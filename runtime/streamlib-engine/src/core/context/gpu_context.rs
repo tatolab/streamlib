@@ -1752,6 +1752,152 @@ impl GpuContext {
         ))
     }
 
+    /// Allocate an OPAQUE_FD-exportable `VkBuffer` as a `StorageBuffer`.
+    /// `device_local = true` picks the VRAM-resident CUDA-visible pool
+    /// (`new_opaque_fd_export_device_local`); `false` picks the
+    /// HOST_VISIBLE pool (`new_opaque_fd_export`). Backs
+    /// [`GpuContextFullAccess::create_opaque_fd_export_buffer`], the
+    /// cdylib-safe OPAQUE_FD/CUDA producer allocation (#1262).
+    #[cfg(target_os = "linux")]
+    pub fn create_opaque_fd_export_buffer(
+        &self,
+        byte_size: u64,
+        device_local: bool,
+    ) -> Result<crate::core::rhi::StorageBuffer> {
+        let vulkan_device = &self.device.inner;
+        let buf = if device_local {
+            crate::vulkan::rhi::HostVulkanBuffer::new_opaque_fd_export_device_local(
+                vulkan_device,
+                byte_size,
+            )?
+        } else {
+            crate::vulkan::rhi::HostVulkanBuffer::new_opaque_fd_export(vulkan_device, byte_size)?
+        };
+        Ok(crate::core::rhi::StorageBuffer::from_host_vulkan_buffer(
+            Arc::new(buf),
+        ))
+    }
+
+    /// Export a fresh dup'd OPAQUE_FD from `buffer` plus its byte size
+    /// and the exporting device's `VkPhysicalDeviceIDProperties::deviceUUID`.
+    /// The fd ownership transfers to the caller; the 16-byte UUID is the
+    /// entire CUDA device-binding contract on multi-GPU rigs (a cdylib
+    /// CUDA adapter matches the CUDA device whose `cudaDeviceProp::uuid`
+    /// equals this value, never a silent fall-through to CUDA device 0).
+    /// Backs [`GpuContextFullAccess::export_storage_buffer_opaque_fd`]
+    /// (#1262).
+    #[cfg(target_os = "linux")]
+    pub fn export_storage_buffer_opaque_fd(
+        &self,
+        buffer: &crate::core::rhi::StorageBuffer,
+    ) -> Result<(std::os::unix::io::RawFd, u64, [u8; 16])> {
+        let host_inner = buffer.host_inner();
+        let fd = host_inner.export_opaque_fd_memory()?;
+        let size = buffer.byte_size();
+        // The UUID is the entire CUDA device-binding contract: it MUST
+        // name the device that actually owns the exported memory, not the
+        // `GpuContext`'s own device. Under the single-GPU invariant these
+        // are the same, but sourcing from the buffer's owning
+        // `HostVulkanDevice` keeps the binding correct if a `StorageBuffer`
+        // ever originates from a different device (never a silent
+        // mismatch).
+        let uuid = host_inner.vulkan_device().physical_device_uuid();
+        Ok((fd, size, uuid))
+    }
+
+    /// Wrap an existing OPAQUE_FD `StorageBuffer` (flat `VkBuffer`) as a
+    /// `PixelBuffer` sharing the same `Arc<HostVulkanBuffer>`, so the flat
+    /// CUDA buffer can register through the existing
+    /// `SurfaceStore::register_pixel_buffer_with_timeline` path. Backs
+    /// [`GpuContextFullAccess::wrap_storage_buffer_as_pixel_buffer`]
+    /// (#1262).
+    #[cfg(target_os = "linux")]
+    pub fn wrap_storage_buffer_as_pixel_buffer(
+        &self,
+        storage_buffer: &crate::core::rhi::StorageBuffer,
+        width: u32,
+        height: u32,
+        bytes_per_pixel: u32,
+        format: crate::core::rhi::PixelFormat,
+    ) -> Result<crate::core::rhi::PixelBuffer> {
+        let inner = storage_buffer.host_inner_arc();
+        Ok(crate::core::rhi::PixelBuffer::from_host_vulkan_buffer(
+            inner,
+            width,
+            height,
+            bytes_per_pixel,
+            format,
+        ))
+    }
+
+    /// Per-frame CUDA producer copy: in one host-device submission,
+    /// optionally GPU-wait `consume_done` (`(timeline, wait_value)`),
+    /// `vkCmdCopyImageToBuffer` from `source_texture` (currently in
+    /// `source_layout`) into `dst`, then optionally signal `produce_done`
+    /// (`(timeline, signal_value)`) on completion. When both timelines
+    /// are `None` the submission blocks host-side via `submit_and_wait`.
+    /// Backs
+    /// [`GpuContextFullAccess::copy_texture_to_storage_buffer_and_signal`]
+    /// (#1262).
+    ///
+    /// The source is copied directly from `source_layout` (the camera
+    /// leaves ring textures in `GENERAL`, a legal copy-source layout), so
+    /// no extra layout transition is recorded — the timeline signal's
+    /// completion guarantee is what orders the buffer write ahead of the
+    /// consumer's `acquire_read`.
+    #[cfg(target_os = "linux")]
+    pub fn copy_texture_to_storage_buffer_and_signal(
+        &self,
+        source_texture: &crate::core::rhi::Texture,
+        source_layout: crate::core::rhi::VulkanLayout,
+        dst: &crate::core::rhi::StorageBuffer,
+        consume_done: Option<(&crate::vulkan::rhi::HostVulkanTimelineSemaphore, u64)>,
+        produce_done: Option<(&crate::vulkan::rhi::HostVulkanTimelineSemaphore, u64)>,
+    ) -> Result<()> {
+        let vulkan_device = &self.device.inner;
+        let mut recorder = crate::vulkan::rhi::RhiCommandRecorderInner::new(
+            vulkan_device,
+            "copy_texture_to_storage_buffer_and_signal",
+        )?;
+        recorder.begin()?;
+        let region = crate::vulkan::rhi::ImageCopyRegion::tightly_packed(
+            source_texture.width(),
+            source_texture.height(),
+        );
+        recorder.record_copy_image_to_buffer(source_texture, source_layout, dst, region)?;
+        // Every branch must leave the shared-buffer write with a defined
+        // completion contract before returning — the single-writer
+        // producer copy is unsound otherwise (a consumer could read a
+        // half-written buffer). Two contracts are valid: a `produce_done`
+        // GPU signal that the consumer waits on (the async per-frame
+        // path), or a host-side fence drain. Handle all four
+        // (consume, produce) combinations explicitly so none returns
+        // without one.
+        match (consume_done, produce_done) {
+            // No timelines: bare submit + host-side fence drain. The copy
+            // is complete before return.
+            (None, None) => recorder.submit_and_wait(),
+            // A `produce_done` signal is present (with or without a
+            // `consume_done` wait): the GPU-side signal IS the completion
+            // contract — the consumer waits on `produce_done` before its
+            // read — so the producer need not host-block. Covers
+            // (None, Some) and (Some, Some).
+            (consume, produce @ Some(_)) => {
+                recorder.submit_waiting_and_signaling_timeline(consume, produce)
+            }
+            // A `consume_done` wait but no `produce_done` signal: the copy
+            // GPU-waits on `consume_done`, but with no signal there is no
+            // GPU-side ordering for the consumer. Host-block on the
+            // recorder's completion fence so the shared-buffer write is
+            // guaranteed done before return, keeping the single-writer
+            // contract sound.
+            (consume @ Some(_), None) => {
+                recorder.submit_waiting_and_signaling_timeline(consume, None)?;
+                recorder.wait_for_completion()
+            }
+        }
+    }
+
     /// Transition `texture` into `VK_IMAGE_LAYOUT_GENERAL` via a
     /// one-shot command buffer + fence. Used as the prelude to binding
     /// a freshly-created storage image to a compute / RT kernel that
@@ -5105,6 +5251,228 @@ impl GpuContextFullAccess {
         }
     }
 
+    /// Allocate an OPAQUE_FD-exportable `VkBuffer` as a `StorageBuffer`
+    /// (`device_local` picks VRAM-resident vs HOST_VISIBLE). The
+    /// cdylib-safe OPAQUE_FD/CUDA producer allocation (#1262). Mode-routed:
+    /// host-mode via `host_inner()`, cdylib-mode via the
+    /// `create_opaque_fd_export_buffer` slot.
+    #[cfg(target_os = "linux")]
+    pub fn create_opaque_fd_export_buffer(
+        &self,
+        byte_size: u64,
+        device_local: bool,
+    ) -> Result<crate::core::rhi::StorageBuffer> {
+        match self.handle_kind {
+            HandleKind::Boxed => self
+                .host_inner()
+                .create_opaque_fd_export_buffer(byte_size, device_local),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "create_opaque_fd_export_buffer: GpuContextFullAccess has null vtable".into(),
+                    ));
+                }
+                let mut out_buffer: std::mem::MaybeUninit<crate::core::rhi::StorageBuffer> =
+                    std::mem::MaybeUninit::uninit();
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).create_opaque_fd_export_buffer)(
+                        self.handle,
+                        byte_size,
+                        u8::from(device_local),
+                        out_buffer.as_mut_ptr() as *mut std::ffi::c_void,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    // SAFETY: host signaled success and wrote the
+                    // StorageBuffer PluginAbiObject into the slot.
+                    Ok(unsafe { out_buffer.assume_init() })
+                } else {
+                    let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                        .into_owned();
+                    Err(Error::GpuError(msg))
+                }
+            }
+        }
+    }
+
+    /// Export a fresh dup'd OPAQUE_FD + byte size + exporting-device UUID
+    /// from a `StorageBuffer`. The fd transfers to the caller. Mode-routed:
+    /// host-mode via `host_inner()`, cdylib-mode via the
+    /// `export_storage_buffer_opaque_fd` slot (decoding the
+    /// [`OpaqueFdExportDescriptorRepr`](streamlib_plugin_abi::OpaqueFdExportDescriptorRepr)).
+    #[cfg(target_os = "linux")]
+    pub fn export_storage_buffer_opaque_fd(
+        &self,
+        buffer: &crate::core::rhi::StorageBuffer,
+    ) -> Result<(std::os::unix::io::RawFd, u64, [u8; 16])> {
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().export_storage_buffer_opaque_fd(buffer),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "export_storage_buffer_opaque_fd: GpuContextFullAccess has null vtable"
+                            .into(),
+                    ));
+                }
+                let mut descriptor = streamlib_plugin_abi::OpaqueFdExportDescriptorRepr::default();
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).export_storage_buffer_opaque_fd)(
+                        self.handle,
+                        buffer as *const _ as *const std::ffi::c_void,
+                        &mut descriptor,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    Ok((descriptor.fd, descriptor.size, descriptor.device_uuid))
+                } else {
+                    let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                        .into_owned();
+                    Err(Error::GpuError(msg))
+                }
+            }
+        }
+    }
+
+    /// Wrap an OPAQUE_FD `StorageBuffer` as a `PixelBuffer` sharing the
+    /// same allocation so it can register through the surface-store
+    /// `register_pixel_buffer_with_timeline` path (#1262). Mode-routed:
+    /// host-mode via `host_inner()`, cdylib-mode via the
+    /// `wrap_storage_buffer_as_pixel_buffer` slot.
+    #[cfg(target_os = "linux")]
+    pub fn wrap_storage_buffer_as_pixel_buffer(
+        &self,
+        storage_buffer: &crate::core::rhi::StorageBuffer,
+        width: u32,
+        height: u32,
+        bytes_per_pixel: u32,
+        format: crate::core::rhi::PixelFormat,
+    ) -> Result<crate::core::rhi::PixelBuffer> {
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().wrap_storage_buffer_as_pixel_buffer(
+                storage_buffer,
+                width,
+                height,
+                bytes_per_pixel,
+                format,
+            ),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "wrap_storage_buffer_as_pixel_buffer: GpuContextFullAccess has null vtable"
+                            .into(),
+                    ));
+                }
+                let mut out_pixel_buffer: std::mem::MaybeUninit<crate::core::rhi::PixelBuffer> =
+                    std::mem::MaybeUninit::uninit();
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).wrap_storage_buffer_as_pixel_buffer)(
+                        self.handle,
+                        storage_buffer as *const _ as *const std::ffi::c_void,
+                        width,
+                        height,
+                        bytes_per_pixel,
+                        format as u32,
+                        out_pixel_buffer.as_mut_ptr() as *mut std::ffi::c_void,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    // SAFETY: host signaled success and wrote the PixelBuffer
+                    // PluginAbiObject into the slot.
+                    Ok(unsafe { out_pixel_buffer.assume_init() })
+                } else {
+                    let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                        .into_owned();
+                    Err(Error::GpuError(msg))
+                }
+            }
+        }
+    }
+
+    /// Per-frame CUDA producer copy: image→buffer in one host-device
+    /// submission with optional `consume_done` wait + `produce_done`
+    /// signal (#1262). Mode-routed: host-mode via `host_inner()`,
+    /// cdylib-mode via the `copy_texture_to_storage_buffer_and_signal`
+    /// slot (marshalling the texture PluginAbiObject handle + timeline
+    /// inner-Arc pointers).
+    #[cfg(target_os = "linux")]
+    pub fn copy_texture_to_storage_buffer_and_signal(
+        &self,
+        source_texture: &crate::core::rhi::Texture,
+        source_layout: crate::core::rhi::VulkanLayout,
+        dst: &crate::core::rhi::StorageBuffer,
+        consume_done: Option<(&crate::vulkan::rhi::HostVulkanTimelineSemaphore, u64)>,
+        produce_done: Option<(&crate::vulkan::rhi::HostVulkanTimelineSemaphore, u64)>,
+    ) -> Result<()> {
+        match self.handle_kind {
+            HandleKind::Boxed => self.host_inner().copy_texture_to_storage_buffer_and_signal(
+                source_texture,
+                source_layout,
+                dst,
+                consume_done,
+                produce_done,
+            ),
+            HandleKind::ScopeToken => {
+                if self.vtable.is_null() {
+                    return Err(Error::GpuError(
+                        "copy_texture_to_storage_buffer_and_signal: GpuContextFullAccess has null vtable"
+                            .into(),
+                    ));
+                }
+                let (consume_handle, consume_value) = match consume_done {
+                    Some((sem, value)) => {
+                        (sem as *const _ as *const std::ffi::c_void, value)
+                    }
+                    None => (std::ptr::null(), 0),
+                };
+                let (produce_handle, produce_value) = match produce_done {
+                    Some((sem, value)) => {
+                        (sem as *const _ as *const std::ffi::c_void, value)
+                    }
+                    None => (std::ptr::null(), 0),
+                };
+                let mut err_buf = [0u8; 512];
+                let mut err_len: usize = 0;
+                let status = unsafe {
+                    ((*self.vtable).copy_texture_to_storage_buffer_and_signal)(
+                        self.handle,
+                        source_texture.handle,
+                        source_layout.0,
+                        dst as *const _ as *const std::ffi::c_void,
+                        consume_handle,
+                        consume_value,
+                        produce_handle,
+                        produce_value,
+                        err_buf.as_mut_ptr(),
+                        err_buf.len(),
+                        &mut err_len as *mut usize,
+                    )
+                };
+                if status == 0 {
+                    Ok(())
+                } else {
+                    let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
+                        .into_owned();
+                    Err(Error::GpuError(msg))
+                }
+            }
+        }
+    }
+
     /// Construct a timeline semaphore. Backs the camera processor's
     /// per-frame timeline that signals into downstream consumers
     /// (display, encoders). Mode-routed: host-mode dispatches through
@@ -5470,6 +5838,281 @@ mod tests {
         assert_eq!(resolved.height(), 480);
 
         println!("Texture cache: register + resolve OK");
+    }
+
+    /// #1262 OPAQUE_FD/CUDA producer surface — positive mint/export/wrap
+    /// path plus the zeroed-cached-fields regression.
+    ///
+    /// Mental-revert: if `create_opaque_fd_export_buffer` built the
+    /// `StorageBuffer` with a zeroed `byte_size_cached` (the silent
+    /// all-zero borrow hazard — `docs/learnings/cdylib-make-borrow-cached-fields.md`),
+    /// the `byte_size() == BYTES` assertion below fails immediately —
+    /// with no panic, no export error, just a wrong cached POD. GPU-gated:
+    /// skips when no device is present (CI is GPU-free).
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn opaque_fd_export_buffer_mint_export_wrap_and_non_zero_cache() {
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(g) => g,
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+
+        const W: u32 = 32;
+        const H: u32 = 32;
+        const BPP: u32 = 4;
+        const BYTES: u64 = (W as u64) * (H as u64) * (BPP as u64);
+
+        // HOST_VISIBLE OPAQUE_FD flavor is broadly available; the
+        // DEVICE_LOCAL CUDA flavor rides the same code path with a
+        // different pool. Skip if the OPAQUE_FD pool is unavailable on
+        // this driver rather than failing the suite.
+        let storage = match gpu.create_opaque_fd_export_buffer(BYTES, false) {
+            Ok(s) => s,
+            Err(e) => {
+                println!("Skipping - OPAQUE_FD export pool unavailable: {e}");
+                return;
+            }
+        };
+
+        // Zeroed-cached-fields regression: the cached byte size must be
+        // the real allocation size, never 0.
+        assert_eq!(
+            storage.byte_size(),
+            BYTES,
+            "StorageBuffer.byte_size_cached must carry the real allocation size (zeroed-cache regression)"
+        );
+        assert!(
+            !storage.mapped_ptr().is_null(),
+            "HOST_VISIBLE OPAQUE_FD buffer must expose a persistent mapping"
+        );
+
+        // Export → fresh dup'd fd + size + device UUID.
+        let (fd, size, uuid) = gpu
+            .export_storage_buffer_opaque_fd(&storage)
+            .expect("export_storage_buffer_opaque_fd failed");
+        assert!(fd >= 0, "exported OPAQUE_FD must be non-negative, got {fd}");
+        assert_eq!(size, BYTES, "exported size must equal the allocation size");
+        assert!(
+            uuid.iter().any(|b| *b != 0),
+            "device UUID must not be all-zero — CUDA device binding depends on it, got {uuid:02x?}"
+        );
+        // The caller owns the dup'd fd; close it so the test leaks nothing.
+        unsafe { libc::close(fd) };
+
+        // Wrap → PixelBuffer sharing the same allocation, with the
+        // caller's pixel-shape metadata cached.
+        let pixel_buffer = gpu
+            .wrap_storage_buffer_as_pixel_buffer(&storage, W, H, BPP, crate::core::rhi::PixelFormat::Bgra32)
+            .expect("wrap_storage_buffer_as_pixel_buffer failed");
+        assert_eq!(pixel_buffer.width, W);
+        assert_eq!(pixel_buffer.height, H);
+
+        println!("OPAQUE_FD mint/export/wrap OK — byte_size={BYTES} uuid={uuid:02x?}");
+    }
+
+    /// #1262 followup #1 — the ONLY positive coverage of the batch's
+    /// riskiest FullAccess slot, `copy_texture_to_storage_buffer_and_signal`.
+    ///
+    /// Drives the REAL host vtable body
+    /// (`HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE`), not the plain
+    /// `GpuContext` method — that body reconstructs a borrowed source
+    /// `Texture` from a raw inner-Arc handle via
+    /// `Arc::increment_strong_count` + `Texture::from_arc_into_raw`,
+    /// records the image->buffer copy, and host-blocks on the
+    /// null-timeline submit path. Two locks:
+    ///   (a) the destination OPAQUE_FD `StorageBuffer` bytes equal the
+    ///       known source contents after the copy;
+    ///   (b) the source texture's inner-Arc strong count is identical
+    ///       before and after the call — the
+    ///       `increment_strong_count`/`from_arc_into_raw` borrow must be
+    ///       balanced by exactly one `Texture::Drop`.
+    ///
+    /// Mental-revert: if the host body leaked one strong count (dropped
+    /// the balancing `Texture::Drop`, or double-incremented), the
+    /// strong-count equality assertion fails — a use-after-free / leak
+    /// this test catches. GPU-gated: skips cleanly with no device (CI is
+    /// GPU-free), so it does not run in the sandbox — it is a
+    /// /verify-live regression.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn copy_texture_to_storage_buffer_and_signal_positive_and_refcount_balance() {
+        use std::ffi::c_void;
+        use std::sync::Arc;
+
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(g) => Arc::new(g),
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+
+        const W: u32 = 32;
+        const H: u32 = 32;
+        const BPP: u32 = 4;
+        const BYTES: u64 = (W as u64) * (H as u64) * (BPP as u64);
+
+        // HOST_VISIBLE OPAQUE_FD staging + destination buffers. Skip the
+        // whole test if the pool is unavailable on this driver rather
+        // than failing the suite (mirrors the sibling OPAQUE_FD
+        // regression's skip-clean shape).
+        let staging = match gpu.create_opaque_fd_export_buffer(BYTES, false) {
+            Ok(s) => s,
+            Err(e) => {
+                println!("Skipping - OPAQUE_FD export pool unavailable: {e}");
+                return;
+            }
+        };
+        let dst = match gpu.create_opaque_fd_export_buffer(BYTES, false) {
+            Ok(s) => s,
+            Err(e) => {
+                println!("Skipping - OPAQUE_FD export pool unavailable: {e}");
+                return;
+            }
+        };
+
+        // Known source pattern written into the host-visible staging map.
+        let staging_ptr = staging.mapped_ptr();
+        assert!(
+            !staging_ptr.is_null(),
+            "HOST_VISIBLE staging buffer must expose a mapping"
+        );
+        for i in 0..BYTES as usize {
+            unsafe { *staging_ptr.add(i) = (i % 251) as u8 };
+        }
+
+        // Source texture, filled from the staging buffer and left in
+        // GENERAL — a legal copy-source layout (the landed slot copies
+        // directly from whatever `source_layout` the caller passes,
+        // recording no transition).
+        let desc = TextureDescriptor::new(W, H, TextureFormat::Rgba8Unorm).with_usage(
+            TextureUsages::COPY_DST | TextureUsages::COPY_SRC | TextureUsages::TEXTURE_BINDING,
+        );
+        let source_texture = match gpu.device().create_texture_local(&desc) {
+            Ok(t) => t,
+            Err(e) => {
+                println!("Skipping - source texture allocation failed: {e}");
+                return;
+            }
+        };
+
+        {
+            use crate::vulkan::rhi::{VulkanAccess, VulkanStage};
+            let mut fill = crate::vulkan::rhi::RhiCommandRecorderInner::new(
+                &gpu.device().inner,
+                "copy_slot_regression_fill_source",
+            )
+            .expect("fill recorder");
+            fill.begin().expect("fill begin");
+            fill.record_image_barrier(
+                &source_texture,
+                VulkanLayout::UNDEFINED,
+                VulkanLayout::TRANSFER_DST_OPTIMAL,
+                VulkanStage::TOP_OF_PIPE,
+                VulkanStage::ALL_TRANSFER,
+                VulkanAccess::NONE,
+                VulkanAccess::TRANSFER_WRITE,
+            )
+            .expect("barrier UNDEFINED -> TRANSFER_DST");
+            fill.record_copy_buffer_to_image(
+                &staging,
+                &source_texture,
+                VulkanLayout::TRANSFER_DST_OPTIMAL,
+                crate::vulkan::rhi::ImageCopyRegion::tightly_packed(W, H),
+            )
+            .expect("copy staging -> source image");
+            fill.record_image_barrier(
+                &source_texture,
+                VulkanLayout::TRANSFER_DST_OPTIMAL,
+                VulkanLayout::GENERAL,
+                VulkanStage::ALL_TRANSFER,
+                VulkanStage::ALL_TRANSFER,
+                VulkanAccess::TRANSFER_WRITE,
+                VulkanAccess::TRANSFER_READ,
+            )
+            .expect("barrier TRANSFER_DST -> GENERAL");
+            fill.submit_and_wait().expect("fill submit_and_wait");
+        }
+
+        // Measure the source texture's inner-Arc strong count without
+        // disturbing it (bump, reconstruct, read, drop — net zero). The
+        // absolute value is immaterial; only before == after is asserted.
+        let strong_count = |texture: &crate::core::rhi::Texture| -> usize {
+            let ptr = texture.handle as *const crate::core::rhi::texture::TextureInner;
+            unsafe {
+                Arc::increment_strong_count(ptr);
+                let arc = Arc::from_raw(ptr);
+                let count = Arc::strong_count(&arc);
+                drop(arc);
+                count
+            }
+        };
+        let count_before = strong_count(&source_texture);
+
+        // Mint a full escalate scope token bound to this context, then
+        // drive the REAL host vtable body so the dangerous
+        // Arc-reconstruction path actually runs (the plain `GpuContext`
+        // method borrows `&Texture` directly and would not exercise it).
+        let token =
+            crate::core::context::escalate_scope_registry::begin_escalate_scope(gpu.clone());
+
+        let mut err_buf = vec![0u8; 512];
+        let mut err_len: usize = 0;
+        let rc = unsafe {
+            (crate::core::plugin::host_services::HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE
+                .copy_texture_to_storage_buffer_and_signal)(
+                token as *const c_void,
+                source_texture.handle,
+                VulkanLayout::GENERAL.0,
+                &dst as *const crate::core::rhi::StorageBuffer as *const c_void,
+                std::ptr::null(), // consume_done: none -> host-blocking submit_and_wait
+                0,
+                std::ptr::null(), // produce_done: none
+                0,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len,
+            )
+        };
+
+        let count_after = strong_count(&source_texture);
+        crate::core::context::escalate_scope_registry::end_escalate_scope(token);
+
+        let err = String::from_utf8_lossy(&err_buf[..err_len]).into_owned();
+        assert_eq!(
+            rc, 0,
+            "copy_texture_to_storage_buffer_and_signal returned error: {err}"
+        );
+
+        // (b) THE crucial lock: host-side Arc reconstruction refcount
+        // balance. increment_strong_count + from_arc_into_raw must be
+        // balanced by exactly one Texture::Drop.
+        assert_eq!(
+            count_before, count_after,
+            "host-side Arc reconstruction (increment_strong_count + from_arc_into_raw) must be \
+             balanced by exactly one Texture::Drop; a leak or double-decrement is a \
+             use-after-free / leak bug"
+        );
+
+        // (a) destination bytes equal the known source contents.
+        let dst_ptr = dst.mapped_ptr();
+        assert!(
+            !dst_ptr.is_null(),
+            "HOST_VISIBLE destination buffer must expose a mapping"
+        );
+        for i in 0..BYTES as usize {
+            let got = unsafe { *dst_ptr.add(i) };
+            let want = (i % 251) as u8;
+            assert_eq!(got, want, "destination byte {i} mismatch: got {got}, want {want}");
+        }
+
+        println!(
+            "copy_texture_to_storage_buffer_and_signal OK — {BYTES} bytes copied, \
+             strong_count balanced ({count_before} -> {count_after})"
+        );
     }
 
     #[test]

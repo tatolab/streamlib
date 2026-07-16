@@ -599,6 +599,52 @@ impl RhiCommandRecorderInner {
         self.submit_inner(Some((timeline.semaphore(), signal_value)))
     }
 
+    /// End recording and submit in one queue submission, optionally
+    /// GPU-waiting `wait` (`(timeline, wait_value)`) before the recorded
+    /// work runs and optionally signaling `signal`
+    /// (`(timeline, signal_value)`) on completion. `None` for either side
+    /// omits that half.
+    ///
+    /// This backs the OPAQUE_FD/CUDA per-frame producer copy
+    /// (`copy_texture_to_storage_buffer_and_signal`): the producer waits
+    /// on the consumer's `consume_done` timeline before overwriting the
+    /// shared buffer, then signals `produce_done` after the copy so the
+    /// consumer's `acquire_read` unblocks. Each signal/wait value MUST be
+    /// strictly greater than its timeline's current counter (Vulkan
+    /// disallows monotonic regressions).
+    ///
+    /// When both sides are `None` the caller gets a bare submission with
+    /// no host wait — use [`Self::submit_and_wait`] if a host-side drain
+    /// is needed instead.
+    #[tracing::instrument(level = "trace", skip(self, wait, signal), fields(label = %self.label))]
+    pub fn submit_waiting_and_signaling_timeline(
+        &mut self,
+        wait: Option<(&HostVulkanTimelineSemaphore, u64)>,
+        signal: Option<(&HostVulkanTimelineSemaphore, u64)>,
+    ) -> Result<()> {
+        let waits: Vec<vk::SemaphoreSubmitInfo> = wait
+            .into_iter()
+            .map(|(timeline, value)| {
+                vk::SemaphoreSubmitInfo::builder()
+                    .semaphore(timeline.semaphore())
+                    .value(value)
+                    .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+                    .build()
+            })
+            .collect();
+        let signals: Vec<vk::SemaphoreSubmitInfo> = signal
+            .into_iter()
+            .map(|(timeline, value)| {
+                vk::SemaphoreSubmitInfo::builder()
+                    .semaphore(timeline.semaphore())
+                    .value(value)
+                    .stage_mask(vk::PipelineStageFlags2::ALL_COMMANDS)
+                    .build()
+            })
+            .collect();
+        self.submit_with_semaphores(&waits, &signals)
+    }
+
     /// End recording and submit without semaphore signaling. The
     /// recorder's internal completion fence is signaled so the next
     /// `begin()` blocks on completion.
@@ -623,6 +669,29 @@ impl RhiCommandRecorderInner {
                         self.label
                     ))
                 })?;
+        }
+        Ok(())
+    }
+
+    /// Host-block until this recorder's most recent submission drains,
+    /// via its internal completion fence. Use after a
+    /// [`Self::submit_waiting_and_signaling_timeline`] whose signal side
+    /// is `None`: with no GPU-side signal to order a downstream consumer,
+    /// a host-side drain is the only completion guarantee the caller has.
+    /// No-op when nothing is in flight (the fence is already signaled).
+    #[tracing::instrument(level = "trace", skip(self), fields(label = %self.label))]
+    pub fn wait_for_completion(&mut self) -> Result<()> {
+        if self.submission_in_flight {
+            unsafe {
+                self.device
+                    .wait_for_fences(&[self.completion_fence], true, u64::MAX)
+                    .map_err(|e| {
+                        Error::GpuError(format!(
+                            "RhiCommandRecorder '{}': wait_for_fences in wait_for_completion: {e}",
+                            self.label
+                        ))
+                    })?;
+            }
         }
         Ok(())
     }
