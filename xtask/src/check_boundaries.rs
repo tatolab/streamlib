@@ -1183,33 +1183,23 @@ fn check_packages_engine_reach(
 // calling the runtime's add-module API). Cdylib detection reuses
 // `check_cdylib_reach::cargo_toml_has_cdylib` — one crate-type detector.
 //
-// Seeded to the 3 current offenders; `camera-plugin-sdk-compute/plugin` is left
-// un-allowlisted as live proof the rule passes for a correctly-authored cdylib
-// example (it links `streamlib-plugin-sdk`, never the facade).
+// `camera-plugin-sdk-compute/plugin` is left un-allowlisted as live proof the
+// rule passes for a correctly-authored cdylib example (it links
+// `streamlib-plugin-sdk`, never the facade).
 
 const CHECK_EXAMPLES_CDYLIB_FACADE_DEP: &str = "examples-cdylib-no-facade-dep";
 
 const EXAMPLES_CDYLIB_FACADE_DEP_RATIONALE: &str = "an examples/* cdylib plugin must not link the full `streamlib` facade — a cdylib plugin is built independently at load time and rides streamlib-plugin-sdk / streamlib-consumer-rhi, never the FullAccess facade. Move it to [dev-dependencies] or author against the plugin SDK";
 
-/// The 3 `examples/*` cdylib crates that currently link the `streamlib` facade
-/// as a non-dev runtime dep (green baseline). Each is the shrinking conversion
-/// backlog. `camera-plugin-sdk-compute/plugin` is deliberately absent — it
-/// links `streamlib-plugin-sdk` (never the facade) and proves the rule passes.
+/// The `examples/*` cdylib crates that still link the `streamlib` facade as a
+/// non-dev runtime dep (green baseline) — the shrinking conversion backlog.
+/// `camera-plugin-sdk-compute/plugin` is deliberately absent: it links
+/// `streamlib-plugin-sdk` (never the facade) and proves the rule passes.
 const EXAMPLES_CDYLIB_FACADE_DEP_ALLOWLIST: &[AllowEntry] = &[
-    AllowEntry {
-        path: "examples/camera-rust-plugin/plugin/Cargo.toml",
-        kind: AllowKind::ExactFile,
-        rationale: "pre-conversion facade-linking cdylib example (shrinking backlog)",
-    },
     AllowEntry {
         path: "examples/camera-python-display/effects/Cargo.toml",
         kind: AllowKind::ExactFile,
-        rationale: "pre-conversion facade-linking cdylib example (shrinking backlog)",
-    },
-    AllowEntry {
-        path: "examples/polyglot-manual-source/plugin/Cargo.toml",
-        kind: AllowKind::ExactFile,
-        rationale: "pre-conversion facade-linking cdylib example (shrinking backlog)",
+        rationale: "facade-linking cdylib example — its BlendingCompositor reaches RhiToneMapper / display_info / the host-device intermediate-texture path, none of which the engine-free plugin SDK carries yet; conversion is blocked on those SDK surfaces",
     },
 ];
 
@@ -2784,12 +2774,13 @@ streamlib = { workspace = true }
     #[test]
     fn allows_facade_dep_in_allowlisted_cdylib_example() {
         let dir = empty_workspace();
-        // examples/camera-rust-plugin/plugin is on the seeded baseline.
+        // examples/camera-python-display/effects is the remaining allowlisted
+        // entry (BlendingCompositor blocked on absent SDK surfaces).
         write_fixture(
             dir.path(),
-            "examples/camera-rust-plugin/plugin/Cargo.toml",
+            "examples/camera-python-display/effects/Cargo.toml",
             r#"[package]
-name = "camera-rust-plugin"
+name = "camera-python-display-effects"
 version = "0.1.0"
 edition = "2021"
 
