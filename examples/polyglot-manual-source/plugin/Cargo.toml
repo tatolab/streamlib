@@ -19,7 +19,8 @@ crate-type = ["rlib", "cdylib"]
 streamlib-jtd-codegen = { workspace = true }
 
 [dependencies]
-streamlib = { workspace = true }
+streamlib-plugin-sdk = { workspace = true }
+streamlib-macros = { workspace = true }
 streamlib-plugin-abi = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

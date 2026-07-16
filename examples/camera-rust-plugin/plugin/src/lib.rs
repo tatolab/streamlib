@@ -11,8 +11,17 @@
 //! The Linux implementation ([`grayscale_linux`]) samples the input
 //! camera texture through a sandboxed graphics kernel and writes a
 //! BT.601-luma grayscale frame into a ring of output render-target
-//! textures. The macOS implementation ([`grayscale_apple`]) reads pixels
-//! directly from `CVPixelBuffer` memory via CoreVideo.
+//! textures.
+//!
+//! The macOS/iOS grayscale arm (`grayscale_apple.rs`) reads pixels from
+//! `CVPixelBuffer` on the CPU. It is not compiled here: it needs the
+//! `GpuContextLimitedAccess` CPU-surface accessors (`check_out_surface` /
+//! `acquire_pixel_buffer`) that the engine-free `streamlib-plugin-sdk`
+//! carries on Linux but not yet on macOS. The source stays in-tree; the
+//! rewrite onto the SDK's macOS surface is a separate follow-up (Apple
+//! paths are parked until the Linux path is stable). Compiling it here
+//! would require the `streamlib` facade, reintroducing the double-engine
+//! hazard this cdylib avoids by linking only the SDK.
 
 #[allow(non_snake_case, unused_imports, dead_code, clippy::all)]
 mod _generated_ {
@@ -24,14 +33,8 @@ mod grayscale_kernel;
 #[cfg(target_os = "linux")]
 mod grayscale_linux;
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-mod grayscale_apple;
-
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "ios"))]
+#[cfg(target_os = "linux")]
 use streamlib_plugin_abi::export_plugin;
 
 #[cfg(target_os = "linux")]
 export_plugin!(grayscale_linux::GrayscaleProcessor::Processor);
-
-#[cfg(any(target_os = "macos", target_os = "ios"))]
-export_plugin!(grayscale_apple::GrayscaleProcessor::Processor);

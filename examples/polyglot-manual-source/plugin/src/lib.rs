@@ -25,13 +25,13 @@ mod _generated_ {
 
 use std::path::PathBuf;
 use crate::_generated_::VideoFrame;
-use streamlib::sdk::error::{Result, Error};
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::{Result, Error};
+use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib_plugin_abi::export_plugin;
 
 const OUTPUT_ENV_VAR: &str = "STREAMLIB_POLYGLOT_MANUAL_SOURCE_SINK_OUTPUT";
 
-#[streamlib::sdk::processor("PolyglotManualSourceCountingSink")]
+#[streamlib_plugin_sdk::sdk::processor("PolyglotManualSourceCountingSink")]
 pub struct PolyglotManualSourceCountingSink {
     output_file: Option<PathBuf>,
     frame_counter: u64,
@@ -39,7 +39,7 @@ pub struct PolyglotManualSourceCountingSink {
     last_ns: u64,
 }
 
-impl streamlib::sdk::processors::ReactiveProcessor for PolyglotManualSourceCountingSink::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for PolyglotManualSourceCountingSink::Processor {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let output = std::env::var(OUTPUT_ENV_VAR)
             .ok()
