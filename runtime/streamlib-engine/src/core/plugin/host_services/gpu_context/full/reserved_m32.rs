@@ -14,18 +14,25 @@
 //! net. Linux-only; the non-Linux stubs return a typed
 //! "not available on this platform" error.
 //!
-//! The remaining reserved slots (present target #1258, hardware video
-//! #1259, exportable timeline #1260, texture readback #1261) still ship
-//! a typed NotYetProvided-style stub: a non-zero return
-//! ([`NOT_YET_PROVIDED_RC`]) + a descriptive `write_err` message, never
-//! `todo!()` / `unimplemented!()`, never an unguarded unwind across the
-//! ABI. Their per-surface fill-in issues replace those bodies against
-//! the frozen slots without touching the vtable struct again.
+//! The hardware video **encoder** slot (`create_encoder_session` /
+//! `drop_encoder_session`, #1259) carries its real host body as of the
+//! #1376 fill-in: it decodes + validates the descriptor GPU-free, then
+//! dispatches to the resolved `Arc<GpuContext>` via
+//! [`with_full_scope_or_err`], boxing a `HostVideoEncoderSession`.
+//! Linux-only; the non-Linux stub returns a typed "not available on this
+//! platform" error, and `drop_encoder_session` reclaims the Box.
 //!
-//! The four drop-only slots (`drop_present_target`,
-//! `drop_encoder_session`, `drop_decoder_session`, `drop_texture_readback`)
-//! are defensive no-ops until minting lands: no create slot yields a
-//! real handle yet, so drop is never called with one.
+//! The remaining reserved slot in this file (hardware video **decoder**
+//! `create_decoder_session`, #1259/#1377) still ships a typed
+//! NotYetProvided-style stub: a non-zero return ([`NOT_YET_PROVIDED_RC`])
+//! + a descriptive `write_err` message, never `todo!()` /
+//! `unimplemented!()`, never an unguarded unwind across the ABI. Its
+//! fill-in issue replaces the body against the frozen slot without
+//! touching the vtable struct again.
+//!
+//! `drop_decoder_session` stays a defensive no-op until decoder minting
+//! lands (no create slot yields a decoder handle yet, so drop is never
+//! called with one).
 
 use std::ffi::c_void;
 
@@ -313,6 +320,102 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_dr
 // Hardware video encode/decode (#1259)
 // ============================================================================
 
+/// Mint a hardware video encoder session on the host device and write
+/// the Box-shaped opaque handle into `*out_session` plus the two cached
+/// aligned-extent POD out-params. Decodes + validates the descriptor
+/// (codec / preset discriminants, GPU-free) BEFORE scope resolution, then
+/// dispatches to the resolved `Arc<GpuContext>`'s
+/// [`crate::core::context::GpuContext::create_encoder_session`] primitive
+/// (the modern host-side constructor — no `host_vulkan_device_arc` ABI
+/// transit). `disable_gpu_input_prealloc == 0` folds in the eager
+/// `prepare_gpu_encode_resources`.
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_create_encoder_session(
+    gpu_handle: *const c_void,
+    desc: *const VideoEncoderSessionDescriptorRepr,
+    out_session: *mut *const c_void,
+    out_aligned_width: *mut u32,
+    out_aligned_height: *mut u32,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    run_host_extern_c(
+        "host_gpu_full_create_encoder_session",
+        || -> i32 {
+            if out_session.is_null()
+                || out_aligned_width.is_null()
+                || out_aligned_height.is_null()
+                || desc.is_null()
+            {
+                write_err(
+                    "create_encoder_session: null desc / out pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            // SAFETY: `desc` non-null per the guard; read once by ref (POD).
+            let repr = unsafe { &*desc };
+            // Decode + validate the descriptor GPU-free, before scope
+            // resolution — an unsupported codec/preset is a typed
+            // invalid-args error, not a device failure.
+            let config = match super::super::super::video_encoder_session::encoder_config_from_repr(
+                repr,
+            ) {
+                Ok(config) => config,
+                Err(msg) => {
+                    write_err(
+                        &format!("create_encoder_session: {msg}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+            let prepare_gpu_input = repr.disable_gpu_input_prealloc == 0;
+            let result = with_full_scope_or_err(
+                gpu_handle,
+                "create_encoder_session",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| gpu.create_encoder_session(config, prepare_gpu_input),
+            );
+            match result {
+                Some(Ok(encoder)) => {
+                    // Cached aligned extent sourced from the encoder itself
+                    // (never recomputed ABI-side): RGBA input to
+                    // `submit_texture` must be >= these.
+                    let (aligned_width, aligned_height) = encoder.aligned_extent();
+                    let session =
+                        super::super::super::video_encoder_session::HostVideoEncoderSession::new(
+                            encoder,
+                        );
+                    let raw = Box::into_raw(Box::new(session)) as *const c_void;
+                    // SAFETY: out pointers null-checked above.
+                    unsafe {
+                        std::ptr::write(out_session, raw);
+                        std::ptr::write(out_aligned_width, aligned_width);
+                        std::ptr::write(out_aligned_height, aligned_height);
+                    }
+                    0
+                }
+                Some(Err(e)) => {
+                    write_err(&format!("{e}"), err_buf, err_buf_cap, err_len);
+                    1
+                }
+                None => 1, // err_buf populated by with_full_scope_or_err
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
 #[allow(clippy::too_many_arguments)]
 pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_create_encoder_session(
     _gpu_handle: *const c_void,
@@ -326,18 +429,48 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cr
 ) -> i32 {
     run_host_extern_c(
         "host_gpu_full_create_encoder_session",
-        || not_yet_provided("create_encoder_session", err_buf, err_buf_cap, err_len),
-        NOT_YET_PROVIDED_RC,
+        || {
+            write_err(
+                "create_encoder_session: not available on this platform",
+                err_buf,
+                err_buf_cap,
+                err_len,
+            );
+            1
+        },
+        1,
     )
 }
 
+/// Release an owned encoder session: `Box::from_raw` then drop
+/// (`SimpleEncoder::Drop` runs `wait_idle` + spec-ordered teardown
+/// host-side). Null-safe no-op. Off-Linux no session is ever minted, so
+/// the reclaim is a no-op there.
 pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_encoder_session(
     owned_handle: *const c_void,
 ) {
     run_host_extern_c(
         "host_gpu_full_drop_encoder_session",
         || {
-            let _ = owned_handle;
+            if owned_handle.is_null() {
+                return;
+            }
+            #[cfg(target_os = "linux")]
+            // SAFETY: paired with `Box::into_raw(Box<HostVideoEncoderSession>)`
+            // in `host_gpu_full_create_encoder_session`. Reclaiming via
+            // `Box::from_raw` drops the `SimpleEncoder`, whose Drop
+            // `wait_idle`s + tears down spec-ordered — sound inside the
+            // panic net (a caught panic logs, never converts — void return).
+            unsafe {
+                let _ = Box::from_raw(
+                    owned_handle
+                        as *mut super::super::super::video_encoder_session::HostVideoEncoderSession,
+                );
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = owned_handle;
+            }
         },
         (),
     )
@@ -1062,16 +1195,60 @@ mod reserved_m32_wire_format_tests {
         );
     }
 
+    // #1376 landed the encoder-session mint slot: the reserved
+    // NotYetProvided stub is replaced by a real host body. The GPU-free
+    // wire tests below lock the guard paths that fire before any device
+    // work; the positive create/encode/drain round-trip is GPU-gated (in
+    // `host_services::video_encoder_session::encoder_session_gpu_gated_tests`).
+
+    /// Tier-1 wire test: a null out-param short-circuits to a typed error
+    /// before any descriptor decode / scope resolution. Mental-revert:
+    /// dropping the null-out guard UB-writes the Box handle through a null
+    /// `out_session` pointer.
     #[test]
-    fn create_encoder_session_reports_not_yet_provided() {
+    #[cfg(target_os = "linux")]
+    fn create_encoder_session_rejects_null_out_param() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut aw: u32 = 0;
+        let mut ah: u32 = 0;
+        let desc = streamlib_plugin_abi::VideoEncoderSessionDescriptorRepr::default();
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.create_encoder_session)(
+                std::ptr::null(),
+                &desc,
+                std::ptr::null_mut(), // null out_session
+                &mut aw,
+                &mut ah,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len).contains("create_encoder_session: null desc / out pointer"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    /// Tier-1 wire test: an unsupported codec discriminant is a typed
+    /// invalid-args error, decoded GPU-free before scope resolution.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn create_encoder_session_rejects_invalid_codec() {
         let (mut buf, mut len) = make_err_buf();
         let mut out: *const c_void = std::ptr::null();
         let mut aw: u32 = 0;
         let mut ah: u32 = 0;
+        let desc = streamlib_plugin_abi::VideoEncoderSessionDescriptorRepr {
+            codec: 99, // out-of-range codec discriminant
+            ..Default::default()
+        };
         let rc = unsafe {
             (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.create_encoder_session)(
                 std::ptr::null(),
-                std::ptr::null(),
+                &desc,
                 &mut out,
                 &mut aw,
                 &mut ah,
@@ -1080,8 +1257,81 @@ mod reserved_m32_wire_format_tests {
                 &mut len,
             )
         };
-        assert_eq!(rc, NOT_YET_PROVIDED_RC);
-        assert!(err_buf_as_str(&buf, len).contains("create_encoder_session: not yet provided"));
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len).contains("invalid codec discriminant 99"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+        assert!(out.is_null(), "out_session must not be written on error");
+    }
+
+    /// Tier-1 wire test: a valid descriptor with a null (never-issued)
+    /// scope token bottoms out in the escalate-scope check — no device is
+    /// touched.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn create_encoder_session_rejects_null_scope_token() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut out: *const c_void = std::ptr::null();
+        let mut aw: u32 = 0;
+        let mut ah: u32 = 0;
+        // Valid H.264 descriptor so decode passes and the scope check fires.
+        let desc = streamlib_plugin_abi::VideoEncoderSessionDescriptorRepr {
+            width: 320,
+            height: 240,
+            fps: 30,
+            codec: streamlib_plugin_abi::VideoCodecRepr::H264 as u32,
+            preset: streamlib_plugin_abi::VideoEncoderPresetRepr::Medium as u32,
+            ..Default::default()
+        };
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.create_encoder_session)(
+                std::ptr::null(), // null scope token
+                &desc,
+                &mut out,
+                &mut aw,
+                &mut ah,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len).contains("create_encoder_session: invalid escalate scope"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+        assert!(out.is_null(), "out_session must not be written on error");
+    }
+
+    /// Off-Linux the slot returns a typed "not available on this platform"
+    /// error (`SimpleEncoder` is Linux-only).
+    #[test]
+    #[cfg(not(target_os = "linux"))]
+    fn create_encoder_session_reports_not_available_off_linux() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut out: *const c_void = std::ptr::null();
+        let mut aw: u32 = 0;
+        let mut ah: u32 = 0;
+        let desc = streamlib_plugin_abi::VideoEncoderSessionDescriptorRepr::default();
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.create_encoder_session)(
+                std::ptr::null(),
+                &desc,
+                &mut out,
+                &mut aw,
+                &mut ah,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len).contains("create_encoder_session: not available on this platform")
+        );
     }
 
     #[test]

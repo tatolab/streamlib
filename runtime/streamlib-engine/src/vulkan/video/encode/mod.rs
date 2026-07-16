@@ -235,19 +235,48 @@ impl SimpleEncoder {
         full: &crate::core::context::GpuContextFullAccess,
         config: SimpleEncoderConfig,
     ) -> Result<Self, VideoError> {
-        config.validate().map_err(VideoError::BitstreamError)?;
-
         // Cdylib-safe: `GpuContextFullAccess::device()` returns
         // `&Arc<GpuDevice>` which borrows engine-private state and
         // panics in cdylib mode. Route through the
         // `host_vulkan_device_arc` FullAccess vtable slot so workspace
         // plugin cdylibs (the encoder packages) can construct an
         // encoder without tripping the panic guard.
+        //
+        // This ABI-transit path is retiring (#1265): the modern host-side
+        // construction is [`crate::core::context::GpuContext::create_encoder_session`],
+        // which shares the [`Self::from_host_device`] body below without the
+        // `host_vulkan_device_arc` transit. `from_full_access` stays only
+        // until the encoder packages flip to the cdylib-safe primitive.
         let host_device = full.host_vulkan_device_arc().map_err(|e| {
             VideoError::Engine(format!(
                 "Failed to acquire host Vulkan device for encoder: {e}"
             ))
         })?;
+        Self::from_host_device(host_device, config)
+    }
+
+    /// Create a `SimpleEncoder` directly from a host-owned
+    /// `Arc<HostVulkanDevice>` — the modern, cdylib-safe construction
+    /// path (no `host_vulkan_device_arc` ABI transit). Pulls the host's
+    /// Vulkan instance, device, allocator, and the video encode /
+    /// transfer / compute queues off the Arc; the codec submits through
+    /// the host's per-queue serialization via
+    /// [`crate::vulkan::rhi::HostVulkanDevice::submit_to_queue`]. Backs
+    /// [`crate::core::context::GpuContext::create_encoder_session`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The config is invalid.
+    /// - The host device wasn't created with video encode support
+    ///   ([`vk::QueueFlags::VIDEO_ENCODE_KHR`] queue family missing).
+    /// - Any Vulkan resource creation fails.
+    pub(crate) fn from_host_device(
+        host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
+        config: SimpleEncoderConfig,
+    ) -> Result<Self, VideoError> {
+        config.validate().map_err(VideoError::BitstreamError)?;
+
         let encode_queue = host_device.video_encode_queue().ok_or_else(|| {
             VideoError::BitstreamError(
                 "host device has no video encode queue family — \
