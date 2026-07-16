@@ -75,6 +75,10 @@ In **propose_only** mode, do not launch — instead post the plan-of-record for 
 
 ## 6. PARK anything needing the owner
 When a ticket needs a decision only the repo owner can make (an answered question, a merge, a milestone-scope call, or the attempt cap tripped):
+
+**If the owner is interactively reachable this turn** (the loop is running attended, not a headless cron firing), surface the decision with the **`AskUserQuestion` tool** — it's cleaner than a comment (structured, one-click). Frame 2–4 tight options, and **ALWAYS include an option that lets the owner launch research subagents to help decide** (e.g. "Research it first" → the loop spawns Opus research agents on the decision — approaches, trade-offs, a grounded recommendation — then re-presents). Still mirror the decision as a GitHub comment (below) so there's a durable record, and still record the ticket in "Waiting on the owner".
+
+**When the owner is NOT reachable this turn** (autonomous firing), park it as a GitHub comment instead — `AskUserQuestion` needs a live user:
 - Add the `gate` display label.
 - Post **one** decision comment in this **strict shape**, so the owner sees a pending decision at a glance and can answer in one token without reading prose (the owner has reported not even realizing a decision was pending, buried under paragraphs):
   - **First line is a marked header** — `## ⛔ DECISION NEEDED — <the decision in one line>` (or `## ❓ OWNER QUESTION — <…>`). The marker + the one-line ask must be the very first thing in the comment.
