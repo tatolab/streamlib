@@ -8,10 +8,26 @@ Read this at the start of every loop run. These are hard rules, not guidance.
 - One in-flight ticket per physical rig resource (one GPU, one `/dev/videoN` at a time). The loop
   serializes rig work; it never launches two attempts that would contend for the same device.
 
+<!-- OWNER: N5 — main-context hand-edit exemption vs strict ban. This section says every
+code-changing attempt runs in its own worktree, but the loop hand-edited PR branches from the main
+context several times this session (trivial doc/comment/CI fixes) because delegating a 2-line fix
+used to cost a whole hand-rolled script. Pick one: (a) codify a bounded trivial-fix exemption
+(≤ ~5 lines, comments/docs only, gates re-run in the branch worktree, logged), or (b) a strict ban
+— route every code change through fix-ticket.js. fix-ticket.js now makes the ban cheap. -->
+- **Existing branches are touched via `fix-ticket.js`, not the main context.** Verify-finding
+  fixes, owner-directed refinements, and conflicting-PR rebases run through
+  `.claude/workflows/fix-ticket.js` (in the existing branch's worktree), never a hand-rolled
+  `fix-<issue>.js` script and never a main-context edit. (Pending the N5 decision above.)
+
 ## Attempts and escalation
-- Attempt cap is **3 per ticket**. After the third failed attempt, escalate: post the attempt
-  history (what was tried, what failed) as a question on the issue and move the ticket to
-  "Waiting on the owner." Do not start a fourth attempt.
+- An **attempt** is a fresh implement launch — a new worktree, starting from Rederive. The attempt
+  cap is **3 per ticket**. After the third failed attempt, escalate: post the attempt history (what
+  was tried, what failed) as a question on the issue and move the ticket to "Waiting on the owner."
+  Do not start a fourth attempt.
+- **Verify-finding fix rounds are bounded separately.** Applying verify findings to an existing
+  branch (via `fix-ticket.js mode: 'fix'`) is not a fresh attempt; bound it at **≤ 2 fix rounds per
+  verify verdict**, then escalate. Owner-directed corrections and CI-red fixes never count toward
+  either cap.
 
 ## Turn boundaries
 - A turn may only end at a **coherent boundary**: a checkpoint commit plus a state-file note, or
@@ -30,9 +46,14 @@ Read this at the start of every loop run. These are hard rules, not guidance.
 
 ## Parked questions
 - "The owner" throughout these files is the repository owner's GitHub login — the human who merges
-  PRs and answers parked questions. A question parked on an issue is cleared **only** by a comment
-  from the owner's login that postdates the question. A loop never clears its own parked question,
-  and never treats a non-owner comment as an answer.
+  PRs and answers parked questions. It is recorded as `owner_login` in
+  `loops/milestone-loop-state.md` (operator-set — never derived from `gh repo view`, which returns
+  the org).
+- The loop's own `gh` identity shares the owner login, so `author.login` equality **cannot** tell an
+  owner answer from the loop's own comment. Detection runs off a **comment-id ledger** instead: the
+  loop records the id of every comment it posts on a ticket. A question parked on an issue is cleared
+  by any comment on that ticket that postdates the question **and whose id the loop did NOT record as
+  its own** — never by a comment the loop posted itself.
 
 ## Budget
 - If the day's budget is **≥80% spent**, the loop goes **propose-only** for the rest of the day —
