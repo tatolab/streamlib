@@ -536,6 +536,147 @@ impl GpuContextLimitedAccess {
             Err(Error::GpuError(msg))
         }
     }
+
+    /// Borrow a privileged [`GpuContextFullAccess`] for the duration of
+    /// `f`, then drain the device and release the host's escalate gate.
+    ///
+    /// This is a `process()` body's only path to privileged GPU
+    /// resource-creation (readbacks, texture rings, encoder sessions): the
+    /// host holds its escalate gate across the closure, then `escalate_end`
+    /// drains the device (`wait_device_idle`) inside the gate and releases
+    /// it. A closure panic still runs `escalate_end` — the gate never
+    /// leaks — and then re-raises. Returns [`Error::EscalateBeginRejected`]
+    /// when the host refuses the scope; the actionable cause is a nested
+    /// `escalate` or an `escalate` inside a FullAccess lifecycle body
+    /// (`setup` / `teardown` / Manual `start` / `stop`), both same-thread
+    /// gate re-entry — call `ctx.gpu_full_access().X()` directly in those
+    /// bodies instead.
+    ///
+    /// Two soft contracts the borrow checker does not enforce:
+    /// - Do not spawn a thread that outlives the closure while it still
+    ///   holds `full` — the scope token is invalidated the instant
+    ///   `escalate` returns, so an in-flight FullAccess call from an
+    ///   escaped thread races `escalate_end`.
+    /// - Ending the scope costs a device-wide drain, so do not `escalate`
+    ///   per frame. Escalate once (first frame, or an extent change), cache
+    ///   the created resource, and run per-frame work through that
+    ///   resource's own methods (its `submit` / `try_read` are scope-free).
+    ///
+    /// ```compile_fail
+    /// fn escapes(limited: &streamlib_plugin_sdk::sdk::context::GpuContextLimitedAccess) {
+    ///     // The closure's `&GpuContextFullAccess` is HRTB-scoped to the
+    ///     // escalate window; returning it out of the closure cannot escape
+    ///     // — this fails to compile.
+    ///     let _escaped = limited.escalate(|full| full);
+    /// }
+    /// ```
+    pub fn escalate<R>(&self, f: impl FnOnce(&GpuContextFullAccess) -> R) -> Result<R> {
+        if self.handle.is_null() || self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "escalate: GpuContextLimitedAccess has null handle/vtable".into(),
+            ));
+        }
+        // The FullAccess vtable is ABI-optional (HostServices v6): null on a
+        // host that ships no GpuContext. Check it BEFORE `escalate_begin` so
+        // the GPU-less-host arm never enters — and so never has to leave —
+        // the escalate gate (no cleanup path needed on this error arm).
+        let full_vtable = crate::plugin::host_callbacks()
+            .map(|callbacks| callbacks.gpu_context_full_access_vtable)
+            .unwrap_or(std::ptr::null());
+        if full_vtable.is_null() {
+            return Err(Error::GpuError(
+                "escalate: host did not install a GpuContextFullAccessVTable (GPU-less host)"
+                    .into(),
+            ));
+        }
+        // SAFETY: handle + vtable were paired at construction; the vtable is
+        // `&'static` for the host's lifetime.
+        let vt = unsafe { &*self.vtable };
+
+        let mut scope_token: *const c_void = std::ptr::null();
+        let mut begin_err_buf = [0u8; 512];
+        let mut begin_err_len: usize = 0;
+        // SAFETY: handle + vtable paired at construction; `scope_token` and
+        // the err buffer are live stack storage the host writes the opaque
+        // token / error bytes into.
+        let begin_rc = unsafe {
+            (vt.escalate_begin)(
+                self.handle,
+                &mut scope_token,
+                begin_err_buf.as_mut_ptr(),
+                begin_err_buf.len(),
+                &mut begin_err_len as *mut usize,
+            )
+        };
+        if begin_rc != 0 {
+            // Named variant: the host refused escalate_begin — same-thread
+            // gate re-entry (nested escalate / escalate inside a FullAccess
+            // lifecycle body), caught at the boundary. The host's err_buf
+            // carries the actionable message.
+            let msg =
+                String::from_utf8_lossy(&begin_err_buf[..begin_err_len.min(begin_err_buf.len())])
+                    .into_owned();
+            return Err(Error::EscalateBeginRejected(msg));
+        }
+
+        // Scope-token FullAccess: the opaque token as `handle`, the host's
+        // FullAccess vtable, borrowing (no refcount bump) the originating
+        // LimitedAccess pair for the Option-B mirror-method dispatch. The
+        // borrow is sound because we hold `&self` across the closure. Drop
+        // is a no-op in ScopeToken mode — `escalate_end` below is the single
+        // release authority.
+        let full = GpuContextFullAccess {
+            handle: scope_token,
+            vtable: full_vtable,
+            handle_kind: HandleKind::ScopeToken,
+            inherited_lim_handle: self.handle,
+            inherited_lim_vtable: self.vtable,
+        };
+        // catch_unwind so a closure panic still fires escalate_end (below) —
+        // otherwise the host's escalate gate would leak. AssertUnwindSafe
+        // mirrors the engine twin: `escalate`'s signature adds no
+        // `UnwindSafe` bound on the closure. NOTHING fallible (`?`) runs
+        // between a successful `escalate_begin` and `escalate_end`.
+        let closure_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&full)));
+        drop(full);
+
+        // UNCONDITIONAL: `escalate_end` is the single release authority — it
+        // drains the device (`wait_device_idle`) WHILE holding the gate,
+        // then releases it and invalidates the token. Runs on both the Ok
+        // and the panic path.
+        let mut end_err_buf = [0u8; 512];
+        let mut end_err_len: usize = 0;
+        // SAFETY: same (handle, vtable) pair; `scope_token` is the token
+        // minted by `escalate_begin` above.
+        let end_rc = unsafe {
+            (vt.escalate_end)(
+                self.handle,
+                scope_token,
+                end_err_buf.as_mut_ptr(),
+                end_err_buf.len(),
+                &mut end_err_len as *mut usize,
+            )
+        };
+
+        match closure_result {
+            Ok(value) => {
+                if end_rc != 0 {
+                    let msg =
+                        String::from_utf8_lossy(&end_err_buf[..end_err_len.min(end_err_buf.len())])
+                            .into_owned();
+                    Err(Error::GpuError(format!(
+                        "escalate: escalate_end failed: {msg}"
+                    )))
+                } else {
+                    Ok(value)
+                }
+            }
+            // The closure unwound; `escalate_end` already fired (gate
+            // released). Re-raise the original panic so the plugin's
+            // `process()` sees the panic, not a swallowed error.
+            Err(panic) => std::panic::resume_unwind(panic),
+        }
+    }
 }
 
 // =============================================================================
@@ -546,9 +687,11 @@ impl GpuContextLimitedAccess {
 /// engine-internal in-process constructor sets `Boxed`; the cdylib
 /// vtable-dispatched constructor sets `ScopeToken`. Drop dispatches on
 /// this kind.
-// The SDK never *constructs* a HandleKind (host-built views arrive by
-// pointer); the variants exist for `#[repr(C)]` layout parity and the Drop
-// match. Allow them to be "never constructed" within this crate.
+// `GpuContextLimitedAccess::escalate` is the SDK's only constructor of a
+// `HandleKind` — it builds a `ScopeToken` view for the escalate closure.
+// The `Boxed` variant is host-only (the SDK never mints a
+// `Box<Arc<GpuContext>>` handle); it exists for `#[repr(C)]` layout parity
+// and the Drop match, so the allow keeps its never-constructed state quiet.
 #[allow(dead_code)]
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -570,7 +713,8 @@ pub(crate) enum HandleKind {
 ///
 /// Deliberately **not** `Clone` — a `&GpuContextFullAccess` is borrowed
 /// from a [`RuntimeContextFullAccess`] for the duration of a single
-/// lifecycle call and cannot be stashed.
+/// lifecycle call, or from [`GpuContextLimitedAccess::escalate`] for the
+/// duration of the closure, and cannot be stashed.
 ///
 /// ```compile_fail
 /// fn assert_not_clone<T: Clone>() {}
@@ -1625,5 +1769,130 @@ mod layout_tests {
             offset_of!(RuntimeContextLimitedAccess<'static>, gpu_limited),
             16
         );
+    }
+}
+
+// =============================================================================
+// escalate — GPU-free wrapper tests + hardware-gated round-trip
+// =============================================================================
+//
+// The begin/catch/end sequencing itself is a near-verbatim port of the engine
+// twin `GpuContextLimitedAccess::escalate_via_vtable`, whose host side (gate
+// release, stale-token idempotency, post-`escalate_end` `InvalidEscalateScope`
+// backstop) is locked by the engine's `gpu_lim_escalate_vtable_tests`. These
+// SDK-arm tests lock the wrapper's GPU-free guard arms (typed errors, no UB,
+// closure never runs on a guard path) and compile-lock the privileged
+// happy path for /verify-live.
+#[cfg(all(test, target_os = "linux"))]
+mod escalate_tests {
+    use super::*;
+
+    #[test]
+    fn full_access_method_on_null_vtable_returns_typed_error_not_ub() {
+        // A ScopeToken FullAccess whose vtable is null (a stale / never-armed
+        // view) must return a typed error from every method, never
+        // dereference the null vtable. Mental-revert the
+        // `self.vtable.is_null()` guard in `create_texture_readback` and this
+        // segfaults instead of returning `Err`.
+        let full = GpuContextFullAccess {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+            handle_kind: HandleKind::ScopeToken,
+            inherited_lim_handle: std::ptr::null(),
+            inherited_lim_vtable: std::ptr::null(),
+        };
+        let result = full.create_texture_readback("tap", 16, 16, TextureFormat::Rgba8Unorm);
+        assert!(
+            matches!(result, Err(Error::GpuError(_))),
+            "null-vtable FullAccess call must return a typed GpuError, got {result:?}"
+        );
+        // `full.handle` is null → Drop returns early; no vtable touched.
+    }
+
+    #[test]
+    fn escalate_with_null_handle_returns_typed_error_and_skips_closure() {
+        let limited = GpuContextLimitedAccess {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+        };
+        let closure_ran = std::cell::Cell::new(false);
+        let result = limited.escalate(|_full| {
+            closure_ran.set(true);
+            7u32
+        });
+        assert!(
+            matches!(result, Err(Error::GpuError(_))),
+            "null handle/vtable must return a typed GpuError, got {result:?}"
+        );
+        assert!(
+            !closure_ran.get(),
+            "closure must not run on the null-handle guard path"
+        );
+        // `limited.handle` is null → Drop skips `drop_handle`; no vtable touched.
+    }
+
+    #[test]
+    fn escalate_without_host_full_access_vtable_returns_typed_error_before_touching_vtable() {
+        // The GPU-free test binary installs no HostCallbacks, so the
+        // FullAccess vtable is absent. `escalate` must return a typed error
+        // at the full-access-vtable null-check, which runs BEFORE it
+        // dereferences the LimitedAccess vtable or calls `escalate_begin`.
+        // The fake, never-dereferenced non-null handle/vtable prove that
+        // ordering: were the null-check moved after `&*self.vtable` /
+        // `escalate_begin`, this would deref the fake vtable and crash.
+        // `ManuallyDrop` keeps Drop from touching the fake vtable.
+        let sentinel: u8 = 0;
+        let limited = std::mem::ManuallyDrop::new(GpuContextLimitedAccess {
+            handle: &sentinel as *const u8 as *const c_void,
+            vtable: &sentinel as *const u8 as *const GpuContextLimitedAccessVTable,
+        });
+        let closure_ran = std::cell::Cell::new(false);
+        let result = limited.escalate(|_full| {
+            closure_ran.set(true);
+            1u32
+        });
+        assert!(
+            matches!(result, Err(Error::GpuError(_))),
+            "absent FullAccess vtable must return a typed GpuError, got {result:?}"
+        );
+        assert!(
+            !closure_ran.get(),
+            "closure must not run when no FullAccess vtable is installed"
+        );
+    }
+
+    /// Happy-path compile + round-trip lock, gated on the `hardware-tests`
+    /// feature (needs a live GPU host; see `docs/testing-hardware.md`). Locks
+    /// that `limited.escalate(|full| full.create_texture_readback(...))`
+    /// type-checks and the acquired readback is usable on its own scope-free
+    /// methods. There is no way to mint a host-backed `GpuContextLimitedAccess`
+    /// from the SDK's own test binary, so this cannot run here — /verify-live
+    /// exercises it end-to-end through a host-loaded consumer. The null-handle
+    /// instance keeps an accidental run under the feature to a clean `Err`
+    /// rather than UB.
+    #[test]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "needs a live GPU host; /verify-live runs it"
+    )]
+    fn escalate_create_texture_readback_round_trip() {
+        fn round_trip(limited: &GpuContextLimitedAccess) -> Result<u64> {
+            let readback = limited.escalate(|full| {
+                full.create_texture_readback(
+                    "escalate-round-trip",
+                    64,
+                    64,
+                    TextureFormat::Rgba8Unorm,
+                )
+            })??;
+            // Per-frame use rides the readback's OWN methods — scope-free, no
+            // second escalate.
+            Ok(readback.staging_size())
+        }
+        let limited = GpuContextLimitedAccess {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+        };
+        let _ = round_trip(&limited);
     }
 }
