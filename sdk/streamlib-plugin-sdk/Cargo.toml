@@ -46,5 +46,11 @@ iceoryx2-log = "0.8.1"
 # depend on it instead of the engine).
 streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.6.0" }
 
+[features]
+# Marker feature gating the `escalate` happy-path round-trip test, which needs
+# a live GPU host (mirrors the engine's `hardware-tests`). The GPU-free CI
+# suite leaves that test `ignore`d; /verify-live runs it.
+hardware-tests = []
+
 [lints]
 workspace = true

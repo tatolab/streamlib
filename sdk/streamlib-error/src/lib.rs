@@ -117,6 +117,9 @@ pub enum Error {
     #[error("Invalid escalate scope: {0}")]
     InvalidEscalateScope(String),
 
+    #[error("Escalate begin rejected: {0}")]
+    EscalateBeginRejected(String),
+
     #[error(
         "Plugin ABI version mismatch loading '{plugin_path}': plugin was built \
          against plugin-ABI v{plugin_abi_version}, but this host speaks \

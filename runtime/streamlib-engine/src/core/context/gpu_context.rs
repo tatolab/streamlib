@@ -2641,10 +2641,13 @@ impl GpuContextLimitedAccess {
         };
         let mutex_wait_ns = lock_start.elapsed().as_nanos() as u64;
         if begin_rc != 0 {
+            // The host refused escalate_begin — the actionable cause (a
+            // nested escalate, or an escalate inside a FullAccess lifecycle
+            // body, both same-thread gate re-entry caught at the boundary)
+            // is in the host's err_buf. Surfaced as a typed variant the
+            // caller can match, sibling to `InvalidEscalateScope`.
             let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            return Err(Error::GpuError(format!(
-                "escalate (vtable): escalate_begin failed: {msg}"
-            )));
+            return Err(Error::EscalateBeginRejected(msg));
         }
 
         let closure_start = std::time::Instant::now();
