@@ -17,8 +17,19 @@ crate-type = ["rlib", "cdylib"]
 streamlib-jtd-codegen = {version = "0.6.0"}
 
 [dependencies]
-streamlib = {version = "0.6.0"}
+# Engine-free authoring SDK (never the `streamlib` facade) — capability-typed
+# runtime/GPU context views, the cdylib-safe `TextureReadback` PluginAbiObject,
+# generated wire types under `crate::_generated_::*`, error/result types. GPU
+# resource creation goes through `GpuContextLimitedAccess::escalate` +
+# `create_texture_readback`, never the raw host device.
+streamlib-plugin-sdk = {version = "0.6.0"}
+
+# Procedural macros — `#[streamlib_plugin_sdk::sdk::processor("...")]` reads the
+# crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
 streamlib-macros = {version = "0.6.0"}
+
+# Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
+# runtime dlopens at load time.
 streamlib-plugin-abi = {version = "0.6.0"}
 
 serde = {version = "1.0", features = ["derive"]}

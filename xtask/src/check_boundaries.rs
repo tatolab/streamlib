@@ -983,8 +983,8 @@ const PACKAGES_FACADE_DEP_ALLOWLIST: &[AllowEntry] = &[
     // Shrinking conversion backlog — each drops off as its package converts
     // to the engine-free plugin-authoring SDK. The remaining entries are
     // gated on a new engine-free primitive (present target, exportable
-    // timelines / surface-store registration, hardware encode/decode, GPU
-    // texture readback) that the package names the raw host device without.
+    // timelines / surface-store registration, hardware encode/decode) that
+    // the package names the raw host device without.
     AllowEntry {
         path: "packages/camera/Cargo.toml",
         kind: AllowKind::ExactFile,
@@ -992,11 +992,6 @@ const PACKAGES_FACADE_DEP_ALLOWLIST: &[AllowEntry] = &[
     },
     AllowEntry {
         path: "packages/display/Cargo.toml",
-        kind: AllowKind::ExactFile,
-        rationale: "pre-conversion facade linker (shrinking backlog)",
-    },
-    AllowEntry {
-        path: "packages/frame-tap/Cargo.toml",
         kind: AllowKind::ExactFile,
         rationale: "pre-conversion facade linker (shrinking backlog)",
     },
@@ -1092,9 +1087,9 @@ const ENGINE_BRIDGE_PATH: &str = "streamlib::sdk::engine::";
 /// bare identifier (word boundaries) so a longer lookalike does not trip it.
 const HOST_DEVICE_ARC_IDENT: &str = "host_vulkan_device_arc";
 
-/// The 6 `packages/*` dirs whose source currently reaches the engine bridge or
+/// The 5 `packages/*` dirs whose source currently reaches the engine bridge or
 /// the host device (green baseline). `test-fixtures` is permanent (host-side);
-/// the other 5 are the shrinking conversion backlog.
+/// the other 4 are the shrinking conversion backlog.
 const PACKAGES_ENGINE_REACH_ALLOWLIST: &[AllowEntry] = &[
     AllowEntry {
         path: "packages/test-fixtures/",
@@ -1109,11 +1104,6 @@ const PACKAGES_ENGINE_REACH_ALLOWLIST: &[AllowEntry] = &[
     },
     AllowEntry {
         path: "packages/display/",
-        kind: AllowKind::PathPrefix,
-        rationale: "pre-conversion engine-bridge reacher (shrinking backlog)",
-    },
-    AllowEntry {
-        path: "packages/frame-tap/",
         kind: AllowKind::PathPrefix,
         rationale: "pre-conversion engine-bridge reacher (shrinking backlog)",
     },
