@@ -414,10 +414,17 @@ unsafe extern "C" fn host_ss_register_texture(
                 }
             };
             // SAFETY: produce_done_handle / consume_done_handle, when
-            // non-null, each point at the engine-owned
-            // `Arc<HostVulkanTimelineSemaphore>` (passed by `&Arc<...>`
-            // from engine code through `&*` cast). The
-            // single-writer-per-edge model is documented in
+            // non-null, are each an inner pointer to a host-owned
+            // `HostVulkanTimelineSemaphore` (matching the `register_texture`
+            // vtable slot doc). Both callers supply the same provenance: an
+            // engine caller passes `Arc::as_ptr` / a `&Arc<...>` borrow, and
+            // a cdylib caller passes `Arc::into_raw(Arc<HostVulkanTimelineSemaphore>)`
+            // via the SDK's `cdylib_handle`. Either way the pointee is a
+            // `HostVulkanTimelineSemaphore`, so the `*const HostVulkanTimelineSemaphore`
+            // cast is well-provenanced and the borrow below never takes
+            // ownership (the host retains the semaphore; it only exports its
+            // OPAQUE_FD during this call). The single-writer-per-edge model
+            // is documented in
             // `docs/architecture/adapter-timeline-single-writer.md`.
             let produce_done = unsafe {
                 if produce_done_handle.is_null() {
@@ -1140,5 +1147,131 @@ mod surface_store_vtable_tier1_wire_format_tests {
             err_buf_as_str(&buf, len)
                 .contains("update_image_layout: not available on this platform")
         );
+    }
+
+    /// Positive round-trip (exit-criterion 2 of #1260): a texture
+    /// registered through the producer `register_texture` vtable slot —
+    /// the host side of the SDK `SurfaceStore::register_texture` path —
+    /// is resolvable through the same runtime's surface-share lookup.
+    ///
+    /// Mints a real DMA-BUF render-target texture plus an exportable
+    /// `produce_done` / `consume_done` timeline pair, registers them via
+    /// `HOST_SURFACE_STORE_VTABLE.register_texture` (exactly the bytes the
+    /// cdylib SDK wrapper marshals), then resolves the surface through
+    /// `SurfaceStoreInner::lookup_texture` and asserts the registration is
+    /// visible. Locks criterion 2 against a live device + surface-share
+    /// service; gated identically to the sibling timeline round-trip
+    /// `exportable_timeline_round_trips_through_methods_vtable`.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn register_texture_round_trips_through_surface_store_lookup() {
+        use std::sync::Arc;
+
+        use crate::core::context::GpuContext;
+        use crate::core::context::surface_store::SurfaceStoreInner;
+        use crate::core::rhi::{Texture, TextureDescriptor, TextureFormat, TextureUsages, VulkanLayout};
+        use crate::core::runtime::Runner;
+        use crate::host_rhi::HostTextureExt;
+        use crate::vulkan::rhi::drm_modifier_probe::fourcc;
+        use crate::vulkan::rhi::vulkan_buffer::VULKAN_DEVICE_FOR_IMPORT;
+        use crate::vulkan::rhi::{HostVulkanTexture, HostVulkanTimelineSemaphore};
+
+        // Bring up the process-global host device (also wires
+        // VULKAN_DEVICE_FOR_IMPORT, the device lookup_texture imports
+        // through — keeping register + lookup on one device).
+        if GpuContext::init_for_platform_sync().is_err() {
+            return; // no Vulkan device in this env — skip.
+        }
+        let Some(device) = VULKAN_DEVICE_FOR_IMPORT.get() else {
+            return;
+        };
+
+        // Exportable produce_done / consume_done timelines (single-writer
+        // per edge), minted exactly as the FullAccess slot does.
+        let produce_done = match HostVulkanTimelineSemaphore::new_exportable(device.device(), 0) {
+            Ok(s) => Arc::new(s),
+            Err(_) => return, // VK_KHR_external_semaphore_fd unavailable — skip.
+        };
+        let consume_done = match HostVulkanTimelineSemaphore::new_exportable(device.device(), 0) {
+            Ok(s) => Arc::new(s),
+            Err(_) => return,
+        };
+
+        // A real DMA-BUF render-target texture — the flavor a cross-process
+        // producer registers and the consumer imports via from_dma_buf_fd.
+        let modifiers: Vec<u64> = device
+            .drm_modifier_table()
+            .rt_modifiers(fourcc::DRM_FORMAT_ABGR8888)
+            .to_vec();
+        if modifiers.is_empty() {
+            return; // EGL advertised no RT modifier for this format — skip.
+        }
+        let desc = TextureDescriptor::new(64, 64, TextureFormat::Rgba8Unorm).with_usage(
+            TextureUsages::RENDER_ATTACHMENT
+                | TextureUsages::TEXTURE_BINDING
+                | TextureUsages::COPY_SRC
+                | TextureUsages::COPY_DST,
+        );
+        let vk_texture =
+            match HostVulkanTexture::new_render_target_dma_buf(device, &desc, &modifiers) {
+                Ok(t) => t,
+                Err(_) => return, // no DMA-BUF export on this driver — skip.
+            };
+        let texture = <Texture as HostTextureExt>::from_vulkan(vk_texture);
+
+        // A running surface-share service (Unix socket) for this runtime.
+        let runtime = match Runner::new() {
+            Ok(r) => r,
+            Err(_) => return,
+        };
+        let socket_path = runtime.surface_socket_path().to_string_lossy().to_string();
+        let runtime_id = runtime.runtime_id().to_string();
+
+        let inner = SurfaceStoreInner::new(socket_path, runtime_id);
+        inner.connect().expect("SurfaceStoreInner::connect");
+
+        // Register through the producer vtable slot — the host side of the
+        // SDK `SurfaceStore::register_texture` dispatch. The handle is an
+        // inner Arc pointer (borrowed, not consumed by register); the
+        // timeline handles are inner Arc pointers the slot exports FDs from.
+        let surface_id = "roundtrip-producer-texture";
+        let (mut buf, mut len) = make_err_buf();
+        let rc = unsafe {
+            (HOST_SURFACE_STORE_VTABLE.register_texture)(
+                Arc::as_ptr(&inner) as *const c_void,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                &texture as *const Texture as *const c_void,
+                Arc::as_ptr(&produce_done) as *const c_void,
+                Arc::as_ptr(&consume_done) as *const c_void,
+                VulkanLayout::UNDEFINED.0,
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(
+            rc,
+            0,
+            "register_texture failed: {}",
+            err_buf_as_str(&buf, len)
+        );
+
+        // Criterion 2: the registration is resolvable via surface-share
+        // lookup on the same runtime.
+        let resolved = inner.lookup_texture(surface_id);
+        assert!(
+            resolved.is_ok(),
+            "registration made through the producer surface must be resolvable via \
+             lookup_texture: {:?}",
+            resolved.err()
+        );
+
+        inner.disconnect().ok();
+        drop(texture);
     }
 }

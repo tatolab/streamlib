@@ -153,12 +153,17 @@ pub struct SurfaceStoreVTable {
     // error message.
     /// Register a texture for cross-process sharing. `texture` is a
     /// `*const Texture` PluginAbiObject pointer; `produce_done_handle` and
-    /// `consume_done_handle` are opaque `Arc<HostVulkanTimelineSemaphore>`
+    /// `consume_done_handle` are opaque inner-`HostVulkanTimelineSemaphore`
     /// pointers (null for "no timeline") that carry the
     /// single-writer-per-edge pair documented in
-    /// `docs/architecture/adapter-timeline-single-writer.md` — both
-    /// engine-only, cdylibs pass null. `layout_raw` is the i32
-    /// `VkImageLayout` enumerant.
+    /// `docs/architecture/adapter-timeline-single-writer.md`.
+    ///
+    /// Both engine code and cdylibs supply these: a cdylib mints an
+    /// exportable timeline via the FullAccess
+    /// `create_exportable_timeline_semaphore` slot (#1260) and passes the
+    /// `HostTimelineSemaphore` PluginAbiObject's `handle` field — the same
+    /// `Arc::into_raw(Arc<HostVulkanTimelineSemaphore>)` inner pointer the
+    /// host derefs here. `layout_raw` is the i32 `VkImageLayout` enumerant.
     pub register_texture: unsafe extern "C" fn(
         handle: *const c_void,
         id_ptr: *const u8,
