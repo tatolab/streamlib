@@ -18,6 +18,43 @@ This matches the model every comparable system has converged on
 (Chromium GPU process / Dawn Wire, Unreal RHI + Shader Compile
 Workers, VST3 plugin sandbox, WebGPU/wgpu-core).
 
+## Swapchain / present target — the plugin-ABI surface vs. the subprocess
+
+The swapchain is **not** host-only-by-construction for the plugin ABI.
+A cdylib plugin (workspace member or separately-built engine-free
+`.slpkg`) drives a full-screen swapchain through the present-target
+surface: the FullAccess `create_present_target` slot mints a Box-shaped
+`PresentTarget` PluginAbiObject from a native window handle
+(`RawWindowHandleRepr`), and the per-type `PresentTargetMethodsVTable`
+carries the `begin_frame` / `end_frame` / `recreate` / `set_hdr_metadata`
+frame loop. Because a Rust `FnOnce` closure cannot cross the ABI, the
+host's `render_frame` loop is split into a `begin_frame` (acquire + prime
+the frame's borrowed recorder) / `end_frame` (barrier + submit + present)
+pair; per-image render-finished-semaphore keying stays entirely host-side
+across the split. This is the Unreal RHI viewport model
+(`RHICreateViewport(handle)`): the engine/RHI owns the swapchain,
+whoever owns the OS window hands a native handle across the ABI, the
+caller drives present.
+
+**This is orthogonal to the subprocess carve-out below.** A *subprocess*
+has no window and constructs a consumer-only `VkDevice`, so it never owns
+a swapchain — the "Subprocess has no swapchain" rows in the per-pattern
+table are unchanged. The present-target surface serves in-process,
+workspace-plugin, and engine-free cdylib callers, none of which are
+subprocesses.
+
+**Window + event-loop ownership is host-portable, not baked into the
+ABI.** On Linux the display package that creates the winit window / event
+loop is a platform detail (winit carries no engine dep, and X11 permits
+an off-main-thread loop). On macOS the event loop is main-thread-bound
+(`NSApplication`), so window ownership belongs to the host / application
+layer — a display processor receives the window handle as an input rather
+than assuming it owns the loop. `vkQueuePresentKHR` itself is not
+main-thread-bound, so host-owns-window + processor-presents-on-its-thread
+works on every platform. The `RawWindowHandleRepr` reserves the Win32 /
+AppKit discriminants from day one so Windows / macOS activation lands a
+new host dispatch arm, never an ABI layout bump.
+
 ## The carve-out
 
 A subprocess can't share a host's `VkDevice` across processes — it must

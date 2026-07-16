@@ -3,7 +3,8 @@
 
 //! Swapchain + window-surface orchestrator for the host RHI.
 
-use std::sync::Arc;
+use std::ffi::c_void;
+use std::sync::{Arc, Mutex};
 
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 use vulkanalia::prelude::v1_4::*;
@@ -82,6 +83,88 @@ pub struct VulkanPresentTarget {
     frame_timeline_value: u64,
 
     current_frame: usize,
+
+    /// State stashed between [`Self::begin_frame`] and
+    /// [`Self::end_frame`] for the frame currently being recorded. `None`
+    /// between an `end_frame` and the next `begin_frame` — the state
+    /// machine that lets the plugin-ABI `begin_frame`/`end_frame` split
+    /// (which cannot pass a Rust closure across the boundary) detect a
+    /// misordered call (`begin_frame` while a frame is already in flight,
+    /// or `end_frame` with none) as a typed error instead of UB.
+    in_flight: Option<InFlightFrame>,
+}
+
+/// The per-frame handles [`VulkanPresentTarget::end_frame`] needs, stashed
+/// by [`VulkanPresentTarget::begin_frame`] after acquiring the swapchain
+/// image. Kept host-side and opaque to any plugin-ABI caller — all
+/// per-image render-finished-semaphore keying (VUID-vkQueueSubmit2-
+/// semaphore-03868) stays inside the host across the begin/end split.
+struct InFlightFrame {
+    frame_index: usize,
+    image_index: u32,
+    swapchain_image: vk::Image,
+    render_finished_semaphore: vk::Semaphore,
+    image_available_semaphore: vk::Semaphore,
+    timeline_signal_value: u64,
+}
+
+/// A recorder operation [`VulkanPresentTarget::end_frame`] emits after the
+/// frame's draws, before submit + present.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PresentEndFramePostDrawOp {
+    /// Close a dynamic-rendering pass the frame's draws left open. Must be
+    /// emitted BEFORE [`Self::RecordSwapchainPresentBarrier`] — a
+    /// `vkCmdPipelineBarrier2` layout transition recorded inside an open
+    /// dynamic-rendering instance is `VUID-vkCmdPipelineBarrier2`-class UB.
+    CloseOpenDynamicRenderingPass,
+    /// Record the swapchain post-draw layout barrier
+    /// (COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR).
+    RecordSwapchainPresentBarrier,
+}
+
+/// The ordered post-draw recorder operations `end_frame` emits, given
+/// whether the frame's draws left a dynamic-rendering pass open. A
+/// still-open pass is closed BEFORE the present layout barrier (recording
+/// a barrier inside an open dynamic-rendering instance is UB); a properly
+/// balanced frame emits the barrier alone. Pure so the ordering is
+/// unit-testable without a swapchain — the render-pass-balance guard the
+/// plugin-ABI `begin_frame`/`end_frame` split needs (a plugin can open a
+/// pass via the borrowed recorder and forget to close it), mirroring
+/// [`VulkanPresentTarget::render_frame`]'s closure-path auto-close.
+fn present_end_frame_post_draw_ops(
+    dynamic_rendering_still_open: bool,
+) -> Vec<PresentEndFramePostDrawOp> {
+    let mut ops = Vec::with_capacity(2);
+    if dynamic_rendering_still_open {
+        ops.push(PresentEndFramePostDrawOp::CloseOpenDynamicRenderingPass);
+    }
+    ops.push(PresentEndFramePostDrawOp::RecordSwapchainPresentBarrier);
+    ops
+}
+
+/// Outcome of [`VulkanPresentTarget::begin_frame`]: the acquired
+/// swapchain image + frame-slot state the caller records draws against.
+/// The recorder is left borrowed on the target (`self.recorders[frame_index]`,
+/// already `begin()`'d and pre-barriered) — the caller drives it and then
+/// calls [`VulkanPresentTarget::end_frame`].
+///
+/// Pure-POD (raw `VkImage` / `VkImageView` widened to `u64`) so the
+/// plugin-ABI slot body can populate `PresentFrameBeginRepr` without
+/// touching `vulkanalia` — the RHI boundary keeps every `vk::*` type
+/// inside this crate.
+pub struct AcquiredFrame {
+    /// Frame-in-flight slot index ∈ `[0, MAX_FRAMES_IN_FLIGHT)`.
+    pub frame_index: u32,
+    /// Acquired swapchain image index (host-internal ordering).
+    pub image_index: u32,
+    /// Acquired swapchain `VkImage` (widened to `u64`).
+    pub image_raw: u64,
+    /// `VkImageView` feeding `cmd_begin_dynamic_rendering` (widened to `u64`).
+    pub image_view_raw: u64,
+    /// Current swapchain extent `(width, height)`.
+    pub extent: (u32, u32),
+    /// Swapchain image color format (kernel `attachment_formats` must match).
+    pub color_format: TextureFormat,
 }
 
 /// Active-frame handle passed to the [`VulkanPresentTarget::render_frame`]
@@ -243,6 +326,7 @@ impl VulkanPresentTarget {
             frame_timeline,
             frame_timeline_value: 0,
             current_frame: 0,
+            in_flight: None,
         })
     }
 
@@ -392,19 +476,33 @@ impl VulkanPresentTarget {
         Ok(())
     }
 
-    /// Acquire the next swapchain image, run the caller's `render`
-    /// closure with the recorder in scope, then submit + present.
-    /// Returns `Ok(false)` if the swapchain returned `OUT_OF_DATE_KHR`
-    /// during acquire — callers should drive [`Self::recreate`] and
-    /// retry next frame.
-    #[tracing::instrument(level = "trace", skip(self, render), fields(frame_index = self.current_frame))]
-    pub fn render_frame<F>(&mut self, render: F) -> Result<bool>
-    where
-        F: FnOnce(&mut PresentFrame<'_>) -> Result<()>,
-    {
+    /// Acquire the next swapchain image, wait for slot reuse, then
+    /// `begin()` + pre-barrier (UNDEFINED → COLOR_ATTACHMENT_OPTIMAL) the
+    /// frame slot's recorder and stash the per-frame state for the
+    /// matching [`Self::end_frame`]. Returns `Ok(None)` if the swapchain
+    /// returned `OUT_OF_DATE_KHR` during acquire (the timeline bump is
+    /// rolled back so the next attempt's wait math stays consistent, and
+    /// the caller must drive [`Self::recreate`] and NOT call `end_frame`).
+    ///
+    /// The recorder is left borrowed on the target — reach it via
+    /// `self.recorders[frame_index]` (host-Rust) or the raw handle from
+    /// [`Self::in_flight_recorder_handle`] (plugin ABI). This is the
+    /// non-closure half of the former `render_frame` loop; splitting it
+    /// lets the plugin ABI drive the frame without passing a Rust closure
+    /// across the boundary. Blocks on the slot-reuse timeline wait and the
+    /// `u64::MAX`-timeout acquire.
+    #[tracing::instrument(level = "trace", skip(self), fields(frame_index = self.current_frame))]
+    pub fn begin_frame(&mut self) -> Result<Option<AcquiredFrame>> {
+        if self.in_flight.is_some() {
+            return Err(Error::GpuError(
+                "VulkanPresentTarget::begin_frame: a frame is already in flight — \
+                 end_frame must be called before the next begin_frame"
+                    .into(),
+            ));
+        }
+
         let frame_index = self.current_frame;
         let raw_device = self.device.device();
-        let queue = self.device.queue();
 
         // Slot reuse: wait until frame N-MAX_FRAMES_IN_FLIGHT signaled the timeline.
         self.frame_timeline_value += 1;
@@ -423,13 +521,29 @@ impl VulkanPresentTarget {
                     .wait_semaphores(&wait_info, u64::MAX)
                     .map_err(|e| {
                         Error::GpuError(format!(
-                            "VulkanPresentTarget::render_frame: wait_semaphores (slot reuse): {e}"
+                            "VulkanPresentTarget::begin_frame: wait_semaphores (slot reuse): {e}"
                         ))
                     })?;
             }
         }
 
         let image_available_semaphore = self.image_available_semaphores[frame_index];
+
+        // Begin the frame's recorder BEFORE acquiring the swapchain image.
+        // `begin()` only waits the recorder's completion fence and (re)opens
+        // its command buffer — it never touches the swapchain image — so a
+        // `begin()` failure needs no image cleanup (nothing is acquired yet):
+        // roll back the timeline bump and return. Doing `begin()` AFTER
+        // acquire would strand the acquired image and its signaled
+        // image-available semaphore on a `begin()` failure; the next
+        // `begin_frame` reuses the same frame slot and would re-acquire on
+        // the still-signaled semaphore
+        // (VUID-vkAcquireNextImageKHR-semaphore-01779).
+        if let Err(e) = self.recorders[frame_index].begin() {
+            self.frame_timeline_value = self.frame_timeline_value.saturating_sub(1);
+            return Err(e);
+        }
+
         let image_index = match unsafe {
             raw_device.acquire_next_image_khr(
                 self.swapchain,
@@ -440,15 +554,19 @@ impl VulkanPresentTarget {
         } {
             Ok((index, _)) => index,
             Err(vk::ErrorCode::OUT_OF_DATE_KHR) => {
-                // Caller will drive recreate(). Roll back the timeline
-                // bump so the next attempt's wait math stays consistent.
+                // Caller will drive recreate(). Abandon the recording opened
+                // above (nothing was submitted) so the reused slot begins
+                // clean, and roll back the timeline bump so the next
+                // attempt's wait math stays consistent.
+                self.recorders[frame_index].abort_recording();
                 self.frame_timeline_value = self.frame_timeline_value.saturating_sub(1);
-                return Ok(false);
+                return Ok(None);
             }
             Err(e) => {
+                self.recorders[frame_index].abort_recording();
                 self.frame_timeline_value = self.frame_timeline_value.saturating_sub(1);
                 return Err(Error::GpuError(format!(
-                    "VulkanPresentTarget::render_frame: acquire_next_image_khr: {e}"
+                    "VulkanPresentTarget::begin_frame: acquire_next_image_khr: {e}"
                 )));
             }
         };
@@ -456,21 +574,17 @@ impl VulkanPresentTarget {
         let swapchain_image = self.swapchain_images[image_index as usize];
         let image_view = self.swapchain_image_views[image_index as usize];
         let render_finished_semaphore = self.render_finished_semaphores[image_index as usize];
-
-        // Capture handles needed for end-of-frame work BEFORE borrowing
-        // self.recorders[frame_index] mutably.
         let extent = self.swapchain_extent;
-        let timeline_semaphore = self.frame_timeline.semaphore();
         let timeline_signal_value = self.frame_timeline_value;
         let color_format = self.color_format;
 
-        let recorder = &mut self.recorders[frame_index];
-        recorder.begin()?;
-
         // Pre-draw barrier: swapchain image UNDEFINED → COLOR_ATTACHMENT_OPTIMAL.
-        // UNDEFINED is valid on every reuse because the render pass uses
-        // CLEAR load op (set by `PresentFrame::begin_rendering`).
-        recorder.record_swapchain_image_barrier(
+        // The recorder is Recording (`begin()` succeeded above), so this
+        // cannot fail on the recorder state guard. UNDEFINED is valid on
+        // every reuse because the render pass uses CLEAR load op (set by
+        // `PresentFrame::begin_rendering` / `cmd_begin_dynamic_rendering`
+        // with a clear color).
+        self.recorders[frame_index].record_swapchain_image_barrier(
             swapchain_image,
             vk::ImageLayout::UNDEFINED,
             vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
@@ -480,57 +594,96 @@ impl VulkanPresentTarget {
             vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
         )?;
 
-        let extra_waits: Vec<vk::SemaphoreSubmitInfo> = Vec::new();
-        let mut frame = PresentFrame {
+        self.in_flight = Some(InFlightFrame {
+            frame_index,
+            image_index,
+            swapchain_image,
+            render_finished_semaphore,
+            image_available_semaphore,
+            timeline_signal_value,
+        });
+
+        Ok(Some(AcquiredFrame {
             frame_index: frame_index as u32,
             image_index,
+            image_raw: swapchain_image.as_raw(),
+            image_view_raw: image_view.as_raw(),
             extent: (extent.width, extent.height),
             color_format,
-            recorder,
-            inner: PresentFrameInner {
-                image_view,
-                extra_waits,
-                in_render_pass: false,
-            },
-        };
+        }))
+    }
 
-        let user_result = render(&mut frame);
+    /// Complete the frame acquired by [`Self::begin_frame`]: post-draw
+    /// barrier (COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR), submit (wait
+    /// image-available + `extra_waits`; signal render-finished +
+    /// frame-timeline), and `vkQueuePresentKHR`. Returns `Ok(false)` when
+    /// present returned `OUT_OF_DATE_KHR` (caller should drive
+    /// [`Self::recreate`]).
+    ///
+    /// Always runs even when the caller's own draw calls failed —
+    /// dropping the acquired image without presenting would leave it
+    /// app-owned indefinitely and the next `u64::MAX`-timeout acquire
+    /// would trip `VUID-vkAcquireNextImageKHR-surface-07783`
+    /// (forward-progress). `extra_waits` fold any producer-finished
+    /// timeline waits into the submit wait list. Returns a typed error
+    /// (never UB) when no frame is in flight (misordered begin/end).
+    #[tracing::instrument(level = "trace", skip(self, extra_waits))]
+    pub fn end_frame(&mut self, extra_waits: &[vk::SemaphoreSubmitInfo]) -> Result<bool> {
+        let in_flight = self.in_flight.take().ok_or_else(|| {
+            Error::GpuError(
+                "VulkanPresentTarget::end_frame: no frame in flight — \
+                 begin_frame must return an acquired frame first"
+                    .into(),
+            )
+        })?;
 
-        // If the user opened a render pass and didn't close it, close it now.
-        if frame.inner.in_render_pass {
-            frame.recorder.cmd_end_dynamic_rendering()?;
-            frame.inner.in_render_pass = false;
+        let queue = self.device.queue();
+        let frame_index = in_flight.frame_index;
+        let swapchain_image = in_flight.swapchain_image;
+        let image_available_semaphore = in_flight.image_available_semaphore;
+        let render_finished_semaphore = in_flight.render_finished_semaphore;
+        let timeline_semaphore = self.frame_timeline.semaphore();
+        let timeline_signal_value = in_flight.timeline_signal_value;
+
+        let recorder = &mut self.recorders[frame_index];
+        // Render-pass balance guard across the ABI split: if the frame's
+        // draws opened a dynamic-rendering pass and never closed it (a
+        // plugin drove `begin_frame` via the ABI split and forgot
+        // `cmd_end_dynamic_rendering`), close it BEFORE the post-draw layout
+        // barrier — a `vkCmdPipelineBarrier2` recorded inside an open
+        // dynamic-rendering instance is UB. Mirrors `render_frame`'s
+        // closure-path auto-close so the split path is never weaker than the
+        // host path, and warns so the forgotten-close foot-gun is
+        // observable.
+        let dynamic_rendering_still_open = recorder.host_in_render_pass();
+        for op in present_end_frame_post_draw_ops(dynamic_rendering_still_open) {
+            match op {
+                PresentEndFramePostDrawOp::CloseOpenDynamicRenderingPass => {
+                    tracing::warn!(
+                        frame_index,
+                        "VulkanPresentTarget::end_frame: the frame's draws left a \
+                         dynamic-rendering pass open — auto-closing it before the \
+                         swapchain present barrier (a plugin opened a pass via the \
+                         borrowed recorder and did not call cmd_end_dynamic_rendering; \
+                         a layout barrier inside an open dynamic-rendering instance is \
+                         undefined behavior)"
+                    );
+                    recorder.cmd_end_dynamic_rendering()?;
+                }
+                PresentEndFramePostDrawOp::RecordSwapchainPresentBarrier => {
+                    // Post-draw barrier: COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR.
+                    recorder.record_swapchain_image_barrier(
+                        swapchain_image,
+                        vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
+                        vk::ImageLayout::PRESENT_SRC_KHR,
+                        vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                        vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                        vk::PipelineStageFlags2::NONE,
+                        vk::AccessFlags2::NONE,
+                    )?;
+                }
+            }
         }
-
-        let extra_waits = std::mem::take(&mut frame.inner.extra_waits);
-
-        // Always run the post-draw barrier + submit + present, even on
-        // user error. Dropping the acquired image without presenting
-        // would leave the swapchain image app-owned indefinitely; the
-        // next `vkAcquireNextImageKHR` with UINT64_MAX timeout would
-        // then trip `VUID-vkAcquireNextImageKHR-surface-07783`
-        // (forward progress not guaranteed) and potentially block. On
-        // user error the post-draw barrier sources from the pre-draw
-        // `COLOR_ATTACHMENT_OPTIMAL` layout regardless of what the
-        // user managed to record; the presented image may be
-        // partially-drawn or clear-color black (a visible glitch the
-        // user-error semantics already accept). The
-        // `image_available_semaphore` is consumed via the submit's
-        // wait list and `render_finished_semaphore` is signaled
-        // normally so the present wait succeeds. The user error
-        // propagates to the caller AFTER the swapchain is back in a
-        // consistent state.
-        //
-        // Post-draw barrier: swapchain image COLOR_ATTACHMENT_OPTIMAL → PRESENT_SRC_KHR.
-        frame.recorder.record_swapchain_image_barrier(
-            swapchain_image,
-            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            vk::ImageLayout::PRESENT_SRC_KHR,
-            vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
-            vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
-            vk::PipelineStageFlags2::NONE,
-            vk::AccessFlags2::NONE,
-        )?;
 
         // Submit: wait on image_available (binary, COLOR_ATTACHMENT_OUTPUT)
         // + any caller-added timeline waits; signal render_finished (binary,
@@ -543,7 +696,7 @@ impl VulkanPresentTarget {
                 .stage_mask(vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT)
                 .build(),
         );
-        wait_infos.extend_from_slice(&extra_waits);
+        wait_infos.extend_from_slice(extra_waits);
 
         let signal_infos = [
             vk::SemaphoreSubmitInfo::builder()
@@ -557,13 +710,12 @@ impl VulkanPresentTarget {
                 .build(),
         ];
 
-        let recorder = &mut self.recorders[frame_index];
         recorder.submit_with_semaphores(&wait_infos, &signal_infos)?;
 
         // Present.
         let present_wait_semaphores = [render_finished_semaphore];
         let swapchains = [self.swapchain];
-        let image_indices = [image_index];
+        let image_indices = [in_flight.image_index];
         let present_info = vk::PresentInfoKHR::builder()
             .wait_semaphores(&present_wait_semaphores)
             .swapchains(&swapchains)
@@ -575,20 +727,115 @@ impl VulkanPresentTarget {
             Ok(_) => false,
             Err(vk::ErrorCode::OUT_OF_DATE_KHR) => true,
             Err(e) => {
+                self.current_frame = (frame_index + 1) % MAX_FRAMES_IN_FLIGHT;
                 return Err(Error::GpuError(format!(
-                    "VulkanPresentTarget::render_frame: queue_present: {e}"
+                    "VulkanPresentTarget::end_frame: queue_present: {e}"
                 )));
             }
         };
 
         self.current_frame = (frame_index + 1) % MAX_FRAMES_IN_FLIGHT;
-
-        // Propagate the user closure's error AFTER the swapchain image
-        // has been presented back. The frame is "done" from the
-        // swapchain's perspective; the caller still sees the error.
-        user_result?;
-
         Ok(!out_of_date)
+    }
+
+    /// Wire-format companion to [`Self::end_frame`]: materializes the
+    /// `vk::SemaphoreSubmitInfo` extra-waits from their `#[repr(C)]`
+    /// [`streamlib_plugin_abi::SemaphoreSubmitInfoRepr`] projections
+    /// host-side (the RHI boundary keeps `vulkanalia` inside this crate),
+    /// then dispatches [`Self::end_frame`]. The plugin-ABI `end_frame`
+    /// slot body calls this so it never names a `vk::*` type.
+    pub fn end_frame_from_wire(
+        &mut self,
+        extra_waits: &[streamlib_plugin_abi::SemaphoreSubmitInfoRepr],
+    ) -> Result<bool> {
+        let vk_waits: Vec<vk::SemaphoreSubmitInfo> = extra_waits
+            .iter()
+            .map(|r| {
+                vk::SemaphoreSubmitInfo::builder()
+                    .semaphore(vk::Semaphore::from_raw(r.semaphore))
+                    .value(r.value)
+                    .stage_mask(vk::PipelineStageFlags2::from_bits_truncate(r.stage_mask))
+                    .device_index(r.device_index)
+                    .build()
+            })
+            .collect();
+        self.end_frame(&vk_waits)
+    }
+
+    /// Raw `Box<RhiCommandRecorderInner>` pointer of the in-flight frame's
+    /// recorder, or null when no frame is in flight. Borrowed, NON-OWNING
+    /// — the present target owns the recorder across the begin/end split;
+    /// a caller must never release it. Used by the plugin-ABI `begin_frame`
+    /// return (recorder handle) + `end_frame` recorder-identity check.
+    pub fn in_flight_recorder_handle(&self) -> *const std::ffi::c_void {
+        match &self.in_flight {
+            Some(f) => self.recorders[f.frame_index].raw_handle(),
+            None => std::ptr::null(),
+        }
+    }
+
+    /// Acquire the next swapchain image, run the caller's `render`
+    /// closure with the recorder in scope, then submit + present.
+    /// Returns `Ok(false)` if the swapchain returned `OUT_OF_DATE_KHR`
+    /// during acquire — callers should drive [`Self::recreate`] and
+    /// retry next frame. Reimplemented atop the
+    /// [`Self::begin_frame`]/[`Self::end_frame`] split so the host-Rust
+    /// closure API and the plugin-ABI split share one frame-loop
+    /// implementation.
+    #[tracing::instrument(level = "trace", skip(self, render))]
+    pub fn render_frame<F>(&mut self, render: F) -> Result<bool>
+    where
+        F: FnOnce(&mut PresentFrame<'_>) -> Result<()>,
+    {
+        let acquired = match self.begin_frame()? {
+            Some(a) => a,
+            None => return Ok(false),
+        };
+        let frame_index = acquired.frame_index as usize;
+
+        let recorder = &mut self.recorders[frame_index];
+        let mut frame = PresentFrame {
+            frame_index: acquired.frame_index,
+            image_index: acquired.image_index,
+            extent: acquired.extent,
+            color_format: acquired.color_format,
+            recorder,
+            inner: PresentFrameInner {
+                image_view: vk::ImageView::from_raw(acquired.image_view_raw),
+                extra_waits: Vec::new(),
+                in_render_pass: false,
+            },
+        };
+
+        let user_result = render(&mut frame);
+
+        // If the render closure opened a dynamic-rendering pass and didn't
+        // close it, close it now — before `end_frame`'s post-draw barrier —
+        // so a barrier is never recorded inside an open pass (UB). Same
+        // auto-close the ABI split path applies in `end_frame`; warn so the
+        // forgotten-close foot-gun is observable on the host path too.
+        if frame.inner.in_render_pass {
+            tracing::warn!(
+                frame_index = acquired.frame_index,
+                "VulkanPresentTarget::render_frame: the render closure left a \
+                 dynamic-rendering pass open — auto-closing it before submit (call \
+                 PresentFrame::end_rendering to close it explicitly)"
+            );
+            frame.recorder.cmd_end_dynamic_rendering()?;
+            frame.inner.in_render_pass = false;
+        }
+
+        // Move the caller-accumulated timeline waits out before releasing
+        // the recorder borrow so `end_frame` can fold them into the submit.
+        let extra_waits = std::mem::take(&mut frame.inner.extra_waits);
+        drop(frame);
+
+        // Always barrier + submit + present, even on user draw error (see
+        // `end_frame`'s forward-progress note); propagate the user error
+        // AFTER the swapchain image is presented back consistent.
+        let present_ok = self.end_frame(&extra_waits)?;
+        user_result?;
+        Ok(present_ok)
     }
 }
 
@@ -672,6 +919,117 @@ impl Drop for VulkanPresentTarget {
 
 unsafe impl Send for VulkanPresentTarget {}
 unsafe impl Sync for VulkanPresentTarget {}
+
+/// Boxed, `Mutex`-guarded [`VulkanPresentTarget`] backing a
+/// [`PresentTarget`] PluginAbiObject handle. The `Mutex` matches
+/// `RhiCommandRecorderInner`'s state-guard discipline: the plugin-ABI
+/// method bodies `try_lock` it so a concurrent or misordered
+/// `begin_frame`/`end_frame` returns a typed error rather than aliasing
+/// `&mut VulkanPresentTarget` (UB). Single-owner — leaked with
+/// [`Box::into_raw`] at mint, reclaimed with `Box::from_raw` at drop.
+pub type PresentTargetInner = Mutex<VulkanPresentTarget>;
+
+/// Layout-stable `#[repr(C)]` PluginAbiObject projecting the host
+/// [`VulkanPresentTarget`] swapchain orchestrator across the plugin ABI.
+///
+/// **Box-shaped, drop-only (`!Clone`).** The opaque `handle` points at a
+/// `Box<PresentTargetInner>` (`Box<Mutex<VulkanPresentTarget>>`); the
+/// target is single-owner, `!Clone`, `Drop`-heavy (drains + destroys the
+/// surface / swapchain / semaphores / recorders), so it maps onto the
+/// [`RhiCommandRecorder`] Box precedent, not the Arc clone/drop pair.
+/// Drop dispatches the parent [`GpuContextFullAccessVTable`]'s
+/// `drop_present_target` slot (`Box::from_raw` + drop in host-compiled
+/// code, keeping every `vkDestroy*` inside the host build). A raw
+/// `repr(Rust)` `Arc<VulkanPresentTarget>` transiting a separately-built
+/// `.slpkg` would be cross-build layout skew — see
+/// `docs/learnings/slpkg-raw-device-rhi-construction.md`; the Box
+/// PluginAbiObject is what keeps destruction host-side.
+///
+/// Per-frame method dispatch (`begin_frame` / `end_frame` / `recreate` /
+/// `set_hdr_metadata`) routes through the per-type
+/// [`streamlib_plugin_abi::PresentTargetMethodsVTable`]; the swapchain
+/// color format is a cached POD field (`color_format_raw`) read with a
+/// zero-hop `&self` getter and refreshed on `recreate`.
+#[repr(C)]
+pub struct PresentTarget {
+    /// Opaque handle to the host's `Box<PresentTargetInner>`.
+    pub(crate) handle: *const c_void,
+    /// Parent vtable for plugin-ABI Drop dispatch (`drop_present_target`).
+    pub(crate) vtable: *const streamlib_plugin_abi::GpuContextFullAccessVTable,
+    /// Per-type vtable for plugin-ABI method dispatch. Null in a
+    /// vtable-less host-mode construction; populated by
+    /// [`Self::from_target`].
+    pub(crate) methods_vtable: *const streamlib_plugin_abi::PresentTargetMethodsVTable,
+    /// Cached swapchain-image `TextureFormat` `#[repr(u32)]` discriminant.
+    /// Refreshed from the `recreate` slot's `out_color_format_raw` so a
+    /// format flip (SDR BGRA8 → HDR10 FP16) never leaves a stale getter.
+    pub(crate) color_format_raw: u32,
+    /// Reserved padding (keeps the struct a multiple of 8; zero, never read).
+    pub(crate) _padding: u32,
+}
+
+// SAFETY: `handle` points at a `Box<Mutex<VulkanPresentTarget>>`; the
+// inner is Send + Sync (VulkanPresentTarget is Send + Sync and the Mutex
+// serializes access). The vtable pointers are `'static` host statics.
+unsafe impl Send for PresentTarget {}
+unsafe impl Sync for PresentTarget {}
+
+impl PresentTarget {
+    /// Leak `target` as a `Box<PresentTargetInner>` opaque handle and
+    /// resolve the host-mode parent + per-type vtables, caching the
+    /// initial swapchain color format. Minting entry point for the
+    /// FullAccess `create_present_target` slot body.
+    pub fn from_target(target: VulkanPresentTarget) -> Self {
+        let color_format_raw = target.color_format() as u32;
+        let handle = Box::into_raw(Box::new(Mutex::new(target))) as *const c_void;
+        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
+        let methods_vtable =
+            crate::core::plugin::host_services::host_present_target_methods_vtable();
+        Self {
+            handle,
+            vtable,
+            methods_vtable,
+            color_format_raw,
+            _padding: 0,
+        }
+    }
+
+    /// Swapchain image color format `#[repr(u32)]` discriminant — a
+    /// zero-hop cached-POD read (no plugin-ABI hop). Refreshed on
+    /// `recreate`.
+    pub fn color_format_raw(&self) -> u32 {
+        self.color_format_raw
+    }
+
+    /// Opaque `Box<PresentTargetInner>` handle. Borrowed — the plugin-ABI
+    /// method slots (`begin_frame` / `end_frame` / `recreate` /
+    /// `set_hdr_metadata`) take it as `present_handle`. A host-side test
+    /// harness drives the surface by passing this to the methods vtable.
+    pub fn handle(&self) -> *const c_void {
+        self.handle
+    }
+}
+
+impl Drop for PresentTarget {
+    fn drop(&mut self) {
+        if !self.handle.is_null() && !self.vtable.is_null() {
+            // SAFETY: matched with `Box::into_raw` in `from_target`; the
+            // vtable's `drop_present_target` runs `Box::from_raw` + drop
+            // host-side.
+            unsafe {
+                ((*self.vtable).drop_present_target)(self.handle);
+            }
+        }
+    }
+}
+
+impl std::fmt::Debug for PresentTarget {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PresentTarget")
+            .field("color_format_raw", &self.color_format_raw)
+            .finish()
+    }
+}
 
 /// Engine-internal: surface + dimensions + ColorTraits hint → swapchain
 /// handle chain. Returns `(swapchain, images, image_views, format,
@@ -936,6 +1294,36 @@ mod tests {
         HostVulkanDevice::new().ok()
     }
 
+    /// Consumer half of the render-pass-balance seam (#1258): when the
+    /// frame's draws left a dynamic-rendering pass open at `end_frame`, the
+    /// post-draw sequence MUST close it before the swapchain present
+    /// barrier — a `vkCmdPipelineBarrier2` recorded inside an open
+    /// dynamic-rendering instance is UB. `end_frame` drives exactly
+    /// `present_end_frame_post_draw_ops`, so locking the ordering here locks
+    /// the guard. Mentally reverting the guard (dropping the
+    /// `CloseOpenDynamicRenderingPass` op) makes the open-pass case emit the
+    /// barrier with no preceding close and fails this test. GPU-free: runs
+    /// in the normal suite. The producer half (the recorder-inner flag is
+    /// set by `cmd_begin_dynamic_rendering`) is locked by
+    /// `vulkan_command_recorder::tests::dynamic_rendering_balance_tracks_open_then_close`.
+    #[test]
+    fn end_frame_closes_open_dynamic_rendering_before_present_barrier() {
+        use PresentEndFramePostDrawOp::{CloseOpenDynamicRenderingPass, RecordSwapchainPresentBarrier};
+
+        // Pass left open: close precedes the present barrier.
+        assert_eq!(
+            present_end_frame_post_draw_ops(true),
+            vec![CloseOpenDynamicRenderingPass, RecordSwapchainPresentBarrier],
+            "an open dynamic-rendering pass must be closed BEFORE the present barrier"
+        );
+        // Pass properly closed: barrier only, no spurious close.
+        assert_eq!(
+            present_end_frame_post_draw_ops(false),
+            vec![RecordSwapchainPresentBarrier],
+            "a balanced frame records the present barrier alone"
+        );
+    }
+
     /// `vk_format_to_texture_format` is the format-mapping seam between
     /// swapchain surface negotiation and the kernel's
     /// `AttachmentFormats`. Mentally reverting any arm — say,
@@ -1037,6 +1425,36 @@ mod tests {
     #[test]
     fn max_frames_in_flight_is_two() {
         assert_eq!(MAX_FRAMES_IN_FLIGHT, 2);
+    }
+
+    /// The `PresentTarget` PluginAbiObject is `#[repr(C)]` and must stay
+    /// byte-identical to the SDK twin
+    /// (`sdk/streamlib-plugin-sdk/src/rhi/present_target.rs`). Both arms
+    /// pin this layout; a drift on either side is a silent cross-build
+    /// corruption. Mentally reverting a field reorder makes this fail.
+    #[test]
+    fn present_target_pluginabiobject_layout() {
+        use core::mem::{align_of, offset_of, size_of};
+        assert_eq!(size_of::<PresentTarget>(), 32);
+        assert_eq!(align_of::<PresentTarget>(), 8);
+        assert_eq!(offset_of!(PresentTarget, handle), 0);
+        assert_eq!(offset_of!(PresentTarget, vtable), 8);
+        assert_eq!(offset_of!(PresentTarget, methods_vtable), 16);
+        assert_eq!(offset_of!(PresentTarget, color_format_raw), 24);
+        assert_eq!(offset_of!(PresentTarget, _padding), 28);
+    }
+
+    /// `PresentTarget` is deliberately NOT `Clone` — the backing
+    /// `VulkanPresentTarget` is single-owner `Drop`-heavy, so the parent
+    /// vtable carries only `drop_present_target`, no clone slot.
+    /// ```compile_fail
+    /// fn assert_clone<T: Clone>() {}
+    /// assert_clone::<streamlib_engine::vulkan::rhi::PresentTarget>();
+    /// ```
+    #[test]
+    fn present_target_is_send_sync() {
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<PresentTarget>();
     }
 
     /// `PresentFrame::add_timeline_wait` must accumulate in insertion

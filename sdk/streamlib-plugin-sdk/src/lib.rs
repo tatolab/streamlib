@@ -119,14 +119,14 @@ pub mod sdk {
             GraphicsKernelDescriptor, GraphicsPipelineState, GraphicsPushConstants,
             GraphicsShaderStage, GraphicsShaderStageFlags, GraphicsStage, HostTimelineSemaphore,
             ImageCopyRegion, IndexType, MultisampleState, NativeTextureHandle,
-            OffscreenColorTarget, OffscreenDraw, PixelFormat, PolygonMode, PrimitiveTopology,
-            RasterizationState, ReadbackTicket, RhiColorConverter, RhiCommandRecorder, ScissorRect,
-            SourceLayoutInfo, StorageBuffer, SurfaceStore, TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES,
-            Texture, TextureDescriptor, TextureFormat, TextureReadback, TextureRing,
-            TextureRingSlot, TextureSourceLayout, TextureUsages, VertexAttributeFormat,
-            VertexInputAttribute, VertexInputBinding, VertexInputRate, VertexInputState, Viewport,
-            VulkanAccess, VulkanComputeKernel, VulkanGraphicsKernel, VulkanLayout, VulkanStage,
-            pixel_format_color_kind,
+            OffscreenColorTarget, OffscreenDraw, PixelFormat, PolygonMode, PresentTarget,
+            PresentTargetFrame, PrimitiveTopology, RasterizationState, ReadbackTicket,
+            RhiColorConverter, RhiCommandRecorder, ScissorRect, SourceLayoutInfo, StorageBuffer,
+            SurfaceStore, TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES, Texture, TextureDescriptor,
+            TextureFormat, TextureReadback, TextureRing, TextureRingSlot, TextureSourceLayout,
+            TextureUsages, VertexAttributeFormat, VertexInputAttribute, VertexInputBinding,
+            VertexInputRate, VertexInputState, Viewport, VulkanAccess, VulkanComputeKernel,
+            VulkanGraphicsKernel, VulkanLayout, VulkanStage, pixel_format_color_kind,
         };
     }
 

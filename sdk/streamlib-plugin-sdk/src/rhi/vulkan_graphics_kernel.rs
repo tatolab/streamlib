@@ -360,7 +360,7 @@ fn zero_scissor_repr() -> streamlib_plugin_abi::ScissorRectRepr {
     }
 }
 
-fn draw_call_to_repr(d: &super::DrawCall) -> streamlib_plugin_abi::DrawCallRepr {
+pub(crate) fn draw_call_to_repr(d: &super::DrawCall) -> streamlib_plugin_abi::DrawCallRepr {
     let (viewport_present, viewport) = match d.viewport {
         Some(v) => (1u32, viewport_to_repr(v)),
         None => (0u32, zero_viewport_repr()),
@@ -381,7 +381,7 @@ fn draw_call_to_repr(d: &super::DrawCall) -> streamlib_plugin_abi::DrawCallRepr 
     }
 }
 
-fn draw_indexed_call_to_repr(
+pub(crate) fn draw_indexed_call_to_repr(
     d: &super::DrawIndexedCall,
 ) -> streamlib_plugin_abi::DrawIndexedCallRepr {
     let (viewport_present, viewport) = match d.viewport {

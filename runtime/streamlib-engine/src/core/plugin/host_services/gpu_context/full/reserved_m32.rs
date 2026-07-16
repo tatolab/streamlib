@@ -33,6 +33,207 @@ use super::super::scope_token::with_full_scope_or_err;
 // Present target (#1258)
 // ============================================================================
 
+/// Borrowed-native-handle shim implementing `raw-window-handle`'s
+/// `HasWindowHandle` + `HasDisplayHandle` from the flattened
+/// [`RawWindowHandleRepr`], so `VulkanPresentTarget::new` can build a
+/// `VkSurfaceKHR` from the caller's window without the SDK ever naming a
+/// `vk::*` type. The caller (SDK / winit event loop) owns the native
+/// window and guarantees the borrowed window + display pointers remain
+/// valid until the minted `PresentTarget` is dropped — a Wayland / Xlib
+/// `VkSurfaceKHR` retains the display connection, and `vkDestroySurfaceKHR`
+/// (at `PresentTarget` drop, not at this call's return) dereferences it.
+#[cfg(target_os = "linux")]
+struct RawWindowHandleShim {
+    window: raw_window_handle::RawWindowHandle,
+    display: raw_window_handle::RawDisplayHandle,
+}
+
+#[cfg(target_os = "linux")]
+impl raw_window_handle::HasWindowHandle for RawWindowHandleShim {
+    fn window_handle(
+        &self,
+    ) -> Result<raw_window_handle::WindowHandle<'_>, raw_window_handle::HandleError> {
+        // SAFETY: per the struct-level contract the caller keeps the
+        // borrowed native window pointer valid until the minted
+        // PresentTarget is dropped (vkDestroySurfaceKHR), which outlives
+        // this borrow.
+        Ok(unsafe { raw_window_handle::WindowHandle::borrow_raw(self.window) })
+    }
+}
+
+#[cfg(target_os = "linux")]
+impl raw_window_handle::HasDisplayHandle for RawWindowHandleShim {
+    fn display_handle(
+        &self,
+    ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
+        // SAFETY: per the struct-level contract the caller keeps the
+        // borrowed native display pointer valid until the minted
+        // PresentTarget is dropped — a Wayland / Xlib VkSurfaceKHR retains
+        // the display connection, which vkDestroySurfaceKHR dereferences at
+        // PresentTarget drop, well after this borrow ends.
+        Ok(unsafe { raw_window_handle::DisplayHandle::borrow_raw(self.display) })
+    }
+}
+
+#[cfg(target_os = "linux")]
+#[allow(clippy::too_many_arguments)]
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_create_present_target(
+    scope_token: *const c_void,
+    window: *const RawWindowHandleRepr,
+    width: u32,
+    height: u32,
+    vsync: u32,
+    color: *const ColorTraitsRepr,
+    out_present_target: *mut c_void,
+    err_buf: *mut u8,
+    err_buf_cap: usize,
+    err_len: *mut usize,
+) -> i32 {
+    use std::num::NonZeroU32;
+    use std::os::raw::{c_int, c_ulong};
+    use std::ptr::NonNull;
+
+    use raw_window_handle::{
+        RawDisplayHandle, RawWindowHandle, WaylandDisplayHandle, WaylandWindowHandle,
+        XcbDisplayHandle, XcbWindowHandle, XlibDisplayHandle, XlibWindowHandle,
+    };
+
+    use super::super::super::shared::wire::write_err;
+    use super::super::scope_token::with_full_scope_or_err;
+
+    run_host_extern_c(
+        "host_gpu_full_create_present_target",
+        || -> i32 {
+            if out_present_target.is_null() || window.is_null() {
+                write_err(
+                    "create_present_target: null window / out_present_target",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
+                return 1;
+            }
+            // SAFETY: `window` non-null per the guard; read once by ref (POD).
+            let repr = unsafe { &*window };
+            let shim = match repr.kind {
+                0 => {
+                    // Xlib: window is an XID (c_ulong); display is optional.
+                    let wh = XlibWindowHandle::new(repr.window_or_surface as c_ulong);
+                    let display = NonNull::new(repr.display_or_connection as *mut c_void);
+                    let dh = XlibDisplayHandle::new(display, repr.screen as c_int);
+                    RawWindowHandleShim {
+                        window: RawWindowHandle::Xlib(wh),
+                        display: RawDisplayHandle::Xlib(dh),
+                    }
+                }
+                1 => {
+                    // Xcb: window is a non-zero u32; connection is optional.
+                    let Some(xcb_window) = NonZeroU32::new(repr.window_or_surface as u32) else {
+                        write_err(
+                            "create_present_target: Xcb window handle is zero (invalid)",
+                            err_buf,
+                            err_buf_cap,
+                            err_len,
+                        );
+                        return 1;
+                    };
+                    let wh = XcbWindowHandle::new(xcb_window);
+                    let connection = NonNull::new(repr.display_or_connection as *mut c_void);
+                    let dh = XcbDisplayHandle::new(connection, repr.screen as c_int);
+                    RawWindowHandleShim {
+                        window: RawWindowHandle::Xcb(wh),
+                        display: RawDisplayHandle::Xcb(dh),
+                    }
+                }
+                2 => {
+                    // Wayland: wl_surface* + wl_display* both required.
+                    let Some(surface) = NonNull::new(repr.window_or_surface as *mut c_void) else {
+                        write_err(
+                            "create_present_target: Wayland wl_surface pointer is null (invalid)",
+                            err_buf,
+                            err_buf_cap,
+                            err_len,
+                        );
+                        return 1;
+                    };
+                    let Some(display) = NonNull::new(repr.display_or_connection as *mut c_void)
+                    else {
+                        write_err(
+                            "create_present_target: Wayland wl_display pointer is null (invalid)",
+                            err_buf,
+                            err_buf_cap,
+                            err_len,
+                        );
+                        return 1;
+                    };
+                    let wh = WaylandWindowHandle::new(surface);
+                    let dh = WaylandDisplayHandle::new(display);
+                    RawWindowHandleShim {
+                        window: RawWindowHandle::Wayland(wh),
+                        display: RawDisplayHandle::Wayland(dh),
+                    }
+                }
+                3 | 4 => {
+                    // Win32 (3) / AppKit (4) discriminants reserved from day
+                    // one — activation lands only a new dispatch arm here,
+                    // never an ABI layout bump. Apple's display path is
+                    // CAMetalLayer, outside this surface.
+                    return not_yet_provided(
+                        "create_present_target (Win32/AppKit reserved)",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                }
+                other => {
+                    write_err(
+                        &format!("create_present_target: unknown window-handle kind {other}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
+
+            let color_traits =
+                super::super::super::present_target::color_traits_from_repr(color);
+            let result = with_full_scope_or_err(
+                scope_token,
+                "create_present_target",
+                err_buf,
+                err_buf_cap,
+                err_len,
+                |gpu| gpu.create_present_target(&shim, width, height, vsync != 0, color_traits.as_ref()),
+            );
+            match result {
+                Some(Ok(present_target)) => {
+                    // SAFETY: `out_present_target` is the caller's
+                    // `PresentTarget` slot — a `#[repr(C)]` 32-byte POD
+                    // (handle, vtable, methods_vtable, color_format_raw,
+                    // padding). Written by value; the cdylib's Drop later
+                    // dispatches `drop_present_target` (`Box::from_raw` +
+                    // drop host-side).
+                    unsafe {
+                        std::ptr::write(
+                            out_present_target as *mut crate::vulkan::rhi::PresentTarget,
+                            present_target,
+                        );
+                    }
+                    0
+                }
+                Some(Err(e)) => {
+                    write_err(&format!("{e}"), err_buf, err_buf_cap, err_len);
+                    1
+                }
+                None => 1,
+            }
+        },
+        1,
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
 #[allow(clippy::too_many_arguments)]
 pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_create_present_target(
     _gpu_handle: *const c_void,
@@ -53,6 +254,31 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cr
     )
 }
 
+#[cfg(target_os = "linux")]
+pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_present_target(
+    owned_handle: *const c_void,
+) {
+    run_host_extern_c(
+        "host_gpu_full_drop_present_target",
+        || {
+            if owned_handle.is_null() {
+                return;
+            }
+            // SAFETY: `owned_handle` is
+            // `Box::into_raw(Box<PresentTargetInner>)`-shaped
+            // (`Box<Mutex<VulkanPresentTarget>>`) from
+            // `PresentTarget::from_target`. Reconstruct the Box and let
+            // Drop run — every `vkDestroySwapchainKHR` /
+            // `vkDestroySurfaceKHR` / semaphore teardown runs host-side.
+            unsafe {
+                let _ = Box::from_raw(owned_handle as *mut crate::vulkan::rhi::PresentTargetInner);
+            }
+        },
+        (),
+    )
+}
+
+#[cfg(not(target_os = "linux"))]
 pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_drop_present_target(
     owned_handle: *const c_void,
 ) {
@@ -350,14 +576,90 @@ mod reserved_m32_wire_format_tests {
         std::str::from_utf8(&buf[..len]).expect("UTF-8")
     }
 
+    /// Tier-1 wire test: a null out-param short-circuits to a typed
+    /// error before any scope / window decode. Mentally reverting the
+    /// null guard to a deref segfaults instead of returning rc 1.
+    #[cfg(target_os = "linux")]
     #[test]
-    fn create_present_target_reports_not_yet_provided() {
+    fn create_present_target_null_out_is_typed_error() {
         let (mut buf, mut len) = make_err_buf();
-        let mut out = [0u8; 64];
+        // Non-null window, null out → the null-out branch fires.
+        let window = streamlib_plugin_abi::RawWindowHandleRepr::default();
         let rc = unsafe {
             (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.create_present_target)(
                 std::ptr::null(),
+                &window,
+                64,
+                64,
+                1,
                 std::ptr::null(),
+                std::ptr::null_mut(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut len,
+            )
+        };
+        assert_eq!(rc, 1);
+        assert!(
+            err_buf_as_str(&buf, len).contains("null window / out_present_target"),
+            "got: {}",
+            err_buf_as_str(&buf, len)
+        );
+    }
+
+    /// Tier-1 wire test: the reserved Win32 (3) / AppKit (4)
+    /// discriminants return the typed not-yet-provided refusal BEFORE
+    /// scope resolution — activation lands a new dispatch arm, never a
+    /// layout bump.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn create_present_target_reserved_win32_appkit_is_not_yet_provided() {
+        for kind in [3u32, 4u32] {
+            let (mut buf, mut len) = make_err_buf();
+            let mut out = [0u8; 32];
+            let window = streamlib_plugin_abi::RawWindowHandleRepr {
+                kind,
+                window_or_surface: 0x1000,
+                ..Default::default()
+            };
+            let rc = unsafe {
+                (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.create_present_target)(
+                    std::ptr::null(),
+                    &window,
+                    64,
+                    64,
+                    1,
+                    std::ptr::null(),
+                    out.as_mut_ptr() as *mut c_void,
+                    buf.as_mut_ptr(),
+                    buf.len(),
+                    &mut len,
+                )
+            };
+            assert_eq!(rc, NOT_YET_PROVIDED_RC, "kind {kind}");
+            assert!(
+                err_buf_as_str(&buf, len).contains("Win32/AppKit reserved"),
+                "kind {kind} got: {}",
+                err_buf_as_str(&buf, len)
+            );
+        }
+    }
+
+    /// Tier-1 wire test: an out-of-range window-handle kind is a typed
+    /// invalid-args error (distinct from the reserved-discriminant path).
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn create_present_target_unknown_kind_is_typed_error() {
+        let (mut buf, mut len) = make_err_buf();
+        let mut out = [0u8; 32];
+        let window = streamlib_plugin_abi::RawWindowHandleRepr {
+            kind: 99,
+            ..Default::default()
+        };
+        let rc = unsafe {
+            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.create_present_target)(
+                std::ptr::null(),
+                &window,
                 64,
                 64,
                 1,
@@ -368,9 +670,9 @@ mod reserved_m32_wire_format_tests {
                 &mut len,
             )
         };
-        assert_eq!(rc, NOT_YET_PROVIDED_RC);
+        assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len).contains("create_present_target: not yet provided"),
+            err_buf_as_str(&buf, len).contains("unknown window-handle kind 99"),
             "got: {}",
             err_buf_as_str(&buf, len)
         );

@@ -86,6 +86,41 @@ enum RecorderState {
     Recording,
 }
 
+/// Tracks whether the recorder's command buffer is currently inside an
+/// open dynamic-rendering instance (a `cmd_begin_rendering` without a
+/// matching `cmd_end_rendering`).
+///
+/// [`VulkanPresentTarget::end_frame`](super::vulkan_present_target::VulkanPresentTarget::end_frame)
+/// reads this before recording the swapchain post-draw layout barrier: a
+/// `vkCmdPipelineBarrier2` recorded inside an open dynamic-rendering
+/// instance is `VUID-vkCmdPipelineBarrier2`-class undefined behavior, so a
+/// plugin that drove `begin_frame` across the ABI split and forgot
+/// `cmd_end_dynamic_rendering` must have its pass auto-closed first. Pure
+/// state (no Vulkan handle) so the open/close balance is unit-testable
+/// without a GPU.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RecorderDynamicRenderingBalance {
+    is_open: bool,
+}
+
+impl RecorderDynamicRenderingBalance {
+    /// Whether a dynamic-rendering pass is currently open on the recorder.
+    pub(crate) fn is_open(self) -> bool {
+        self.is_open
+    }
+
+    /// Record that `cmd_begin_dynamic_rendering` opened a pass.
+    pub(crate) fn mark_opened(&mut self) {
+        self.is_open = true;
+    }
+
+    /// Record that the pass closed (`cmd_end_dynamic_rendering`, a fresh
+    /// `begin()`, or an aborted recording).
+    pub(crate) fn mark_closed(&mut self) {
+        self.is_open = false;
+    }
+}
+
 /// Engine-owned multi-step command-buffer recorder.
 ///
 /// Owns a long-lived command pool + reset-able primary command buffer
@@ -130,6 +165,15 @@ pub struct RhiCommandRecorderInner {
     /// `vkQueueSubmit` leaves the fence unsignaled forever.
     submission_in_flight: bool,
     state: Mutex<RecorderState>,
+    /// Whether a dynamic-rendering pass is currently open on this
+    /// recorder's command buffer. Set by
+    /// [`Self::cmd_begin_dynamic_rendering`], cleared by
+    /// [`Self::cmd_end_dynamic_rendering`], [`Self::begin`], and
+    /// [`Self::abort_recording`]. Read by
+    /// [`VulkanPresentTarget::end_frame`](super::vulkan_present_target::VulkanPresentTarget::end_frame)
+    /// so a still-open pass is closed before the post-draw layout barrier
+    /// (a barrier inside an open dynamic-rendering instance is UB).
+    render_pass_balance: RecorderDynamicRenderingBalance,
 }
 
 impl RhiCommandRecorderInner {
@@ -197,6 +241,7 @@ impl RhiCommandRecorderInner {
             completion_fence,
             submission_in_flight: false,
             state: Mutex::new(RecorderState::Idle),
+            render_pass_balance: RecorderDynamicRenderingBalance::default(),
         })
     }
 
@@ -259,6 +304,9 @@ impl RhiCommandRecorderInner {
                 })?;
         }
 
+        // A fresh recording starts with no dynamic-rendering pass open —
+        // the reset command buffer above discarded any prior pass.
+        self.render_pass_balance.mark_closed();
         *state = RecorderState::Recording;
         Ok(())
     }
@@ -739,6 +787,7 @@ impl RhiCommandRecorderInner {
             self.device
                 .cmd_begin_rendering(self.command_buffer, &rendering_info);
         }
+        self.render_pass_balance.mark_opened();
         Ok(())
     }
 
@@ -749,7 +798,29 @@ impl RhiCommandRecorderInner {
         unsafe {
             self.device.cmd_end_rendering(self.command_buffer);
         }
+        self.render_pass_balance.mark_closed();
         Ok(())
+    }
+
+    /// Whether a dynamic-rendering pass is currently open on this
+    /// recorder's command buffer (a `cmd_begin_dynamic_rendering` without
+    /// a matching `cmd_end_dynamic_rendering`). Read by
+    /// [`VulkanPresentTarget::end_frame`](super::vulkan_present_target::VulkanPresentTarget::end_frame)
+    /// to close a forgotten pass before the post-draw layout barrier.
+    pub(crate) fn in_render_pass(&self) -> bool {
+        self.render_pass_balance.is_open()
+    }
+
+    /// Abandon an in-progress recording without submitting: reset the
+    /// state machine to [`RecorderState::Idle`] and drop any open
+    /// dynamic-rendering pass so the next [`Self::begin`] starts clean.
+    /// The begun-but-unsubmitted command buffer is discarded at that
+    /// `begin()`'s `reset_command_buffer`. Used when a frame is abandoned
+    /// after `begin()` but before submit (e.g. swapchain `OUT_OF_DATE_KHR`
+    /// on acquire), so the recorder slot is reusable next attempt.
+    pub(crate) fn abort_recording(&mut self) {
+        self.render_pass_balance.mark_closed();
+        *self.state.lock() = RecorderState::Idle;
     }
 
     // -------------------------------------------------------------------------
@@ -963,6 +1034,15 @@ impl RhiCommandRecorder {
         }
     }
 
+    /// Raw `Box<RhiCommandRecorderInner>` handle backing this recorder.
+    /// Borrowed, NON-OWNING — used by [`VulkanPresentTarget`] to hand its
+    /// internal per-frame recorder back across the plugin ABI `begin_frame`
+    /// return + `end_frame` identity check. The caller must never release
+    /// it (the present target owns the recorder).
+    pub(crate) fn raw_handle(&self) -> *const c_void {
+        self.handle
+    }
+
     /// Engine-internal mutable borrow of the host-owned
     /// `RhiCommandRecorderInner`. **Panics if called from cdylib code.**
     pub(crate) fn host_inner_mut(&mut self) -> &mut RhiCommandRecorderInner {
@@ -975,6 +1055,31 @@ impl RhiCommandRecorder {
         // SAFETY: `self.handle` is `Box::into_raw(Box<RhiCommandRecorderInner>)`
         // and `&mut self` guarantees no other reference exists.
         unsafe { &mut *(self.handle as *mut RhiCommandRecorderInner) }
+    }
+
+    /// Host-side render-pass balance read used by
+    /// [`VulkanPresentTarget::end_frame`](super::vulkan_present_target::VulkanPresentTarget::end_frame):
+    /// is the backing recorder inside an open dynamic-rendering instance?
+    /// The present target owns its per-frame recorders and drives them
+    /// host-side across the begin/end split, so this reads the boxed inner
+    /// directly (never dispatched across the ABI — there is no vtable slot,
+    /// and none is needed since `end_frame` runs in host-compiled code).
+    pub(crate) fn host_in_render_pass(&self) -> bool {
+        // SAFETY: `self.handle` is `Box::into_raw(Box<RhiCommandRecorderInner>)`;
+        // the present target owns the recorder and drives it host-side, so
+        // no aliasing `&mut` exists during this shared read.
+        unsafe { (*(self.handle as *const RhiCommandRecorderInner)).in_render_pass() }
+    }
+
+    /// Host-side abandon-recording used by
+    /// [`VulkanPresentTarget::begin_frame`](super::vulkan_present_target::VulkanPresentTarget::begin_frame)
+    /// when a frame is dropped after `begin()` but before submit (swapchain
+    /// `OUT_OF_DATE_KHR` on acquire). Resets the recorder to `Idle` so the
+    /// reused slot begins clean next attempt. See
+    /// [`RhiCommandRecorderInner::abort_recording`]. **Panics if called
+    /// from cdylib code** (present targets are host-only).
+    pub(crate) fn abort_recording(&mut self) {
+        self.host_inner_mut().abort_recording();
     }
 
     // -------------------------------------------------------------------------
@@ -1957,6 +2062,38 @@ mod tests {
                 None
             }
         }
+    }
+
+    // ----- Vulkan-free: dynamic-rendering balance producer (#1258) -----
+    //
+    // The recorder tracks whether its command buffer is inside an open
+    // dynamic-rendering instance so `VulkanPresentTarget::end_frame` can
+    // close a forgotten pass before the post-draw layout barrier (a
+    // `vkCmdPipelineBarrier2` inside an open pass is UB). The device-side
+    // `cmd_begin/cmd_end_dynamic_rendering` methods record these exact
+    // transitions on `RecorderDynamicRenderingBalance`; testing the pure
+    // state type locks the producer half of that seam without a GPU.
+    // Mentally reverting `mark_opened()` in `cmd_begin_dynamic_rendering`
+    // (leaving the flag clear) makes `end_frame` skip its guard — the
+    // consumer half is locked by
+    // `vulkan_present_target::tests::end_frame_closes_open_dynamic_rendering_before_present_barrier`.
+    #[test]
+    fn dynamic_rendering_balance_tracks_open_then_close() {
+        let mut balance = RecorderDynamicRenderingBalance::default();
+        assert!(
+            !balance.is_open(),
+            "a fresh recorder has no dynamic-rendering pass open"
+        );
+        balance.mark_opened(); // cmd_begin_dynamic_rendering records this
+        assert!(
+            balance.is_open(),
+            "after cmd_begin_dynamic_rendering the recorder-inner flag is set"
+        );
+        balance.mark_closed(); // cmd_end_dynamic_rendering / begin / abort record this
+        assert!(
+            !balance.is_open(),
+            "after cmd_end_dynamic_rendering the recorder-inner flag clears"
+        );
     }
 
     fn make_storage_buffer(device: &Arc<HostVulkanDevice>, element_count: u32) -> PixelBuffer {

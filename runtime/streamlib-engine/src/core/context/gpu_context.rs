@@ -1402,6 +1402,43 @@ impl GpuContext {
         crate::vulkan::rhi::RhiCommandRecorder::new(vulkan_device, label)
     }
 
+    /// Build a swapchain-backed [`PresentTarget`](crate::vulkan::rhi::PresentTarget)
+    /// from a native `window` handle, at the requested initial extent +
+    /// vsync preference. `color_traits` drives the `VkColorSpaceKHR`
+    /// priority walk; `None` keeps the legacy SDR pick. The window handle
+    /// must outlive the returned target (the host owns the `VkSurfaceKHR`
+    /// from creation, never the window). Minting entry point behind the
+    /// FullAccess `create_present_target` plugin-ABI slot — engine-free
+    /// display processors reach it through the SDK `create_present_target`
+    /// wrapper, never `VulkanPresentTarget::new` on a raw device.
+    #[cfg(target_os = "linux")]
+    pub fn create_present_target(
+        &self,
+        window: &(impl raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle),
+        width: u32,
+        height: u32,
+        vsync: bool,
+        color_traits: Option<&crate::core::color::ColorTraits>,
+    ) -> Result<crate::vulkan::rhi::PresentTarget> {
+        tracing::debug!(
+            rhi_op = "create_present_target",
+            width,
+            height,
+            vsync,
+            "GpuContext::create_present_target"
+        );
+        let vulkan_device = &self.device.inner;
+        let target = crate::vulkan::rhi::VulkanPresentTarget::new(
+            vulkan_device,
+            window,
+            width,
+            height,
+            vsync,
+            color_traits,
+        )?;
+        Ok(crate::vulkan::rhi::PresentTarget::from_target(target))
+    }
+
     /// Create a Vulkan video session — the privileged
     /// `VkVideoSessionKHR` + bound device memory the codec layer
     /// uses for `vkCmdDecodeVideoKHR` / `vkCmdEncodeVideoKHR`.

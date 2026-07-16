@@ -156,7 +156,11 @@ the best of our current knowledge the in-tree set as of this doc is:
   `wait_device_idle`, `acquire_output_texture`,
   `upload_pixel_buffer_as_texture`, `color_converter`,
   `create_command_recorder`, `build_triangles_blas`, `build_tlas`,
-  `supports_ray_tracing_pipeline`, `check_in_surface`. The
+  `supports_ray_tracing_pipeline`, `check_in_surface`,
+  `create_present_target` + `drop_present_target` (mint / release the
+  Box-shaped swapchain present target from a native window handle —
+  Linux-only; reserved Win32/AppKit discriminants + non-Linux return the
+  typed not-yet-provided refusal). The
   LimitedAccess-mirror methods inherit through the originating
   LimitedAccess vtable rather than duplicating slots here. Each
   callback's `gpu_handle` argument is the opaque scope token issued
@@ -187,7 +191,22 @@ PluginAbiObject (the `(handle, vtable, methods_vtable, cached POD)` layout):
 - **`RhiCommandRecorderMethodsVTable`** — `begin`,
   `record_image_barrier`, `record_buffer_barrier`, `record_dispatch`,
   `record_copy_image_to_buffer`, `submit_signaling_timeline`, plus
-  PixelBuffer sibling slots for the cdylib camera per-frame hot path.
+  PixelBuffer sibling slots for the cdylib camera per-frame hot path,
+  and the swapchain render-path slots the present target's borrowed
+  recorder drives (`record_swapchain_image_barrier`,
+  `cmd_begin_dynamic_rendering`, `cmd_end_dynamic_rendering`,
+  `submit_with_semaphores`, `record_draw` / `record_draw_indexed`).
+- **`PresentTargetMethodsVTable`** — `begin_frame` (acquire + prime the
+  frame's borrowed recorder), `end_frame` (post-barrier + submit +
+  present, folding any producer-finished `extra_waits`), `recreate`
+  (swapchain resize / colorspace flip, writing the live
+  `out_color_format_raw` so the cached POD getter never goes stale), and
+  `set_hdr_metadata`. All per-image render-finished-semaphore keying
+  (VUID-vkQueueSubmit2-semaphore-03868) stays host-side across the
+  begin/end split. The `PresentTarget` handle is Box-shaped drop-only
+  (`!Clone`), backed by a `Box<Mutex<VulkanPresentTarget>>` so a
+  concurrent or misordered `begin_frame`/`end_frame` returns a typed
+  error, never aliased-`&mut` UB.
 - **`OutputWriterVTable`** + **`InputMailboxesVTable`** — per-frame
   `write_raw` / `read_raw` dispatch the host-allocated iceoryx2
   resources hand to the cdylib via `ProcessorVTable::set_iceoryx2_resources`.
