@@ -1990,6 +1990,30 @@ impl GpuContext {
         Ok(encoder)
     }
 
+    /// Mint a hardware video [`SimpleDecoder`](crate::vulkan::video::decode::SimpleDecoder)
+    /// on this context's host device — the modern, cdylib-safe decoder
+    /// construction path. Builds directly from the host-owned
+    /// `Arc<HostVulkanDevice>` (`self.device.inner`), NOT through the
+    /// retiring `host_vulkan_device_arc` FullAccess ABI transit that
+    /// `SimpleDecoder::from_full_access` uses. Backs the plugin-ABI
+    /// `create_decoder_session` FullAccess slot (M32 #1259 fill-in,
+    /// #1377).
+    ///
+    /// Coded dimensions are auto-detected from the first SPS (query via
+    /// [`SimpleDecoder::dimensions`](crate::vulkan::video::decode::SimpleDecoder::dimensions)
+    /// after the first `feed`); the config's `max_width` / `max_height` of
+    /// `0` request that auto-detection.
+    #[cfg(target_os = "linux")]
+    #[tracing::instrument(skip(self, config), fields(rhi_op = "create_decoder_session"))]
+    pub fn create_decoder_session(
+        &self,
+        config: crate::vulkan::video::decode::SimpleDecoderConfig,
+    ) -> Result<crate::vulkan::video::decode::SimpleDecoder> {
+        let host_device = Arc::clone(&self.device.inner);
+        crate::vulkan::video::decode::SimpleDecoder::from_host_device(host_device, config)
+            .map_err(|e| Error::GpuError(format!("create_decoder_session: {e}")))
+    }
+
     /// Initialize GPU context for the current platform.
     pub fn init_for_platform() -> Result<Self> {
         #[cfg(target_os = "macos")]

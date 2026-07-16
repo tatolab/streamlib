@@ -177,11 +177,40 @@ impl SimpleDecoder {
         // `host_vulkan_device_arc` FullAccess vtable slot so workspace
         // plugin cdylibs (the decoder packages) can construct a
         // decoder without tripping the panic guard.
+        //
+        // This ABI-transit path is retiring (#1265): the modern host-side
+        // construction is
+        // [`crate::core::context::GpuContext::create_decoder_session`],
+        // which shares [`Self::from_host_device`] below without the
+        // `host_vulkan_device_arc` transit. `from_full_access` stays only
+        // until the decoder packages flip to the cdylib-safe primitive.
         let host_device = full.host_vulkan_device_arc().map_err(|e| {
             VideoError::Engine(format!(
                 "Failed to acquire host Vulkan device for decoder: {e}"
             ))
         })?;
+        Self::from_host_device(host_device, config)
+    }
+
+    /// Create a `SimpleDecoder` directly from a host-owned
+    /// `Arc<HostVulkanDevice>` — the modern, cdylib-safe construction path
+    /// (no `host_vulkan_device_arc` ABI transit). Pulls the host's Vulkan
+    /// instance, device, allocator, and the video decode / transfer queues
+    /// off the Arc; the codec submits through the host's per-queue
+    /// serialization via
+    /// [`crate::vulkan::rhi::HostVulkanDevice::submit_to_queue`]. Backs
+    /// [`crate::core::context::GpuContext::create_decoder_session`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The host device wasn't created with video decode support
+    ///   ([`vk::QueueFlags::VIDEO_DECODE_KHR`] queue family missing).
+    /// - Any Vulkan resource creation fails.
+    pub(crate) fn from_host_device(
+        host_device: Arc<crate::vulkan::rhi::HostVulkanDevice>,
+        config: SimpleDecoderConfig,
+    ) -> Result<Self, VideoError> {
         let decode_queue = host_device.video_decode_queue().ok_or_else(|| {
             VideoError::BitstreamError(
                 "host device has no video decode queue family — \
@@ -199,7 +228,7 @@ impl SimpleDecoder {
                 })?;
         let host_arc: Arc<crate::vulkan::rhi::HostVulkanDevice> = Arc::clone(&host_device);
 
-        Self::from_host_device(
+        Self::from_external_parts(
             config,
             host_device.instance().clone(),
             host_device.device().clone(),
@@ -215,8 +244,9 @@ impl SimpleDecoder {
 
     /// Internal helper — assemble a `SimpleDecoder` from the host RHI's
     /// already-validated Vulkan handles. Only callable from
-    /// [`Self::from_full_access`]; not exposed to consumers.
-    fn from_host_device(
+    /// [`Self::from_host_device`]; not exposed to consumers.
+    #[allow(clippy::too_many_arguments)]
+    fn from_external_parts(
         config: SimpleDecoderConfig,
         instance: vulkanalia::Instance,
         device: vulkanalia::Device,

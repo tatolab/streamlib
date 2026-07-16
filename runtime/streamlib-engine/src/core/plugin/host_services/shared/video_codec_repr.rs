@@ -39,11 +39,14 @@ pub(in crate::core::plugin::host_services) fn codec_from_repr(
 }
 
 /// Encode the engine [`Codec`] back to the frozen [`VideoCodecRepr`]
-/// (decoder-outbound: the decoder reports its detected codec).
+/// (decoder-outbound direction).
 ///
-/// Consumed by the decoder sibling (#1377); landed here so the two
-/// siblings share one conversion (the encoder fill-in is the first
-/// sibling). Exercised by the round-trip test below.
+/// The decoder-methods vtable frozen by #1253 exposes no codec-reporting
+/// slot in v1 — `VideoDecodedFrameRepr` carries no codec field, and the
+/// decoder decodes the codec it was configured with, so the codec is
+/// already known caller-side. This stays test-only (`#[allow(dead_code)]`)
+/// until a future decoder slot reports a detected codec; the round-trip
+/// test below still locks it against [`codec_from_repr`].
 #[allow(dead_code)]
 pub(in crate::core::plugin::host_services) fn codec_to_repr(codec: Codec) -> VideoCodecRepr {
     match codec {
@@ -83,9 +86,9 @@ pub(in crate::core::plugin::host_services) fn h273_color_vui_from_repr(
 /// [`H273ColorVuiRepr`] (decoder-outbound: `current_color_vui`). A `None`
 /// axis writes `value = 0`, `present = 0`.
 ///
-/// Consumed by the decoder sibling (#1377); landed here so the two
-/// siblings share one conversion. Exercised by the round-trip test below.
-#[allow(dead_code)]
+/// Consumed by the decoder sibling's `current_color_vui` methods-vtable
+/// body (#1377); the round-trip test below locks it against
+/// [`h273_color_vui_from_repr`].
 pub(in crate::core::plugin::host_services) fn h273_color_vui_to_repr(
     vui: &H273ColorVui,
 ) -> H273ColorVuiRepr {
