@@ -12,9 +12,10 @@ pub mod _generated_ {
     include!(concat!(env!("OUT_DIR"), "/_generated_shim.rs"));
 }
 
-// GPU texture readback is Linux-only (the host RHI's `VulkanTextureReadback`
-// lives behind `#[cfg(target_os = "linux")]`). The tap follows the same
-// platform split as camera/display.
+// GPU texture readback is Linux-only: the SDK's cdylib-safe `TextureReadback`
+// (created via `GpuContextFullAccess::create_texture_readback`) is backed by a
+// host readback that lives behind `#[cfg(target_os = "linux")]`. The tap
+// follows the same platform split as camera/display.
 #[cfg(target_os = "linux")]
 pub mod frame_tap;
 
