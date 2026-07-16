@@ -17,6 +17,7 @@ const input = typeof args === 'string' ? JSON.parse(args) : args || {};
 const issue = input.issue;
 const zones = Array.isArray(input.zones) ? input.zones : [];
 
+// KEEP-IN-SYNC(zone-router): implement-ticket.js, verify-change.js, draft-design.js, run-research.js, fix-ticket.js
 function expertsForZones(zoneList) {
   const z = zoneList.map((s) => String(s).toLowerCase());
   const has = (...keys) => keys.some((k) => z.some((zone) => zone.includes(k)));
@@ -27,6 +28,31 @@ function expertsForZones(zoneList) {
   if (has('vulkan', 'rhi', 'video', 'gpu', 'codec', 'kernel', 'texture')) experts.push('gpu-vulkan-expert');
   if (has('camera', 'v4l2', 'media', 'audio', 'display', 'modifier')) experts.push('linux-media-expert');
   return experts;
+}
+
+// K3: degrade-not-crash — see implement-ticket.js. On a null/failed structured
+// result, retry ONCE schema-free and parse; then continue degraded, not dead.
+async function resilientAgent(prompt, opts) {
+  const first = await agent(prompt, opts);
+  if (first) return first;
+  const options = opts || {};
+  const { schema, ...schemaFree } = options;
+  const shape = schema ? JSON.stringify(schema) : '{}';
+  const retry = await agent(
+    `${prompt}\n\nReturn ONLY a single JSON object matching this shape — no prose, no code fence: ${shape}`,
+    schemaFree,
+  );
+  if (retry && typeof retry === 'object') return retry;
+  if (typeof retry === 'string') {
+    try {
+      return JSON.parse(retry);
+    } catch (parseError) {
+      log(`resilientAgent: schema-free retry did not parse (${options.label || 'unlabeled'}); continuing degraded`);
+      return { degraded: true };
+    }
+  }
+  log(`resilientAgent: schema-free retry returned no usable output (${options.label || 'unlabeled'}); continuing degraded`);
+  return { degraded: true };
 }
 
 const experts = expertsForZones(zones);
@@ -70,7 +96,7 @@ const investigations = (
       const opts = { phase: 'Investigate', label: `angle:${a.angle.split(':')[0]}`, schema: investigateSchema };
       if (a.agentType) opts.agentType = a.agentType;
       else opts.model = 'opus';
-      return agent(
+      return resilientAgent(
         `Investigate issue #${issue} from ONE angle only — ${a.angle}. Do NOT read or repeat any recommendation the ` +
           `issue body may already contain; form your own view from this angle alone, so your conclusion is independent. ` +
           `Read-only, no code changes. Cite sources / file:line. Report your findings and which way this angle leans.`,
@@ -83,7 +109,7 @@ log(`investigation complete: ${investigations.length} of ${angles.length} angles
 
 phase('Synthesize');
 const synthesis =
-  (await agent(
+  (await resilientAgent(
     `Synthesize the independent angle investigations below into a research report for issue #${issue}, and post it as an ` +
       `issue comment via gh. The report states each option with its pros/cons/evidence, then an unambiguous recommendation ` +
       `(or, if there's no clear winner, says so and lists the question that would break the tie), and an open-questions list ` +

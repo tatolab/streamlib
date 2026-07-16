@@ -25,6 +25,7 @@ const zones = Array.isArray(input.zones) ? input.zones : [];
 
 // Map the issue's zones to the domain experts to consult. Returns the expert
 // agentType names; empty means "generic reasoning only".
+// KEEP-IN-SYNC(zone-router): implement-ticket.js, verify-change.js, draft-design.js, run-research.js, fix-ticket.js
 function expertsForZones(zoneList) {
   const z = zoneList.map((s) => String(s).toLowerCase());
   const has = (...keys) => keys.some((k) => z.some((zone) => zone.includes(k)));
@@ -60,13 +61,38 @@ const briefSchema = {
   required: ['decisions_for_owner', 'diagram_included', 'risk_class'],
 };
 
+// K3: degrade-not-crash — see implement-ticket.js. On a null/failed structured
+// result, retry ONCE schema-free and parse; then continue degraded, not dead.
+async function resilientAgent(prompt, opts) {
+  const first = await agent(prompt, opts);
+  if (first) return first;
+  const options = opts || {};
+  const { schema, ...schemaFree } = options;
+  const shape = schema ? JSON.stringify(schema) : '{}';
+  const retry = await agent(
+    `${prompt}\n\nReturn ONLY a single JSON object matching this shape — no prose, no code fence: ${shape}`,
+    schemaFree,
+  );
+  if (retry && typeof retry === 'object') return retry;
+  if (typeof retry === 'string') {
+    try {
+      return JSON.parse(retry);
+    } catch (parseError) {
+      log(`resilientAgent: schema-free retry did not parse (${options.label || 'unlabeled'}); continuing degraded`);
+      return { degraded: true };
+    }
+  }
+  log(`resilientAgent: schema-free retry returned no usable output (${options.label || 'unlabeled'}); continuing degraded`);
+  return { degraded: true };
+}
+
 const experts = expertsForZones(zones);
 
 phase('Recon');
 let reconResults;
 if (experts.length === 0) {
   log(`no zone-matched experts for issue #${issue}; generic recon only`);
-  const generic = await agent(
+  const generic = await resilientAgent(
     `Read-only architecture recon for issue #${issue}. Do NOT edit any file. ` +
       `Prove whether a core system already covers this concern before any new abstraction is proposed. ` +
       `Re-derive from the current tree and cite file:line for every claim.`,
@@ -77,7 +103,7 @@ if (experts.length === 0) {
   reconResults = (
     await parallel(
       experts.map((expert) => () =>
-        agent(
+        resilientAgent(
           `Read-only recon for issue #${issue}, zone(s): ${zones.join(', ') || 'unspecified'}. ` +
             `Do NOT edit any file. Answer for the design: which existing core system already covers this concern, ` +
             `what would have to change, the contract invariants that bound it, and the known failure modes. ` +
@@ -92,7 +118,7 @@ log(`recon complete: ${reconResults.length} of ${experts.length || 1} expert(s) 
 
 phase('Brief');
 const brief =
-  (await agent(
+  (await resilientAgent(
     `Merge the recon below into a DESIGN BRIEF for the repo owner on issue #${issue}, then post it as an ` +
       `issue comment via gh. The brief must contain: What & why; a mermaid diagram of the proposed shape; ` +
       `Alternatives considered (each with a one-line why/why-not, including "extend the existing system" vs ` +
