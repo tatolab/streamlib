@@ -5878,6 +5878,208 @@ mod tests {
         println!("OPAQUE_FD mint/export/wrap OK — byte_size={BYTES} uuid={uuid:02x?}");
     }
 
+    /// #1262 followup #1 — the ONLY positive coverage of the batch's
+    /// riskiest FullAccess slot, `copy_texture_to_storage_buffer_and_signal`.
+    ///
+    /// Drives the REAL host vtable body
+    /// (`HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE`), not the plain
+    /// `GpuContext` method — that body reconstructs a borrowed source
+    /// `Texture` from a raw inner-Arc handle via
+    /// `Arc::increment_strong_count` + `Texture::from_arc_into_raw`,
+    /// records the image->buffer copy, and host-blocks on the
+    /// null-timeline submit path. Two locks:
+    ///   (a) the destination OPAQUE_FD `StorageBuffer` bytes equal the
+    ///       known source contents after the copy;
+    ///   (b) the source texture's inner-Arc strong count is identical
+    ///       before and after the call — the
+    ///       `increment_strong_count`/`from_arc_into_raw` borrow must be
+    ///       balanced by exactly one `Texture::Drop`.
+    ///
+    /// Mental-revert: if the host body leaked one strong count (dropped
+    /// the balancing `Texture::Drop`, or double-incremented), the
+    /// strong-count equality assertion fails — a use-after-free / leak
+    /// this test catches. GPU-gated: skips cleanly with no device (CI is
+    /// GPU-free), so it does not run in the sandbox — it is a
+    /// /verify-live regression.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn copy_texture_to_storage_buffer_and_signal_positive_and_refcount_balance() {
+        use std::ffi::c_void;
+        use std::sync::Arc;
+
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(g) => Arc::new(g),
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+
+        const W: u32 = 32;
+        const H: u32 = 32;
+        const BPP: u32 = 4;
+        const BYTES: u64 = (W as u64) * (H as u64) * (BPP as u64);
+
+        // HOST_VISIBLE OPAQUE_FD staging + destination buffers. Skip the
+        // whole test if the pool is unavailable on this driver rather
+        // than failing the suite (mirrors the sibling OPAQUE_FD
+        // regression's skip-clean shape).
+        let staging = match gpu.create_opaque_fd_export_buffer(BYTES, false) {
+            Ok(s) => s,
+            Err(e) => {
+                println!("Skipping - OPAQUE_FD export pool unavailable: {e}");
+                return;
+            }
+        };
+        let dst = match gpu.create_opaque_fd_export_buffer(BYTES, false) {
+            Ok(s) => s,
+            Err(e) => {
+                println!("Skipping - OPAQUE_FD export pool unavailable: {e}");
+                return;
+            }
+        };
+
+        // Known source pattern written into the host-visible staging map.
+        let staging_ptr = staging.mapped_ptr();
+        assert!(
+            !staging_ptr.is_null(),
+            "HOST_VISIBLE staging buffer must expose a mapping"
+        );
+        for i in 0..BYTES as usize {
+            unsafe { *staging_ptr.add(i) = (i % 251) as u8 };
+        }
+
+        // Source texture, filled from the staging buffer and left in
+        // GENERAL — a legal copy-source layout (the landed slot copies
+        // directly from whatever `source_layout` the caller passes,
+        // recording no transition).
+        let desc = TextureDescriptor::new(W, H, TextureFormat::Rgba8Unorm).with_usage(
+            TextureUsages::COPY_DST | TextureUsages::COPY_SRC | TextureUsages::TEXTURE_BINDING,
+        );
+        let source_texture = match gpu.device().create_texture_local(&desc) {
+            Ok(t) => t,
+            Err(e) => {
+                println!("Skipping - source texture allocation failed: {e}");
+                return;
+            }
+        };
+
+        {
+            use crate::vulkan::rhi::{VulkanAccess, VulkanStage};
+            let mut fill = crate::vulkan::rhi::RhiCommandRecorderInner::new(
+                &gpu.device().inner,
+                "copy_slot_regression_fill_source",
+            )
+            .expect("fill recorder");
+            fill.begin().expect("fill begin");
+            fill.record_image_barrier(
+                &source_texture,
+                VulkanLayout::UNDEFINED,
+                VulkanLayout::TRANSFER_DST_OPTIMAL,
+                VulkanStage::TOP_OF_PIPE,
+                VulkanStage::ALL_TRANSFER,
+                VulkanAccess::NONE,
+                VulkanAccess::TRANSFER_WRITE,
+            )
+            .expect("barrier UNDEFINED -> TRANSFER_DST");
+            fill.record_copy_buffer_to_image(
+                &staging,
+                &source_texture,
+                VulkanLayout::TRANSFER_DST_OPTIMAL,
+                crate::vulkan::rhi::ImageCopyRegion::tightly_packed(W, H),
+            )
+            .expect("copy staging -> source image");
+            fill.record_image_barrier(
+                &source_texture,
+                VulkanLayout::TRANSFER_DST_OPTIMAL,
+                VulkanLayout::GENERAL,
+                VulkanStage::ALL_TRANSFER,
+                VulkanStage::ALL_TRANSFER,
+                VulkanAccess::TRANSFER_WRITE,
+                VulkanAccess::TRANSFER_READ,
+            )
+            .expect("barrier TRANSFER_DST -> GENERAL");
+            fill.submit_and_wait().expect("fill submit_and_wait");
+        }
+
+        // Measure the source texture's inner-Arc strong count without
+        // disturbing it (bump, reconstruct, read, drop — net zero). The
+        // absolute value is immaterial; only before == after is asserted.
+        let strong_count = |texture: &crate::core::rhi::Texture| -> usize {
+            let ptr = texture.handle as *const crate::core::rhi::texture::TextureInner;
+            unsafe {
+                Arc::increment_strong_count(ptr);
+                let arc = Arc::from_raw(ptr);
+                let count = Arc::strong_count(&arc);
+                drop(arc);
+                count
+            }
+        };
+        let count_before = strong_count(&source_texture);
+
+        // Mint a full escalate scope token bound to this context, then
+        // drive the REAL host vtable body so the dangerous
+        // Arc-reconstruction path actually runs (the plain `GpuContext`
+        // method borrows `&Texture` directly and would not exercise it).
+        let token =
+            crate::core::context::escalate_scope_registry::begin_escalate_scope(gpu.clone());
+
+        let mut err_buf = vec![0u8; 512];
+        let mut err_len: usize = 0;
+        let rc = unsafe {
+            (crate::core::plugin::host_services::HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE
+                .copy_texture_to_storage_buffer_and_signal)(
+                token as *const c_void,
+                source_texture.handle,
+                VulkanLayout::GENERAL.0,
+                &dst as *const crate::core::rhi::StorageBuffer as *const c_void,
+                std::ptr::null(), // consume_done: none -> host-blocking submit_and_wait
+                0,
+                std::ptr::null(), // produce_done: none
+                0,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len,
+            )
+        };
+
+        let count_after = strong_count(&source_texture);
+        crate::core::context::escalate_scope_registry::end_escalate_scope(token);
+
+        let err = String::from_utf8_lossy(&err_buf[..err_len]).into_owned();
+        assert_eq!(
+            rc, 0,
+            "copy_texture_to_storage_buffer_and_signal returned error: {err}"
+        );
+
+        // (b) THE crucial lock: host-side Arc reconstruction refcount
+        // balance. increment_strong_count + from_arc_into_raw must be
+        // balanced by exactly one Texture::Drop.
+        assert_eq!(
+            count_before, count_after,
+            "host-side Arc reconstruction (increment_strong_count + from_arc_into_raw) must be \
+             balanced by exactly one Texture::Drop; a leak or double-decrement is a \
+             use-after-free / leak bug"
+        );
+
+        // (a) destination bytes equal the known source contents.
+        let dst_ptr = dst.mapped_ptr();
+        assert!(
+            !dst_ptr.is_null(),
+            "HOST_VISIBLE destination buffer must expose a mapping"
+        );
+        for i in 0..BYTES as usize {
+            let got = unsafe { *dst_ptr.add(i) };
+            let want = (i % 251) as u8;
+            assert_eq!(got, want, "destination byte {i} mismatch: got {got}, want {want}");
+        }
+
+        println!(
+            "copy_texture_to_storage_buffer_and_signal OK — {BYTES} bytes copied, \
+             strong_count balanced ({count_before} -> {count_after})"
+        );
+    }
+
     #[test]
     #[cfg(target_os = "linux")]
     fn test_register_texture_with_layout_round_trip() {
