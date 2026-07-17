@@ -550,14 +550,22 @@ fn source_for_dir(
 /// instant); otherwise build the bundled Rust source on the host. This is
 /// the pip wheel-vs-sdist model for Rust: one artifact runs everywhere,
 /// and a toolchain is needed only when there's no matching prebuilt.
+///
+/// A Python/Deno package that has not yet been provisioned (no `.venv` /
+/// no regenerated `_generated_/`) also routes to the orchestrator — an
+/// extracted `.slpkg` or installed-cache entry carries source but no venv,
+/// and `materialize` is the only place the venv is provisioned. Loading it
+/// as-is would leave its subprocess spawn with no interpreter.
 fn source_for_resolved_dir(pkg_ref: &streamlib_idents::PackageRef, dir: PathBuf) -> ResolvedSource {
-    if needs_host_build(&dir) {
+    if needs_host_build(&dir) || needs_polyglot_provisioning(&dir) {
         ResolvedSource::NeedsBuild(BuildRequest {
             package: pkg_ref.clone(),
             source: BuildSource::PackageDir(dir),
             // No explicit policy on these arms — a build is required only
-            // because the prebuilt is absent, so `IfStale` (build iff the
-            // cdylib isn't already staged) is the right semantics.
+            // because the prebuilt / provisioning is absent, so `IfStale`
+            // (build iff the output isn't already staged) is the right
+            // semantics; the orchestrator's own staleness-skip short-circuits
+            // an already-provisioned cache slot, so there is no rebuild loop.
             policy: BuildPolicy::IfStale,
             host_triple: host_target_triple().to_string(),
         })
@@ -608,6 +616,36 @@ fn source_for_fetched_slpkg(
 /// as-is and fails loud at dlopen (no artifact, nothing to build).
 fn needs_host_build(dir: &std::path::Path) -> bool {
     has_buildable_rust_source(dir) && !has_matching_prebuilt(dir)
+}
+
+/// Whether a resolved package dir declares Python or Deno processors but is
+/// missing the build-time provisioning those runtimes need — a Python package
+/// with no `.venv/bin/python` interpreter, or a Deno package with no
+/// regenerated `_generated_/` wire vocabulary. Such a dir must route through
+/// the orchestrator's `materialize` (which provisions the venv / regenerates
+/// `_generated_/` at the cache slot it loads from), not load as-is: loaded
+/// as-is, a Python package's subprocess spawn dies with `.venv/bin/python: No
+/// such file or directory`. An already-provisioned dir returns `false` and
+/// loads directly; the orchestrator's own `IfStale` staleness-skip then
+/// short-circuits any redundant rebuild (no rebuild loop). Mirrors the
+/// per-language provisioned-checks the orchestrator's staleness-skip uses.
+fn needs_polyglot_provisioning(dir: &std::path::Path) -> bool {
+    use streamlib_processor_schema::ProcessorLanguage;
+    let config = match crate::core::config::ProjectConfig::load(dir) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+    let declares = |language: ProcessorLanguage| {
+        config
+            .processors
+            .iter()
+            .any(|p| p.runtime.language == language)
+    };
+    let python_unprovisioned = declares(ProcessorLanguage::Python)
+        && !dir.join(".venv").join("bin").join("python").exists();
+    let deno_unprovisioned =
+        declares(ProcessorLanguage::TypeScript) && !dir.join("_generated_").is_dir();
+    python_unprovisioned || deno_unprovisioned
 }
 
 /// Whether `dir` declares Rust processors AND carries a `Cargo.toml` to
@@ -1022,6 +1060,111 @@ mod tests {
     }
 
     // =====================================================================
+    // Polyglot provisioning — an unprovisioned Python/Deno package must
+    // route through the orchestrator's `materialize` (which provisions the
+    // venv / regenerates `_generated_/` at the cache slot it loads from),
+    // not load as-is. The bug: a Python-only package loaded as-is has no
+    // `.venv/bin/python`, so its subprocess spawn dies at runtime with
+    // `.venv/bin/python: No such file or directory`.
+    // =====================================================================
+
+    const DENO_YAML: &str = "package:\n  org: tatolab\n  name: ts\n  version: 0.1.0\nprocessors:\n  - name: T\n    version: 1.0.0\n    description: d\n    runtime: deno\n    execution: manual\n    entrypoint: \"t.ts:default\"\n    inputs: []\n    outputs: []\n";
+
+    /// CRUX (bug-reproduce): a resolved (extracted `.slpkg` / installed-cache /
+    /// `streamlib_modules`) Python-only package (no Rust, no `Cargo.toml`) with
+    /// no provisioned `.venv` must resolve to `NeedsBuild` so the orchestrator
+    /// provisions its venv — NOT `Ready` (loaded as-is, the subprocess spawn
+    /// then fails with `.venv/bin/python: No such file or directory`). Mentally
+    /// revert the `needs_polyglot_provisioning` clause in
+    /// `source_for_resolved_dir` and this resolves to `Ready`, failing the
+    /// assertion.
+    #[test]
+    fn resolved_dir_routes_unprovisioned_python_to_build() {
+        let dir = tempfile::tempdir().unwrap();
+        manifest(dir.path(), PY_YAML);
+        std::fs::write(dir.path().join("p.py"), b"#").unwrap();
+        let resolved = source_for_resolved_dir(&pkg_ref(), dir.path().to_path_buf());
+        assert!(
+            matches!(resolved, ResolvedSource::NeedsBuild(_)),
+            "unprovisioned Python-only package must route through materialize, got {resolved:?}"
+        );
+    }
+
+    /// A Python package with no `.venv/bin/python` needs provisioning.
+    #[test]
+    fn needs_polyglot_provisioning_for_python_without_venv() {
+        let dir = tempfile::tempdir().unwrap();
+        manifest(dir.path(), PY_YAML);
+        std::fs::write(dir.path().join("p.py"), b"#").unwrap();
+        assert!(needs_polyglot_provisioning(dir.path()));
+    }
+
+    /// Once the venv interpreter is present, the package loads as-is — the
+    /// short-circuit that stops a rebuild loop. Mentally revert the
+    /// `.venv/bin/python` existence check and this stays `true`, re-materializing
+    /// an already-provisioned slot on every load.
+    #[test]
+    fn no_polyglot_provisioning_when_python_venv_present() {
+        let dir = tempfile::tempdir().unwrap();
+        manifest(dir.path(), PY_YAML);
+        let bin = dir.path().join(".venv").join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::write(bin.join("python"), b"#!/bin/sh\n").unwrap();
+        assert!(!needs_polyglot_provisioning(dir.path()));
+    }
+
+    /// A Deno package with no regenerated `_generated_/` needs provisioning.
+    #[test]
+    fn needs_polyglot_provisioning_for_deno_without_generated() {
+        let dir = tempfile::tempdir().unwrap();
+        manifest(dir.path(), DENO_YAML);
+        assert!(needs_polyglot_provisioning(dir.path()));
+    }
+
+    /// A Deno package whose `_generated_/` is already present loads as-is.
+    #[test]
+    fn no_polyglot_provisioning_when_deno_generated_present() {
+        let dir = tempfile::tempdir().unwrap();
+        manifest(dir.path(), DENO_YAML);
+        std::fs::create_dir_all(dir.path().join("_generated_")).unwrap();
+        assert!(!needs_polyglot_provisioning(dir.path()));
+    }
+
+    /// A Deno-only package also routes through `source_for_resolved_dir` when
+    /// its `_generated_/` is missing — the codegen-provisioning analog of the
+    /// Python-venv bug.
+    #[test]
+    fn resolved_dir_routes_unprovisioned_deno_to_build() {
+        let dir = tempfile::tempdir().unwrap();
+        manifest(dir.path(), DENO_YAML);
+        let resolved = source_for_resolved_dir(&pkg_ref(), dir.path().to_path_buf());
+        assert!(
+            matches!(resolved, ResolvedSource::NeedsBuild(_)),
+            "unprovisioned Deno-only package must route through materialize, got {resolved:?}"
+        );
+    }
+
+    /// Rust-path non-regression: a Rust package (whose build decision is
+    /// `needs_host_build`, not the polyglot path) must NOT be treated as
+    /// needing polyglot provisioning — no venv/`_generated_` is ever expected
+    /// for it. A schemas-only package likewise needs no provisioning.
+    #[test]
+    fn no_polyglot_provisioning_for_rust_or_schemas_only() {
+        let rust = tempfile::tempdir().unwrap();
+        manifest(rust.path(), RUST_YAML);
+        std::fs::write(rust.path().join("Cargo.toml"), b"[package]\nname='rp'\n").unwrap();
+        assert!(!needs_polyglot_provisioning(rust.path()));
+
+        let schemas_only = tempfile::tempdir().unwrap();
+        std::fs::write(
+            schemas_only.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: s\n  version: 0.1.0\n",
+        )
+        .unwrap();
+        assert!(!needs_polyglot_provisioning(schemas_only.path()));
+    }
+
+    // =====================================================================
     // fetch_remote_slpkg — fetch, integrity check, cache reuse
     // =====================================================================
 
@@ -1400,11 +1543,29 @@ mod tests {
         slot
     }
 
+    /// The resolved package dir regardless of whether it loads directly
+    /// (`Ready`) or routes through the orchestrator (`NeedsBuild`) — used by
+    /// the precedence tests below, which assert *which* dir won independent of
+    /// the build/provision decision. A Python-only fixture (the realistic
+    /// installed-cache / `streamlib_modules` shape) routes to `NeedsBuild`
+    /// because it needs its venv provisioned.
+    fn resolved_dir(resolved: &ResolvedSource) -> PathBuf {
+        match resolved {
+            ResolvedSource::Ready(dir) => dir.clone(),
+            ResolvedSource::NeedsBuild(req) => match &req.source {
+                BuildSource::PackageDir(dir) => dir.clone(),
+                other => panic!("expected PackageDir source, got {other:?}"),
+            },
+        }
+    }
+
     /// CRUX (D7 bridge): with BOTH an app-modules entry and an installed-cache
     /// record present, `Strategy::InstalledCache` resolves the app-modules
     /// dir. Mentally revert the modules probe in
     /// `resolve_installed_cache_strategy` and this resolves the cache slot
-    /// instead, failing the assertion.
+    /// instead, failing the assertion. (The Python-only fixtures route to
+    /// `NeedsBuild` — see [`resolved_dir`] — so the assertion is on the winning
+    /// dir, not the `Ready`/`NeedsBuild` variant.)
     #[test]
     #[serial_test::serial]
     fn installed_cache_strategy_prefers_app_modules_dir() {
@@ -1417,13 +1578,11 @@ mod tests {
         let resolved =
             resolve_installed_cache_strategy(&pkg_ref_named("foo"), Some(app_root.path()))
                 .expect("must resolve");
-        match resolved {
-            ResolvedSource::Ready(dir) => assert_eq!(
-                dir, modules_dir,
-                "app modules must win over the installed cache"
-            ),
-            other => panic!("expected Ready(app modules dir), got {other:?}"),
-        }
+        assert_eq!(
+            resolved_dir(&resolved),
+            modules_dir,
+            "app modules must win over the installed cache"
+        );
     }
 
     /// A package absent from `streamlib_modules/` falls through to the
@@ -1439,10 +1598,7 @@ mod tests {
         let resolved =
             resolve_installed_cache_strategy(&pkg_ref_named("foo"), Some(app_root.path()))
                 .expect("must resolve from the installed cache");
-        match resolved {
-            ResolvedSource::Ready(dir) => assert_eq!(dir, slot),
-            other => panic!("expected Ready(cache slot), got {other:?}"),
-        }
+        assert_eq!(resolved_dir(&resolved), slot);
     }
 
     /// A `streamlib_modules/@org/name` dir whose manifest declares a DIFFERENT
@@ -1460,10 +1616,30 @@ mod tests {
         let resolved =
             resolve_installed_cache_strategy(&pkg_ref_named("foo"), Some(app_root.path()))
                 .expect("must fall through to the installed cache");
-        match resolved {
-            ResolvedSource::Ready(dir) => assert_eq!(dir, slot),
-            other => panic!("expected Ready(cache slot), got {other:?}"),
-        }
+        assert_eq!(resolved_dir(&resolved), slot);
+    }
+
+    /// CRUX (bug path): a Python-only package resolved from the app's
+    /// `streamlib_modules/` folder with no provisioned venv must resolve to
+    /// `NeedsBuild` (source = the app-modules dir) so `materialize` provisions
+    /// the venv at the cache slot it loads from — the exact
+    /// `resolve_installed_cache_strategy` path that shipped the module as-is and
+    /// left the subprocess spawn with `.venv/bin/python: No such file or
+    /// directory`. Mentally revert the `needs_polyglot_provisioning` clause in
+    /// `source_for_resolved_dir` and this resolves to `Ready`, failing
+    /// `assert_builds_from`.
+    #[test]
+    #[serial_test::serial]
+    fn installed_cache_strategy_routes_unprovisioned_python_app_module_to_build() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = sandbox_home(home.path());
+        let app_root = tempfile::tempdir().unwrap();
+        let modules_dir = write_app_modules_package(app_root.path(), "foo", "foo");
+
+        let resolved =
+            resolve_installed_cache_strategy(&pkg_ref_named("foo"), Some(app_root.path()))
+                .expect("must resolve");
+        assert_builds_from(resolved, &modules_dir);
     }
 
     /// Neither app modules nor installed cache ⇒ typed ModuleNotFound.
