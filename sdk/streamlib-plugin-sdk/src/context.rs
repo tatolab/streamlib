@@ -1356,6 +1356,13 @@ impl GpuContextFullAccess {
     /// escalations. The `pixel_buffer` crosses the plugin ABI by borrowed
     /// pointer (the PluginAbiObject twin pattern); the host reads it back
     /// through its own RHI `PixelBuffer` mirror.
+    ///
+    /// The source must be an RGBA8/BGRA8 HOST_VISIBLE buffer of at least
+    /// `width * height * 4` bytes; `width` / `height` describe the logical
+    /// region copied and are NOT read from the `PixelBuffer`'s cached dims.
+    /// The host validates the required byte size against the source buffer's
+    /// actual allocation and returns a typed error on overflow (rather than
+    /// faulting the device).
     pub fn upload_pixel_buffer_as_texture(
         &self,
         surface_id: &str,
