@@ -34,6 +34,8 @@ use crate::audio_clock_shim::AudioClockShim;
 use streamlib_consumer_rhi::{PixelFormat, TextureFormat, TextureUsages, VulkanLayout};
 #[cfg(target_os = "linux")]
 use streamlib_error::{Error, Result};
+#[cfg(target_os = "linux")]
+use streamlib_plugin_abi::GpuCapabilitiesRepr;
 
 // =============================================================================
 // GpuContextLimitedAccess — cdylib arm
@@ -763,6 +765,40 @@ impl Drop for GpuContextFullAccess {
             // No-op — escalate_end is the authority.
             HandleKind::ScopeToken => {}
         }
+    }
+}
+
+/// Host GPU capability snapshot — the Rust-side projection of the plugin
+/// ABI's `GpuCapabilitiesRepr`, read once at processor setup for
+/// device-vendor branching and external-memory / cross-device-DMA-BUF
+/// probe checks. Returned by
+/// [`GpuContextFullAccess::gpu_capabilities`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GpuCapabilities {
+    /// GPU device / vendor name (`VkPhysicalDeviceProperties::deviceName`).
+    pub device_name: String,
+    /// Whether the GPU exposes `VK_KHR_external_memory_fd` +
+    /// `VK_EXT_external_memory_dma_buf` (DMA-BUF FD import available).
+    pub supports_external_memory: bool,
+    /// Whether cross-device DMA-BUF probe is supported (NVIDIA Linux
+    /// reports `false` per the engine-layer capability guard).
+    pub supports_cross_device_dma_buf_probe: bool,
+    /// Whether the GPU exposes `VK_KHR_ray_tracing_pipeline`.
+    pub supports_ray_tracing_pipeline: bool,
+}
+
+/// Project a `GpuCapabilitiesRepr` (fixed-size UTF-8 device-name buffer +
+/// valid-length + `u8` capability bools) into the Rust-side
+/// [`GpuCapabilities`].
+#[cfg(target_os = "linux")]
+fn gpu_capabilities_from_repr(repr: &GpuCapabilitiesRepr) -> GpuCapabilities {
+    let name_len = (repr.device_name_len as usize).min(repr.device_name.len());
+    let device_name = String::from_utf8_lossy(&repr.device_name[..name_len]).into_owned();
+    GpuCapabilities {
+        device_name,
+        supports_external_memory: repr.supports_external_memory != 0,
+        supports_cross_device_dma_buf_probe: repr.supports_cross_device_dma_buf_probe != 0,
+        supports_ray_tracing_pipeline: repr.supports_ray_tracing_pipeline != 0,
     }
 }
 
@@ -1741,16 +1777,22 @@ impl GpuContextFullAccess {
     /// host-device submission (#1262). Dispatches through the
     /// `copy_texture_to_storage_buffer_and_signal` slot.
     ///
-    /// The cross-API timeline wait/signal (`consume_done` / `produce_done`)
-    /// rides null handles until #1260 lands the SDK exportable-timeline
-    /// PluginAbiObject; on the null path the host submission blocks until
-    /// the copy completes. When #1260 lands, this method gains the
-    /// `Option<(&HostTimelineSemaphore, u64)>` wait/signal parameters.
+    /// In the same submission the host GPU-waits on `consume_done` at its
+    /// value before the copy and signals `produce_done` at its value on
+    /// completion (single-writer-per-edge). Pass `None` for either edge to
+    /// skip that wait / signal. A cross-process consumer MUST be handed a
+    /// `produce_done` timeline here — the GPU-queue completion this method
+    /// schedules is what advances it; a fully-`None` call blocks host-side
+    /// until the copy completes with no cross-API sync, so a subprocess
+    /// consumer waiting on a never-signalled `produce_done` would block
+    /// forever.
     pub fn copy_texture_to_storage_buffer_and_signal(
         &self,
         source_texture: &crate::rhi::Texture,
         source_layout: VulkanLayout,
         dst: &crate::rhi::StorageBuffer,
+        consume_done: Option<(&crate::rhi::HostTimelineSemaphore, u64)>,
+        produce_done: Option<(&crate::rhi::HostTimelineSemaphore, u64)>,
     ) -> Result<()> {
         if self.vtable.is_null() {
             return Err(Error::GpuError(
@@ -1758,21 +1800,31 @@ impl GpuContextFullAccess {
                     .into(),
             ));
         }
+        let (consume_handle, consume_value) = match consume_done {
+            Some((timeline, value)) => (timeline.cdylib_handle(), value),
+            None => (std::ptr::null(), 0),
+        };
+        let (produce_handle, produce_value) = match produce_done {
+            Some((timeline, value)) => (timeline.cdylib_handle(), value),
+            None => (std::ptr::null(), 0),
+        };
         let mut err_buf = [0u8; 512];
         let mut err_len: usize = 0;
         // SAFETY: vtable + handle paired at construction; the texture +
-        // storage buffer are borrowed for the call. Null timeline handles
-        // select the host-blocking (no cross-API sync) path.
+        // storage buffer are borrowed for the call; each timeline handle is
+        // the host-minted `Arc::into_raw(Arc<HostVulkanTimelineSemaphore>)`
+        // inner pointer the host derefs as a borrow (null selects "no wait /
+        // no signal" on that edge).
         let status = unsafe {
             ((*self.vtable).copy_texture_to_storage_buffer_and_signal)(
                 self.handle,
                 source_texture.handle,
                 source_layout.0,
                 dst as *const _ as *const c_void,
-                std::ptr::null(),
-                0,
-                std::ptr::null(),
-                0,
+                consume_handle,
+                consume_value,
+                produce_handle,
+                produce_value,
                 err_buf.as_mut_ptr(),
                 err_buf.len(),
                 &mut err_len as *mut usize,
@@ -1780,6 +1832,86 @@ impl GpuContextFullAccess {
         };
         if status == 0 {
             Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
+    /// Read the host GPU capability snapshot (v5 `gpu_capabilities` slot):
+    /// device name plus external-memory / cross-device-DMA-BUF-probe /
+    /// ray-tracing capability bools, read once at setup for device-vendor
+    /// branching. Dispatches through the [`GpuContextFullAccessVTable`]'s
+    /// `gpu_capabilities` slot.
+    pub fn gpu_capabilities(&self) -> Result<GpuCapabilities> {
+        if self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "gpu_capabilities: GpuContextFullAccess has null vtable".into(),
+            ));
+        }
+        let mut caps: std::mem::MaybeUninit<GpuCapabilitiesRepr> = std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: vtable + handle paired at construction; the host fully
+        // populates `caps` (fixed-size device_name buffer + len + capability
+        // bools) on success.
+        let status = unsafe {
+            ((*self.vtable).gpu_capabilities)(
+                self.handle,
+                caps.as_mut_ptr(),
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status != 0 {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            return Err(Error::GpuError(msg));
+        }
+        // SAFETY: host signaled success and wrote a valid GpuCapabilitiesRepr.
+        let caps = unsafe { caps.assume_init() };
+        Ok(gpu_capabilities_from_repr(&caps))
+    }
+
+    /// Import a V4L2 (or otherwise externally-allocated) DMA-BUF FD as a
+    /// [`StorageBuffer`](crate::rhi::StorageBuffer) (SSBO-shaped) over the
+    /// v7 slot. Dispatches through the [`GpuContextFullAccessVTable`]'s
+    /// `import_dma_buf_storage_buffer` slot.
+    ///
+    /// **The host consumes `fd` on success** (`vkImportMemoryFdInfoKHR`
+    /// takes ownership). On failure the caller retains ownership and must
+    /// close it.
+    pub fn import_dma_buf_storage_buffer(
+        &self,
+        fd: i32,
+        byte_size: u64,
+    ) -> Result<crate::rhi::StorageBuffer> {
+        if self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "import_dma_buf_storage_buffer: GpuContextFullAccess has null vtable".into(),
+            ));
+        }
+        let mut out: std::mem::MaybeUninit<crate::rhi::StorageBuffer> =
+            std::mem::MaybeUninit::uninit();
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: vtable + handle paired at construction; the host writes a
+        // valid `StorageBuffer` PluginAbiObject (with populated
+        // `byte_size_cached`) into `out` and consumes `fd` on success.
+        let status = unsafe {
+            ((*self.vtable).import_dma_buf_storage_buffer)(
+                self.handle,
+                fd,
+                byte_size,
+                out.as_mut_ptr() as *mut c_void,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            // SAFETY: host signaled success and wrote a valid value.
+            Ok(unsafe { out.assume_init() })
         } else {
             let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
             Err(Error::GpuError(msg))
@@ -2105,5 +2237,98 @@ mod escalate_tests {
             vtable: std::ptr::null(),
         };
         let _ = round_trip(&limited);
+    }
+
+    fn null_full_access() -> GpuContextFullAccess {
+        GpuContextFullAccess {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+            handle_kind: HandleKind::ScopeToken,
+            inherited_lim_handle: std::ptr::null(),
+            inherited_lim_vtable: std::ptr::null(),
+        }
+    }
+
+    #[test]
+    fn gpu_capabilities_on_null_vtable_returns_typed_error_not_ub() {
+        // Mental-revert the `self.vtable.is_null()` guard in
+        // `gpu_capabilities` and this UB-derefs the null vtable to reach its
+        // `gpu_capabilities` slot.
+        let full = null_full_access();
+        let result = full.gpu_capabilities();
+        assert!(
+            matches!(result, Err(Error::GpuError(_))),
+            "null-vtable gpu_capabilities must return a typed GpuError, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn import_dma_buf_storage_buffer_on_null_vtable_returns_typed_error_not_ub() {
+        // Mental-revert the `self.vtable.is_null()` guard in
+        // `import_dma_buf_storage_buffer` and this UB-derefs the null vtable.
+        // The caller retains the fd on this guard path (the host never sees
+        // it), so passing `-1` is safe.
+        let full = null_full_access();
+        let result = full.import_dma_buf_storage_buffer(-1, 4096);
+        assert!(
+            matches!(result, Err(Error::GpuError(_))),
+            "null-vtable import_dma_buf_storage_buffer must return a typed GpuError, got {result:?}"
+        );
+    }
+
+    #[test]
+    fn copy_texture_to_storage_buffer_and_signal_on_null_vtable_returns_typed_error_not_ub() {
+        // The GAP-B-fixed method still guards the null vtable before touching
+        // the copy slot or dereferencing any timeline handle. Mental-revert
+        // the `self.vtable.is_null()` guard and this UB-derefs the null vtable.
+        let full = null_full_access();
+        let texture = crate::rhi::Texture {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+            width_cached: 0,
+            height_cached: 0,
+            format_raw: 0,
+            _padding: 0,
+        };
+        let storage_buffer = crate::rhi::StorageBuffer {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+            byte_size_cached: 0,
+            mapped_ptr_cached: std::ptr::null_mut(),
+        };
+        let result = full.copy_texture_to_storage_buffer_and_signal(
+            &texture,
+            VulkanLayout(0),
+            &storage_buffer,
+            None,
+            None,
+        );
+        assert!(
+            matches!(result, Err(Error::GpuError(_))),
+            "null-vtable copy_texture_to_storage_buffer_and_signal must return a typed GpuError, \
+             got {result:?}"
+        );
+    }
+
+    #[test]
+    fn gpu_capabilities_from_repr_reads_fields() {
+        // Construct a repr with a known device name + capability bools and
+        // assert the u8→bool and UTF-8-slice→String projection.
+        let mut device_name = [0u8; 256];
+        let name = b"Test GPU 9000";
+        device_name[..name.len()].copy_from_slice(name);
+        let repr = GpuCapabilitiesRepr {
+            device_name,
+            device_name_len: name.len() as u32,
+            supports_external_memory: 1,
+            supports_cross_device_dma_buf_probe: 0,
+            supports_ray_tracing_pipeline: 1,
+            _reserved_padding: 0,
+        };
+        let caps = gpu_capabilities_from_repr(&repr);
+        assert_eq!(caps.device_name, "Test GPU 9000");
+        assert!(caps.supports_external_memory);
+        assert!(!caps.supports_cross_device_dma_buf_probe);
+        assert!(caps.supports_ray_tracing_pipeline);
     }
 }
