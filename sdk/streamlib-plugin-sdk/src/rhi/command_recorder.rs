@@ -14,23 +14,29 @@
 //! mutable state (`begin()` → `record_*(&mut self)` → `submit_*(&mut
 //! self)`) that doesn't survive duplication.
 //!
-//! The host `RhiCommandRecorderInner` backing + the methods that name
-//! host-only types (`record_buffer_barrier` / `record_copy_*` over
-//! `VulkanBufferLike` / `PixelBuffer`, `record_draw*` over
-//! `VulkanGraphicsKernel`, `submit_signaling_timeline` over
-//! `HostVulkanTimelineSemaphore`, the raw-`vk::*` swapchain / dynamic-
-//! rendering methods) stay in the engine — they can't cross the
-//! engine-free boundary.
+//! The host `RhiCommandRecorderInner` backing stays in the engine; the
+//! cdylib holds only the opaque `handle` and dispatches every method
+//! through the vtables.
+//!
+//! ~~The `record_buffer_barrier` / `record_copy_*` (over `VulkanBufferLike`
+//! / `PixelBuffer`) and `submit_signaling_timeline` (over
+//! `HostVulkanTimelineSemaphore`) methods stay in the engine — they can't
+//! cross the engine-free boundary.~~ (2026-07-17, #1226: they cross now —
+//! #1260 / #1262 shipped the engine-free `StorageBuffer` / `PixelBuffer` /
+//! `HostTimelineSemaphore` twins these slots marshal through, so every
+//! `RhiCommandRecorderMethodsVTable` slot is wrapped here.)
 
 use std::ffi::c_void;
 
 use streamlib_consumer_rhi::VulkanLayout;
 use streamlib_error::{Error, Result};
-use streamlib_plugin_abi::{GpuContextFullAccessVTable, RhiCommandRecorderMethodsVTable};
+use streamlib_plugin_abi::{
+    GpuContextFullAccessVTable, ImageCopyRegionRepr, RhiCommandRecorderMethodsVTable,
+};
 
 use crate::rhi::{
-    DrawCall, DrawIndexedCall, Texture, VulkanAccess, VulkanComputeKernel, VulkanGraphicsKernel,
-    VulkanStage,
+    DrawCall, DrawIndexedCall, HostTimelineSemaphore, PixelBuffer, StorageBuffer, Texture,
+    VulkanAccess, VulkanComputeKernel, VulkanGraphicsKernel, VulkanStage,
 };
 
 /// Image-to-buffer / buffer-to-image copy region.
@@ -60,6 +66,21 @@ impl ImageCopyRegion {
             buffer_image_height: height,
             mip_level: 0,
             array_layer: 0,
+        }
+    }
+
+    /// Project into the plugin-ABI `#[repr(C)]` wire struct the copy slots
+    /// read once at call time.
+    fn to_repr(self) -> ImageCopyRegionRepr {
+        ImageCopyRegionRepr {
+            width: self.width,
+            height: self.height,
+            buffer_offset: self.buffer_offset,
+            buffer_row_length: self.buffer_row_length,
+            buffer_image_height: self.buffer_image_height,
+            mip_level: self.mip_level,
+            array_layer: self.array_layer,
+            _reserved_padding: 0,
         }
     }
 }
@@ -224,6 +245,176 @@ impl RhiCommandRecorder {
         let status = unsafe {
             ((*self.methods_vtable).submit_and_wait)(
                 self.handle,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        status_to_result(status, &err_buf, err_len)
+    }
+
+    // -------------------------------------------------------------------------
+    // Buffer copy / barrier / timeline-submit wrappers (recorder-v1/v2 slots).
+    // The camera producer path drives these per frame:
+    // `record_copy_image_to_*` moves the compute output into an SSBO or a
+    // pooled pixel buffer, `record_*_barrier` transitions that destination
+    // for the reader, and `submit_signaling_timeline` ends the recording
+    // signalling a `produce_done` timeline. Sibling-slot-per-buffer-flavor:
+    // one typed wrapper per StorageBuffer / PixelBuffer destination, matching
+    // the ABI's `record_buffer_barrier` / `record_pixel_buffer_barrier` pair.
+    // -------------------------------------------------------------------------
+
+    /// Record `vkCmdCopyImageToBuffer` from `src` (currently in `src_layout`)
+    /// into a [`StorageBuffer`] destination. Dispatches the
+    /// `record_copy_image_to_buffer` slot.
+    pub fn record_copy_image_to_buffer(
+        &mut self,
+        src: &Texture,
+        src_layout: VulkanLayout,
+        dst: &StorageBuffer,
+        region: ImageCopyRegion,
+    ) -> Result<()> {
+        let vt = self.require_methods_vtable("record_copy_image_to_buffer")?;
+        let region_repr = region.to_repr();
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        // SAFETY: methods_vtable non-null per the guard; `src.handle` /
+        // `dst.handle` are the borrowed inner-`Arc` pointers the host
+        // reconstructs; `region_repr` lives across the call.
+        let status = unsafe {
+            ((*vt).record_copy_image_to_buffer)(
+                self.handle,
+                src.handle,
+                src_layout.0,
+                dst.handle,
+                &region_repr,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        status_to_result(status, &err_buf, err_len)
+    }
+
+    /// PixelBuffer-flavored sibling of [`Self::record_copy_image_to_buffer`]:
+    /// record `vkCmdCopyImageToBuffer` from `src` into a [`PixelBuffer`]
+    /// destination. Dispatches the `record_copy_image_to_pixel_buffer` slot.
+    pub fn record_copy_image_to_pixel_buffer(
+        &mut self,
+        src: &Texture,
+        src_layout: VulkanLayout,
+        dst: &PixelBuffer,
+        region: ImageCopyRegion,
+    ) -> Result<()> {
+        let vt = self.require_methods_vtable("record_copy_image_to_pixel_buffer")?;
+        let region_repr = region.to_repr();
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        // SAFETY: methods_vtable non-null per the guard; `src.handle` /
+        // `dst.handle` are the borrowed inner-`Arc` pointers the host
+        // reconstructs; `region_repr` lives across the call.
+        let status = unsafe {
+            ((*vt).record_copy_image_to_pixel_buffer)(
+                self.handle,
+                src.handle,
+                src_layout.0,
+                dst.handle,
+                &region_repr,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        status_to_result(status, &err_buf, err_len)
+    }
+
+    /// Record a whole-buffer memory barrier on a [`StorageBuffer`],
+    /// transitioning it across the given stage/access masks. Dispatches the
+    /// `record_buffer_barrier` slot.
+    pub fn record_buffer_barrier(
+        &mut self,
+        buffer: &StorageBuffer,
+        from_stage: VulkanStage,
+        to_stage: VulkanStage,
+        from_access: VulkanAccess,
+        to_access: VulkanAccess,
+    ) -> Result<()> {
+        let vt = self.require_methods_vtable("record_buffer_barrier")?;
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        // SAFETY: methods_vtable non-null per the guard; `buffer.handle` is
+        // the borrowed inner-`Arc` pointer the host reconstructs via
+        // `make_storage_buffer_borrow`.
+        let status = unsafe {
+            ((*vt).record_buffer_barrier)(
+                self.handle,
+                buffer.handle,
+                from_stage.0 as i64,
+                to_stage.0 as i64,
+                from_access.0 as i64,
+                to_access.0 as i64,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        status_to_result(status, &err_buf, err_len)
+    }
+
+    /// PixelBuffer-flavored sibling of [`Self::record_buffer_barrier`]:
+    /// record a whole-buffer memory barrier on a [`PixelBuffer`] (the
+    /// camera's per-frame `TRANSFER_WRITE` → `HOST_READ` transition on the
+    /// pooled IPC buffer). Dispatches the `record_pixel_buffer_barrier` slot.
+    pub fn record_pixel_buffer_barrier(
+        &mut self,
+        buffer: &PixelBuffer,
+        from_stage: VulkanStage,
+        to_stage: VulkanStage,
+        from_access: VulkanAccess,
+        to_access: VulkanAccess,
+    ) -> Result<()> {
+        let vt = self.require_methods_vtable("record_pixel_buffer_barrier")?;
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        // SAFETY: methods_vtable non-null per the guard; `buffer.handle` is
+        // the borrowed inner-`Arc` pointer the host reconstructs via
+        // `make_pixel_buffer_borrow`.
+        let status = unsafe {
+            ((*vt).record_pixel_buffer_barrier)(
+                self.handle,
+                buffer.handle,
+                from_stage.0 as i64,
+                to_stage.0 as i64,
+                from_access.0 as i64,
+                to_access.0 as i64,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        status_to_result(status, &err_buf, err_len)
+    }
+
+    /// End recording and submit, signalling `timeline` to `signal_value` on
+    /// GPU completion. Dispatches the `submit_signaling_timeline` slot.
+    pub fn submit_signaling_timeline(
+        &mut self,
+        timeline: &HostTimelineSemaphore,
+        signal_value: u64,
+    ) -> Result<()> {
+        let vt = self.require_methods_vtable("submit_signaling_timeline")?;
+        let mut err_buf = [0u8; 256];
+        let mut err_len: usize = 0;
+        // SAFETY: methods_vtable non-null per the guard;
+        // `timeline.cdylib_handle()` is the borrowed
+        // `Arc::into_raw(Arc<HostVulkanTimelineSemaphore>)` inner pointer the
+        // host derefs as a `&HostVulkanTimelineSemaphore` borrow without
+        // bumping the refcount.
+        let status = unsafe {
+            ((*vt).submit_signaling_timeline)(
+                self.handle,
+                timeline.cdylib_handle(),
+                signal_value,
                 err_buf.as_mut_ptr(),
                 err_buf.len(),
                 &mut err_len as *mut usize,
@@ -498,5 +689,119 @@ mod layout_tests {
     fn rhi_command_recorder_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<RhiCommandRecorder>();
+    }
+}
+
+#[cfg(test)]
+mod dispatch_guard_tests {
+    use super::*;
+
+    fn null_recorder() -> RhiCommandRecorder {
+        RhiCommandRecorder {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+            methods_vtable: std::ptr::null(),
+        }
+    }
+
+    fn null_texture() -> Texture {
+        Texture {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+            width_cached: 0,
+            height_cached: 0,
+            format_raw: 0,
+            _padding: 0,
+        }
+    }
+
+    fn null_storage_buffer() -> StorageBuffer {
+        StorageBuffer {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+            byte_size_cached: 0,
+            mapped_ptr_cached: std::ptr::null_mut(),
+        }
+    }
+
+    fn null_pixel_buffer() -> PixelBuffer {
+        PixelBuffer {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+            width: 0,
+            height: 0,
+            format_raw: 0,
+            plane_count_cached: 0,
+        }
+    }
+
+    fn null_timeline() -> HostTimelineSemaphore {
+        HostTimelineSemaphore {
+            handle: std::ptr::null(),
+            methods: std::ptr::null(),
+        }
+    }
+
+    /// Every buffer copy / barrier / timeline-submit wrapper must refuse a
+    /// null methods vtable with a typed `Err`, never dereference it.
+    ///
+    /// Mental-revert: drop each wrapper's `require_methods_vtable` guard and
+    /// the `((*vt).slot)(...)` call UB-derefs a null
+    /// `*const RhiCommandRecorderMethodsVTable` (SIGSEGV in the runner).
+    #[test]
+    fn buffer_copy_barrier_timeline_wrappers_are_typed_errors_on_null_vtable() {
+        let mut recorder = null_recorder();
+        let texture = null_texture();
+        let storage_buffer = null_storage_buffer();
+        let pixel_buffer = null_pixel_buffer();
+        let timeline = null_timeline();
+        let region = ImageCopyRegion::tightly_packed(4, 4);
+
+        assert!(
+            recorder
+                .record_copy_image_to_buffer(&texture, VulkanLayout(0), &storage_buffer, region)
+                .is_err(),
+            "record_copy_image_to_buffer on a null-vtable recorder must return a typed Err, not UB"
+        );
+        assert!(
+            recorder
+                .record_copy_image_to_pixel_buffer(
+                    &texture,
+                    VulkanLayout(0),
+                    &pixel_buffer,
+                    region
+                )
+                .is_err(),
+            "record_copy_image_to_pixel_buffer on a null-vtable recorder must return a typed Err, \
+             not UB"
+        );
+        assert!(
+            recorder
+                .record_buffer_barrier(
+                    &storage_buffer,
+                    VulkanStage(0),
+                    VulkanStage(0),
+                    VulkanAccess(0),
+                    VulkanAccess(0)
+                )
+                .is_err(),
+            "record_buffer_barrier on a null-vtable recorder must return a typed Err, not UB"
+        );
+        assert!(
+            recorder
+                .record_pixel_buffer_barrier(
+                    &pixel_buffer,
+                    VulkanStage(0),
+                    VulkanStage(0),
+                    VulkanAccess(0),
+                    VulkanAccess(0)
+                )
+                .is_err(),
+            "record_pixel_buffer_barrier on a null-vtable recorder must return a typed Err, not UB"
+        );
+        assert!(
+            recorder.submit_signaling_timeline(&timeline, 1).is_err(),
+            "submit_signaling_timeline on a null-vtable recorder must return a typed Err, not UB"
+        );
     }
 }

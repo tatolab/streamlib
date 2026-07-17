@@ -27,7 +27,7 @@ use streamlib_consumer_rhi::VulkanLayout;
 use streamlib_error::{Error, Result};
 use streamlib_plugin_abi::SurfaceStoreVTable;
 
-use crate::rhi::{HostTimelineSemaphore, Texture};
+use crate::rhi::{HostTimelineSemaphore, PixelBuffer, Texture};
 
 /// Cross-process surface-sharing handle (producer arm).
 ///
@@ -161,6 +161,75 @@ impl SurfaceStore {
         status_to_unit("register_texture", status, &err_buf, err_len)
     }
 
+    /// PixelBuffer sibling of [`Self::register_texture`]: register a pixel
+    /// buffer for cross-process sharing under `surface_id`, with optional
+    /// `produce_done` / `consume_done` timeline sidecars
+    /// (single-writer-per-edge; see
+    /// `docs/architecture/adapter-timeline-single-writer.md`). Dispatches
+    /// through the vtable's `register_pixel_buffer_with_timeline` slot
+    /// (Linux-only host-side).
+    ///
+    /// The cdylib passes a pointer to its own [`PixelBuffer`] PluginAbiObject
+    /// (the host reinterprets the layout-identical bytes) and the inner
+    /// handles of the exportable timelines; the host derefs the timeline
+    /// handles as `Arc<HostVulkanTimelineSemaphore>` borrows.
+    ///
+    /// Unlike [`Self::register_texture`], this slot takes no `VkImageLayout`
+    /// — a flat pixel-buffer allocation carries no image-layout state.
+    ///
+    /// Lifetime contract matches [`Self::register_texture`]: registration
+    /// only BORROWS the `produce_done` / `consume_done` timelines — the host
+    /// exports each one's `OPAQUE_FD` during this call and retains no clone
+    /// of the [`HostTimelineSemaphore`]. The caller MUST keep both timeline
+    /// values alive (and keep signalling `produce_done` by GPU-queue
+    /// completion) for the whole registration / session lifetime. Dropping a
+    /// timeline after registration decrements the host `VkSemaphore` refcount
+    /// to zero, so the producer can never signal `produce_done` again and a
+    /// subprocess consumer blocks forever waiting on it.
+    pub fn register_pixel_buffer_with_timeline(
+        &self,
+        surface_id: &str,
+        pixel_buffer: &PixelBuffer,
+        produce_done: Option<&HostTimelineSemaphore>,
+        consume_done: Option<&HostTimelineSemaphore>,
+    ) -> Result<()> {
+        if self.is_none() {
+            return Err(Error::GpuError(
+                "SurfaceStore::register_pixel_buffer_with_timeline: null handle".into(),
+            ));
+        }
+        let produce_done_ptr = produce_done
+            .map(|t| t.cdylib_handle())
+            .unwrap_or(std::ptr::null());
+        let consume_done_ptr = consume_done
+            .map(|t| t.cdylib_handle())
+            .unwrap_or(std::ptr::null());
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: handle + vtable paired at construction; `pixel_buffer` is a
+        // live `&PixelBuffer` whose `#[repr(C)]` layout matches the engine's,
+        // and the timeline handles are the host-minted inner Arc pointers.
+        let status = unsafe {
+            ((*self.vtable).register_pixel_buffer_with_timeline)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                pixel_buffer as *const PixelBuffer as *const c_void,
+                produce_done_ptr,
+                consume_done_ptr,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        status_to_unit(
+            "register_pixel_buffer_with_timeline",
+            status,
+            &err_buf,
+            err_len,
+        )
+    }
+
     /// Update the published `VkImageLayout` for an already-registered
     /// texture. Producer-side per-frame op after a layout transition.
     /// Dispatches through the vtable's `update_image_layout` slot.
@@ -287,6 +356,27 @@ mod layout_tests {
                 .register_texture("s", &null_texture, None, None, VulkanLayout(0))
                 .is_err(),
             "register_texture on a null store must return a typed Err, not UB"
+        );
+        // Same guard for the PixelBuffer sibling: build a null-handle
+        // PixelBuffer to pass — the is_none() guard fires before the pixel
+        // buffer pointer or the vtable is ever read.
+        //
+        // Mental-revert: drop register_pixel_buffer_with_timeline's is_none()
+        // guard and this call UB-derefs the null `*const SurfaceStoreVTable`
+        // (SIGSEGV).
+        let null_pixel_buffer = PixelBuffer {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+            width: 0,
+            height: 0,
+            format_raw: 0,
+            plane_count_cached: 0,
+        };
+        assert!(
+            store
+                .register_pixel_buffer_with_timeline("s", &null_pixel_buffer, None, None)
+                .is_err(),
+            "register_pixel_buffer_with_timeline on a null store must return a typed Err, not UB"
         );
         drop(store);
     }

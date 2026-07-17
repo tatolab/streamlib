@@ -88,8 +88,8 @@ pub mod sdk {
     pub mod context {
         pub use crate::audio_clock_shim::{AudioClockShim, AudioTickContext};
         pub use crate::context::{
-            GpuContextFullAccess, GpuContextLimitedAccess, RuntimeContextFullAccess,
-            RuntimeContextLimitedAccess,
+            GpuCapabilities, GpuContextFullAccess, GpuContextLimitedAccess,
+            RuntimeContextFullAccess, RuntimeContextLimitedAccess,
         };
     }
 
@@ -143,8 +143,8 @@ pub mod sdk {
         pub use crate::color::{
             ColorSpaceKind, MatrixId, PrimariesId, RangeId, ResolvedColorInfo, TransferId,
             YuvToRgbDecomposition, bt709_to_linear, from_linear, hlg_to_linear, linear_to_bt709,
-            linear_to_hlg, linear_to_pq, linear_to_srgb, pq_to_linear, srgb_to_linear, to_linear,
-            yuv_to_rgb_matrix,
+            linear_to_hlg, linear_to_pq, linear_to_srgb, pq_to_linear, resolve_color_defaults,
+            srgb_to_linear, to_linear, yuv_to_rgb_matrix,
         };
     }
 
