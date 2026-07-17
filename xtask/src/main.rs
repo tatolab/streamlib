@@ -228,6 +228,13 @@ enum StaticRegistryAction {
         /// publish scripts' bump/restore convention).
         #[arg(long)]
         dev: Option<u32>,
+        /// Also emit the cargo source-replacement mirror under `cargo-mirror/`
+        /// (the full crates.io closure of the engine/SDK chain) so a link-free
+        /// build resolves `streamlib = "<version>"` entirely offline from the
+        /// tree — what the separate-build `.slpkg` validation gate needs. Off
+        /// by default: a routine `.slpkg` emit skips the heavy vendored tree.
+        #[arg(long)]
+        cargo_mirror: bool,
     },
 }
 
@@ -292,12 +299,17 @@ fn main() -> Result<()> {
                 .with_context(|| format!("stripping path patches from {}", dir.display()))?;
             tracing::info!(dir = %dir.display(), "stripped path-flavor patch entries from streamlib.yaml");
         }
-        Commands::StaticRegistry(StaticRegistryAction::Emit { out, dev }) => {
+        Commands::StaticRegistry(StaticRegistryAction::Emit {
+            out,
+            dev,
+            cargo_mirror,
+        }) => {
             use streamlib_pack::static_registry::{EmitOptions, emit_static_registry};
             emit_static_registry(&EmitOptions {
                 workspace_root: workspace_root()?,
                 out,
                 dev,
+                cargo_mirror,
             })?
         }
     }

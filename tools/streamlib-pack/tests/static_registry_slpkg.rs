@@ -215,6 +215,7 @@ fn emitted_tree_truncation_is_rejected_by_consumer_checks() {
         workspace_root: ws.clone(),
         out: out.clone(),
         dev: None,
+        cargo_mirror: false,
     })
     .expect("slpkg emit against the fake workspace must succeed");
 

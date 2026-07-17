@@ -107,6 +107,7 @@ fn real_emit_writes_catalog_inside_the_flipped_tree() {
         workspace_root: workspace,
         out: out.clone(),
         dev: None,
+        cargo_mirror: false,
     })
     .expect("real emit path (slpkg + catalog + manifest) succeeds");
 

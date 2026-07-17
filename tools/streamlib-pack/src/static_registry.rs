@@ -37,6 +37,12 @@ pub struct EmitOptions {
     pub out: PathBuf,
     /// `-dev.N` suffix for the emitted release version.
     pub dev: Option<u32>,
+    /// Also emit the cargo source-replacement mirror (the full crates.io
+    /// closure of the engine/SDK chain) under `cargo-mirror/`, and list the
+    /// engine/SDK release closure in the release manifest's `crates`. Off by
+    /// default: the mirror is a heavy vendored tree only the separate-build
+    /// validation gate needs, so a routine `.slpkg` emit stays lightweight.
+    pub cargo_mirror: bool,
 }
 
 /// Atomically publish a fully-built `staging` tree into the served `served`
@@ -344,11 +350,33 @@ fn emit_slpkg_and_manifest(
         tracing::info!(emitted, skipped, "static-registry .slpkg emit complete");
     }
 
+    // The engine/SDK crate chain: with `--cargo-mirror`, emit the cargo
+    // source-replacement mirror (the full crates.io closure of the chain, as a
+    // directory source under `cargo-mirror/`) so a link-free build resolves
+    // `streamlib = "0.6.0"` entirely offline from the tree, and list the closure
+    // in the release manifest's `crates` (what `crates_missing_from_release`
+    // checks a consumer's crate pins against). Without the flag the crate chain
+    // is absent and `crates` stays empty — a routine `.slpkg` emit does not pay
+    // for the heavy vendored tree. There is no publish step: the crates resolve
+    // from the emitted tree, not any registry.
+    let crate_members: Vec<ReleaseManifestMember> = if opts.cargo_mirror {
+        let closure = crate::compute_release_closure(&opts.workspace_root)
+            .context("computing the engine/SDK release closure for the cargo mirror")?;
+        crate::cargo_mirror::emit_cargo_mirror(&opts.workspace_root, staging, &opts.out, &closure)
+            .context("emitting the cargo source-replacement mirror")?;
+        closure
+            .crates
+            .iter()
+            .map(|c| ReleaseManifestMember::new(c.name.clone(), c.version.clone()))
+            .collect()
+    } else {
+        Vec::new()
+    };
+
     // The release manifest lists exactly the `.slpkg` packages this emit
-    // published. The SDK crate chain is NOT published by this emit — the custom
-    // cargo registry was removed; SDK / library crates ship from public
-    // registries as a separate, gated release step — so `crates` is empty.
-    let mut manifest = ReleaseManifest::new(target.to_string(), Vec::new());
+    // published plus (with `--cargo-mirror`) the engine/SDK crate closure the
+    // mirror carries.
+    let mut manifest = ReleaseManifest::new(target.to_string(), crate_members);
     manifest.packages = package_members;
 
     // Written LAST — the completion marker.
