@@ -3,53 +3,56 @@
 
 // H.264 Encoder Processor
 //
-// Thin wrapper around streamlib::sdk::engine::video::SimpleEncoder using the shared RHI
-// HostVulkanDevice. The encoder shares streamlib's Vulkan device, VMA allocator,
-// and queues — no separate device creation, no NVIDIA dual-device crash.
+// Thin wrapper around the engine-free plugin SDK's hardware
+// `EncoderSession` PluginAbiObject. The session is minted host-side via
+// `GpuContextLimitedAccess::escalate(|full| full.create_encoder_session(..))`
+// on the first VideoFrame, so its dimensions track the upstream frame size.
+// Config width/height become guardrails (mismatch logs a warning, frame
+// wins) mirroring how `frame.fps` flows through `mp4_writer`. The escalate
+// window ends after the one-shot mint; per-frame `submit_texture` / `drain_packet`
+// ride the session's own scope-free methods — never re-escalate per frame.
 //
-// The encoder is constructed lazily on the first VideoFrame so its session
-// dimensions track the upstream frame size. Config width/height become
-// guardrails (mismatch logs a warning, frame wins) mirroring how `frame.fps`
-// flows through `mp4_writer`. Privileged resource construction runs inside
-// `GpuContextLimitedAccess::escalate(|full| …)` so the processor-setup mutex
-// and `device_wait_idle` order it against the rest of the GPU work.
-//
-// The camera's GPU-resident textures are on the same device, so encode_image()
-// accepts them directly (zero-copy).
+// The camera's GPU-resident texture is resolved by `surface_id` and handed
+// to `submit_texture`, which resolves the encode-src image view host-side —
+// no `host_vulkan_texture_arc` / raw-view bridge in the cdylib.
 
 
 use crate::_generated_::{EncodedVideoFrame, VideoFrame};
-use crate::linux::color_vui_translate::color_info_to_h273;
-use streamlib::sdk::context::{
+use crate::linux::color_vui_translate::color_info_to_h273_repr;
+use streamlib_plugin_sdk::sdk::context::{
     GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };
-use streamlib::sdk::engine::HostTextureExt;
-use streamlib::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::rhi::{EncoderSession, VulkanLayout};
 
-use streamlib::sdk::engine::video::{Codec, Preset, SimpleEncoder, SimpleEncoderConfig};
+use streamlib_plugin_abi::{
+    VideoCodecRepr, VideoEncoderPresetRepr, VideoEncoderSessionDescriptorRepr,
+};
 
 // ============================================================================
 // PROCESSOR
 // ============================================================================
 
-#[streamlib::sdk::processor("H264Encoder")]
+#[streamlib_plugin_sdk::sdk::processor("H264Encoder")]
 pub struct H264EncoderProcessor {
-    /// Vulkan Video hardware encoder (built lazily from the first frame).
-    encoder: Option<SimpleEncoder>,
+    /// Vulkan Video hardware encoder session (minted lazily from the first
+    /// frame). `!Clone` — owns exclusive Vulkan Video session / DPB /
+    /// command resources.
+    session: Option<EncoderSession>,
 
     /// GPU context for resolving VideoFrame textures and escalating to
-    /// full access for the one-shot lazy encoder construction.
+    /// full access for the one-shot lazy encoder-session mint.
     gpu_context: Option<GpuContextLimitedAccess>,
 
     /// Frames encoded counter.
     frames_encoded: u64,
 }
 
-impl streamlib::sdk::processors::ReactiveProcessor for H264EncoderProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for H264EncoderProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!(
-            "[H264Encoder] Setup complete (encoder construction deferred to first frame)"
+            "[H264Encoder] Setup complete (encoder-session mint deferred to first frame)"
         );
         Ok(())
     }
@@ -59,7 +62,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for H264EncoderProcessor::Pro
             frames_encoded = self.frames_encoded,
             "[H264Encoder] Shutting down"
         );
-        self.encoder.take();
+        self.session.take();
         self.gpu_context.take();
         Ok(())
     }
@@ -73,50 +76,46 @@ impl streamlib::sdk::processors::ReactiveProcessor for H264EncoderProcessor::Pro
         let gpu_ctx = self
             .gpu_context
             .as_ref()
-            .ok_or_else(|| Error::Runtime("GPU context not initialized".into()))?;
+            .ok_or_else(|| Error::Runtime("GPU context not initialized".into()))?
+            .clone();
 
-        if self.encoder.is_none() {
-            let encoder = build_encoder_lazily(gpu_ctx, &self.config, &frame)?;
-            self.encoder = Some(encoder);
+        if self.session.is_none() {
+            let session = build_encoder_session_lazily(&gpu_ctx, &self.config, &frame)?;
+            self.session = Some(session);
         }
 
-        let encoder = self
-            .encoder
-            .as_mut()
-            .ok_or_else(|| Error::Runtime("H.264 encoder not initialized".into()))?;
-
+        // Resolve the incoming frame's GPU texture; `submit_texture` resolves
+        // the encode-src view host-side and requires the source in
+        // SHADER_READ_ONLY_OPTIMAL (the layout resolved textures are left in).
         let texture = gpu_ctx.resolve_texture_by_surface_id(
             &frame.surface_id,
             frame.texture_layout,
             frame.width,
             frame.height,
         )?;
-        // Cdylib-safe: `Texture::vulkan_inner()` reaches `host_inner()` which
-        // panics under `host_callbacks().is_some()`. Route through the
-        // `host_vulkan_texture_arc` FullAccess slot so cdylib callers don't
-        // trip the panic guard.
-        let host_texture = texture.host_vulkan_texture_arc().map_err(|e| {
-            Error::GpuError(format!("Failed to acquire host texture for encode: {e}"))
-        })?;
-        let image_view = host_texture.image_view().map_err(|e| {
-            Error::GpuError(format!("Failed to get image view: {e}"))
-        })?;
 
         let timestamp_ns: Option<i64> = frame.timestamp_ns.parse().ok();
         let frame_fps = frame.fps;
         // Pass color metadata through input → encoded so the muxer /
-        // downstream consumer can populate VUI / colr without re-
-        // deriving from the bitstream. VUI write-back from encoder
-        // config lands in a follow-up.
+        // downstream consumer can populate VUI / colr without re-deriving
+        // from the bitstream.
         let frame_color_info = frame.color_info.clone();
         let frame_mastering_display = frame.mastering_display.clone();
         let frame_content_light = frame.content_light.clone();
 
-        let packets = encoder.encode_image(image_view, timestamp_ns).map_err(|e| {
-            Error::Runtime(format!("H.264 encode failed: {e}"))
-        })?;
+        let session = self
+            .session
+            .as_mut()
+            .ok_or_else(|| Error::Runtime("H.264 encoder session not initialized".into()))?;
 
-        for packet in packets {
+        let packet_count = session
+            .submit_texture(&texture, VulkanLayout::SHADER_READ_ONLY_OPTIMAL, timestamp_ns)
+            .map_err(|e| Error::Runtime(format!("H.264 encode failed: {e}")))?;
+
+        for index in 0..packet_count {
+            let packet = session
+                .drain_packet(index)
+                .map_err(|e| Error::Runtime(format!("H.264 drain packet failed: {e}")))?;
             let encoded = EncodedVideoFrame {
                 data: packet.data,
                 fps: frame_fps,
@@ -174,11 +173,13 @@ fn select_encoder_dims(
     (frame_width, frame_height, fps)
 }
 
-fn build_encoder_lazily(
+/// Build the frozen encoder-session descriptor from config + first frame,
+/// then mint the host `EncoderSession` inside a one-shot escalate window.
+fn build_encoder_session_lazily(
     gpu_ctx: &GpuContextLimitedAccess,
     config: &crate::_generated_::H264EncoderConfig,
     frame: &VideoFrame,
-) -> Result<SimpleEncoder> {
+) -> Result<EncoderSession> {
     let (width, height, fps) = select_encoder_dims(
         config.width,
         config.height,
@@ -190,58 +191,87 @@ fn build_encoder_lazily(
 
     // First-frame color info drives the session-level SPS VUI. Mid-stream
     // ColorInfo changes are not honored — switching colorimetry requires a
-    // new SPS, which the encoder doesn't re-emit per frame.
+    // new SPS, which the encoder doesn't re-emit per frame. An all-absent
+    // repr (every `*_present` byte 0) reads host-side as "no VUI".
     let color_vui = frame
         .color_info
         .as_ref()
-        .and_then(color_info_to_h273);
+        .map(color_info_to_h273_repr)
+        .unwrap_or_default();
 
-    let encoder_config = SimpleEncoderConfig {
+    let (has_bitrate, bitrate_bps) = match config.bitrate_bps {
+        Some(bps) => (1, bps),
+        None => (0, 0),
+    };
+    let (has_effort_level, effort_level) = match config.effort_level {
+        Some(level) => (1, level),
+        None => (0, 0),
+    };
+    let idr_interval_secs = config.keyframe_interval_seconds.unwrap_or(2.0) as u32;
+
+    let descriptor = VideoEncoderSessionDescriptorRepr {
         width,
         height,
         fps,
-        codec: Codec::H264,
-        preset: Preset::Medium,
-        streaming: true,
-        idr_interval_secs: config.keyframe_interval_seconds.unwrap_or(2.0) as u32,
-        bitrate_bps: config.bitrate_bps,
-        prepend_header_to_idr: Some(true),
-        effort_level: config.effort_level,
+        codec: VideoCodecRepr::H264 as u32,
+        preset: VideoEncoderPresetRepr::Medium as u32,
+        bitrate_bps,
+        has_bitrate,
+        idr_interval_secs,
+        effort_level,
+        has_effort_level,
+        // `streaming = true`: header prepended to each IDR for mid-stream join.
+        streaming: 1,
+        prepend_header_present: 1,
+        prepend_header: 1,
+        // Texture input: keep the eager `prepare_gpu_encode_resources` the
+        // host folds in when this byte is 0.
+        disable_gpu_input_prealloc: 0,
         color_vui,
         ..Default::default()
     };
 
-    let encoder = gpu_ctx.escalate(|full| {
-        let mut encoder = SimpleEncoder::from_full_access(full, encoder_config)
-            .map_err(|e| Error::Runtime(format!("Failed to create H.264 encoder: {e}")))?;
+    // Mint the session in a one-shot escalate window — the scope-end drains
+    // the device, so this runs at most once per session (first frame). Per-
+    // frame `submit_texture` / `drain_packet` ride the session's own
+    // scope-free methods. `escalate` returns `Result<Result<..>>`: the outer
+    // is the escalate machinery, the inner is the mint.
+    let session = match gpu_ctx.escalate(|full| full.create_encoder_session(&descriptor)) {
+        Ok(Ok(session)) => session,
+        Ok(Err(e)) => {
+            return Err(Error::Runtime(format!(
+                "Failed to create H.264 encoder session: {e}"
+            )));
+        }
+        Err(e) => {
+            return Err(Error::Runtime(format!(
+                "escalate for H.264 encoder-session mint failed: {e}"
+            )));
+        }
+    };
 
-        encoder
-            .prepare_gpu_encode_resources()
-            .map_err(|e| Error::Runtime(format!("Failed to pre-allocate H.264 encode resources: {e}")))?;
-
-        Ok(encoder)
-    })?;
-
+    let (aligned_width, aligned_height) = session.aligned_extent();
     tracing::info!(
-        "[H264Encoder] Initialized lazily ({}x{}, {}fps, shared RHI device, Vulkan Video hardware)",
+        aligned_width,
+        aligned_height,
+        "[H264Encoder] Session minted lazily ({}x{}, {}fps, Vulkan Video hardware)",
         width,
         height,
         fps
     );
-    tracing::info!(
-        color_vui = ?color_vui,
-        "[H264Encoder] SPS VUI color metadata chained from first-frame color_info"
-    );
     // Debug: emit the cached SPS+PPS bytes as hex once at construction so
-    // E2E flows can `ffprobe` the SPS VUI without saving a full MP4. This
-    // is a one-shot trace; encoded packets at frame rate are not logged.
-    tracing::debug!(
-        header_hex = %hex_encode(encoder.header()),
-        header_len = encoder.header().len(),
-        "[H264Encoder] Cached SPS+PPS header"
-    );
+    // E2E flows can `ffprobe` the SPS VUI without saving a full MP4. This is
+    // a one-shot trace; encoded packets at frame rate are not logged.
+    match session.header() {
+        Ok(header) => tracing::debug!(
+            header_hex = %hex_encode(&header),
+            header_len = header.len(),
+            "[H264Encoder] Cached SPS+PPS header"
+        ),
+        Err(e) => tracing::debug!(error = %e, "[H264Encoder] Header fetch failed (non-fatal)"),
+    }
 
-    Ok(encoder)
+    Ok(session)
 }
 
 /// Lowercase hex encoder for the one-shot SPS+PPS debug log. Returns an

@@ -3,75 +3,73 @@
 
 // H.264 Decoder Processor
 //
-// Thin wrapper around streamlib::sdk::engine::video::SimpleDecoder using the shared RHI
-// HostVulkanDevice. Decoded NV12 frames are written to pixel buffers for output.
+// Thin wrapper around the engine-free plugin SDK's hardware
+// `DecoderSession` PluginAbiObject. The session is minted host-side in
+// `setup()` via `GpuContextFullAccess::create_decoder_session` (a FullAccess
+// lifecycle body already holds the gate — no escalate); coded dimensions
+// auto-detect from the first SPS. Per bitstream chunk, `feed` decodes +
+// stages `0..N` RGBA frames, pulled via `drain_frame`.
+//
+// Each decoded RGBA frame is staged into a pooled host-visible pixel buffer;
+// the pool id doubles as the output `VideoFrame.surface_id`. Downstream
+// consumers resolve that surface_id, at which point the host uploads the
+// buffer to a GPU texture (SHADER_READ_ONLY_OPTIMAL) — the same CPU→GPU
+// hand-off the camera uses. No engine-only `TextureRing` /
+// `copy_pixel_buffer_to_slot` reach from the cdylib.
 
 
 use crate::_generated_::{EncodedVideoFrame, VideoFrame};
-use crate::linux::color_vui_translate::h273_to_color_info;
-use streamlib::sdk::context::{
-    GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess, TextureRing,
+use crate::linux::color_vui_translate::decoded_vui_to_color_info;
+use streamlib_plugin_sdk::sdk::context::{
+    GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::rhi::{PixelFormat, TextureFormat, TextureUsages};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::rhi::{DecoderSession, PixelFormat};
 
-use streamlib::sdk::engine::video::{Codec, SimpleDecoder, SimpleDecoderConfig};
-
-/// Pre-allocated output texture ring depth. Matches `MAX_FRAMES_IN_FLIGHT`
-/// — one slot for the GPU's in-flight upload, one for the next decoded
-/// frame the processor is staging. See `docs/learnings/vulkan-frames-in-flight.md`.
-const RING_DEPTH: usize = 2;
+use streamlib_plugin_abi::{VideoCodecRepr, VideoDecoderSessionDescriptorRepr};
 
 // ============================================================================
 // PROCESSOR
 // ============================================================================
 
-#[streamlib::sdk::processor("H264Decoder")]
+#[streamlib_plugin_sdk::sdk::processor("H264Decoder")]
 pub struct H264DecoderProcessor {
-    /// Vulkan Video hardware decoder (shares RHI device).
-    decoder: Option<SimpleDecoder>,
+    /// Vulkan Video hardware decoder session (minted in `setup`). `!Clone` —
+    /// owns exclusive Vulkan Video session / DPB / command resources.
+    session: Option<DecoderSession>,
 
-    /// GPU context for creating pixel buffers for decoded frames.
+    /// GPU context for staging decoded frames into pooled pixel buffers.
     gpu_context: Option<GpuContextLimitedAccess>,
-
-    /// Pre-allocated output texture ring. Built lazily on the first
-    /// decoded frame (dimensions come from the SPS), rebuilt only on
-    /// mid-stream resolution change.
-    texture_ring: Option<TextureRing>,
 
     /// Frames decoded counter.
     frames_decoded: u64,
 }
 
-impl streamlib::sdk::processors::ReactiveProcessor for H264DecoderProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for H264DecoderProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
 
-        // Decoder dimensions come from H.264 SPS — leaving `max_width` /
-        // `max_height` at zero tells `SimpleDecoder` to size the DPB and
-        // video session from the first parsed SPS rather than pre-allocating
-        // for a hard-coded resolution cap.
-        let decoder_config = SimpleDecoderConfig {
-            codec: Codec::H264,
-            rgba_output: true,
-            max_width: 0,
-            max_height: 0,
+        // Decoder dimensions come from the H.264 SPS — leaving `max_width` /
+        // `max_height` at zero tells the host to size the DPB and video
+        // session from the first parsed SPS rather than pre-allocating for a
+        // hard-coded resolution cap. `rgba_output = 1`: drained frames are
+        // GPU NV12→RGBA converted host-side.
+        let descriptor = VideoDecoderSessionDescriptorRepr {
+            codec: VideoCodecRepr::H264 as u32,
+            rgba_output: 1,
             ..Default::default()
         };
 
-        let decoder = SimpleDecoder::from_full_access(ctx.gpu_full_access(), decoder_config)
-            .map_err(|e| Error::Runtime(format!("Failed to create H.264 decoder: {e}")))?;
+        // FullAccess lifecycle body: call the create slot directly — the
+        // dispatcher already holds the gate, so no `escalate` here.
+        let session = ctx
+            .gpu_full_access()
+            .create_decoder_session(&descriptor)
+            .map_err(|e| Error::Runtime(format!("Failed to create H.264 decoder session: {e}")))?;
 
-        // Session creation, DPB allocation, and the NV12→RGBA converter are
-        // built lazily inside `SimpleDecoder::feed()` once the first SPS
-        // arrives — at that point the actual coded extent is known and
-        // sized to match. The processor-setup mutex inside `escalate` and
-        // the RHI queue submitter coordinate device-side ordering, so the
-        // historical pre-swapchain pre-init is no longer required.
+        tracing::info!("[H264Decoder] Session minted (Vulkan Video hardware)");
 
-        tracing::info!("[H264Decoder] Initialized (shared RHI device, Vulkan Video hardware)");
-
-        self.decoder = Some(decoder);
+        self.session = Some(session);
         Ok(())
     }
 
@@ -80,8 +78,7 @@ impl streamlib::sdk::processors::ReactiveProcessor for H264DecoderProcessor::Pro
             frames_decoded = self.frames_decoded,
             "[H264Decoder] Shutting down"
         );
-        self.decoder.take();
-        self.texture_ring.take();
+        self.session.take();
         self.gpu_context.take();
         Ok(())
     }
@@ -95,90 +92,85 @@ impl streamlib::sdk::processors::ReactiveProcessor for H264DecoderProcessor::Pro
         let gpu_ctx = self
             .gpu_context
             .as_ref()
-            .ok_or_else(|| Error::Runtime("GPU context not initialized".into()))?;
+            .ok_or_else(|| Error::Runtime("GPU context not initialized".into()))?
+            .clone();
 
-        let decoder = self
-            .decoder
+        let session = self
+            .session
             .as_mut()
-            .ok_or_else(|| Error::Runtime("H.264 decoder not initialized".into()))?;
+            .ok_or_else(|| Error::Runtime("H.264 decoder session not initialized".into()))?;
 
-        let decoded_frames = decoder.feed(&encoded.data).map_err(|e| {
-            Error::Runtime(format!("H.264 decode failed: {e}"))
-        })?;
+        let frame_count = session
+            .feed(&encoded.data)
+            .map_err(|e| Error::Runtime(format!("H.264 decode failed: {e}")))?;
 
-        for decoded in decoded_frames {
+        // Color info: prefer the parsed bitstream VUI (self-describing,
+        // survives muxer round-trips that re-encode `EncodedVideoFrame.
+        // color_info`) over the producer's attestation. Falls back to the
+        // passthrough when the bitstream didn't carry a VUI. The VUI is
+        // best-effort metadata — a query error (e.g. a null methods vtable)
+        // must not drop otherwise-valid decoded frames, so warn + fall back.
+        let parsed_vui = match session.current_color_vui() {
+            Ok(vui) => vui,
+            Err(e) => {
+                tracing::warn!(error = %e, "[H264Decoder] color VUI query failed; using passthrough");
+                None
+            }
+        };
+        let color_info_source = if parsed_vui.is_some() {
+            "bitstream"
+        } else {
+            "encoded_passthrough"
+        };
+        let color_info = parsed_vui
+            .map(|vui| decoded_vui_to_color_info(&vui))
+            .or_else(|| encoded.color_info.clone());
+
+        for index in 0..frame_count {
+            let decoded = session
+                .drain_frame(index)
+                .map_err(|e| Error::Runtime(format!("H.264 drain frame failed: {e}")))?;
             let width = decoded.width;
             let height = decoded.height;
 
-            // Decoded frames come back as RGBA (GPU NV12→RGBA via Nv12ToRgbConverter).
+            // Decoded frames come back as RGBA (host GPU NV12→RGBA convert).
             let rgba_size = (width * height * 4) as usize;
             let src = &decoded.data[..rgba_size.min(decoded.data.len())];
 
-            // Acquire (or build, on first frame / resolution change) the
-            // output texture ring. SPS-driven dimensions are stable within
-            // a session, so the escalate path runs at most once per stream
-            // and steady-state decode stays Limited-only.
-            let need_rebuild = match self.texture_ring.as_ref() {
-                Some(ring) => ring.width() != width || ring.height() != height,
-                None => true,
-            };
-            if need_rebuild {
-                self.texture_ring = Some(gpu_ctx.escalate(|full| {
-                    full.create_texture_ring(
-                        width,
-                        height,
-                        TextureFormat::Rgba8Unorm,
-                        TextureUsages::COPY_DST
-                            | TextureUsages::TEXTURE_BINDING
-                            | TextureUsages::STORAGE_BINDING,
-                        RING_DEPTH,
-                    )
-                })?);
-            }
-            let ring = self.texture_ring.as_ref().unwrap();
-            let slot = ring.acquire_next();
-
-            // Stage RGBA into a host-visible pixel buffer, then copy into
-            // the ring slot's pre-allocated DEVICE_LOCAL texture via the
-            // ring's amortized upload primitive — no per-frame escalation
-            // AND no per-frame vkCreateCommandPool / vkAllocateCommandBuffers
-            // / vkCreateFence (the slot's command pool + cb + fence are
-            // pre-allocated by `create_texture_ring`, reset+reused per call).
-            let (_pool_id, pixel_buffer) =
+            // Stage RGBA into a pooled host-visible pixel buffer. The pool id
+            // is the output surface_id: downstream `resolve_texture_by_surface_id`
+            // triggers the host to upload this buffer into a GPU texture. The
+            // `pixel_buffer` handle stays live through the `outputs.write`
+            // below so the pool can't rotate this slot out mid-flight (the
+            // pool skips buffers whose Arc is still held).
+            let (pool_id, pixel_buffer) =
                 gpu_ctx.acquire_pixel_buffer(width, height, PixelFormat::Rgba32)?;
             let dst_ptr = pixel_buffer.plane_base_address(0);
-            unsafe {
-                std::ptr::copy_nonoverlapping(src.as_ptr(), dst_ptr, src.len());
+            if dst_ptr.is_null() {
+                return Err(Error::Runtime(
+                    "H.264 decoder: pixel buffer plane base address is null".into(),
+                ));
             }
-            ring.copy_pixel_buffer_to_slot(&slot, &pixel_buffer, width, height)?;
-            let surface_id = slot.surface_id().to_string();
-
-            let timestamp_ns = encoded.timestamp_ns.clone();
-
-            // Color info: prefer the parsed bitstream VUI (self-describing,
-            // survives muxer round-trips that re-encode `EncodedVideoFrame.
-            // color_info`) over the producer's attestation. Falls back to the
-            // passthrough when the bitstream didn't carry a VUI.
-            let parsed_vui = decoder.current_color_vui();
-            let color_info_source = if parsed_vui.is_some() {
-                "bitstream"
-            } else {
-                "encoded_passthrough"
-            };
-            let color_info = parsed_vui
-                .map(|vui| h273_to_color_info(&vui))
-                .or_else(|| encoded.color_info.clone());
+            let copy_len = src.len().min(pixel_buffer.plane_size(0) as usize);
+            // SAFETY: `dst_ptr` is the mapped host-visible base of a pixel
+            // buffer sized (width, height, Rgba32) = `width*height*4` bytes;
+            // `copy_len` is clamped to both the RGBA source and the plane
+            // size, and the regions do not overlap.
+            unsafe {
+                std::ptr::copy_nonoverlapping(src.as_ptr(), dst_ptr, copy_len);
+            }
+            let surface_id = pool_id.to_string();
 
             let video_frame = VideoFrame {
                 surface_id,
                 width,
                 height,
-                timestamp_ns,
+                timestamp_ns: encoded.timestamp_ns.clone(),
                 fps: encoded.fps,
                 // Per-frame override is opt-in; per-surface
                 // `current_image_layout` from surface-share is the default.
                 texture_layout: None,
-                color_info,
+                color_info: color_info.clone(),
                 mastering_display: encoded.mastering_display.clone(),
                 content_light: encoded.content_light.clone(),
             };
@@ -193,6 +185,8 @@ impl streamlib::sdk::processors::ReactiveProcessor for H264DecoderProcessor::Pro
                     "[H264Decoder] First frame decoded — surfaced color_info"
                 );
             }
+            // `pixel_buffer` drops here (after the write) — matches the
+            // camera's in-flight hold.
         }
 
         if self.frames_decoded % 300 == 0 && self.frames_decoded > 0 {
