@@ -1344,6 +1344,57 @@ impl GpuContextFullAccess {
         })
     }
 
+    /// Upload a HOST_VISIBLE [`PixelBuffer`](crate::rhi::PixelBuffer)'s
+    /// contents to a freshly-allocated GPU texture and register it under
+    /// `surface_id`. Dispatches through the
+    /// [`GpuContextFullAccessVTable`]'s `upload_pixel_buffer_as_texture`
+    /// slot.
+    ///
+    /// This is the escalate-privileged FullAccess tier — the host
+    /// allocates a new texture per call. For per-frame hot paths, prefer a
+    /// setup-time `TextureRing` on the host side rather than repeated
+    /// escalations. The `pixel_buffer` crosses the plugin ABI by borrowed
+    /// pointer (the PluginAbiObject twin pattern); the host reads it back
+    /// through its own RHI `PixelBuffer` mirror.
+    pub fn upload_pixel_buffer_as_texture(
+        &self,
+        surface_id: &str,
+        pixel_buffer: &crate::rhi::PixelBuffer,
+        width: u32,
+        height: u32,
+    ) -> Result<()> {
+        if self.vtable.is_null() {
+            return Err(Error::GpuError(
+                "upload_pixel_buffer_as_texture: GpuContextFullAccess has null vtable".into(),
+            ));
+        }
+        let mut err_buf = [0u8; 512];
+        let mut err_len: usize = 0;
+        // SAFETY: vtable + handle (scope token) paired at construction;
+        // `pixel_buffer` is a borrowed PluginAbiObject valid for the call.
+        // The host reads it back as its own `crate::core::rhi::PixelBuffer`
+        // mirror (layout-locked by the pixel_buffer layout test).
+        let status = unsafe {
+            ((*self.vtable).upload_pixel_buffer_as_texture)(
+                self.handle,
+                surface_id.as_ptr(),
+                surface_id.len(),
+                pixel_buffer as *const crate::rhi::PixelBuffer as *const c_void,
+                width,
+                height,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if status == 0 {
+            Ok(())
+        } else {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            Err(Error::GpuError(msg))
+        }
+    }
+
     /// Create a compute kernel from a SPIR-V shader and a binding
     /// declaration. Dispatches through the [`GpuContextFullAccessVTable`]'s
     /// `create_compute_kernel` slot; the host reflects the SPIR-V,
@@ -1926,6 +1977,38 @@ mod escalate_tests {
         assert!(
             matches!(result, Err(Error::GpuError(_))),
             "null-vtable FullAccess call must return a typed GpuError, got {result:?}"
+        );
+        // `full.handle` is null → Drop returns early; no vtable touched.
+    }
+
+    #[test]
+    fn upload_pixel_buffer_as_texture_on_null_vtable_returns_typed_error_not_ub() {
+        // A ScopeToken FullAccess whose vtable is null must return a typed
+        // error from `upload_pixel_buffer_as_texture`, never dereference the
+        // null vtable to reach its `upload_pixel_buffer_as_texture` slot.
+        // Mental-revert the `self.vtable.is_null()` guard in that method and
+        // this segfaults instead of returning `Err`.
+        let full = GpuContextFullAccess {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+            handle_kind: HandleKind::ScopeToken,
+            inherited_lim_handle: std::ptr::null(),
+            inherited_lim_vtable: std::ptr::null(),
+        };
+        // A null-handle/null-vtable PixelBuffer: its Drop is a no-op (guarded
+        // on non-null handle+vtable), so it never touches a vtable slot.
+        let pixel_buffer = crate::rhi::PixelBuffer {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+            width: 16,
+            height: 16,
+            format_raw: 0,
+            plane_count_cached: 1,
+        };
+        let result = full.upload_pixel_buffer_as_texture("tap", &pixel_buffer, 16, 16);
+        assert!(
+            matches!(result, Err(Error::GpuError(_))),
+            "null-vtable upload_pixel_buffer_as_texture must return a typed GpuError, got {result:?}"
         );
         // `full.handle` is null → Drop returns early; no vtable touched.
     }
