@@ -990,16 +990,6 @@ const PACKAGES_FACADE_DEP_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::ExactFile,
         rationale: "pre-conversion facade linker (shrinking backlog)",
     },
-    AllowEntry {
-        path: "packages/h264/Cargo.toml",
-        kind: AllowKind::ExactFile,
-        rationale: "pre-conversion facade linker (shrinking backlog)",
-    },
-    AllowEntry {
-        path: "packages/h265/Cargo.toml",
-        kind: AllowKind::ExactFile,
-        rationale: "pre-conversion facade linker (shrinking backlog)",
-    },
 ];
 
 fn check_packages_facade_runtime_dep(
@@ -1095,16 +1085,6 @@ const PACKAGES_ENGINE_REACH_ALLOWLIST: &[AllowEntry] = &[
     // Shrinking conversion backlog.
     AllowEntry {
         path: "packages/camera/",
-        kind: AllowKind::PathPrefix,
-        rationale: "pre-conversion engine-bridge reacher (shrinking backlog)",
-    },
-    AllowEntry {
-        path: "packages/h264/",
-        kind: AllowKind::PathPrefix,
-        rationale: "pre-conversion engine-bridge reacher (shrinking backlog)",
-    },
-    AllowEntry {
-        path: "packages/h265/",
         kind: AllowKind::PathPrefix,
         rationale: "pre-conversion engine-bridge reacher (shrinking backlog)",
     },
@@ -2667,10 +2647,10 @@ streamlib = { version = "0.6.0" }
     #[test]
     fn allows_engine_reach_in_allowlisted_package() {
         let dir = empty_workspace();
-        // packages/h264 is on the seeded baseline — both reach forms pass.
+        // packages/camera is on the seeded baseline — both reach forms pass.
         write_fixture(
             dir.path(),
-            "packages/h264/src/linux/encoder.rs",
+            "packages/camera/src/linux/camera.rs",
             "use streamlib::sdk::engine::host_rhi::VulkanDevice;\nfn f() { let d = full.host_vulkan_device_arc().unwrap(); }\n",
         );
         let report = scan_all(dir.path()).unwrap();
