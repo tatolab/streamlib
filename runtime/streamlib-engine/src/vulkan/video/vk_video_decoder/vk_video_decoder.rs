@@ -1582,13 +1582,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires GPU — VkVideoDecoder::new() needs a real VideoContext"]
-    fn test_create_decoder() {
-        // VkVideoDecoder::new() requires Arc<VideoContext> with a live Vulkan
-        // device. This test is kept as a placeholder for GPU integration tests.
-    }
-
-    #[test]
     fn test_get_video_codec_string() {
         assert_eq!(
             VkVideoDecoder::get_video_codec_string(vk::VideoCodecOperationFlagsKHR::NONE),
@@ -1642,30 +1635,6 @@ mod tests {
     }
 
     // test_set_export_preferences removed — set_export_preferences method was removed.
-
-    #[test]
-    #[ignore = "requires GPU — VkVideoDecoder::new() needs a real VideoContext"]
-    fn test_start_video_sequence() {
-        // Requires Arc<VideoContext> with a live Vulkan device.
-    }
-
-    #[test]
-    #[ignore = "requires GPU — VkVideoDecoder::new() needs a real VideoContext"]
-    fn test_get_current_frame_data() {
-        // Requires Arc<VideoContext> with a live Vulkan device.
-    }
-
-    #[test]
-    #[ignore = "requires GPU — VkVideoDecoder::new() needs a real VideoContext"]
-    fn test_get_bitstream_buffer_updates_max() {
-        // Requires Arc<VideoContext> with a live Vulkan device.
-    }
-
-    #[test]
-    #[ignore = "requires GPU — VkVideoDecoder::new() needs a real VideoContext"]
-    fn test_deinitialize_is_safe() {
-        // Requires Arc<VideoContext> with a live Vulkan device.
-    }
 
     #[test]
     fn test_nv_vk_decode_frame_data_resize() {
