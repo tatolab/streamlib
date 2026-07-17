@@ -4,6 +4,11 @@
 # Member of the standalone `camera-python-display` workspace — inherits its
 # `[workspace.package]` fields and resolves every dependency by version
 # via `[workspace.dependencies]`. No path deps.
+#
+# Engine-free plugin: this cdylib links ONLY `streamlib-plugin-sdk` (never the
+# `streamlib` engine facade), matching `camera-plugin-sdk-compute/plugin`. Its
+# GPU work rides the cdylib-safe FullAccess / Limited primitives, so the image
+# stays sound as a separately-built `.slpkg`.
 [package]
 name = "camera-python-display-effects"
 version.workspace = true
@@ -19,12 +24,10 @@ crate-type = ["rlib", "cdylib"]
 streamlib-jtd-codegen = { workspace = true }
 
 [dependencies]
-streamlib = { workspace = true }
+# Engine-free authoring SDK — the whole point of this example. NO `streamlib`
+# facade dependency: the plugin cdylib must not statically link the engine.
+streamlib-plugin-sdk = { workspace = true }
+streamlib-macros = { workspace = true }
 streamlib-plugin-abi = { workspace = true }
 tracing = { workspace = true }
 serde = { workspace = true }
-serde_json = { workspace = true }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-streamlib-adapter-abi = { workspace = true }
-streamlib-consumer-rhi = { workspace = true }

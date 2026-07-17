@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! CRT + Film Grain Processor (Linux only).
+//! CRT + Film Grain Processor (Linux only, engine-free).
 //!
 //! Applies vintage CRT display effects and 80s Blade Runner-style film
 //! grain via a sandboxed graphics kernel:
@@ -13,22 +13,27 @@
 //!
 //! Linux-only — the tiled DMA-BUF `VkImage`s every modern producer in
 //! this example emits aren't consumable by a macOS Metal vertex+
-//! fragment path. The kernel wrapper itself ([`SandboxedCrtFilmGrain`])
-//! lives in `crt_film_grain_kernel.rs` — see that file's module-level
-//! doc for why it lives in the example and not the engine.
+//! fragment path. Everything goes through the engine-free
+//! `streamlib-plugin-sdk`: the kernel + ring + timelines are built on
+//! `GpuContextFullAccess` at setup (privileged), and `process()` resolves
+//! + dispatches on `GpuContextLimitedAccess` (the hot path never
+//! escalates). No raw `HostVulkanDevice`, so the cdylib stays sound as a
+//! separately-built `.slpkg`. The kernel wrapper itself
+//! ([`SandboxedCrtFilmGrain`]) lives in `crt_film_grain_kernel.rs`.
 
 #![cfg(target_os = "linux")]
 
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
-use streamlib::sdk::engine::HostSurfaceStoreExt;
-use streamlib::sdk::engine::host_rhi::HostVulkanTimelineSemaphore;
 
-use streamlib::sdk::rhi::{Texture, TextureFormat, VulkanLayout};
-use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::error::{Result, Error};
+use streamlib_plugin_sdk::sdk::context::{
+    GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
+};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::rhi::{HostTimelineSemaphore, Texture, TextureFormat, VulkanLayout};
+
 use crate::_generated_::VideoFrame;
 
 use crate::crt_film_grain_kernel::{
@@ -52,14 +57,14 @@ const CRT_OUTPUT_SURFACE_UUIDS: [&str; OUTPUT_RING_DEPTH] = [
 struct OutputSlot {
     surface_id: String,
     texture: Texture,
-    // Per-slot single-writer-per-edge timeline pair held on the host
+    // Per-slot single-writer-per-edge timeline pair held on the plugin
     // side so cross-process consumers reaching the slot via
     // `surface_store.lookup` see live timeline FDs (the registration
-    // duplicated them via SCM_RIGHTS but the host-side Arcs must
+    // duplicated them via SCM_RIGHTS but the producer-side handles must
     // outlive the surface). See
     // `docs/architecture/adapter-timeline-single-writer.md`.
-    _produce_done: Arc<HostVulkanTimelineSemaphore>,
-    _consume_done: Arc<HostVulkanTimelineSemaphore>,
+    _produce_done: HostTimelineSemaphore,
+    _consume_done: HostTimelineSemaphore,
 }
 
 struct LinuxBackend {
@@ -109,7 +114,7 @@ impl Default for CrtFilmGrainConfig {
     }
 }
 
-#[streamlib::sdk::processor("CrtFilmGrain")]
+#[streamlib_plugin_sdk::sdk::processor("CrtFilmGrain")]
 pub struct CrtFilmGrainProcessor {
     config: CrtFilmGrainConfig,
     gpu_context: Option<GpuContextLimitedAccess>,
@@ -118,7 +123,7 @@ pub struct CrtFilmGrainProcessor {
     backend: Option<LinuxBackend>,
 }
 
-impl streamlib::sdk::processors::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for CrtFilmGrainProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.setup_inner(ctx)
     }
@@ -235,92 +240,79 @@ impl streamlib::sdk::processors::ReactiveProcessor for CrtFilmGrainProcessor::Pr
 
 impl CrtFilmGrainProcessor::Processor {
     fn setup_inner(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        tracing::info!("CrtFilmGrain: setup (Vulkan graphics kernel)");
+        tracing::info!("CrtFilmGrain: setup (engine-free Vulkan graphics kernel)");
         let gpu_context = ctx.gpu_limited_access().clone();
         self.gpu_context = Some(gpu_context.clone());
         self.start_time = Some(Instant::now());
 
         // setup() runs inside the engine's privileged lifecycle dispatch
         // (`ProcessorInstance::setup`), so `ctx.gpu_full_access()` is
-        // already privileged in both cdylib and in-process modes: cdylib
-        // bodies see a ScopeToken-shaped FullAccess routed through the
-        // FullAccess vtable, in-process bodies see the Boxed FullAccess
-        // dispatched directly. Calling `gpu_limited_access().escalate(...)`
-        // here would re-enter the same gate and trip the gate's same-
-        // thread re-entry panic.
+        // already privileged — building the kernel + ring + timelines here
+        // (not via `gpu_limited_access().escalate(...)`) avoids re-entering
+        // the escalate gate on the same thread.
         let width = self.config.width;
         let height = self.config.height;
         let full = ctx.gpu_full_access();
-        let vulkan_device = full.host_vulkan_device_arc()?;
-        let kernel = Arc::new(SandboxedCrtFilmGrain::new(&vulkan_device)?);
+        let kernel = Arc::new(SandboxedCrtFilmGrain::new(full)?);
 
-        let mut ring_descriptors: Vec<(String, Texture)> =
-            Vec::with_capacity(OUTPUT_RING_DEPTH);
+        let mut ring_descriptors: Vec<(String, Texture)> = Vec::with_capacity(OUTPUT_RING_DEPTH);
         for slot_idx in 0..OUTPUT_RING_DEPTH {
-            let texture = full.acquire_render_target_dma_buf_image(
-                width,
-                height,
-                TextureFormat::Bgra8Unorm,
-            )?;
+            let texture =
+                full.acquire_render_target_dma_buf_image(width, height, TextureFormat::Bgra8Unorm)?;
             let surface_id = CRT_OUTPUT_SURFACE_UUIDS[slot_idx].to_string();
             ring_descriptors.push((surface_id, texture));
         }
 
-        // Dual-register each slot outside `escalate`:
+        // Cross-process surface-share handle for Path 2 consumers (the
+        // `cyberpunk_glitch` Python subprocess reaching the ring via
+        // `OpenGLContext.acquire_read`). Fetch once — the FullAccess
+        // mirror inherits the Limited `surface_store` slot.
+        let surface_store = full.surface_store();
+        if surface_store.is_none() {
+            return Err(Error::Configuration(
+                "CrtFilmGrain: GpuContext has no surface_store — cross-process output \
+                 (Glitch consumer) unavailable"
+                    .into(),
+            ));
+        }
+
+        // Dual-register each slot:
         // - `GpuContext::texture_cache` (Path 1 — in-process consumers
-        //   like `Display`).
-        // - `surface_store` (Path 2 — cross-process consumers like the
-        //   `cyberpunk_glitch` Python subprocess reaching the ring via
-        //   `OpenGLContext.acquire_read`).
-        //
-        // Path 1 starts at `UNDEFINED` (the kernel's pre-render barrier
-        // handles `UNDEFINED → COLOR_ATTACHMENT_OPTIMAL`); Path 2
-        // declares `SHADER_READ_ONLY_OPTIMAL` because Glitch reads
-        // after the first dispatch lands.
+        //   like `Display`), starting at `UNDEFINED` (the kernel's
+        //   pre-render barrier handles `UNDEFINED → COLOR_ATTACHMENT_OPTIMAL`).
+        // - `surface_store` (Path 2 — cross-process consumers), declaring
+        //   `SHADER_READ_ONLY_OPTIMAL` because Glitch reads after the first
+        //   dispatch lands.
         let mut output_ring: Vec<OutputSlot> = Vec::with_capacity(OUTPUT_RING_DEPTH);
-        for (slot_idx, (surface_id, texture)) in ring_descriptors.into_iter().enumerate()
-        {
+        for (slot_idx, (surface_id, texture)) in ring_descriptors.into_iter().enumerate() {
             // Per-slot single-writer-per-edge exportable timelines —
             // `produce_done` signaled by the host-side CRT kernel,
             // `consume_done` signaled by cross-process consumers (Glitch
             // Python subprocess). See
             // `docs/architecture/adapter-timeline-single-writer.md`.
-            let produce_done = Arc::new(
-                HostVulkanTimelineSemaphore::new_exportable(vulkan_device.device(), 0)
-                    .map_err(|e| {
-                        Error::Configuration(format!(
-                            "CrtFilmGrain: HostVulkanTimelineSemaphore::new_exportable \
-                             (produce_done) slot {slot_idx}: {e}"
-                        ))
-                    })?,
-            );
-            let consume_done = Arc::new(
-                HostVulkanTimelineSemaphore::new_exportable(vulkan_device.device(), 0)
-                    .map_err(|e| {
-                        Error::Configuration(format!(
-                            "CrtFilmGrain: HostVulkanTimelineSemaphore::new_exportable \
-                             (consume_done) slot {slot_idx}: {e}"
-                        ))
-                    })?,
-            );
+            let produce_done = full.create_exportable_timeline_semaphore(0).map_err(|e| {
+                Error::Configuration(format!(
+                    "CrtFilmGrain: create_exportable_timeline_semaphore (produce_done) \
+                     slot {slot_idx}: {e}"
+                ))
+            })?;
+            let consume_done = full.create_exportable_timeline_semaphore(0).map_err(|e| {
+                Error::Configuration(format!(
+                    "CrtFilmGrain: create_exportable_timeline_semaphore (consume_done) \
+                     slot {slot_idx}: {e}"
+                ))
+            })?;
             gpu_context.register_texture_with_layout(
                 &surface_id,
                 texture.clone(),
                 VulkanLayout::UNDEFINED,
             );
-            let surface_store = gpu_context.surface_store().ok_or_else(|| {
-                Error::Configuration(
-                    "CrtFilmGrain: GpuContext has no surface_store \
-                     — cross-process output (Glitch consumer) unavailable"
-                        .into(),
-                )
-            })?;
             surface_store
                 .register_texture(
                     &surface_id,
                     &texture,
-                    Some(produce_done.as_ref()),
-                    Some(consume_done.as_ref()),
+                    Some(&produce_done),
+                    Some(&consume_done),
                     VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
                 )
                 .map_err(|e| {
@@ -369,4 +361,3 @@ fn synth_slot_videoframe(surface_id: &str, width: u32, height: u32) -> VideoFram
         content_light: None,
     }
 }
-

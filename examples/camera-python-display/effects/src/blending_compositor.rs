@@ -2,13 +2,14 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Blending Compositor — multi-layer alpha-over composite with PiP slide-in
-//! on the canonical graphics-kernel + texture-cache RHI.
+//! on the engine-free plugin SDK's graphics-kernel + texture-cache surfaces.
 //!
-//! Runs as a [`ManualProcessor`] with a render thread paced against the
-//! display's refresh rate (60 Hz fallback). Each tick reads the latest
-//! frame from each input port (older queued frames are dropped by the
-//! port's `SkipToLatest` read mode), resolves the input frames'
-//! [`Texture`]s via `GpuContext::resolve_texture_registration_by_surface_id`
+//! Runs as a [`ManualProcessor`] with a render thread paced against a
+//! fixed 60 Hz cadence (the render thread has no window handle, so there
+//! is no live refresh query). Each tick reads the latest frame from each
+//! input port (older queued frames are dropped by the port's
+//! `SkipToLatest` read mode), resolves the input frames' [`Texture`]s via
+//! `GpuContextLimitedAccess::resolve_texture_registration_by_surface_id`
 //! (Path 1 — same-process texture cache), picks the next slot in a
 //! ring of pre-allocated render-target output `Texture`s,
 //! dispatches the compositor's graphics kernel into it, and emits the
@@ -16,14 +17,17 @@
 //!
 //! Layer order (bottom → top): video → lower_third → watermark → PiP.
 //!
-//! Linux-only. The macOS Metal path was retired when the compositor
-//! moved onto the graphics-kernel + texture-cache RHI; supporting it
-//! would have required parallel adapter machinery that does not exist
-//! outside the engine today.
+//! Linux-only. Everything goes through the engine-free
+//! `streamlib-plugin-sdk`: the compositor kernel, tone-mapper, output
+//! ring, and per-slot timelines are built on `GpuContextFullAccess` at
+//! setup (privileged), and the render thread resolves + dispatches on
+//! `GpuContextLimitedAccess` (the hot path never escalates). No raw
+//! `HostVulkanDevice`, so the cdylib stays sound as a separately-built
+//! `.slpkg`.
 //!
 //! The kernel wrapper itself ([`SandboxedBlendingCompositor`]) lives
-//! in `blending_compositor_kernel.rs` — see that file's module-level
-//! doc for why it lives in the example and not the engine.
+//! in `blending_compositor_kernel.rs`; the sandboxed tone-mapper
+//! ([`SandboxedToneMapper`]) in `tone_mapper.rs`.
 
 #![cfg(target_os = "linux")]
 
@@ -33,30 +37,28 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex as StdMutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use streamlib::sdk::engine::host_rhi::{HostVulkanTexture, HostVulkanTimelineSemaphore};
-use streamlib::sdk::engine::{HostSurfaceStoreExt, HostTextureExt};
 
-use streamlib::sdk::color::TransferId;
-use streamlib::sdk::display_info;
-use streamlib::sdk::rhi::{
-    RhiToneMapper, Texture, TextureDescriptor, TextureFormat, TextureUsages, ToneCurveId,
-    ToneMapperPushConstants, VulkanLayout,
+use streamlib_plugin_sdk::sdk::color::TransferId;
+use streamlib_plugin_sdk::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::iceoryx2::{InputMailboxes, OutputWriter};
+use streamlib_plugin_sdk::sdk::rhi::{
+    HostTimelineSemaphore, PooledTextureHandle, Texture, TextureFormat, TexturePoolDescriptor,
+    TextureRegistration, TextureUsages, VulkanLayout,
 };
-use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
-use streamlib::sdk::error::{Result, Error};
-use streamlib::sdk::iceoryx2::{InputMailboxes, OutputWriter};
+
 use crate::_generated_::tatolab__core::color_info::{Matrix, Primaries, Range, Transfer};
 use crate::_generated_::{ColorInfo, VideoFrame};
 
-// Sandboxed kernel wrapper — see `blending_compositor_kernel.rs` for
-// the rationale (sandboxed scenario content rides the engine RHI's
-// cdylib-safe surfaces).
+// Sandboxed kernel + tone-mapper wrappers — see their module-level docs
+// for why they live in the example and not the engine.
 use crate::blending_compositor_kernel::{
     BlendingCompositorInputs, BlendingLayer, BlendingOutput, SandboxedBlendingCompositor,
 };
+use crate::tone_mapper::{SandboxedToneMapper, ToneCurveId, ToneMapperPushConstants};
 
 /// Iteration cap applied when [`BlendingCompositorConfig::target_fps`]
-/// or the display refresh query produces a non-positive value.
+/// produces a non-positive value.
 const FALLBACK_TARGET_FPS: f64 = 60.0;
 
 /// Render-loop iteration count slack: at 60 Hz nominal we tolerate up
@@ -90,13 +92,14 @@ pub struct BlendingCompositorConfig {
     /// Delay after first camera frame before PiP slides in, seconds.
     pub pip_slide_delay: f32,
     /// Override the render loop's target frame rate. When unset, the
-    /// loop polls [`display_info::get_refresh_rate`]; primarily useful
-    /// for tests that need a deterministic cadence without a window.
+    /// loop paces against the 60 Hz fallback (the render thread has no
+    /// window handle, so there is no live refresh query); primarily
+    /// useful for tests that need a deterministic cadence.
     #[serde(default)]
     pub target_fps: Option<f64>,
     /// Working-space `ColorInfo` for the per-acquire compositing model:
     /// each input frame whose declared `ColorInfo` differs from this is
-    /// converted via [`RhiToneMapper`] into a per-port intermediate
+    /// converted via [`SandboxedToneMapper`] into a per-port intermediate
     /// before the composite kernel reads it; the output frame stamps
     /// this same `ColorInfo`.
     ///
@@ -118,8 +121,8 @@ pub struct BlendingCompositorConfig {
     pub default_tone_curve: Option<ToneCurveSelector>,
 }
 
-/// Serializable proxy for [`ToneCurveId`] so the engine-internal enum
-/// can be set from config YAML / JSON without leaking the engine type.
+/// Serializable proxy for [`ToneCurveId`] so the tone-curve enum can be
+/// set from config YAML / JSON.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ToneCurveSelector {
     /// Identity — pure transfer rescale, no tone curve.
@@ -156,54 +159,53 @@ impl Default for BlendingCompositorConfig {
 }
 
 /// Output ring slot — pre-allocated render-target texture + the UUID
-/// it is registered under in `GpuContext::texture_cache`.
+/// it is registered under in the same-process texture cache.
 struct OutputSlot {
     surface_id: String,
     texture: Texture,
-    // Per-slot single-writer-per-edge timeline pair held on the host
+    // Per-slot single-writer-per-edge timeline pair held on the plugin
     // side so cross-process consumers reaching the slot via
     // `surface_store.lookup` see live timeline FDs (the registration
-    // duplicated them via SCM_RIGHTS but the host-side Arcs must
+    // duplicated them via SCM_RIGHTS but the producer-side handles must
     // outlive the surface). See
     // `docs/architecture/adapter-timeline-single-writer.md`.
-    _produce_done: Arc<HostVulkanTimelineSemaphore>,
-    _consume_done: Arc<HostVulkanTimelineSemaphore>,
+    _produce_done: HostTimelineSemaphore,
+    _consume_done: HostTimelineSemaphore,
 }
 
 /// GPU backend bundle owned by the processor and moved into the
-/// render thread on `start()`. The output texture ring is allocated
-/// during `setup()` (FullAccess required for
-/// `acquire_render_target_dma_buf_image`) and consumed read-only by
-/// the render thread (LimitedAccess is sufficient for resolving
-/// registrations).
+/// render thread on `start()`. Everything is built during `setup()`
+/// from the privileged `GpuContextFullAccess` and consumed by the
+/// render thread through cdylib-safe method dispatch + the Limited
+/// `acquire_texture` pool (for intermediates).
 struct GpuBackend {
     compositor: Arc<SandboxedBlendingCompositor>,
     output_ring: Vec<OutputSlot>,
-    /// Per-input tone-mapper. Constructed in `setup()` (kernel is
-    /// allocated lazily on first dispatch). Engaged by
+    /// Per-input tone-mapper. Constructed in `setup()`. Engaged by
     /// `normalize_layer` when an input frame's `ColorInfo` differs
     /// from the working space.
-    tone_mapper: Arc<RhiToneMapper>,
-    /// Per-port intermediate textures, lazily allocated on first
-    /// frame and reallocated when input dimensions change. Keyed by
+    tone_mapper: Arc<SandboxedToneMapper>,
+    /// Per-port intermediate textures, lazily acquired on first
+    /// frame and re-acquired when input dimensions change. Keyed by
     /// port name ("video_in", "lower_third_in", etc.). Only the
     /// render thread mutates this; the mutex exists so the map can
     /// also be inspected from other threads if a debug surface is
     /// added later.
     intermediates: StdMutex<HashMap<String, Intermediate>>,
-    /// Host Vulkan device, threaded through for lazy intermediate
-    /// allocation. The render thread holds the only consumer-side
-    /// `Arc`; teardown releases it when the thread exits.
-    vulkan_device: Arc<streamlib::sdk::engine::host_rhi::HostVulkanDevice>,
 }
 
 /// Per-input intermediate texture used by the per-acquire tone-mapping
 /// stage. The compositor reads this when the input's `ColorInfo`
-/// differs from the working space; allocated lazily on first
-/// conversion at the input's dimensions and reallocated on dimension
-/// change.
+/// differs from the working space; acquired lazily on first conversion
+/// at the input's dimensions and re-acquired on dimension change.
 struct Intermediate {
-    texture: Texture,
+    /// Pooled scratch texture acquired via
+    /// [`GpuContextLimitedAccess::acquire_texture`]. Held so the pool
+    /// slot stays checked out for the intermediate's lifetime; the
+    /// texture is bound via [`PooledTextureHandle::texture`]. Dropped
+    /// (returned to the pool) when the port's dimensions change and a
+    /// new one is acquired.
+    pool_handle: PooledTextureHandle,
     width: u32,
     height: u32,
     /// Last-known Vulkan layout the texture is in. Tracked by the
@@ -212,7 +214,7 @@ struct Intermediate {
     current_layout: VulkanLayout,
 }
 
-#[streamlib::sdk::processor("BlendingCompositor")]
+#[streamlib_plugin_sdk::sdk::processor("BlendingCompositor")]
 pub struct BlendingCompositorProcessor {
     config: BlendingCompositorConfig,
 
@@ -229,7 +231,7 @@ pub struct BlendingCompositorProcessor {
     backend: Option<GpuBackend>,
 }
 
-impl streamlib::sdk::processors::ManualProcessor for BlendingCompositorProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for BlendingCompositorProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.setup_inner(ctx)
     }
@@ -288,9 +290,7 @@ impl streamlib::sdk::processors::ManualProcessor for BlendingCompositorProcessor
                     frame_count.load(Ordering::Relaxed)
                 );
             })
-            .map_err(|e| {
-                Error::Configuration(format!("spawn render thread: {e}"))
-            })?;
+            .map_err(|e| Error::Configuration(format!("spawn render thread: {e}")))?;
         self.render_thread = Some(handle);
         Ok(())
     }
@@ -311,53 +311,40 @@ impl BlendingCompositorProcessor::Processor {
                 return fps;
             }
         }
-        // Render thread runs without a window handle; the underlying
-        // helper falls back to the primary monitor's refresh on Linux,
-        // returning a positive `f64` directly.
-        let rate = display_info::get_refresh_rate(None);
-        if rate > 0.0 {
-            rate
-        } else {
-            FALLBACK_TARGET_FPS
-        }
+        // The render thread runs without a window handle; there is no
+        // live refresh-rate query on this path, so use the standard
+        // 60 Hz fallback (the display's default cadence).
+        FALLBACK_TARGET_FPS
     }
 
     fn setup_inner(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        tracing::info!("BlendingCompositor: setup (Vulkan)");
+        tracing::info!("BlendingCompositor: setup (engine-free Vulkan)");
         let gpu_context = ctx.gpu_limited_access().clone();
         self.gpu_context = Some(gpu_context.clone());
 
         // setup() runs inside the engine's privileged lifecycle dispatch
         // (`ProcessorInstance::setup`), so `ctx.gpu_full_access()` is
-        // already privileged in both cdylib and in-process modes: cdylib
-        // bodies see a ScopeToken-shaped FullAccess routed through the
-        // FullAccess vtable, in-process bodies see the Boxed FullAccess
-        // dispatched directly. Calling `gpu_limited_access().escalate(...)`
-        // here would re-enter the same gate and trip the gate's same-
-        // thread re-entry panic.
-        //
-        // `host_vulkan_device_arc()` is the cdylib-safe FullAccess
-        // accessor; the `Arc<HostVulkanDevice>` it returns is held by
-        // the sandboxed graphics-kernel wrapper for steady-state
-        // dispatch.
+        // already privileged — building the kernel + ring + tone-mapper +
+        // timelines here (not via `gpu_limited_access().escalate(...)`)
+        // avoids re-entering the escalate gate on the same thread.
         let width = self.config.width;
         let height = self.config.height;
         let full = ctx.gpu_full_access();
-        let vulkan_device = full.host_vulkan_device_arc()?;
-        let compositor = Arc::new(SandboxedBlendingCompositor::new(&vulkan_device)?);
+        let compositor = Arc::new(SandboxedBlendingCompositor::new(full)?);
+
+        // Per-input tone-mapper. Built once here; engaged by
+        // `normalize_layer` when an input's `ColorInfo` differs from the
+        // working space.
+        let tone_mapper = Arc::new(SandboxedToneMapper::new(full)?);
 
         // Pre-allocate the output texture ring — render-target-capable
         // tiled DMA-BUF VkImages. Dual-registration happens below via
         // the LimitedAccess `register_texture_with_layout` /
         // `surface_store` primitives.
-        let mut ring_descriptors: Vec<(String, Texture)> =
-            Vec::with_capacity(OUTPUT_RING_DEPTH);
+        let mut ring_descriptors: Vec<(String, Texture)> = Vec::with_capacity(OUTPUT_RING_DEPTH);
         for slot_idx in 0..OUTPUT_RING_DEPTH {
-            let texture = full.acquire_render_target_dma_buf_image(
-                width,
-                height,
-                TextureFormat::Bgra8Unorm,
-            )?;
+            let texture =
+                full.acquire_render_target_dma_buf_image(width, height, TextureFormat::Bgra8Unorm)?;
             // Engine UUIDv4-shaped fixed string per slot — keeps the
             // `surface_id` stable across runs (helpful for log
             // correlation) and the slot index visible in the last
@@ -365,22 +352,27 @@ impl BlendingCompositorProcessor::Processor {
             // Hex-only by construction so any future consumer that
             // parses surface_id as a real UUID still resolves it
             // (`b1e0d` ≈ "blend").
-            let surface_id =
-                format!("00000000-0000-0000-0000-00000b1e0d{slot_idx:02x}");
+            let surface_id = format!("00000000-0000-0000-0000-00000b1e0d{slot_idx:02x}");
             ring_descriptors.push((surface_id, texture));
         }
 
-        // Per-input tone-mapper. Cheap to construct (kernel built
-        // lazily on first dispatch); each consumer owns its own
-        // instance per the "no engine-side cache" pattern.
-        let tone_mapper = Arc::new(RhiToneMapper::new(&vulkan_device));
+        // Cross-process surface-share handle for Path 2 consumers (the
+        // `cyberpunk_glitch` Python subprocess reaching the ring via
+        // `OpenGLContext.acquire_read`). Fetch once — the FullAccess
+        // mirror inherits the Limited `surface_store` slot.
+        let surface_store = full.surface_store();
+        if surface_store.is_none() {
+            return Err(Error::Configuration(
+                "BlendingCompositor: GpuContext has no surface_store — cross-process output \
+                 (Glitch consumer) unavailable"
+                    .to_string(),
+            ));
+        }
 
-        // Dual-register each slot outside `escalate`:
+        // Dual-register each slot:
         // - `GpuContext::texture_cache` (Path 1 — in-process consumers
         //   like `LinuxDisplayProcessor` and `CrtFilmGrain`).
-        // - `surface_store` (Path 2 — cross-process consumers like the
-        //   `cyberpunk_glitch` Python subprocess reaching the ring via
-        //   `OpenGLContext.acquire_read`).
+        // - `surface_store` (Path 2 — cross-process consumers).
         //
         // The two registrations describe the same texture and declare
         // matching layouts (anti-pattern #2 in `texture-registration.md`
@@ -390,55 +382,40 @@ impl BlendingCompositorProcessor::Processor {
         // `SHADER_READ_ONLY_OPTIMAL` because Glitch reads after the
         // first render lands.
         let mut output_ring: Vec<OutputSlot> = Vec::with_capacity(OUTPUT_RING_DEPTH);
-        for (slot_idx, (surface_id, texture)) in ring_descriptors.into_iter().enumerate()
-        {
+        for (slot_idx, (surface_id, texture)) in ring_descriptors.into_iter().enumerate() {
             // Per-slot single-writer-per-edge exportable timelines —
-            // `produce_done` signaled by the host-side compositor,
+            // `produce_done` signaled by the plugin-side compositor,
             // `consume_done` signaled by cross-process consumers (Glitch
             // Python subprocess). See
             // `docs/architecture/adapter-timeline-single-writer.md`.
-            let produce_done = Arc::new(
-                HostVulkanTimelineSemaphore::new_exportable(vulkan_device.device(), 0)
-                    .map_err(|e| {
-                        Error::Configuration(format!(
-                            "BlendingCompositor: HostVulkanTimelineSemaphore::new_exportable \
-                             (produce_done) slot {slot_idx}: {e}"
-                        ))
-                    })?,
-            );
-            let consume_done = Arc::new(
-                HostVulkanTimelineSemaphore::new_exportable(vulkan_device.device(), 0)
-                    .map_err(|e| {
-                        Error::Configuration(format!(
-                            "BlendingCompositor: HostVulkanTimelineSemaphore::new_exportable \
-                             (consume_done) slot {slot_idx}: {e}"
-                        ))
-                    })?,
-            );
+            let produce_done = full.create_exportable_timeline_semaphore(0).map_err(|e| {
+                Error::Configuration(format!(
+                    "BlendingCompositor: create_exportable_timeline_semaphore (produce_done) \
+                     slot {slot_idx}: {e}"
+                ))
+            })?;
+            let consume_done = full.create_exportable_timeline_semaphore(0).map_err(|e| {
+                Error::Configuration(format!(
+                    "BlendingCompositor: create_exportable_timeline_semaphore (consume_done) \
+                     slot {slot_idx}: {e}"
+                ))
+            })?;
             gpu_context.register_texture_with_layout(
                 &surface_id,
                 texture.clone(),
                 VulkanLayout::UNDEFINED,
             );
-            let surface_store = gpu_context.surface_store().ok_or_else(|| {
-                Error::Configuration(
-                    "BlendingCompositor: GpuContext has no surface_store \
-                     — cross-process output (Glitch consumer) unavailable"
-                        .to_string(),
-                )
-            })?;
             surface_store
                 .register_texture(
                     &surface_id,
                     &texture,
-                    Some(produce_done.as_ref()),
-                    Some(consume_done.as_ref()),
+                    Some(&produce_done),
+                    Some(&consume_done),
                     VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
                 )
                 .map_err(|e| {
                     Error::Configuration(format!(
-                        "BlendingCompositor: surface_store.register_texture \
-                         slot {slot_idx}: {e}"
+                        "BlendingCompositor: surface_store.register_texture slot {slot_idx}: {e}"
                     ))
                 })?;
             output_ring.push(OutputSlot {
@@ -457,7 +434,6 @@ impl BlendingCompositorProcessor::Processor {
             output_ring,
             tone_mapper,
             intermediates: StdMutex::new(HashMap::new()),
-            vulkan_device,
         });
         Ok(())
     }
@@ -633,7 +609,7 @@ fn compose_one_frame(
                 state.default_tone_curve,
                 &backend.tone_mapper,
                 &backend.intermediates,
-                &backend.vulkan_device,
+                gpu_ctx,
             )?;
         }
     }
@@ -683,8 +659,8 @@ fn compose_one_frame(
     let pip = state.last_pip.as_ref();
 
     // Dispatch — the compositor records input barriers (when needed) +
-    // offscreen render + output post-barrier through the engine RHI,
-    // submits each, and waits before returning.
+    // offscreen render + output post-barrier through the plugin SDK's
+    // RHI, submits each, and waits before returning.
     backend.compositor.dispatch(BlendingCompositorInputs {
         video: video.map(|l| l.as_layer()),
         lower_third: lower_third.map(|l| l.as_layer()),
@@ -751,13 +727,11 @@ fn default_working_space() -> ColorInfo {
     }
 }
 
-/// Map BC's local schema `Transfer` enum to the engine's `TransferId`
-/// push-constant id. Local because the engine's
-/// [`streamlib::sdk::color::transfer_id_from_schema`] takes the
-/// engine-crate's flavor of the schema enum (a distinct Rust type
-/// from BC's `_generated_/` codegen output, even though both are
-/// generated from the same JTD source). Match arms mirror the
-/// engine helper's coverage.
+/// Map BC's local schema `Transfer` enum to the plugin SDK's
+/// [`TransferId`] push-constant id. Local because the SDK's
+/// `TransferId` is a distinct Rust type from BC's `_generated_/`
+/// codegen output, even though both are generated from the same JTD
+/// source.
 fn transfer_id_from_schema(t: &Transfer) -> TransferId {
     match t {
         Transfer::Srgb => TransferId::Srgb,
@@ -800,7 +774,7 @@ fn color_info_matches_working_space(input: Option<&ColorInfo>, working: &ColorIn
 /// used by `normalize_layer` to detect mismatches against the
 /// working space and engage the tone-mapper.
 struct ResolvedLayer {
-    registration: streamlib::sdk::context::TextureRegistration,
+    registration: TextureRegistration,
     texture: Texture,
     /// `ColorInfo` declared on the source `VideoFrame`. `None` means
     /// the producer didn't tag the frame; defaults to the working
@@ -886,21 +860,22 @@ fn refresh_layer(
 /// Per-input tone-map normalization: if `layer.source_color_info`
 /// (after defaults resolution) differs from the working space, run
 /// the tone-mapper from the upstream texture into a per-port
-/// intermediate (allocating / reallocating on dimension change) and
+/// intermediate (acquiring / re-acquiring on dimension change) and
 /// repoint the layer at the intermediate. When the source already
 /// matches, leaves the layer unchanged.
 ///
 /// The composite kernel reads RGBA8 storage images in working-space
 /// encoding regardless of which path runs.
+#[allow(clippy::too_many_arguments)]
 fn normalize_layer(
     port: &str,
     layer: &mut ResolvedLayer,
     working_space: &ColorInfo,
     working_peak_nits: f32,
     tone_curve: ToneCurveId,
-    tone_mapper: &RhiToneMapper,
+    tone_mapper: &SandboxedToneMapper,
     intermediates: &StdMutex<HashMap<String, Intermediate>>,
-    vulkan_device: &Arc<streamlib::sdk::engine::host_rhi::HostVulkanDevice>,
+    gpu_ctx: &GpuContextLimitedAccess,
 ) -> Result<()> {
     // Fast-path: missing color_info or matching axes mean "use the
     // working space" — no conversion engages. This is the cheap-path
@@ -928,32 +903,29 @@ fn normalize_layer(
     let width = layer.texture.width();
     let height = layer.texture.height();
 
-    // Acquire-or-allocate the per-port intermediate at the input's
+    // Acquire-or-reuse the per-port intermediate at the input's
     // current dimensions.
     let mut map = intermediates.lock().unwrap();
     let intermediate = match map.get_mut(port) {
         Some(existing) if existing.width == width && existing.height == height => existing,
         _ => {
-            // Allocate fresh — either first frame for this port or
+            // Acquire fresh — either first frame for this port or
             // input dims changed and the cached intermediate is the
-            // wrong size.
-            let desc = TextureDescriptor {
+            // wrong size. Dropping the prior `Intermediate` (if any)
+            // returns its pooled slot; `acquire_texture` gives a new
+            // STORAGE_BINDING | TEXTURE_BINDING scratch texture.
+            let desc = TexturePoolDescriptor {
                 width,
                 height,
                 format: TextureFormat::Bgra8Unorm,
                 usage: TextureUsages::TEXTURE_BINDING | TextureUsages::STORAGE_BINDING,
                 label: Some("bc-tone-mapped-intermediate"),
             };
-            let host_tex = HostVulkanTexture::new(vulkan_device, &desc).map_err(|e| {
-                Error::Configuration(format!(
-                    "BlendingCompositor: HostVulkanTexture::new for port {port}: {e}"
-                ))
-            })?;
-            let texture = <Texture as HostTextureExt>::from_vulkan(host_tex);
+            let pool_handle = gpu_ctx.acquire_texture(&desc)?;
             map.insert(
                 port.to_string(),
                 Intermediate {
-                    texture,
+                    pool_handle,
                     width,
                     height,
                     current_layout: VulkanLayout::UNDEFINED,
@@ -1001,7 +973,7 @@ fn normalize_layer(
     tone_mapper.apply_with_layouts(
         &layer.texture,
         src_layout,
-        &intermediate.texture,
+        intermediate.pool_handle.texture(),
         intermediate.current_layout,
         &push,
     )?;
@@ -1015,7 +987,7 @@ fn normalize_layer(
         .update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
 
     // Repoint the layer at the intermediate.
-    layer.texture = intermediate.texture.clone();
+    layer.texture = intermediate.pool_handle.texture_clone();
     layer.normalized_layout = Some(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
     Ok(())
 }
@@ -1105,30 +1077,6 @@ mod tests {
         assert!(
             elapsed < Duration::from_millis(250),
             "loop took {elapsed:?} to exit after stop signal (cap is 250 ms)"
-        );
-    }
-
-    /// Locks down the contract the render loop's drain-latest behavior
-    /// inherits from the iceoryx2 `SkipToLatest` read mode (the schema
-    /// default for video input ports). `inputs.read()` calls into
-    /// `PortMailbox::pop_latest`; if a future refactor changed this
-    /// primitive to FIFO behavior, the loop would silently drift to
-    /// consuming stale frames.
-    #[test]
-    fn iceoryx2_pop_latest_skips_stale_frames() {
-        use streamlib::sdk::iceoryx2::PortMailbox;
-
-        let mailbox = PortMailbox::new(8);
-        for i in 0u8..5 {
-            mailbox.push(vec![i]);
-        }
-        let latest = mailbox
-            .pop_latest()
-            .expect("at least one frame should have been pushed");
-        assert_eq!(latest, vec![4], "pop_latest must return the most recent push");
-        assert!(
-            mailbox.is_empty(),
-            "older frames must be drained (skip-stale semantics)"
         );
     }
 
