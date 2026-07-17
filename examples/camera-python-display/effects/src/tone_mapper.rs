@@ -273,6 +273,25 @@ mod tests {
         assert_eq!(ToneCurveId::Bt2446a as u32, 2);
     }
 
+    /// `TransferId` discriminants must match the `TRANSFER_*` constants in
+    /// `shaders/color_convert_common.glsl`, which `tone_curve.comp` includes.
+    /// `ToneMapperPushConstants.input_transfer` / `output_transfer` carry
+    /// `TransferId as u32` and the shader dispatches on the raw numeric id, so
+    /// a drift here silently selects the wrong transfer curve (no error, no
+    /// panic). `TransferId` lives in a different crate (`streamlib-plugin-sdk`)
+    /// from this example-local shader, so this lock pins the cross-crate
+    /// Rust↔GLSL contract. Mentally revert any renumber and this catches it.
+    #[test]
+    fn transfer_id_values_match_shader() {
+        // Mirrors: TRANSFER_LINEAR=0u, TRANSFER_SRGB=1u, TRANSFER_BT709=2u,
+        //          TRANSFER_PQ=3u, TRANSFER_HLG=4u (color_convert_common.glsl).
+        assert_eq!(TransferId::Linear as u32, 0);
+        assert_eq!(TransferId::Srgb as u32, 1);
+        assert_eq!(TransferId::Bt709 as u32, 2);
+        assert_eq!(TransferId::Pq as u32, 3);
+        assert_eq!(TransferId::Hlg as u32, 4);
+    }
+
     /// The convenience constructor populates fields in the canonical
     /// HDR→SDR config and encodes the `TransferId` / `ToneCurveId` enums to
     /// their `#[repr(u32)]` discriminants.
