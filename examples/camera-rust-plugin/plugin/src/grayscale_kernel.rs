@@ -7,11 +7,14 @@
 //!
 //! The grayscale effect is example content: the BT.601 luma weights are
 //! baked into the fragment shader, so it doesn't belong in the engine.
-//! It rides the engine RHI's cdylib-safe
+//! It rides the engine-free `streamlib-plugin-sdk`'s cdylib-safe
 //! [`VulkanGraphicsKernel::offscreen_render`] + [`RhiCommandRecorder`]
-//! surfaces, so the crate stays inside the boundary-check rule — no
-//! `vulkanalia` dep, no allowlist exception. Every queue-mutex / fence /
-//! Drop / barrier bug the engine has fixed propagates here for free.
+//! surfaces — the kernel + recorder are built through
+//! [`GpuContextFullAccess::create_graphics_kernel`] /
+//! [`GpuContextFullAccess::create_command_recorder`], never a raw host
+//! device — so the cdylib links no engine facade and needs no allowlist
+//! exception. Every queue-mutex / fence / Drop / barrier bug the engine
+//! has fixed propagates here for free.
 //!
 //! ## Lifecycle
 //!
@@ -22,19 +25,17 @@
 //! textures are in `SHADER_READ_ONLY_OPTIMAL`, ready for the next
 //! consumer to sample without re-barriering.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
-use streamlib::sdk::engine::host_rhi::{
-    HostVulkanDevice, OffscreenColorTarget, OffscreenDraw, RhiCommandRecorder, VulkanAccess,
-    VulkanGraphicsKernel, VulkanStage,
-};
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::rhi::{
+use streamlib_plugin_sdk::sdk::context::GpuContextFullAccess;
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::rhi::{
     AttachmentFormats, ColorBlendState, ColorWriteMask, DepthStencilState, DrawCall,
     GraphicsBindingSpec, GraphicsDynamicState, GraphicsKernelDescriptor, GraphicsPipelineState,
     GraphicsPushConstants, GraphicsShaderStageFlags, GraphicsStage, MultisampleState,
-    PrimitiveTopology, RasterizationState, ScissorRect, Texture, TextureFormat, VertexInputState,
-    Viewport, VulkanLayout,
+    OffscreenColorTarget, OffscreenDraw, PrimitiveTopology, RasterizationState, RhiCommandRecorder,
+    ScissorRect, Texture, TextureFormat, VertexInputState, Viewport, VulkanAccess,
+    VulkanGraphicsKernel, VulkanLayout, VulkanStage,
 };
 
 /// Single input layer (the pre-effect texture) + its current Vulkan
@@ -72,7 +73,7 @@ pub struct SandboxedGrayscale {
 }
 
 impl SandboxedGrayscale {
-    pub fn new(vulkan_device: &Arc<HostVulkanDevice>) -> Result<Self> {
+    pub fn new(full: &GpuContextFullAccess) -> Result<Self> {
         let label = "grayscale";
 
         let vert = include_bytes!(concat!(env!("OUT_DIR"), "/grayscale.vert.spv"));
@@ -102,9 +103,9 @@ impl SandboxedGrayscale {
             },
             descriptor_sets_in_flight: 1,
         };
-        let kernel = VulkanGraphicsKernel::new(vulkan_device, &descriptor)?;
+        let kernel = full.create_graphics_kernel(&descriptor)?;
 
-        let recorder = RhiCommandRecorder::new(vulkan_device, "grayscale_recorder")?;
+        let recorder = full.create_command_recorder("grayscale_recorder")?;
 
         Ok(Self {
             label,

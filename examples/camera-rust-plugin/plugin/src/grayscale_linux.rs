@@ -14,11 +14,11 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use streamlib::sdk::context::{
+use streamlib_plugin_sdk::sdk::context::{
     GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::rhi::{TextureUsages, VulkanLayout};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::rhi::{TextureFormat, TextureRing, TextureUsages, VulkanLayout};
 
 use crate::_generated_::VideoFrame;
 use crate::grayscale_kernel::{
@@ -32,17 +32,17 @@ const OUTPUT_RING_DEPTH: usize = 2;
 
 struct LinuxBackend {
     kernel: Arc<SandboxedGrayscale>,
-    output_ring: streamlib::sdk::context::TextureRing,
+    output_ring: TextureRing,
 }
 
-#[streamlib::sdk::processor("GrayscaleRust")]
+#[streamlib_plugin_sdk::sdk::processor("GrayscaleRust")]
 pub struct GrayscaleProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,
     frame_count: AtomicU64,
     backend: Option<LinuxBackend>,
 }
 
-impl streamlib::sdk::processors::ReactiveProcessor for GrayscaleProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for GrayscaleProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.setup_inner(ctx)
     }
@@ -141,8 +141,7 @@ impl GrayscaleProcessor::Processor {
         // `gpu_limited_access().escalate(...)` here would re-enter the
         // escalate gate on the same thread and trip its re-entry panic.
         let full = ctx.gpu_full_access();
-        let vulkan_device = full.host_vulkan_device_arc()?;
-        let kernel = Arc::new(SandboxedGrayscale::new(&vulkan_device)?);
+        let kernel = Arc::new(SandboxedGrayscale::new(full)?);
 
         // Camera in this example emits 1920×1080. The grayscale kernel
         // validates input/output dimensions match per dispatch, so a
@@ -153,7 +152,7 @@ impl GrayscaleProcessor::Processor {
         let output_ring = full.create_texture_ring(
             width,
             height,
-            streamlib::sdk::rhi::TextureFormat::Bgra8Unorm,
+            TextureFormat::Bgra8Unorm,
             TextureUsages::RENDER_ATTACHMENT
                 | TextureUsages::TEXTURE_BINDING
                 | TextureUsages::COPY_SRC,
