@@ -353,12 +353,18 @@ fn emit_slpkg_and_manifest(
     // The engine/SDK crate chain: with `--cargo-mirror`, emit the cargo
     // source-replacement mirror (the full crates.io closure of the chain, as a
     // directory source under `cargo-mirror/`) so a link-free build resolves
-    // `streamlib = "0.6.0"` entirely offline from the tree, and list the closure
-    // in the release manifest's `crates` (what `crates_missing_from_release`
-    // checks a consumer's crate pins against). Without the flag the crate chain
-    // is absent and `crates` stays empty — a routine `.slpkg` emit does not pay
-    // for the heavy vendored tree. There is no publish step: the crates resolve
-    // from the emitted tree, not any registry.
+    // `streamlib = "0.6.0"` entirely offline from the tree, and record the
+    // closure in the release manifest's `crates` as release metadata carried
+    // alongside the mirror. That `crates` list is NOT what guards the mirror's
+    // completeness: `crates_missing_from_release` keys on `registry = tatolab`
+    // crate pins, which no manifest carries anymore (those pins were stripped
+    // when the custom cargo registry was removed), so it does not cover the
+    // bare-crates.io deps the mirror resolves — the pin seam is only
+    // half-reconnected. A partial mirror is prevented instead by the atomic
+    // whole-tree staged swap (a consumer observes the whole tree or none). Without
+    // the flag the crate chain is absent and `crates` stays empty — a routine
+    // `.slpkg` emit does not pay for the heavy vendored tree. There is no publish
+    // step: the crates resolve from the emitted tree, not any registry.
     let crate_members: Vec<ReleaseManifestMember> = if opts.cargo_mirror {
         let closure = crate::compute_release_closure(&opts.workspace_root)
             .context("computing the engine/SDK release closure for the cargo mirror")?;

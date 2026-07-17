@@ -41,6 +41,15 @@
 //! Crates are therefore packaged in the release closure's topological order
 //! (leaf-first) and each is injected into the directory source **before** its
 //! dependents are packaged, so every sibling resolves from the growing mirror.
+//!
+//! ## Version immutability is discipline, not an in-emit guard
+//!
+//! The served tree stores each engine/SDK crate as **unpacked** directory-source
+//! entries, not a `.crate` tarball, so there is no prior tarball to diff a
+//! re-emit against. An engine crate's bytes staying immutable across re-emits at
+//! a fixed version therefore rests on version-bump discipline plus the atomic
+//! whole-tree staged swap (a re-emit replaces the whole tree at once), not on an
+//! in-emit content-immutability check.
 
 use std::collections::BTreeMap;
 use std::io::Read;
@@ -286,10 +295,8 @@ pub fn emit_cargo_mirror(
         )?;
         // Byte-stable normalize (strip git-HEAD vcs-info, fixed-header re-gzip)
         // so `package` — the checksum a consumer's lock records — is a pure
-        // function of source, independent of the commit the emit ran at. First
-        // emit into a fresh staging tree ⇒ no prior `.crate` to guard against.
-        let package_sha256 =
-            finalize_crate_tarball(&crate_path, &member.name, &member.version, None)?;
+        // function of source, independent of the commit the emit ran at.
+        let package_sha256 = finalize_crate_tarball(&crate_path, &member.name, &member.version)?;
         inject_crate_into_directory_source(
             &crate_path,
             &member.name,

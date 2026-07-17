@@ -22,9 +22,11 @@ toml_edit = { workspace = true }
 tempfile = { workspace = true }
 zip = "2.2"
 # Byte-stable `.crate` normalization + directory-source injection for the cargo
-# source-replacement mirror (see `crate_tarball` + `cargo_mirror`). All three
-# versions are already resolved in the workspace lock (transitive), so adding
-# them here pulls no new crate.
+# source-replacement mirror (see `crate_tarball` + `cargo_mirror`). `sha2` has a
+# `[workspace.dependencies]` entry so it unifies via `workspace = true`; `flate2`
+# and `tar` have no workspace-table entry, so they are pinned locally here. All
+# three are already resolved in the workspace lock (transitive), so adding them
+# pulls no new crate.
 sha2 = { workspace = true }
 flate2 = "1"
 tar = "0.4"

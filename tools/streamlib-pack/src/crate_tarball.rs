@@ -10,13 +10,13 @@
 //!   content-stale `target/package` leftover is never emitted.
 //! - [`normalize_crate_tarball`] rewrites a `.crate` into a form whose bytes are
 //!   a pure function of source content, and [`finalize_crate_tarball`] pairs
-//!   that with an immutability guard so re-emitting an unchanged release yields
-//!   identical checksums while a source change under a published version is
-//!   refused. `cargo package` is already byte-deterministic *except* for the
+//!   that with the normalized tarball's sha256 — the `package` checksum a
+//!   consumer's `Cargo.lock` records for the directory-source entry. `cargo
+//!   package` is already byte-deterministic *except* for the
 //!   `{name}-{version}/.cargo_vcs_info.json` entry, whose embedded git-HEAD
 //!   sha1 makes the checksum a function of the commit rather than the source;
-//!   normalization strips it (see
-//!   `docs/learnings/cargo-crate-vcs-info-nondeterminism.md`).
+//!   normalization strips it so the recorded checksum tracks source content,
+//!   not the commit the emit ran at.
 
 use std::io::{Read, Write};
 use std::path::Path;
@@ -46,40 +46,23 @@ pub enum CrateTarballIntegrityError {
     /// The required `{name}-{version}/Cargo.toml` entry is absent.
     #[error("crate tarball missing manifest entry `{expected}`")]
     MissingManifestEntry { expected: String },
-    /// The recorded sha256 did not match the tarball bytes.
-    #[error("crate tarball sha256 mismatch: expected {expected}, got {actual}")]
-    ChecksumMismatch { expected: String, actual: String },
 }
 
 /// Structurally verify a `cargo package` `.crate` at `path` for
 /// `(name, version)`: the gzip stream fully decodes (truncation trips the
-/// trailer check), every tar entry enumerates to EOF, the crate's
-/// `{name}-{version}/Cargo.toml` entry is present, and — when `expected_sha256`
-/// is given — the tarball bytes hash to it. The checksum arm is exercised by
-/// the tests and reserved for the byte-stable-emission follow-up; the emit's
-/// post-repackage integrity check calls with `None`.
+/// trailer check), every tar entry enumerates to EOF, and the crate's
+/// `{name}-{version}/Cargo.toml` entry is present. This is a structural check
+/// only — the byte-stable `package` checksum a consumer's lock records is
+/// produced downstream by [`finalize_crate_tarball`].
 pub fn verify_crate_tarball(
     path: &Path,
     name: &str,
     version: &str,
-    expected_sha256: Option<&str>,
 ) -> Result<(), CrateTarballIntegrityError> {
     let bytes = std::fs::read(path).map_err(|source| CrateTarballIntegrityError::Unreadable {
         path: path.display().to_string(),
         source,
     })?;
-
-    if let Some(expected) = expected_sha256 {
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes);
-        let actual = format!("{:x}", hasher.finalize());
-        if !actual.eq_ignore_ascii_case(expected) {
-            return Err(CrateTarballIntegrityError::ChecksumMismatch {
-                expected: expected.to_string(),
-                actual,
-            });
-        }
-    }
 
     // Fully decode the gzip stream. A truncated tarball trips here: the
     // decoder reaches an unexpected EOF before the gzip trailer (CRC + ISIZE)
@@ -154,7 +137,7 @@ pub fn obtain_crate_tarball(
 
     repackage().with_context(|| format!("repackage crate {name} {version}"))?;
 
-    verify_crate_tarball(candidate, name, version, None).with_context(|| {
+    verify_crate_tarball(candidate, name, version).with_context(|| {
         format!(
             "freshly-packaged crate tarball at {} failed integrity verification",
             candidate.display()
@@ -237,48 +220,20 @@ pub fn normalize_crate_tarball(path: &Path, name: &str, version: &str) -> anyhow
     Ok(())
 }
 
-/// The sha256 of the crate's canonical (vcs-stripped, uncompressed) tar bytes —
-/// a compression-independent fingerprint of source content. Two crates built
-/// from identical source but a different git HEAD (or a different gzip level)
-/// share a fingerprint; a real source change is a different fingerprint.
-pub fn crate_content_fingerprint(path: &Path, name: &str, version: &str) -> anyhow::Result<String> {
-    let canonical = canonical_tar_bytes(path, name, version)?;
-    let mut hasher = Sha256::new();
-    hasher.update(&canonical);
-    Ok(format!("{:x}", hasher.finalize()))
-}
-
-/// Normalize the `.crate` at `path` into byte-stable form, refuse a source
-/// change under an already-published `(name, version)`, and return the
-/// normalized tarball's sha256 for the sparse-index line.
+/// Normalize the `.crate` at `path` into byte-stable form and return the
+/// normalized tarball's sha256 — the `package` checksum a consumer's
+/// `Cargo.lock` records for the directory-source entry.
 ///
-/// `previously_served` is the same crate's `.crate` in the prior complete
-/// served tree (still present during a staged emit). When it exists, its
-/// content fingerprint — normalized on the fly, so a legacy un-normalized
-/// served tree does not false-positive during the transition — must equal the
-/// new crate's; a mismatch means the source changed without a version bump and
-/// is refused. A benign commit bump (identical source, new git HEAD) passes and
-/// yields the same checksum, so it neither churns the index nor trips the guard.
-pub fn finalize_crate_tarball(
-    path: &Path,
-    name: &str,
-    version: &str,
-    previously_served: Option<&Path>,
-) -> anyhow::Result<String> {
+/// Normalization strips the git-HEAD vcs-info and fixes the gzip header, so the
+/// checksum is a pure function of source content: a benign commit bump
+/// (identical source, new git HEAD) yields the same checksum, so it neither
+/// churns the index nor depends on the commit the emit ran at. There is no
+/// prior-`.crate` immutability diff in the mirror path — the served tree stores
+/// unpacked directory-source entries, not `.crate` files, so version-bump
+/// discipline plus the atomic whole-tree swap, not an in-emit guard, keep an
+/// engine crate's bytes immutable across re-emits at a fixed version.
+pub fn finalize_crate_tarball(path: &Path, name: &str, version: &str) -> anyhow::Result<String> {
     normalize_crate_tarball(path, name, version)?;
-
-    if let Some(served) = previously_served {
-        let new_fingerprint = crate_content_fingerprint(path, name, version)?;
-        let served_fingerprint = crate_content_fingerprint(served, name, version)?;
-        if new_fingerprint != served_fingerprint {
-            anyhow::bail!(
-                "crate `{name}` `{version}` changed at the same version \
-                 (content fingerprint {new_fingerprint} != published \
-                 {served_fingerprint}) — bump the version; re-emitting different \
-                 source under a published version is refused"
-            );
-        }
-    }
 
     let bytes = std::fs::read(path)
         .with_context(|| format!("read normalized crate tarball {}", path.display()))?;
@@ -365,15 +320,6 @@ mod tests {
         dir.join(format!("{name}-{version}.crate"))
     }
 
-    /// gzip `raw` into a `.crate`-shaped file at `path` at an explicit
-    /// compression level (for the compression-independence fingerprint test).
-    fn gzip_to_file_at_level(path: &Path, raw: &[u8], level: Compression) {
-        let file = std::fs::File::create(path).unwrap();
-        let mut enc = GzEncoder::new(file, level);
-        enc.write_all(raw).unwrap();
-        enc.finish().unwrap();
-    }
-
     /// Write a `.crate` that mirrors what `cargo package` emits from a git
     /// checkout: a `.cargo_vcs_info.json` entry (carrying `vcs_sha1`) plus the
     /// manifest and a source file whose bytes are `lib_contents`.
@@ -428,7 +374,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = candidate_path(dir.path(), "streamlib-x", "0.5.0");
         write_valid_crate(&path, "streamlib-x", "0.5.0");
-        verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).unwrap();
+        verify_crate_tarball(&path, "streamlib-x", "0.5.0").unwrap();
     }
 
     /// KEY (exit criterion): a structurally-VALID but content-STALE cached
@@ -447,7 +393,7 @@ mod tests {
         // A pre-existing candidate that is structurally VALID (verifies clean)
         // but built from STALE source.
         write_valid_crate_with_lib(&path, "streamlib-x", "0.5.0", b"// STALE source\n");
-        verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).expect(
+        verify_crate_tarball(&path, "streamlib-x", "0.5.0").expect(
             "sanity: the stale cache is structurally valid, so the old fast-path WOULD reuse it",
         );
         let stale_bytes = std::fs::read(&path).unwrap();
@@ -475,7 +421,7 @@ mod tests {
             b"// FRESH source\n",
             "the emitted artifact must carry current source"
         );
-        verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).unwrap();
+        verify_crate_tarball(&path, "streamlib-x", "0.5.0").unwrap();
     }
 
     /// A corrupt pre-existing candidate is likewise dropped and repackaged into
@@ -498,7 +444,7 @@ mod tests {
             .unwrap()
             .set_len(20)
             .unwrap();
-        assert!(verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).is_err());
+        assert!(verify_crate_tarball(&path, "streamlib-x", "0.5.0").is_err());
 
         let repackaged = Cell::new(false);
         obtain_crate_tarball(&path, "streamlib-x", "0.5.0", || {
@@ -513,7 +459,7 @@ mod tests {
             "repackage MUST run for a corrupt cached tarball"
         );
         // Final artifact is valid.
-        verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).unwrap();
+        verify_crate_tarball(&path, "streamlib-x", "0.5.0").unwrap();
     }
 
     #[test]
@@ -521,7 +467,7 @@ mod tests {
         let dir = tempdir().unwrap();
         let path = candidate_path(dir.path(), "streamlib-x", "0.5.0");
         std::fs::write(&path, b"").unwrap();
-        let err = verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).unwrap_err();
+        let err = verify_crate_tarball(&path, "streamlib-x", "0.5.0").unwrap_err();
         assert!(
             matches!(err, CrateTarballIntegrityError::GzipInvalid(_)),
             "got {err:?}"
@@ -535,43 +481,13 @@ mod tests {
         // A well-formed gzip-tar with a source file but NO Cargo.toml.
         let raw = build_tar_bytes(&[("streamlib-x-0.5.0/src/lib.rs", b"// lib\n")]);
         gzip_to_file(&path, &raw);
-        let err = verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).unwrap_err();
+        let err = verify_crate_tarball(&path, "streamlib-x", "0.5.0").unwrap_err();
         match err {
             CrateTarballIntegrityError::MissingManifestEntry { expected } => {
                 assert_eq!(expected, "streamlib-x-0.5.0/Cargo.toml");
             }
             other => panic!("expected MissingManifestEntry, got {other:?}"),
         }
-    }
-
-    #[test]
-    fn wrong_expected_sha256_mismatches() {
-        let dir = tempdir().unwrap();
-        let path = candidate_path(dir.path(), "streamlib-x", "0.5.0");
-        write_valid_crate(&path, "streamlib-x", "0.5.0");
-        let err = verify_crate_tarball(
-            &path,
-            "streamlib-x",
-            "0.5.0",
-            Some("0000000000000000000000000000000000000000000000000000000000000000"),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(err, CrateTarballIntegrityError::ChecksumMismatch { .. }),
-            "got {err:?}"
-        );
-    }
-
-    #[test]
-    fn correct_expected_sha256_verifies() {
-        let dir = tempdir().unwrap();
-        let path = candidate_path(dir.path(), "streamlib-x", "0.5.0");
-        write_valid_crate(&path, "streamlib-x", "0.5.0");
-        let bytes = std::fs::read(&path).unwrap();
-        let mut hasher = Sha256::new();
-        hasher.update(&bytes);
-        let sha = format!("{:x}", hasher.finalize());
-        verify_crate_tarball(&path, "streamlib-x", "0.5.0", Some(&sha)).unwrap();
     }
 
     #[test]
@@ -589,7 +505,7 @@ mod tests {
         .unwrap();
 
         assert!(repackaged.get());
-        verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).unwrap();
+        verify_crate_tarball(&path, "streamlib-x", "0.5.0").unwrap();
     }
 
     #[test]
@@ -636,7 +552,7 @@ mod tests {
         let keep = 1536 + 256;
         gzip_to_file(&path, &raw[..keep]);
 
-        let err = verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).unwrap_err();
+        let err = verify_crate_tarball(&path, "streamlib-x", "0.5.0").unwrap_err();
         assert!(
             matches!(err, CrateTarballIntegrityError::TarInvalid(_)),
             "got {err:?}"
@@ -659,7 +575,7 @@ mod tests {
             .unwrap()
             .set_len(full - 8)
             .unwrap();
-        let err = verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).unwrap_err();
+        let err = verify_crate_tarball(&path, "streamlib-x", "0.5.0").unwrap_err();
         assert!(
             matches!(err, CrateTarballIntegrityError::GzipInvalid(_)),
             "got {err:?}"
@@ -688,7 +604,7 @@ mod tests {
             "vcs-info entry must be stripped, got {names:?}"
         );
         // The normalized crate is still structurally valid (manifest present).
-        verify_crate_tarball(&path, "streamlib-x", "0.5.0", None).unwrap();
+        verify_crate_tarball(&path, "streamlib-x", "0.5.0").unwrap();
 
         let after_first = std::fs::read(&path).unwrap();
         normalize_crate_tarball(&path, "streamlib-x", "0.5.0").unwrap();
@@ -727,127 +643,28 @@ mod tests {
         assert_eq!(sha256_of_file(&a), sha256_of_file(&b));
     }
 
-    /// NEGATIVE (exit-criterion 2): a changed source under the same version is
-    /// refused. Mentally revert the guard (drop the fingerprint compare) and
-    /// this returns Ok instead of Err.
+    /// `finalize_crate_tarball` normalizes the `.crate` in place and returns the
+    /// normalized tarball's sha256 (the `package` checksum a consumer's lock
+    /// records). The returned digest matches the on-disk normalized bytes, and a
+    /// benign commit bump (identical source, different git HEAD) yields the same
+    /// digest — the checksum tracks source, not the commit.
     #[test]
-    fn guard_refuses_changed_source_same_version() {
-        let dir = tempdir().unwrap();
-        let served = candidate_path(dir.path(), "streamlib-x", "0.5.0");
-        let fresh = dir.path().join("streamlib-x-0.5.0-fresh.crate");
-        write_crate_with_vcs(
-            &served,
-            "streamlib-x",
-            "0.5.0",
-            b"// source A\n",
-            "aaaaaaaa",
-        );
-        write_crate_with_vcs(
-            &fresh,
-            "streamlib-x",
-            "0.5.0",
-            b"// source B - CHANGED\n",
-            "bbbbbbbb",
-        );
-
-        let err = finalize_crate_tarball(&fresh, "streamlib-x", "0.5.0", Some(served.as_path()))
-            .unwrap_err();
-        let msg = format!("{err:#}");
-        assert!(
-            msg.contains("changed at the same version"),
-            "expected the immutability-guard message, got: {msg}"
-        );
-    }
-
-    /// A benign commit bump (identical source, different git HEAD) passes the
-    /// guard even when the served tree is a legacy *un-normalized* crate, and
-    /// the returned checksum is the stable normalized one.
-    #[test]
-    fn guard_allows_same_source_different_vcs() {
-        let dir = tempdir().unwrap();
-        let served = candidate_path(dir.path(), "streamlib-x", "0.5.0");
-        let served_copy = dir.path().join("streamlib-x-0.5.0-servedcopy.crate");
-        let fresh = dir.path().join("streamlib-x-0.5.0-fresh.crate");
-        // Served tree is legacy (un-normalized: still carries vcs-info).
-        write_crate_with_vcs(
-            &served,
-            "streamlib-x",
-            "0.5.0",
-            b"// stable source\n",
-            "aaaaaaaa",
-        );
-        std::fs::copy(&served, &served_copy).unwrap();
-        write_crate_with_vcs(
-            &fresh,
-            "streamlib-x",
-            "0.5.0",
-            b"// stable source\n",
-            "bbbbbbbb",
-        );
-
-        // The normalized checksum the served tree *should* carry.
-        normalize_crate_tarball(&served_copy, "streamlib-x", "0.5.0").unwrap();
-        let served_normalized_cksum = sha256_of_file(&served_copy);
-
-        let cksum = finalize_crate_tarball(&fresh, "streamlib-x", "0.5.0", Some(served.as_path()))
-            .expect("identical source under a legacy served tree must pass the guard");
-        assert_eq!(
-            cksum, served_normalized_cksum,
-            "a benign commit bump must yield the same normalized checksum (no index churn)"
-        );
-    }
-
-    /// A first emit into a fresh tree (no prior served crate) is always allowed
-    /// and still returns the normalized checksum.
-    #[test]
-    fn guard_absent_served_is_ok() {
+    fn finalize_normalizes_and_returns_stable_checksum() {
         let dir = tempdir().unwrap();
         let fresh = candidate_path(dir.path(), "streamlib-x", "0.5.0");
         write_crate_with_vcs(&fresh, "streamlib-x", "0.5.0", b"// lib\n", "aaaaaaaa");
 
-        let cksum = finalize_crate_tarball(&fresh, "streamlib-x", "0.5.0", None).unwrap();
+        let cksum = finalize_crate_tarball(&fresh, "streamlib-x", "0.5.0").unwrap();
         assert_eq!(cksum, sha256_of_file(&fresh));
-        verify_crate_tarball(&fresh, "streamlib-x", "0.5.0", None).unwrap();
-    }
+        verify_crate_tarball(&fresh, "streamlib-x", "0.5.0").unwrap();
 
-    /// The content fingerprint ignores both the git-HEAD sha1 and the gzip
-    /// compression level — it is a function of source content only.
-    #[test]
-    fn crate_content_fingerprint_ignores_vcs_and_compression() {
-        let dir = tempdir().unwrap();
-        // Same source, vcs "aaaa", default compression.
-        let a = candidate_path(dir.path(), "streamlib-x", "0.5.0");
-        write_crate_with_vcs(
-            &a,
-            "streamlib-x",
-            "0.5.0",
-            b"// identical source\n",
-            "aaaaaaaa",
-        );
-        // Same source, vcs "bbbb", a DIFFERENT compression level → different bytes.
-        let raw_b = build_tar_bytes(&[
-            (
-                "streamlib-x-0.5.0/.cargo_vcs_info.json",
-                b"{\n  \"git\": {\n    \"sha1\": \"bbbbbbbb\"\n  },\n  \"path_in_vcs\": \"\"\n}",
-            ),
-            (
-                "streamlib-x-0.5.0/Cargo.toml",
-                manifest_bytes("streamlib-x", "0.5.0").as_bytes(),
-            ),
-            ("streamlib-x-0.5.0/src/lib.rs", b"// identical source\n"),
-        ]);
-        let b = dir.path().join("streamlib-x-0.5.0-b.crate");
-        gzip_to_file_at_level(&b, &raw_b, Compression::best());
-
-        assert_ne!(
-            std::fs::read(&a).unwrap(),
-            std::fs::read(&b).unwrap(),
-            "sanity: differing vcs + compression level make the raw crates differ"
-        );
+        // A second crate: same source, different git HEAD → same finalized digest.
+        let bumped = dir.path().join("streamlib-x-0.5.0-bumped.crate");
+        write_crate_with_vcs(&bumped, "streamlib-x", "0.5.0", b"// lib\n", "bbbbbbbb");
+        let bumped_cksum = finalize_crate_tarball(&bumped, "streamlib-x", "0.5.0").unwrap();
         assert_eq!(
-            crate_content_fingerprint(&a, "streamlib-x", "0.5.0").unwrap(),
-            crate_content_fingerprint(&b, "streamlib-x", "0.5.0").unwrap(),
-            "the fingerprint must be independent of git HEAD and gzip level"
+            cksum, bumped_cksum,
+            "a benign commit bump must yield the same normalized checksum (no index churn)"
         );
     }
 }
