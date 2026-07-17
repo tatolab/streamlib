@@ -174,9 +174,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
                1. For raw `VkImage` / `VkImageView` access from a `Texture`, \
                   use `HostTextureExt::host_vulkan_texture_arc()` (the v10 \
                   FullAccess vtable slot — already in use by \
-                  `packages/camera/src/camera_to_cuda_copy.rs`, \
-                  `packages/h264/src/linux/encoder.rs`, \
-                  `packages/h265/src/linux/encoder.rs`).\n    \
+                  `packages/camera/src/camera_to_cuda_copy.rs`).\n    \
                2. If the call genuinely belongs in a host-only path (a \
                   `#[test]` or `#[cfg(test)]` helper), move it under \
                   `#[cfg(test)]` / `mod tests` so the lint skips it."
