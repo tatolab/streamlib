@@ -983,6 +983,36 @@ impl GpuContext {
     ) -> Result<()> {
         use crate::core::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
 
+        // Defense-in-depth for the FullAccess (privileged) tier — #1388 is
+        // the first SDK/plugin exposure of this slot. The copy region is
+        // tightly packed (buffer_row_length = 0 in
+        // record_and_submit_buffer_to_image) and the destination format is
+        // hardcoded Rgba8Unorm (4 bytes/pixel), so vkCmdCopyBufferToImage
+        // reads exactly width * height * 4 bytes from the source
+        // HOST_VISIBLE buffer. A buggy privileged plugin passing oversized
+        // dimensions (or a smaller / non-RGBA8 source) would drive a
+        // GPU-side out-of-bounds read of the staging buffer —
+        // VK_ERROR_DEVICE_LOST (driver corruption) with no error and no
+        // panic. Validate the required byte size against the source
+        // buffer's actual allocation and return a typed error before submit.
+        let required_byte_size = (width as u64)
+            .checked_mul(height as u64)
+            .and_then(|pixels| pixels.checked_mul(4))
+            .ok_or_else(|| {
+                crate::core::Error::GpuError(format!(
+                    "upload_pixel_buffer_as_texture: {width}x{height} Rgba8Unorm copy region \
+                     byte size overflows u64"
+                ))
+            })?;
+        let source_byte_size = pixel_buffer.buffer_ref().inner.size();
+        if required_byte_size > source_byte_size {
+            return Err(crate::core::Error::GpuError(format!(
+                "upload_pixel_buffer_as_texture: {width}x{height} Rgba8Unorm copy region requires \
+                 {required_byte_size} bytes but the source pixel buffer holds only \
+                 {source_byte_size} bytes"
+            )));
+        }
+
         let desc = TextureDescriptor::new(width, height, TextureFormat::Rgba8Unorm).with_usage(
             TextureUsages::COPY_DST
                 | TextureUsages::TEXTURE_BINDING
@@ -6175,6 +6205,75 @@ mod tests {
             "copy_texture_to_storage_buffer_and_signal OK — {BYTES} bytes copied, \
              strong_count balanced ({count_before} -> {count_after})"
         );
+    }
+
+    /// A privileged FullAccess plugin passing oversized dimensions (or a
+    /// source buffer smaller than width*height*4) must get a typed
+    /// `Error::GpuError` from `upload_pixel_buffer_as_texture` BEFORE any
+    /// `vkCmdCopyBufferToImage` submit — not a GPU-side out-of-bounds read
+    /// of the HOST_VISIBLE staging buffer (`VK_ERROR_DEVICE_LOST`). #1388 is
+    /// the first SDK/plugin exposure of this slot, so this closes the
+    /// device-fault mode the ABI is meant to close.
+    ///
+    /// Mental-revert: drop the required-byte-size guard in
+    /// `upload_pixel_buffer_as_texture` and this call records a
+    /// 4096x4096x4 (64 MiB) tightly-packed copy region against a 64-byte
+    /// source buffer, faulting the device instead of returning. GPU-gated:
+    /// skips cleanly with no device (CI is GPU-free) — a /verify-live
+    /// regression.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn upload_pixel_buffer_as_texture_rejects_oversized_dimensions() {
+        use std::sync::Arc;
+
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(g) => g,
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+
+        // 4x4 RGBA8 HOST_VISIBLE source = 64 bytes.
+        const SRC_W: u32 = 4;
+        const SRC_H: u32 = 4;
+        const SRC_BYTES: u64 = (SRC_W as u64) * (SRC_H as u64) * 4;
+        let host_buffer =
+            match crate::vulkan::rhi::HostVulkanBuffer::new(&gpu.device().inner, SRC_BYTES) {
+                Ok(b) => b,
+                Err(e) => {
+                    println!("Skipping - HOST_VISIBLE buffer allocation failed: {e}");
+                    return;
+                }
+            };
+        let pixel_buffer = crate::core::rhi::PixelBuffer::from_host_vulkan_buffer(
+            Arc::new(host_buffer),
+            SRC_W,
+            SRC_H,
+            4,
+            crate::core::rhi::PixelFormat::Rgba32,
+        );
+
+        // Oversized copy region: 4096x4096x4 = 64 MiB, far past the 64-byte
+        // source. Without the guard this is a GPU out-of-bounds read of the
+        // staging buffer.
+        let result = gpu.upload_pixel_buffer_as_texture(
+            "oversized_upload_regression",
+            &pixel_buffer,
+            4096,
+            4096,
+        );
+
+        let err = result.expect_err(
+            "oversized upload_pixel_buffer_as_texture must return a typed error, not submit a \
+             GPU out-of-bounds copy",
+        );
+        let msg = err.to_string();
+        assert!(
+            msg.contains("upload_pixel_buffer_as_texture") && msg.contains("bytes"),
+            "expected a byte-size validation error, got: {msg}"
+        );
+        println!("upload_pixel_buffer_as_texture oversized-dimension guard OK — {msg}");
     }
 
     #[test]
