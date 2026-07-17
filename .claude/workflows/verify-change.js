@@ -9,7 +9,7 @@ export const meta = {
     'Adjudicate a branch before opening a PR: the change-verifier (Stage A) plus parallel path-routed domain lenses and, when the branch claims E2E evidence, the evidence-verifier (Stage B). Any blocker → FIX; an unresolved owner question → DISCUSS; else PASS opens a PR ready for review (never a draft).',
   phases: [
     { title: 'Verify', detail: 'Stage A: the always-on change-verifier reviews the diff against the ticket and returns its verdict JSON.' },
-    { title: 'Lenses', detail: 'Stage B: parallel read-only domain lenses over the diff, plus evidence-verifier if E2E evidence is claimed.' },
+    { title: 'Lenses', detail: 'Stage B: parallel read-only domain lenses over the diff, the always-on rust-craftsmanship lens when the diff touches Rust, plus evidence-verifier if E2E evidence is claimed.' },
     { title: 'Adjudicate', detail: 'Merge findings → FIX / DISCUSS / PASS; PASS opens a PR ready for review via gh (never a draft, never a merge).' },
   ],
 };
@@ -122,8 +122,9 @@ const guard =
       `Confirm all three: (1) issue #${issue} is OPEN (\`gh issue view ${issue} --json state\`); (2) the branch ` +
       `\`${branch}\` exists (\`git rev-parse --verify ${branch}\` or \`git ls-remote --exit-code --heads origin ${branch}\`); ` +
       `(3) \`git diff origin/main..${branch} --stat\` is NON-EMPTY. Return { ok: true } only if all three hold; ` +
-      `otherwise { ok: false, reason: "<which check failed>" }.`,
-    { phase: 'Guard', label: 'branch-guard', model: 'sonnet', schema: { type: 'object', properties: { ok: { type: 'boolean' }, reason: { type: 'string' } }, required: ['ok'] } },
+      `otherwise { ok: false, reason: "<which check failed>" }. Also set touches_rust: true if ` +
+      `\`git diff origin/main..${branch} --name-only\` lists any path ending in \`.rs\`, else false.`,
+    { phase: 'Guard', label: 'branch-guard', model: 'sonnet', schema: { type: 'object', properties: { ok: { type: 'boolean' }, reason: { type: 'string' }, touches_rust: { type: 'boolean' } }, required: ['ok'] } },
   )) || {};
 if (guard.ok !== true) {
   const reason = guard.reason || 'branch-guard produced no result';
@@ -159,6 +160,19 @@ const lensThunks = experts.map((expert) => () =>
     { agentType: expert, phase: 'Lenses', label: `lens:${expert}`, schema: verdictSchema },
   ),
 );
+// The always-on Rust clean-code lens — duplication/smell/idiom/ownership/API shape
+// the mechanical gates and the correctness verifier don't judge. Gated on touches_rust.
+if (guard.touches_rust) {
+  lensThunks.push(() =>
+    resilientAgent(
+      `Read-only senior-Rust craftsmanship review of the added/changed Rust in the diff on issue #${issue}'s branch \`${branch}\`. ` +
+        `Grade duplication (DRY), code smell, idiomatic Rust, ownership/allocation ergonomics, and API/type shape — the clean-code ` +
+        `qualities the mechanical gates and the correctness verifier do not judge. Do NOT edit. Cite file:line and name the concrete ` +
+        `fix. Emit the verdict JSON (lens "rust-craftsmanship"); put an overall craftsmanship grade in coverage_notes. ${severityTaxonomy}`,
+      { agentType: 'rust-craftsmanship-reviewer', phase: 'Lenses', label: 'lens:rust-craftsmanship', schema: verdictSchema },
+    ),
+  );
+}
 if (claimsE2e) {
   lensThunks.push(() =>
     resilientAgent(
