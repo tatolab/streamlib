@@ -198,3 +198,116 @@ fn link_free_package_resolves_and_builds_offline_from_the_mirror() {
         String::from_utf8_lossy(&build.stderr)
     );
 }
+
+/// The `--cargo-mirror` glue through the WHOLE-TREE emit (`emit_static_registry`,
+/// not `emit_cargo_mirror` directly): the static-registry path must compute the
+/// release closure, emit the mirror, AND record that closure in the release
+/// manifest's `crates`. The sibling test above bypasses this glue by calling
+/// `emit_cargo_mirror` directly, so nothing else exercises the closure →
+/// `ReleaseManifest.crates` wiring end-to-end.
+///
+/// `#[ignore]` for the same reason as the sibling test — it runs the full emit
+/// (every distributable `packages/*` `.slpkg` plus `cargo vendor` + `cargo
+/// package` of the whole engine/SDK chain). Run explicitly:
+///
+/// ```text
+/// cargo test -p streamlib-pack --test cargo_mirror_offline_build \
+///   emit_static_registry_with_cargo_mirror -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore = "runs the full static-registry emit + cargo mirror of the engine/SDK chain; run with --ignored"]
+fn emit_static_registry_with_cargo_mirror_records_closure_and_resolves_offline() {
+    use streamlib_idents::{RegistryClient, RegistryConfig};
+    use streamlib_pack::static_registry::{EmitOptions, emit_static_registry};
+
+    let ws = workspace_root();
+    let closure = compute_release_closure(&ws).expect("compute release closure");
+    assert!(
+        closure.crates.iter().any(|c| c.name == "streamlib"),
+        "the release closure must carry the `streamlib` SDK crate"
+    );
+
+    // Emit the WHOLE tree (slpkg store + catalog + release manifest) WITH the
+    // cargo mirror, through the real `emit_static_registry` glue. `out` is
+    // created by the emit's staged build + atomic flip.
+    let out_root = tempfile::tempdir().expect("emit out tempdir");
+    let out = out_root.path().join("registry");
+    emit_static_registry(&EmitOptions {
+        workspace_root: ws.clone(),
+        out: out.clone(),
+        dev: None,
+        cargo_mirror: true,
+    })
+    .expect("`static-registry emit --cargo-mirror` must succeed");
+
+    // (a) The release manifest's `crates` lists EXACTLY the release closure the
+    // mirror carries — the glue the direct `emit_cargo_mirror` test never runs.
+    let cfg = RegistryConfig {
+        base_url: format!("file://{}", out.display()),
+    };
+    let client = RegistryClient::new(&cfg);
+    let versions = client
+        .list_release_versions("tatolab")
+        .expect("list release versions");
+    assert_eq!(versions.len(), 1, "exactly one release emitted: {versions:?}");
+    let manifest = client
+        .fetch_release_manifest("tatolab", &versions[0].to_string())
+        .expect("fetch release manifest")
+        .expect("the release manifest must be present (completion marker)");
+
+    let mut manifest_crates: Vec<(String, String)> = manifest
+        .crates
+        .iter()
+        .map(|m| (m.name.clone(), m.version.clone()))
+        .collect();
+    let mut closure_crates: Vec<(String, String)> = closure
+        .crates
+        .iter()
+        .map(|c| (c.name.clone(), c.version.clone()))
+        .collect();
+    manifest_crates.sort();
+    closure_crates.sort();
+    assert_eq!(
+        manifest_crates, closure_crates,
+        "the release manifest's `crates` must list exactly the release closure"
+    );
+
+    // (b) The emitted tree resolves `streamlib = 0.6.0` entirely offline. The
+    // generated [source] config's `directory` names the FINAL served vendor dir
+    // (rooted at `out`), so it is valid after the atomic flip.
+    let mirror_config = out
+        .join(CARGO_MIRROR_SUBDIR)
+        .join(SOURCE_REPLACEMENT_CONFIG_FILE);
+    assert!(
+        out.join(CARGO_MIRROR_SUBDIR)
+            .join(VENDOR_SUBDIR)
+            .join("streamlib")
+            .join(".cargo-checksum.json")
+            .is_file(),
+        "the whole-tree emit must inject the `streamlib` SDK crate into the mirror"
+    );
+
+    let resolver = tempfile::tempdir().unwrap();
+    write_consumer(resolver.path(), "resolve-consumer", "streamlib = \"0.6.0\"");
+    install_source_config(resolver.path(), &mirror_config);
+    let lockgen = run_cargo(resolver.path(), &["generate-lockfile", "--offline"]);
+    assert!(
+        lockgen.status.success(),
+        "generate-lockfile --offline against the emitted tree must succeed.\nstderr:\n{}",
+        String::from_utf8_lossy(&lockgen.stderr)
+    );
+    let lock = std::fs::read_to_string(resolver.path().join("Cargo.lock")).unwrap();
+    let streamlib_block = lock
+        .split("[[package]]")
+        .find(|b| b.contains("name = \"streamlib\"\n"))
+        .expect("consumer lock must list the streamlib crate");
+    assert!(
+        streamlib_block.contains("version = \"0.6.0\"\n"),
+        "the mirror must resolve `streamlib` to the ENGINE 0.6.0, not the crates.io squatter:\n{streamlib_block}"
+    );
+    assert!(
+        lock.contains("name = \"streamlib-engine\"\n"),
+        "the resolved `streamlib` must be the engine SDK crate (pulls streamlib-engine), \
+         proving the mirror shadowed the crates.io squatter"
+    );
+}
