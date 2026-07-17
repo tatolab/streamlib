@@ -207,23 +207,9 @@ pub enum ColorSpaceKind {
     Yuv,
 }
 
-/// Resolve every missing axis to its per-kind default. The defaults
-/// mirror V4L2's `V4L2_MAP_*_DEFAULT` macros and libplacebo's
-/// `pl_color_space_infer`:
-///
-/// | axis | RGB default | YCbCr default |
-/// |---|---|---|
-/// | `primaries` | `Bt709` | `Bt709` |
-/// | `transfer` | `Srgb` | `Bt709` |
-/// | `matrix` | `Identity` | `Smpte170m` (BT.601, the UVC convention) |
-/// | `range` | `Full` | `Limited` |
-///
-/// RGB-encoded sources also override the matrix axis to `Identity`
-/// regardless of the on-wire value, since matrix is meaningless when
-/// data is already RGB.
-///
-/// Each axis takes an `Option<EngineId>` — `None` means the on-wire
-/// value was absent (H.273 "Unspecified").
+/// Resolve each absent axis (`None` = the on-wire value was H.273 "Unspecified")
+/// to its per-kind default, mirroring V4L2's `V4L2_MAP_*_DEFAULT` and libplacebo's
+/// `pl_color_space_infer`. RGB sources collapse the matrix axis to `Identity`.
 pub fn resolve_color_defaults(
     primaries: Option<PrimariesId>,
     transfer: Option<TransferId>,
