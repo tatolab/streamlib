@@ -21,6 +21,13 @@ toml = { workspace = true }
 toml_edit = { workspace = true }
 tempfile = { workspace = true }
 zip = "2.2"
+# Byte-stable `.crate` normalization + directory-source injection for the cargo
+# source-replacement mirror (see `crate_tarball` + `cargo_mirror`). All three
+# versions are already resolved in the workspace lock (transitive), so adding
+# them here pulls no new crate.
+sha2 = { workspace = true }
+flate2 = "1"
+tar = "0.4"
 streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.6.0" }
 streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.6.0" }
 streamlib-idents = { path = "../../sdk/streamlib-idents", version = "0.6.0" }

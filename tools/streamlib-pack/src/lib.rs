@@ -45,7 +45,9 @@ use streamlib_processor_schema::ProcessorLanguage;
 
 pub use streamlib_cargo_build::CargoProfile;
 
+pub mod cargo_mirror;
 pub mod catalog;
+pub mod crate_tarball;
 pub mod static_registry;
 
 // The `streamlib link` marker schema + discovery moved to `streamlib-idents`
