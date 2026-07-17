@@ -476,7 +476,10 @@ mod tests {
     /// `bt2390_eetf`) and this test fails — the GPU output diverges
     /// from the CPU reference everywhere above the knee.
     #[test]
-    #[ignore = "hardware integration — requires a working Vulkan device + queue"]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     fn bt2390_pq_to_srgb_matches_cpu_reference() {
         let Some(device) = try_vulkan_device() else {
             return;
@@ -603,7 +606,10 @@ mod tests {
     /// the new precondition check at the top of
     /// `VulkanToneMapper::apply_with_layouts` and this test fails.
     #[test]
-    #[ignore = "hardware integration — requires a working Vulkan device + queue"]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
     fn apply_with_layouts_rejects_same_image_for_src_and_dst() {
         let Some(device) = try_vulkan_device() else {
             return;
