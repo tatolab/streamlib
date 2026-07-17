@@ -17,14 +17,17 @@ crate-type = ["rlib", "cdylib"]
 streamlib-jtd-codegen = {version = "0.6.0"}
 
 [dependencies]
-# Engine substrate — runtime context, processor traits, generated config
-# types under `crate::_generated_::tatolab__display::*`, VideoFrame
-# wire type, host RHI types (HostVulkanDevice, VulkanGraphicsKernel,
-# VulkanPresentTarget, RhiCommandRecorder, OffscreenColorTarget,
-# TextureFormat).
-streamlib = {version = "0.6.0"}
+# Engine-free authoring SDK (never the `streamlib` facade) — capability-typed
+# runtime/GPU context views, generated config types under
+# `crate::_generated_::tatolab__display::*`, the `VideoFrame` wire type, and the
+# cdylib-safe RHI PluginAbiObjects (`PresentTarget`, `VulkanGraphicsKernel`,
+# `RhiCommandRecorder`, `TextureReadback`, `TextureFormat`, `VulkanLayout`). GPU
+# resource creation goes through `GpuContextLimitedAccess::escalate` +
+# `create_present_target` / `create_graphics_kernel` / `create_texture_readback`,
+# never the raw host device.
+streamlib-plugin-sdk = {version = "0.6.0"}
 
-# Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
+# Procedural macros — `#[streamlib_plugin_sdk::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
 streamlib-macros = {version = "0.6.0"}
 
@@ -36,16 +39,14 @@ tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 serde = {version = "1.0", features = ["derive"]}
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# Window creation + event loop for the Linux display processor.
+# Window creation + event loop for the Linux display processor (a
+# host-portable platform detail, not baked into the plugin ABI).
 winit = "0.30"
-# Raw window-handle traits — `VulkanPresentTarget::new` takes
-# `&(impl HasWindowHandle + HasDisplayHandle)`; the winit `Window` type
-# implements both.
+# Raw window-handle traits — the winit `Window` implements
+# `HasWindowHandle` + `HasDisplayHandle`; the processor projects those into
+# the plugin ABI's flattened `RawWindowHandleRepr` fed to
+# `create_present_target`.
 raw-window-handle = "0.6"
-# Consumer-side RHI carve-out — typed `VulkanLayout` enum used in
-# producer/consumer surface-share interop. Camera uses the same dep
-# for the same reason.
-streamlib-consumer-rhi = {version = "0.6.0"}
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 # Apple module is ported into this package but DISABLED in `lib.rs` —
