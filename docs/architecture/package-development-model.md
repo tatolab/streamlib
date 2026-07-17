@@ -272,8 +272,15 @@ workspace member ∧ linkable name (`streamlib*` / `vulkan-jpeg` /
 topological order. There is no "SDK-subset vs. all-libs" switch —
 `streamlib-plugin-sdk` / `vulkan-jpeg` are members by definition. It is the
 crate set `streamlib link` overrides (and the set a future SDK release would
-publish); the `.slpkg` emit no longer consults it (a `.slpkg` release
-publishes packages, not crates).
+publish). A routine `.slpkg` emit does not consult it (a `.slpkg` release
+publishes packages, not crates); a `--cargo-mirror` emit *does* — it records the
+closure in the release manifest's `crates` alongside the cargo source-replacement
+mirror it emits (see
+[`static-registry.md`](static-registry.md#the-opt-in-cargo-mirror)).
+
+> ~~The `.slpkg` emit no longer consults it.~~ — Superseded 2026-07-17 by the
+> separate-build validation gate's `--cargo-mirror` emit path, which consults
+> `compute_release_closure`. The claim held only for a routine (no-flag) emit.
 
 **Manifest-last atomicity.** A `ReleaseManifest`
 ([`sdk/streamlib-idents/src/release.rs`](../../sdk/streamlib-idents/src/release.rs))

@@ -62,11 +62,48 @@ sees the previous *complete* release; the flip is the only mutation of the
 served path. This closes the mid-publish window where a consumer could resolve
 a higher partial version before its release manifest landed.
 
-The release manifest lists exactly the `.slpkg` packages the emit published;
-its `crates` set is empty (the emit no longer publishes an SDK crate chain).
-`compute_release_closure` — the single definition of "which library crates a
-release publishes" — survives as the crate set `streamlib link` patches, but is
-no longer consulted by the `.slpkg` emit.
+The release manifest lists the `.slpkg` packages the emit published. A routine
+emit leaves its `crates` set empty and does not consult `compute_release_closure`
+— the single definition of "which library crates a release publishes", which
+also survives as the crate set `streamlib link` patches. With `--cargo-mirror`
+the emit *does* consult `compute_release_closure`, recording that closure in
+`crates` as release metadata carried alongside the cargo source-replacement
+mirror it emits (see [The opt-in cargo mirror](#the-opt-in-cargo-mirror)).
+
+> ~~Its `crates` set is empty (the emit no longer publishes an SDK crate chain);
+> `compute_release_closure` … is no longer consulted by the `.slpkg` emit.~~ —
+> Superseded 2026-07-17 by the separate-build validation gate's `--cargo-mirror`
+> emit path, which consults `compute_release_closure` and populates `crates`
+> from it. The unconditional claim held only for a routine (no-flag) emit.
+
+## The opt-in cargo mirror
+
+`cargo xtask static-registry emit --cargo-mirror` additionally emits a cargo
+**source-replacement mirror** under `cargo-mirror/`: the full crates.io
+dependency closure of the engine/SDK crate chain, vendored as a cargo directory
+source, plus a generated `[source]` replacement config. A downstream package
+that declares the engine/SDK crates by bare version (`streamlib = "0.6.0"`) —
+with no `streamlib link` and no `[patch.crates-io]` — then resolves and compiles
+its whole closure entirely offline from the tree, the way the separate-build
+`.slpkg` validation gate builds a package by version.
+
+This is **not** a return of the removed `registry.tatolab.com` SDK-distribution
+registry (the cargo sparse index + `.crate` tarball emitters in the removal note
+above): only that SDK-distribution *emulation* — which served the SDK to
+arbitrary remote consumers by version — was removed. The cargo mirror is an
+emit-machine-**local**, gate-only affordance. A cargo directory source resolves
+by an **absolute** filesystem path baked into its `[source]` config, so it is
+local-only and cannot be HTTP-served. It is therefore deliberately **not** part
+of the relocatable `.slpkg` tree above: the absolute path in the emitted config
+is by design for a local build gate, not a relocatability regression.
+
+The mirror uses `[source.crates-io] replace-with = <mirror>` — the ratified
+`[source]`-**replacement** pattern. Replacement (not a `CARGO_REGISTRIES_*_INDEX`
+index override) preserves the canonical crates.io source id in a consumer's
+`Cargo.lock`, so a later `--locked` build stays reproducible. The mirror
+machinery lives in `tools/streamlib-pack/src/cargo_mirror.rs` (plus
+`crate_tarball.rs` for byte-stable packaging of the workspace's engine/SDK
+crates, which `cargo vendor` cannot carry).
 
 ## Catalog — queryable processor / port / schema metadata
 
