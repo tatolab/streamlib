@@ -585,7 +585,11 @@ fn source_for_resolved_dir(pkg_ref: &streamlib_idents::PackageRef, dir: PathBuf)
 /// - [`BuildPolicy::IfStale`] — prefer a matching prebuilt, else build the
 ///   bundled source. Identical to how a local [`Strategy::Slpkg`] resolves.
 /// - [`BuildPolicy::AlwaysBuild`] — rebuild the bundled source even when a
-///   prebuilt is present (no-op when there's nothing to build).
+///   prebuilt is present. A box with no Rust source is not automatically a
+///   no-op: an unprovisioned Python/Deno box still routes through
+///   `materialize` (same reason as [`source_for_resolved_dir`]) so its venv /
+///   `_generated_/` gets provisioned before load; only a fully-provisioned
+///   non-Rust box loads as-is.
 fn source_for_fetched_slpkg(
     pkg_ref: &streamlib_idents::PackageRef,
     dir: PathBuf,
@@ -595,7 +599,14 @@ fn source_for_fetched_slpkg(
         BuildPolicy::NeverBuild => ResolvedSource::Ready(dir),
         BuildPolicy::IfStale => source_for_resolved_dir(pkg_ref, dir),
         BuildPolicy::AlwaysBuild => {
-            if has_buildable_rust_source(&dir) {
+            // `has_buildable_rust_source` covers the "rebuild the Rust cdylib"
+            // intent; `needs_polyglot_provisioning` covers an unprovisioned
+            // Python/Deno box (no `.venv` / no `_generated_/`) that would
+            // otherwise load as-is and die at subprocess spawn with
+            // `.venv/bin/python: No such file or directory`. Both are LIVE
+            // AlwaysBuild paths — `streamlib add` and `Strategy::Registry`
+            // resolve with AlwaysBuild through here.
+            if has_buildable_rust_source(&dir) || needs_polyglot_provisioning(&dir) {
                 ResolvedSource::NeedsBuild(BuildRequest {
                     package: pkg_ref.clone(),
                     source: BuildSource::PackageDir(dir),
@@ -618,7 +629,7 @@ fn needs_host_build(dir: &std::path::Path) -> bool {
     has_buildable_rust_source(dir) && !has_matching_prebuilt(dir)
 }
 
-/// Whether a resolved package dir declares Python or Deno processors but is
+/// Whether a resolved package dir carries a Python or Deno runtime but is
 /// missing the build-time provisioning those runtimes need — a Python package
 /// with no `.venv/bin/python` interpreter, or a Deno package with no
 /// regenerated `_generated_/` wire vocabulary. Such a dir must route through
@@ -627,24 +638,31 @@ fn needs_host_build(dir: &std::path::Path) -> bool {
 /// as-is, a Python package's subprocess spawn dies with `.venv/bin/python: No
 /// such file or directory`. An already-provisioned dir returns `false` and
 /// loads directly; the orchestrator's own `IfStale` staleness-skip then
-/// short-circuits any redundant rebuild (no rebuild loop). Mirrors the
-/// per-language provisioned-checks the orchestrator's staleness-skip uses.
+/// short-circuits any redundant rebuild (no rebuild loop).
+///
+/// Each language's presence oracle is the SAME one the orchestrator's
+/// staleness-skip uses, so the two resolvers can never disagree (a disagreement
+/// would ping-pong: source.rs routes to `NeedsBuild` while the orchestrator's
+/// guard deems the venv-less slot reusable, loading it broken):
+/// - Python — filesystem-detected (a `python/` source dir or a `pyproject.toml`
+///   at the package root), matching `python_venv::staged_package_has_python`.
+/// - Deno — manifest-detected (a `TypeScript` runtime processor), matching
+///   `deno_codegen::staged_package_has_deno`.
 fn needs_polyglot_provisioning(dir: &std::path::Path) -> bool {
     use streamlib_processor_schema::ProcessorLanguage;
-    let config = match crate::core::config::ProjectConfig::load(dir) {
-        Ok(c) => c,
-        Err(_) => return false,
-    };
-    let declares = |language: ProcessorLanguage| {
-        config
+    // Python: filesystem oracle, aligned with `staged_package_has_python`.
+    let has_python = dir.join("python").is_dir() || dir.join("pyproject.toml").is_file();
+    let python_unprovisioned =
+        has_python && !dir.join(".venv").join("bin").join("python").exists();
+    // Deno: manifest oracle, aligned with `staged_package_has_deno`.
+    let declares_deno = match crate::core::config::ProjectConfig::load(dir) {
+        Ok(c) => c
             .processors
             .iter()
-            .any(|p| p.runtime.language == language)
+            .any(|p| p.runtime.language == ProcessorLanguage::TypeScript),
+        Err(_) => false,
     };
-    let python_unprovisioned = declares(ProcessorLanguage::Python)
-        && !dir.join(".venv").join("bin").join("python").exists();
-    let deno_unprovisioned =
-        declares(ProcessorLanguage::TypeScript) && !dir.join("_generated_").is_dir();
+    let deno_unprovisioned = declares_deno && !dir.join("_generated_").is_dir();
     python_unprovisioned || deno_unprovisioned
 }
 
@@ -1059,6 +1077,33 @@ mod tests {
         assert!(matches!(resolved, ResolvedSource::Ready(_)));
     }
 
+    /// COMPLETENESS (bug-reproduce, LIVE `Strategy::Url` / `Strategy::Registry`
+    /// + `streamlib add` path): `AlwaysBuild` on an UNPROVISIONED Python box
+    /// (a `pyproject.toml` present but no `.venv`) must route through
+    /// `materialize`, NOT load as-is — the same `.venv/bin/python: No such file
+    /// or directory` bug as the `IfStale` path, on the AlwaysBuild arm. Mentally
+    /// revert the `|| needs_polyglot_provisioning(&dir)` clause in the
+    /// `AlwaysBuild` arm and this resolves to `Ready`, failing the assertion.
+    #[test]
+    fn fetched_slpkg_always_build_provisions_unprovisioned_python() {
+        let dir = tempfile::tempdir().unwrap();
+        manifest(dir.path(), PY_YAML);
+        std::fs::write(
+            dir.path().join("pyproject.toml"),
+            b"[project]\nname = \"py\"\n",
+        )
+        .unwrap();
+        let resolved = source_for_fetched_slpkg(
+            &pkg_ref(),
+            dir.path().to_path_buf(),
+            BuildPolicy::AlwaysBuild,
+        );
+        match resolved {
+            ResolvedSource::NeedsBuild(req) => assert_eq!(req.policy, BuildPolicy::AlwaysBuild),
+            other => panic!("expected NeedsBuild(AlwaysBuild), got {other:?}"),
+        }
+    }
+
     // =====================================================================
     // Polyglot provisioning — an unprovisioned Python/Deno package must
     // route through the orchestrator's `materialize` (which provisions the
@@ -1080,9 +1125,16 @@ mod tests {
     /// assertion.
     #[test]
     fn resolved_dir_routes_unprovisioned_python_to_build() {
+        // Python presence is filesystem-detected (a `pyproject.toml`, matching
+        // the orchestrator's `staged_package_has_python`), so the fixture
+        // stages that on-disk layout rather than relying on the manifest.
         let dir = tempfile::tempdir().unwrap();
         manifest(dir.path(), PY_YAML);
-        std::fs::write(dir.path().join("p.py"), b"#").unwrap();
+        std::fs::write(
+            dir.path().join("pyproject.toml"),
+            b"[project]\nname = \"py\"\n",
+        )
+        .unwrap();
         let resolved = source_for_resolved_dir(&pkg_ref(), dir.path().to_path_buf());
         assert!(
             matches!(resolved, ResolvedSource::NeedsBuild(_)),
@@ -1090,12 +1142,28 @@ mod tests {
         );
     }
 
-    /// A Python package with no `.venv/bin/python` needs provisioning.
+    /// A Python package (a `pyproject.toml` on disk) with no `.venv/bin/python`
+    /// needs provisioning.
     #[test]
     fn needs_polyglot_provisioning_for_python_without_venv() {
         let dir = tempfile::tempdir().unwrap();
         manifest(dir.path(), PY_YAML);
-        std::fs::write(dir.path().join("p.py"), b"#").unwrap();
+        std::fs::write(
+            dir.path().join("pyproject.toml"),
+            b"[project]\nname = \"py\"\n",
+        )
+        .unwrap();
+        assert!(needs_polyglot_provisioning(dir.path()));
+    }
+
+    /// A `python/` source dir alone (no `pyproject.toml`) is the other half of
+    /// the filesystem oracle — a package staged that way with no `.venv` still
+    /// needs provisioning, matching `staged_package_has_python`.
+    #[test]
+    fn needs_polyglot_provisioning_for_python_dir_without_venv() {
+        let dir = tempfile::tempdir().unwrap();
+        manifest(dir.path(), PY_YAML);
+        std::fs::create_dir_all(dir.path().join("python")).unwrap();
         assert!(needs_polyglot_provisioning(dir.path()));
     }
 
@@ -1107,9 +1175,28 @@ mod tests {
     fn no_polyglot_provisioning_when_python_venv_present() {
         let dir = tempfile::tempdir().unwrap();
         manifest(dir.path(), PY_YAML);
+        std::fs::write(
+            dir.path().join("pyproject.toml"),
+            b"[project]\nname = \"py\"\n",
+        )
+        .unwrap();
         let bin = dir.path().join(".venv").join("bin");
         std::fs::create_dir_all(&bin).unwrap();
         std::fs::write(bin.join("python"), b"#!/bin/sh\n").unwrap();
+        assert!(!needs_polyglot_provisioning(dir.path()));
+    }
+
+    /// Oracle-parity (Finding 2): a manifest that declares Python WITHOUT the
+    /// on-disk layout (no `python/` dir, no `pyproject.toml`) is NOT detected —
+    /// matching the orchestrator's `staged_package_has_python`, which is
+    /// filesystem-only. A manifest-driven oracle here would disagree with the
+    /// orchestrator's staleness-skip and ping-pong. Mentally revert the
+    /// filesystem detection to manifest-based and this returns `true`, breaking
+    /// parity.
+    #[test]
+    fn no_polyglot_provisioning_for_manifest_python_without_filesystem_layout() {
+        let dir = tempfile::tempdir().unwrap();
+        manifest(dir.path(), PY_YAML);
         assert!(!needs_polyglot_provisioning(dir.path()));
     }
 
@@ -1491,6 +1578,9 @@ mod tests {
 
     /// Write `<app_root>/streamlib_modules/@tatolab/<pkg_name>/streamlib.yaml`
     /// declaring `@tatolab/<declared_name>` (differ only in the mismatch test).
+    /// Stages the on-disk Python layout (`pyproject.toml`) so the fixture trips
+    /// the filesystem provisioning oracle — the realistic shape a Python
+    /// `streamlib_modules` entry ships with.
     fn write_app_modules_package(
         app_root: &std::path::Path,
         pkg_name: &str,
@@ -1511,11 +1601,14 @@ mod tests {
             ),
         )
         .unwrap();
+        std::fs::write(dir.join("pyproject.toml"), b"[project]\nname = \"p\"\n").unwrap();
         dir
     }
 
     /// Record `@tatolab/<name>` in the sandboxed installed cache and create
-    /// its slot on disk. Returns the slot dir.
+    /// its slot on disk. Returns the slot dir. Stages the on-disk Python layout
+    /// (`pyproject.toml`) so the slot trips the filesystem provisioning oracle —
+    /// the realistic shape an extracted Python `.slpkg` cache slot carries.
     fn record_installed_cache_package(name: &str) -> PathBuf {
         use crate::core::config::{InstalledPackageEntry, InstalledPackageManifest};
         let slot = crate::core::streamlib_home::get_cached_package_dir(&format!("{name}-1.0.0"));
@@ -1530,6 +1623,7 @@ mod tests {
             ),
         )
         .unwrap();
+        std::fs::write(slot.join("pyproject.toml"), b"[project]\nname = \"p\"\n").unwrap();
         let mut manifest = InstalledPackageManifest::load().unwrap();
         manifest.add(InstalledPackageEntry {
             name: pkg_ref_named(name),
