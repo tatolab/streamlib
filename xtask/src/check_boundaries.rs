@@ -1162,16 +1162,14 @@ const CHECK_EXAMPLES_CDYLIB_FACADE_DEP: &str = "examples-cdylib-no-facade-dep";
 const EXAMPLES_CDYLIB_FACADE_DEP_RATIONALE: &str = "an examples/* cdylib plugin must not link the full `streamlib` facade — a cdylib plugin is built independently at load time and rides streamlib-plugin-sdk / streamlib-consumer-rhi, never the FullAccess facade. Move it to [dev-dependencies] or author against the plugin SDK";
 
 /// The `examples/*` cdylib crates that still link the `streamlib` facade as a
-/// non-dev runtime dep (green baseline) — the shrinking conversion backlog.
-/// `camera-plugin-sdk-compute/plugin` is deliberately absent: it links
-/// `streamlib-plugin-sdk` (never the facade) and proves the rule passes.
-const EXAMPLES_CDYLIB_FACADE_DEP_ALLOWLIST: &[AllowEntry] = &[
-    AllowEntry {
-        path: "examples/camera-python-display/effects/Cargo.toml",
-        kind: AllowKind::ExactFile,
-        rationale: "facade-linking cdylib example — its BlendingCompositor reaches RhiToneMapper / display_info / the host-device intermediate-texture path, none of which the engine-free plugin SDK carries yet; conversion is blocked on those SDK surfaces",
-    },
-];
+/// non-dev runtime dep (green baseline) — the conversion backlog. Now EMPTY:
+/// `camera-python-display/effects` (the last entry) was converted to
+/// `streamlib-plugin-sdk` in #1389, so every cdylib example rides the
+/// engine-free plugin SDK. `camera-plugin-sdk-compute/plugin` and
+/// `camera-python-display/effects` are the live proof the rule passes; a new
+/// facade-linking cdylib example fails the check with no allowlist to fall
+/// back on.
+const EXAMPLES_CDYLIB_FACADE_DEP_ALLOWLIST: &[AllowEntry] = &[];
 
 fn check_examples_cdylib_facade_dep(
     project_root: &Path,
@@ -2742,10 +2740,26 @@ streamlib = { workspace = true }
     }
 
     #[test]
-    fn allows_facade_dep_in_allowlisted_cdylib_example() {
+    fn examples_cdylib_facade_dep_allowlist_is_empty() {
+        // #1389 converted `camera-python-display/effects` (the last entry) to
+        // `streamlib-plugin-sdk`, so the allowlist is now empty — every cdylib
+        // example rides the engine-free plugin SDK. Locking emptiness keeps a
+        // future facade-linking cdylib example from silently re-adding an
+        // allowlist crutch.
+        assert!(
+            EXAMPLES_CDYLIB_FACADE_DEP_ALLOWLIST.is_empty(),
+            "examples-cdylib facade-dep allowlist must stay empty after #1389; \
+             convert the cdylib to streamlib-plugin-sdk instead of allowlisting it"
+        );
+    }
+
+    #[test]
+    fn rejects_facade_dep_in_former_allowlisted_effects_example() {
+        // The former last allowlist entry: with the allowlist now empty, a
+        // facade-linking `camera-python-display/effects` Cargo.toml must be
+        // flagged — there is no allowlist fallback left. Mentally revert the
+        // allowlist back to containing this path and this test fails.
         let dir = empty_workspace();
-        // examples/camera-python-display/effects is the remaining allowlisted
-        // entry (BlendingCompositor blocked on absent SDK surfaces).
         write_fixture(
             dir.path(),
             "examples/camera-python-display/effects/Cargo.toml",
@@ -2762,15 +2776,14 @@ streamlib = { workspace = true }
 "#,
         );
         let report = scan_all(dir.path()).unwrap();
-        let hits: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.check == CHECK_EXAMPLES_CDYLIB_FACADE_DEP)
-            .collect();
         assert!(
-            hits.is_empty(),
-            "allowlisted cdylib example facade dep should pass: {:?}",
-            hits
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_EXAMPLES_CDYLIB_FACADE_DEP),
+            "a facade-linking effects Cargo.toml must be flagged now the allowlist is empty, \
+             got {:?}",
+            report.violations,
         );
     }
 

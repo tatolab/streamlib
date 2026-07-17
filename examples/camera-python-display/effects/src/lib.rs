@@ -20,6 +20,8 @@ mod blending_compositor_kernel;
 mod crt_film_grain;
 #[cfg(target_os = "linux")]
 mod crt_film_grain_kernel;
+#[cfg(target_os = "linux")]
+mod tone_mapper;
 
 #[cfg(target_os = "linux")]
 use streamlib_plugin_abi::export_plugin;

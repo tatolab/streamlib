@@ -6,13 +6,14 @@
 //! Codegen + Vulkan shader compilation for the camera-python-display
 //! effects package.
 //!
-//! The two graphics-kernel wrappers in this crate
-//! (`blending_compositor.rs`, `crt_film_grain.rs`) are sandboxed
-//! scenario content for the camera-python-display demo. Each wrapper
-//! drives its dispatch through the engine RHI's cdylib-safe
-//! `VulkanGraphicsKernel::offscreen_render` + `RhiCommandRecorder`
-//! surfaces, so this crate stays inside the boundary-check rule —
-//! no `vulkanalia` dep, no allowlist exception.
+//! The two graphics-kernel wrappers (`blending_compositor.rs`,
+//! `crt_film_grain.rs`) and the sandboxed tone-mapper (`tone_mapper.rs`)
+//! are sandboxed scenario content for the camera-python-display demo.
+//! Each rides the engine-free plugin SDK's cdylib-safe FullAccess /
+//! Limited primitives (`create_graphics_kernel` / `create_compute_kernel`
+//! / `create_command_recorder` / `offscreen_render`), so this crate links
+//! ONLY `streamlib-plugin-sdk` — no `streamlib` facade, no `vulkanalia`
+//! dep, no boundary allowlist exception.
 //!
 //! `lib.rs` embeds the resulting SPIR-V via
 //! `include_bytes!(concat!(env!("OUT_DIR"), …))`.
@@ -28,6 +29,9 @@ fn compile_shaders() {
     use std::path::{Path, PathBuf};
     use std::process::Command;
 
+    // `(source, out_name, glslc_stage)`. The tone-mapper compute shader
+    // `#include`s `color_convert_common.glsl` (also copied example-local),
+    // resolved via the `-I shaders` include dir below.
     let shaders: &[(&str, &str, &str)] = &[
         (
             "shaders/blending_compositor.vert",
@@ -49,7 +53,17 @@ fn compile_shaders() {
             "crt_film_grain.frag.spv",
             "fragment",
         ),
+        ("shaders/tone_curve.comp", "tone_curve.comp.spv", "compute"),
     ];
+
+    // Include dir for `#include "color_convert_common.glsl"` in the
+    // tone-mapper compute shader. Harmless for the graphics stages (they
+    // include nothing). Rerun the build when the shared header changes.
+    let shader_include_dir = "shaders";
+    println!(
+        "cargo:rerun-if-changed={}/color_convert_common.glsl",
+        shader_include_dir
+    );
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");
 
@@ -63,6 +77,8 @@ fn compile_shaders() {
         let status = Command::new(&glslc)
             .arg(format!("-fshader-stage={stage}"))
             .arg("-O")
+            .arg("-I")
+            .arg(shader_include_dir)
             .arg(src_path)
             .arg("-o")
             .arg(&dst_path)
