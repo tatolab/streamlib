@@ -213,6 +213,31 @@ cargo test -p streamlib
 cargo build --workspace
 ```
 
+## Running the Milestone Loop
+
+Ongoing work runs as a recurring reconciler loop rather than one-off prompts: a
+`/loop` fires a `/goal` on an interval, and each firing is one bounded pass that
+advances a single focused milestone, then yields. Loop state lives in `loops/`;
+the loop definition, knobs, and kill switches are in [`LOOP.md`](LOOP.md).
+
+To start (or restart) it in a Claude Code session — **two steps, in order**:
+
+1. **Pick the milestone** the loop scopes to:
+   ```
+   /focus-milestone <name or number>
+   ```
+2. **Start the recurring loop** (paste verbatim):
+   ```
+   /loop 30m /goal all issues in the focused milestone are merged, or waiting on the owner or on blockers — each turn: run one milestone-loop reconciler pass; obey loops/constraints.md; max 8 turns/firing
+   ```
+
+- Set the focus **before** starting the loop, or the first pass has no milestone to work.
+- **Sprint mode** (you're present and don't want to wait for the 30-min tick): paste the
+  same `/goal …` line **without** the `/loop 30m` prefix — it runs one pass on demand.
+- The loop is **session-only**: the schedule stops when you close the session, so re-invoke
+  it per session. To stop it early, delete the `/loop` or set `paused: true` in
+  `loops/milestone-loop-state.md`.
+
 ## Status
 
 StreamLib is under active development. APIs may change between versions.
