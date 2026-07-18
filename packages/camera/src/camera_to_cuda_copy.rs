@@ -10,59 +10,40 @@
 //! and this processor sits between the camera and downstream
 //! consumers in the DAG, issuing a per-frame `vkCmdCopyImageToBuffer`
 //! from the camera's ring `VkImage` into the cuda `VkBuffer` and
-//! signaling the cuda adapter's timeline GPU-side. Subprocess
+//! signaling the `produce_done` timeline GPU-side. Subprocess
 //! `acquire_read` waits on the same timeline value, so consumer
 //! Python / Deno inference reads GPU-resident bytes with zero CPU
 //! copies on the cuda path.
 //!
 //! The processor owns the cuda OPAQUE_FD VkBuffer + the exportable
-//! timeline semaphore + the surface-share registration for both, all
-//! created in `setup()` and torn down when the processor's `Drop`
-//! fires. There is no setup-hook variant — the lifecycle binding to
-//! a single processor instance is what guarantees the cuda surface
-//! never outlives its producer.
+//! timeline semaphores + the surface-share registration + the cached
+//! per-frame copy recorder, all created in `setup()` and torn down
+//! when the processor's `Drop` fires. There is no setup-hook variant —
+//! the lifecycle binding to a single processor instance is what
+//! guarantees the cuda surface never outlives its producer.
 //!
 //! Linux-only. CUDA is Linux-only on the in-tree adapter set;
 //! macOS / iOS builds compile a no-op stub that returns a
 //! configuration error from `setup()`.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use streamlib::sdk::engine::HostTextureExt;
-use streamlib::sdk::error::{Error, Result};
-#[cfg(target_os = "linux")]
-use streamlib::sdk::engine::HostSurfaceStoreExt;
+use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
 
 use crate::_generated_::VideoFrame;
 
 #[cfg(target_os = "linux")]
-use streamlib::sdk::context::GpuContextLimitedAccess;
+use streamlib_plugin_sdk::sdk::context::GpuContextLimitedAccess;
 #[cfg(target_os = "linux")]
-use streamlib::sdk::engine::host_rhi::{HostMarker, HostVulkanBuffer, HostVulkanTimelineSemaphore};
-#[cfg(target_os = "linux")]
-use streamlib::sdk::rhi::{PixelBuffer, PixelFormat};
-#[cfg(target_os = "linux")]
-use streamlib_adapter_abi::{AdapterError, SurfaceId};
-#[cfg(target_os = "linux")]
-use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration};
-// Import VulkanLayout from consumer-rhi directly for consistency with
-// the rest of the camera package (`linux/camera.rs` also imports from
-// `streamlib_consumer_rhi`). `streamlib_adapter_cuda` re-exports the
-// same type — both resolve to the identical newtype — but pinning the
-// import to the canonical home avoids future drift if the adapter
-// re-export ever diverges.
-#[cfg(target_os = "linux")]
-use streamlib_consumer_rhi::VulkanLayout;
+use streamlib_plugin_sdk::sdk::rhi::{
+    HostTimelineSemaphore, ImageCopyRegion, PixelBuffer, PixelFormat, RhiCommandRecorder,
+    StorageBuffer, VulkanAccess, VulkanLayout, VulkanStage,
+};
 
 /// Surface id this processor registers the cuda OPAQUE_FD `VkBuffer`
 /// under. Downstream Python / Deno consumers read it under the same
 /// id; the consumer's config pins to this constant so the wiring is
-/// fixed across the IPC boundary.
-#[cfg(target_os = "linux")]
-pub const CUDA_CAMERA_SURFACE_ID: SurfaceId = 484_001;
-
-#[cfg(not(target_os = "linux"))]
+/// fixed across the IPC boundary. Raw `u64` is the surface-id ABI type.
 pub const CUDA_CAMERA_SURFACE_ID: u64 = 484_001;
 
 /// Default cuda buffer dimensions applied when the consumer's
@@ -70,7 +51,9 @@ pub const CUDA_CAMERA_SURFACE_ID: u64 = 484_001;
 /// camera processor's default capture resolution; consumers that
 /// run at a non-default resolution must pass `{"width": N, "height": M}`
 /// matching their camera config.
+#[cfg(target_os = "linux")]
 const DEFAULT_SURFACE_WIDTH: u32 = 1920;
+#[cfg(target_os = "linux")]
 const DEFAULT_SURFACE_HEIGHT: u32 = 1080;
 
 // Per-platform backend stash. The proc-macro strips `#[cfg]` from
@@ -84,13 +67,32 @@ type GpuBackendStash = ();
 
 #[cfg(target_os = "linux")]
 struct LinuxState {
-    /// Owns the cuda OPAQUE_FD `VkBuffer` + exportable timeline; lives
-    /// for the processor's runtime window so surface-share's daemon-
-    /// duped fds stay valid.
-    adapter: Arc<CudaSurfaceAdapter<streamlib::sdk::engine::host_rhi::HostVulkanDevice>>,
-    surface_id: SurfaceId,
-    /// Hot-path-cached so `process()` doesn't go through `Arc::clone`
-    /// on the limited-access GpuContext every frame.
+    /// Cuda OPAQUE_FD DEVICE_LOCAL `VkBuffer` the per-frame copy fills.
+    storage_buffer: StorageBuffer,
+    /// The same allocation viewed as a `PixelBuffer` for the surface-store
+    /// `register_pixel_buffer_with_timeline` producer path. Held as a lifetime
+    /// anchor after registration (never read again), so the exported OPAQUE_FD
+    /// the surface-share daemon duped stays bound to a live allocation.
+    #[allow(dead_code)]
+    pixel_buffer: PixelBuffer,
+    /// Single-writer-per-edge exportable timelines. Both MUST live for the
+    /// processor's life: `register_pixel_buffer_with_timeline` only borrows
+    /// them and exports each one's OPAQUE_FD once — dropping either drops the
+    /// host `VkSemaphore` refcount to zero and a subprocess consumer blocks
+    /// forever on it. See `docs/architecture/adapter-timeline-single-writer.md`.
+    /// `produce_done` is advanced per frame; `consume_done` is a lifetime
+    /// anchor (the host GPU-waits it on the consumer's edge, never this side).
+    produce_done: HostTimelineSemaphore,
+    #[allow(dead_code)]
+    consume_done: HostTimelineSemaphore,
+    /// Cached per-frame `vkCmdCopyImageToBuffer` recorder — driven scope-free
+    /// in `process()` (no re-escalation; escalate_end would `wait_device_idle`
+    /// every frame).
+    copy_recorder: RhiCommandRecorder,
+    /// Monotonic `produce_done` signal value, advanced once per submitted copy.
+    produce_signal_value: u64,
+    /// Hot-path-cached so `process()` doesn't clone the limited-access
+    /// GpuContext every frame.
     gpu_ctx: GpuContextLimitedAccess,
     width: u32,
     height: u32,
@@ -107,13 +109,13 @@ struct LinuxState {
 // would silently discard the JSON — the macro initializes custom
 // fields via `Default::default()`. Schemas-driven config is the
 // only path that flows external config through to the processor.)
-#[streamlib::sdk::processor("CameraToCudaCopy")]
+#[streamlib_plugin_sdk::sdk::processor("CameraToCudaCopy")]
 pub struct CameraToCudaCopyProcessor {
     backend: GpuBackendStash,
     frame_count: AtomicU64,
 }
 
-impl streamlib::sdk::processors::ReactiveProcessor for CameraToCudaCopyProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for CameraToCudaCopyProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.setup_inner(ctx)
     }
@@ -153,119 +155,65 @@ impl CameraToCudaCopyProcessor::Processor {
             )));
         }
 
-        // setup() runs inside the engine's privileged lifecycle dispatch
-        // (`ProcessorInstance::setup` — VTable variant under
-        // `with_cdylib_scope`, LegacyDyn under
-        // `gpu_limited_access().escalate(...)`). The FullAccess on `ctx`
-        // is therefore already privileged in either mode: cdylib bodies
-        // see a ScopeToken-shaped FullAccess routed through the
-        // FullAccess vtable, in-process bodies see the Boxed FullAccess
-        // dispatched directly. Calling `gpu_limited_access().escalate(...)`
-        // from here would re-enter the same gate and trip the gate's
-        // same-thread re-entry panic.
-        let host_device = ctx.gpu_full_access().host_vulkan_device_arc()?;
+        // setup() runs inside the host's privileged lifecycle dispatch, so
+        // `ctx.gpu_full_access()` is already escalated. Calling
+        // `gpu_limited_access().escalate(...)` here would re-enter the same
+        // gate and be rejected; per-frame work instead runs scope-free on the
+        // cached `copy_recorder` (an `escalate` per frame would
+        // `wait_device_idle` on every scope exit).
+        let full = ctx.gpu_full_access();
 
-        // 1. DEVICE_LOCAL OPAQUE_FD VkBuffer. CPU never touches the
-        //    bytes; the GPU copy in `process()` populates them, and the
-        //    cdylib's `cudaImportExternalMemory` →
-        //    `cudaExternalMemoryGetMappedBuffer` exposes a `kDLCUDA`-
-        //    classified device pointer to PyTorch / JAX.
-        let pixel_buffer = HostVulkanBuffer::new_opaque_fd_export_device_local(
-            &host_device,
-            (width as u64) * (height as u64) * 4,
-        )
-        .map_err(|e| {
-            Error::Configuration(format!(
-                "CameraToCudaCopy: new_opaque_fd_export_device_local: {e}"
-            ))
-        })?;
-        let pixel_buffer_arc = Arc::new(pixel_buffer);
-        let pixel_buffer_rhi = PixelBuffer::from_host_vulkan_buffer(
-            Arc::clone(&pixel_buffer_arc),
+        // DEVICE_LOCAL OPAQUE_FD VkBuffer. CPU never touches the bytes; the
+        // per-frame GPU copy populates them and the cdylib consumer's
+        // `cudaImportExternalMemory` → `cudaExternalMemoryGetMappedBuffer`
+        // exposes a `kDLCUDA`-classified device pointer to PyTorch / JAX.
+        let storage_buffer =
+            full.create_opaque_fd_export_buffer((width as u64) * (height as u64) * 4, true)?;
+
+        // View the flat OPAQUE_FD allocation as a PixelBuffer so it registers
+        // through the surface-store pixel-buffer-with-timeline producer path.
+        let pixel_buffer = full.wrap_storage_buffer_as_pixel_buffer(
+            &storage_buffer,
             width,
             height,
             4,
             PixelFormat::Bgra32,
-        );
+        )?;
 
-        // 2. Exportable timelines — one per single-writer edge per
-        //    `docs/architecture/adapter-timeline-single-writer.md`. The
-        //    cdylib imports them as CUDA timeline external semaphores
-        //    so `acquire_read` blocks on the producer's GPU signal
-        //    (`produce_done`) and the host's next write waits on the
-        //    consumer's signal (`consume_done`).
-        let produce_done = Arc::new(
-            HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-                .map_err(|e| {
-                    Error::Configuration(format!(
-                        "CameraToCudaCopy: HostVulkanTimelineSemaphore::new_exportable \
-                         (produce_done): {e}"
-                    ))
-                })?,
-        );
-        let consume_done = Arc::new(
-            HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-                .map_err(|e| {
-                    Error::Configuration(format!(
-                        "CameraToCudaCopy: HostVulkanTimelineSemaphore::new_exportable \
-                         (consume_done): {e}"
-                    ))
-                })?,
-        );
+        // One exportable timeline per single-writer edge; the cdylib imports
+        // them as CUDA timeline external semaphores so `acquire_read` blocks
+        // on the producer's GPU signal (`produce_done`) and the host's next
+        // write waits on the consumer's signal (`consume_done`).
+        let produce_done = full.create_exportable_timeline_semaphore(0)?;
+        let consume_done = full.create_exportable_timeline_semaphore(0)?;
 
-        let gpu_lim = ctx.gpu_limited_access().clone();
-
-        // 3. Surface-share registration so subprocess customers can
-        //    `check_out` the OPAQUE_FD memory + timeline in one round
-        //    trip. Use the LimitedAccess `surface_store()` accessor
-        //    (vtable-dispatched in cdylib mode); the camera package
-        //    follows the same pattern for its ring textures.
-        let surface_store = gpu_lim.surface_store().ok_or_else(|| {
-            Error::Configuration(
+        // Surface-share registration so subprocess customers can `check_out`
+        // the OPAQUE_FD memory + timelines in one round trip. The host always
+        // writes a value; branch on the null-handle sentinel.
+        let surface_store = full.surface_store();
+        if surface_store.is_none() {
+            return Err(Error::Configuration(
                 "CameraToCudaCopy: GpuContext has no surface_store (Linux runtime?)".into(),
-            )
-        })?;
+            ));
+        }
         let surface_key = CUDA_CAMERA_SURFACE_ID.to_string();
-        surface_store
-            .register_pixel_buffer_with_timeline(
-                &surface_key,
-                &pixel_buffer_rhi,
-                Some(produce_done.as_ref()),
-                Some(consume_done.as_ref()),
-            )
-            .map_err(|e| {
-                Error::Configuration(format!(
-                    "CameraToCudaCopy: register_pixel_buffer_with_timeline: {e}"
-                ))
-            })?;
+        surface_store.register_pixel_buffer_with_timeline(
+            &surface_key,
+            &pixel_buffer,
+            Some(&produce_done),
+            Some(&consume_done),
+        )?;
 
-        // 4. Cuda adapter — owns the registration's `Arc`s and runs
-        //    the timeline-wait protocol on per-acquire from the cdylib
-        //    customer. Construction + the `register_host_surface`
-        //    HashMap insert are pure Rust (no GPU work, no FullAccess
-        //    methods), so they live outside escalate.
-        let adapter: Arc<CudaSurfaceAdapter<streamlib::sdk::engine::host_rhi::HostVulkanDevice>> =
-            Arc::new(CudaSurfaceAdapter::new(Arc::clone(&host_device)));
-        adapter
-            .register_host_surface(
-                CUDA_CAMERA_SURFACE_ID,
-                HostSurfaceRegistration::<HostMarker> {
-                    pixel_buffer: pixel_buffer_arc,
-                    produce_done,
-                    consume_done,
-                    initial_layout: VulkanLayout::UNDEFINED,
-                },
-            )
-            .map_err(|e| {
-                Error::Configuration(format!(
-                    "CameraToCudaCopy: register_host_surface: {e:?}"
-                ))
-            })?;
+        let copy_recorder = full.create_command_recorder("camera_to_cuda_copy")?;
 
         self.backend = Some(LinuxState {
-            adapter,
-            surface_id: CUDA_CAMERA_SURFACE_ID,
-            gpu_ctx: gpu_lim,
+            storage_buffer,
+            pixel_buffer,
+            produce_done,
+            consume_done,
+            copy_recorder,
+            produce_signal_value: 0,
+            gpu_ctx: ctx.gpu_limited_access().clone(),
             width,
             height,
         });
@@ -289,39 +237,22 @@ impl CameraToCudaCopyProcessor::Processor {
 
     #[cfg(target_os = "linux")]
     fn process_frame_inner(&mut self, frame: &VideoFrame) -> Result<()> {
-        let backend = self.backend.as_ref().ok_or_else(|| {
+        let backend = self.backend.as_mut().ok_or_else(|| {
             Error::Configuration("CameraToCudaCopy: backend not initialized".into())
         })?;
 
-        // Resolve the camera ring texture. The camera processor
-        // produces RGBA8 ring textures registered under fresh UUIDs
-        // and rotates through them; `frame.surface_id` carries the
-        // current ring slot's UUID.
-        let texture = backend
-            .gpu_ctx
-            .resolve_texture_by_surface_id(
-                &frame.surface_id,
-                frame.texture_layout,
-                frame.width,
-                frame.height,
-            )
-            .map_err(|e| {
-            Error::Configuration(format!(
-                "CameraToCudaCopy: resolve_texture_by_surface_id('{}'): {e}",
-                frame.surface_id
-            ))
-        })?;
-        // Cdylib-safe: `Texture::vulkan_inner()` reaches `host_inner()` which
-        // panics under `host_callbacks().is_some()`. Route through the
-        // `host_vulkan_texture_arc` FullAccess slot so cdylib callers don't
-        // trip the panic guard.
-        let host_texture = texture.host_vulkan_texture_arc().map_err(|e| {
-            Error::Configuration(format!(
-                "CameraToCudaCopy: host_vulkan_texture_arc: {e}"
-            ))
-        })?;
-        let cam_w = host_texture.width();
-        let cam_h = host_texture.height();
+        // Resolve the camera ring texture. The camera processor produces
+        // RGBA8 ring textures registered under fresh UUIDs and rotates through
+        // them; `frame.surface_id` carries the current ring slot's UUID.
+        let texture = backend.gpu_ctx.resolve_texture_by_surface_id(
+            &frame.surface_id,
+            frame.texture_layout,
+            frame.width,
+            frame.height,
+        )?;
+
+        let cam_w = texture.width();
+        let cam_h = texture.height();
         if cam_w != backend.width || cam_h != backend.height {
             return Err(Error::Configuration(format!(
                 "CameraToCudaCopy: camera resolution {cam_w}x{cam_h} differs from \
@@ -332,40 +263,47 @@ impl CameraToCudaCopyProcessor::Processor {
             )));
         }
 
-        // The camera processor leaves ring textures in `GENERAL`
-        // layout (storage|sampled). Tell the cuda adapter to copy
-        // out and restore the same layout — the camera processor
-        // and any downstream sampler keep their layout invariant
-        // over the copy window. The adapter handles the VkImage /
-        // extent extraction internally so this crate stays out of
-        // `vulkanalia` per the engine boundary rule.
-        //
-        // `WriteContended` is the expected race when a consumer's
-        // subprocess `cuda.acquire_read` is mid-inference (~30 ms
-        // at 640x640 on Jetson-class GPUs); the camera frame is
-        // dropped on this tick and the next ring slot will succeed.
-        // Tearing down the pipeline on this error would defeat the
-        // whole point of the host pipeline shape.
-        match backend.adapter.submit_host_copy_image_to_buffer(
-            backend.surface_id,
-            host_texture.as_ref(),
+        backend.produce_signal_value += 1;
+        let signal_value = backend.produce_signal_value;
+        let region = ImageCopyRegion::tightly_packed(backend.width, backend.height);
+        let recorder = &mut backend.copy_recorder;
+
+        // The camera leaves ring textures in `GENERAL`. Transition to
+        // TRANSFER_SRC for the copy, then RESTORE to GENERAL — the camera
+        // processor and every downstream sampler keep GENERAL as their layout
+        // invariant across the copy window, so omitting the restore strands the
+        // ring slot in TRANSFER_SRC_OPTIMAL and breaks the next sampler.
+        recorder.begin()?;
+        recorder.record_image_barrier(
+            &texture,
             VulkanLayout::GENERAL,
-        ) {
-            Ok(_) => {}
-            Err(AdapterError::WriteContended { .. }) => {
-                if self.frame_count.load(Ordering::Relaxed) % 60 == 0 {
-                    tracing::debug!(
-                        "CameraToCudaCopy: write contended (subprocess reader still \
-                         holding the cuda surface) — dropping this camera tick"
-                    );
-                }
-            }
-            Err(e) => {
-                return Err(Error::Configuration(format!(
-                    "CameraToCudaCopy: submit_host_copy_image_to_buffer: {e:?}"
-                )));
-            }
-        }
+            VulkanLayout::TRANSFER_SRC_OPTIMAL,
+            VulkanStage::ALL_COMMANDS,
+            VulkanStage::ALL_TRANSFER,
+            VulkanAccess::MEMORY_WRITE,
+            VulkanAccess::TRANSFER_READ,
+        )?;
+        recorder.record_copy_image_to_buffer(
+            &texture,
+            VulkanLayout::TRANSFER_SRC_OPTIMAL,
+            &backend.storage_buffer,
+            region,
+        )?;
+        recorder.record_image_barrier(
+            &texture,
+            VulkanLayout::TRANSFER_SRC_OPTIMAL,
+            VulkanLayout::GENERAL,
+            VulkanStage::ALL_TRANSFER,
+            VulkanStage::ALL_COMMANDS,
+            VulkanAccess::TRANSFER_READ,
+            VulkanAccess::MEMORY_READ | VulkanAccess::MEMORY_WRITE,
+        )?;
+        // Signal `produce_done` on GPU-queue completion (single-writer edge) —
+        // the cross-process consumer's `acquire_read` unblocks off this value.
+        // No `consume_done` wait on the write path: the camera drops ticks when
+        // the consumer skips a frame, and a GPU-wait on a stale consume edge
+        // would deadlock the producer against a consumer that never read.
+        recorder.submit_signaling_timeline(&backend.produce_done, signal_value)?;
         Ok(())
     }
 

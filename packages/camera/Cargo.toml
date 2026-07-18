@@ -17,12 +17,16 @@ crate-type = ["rlib", "cdylib"]
 streamlib-jtd-codegen = {version = "0.6.0"}
 
 [dependencies]
-# Engine substrate — runtime context, processor traits, generated config
-# types under `crate::_generated_::tatolab__camera::*`, VideoFrame
-# wire type, RHI primitives.
-streamlib = {version = "0.6.0"}
+# Engine-free authoring SDK (never the `streamlib` facade) — capability-typed
+# runtime/GPU context views, the cdylib-safe RHI PluginAbiObjects the camera
+# drives (`StorageBuffer`, `PixelBuffer`, `Texture`, `RhiColorConverter`,
+# `RhiCommandRecorder`, `HostTimelineSemaphore`, `SurfaceStore`) plus the
+# `VulkanLayout` / `PixelFormat` / `TextureFormat` primitives, generated config
+# types under `crate::_generated_::*`, and the `VideoFrame` wire type. Every GPU
+# resource comes through `GpuContextFullAccess`, never the raw host device.
+streamlib-plugin-sdk = {version = "0.6.0"}
 
-# Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
+# Procedural macros — `#[streamlib_plugin_sdk::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
 streamlib-macros = {version = "0.6.0"}
 
@@ -30,14 +34,11 @@ streamlib-macros = {version = "0.6.0"}
 # runtime dlopens at load time.
 streamlib-plugin-abi = {version = "0.6.0"}
 
-# Cross-platform deps used by the camera processor.
-parking_lot = "0.12"
-
-# Serialization (config dataclass ships as serde-derived).
 tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 
 # UUID generation for ring texture / pixel-buffer surface_ids.
 uuid = { version = "1.11", features = ["v4"] }
+# Serialization (generated config dataclasses ship as serde-derived).
 serde = {version = "1.0", features = ["derive"]}
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -45,33 +46,11 @@ serde = {version = "1.0", features = ["derive"]}
 v4l = "0.14"
 # Raw ioctl + close fd plumbing for VIDIOC_EXPBUF / VIDIOC_QBUF / VIDIOC_STREAMON
 # (V4L2's stream type doesn't expose enough for the DMA-BUF zero-copy path).
-# Consumer-side RHI carve-out — typed `VulkanLayout` enum used in
-# surface-share registrations + recorder barriers. Camera does NOT use
-# anything else from consumer-rhi (no `ConsumerVulkanDevice`, no imports);
-# this is the typed-layout interop type shared between the host RHI's
-# `RhiCommandRecorder` and the cross-process surface-share schema.
-streamlib-consumer-rhi = {version = "0.6.0"}
-# CUDA host-side surface adapter — the `CameraToCudaCopy` processor
-# allocates a DEVICE_LOCAL OPAQUE_FD VkBuffer + exportable timeline
-# and runs the host-side `vkCmdCopyImageToBuffer` per frame for
-# cross-API CUDA interop. The adapter crate itself stays cudarc-free
-# (`cudarc` integration happens in the cdylib consumer); this dep
-# does NOT pull `libcuda.so` into the camera package's link surface.
-streamlib-adapter-cuda = {version = "0.6.0"}
-# Adapter ABI — provides `SurfaceId` and `AdapterError` types the
-# CUDA adapter surface uses in its public API.
-streamlib-adapter-abi = {version = "0.6.0"}
 libc = {version = "0.2.177"}
 
-[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-# Objective-C interop and Apple framework bindings.
-objc2-av-foundation = {version = "0.3.2", features = ["objc2-core-media", "objc2-core-video"]}
-objc2 = {version = "0.6.3"}
-objc2-core-video = {version = "0.3.2"}
-objc2-foundation = {version = "0.3.2"}
-# GCD wrapper for dispatching AVFoundation init to the main thread.
-dispatch2 = "0.3"
-libc = {version = "0.2.177"}
-
+# NOTE: the Apple (AVFoundation) camera arm is parked under
+# `src/_apple_impl_pending_/` (never compiled — see `src/lib.rs`); its
+# objc2 / dispatch2 interop deps are removed until the plugin SDK ships an
+# engine-free Apple RHI surface and the arm is unparked.
 
 [workspace]

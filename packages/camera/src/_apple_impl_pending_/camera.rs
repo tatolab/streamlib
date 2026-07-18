@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::apple::corevideo_ffi::{
+use crate::_apple_impl_pending_::corevideo_ffi::{
     CVPixelBufferGetHeight, CVPixelBufferGetIOSurface, CVPixelBufferGetWidth, IOSurfaceGetID,
 };
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};

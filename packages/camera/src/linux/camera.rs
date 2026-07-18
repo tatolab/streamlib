@@ -7,18 +7,17 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use streamlib::sdk::color::{
+use streamlib_plugin_sdk::sdk::color::{
     resolve_color_defaults, ColorSpaceKind, MatrixId, PrimariesId, RangeId, TransferId,
 };
-use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
-use streamlib::sdk::engine::host_rhi::{
-    HostVulkanTimelineSemaphore, ImageCopyRegion, RhiCommandRecorder, VulkanAccess, VulkanStage,
+use streamlib_plugin_sdk::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
+use streamlib_plugin_sdk::sdk::iceoryx2::OutputWriter;
+use streamlib_plugin_sdk::sdk::rhi::{
+    HostTimelineSemaphore, ImageCopyRegion, PixelFormat, RhiColorConverter, RhiCommandRecorder,
+    SourceLayoutInfo, StorageBuffer, Texture, TextureFormat, VulkanAccess, VulkanLayout,
+    VulkanStage,
 };
-use streamlib::sdk::engine::HostSurfaceStoreExt;
-use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::iceoryx2::OutputWriter;
-use streamlib::sdk::rhi::{PixelFormat, RhiColorConverter, StorageBuffer, Texture, TextureFormat};
-use streamlib_consumer_rhi::VulkanLayout;
 
 use v4l::buffer::Type;
 use v4l::io::traits::CaptureStream;
@@ -37,7 +36,7 @@ pub struct LinuxCameraDevice {
     pub name: String,
 }
 
-#[streamlib::sdk::processor("Camera")]
+#[streamlib_plugin_sdk::sdk::processor("Camera")]
 pub struct LinuxCameraProcessor {
     camera_name: String,
     gpu_context: Option<GpuContextLimitedAccess>,
@@ -46,7 +45,7 @@ pub struct LinuxCameraProcessor {
     capture_thread_handle: Option<std::thread::JoinHandle<()>>,
 }
 
-impl streamlib::sdk::processors::ManualProcessor for LinuxCameraProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for LinuxCameraProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
         tracing::info!("Camera: setup() complete");
@@ -390,13 +389,13 @@ impl streamlib::sdk::processors::ManualProcessor for LinuxCameraProcessor::Proce
 struct CameraGpuResources {
     color_converter: RhiColorConverter,
     recorder: RhiCommandRecorder,
-    timeline: Arc<HostVulkanTimelineSemaphore>,
+    timeline: HostTimelineSemaphore,
     // Per-ring-slot single-writer-per-edge exportable timeline pairs
     // — `produce_done` signaled by the camera capture path,
     // `consume_done` signaled by cross-process consumers. See
     // `docs/architecture/adapter-timeline-single-writer.md`.
-    ring_produce_done: Vec<Arc<HostVulkanTimelineSemaphore>>,
-    ring_consume_done: Vec<Arc<HostVulkanTimelineSemaphore>>,
+    ring_produce_done: Vec<HostTimelineSemaphore>,
+    ring_consume_done: Vec<HostTimelineSemaphore>,
     input_storage_buffers: Vec<StorageBuffer>,
     input_mapped_ptrs: [*mut u8; 2],
     ring_textures: Vec<Texture>,
@@ -540,12 +539,12 @@ fn capture_thread_loop(
     // strides (V4L2 convention; both planes share stride for bi-planar
     // formats). YUYV has a single packed plane.
     let src_layout = match &fourcc_bytes {
-        b"NV12" => streamlib::sdk::rhi::SourceLayoutInfo::nv12(
+        b"NV12" => SourceLayoutInfo::nv12(
             v4l2_bytes_per_line,
             v4l2_bytes_per_line,
             v4l2_bytes_per_line * height,
         ),
-        b"YUYV" => streamlib::sdk::rhi::SourceLayoutInfo::yuyv(v4l2_bytes_per_line),
+        b"YUYV" => SourceLayoutInfo::yuyv(v4l2_bytes_per_line),
         _ => unreachable!("guarded by FourCC match above"),
     };
     tracing::info!(
@@ -612,15 +611,10 @@ fn capture_thread_loop(
 
         let recorder = full.create_command_recorder("camera_capture")?;
 
-        // Timeline now constructed through the FullAccess primitive
-        // (#920) — the camera no longer reaches through
-        // `full.device().vulkan_device().device()`.
-        let timeline = full.create_timeline_semaphore(0)?;
-
-        // After #920 (timeline) + #921 (DMA-BUF import + ring texture
-        // migration), the camera no longer holds a `vulkan_device`
-        // handle inside setup — every host-RHI call goes through
-        // FullAccess. Camera is cdylib-loadable.
+        // Host-readback / display-wait timeline. Exportable is the only
+        // engine-free timeline primitive; the camera only ever waits on it
+        // host-side, so the extra OPAQUE_FD capability is harmless.
+        let timeline = full.create_exportable_timeline_semaphore(0)?;
 
         // Double-buffered HOST_VISIBLE input SSBOs (MMAP+memcpy fallback path).
         let mut input_storage_buffers: Vec<StorageBuffer> = Vec::with_capacity(2);
@@ -645,16 +639,13 @@ fn capture_thread_loop(
         // `docs/learnings/nvidia-dma-buf-after-swapchain.md`).
         let mut ring_textures: Vec<Texture> = Vec::with_capacity(RING_TEXTURE_COUNT);
         let mut ring_texture_ids: Vec<String> = Vec::with_capacity(RING_TEXTURE_COUNT);
-        let mut ring_produce_done: Vec<Arc<HostVulkanTimelineSemaphore>> =
+        let mut ring_produce_done: Vec<HostTimelineSemaphore> =
             Vec::with_capacity(RING_TEXTURE_COUNT);
-        let mut ring_consume_done: Vec<Arc<HostVulkanTimelineSemaphore>> =
+        let mut ring_consume_done: Vec<HostTimelineSemaphore> =
             Vec::with_capacity(RING_TEXTURE_COUNT);
         // Per-ring-slot exportable timelines for single-writer-per-edge
         // surface-share registration (see
-        // `docs/architecture/adapter-timeline-single-writer.md`). The
-        // `host_vulkan_device_arc()` bridge is the cdylib-safe v9
-        // accessor used elsewhere in the camera package.
-        let host_device = full.host_vulkan_device_arc()?;
+        // `docs/architecture/adapter-timeline-single-writer.md`).
         for _ in 0..RING_TEXTURE_COUNT {
             let stream_texture = full.acquire_render_target_dma_buf_image(
                 width,
@@ -662,24 +653,8 @@ fn capture_thread_loop(
                 TextureFormat::Rgba8Unorm,
             )?;
             let texture_id = uuid::Uuid::new_v4().to_string();
-            let produce_done = Arc::new(
-                HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-                    .map_err(|e| {
-                        Error::Configuration(format!(
-                            "camera: HostVulkanTimelineSemaphore::new_exportable \
-                             (produce_done): {e}"
-                        ))
-                    })?,
-            );
-            let consume_done = Arc::new(
-                HostVulkanTimelineSemaphore::new_exportable(host_device.device(), 0)
-                    .map_err(|e| {
-                        Error::Configuration(format!(
-                            "camera: HostVulkanTimelineSemaphore::new_exportable \
-                             (consume_done): {e}"
-                        ))
-                    })?,
-            );
+            let produce_done = full.create_exportable_timeline_semaphore(0)?;
+            let consume_done = full.create_exportable_timeline_semaphore(0)?;
             ring_texture_ids.push(texture_id);
             ring_textures.push(stream_texture);
             ring_produce_done.push(produce_done);
@@ -794,7 +769,10 @@ fn capture_thread_loop(
             vulkan_device_name,
             probe_skipped,
         })
-    });
+    })
+    // `escalate` wraps the closure's own `Result` — flatten the
+    // `Result<Result<_>>` (the SDK does not auto-flatten a fallible closure).
+    .and_then(std::convert::identity);
 
     let CameraGpuResources {
         color_converter,
@@ -860,12 +838,13 @@ fn capture_thread_loop(
     for (i, (texture_id, stream_texture)) in
         ring_texture_ids.iter().zip(ring_textures.iter()).enumerate()
     {
-        if let Some(store) = gpu_context.surface_store() {
+        let store = gpu_context.surface_store();
+        if !store.is_none() {
             if let Err(e) = store.register_texture(
                 texture_id,
                 stream_texture,
-                Some(ring_produce_done[i].as_ref()),
-                Some(ring_consume_done[i].as_ref()),
+                Some(&ring_produce_done[i]),
+                Some(&ring_consume_done[i]),
                 VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
             ) {
                 tracing::warn!(
@@ -883,7 +862,6 @@ fn capture_thread_loop(
         );
     }
 
-    gpu_context.set_video_source_timeline_semaphore(&camera_timeline);
     let mut timeline_signal_value: u64;
 
     let dispatch_x = (width + 15) / 16;
@@ -1156,13 +1134,13 @@ fn capture_thread_loop(
 
         // Copy ring → pooled pixel buffer (cross-process IPC).
         let copy_region = ImageCopyRegion::tightly_packed(width, height);
-        if let Err(e) = recorder.record_copy_image_to_buffer(
+        if let Err(e) = recorder.record_copy_image_to_pixel_buffer(
             &ring_textures[ring_index],
             VulkanLayout::TRANSFER_SRC_OPTIMAL,
             &pooled_buffer,
             copy_region,
         ) {
-            tracing::error!(camera = camera_name, error = %e, "record_copy_image_to_buffer failed");
+            tracing::error!(camera = camera_name, error = %e, "record_copy_image_to_pixel_buffer failed");
             continue;
         }
 
@@ -1181,7 +1159,7 @@ fn capture_thread_loop(
             tracing::error!(camera = camera_name, error = %e, "post-copy image barrier failed");
             continue;
         }
-        if let Err(e) = recorder.record_buffer_barrier(
+        if let Err(e) = recorder.record_pixel_buffer_barrier(
             &pooled_buffer,
             VulkanStage::ALL_TRANSFER,
             VulkanStage::HOST,
@@ -1236,7 +1214,7 @@ fn capture_thread_loop(
         // - PNG sampling: resolves pixel buffer for CPU readback
         let surface_id = pool_id.to_string();
         let timestamp_ns =
-            streamlib::sdk::media_clock::MediaClock::now().as_nanos() as i64;
+            streamlib_plugin_sdk::sdk::media_clock::MediaClock::now().as_nanos() as i64;
 
         let ipc_frame = crate::_generated_::VideoFrame {
             surface_id,
@@ -1301,9 +1279,6 @@ fn capture_thread_loop(
         }
     }
 
-    // Clear the published handle so a future runtime swap doesn't try to
-    // wait on a dead semaphore.
-    gpu_context.clear_video_source_timeline_semaphore();
     drop(dmabuf_imported_buffers);
     drop(ring_textures);
     drop(ring_produce_done);
@@ -1436,7 +1411,7 @@ fn range_id(r: &crate::_generated_::tatolab__core::color_info::Range) -> RangeId
 mod tests {
     use super::*;
     use crate::_generated_::CameraConfig;
-    use streamlib::sdk::processors::GeneratedProcessor;
+    use streamlib_plugin_sdk::sdk::processors::GeneratedProcessor;
 
     #[test]
     fn test_list_devices() {
