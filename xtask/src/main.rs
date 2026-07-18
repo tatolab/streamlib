@@ -13,7 +13,6 @@ use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use streamlib_jtd_codegen::{GenerateOptions, RuntimeTarget, generate};
 
-pub mod check_abi_republish;
 pub mod check_boundaries;
 pub mod check_cdylib_reach;
 pub mod check_consumer_rhi_repr;
@@ -190,13 +189,6 @@ enum Commands {
         dir: PathBuf,
     },
 
-    /// CI gate for the "ABI bump ⇒ coordinated republish" CD step: fail a PR
-    /// that changes `STREAMLIB_ABI_VERSION` without also changing the
-    /// `[workspace.package]` version. Compares merge-base vs. working tree;
-    /// registry-free (a `git` diff, no network). See the "Release / ABI
-    /// republish" section of `docs/architecture/static-registry.md`.
-    CheckAbiRepublish,
-
     /// Drift trip-wire for the vendored vulkanalia fork trees
     /// (`vendor/tatolab-vulkanalia{,-sys,-vma}`): hashes each vendored crate
     /// dir and fails on any byte change vs. the recorded hash — the guard
@@ -280,7 +272,6 @@ fn main() -> Result<()> {
         }
         Commands::CheckConsumerRhiRepr => check_consumer_rhi_repr::run(&workspace_root()?)?,
         Commands::CheckDeviceWaitIdle => check_device_wait_idle::run(&workspace_root()?)?,
-        Commands::CheckAbiRepublish => check_abi_republish::run(&workspace_root()?)?,
         Commands::CheckVendoredVulkanalia => check_vendored_vulkanalia::run(&workspace_root()?)?,
         Commands::CheckPackageVersionDrift { fix } => {
             check_package_version_drift::run(&workspace_root()?, fix)?

@@ -1,0 +1,31 @@
+name: PR Title
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  conventional-title:
+    runs-on: ubuntu-latest
+    steps:
+      # The repo squash-merges, so the PR title becomes the squash commit subject
+      # that release-please parses to compute the version bump. A non-conventional
+      # title silently skips versioning — this gate makes that impossible.
+      - name: Validate the PR title is a conventional-commit type
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          echo "PR title: $TITLE"
+          if printf '%s' "$TITLE" | grep -qE '^(feat|fix|perf|refactor|docs|chore|test|ci|build|revert)(\([a-z0-9._-]+\))?!?: .+'; then
+            echo "OK: conventional title."
+            exit 0
+          fi
+          echo "::error::PR title must be a conventional-commit type, e.g. 'feat(camera): ...' or 'fix: ...'."
+          echo "release-please reads the squash-merged title to compute the version bump:"
+          echo "  feat -> minor, fix -> patch, ! or 'BREAKING CHANGE:' -> breaking (pre-1.0: minor)."
+          echo "  refactor / chore / docs / test / ci / perf land no version bump."
+          echo "Allowed types: feat, fix, perf, refactor, docs, chore, test, ci, build, revert."
+          exit 1
