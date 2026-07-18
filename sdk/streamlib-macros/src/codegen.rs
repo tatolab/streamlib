@@ -592,16 +592,12 @@ fn generate_processor_impl_from_schema(
 
             /// Build-fingerprint handshake constants read by
             /// `export_plugin!` when it emits the `STREAMLIB_PLUGIN`
-            /// declaration. Resolved against the detected SDK crate:
-            /// the facade `streamlib` (statically-linked engine → real
-            /// engine transit fingerprint) or the engine-free
-            /// `streamlib-plugin-sdk` (transit fingerprint 0).
+            /// declaration. Resolved against the detected SDK crate —
+            /// the facade `streamlib` or the engine-free
+            /// `streamlib-plugin-sdk`.
             #[doc(hidden)]
             pub const __STREAMLIB_ABI_LAYOUT_FINGERPRINT: u64 =
                 __streamlib_sdk::plugin::PLUGIN_ABI_LAYOUT_FINGERPRINT;
-            #[doc(hidden)]
-            pub const __STREAMLIB_ENGINE_TRANSIT_FINGERPRINT: u64 =
-                __streamlib_sdk::plugin::ENGINE_TRANSIT_FINGERPRINT;
             #[doc(hidden)]
             pub const __STREAMLIB_BUILD_IDENTITY: &'static str =
                 __streamlib_sdk::plugin::BUILD_IDENTITY;

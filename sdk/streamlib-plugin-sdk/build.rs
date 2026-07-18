@@ -7,9 +7,7 @@
 //! engine-free plugin SDK can expose a human-readable build-identity
 //! string (`sdk::plugin::BUILD_IDENTITY`) for the plugin-load
 //! fingerprint handshake. Mirrors the engine build.rs's identity
-//! capture; the engine-free SDK carries no transit surface, so its
-//! `ENGINE_TRANSIT_FINGERPRINT` is a plain `0` and needs no build-time
-//! probe.
+//! capture.
 
 fn main() {
     let target = std::env::var("TARGET").expect("TARGET env var set by cargo for build.rs");

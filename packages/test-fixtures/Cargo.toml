@@ -17,20 +17,20 @@ name = "streamlib_test_fixtures"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.6.0" }
+streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.7.0" }
 
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated config
 # types under `crate::_generated_::tatolab__test_fixtures::*`.
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.6.0" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.7.0" }
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.6.0" }
+streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.7.0" }
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = { path = "../../runtime/streamlib-plugin-abi", version = "0.6.0" }
+streamlib-plugin-abi = { path = "../../runtime/streamlib-plugin-abi", version = "0.7.0" }
 
 # Serialization (config dataclass ships as serde-derived).
 serde.workspace = true
@@ -40,19 +40,6 @@ serde.workspace = true
 # its own tokio crate so `tokio::net::*` has working TLS slots inside
 # the plugin's runtime even when the host has its own separate tokio.
 tokio = { workspace = true, features = ["rt", "net", "macros"] }
-
-# Surface adapters exercised by the dlopen smoke fixtures. Each fixture
-# constructs the host-flavor adapter from inside a cdylib's
-# `gpu.escalate(...)` closure to validate the cdylib-side
-# adapter-construction chain (the v9 `host_vulkan_device_arc` bridge
-# and the v10 `host_vulkan_texture_arc` bridge plus the existing
-# `acquire_render_target_dma_buf_image` slot).
-[target.'cfg(target_os = "linux")'.dependencies]
-streamlib-adapter-abi = { path = "../../adapters/streamlib-adapter-abi", version = "0.6.0" }
-streamlib-adapter-cpu-readback = { path = "../../adapters/streamlib-adapter-cpu-readback", version = "0.6.0" }
-streamlib-adapter-cuda = { path = "../../adapters/streamlib-adapter-cuda", version = "0.6.0" }
-streamlib-adapter-opengl = { path = "../../adapters/streamlib-adapter-opengl", version = "0.6.0" }
-streamlib-adapter-vulkan = { path = "../../adapters/streamlib-adapter-vulkan", version = "0.6.0" }
 
 [lints]
 workspace = true

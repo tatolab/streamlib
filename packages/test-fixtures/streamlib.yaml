@@ -40,16 +40,6 @@ schemas:
     file: schemas/panicking_continuous_lifecycle_processor_config.yaml
   ConcurrentEscalateTestProcessorConfig:
     file: schemas/concurrent_escalate_test_processor_config.yaml
-  CpuReadbackSmokeTestProcessorConfig:
-    file: schemas/cpu_readback_smoke_test_processor_config.yaml
-  VulkanSmokeTestProcessorConfig:
-    file: schemas/vulkan_smoke_test_processor_config.yaml
-  OpenGlSmokeTestProcessorConfig:
-    file: schemas/opengl_smoke_test_processor_config.yaml
-  CudaSmokeTestProcessorConfig:
-    file: schemas/cuda_smoke_test_processor_config.yaml
-  SurfaceShareEscalateConsistencyTestProcessorConfig:
-    file: schemas/surface_share_escalate_consistency_test_processor_config.yaml
 
 processors:
   - name: TestConfiguredProcessor
@@ -139,43 +129,3 @@ processors:
     config:
       name: config
       schema: ConcurrentEscalateTestProcessorConfig
-
-  - name: CpuReadbackSmokeTestProcessor
-    version: 1.0.0
-    description: "Dlopen-cdylib surface-adapter smoke fixture for the cpu-readback adapter. Exercises the cdylib-side adapter-construction chain end-to-end: host_vulkan_device_arc, direct HostVulkanBuffer::new + HostVulkanTimelineSemaphore::new_exportable, CpuReadbackSurfaceAdapter::new, register_host_surface, acquire_write/view_mut/bytes_mut, drop guard."
-    execution: manual
-    config:
-      name: config
-      schema: CpuReadbackSmokeTestProcessorConfig
-
-  - name: VulkanSmokeTestProcessor
-    version: 1.0.0
-    description: "Dlopen-cdylib surface-adapter smoke fixture for the vulkan adapter. Exercises the cdylib-side adapter-construction chain end-to-end: host_vulkan_device_arc, acquire_render_target_dma_buf_image + host_vulkan_texture_arc, direct HostVulkanTimelineSemaphore::new, VulkanSurfaceAdapter::new, register_host_surface, acquire_write, vk_image() handle assertion."
-    execution: manual
-    config:
-      name: config
-      schema: VulkanSmokeTestProcessorConfig
-
-  - name: OpenGlSmokeTestProcessor
-    version: 1.0.0
-    description: "Dlopen-cdylib surface-adapter smoke fixture for the opengl adapter. Exercises the cdylib-side adapter-construction chain end-to-end: host_vulkan_device_arc + acquire_render_target_dma_buf_image + host_vulkan_texture_arc + pub-method DMA-BUF FD/layout/modifier accessors, EglRuntime::new (may SKIP), OpenGlSurfaceAdapter::new, register_host_surface, acquire_write, gl_texture_id() assertion."
-    execution: manual
-    config:
-      name: config
-      schema: OpenGlSmokeTestProcessorConfig
-
-  - name: CudaSmokeTestProcessor
-    version: 1.0.0
-    description: "Dlopen-cdylib surface-adapter smoke fixture for the cuda adapter. Exercises the OPAQUE_FD buffer path: host_vulkan_device_arc, opaque_fd_buffer_pool() probe (SKIP if unavailable), HostVulkanBuffer::new_opaque_fd_export, HostVulkanTimelineSemaphore::new_exportable, CudaSurfaceAdapter::new, register_host_surface, acquire_write, vk_buffer() handle assertion."
-    execution: manual
-    config:
-      name: config
-      schema: CudaSmokeTestProcessorConfig
-
-  - name: SurfaceShareEscalateConsistencyTestProcessor
-    version: 1.0.0
-    description: "Dlopen-cdylib smoke fixture verifying surface-share daemon and escalate-IPC paths agree on resource lifetime for the same surface_id. Registers a texture via both the cross-process surface_store.register_texture channel and the in-process gpu.register_texture_with_layout texture cache; resolves via both gpu.resolve_texture_registration_by_surface_id (Path 1 / escalate-IPC) and surface_store.lookup_texture (cross-process)."
-    execution: manual
-    config:
-      name: config
-      schema: SurfaceShareEscalateConsistencyTestProcessorConfig

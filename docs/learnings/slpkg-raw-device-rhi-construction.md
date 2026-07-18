@@ -116,6 +116,22 @@ a GPU package is plugin-safe; the only real test is a separate-build
 > `HostVulkanBuffer::new*` regardless of the load-time check. See
 > `docs/architecture/plugin-abi.md` → "Load handshake".
 
+> **Update 2026-07-18 (raw-`Arc` transit slots deleted).** The
+> `host_vulkan_device_arc`, `host_vulkan_texture_arc`, and
+> timeline-semaphore raw-`Arc` transit slots were removed from the
+> FullAccess/LimitedAccess vtables entirely, and the
+> `engine_transit_fingerprint` handshake component was dropped with
+> them. **No plugin ABI slot transits a non-`#[repr(C)]` host type**, so
+> the driver-corruption mode above is closed *by construction*: a
+> package's GPU code can no longer name the transited types across the
+> boundary — the "reorder-at-identical-size" residual gap the fingerprint
+> could not catch is gone because there is nothing to transit. The
+> guidance is unchanged and now type-enforced: build every GPU resource
+> through the cdylib-safe FullAccess primitives. The host-mode client
+> methods that kept the names (`GpuContextFullAccess::host_vulkan_device_arc`,
+> `HostTextureExt::host_vulkan_texture_arc`) are engine-internal only —
+> they error in cdylib mode and back no plugin ABI slot.
+
 ## Reference
 
 - The sound primitives live on `GpuContextFullAccess` in

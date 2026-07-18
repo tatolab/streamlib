@@ -191,8 +191,8 @@ pub mod sdk {
 
         // ---- Build-fingerprint handshake constants ----
         //
-        // The `#[processor]` macro reads these three names to populate
-        // the `STREAMLIB_PLUGIN` declaration. Mirrors the facade
+        // The `#[processor]` macro reads these names to populate the
+        // `STREAMLIB_PLUGIN` declaration. Mirrors the facade
         // `streamlib`'s `sdk::plugin` (which re-exports the engine's
         // `core::plugin`) so a package built against either SDK resolves
         // the same paths.
@@ -200,12 +200,6 @@ pub mod sdk {
         /// Structural fingerprint of the `#[repr(C)]` plugin-ABI dispatch
         /// surface this SDK was built against.
         pub use streamlib_plugin_abi::PLUGIN_ABI_LAYOUT_FINGERPRINT;
-
-        /// Engine transit fingerprint. Always `0` for the engine-free
-        /// plugin SDK: a package built against `streamlib-plugin-sdk`
-        /// links no engine, so it exposes no non-`#[repr(C)]` transit
-        /// surface and the host's transit check short-circuits.
-        pub const ENGINE_TRANSIT_FINGERPRINT: u64 = 0;
 
         /// Human-readable identity of this SDK build (SDK version, rustc
         /// version, target triple, profile). Surfaced by the host in a

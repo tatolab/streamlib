@@ -185,50 +185,19 @@ unsafe impl Sync for VulkanFence {}
 /// [`Self::from_imported_opaque_fd`] into its own `VkDevice`. The two
 /// processes then signal/wait the same timeline.
 ///
-/// # Cdylib reachability
-///
-/// Two paths are available to workspace plugin cdylibs that need an
-/// `Arc<HostVulkanTimelineSemaphore>` for adapter
-/// `register_host_surface`:
-///
-/// 1. **Non-exportable (in-process):** call
-///    `GpuContextFullAccess::create_timeline_semaphore(initial_value)` —
-///    backed by the v6 `create_timeline_semaphore` FullAccess vtable
-///    slot, returns `Arc<HostVulkanTimelineSemaphore>` already wired
-///    through Arc-raw-pointer transit.
-/// 2. **Exportable (cross-process / cuda / surface-share):** obtain
-///    `Arc<HostVulkanDevice>` via the v9 `host_vulkan_device_arc`
-///    slot, then call
-///    `HostVulkanTimelineSemaphore::new_exportable(device_arc.device(), initial_value)`
-///    directly. The constructor takes only a `&vulkanalia::Device`
-///    (cloned cheaply into the returned `Self`); no `host_inner()`,
-///    no host-private path.
-///
-/// Adding a `host_inner()` or `host_callbacks()` guard inside any of
-/// the `new` / `new_exportable` / `create` constructor bodies would
-/// break path 2 silently — reviewers touching constructor bodies must
-/// keep them guard-free. The cdylib surface-adapter dlopen smoke
-/// tests cover the full end-to-end path.
+/// Host-internal — never crosses the plugin ABI. The engine-free
+/// exportable-timeline surface a plugin sees is the `#[repr(C)]`
+/// `HostTimelineSemaphore` PluginAbiObject, minted host-side by the
+/// FullAccess `create_exportable_timeline_semaphore` slot which builds
+/// one of these via [`Self::new_exportable`]. That host-side backing is
+/// why the `new` / `new_exportable` / `create` constructor bodies must
+/// stay free of any `host_inner()` / `host_callbacks()` guard.
 pub struct HostVulkanTimelineSemaphore {
     device: vulkanalia::Device,
     semaphore: vk::Semaphore,
     /// Whether the semaphore was created with VK_KHR_external_semaphore_fd
     /// export support — i.e. [`Self::export_opaque_fd`] is callable.
     exportable: bool,
-}
-
-/// First-order layout probe for [`HostVulkanTimelineSemaphore`] — one of
-/// the three non-`#[repr(C)]` engine types that transit the plugin ABI
-/// by raw `Arc` pointer (the FullAccess `create_timeline_semaphore` /
-/// set / wait / `host_video_source_timeline_arc` slots). Colocated with
-/// the type; folded into
-/// [`crate::core::plugin::build_fingerprint::ENGINE_TRANSIT_FINGERPRINT`].
-#[cfg(target_os = "linux")]
-pub(crate) const fn host_vulkan_timeline_semaphore_layout_probe() -> [u64; 2] {
-    [
-        core::mem::size_of::<HostVulkanTimelineSemaphore>() as u64,
-        core::mem::align_of::<HostVulkanTimelineSemaphore>() as u64,
-    ]
 }
 
 #[cfg(target_os = "linux")]
@@ -371,26 +340,7 @@ impl HostVulkanTimelineSemaphore {
     /// timeout". Returns `Ok(())` on success and
     /// [`Error::GpuError`] (containing the underlying VkResult) on
     /// timeout or driver failure.
-    ///
-    /// In cdylib mode (host_callbacks installed), dispatches through
-    /// the v13 `GpuContextLimitedAccessVTable::wait_timeline_semaphore`
-    /// slot so the call runs against the host's loaded
-    /// `vulkanalia::Device` instead of the statically-linked cdylib
-    /// copy. Host mode falls through to the direct `vkWaitSemaphores`
-    /// path via [`Self::wait_direct`].
     pub fn wait(&self, value: u64, timeout_ns: u64) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.wait_via_vtable(value, timeout_ns);
-        }
-        self.wait_direct(value, timeout_ns)
-    }
-
-    /// Direct `vkWaitSemaphores` path. Bypasses the
-    /// `host_callbacks().is_some()` check so the host-side wrapper
-    /// (`host_gpu_lim_wait_timeline_semaphore`) can call into the
-    /// real Vulkan path without recursing back through the vtable.
-    /// Engine-internal helper.
-    pub(crate) fn wait_direct(&self, value: u64, timeout_ns: u64) -> Result<()> {
         let semaphores = [self.semaphore];
         let values = [value];
         let info = vk::SemaphoreWaitInfo::builder()
@@ -405,48 +355,6 @@ impl HostVulkanTimelineSemaphore {
                     "vkWaitSemaphores(value={value}, timeout_ns={timeout_ns}): {e}"
                 ))
             })
-    }
-
-    /// Cdylib-side dispatch for [`Self::wait`]. Resolves the host's
-    /// `GpuContextLimitedAccessVTable` via
-    /// [`crate::core::plugin::host_services::host_gpu_context_limited_access_vtable`]
-    /// and hands the call back to host code, passing `self` as a
-    /// borrowed pointer.
-    ///
-    /// `gpu_handle` is intentionally null — the host wrapper for the
-    /// `wait_timeline_semaphore` slot does not deref it; the
-    /// timeline borrow alone carries the `vulkanalia::Device` the
-    /// wait needs. The handle stays in the wire format for
-    /// cross-slot consistency.
-    fn wait_via_vtable(&self, value: u64, timeout_ns: u64) -> Result<()> {
-        let vtable = crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
-        if vtable.is_null() {
-            return Err(Error::GpuError(
-                "HostVulkanTimelineSemaphore::wait: cdylib mode but \
-                 host gpu_context_limited_access_vtable is null"
-                    .into(),
-            ));
-        }
-        let timeline_handle = self as *const Self as *const std::ffi::c_void;
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*vtable).wait_timeline_semaphore)(
-                std::ptr::null(),
-                timeline_handle,
-                value,
-                timeout_ns,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
     }
 
     /// Host-side signal: advance the counter to `value` from the CPU.

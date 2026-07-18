@@ -50,16 +50,13 @@ returns 0 — that's the lock.
 engine. A package that Cargo-deps `streamlib` (the `streamlib-sdk`
 façade — e.g. `packages/camera`, `packages/h264`, the
 `streamlib-cross-rustc-fixture`) pulls `streamlib-engine` **into the
-cdylib** as a statically-linked copy. That embedded engine copy is
-precisely what makes the `GpuContextFullAccess` raw-`Arc` slots
-(`host_vulkan_device_arc`, `host_vulkan_texture_arc`, the
-timeline-semaphore create/set/wait/get) callable from the plugin — and
-what the build-fingerprint handshake (below) guards, because a
-separately-built copy of the engine can lay those non-`#[repr(C)]`
-transit types out differently. The capability *split* still holds for
-these plugins (FullAccess is reachable only inside `escalate(|full|
-…)`); what differs is that the engine is present in the address space,
-not absent.
+cdylib** as a statically-linked copy. That embedded engine copy buys the
+plugin no extra reach across the boundary: no plugin ABI slot transits a
+non-`#[repr(C)]` host type, so every FullAccess resource crosses as a
+layout-stable PluginAbiObject — byte-identical to what an engine-free
+plugin sees. The capability *split* still holds for these plugins
+(FullAccess is reachable only inside `escalate(|full| …)`); what differs
+is that the engine is present in the address space, not absent.
 
 ## Host-side and in-repo packages — workspace members, not registry plugins
 
@@ -430,22 +427,15 @@ asserts the borrow's POD getters return the real values.
   layout-changing edit that forgot to bump the matching version
   constant still changes it — catching a same-constant /
   different-layout republish that a version-only check would miss.
-- `ENGINE_TRANSIT_FINGERPRINT` (`streamlib-engine`,
-  `core::plugin::build_fingerprint`) — folds
-  `PLUGIN_ABI_LAYOUT_FINGERPRINT`, the engine and `streamlib-consumer-rhi`
-  crate versions, and (on Linux) the first-order layout of the three
-  non-`#[repr(C)]` engine types that transit by raw `Arc`
-  (`HostVulkanDevice`, `HostVulkanTexture`,
-  `HostVulkanTimelineSemaphore`). The engine version is folded in
-  deliberately, so a cross-engine-version load is refused even when
-  layouts happen to coincide.
 
 ### Load handshake
 
-`PluginDeclaration` (ABI v5) carries a build-fingerprint handshake so a
+`PluginDeclaration` (ABI v6) carries a build-fingerprint handshake so a
 host refuses — with a typed, actionable error — any plugin whose
-`#[repr(C)]` dispatch surface or engine-internal transit surface could
-skew from its own. The v5 envelope, pinned by the
+`#[repr(C)]` dispatch surface could skew from its own. No plugin ABI
+slot transits a non-`#[repr(C)]` host type, so the dispatch-surface
+fingerprint is the whole story: every FullAccess resource crosses as a
+layout-stable PluginAbiObject. The v6 envelope, pinned by the
 `plugin_declaration_layout` regression test:
 
 | offset | field | purpose |
@@ -454,28 +444,23 @@ skew from its own. The v5 envelope, pinned by the
 | 4 | `_reserved_padding: u32` | alignment |
 | 8 | `register: PluginRegisterFn` | pinned |
 | 16 | `abi_layout_fingerprint: u64` | plugin's `PLUGIN_ABI_LAYOUT_FINGERPRINT` |
-| 24 | `engine_transit_fingerprint: u64` | plugin's `ENGINE_TRANSIT_FINGERPRINT`, or `0` |
-| 32 | `build_identity_ptr: *const u8` | human-readable identity string |
-| 40 | `build_identity_len: usize` | identity length |
+| 24 | `build_identity_ptr: *const u8` | human-readable identity string |
+| 32 | `build_identity_len: usize` | identity length |
 
-`export_plugin!` populates the two fingerprints and the identity from
-three associated consts the `#[processor]` macro emits against the
-detected SDK crate. A **facade plugin** (Cargo-deps `streamlib`,
-statically-linking the engine) reports its real
-`ENGINE_TRANSIT_FINGERPRINT`; an **engine-free plugin** (Cargo-deps
-`streamlib-plugin-sdk`) reports `0`, the "no transit surface" sentinel.
+`export_plugin!` populates the fingerprint and the identity from
+associated consts the `#[processor]` macro emits against the detected
+SDK crate — the facade `streamlib` or the engine-free
+`streamlib-plugin-sdk`, resolved identically.
 
-The host's `validate_plugin_declaration` runs three checks in a
+The host's `validate_plugin_declaration` runs two checks in a
 load-bearing order, before `register` is invoked:
 
 1. `abi_version == STREAMLIB_ABI_VERSION` — read from the pinned
-   offset-0 slot first. A mismatch means the appended v5 fields may not
+   offset-0 slot first. A mismatch means the appended fields may not
    exist, so they are **not** dereferenced; returns
    `Error::PluginAbiVersionMismatch`.
 2. `abi_layout_fingerprint == PLUGIN_ABI_LAYOUT_FINGERPRINT` — else
    `Error::PluginBuildMismatch`.
-3. `engine_transit_fingerprint == 0` (engine-free) **or**
-   `== ENGINE_TRANSIT_FINGERPRINT` — else `Error::PluginBuildMismatch`.
 
 Both typed errors name the plugin's and the host's build identities and
 the rebuild remedy (publish a matching engine `-dev` version and bump
@@ -483,15 +468,6 @@ the plugin's pin, or `streamlib link`). The identity string is read
 defensively on the error path — null pointer → `"unknown"`, the length
 is capped, and the bytes are lossily decoded — so a corrupt declaration
 never drives an unbounded or unsafe read.
-
-**Residual soundness gap:** the transit probe is first-order
-(`size_of` / `align_of`), so it catches a transit type whose size or
-alignment skews across two builds (the dominant mode) but not a pure
-reorder-at-identical-size, which `repr(Rust)` permits. The
-engine-version fold narrows the survivable window to "same engine
-version, different transitive resolution, same first-order layout"; the
-fully sound fix is the PluginAbiObject lift of the remaining raw-`Arc`
-slots, which removes the transit entirely.
 
 ### Image lifetime — `dlclose` is never called
 

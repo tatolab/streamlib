@@ -1290,9 +1290,7 @@ impl GpuContextFullAccess {
     /// fully-initialized [`HostTimelineSemaphore`](crate::rhi::HostTimelineSemaphore)
     /// (handle + host-static methods vtable) into the out-param.
     ///
-    /// Distinct from the engine-only non-exportable
-    /// `create_timeline_semaphore` (Arc-raw transit, in-process): the
-    /// returned timeline can `export_opaque_fd` for cross-process /
+    /// The returned timeline can `export_opaque_fd` for cross-process /
     /// CUDA surface-share sync, and its inner handle registers into
     /// surface-share via [`crate::rhi::SurfaceStore::register_texture`].
     pub fn create_exportable_timeline_semaphore(

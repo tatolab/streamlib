@@ -14,7 +14,6 @@ mod pixel_buffer;
 mod surface_store;
 mod texture;
 mod texture_registration;
-mod video_source_timeline;
 
 pub(in crate::core::plugin::host_services) use buffer::{
     host_gpu_lim_acquire_index_buffer, host_gpu_lim_acquire_storage_buffer,
@@ -56,9 +55,4 @@ pub(in crate::core::plugin::host_services) use texture_registration::{
     host_gpu_lim_resolve_texture_registration_by_surface_id,
     host_gpu_lim_texture_registration_current_layout, host_gpu_lim_texture_registration_texture,
     host_gpu_lim_texture_registration_update_layout,
-};
-pub(in crate::core::plugin::host_services) use video_source_timeline::{
-    host_gpu_lim_clear_video_source_timeline_semaphore,
-    host_gpu_lim_host_video_source_timeline_arc, host_gpu_lim_set_video_source_timeline_semaphore,
-    host_gpu_lim_wait_timeline_semaphore,
 };

@@ -117,7 +117,15 @@ use crate::repr::{
 ///   those bodies against these frozen slots without touching the
 ///   struct again. **ABI-breaking** — plugins built against v10 are not
 ///   load-compatible with a v11 host.
-pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 11;
+/// - v12: removes the three raw-`Arc`-transit slots
+///   `create_timeline_semaphore` (v6), `host_vulkan_device_arc` (v9),
+///   and `host_vulkan_texture_arc` (v10) — the last non-`#[repr(C)]`
+///   host-type transit surface on this vtable. No engine-free plugin
+///   can name the transited types, and every remaining consumer is
+///   host-internal (reached through the host-mode client methods, not
+///   the vtable slots). The three removed slots sat mid-struct, so the
+///   v11 tail slots shift down 24 bytes. **ABI-breaking**.
+pub const GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION: u32 = 12;
 
 /// Dispatch table for the host's `GpuContextFullAccess`. The cdylib
 /// obtains a handle inside an `escalate(|full| ...)` scope (via the
@@ -500,29 +508,6 @@ pub struct GpuContextFullAccessVTable {
     ) -> i32,
 
     // -------------------------------------------------------------------------
-    // v6 (#914 / #920): Timeline-semaphore construction primitive
-    // -------------------------------------------------------------------------
-    /// Construct a timeline semaphore with the given `initial_value`.
-    /// On success writes
-    /// `Arc::into_raw(Arc<HostVulkanTimelineSemaphore>)` into
-    /// `*out_handle` and returns 0.
-    ///
-    /// **Arc-raw-pointer transit** — not a layout-stable PluginAbiObject.
-    /// In-tree consumers (camera, display) ride this freely because
-    /// they're built in the same workspace as the engine. Cross-repo
-    /// plugin distribution will need a PluginAbiObject lift for
-    /// `HostVulkanTimelineSemaphore`; tracked as a future follow-up.
-    /// Linux-only on the host side; non-Linux stubs return non-zero.
-    pub create_timeline_semaphore: unsafe extern "C" fn(
-        gpu_handle: *const c_void,
-        initial_value: u64,
-        out_handle: *mut *const c_void,
-        err_buf: *mut u8,
-        err_buf_cap: usize,
-        err_len: *mut usize,
-    ) -> i32,
-
-    // -------------------------------------------------------------------------
     // v7 (#914 / #921): V4L2 DMA-BUF FD import as SSBO
     // -------------------------------------------------------------------------
     /// Import a V4L2 (or otherwise externally-allocated) DMA-BUF FD
@@ -544,66 +529,6 @@ pub struct GpuContextFullAccessVTable {
         err_buf_cap: usize,
         err_len: *mut usize,
     ) -> i32,
-
-    // -------------------------------------------------------------------------
-    // v8: cdylib-reachable HostVulkanDevice Arc accessor (#1004)
-    // -------------------------------------------------------------------------
-    /// Clone the host's `Arc<HostVulkanDevice>` and return the raw
-    /// `Arc::into_raw` pointer on success.
-    ///
-    /// Returned pointer is a valid `Arc<HostVulkanDevice>` with the
-    /// refcount bumped by 1 — the caller is responsible for calling
-    /// `Arc::from_raw` to reconstitute the Arc and matching its
-    /// eventual `Drop`. On failure (null scope token, host_inner panic)
-    /// returns `std::ptr::null()`.
-    ///
-    /// **Rustc-version coupling.** `HostVulkanDevice`'s layout isn't
-    /// `#[repr(C)]`; the returned pointer is valid only when the cdylib
-    /// shares the host's rustc version AND the engine's dep graph (i.e.
-    /// in-process workspace plugin cdylibs, like the
-    /// `streamlib-test-fixtures` smoke fixtures the #1004 dlopen tests
-    /// load). Subprocess cdylibs (`streamlib-python-native`,
-    /// `streamlib-deno-native`) don't dep on `streamlib-engine` and
-    /// can't import `HostVulkanDevice` to call this slot in the first
-    /// place — the type-system gate covers them.
-    ///
-    /// Used by surface-adapter integration tests where the in-process
-    /// plugin cdylib needs to construct a host-flavor
-    /// `XxxSurfaceAdapter<HostVulkanDevice>` and exercise its
-    /// `acquire_write` → `view_mut` → release path. Production
-    /// processor code shouldn't reach for this — the higher-level
-    /// FullAccess vtable methods (kernel construction, buffer/texture
-    /// allocation) cover the supported plugin ABI surface.
-    pub host_vulkan_device_arc: unsafe extern "C" fn(gpu_handle: *const c_void) -> *const c_void,
-
-    // -------------------------------------------------------------------------
-    // v10: cdylib-reachable HostVulkanTexture Arc accessor.
-    // -------------------------------------------------------------------------
-    /// Clone the host's `Arc<HostVulkanTexture>` backing a `Texture`
-    /// PluginAbiObject and return the raw `Arc::into_raw` pointer on success.
-    ///
-    /// `texture_handle` is the same opaque `Arc::into_raw(Arc<TextureInner>)`
-    /// pointer cached on the `Texture` PluginAbiObject's `handle` field; the
-    /// host dereferences it without taking ownership, clones the
-    /// inner `Arc<HostVulkanTexture>`, and returns its raw pointer
-    /// with the strong count bumped by 1. The caller is responsible
-    /// for `Arc::from_raw` to reconstitute the Arc and matching its
-    /// eventual `Drop`. On a null `texture_handle` (or any host-side
-    /// failure caught by `catch_unwind`) returns `std::ptr::null()`.
-    ///
-    /// **Rustc-version coupling.** `HostVulkanTexture`'s layout isn't
-    /// `#[repr(C)]`; the returned pointer is valid only when the cdylib
-    /// shares the host's rustc version AND the engine's dep graph
-    /// (workspace plugin cdylibs do; subprocess cdylibs don't dep on
-    /// `streamlib-engine` so they can't reach `HostVulkanTexture` in
-    /// the first place).
-    ///
-    /// Used by the dlopen smoke fixtures for the OpenGL / Skia /
-    /// Vulkan surface adapters, which need to call
-    /// `XxxSurfaceAdapter::register_host_surface` with a real
-    /// `Arc<HostVulkanTexture>` to exercise `acquire_*` paths.
-    pub host_vulkan_texture_arc:
-        unsafe extern "C" fn(texture_handle: *const c_void) -> *const c_void,
 
     // =========================================================================
     // v11 (M32 #1253) — one-shot slot reservation for the five engine-free
@@ -686,8 +611,7 @@ pub struct GpuContextFullAccessVTable {
     /// given `initial_value` and write a fully-initialized
     /// `HostTimelineSemaphore` PluginAbiObject (16 bytes; `handle` +
     /// host-static `methods` vtable pointer) into `*out_timeline`.
-    /// Distinct from v6 `create_timeline_semaphore` (non-exportable,
-    /// Arc-raw transit, in-process only). Linux-only.
+    /// Linux-only.
     pub create_exportable_timeline_semaphore: unsafe extern "C" fn(
         gpu_handle: *const c_void,
         initial_value: u64,
@@ -812,10 +736,10 @@ mod tests {
 
     #[test]
     fn gpu_context_full_access_vtable_layout() {
-        // layout_version (u32) + _reserved_padding (u32) + 47 fn
-        // pointers (8 bytes each) = 4 + 4 + 376 = 384 bytes, align = 8.
+        // layout_version (u32) + _reserved_padding (u32) + 44 fn
+        // pointers (8 bytes each) = 4 + 4 + 352 = 360 bytes, align = 8.
         //
-        // 34 pre-v11 entries = 1 drop_handle + 7 clone/drop pairs (14 fn
+        // 31 pre-v11 entries = 1 drop_handle + 7 clone/drop pairs (14 fn
         // pointers for the 7 PluginAbiObject return types: compute / graphics /
         // ray-tracing kernels, texture ring, color converter,
         // acceleration structure, command recorder) + 4 create_* method
@@ -825,18 +749,19 @@ mod tests {
         // upload_pixel_buffer_as_texture, color_converter,
         // create_command_recorder, build_triangles_blas, build_tlas,
         // supports_ray_tracing_pipeline, check_in_surface)
-        // + 1 gpu_capabilities + 1 create_timeline_semaphore
-        // + 1 import_dma_buf_storage_buffer + 1 host_vulkan_device_arc
-        // + 1 host_vulkan_texture_arc.
+        // + 1 gpu_capabilities + 1 import_dma_buf_storage_buffer.
+        // (v12 #1270 removed the three raw-`Arc`-transit slots
+        // create_timeline_semaphore / host_vulkan_device_arc /
+        // host_vulkan_texture_arc.)
         //
-        // v11 (#1253) appends 13 slots @280..376: create/drop
-        // present_target (2), create/drop encoder + decoder session (4),
-        // create_exportable_timeline_semaphore (1), create/drop
-        // texture_readback (2), create_opaque_fd_export_buffer +
-        // export_storage_buffer_opaque_fd +
+        // v11 (#1253) tail — 13 slots @256..352 after the v12 shift:
+        // create/drop present_target (2), create/drop encoder + decoder
+        // session (4), create_exportable_timeline_semaphore (1),
+        // create/drop texture_readback (2), create_opaque_fd_export_buffer
+        // + export_storage_buffer_opaque_fd +
         // wrap_storage_buffer_as_pixel_buffer +
         // copy_texture_to_storage_buffer_and_signal (4).
-        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 384);
+        assert_eq!(size_of::<GpuContextFullAccessVTable>(), 360);
         assert_eq!(align_of::<GpuContextFullAccessVTable>(), 8);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, layout_version), 0);
         assert_eq!(offset_of!(GpuContextFullAccessVTable, _reserved_padding), 4);
@@ -958,87 +883,74 @@ mod tests {
             offset_of!(GpuContextFullAccessVTable, gpu_capabilities),
             240
         );
-        // v6 (#914 / #920): create_timeline_semaphore.
-        assert_eq!(
-            offset_of!(GpuContextFullAccessVTable, create_timeline_semaphore),
-            248
-        );
-        // v7 (#914 / #921): import_dma_buf_storage_buffer.
+        // v7 (#914 / #921): import_dma_buf_storage_buffer — now @248
+        // after the v12 (#1270) removal of create_timeline_semaphore.
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, import_dma_buf_storage_buffer),
-            256
+            248
         );
-        // v9 (#1004): host_vulkan_device_arc.
-        assert_eq!(
-            offset_of!(GpuContextFullAccessVTable, host_vulkan_device_arc),
-            264
-        );
-        // v10: host_vulkan_texture_arc.
-        assert_eq!(
-            offset_of!(GpuContextFullAccessVTable, host_vulkan_texture_arc),
-            272
-        );
-        // v11 (#1253) — final slot order assigned at aggregation.
+        // v11 (#1253) tail — shifted down 24 bytes by the v12 removal of
+        // host_vulkan_device_arc + host_vulkan_texture_arc.
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, create_present_target),
-            280
+            256
         );
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, drop_present_target),
-            288
+            264
         );
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, create_encoder_session),
-            296
+            272
         );
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, drop_encoder_session),
-            304
+            280
         );
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, create_decoder_session),
-            312
+            288
         );
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, drop_decoder_session),
-            320
+            296
         );
         assert_eq!(
             offset_of!(
                 GpuContextFullAccessVTable,
                 create_exportable_timeline_semaphore
             ),
-            328
+            304
         );
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, create_texture_readback),
-            336
+            312
         );
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, drop_texture_readback),
-            344
+            320
         );
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, create_opaque_fd_export_buffer),
-            352
+            328
         );
         assert_eq!(
             offset_of!(GpuContextFullAccessVTable, export_storage_buffer_opaque_fd),
-            360
+            336
         );
         assert_eq!(
             offset_of!(
                 GpuContextFullAccessVTable,
                 wrap_storage_buffer_as_pixel_buffer
             ),
-            368
+            344
         );
         assert_eq!(
             offset_of!(
                 GpuContextFullAccessVTable,
                 copy_texture_to_storage_buffer_and_signal
             ),
-            376
+            352
         );
     }
 }

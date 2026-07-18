@@ -411,9 +411,9 @@ struct Sidecar {
 /// Sidecar recording the staged artifact's toolchain context + the input
 /// fingerprint it was built from. The `inputs_hash` drives `IfStale` for
 /// non-Rust packages; abi/triple/profile are defense-in-depth atop the
-/// runtime `PluginDeclaration` handshake. The two build fingerprints are
+/// runtime `PluginDeclaration` handshake. The build fingerprint is
 /// recorded for diagnostics — the runtime `validate_plugin_declaration`
-/// check is the authoritative gate; they are not part of the staleness
+/// check is the authoritative gate; it is not part of the staleness
 /// comparison here.
 fn write_sidecar(
     dest: &Path,
@@ -425,10 +425,6 @@ fn write_sidecar(
         "abi_version": streamlib_plugin_abi::STREAMLIB_ABI_VERSION,
         "abi_layout_fingerprint":
             format!("{:#018x}", streamlib_plugin_abi::PLUGIN_ABI_LAYOUT_FINGERPRINT),
-        "engine_transit_fingerprint": format!(
-            "{:#018x}",
-            streamlib_engine::core::plugin::ENGINE_TRANSIT_FINGERPRINT
-        ),
         "triple": triple,
         "profile": profile.label(),
         "inputs_hash": inputs_hash,
