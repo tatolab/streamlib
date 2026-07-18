@@ -35,7 +35,20 @@ use streamlib_plugin_abi::{InputMailboxesVTable, OutputWriterVTable};
 
 use serde::{Deserialize, Serialize as SerdeSerialize};
 
+use crate::bag::Bag;
 use crate::media_clock::MediaClock;
+
+/// Interim per-channel payload budget for a schema-free [`Bag`] write, in
+/// bytes. Matches the host's `streamlib_ipc_types::MAX_PAYLOAD_SIZE` fixed
+/// iceoryx2 slot size, restated here because the engine-free SDK does not
+/// depend on the host IPC crate.
+///
+/// This is the phase-1 interim guard (design #1345 §11): a bag with no
+/// declared bound must surface an oversize payload as the named
+/// [`Error::BagPayloadOverflow`] on the write side, never a downstream slot
+/// overrun. It is removed once hint-primed dynamic slot allocation (#1421)
+/// lands.
+pub const BAG_MAX_PAYLOAD_BYTES: usize = 65536;
 
 /// How frames should be read from an input port's buffer. Engine-free
 /// twin of the engine's `iceoryx2::ReadMode`; the macro emits
@@ -222,6 +235,26 @@ impl OutputWriter {
         }
     }
 
+    /// Write a schema-free [`Bag`] to `port` with an explicit timestamp.
+    ///
+    /// Encodes the bag as a msgpack named map and writes it over the same
+    /// wire as [`Self::write`]. An encoded payload larger than
+    /// [`BAG_MAX_PAYLOAD_BYTES`] fails with the named
+    /// [`Error::BagPayloadOverflow`] before the ABI hop, never a silent
+    /// truncation or a downstream slot overrun.
+    #[tracing::instrument(level = "trace", skip(self, bag), fields(port = %port))]
+    pub fn write_bag(&self, port: &str, bag: &Bag, timestamp_ns: i64) -> Result<()> {
+        let data = bag.to_msgpack()?;
+        if data.len() > BAG_MAX_PAYLOAD_BYTES {
+            return Err(Error::BagPayloadOverflow {
+                port: port.to_owned(),
+                actual_bytes: data.len(),
+                budget_bytes: BAG_MAX_PAYLOAD_BYTES,
+            });
+        }
+        self.write_raw(port, &data, timestamp_ns)
+    }
+
     /// Check if a port is configured.
     pub fn has_port(&self, port: &str) -> bool {
         if !self.is_configured() {
@@ -391,6 +424,23 @@ impl InputMailboxes {
         }
         buf.truncate(out_len);
         Ok(Some((buf, out_timestamp)))
+    }
+
+    /// Read the latest frame on `port` as a schema-free [`Bag`].
+    ///
+    /// Returns `Ok(Some((bag, timestamp_ns)))` on a decoded frame and
+    /// `Ok(None)` when the mailbox is empty. A frame whose bytes are not a
+    /// msgpack named map surfaces as the named [`Error::BagDecodeFailed`],
+    /// never a panic.
+    #[tracing::instrument(level = "trace", skip(self), fields(port = %port))]
+    pub fn read_bag(&self, port: &str) -> Result<Option<(Bag, i64)>> {
+        match self.read_raw(port)? {
+            None => Ok(None),
+            Some((data, timestamp_ns)) => {
+                let bag = Bag::from_msgpack(&data)?;
+                Ok(Some((bag, timestamp_ns)))
+            }
+        }
     }
 
     /// Check if a port has any payloads available.

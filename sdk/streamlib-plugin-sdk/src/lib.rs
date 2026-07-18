@@ -26,6 +26,7 @@
 // the `#[repr(C)]` layout-matched twins + the cdylib-side vtable-marshal
 // code, re-exported under `sdk::*` below.
 mod audio_clock_shim;
+mod bag;
 mod color;
 mod context;
 mod iceoryx2;
@@ -168,8 +169,18 @@ pub mod sdk {
     /// `*Inner` placeholders, and `ReadMode`.
     pub mod iceoryx2 {
         pub use crate::iceoryx2::{
-            InputMailboxes, InputMailboxesInner, OutputWriter, OutputWriterInner, ReadMode,
+            BAG_MAX_PAYLOAD_BYTES, InputMailboxes, InputMailboxesInner, OutputWriter,
+            OutputWriterInner, ReadMode,
         };
+    }
+
+    // ---- Dynamic msgpack bag (schema-free named map) ----
+    /// `Bag` — an owned, eagerly-decoded msgpack named map read/written over
+    /// the same wire as the typed `read`/`write` paths, with no codegen or
+    /// schema package. The companion literal macro lives at the crate root as
+    /// [`streamlib_plugin_sdk::bag!`](crate::bag).
+    pub mod bag {
+        pub use crate::bag::Bag;
     }
 
     // ---- Runtime-control requests (engine-free) ----
