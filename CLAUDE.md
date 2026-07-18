@@ -18,7 +18,7 @@ StreamLib is a BUSL-1.1-licensed real-time media engine (Vulkan RHI, V4L2, vulka
 iceoryx2 IPC, dlopen'd .slpkg plugin packages, Python/Deno SDKs). It is built like a game engine:
 ONE core system per concern — extend the existing system, never build a parallel one. Search first.
 
-Rules load from `.claude/rules/` (licensing, naming, engine doctrine always; RHI, plugin-ABI,
+Rules load from `.claude/rules/` (licensing, naming, engine doctrine, comments always; RHI, plugin-ABI,
 polyglot, docs-policy, flow rules load when you read matching files). Empirical driver knowledge
 lives in `docs/learnings/`; design rationale in `docs/decisions/`. Everything else is re-derived
 from code at need — do not create summary docs of what code already shows.
