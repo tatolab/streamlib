@@ -600,10 +600,8 @@ fn capture_thread_loop(
     };
 
     let setup_result = gpu_context.escalate(|full| {
-        // Read-once capability snapshot. Replaces the host-internal
-        // `full.device().vulkan_device().{name, supports_*}()`
-        // reach-throughs (#914) so the camera processor can run as a
-        // cdylib without leaking `HostVulkanDevice` across the FFI.
+        // Read-once capability snapshot — the FullAccess device handle must
+        // not cross the plugin ABI into this cdylib-loaded processor.
         let caps = full.gpu_capabilities()?;
         let vulkan_device_name = caps.device_name.clone();
 
@@ -626,7 +624,7 @@ fn capture_thread_loop(
         }
 
         // 2-texture DEVICE_LOCAL ring via the FullAccess render-target
-        // DMA-BUF allocation slot (#914 / #921). Picks an EGL-probe
+        // DMA-BUF allocation slot. Picks an EGL-probe
         // tiled DRM modifier; the resulting Texture carries
         // STORAGE_BINDING | TEXTURE_BINDING | COPY_SRC | COPY_DST |
         // RENDER_ATTACHMENT — a superset of the camera's
