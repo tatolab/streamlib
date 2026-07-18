@@ -50,6 +50,20 @@ use crate::media_clock::MediaClock;
 /// lands.
 pub const BAG_MAX_PAYLOAD_BYTES: usize = 65536;
 
+/// Reject an encoded [`Bag`] payload that would overrun the fixed iceoryx2
+/// slot, before the ABI hop. A length equal to [`BAG_MAX_PAYLOAD_BYTES`]
+/// fits; strictly larger is [`Error::BagPayloadOverflow`].
+fn check_bag_payload_within_budget(port: &str, encoded_len: usize) -> Result<()> {
+    if encoded_len > BAG_MAX_PAYLOAD_BYTES {
+        return Err(Error::BagPayloadOverflow {
+            port: port.to_owned(),
+            actual_bytes: encoded_len,
+            budget_bytes: BAG_MAX_PAYLOAD_BYTES,
+        });
+    }
+    Ok(())
+}
+
 /// How frames should be read from an input port's buffer. Engine-free
 /// twin of the engine's `iceoryx2::ReadMode`; the macro emits
 /// `ReadMode::{SkipToLatest,ReadNextInOrder}` into generated
@@ -245,13 +259,7 @@ impl OutputWriter {
     #[tracing::instrument(level = "trace", skip(self, bag), fields(port = %port))]
     pub fn write_bag(&self, port: &str, bag: &Bag, timestamp_ns: i64) -> Result<()> {
         let data = bag.to_msgpack()?;
-        if data.len() > BAG_MAX_PAYLOAD_BYTES {
-            return Err(Error::BagPayloadOverflow {
-                port: port.to_owned(),
-                actual_bytes: data.len(),
-                budget_bytes: BAG_MAX_PAYLOAD_BYTES,
-            });
-        }
+        check_bag_payload_within_budget(port, data.len())?;
         self.write_raw(port, &data, timestamp_ns)
     }
 
@@ -484,5 +492,32 @@ impl Drop for InputMailboxes {
         }
         self.handle = std::ptr::null();
         self.vtable = std::ptr::null();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn payload_at_budget_boundary_is_accepted() {
+        assert!(check_bag_payload_within_budget("frames", BAG_MAX_PAYLOAD_BYTES - 1).is_ok());
+        assert!(check_bag_payload_within_budget("frames", BAG_MAX_PAYLOAD_BYTES).is_ok());
+    }
+
+    #[test]
+    fn payload_over_budget_is_named_overflow() {
+        match check_bag_payload_within_budget("frames", BAG_MAX_PAYLOAD_BYTES + 1) {
+            Err(Error::BagPayloadOverflow {
+                port,
+                actual_bytes,
+                budget_bytes,
+            }) => {
+                assert_eq!(port, "frames");
+                assert_eq!(actual_bytes, BAG_MAX_PAYLOAD_BYTES + 1);
+                assert_eq!(budget_bytes, BAG_MAX_PAYLOAD_BYTES);
+            }
+            other => panic!("expected BagPayloadOverflow, got {:?}", other),
+        }
     }
 }
