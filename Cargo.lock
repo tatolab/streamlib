@@ -5292,10 +5292,10 @@ version = "0.7.0"
 dependencies = [
  "criterion",
  "iceoryx2-log",
+ "rmp",
  "rmp-serde",
  "rmpv",
  "serde",
- "serde_bytes",
  "serde_json",
  "streamlib-adapter-abi",
  "streamlib-consumer-rhi",

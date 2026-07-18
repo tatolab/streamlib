@@ -34,6 +34,9 @@ streamlib-adapter-abi = { path = "../../adapters/streamlib-adapter-abi", version
 serde = { workspace = true }
 serde_json = { workspace = true }
 rmp-serde = { workspace = true }
+# Low-level msgpack encode primitives that stream `Bag::to_msgpack` to bytes
+# without cloning the value tree (write_map_len + write_str per entry).
+rmp = { workspace = true }
 # Dynamic msgpack value tree backing `sdk::bag::Bag` (eager-decoded named map
 # with native `bin` support). Companion of `rmp-serde`.
 rmpv = { workspace = true }
@@ -60,7 +63,6 @@ hardware-tests = []
 # comparison (issue #1407 hot-path rule).
 criterion = { version = "0.5", features = ["html_reports"] }
 serde = { workspace = true }
-serde_bytes = { workspace = true }
 
 [[bench]]
 name = "bag_decode"

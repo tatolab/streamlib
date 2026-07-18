@@ -87,15 +87,15 @@ impl Bag {
     /// Encode this bag as a msgpack named map (string-keyed map), the exact
     /// shape `rmp_serde::to_vec_named` emits for a struct.
     pub fn to_msgpack(&self) -> Result<Vec<u8>> {
-        let map = Value::Map(
-            self.entries
-                .iter()
-                .map(|(k, v)| (Value::from(k.as_str()), v.clone()))
-                .collect(),
-        );
         let mut out = Vec::new();
-        rmpv::encode::write_value(&mut out, &map)
+        rmp::encode::write_map_len(&mut out, self.entries.len() as u32)
             .map_err(|e| Error::BagEncodeFailed(e.to_string()))?;
+        for (key, value) in &self.entries {
+            rmp::encode::write_str(&mut out, key)
+                .map_err(|e| Error::BagEncodeFailed(e.to_string()))?;
+            rmpv::encode::write_value(&mut out, value)
+                .map_err(|e| Error::BagEncodeFailed(e.to_string()))?;
+        }
         Ok(out)
     }
 
@@ -109,11 +109,7 @@ impl Bag {
         let value = self
             .lookup(key)
             .ok_or_else(|| Error::BagKeyMissing { key: key.to_owned() })?;
-        rmpv::ext::from_value(value.clone()).map_err(|e| Error::BagTypeMismatch {
-            key: key.to_owned(),
-            expected_type: std::any::type_name::<T>().to_owned(),
-            detail: e.to_string(),
-        })
+        self.decode_value(key, value)
     }
 
     /// Read the value at `key` as `T`, tolerating absence.
@@ -124,14 +120,18 @@ impl Bag {
     pub fn get_opt<T: DeserializeOwned>(&self, key: &str) -> Result<Option<T>> {
         match self.lookup(key) {
             None => Ok(None),
-            Some(value) => rmpv::ext::from_value(value.clone())
-                .map(Some)
-                .map_err(|e| Error::BagTypeMismatch {
-                    key: key.to_owned(),
-                    expected_type: std::any::type_name::<T>().to_owned(),
-                    detail: e.to_string(),
-                }),
+            Some(value) => self.decode_value(key, value).map(Some),
         }
+    }
+
+    /// Deserialize a looked-up value into `T`, mapping any decode failure to
+    /// the [`Error::BagTypeMismatch`] that names `key` and the expected type.
+    fn decode_value<T: DeserializeOwned>(&self, key: &str, value: &Value) -> Result<T> {
+        rmpv::ext::from_value(value.clone()).map_err(|e| Error::BagTypeMismatch {
+            key: key.to_owned(),
+            expected_type: std::any::type_name::<T>().to_owned(),
+            detail: e.to_string(),
+        })
     }
 
     /// Read the value at `key` as a msgpack `bin` byte string.
