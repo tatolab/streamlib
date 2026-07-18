@@ -611,8 +611,7 @@ pub struct GpuContextFullAccessVTable {
     /// given `initial_value` and write a fully-initialized
     /// `HostTimelineSemaphore` PluginAbiObject (16 bytes; `handle` +
     /// host-static `methods` vtable pointer) into `*out_timeline`.
-    /// Distinct from v6 `create_timeline_semaphore` (non-exportable,
-    /// Arc-raw transit, in-process only). Linux-only.
+    /// Linux-only.
     pub create_exportable_timeline_semaphore: unsafe extern "C" fn(
         gpu_handle: *const c_void,
         initial_value: u64,

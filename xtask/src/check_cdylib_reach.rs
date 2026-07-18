@@ -628,7 +628,7 @@ mod tests {
             impl HostVulkanTimelineSemaphore {
                 pub fn wait(&self) -> u32 {
                     if host_callbacks().is_some() {
-                        return self.wait_via_vtable();
+                        return 1;
                     }
                     0
                 }
