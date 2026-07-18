@@ -51,17 +51,14 @@ pub(super) fn list_available_triples(lib_dir: &std::path::Path) -> Result<Vec<St
 ///    v5 fields.
 /// 2. `abi_layout_fingerprint` — the `#[repr(C)]` dispatch-surface
 ///    layout must match; else [`Error::PluginBuildMismatch`].
-/// 3. `engine_transit_fingerprint` — `0` (engine-free plugin, no transit
-///    surface) OR the host's engine transit fingerprint; else
-///    [`Error::PluginBuildMismatch`].
 ///
 /// # Safety
 ///
 /// `decl_ptr` must point at the loaded plugin's `STREAMLIB_PLUGIN`
 /// static, which the caller keeps alive for the process lifetime via
 /// `LOADED_PLUGIN_LIBRARIES`. The static is at least 4 bytes (the
-/// pinned `abi_version` field); the full 48-byte `PluginDeclaration`
-/// is only dereferenced after `abi_version` confirms a v5 layout.
+/// pinned `abi_version` field); the full `PluginDeclaration` is only
+/// dereferenced after `abi_version` confirms a matching layout.
 #[tracing::instrument(
     level = "debug",
     skip(decl_ptr),
@@ -96,30 +93,16 @@ pub(crate) unsafe fn validate_plugin_declaration(
     // SAFETY: the version match guarantees the 48-byte v5 layout.
     let decl = unsafe { &*decl_ptr };
     let host_abi_fingerprint = streamlib_plugin_abi::PLUGIN_ABI_LAYOUT_FINGERPRINT;
-    let host_transit_fingerprint =
-        crate::core::plugin::build_fingerprint::ENGINE_TRANSIT_FINGERPRINT;
     let host_identity = crate::core::plugin::build_fingerprint::BUILD_IDENTITY.to_string();
 
-    let build_mismatch = |plugin_transit_fingerprint: u64| Error::PluginBuildMismatch {
-        plugin_path: dylib_path.display().to_string(),
-        plugin_identity: read_plugin_build_identity(decl),
-        host_identity: host_identity.clone(),
-        plugin_abi_fingerprint: decl.abi_layout_fingerprint,
-        host_abi_fingerprint,
-        plugin_transit_fingerprint,
-        host_transit_fingerprint,
-    };
-
     if decl.abi_layout_fingerprint != host_abi_fingerprint {
-        return Err(build_mismatch(decl.engine_transit_fingerprint));
-    }
-
-    // `0` = engine-free plugin (no transit surface). Any non-zero value
-    // must match this host's engine transit fingerprint exactly.
-    if decl.engine_transit_fingerprint != 0
-        && decl.engine_transit_fingerprint != host_transit_fingerprint
-    {
-        return Err(build_mismatch(decl.engine_transit_fingerprint));
+        return Err(Error::PluginBuildMismatch {
+            plugin_path: dylib_path.display().to_string(),
+            plugin_identity: read_plugin_build_identity(decl),
+            host_identity,
+            plugin_abi_fingerprint: decl.abi_layout_fingerprint,
+            host_abi_fingerprint,
+        });
     }
 
     Ok(())
@@ -612,8 +595,6 @@ mod tests {
             _reserved_padding: 0,
             register: noop_register,
             abi_layout_fingerprint: streamlib_plugin_abi::PLUGIN_ABI_LAYOUT_FINGERPRINT,
-            engine_transit_fingerprint:
-                crate::core::plugin::build_fingerprint::ENGINE_TRANSIT_FINGERPRINT,
             build_identity_ptr: PLUGIN_TEST_IDENTITY.as_ptr(),
             build_identity_len: PLUGIN_TEST_IDENTITY.len(),
         }
@@ -629,16 +610,6 @@ mod tests {
     fn validate_accepts_matched_declaration() {
         unsafe { validate_plugin_declaration(&matched_declaration(), probe_path()) }
             .expect("a build-matched declaration must load");
-    }
-
-    #[test]
-    fn validate_accepts_engine_free_transit_zero() {
-        // `engine_transit_fingerprint == 0` is the "engine-free plugin"
-        // sentinel — no transit surface, so the transit check is skipped.
-        let mut decl = matched_declaration();
-        decl.engine_transit_fingerprint = 0;
-        unsafe { validate_plugin_declaration(&decl, probe_path()) }
-            .expect("an engine-free plugin (transit fingerprint 0) must load");
     }
 
     #[test]
@@ -686,36 +657,6 @@ mod tests {
         );
         let msg = err.to_string();
         // Both identities + the remedy appear in the operator-facing message.
-        assert!(
-            msg.contains(PLUGIN_TEST_IDENTITY),
-            "plugin identity missing: {msg}"
-        );
-        assert!(
-            msg.contains(crate::core::plugin::build_fingerprint::BUILD_IDENTITY),
-            "host identity missing: {msg}"
-        );
-        assert!(msg.contains("Rebuild the plugin"), "remedy missing: {msg}");
-    }
-
-    #[test]
-    fn validate_rejects_mismatched_transit_fingerprint() {
-        let mut decl = matched_declaration();
-        // Non-zero (so not treated as engine-free) and non-matching.
-        decl.engine_transit_fingerprint =
-            crate::core::plugin::build_fingerprint::ENGINE_TRANSIT_FINGERPRINT ^ 0x1;
-        let err = unsafe { validate_plugin_declaration(&decl, probe_path()) }
-            .expect_err("a mismatched engine_transit_fingerprint must be refused");
-        match &err {
-            Error::PluginBuildMismatch {
-                plugin_transit_fingerprint,
-                host_transit_fingerprint,
-                ..
-            } => {
-                assert_ne!(plugin_transit_fingerprint, host_transit_fingerprint);
-            }
-            other => panic!("expected PluginBuildMismatch, got {other:?}"),
-        }
-        let msg = err.to_string();
         assert!(
             msg.contains(PLUGIN_TEST_IDENTITY),
             "plugin identity missing: {msg}"

@@ -139,11 +139,9 @@ pub enum Error {
     #[error(
         "Plugin build mismatch loading '{plugin_path}': the plugin's build \
          fingerprint does not match this host's. Plugin build: [{plugin_identity}] \
-         (abi_layout={plugin_abi_fingerprint:#018x}, \
-         engine_transit={plugin_transit_fingerprint:#018x}); host build: \
-         [{host_identity}] (abi_layout={host_abi_fingerprint:#018x}, \
-         engine_transit={host_transit_fingerprint:#018x}). Rebuild the plugin \
-         against the host's engine build — publish a matching engine `-dev` \
+         (abi_layout={plugin_abi_fingerprint:#018x}); host build: \
+         [{host_identity}] (abi_layout={host_abi_fingerprint:#018x}). Rebuild the \
+         plugin against the host's engine build — publish a matching engine `-dev` \
          version and bump the plugin's pin, or use `streamlib link`."
     )]
     PluginBuildMismatch {
@@ -152,8 +150,6 @@ pub enum Error {
         host_identity: String,
         plugin_abi_fingerprint: u64,
         host_abi_fingerprint: u64,
-        plugin_transit_fingerprint: u64,
-        host_transit_fingerprint: u64,
     },
 
     #[error(transparent)]

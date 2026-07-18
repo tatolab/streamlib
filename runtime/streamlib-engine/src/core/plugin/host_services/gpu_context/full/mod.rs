@@ -43,10 +43,9 @@ pub(in crate::core::plugin::host_services) use methods::{
     host_gpu_full_acquire_output_texture, host_gpu_full_build_tlas,
     host_gpu_full_build_triangles_blas, host_gpu_full_check_in_surface,
     host_gpu_full_color_converter, host_gpu_full_create_command_recorder,
-    host_gpu_full_create_timeline_semaphore, host_gpu_full_gpu_capabilities,
-    host_gpu_full_host_vulkan_device_arc, host_gpu_full_host_vulkan_texture_arc,
-    host_gpu_full_import_dma_buf_storage_buffer, host_gpu_full_supports_ray_tracing_pipeline,
-    host_gpu_full_upload_pixel_buffer_as_texture, host_gpu_full_wait_device_idle,
+    host_gpu_full_gpu_capabilities, host_gpu_full_import_dma_buf_storage_buffer,
+    host_gpu_full_supports_ray_tracing_pipeline, host_gpu_full_upload_pixel_buffer_as_texture,
+    host_gpu_full_wait_device_idle,
 };
 pub(in crate::core::plugin::host_services) use render_target::host_gpu_full_acquire_render_target_dma_buf_image;
 pub(in crate::core::plugin::host_services) use reserved_m32::{
@@ -561,37 +560,6 @@ mod gpu_full_access_vtable_tests {
             HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.layout_version,
             streamlib_plugin_abi::GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION
         );
-    }
-
-    // v9 slot: host_vulkan_device_arc takes a scope token (not an
-    // err-buf). The null-token case bottoms out in
-    // `with_scope(0, ...) → None`, so the callback returns a null
-    // pointer. Mental-revert: stub the callback body to call
-    // `Arc::into_raw(...)` directly on a freshly-cloned Arc without
-    // checking the token; this test trips on the resulting non-null
-    // return and the unmatched `from_raw` would Drop the Arc, lowering
-    // the refcount on the host's actual `Arc<HostVulkanDevice>`.
-    #[test]
-    fn host_vulkan_device_arc_returns_null_on_null_token() {
-        let raw = unsafe {
-            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.host_vulkan_device_arc)(std::ptr::null())
-        };
-        assert!(raw.is_null(), "null scope token must yield null pointer");
-    }
-
-    // v10 slot: host_vulkan_texture_arc takes a raw texture handle
-    // (not an err-buf). The null-handle case short-circuits in the
-    // wrapper before any deref, returning a null pointer. Mental-
-    // revert: remove the `if texture_handle.is_null()` guard inside
-    // `host_gpu_full_host_vulkan_texture_arc`; the wrapper would then
-    // UB-deref the null pointer as `*const TextureInner` and the test
-    // runner would SIGSEGV.
-    #[test]
-    fn host_vulkan_texture_arc_returns_null_on_null_handle() {
-        let raw = unsafe {
-            (HOST_GPU_CONTEXT_FULL_ACCESS_VTABLE.host_vulkan_texture_arc)(std::ptr::null())
-        };
-        assert!(raw.is_null(), "null texture handle must yield null pointer");
     }
 
     #[test]

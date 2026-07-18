@@ -41,18 +41,5 @@ serde.workspace = true
 # the plugin's runtime even when the host has its own separate tokio.
 tokio = { workspace = true, features = ["rt", "net", "macros"] }
 
-# Surface adapters exercised by the dlopen smoke fixtures. Each fixture
-# constructs the host-flavor adapter from inside a cdylib's
-# `gpu.escalate(...)` closure to validate the cdylib-side
-# adapter-construction chain (the v9 `host_vulkan_device_arc` bridge
-# and the v10 `host_vulkan_texture_arc` bridge plus the existing
-# `acquire_render_target_dma_buf_image` slot).
-[target.'cfg(target_os = "linux")'.dependencies]
-streamlib-adapter-abi = { path = "../../adapters/streamlib-adapter-abi", version = "0.6.0" }
-streamlib-adapter-cpu-readback = { path = "../../adapters/streamlib-adapter-cpu-readback", version = "0.6.0" }
-streamlib-adapter-cuda = { path = "../../adapters/streamlib-adapter-cuda", version = "0.6.0" }
-streamlib-adapter-opengl = { path = "../../adapters/streamlib-adapter-opengl", version = "0.6.0" }
-streamlib-adapter-vulkan = { path = "../../adapters/streamlib-adapter-vulkan", version = "0.6.0" }
-
 [lints]
 workspace = true

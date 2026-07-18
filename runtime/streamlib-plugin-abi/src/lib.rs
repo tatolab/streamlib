@@ -94,7 +94,12 @@ pub use vtables::*;
 ///   `abi_version` field stays pinned at offset 0 and is read first,
 ///   so the appended fields are dereferenced only from a v5
 ///   declaration.
-pub const STREAMLIB_ABI_VERSION: u32 = 5;
+/// - v6: #1270 removes the raw-`Arc` transit slots from the FullAccess
+///   and LimitedAccess vtables and drops the now-subjectless
+///   `engine_transit_fingerprint` field from [`PluginDeclaration`].
+///   The load handshake keeps `abi_version` (offset 0, read first) +
+///   `abi_layout_fingerprint`, which already reject any skewed build.
+pub const STREAMLIB_ABI_VERSION: u32 = 6;
 
 /// Layout version of the [`HostServices`] payload. Read first by the
 /// cdylib's `install_host_services` before any other field is
@@ -844,8 +849,8 @@ pub type PluginRegisterFn = unsafe extern "C" fn(host_services: *const c_void);
 ///
 /// Plugins export a static named `STREAMLIB_PLUGIN` of this type via
 /// [`export_plugin!`]. The host's loader looks up the symbol,
-/// validates `abi_version` (offset 0, read first), then the build
-/// fingerprints, then invokes `register`.
+/// validates `abi_version` (offset 0, read first), then the
+/// `abi_layout_fingerprint`, then invokes `register`.
 ///
 /// # Layout discipline
 ///
@@ -874,13 +879,6 @@ pub struct PluginDeclaration {
     /// at build time. The host refuses the load unless it equals its
     /// own.
     pub abi_layout_fingerprint: u64,
-
-    /// Structural fingerprint of the engine-internal (non-`#[repr(C)]`)
-    /// transit surface the plugin's statically-linked engine copy
-    /// exposes across the FullAccess vtable's raw-`Arc` slots. `0` for
-    /// an engine-free plugin (no transit surface); otherwise the
-    /// host refuses the load unless it equals its own engine's value.
-    pub engine_transit_fingerprint: u64,
 
     /// Pointer to the plugin's human-readable build-identity string
     /// (engine version / rustc version / target triple / profile).
@@ -979,15 +977,12 @@ macro_rules! export_plugin {
             abi_version: $crate::STREAMLIB_ABI_VERSION,
             _reserved_padding: 0,
             register: __streamlib_plugin_register,
-            // The `#[processor]` macro emits these three associated
-            // consts against the plugin's detected SDK crate — the
-            // facade `streamlib` (statically-linked engine → real
-            // transit fingerprint) or the engine-free
-            // `streamlib-plugin-sdk` (transit fingerprint 0). The
-            // envelope names no SDK path itself, matching how
-            // `register` is resolved.
+            // The `#[processor]` macro emits these associated consts
+            // against the plugin's detected SDK crate (the facade
+            // `streamlib` or the engine-free `streamlib-plugin-sdk`); the
+            // envelope names no SDK path itself, matching how `register`
+            // is resolved.
             abi_layout_fingerprint: <$first>::__STREAMLIB_ABI_LAYOUT_FINGERPRINT,
-            engine_transit_fingerprint: <$first>::__STREAMLIB_ENGINE_TRANSIT_FINGERPRINT,
             build_identity_ptr: <$first>::__STREAMLIB_BUILD_IDENTITY.as_ptr(),
             build_identity_len: <$first>::__STREAMLIB_BUILD_IDENTITY.len(),
         };
@@ -1010,10 +1005,11 @@ mod layout_tests {
 
     #[test]
     fn plugin_declaration_layout() {
-        // v5 envelope: u32 abi_version + u32 padding + fn ptr +
-        // two u64 fingerprints + (*const u8, usize) identity slice
-        // = 48 bytes, align 8.
-        assert_eq!(size_of::<PluginDeclaration>(), 48);
+        // v6 envelope: u32 abi_version + u32 padding + fn ptr +
+        // one u64 abi_layout_fingerprint + (*const u8, usize) identity
+        // slice = 40 bytes, align 8. (#1270 dropped the
+        // `engine_transit_fingerprint` u64.)
+        assert_eq!(size_of::<PluginDeclaration>(), 40);
         assert_eq!(align_of::<PluginDeclaration>(), 8);
         // `abi_version` @0 and `register` @8 are pinned forever — the
         // host reads `abi_version` before dereferencing any appended
@@ -1022,12 +1018,8 @@ mod layout_tests {
         assert_eq!(offset_of!(PluginDeclaration, _reserved_padding), 4);
         assert_eq!(offset_of!(PluginDeclaration, register), 8);
         assert_eq!(offset_of!(PluginDeclaration, abi_layout_fingerprint), 16);
-        assert_eq!(
-            offset_of!(PluginDeclaration, engine_transit_fingerprint),
-            24
-        );
-        assert_eq!(offset_of!(PluginDeclaration, build_identity_ptr), 32);
-        assert_eq!(offset_of!(PluginDeclaration, build_identity_len), 40);
+        assert_eq!(offset_of!(PluginDeclaration, build_identity_ptr), 24);
+        assert_eq!(offset_of!(PluginDeclaration, build_identity_len), 32);
     }
 
     #[test]
@@ -1054,8 +1046,10 @@ mod layout_tests {
         // v15: M32 one-shot slot reservation (#1253) appends five
         // per-type methods-vtable pointers.
         assert_eq!(HOST_SERVICES_LAYOUT_VERSION, 15);
-        // v5: PluginDeclaration grew the build-fingerprint handshake.
-        assert_eq!(STREAMLIB_ABI_VERSION, 5);
+        // v6: #1270 removed the raw-`Arc` transit slots and the
+        // `engine_transit_fingerprint` handshake field from
+        // PluginDeclaration.
+        assert_eq!(STREAMLIB_ABI_VERSION, 6);
         // v2: shared-Rust-type iceoryx2 slots replaced by
         // `set_iceoryx2_resources` (issue #894).
         assert_eq!(PROCESSOR_VTABLE_LAYOUT_VERSION, 2);
@@ -1064,13 +1058,16 @@ mod layout_tests {
         // v2: added owning-Arc handle lifetime callbacks
         // (`clone_handle` / `drop_handle`).
         assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
-        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 14);
+        // v15: #1270 removed the v12–v14 video-source-timeline slots.
+        assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 15);
         // SurfaceStore stays at v1 for the entire M32 milestone — #1260
         // and #1262 both re-bless existing slots (no new SurfaceStore
         // slot).
         assert_eq!(SURFACE_STORE_VTABLE_LAYOUT_VERSION, 1);
-        // v11: M32 one-shot slot reservation (#1253).
-        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 11);
+        // v12: #1270 removed the raw-`Arc` transit slots
+        // create_timeline_semaphore / host_vulkan_device_arc /
+        // host_vulkan_texture_arc.
+        assert_eq!(GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION, 12);
         assert_eq!(TEXTURE_RING_METHODS_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(VULKAN_COMPUTE_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 5);
         assert_eq!(VULKAN_GRAPHICS_KERNEL_METHODS_VTABLE_LAYOUT_VERSION, 4);

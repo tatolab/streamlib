@@ -32,9 +32,7 @@ pub use streamlib_plugin_abi::{HOST_SERVICES_LAYOUT_VERSION, HostServices};
 
 // Build-fingerprint handshake surface. The facade `streamlib` SDK's
 // `sdk::plugin` re-exports `core::plugin`, so the `#[processor]` macro
-// resolves these three names against a facade plugin's statically-
-// linked engine copy — `ENGINE_TRANSIT_FINGERPRINT` is the plugin's
-// real transit fingerprint. The engine-free `streamlib-plugin-sdk`
-// exports the same three names with a transit fingerprint of 0.
-pub use build_fingerprint::{BUILD_IDENTITY, ENGINE_TRANSIT_FINGERPRINT};
+// resolves these names against the plugin's build; the engine-free
+// `streamlib-plugin-sdk` exports the same names.
+pub use build_fingerprint::BUILD_IDENTITY;
 pub use streamlib_plugin_abi::PLUGIN_ABI_LAYOUT_FINGERPRINT;

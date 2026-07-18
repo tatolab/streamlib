@@ -5357,11 +5357,6 @@ version = "0.6.0"
 dependencies = [
  "serde",
  "streamlib",
- "streamlib-adapter-abi",
- "streamlib-adapter-cpu-readback",
- "streamlib-adapter-cuda",
- "streamlib-adapter-opengl",
- "streamlib-adapter-vulkan",
  "streamlib-jtd-codegen",
  "streamlib-macros",
  "streamlib-plugin-abi",

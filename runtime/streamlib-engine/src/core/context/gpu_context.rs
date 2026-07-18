@@ -431,16 +431,6 @@ pub struct GpuContext {
     color_converter_cache: Arc<
         RwLock<HashMap<(PixelFormat, PixelFormat), Arc<crate::core::rhi::RhiColorConverterInner>>>,
     >,
-    /// Engine-tier publication slot for an in-process producer's timeline
-    /// semaphore. The producer (today: the camera; in principle any in-tree
-    /// video source) publishes a typed handle here so an in-process consumer
-    /// (today: display) can `vkQueueSubmit2`-wait on it for GPU-GPU sync.
-    /// The slot is single-publisher by construction; concurrent publishers
-    /// would clobber. Promote to a registry keyed by producer id if/when a
-    /// second concurrent publisher is filed.
-    #[cfg(target_os = "linux")]
-    video_source_timeline_semaphore:
-        Arc<Mutex<Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>>>>,
     /// Serializes [`GpuContextLimitedAccess::escalate`] scopes across
     /// threads (and across the in-process and vtable dispatch paths —
     /// engine-internal callers using `host_inner` direct dispatch and
@@ -506,8 +496,6 @@ impl GpuContext {
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
-            #[cfg(target_os = "linux")]
-            video_source_timeline_semaphore: Arc::new(Mutex::new(None)),
             escalate_gate: Arc::new(super::escalate_gate::EscalateGate::new()),
             #[cfg(target_os = "linux")]
             cpu_readback_bridge: Arc::new(Mutex::new(None)),
@@ -535,8 +523,6 @@ impl GpuContext {
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
-            #[cfg(target_os = "linux")]
-            video_source_timeline_semaphore: Arc::new(Mutex::new(None)),
             escalate_gate: Arc::new(super::escalate_gate::EscalateGate::new()),
             #[cfg(target_os = "linux")]
             cpu_readback_bridge: Arc::new(Mutex::new(None)),
@@ -1092,32 +1078,6 @@ impl GpuContext {
             reg.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
         }
         Ok(())
-    }
-
-    /// Publish a producer's timeline semaphore for in-process GPU-GPU sync.
-    /// The slot is shared across `GpuContext` clones; clone the input Arc
-    /// so the producer drop doesn't strand the consumer mid-wait.
-    #[cfg(target_os = "linux")]
-    pub fn set_video_source_timeline_semaphore(
-        &self,
-        timeline: &Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
-    ) {
-        *self.video_source_timeline_semaphore.lock().unwrap() = Some(Arc::clone(timeline));
-    }
-
-    /// Drop the published producer timeline. Called by the producer on
-    /// teardown so the consumer can observe the absence and skip the wait.
-    #[cfg(target_os = "linux")]
-    pub fn clear_video_source_timeline_semaphore(&self) {
-        *self.video_source_timeline_semaphore.lock().unwrap() = None;
-    }
-
-    /// Snapshot the currently-published producer timeline, if any.
-    #[cfg(target_os = "linux")]
-    pub fn video_source_timeline_semaphore(
-        &self,
-    ) -> Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
-        self.video_source_timeline_semaphore.lock().unwrap().clone()
     }
 
     /// Get a reference to the RHI GPU device.
@@ -1729,28 +1689,15 @@ impl GpuContext {
         }
     }
 
-    /// Construct a timeline semaphore against the host's vulkan device.
-    /// Backs [`GpuContextFullAccess::create_timeline_semaphore`] which
-    /// is the FullAccess-callable entry point.
-    #[cfg(target_os = "linux")]
-    pub fn create_timeline_semaphore(
-        &self,
-        initial_value: u64,
-    ) -> Result<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
-        let device = self.device.inner.device();
-        let sem = crate::vulkan::rhi::HostVulkanTimelineSemaphore::new(device, initial_value)?;
-        Ok(Arc::new(sem))
-    }
-
     /// Construct an OPAQUE_FD-exportable timeline semaphore against the
     /// host's vulkan device. Backs
     /// [`GpuContextFullAccess::create_exportable_timeline_semaphore`]
     /// which is the FullAccess-callable entry point.
     ///
-    /// Distinct from [`Self::create_timeline_semaphore`]: the returned
-    /// semaphore is created with `VK_KHR_external_semaphore_fd` export
-    /// support so its `export_opaque_fd` can hand a fresh OPAQUE_FD to a
-    /// subprocess consumer (surface-share / CUDA cross-process sync).
+    /// The returned semaphore is created with
+    /// `VK_KHR_external_semaphore_fd` export support so its
+    /// `export_opaque_fd` can hand a fresh OPAQUE_FD to a subprocess
+    /// consumer (surface-share / CUDA cross-process sync).
     #[cfg(target_os = "linux")]
     pub fn create_exportable_timeline_semaphore(
         &self,
@@ -3421,126 +3368,6 @@ impl GpuContextLimitedAccess {
         }
     }
 
-    /// See [`GpuContext::set_video_source_timeline_semaphore`].
-    ///
-    /// Dispatches through the plugin ABI
-    /// [`GpuContextLimitedAccessVTable::set_video_source_timeline_semaphore`](streamlib_plugin_abi::GpuContextLimitedAccessVTable::set_video_source_timeline_semaphore)
-    /// callback. The cdylib passes
-    /// `Arc::as_ptr(timeline) as *const c_void` — a **borrowed**
-    /// pointer; the host's callback `Arc::increment_strong_count`s
-    /// it, reconstitutes a temporary owned Arc via `Arc::from_raw`,
-    /// calls the underlying `GpuContext::set_video_source_timeline_semaphore`
-    /// (which itself clones into the published slot), and lets the
-    /// temporary drop. Net effect: one fresh strong count moves into
-    /// the slot; the caller's Arc is unchanged.
-    ///
-    /// **Arc-raw-pointer transit** — see
-    /// [`GpuContextFullAccess::create_timeline_semaphore`]'s docs on
-    /// the same rustc-version-coupling caveat. In-tree consumers
-    /// (camera, display) ride this freely; cross-repo distribution
-    /// awaits a PluginAbiObject lift of `HostVulkanTimelineSemaphore`.
-    #[cfg(target_os = "linux")]
-    pub fn set_video_source_timeline_semaphore(
-        &self,
-        timeline: &Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
-    ) {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return;
-        }
-        let timeline_ptr = Arc::as_ptr(timeline) as *const std::ffi::c_void;
-        // SAFETY: handle + vtable were paired at construction; the
-        // host's callback contractually does the
-        // increment-+-from_raw-+-clone-+-drop dance for the borrowed
-        // Arc pointer.
-        unsafe {
-            ((*self.vtable).set_video_source_timeline_semaphore)(self.handle, timeline_ptr);
-        }
-    }
-
-    /// See [`GpuContext::clear_video_source_timeline_semaphore`].
-    ///
-    /// Dispatches through the plugin ABI
-    /// [`GpuContextLimitedAccessVTable::clear_video_source_timeline_semaphore`](streamlib_plugin_abi::GpuContextLimitedAccessVTable::clear_video_source_timeline_semaphore)
-    /// callback. Pairs with
-    /// [`Self::set_video_source_timeline_semaphore`].
-    #[cfg(target_os = "linux")]
-    pub fn clear_video_source_timeline_semaphore(&self) {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return;
-        }
-        // SAFETY: handle + vtable were paired at construction.
-        unsafe {
-            ((*self.vtable).clear_video_source_timeline_semaphore)(self.handle);
-        }
-    }
-
-    /// See [`GpuContext::video_source_timeline_semaphore`].
-    ///
-    /// **Engine-only** — return type
-    /// `Option<Arc<HostVulkanTimelineSemaphore>>` borrows into
-    /// host-private state, so the borrow can't cross the plugin ABI
-    /// boundary. Calling from a cdylib panics at the explicit guard
-    /// below. **Cdylib callers** must use
-    /// [`Self::host_video_source_timeline_arc`] instead — it returns
-    /// the same `Option<Arc<...>>` but via the v14 vtable slot that
-    /// transits the Arc as a raw pointer
-    /// (`Arc::into_raw` / `Arc::from_raw`).
-    #[cfg(target_os = "linux")]
-    pub fn video_source_timeline_semaphore(
-        &self,
-    ) -> Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "GpuContextLimitedAccess::video_source_timeline_semaphore() \
-                 reached from cdylib code; use \
-                 `host_video_source_timeline_arc()` instead. The legacy method \
-                 returns `Option<Arc<HostVulkanTimelineSemaphore>>` from \
-                 `host_inner()` which borrows host-private state and cannot \
-                 cross the plugin ABI."
-            );
-        }
-        self.host_inner().video_source_timeline_semaphore()
-    }
-
-    /// Cdylib-safe sibling of
-    /// [`Self::video_source_timeline_semaphore`]. Dispatches through
-    /// the v14
-    /// [`GpuContextLimitedAccessVTable::host_video_source_timeline_arc`](streamlib_plugin_abi::GpuContextLimitedAccessVTable::host_video_source_timeline_arc)
-    /// slot in cdylib mode; in host mode the same vtable dispatch
-    /// resolves to the local `HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`
-    /// static. Returns `None` when no producer has published a
-    /// timeline yet (the slot is empty), when the slot was cleared
-    /// via [`Self::clear_video_source_timeline_semaphore`], or when
-    /// the handle/vtable is null.
-    ///
-    /// **Arc-raw-pointer transit** — same rustc-version coupling
-    /// caveat as
-    /// [`Self::set_video_source_timeline_semaphore`].
-    /// `HostVulkanTimelineSemaphore` is not `#[repr(C)]`; in-tree
-    /// workspace plugin cdylibs share the host's rustc + dep graph
-    /// and ride this freely.
-    #[cfg(target_os = "linux")]
-    pub fn host_video_source_timeline_arc(
-        &self,
-    ) -> Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return None;
-        }
-        // SAFETY: handle + vtable were paired at construction. The
-        // host's callback either returns null (slot empty / null
-        // handle) or `Arc::into_raw` on a freshly cloned
-        // `Arc<HostVulkanTimelineSemaphore>` (fresh strong count
-        // moves into the cdylib).
-        let raw = unsafe { ((*self.vtable).host_video_source_timeline_arc)(self.handle) };
-        if raw.is_null() {
-            return None;
-        }
-        // SAFETY: matched with the host's `Arc::into_raw` above.
-        let arc =
-            unsafe { Arc::from_raw(raw as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore) };
-        Some(arc)
-    }
-
     /// Acquire a pooled texture from a pre-reserved pool (Split: fast path).
     ///
     /// `VK_IMAGE_TILING_OPTIMAL`, in-process use only. For cross-process
@@ -4497,69 +4324,6 @@ impl GpuContextFullAccess {
         }
     }
 
-    /// See [`GpuContext::set_video_source_timeline_semaphore`].
-    ///
-    /// **Engine-only** — parameter is `&Arc<HostVulkanTimelineSemaphore>`
-    /// (host-internal type from `crate::vulkan::rhi`). Calling from a
-    /// cdylib panics inside [`Self::host_inner`]; the panic is caught by
-    /// `run_host_extern_c` at the plugin ABI, so it surfaces as a
-    /// clean "callback panicked" log rather than UB.
-    #[cfg(target_os = "linux")]
-    pub fn set_video_source_timeline_semaphore(
-        &self,
-        timeline: &Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
-    ) {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "GpuContextFullAccess::set_video_source_timeline_semaphore(): \
-                 parameter `&Arc<HostVulkanTimelineSemaphore>` is host-internal \
-                 (crate::vulkan::rhi) and cannot cross the plugin ABI; this \
-                 method is engine-only and cdylib code must not call it."
-            );
-        }
-        self.host_inner()
-            .set_video_source_timeline_semaphore(timeline);
-    }
-
-    /// See [`GpuContext::clear_video_source_timeline_semaphore`].
-    ///
-    /// **Engine-only** — pairs with
-    /// [`Self::set_video_source_timeline_semaphore`]; that method is
-    /// engine-only, so this one is too. Calling from a cdylib panics
-    /// at the explicit guard below.
-    #[cfg(target_os = "linux")]
-    pub fn clear_video_source_timeline_semaphore(&self) {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "GpuContextFullAccess::clear_video_source_timeline_semaphore(): \
-                 pairs with set_video_source_timeline_semaphore which takes a \
-                 host-internal `&Arc<HostVulkanTimelineSemaphore>`; engine-only \
-                 by inheritance — cdylib code must not call it."
-            );
-        }
-        self.host_inner().clear_video_source_timeline_semaphore();
-    }
-
-    /// See [`GpuContext::video_source_timeline_semaphore`].
-    ///
-    /// **Engine-only** — return type is
-    /// `Option<Arc<HostVulkanTimelineSemaphore>>` (host-internal type).
-    /// Calling from a cdylib panics at the explicit guard below.
-    #[cfg(target_os = "linux")]
-    pub fn video_source_timeline_semaphore(
-        &self,
-    ) -> Option<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "GpuContextFullAccess::video_source_timeline_semaphore(): \
-                 return type `Option<Arc<HostVulkanTimelineSemaphore>>` is \
-                 host-internal (crate::vulkan::rhi) and cannot cross the plugin ABI \
-                 boundary; engine-only — cdylib code must not call it."
-            );
-        }
-        self.host_inner().video_source_timeline_semaphore()
-    }
-
     /// Get a reference to the RHI GPU device.
     ///
     /// **Engine-only** — returns `&Arc<GpuDevice>` which borrows into
@@ -4585,22 +4349,12 @@ impl GpuContextFullAccess {
         self.host_inner().device()
     }
 
-    /// Clone the host's `Arc<HostVulkanDevice>` for in-process workspace
-    /// plugin cdylibs that need to construct a host-flavor
-    /// `XxxSurfaceAdapter<HostVulkanDevice>` (e.g. #1004 dlopen smoke
-    /// fixtures for the surface adapters). Dispatches through the v9
-    /// `host_vulkan_device_arc` FullAccess vtable slot in cdylib mode;
-    /// in host mode reaches `host_inner().device().vulkan_device()`
-    /// directly. The returned Arc's strong count is incremented; the
-    /// caller's `Drop` decrements the host's count.
-    ///
-    /// **Rustc-version coupling.** `HostVulkanDevice` is not
-    /// `#[repr(C)]` — the plugin ABI Arc transit is safe only when the
-    /// cdylib shares the host's rustc version and the engine's dep
-    /// graph (workspace plugin cdylibs do; subprocess cdylibs
-    /// — `streamlib-python-native`, `streamlib-deno-native` — don't dep
-    /// on `streamlib-engine` and can't import `HostVulkanDevice`, so
-    /// they can't reach this method at all).
+    /// Clone the host's `Arc<HostVulkanDevice>`. Engine-internal
+    /// host-mode accessor for in-process RHI helpers (subprocess
+    /// escalate handle assignment, the video encode/decode
+    /// `from_full_access` constructors). No plugin ABI transit slot
+    /// backs it — cdylib GPU code builds through the cdylib-safe
+    /// FullAccess primitives, never the raw device.
     #[cfg(target_os = "linux")]
     pub fn host_vulkan_device_arc(&self) -> Result<Arc<crate::vulkan::rhi::HostVulkanDevice>> {
         match self.handle_kind {
@@ -4609,28 +4363,13 @@ impl GpuContextFullAccess {
                     self.host_inner().device().as_ref(),
                 ),
             )),
-            HandleKind::ScopeToken => {
-                if self.vtable.is_null() {
-                    return Err(Error::GpuError(
-                        "host_vulkan_device_arc: GpuContextFullAccess has null vtable".into(),
-                    ));
-                }
-                let raw = unsafe { ((*self.vtable).host_vulkan_device_arc)(self.handle) };
-                if raw.is_null() {
-                    return Err(Error::GpuError(
-                        "host_vulkan_device_arc: host returned null pointer (likely \
-                         null/stale scope token or host-side panic)"
-                            .into(),
-                    ));
-                }
-                // SAFETY: host's wrapper called `Arc::into_raw` on a freshly
-                // cloned `Arc<HostVulkanDevice>` and the cdylib shares the
-                // host's rustc version + dep graph (workspace plugin cdylib
-                // contract documented on the method).
-                let arc =
-                    unsafe { Arc::from_raw(raw as *const crate::vulkan::rhi::HostVulkanDevice) };
-                Ok(arc)
-            }
+            HandleKind::ScopeToken => Err(Error::GpuError(
+                "host_vulkan_device_arc: engine-internal host-mode accessor; \
+                 the raw-device plugin ABI transit slot was removed (#1270). \
+                 Cdylib GPU code builds through the cdylib-safe FullAccess \
+                 primitives, not the host device."
+                    .into(),
+            )),
         }
     }
 
@@ -5565,68 +5304,6 @@ impl GpuContextFullAccess {
         }
     }
 
-    /// Construct a timeline semaphore. Backs the camera processor's
-    /// per-frame timeline that signals into downstream consumers
-    /// (display, encoders). Mode-routed: host-mode dispatches through
-    /// `host_inner()`; cdylib-mode dispatches through the vtable's
-    /// `create_timeline_semaphore` slot and reconstructs the Arc via
-    /// `Arc::from_raw`.
-    ///
-    /// **Note**: this slot transits `Arc<HostVulkanTimelineSemaphore>`
-    /// via Arc-raw-pointer pattern — same hazard as the kernel paths
-    /// pre-#917 Phase 8. Arc internals leak across the plugin ABI for now.
-    /// In-tree consumers (camera, display) are built in the same
-    /// workspace as engine; the layout matches by construction.
-    /// Cross-repo plugin distribution will need a PluginAbiObject lift for
-    /// `HostVulkanTimelineSemaphore` — tracked as a future follow-up.
-    #[cfg(target_os = "linux")]
-    pub fn create_timeline_semaphore(
-        &self,
-        initial_value: u64,
-    ) -> Result<Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
-        match self.handle_kind {
-            HandleKind::Boxed => self.host_inner().create_timeline_semaphore(initial_value),
-            HandleKind::ScopeToken => {
-                if self.vtable.is_null() {
-                    return Err(Error::GpuError(
-                        "create_timeline_semaphore: GpuContextFullAccess has null vtable".into(),
-                    ));
-                }
-                let mut out_handle: *const std::ffi::c_void = std::ptr::null();
-                let mut err_buf = [0u8; 512];
-                let mut err_len: usize = 0;
-                let status = unsafe {
-                    ((*self.vtable).create_timeline_semaphore)(
-                        self.handle,
-                        initial_value,
-                        &mut out_handle,
-                        err_buf.as_mut_ptr(),
-                        err_buf.len(),
-                        &mut err_len as *mut usize,
-                    )
-                };
-                if status == 0 {
-                    if out_handle.is_null() {
-                        return Err(Error::GpuError(
-                            "create_timeline_semaphore: host signaled success but out_handle is null".into(),
-                        ));
-                    }
-                    // SAFETY: host wrote
-                    // `Arc::into_raw(Arc<HostVulkanTimelineSemaphore>)`.
-                    let arc = unsafe {
-                        Arc::from_raw(
-                            out_handle as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore,
-                        )
-                    };
-                    Ok(arc)
-                } else {
-                    let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())])
-                        .into_owned();
-                    Err(Error::GpuError(msg))
-                }
-            }
-        }
-    }
 
     /// Read-once GPU capability snapshot. Backs the camera processor's
     /// vendor-name / external-memory / cross-device-DMA-BUF-probe
@@ -6345,7 +6022,7 @@ mod tests {
     }
 
     #[test]
-    fn test_texture_cache_miss_and_timeline_semaphore() {
+    fn test_texture_cache_miss() {
         let gpu = match GpuContext::init_for_platform() {
             Ok(g) => g,
             Err(_) => {
@@ -6360,31 +6037,7 @@ mod tests {
                 .is_err()
         );
 
-        // Timeline semaphore publication slot is shared across Clones.
-        #[cfg(target_os = "linux")]
-        {
-            use crate::host_rhi::HostGpuDeviceExt;
-            assert!(gpu.video_source_timeline_semaphore().is_none());
-
-            let vk_device = gpu.device().vulkan_device();
-            let timeline = Arc::new(
-                crate::vulkan::rhi::HostVulkanTimelineSemaphore::new(vk_device.device(), 0)
-                    .expect("create timeline semaphore"),
-            );
-
-            gpu.set_video_source_timeline_semaphore(&timeline);
-            let snapshot1 = gpu.video_source_timeline_semaphore().expect("set");
-            assert!(Arc::ptr_eq(&snapshot1, &timeline));
-
-            let gpu2 = gpu.clone();
-            let snapshot2 = gpu2.video_source_timeline_semaphore().expect("shared");
-            assert!(Arc::ptr_eq(&snapshot2, &timeline));
-
-            gpu2.clear_video_source_timeline_semaphore();
-            assert!(gpu.video_source_timeline_semaphore().is_none());
-        }
-
-        println!("Texture cache miss + timeline semaphore sharing: OK");
+        println!("Texture cache miss: OK");
     }
 
     #[test]
@@ -6400,55 +6053,6 @@ mod tests {
         // Limited-access delegates to the same underlying context.
         let limited = GpuContextLimitedAccess::new(gpu.clone());
         let full = limited.to_full_access();
-
-        #[cfg(target_os = "linux")]
-        {
-            use crate::host_rhi::HostGpuDeviceExt;
-            let vk_device = gpu.device().vulkan_device();
-            let timeline_a = Arc::new(
-                crate::vulkan::rhi::HostVulkanTimelineSemaphore::new(vk_device.device(), 0)
-                    .expect("create timeline a"),
-            );
-            let timeline_b = Arc::new(
-                crate::vulkan::rhi::HostVulkanTimelineSemaphore::new(vk_device.device(), 0)
-                    .expect("create timeline b"),
-            );
-
-            limited.set_video_source_timeline_semaphore(&timeline_a);
-            assert!(Arc::ptr_eq(
-                &gpu.video_source_timeline_semaphore().expect("via gpu"),
-                &timeline_a,
-            ));
-            assert!(Arc::ptr_eq(
-                &limited
-                    .video_source_timeline_semaphore()
-                    .expect("via limited"),
-                &timeline_a,
-            ));
-
-            // The full-access view shares the same publication slot.
-            assert!(Arc::ptr_eq(
-                &full.video_source_timeline_semaphore().expect("via full"),
-                &timeline_a,
-            ));
-            full.set_video_source_timeline_semaphore(&timeline_b);
-            assert!(Arc::ptr_eq(
-                &limited
-                    .video_source_timeline_semaphore()
-                    .expect("limited sees b"),
-                &timeline_b,
-            ));
-
-            // Conversion full -> limited round-trips.
-            let limited2 = full.to_limited_access();
-            assert!(Arc::ptr_eq(
-                &limited2
-                    .video_source_timeline_semaphore()
-                    .expect("limited2 sees b"),
-                &timeline_b,
-            ));
-            full.clear_video_source_timeline_semaphore();
-        }
 
         // Delegated accessor reaches the same RHI device. `device()` is
         // FullAccess-only after #324; Sandbox reaches the same underlying

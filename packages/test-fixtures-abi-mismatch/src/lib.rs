@@ -12,10 +12,8 @@
 //!   → [`streamlib_error::Error::PluginAbiVersionMismatch`]
 //! - `tamper-too-high`          → `abi_version = u32::MAX`
 //!   → [`streamlib_error::Error::PluginAbiVersionMismatch`]
-//! - `tamper-transit-fingerprint` → correct `abi_version` +
-//!   correct `abi_layout_fingerprint` (computed from this crate's own
-//!   `streamlib-plugin-abi` dep) + a bit-flipped, non-zero
-//!   `engine_transit_fingerprint`
+//! - `tamper-abi-layout-fingerprint` → correct `abi_version` +
+//!   a bit-flipped `abi_layout_fingerprint`
 //!   → [`streamlib_error::Error::PluginBuildMismatch`]
 //!
 //! The three directions cover the two typed error variants and the
@@ -33,25 +31,25 @@ compile_error!(
     "streamlib-test-fixtures-abi-mismatch: `tamper-too-low` and \
      `tamper-too-high` are mutually exclusive."
 );
-#[cfg(all(feature = "tamper-too-low", feature = "tamper-transit-fingerprint"))]
+#[cfg(all(feature = "tamper-too-low", feature = "tamper-abi-layout-fingerprint"))]
 compile_error!(
     "streamlib-test-fixtures-abi-mismatch: `tamper-too-low` and \
-     `tamper-transit-fingerprint` are mutually exclusive."
+     `tamper-abi-layout-fingerprint` are mutually exclusive."
 );
-#[cfg(all(feature = "tamper-too-high", feature = "tamper-transit-fingerprint"))]
+#[cfg(all(feature = "tamper-too-high", feature = "tamper-abi-layout-fingerprint"))]
 compile_error!(
     "streamlib-test-fixtures-abi-mismatch: `tamper-too-high` and \
-     `tamper-transit-fingerprint` are mutually exclusive."
+     `tamper-abi-layout-fingerprint` are mutually exclusive."
 );
 #[cfg(not(any(
     feature = "tamper-too-low",
     feature = "tamper-too-high",
-    feature = "tamper-transit-fingerprint"
+    feature = "tamper-abi-layout-fingerprint"
 )))]
 compile_error!(
     "streamlib-test-fixtures-abi-mismatch: enable exactly one of \
      `tamper-too-low` (default), `tamper-too-high`, or \
-     `tamper-transit-fingerprint`."
+     `tamper-abi-layout-fingerprint`."
 );
 
 // Per-direction tamper values. Fields the host never reads for a given
@@ -60,7 +58,6 @@ compile_error!(
 mod tamper {
     pub const ABI_VERSION: u32 = 0;
     pub const ABI_LAYOUT_FINGERPRINT: u64 = 0;
-    pub const ENGINE_TRANSIT_FINGERPRINT: u64 = 0;
     pub const BUILD_IDENTITY: &str = "tamper-too-low fixture";
 }
 
@@ -68,22 +65,20 @@ mod tamper {
 mod tamper {
     pub const ABI_VERSION: u32 = u32::MAX;
     pub const ABI_LAYOUT_FINGERPRINT: u64 = 0;
-    pub const ENGINE_TRANSIT_FINGERPRINT: u64 = 0;
     pub const BUILD_IDENTITY: &str = "tamper-too-high fixture";
 }
 
-#[cfg(feature = "tamper-transit-fingerprint")]
+#[cfg(feature = "tamper-abi-layout-fingerprint")]
 mod tamper {
-    // Correct wire ABI version + correct dispatch-surface fingerprint
-    // (both from this crate's own streamlib-plugin-abi dep — the same
-    // workspace crate the host links), so the `abi_version` and
-    // `abi_layout_fingerprint` checks pass and the host reaches the
-    // engine-transit check, which must reject the bit-flipped value.
+    // Correct wire ABI version (from this crate's own streamlib-plugin-abi
+    // dep — the same workspace crate the host links), so the `abi_version`
+    // check passes and the host reaches the `abi_layout_fingerprint`
+    // check, which must reject the bit-flipped value.
     pub const ABI_VERSION: u32 = streamlib_plugin_abi::STREAMLIB_ABI_VERSION;
-    pub const ABI_LAYOUT_FINGERPRINT: u64 = streamlib_plugin_abi::PLUGIN_ABI_LAYOUT_FINGERPRINT;
-    // Non-zero (so NOT the engine-free sentinel) and guaranteed not to
-    // match any real host engine transit fingerprint.
-    pub const ENGINE_TRANSIT_FINGERPRINT: u64 = 0xDEAD_BEEF_DEAD_BEEF;
+    // Bit-flipped so it cannot match any real host dispatch-surface
+    // fingerprint.
+    pub const ABI_LAYOUT_FINGERPRINT: u64 =
+        streamlib_plugin_abi::PLUGIN_ABI_LAYOUT_FINGERPRINT ^ 0xDEAD_BEEF_DEAD_BEEF;
     pub const BUILD_IDENTITY: &str = "tampered-fixture-build";
 }
 
@@ -105,7 +100,6 @@ pub static STREAMLIB_PLUGIN: PluginDeclaration = PluginDeclaration {
     _reserved_padding: 0,
     register: __streamlib_plugin_register_stub,
     abi_layout_fingerprint: tamper::ABI_LAYOUT_FINGERPRINT,
-    engine_transit_fingerprint: tamper::ENGINE_TRANSIT_FINGERPRINT,
     build_identity_ptr: tamper::BUILD_IDENTITY.as_ptr(),
     build_identity_len: tamper::BUILD_IDENTITY.len(),
 };

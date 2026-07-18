@@ -13,14 +13,13 @@
 //!   (`abi_version = u32::MAX`) → `Error::PluginAbiVersionMismatch`.
 //!   Both directions lock the *equality* check — a future `<` or `>`
 //!   regression would only catch one.
-//! - `tamper-transit-fingerprint` (correct `abi_version` + correct
-//!   `abi_layout_fingerprint`, bit-flipped `engine_transit_fingerprint`)
-//!   → `Error::PluginBuildMismatch`, whose Display names both build
-//!   identities + the rebuild remedy. This is the check the whole
-//!   feature exists for: a mixed host/plugin build is refused BEFORE
-//!   the raw-`Arc` transit could corrupt the driver.
+//! - `tamper-abi-layout-fingerprint` (correct `abi_version` +
+//!   bit-flipped `abi_layout_fingerprint`) → `Error::PluginBuildMismatch`,
+//!   whose Display names both build identities + the rebuild remedy. A
+//!   plugin built against a divergent `#[repr(C)]` dispatch surface is
+//!   refused before `register` runs.
 //!
-//! Mental-revert: removing any of the three checks in
+//! Mental-revert: removing either check in
 //! `validate_plugin_declaration` would let the runtime invoke the
 //! fixture's no-op `register` stub, which never registers the
 //! processor. The runtime's subsequent "processor not registered"
@@ -175,12 +174,12 @@ fn load_project_rejects_abi_version_above_runtime() {
 
 #[test]
 #[serial]
-fn load_project_rejects_mismatched_engine_transit_fingerprint() {
-    // Correct abi_version + correct abi_layout_fingerprint, but a
-    // bit-flipped engine_transit_fingerprint: the host must reject with
-    // PluginBuildMismatch BEFORE invoking `register` — no segfault, no
-    // abort, a clean typed error naming both build identities.
-    let dylib = build_tampered_cdylib("tamper-transit-fingerprint");
+fn load_project_rejects_mismatched_abi_layout_fingerprint() {
+    // Correct abi_version but a bit-flipped abi_layout_fingerprint: the
+    // host must reject with PluginBuildMismatch BEFORE invoking
+    // `register` — no segfault, no abort, a clean typed error naming
+    // both build identities.
+    let dylib = build_tampered_cdylib("tamper-abi-layout-fingerprint");
     let tmp = tempfile::tempdir().unwrap();
     let project = stage_project(tmp.path(), &dylib);
 

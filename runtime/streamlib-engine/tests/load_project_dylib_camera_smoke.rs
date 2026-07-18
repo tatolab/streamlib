@@ -13,15 +13,11 @@
 //!
 //! The camera is the canonical streamlib processor — its `start()`
 //! body opens V4L2 and spawns the capture thread, then returns. The
-//! capture thread then runs the one-shot FullAccess primitive set
-//! inside a single `gpu_limited_access().escalate(|full| { ... })`
-//! block: `gpu_capabilities`, `color_converter`,
-//! `create_command_recorder`, `create_timeline_semaphore`,
+//! capture thread runs the one-shot FullAccess primitive set inside a
+//! single `gpu_limited_access().escalate(|full| { ... })` block:
+//! `gpu_capabilities`, `color_converter`, `create_command_recorder`,
 //! `acquire_storage_buffer`, `acquire_render_target_dma_buf_image`,
-//! `import_dma_buf_storage_buffer`. After the escalate returns the
-//! thread publishes the timeline via
-//! `gpu_limited_access.set_video_source_timeline_semaphore` (the v12
-//! vtable slot added in this PR) and enters the per-frame capture
+//! `import_dma_buf_storage_buffer`, then enters the per-frame capture
 //! loop.
 //!
 //! Exit-criterion-#3 of #914 ("camera processor loads as a cdylib
@@ -29,8 +25,8 @@
 //! `setup()` + `start()` without panicking") is what this test locks:
 //! `runtime.start()` and `runtime.stop()` both return `Ok` against
 //! vivid, proving the
-//! synchronous lifecycle dispatches through the cdylib FFI boundary
-//! cleanly.
+//! synchronous lifecycle dispatches through the cdylib plugin ABI
+//! boundary cleanly.
 //!
 //! What this test does NOT lock — guarded separately:
 //!
@@ -217,18 +213,18 @@ fn dlopen_camera_processor_completes_lifecycle_against_vivid() {
 
     runtime.start().expect(
         "runtime.start() must succeed — proves Camera::setup() and \
-         Camera::start() ran through the cdylib FFI boundary without \
+         Camera::start() ran through the cdylib plugin ABI boundary without \
          panicking (requires Vulkan device + vivid on this host)",
     );
 
     // The Camera processor's `start()` spawns the V4L2 capture
     // thread, which then runs the one-shot FullAccess escalation
     // (`gpu_capabilities`, `color_converter`, `create_command_recorder`,
-    // `create_timeline_semaphore`, `acquire_storage_buffer`,
-    // `acquire_render_target_dma_buf_image`, `import_dma_buf_storage_buffer`)
-    // inside `gpu_limited_access().escalate(|full| { ... })`. Sleep
-    // long enough for the escalation to complete on a cold pipeline
-    // cache. A panic at the cdylib FFI boundary during any of those
+    // `acquire_storage_buffer`, `acquire_render_target_dma_buf_image`,
+    // `import_dma_buf_storage_buffer`) inside
+    // `gpu_limited_access().escalate(|full| { ... })`. Sleep long
+    // enough for the escalation to complete on a cold pipeline cache.
+    // A panic at the cdylib plugin ABI boundary during any of those
     // FullAccess calls surfaces as a thread-side panic during this
     // window — `runtime.stop()`'s teardown joins the capture thread
     // and propagates the panic state.

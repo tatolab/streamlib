@@ -10,13 +10,9 @@
 //! `upload_pixel_buffer_as_texture`, `color_converter`,
 //! `create_command_recorder`, `build_triangles_blas`, `build_tlas`,
 //! `supports_ray_tracing_pipeline`, `gpu_capabilities`,
-//! `create_timeline_semaphore`, `import_dma_buf_storage_buffer`,
-//! `check_in_surface`, `host_vulkan_device_arc`,
-//! `host_vulkan_texture_arc`.
+//! `import_dma_buf_storage_buffer`, `check_in_surface`.
 
 use std::ffi::c_void;
-#[cfg(target_os = "linux")]
-use std::sync::Arc;
 
 use super::super::super::run_host_extern_c;
 use super::super::super::shared::wire::write_err;
@@ -777,70 +773,6 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_gp
 }
 
 #[cfg(target_os = "linux")]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_create_timeline_semaphore(
-    scope_token: *const c_void,
-    initial_value: u64,
-    out_handle: *mut *const c_void,
-    err_buf: *mut u8,
-    err_buf_cap: usize,
-    err_len: *mut usize,
-) -> i32 {
-    run_host_extern_c(
-        "host_gpu_full_create_timeline_semaphore",
-        || -> i32 {
-            if out_handle.is_null() {
-                write_err(
-                    "create_timeline_semaphore: null out_handle pointer",
-                    err_buf,
-                    err_buf_cap,
-                    err_len,
-                );
-                return 1;
-            }
-            let result = with_full_scope_or_err(
-                scope_token,
-                "create_timeline_semaphore",
-                err_buf,
-                err_buf_cap,
-                err_len,
-                |gpu| gpu.create_timeline_semaphore(initial_value),
-            );
-            match result {
-                Some(Ok(arc)) => {
-                    let raw = Arc::into_raw(arc) as *const c_void;
-                    unsafe { std::ptr::write(out_handle, raw) };
-                    0
-                }
-                Some(Err(e)) => {
-                    write_err(&format!("{}", e), err_buf, err_buf_cap, err_len);
-                    1
-                }
-                None => 1,
-            }
-        },
-        1,
-    )
-}
-
-#[cfg(not(target_os = "linux"))]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_create_timeline_semaphore(
-    _scope_token: *const c_void,
-    _initial_value: u64,
-    _out_handle: *mut *const c_void,
-    err_buf: *mut u8,
-    err_buf_cap: usize,
-    err_len: *mut usize,
-) -> i32 {
-    write_err(
-        "create_timeline_semaphore: not available on this platform",
-        err_buf,
-        err_buf_cap,
-        err_len,
-    );
-    1
-}
-
-#[cfg(target_os = "linux")]
 pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_import_dma_buf_storage_buffer(
     scope_token: *const c_void,
     fd: i32,
@@ -973,77 +905,3 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_ch
     )
 }
 
-/// Clone the host's `Arc<HostVulkanDevice>` and return the raw
-/// `Arc::into_raw` pointer. Used by in-process workspace plugin cdylibs
-/// (#1004 dlopen smoke fixtures for the surface adapters) that need to
-/// construct a host-flavor `XxxSurfaceAdapter<HostVulkanDevice>` to
-/// exercise `acquire_write` → `view_mut` → release through the cdylib
-/// boundary. On null/stale token returns a null pointer.
-#[cfg(target_os = "linux")]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_host_vulkan_device_arc(
-    scope_token: *const c_void,
-) -> *const c_void {
-    run_host_extern_c(
-        "host_gpu_full_host_vulkan_device_arc",
-        || -> *const c_void {
-            let token = scope_token as u64;
-            crate::core::context::escalate_scope_registry::with_scope(token, |gpu| {
-                let device = gpu.device();
-                let host_device = crate::host_rhi::HostGpuDeviceExt::vulkan_device(device.as_ref());
-                let arc = Arc::clone(host_device);
-                Arc::into_raw(arc) as *const c_void
-            })
-            .unwrap_or(std::ptr::null())
-        },
-        std::ptr::null(),
-    )
-}
-
-#[cfg(not(target_os = "linux"))]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_host_vulkan_device_arc(
-    _scope_token: *const c_void,
-) -> *const c_void {
-    std::ptr::null()
-}
-
-/// Clone the host's `Arc<HostVulkanTexture>` backing a `Texture`
-/// PluginAbiObject and return the raw `Arc::into_raw` pointer. Second bridge
-/// of the cdylib-side adapter-construction chain: cdylibs can't
-/// reach `Texture::host_inner()` (panics in cdylib mode), so they
-/// dispatch through this slot to obtain a real
-/// `Arc<HostVulkanTexture>` for calls like
-/// `OpenGlSurfaceAdapter::register_host_surface`. On null
-/// `texture_handle` returns a null pointer.
-#[cfg(target_os = "linux")]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_host_vulkan_texture_arc(
-    texture_handle: *const c_void,
-) -> *const c_void {
-    run_host_extern_c(
-        "host_gpu_full_host_vulkan_texture_arc",
-        || -> *const c_void {
-            if texture_handle.is_null() {
-                return std::ptr::null();
-            }
-            // SAFETY: `texture_handle` is the same opaque
-            // `Arc::into_raw(Arc<TextureInner>)` pointer cached on the
-            // `Texture` PluginAbiObject's `handle` field (see
-            // `Texture::from_arc_into_raw`). The leaked strong count
-            // keeps the `TextureInner` alive at least until the
-            // PluginAbiObject's `Drop` runs. We borrow without taking
-            // ownership, clone the inner `Arc<HostVulkanTexture>`, and
-            // return its raw pointer with the strong count bumped by 1.
-            let inner =
-                unsafe { &*(texture_handle as *const crate::core::rhi::texture::TextureInner) };
-            let arc = Arc::clone(&inner.inner);
-            Arc::into_raw(arc) as *const c_void
-        },
-        std::ptr::null(),
-    )
-}
-
-#[cfg(not(target_os = "linux"))]
-pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_host_vulkan_texture_arc(
-    _texture_handle: *const c_void,
-) -> *const c_void {
-    std::ptr::null()
-}
