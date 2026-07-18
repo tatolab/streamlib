@@ -13,12 +13,51 @@ jobs:
   release-please:
     runs-on: ubuntu-latest
     outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
-      version: ${{ steps.release.outputs.major }}.${{ steps.release.outputs.minor }}.${{ steps.release.outputs.patch }}
+      release_created: ${{ steps.tag.outputs.release_created || steps.open.outputs.release_created }}
+      tag_name: ${{ steps.tag.outputs.tag_name || steps.open.outputs.tag_name }}
+      version: ${{ steps.tag.outputs.major || steps.open.outputs.major }}.${{ steps.tag.outputs.minor || steps.open.outputs.minor }}.${{ steps.tag.outputs.patch || steps.open.outputs.patch }}
     steps:
+      # Pass 1 — open / refresh the standing release PR (version bump + changelog)
+      # for the feat/fix commits landed since the last release.
       - uses: googleapis/release-please-action@v4
-        id: release
+        id: open
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # A version cut is pure bookkeeping — version + changelog, no code — so it
+      # needs no human gate; auto-merge the release PR the moment it exists. The
+      # PR is found by release-please's own `autorelease: pending` label rather
+      # than an action output, so a freshly-opened PR is caught unambiguously.
+      - name: Auto-merge the release PR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          PR_NUMBER=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
+            --json number,labels \
+            --jq 'map(select(.labels[].name == "autorelease: pending")) | .[0].number // empty')
+          if [ -z "$PR_NUMBER" ]; then
+            echo "no open release PR to merge this run"
+            exit 0
+          fi
+          for attempt in 1 2 3 4 5; do
+            if gh pr merge "$PR_NUMBER" --squash --repo "$GITHUB_REPOSITORY"; then
+              echo "merged release PR #$PR_NUMBER"
+              exit 0
+            fi
+            echo "attempt $attempt: release PR #$PR_NUMBER not yet mergeable, retrying in 5s..."
+            sleep 5
+          done
+          echo "::error::could not merge release PR #$PR_NUMBER after retries"
+          exit 1
+
+      # A GITHUB_TOKEN merge does NOT re-fire this `push: main` workflow, so the
+      # tag would never be cut. Pass 2 runs release-please again in-run: it now
+      # sees the merged release PR, creates the git tag + GitHub Release, and sets
+      # release_created so trigger-schemas publishes the client. No-op when the
+      # step above merged nothing.
+      - uses: googleapis/release-please-action@v4
+        id: tag
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
