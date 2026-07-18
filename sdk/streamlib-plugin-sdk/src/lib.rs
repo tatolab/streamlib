@@ -178,7 +178,7 @@ pub mod sdk {
     /// `Bag` — an owned, eagerly-decoded msgpack named map read/written over
     /// the same wire as the typed `read`/`write` paths, with no codegen or
     /// schema package. The companion literal macro lives at the crate root as
-    /// [`streamlib_plugin_sdk::bag!`](crate::bag).
+    /// `streamlib_plugin_sdk::bag!`.
     pub mod bag {
         pub use crate::bag::Bag;
     }
