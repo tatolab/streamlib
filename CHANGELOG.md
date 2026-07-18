@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.1](https://github.com/tatolab/streamlib/compare/v0.7.0...v0.7.1) (2026-07-18)
+
+
+### Features
+
+* **plugin-sdk:** dynamic Bag read/write over the msgpack wire ([#1431](https://github.com/tatolab/streamlib/issues/1431)) ([f5e5d89](https://github.com/tatolab/streamlib/commit/f5e5d8952f9f8e2907f478e05199c4b2a4da39ff))
+
 ## [0.5.1](https://github.com/tatolab/streamlib/compare/v0.5.0...v0.5.1) (2026-06-08)
 
 
