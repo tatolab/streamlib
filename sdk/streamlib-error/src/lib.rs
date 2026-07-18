@@ -152,6 +152,35 @@ pub enum Error {
         host_abi_fingerprint: u64,
     },
 
+    #[error("Bag key '{key}' is not present")]
+    BagKeyMissing { key: String },
+
+    #[error(
+        "Bag key '{key}' could not be read as `{expected_type}`: {detail}"
+    )]
+    BagTypeMismatch {
+        key: String,
+        expected_type: String,
+        detail: String,
+    },
+
+    #[error("Bag msgpack decode failed: {0}")]
+    BagDecodeFailed(String),
+
+    #[error("Bag msgpack encode failed: {0}")]
+    BagEncodeFailed(String),
+
+    #[error(
+        "Bag payload of {actual_bytes} bytes on port '{port}' exceeds the \
+         per-channel budget of {budget_bytes} bytes — split the payload or \
+         raise the port's declared max_payload_bytes"
+    )]
+    BagPayloadOverflow {
+        port: String,
+        actual_bytes: usize,
+        budget_bytes: usize,
+    },
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }

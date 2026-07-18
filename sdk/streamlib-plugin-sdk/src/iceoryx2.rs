@@ -35,7 +35,34 @@ use streamlib_plugin_abi::{InputMailboxesVTable, OutputWriterVTable};
 
 use serde::{Deserialize, Serialize as SerdeSerialize};
 
+use crate::bag::Bag;
 use crate::media_clock::MediaClock;
+
+/// Interim per-channel payload budget for a schema-free [`Bag`] write, in
+/// bytes. Matches the host's `streamlib_ipc_types::MAX_PAYLOAD_SIZE` fixed
+/// iceoryx2 slot size, restated here because the engine-free SDK does not
+/// depend on the host IPC crate.
+///
+/// This is the phase-1 interim guard (design #1345 §11): a bag with no
+/// declared bound must surface an oversize payload as the named
+/// [`Error::BagPayloadOverflow`] on the write side, never a downstream slot
+/// overrun. It is removed once hint-primed dynamic slot allocation (#1421)
+/// lands.
+pub const BAG_MAX_PAYLOAD_BYTES: usize = 65536;
+
+/// Reject an encoded [`Bag`] payload that would overrun the fixed iceoryx2
+/// slot, before the ABI hop. A length equal to [`BAG_MAX_PAYLOAD_BYTES`]
+/// fits; strictly larger is [`Error::BagPayloadOverflow`].
+fn check_bag_payload_within_budget(port: &str, encoded_len: usize) -> Result<()> {
+    if encoded_len > BAG_MAX_PAYLOAD_BYTES {
+        return Err(Error::BagPayloadOverflow {
+            port: port.to_owned(),
+            actual_bytes: encoded_len,
+            budget_bytes: BAG_MAX_PAYLOAD_BYTES,
+        });
+    }
+    Ok(())
+}
 
 /// How frames should be read from an input port's buffer. Engine-free
 /// twin of the engine's `iceoryx2::ReadMode`; the macro emits
@@ -222,6 +249,20 @@ impl OutputWriter {
         }
     }
 
+    /// Write a schema-free [`Bag`] to `port` with an explicit timestamp.
+    ///
+    /// Encodes the bag as a msgpack named map and writes it over the same
+    /// wire as [`Self::write`]. An encoded payload larger than
+    /// [`BAG_MAX_PAYLOAD_BYTES`] fails with the named
+    /// [`Error::BagPayloadOverflow`] before the ABI hop, never a silent
+    /// truncation or a downstream slot overrun.
+    #[tracing::instrument(level = "trace", skip(self, bag), fields(port = %port))]
+    pub fn write_bag(&self, port: &str, bag: &Bag, timestamp_ns: i64) -> Result<()> {
+        let data = bag.to_msgpack()?;
+        check_bag_payload_within_budget(port, data.len())?;
+        self.write_raw(port, &data, timestamp_ns)
+    }
+
     /// Check if a port is configured.
     pub fn has_port(&self, port: &str) -> bool {
         if !self.is_configured() {
@@ -393,6 +434,23 @@ impl InputMailboxes {
         Ok(Some((buf, out_timestamp)))
     }
 
+    /// Read the latest frame on `port` as a schema-free [`Bag`].
+    ///
+    /// Returns `Ok(Some((bag, timestamp_ns)))` on a decoded frame and
+    /// `Ok(None)` when the mailbox is empty. A frame whose bytes are not a
+    /// msgpack named map surfaces as the named [`Error::BagDecodeFailed`],
+    /// never a panic.
+    #[tracing::instrument(level = "trace", skip(self), fields(port = %port))]
+    pub fn read_bag(&self, port: &str) -> Result<Option<(Bag, i64)>> {
+        match self.read_raw(port)? {
+            None => Ok(None),
+            Some((data, timestamp_ns)) => {
+                let bag = Bag::from_msgpack(&data)?;
+                Ok(Some((bag, timestamp_ns)))
+            }
+        }
+    }
+
     /// Check if a port has any payloads available.
     pub fn has_data(&self, port: &str) -> bool {
         if !self.is_configured() {
@@ -434,5 +492,32 @@ impl Drop for InputMailboxes {
         }
         self.handle = std::ptr::null();
         self.vtable = std::ptr::null();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn payload_at_budget_boundary_is_accepted() {
+        assert!(check_bag_payload_within_budget("frames", BAG_MAX_PAYLOAD_BYTES - 1).is_ok());
+        assert!(check_bag_payload_within_budget("frames", BAG_MAX_PAYLOAD_BYTES).is_ok());
+    }
+
+    #[test]
+    fn payload_over_budget_is_named_overflow() {
+        match check_bag_payload_within_budget("frames", BAG_MAX_PAYLOAD_BYTES + 1) {
+            Err(Error::BagPayloadOverflow {
+                port,
+                actual_bytes,
+                budget_bytes,
+            }) => {
+                assert_eq!(port, "frames");
+                assert_eq!(actual_bytes, BAG_MAX_PAYLOAD_BYTES + 1);
+                assert_eq!(budget_bytes, BAG_MAX_PAYLOAD_BYTES);
+            }
+            other => panic!("expected BagPayloadOverflow, got {:?}", other),
+        }
     }
 }

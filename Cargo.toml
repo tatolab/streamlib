@@ -105,6 +105,14 @@ serde_bytes = "0.11"
 toml = "0.8"
 toml_edit = "0.22"
 rmp-serde = "1.3"
+# Low-level msgpack encode primitives (write_map_len / write_str) used to
+# stream a `Bag` to bytes without cloning the value tree. Same msgpack-rust
+# project as `rmp-serde` / `rmpv`, which already pull it transitively.
+rmp = "0.8"
+# msgpack dynamic value tree (Value enum with a native `bin` variant) backing
+# the engine-free SDK `Bag`. Companion crate to `rmp-serde` from the same
+# msgpack-rust project; `with-serde` enables `rmpv::ext::{from_value,to_value}`.
+rmpv = { version = "1.3", features = ["with-serde"] }
 
 # Hashing
 sha2 = "0.10"

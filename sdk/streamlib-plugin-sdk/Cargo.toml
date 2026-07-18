@@ -34,6 +34,12 @@ streamlib-adapter-abi = { path = "../../adapters/streamlib-adapter-abi", version
 serde = { workspace = true }
 serde_json = { workspace = true }
 rmp-serde = { workspace = true }
+# Low-level msgpack encode primitives that stream `Bag::to_msgpack` to bytes
+# without cloning the value tree (write_map_len + write_str per entry).
+rmp = { workspace = true }
+# Dynamic msgpack value tree backing `sdk::bag::Bag` (eager-decoded named map
+# with native `bin` support). Companion of `rmp-serde`.
+rmpv = { workspace = true }
 tracing = { workspace = true }
 # iceoryx2's logging facade — the cdylib's Log forwarder routes iceoryx2
 # records through the host's iceoryx_log_emit callback. Logging facade only
@@ -51,6 +57,16 @@ streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", versio
 # a live GPU host (mirrors the engine's `hardware-tests`). The GPU-free CI
 # suite leaves that test `ignore`d; /verify-live runs it.
 hardware-tests = []
+
+[dev-dependencies]
+# Microbench harness for the eager-Bag-decode vs codegen-deserialize
+# comparison (issue #1407 hot-path rule).
+criterion = { version = "0.5", features = ["html_reports"] }
+serde = { workspace = true }
+
+[[bench]]
+name = "bag_decode"
+harness = false
 
 [lints]
 workspace = true
