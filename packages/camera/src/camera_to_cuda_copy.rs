@@ -268,19 +268,22 @@ impl CameraToCudaCopyProcessor::Processor {
         let region = ImageCopyRegion::tightly_packed(backend.width, backend.height);
         let recorder = &mut backend.copy_recorder;
 
-        // The camera leaves ring textures in `GENERAL`. Transition to
-        // TRANSFER_SRC for the copy, then RESTORE to GENERAL — the camera
-        // processor and every downstream sampler keep GENERAL as their layout
-        // invariant across the copy window, so omitting the restore strands the
-        // ring slot in TRANSFER_SRC_OPTIMAL and breaks the next sampler.
+        // The camera leaves ring textures in SHADER_READ_ONLY_OPTIMAL — its
+        // registered per-surface invariant (the camera's own post-copy barrier
+        // ends there, and the ring texture is registered under the frame pool_id
+        // at that layout). Transition to TRANSFER_SRC for the copy, then RESTORE
+        // to SHADER_READ_ONLY_OPTIMAL — the camera processor and every
+        // downstream sampler expect the slot back in its registered layout, so
+        // omitting the restore strands the ring slot in TRANSFER_SRC_OPTIMAL and
+        // breaks the next sampler.
         recorder.begin()?;
         recorder.record_image_barrier(
             &texture,
-            VulkanLayout::GENERAL,
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
             VulkanLayout::TRANSFER_SRC_OPTIMAL,
             VulkanStage::ALL_COMMANDS,
             VulkanStage::ALL_TRANSFER,
-            VulkanAccess::MEMORY_WRITE,
+            VulkanAccess::SHADER_READ,
             VulkanAccess::TRANSFER_READ,
         )?;
         recorder.record_copy_image_to_buffer(
@@ -292,11 +295,11 @@ impl CameraToCudaCopyProcessor::Processor {
         recorder.record_image_barrier(
             &texture,
             VulkanLayout::TRANSFER_SRC_OPTIMAL,
-            VulkanLayout::GENERAL,
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
             VulkanStage::ALL_TRANSFER,
-            VulkanStage::ALL_COMMANDS,
+            VulkanStage::FRAGMENT_SHADER,
             VulkanAccess::TRANSFER_READ,
-            VulkanAccess::MEMORY_READ | VulkanAccess::MEMORY_WRITE,
+            VulkanAccess::SHADER_READ,
         )?;
         // Signal `produce_done` on GPU-queue completion (single-writer edge) —
         // the cross-process consumer's `acquire_read` unblocks off this value.
