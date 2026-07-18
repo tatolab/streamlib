@@ -964,11 +964,11 @@ const CHECK_PACKAGES_FACADE_DEP: &str = "packages-no-facade-runtime-dep";
 
 const PACKAGES_FACADE_DEP_RATIONALE: &str = "a packages/* crate must not carry the full `streamlib` facade as a runtime dep — a distributable .slpkg builds engine-free against the plugin-authoring SDK; the facade is host-by-design only for api-server + test-fixtures. Move it to [dev-dependencies] or convert the package to the engine-free authoring SDK";
 
-/// The `packages/*` crates that still link the `streamlib` facade as a
-/// non-dev runtime dep (green baseline). `api-server` + `test-fixtures` are
-/// permanent (host-by-design); the remaining entries are the shrinking
-/// conversion backlog, each gated on a new engine-free primitive — remove each
-/// entry as its package converts to the engine-free plugin-authoring SDK.
+/// The `packages/*` crates that link the `streamlib` facade as a non-dev
+/// runtime dep. `api-server` + `test-fixtures` are the only permitted linkers
+/// (host-by-design); every distributable package builds engine-free against
+/// the plugin-authoring SDK. A newly-carved package is NOT added here — it
+/// converts to the engine-free SDK instead.
 const PACKAGES_FACADE_DEP_ALLOWLIST: &[AllowEntry] = &[
     AllowEntry {
         path: "packages/api-server/Cargo.toml",
@@ -979,16 +979,6 @@ const PACKAGES_FACADE_DEP_ALLOWLIST: &[AllowEntry] = &[
         path: "packages/test-fixtures/Cargo.toml",
         kind: AllowKind::ExactFile,
         rationale: "permanent, host-by-design: test-fixtures run host-side under cargo test and legitimately link the full facade",
-    },
-    // Shrinking conversion backlog — each drops off as its package converts
-    // to the engine-free plugin-authoring SDK. The remaining entries are
-    // gated on a new engine-free primitive (present target, exportable
-    // timelines / surface-store registration, hardware encode/decode) that
-    // the package names the raw host device without.
-    AllowEntry {
-        path: "packages/camera/Cargo.toml",
-        kind: AllowKind::ExactFile,
-        rationale: "pre-conversion facade linker (shrinking backlog)",
     },
 ];
 
@@ -1073,20 +1063,15 @@ const ENGINE_BRIDGE_PATH: &str = "streamlib::sdk::engine::";
 /// bare identifier (word boundaries) so a longer lookalike does not trip it.
 const HOST_DEVICE_ARC_IDENT: &str = "host_vulkan_device_arc";
 
-/// The `packages/*` dirs whose source currently reaches the engine bridge or
-/// the host device (green baseline). `test-fixtures` is permanent (host-side);
-/// the rest are the shrinking conversion backlog.
+/// The `packages/*` dirs whose source may reach the engine bridge or the host
+/// device. `test-fixtures` is the only permitted reacher (host-side, exercises
+/// the bridge by design); a distributable package's GPU code goes through the
+/// cdylib-safe FullAccess primitives instead.
 const PACKAGES_ENGINE_REACH_ALLOWLIST: &[AllowEntry] = &[
     AllowEntry {
         path: "packages/test-fixtures/",
         kind: AllowKind::PathPrefix,
         rationale: "permanent: test-fixtures run host-side and exercise the engine bridge directly by design",
-    },
-    // Shrinking conversion backlog.
-    AllowEntry {
-        path: "packages/camera/",
-        kind: AllowKind::PathPrefix,
-        rationale: "pre-conversion engine-bridge reacher (shrinking backlog)",
     },
 ];
 
@@ -2543,13 +2528,13 @@ streamlib = { version = "0.6.0" }
     #[test]
     fn allows_facade_dep_in_allowlisted_package() {
         let dir = empty_workspace();
-        // packages/camera is on the seeded green baseline — its facade dep must
-        // NOT trip the ratchet.
+        // packages/api-server is a permanent host-by-design linker — its facade
+        // dep must NOT trip the ratchet.
         write_fixture(
             dir.path(),
-            "packages/camera/Cargo.toml",
+            "packages/api-server/Cargo.toml",
             r#"[package]
-name = "streamlib-camera"
+name = "streamlib-api-server"
 version = "0.1.0"
 edition = "2021"
 
@@ -2645,10 +2630,11 @@ streamlib = { version = "0.6.0" }
     #[test]
     fn allows_engine_reach_in_allowlisted_package() {
         let dir = empty_workspace();
-        // packages/camera is on the seeded baseline — both reach forms pass.
+        // packages/test-fixtures is the permanent host-side reacher — both
+        // reach forms pass.
         write_fixture(
             dir.path(),
-            "packages/camera/src/linux/camera.rs",
+            "packages/test-fixtures/src/gpu_fixture.rs",
             "use streamlib::sdk::engine::host_rhi::VulkanDevice;\nfn f() { let d = full.host_vulkan_device_arc().unwrap(); }\n",
         );
         let report = scan_all(dir.path()).unwrap();
