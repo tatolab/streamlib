@@ -190,13 +190,13 @@ same condition so an author sees the error.
 `STREAMLIB_ABI_VERSION` (in `streamlib-plugin-abi`) is the C-ABI contract a
 `dlopen`-loaded package cdylib and the source-built host must agree on. When
 they diverge, the load handshake refuses the cdylib with
-`PluginAbiVersionMismatch` — working as designed on a genuine version skew.
-The `cargo xtask check-abi-republish` CI gate keeps the two in step at PR time:
-a change to `STREAMLIB_ABI_VERSION` without a matching `[workspace.package]`
-version change fails the check (a registry-free `git` diff of merge-base vs.
-working tree). The pin sweep + SDK republish a bump implies are the
-release-time actions the gate points a bumper toward, executed against whatever
-registry the SDK ships to.
+`PluginAbiVersionMismatch` — the runtime guard against a genuine version skew.
+The `[workspace.package]` version is owned by release-please and bumped
+automatically from conventional-commit types on its release PR; an
+ABI-affecting change lands as a `feat` (or breaking) commit so the project
+version rises with the ABI. Under the `streamlib link` consumption model a
+package resolves the engine from a matched local checkout, so no separate SDK
+republish is implied by a bump.
 
 ## Emitting a tree
 
