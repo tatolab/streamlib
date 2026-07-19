@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.13](https://github.com/tatolab/streamlib/compare/v0.7.12...v0.7.13) (2026-07-19)
+
+
+### Features
+
+* **cli:** derive + reconcile package dependencies; streamlib add records the range ([#1465](https://github.com/tatolab/streamlib/issues/1465)) ([e5cf615](https://github.com/tatolab/streamlib/commit/e5cf6152ca7d68bdccfc52aa446a3a90d78d032c))
+
 ## [0.7.12](https://github.com/tatolab/streamlib/compare/v0.7.11...v0.7.12) (2026-07-19)
 
 
