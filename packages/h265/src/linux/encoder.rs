@@ -34,12 +34,12 @@ use streamlib_plugin_abi::{
 // ============================================================================
 
 #[streamlib_plugin_sdk::sdk::processor(
-    "@tatolab/h265/H265Encoder@1.0.0",
+    "@tatolab/h265/H265Encoder",
     execution = reactive,
     scheduling = high,
     config = crate::_generated_::H265EncoderConfig,
-    input("video_in", "@tatolab/core/VideoFrame@1.0.0", read_mode = "read_next_in_order", buffer_size = 8),
-    output("encoded_video_out", "@tatolab/core/EncodedVideoFrame@1.0.0"),
+    input("video_in", "@tatolab/core/VideoFrame", read_mode = "read_next_in_order", buffer_size = 8),
+    output("encoded_video_out", "@tatolab/core/EncodedVideoFrame"),
 )]
 pub struct H265EncoderProcessor {
     /// Vulkan Video hardware encoder session (minted lazily from the first

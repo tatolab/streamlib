@@ -110,12 +110,12 @@ struct LinuxState {
 // fields via `Default::default()`. Schemas-driven config is the
 // only path that flows external config through to the processor.)
 #[streamlib_plugin_sdk::sdk::processor(
-    "@tatolab/camera/CameraToCudaCopy@1.0.0",
+    "@tatolab/camera/CameraToCudaCopy",
     execution = reactive,
     scheduling = high,
     config = crate::_generated_::CameraToCudaCopyConfig,
-    input("video_in", "@tatolab/core/VideoFrame@1.0.0"),
-    output("video_out", "@tatolab/core/VideoFrame@1.0.0"),
+    input("video_in", "@tatolab/core/VideoFrame"),
+    output("video_out", "@tatolab/core/VideoFrame"),
 )]
 pub struct CameraToCudaCopyProcessor {
     backend: GpuBackendStash,

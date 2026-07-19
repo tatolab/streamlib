@@ -19,7 +19,7 @@ const INITIAL_RETRY_DELAY_MS: u64 = 500;
 const MAX_RETRY_DELAY_MS: u64 = 10_000;
 
 #[streamlib_plugin_sdk::sdk::processor(
-    "@tatolab/moq/MoqSubscribeTrack@1.0.0",
+    "@tatolab/moq/MoqSubscribeTrack",
     execution = manual,
     config = crate::_generated_::MoqSubscribeTrackConfig,
     output("data_out", any),

@@ -24,10 +24,10 @@ use std::sync::Arc;
 const DEFAULT_FPS: u32 = 10;
 
 #[streamlib_plugin_sdk::sdk::processor(
-    "@tatolab/debug-utilities/JpegBytesSource@1.0.0",
+    "@tatolab/debug-utilities/JpegBytesSource",
     execution = manual,
     config = crate::_generated_::JpegBytesSourceConfig,
-    output("encoded_jpeg", "@tatolab/jpeg/EncodedJpegFrame@1.0.7"),
+    output("encoded_jpeg", "@tatolab/jpeg/EncodedJpegFrame"),
 )]
 pub struct JpegBytesSourceProcessor {
     /// JPEG bytes loaded from disk at setup time.

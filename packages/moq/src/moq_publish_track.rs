@@ -11,7 +11,7 @@ use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContex
 use streamlib_plugin_sdk::sdk::error::{Error, Result};
 
 #[streamlib_plugin_sdk::sdk::processor(
-    "@tatolab/moq/MoqPublishTrack@1.0.0",
+    "@tatolab/moq/MoqPublishTrack",
     execution = reactive,
     config = crate::_generated_::MoqPublishTrackConfig,
     input("data_in", any),

@@ -54,11 +54,11 @@ struct OscillatorState {
 }
 
 #[streamlib_plugin_sdk::sdk::processor(
-    "@tatolab/audio/ChordGenerator@1.0.0",
+    "@tatolab/audio/ChordGenerator",
     execution = manual,
     scheduling = realtime,
     config = crate::_generated_::ChordGeneratorConfig,
-    output("chord", "@tatolab/core/AudioFrame@1.0.0"),
+    output("chord", "@tatolab/core/AudioFrame"),
 )]
 pub struct ChordGeneratorProcessor {
     oscillators: Arc<Mutex<Option<OscillatorState>>>,

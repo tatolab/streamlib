@@ -7,13 +7,13 @@ use streamlib_plugin_sdk::sdk::error::{Result, Error};
 use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
 #[streamlib_plugin_sdk::sdk::processor(
-    "@tatolab/audio/AudioMixer@1.0.0",
+    "@tatolab/audio/AudioMixer",
     execution = reactive,
     scheduling = realtime,
     config = crate::_generated_::AudioMixerConfig,
-    input("left", "@tatolab/core/AudioFrame@1.0.0", read_mode = "read_next_in_order", buffer_size = 32),
-    input("right", "@tatolab/core/AudioFrame@1.0.0", read_mode = "read_next_in_order", buffer_size = 32),
-    output("audio", "@tatolab/core/AudioFrame@1.0.0"),
+    input("left", "@tatolab/core/AudioFrame", read_mode = "read_next_in_order", buffer_size = 32),
+    input("right", "@tatolab/core/AudioFrame", read_mode = "read_next_in_order", buffer_size = 32),
+    output("audio", "@tatolab/core/AudioFrame"),
 )]
 pub struct AudioMixerProcessor {
     sample_rate: u32,

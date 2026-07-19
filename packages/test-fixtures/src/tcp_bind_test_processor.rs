@@ -26,7 +26,7 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
 
 #[streamlib::sdk::processor(
-    "@tatolab/test-fixtures/TcpBindTestProcessor@1.0.0",
+    "@tatolab/test-fixtures/TcpBindTestProcessor",
     execution = manual,
     config = crate::_generated_::TcpBindTestProcessorConfig,
 )]

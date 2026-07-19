@@ -32,9 +32,9 @@ use streamlib_plugin_abi::export_plugin;
 const OUTPUT_ENV_VAR: &str = "STREAMLIB_POLYGLOT_MANUAL_SOURCE_SINK_OUTPUT";
 
 #[streamlib_plugin_sdk::sdk::processor(
-    "@tatolab/polyglot-manual-source-counting-sink/PolyglotManualSourceCountingSink@0.1.0",
+    "@tatolab/polyglot-manual-source-counting-sink/PolyglotManualSourceCountingSink",
     execution = reactive,
-    input("video_in", "@tatolab/core/VideoFrame@1.0.0"),
+    input("video_in", "@tatolab/core/VideoFrame"),
 )]
 pub struct PolyglotManualSourceCountingSink {
     output_file: Option<PathBuf>,

@@ -32,7 +32,7 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
 
 #[streamlib::sdk::processor(
-    "@tatolab/test-fixtures/ConcurrentEscalateTestProcessor@1.0.0",
+    "@tatolab/test-fixtures/ConcurrentEscalateTestProcessor",
     execution = manual,
     config = crate::_generated_::ConcurrentEscalateTestProcessorConfig,
 )]

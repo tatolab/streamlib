@@ -10,7 +10,7 @@ use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::ContinuousProcessor;
 
 #[streamlib::sdk::processor(
-    "@tatolab/test-fixtures/TestConfiguredProcessor@1.0.0",
+    "@tatolab/test-fixtures/TestConfiguredProcessor",
     execution = continuous,
     config = crate::_generated_::TestConfiguredProcessorConfig,
 )]

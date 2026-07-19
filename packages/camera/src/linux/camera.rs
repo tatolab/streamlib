@@ -37,11 +37,11 @@ pub struct LinuxCameraDevice {
 }
 
 #[streamlib_plugin_sdk::sdk::processor(
-    "@tatolab/camera/Camera@1.0.0",
+    "@tatolab/camera/Camera",
     execution = manual,
     scheduling = high,
     config = crate::_generated_::CameraConfig,
-    output("video", "@tatolab/core/VideoFrame@1.0.0"),
+    output("video", "@tatolab/core/VideoFrame"),
 )]
 pub struct LinuxCameraProcessor {
     camera_name: String,

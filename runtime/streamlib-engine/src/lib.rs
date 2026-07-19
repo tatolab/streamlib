@@ -54,7 +54,7 @@ pub mod schemas {
 }
 
 // Re-export attribute macros for processor syntax:
-// - #[streamlib::processor("@org/pkg/Type@version", …)] - identity + execution + ports in code
+// - #[streamlib::processor("@org/pkg/Type", …)] - identity + execution + ports in code
 // - #[derive(ConfigDescriptor)] - Config field metadata derive macro
 pub use streamlib_macros::{
     ConfigDescriptor, module_ident, module_ident_any_version, module_ident_joined,

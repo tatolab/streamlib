@@ -28,10 +28,10 @@ unsafe extern "C" {
 }
 
 #[streamlib::sdk::processor(
-    "@tatolab/camera-rust-plugin/GrayscaleRust@0.1.0",
+    "@tatolab/camera-rust-plugin/GrayscaleRust",
     execution = reactive,
-    input("video_in", "@tatolab/core/VideoFrame@1.0.0"),
-    output("video_out", "@tatolab/core/VideoFrame@1.0.0"),
+    input("video_in", "@tatolab/core/VideoFrame"),
+    output("video_out", "@tatolab/core/VideoFrame"),
 )]
 pub struct GrayscaleProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,

@@ -32,7 +32,7 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ContinuousProcessor;
 
 #[streamlib::sdk::processor(
-    "@tatolab/test-fixtures/LifecycleProbeProcessor@1.0.0",
+    "@tatolab/test-fixtures/LifecycleProbeProcessor",
     execution = continuous,
     config = crate::_generated_::LifecycleProbeProcessorConfig,
 )]

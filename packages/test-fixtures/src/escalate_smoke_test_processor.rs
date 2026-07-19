@@ -52,7 +52,7 @@ use streamlib::sdk::processors::ManualProcessor;
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
 
 #[streamlib::sdk::processor(
-    "@tatolab/test-fixtures/EscalateSmokeTestProcessor@1.0.0",
+    "@tatolab/test-fixtures/EscalateSmokeTestProcessor",
     execution = manual,
     config = crate::_generated_::EscalateSmokeTestProcessorConfig,
 )]

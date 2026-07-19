@@ -215,14 +215,14 @@ struct Intermediate {
 }
 
 #[streamlib_plugin_sdk::sdk::processor(
-    "@tatolab/camera-python-display-effects/BlendingCompositor@0.1.0",
+    "@tatolab/camera-python-display-effects/BlendingCompositor",
     execution = manual,
     scheduling = realtime,
-    input("video_in", "@tatolab/core/VideoFrame@1.0.0"),
-    input("lower_third_in", "@tatolab/core/VideoFrame@1.0.0"),
-    input("watermark_in", "@tatolab/core/VideoFrame@1.0.0"),
-    input("pip_in", "@tatolab/core/VideoFrame@1.0.0"),
-    output("video_out", "@tatolab/core/VideoFrame@1.0.0"),
+    input("video_in", "@tatolab/core/VideoFrame"),
+    input("lower_third_in", "@tatolab/core/VideoFrame"),
+    input("watermark_in", "@tatolab/core/VideoFrame"),
+    input("pip_in", "@tatolab/core/VideoFrame"),
+    output("video_out", "@tatolab/core/VideoFrame"),
 )]
 pub struct BlendingCompositorProcessor {
     config: BlendingCompositorConfig,

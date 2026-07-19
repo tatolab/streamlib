@@ -25,10 +25,10 @@ use std::sync::Arc;
 const RING_DEPTH: usize = 2;
 
 #[streamlib_plugin_sdk::sdk::processor(
-    "@tatolab/debug-utilities/BgraFileSource@1.0.0",
+    "@tatolab/debug-utilities/BgraFileSource",
     execution = manual,
     config = crate::_generated_::BgraFileSourceConfig,
-    output("video", "@tatolab/core/VideoFrame@1.0.0"),
+    output("video", "@tatolab/core/VideoFrame"),
 )]
 pub struct BgraFileSourceProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,

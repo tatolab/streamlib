@@ -14,7 +14,7 @@ use crate::core::processors::PROCESSOR_REGISTRY;
 
 /// Mock processor with two input ports + two output ports.
 #[crate::processor(
-    "@tatolab/streamlib-engine/TestMockProcessor@1.0.0",
+    "@tatolab/streamlib-engine/TestMockProcessor",
     execution = manual,
     input("in1", any),
     input("in2", any),
@@ -46,7 +46,7 @@ impl crate::core::ManualProcessor for MockProcessor::Processor {
 
 /// Mock processor with only output ports.
 #[crate::processor(
-    "@tatolab/streamlib-engine/TestMockOutputOnlyProcessor@1.0.0",
+    "@tatolab/streamlib-engine/TestMockOutputOnlyProcessor",
     execution = manual,
     output("out1", any),
     output("out2", any),
@@ -76,7 +76,7 @@ impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
 
 /// Mock processor with only input ports.
 #[crate::processor(
-    "@tatolab/streamlib-engine/TestMockInputOnlyProcessor@1.0.0",
+    "@tatolab/streamlib-engine/TestMockInputOnlyProcessor",
     execution = manual,
     input("in1", any),
     input("in2", any),

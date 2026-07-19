@@ -15,7 +15,7 @@ use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextFullAccess};
 // Define a simple processor. The macro emits the type, port markers,
 // descriptor, and `schema_ident()` accessor — it never auto-registers.
 #[streamlib::sdk::processor(
-    "@tatolab/streamlib-engine/TestProcessor@1.0.0",
+    "@tatolab/streamlib-engine/TestProcessor",
     execution = manual,
     input("video_in", any),
     output("video_out", any),
@@ -118,7 +118,9 @@ fn test_processor_schema_ident_declared_in_attribute() {
     assert_eq!(ident.org.as_str(), "tatolab");
     assert_eq!(ident.package.as_str(), "streamlib-engine");
     assert_eq!(ident.r#type.as_str(), "TestProcessor");
-    assert_eq!(ident.version.major, 1);
+    // The version-free attribute grammar (#1409) synthesizes the 0.0.0
+    // version-free sentinel — versions are derived at package-build time.
+    assert_eq!(ident.version.major, 0);
     assert_eq!(ident.version.minor, 0);
     assert_eq!(ident.version.patch, 0);
 }
@@ -127,9 +129,10 @@ fn test_processor_schema_ident_declared_in_attribute() {
 fn test_processor_schema_ident_renders_canonical_joined_form() {
     // The structured SchemaIdent's Display impl produces the canonical
     // `@<org>/<package>/<Type>@<major.minor.patch>` joined form used by
-    // `max_payload_bytes_for_port_spec` and other lookup paths.
+    // `max_payload_bytes_for_port_spec` and other lookup paths. The
+    // version-free grammar renders the 0.0.0 sentinel.
     assert_eq!(
         TestProcessor::schema_ident().to_string(),
-        "@tatolab/streamlib-engine/TestProcessor@1.0.0"
+        "@tatolab/streamlib-engine/TestProcessor@0.0.0"
     );
 }

@@ -34,7 +34,7 @@ use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::{ContinuousProcessor, ManualProcessor};
 
 #[streamlib::sdk::processor(
-    "@tatolab/test-fixtures/PanickingManualLifecycleProcessor@1.0.0",
+    "@tatolab/test-fixtures/PanickingManualLifecycleProcessor",
     execution = manual,
     config = crate::_generated_::PanickingManualLifecycleProcessorConfig,
 )]
@@ -85,7 +85,7 @@ impl ManualProcessor for PanickingManualLifecycle::Processor {
 }
 
 #[streamlib::sdk::processor(
-    "@tatolab/test-fixtures/PanickingContinuousLifecycleProcessor@1.0.0",
+    "@tatolab/test-fixtures/PanickingContinuousLifecycleProcessor",
     execution = continuous,
     config = crate::_generated_::PanickingContinuousLifecycleProcessorConfig,
 )]

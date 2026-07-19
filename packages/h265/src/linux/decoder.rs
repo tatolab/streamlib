@@ -33,12 +33,12 @@ use streamlib_plugin_abi::{VideoCodecRepr, VideoDecoderSessionDescriptorRepr};
 // ============================================================================
 
 #[streamlib_plugin_sdk::sdk::processor(
-    "@tatolab/h265/H265Decoder@1.0.0",
+    "@tatolab/h265/H265Decoder",
     execution = reactive,
     scheduling = high,
     config = crate::_generated_::H265DecoderConfig,
-    input("encoded_video_in", "@tatolab/core/EncodedVideoFrame@1.0.0", read_mode = "read_next_in_order", buffer_size = 16),
-    output("video_out", "@tatolab/core/VideoFrame@1.0.0"),
+    input("encoded_video_in", "@tatolab/core/EncodedVideoFrame", read_mode = "read_next_in_order", buffer_size = 16),
+    output("video_out", "@tatolab/core/VideoFrame"),
 )]
 pub struct H265DecoderProcessor {
     /// Vulkan Video hardware decoder session (minted in `setup`). `!Clone` —

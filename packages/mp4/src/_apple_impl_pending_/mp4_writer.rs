@@ -27,10 +27,10 @@ extern "C" {
 }
 
 #[crate::processor(
-    "@tatolab/mp4/Mp4Writer@1.0.0",
+    "@tatolab/mp4/Mp4Writer",
     execution = reactive,
     config = crate::_generated_::LinuxMp4WriterConfig,
-    input("video_in", "@tatolab/core/VideoFrame@1.0.0", read_mode = "read_next_in_order", overflow = "block", buffer_size = 32),
+    input("video_in", "@tatolab/core/VideoFrame", read_mode = "read_next_in_order", overflow = "block", buffer_size = 32),
 )]
 pub struct AppleMp4WriterProcessor {
     // RuntimeContext for main thread dispatch

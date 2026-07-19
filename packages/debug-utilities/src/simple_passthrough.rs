@@ -7,11 +7,11 @@ use streamlib_plugin_sdk::sdk::error::Result;
 use streamlib_plugin_sdk::sdk::processors::ManualProcessor;
 
 #[streamlib_plugin_sdk::sdk::processor(
-    "@tatolab/debug-utilities/SimplePassthrough@1.0.0",
+    "@tatolab/debug-utilities/SimplePassthrough",
     execution = manual,
     config = crate::_generated_::SimplePassthroughConfig,
-    input("input", "@tatolab/core/VideoFrame@1.0.0", read_mode = "skip_to_latest", buffer_size = 4),
-    output("output", "@tatolab/core/VideoFrame@1.0.0"),
+    input("input", "@tatolab/core/VideoFrame", read_mode = "skip_to_latest", buffer_size = 4),
+    output("output", "@tatolab/core/VideoFrame"),
 )]
 pub struct SimplePassthroughProcessor;
 

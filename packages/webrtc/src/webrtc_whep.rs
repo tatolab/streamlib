@@ -22,11 +22,11 @@ use tokio::sync::mpsc;
 // ============================================================================
 
 #[streamlib_plugin_sdk::sdk::processor(
-    "@tatolab/webrtc/WebrtcWhep@1.0.0",
+    "@tatolab/webrtc/WebrtcWhep",
     execution = manual,
     config = crate::_generated_::WebrtcWhepConfig,
-    output("encoded_video_out", "@tatolab/core/EncodedVideoFrame@1.0.0"),
-    output("encoded_audio_out", "@tatolab/core/EncodedAudioFrame@1.0.0"),
+    output("encoded_video_out", "@tatolab/core/EncodedVideoFrame"),
+    output("encoded_audio_out", "@tatolab/core/EncodedAudioFrame"),
 )]
 pub struct WebRtcWhepProcessor {
     // WHEP client (owns WebRTC session)

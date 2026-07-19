@@ -327,11 +327,11 @@ unsafe fn forward_camera_iosurface_directly(
 }
 
 #[streamlib::sdk::processor(
-    "@tatolab/camera/Camera@1.0.0",
+    "@tatolab/camera/Camera",
     execution = manual,
     scheduling = high,
     config = crate::_generated_::CameraConfig,
-    output("video", "@tatolab/core/VideoFrame@1.0.0"),
+    output("video", "@tatolab/core/VideoFrame"),
 )]
 pub struct AppleCameraProcessor {
     camera_name: String,

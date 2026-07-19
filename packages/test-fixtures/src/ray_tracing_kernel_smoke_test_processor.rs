@@ -91,7 +91,7 @@ const SMOKE_RCHIT_SPV: &[u8] = include_bytes!(concat!(
 const SMOKE_SURFACE_SIZE: u32 = 64;
 
 #[streamlib::sdk::processor(
-    "@tatolab/test-fixtures/RayTracingKernelSmokeTestProcessor@1.0.0",
+    "@tatolab/test-fixtures/RayTracingKernelSmokeTestProcessor",
     execution = manual,
     config = crate::_generated_::RayTracingKernelSmokeTestProcessorConfig,
 )]

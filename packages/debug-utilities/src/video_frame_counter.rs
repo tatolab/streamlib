@@ -48,10 +48,10 @@ pub fn reset() {
 }
 
 #[streamlib_plugin_sdk::sdk::processor(
-    "@tatolab/debug-utilities/VideoFrameCounter@1.0.0",
+    "@tatolab/debug-utilities/VideoFrameCounter",
     execution = reactive,
     config = crate::_generated_::VideoFrameCounterConfig,
-    input("input", "@tatolab/core/VideoFrame@1.0.0", read_mode = "read_next_in_order", buffer_size = 16),
+    input("input", "@tatolab/core/VideoFrame", read_mode = "read_next_in_order", buffer_size = 16),
 )]
 pub struct VideoFrameCounterProcessor;
 

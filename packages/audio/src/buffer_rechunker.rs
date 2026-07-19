@@ -6,12 +6,12 @@ use streamlib_plugin_sdk::sdk::error::Result;
 use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
 #[streamlib_plugin_sdk::sdk::processor(
-    "@tatolab/audio/BufferRechunker@1.0.0",
+    "@tatolab/audio/BufferRechunker",
     execution = reactive,
     scheduling = realtime,
     config = crate::_generated_::BufferRechunkerConfig,
-    input("audio_in", "@tatolab/core/AudioFrame@1.0.0", read_mode = "read_next_in_order", buffer_size = 32),
-    output("audio_out", "@tatolab/core/AudioFrame@1.0.0"),
+    input("audio_in", "@tatolab/core/AudioFrame", read_mode = "read_next_in_order", buffer_size = 32),
+    output("audio_out", "@tatolab/core/AudioFrame"),
 )]
 pub struct BufferRechunkerProcessor {
     buffer: Vec<f32>,

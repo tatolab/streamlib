@@ -104,7 +104,7 @@ fn generate_runtime_name() -> String {
 }
 
 #[streamlib::sdk::processor(
-    "@tatolab/api-server/ApiServer@1.0.0",
+    "@tatolab/api-server/ApiServer",
     execution = manual,
     config = crate::_generated_::ApiServerConfig,
 )]

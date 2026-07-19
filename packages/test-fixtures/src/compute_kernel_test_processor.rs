@@ -81,7 +81,7 @@ const CPU_REF_DOUBLER_BINDINGS: &[ComputeBindingSpec] = &[
 ];
 
 #[streamlib::sdk::processor(
-    "@tatolab/test-fixtures/ComputeKernelTestProcessor@1.0.0",
+    "@tatolab/test-fixtures/ComputeKernelTestProcessor",
     execution = manual,
     config = crate::_generated_::ComputeKernelTestProcessorConfig,
 )]

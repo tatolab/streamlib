@@ -97,10 +97,10 @@ struct ReadbackCreationBackoff {
 }
 
 #[streamlib_plugin_sdk::sdk::processor(
-    "@tatolab/frame-tap/FrameTap@1.0.0",
+    "@tatolab/frame-tap/FrameTap",
     execution = reactive,
     config = crate::_generated_::FrameTapConfig,
-    input("video_in", "@tatolab/core/VideoFrame@1.0.0"),
+    input("video_in", "@tatolab/core/VideoFrame"),
 )]
 pub struct FrameTapProcessor {
     /// LimitedAccess context for resolving surfaces and escalating for
