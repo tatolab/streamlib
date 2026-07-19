@@ -3,21 +3,29 @@
 
 """Decorators for defining StreamLib processors in Python.
 
-`@processor("PascalCase")` mirrors Rust's `#[streamlib::processor("Camera")]`
-proc-macro: a positional PascalCase short name. The decorator reads the
-package identity (`package: { org, name, version }`) from the sibling
-`streamlib.yaml`, composes a structured
-[`SchemaIdent`][streamlib.schema_ident.SchemaIdent] attached to the class as
-`__streamlib_schema_ident__`, and registers the processor in the
-process-global [`_processor_registry`][streamlib._processor_registry].
+`@processor("@org/package/Type", execution=...)` mirrors Rust's
+`#[processor("@org/package/Type", execution = ...)]` proc-macro
+(`sdk/streamlib-processor-extract/src/grammar.rs`): identity, execution
+mode, and scheduling are declared **in code**, never read from a sibling
+`streamlib.yaml` at decoration time. The identity string is **version-free**
+(`@org/package/Type`, no `@version`) — a schema ref is an identity the runtime
+binds version-blind, and the concrete version is derived at package-build time,
+never hand-authored (#1409). The decorator synthesizes the `SemVer 0.0.0`
+version-free sentinel and attaches a structured
+[`SchemaIdent`][streamlib.schema_ident.SchemaIdent] to the class as
+`__streamlib_schema_ident__`, registering the processor in the process-global
+[`_processor_registry`][streamlib._processor_registry].
+
+Omitting the identity synthesizes `@app/local/<ClassName>` — a bare `.py`
+module with no `streamlib.yaml` defines a working local processor.
 
 The decorator is the manifest truth-source for the `processors:` set: a
 package's processors are derived by *importing* its modules and enumerating
 what `@processor` registered — never by reading a hand-authored `processors:`
-list. This is the Python analogue of the Rust `syn` source-scan in
-`sdk/streamlib-processor-extract` (there the scan reads the AST without
-running it; here extraction is import). Only the package identity comes from
-`streamlib.yaml`; the processor set comes from code. See
+list, and never by reading `package:` identity out of `streamlib.yaml`. This is
+the Python analogue of the Rust `syn` source-scan in
+`sdk/streamlib-processor-extract` (there the scan reads the AST without running
+it; here extraction is import). See
 [`streamlib.extract_processors`][].
 
 Schema references in port declarations (`@input(schema=...)` /
@@ -52,14 +60,19 @@ human-facing display.
 
 from __future__ import annotations
 
-import inspect
 import re
-from pathlib import Path
 from typing import Optional, Pattern, Type, Union
 
-from ._manifest import ManifestParseError, read_package_block
 from ._processor_registry import RegisteredProcessor, register_processor
 from .schema_ident import SchemaIdent
+
+# The version-free sentinel every code-declared identity carries. The concrete
+# release version is derived at package-build time (#1409); the runtime schema
+# registry stores and looks up unversioned, so `0.0.0` is an inert placeholder.
+_VERSION_FREE_SENTINEL = "0.0.0"
+
+_EXECUTION_MODES = ("reactive", "manual", "continuous")
+_SCHEDULING_PRIORITIES = ("realtime", "high", "normal")
 
 
 # =============================================================================
@@ -67,75 +80,67 @@ from .schema_ident import SchemaIdent
 # =============================================================================
 
 
-def processor(short_name: str):
-    """Mark a class as a StreamLib processor (PascalCase positional short name).
+def processor(
+    identity: Optional[str] = None,
+    *,
+    execution: str,
+    interval_ms: int = 0,
+    scheduling: Optional[str] = None,
+    description: Optional[str] = None,
+):
+    """Mark a class as a StreamLib processor — identity and mode declared in code.
 
-    Mirrors Rust's `#[streamlib::processor("Camera")]` macro. At decoration
-    time, the decorator locates the sibling `streamlib.yaml` (next to the
-    file containing the decorated class), reads its
-    `package: { org, name, version }` block for the package identity,
-    constructs a structured `SchemaIdent` attached to the class as
-    `__streamlib_schema_ident__`, and registers the processor in the
-    process-global registry so the import-and-enumerate extractor can derive
-    the package's `processors:` set from code. The `short_name` is NOT
-    validated against a `processors:` list in the manifest — the decorator IS
-    that list.
+    Mirrors Rust's `#[processor("@org/package/Type", execution = ...)]` macro.
+    Nothing is read from disk: the version-free `@org/package/Type` identity, the
+    execution mode, and the scheduling priority all come from the arguments. The
+    decorator synthesizes the `0.0.0` version-free sentinel, attaches a structured
+    `SchemaIdent` as `__streamlib_schema_ident__`, and registers the processor in
+    the process-global registry so the import-and-enumerate extractor can derive
+    the package's `processors:` set from code.
 
     Args:
-        short_name: PascalCase type name — the processor's identity.
+        identity: Version-free `@org/package/Type` string. Omit to synthesize
+            `@app/local/<ClassName>` — a bare module with no `streamlib.yaml`
+            still defines a working local processor.
+        execution: `"reactive"`, `"manual"`, or `"continuous"`. Required — the
+            execution mode is authored in code, mirroring the Rust grammar.
+        interval_ms: Minimum interval between `process()` calls, only meaningful
+            for `execution="continuous"`.
+        scheduling: `"realtime"`, `"high"`, or `"normal"`; omit for the default.
+        description: Human-readable processor description for introspection.
 
     Raises:
-        FileNotFoundError: if no sibling `streamlib.yaml` is found.
-        ManifestParseError: if the manifest is malformed or missing
-            required `package:` fields.
+        ValueError: if `identity` is a malformed or versioned identity string,
+            if `execution` is not a known mode, if `scheduling` is not a known
+            priority, or if an omitted identity cannot synthesize a valid
+            `@app/local` type from the class name.
 
     Example:
         ```python
         from streamlib import processor
 
-        @processor("CyberpunkProcessor")
-        class CyberpunkProcessor:
+        @processor("@tatolab/camera/Camera", execution="manual", scheduling="high")
+        class Camera:
+            ...
+
+        @processor(execution="reactive")  # → @app/local/LocalFilter
+        class LocalFilter:
             ...
         ```
-
-    Wire format and IPC always carry the full structured `SchemaIdent`;
-    the short-name positional is an authoring convenience for the
-    processor's own identity declaration only — schema references in
-    port declarations (`@input(schema=...)` / `@output(schema=...)`)
-    have no analogous shorthand and require a structured carrier.
     """
-    if not isinstance(short_name, str):
+    if identity is not None and not isinstance(identity, str):
         raise TypeError(
-            f"@processor() takes a positional PascalCase short name (str); "
-            f"got {type(short_name).__name__}. The legacy `name=`/`description=`/"
-            f"`execution=` kwarg form is removed (pre-1.0 policy)."
+            f"@processor() identity must be a version-free `@org/package/Type` "
+            f"string or omitted (for `@app/local/<ClassName>`); got "
+            f"{type(identity).__name__}."
         )
+    execution_spec = _normalize_execution(execution, interval_ms)
+    scheduling_spec = _normalize_scheduling(scheduling)
 
     def decorator(cls):
-        manifest_path = _locate_sibling_manifest(cls)
-        try:
-            package = read_package_block(manifest_path)
-        except ManifestParseError:
-            raise
-        except FileNotFoundError as exc:
-            raise FileNotFoundError(
-                f"streamlib.yaml not found at {manifest_path}. "
-                f"@processor({short_name!r}) requires a sibling streamlib.yaml "
-                f"with a `package: {{ org, name, version }}` block."
-            ) from exc
-
-        # Schema idents are release-only by invariant: a package may carry a
-        # `-dev.N` / `-rc.N` prerelease version, but its schema idents project
-        # onto the release core (mirrors Rust's `SemVer::release_core`). The
-        # 3-part `SchemaIdent` validator would otherwise reject a legitimately
-        # dev-versioned package's processors.
-        ident = SchemaIdent(
-            org=package.org,
-            package=package.name,
-            type_=short_name,
-            version=_release_core(package.version),
-        )
+        ident = _resolve_processor_identity(identity, cls)
         cls.__streamlib_schema_ident__ = ident
+        cls.__streamlib_execution__ = execution_spec
 
         # Collect port metadata declared by @input / @output for runtime
         # introspection. Port schemas are already SchemaIdent instances at
@@ -153,8 +158,11 @@ def processor(short_name: str):
 
         register_processor(
             RegisteredProcessor(
-                short_name=short_name,
+                short_name=ident.type_,
                 schema_ident=ident,
+                execution=execution_spec,
+                scheduling=scheduling_spec,
+                description=description,
                 inputs=tuple(inputs),
                 outputs=tuple(outputs),
                 class_qualname=getattr(cls, "__qualname__", cls.__name__),
@@ -166,50 +174,102 @@ def processor(short_name: str):
     return decorator
 
 
-# Package-version grammar: 3-part core + optional closed `-dev.N` / `-rc.N`
-# prerelease. Mirrors Rust's `SemVer::from_dotted` so all three runtimes
-# accept and reject the same manifests.
-_PACKAGE_VERSION_PATTERN: Pattern[str] = re.compile(
-    r"^(\d+\.\d+\.\d+)(?:-(?:dev|rc)\.\d+)?$"
-)
+# Version-free identity grammar: `@<org>/<package>/<Type>`, no trailing
+# `@<version>`. Mirrors Rust's `parse_schema_ident_str` in
+# `sdk/streamlib-processor-extract/src/grammar.rs`.
+_IDENTITY_PATTERN: Pattern[str] = re.compile(r"^@([^/@]+)/([^/@]+)/([^/@]+)$")
 
 
-def _release_core(version: str) -> str:
-    """Project a package version onto its release core `MAJOR.MINOR.PATCH`.
+def _resolve_processor_identity(identity: Optional[str], cls) -> SchemaIdent:
+    """Resolve the declared identity, or synthesize `@app/local/<ClassName>`."""
+    if identity is None:
+        type_name = getattr(cls, "__name__", None)
+        try:
+            return SchemaIdent(
+                org="app",
+                package="local",
+                type_=type_name,
+                version=_VERSION_FREE_SENTINEL,
+            )
+        except ValueError as exc:
+            raise ValueError(
+                f"cannot synthesize an `@app/local` identity for {cls!r}: "
+                f"{exc}. Declare an explicit `@org/package/Type` identity, or "
+                f"give the class a PascalCase name."
+            ) from exc
+    return _parse_identity_str(identity)
 
-    Package versions may carry a `-dev.N` / `-rc.N` prerelease, but schema
-    idents are release-only by invariant. Anything outside that closed
-    grammar (`-alpha.1`, `+build`, malformed ordinals) raises — identical
-    posture to Rust's manifest parsing, never a silent projection of an
-    invalid version. Mirrors Rust's `streamlib_idents::SemVer::release_core`.
+
+def _parse_identity_str(raw: str) -> SchemaIdent:
+    """Parse a version-free `@org/package/Type` string into a `SchemaIdent`.
+
+    The grammar is version-free (#1409): a trailing `@<version>` is rejected —
+    a schema ref is an identity the runtime binds version-blind, and versions
+    are derived at package-build time. The synthesized `SchemaIdent` carries
+    the `0.0.0` version-free sentinel. Mirrors Rust's `parse_schema_ident_str`.
     """
-    match = _PACKAGE_VERSION_PATTERN.match(version)
+    if not raw.startswith("@"):
+        raise ValueError(
+            f"schema identity {raw!r} must start with `@` "
+            f"(e.g. `@tatolab/core/VideoFrame`)"
+        )
+    if "@" in raw[1:]:
+        raise ValueError(
+            f"schema identity {raw!r} must be version-free "
+            f"`@<org>/<package>/<Type>` with no `@<version>` — a schema ref is "
+            f"an identity the runtime binds version-blind; versions are derived "
+            f"at package-build time, never hand-authored (#1409)"
+        )
+    match = _IDENTITY_PATTERN.match(raw)
     if match is None:
         raise ValueError(
-            f"invalid package version {version!r}: must be MAJOR.MINOR.PATCH "
-            f"with an optional -dev.N / -rc.N prerelease"
+            f"schema identity {raw!r} must be `@<org>/<package>/<Type>` "
+            f"(exactly three `/`-separated segments)"
         )
-    return match.group(1)
+    org, package, type_ = match.groups()
+    return SchemaIdent(
+        org=org,
+        package=package,
+        type_=type_,
+        version=_VERSION_FREE_SENTINEL,
+    )
 
 
-def _locate_sibling_manifest(cls) -> Path:
-    """Find the streamlib.yaml next to the file the class lives in.
+def _normalize_execution(execution: str, interval_ms: int) -> Union[str, dict]:
+    """Project the `execution=` / `interval_ms=` args onto the manifest shape.
 
-    Looks at the directory containing the source file of `cls` for a
-    `streamlib.yaml`. If not present there, returns that path anyway —
-    the caller raises FileNotFoundError with the expected location, which
-    is more useful than walking up arbitrarily.
+    `reactive` / `manual` render as bare strings; `continuous` renders as the
+    `{ "type": "continuous", "interval_ms": N }` mapping the Rust
+    `ProcessorSchemaExecution` serializer emits.
     """
-    try:
-        source_file = inspect.getfile(cls)
-    except TypeError as exc:
-        # Built-in classes / dynamically-created classes without a source.
-        raise TypeError(
-            f"@processor cannot resolve a source file for {cls!r}; the "
-            f"decorator must be applied to a class defined in a regular "
-            f"Python module."
-        ) from exc
-    return Path(source_file).resolve().parent / "streamlib.yaml"
+    if not isinstance(execution, str) or execution not in _EXECUTION_MODES:
+        raise ValueError(
+            f"invalid execution {execution!r}: must be one of "
+            f"{', '.join(_EXECUTION_MODES)}"
+        )
+    if execution == "continuous":
+        if (
+            not isinstance(interval_ms, int)
+            or isinstance(interval_ms, bool)
+            or interval_ms < 0
+        ):
+            raise ValueError(
+                f"invalid interval_ms {interval_ms!r}: must be a non-negative int"
+            )
+        return {"type": "continuous", "interval_ms": interval_ms}
+    return execution
+
+
+def _normalize_scheduling(scheduling: Optional[str]) -> Optional[dict]:
+    """Project the `scheduling=` arg onto the manifest `{ priority }` shape."""
+    if scheduling is None:
+        return None
+    if not isinstance(scheduling, str) or scheduling not in _SCHEDULING_PRIORITIES:
+        raise ValueError(
+            f"invalid scheduling {scheduling!r}: must be one of "
+            f"{', '.join(_SCHEDULING_PRIORITIES)}"
+        )
+    return {"priority": scheduling}
 
 
 # =============================================================================

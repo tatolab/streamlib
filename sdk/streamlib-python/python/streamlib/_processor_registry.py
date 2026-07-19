@@ -19,9 +19,18 @@ extractor that wants a package's processors in isolation calls
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import List, Tuple
+from typing import List, Optional, Tuple, Union
 
 from .schema_ident import SchemaIdent
+
+# Manifest-shaped execution mode carried by the decorator. A bare string for
+# `reactive` / `manual`, or the `{ "type": "continuous", "interval_ms": N }`
+# mapping the Rust `ProcessorSchemaExecution` serializer emits for continuous.
+ExecutionSpec = Union[str, dict]
+
+# Manifest-shaped `scheduling:` block (`{ "priority": <realtime|high|normal> }`),
+# or `None` when the processor declares no scheduling.
+SchedulingSpec = Optional[dict]
 
 
 @dataclass(frozen=True)
@@ -29,13 +38,18 @@ class RegisteredProcessor:
     """One processor derived from a `@processor(...)` decorator at import time.
 
     Mirrors Rust's `streamlib_processor_extract::ExtractedProcessor`: the
-    structured identity the manifest/`.slpkg` assembly consumes, plus the
-    port metadata declared by `@input` / `@output` and the class it was
-    written on (for diagnostics).
+    structured identity the manifest/`.slpkg` assembly consumes, the execution
+    mode and scheduling the attribute declared, plus the port metadata declared
+    by `@input` / `@output` and the class it was written on (for diagnostics).
+    This is the single metadata shape the import-and-enumerate extractor reads —
+    the decorator populates every field the manifest `processors:` entry needs.
     """
 
     short_name: str
     schema_ident: SchemaIdent
+    execution: ExecutionSpec = "reactive"
+    scheduling: SchedulingSpec = None
+    description: Optional[str] = None
     inputs: Tuple[dict, ...] = field(default=())
     outputs: Tuple[dict, ...] = field(default=())
     class_qualname: str = ""

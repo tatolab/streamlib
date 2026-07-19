@@ -102,6 +102,9 @@ def _to_manifest_json(procs: List[RegisteredProcessor]) -> str:
         {
             "name": entry.short_name,
             "schema_ident": entry.schema_ident.to_wire_dict(),
+            "execution": entry.execution,
+            "scheduling": entry.scheduling,
+            "description": entry.description,
             "inputs": [
                 {
                     "name": port["name"],
