@@ -22,7 +22,7 @@ backend-vulkan = ["streamlib/backend-vulkan"]
 # local development `./setup.sh` runs `streamlib link --engine <checkout>` to
 # point this dep at the in-repo SDK. Once the SDK publishes, the bare version
 # resolves with no link step.
-streamlib = { version = "0.7.10" }
+streamlib = { version = "0.7.11" }
 tokio = { version = "1.48.0", features = ["full"] }
 anyhow = "1.0.100"
 serde_json = "1.0"
