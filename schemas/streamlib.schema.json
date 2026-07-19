@@ -86,6 +86,10 @@
         "rev": {
           "description": "Pinned commit. Branch / tag refs are deliberately not supported — pinning is required for reproducible resolution. Mirrors the workspace rule from `CLAUDE.md` (`Conventions → Dependencies`).",
           "type": "string"
+        },
+        "runtime": {
+          "description": "Runtime-only dependency marker — see [`DependencySpec::is_runtime`].",
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -141,6 +145,10 @@
       "properties": {
         "path": {
           "type": "string"
+        },
+        "runtime": {
+          "description": "Runtime-only dependency marker — see [`DependencySpec::is_runtime`].",
+          "type": "boolean"
         }
       },
       "additionalProperties": false
@@ -432,6 +440,10 @@
         "version"
       ],
       "properties": {
+        "runtime": {
+          "description": "Runtime-only dependency marker — see [`DependencySpec::is_runtime`].",
+          "type": "boolean"
+        },
         "version": {
           "$ref": "#/definitions/SemVerRange"
         }
