@@ -495,13 +495,16 @@ pub(crate) fn parse_module_ident_wire(raw: &str) -> IdentResult<ModuleIdent> {
     Ok(ModuleIdent { org, name, version })
 }
 
-/// Validate a segment against the shared lowercase-hyphen grammar
-/// (`[a-z][a-z0-9-]*`): non-empty, first char `[a-z]`, remaining chars
-/// `[a-z0-9-]`. The three `on_*` selectors map each failure to the caller's
-/// segment-specific [`IdentError`] variant so org / package / channel names
-/// keep distinct messages while sharing one grammar loop.
+/// Validate a segment against the shared lowercase-leading grammar: non-empty,
+/// first char `[a-z]`, remaining chars accepted by `char_allowed`. The charset
+/// predicate is supplied by the caller so org / package keep the
+/// no-underscore charset (`[a-z][a-z0-9-]*`) while channel / port names admit
+/// `_` (`[a-z][a-z0-9_-]*`). The three `on_*` selectors map each failure to the
+/// caller's segment-specific [`IdentError`] variant so the segments keep
+/// distinct messages while sharing one grammar loop.
 pub(crate) fn validate_lower_hyphen_grammar(
     s: &str,
+    char_allowed: fn(char) -> bool,
     on_empty: fn() -> IdentError,
     on_first_not_lowercase: fn(&str) -> IdentError,
     on_invalid_char: fn(&str, char) -> IdentError,
@@ -515,7 +518,7 @@ pub(crate) fn validate_lower_hyphen_grammar(
         return Err(on_first_not_lowercase(s));
     }
     for c in chars {
-        if !is_lower_alnum_or_hyphen(c) {
+        if !char_allowed(c) {
             return Err(on_invalid_char(s, c));
         }
     }
@@ -526,6 +529,7 @@ pub(crate) fn validate_lower_hyphen_grammar(
 pub fn validate_org(s: &str) -> IdentResult<()> {
     validate_lower_hyphen_grammar(
         s,
+        is_lower_alnum_or_hyphen,
         || IdentError::EmptyOrg,
         |s| IdentError::OrgMustStartWithLowercase(s.to_string()),
         |s, c| IdentError::InvalidOrgCharacter(s.to_string(), c),
@@ -536,6 +540,7 @@ pub fn validate_org(s: &str) -> IdentResult<()> {
 pub fn validate_package(s: &str) -> IdentResult<()> {
     validate_lower_hyphen_grammar(
         s,
+        is_lower_alnum_or_hyphen,
         || IdentError::EmptyPackage,
         |s| IdentError::PackageMustStartWithLowercase(s.to_string()),
         |s, c| IdentError::InvalidPackageCharacter(s.to_string(), c),
@@ -562,6 +567,15 @@ pub fn validate_type(s: &str) -> IdentResult<()> {
 
 pub(crate) fn is_lower_alnum_or_hyphen(c: char) -> bool {
     matches!(c, 'a'..='z' | '0'..='9' | '-')
+}
+
+/// Channel / port charset predicate: the org/package charset plus `_`
+/// (`[a-z0-9_-]`). Underscore is transport-legal — iceoryx2 `ServiceName`
+/// imposes no charset restriction beyond non-empty / length / no `iox2://`
+/// prefix, and a Zenoh keyexpr segment forbids only `/ * $ ? #` — so port
+/// names like `video_in` cross the wire intact.
+pub(crate) fn is_lower_alnum_hyphen_or_underscore(c: char) -> bool {
+    matches!(c, 'a'..='z' | '0'..='9' | '-' | '_')
 }
 
 fn ident_string_schema(description: &str, pattern: &str) -> Schema {

@@ -6,10 +6,12 @@
 //!
 //! A channel name is the same string in two roles: an iceoryx2 service name
 //! intra-node and (phase [L]) a Zenoh key-expression cross-node. Its charset
-//! reuses the canonical org/package ident grammar (`[a-z][a-z0-9-]*`) — the
-//! one charset that is simultaneously iceoryx2-service-legal and
-//! Zenoh-keyexpr-legal — so the authoring model does not change when routing
-//! moves cross-node. This module is the single source of truth for that
+//! is the lowercase-leading ident grammar plus `_` (`[a-z][a-z0-9_-]*`) — the
+//! org/package charset widened by underscore so port names like `video_in`
+//! (which `connect()` folds into the channel name) cross intact. Underscore is
+//! transport-legal: iceoryx2 `ServiceName` imposes no charset restriction
+//! beyond non-empty / length / no `iox2://` prefix, and a Zenoh keyexpr segment
+//! forbids only `/ * $ ? #`. This module is the single source of truth for that
 //! grammar; the SDK and the engine both validate through it rather than
 //! forking a parallel copy.
 //!
@@ -19,7 +21,7 @@
 //! prefix-truncated, which would collide).
 
 use crate::error::{IdentError, IdentResult};
-use crate::ident::validate_lower_hyphen_grammar;
+use crate::ident::{is_lower_alnum_hyphen_or_underscore, validate_lower_hyphen_grammar};
 use std::fmt;
 
 /// Maximum channel-name length in UTF-8 bytes.
@@ -74,14 +76,16 @@ impl fmt::Display for ChannelName {
     }
 }
 
-/// Validate the channel charset grammar (`[a-z][a-z0-9-]*`) without the
+/// Validate the channel charset grammar (`[a-z][a-z0-9_-]*`) without the
 /// [`MAX_CHANNEL_NAME_BYTES`] length bound — the charset half shared by
 /// [`validate_channel_name`] and [`connect_channel_name`]'s pre-hash input
 /// guard (the joined form is length-legalized by hashing, so only its charset
-/// is checked up front).
+/// is checked up front). Underscore is admitted here (but not for org/package)
+/// so a port name like `video_in` is a legal channel-name character.
 fn validate_channel_charset(s: &str) -> IdentResult<()> {
     validate_lower_hyphen_grammar(
         s,
+        is_lower_alnum_hyphen_or_underscore,
         || IdentError::EmptyChannelName,
         |s| IdentError::ChannelNameMustStartWithLowercase(s.to_string()),
         |s, c| IdentError::InvalidChannelNameCharacter(s.to_string(), c),
@@ -89,7 +93,7 @@ fn validate_channel_charset(s: &str) -> IdentResult<()> {
 }
 
 /// Validate a channel name against the canonical grammar
-/// (`[a-z][a-z0-9-]*`, at most [`MAX_CHANNEL_NAME_BYTES`] UTF-8 bytes).
+/// (`[a-z][a-z0-9_-]*`, at most [`MAX_CHANNEL_NAME_BYTES`] UTF-8 bytes).
 pub fn validate_channel_name(s: &str) -> IdentResult<()> {
     if s.len() > MAX_CHANNEL_NAME_BYTES {
         return Err(IdentError::ChannelNameTooLong {
@@ -111,12 +115,13 @@ pub fn validate_channel_name(s: &str) -> IdentResult<()> {
 /// (`{prefix}-{hash}`) — a pure function of the inputs that stays unique rather
 /// than a prefix truncation that would collide two long links onto one channel.
 ///
-/// The four inputs are not grammar-guaranteed: a port name may carry characters
-/// outside the channel charset (e.g. `video_in`), and a processor id need not be
-/// lowercase. Such an input would otherwise produce a silently-invalid wire
-/// name, so it surfaces here as the matching [`IdentError`] charset variant —
-/// the joined form (which carries every input character) is grammar-checked
-/// before the length-legalizing hash step.
+/// The four inputs are not grammar-guaranteed: a port name may carry a genuinely
+/// illegal character (uppercase, `/`, `.`, whitespace), or a processor id need
+/// not be lowercase. Such an input would otherwise produce a silently-invalid
+/// wire name, so it surfaces here as the matching [`IdentError`] charset variant
+/// — the joined form (which carries every input character) is grammar-checked
+/// before the length-legalizing hash step. Underscore is a legal channel
+/// character, so a port like `video_in` rides through with no error.
 pub fn connect_channel_name(
     src_processor: &str,
     src_output: &str,
@@ -201,12 +206,26 @@ mod tests {
 
     #[test]
     fn rejects_illegal_charset() {
-        // Underscore, dot, slash — none are iceoryx2/keyexpr-safe.
-        for (name, bad) in [("cam_out", '_'), ("cam.out", '.'), ("cam/out", '/')] {
+        // Dot, slash, space — none are iceoryx2/keyexpr-safe. Underscore is NOT
+        // in this list: it is transport-legal and admitted into the channel
+        // charset (see `underscore_is_legal_for_channels`).
+        for (name, bad) in [("cam.out", '.'), ("cam/out", '/'), ("cam out", ' ')] {
             assert_eq!(
                 validate_channel_name(name),
                 Err(IdentError::InvalidChannelNameCharacter(name.to_string(), bad))
             );
+        }
+    }
+
+    #[test]
+    fn underscore_is_legal_for_channels() {
+        // Underscore is transport-legal (iceoryx2 ServiceName has no charset
+        // restriction; a Zenoh keyexpr segment forbids only `/ * $ ? #`), so a
+        // shipped underscore port name is a valid channel name. Mental-revert
+        // guard: narrow the channel charset back to `[a-z0-9-]` and this fails.
+        for name in ["video_in", "video_out", "encoded_jpeg_in", "cam_frame--sink_in"] {
+            validate_channel_name(name).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(ChannelName::new(name).unwrap().as_str(), name);
         }
     }
 
@@ -287,17 +306,29 @@ mod tests {
     }
 
     #[test]
+    fn connect_name_accepts_underscore_ports() {
+        // Shipped port names carry underscores (`video_in`, `video_out`, …).
+        // `connect()` folds them into the channel name, so an underscore port
+        // must yield a VALID ChannelName with NO error — a silent fallback here
+        // would break every shipped underscore port. Mental-revert guard:
+        // narrow the channel charset back to `[a-z0-9-]` and this errors.
+        let name = connect_channel_name("cam", "video_out", "sink", "video_in").unwrap();
+        assert_eq!(name.as_str(), "cam-video_out--sink-video_in");
+        validate_channel_name(name.as_str()).unwrap();
+    }
+
+    #[test]
     fn connect_name_rejects_out_of_grammar_input() {
-        // A port name carrying an out-of-grammar char (underscore is legal for a
-        // port ident but not for the iceoryx2/keyexpr channel charset) must
-        // surface as a typed connect-time error, never a silently-invalid wire
-        // name. Mental-revert guard: without the input charset check the
-        // underscore would ride through into the emitted ChannelName.
+        // A port name carrying a genuinely-illegal char (`/` is not
+        // iceoryx2/keyexpr-safe) must surface as a typed connect-time error,
+        // never a silently-invalid wire name. Mental-revert guard: without the
+        // input charset check the slash would ride through into the emitted
+        // ChannelName.
         assert_eq!(
-            connect_channel_name("cam", "video_in", "sink", "in"),
+            connect_channel_name("cam", "video/in", "sink", "in"),
             Err(IdentError::InvalidChannelNameCharacter(
-                "cam-video_in--sink-in".to_string(),
-                '_'
+                "cam-video/in--sink-in".to_string(),
+                '/'
             ))
         );
         // An uppercase (non-lowercase-leading) source processor id is likewise
