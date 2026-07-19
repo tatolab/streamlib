@@ -1,29 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Policy-gated **acquire-on-reference**: on a load miss against the installed
-//! set, optionally fetch the providing package from the static registry,
-//! verify it, and record it in `streamlib.lock` — completing the load without
-//! an explicit `streamlib add`.
-//!
-//! This is the fleet affordance behind the installed-set-only load gate. It is
-//! **off by default**: a normal run resolves refs strictly against
-//! `streamlib_modules/` + `streamlib.lock` and never reaches the network. The
-//! knob has three settings:
-//!
-//! - [`AcquireOnReferencePolicy::Off`] (default) — never acquire; a miss is a
-//!   fix-it error naming `streamlib add`.
-//! - [`AcquireOnReferencePolicy::On`] — acquire on every miss.
-//! - [`AcquireOnReferencePolicy::Prompt`] — acquire only after a host-installed
-//!   [confirmation handler](set_acquire_confirmation_handler) approves; with no
-//!   handler installed it **fails closed** (does not acquire) so an unattended
-//!   run never silently fetches.
-//!
-//! Acquire itself is install-shaped (range → concrete, WRITES the lock) via
-//! [`AppModulesDir::acquire_from_registry`]; it is never the locked-run
-//! resolver — the two-resolver split stays intact.
-//!
-//! [`AppModulesDir::acquire_from_registry`]: streamlib_idents::app_modules::AppModulesDir::acquire_from_registry
+//! Policy-gated **acquire-on-reference**: on an installed-set load miss,
+//! optionally fetch the providing package from the static registry and record
+//! it in `streamlib.lock` — completing the load without an explicit
+//! `streamlib add`. Off by default (a normal run never reaches the network);
+//! the [`AcquireOnReferencePolicy`] knob opts a fleet in.
 
 use std::sync::{Arc, RwLock};
 

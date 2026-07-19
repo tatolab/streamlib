@@ -910,21 +910,12 @@ impl AppModulesDir {
         })
     }
 
-    /// Acquire `pkg_ref` from the static registry `config` on reference:
-    /// resolve the declared `range` to the highest concrete version the
-    /// registry holds, then materialize that version's `.slpkg` into
-    /// `streamlib_modules/@org/name/` and record it in `streamlib.lock` — the
-    /// exact byte-source [`add_package`](Self::add_package) flow (fetch →
-    /// hash → atomic promote → lock), so an acquired package is
-    /// indistinguishable from one added by hand.
-    ///
-    /// This is the **install-shaped** half of the two-resolver split: a
-    /// `range → concrete` resolution that WRITES the lock. It reuses the same
-    /// [`RegistryClient`] + content-hash + [`write_modules_lockfile`] machinery
-    /// `streamlib add`/`install` use; it is never the locked-run resolver
-    /// (which loads a pinned set offline and makes no resolution decisions).
-    ///
-    /// [`write_modules_lockfile`]: crate::lockfile::write_modules_lockfile
+    /// Acquire `pkg_ref` from the static registry on reference: resolve `range`
+    /// to the highest concrete version the registry holds, then materialize its
+    /// `.slpkg` via the [`add_package`](Self::add_package) byte-source flow and
+    /// record it in `streamlib.lock`. The install-shaped half of the
+    /// two-resolver split (`range → concrete`, WRITES the lock) — never the
+    /// locked-run resolver.
     #[tracing::instrument(skip(self, config), fields(app_root = %self.app_root.display(), package = %pkg_ref, %range))]
     pub fn acquire_from_registry(
         &self,
