@@ -383,6 +383,16 @@ instead of a copy — recorded as a `LockfileSource::Link` — so checkout edits
 are live on the next run; `streamlib install` re-creates that symlink when
 reproducing the lock.
 
+The CLI `streamlib add` verb is context-sensitive on its anchor directory. The
+byte-source adoption above is the **consumer / app** flow (no `package:` block
+in the anchor's `streamlib.yaml`). In a **package-authoring** dir (a
+`streamlib.yaml` *with* a `package:` block), `streamlib add @org/name@<version>`
+instead records a caret dependency (`^<version>`) into that package's own
+`dependencies:` table — the schema-tier `cargo add` — preserving every other
+manifest field and the leading `# yaml-language-server` comment header. The
+`AppModulesDir` primitive itself is unchanged: it is the consumer flow and still
+refuses a registry-coordinate byte source.
+
 At load time, `Strategy::InstalledCache` (the bare `Runner::add_module`
 default) probes `<cwd>/streamlib_modules/@org/name` **before** the
 installed-package cache; an active engine `streamlib link --engine` still
