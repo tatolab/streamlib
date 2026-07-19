@@ -130,8 +130,14 @@ const applyPrompt =
       `resulting \`commits\`, and \`git diff origin/main --stat\` in \`diff_stat\`.\n\n` +
       `Findings to apply (JSON): ${JSON.stringify(findings)}`;
 
+// The schema is load-bearing: without it the Apply agent's return is raw text,
+// `applied.worktree_path` is undefined, and the Test phase gates against an empty
+// path (the hard guard then skips the whole battery). Force the structured report.
 const applied =
-  (await resilientAgent(applyPrompt, leadOpts({ phase: 'Apply', label: `fix:${lead || 'generic'}:${mode}` }))) || {};
+  (await resilientAgent(
+    applyPrompt,
+    leadOpts({ phase: 'Apply', label: `fix:${lead || 'generic'}:${mode}`, schema: fixReportSchema }),
+  )) || {};
 log(`fix applied: mode=${mode} branch=${applied.branch || branch} commits=${(applied.commits || []).length} unresolved=${(applied.unresolved || []).length}`);
 
 phase('Test');
