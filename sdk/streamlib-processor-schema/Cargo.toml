@@ -15,7 +15,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }  # used by schemars for enum_values literals
 serde_yaml = { workspace = true }
 sha2 = { workspace = true }
-streamlib-idents = { path = "../streamlib-idents", version = "0.7.11" }
+streamlib-idents = { path = "../streamlib-idents", version = "0.7.12" }
 thiserror = { workspace = true }
 schemars = "0.8"  # JSON Schema generation for streamlib.yaml editor support
 # Host-only OpenAPI schema derive for the wire-output DTOs, behind the

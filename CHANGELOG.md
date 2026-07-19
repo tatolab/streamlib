@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.12](https://github.com/tatolab/streamlib/compare/v0.7.11...v0.7.12) (2026-07-19)
+
+
+### Bug Fixes
+
+* **engine:** make the staged-processor cross-check version-blind ([#1462](https://github.com/tatolab/streamlib/issues/1462)) ([c9cc665](https://github.com/tatolab/streamlib/commit/c9cc665499ebacaf9b33495c3219c009dcb7fc55))
+
 ## [0.7.11](https://github.com/tatolab/streamlib/compare/v0.7.10...v0.7.11) (2026-07-19)
 
 

@@ -15,14 +15,14 @@ name = "streamlib_adapter_vulkan"
 path = "src/lib.rs"
 
 [dependencies]
-streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.7.11" }
-streamlib-adapter-vulkan-abi = { path = "../streamlib-adapter-vulkan-abi", version = "0.7.11" }
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.7.12" }
+streamlib-adapter-vulkan-abi = { path = "../streamlib-adapter-vulkan-abi", version = "0.7.12" }
 thiserror.workspace = true
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.7.11" }
-streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.7.11" }
+streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.7.12" }
+streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.7.12" }
 vulkanalia.workspace = true
 libc.workspace = true
 serde = { workspace = true }
