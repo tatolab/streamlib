@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.2](https://github.com/tatolab/streamlib/compare/v0.7.1...v0.7.2) (2026-07-19)
+
+
+### Features
+
+* **macros:** ports-in-code — #[processor] attribute is the single source of truth ([#1437](https://github.com/tatolab/streamlib/issues/1437)) ([bfc0f14](https://github.com/tatolab/streamlib/commit/bfc0f142c22e7fd6d653568de277f8304a1f4c76))
+
 ## [0.7.1](https://github.com/tatolab/streamlib/compare/v0.7.0...v0.7.1) (2026-07-18)
 
 
