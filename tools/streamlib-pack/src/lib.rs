@@ -527,6 +527,13 @@ pub fn assemble_artifact_with_cargo_config(
                 streamlib_idents::SESSION_ORG,
             );
         }
+        // The `#[processor(...)]` / `@processor(...)` declarations in code are the
+        // source of truth for the `processors:` section (#1411). Derive the
+        // processor set from code and refuse to build a distributable `.slpkg`
+        // whose committed `processors:` disagrees. `StagedDir` (runtime
+        // orchestrator load-time build) is exempt — it assembles an already-
+        // published, drift-validated artifact.
+        enforce_processor_manifest_matches_code(pkg_dir, &config.processors)?;
     }
 
     // (archive_path, source_path) pairs for every file EXCEPT the
@@ -749,6 +756,38 @@ fn dylib_filename(path: &Path) -> Result<String> {
         .ok_or_else(|| anyhow::anyhow!("dylib path has no filename: {}", path.display()))?
         .to_string_lossy()
         .into_owned())
+}
+
+/// Derive the processor set from a package's code and fail the build if the
+/// committed `processors:` section disagrees. The Rust half is a `syn` source
+/// scan (in-process, no compile); the Python / Deno halves shell out to the
+/// SDK's import-and-enumerate extractor CLIs. Reachability is resolved for the
+/// **host** target — the triple `pkg build` produces a cdylib for — so a
+/// cross-platform arm the host doesn't compile never counts as drift.
+///
+/// A schema-only package (no Rust crate root, no `pyproject.toml`, no
+/// `deno.json`) derives an empty set and must therefore carry no `processors:`;
+/// a package that hosts code carries exactly the processors it declares.
+fn enforce_processor_manifest_matches_code(
+    pkg_dir: &Path,
+    committed: &[streamlib_processor_schema::ProcessorSchema],
+) -> Result<()> {
+    let target = streamlib_processor_extract::ModuleReachabilityTarget::for_host();
+    let extractor = streamlib_processor_extract::SystemSubprocessProcessorExtractor;
+    let derived =
+        streamlib_processor_extract::derive_package_processor_surfaces(pkg_dir, &target, &extractor)
+            .map_err(|e| anyhow::anyhow!("deriving the processor set from code: {e}"))?;
+    // Compare only the languages actually derived. A language whose extractor
+    // runtime was unavailable (Python/Deno on a host without it) is skipped, and
+    // its committed processors are excluded rather than falsely flagged as drift.
+    let committed_in_scope =
+        streamlib_processor_extract::filter_committed_to_languages(committed, &derived.derived_languages);
+    streamlib_processor_extract::check_processor_manifest_drift(
+        pkg_dir,
+        &committed_in_scope,
+        &derived.surfaces,
+    )
+    .map_err(|report| anyhow::anyhow!("{report}"))
 }
 
 /// Enforce the standalone, registry-only contract for a published `.slpkg`:
@@ -1605,6 +1644,83 @@ mod tests {
         );
     }
 
+    /// Write a minimal Rust package that declares one `#[processor]` in code.
+    /// `manifest_processors` is spliced verbatim as the `processors:` YAML so a
+    /// test can make it agree with — or drift from — the code.
+    fn write_rust_processor_pkg(dir: &Path, manifest_processors: &str) {
+        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            "[package]\nname = \"cam\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("src/lib.rs"),
+            r#"#[processor("@tatolab/camera/Camera", execution = manual, output("video", "@tatolab/core/VideoFrame"))]
+            pub struct Camera;
+            "#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("streamlib.yaml"),
+            format!(
+                "package:\n  org: tatolab\n  name: cam\n  version: 0.1.0\n{manifest_processors}"
+            ),
+        )
+        .unwrap();
+    }
+
+    /// A source-only `.slpkg` build assembles when the committed `processors:`
+    /// matches the `#[processor(...)]` declarations in code. (The Slpkg target
+    /// ships source only — no cdylib build — so the Rust source scan is the only
+    /// derivation that runs; no live runtime is needed.)
+    #[test]
+    fn slpkg_build_succeeds_when_manifest_matches_code() {
+        let dir = tempdir().unwrap();
+        write_rust_processor_pkg(
+            dir.path(),
+            "processors:\n- name: Camera\n  version: 1.0.0\n  runtime: rust\n  execution: manual\n  outputs:\n  - name: video\n    schema: VideoFrame\n",
+        );
+        let out = dir.path().join("o.slpkg");
+        let outcome = assemble_artifact(
+            dir.path(),
+            &AssembleTarget::Slpkg(out.clone()),
+            &slpkg_opts(false),
+            &(),
+        )
+        .expect("in-sync manifest must build");
+        assert_eq!(outcome.processors, 1);
+    }
+
+    /// The truth-flip gate (#1411): a `.slpkg` build is a hard error when the
+    /// committed `processors:` disagrees with code. Here the manifest omits the
+    /// `Camera` the code declares. Mentally revert
+    /// `enforce_processor_manifest_matches_code` and this build succeeds despite
+    /// shipping a manifest that lies about the package's processors.
+    #[test]
+    fn slpkg_build_fails_on_processor_manifest_drift() {
+        let dir = tempdir().unwrap();
+        // Manifest lists a different processor name than code declares.
+        write_rust_processor_pkg(
+            dir.path(),
+            "processors:\n- name: Stale\n  version: 1.0.0\n  runtime: rust\n  execution: manual\n",
+        );
+        let out = dir.path().join("o.slpkg");
+        let err = assemble_artifact(
+            dir.path(),
+            &AssembleTarget::Slpkg(out),
+            &slpkg_opts(false),
+            &(),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("Camera"), "drift error must name Camera: {msg}");
+        assert!(
+            msg.contains("source of truth"),
+            "drift error must explain code is truth: {msg}"
+        );
+    }
+
     #[test]
     fn slpkg_assembly_refuses_under_an_active_link_but_staged_dir_is_exempt() {
         // The load-bearing pack-seam guard: a distributable `.slpkg` must not
@@ -1730,7 +1846,11 @@ mod tests {
         .unwrap();
         std::fs::write(dir.path().join("Cargo.toml"), b"[package]\nname='rp'\n").unwrap();
         std::fs::create_dir(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/lib.rs"), b"// crate source").unwrap();
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            b"#[processor(\"@tatolab/rp/P\", execution = manual)]\npub struct P;\n",
+        )
+        .unwrap();
         let triple_dir = dir.path().join("lib").join(host_target_triple());
         std::fs::create_dir_all(&triple_dir).unwrap();
         let dylib = format!("librp.{}", host_dylib_extension());
@@ -2479,7 +2599,11 @@ mod tests {
         )
         .unwrap();
         std::fs::create_dir(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/lib.rs"), b"// crate source").unwrap();
+        std::fs::write(
+            dir.path().join("src/lib.rs"),
+            b"#[processor(\"@tatolab/rp/P\", execution = manual)]\npub struct P;\n",
+        )
+        .unwrap();
 
         let out = dir.path().join("o.slpkg");
         assemble_artifact(

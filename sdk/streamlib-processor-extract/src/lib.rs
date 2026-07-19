@@ -29,9 +29,10 @@ use std::path::{Path, PathBuf};
 use streamlib_processor_schema::ProcessorSchema;
 
 pub use derive::{
-    DeriveError, ManifestDriftReport, PackageLanguage, PortSchemaSurface, PortSurface,
-    ProcessorSurface, SubprocessProcessorExtractor, SystemSubprocessProcessorExtractor,
-    check_processor_manifest_drift, derive_package_processor_surfaces, detect_package_languages,
+    DeriveError, DerivedProcessorSet, ManifestDriftReport, PackageLanguage, PortSchemaSurface,
+    PortSurface, ProcessorSurface, SkippedLanguage, SubprocessProcessorExtractor,
+    SystemSubprocessProcessorExtractor, check_processor_manifest_drift,
+    derive_package_processor_surfaces, detect_package_languages, filter_committed_to_languages,
 };
 pub use grammar::{ParsedPort, ParsedProcessorAttr};
 pub use reachable::{ModuleReachabilityTarget, extract_reachable_rust_processors};

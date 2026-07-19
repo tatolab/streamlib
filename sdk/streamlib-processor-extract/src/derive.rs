@@ -32,7 +32,8 @@ use std::process::Command;
 
 use serde::Deserialize;
 use streamlib_processor_schema::{
-    PortSchemaSpec, ProcessorPortSchema, ProcessorSchema, ProcessorSchemaExecution,
+    PortSchemaSpec, ProcessorLanguage, ProcessorPortSchema, ProcessorSchema,
+    ProcessorSchemaExecution,
 };
 
 use crate::reachable::{ModuleReachabilityTarget, extract_reachable_rust_processors};
@@ -54,6 +55,17 @@ impl PackageLanguage {
             PackageLanguage::Rust => "rust",
             PackageLanguage::Python => "python",
             PackageLanguage::TypeScript => "deno",
+        }
+    }
+
+    /// The [`PackageLanguage`] a committed processor's `runtime.language`
+    /// belongs to — the bridge for filtering the committed `processors:` list to
+    /// the languages actually derived.
+    pub fn of_processor(schema: &ProcessorSchema) -> Self {
+        match schema.runtime.language {
+            ProcessorLanguage::Rust => PackageLanguage::Rust,
+            ProcessorLanguage::Python => PackageLanguage::Python,
+            ProcessorLanguage::TypeScript => PackageLanguage::TypeScript,
         }
     }
 }
@@ -358,39 +370,106 @@ impl WireProcessor {
     }
 }
 
-/// Derive the full processor identity surface for a package from code, across
-/// every language it hosts. Rust is scanned in-process
-/// ([`extract_reachable_rust_processors`] against `target`); Python and Deno are
-/// derived by running their import-and-enumerate subprocess extractors through
-/// `extractor`.
+/// One language whose derivation was skipped because its subprocess extractor
+/// could not run — the runtime was absent, failed to import, or was
+/// unconfigured. The build cannot prove agreement for a skipped language, so it
+/// neither fabricates a pass nor a drift; the drift comparison simply excludes
+/// that language's committed processors (see
+/// [`filter_committed_to_languages`]).
+#[derive(Debug, Clone)]
+pub struct SkippedLanguage {
+    pub language: PackageLanguage,
+    pub reason: String,
+}
+
+/// The code-derived processor surface for a package, plus which languages were
+/// actually derived and which were skipped for want of a runtime.
+#[derive(Debug, Default)]
+pub struct DerivedProcessorSet {
+    /// The derived processor surfaces, sorted by `Type` name (a set).
+    pub surfaces: Vec<ProcessorSurface>,
+    /// The languages successfully derived — the languages whose committed
+    /// processors the drift check may compare against.
+    pub derived_languages: BTreeSet<PackageLanguage>,
+    /// Languages present but skipped (extractor runtime absent / unconfigured).
+    pub skipped: Vec<SkippedLanguage>,
+}
+
+/// Derive the processor identity surface for a package from code, across every
+/// language it hosts. Rust is scanned in-process
+/// ([`extract_reachable_rust_processors`] against `target`) and is always
+/// derived; Python and Deno are derived by running their import-and-enumerate
+/// subprocess extractors through `extractor`.
 ///
-/// The result is sorted by processor `Type` name so it is a set (order-
-/// independent) for the drift comparison.
+/// A Python/Deno extractor that cannot **run** — the runtime is absent, its
+/// import failed, or (Deno) it is unconfigured — is a [`SkippedLanguage`], not a
+/// hard error: extraction-is-import needs the runtime present, and a `pkg build`
+/// that merely bundles a Python/Deno package as source on a host without that
+/// runtime must still work. A malformed *output* from an extractor that DID run
+/// is a hard [`DeriveError`] (the extractor ran and produced garbage — a real
+/// bug, not an absent runtime). Rust scan failures are always hard.
 #[tracing::instrument(skip_all, fields(package = %package_dir.display()))]
 pub fn derive_package_processor_surfaces(
     package_dir: &Path,
     target: &ModuleReachabilityTarget,
     extractor: &dyn SubprocessProcessorExtractor,
-) -> Result<Vec<ProcessorSurface>, DeriveError> {
+) -> Result<DerivedProcessorSet, DeriveError> {
     let languages = detect_package_languages(package_dir);
-    let mut surfaces = Vec::new();
+    let mut set = DerivedProcessorSet::default();
 
     if languages.contains(&PackageLanguage::Rust) {
         let rust = extract_reachable_rust_processors(package_dir, target)?;
-        surfaces.extend(rust.iter().map(ProcessorSurface::from_extracted));
+        set.surfaces
+            .extend(rust.iter().map(ProcessorSurface::from_extracted));
+        set.derived_languages.insert(PackageLanguage::Rust);
     }
-    if languages.contains(&PackageLanguage::Python) {
-        let json = extractor.extract_python(package_dir)?;
-        surfaces.extend(parse_subprocess_manifest_json("python", &json)?);
-    }
-    if languages.contains(&PackageLanguage::TypeScript) {
-        let json = extractor.extract_deno(package_dir)?;
-        surfaces.extend(parse_subprocess_manifest_json("deno", &json)?);
+    for (language, run) in [
+        (PackageLanguage::Python, extractor.extract_python(package_dir)),
+        (PackageLanguage::TypeScript, extractor.extract_deno(package_dir)),
+    ] {
+        if !languages.contains(&language) {
+            continue;
+        }
+        match run {
+            Ok(json) => {
+                set.surfaces
+                    .extend(parse_subprocess_manifest_json(language.label(), &json)?);
+                set.derived_languages.insert(language);
+            }
+            Err(err @ (DeriveError::SpawnExtractor { .. }
+            | DeriveError::ExtractorFailed { .. }
+            | DeriveError::ExtractorUnconfigured { .. })) => {
+                let reason = err.to_string();
+                tracing::warn!(
+                    language = language.label(),
+                    reason = %reason,
+                    "skipping processor drift check for a language whose extractor runtime is \
+                     unavailable — its committed processors are not verified against code"
+                );
+                set.skipped.push(SkippedLanguage { language, reason });
+            }
+            Err(other) => return Err(other),
+        }
     }
 
-    surfaces.sort_by(|a, b| a.name.cmp(&b.name));
-    tracing::debug!(processors = surfaces.len(), "derived across languages");
-    Ok(surfaces)
+    set.surfaces.sort_by(|a, b| a.name.cmp(&b.name));
+    tracing::debug!(processors = set.surfaces.len(), "derived across languages");
+    Ok(set)
+}
+
+/// Filter a committed `processors:` list to only the processors whose runtime
+/// language is in `languages` — the languages actually derived. A drift check
+/// must never flag a committed processor whose language was skipped for want of
+/// a runtime as "only in manifest".
+pub fn filter_committed_to_languages(
+    committed: &[ProcessorSchema],
+    languages: &BTreeSet<PackageLanguage>,
+) -> Vec<ProcessorSchema> {
+    committed
+        .iter()
+        .filter(|schema| languages.contains(&PackageLanguage::of_processor(schema)))
+        .cloned()
+        .collect()
 }
 
 /// A committed `processors:` section that disagrees with what the code derives.
@@ -670,7 +749,9 @@ mod tests {
             deno: String::new(),
         };
 
-        let derived = derive_package_processor_surfaces(root, &linux(), &extractor).unwrap();
+        let derived = derive_package_processor_surfaces(root, &linux(), &extractor)
+            .unwrap()
+            .surfaces;
         assert_eq!(derived.len(), 2);
         assert_eq!(derived[0].name, "Camera"); // sorted
         assert_eq!(derived[1].name, "PassThrough");
@@ -724,7 +805,9 @@ processors:
             python: String::new(),
             deno: String::new(),
         };
-        let derived = derive_package_processor_surfaces(root, &linux(), &extractor).unwrap();
+        let derived = derive_package_processor_surfaces(root, &linux(), &extractor)
+            .unwrap()
+            .surfaces;
 
         // Committed manifest lists only Alpha — Beta was added in code and never
         // written to `processors:`. Mentally revert the drift check to `Ok(())`
@@ -760,7 +843,9 @@ processors:
             python: String::new(),
             deno: String::new(),
         };
-        let derived = derive_package_processor_surfaces(root, &linux(), &extractor).unwrap();
+        let derived = derive_package_processor_surfaces(root, &linux(), &extractor)
+            .unwrap()
+            .surfaces;
         let committed = parse_committed(
             r#"
 processors:
@@ -793,7 +878,9 @@ processors:
             python: String::new(),
             deno: String::new(),
         };
-        let derived = derive_package_processor_surfaces(root, &linux(), &extractor).unwrap();
+        let derived = derive_package_processor_surfaces(root, &linux(), &extractor)
+            .unwrap()
+            .surfaces;
         let committed = parse_committed(
             r#"
 processors:
@@ -825,7 +912,9 @@ processors:
             python: String::new(),
             deno: String::new(),
         };
-        let derived = derive_package_processor_surfaces(root, &linux(), &extractor).unwrap();
+        let derived = derive_package_processor_surfaces(root, &linux(), &extractor)
+            .unwrap()
+            .surfaces;
         let committed = parse_committed(
             r#"
 processors:
@@ -842,6 +931,54 @@ processors:
         assert!(report.differing[0].contains("output ports differ"));
     }
 
+    /// A present Python package whose extractor cannot run is a skip, not a hard
+    /// error: derivation succeeds with the language recorded in `skipped`, and
+    /// filtering the committed list to the derived languages drops the Python
+    /// processors so they are not falsely flagged as drift. Mentally reroute the
+    /// `ExtractorFailed` arm to `return Err(other)` and this build path would
+    /// hard-fail whenever python/streamlib is absent — breaking source-only
+    /// bundling.
+    #[test]
+    fn python_extractor_failure_is_skipped_not_hard_error() {
+        struct FailingPython;
+        impl SubprocessProcessorExtractor for FailingPython {
+            fn extract_python(&self, dir: &Path) -> Result<String, DeriveError> {
+                Err(DeriveError::ExtractorFailed {
+                    language: "python",
+                    package: dir.to_path_buf(),
+                    code: "1".to_string(),
+                    stderr: "No module named 'streamlib'".to_string(),
+                })
+            }
+            fn extract_deno(&self, _dir: &Path) -> Result<String, DeriveError> {
+                Ok("[]".to_string())
+            }
+        }
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(root, "pyproject.toml", "");
+        let set = derive_package_processor_surfaces(root, &linux(), &FailingPython).unwrap();
+        assert!(set.surfaces.is_empty());
+        assert!(!set.derived_languages.contains(&PackageLanguage::Python));
+        assert_eq!(set.skipped.len(), 1);
+        assert_eq!(set.skipped[0].language, PackageLanguage::Python);
+
+        let committed = parse_committed(
+            r#"
+processors:
+- name: PassThrough
+  version: 1.0.0
+  runtime: python
+  entrypoint: src.pass:PassThrough
+  execution: reactive
+"#,
+        );
+        // Python was skipped → its committed processor is filtered out → no drift.
+        let filtered = filter_committed_to_languages(&committed, &set.derived_languages);
+        assert!(filtered.is_empty());
+        check_processor_manifest_drift(root, &filtered, &set.surfaces).unwrap();
+    }
+
     #[test]
     fn schema_only_package_has_no_processors_and_no_drift() {
         let tmp = tempdir();
@@ -851,7 +988,9 @@ processors:
             python: String::new(),
             deno: String::new(),
         };
-        let derived = derive_package_processor_surfaces(root, &linux(), &extractor).unwrap();
+        let derived = derive_package_processor_surfaces(root, &linux(), &extractor)
+            .unwrap()
+            .surfaces;
         assert!(derived.is_empty());
         check_processor_manifest_drift(root, &[], &derived).unwrap();
     }
