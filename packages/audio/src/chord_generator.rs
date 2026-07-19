@@ -53,7 +53,13 @@ struct OscillatorState {
     osc_g4: SineOscillator,
 }
 
-#[streamlib_plugin_sdk::sdk::processor("ChordGenerator")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/audio/ChordGenerator@1.0.0",
+    execution = manual,
+    scheduling = realtime,
+    config = crate::_generated_::ChordGeneratorConfig,
+    output("chord", "@tatolab/core/AudioFrame@1.0.0"),
+)]
 pub struct ChordGeneratorProcessor {
     oscillators: Arc<Mutex<Option<OscillatorState>>>,
     frame_counter: Arc<AtomicU64>,

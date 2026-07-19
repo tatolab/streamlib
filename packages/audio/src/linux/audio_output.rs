@@ -49,7 +49,13 @@ pub struct LinuxAudioDevice {
     pub is_default: bool,
 }
 
-#[streamlib_plugin_sdk::sdk::processor("AudioOutput")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/audio/AudioOutput@1.0.0",
+    execution = manual,
+    scheduling = realtime,
+    config = crate::_generated_::AudioOutputConfig,
+    input("audio", "@tatolab/core/AudioFrame@1.0.0", read_mode = "read_next_in_order", buffer_size = 32),
+)]
 pub struct LinuxAudioOutputProcessor {
     device_id: Option<usize>,
     device_name: String,

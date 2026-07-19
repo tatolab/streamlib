@@ -31,7 +31,13 @@ enum WhipClientMessage {
 // PROCESSOR
 // ============================================================================
 
-#[streamlib_plugin_sdk::sdk::processor("WebrtcWhip")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/webrtc/WebrtcWhip@1.0.0",
+    execution = reactive,
+    config = crate::_generated_::WebrtcWhipConfig,
+    input("encoded_video_in", "@tatolab/core/EncodedVideoFrame@1.0.0", read_mode = "read_next_in_order", buffer_size = 16),
+    input("encoded_audio_in", "@tatolab/core/EncodedAudioFrame@1.0.0", read_mode = "skip_to_latest", buffer_size = 8),
+)]
 pub struct WebRtcWhipProcessor {
     // Session state
     session_started: bool,

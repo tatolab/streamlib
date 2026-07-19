@@ -96,7 +96,12 @@ struct ReadbackCreationBackoff {
     retry_at: Instant,
 }
 
-#[streamlib_plugin_sdk::sdk::processor("FrameTap")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/frame-tap/FrameTap@1.0.0",
+    execution = reactive,
+    config = crate::_generated_::FrameTapConfig,
+    input("video_in", "@tatolab/core/VideoFrame@1.0.0"),
+)]
 pub struct FrameTapProcessor {
     /// LimitedAccess context for resolving surfaces and escalating for
     /// privileged readback creation in `process()`.

@@ -67,7 +67,13 @@ impl SendableClapHostPtr {
     }
 }
 
-#[streamlib_plugin_sdk::sdk::processor("ClapEffect")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/clap/ClapEffect@1.0.0",
+    execution = manual,
+    config = crate::_generated_::ClapEffectConfig,
+    input("audio_in", "@tatolab/core/AudioFrame@1.0.0", read_mode = "read_next_in_order", buffer_size = 32),
+    output("audio_out", "@tatolab/core/AudioFrame@1.0.0"),
+)]
 pub struct ClapEffectProcessor {
     host: Option<ClapPluginHost>,
     buffer_size: usize,

@@ -197,7 +197,14 @@ impl AudioEncoderOpus for OpusEncoder {
 // PROCESSOR
 // ============================================================================
 
-#[streamlib_plugin_sdk::sdk::processor("OpusEncoder")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/opus/OpusEncoder@1.0.0",
+    execution = reactive,
+    scheduling = realtime,
+    config = crate::_generated_::OpusEncoderConfig,
+    input("audio_in", "@tatolab/core/AudioFrame@1.0.0", read_mode = "read_next_in_order", buffer_size = 32),
+    output("encoded_audio_out", "@tatolab/core/EncodedAudioFrame@1.0.0"),
+)]
 pub struct OpusEncoderProcessor {
     /// Opus encoder.
     opus_encoder: Option<OpusEncoder>,

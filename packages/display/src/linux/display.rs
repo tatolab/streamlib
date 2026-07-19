@@ -56,7 +56,13 @@ const DISPLAY_BLIT_VERT_SPV: &[u8] =
 const DISPLAY_BLIT_FRAG_SPV: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/display_blit.frag.spv"));
 
-#[streamlib_plugin_sdk::sdk::processor("Display")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/display/Display@1.0.0",
+    execution = manual,
+    scheduling = high,
+    config = crate::_generated_::DisplayConfig,
+    input("video", "@tatolab/core/VideoFrame@1.0.0", read_mode = "skip_to_latest", buffer_size = 4),
+)]
 pub struct LinuxDisplayProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,
     window_id: LinuxWindowId,

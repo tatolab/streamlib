@@ -5,7 +5,14 @@ use crate::_generated_::AudioFrame;
 use streamlib_plugin_sdk::sdk::error::Result;
 use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
-#[streamlib_plugin_sdk::sdk::processor("BufferRechunker")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/audio/BufferRechunker@1.0.0",
+    execution = reactive,
+    scheduling = realtime,
+    config = crate::_generated_::BufferRechunkerConfig,
+    input("audio_in", "@tatolab/core/AudioFrame@1.0.0", read_mode = "read_next_in_order", buffer_size = 32),
+    output("audio_out", "@tatolab/core/AudioFrame@1.0.0"),
+)]
 pub struct BufferRechunkerProcessor {
     buffer: Vec<f32>,
     sample_rate: u32,

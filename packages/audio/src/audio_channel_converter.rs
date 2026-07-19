@@ -6,7 +6,14 @@ use crate::_generated_::AudioFrame;
 use streamlib_plugin_sdk::sdk::error::{Result, Error};
 use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
-#[streamlib_plugin_sdk::sdk::processor("AudioChannelConverter")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/audio/AudioChannelConverter@1.0.0",
+    execution = reactive,
+    scheduling = realtime,
+    config = crate::_generated_::AudioChannelConverterConfig,
+    input("audio_in", "@tatolab/core/AudioFrame@1.0.0", read_mode = "read_next_in_order", buffer_size = 32),
+    output("audio_out", "@tatolab/core/AudioFrame@1.0.0"),
+)]
 pub struct AudioChannelConverterProcessor {
     frame_counter: u64,
 }

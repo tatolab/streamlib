@@ -6,7 +6,13 @@ use streamlib_plugin_sdk::sdk::context::RuntimeContextFullAccess;
 use streamlib_plugin_sdk::sdk::error::Result;
 use streamlib_plugin_sdk::sdk::processors::ManualProcessor;
 
-#[streamlib_plugin_sdk::sdk::processor("SimplePassthrough")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/debug-utilities/SimplePassthrough@1.0.0",
+    execution = manual,
+    config = crate::_generated_::SimplePassthroughConfig,
+    input("input", "@tatolab/core/VideoFrame@1.0.0", read_mode = "skip_to_latest", buffer_size = 4),
+    output("output", "@tatolab/core/VideoFrame@1.0.0"),
+)]
 pub struct SimplePassthroughProcessor;
 
 impl ManualProcessor for SimplePassthroughProcessor::Processor {

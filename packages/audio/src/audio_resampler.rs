@@ -15,7 +15,14 @@ fn quality_to_resampling_quality(quality: &Quality) -> ResamplingQuality {
     }
 }
 
-#[streamlib_plugin_sdk::sdk::processor("AudioResampler")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/audio/AudioResampler@1.0.0",
+    execution = reactive,
+    scheduling = realtime,
+    config = crate::_generated_::AudioResamplerConfig,
+    input("audio_in", "@tatolab/core/AudioFrame@1.0.0", read_mode = "read_next_in_order", buffer_size = 32),
+    output("audio_out", "@tatolab/core/AudioFrame@1.0.0"),
+)]
 pub struct AudioResamplerProcessor {
     resampler: Option<AudioResampler>,
     output_sample_rate: u32,

@@ -36,7 +36,13 @@ pub struct LinuxCameraDevice {
     pub name: String,
 }
 
-#[streamlib_plugin_sdk::sdk::processor("Camera")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/camera/Camera@1.0.0",
+    execution = manual,
+    scheduling = high,
+    config = crate::_generated_::CameraConfig,
+    output("video", "@tatolab/core/VideoFrame@1.0.0"),
+)]
 pub struct LinuxCameraProcessor {
     camera_name: String,
     gpu_context: Option<GpuContextLimitedAccess>,

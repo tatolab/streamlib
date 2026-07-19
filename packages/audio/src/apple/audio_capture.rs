@@ -18,7 +18,13 @@ pub struct AppleAudioInputDevice {
     pub is_default: bool,
 }
 
-#[streamlib_plugin_sdk::sdk::processor("AudioCapture")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/audio/AudioCapture@1.0.0",
+    execution = manual,
+    scheduling = realtime,
+    config = crate::_generated_::AudioCaptureConfig,
+    output("audio", "@tatolab/core/AudioFrame@1.0.0"),
+)]
 pub struct AppleAudioCaptureProcessor {
     device_info: Option<AppleAudioInputDevice>,
     _device: Option<Device>,
