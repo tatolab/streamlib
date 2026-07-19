@@ -168,9 +168,7 @@ pub enum Error {
     #[error("Bag key '{key}' is not present")]
     BagKeyMissing { key: String },
 
-    #[error(
-        "Bag key '{key}' could not be read as `{expected_type}`: {detail}"
-    )]
+    #[error("Bag key '{key}' could not be read as `{expected_type}`: {detail}")]
     BagTypeMismatch {
         key: String,
         expected_type: String,

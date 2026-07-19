@@ -27,9 +27,7 @@ use anyhow::{Context, Result};
 use streamlib::sdk::runtime::{
     AddPackageOptions, AddPackageReport, AddPackageSource, AppModulesDir, LinkPackageReport,
 };
-use streamlib_idents::{
-    DependencySpec, Manifest, PackageRef, RegistryDependency, SemVerRange,
-};
+use streamlib_idents::{DependencySpec, Manifest, PackageRef, RegistryDependency, SemVerRange};
 use streamlib_processor_schema::StreamlibYaml;
 
 /// `streamlib add <spec>` — records a dependency range when run in a
@@ -181,8 +179,8 @@ fn record_dependency_range(manifest_path: &Path, spec: &str) -> Result<()> {
     let raw = std::fs::read_to_string(manifest_path)
         .with_context(|| format!("read {}", manifest_path.display()))?;
     let (header, body) = split_leading_comment_header(&raw);
-    let mut manifest: StreamlibYaml =
-        serde_yaml::from_str(&body).with_context(|| format!("parse {}", manifest_path.display()))?;
+    let mut manifest: StreamlibYaml = serde_yaml::from_str(&body)
+        .with_context(|| format!("parse {}", manifest_path.display()))?;
 
     let replaced = manifest
         .dependencies
@@ -195,8 +193,7 @@ fn record_dependency_range(manifest_path: &Path, spec: &str) -> Result<()> {
         )
         .is_some();
 
-    let serialized =
-        serde_yaml::to_string(&manifest).context("serialize streamlib.yaml")?;
+    let serialized = serde_yaml::to_string(&manifest).context("serialize streamlib.yaml")?;
     std::fs::write(manifest_path, format!("{header}{serialized}"))
         .with_context(|| format!("write {}", manifest_path.display()))?;
 
@@ -212,9 +209,7 @@ fn record_dependency_range(manifest_path: &Path, spec: &str) -> Result<()> {
 /// lookup here). Returns a CLI-friendly error otherwise.
 fn parse_authoring_spec(spec: &str) -> Result<(PackageRef, String)> {
     let inner = spec.strip_prefix('@').ok_or_else(|| {
-        anyhow::anyhow!(
-            "expected `@org/name@<version>` (e.g. `@tatolab/core@1.0.0`); got `{spec}`"
-        )
+        anyhow::anyhow!("expected `@org/name@<version>` (e.g. `@tatolab/core@1.0.0`); got `{spec}`")
     })?;
     let (name_part, version) = inner.split_once('@').ok_or_else(|| {
         anyhow::anyhow!(
