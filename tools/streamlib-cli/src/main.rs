@@ -96,23 +96,27 @@ enum Commands {
         dir: Option<PathBuf>,
     },
 
-    /// Bring any valid streamlib package into this app's streamlib_modules/
-    /// folder — the node_modules model for streamlib packages.
+    /// Record a dependency (in a package dir) or adopt a package (in an app).
     ///
-    /// Takes a byte source — a package folder, an archive (`.slpkg` / `.zip`
-    /// / `.tar.gz`), or a `file://` / HTTP(S) URL — materializes it into
-    /// `streamlib_modules/@org/name/` beside the app, and records identity,
-    /// source, and content hash in the app's `streamlib.lock`. The package's
-    /// identity comes from its own manifest. Re-adding replaces cleanly.
-    /// Never builds and never resolves a registry coordinate; a bare
-    /// `runtime.add_module(ident)` run from the app directory finds the
-    /// package afterward.
+    /// Context-sensitive on the anchor directory:
+    ///
+    /// - In a **package-authoring dir** (a `streamlib.yaml` with a `package:`
+    ///   block), `streamlib add @org/name@<version>` records a caret
+    ///   dependency (`^<version>`) into that package's own `dependencies:` —
+    ///   the schema-tier `cargo add`. `pkg build` reconciles it against code.
+    /// - In a **consumer / app dir**, takes a byte source — a package folder,
+    ///   an archive (`.slpkg` / `.zip` / `.tar.gz`), or a `file://` / HTTP(S)
+    ///   URL — materializes it into `streamlib_modules/@org/name/` beside the
+    ///   app, and records identity, source, and content hash in the app's
+    ///   `streamlib.lock`. Identity comes from the package's own manifest;
+    ///   re-adding replaces cleanly. Never builds.
     Add {
-        /// Package folder | archive (`.slpkg`/`.zip`/`.tar.gz`) | URL
+        /// Package dir: `@org/name@<version>`. App dir: package folder |
+        /// archive (`.slpkg`/`.zip`/`.tar.gz`) | URL.
         spec: String,
 
-        /// App root to anchor streamlib_modules/ + streamlib.lock at
-        /// (default: current working directory, no walk-up).
+        /// Anchor dir — a package dir to record a dependency in, or an app root
+        /// to materialize into (default: current working directory, no walk-up).
         #[arg(long)]
         dir: Option<PathBuf>,
 
