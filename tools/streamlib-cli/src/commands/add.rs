@@ -49,7 +49,12 @@ pub fn add(spec: &str, dir: Option<&Path>, expect_sha256: Option<&str>) -> Resul
         // phantom-dependency list — an app resolves refs against its installed
         // set, not a manifest. Reject before touching streamlib_modules/.
         if let Some(count) = manifest.app_dependency_violation_count() {
-            anyhow::bail!(app_dependencies_rejection(&anchor, count));
+            anyhow::bail!(
+                streamlib::sdk::error::Error::AppManifestDeclaresDependencies {
+                    manifest_path: anchor.join(Manifest::FILE_NAME).display().to_string(),
+                    declared_count: count,
+                }
+            );
         }
     }
 
@@ -152,20 +157,6 @@ fn load_anchor_manifest(dir: &Path) -> Result<Option<Manifest>> {
     Manifest::load(dir)
         .map(Some)
         .map_err(|e| anyhow::anyhow!("{e}"))
-}
-
-/// The rejection shown when `streamlib add` runs in an app dir whose
-/// `streamlib.yaml` declares `dependencies:` — an app resolves refs against its
-/// installed set, never a manifest dependency list.
-fn app_dependencies_rejection(dir: &Path, count: usize) -> String {
-    format!(
-        "this app's {} declares `dependencies:` ({count} package(s)), but an app is code, \
-         not a manifest — it resolves processor refs against its installed set \
-         (streamlib_modules/ + streamlib.lock), never a manifest dependency list.\n  \
-         Fix: remove the `dependencies:` block, then install each package with \
-         `streamlib add <source>` (a folder, a .slpkg archive, or a URL).",
-        dir.join(Manifest::FILE_NAME).display()
-    )
 }
 
 /// Record `spec` (`@org/name@<version>`) as a caret dependency in the package
@@ -405,14 +396,6 @@ mod tests {
         let pkg = load_anchor_manifest(dir.path()).unwrap().unwrap();
         assert!(pkg.is_package_flavor());
         assert_eq!(pkg.app_dependency_violation_count(), None);
-    }
-
-    #[test]
-    fn app_dependencies_rejection_names_the_installed_set_fix_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let msg = app_dependencies_rejection(dir.path(), 2);
-        assert!(msg.contains("streamlib_modules/"), "message: {msg}");
-        assert!(msg.contains("streamlib add <source>"), "message: {msg}");
     }
 
     #[test]
