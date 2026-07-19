@@ -54,7 +54,7 @@ pub mod schemas {
 }
 
 // Re-export attribute macros for processor syntax:
-// - #[streamlib::processor("Camera")] - Processor definition by name lookup in streamlib.yaml
+// - #[streamlib::processor("@org/pkg/Type@version", …)] - identity + execution + ports in code
 // - #[derive(ConfigDescriptor)] - Config field metadata derive macro
 pub use streamlib_macros::{
     ConfigDescriptor, module_ident, module_ident_any_version, module_ident_joined,

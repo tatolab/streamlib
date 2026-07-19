@@ -174,7 +174,8 @@ pub mod sdk {
 
     // ---- Procedural macros ----
 
-    /// `#[streamlib::sdk::processor("...")]` attribute macro.
+    /// `#[streamlib::sdk::processor("@org/pkg/Type@version", …)]` attribute
+    /// macro — declares processor identity, execution, and ports.
     pub use streamlib_engine::processor;
 
     /// `#[derive(ConfigDescriptor)]` derive macro.
