@@ -21,6 +21,7 @@
 //!
 //! `remove` reverses the consumer-dir flow. Neither builds anything.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
@@ -160,8 +161,9 @@ fn load_anchor_manifest(dir: &Path) -> Result<Option<Manifest>> {
 }
 
 /// Record `spec` (`@org/name@<version>`) as a caret dependency in the package
-/// manifest at `manifest_path`, preserving every other manifest field and the
-/// leading `# yaml-language-server` / comment header.
+/// manifest at `manifest_path`. Only the top-level `dependencies:` block is
+/// rewritten — every other line (key order, blank lines, and inline comments in
+/// the hand-authored manifest) is left byte-for-byte intact.
 fn record_dependency_range(manifest_path: &Path, spec: &str) -> Result<()> {
     let (pkg_ref, version) = parse_authoring_spec(spec)?;
     let range = SemVerRange::from_str(&format!("^{version}"))
@@ -169,8 +171,7 @@ fn record_dependency_range(manifest_path: &Path, spec: &str) -> Result<()> {
 
     let raw = std::fs::read_to_string(manifest_path)
         .with_context(|| format!("read {}", manifest_path.display()))?;
-    let (header, body) = split_leading_comment_header(&raw);
-    let mut manifest: StreamlibYaml = serde_yaml::from_str(&body)
+    let mut manifest: StreamlibYaml = serde_yaml::from_str(&raw)
         .with_context(|| format!("parse {}", manifest_path.display()))?;
 
     let replaced = manifest
@@ -184,14 +185,104 @@ fn record_dependency_range(manifest_path: &Path, spec: &str) -> Result<()> {
         )
         .is_some();
 
-    let serialized = serde_yaml::to_string(&manifest).context("serialize streamlib.yaml")?;
-    std::fs::write(manifest_path, format!("{header}{serialized}"))
+    let updated = splice_dependencies_block(&raw, &manifest.dependencies)
+        .context("rewrite the dependencies block in streamlib.yaml")?;
+    std::fs::write(manifest_path, updated)
         .with_context(|| format!("write {}", manifest_path.display()))?;
 
     let verb = if replaced { "Updated" } else { "Added" };
     println!("{verb} dependency {pkg_ref} {range}");
     println!("  Manifest: {}", manifest_path.display());
     Ok(())
+}
+
+/// Re-emit only the top-level `dependencies:` block of a `streamlib.yaml`,
+/// splicing it into `raw` in place of the existing block. When the manifest has
+/// no `dependencies:` block yet, a fresh one is inserted directly after the
+/// `package:` block (or appended when there is no `package:` block). Everything
+/// outside the block — comments, key order, and blank lines — is preserved
+/// verbatim.
+fn splice_dependencies_block(
+    raw: &str,
+    dependencies: &BTreeMap<PackageRef, DependencySpec>,
+) -> Result<String> {
+    let block = render_dependencies_block(dependencies)?;
+    let lines: Vec<&str> = raw.split_inclusive('\n').collect();
+
+    if let Some((start, end)) = top_level_block_span(&lines, "dependencies") {
+        return Ok(splice_lines(&lines, start, end, &block));
+    }
+    if let Some((_, package_end)) = top_level_block_span(&lines, "package") {
+        return Ok(splice_lines(&lines, package_end, package_end, &block));
+    }
+
+    let mut out = raw.to_string();
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    out.push_str(&block);
+    Ok(out)
+}
+
+/// Serialize a bare `dependencies:` mapping to YAML — the block that gets spliced
+/// into the manifest. Ends with a trailing newline.
+fn render_dependencies_block(
+    dependencies: &BTreeMap<PackageRef, DependencySpec>,
+) -> Result<String> {
+    #[derive(serde::Serialize)]
+    struct DependenciesOnly<'a> {
+        dependencies: &'a BTreeMap<PackageRef, DependencySpec>,
+    }
+    serde_yaml::to_string(&DependenciesOnly { dependencies }).context("serialize dependencies block")
+}
+
+/// Replace `lines[start..end]` with `block`, reassembling the surrounding lines
+/// (each of which still carries its own newline from `split_inclusive`) unchanged.
+fn splice_lines(lines: &[&str], start: usize, end: usize, block: &str) -> String {
+    let mut out = String::new();
+    out.push_str(&lines[..start].concat());
+    out.push_str(block);
+    out.push_str(&lines[end..].concat());
+    out
+}
+
+/// The `[start, end)` line span of a top-level `<key>:` block — the key line plus
+/// its indented children, minus any trailing blank lines (so a blank separator
+/// before the next block is preserved). `None` when the key is absent.
+fn top_level_block_span(lines: &[&str], key: &str) -> Option<(usize, usize)> {
+    let start = lines.iter().position(|line| is_top_level_key(line, key))?;
+    let mut end = start + 1;
+    while end < lines.len() && !is_top_level_line(lines[end]) {
+        end += 1;
+    }
+    while end > start + 1 && line_body(lines[end - 1]).trim().is_empty() {
+        end -= 1;
+    }
+    Some((start, end))
+}
+
+/// Whether `line` opens a top-level `<key>:` mapping entry (column 0, `key`
+/// immediately followed by `:`). Matches both `dependencies:` and the inline
+/// `dependencies: { ... }` flow form.
+fn is_top_level_key(line: &str, key: &str) -> bool {
+    let body = line_body(line);
+    match body.strip_prefix(key) {
+        Some(rest) => rest.starts_with(':'),
+        None => false,
+    }
+}
+
+/// Whether `line` starts a new top-level construct — a non-blank line at column 0
+/// (a key or a column-0 comment). Blank lines and indented lines belong to the
+/// current block.
+fn is_top_level_line(line: &str) -> bool {
+    let body = line_body(line);
+    !body.is_empty() && !body.starts_with(|c: char| c.is_whitespace())
+}
+
+/// A line with its trailing newline stripped.
+fn line_body(line: &str) -> &str {
+    line.strip_suffix('\n').unwrap_or(line)
 }
 
 /// Parse an authoring-mode spec into a canonical [`PackageRef`] and its
@@ -213,22 +304,6 @@ fn parse_authoring_spec(spec: &str) -> Result<(PackageRef, String)> {
     }
     let pkg_ref = parse_canonical_package_ref(&format!("@{name_part}"))?;
     Ok((pkg_ref, version.to_string()))
-}
-
-/// Split a `streamlib.yaml` into its leading comment/blank header (the
-/// `# yaml-language-server: $schema=` magic comment and friends) and the rest,
-/// so a serde round-trip can re-prepend the header it would otherwise drop.
-fn split_leading_comment_header(raw: &str) -> (String, String) {
-    let mut split_at = 0;
-    for line in raw.split_inclusive('\n') {
-        let trimmed = line.trim_start();
-        if trimmed.is_empty() || trimmed.starts_with('#') {
-            split_at += line.len();
-        } else {
-            break;
-        }
-    }
-    (raw[..split_at].to_string(), raw[split_at..].to_string())
 }
 
 /// Pretty-print the add outcome plus a manifest-derived processor summary.
@@ -459,5 +534,98 @@ mod tests {
         // Runtime fields (processors) survive the round-trip.
         assert_eq!(reparsed.processors.len(), 1);
         assert_eq!(reparsed.processors[0].name, "Widget");
+    }
+
+    #[test]
+    fn record_dependency_range_is_format_preserving() {
+        // A hand-authored manifest with comments and a deliberately
+        // non-alphabetical top-level key order (`schemas:` before `processors:`)
+        // must survive `streamlib add` with *only* the `dependencies:` block
+        // added — no key reordering, no dropped comments.
+        let original = "\
+# yaml-language-server: $schema=./schemas/streamlib.schema.json
+# Hand-authored — key order and comments below are intentional.
+package:
+  org: tatolab
+  name: widget  # our widget package
+  version: 0.1.0
+schemas:
+  WidgetConfig:
+    file: schemas/widget_config.yaml
+processors:
+- name: Widget
+  version: 1.0.0
+  runtime: rust
+  execution: reactive
+";
+        let dir = tempfile::tempdir().unwrap();
+        let manifest_path = dir.path().join("streamlib.yaml");
+        std::fs::write(&manifest_path, original).unwrap();
+
+        record_dependency_range(&manifest_path, "@tatolab/core@1.4.0").unwrap();
+        let written = std::fs::read_to_string(&manifest_path).unwrap();
+
+        // Leading + inline comments survive verbatim.
+        assert!(
+            written.contains("# yaml-language-server:"),
+            "magic-comment header dropped:\n{written}"
+        );
+        assert!(
+            written.contains("# Hand-authored — key order and comments below are intentional."),
+            "leading comment dropped:\n{written}"
+        );
+        assert!(
+            written.contains("name: widget  # our widget package"),
+            "inline comment dropped:\n{written}"
+        );
+
+        // Non-alphabetical top-level order preserved: `schemas:` stays before
+        // `processors:` (a full reserialize would alphabetize them).
+        let schemas_pos = written.find("\nschemas:").unwrap();
+        let processors_pos = written.find("\nprocessors:").unwrap();
+        let package_pos = written.find("\npackage:").unwrap();
+        let deps_pos = written.find("\ndependencies:").unwrap();
+        assert!(
+            schemas_pos < processors_pos,
+            "top-level keys were reordered:\n{written}"
+        );
+        // The new block lands right after `package:`.
+        assert!(
+            package_pos < deps_pos && deps_pos < schemas_pos,
+            "dependencies block not placed after package:\n{written}"
+        );
+
+        // The caret range is recorded and the rest of the manifest reparses.
+        let reparsed: StreamlibYaml = serde_yaml::from_str(&written).unwrap();
+        let core = parse_canonical_package_ref("@tatolab/core").unwrap();
+        match reparsed.dependencies.get(&core).unwrap() {
+            DependencySpec::Registry(r) => {
+                assert_eq!(r.version, SemVerRange::from_str("^1.4.0").unwrap());
+            }
+            other => panic!("expected registry dep, got {other:?}"),
+        }
+
+        // Nothing but the `dependencies:` block was added: deleting that block
+        // (its key line plus every indented child) reproduces the original.
+        let mut kept: Vec<&str> = Vec::new();
+        let mut in_dependencies = false;
+        for line in written.lines() {
+            if line == "dependencies:" {
+                in_dependencies = true;
+                continue;
+            }
+            if in_dependencies {
+                if line.starts_with(char::is_whitespace) {
+                    continue;
+                }
+                in_dependencies = false;
+            }
+            kept.push(line);
+        }
+        assert_eq!(
+            kept.join("\n"),
+            original.trim_end_matches('\n'),
+            "content outside the dependencies block changed:\n{written}"
+        );
     }
 }
