@@ -81,7 +81,9 @@ function trianglePipelineState():
 // `GraphicsShaderStageFlags`.
 const STAGE_VERTEX = 1;
 
-@processor("VulkanGraphicsProcessor", import.meta.url)
+@processor("@tatolab/polyglot-vulkan-graphics-deno/VulkanGraphicsProcessor", {
+  execution: "reactive",
+})
 export default class VulkanGraphicsProcessor implements ReactiveProcessor {
   private uuid = "";
   private width = 0;

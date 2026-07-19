@@ -269,7 +269,9 @@ function linkProgram(gl: any, vs: number, fs: number): number {
 // Processor
 // =============================================================================
 
-@processor("OpenGlFragmentShaderProcessor", import.meta.url)
+@processor("@tatolab/polyglot-opengl-fragment-shader-deno/OpenGlFragmentShaderProcessor", {
+  execution: "reactive",
+})
 export default class OpenGlFragmentShaderProcessor implements ReactiveProcessor {
   private uuid = "";
   private width = 0;

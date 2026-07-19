@@ -4,28 +4,31 @@
 /**
  * Decorators for defining StreamLib processors in Deno.
  *
- * `@processor("PascalCase", import.meta.url)` mirrors Rust's
- * `#[streamlib::processor("Camera")]` proc-macro and Python's
- * `@processor("Camera")`: a positional PascalCase short name. The decorator
- * reads the package identity (`package: { org, name, version }`) from the
- * sibling `streamlib.yaml`, composes a structured {@linkcode SchemaIdent}
- * attached to the class as `streamlibSchemaIdent`, and registers the
- * processor in the module-global registry (`_processor_registry.ts`).
+ * `@processor("@org/package/Type", { execution: ... })` mirrors Rust's
+ * `#[processor("@org/package/Type", execution = ...)]` proc-macro
+ * (`sdk/streamlib-processor-extract/src/grammar.rs`) and Python's
+ * `@processor("@org/package/Type", execution=...)`: identity, execution mode,
+ * and scheduling are declared **in code**, never read from a sibling
+ * `streamlib.yaml` at decoration time. The identity string is **version-free**
+ * (`@org/package/Type`, no `@version`) — a schema ref is an identity the runtime
+ * binds version-blind, and the concrete version is derived at package-build
+ * time, never hand-authored (#1409). The decorator synthesizes the `SemVer
+ * 0.0.0` version-free sentinel and attaches a structured {@linkcode SchemaIdent}
+ * to the class as `streamlibSchemaIdent`, registering the processor in the
+ * module-global registry (`_processor_registry.ts`).
+ *
+ * Omitting the identity synthesizes `@app/local/<ClassName>` — a bare `.ts`
+ * module with no `streamlib.yaml` defines a working local processor. Because
+ * nothing is read from disk, the decorator no longer needs `import.meta.url`:
+ * the second positional argument is gone.
  *
  * The decorator is the manifest truth-source for the `processors:` set: a
  * package's processors are derived by *importing* its modules and enumerating
  * what `@processor` registered — never by reading a hand-authored
- * `processors:` list. This is the Deno analogue of the Rust `syn` source-scan
- * in `sdk/streamlib-processor-extract` (there the scan reads the AST without
- * running it; here extraction is import). Only the package identity comes from
- * `streamlib.yaml`; the processor set comes from code. See
- * `extract_processors.ts`.
- *
- * Deno has no `inspect.getfile` equivalent — TC39 stage-3 decorators
- * don't surface the source URL in the decorator context. The caller
- * passes `import.meta.url` explicitly as the second argument; the
- * decorator resolves it to a filesystem path and looks for a sibling
- * `streamlib.yaml`.
+ * `processors:` list, and never by reading `package:` identity out of
+ * `streamlib.yaml`. This is the Deno analogue of the Rust `syn` source-scan in
+ * `sdk/streamlib-processor-extract` (there the scan reads the AST without
+ * running it; here extraction is import). See `extract_processors.ts`.
  *
  * Schema references in port declarations (`@input(...)` / `@output(...)`)
  * are cross-package by definition. The only accepted forms are a
@@ -52,14 +55,6 @@
  * @module
  */
 
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
-
-import {
-  type ManifestPackage,
-  ManifestParseError,
-  readPackageBlock,
-} from "./_manifest.ts";
 import { registerProcessor } from "./_processor_registry.ts";
 import { SchemaIdent } from "./schema_ident.ts";
 
@@ -67,9 +62,44 @@ import { SchemaIdent } from "./schema_ident.ts";
 // Public types
 // =============================================================================
 
+/**
+ * Manifest-shaped execution mode carried by the decorator. A bare string for
+ * `reactive` / `manual`, or the `{ type: "continuous", interval_ms: N }`
+ * mapping the Rust `ProcessorSchemaExecution` serializer emits for continuous.
+ */
+export type ExecutionSpec =
+  | "reactive"
+  | "manual"
+  | { readonly type: "continuous"; readonly interval_ms: number };
+
+/**
+ * Manifest-shaped `scheduling:` block (`{ priority: <realtime|high|normal> }`),
+ * or `null` when the processor declares no scheduling.
+ */
+export type SchedulingSpec = { readonly priority: string } | null;
+
+/** Options declaring a processor's execution mode and scheduling in code. */
+export interface ProcessorOptions {
+  /**
+   * `"reactive"`, `"manual"`, or `"continuous"`. Required — the execution
+   * mode is authored in code, mirroring the Rust grammar.
+   */
+  readonly execution: "reactive" | "manual" | "continuous";
+  /**
+   * Minimum interval between `process()` calls in milliseconds, only
+   * meaningful for `execution: "continuous"`. Defaults to `0`.
+   */
+  readonly intervalMs?: number;
+  /** `"realtime"`, `"high"`, or `"normal"`; omit for the default. */
+  readonly scheduling?: "realtime" | "high" | "normal";
+  /** Human-readable processor description for introspection. */
+  readonly description?: string;
+}
+
 /** Carrier shape for a class that has been processed by `@processor`. */
 export interface StreamlibClassMetadata {
   readonly streamlibSchemaIdent: SchemaIdent;
+  readonly streamlibExecution: ExecutionSpec;
   readonly streamlibPorts: {
     readonly inputs: readonly PortMetadata[];
     readonly outputs: readonly PortMetadata[];
@@ -104,6 +134,14 @@ export interface PortOptions {
   description?: string;
 }
 
+// The version-free sentinel every code-declared identity carries. The concrete
+// release version is derived at package-build time (#1409); the runtime schema
+// registry stores and looks up unversioned, so `0.0.0` is an inert placeholder.
+const VERSION_FREE_SENTINEL = "0.0.0";
+
+const EXECUTION_MODES = ["reactive", "manual", "continuous"] as const;
+const SCHEDULING_PRIORITIES = ["realtime", "high", "normal"] as const;
+
 // =============================================================================
 // Processor class decorator
 // =============================================================================
@@ -112,79 +150,92 @@ export interface PortOptions {
 type ClassConstructor = new (...args: any[]) => any;
 
 /**
- * Mark a class as a StreamLib processor (PascalCase positional short
- * name).
+ * Mark a class as a StreamLib processor — identity and mode declared in code.
  *
- * Mirrors Rust's `#[streamlib::processor("Camera")]` macro and Python's
- * `@processor("Camera")`. At decoration time, the decorator locates the
- * sibling `streamlib.yaml` (next to the file containing `import.meta.url`),
- * reads its `package: { org, name, version }` block for the package identity,
- * constructs a structured {@linkcode SchemaIdent} attached to the class as
- * `streamlibSchemaIdent`, and registers the processor so the
- * import-and-enumerate extractor can derive the package's `processors:` set
- * from code. Method-level port metadata declared by
+ * Mirrors Rust's `#[processor("@org/package/Type", execution = ...)]` macro and
+ * Python's `@processor("@org/package/Type", execution=...)`. Nothing is read
+ * from disk: the version-free `@org/package/Type` identity, the execution mode,
+ * and the scheduling priority all come from the arguments. The decorator
+ * synthesizes the `0.0.0` version-free sentinel, attaches a structured
+ * {@linkcode SchemaIdent} as `streamlibSchemaIdent`, and registers the
+ * processor so the import-and-enumerate extractor can derive the package's
+ * `processors:` set from code. Method-level port metadata declared by
  * {@linkcode input}/{@linkcode output} is collected onto `streamlibPorts`.
- * `shortName` is NOT validated against a `processors:` list — the decorator IS
- * that list.
  *
- * @param shortName PascalCase type name — the processor's identity.
- * @param moduleUrl Pass `import.meta.url` from the file containing the
- *   decorated class. Required because Deno's TC39 decorator context
- *   does not expose the source URL.
+ * @param identity Version-free `@org/package/Type` string. Omit (pass the
+ *   options object as the sole argument) to synthesize `@app/local/<ClassName>`
+ *   — a bare module with no `streamlib.yaml` still defines a working local
+ *   processor.
+ * @param options Execution mode (required), interval, scheduling, description.
  *
  * @example
  * ```ts
- * import { processor } from "<deno-streamlib>";
+ * import { processor } from "streamlib";
  *
- * @processor("CyberpunkProcessor", import.meta.url)
- * export default class CyberpunkProcessor { … }
+ * @processor("@tatolab/camera/Camera", { execution: "manual", scheduling: "high" })
+ * export default class Camera { … }
+ *
+ * @processor({ execution: "reactive" }) // → @app/local/LocalFilter
+ * export default class LocalFilter { … }
  * ```
- *
- * Wire format and IPC always carry the full structured `SchemaIdent`;
- * the short-name positional is an authoring convenience for the
- * processor's own identity declaration only — schema references in
- * port declarations have no analogous shorthand and require a
- * structured carrier.
  */
-export function processor(shortName: string, moduleUrl: string) {
-  if (typeof shortName !== "string") {
+export function processor(
+  identity: string,
+  options: ProcessorOptions,
+): <T extends ClassConstructor>(target: T, context: ClassDecoratorContext) => T;
+export function processor(
+  options: ProcessorOptions,
+): <T extends ClassConstructor>(target: T, context: ClassDecoratorContext) => T;
+export function processor(
+  identityOrOptions: string | ProcessorOptions,
+  maybeOptions?: ProcessorOptions,
+) {
+  let identity: string | null;
+  let options: ProcessorOptions;
+  if (typeof identityOrOptions === "string") {
+    identity = identityOrOptions;
+    if (maybeOptions === undefined) {
+      throw new TypeError(
+        `@processor(${JSON.stringify(identityOrOptions)}) requires an options ` +
+          `object declaring the execution mode: ` +
+          `@processor("@org/package/Type", { execution: "reactive" }).`,
+      );
+    }
+    options = maybeOptions;
+  } else if (
+    identityOrOptions !== null && typeof identityOrOptions === "object"
+  ) {
+    identity = null;
+    options = identityOrOptions;
+  } else {
     throw new TypeError(
-      `@processor() takes a positional PascalCase short name (string); got ` +
-        `${typeof shortName}. Pass the type name as the first argument: ` +
-        `@processor("Camera", import.meta.url).`,
+      `@processor() takes a version-free \`@org/package/Type\` identity string ` +
+        `plus an options object, or just the options object (for ` +
+        `\`@app/local/<ClassName>\`); got ${typeof identityOrOptions}.`,
     );
   }
-  if (typeof moduleUrl !== "string") {
-    throw new TypeError(
-      `@processor() requires the module's import.meta.url as the second ` +
-        `argument; got ${typeof moduleUrl}. Pass import.meta.url explicitly: ` +
-        `@processor("Camera", import.meta.url).`,
-    );
-  }
+
+  const executionSpec = normalizeExecution(options.execution, options.intervalMs);
+  const schedulingSpec = normalizeScheduling(options.scheduling);
+  const description = options.description ?? null;
 
   return <T extends ClassConstructor>(
     target: T,
     _context: ClassDecoratorContext,
   ): T => {
-    const manifestPath = locateSiblingManifest(moduleUrl, shortName);
-    const pkg = loadPackageBlock(manifestPath, shortName);
-
-    // Schema idents are release-only by invariant: a package may carry a
-    // `-dev.N` / `-rc.N` prerelease version, but its schema idents project
-    // onto the release core (mirrors Rust's `SemVer::release_core`). The
-    // 3-part `SchemaIdent` validator would otherwise reject a legitimately
-    // dev-versioned package's processors.
-    const ident = new SchemaIdent(
-      pkg.org,
-      pkg.name,
-      shortName,
-      releaseCore(pkg.version),
-    );
+    const ident = resolveProcessorIdentity(identity, target);
 
     // Attach as static fields. Mirrors Python's
-    // `cls.__streamlib_schema_ident__` / `cls.__streamlib_ports__`.
+    // `cls.__streamlib_schema_ident__` / `cls.__streamlib_execution__` /
+    // `cls.__streamlib_ports__`.
     Object.defineProperty(target, "streamlibSchemaIdent", {
       value: ident,
+      writable: false,
+      enumerable: true,
+      configurable: false,
+    });
+    Object.defineProperty(target, "streamlibExecution", {
+      value: executionSpec,
       writable: false,
       enumerable: true,
       configurable: false,
@@ -214,8 +265,11 @@ export function processor(shortName: string, moduleUrl: string) {
     });
 
     registerProcessor({
-      shortName,
+      shortName: ident.type,
       schemaIdent: ident,
+      execution: executionSpec,
+      scheduling: schedulingSpec,
+      description,
       inputs: Object.freeze(inputs.slice()),
       outputs: Object.freeze(outputs.slice()),
       className: target.name,
@@ -234,8 +288,8 @@ export function processor(shortName: string, moduleUrl: string) {
  *
  * @example
  * ```ts
- * import { input } from "<deno-streamlib>";
- * import { VideoFrame } from "<deno-streamlib>/_generated_/tatolab__core/video_frame.ts";
+ * import { input } from "streamlib";
+ * import { VideoFrame } from "./_generated_/tatolab__core/video_frame.ts";
  *
  * class MyProcessor {
  *   @input({ schema: VideoFrame, description: "RGB video input" })
@@ -292,66 +346,117 @@ export function output(opts: PortOptions = {}) {
 // =============================================================================
 
 /**
- * Package-version grammar: 3-part core + optional closed `-dev.N` / `-rc.N`
- * prerelease. Mirrors Rust's `SemVer::from_dotted` so all three runtimes
- * accept and reject the same manifests.
+ * Version-free identity grammar: `@<org>/<package>/<Type>`, no trailing
+ * `@<version>`. Mirrors Rust's `parse_schema_ident_str` in
+ * `sdk/streamlib-processor-extract/src/grammar.rs`.
  */
-const PACKAGE_VERSION_PATTERN = /^(\d+\.\d+\.\d+)(?:-(?:dev|rc)\.\d+)?$/;
+const IDENTITY_PATTERN = /^@([^/@]+)\/([^/@]+)\/([^/@]+)$/;
 
-/**
- * Project a package version onto its release core `MAJOR.MINOR.PATCH`.
- *
- * Package versions may carry a `-dev.N` / `-rc.N` prerelease, but schema
- * idents are release-only by invariant. Anything outside that closed grammar
- * (`-alpha.1`, `+build`, malformed ordinals) throws — identical posture to
- * Rust's manifest parsing, never a silent projection of an invalid version.
- * Mirrors Rust's `streamlib_idents::SemVer::release_core`.
- */
-function releaseCore(version: string): string {
-  const match = PACKAGE_VERSION_PATTERN.exec(version);
-  if (match === null) {
-    throw new Error(
-      `invalid package version ${JSON.stringify(version)}: must be ` +
-        `MAJOR.MINOR.PATCH with an optional -dev.N / -rc.N prerelease`,
-    );
-  }
-  return match[1];
-}
-
-function locateSiblingManifest(
-  moduleUrl: string,
-  shortName: string,
-): string {
-  if (!moduleUrl.startsWith("file://")) {
-    throw new Error(
-      `@processor(${JSON.stringify(shortName)}): module URL must be a ` +
-        `file:// URL (got ${moduleUrl}). Pass import.meta.url from a ` +
-        `regular .ts module file.`,
-    );
-  }
-  const filePath = fileURLToPath(moduleUrl);
-  return join(dirname(filePath), "streamlib.yaml");
-}
-
-function loadPackageBlock(
-  manifestPath: string,
-  shortName: string,
-): ManifestPackage {
-  try {
-    return readPackageBlock(manifestPath);
-  } catch (e) {
-    if (e instanceof Deno.errors.NotFound) {
+/** Resolve the declared identity, or synthesize `@app/local/<ClassName>`. */
+function resolveProcessorIdentity(
+  identity: string | null,
+  target: ClassConstructor,
+): SchemaIdent {
+  if (identity === null) {
+    const typeName = target.name;
+    try {
+      return new SchemaIdent("app", "local", typeName, VERSION_FREE_SENTINEL);
+    } catch (e) {
       throw new Error(
-        `streamlib.yaml not found at ${manifestPath}. ` +
-          `@processor(${JSON.stringify(shortName)}) requires a sibling ` +
-          `streamlib.yaml with a \`package: { org, name, version }\` block.`,
+        `cannot synthesize an \`@app/local\` identity for class ` +
+          `${JSON.stringify(typeName)}: ${e instanceof Error ? e.message : String(e)}. ` +
+          `Declare an explicit \`@org/package/Type\` identity, or give the ` +
+          `class a PascalCase name.`,
       );
     }
-    if (e instanceof ManifestParseError) {
-      throw e;
-    }
-    throw e;
   }
+  return parseIdentityStr(identity);
+}
+
+/**
+ * Parse a version-free `@org/package/Type` string into a `SchemaIdent`.
+ *
+ * The grammar is version-free (#1409): a trailing `@<version>` is rejected —
+ * a schema ref is an identity the runtime binds version-blind, and versions
+ * are derived at package-build time. The synthesized `SchemaIdent` carries
+ * the `0.0.0` version-free sentinel. Mirrors Rust's `parse_schema_ident_str`.
+ */
+function parseIdentityStr(raw: string): SchemaIdent {
+  if (!raw.startsWith("@")) {
+    throw new Error(
+      `schema identity ${JSON.stringify(raw)} must start with \`@\` ` +
+        `(e.g. \`@tatolab/core/VideoFrame\`)`,
+    );
+  }
+  if (raw.slice(1).includes("@")) {
+    throw new Error(
+      `schema identity ${JSON.stringify(raw)} must be version-free ` +
+        `\`@<org>/<package>/<Type>\` with no \`@<version>\` — a schema ref is ` +
+        `an identity the runtime binds version-blind; versions are derived at ` +
+        `package-build time, never hand-authored (#1409)`,
+    );
+  }
+  const match = IDENTITY_PATTERN.exec(raw);
+  if (match === null) {
+    throw new Error(
+      `schema identity ${JSON.stringify(raw)} must be ` +
+        `\`@<org>/<package>/<Type>\` (exactly three \`/\`-separated segments)`,
+    );
+  }
+  const [, org, pkg, type] = match;
+  return new SchemaIdent(org, pkg, type, VERSION_FREE_SENTINEL);
+}
+
+/**
+ * Project the `execution` / `intervalMs` options onto the manifest shape.
+ *
+ * `reactive` / `manual` render as bare strings; `continuous` renders as the
+ * `{ type: "continuous", interval_ms: N }` mapping the Rust
+ * `ProcessorSchemaExecution` serializer emits.
+ */
+function normalizeExecution(
+  execution: string,
+  intervalMs: number | undefined,
+): ExecutionSpec {
+  if (
+    typeof execution !== "string" ||
+    !(EXECUTION_MODES as readonly string[]).includes(execution)
+  ) {
+    throw new Error(
+      `invalid execution ${JSON.stringify(execution)}: must be one of ` +
+        `${EXECUTION_MODES.join(", ")}`,
+    );
+  }
+  if (execution === "continuous") {
+    const interval = intervalMs ?? 0;
+    if (!Number.isInteger(interval) || interval < 0) {
+      throw new Error(
+        `invalid intervalMs ${JSON.stringify(intervalMs)}: must be a ` +
+          `non-negative integer`,
+      );
+    }
+    return { type: "continuous", interval_ms: interval };
+  }
+  return execution as "reactive" | "manual";
+}
+
+/** Project the `scheduling` option onto the manifest `{ priority }` shape. */
+function normalizeScheduling(
+  scheduling: string | undefined,
+): SchedulingSpec {
+  if (scheduling === undefined || scheduling === null) {
+    return null;
+  }
+  if (
+    typeof scheduling !== "string" ||
+    !(SCHEDULING_PRIORITIES as readonly string[]).includes(scheduling)
+  ) {
+    throw new Error(
+      `invalid scheduling ${JSON.stringify(scheduling)}: must be one of ` +
+        `${SCHEDULING_PRIORITIES.join(", ")}`,
+    );
+  }
+  return { priority: scheduling };
 }
 
 function resolveSchemaIdent(

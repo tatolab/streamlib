@@ -1,14 +1,11 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Tests for `@processor("PascalCase")` and structured `SchemaIdent` parity."""
+"""Tests for `@processor("@org/package/Type", execution=...)` — identity, mode,
+and ports declared in code (no decoration-time `streamlib.yaml` read).
+"""
 
 from __future__ import annotations
-
-import importlib
-import sys
-import textwrap
-from pathlib import Path
 
 import pytest
 
@@ -72,207 +69,150 @@ class TestSchemaIdent:
 
 
 # =============================================================================
-# @processor decorator — manifest-driven structured-ident emission
+# @processor decorator — in-code identity, version-free sentinel
 # =============================================================================
 
 
-def _write_manifest(dir_path: Path, body: str) -> None:
-    (dir_path / "streamlib.yaml").write_text(textwrap.dedent(body).lstrip("\n"))
+class TestProcessorIdentity:
+    def test_attaches_structured_schema_ident_from_code(self) -> None:
+        @processor("@tatolab/camera/Camera", execution="manual")
+        class Camera:
+            pass
 
-
-def _import_class_from_dir(dir_path: Path, module_name: str, body: str):
-    """Write `<module_name>.py` containing `body` and import it fresh."""
-    (dir_path / f"{module_name}.py").write_text(textwrap.dedent(body).lstrip("\n"))
-    sys.path.insert(0, str(dir_path))
-    try:
-        if module_name in sys.modules:
-            del sys.modules[module_name]
-        return importlib.import_module(module_name)
-    finally:
-        sys.path.remove(str(dir_path))
-
-
-class TestProcessorDecorator:
-    def test_attaches_structured_schema_ident_from_manifest(self, tmp_path: Path) -> None:
-        _write_manifest(
-            tmp_path,
-            """
-            package:
-              org: tatolab
-              name: cyberpunk-processor
-              version: 0.1.0
-
-            processors:
-              - name: CyberpunkProcessor
-                runtime: python
-                execution: reactive
-            """,
-        )
-        module = _import_class_from_dir(
-            tmp_path,
-            "decorator_pkg_module",
-            """
-            from streamlib import processor
-
-            @processor("CyberpunkProcessor")
-            class CyberpunkProcessor:
-                pass
-            """,
-        )
-        ident = module.CyberpunkProcessor.__streamlib_schema_ident__
+        ident = Camera.__streamlib_schema_ident__
         assert ident.org == "tatolab"
-        assert ident.package == "cyberpunk-processor"
-        assert ident.type_ == "CyberpunkProcessor"
-        assert ident.version == "0.1.0"
-        assert str(ident) == "@tatolab/cyberpunk-processor/CyberpunkProcessor@0.1.0"
+        assert ident.package == "camera"
+        assert ident.type_ == "Camera"
+        # Version-free identity synthesizes the 0.0.0 sentinel; the concrete
+        # version is derived at package-build time (#1409).
+        assert ident.version == "0.0.0"
+        assert str(ident) == "@tatolab/camera/Camera@0.0.0"
 
-    def test_prerelease_package_version_projects_to_release_core(
-        self, tmp_path: Path
-    ) -> None:
-        # A `-dev.N` / `-rc.N` package version is legal; the schema ident it
-        # mints must project onto the release core (the 3-part SchemaIdent
-        # validator would otherwise reject the dev-versioned package).
-        _write_manifest(
-            tmp_path,
-            """
-            package:
-              org: tatolab
-              name: camera
-              version: 0.4.33-dev.2
-
-            processors:
-              - name: Camera
-                runtime: python
-                execution: reactive
-            """,
+    def test_hyphenated_org_and_package_accepted(self) -> None:
+        @processor(
+            "@tatolab/camera-python-display/CyberpunkProcessor", execution="reactive"
         )
-        module = _import_class_from_dir(
-            tmp_path,
-            "decorator_prerelease_module",
-            """
-            from streamlib import processor
+        class CyberpunkProcessor:
+            pass
 
-            @processor("Camera")
+        ident = CyberpunkProcessor.__streamlib_schema_ident__
+        assert ident.package == "camera-python-display"
+        assert ident.type_ == "CyberpunkProcessor"
+
+    def test_omitted_identity_synthesizes_app_local(self) -> None:
+        # A bare module with no streamlib.yaml defines a working local
+        # processor: identity synthesizes @app/local/<ClassName>.
+        @processor(execution="reactive")
+        class LocalFilter:
+            pass
+
+        ident = LocalFilter.__streamlib_schema_ident__
+        assert ident.org == "app"
+        assert ident.package == "local"
+        assert ident.type_ == "LocalFilter"
+        assert ident.version == "0.0.0"
+
+    def test_app_local_synth_rejects_non_pascalcase_class(self) -> None:
+        with pytest.raises(ValueError, match="cannot synthesize an `@app/local`"):
+            @processor(execution="reactive")
+            class lowercaseName:  # noqa: N801 — intentionally invalid
+                pass
+
+    def test_versioned_identity_is_rejected(self) -> None:
+        # The grammar is version-free (#1409): a hand-authored `@<version>` is
+        # rejected. Mentally revert the version-free `_parse_identity_str` and
+        # this passes when it must fail.
+        with pytest.raises(ValueError, match="must be version-free"):
+            @processor("@tatolab/camera/Camera@1.0.0", execution="manual")
             class Camera:
                 pass
-            """,
-        )
-        ident = module.Camera.__streamlib_schema_ident__
-        assert ident.version == "0.4.33"
-        assert str(ident) == "@tatolab/camera/Camera@0.4.33"
 
-    def test_unknown_prerelease_channel_rejected_not_projected(
-        self, tmp_path: Path
-    ) -> None:
-        # Only `-dev.N` / `-rc.N` project; an alpha (or any foreign channel)
-        # must raise — the same manifest is rejected by Rust's parser, and
-        # silently projecting here would let the runtimes disagree.
-        _write_manifest(
-            tmp_path,
-            """
-            package:
-              org: tatolab
-              name: camera
-              version: 0.4.33-alpha.1
-
-            processors:
-              - name: Camera
-                runtime: python
-                execution: reactive
-            """,
-        )
-        with pytest.raises(ValueError, match="invalid package version"):
-            _import_class_from_dir(
-                tmp_path,
-                "decorator_alpha_module",
-                """
-                from streamlib import processor
-
-                @processor("Camera")
-                class Camera:
-                    pass
-                """,
-            )
-
-    def test_missing_manifest_errors_with_expected_path(self, tmp_path: Path) -> None:
-        # No streamlib.yaml in tmp_path
-        with pytest.raises(FileNotFoundError, match="streamlib.yaml"):
-            _import_class_from_dir(
-                tmp_path,
-                "no_manifest_module",
-                """
-                from streamlib import processor
-
-                @processor("Anything")
-                class Anything:
-                    pass
-                """,
-            )
-
-    def test_short_name_need_not_appear_in_manifest_processors_list(
-        self, tmp_path: Path
-    ) -> None:
-        # The decorator is the truth-source: a short name is minted straight
-        # from the package identity regardless of any `processors:` list the
-        # manifest happens to carry. (The list is no longer read at all.)
-        _write_manifest(
-            tmp_path,
-            """
-            package:
-              org: tatolab
-              name: example
-              version: 0.1.0
-
-            processors:
-              - name: SomethingElse
-            """,
-        )
-        module = _import_class_from_dir(
-            tmp_path,
-            "unlisted_short_name_module",
-            """
-            from streamlib import processor
-
-            @processor("NotInTheYamlList")
-            class NotInTheYamlList:
+    def test_identity_without_at_prefix_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="must start with `@`"):
+            @processor("tatolab/camera/Camera", execution="manual")
+            class Camera:
                 pass
-            """,
-        )
-        ident = module.NotInTheYamlList.__streamlib_schema_ident__
-        assert ident.type_ == "NotInTheYamlList"
-        assert str(ident) == "@tatolab/example/NotInTheYamlList@0.1.0"
 
-    def test_manifest_missing_org_errors(self, tmp_path: Path) -> None:
-        _write_manifest(
-            tmp_path,
-            """
-            package:
-              name: example
-              version: 0.1.0
+    def test_identity_wrong_segment_count_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="three `/`-separated segments"):
+            @processor("@tatolab/Camera", execution="manual")
+            class Camera:
+                pass
 
-            processors:
-              - name: Foo
-            """,
-        )
-        with pytest.raises(ValueError, match="missing required `package:` field"):
-            _import_class_from_dir(
-                tmp_path,
-                "missing_org_module",
-                """
-                from streamlib import processor
+    def test_non_string_identity_is_rejected(self) -> None:
+        with pytest.raises(TypeError, match="identity must be a version-free"):
+            processor(123, execution="manual")  # type: ignore[arg-type]
 
-                @processor("Foo")
-                class Foo:
-                    pass
-                """,
-            )
 
-    def test_legacy_kwarg_form_rejected(self) -> None:
-        # The legacy `name=`/`description=`/`execution=` kwarg form is gone.
-        # `@processor(name="...")` now raises immediately because the first
-        # positional must be a str.
+# =============================================================================
+# @processor decorator — execution + scheduling declared in code
+# =============================================================================
+
+
+class TestProcessorExecution:
+    def test_reactive_execution_is_a_bare_string(self) -> None:
+        @processor("@tatolab/demo/Reactive", execution="reactive")
+        class Reactive:
+            pass
+
+        assert Reactive.__streamlib_execution__ == "reactive"
+
+    def test_manual_execution_is_a_bare_string(self) -> None:
+        @processor("@tatolab/demo/Manual", execution="manual")
+        class Manual:
+            pass
+
+        assert Manual.__streamlib_execution__ == "manual"
+
+    def test_continuous_execution_carries_interval(self) -> None:
+        @processor("@tatolab/demo/Loop", execution="continuous", interval_ms=16)
+        class Loop:
+            pass
+
+        assert Loop.__streamlib_execution__ == {
+            "type": "continuous",
+            "interval_ms": 16,
+        }
+
+    def test_continuous_defaults_interval_to_zero(self) -> None:
+        @processor("@tatolab/demo/Loop", execution="continuous")
+        class Loop:
+            pass
+
+        assert Loop.__streamlib_execution__ == {
+            "type": "continuous",
+            "interval_ms": 0,
+        }
+
+    def test_execution_is_required(self) -> None:
         with pytest.raises(TypeError):
-            processor(name="Camera")  # type: ignore[arg-type]
+            @processor("@tatolab/demo/NoMode")  # type: ignore[call-arg]
+            class NoMode:
+                pass
+
+    def test_unknown_execution_mode_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="invalid execution"):
+            @processor("@tatolab/demo/Bad", execution="sideways")
+            class Bad:
+                pass
+
+    def test_scheduling_projects_to_priority_mapping(self) -> None:
+        from streamlib._processor_registry import registered_processors
+
+        @processor("@tatolab/demo/Scheduled", execution="manual", scheduling="high")
+        class Scheduled:
+            pass
+
+        entry = next(
+            e for e in registered_processors() if e.short_name == "Scheduled"
+        )
+        assert entry.scheduling == {"priority": "high"}
+
+    def test_unknown_scheduling_priority_is_rejected(self) -> None:
+        with pytest.raises(ValueError, match="invalid scheduling"):
+            @processor("@tatolab/demo/Bad", execution="manual", scheduling="turbo")
+            class Bad:
+                pass
 
 
 # =============================================================================
@@ -328,6 +268,25 @@ class TestPortSchemaResolution:
             pass
 
         assert control._streamlib_input_port["schema"] is None
+
+    def test_processor_collects_ports_declared_in_code(self) -> None:
+        VIDEO = SchemaIdent("tatolab", "core", "VideoFrame", "1.0.0")
+
+        @processor("@tatolab/demo/Ports", execution="reactive")
+        class Ports:
+            @input(name="video_in", schema=VIDEO, description="frames")
+            def handle_in(self):
+                pass
+
+            @output(name="video_out", schema=VIDEO)
+            def handle_out(self):
+                pass
+
+        ports = Ports.__streamlib_ports__
+        assert [p["name"] for p in ports["inputs"]] == ["video_in"]
+        assert [p["name"] for p in ports["outputs"]] == ["video_out"]
+        assert ports["inputs"][0]["description"] == "frames"
+        assert ports["inputs"][0]["schema"].type_ == "VideoFrame"
 
 
 # =============================================================================

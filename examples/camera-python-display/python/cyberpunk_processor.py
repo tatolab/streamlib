@@ -178,7 +178,7 @@ def draw_spray_paint_tag(canvas, x, y, scale=1.0, time_offset=0.0):
 # Cyberpunk Processor
 # =============================================================================
 
-@processor("CyberpunkProcessor")
+@processor("@tatolab/cyberpunk-processor/CyberpunkProcessor", execution="reactive")
 class CyberpunkProcessor:
     """Applies cyberpunk color grading and spray paint watermark using Skia.
 

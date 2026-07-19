@@ -2,21 +2,17 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 /**
- * Tests for `@processor("PascalCase", import.meta.url)` and structured
- * `SchemaIdent` parity. Mirrors
+ * Tests for `@processor("@org/package/Type", { execution: ... })` — identity,
+ * mode, and ports declared in code (no decoration-time `streamlib.yaml` read).
+ * Mirrors
  * `sdk/streamlib-python/python/streamlib/tests/test_processor_decorator.py`
- * shape so a reviewer can diff them line-for-line.
+ * shape so a reviewer can diff them section-for-section.
  */
 
-import {
-  assert,
-  assertEquals,
-  assertRejects,
-  assertThrows,
-} from "@std/assert";
-import { join } from "@std/path";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 
 import { SchemaIdent } from "./schema_ident.ts";
+import { getRegisteredProcessors } from "./_processor_registry.ts";
 import {
   input,
   output,
@@ -122,255 +118,207 @@ Deno.test("SchemaIdent.equals returns true on structural match", () => {
 });
 
 // =============================================================================
-// @processor decorator — manifest-driven structured-ident emission
+// @processor decorator — in-code identity, version-free sentinel
 // =============================================================================
-//
-// Each test writes a `streamlib.yaml` + `<fixture>.ts` pair into a
-// fresh tmp dir, then dynamic-imports the fixture and inspects its
-// emitted class metadata. Mirrors `_import_class_from_dir` from the
-// Python test suite.
 
-interface FixturePaths {
-  dir: string;
-  manifestPath: string;
-  modulePath: string;
-}
+Deno.test("@processor attaches structured SchemaIdent from code", () => {
+  @processor("@tatolab/camera/Camera", { execution: "manual" })
+  class Camera {}
 
-async function makeFixture(
-  manifestBody: string,
-  moduleBody: string,
-): Promise<FixturePaths> {
-  const dir = await Deno.makeTempDir({ prefix: "streamlib-decorator-" });
-  const manifestPath = join(dir, "streamlib.yaml");
-  const modulePath = join(dir, "fixture.ts");
-  await Deno.writeTextFile(manifestPath, manifestBody);
-  await Deno.writeTextFile(modulePath, moduleBody);
-  return { dir, manifestPath, modulePath };
-}
-
-function moduleHeader(): string {
-  const decoratorsUrl = new URL("./decorators.ts", import.meta.url).href;
-  const schemaIdentUrl = new URL("./schema_ident.ts", import.meta.url).href;
-  return (
-    `import { input, output, processor } from "${decoratorsUrl}";\n` +
-    `import { SchemaIdent } from "${schemaIdentUrl}";\n`
-  );
-}
-
-Deno.test("@processor attaches structured SchemaIdent from manifest", async () => {
-  const fixture = await makeFixture(
-    [
-      "package:",
-      "  org: tatolab",
-      "  name: cyberpunk-processor",
-      "  version: 0.1.0",
-      "",
-      "processors:",
-      "  - name: CyberpunkProcessor",
-      "    runtime: deno",
-      "    execution: reactive",
-      "",
-    ].join("\n"),
-    moduleHeader() +
-      `@processor("CyberpunkProcessor", import.meta.url)\n` +
-      `export default class CyberpunkProcessor {}\n`,
-  );
-  try {
-    const mod = await import(`file://${fixture.modulePath}`);
-    const cls = mod.default as unknown as StreamlibClassMetadata;
-    const ident = cls.streamlibSchemaIdent;
-    assert(ident instanceof SchemaIdent);
-    assertEquals(ident.org, "tatolab");
-    assertEquals(ident.package, "cyberpunk-processor");
-    assertEquals(ident.type, "CyberpunkProcessor");
-    assertEquals(ident.version, "0.1.0");
-    assertEquals(String(ident), "@tatolab/cyberpunk-processor/CyberpunkProcessor@0.1.0");
-    assertEquals(cls.streamlibPorts.inputs.length, 0);
-    assertEquals(cls.streamlibPorts.outputs.length, 0);
-  } finally {
-    await Deno.remove(fixture.dir, { recursive: true });
-  }
+  const ident = (Camera as unknown as StreamlibClassMetadata)
+    .streamlibSchemaIdent;
+  assert(ident instanceof SchemaIdent);
+  assertEquals(ident.org, "tatolab");
+  assertEquals(ident.package, "camera");
+  assertEquals(ident.type, "Camera");
+  // Version-free identity synthesizes the 0.0.0 sentinel; the concrete
+  // version is derived at package-build time (#1409).
+  assertEquals(ident.version, "0.0.0");
+  assertEquals(String(ident), "@tatolab/camera/Camera@0.0.0");
 });
 
-Deno.test("@processor projects a prerelease package version to release core", async () => {
-  // A `-dev.N` / `-rc.N` package version is legal; the minted schema ident
-  // must project onto the release core (the 3-part SchemaIdent validator
-  // would otherwise reject the dev-versioned package).
-  const fixture = await makeFixture(
-    [
-      "package:",
-      "  org: tatolab",
-      "  name: camera",
-      "  version: 0.4.33-dev.2",
-      "",
-      "processors:",
-      "  - name: Camera",
-      "    runtime: deno",
-      "    execution: reactive",
-      "",
-    ].join("\n"),
-    moduleHeader() +
-      `@processor("Camera", import.meta.url)\n` +
-      `export default class Camera {}\n`,
-  );
-  try {
-    const mod = await import(`file://${fixture.modulePath}`);
-    const cls = mod.default as unknown as StreamlibClassMetadata;
-    const ident = cls.streamlibSchemaIdent;
-    assertEquals(ident.version, "0.4.33");
-    assertEquals(String(ident), "@tatolab/camera/Camera@0.4.33");
-  } finally {
-    await Deno.remove(fixture.dir, { recursive: true });
-  }
+Deno.test("@processor accepts hyphenated org and package", () => {
+  @processor("@tatolab/camera-deno-subprocess/CyberpunkProcessor", {
+    execution: "reactive",
+  })
+  class CyberpunkProcessor {}
+
+  const ident = (CyberpunkProcessor as unknown as StreamlibClassMetadata)
+    .streamlibSchemaIdent;
+  assertEquals(ident.package, "camera-deno-subprocess");
+  assertEquals(ident.type, "CyberpunkProcessor");
 });
 
-Deno.test("@processor rejects unknown prerelease channels", async () => {
-  // Only `-dev.N` / `-rc.N` project; an alpha (or any foreign channel) must
-  // throw — the same manifest is rejected by Rust's parser, and silently
-  // projecting here would let the runtimes disagree.
-  const fixture = await makeFixture(
-    [
-      "package:",
-      "  org: tatolab",
-      "  name: camera",
-      "  version: 0.4.33-alpha.1",
-      "",
-      "processors:",
-      "  - name: Camera",
-      "    runtime: deno",
-      "    execution: reactive",
-      "",
-    ].join("\n"),
-    moduleHeader() +
-      `@processor("Camera", import.meta.url)\n` +
-      `export default class Camera {}\n`,
-  );
-  try {
-    await assertRejects(
-      () => import(`file://${fixture.modulePath}`),
-      Error,
-      "invalid package version",
-    );
-  } finally {
-    await Deno.remove(fixture.dir, { recursive: true });
-  }
+Deno.test("@processor omitted identity synthesizes @app/local", () => {
+  // A bare module with no streamlib.yaml defines a working local processor:
+  // identity synthesizes @app/local/<ClassName>.
+  @processor({ execution: "reactive" })
+  class LocalFilter {}
+
+  const ident = (LocalFilter as unknown as StreamlibClassMetadata)
+    .streamlibSchemaIdent;
+  assertEquals(ident.org, "app");
+  assertEquals(ident.package, "local");
+  assertEquals(ident.type, "LocalFilter");
+  assertEquals(ident.version, "0.0.0");
 });
 
-Deno.test("@processor errors with expected path when manifest missing", async () => {
-  const dir = await Deno.makeTempDir({ prefix: "streamlib-decorator-" });
-  const modulePath = join(dir, "fixture.ts");
-  // No streamlib.yaml in dir.
-  await Deno.writeTextFile(
-    modulePath,
-    moduleHeader() +
-      `@processor("Anything", import.meta.url)\n` +
-      `export default class Anything {}\n`,
+Deno.test("@processor app/local synth rejects non-PascalCase class name", () => {
+  const decorate = processor({ execution: "reactive" });
+  assertThrows(
+    () => {
+      class lowercaseName {}
+      decorate(
+        lowercaseName,
+        { kind: "class", name: "lowercaseName" } as ClassDecoratorContext,
+      );
+    },
+    Error,
+    "cannot synthesize an `@app/local`",
   );
-  try {
-    let caught: unknown = null;
-    try {
-      await import(`file://${modulePath}`);
-    } catch (e) {
-      caught = e;
-    }
-    assert(caught instanceof Error, "expected an error");
-    const msg = (caught as Error).message;
-    assert(
-      msg.includes("streamlib.yaml not found"),
-      `expected 'streamlib.yaml not found' in error, got: ${msg}`,
-    );
-    assert(
-      msg.includes(join(dir, "streamlib.yaml")),
-      `expected expected manifest path in error, got: ${msg}`,
-    );
-  } finally {
-    await Deno.remove(dir, { recursive: true });
-  }
 });
 
-Deno.test("@processor short name need not appear in manifest processors list", async () => {
-  // The decorator is the truth-source: a short name is minted straight from
-  // the package identity regardless of any `processors:` list the manifest
-  // happens to carry. (The list is no longer read at all.)
-  const fixture = await makeFixture(
-    [
-      "package:",
-      "  org: tatolab",
-      "  name: example",
-      "  version: 0.1.0",
-      "",
-      "processors:",
-      "  - name: SomethingElse",
-      "",
-    ].join("\n"),
-    moduleHeader() +
-      `@processor("NotInTheYamlList", import.meta.url)\n` +
-      `export default class NotInTheYamlList {}\n`,
+Deno.test("@processor rejects a versioned identity", () => {
+  // The grammar is version-free (#1409): a hand-authored `@<version>` is
+  // rejected. Mentally revert the version-free `parseIdentityStr` and this
+  // passes when it must fail.
+  assertThrows(
+    () => {
+      @processor("@tatolab/camera/Camera@1.0.0", { execution: "manual" })
+      class Camera {}
+      void Camera;
+    },
+    Error,
+    "must be version-free",
   );
-  try {
-    const mod = await import(`file://${fixture.modulePath}`);
-    const cls = mod.default as unknown as StreamlibClassMetadata;
-    const ident = cls.streamlibSchemaIdent;
-    assertEquals(ident.type, "NotInTheYamlList");
-    assertEquals(String(ident), "@tatolab/example/NotInTheYamlList@0.1.0");
-  } finally {
-    await Deno.remove(fixture.dir, { recursive: true });
-  }
 });
 
-Deno.test("@processor errors when manifest missing required package fields", async () => {
-  const fixture = await makeFixture(
-    [
-      "package:",
-      "  name: example",
-      "  version: 0.1.0",
-      "",
-      "processors:",
-      "  - name: Foo",
-      "",
-    ].join("\n"),
-    moduleHeader() +
-      `@processor("Foo", import.meta.url)\n` +
-      `export default class Foo {}\n`,
+Deno.test("@processor rejects identity without @ prefix", () => {
+  assertThrows(
+    () => {
+      @processor("tatolab/camera/Camera", { execution: "manual" })
+      class Camera {}
+      void Camera;
+    },
+    Error,
+    "must start with `@`",
   );
-  try {
-    let caught: unknown = null;
-    try {
-      await import(`file://${fixture.modulePath}`);
-    } catch (e) {
-      caught = e;
-    }
-    assert(caught instanceof Error);
-    const msg = (caught as Error).message;
-    assert(
-      msg.includes("missing required `package:` field"),
-      `expected missing-fields message, got: ${msg}`,
-    );
-    assert(msg.includes("org"), msg);
-  } finally {
-    await Deno.remove(fixture.dir, { recursive: true });
-  }
 });
 
-Deno.test("@processor rejects non-string short name", () => {
+Deno.test("@processor rejects identity with wrong segment count", () => {
+  assertThrows(
+    () => {
+      @processor("@tatolab/Camera", { execution: "manual" })
+      class Camera {}
+      void Camera;
+    },
+    Error,
+    "three `/`-separated segments",
+  );
+});
+
+Deno.test("@processor rejects a non-string, non-options identity", () => {
   assertThrows(
     () => {
       // deno-lint-ignore no-explicit-any
-      (processor as any)(123, "file:///dummy.ts");
+      (processor as any)(123, { execution: "manual" });
     },
     TypeError,
-    "PascalCase short name",
+    "identity string",
   );
 });
 
-Deno.test("@processor rejects missing module URL", () => {
+// =============================================================================
+// @processor decorator — execution + scheduling declared in code
+// =============================================================================
+
+Deno.test("@processor reactive execution is a bare string", () => {
+  @processor("@tatolab/demo/Reactive", { execution: "reactive" })
+  class Reactive {}
+
+  assertEquals(
+    (Reactive as unknown as StreamlibClassMetadata).streamlibExecution,
+    "reactive",
+  );
+});
+
+Deno.test("@processor manual execution is a bare string", () => {
+  @processor("@tatolab/demo/Manual", { execution: "manual" })
+  class Manual {}
+
+  assertEquals(
+    (Manual as unknown as StreamlibClassMetadata).streamlibExecution,
+    "manual",
+  );
+});
+
+Deno.test("@processor continuous execution carries interval", () => {
+  @processor("@tatolab/demo/Loop", { execution: "continuous", intervalMs: 16 })
+  class Loop {}
+
+  assertEquals(
+    (Loop as unknown as StreamlibClassMetadata).streamlibExecution,
+    { type: "continuous", interval_ms: 16 },
+  );
+});
+
+Deno.test("@processor continuous defaults interval to zero", () => {
+  @processor("@tatolab/demo/Loop", { execution: "continuous" })
+  class Loop {}
+
+  assertEquals(
+    (Loop as unknown as StreamlibClassMetadata).streamlibExecution,
+    { type: "continuous", interval_ms: 0 },
+  );
+});
+
+Deno.test("@processor execution is required", () => {
   assertThrows(
     () => {
       // deno-lint-ignore no-explicit-any
-      (processor as any)("Camera");
+      (processor as any)("@tatolab/demo/NoMode");
     },
     TypeError,
-    "import.meta.url",
+    "requires an options object",
+  );
+});
+
+Deno.test("@processor rejects unknown execution mode", () => {
+  assertThrows(
+    () => {
+      // deno-lint-ignore no-explicit-any
+      processor("@tatolab/demo/Bad", { execution: "sideways" as any });
+    },
+    Error,
+    "invalid execution",
+  );
+});
+
+Deno.test("@processor scheduling projects to priority mapping", () => {
+  @processor("@tatolab/demo/Scheduled", {
+    execution: "manual",
+    scheduling: "high",
+  })
+  class Scheduled {}
+  void Scheduled;
+
+  const entry = getRegisteredProcessors().find(
+    (e) => e.shortName === "Scheduled",
+  )!;
+  assertEquals(entry.scheduling, { priority: "high" });
+});
+
+Deno.test("@processor rejects unknown scheduling priority", () => {
+  assertThrows(
+    () => {
+      processor("@tatolab/demo/Bad", {
+        execution: "manual",
+        // deno-lint-ignore no-explicit-any
+        scheduling: "turbo" as any,
+      });
+    },
+    Error,
+    "invalid scheduling",
   );
 });
 
@@ -480,42 +428,21 @@ Deno.test("@input port name override", () => {
   assertEquals(meta.name, "video_in");
 });
 
-Deno.test("@processor collects @input + @output port metadata", async () => {
-  const fixture = await makeFixture(
-    [
-      "package:",
-      "  org: tatolab",
-      "  name: ports-fixture",
-      "  version: 0.1.0",
-      "",
-      "processors:",
-      "  - name: PortsFixture",
-      "    runtime: deno",
-      "    execution: reactive",
-      "",
-    ].join("\n"),
-    moduleHeader() +
-      `const VIDEO = new SchemaIdent("tatolab", "core", "VideoFrame", "1.0.0");\n` +
-      `@processor("PortsFixture", import.meta.url)\n` +
-      `export default class PortsFixture {\n` +
-      `  @input({ name: "video_in", schema: VIDEO, description: "trigger" })\n` +
-      `  handleIn() {}\n` +
-      `  @output({ name: "video_out", schema: VIDEO })\n` +
-      `  handleOut() {}\n` +
-      `}\n`,
-  );
-  try {
-    const mod = await import(`file://${fixture.modulePath}`);
-    const cls = mod.default as unknown as StreamlibClassMetadata;
-    assertEquals(cls.streamlibPorts.inputs.length, 1);
-    assertEquals(cls.streamlibPorts.outputs.length, 1);
-    assertEquals(cls.streamlibPorts.inputs[0].name, "video_in");
-    assertEquals(cls.streamlibPorts.inputs[0].description, "trigger");
-    assert(cls.streamlibPorts.inputs[0].schema instanceof SchemaIdent);
-    assertEquals(cls.streamlibPorts.inputs[0].schema!.type, "VideoFrame");
-    assertEquals(cls.streamlibPorts.outputs[0].name, "video_out");
-  } finally {
-    await Deno.remove(fixture.dir, { recursive: true });
-  }
-});
+Deno.test("@processor collects @input + @output ports declared in code", () => {
+  const VIDEO = new SchemaIdent("tatolab", "core", "VideoFrame", "1.0.0");
 
+  @processor("@tatolab/demo/Ports", { execution: "reactive" })
+  class Ports {
+    @input({ name: "video_in", schema: VIDEO, description: "frames" })
+    handleIn() {}
+    @output({ name: "video_out", schema: VIDEO })
+    handleOut() {}
+  }
+
+  const meta = (Ports as unknown as StreamlibClassMetadata).streamlibPorts;
+  assertEquals(meta.inputs.map((p) => p.name), ["video_in"]);
+  assertEquals(meta.outputs.map((p) => p.name), ["video_out"]);
+  assertEquals(meta.inputs[0].description, "frames");
+  assert(meta.inputs[0].schema instanceof SchemaIdent);
+  assertEquals(meta.inputs[0].schema!.type, "VideoFrame");
+});

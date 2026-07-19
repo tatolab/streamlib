@@ -34,7 +34,9 @@ import {
 } from "streamlib";
 import { CpuReadbackContext } from "streamlib/adapters/cpu_readback.ts";
 
-@processor("CpuReadbackBlurProcessor", import.meta.url)
+@processor("@tatolab/polyglot-cpu-readback-blur-deno/CpuReadbackBlurProcessor", {
+  execution: "reactive",
+})
 export default class CpuReadbackBlurProcessor implements ReactiveProcessor {
   private surfaceId: bigint = 0n;
   private kernelSize = 11;

@@ -7,7 +7,8 @@ Mirrors the Rust `golden_extraction_over_a_fixture_crate` shape in
 `sdk/streamlib-processor-extract/src/lib.rs`: a fixture package with several
 processors across several modules (plus a non-processor module that must be
 ignored), extracted by importing and enumerating the registry rather than
-reading the manifest's `processors:` list.
+reading the manifest's `processors:` list. Identity, execution mode, and ports
+are declared in code — the decorator reads no `streamlib.yaml`.
 """
 
 from __future__ import annotations
@@ -26,18 +27,9 @@ def _write(dir_path: Path, rel: str, body: str) -> None:
 
 
 def _fixture_package(root: Path) -> None:
-    _write(
-        root,
-        "streamlib.yaml",
-        """
-        package:
-          org: tatolab
-          name: demo-pack
-          version: 0.2.0
-        """,
-    )
     # Two processors in two modules; a nested port declaration on one; and a
-    # module that declares no processor (must be ignored).
+    # module that declares no processor (must be ignored). No streamlib.yaml is
+    # needed — identity is declared in code, version-free.
     _write(
         root,
         "blur.py",
@@ -46,7 +38,7 @@ def _fixture_package(root: Path) -> None:
 
         VIDEO = SchemaIdent("tatolab", "core", "VideoFrame", "1.0.0")
 
-        @processor("Blur")
+        @processor("@tatolab/demo-pack/Blur", execution="reactive")
         class Blur:
             @input(name="frames_in", schema=VIDEO)
             def handle_in(self): ...
@@ -60,7 +52,7 @@ def _fixture_package(root: Path) -> None:
         """
         from streamlib import processor
 
-        @processor("Camera")
+        @processor("@tatolab/demo-pack/Camera", execution="manual")
         class Camera:
             pass
         """,
@@ -85,13 +77,17 @@ class TestProcessorExtraction:
         assert names == ["Blur", "Camera"]
 
         blur = next(p for p in procs if p.short_name == "Blur")
-        assert str(blur.schema_ident) == "@tatolab/demo-pack/Blur@0.2.0"
+        # Version-free identity: the extracted ident carries the 0.0.0 sentinel;
+        # the concrete version is derived at package-build time (#1409).
+        assert str(blur.schema_ident) == "@tatolab/demo-pack/Blur@0.0.0"
+        assert blur.execution == "reactive"
         assert [port["name"] for port in blur.inputs] == ["frames_in"]
         assert [port["name"] for port in blur.outputs] == ["frames_out"]
         assert blur.inputs[0]["schema"].type_ == "VideoFrame"
 
         camera = next(p for p in procs if p.short_name == "Camera")
-        assert str(camera.schema_ident) == "@tatolab/demo-pack/Camera@0.2.0"
+        assert str(camera.schema_ident) == "@tatolab/demo-pack/Camera@0.0.0"
+        assert camera.execution == "manual"
         assert camera.inputs == ()
 
     def test_repeated_calls_are_isolated(self, tmp_path: Path) -> None:
@@ -103,16 +99,6 @@ class TestProcessorExtraction:
         assert [p.short_name for p in first] == [p.short_name for p in second]
 
     def test_schema_only_package_yields_no_processors(self, tmp_path: Path) -> None:
-        _write(
-            tmp_path,
-            "streamlib.yaml",
-            """
-            package:
-              org: tatolab
-              name: schema-only
-              version: 1.0.0
-            """,
-        )
         _write(tmp_path, "types.py", "class JustAType:\n    pass\n")
         assert extract_processors_from_dir(tmp_path) == []
 
@@ -133,7 +119,11 @@ class TestProcessorExtraction:
             "org": "tatolab",
             "package": "demo-pack",
             "type": "Blur",
-            "version": "0.2.0",
+            "version": "0.0.0",
         }
+        assert blur["execution"] == "reactive"
+        assert blur["scheduling"] is None
         assert blur["inputs"][0]["name"] == "frames_in"
         assert blur["inputs"][0]["schema"]["type"] == "VideoFrame"
+        camera = next(e for e in payload if e["name"] == "Camera")
+        assert camera["execution"] == "manual"
