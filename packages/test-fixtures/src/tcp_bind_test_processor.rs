@@ -27,6 +27,7 @@ use streamlib::sdk::processors::ManualProcessor;
 
 #[streamlib::sdk::processor(
     "@tatolab/test-fixtures/TcpBindTestProcessor",
+    description = "dlopen-owns-tokio integration test fixture from #885 — binds a tokio::net::TcpListener on the plugin's own runtime",
     execution = manual,
     config = crate::_generated_::TcpBindTestProcessorConfig,
 )]

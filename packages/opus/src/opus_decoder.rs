@@ -182,11 +182,12 @@ impl OpusDecoder {
 
 #[streamlib_plugin_sdk::sdk::processor(
     "@tatolab/opus/OpusDecoder",
+    description = "Decodes EncodedAudioFrame (Opus) to AudioFrame",
     execution = reactive,
     scheduling = realtime,
     config = crate::_generated_::OpusDecoderConfig,
-    input("encoded_audio_in", "@tatolab/core/EncodedAudioFrame", read_mode = "skip_to_latest", buffer_size = 8),
-    output("audio_out", "@tatolab/core/AudioFrame"),
+    input("encoded_audio_in", "@tatolab/core/EncodedAudioFrame", read_mode = "skip_to_latest", buffer_size = 8, description = "Opus encoded audio frames to decode"),
+    output("audio_out", "@tatolab/core/AudioFrame", description = "Decoded audio frames"),
 )]
 pub struct OpusDecoderProcessor {
     /// Opus decoder.

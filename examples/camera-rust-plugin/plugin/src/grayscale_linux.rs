@@ -37,6 +37,7 @@ struct LinuxBackend {
 
 #[streamlib_plugin_sdk::sdk::processor(
     "@tatolab/camera-rust-plugin/GrayscaleRust",
+    description = "Grayscale video effect (Rust dylib plugin)",
     execution = reactive,
     input("video_in", "@tatolab/core/VideoFrame"),
     output("video_out", "@tatolab/core/VideoFrame"),

@@ -111,11 +111,12 @@ struct LinuxState {
 // only path that flows external config through to the processor.)
 #[streamlib_plugin_sdk::sdk::processor(
     "@tatolab/camera/CameraToCudaCopy",
+    description = "Host-pipeline producer: camera VkImage -> cuda OPAQUE_FD VkBuffer with timeline signal for cross-API CUDA interop. Linux-only (CUDA is Linux-only on the in-tree adapter set).",
     execution = reactive,
     scheduling = high,
     config = crate::_generated_::CameraToCudaCopyConfig,
-    input("video_in", "@tatolab/core/VideoFrame"),
-    output("video_out", "@tatolab/core/VideoFrame"),
+    input("video_in", "@tatolab/core/VideoFrame", description = "Camera ring texture (RGBA8 DMA-BUF) frame metadata"),
+    output("video_out", "@tatolab/core/VideoFrame", description = "Camera frame forwarded verbatim; cuda surface side-effect happens during process()"),
 )]
 pub struct CameraToCudaCopyProcessor {
     backend: GpuBackendStash,

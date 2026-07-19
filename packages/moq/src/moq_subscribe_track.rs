@@ -20,9 +20,10 @@ const MAX_RETRY_DELAY_MS: u64 = 10_000;
 
 #[streamlib_plugin_sdk::sdk::processor(
     "@tatolab/moq/MoqSubscribeTrack",
+    description = "Subscribes to a named MoQ track and outputs raw bytes to the graph",
     execution = manual,
     config = crate::_generated_::MoqSubscribeTrackConfig,
-    output("data_out", any),
+    output("data_out", any, description = "Received data from MoQ track subscription (any serialized type)"),
 )]
 pub struct MoqSubscribeTrackProcessor {
     runtime_id: Option<String>,

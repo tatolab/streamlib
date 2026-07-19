@@ -8,11 +8,12 @@ use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContex
 
 #[streamlib_plugin_sdk::sdk::processor(
     "@tatolab/audio/AudioChannelConverter",
+    description = "Converts mono audio to N-channel audio according to the configured mode",
     execution = reactive,
     scheduling = realtime,
     config = crate::_generated_::AudioChannelConverterConfig,
-    input("audio_in", "@tatolab/core/AudioFrame", read_mode = "read_next_in_order", buffer_size = 32),
-    output("audio_out", "@tatolab/core/AudioFrame"),
+    input("audio_in", "@tatolab/core/AudioFrame", read_mode = "read_next_in_order", buffer_size = 32, description = "Mono audio frame"),
+    output("audio_out", "@tatolab/core/AudioFrame", description = "Multi-channel audio frame"),
 )]
 pub struct AudioChannelConverterProcessor {
     frame_counter: u64,

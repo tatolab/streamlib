@@ -51,10 +51,11 @@ pub struct LinuxAudioDevice {
 
 #[streamlib_plugin_sdk::sdk::processor(
     "@tatolab/audio/AudioOutput",
+    description = "Plays audio through speakers/headphones (CoreAudio on macOS, ALSA on Linux)",
     execution = manual,
     scheduling = realtime,
     config = crate::_generated_::AudioOutputConfig,
-    input("audio", "@tatolab/core/AudioFrame", read_mode = "read_next_in_order", buffer_size = 32),
+    input("audio", "@tatolab/core/AudioFrame", read_mode = "read_next_in_order", buffer_size = 32, description = "Stereo audio frame to play through speakers"),
 )]
 pub struct LinuxAudioOutputProcessor {
     device_id: Option<usize>,

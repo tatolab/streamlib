@@ -56,6 +56,7 @@ struct ComputeBackend {
 
 #[streamlib_plugin_sdk::sdk::processor(
     "@tatolab/camera-plugin-sdk-compute/GrayscaleCompute",
+    description = "Grayscale video effect via an engine-free SPIR-V compute kernel",
     execution = reactive,
     input("video_in", "@tatolab/core/VideoFrame"),
     output("video_out", "@tatolab/core/VideoFrame"),

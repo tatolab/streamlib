@@ -116,9 +116,10 @@ impl Default for CrtFilmGrainConfig {
 
 #[streamlib_plugin_sdk::sdk::processor(
     "@tatolab/camera-python-display-effects/CrtFilmGrain",
+    description = "CRT display + 80s film grain effect",
     execution = reactive,
-    input("video_in", "@tatolab/core/VideoFrame"),
-    output("video_out", "@tatolab/core/VideoFrame"),
+    input("video_in", "@tatolab/core/VideoFrame", description = "Video frames to process"),
+    output("video_out", "@tatolab/core/VideoFrame", description = "Processed video frames"),
 )]
 pub struct CrtFilmGrainProcessor {
     config: CrtFilmGrainConfig,

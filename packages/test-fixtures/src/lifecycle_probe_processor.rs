@@ -33,6 +33,7 @@ use streamlib::sdk::processors::ContinuousProcessor;
 
 #[streamlib::sdk::processor(
     "@tatolab/test-fixtures/LifecycleProbeProcessor",
+    description = "Phase G (#961) dlopen-cdylib lifecycle-probe processor — appends marker lines for each ProcessorVTable lifecycle hook (setup / process / on_pause / on_resume / teardown) to a file so the integration test can confirm every hook dispatched through the cdylib boundary correctly.",
     execution = continuous,
     config = crate::_generated_::LifecycleProbeProcessorConfig,
 )]

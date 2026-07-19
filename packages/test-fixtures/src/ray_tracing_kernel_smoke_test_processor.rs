@@ -92,6 +92,7 @@ const SMOKE_SURFACE_SIZE: u32 = 64;
 
 #[streamlib::sdk::processor(
     "@tatolab/test-fixtures/RayTracingKernelSmokeTestProcessor",
+    description = "Phase E (#953) dlopen-cdylib ray-tracing-kernel methods-vtable smoke test fixture — builds a single-triangle BLAS + identity TLAS via FullAccess, creates an RT kernel, acquires a STORAGE_BINDING Texture, runs a single trace_rays() through the per-type binding-method vtable to assert the vtable round-trips (set_acceleration_structure / set_storage_image / set_push_constants / trace_rays) don't panic. Smoke-only; pixel correctness not asserted.",
     execution = manual,
     config = crate::_generated_::RayTracingKernelSmokeTestProcessorConfig,
 )]

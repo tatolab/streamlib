@@ -274,9 +274,10 @@ unsafe fn forward_iosurface_directly(
 
 #[streamlib_plugin_sdk::sdk::processor(
     "@tatolab/screen-capture/ScreenCapture",
+    description = "Captures display, window, or application content using ScreenCaptureKit (macOS 12.3+)",
     execution = manual,
     config = crate::_generated_::ScreenCaptureConfig,
-    output("video", "@tatolab/core/VideoFrame"),
+    output("video", "@tatolab/core/VideoFrame", description = "Captured video frames from screen content"),
 )]
 pub struct AppleScreenCaptureProcessor {
     /// GPU context for surface pooling (set in setup).

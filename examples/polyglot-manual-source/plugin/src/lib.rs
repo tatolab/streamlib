@@ -33,6 +33,7 @@ const OUTPUT_ENV_VAR: &str = "STREAMLIB_POLYGLOT_MANUAL_SOURCE_SINK_OUTPUT";
 
 #[streamlib_plugin_sdk::sdk::processor(
     "@tatolab/polyglot-manual-source-counting-sink/PolyglotManualSourceCountingSink",
+    description = "Reactive sink that counts Videoframes and writes count + first/last timestamp to a stats file on teardown. Used to validate that polyglot manual sources can publish via iceoryx2 from a worker thread (#604).",
     execution = reactive,
     input("video_in", "@tatolab/core/VideoFrame"),
 )]

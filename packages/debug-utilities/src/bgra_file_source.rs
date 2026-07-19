@@ -26,9 +26,10 @@ const RING_DEPTH: usize = 2;
 
 #[streamlib_plugin_sdk::sdk::processor(
     "@tatolab/debug-utilities/BgraFileSource",
+    description = "Streams raw BGRA frames from a file as Videoframes",
     execution = manual,
     config = crate::_generated_::BgraFileSourceConfig,
-    output("video", "@tatolab/core/VideoFrame"),
+    output("video", "@tatolab/core/VideoFrame", description = "Video frames read from the BGRA file"),
 )]
 pub struct BgraFileSourceProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,

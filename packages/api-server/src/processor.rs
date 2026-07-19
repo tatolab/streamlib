@@ -105,6 +105,7 @@ fn generate_runtime_name() -> String {
 
 #[streamlib::sdk::processor(
     "@tatolab/api-server/ApiServer",
+    description = "Runtime API server — HTTP + WebSocket control plane",
     execution = manual,
     config = crate::_generated_::ApiServerConfig,
 )]

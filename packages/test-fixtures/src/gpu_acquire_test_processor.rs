@@ -33,6 +33,7 @@ use streamlib::sdk::rhi::PixelFormat;
 
 #[streamlib::sdk::processor(
     "@tatolab/test-fixtures/GpuAcquireTestProcessor",
+    description = "Phase C1 (#901) dlopen-cdylib GPU vtable integration test fixture — exercises clone_handle/acquire_pixel_buffer/plane_base_address_pixel_buffer/drop_pixel_buffer/drop_handle through the GpuContextLimitedAccessVTable",
     execution = manual,
     config = crate::_generated_::GpuAcquireTestProcessorConfig,
 )]
