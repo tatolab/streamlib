@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.7](https://github.com/tatolab/streamlib/compare/v0.7.6...v0.7.7) (2026-07-19)
+
+
+### Features
+
+* **polyglot:** manifest extraction inversion — decorator is the truth-source, not sibling streamlib.yaml ([#1448](https://github.com/tatolab/streamlib/issues/1448)) ([a990d07](https://github.com/tatolab/streamlib/commit/a990d0733e78515f1561744604dd14676a9ad3a2))
+
 ## [0.7.6](https://github.com/tatolab/streamlib/compare/v0.7.5...v0.7.6) (2026-07-19)
 
 
