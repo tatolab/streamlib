@@ -10,8 +10,9 @@ use crate::lockfile::{
     write_modules_lockfile,
 };
 use crate::manifest::Manifest;
+use crate::registry::{RegistryClient, RegistryConfig, select_version};
 use crate::resolver::content_hash_for_package_dir;
-use crate::semver::SemVer;
+use crate::semver::{SemVer, SemVerRange};
 
 /// Conventional per-app modules folder name, created beside the app's
 /// [`MODULES_LOCKFILE_NAME`]. Packages land at `streamlib_modules/@org/name/`.
@@ -413,6 +414,11 @@ pub enum AppModulesError {
     /// promote / symlink). Names the package plus the underlying detail.
     #[error("reproducing '{package}' failed: {detail}")]
     InstallReproduceFailed { package: PackageRef, detail: String },
+
+    /// Resolving a `range → concrete version` against the registry (listing
+    /// versions or selecting one) failed while acquiring a package on reference.
+    #[error("acquiring '{package}' from the registry failed: {detail}")]
+    AcquireRegistryFailed { package: PackageRef, detail: String },
 }
 
 /// A per-app `streamlib_modules/` folder plus its `streamlib.lock`, anchored
@@ -902,6 +908,54 @@ impl AppModulesDir {
             modules_dir,
             packages,
         })
+    }
+
+    /// Acquire `pkg_ref` from the static registry `config` on reference:
+    /// resolve the declared `range` to the highest concrete version the
+    /// registry holds, then materialize that version's `.slpkg` into
+    /// `streamlib_modules/@org/name/` and record it in `streamlib.lock` — the
+    /// exact byte-source [`add_package`](Self::add_package) flow (fetch →
+    /// hash → atomic promote → lock), so an acquired package is
+    /// indistinguishable from one added by hand.
+    ///
+    /// This is the **install-shaped** half of the two-resolver split: a
+    /// `range → concrete` resolution that WRITES the lock. It reuses the same
+    /// [`RegistryClient`] + content-hash + [`write_modules_lockfile`] machinery
+    /// `streamlib add`/`install` use; it is never the locked-run resolver
+    /// (which loads a pinned set offline and makes no resolution decisions).
+    ///
+    /// [`write_modules_lockfile`]: crate::lockfile::write_modules_lockfile
+    #[tracing::instrument(skip(self, config), fields(app_root = %self.app_root.display(), package = %pkg_ref, %range))]
+    pub fn acquire_from_registry(
+        &self,
+        pkg_ref: &PackageRef,
+        range: &SemVerRange,
+        config: &RegistryConfig,
+    ) -> Result<AddPackageReport, AppModulesError> {
+        let acquire_err = |detail: String| AppModulesError::AcquireRegistryFailed {
+            package: pkg_ref.clone(),
+            detail,
+        };
+        let client = RegistryClient::new(config);
+        let available = client
+            .list_versions(pkg_ref)
+            .map_err(|e| acquire_err(format!("listing versions: {e}")))?;
+        let version = select_version(pkg_ref, range, &available)
+            .map_err(|e| acquire_err(e.to_string()))?;
+        let url = client.download_url(pkg_ref, version);
+        tracing::info!(
+            package = %pkg_ref,
+            %version,
+            %url,
+            "acquire_from_registry: resolved range to a concrete version; materializing"
+        );
+        // Route through the byte-source materialize + lock flow. A `file://` or
+        // `http(s)://` download URL is fetched, hashed, extracted, atomically
+        // promoted, and recorded in streamlib.lock — one adoption path.
+        self.add_package(
+            &AddPackageSource::Url { url },
+            &AddPackageOptions::default(),
+        )
     }
 
     /// Reproduce one lockfile entry into its `streamlib_modules/@org/name` slot.

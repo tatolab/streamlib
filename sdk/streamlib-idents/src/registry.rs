@@ -366,8 +366,11 @@ impl<'a> RegistryClient<'a> {
     }
 
     /// Canonical `.slpkg` download URL (recorded in the lockfile):
-    /// `<base>/slpkg/<name>/<version>/<name>.slpkg`.
-    fn download_url(&self, pkg_ref: &PackageRef, version: SemVer) -> String {
+    /// `<base>/slpkg/<name>/<version>/<name>.slpkg`. Public so acquire-shaped
+    /// callers (e.g. [`crate::app_modules::AppModulesDir::acquire_from_registry`])
+    /// can resolve a concrete version's URL and hand it to the byte-source
+    /// materialize + lock flow.
+    pub fn download_url(&self, pkg_ref: &PackageRef, version: SemVer) -> String {
         let name = pkg_ref.name.as_str();
         format!(
             "{}/{}/{}/{}/{}.slpkg",

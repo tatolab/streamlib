@@ -101,6 +101,22 @@ impl Manifest {
         self.package.is_some()
     }
 
+    /// The number of declared dependencies when this manifest is an **app**
+    /// manifest (project flavor — no `package:` block) that nonetheless carries
+    /// a non-empty `dependencies:` block, else `None`.
+    ///
+    /// An app is code, not a manifest: it resolves processor refs against its
+    /// installed set (`streamlib_modules/` + `streamlib.lock`), so a
+    /// `dependencies:` list on an app manifest is a phantom-dependency
+    /// declaration that never resolves — both `streamlib add` and the runtime
+    /// load gate reject it. A **package**-flavor manifest's `dependencies:` are
+    /// legitimate (the recursive walker resolves a loaded package's transitive
+    /// deps), so this returns `None` for it.
+    pub fn app_dependency_violation_count(&self) -> Option<usize> {
+        (!self.is_package_flavor() && !self.dependencies.is_empty())
+            .then_some(self.dependencies.len())
+    }
+
     /// Canonical [`PackageRef`] for this manifest, when it's a package
     /// flavor. Consumers that need the joined `"@org/name"` string form
     /// (e.g. for lockfile keys, log messages) call `.to_string()` on the
@@ -723,6 +739,29 @@ dependencies:
         .unwrap();
         let m = Manifest::load(tmp.path()).unwrap();
         assert_eq!(m.package_id().as_deref(), Some("@tatolab/core"));
+    }
+
+    #[test]
+    fn app_dependency_violation_flags_project_flavor_with_deps() {
+        // Project flavor (no `package:`) + non-empty `dependencies:` is the
+        // phantom-dependency app manifest — flagged with the declared count.
+        let app: Manifest = serde_yaml::from_str(
+            "dependencies:\n  '@tatolab/core': ^1.0.0\n  '@tatolab/camera': ^2.0.0\n",
+        )
+        .unwrap();
+        assert_eq!(app.app_dependency_violation_count(), Some(2));
+
+        // Project flavor with no deps is fine.
+        let empty_app: Manifest = serde_yaml::from_str("dependencies: {}\n").unwrap();
+        assert_eq!(empty_app.app_dependency_violation_count(), None);
+
+        // A package-flavor manifest's deps are legitimate — never flagged.
+        let package: Manifest = serde_yaml::from_str(
+            "package:\n  org: tatolab\n  name: widget\n  version: 0.1.0\n\
+             dependencies:\n  '@tatolab/core': ^1.0.0\n",
+        )
+        .unwrap();
+        assert_eq!(package.app_dependency_violation_count(), None);
     }
 
     #[test]
