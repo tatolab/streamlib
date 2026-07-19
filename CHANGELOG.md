@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.11](https://github.com/tatolab/streamlib/compare/v0.7.10...v0.7.11) (2026-07-19)
+
+
+### Features
+
+* **examples:** hello-streamlib inline-processor example + E2E ([#1458](https://github.com/tatolab/streamlib/issues/1458)) ([f84b839](https://github.com/tatolab/streamlib/commit/f84b839eccb9ba6071cf5df9256bfd4583f971d1))
+* **pack:** derive processor manifests from code with a drift gate (closes [#1411](https://github.com/tatolab/streamlib/issues/1411)) ([#1459](https://github.com/tatolab/streamlib/issues/1459)) ([476e9a6](https://github.com/tatolab/streamlib/commit/476e9a6958c11155c3457f00af08fde1d1f664af))
+
 ## [0.7.10](https://github.com/tatolab/streamlib/compare/v0.7.9...v0.7.10) (2026-07-19)
 
 
