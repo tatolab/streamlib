@@ -31,8 +31,8 @@ pub use catalog::{
 pub use error::{IdentError, IdentResult, ResolverError, ResolverResult};
 pub use git::fetch_git;
 pub use ident::{
-    ModuleIdent, Org, Package, PackageRef, SchemaIdent, TypeName, validate_org, validate_package,
-    validate_type,
+    ModuleIdent, Org, Package, PackageRef, SESSION_ORG, SchemaIdent, TypeName, validate_org,
+    validate_package, validate_type,
 };
 pub use lockfile::{
     APP_LOCKFILE_NAME, CODEGEN_LOCKFILE_NAME, Lockfile, LockfileEntry, LockfileSource,

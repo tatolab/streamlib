@@ -513,6 +513,20 @@ pub fn assemble_artifact_with_cargo_config(
         // by an active `streamlib link`. `StagedDir` stays exempt so
         // orchestrator load-time builds keep working while linked.
         link_marker::ensure_no_active_link_for_pack(pkg_dir)?;
+        // The `@session/…` org is reserved for in-app / session-local
+        // processors registered live at runtime; it is deliberately NOT
+        // publishable. Refuse to build a distribution `.slpkg` that squats it
+        // so a session-local name can never masquerade as an installable
+        // package on the registry. `StagedDir` stays exempt (dev-resolution).
+        if package.org.is_reserved_for_session() {
+            anyhow::bail!(
+                "streamlib.yaml at {} declares the reserved `@{}/…` org, which is \
+                 reserved for in-app / session-local processors and cannot be built \
+                 into a distributable package. Publish under your own org instead.",
+                pkg_dir.display(),
+                streamlib_idents::SESSION_ORG,
+            );
+        }
     }
 
     // (archive_path, source_path) pairs for every file EXCEPT the
@@ -1649,6 +1663,56 @@ mod tests {
             &(),
         )
         .expect("StagedDir assembly must stay exempt while linked");
+    }
+
+    #[test]
+    fn slpkg_assembly_rejects_reserved_session_org_but_staged_dir_is_exempt() {
+        // The reserved-org publish guard: `@session/…` is reserved for in-app /
+        // session-local processors registered live at runtime and is NOT
+        // publishable, so a distributable `.slpkg` that declares it is refused.
+        // StagedDir (orchestrator dev-resolution build) stays exempt. Mentally
+        // revert the `is_reserved_for_session()` bail and the Slpkg arm below
+        // assembles instead of erroring, letting a session name squat the
+        // registry.
+        let dir = tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("schemas")).unwrap();
+        std::fs::write(
+            dir.path().join("streamlib.yaml"),
+            "package:\n  org: session\n  name: my-processor\n  version: 0.0.1\nschemas:\n  T:\n    file: schemas/t.yaml\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.path().join("schemas/t.yaml"),
+            "metadata:\n  type: T\n  max_payload_bytes: 16\n",
+        )
+        .unwrap();
+
+        let err = assemble_artifact(
+            dir.path(),
+            &AssembleTarget::Slpkg(dir.path().join("o.slpkg")),
+            &slpkg_opts(false),
+            &(),
+        )
+        .expect_err("a package under the reserved @session org must be refused for build/publish");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("session"),
+            "the refusal must name the reserved session org, got: {msg}"
+        );
+
+        // StagedDir target → exempt, assembles fine (dev-resolution path).
+        let staged = tempdir().unwrap();
+        assemble_artifact(
+            dir.path(),
+            &AssembleTarget::StagedDir(staged.path().to_path_buf()),
+            &AssembleOptions {
+                no_build: false,
+                profile: CargoProfile::Release,
+                path_deps: PathDepPolicy::RewriteRelativeToAbsolute,
+            },
+            &(),
+        )
+        .expect("StagedDir assembly must stay exempt from the session-org publish guard");
     }
 
     #[test]
