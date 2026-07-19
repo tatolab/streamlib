@@ -6,11 +6,20 @@
  *
  * `@processor("PascalCase", import.meta.url)` mirrors Rust's
  * `#[streamlib::processor("Camera")]` proc-macro and Python's
- * `@processor("Camera")`: a positional PascalCase short name resolved
- * against the sibling `streamlib.yaml`'s `package: { org, name, version }`
- * block at decoration time. The result is a structured
- * {@linkcode SchemaIdent} attached to the class as
- * `streamlibSchemaIdent`.
+ * `@processor("Camera")`: a positional PascalCase short name. The decorator
+ * reads the package identity (`package: { org, name, version }`) from the
+ * sibling `streamlib.yaml`, composes a structured {@linkcode SchemaIdent}
+ * attached to the class as `streamlibSchemaIdent`, and registers the
+ * processor in the module-global registry (`_processor_registry.ts`).
+ *
+ * The decorator is the manifest truth-source for the `processors:` set: a
+ * package's processors are derived by *importing* its modules and enumerating
+ * what `@processor` registered — never by reading a hand-authored
+ * `processors:` list. This is the Deno analogue of the Rust `syn` source-scan
+ * in `sdk/streamlib-processor-extract` (there the scan reads the AST without
+ * running it; here extraction is import). Only the package identity comes from
+ * `streamlib.yaml`; the processor set comes from code. See
+ * `extract_processors.ts`.
  *
  * Deno has no `inspect.getfile` equivalent — TC39 stage-3 decorators
  * don't surface the source URL in the decorator context. The caller
@@ -47,10 +56,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import {
-  type ManifestSummary,
+  type ManifestPackage,
   ManifestParseError,
-  readManifestSummary,
+  readPackageBlock,
 } from "./_manifest.ts";
+import { registerProcessor } from "./_processor_registry.ts";
 import { SchemaIdent } from "./schema_ident.ts";
 
 // =============================================================================
@@ -107,16 +117,17 @@ type ClassConstructor = new (...args: any[]) => any;
  *
  * Mirrors Rust's `#[streamlib::processor("Camera")]` macro and Python's
  * `@processor("Camera")`. At decoration time, the decorator locates the
- * sibling `streamlib.yaml` (next to the file containing
- * `import.meta.url`), reads its `package: { org, name, version }` block,
- * validates that `shortName` appears in the manifest's `processors:`
- * list, and constructs a structured {@linkcode SchemaIdent} attached to
- * the class as `streamlibSchemaIdent`. Method-level port metadata
- * declared by {@linkcode input}/{@linkcode output} is collected onto
- * `streamlibPorts`.
+ * sibling `streamlib.yaml` (next to the file containing `import.meta.url`),
+ * reads its `package: { org, name, version }` block for the package identity,
+ * constructs a structured {@linkcode SchemaIdent} attached to the class as
+ * `streamlibSchemaIdent`, and registers the processor so the
+ * import-and-enumerate extractor can derive the package's `processors:` set
+ * from code. Method-level port metadata declared by
+ * {@linkcode input}/{@linkcode output} is collected onto `streamlibPorts`.
+ * `shortName` is NOT validated against a `processors:` list — the decorator IS
+ * that list.
  *
- * @param shortName PascalCase type name. Must match an entry in the
- *   sibling manifest's `processors:` list.
+ * @param shortName PascalCase type name — the processor's identity.
  * @param moduleUrl Pass `import.meta.url` from the file containing the
  *   decorated class. Required because Deno's TC39 decorator context
  *   does not expose the source URL.
@@ -156,18 +167,7 @@ export function processor(shortName: string, moduleUrl: string) {
     _context: ClassDecoratorContext,
   ): T => {
     const manifestPath = locateSiblingManifest(moduleUrl, shortName);
-    const summary = loadManifestSummary(manifestPath, shortName);
-
-    if (!summary.processorNames.includes(shortName)) {
-      const available = summary.processorNames.length > 0
-        ? summary.processorNames.join("\n    ")
-        : "(none declared)";
-      throw new Error(
-        `@processor(${JSON.stringify(shortName)}): short name not declared ` +
-          `in ${manifestPath}'s \`processors:\` list. Available processors:\n    ` +
-          `${available}`,
-      );
-    }
+    const pkg = loadPackageBlock(manifestPath, shortName);
 
     // Schema idents are release-only by invariant: a package may carry a
     // `-dev.N` / `-rc.N` prerelease version, but its schema idents project
@@ -175,10 +175,10 @@ export function processor(shortName: string, moduleUrl: string) {
     // 3-part `SchemaIdent` validator would otherwise reject a legitimately
     // dev-versioned package's processors.
     const ident = new SchemaIdent(
-      summary.package.org,
-      summary.package.name,
+      pkg.org,
+      pkg.name,
       shortName,
-      releaseCore(summary.package.version),
+      releaseCore(pkg.version),
     );
 
     // Attach as static fields. Mirrors Python's
@@ -211,6 +211,14 @@ export function processor(shortName: string, moduleUrl: string) {
       writable: false,
       enumerable: true,
       configurable: false,
+    });
+
+    registerProcessor({
+      shortName,
+      schemaIdent: ident,
+      inputs: Object.freeze(inputs.slice()),
+      outputs: Object.freeze(outputs.slice()),
+      className: target.name,
     });
 
     return target;
@@ -325,19 +333,18 @@ function locateSiblingManifest(
   return join(dirname(filePath), "streamlib.yaml");
 }
 
-function loadManifestSummary(
+function loadPackageBlock(
   manifestPath: string,
   shortName: string,
-): ManifestSummary {
+): ManifestPackage {
   try {
-    return readManifestSummary(manifestPath);
+    return readPackageBlock(manifestPath);
   } catch (e) {
     if (e instanceof Deno.errors.NotFound) {
       throw new Error(
         `streamlib.yaml not found at ${manifestPath}. ` +
           `@processor(${JSON.stringify(shortName)}) requires a sibling ` +
-          `streamlib.yaml with a \`package: { org, name, version }\` block ` +
-          `and a matching \`processors:\` entry.`,
+          `streamlib.yaml with a \`package: { org, name, version }\` block.`,
       );
     }
     if (e instanceof ManifestParseError) {

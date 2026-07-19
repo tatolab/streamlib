@@ -4,11 +4,21 @@
 """Decorators for defining StreamLib processors in Python.
 
 `@processor("PascalCase")` mirrors Rust's `#[streamlib::processor("Camera")]`
-proc-macro: a positional PascalCase short name that the decorator resolves
-against the sibling `streamlib.yaml`'s `package: { org, name, version }`
-block at decoration time. The result is a structured
-[`SchemaIdent`][streamlib.schema_ident.SchemaIdent] attached to the class
-as `__streamlib_schema_ident__`.
+proc-macro: a positional PascalCase short name. The decorator reads the
+package identity (`package: { org, name, version }`) from the sibling
+`streamlib.yaml`, composes a structured
+[`SchemaIdent`][streamlib.schema_ident.SchemaIdent] attached to the class as
+`__streamlib_schema_ident__`, and registers the processor in the
+process-global [`_processor_registry`][streamlib._processor_registry].
+
+The decorator is the manifest truth-source for the `processors:` set: a
+package's processors are derived by *importing* its modules and enumerating
+what `@processor` registered — never by reading a hand-authored `processors:`
+list. This is the Python analogue of the Rust `syn` source-scan in
+`sdk/streamlib-processor-extract` (there the scan reads the AST without
+running it; here extraction is import). Only the package identity comes from
+`streamlib.yaml`; the processor set comes from code. See
+[`streamlib.extract_processors`][].
 
 Schema references in port declarations (`@input(schema=...)` /
 `@output(schema=...)`) are cross-package by definition. The only accepted
@@ -47,7 +57,8 @@ import re
 from pathlib import Path
 from typing import Optional, Pattern, Type, Union
 
-from ._manifest import ManifestParseError, read_manifest_summary
+from ._manifest import ManifestParseError, read_package_block
+from ._processor_registry import RegisteredProcessor, register_processor
 from .schema_ident import SchemaIdent
 
 
@@ -62,20 +73,21 @@ def processor(short_name: str):
     Mirrors Rust's `#[streamlib::processor("Camera")]` macro. At decoration
     time, the decorator locates the sibling `streamlib.yaml` (next to the
     file containing the decorated class), reads its
-    `package: { org, name, version }` block, validates that `short_name`
-    appears in the manifest's `processors:` list, and constructs a
-    structured `SchemaIdent` attached to the class as
-    `__streamlib_schema_ident__`.
+    `package: { org, name, version }` block for the package identity,
+    constructs a structured `SchemaIdent` attached to the class as
+    `__streamlib_schema_ident__`, and registers the processor in the
+    process-global registry so the import-and-enumerate extractor can derive
+    the package's `processors:` set from code. The `short_name` is NOT
+    validated against a `processors:` list in the manifest — the decorator IS
+    that list.
 
     Args:
-        short_name: PascalCase type name. Must match an entry in the
-            sibling manifest's `processors:` list.
+        short_name: PascalCase type name — the processor's identity.
 
     Raises:
         FileNotFoundError: if no sibling `streamlib.yaml` is found.
         ManifestParseError: if the manifest is malformed or missing
             required `package:` fields.
-        ValueError: if `short_name` is not declared in the manifest.
 
     Example:
         ```python
@@ -102,24 +114,15 @@ def processor(short_name: str):
     def decorator(cls):
         manifest_path = _locate_sibling_manifest(cls)
         try:
-            summary = read_manifest_summary(manifest_path)
+            package = read_package_block(manifest_path)
         except ManifestParseError:
             raise
         except FileNotFoundError as exc:
             raise FileNotFoundError(
                 f"streamlib.yaml not found at {manifest_path}. "
                 f"@processor({short_name!r}) requires a sibling streamlib.yaml "
-                f"with a `package: {{ org, name, version }}` block and a matching "
-                f"`processors:` entry."
+                f"with a `package: {{ org, name, version }}` block."
             ) from exc
-
-        if short_name not in summary.processor_names:
-            available = "\n    ".join(summary.processor_names) or "(none declared)"
-            raise ValueError(
-                f"@processor({short_name!r}): short name not declared in "
-                f"{manifest_path}'s `processors:` list. Available processors:\n    "
-                f"{available}"
-            )
 
         # Schema idents are release-only by invariant: a package may carry a
         # `-dev.N` / `-rc.N` prerelease version, but its schema idents project
@@ -127,10 +130,10 @@ def processor(short_name: str):
         # 3-part `SchemaIdent` validator would otherwise reject a legitimately
         # dev-versioned package's processors.
         ident = SchemaIdent(
-            org=summary.package.org,
-            package=summary.package.name,
+            org=package.org,
+            package=package.name,
             type_=short_name,
-            version=_release_core(summary.package.version),
+            version=_release_core(package.version),
         )
         cls.__streamlib_schema_ident__ = ident
 
@@ -147,6 +150,16 @@ def processor(short_name: str):
                 if hasattr(attr, "_streamlib_output_port"):
                     outputs.append(attr._streamlib_output_port)
         cls.__streamlib_ports__ = {"inputs": inputs, "outputs": outputs}
+
+        register_processor(
+            RegisteredProcessor(
+                short_name=short_name,
+                schema_ident=ident,
+                inputs=tuple(inputs),
+                outputs=tuple(outputs),
+                class_qualname=getattr(cls, "__qualname__", cls.__name__),
+            )
+        )
 
         return cls
 

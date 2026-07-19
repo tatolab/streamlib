@@ -209,7 +209,12 @@ class TestProcessorDecorator:
                 """,
             )
 
-    def test_short_name_not_in_manifest_lists_available(self, tmp_path: Path) -> None:
+    def test_short_name_need_not_appear_in_manifest_processors_list(
+        self, tmp_path: Path
+    ) -> None:
+        # The decorator is the truth-source: a short name is minted straight
+        # from the package identity regardless of any `processors:` list the
+        # manifest happens to carry. (The list is no longer read at all.)
         _write_manifest(
             tmp_path,
             """
@@ -219,22 +224,23 @@ class TestProcessorDecorator:
               version: 0.1.0
 
             processors:
-              - name: Camera
-              - name: Display
+              - name: SomethingElse
             """,
         )
-        with pytest.raises(ValueError, match=r"Available processors"):
-            _import_class_from_dir(
-                tmp_path,
-                "missing_short_name_module",
-                """
-                from streamlib import processor
+        module = _import_class_from_dir(
+            tmp_path,
+            "unlisted_short_name_module",
+            """
+            from streamlib import processor
 
-                @processor("MissingProcessor")
-                class MissingProcessor:
-                    pass
-                """,
-            )
+            @processor("NotInTheYamlList")
+            class NotInTheYamlList:
+                pass
+            """,
+        )
+        ident = module.NotInTheYamlList.__streamlib_schema_ident__
+        assert ident.type_ == "NotInTheYamlList"
+        assert str(ident) == "@tatolab/example/NotInTheYamlList@0.1.0"
 
     def test_manifest_missing_org_errors(self, tmp_path: Path) -> None:
         _write_manifest(

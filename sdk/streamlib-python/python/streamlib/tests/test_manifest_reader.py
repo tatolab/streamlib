@@ -1,7 +1,12 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Tests for the hand-rolled streamlib.yaml minimal manifest reader."""
+"""Tests for the hand-rolled streamlib.yaml package-block reader.
+
+The reader is package-identity-only: the `processors:` set is derived from
+`@processor` decorators (see `test_processor_extraction.py`), never read from
+the manifest.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from streamlib._manifest import ManifestParseError, read_manifest_summary
+from streamlib._manifest import ManifestParseError, read_package_block
 
 
 def _write(tmp_path: Path, body: str) -> Path:
@@ -19,8 +24,8 @@ def _write(tmp_path: Path, body: str) -> Path:
     return p
 
 
-class TestManifestReader:
-    def test_parses_package_block_and_processors_list(self, tmp_path: Path) -> None:
+class TestPackageBlockReader:
+    def test_parses_package_block(self, tmp_path: Path) -> None:
         path = _write(
             tmp_path,
             """
@@ -34,15 +39,12 @@ class TestManifestReader:
               - name: AvatarCharacter
                 runtime: python
                 execution: reactive
-              - name: CyberpunkLowerThird
-                runtime: python
             """,
         )
-        summary = read_manifest_summary(path)
-        assert summary.package.org == "tatolab"
-        assert summary.package.name == "cyberpunk-processor"
-        assert summary.package.version == "0.1.0"
-        assert summary.processor_names == ["AvatarCharacter", "CyberpunkLowerThird"]
+        package = read_package_block(path)
+        assert package.org == "tatolab"
+        assert package.name == "cyberpunk-processor"
+        assert package.version == "0.1.0"
 
     def test_strips_double_quotes_around_version(self, tmp_path: Path) -> None:
         path = _write(
@@ -52,13 +54,10 @@ class TestManifestReader:
               org: tatolab
               name: example
               version: "1.2.3"
-
-            processors:
-              - name: Foo
             """,
         )
-        summary = read_manifest_summary(path)
-        assert summary.package.version == "1.2.3"
+        package = read_package_block(path)
+        assert package.version == "1.2.3"
 
     def test_strips_single_quotes(self, tmp_path: Path) -> None:
         path = _write(
@@ -68,13 +67,11 @@ class TestManifestReader:
               org: 'tatolab'
               name: 'example'
               version: '1.2.3'
-
-            processors: []
             """,
         )
-        summary = read_manifest_summary(path)
-        assert summary.package.org == "tatolab"
-        assert summary.processor_names == []
+        package = read_package_block(path)
+        assert package.org == "tatolab"
+        assert package.name == "example"
 
     def test_ignores_trailing_comments(self, tmp_path: Path) -> None:
         path = _write(
@@ -90,12 +87,13 @@ class TestManifestReader:
               - name: Foo
             """,
         )
-        summary = read_manifest_summary(path)
-        assert summary.package.org == "tatolab"
-        assert summary.processor_names == ["Foo"]
+        package = read_package_block(path)
+        assert package.org == "tatolab"
+        assert package.name == "example"
 
-    def test_skips_nested_processor_body(self, tmp_path: Path) -> None:
-        # Inner ports/inputs/outputs must NOT show up as processor entries.
+    def test_ignores_processors_section(self, tmp_path: Path) -> None:
+        # The reader must not choke on a `processors:` block; it is simply not
+        # read (the decorator is the truth-source).
         path = _write(
             tmp_path,
             """
@@ -109,14 +107,11 @@ class TestManifestReader:
                 inputs:
                   - name: video_in
                     schema: any
-                outputs:
-                  - name: video_out
-                    schema: any
               - name: Bar
             """,
         )
-        summary = read_manifest_summary(path)
-        assert summary.processor_names == ["Foo", "Bar"]
+        package = read_package_block(path)
+        assert package.name == "example"
 
     def test_missing_package_block_errors(self, tmp_path: Path) -> None:
         path = _write(
@@ -127,7 +122,7 @@ class TestManifestReader:
             """,
         )
         with pytest.raises(ManifestParseError, match="missing required"):
-            read_manifest_summary(path)
+            read_package_block(path)
 
     def test_missing_org_field_errors(self, tmp_path: Path) -> None:
         path = _write(
@@ -136,32 +131,11 @@ class TestManifestReader:
             package:
               name: example
               version: 0.1.0
-
-            processors:
-              - name: Foo
             """,
         )
         with pytest.raises(ManifestParseError, match=r"org"):
-            read_manifest_summary(path)
+            read_package_block(path)
 
     def test_no_file_raises_filenotfound(self, tmp_path: Path) -> None:
         with pytest.raises(FileNotFoundError):
-            read_manifest_summary(tmp_path / "does-not-exist.yaml")
-
-    def test_processor_entry_with_non_name_first_key_errors(self, tmp_path: Path) -> None:
-        # Defends the "name-first ordering" assumption with a clear failure.
-        path = _write(
-            tmp_path,
-            """
-            package:
-              org: tatolab
-              name: example
-              version: 0.1.0
-
-            processors:
-              - runtime: python
-                name: Foo
-            """,
-        )
-        with pytest.raises(ManifestParseError, match="name`-first"):
-            read_manifest_summary(path)
+            read_package_block(tmp_path / "does-not-exist.yaml")

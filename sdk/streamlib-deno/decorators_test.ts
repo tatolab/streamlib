@@ -288,7 +288,10 @@ Deno.test("@processor errors with expected path when manifest missing", async ()
   }
 });
 
-Deno.test("@processor short-name not in manifest lists available", async () => {
+Deno.test("@processor short name need not appear in manifest processors list", async () => {
+  // The decorator is the truth-source: a short name is minted straight from
+  // the package identity regardless of any `processors:` list the manifest
+  // happens to carry. (The list is no longer read at all.)
   const fixture = await makeFixture(
     [
       "package:",
@@ -297,26 +300,19 @@ Deno.test("@processor short-name not in manifest lists available", async () => {
       "  version: 0.1.0",
       "",
       "processors:",
-      "  - name: Camera",
-      "  - name: Display",
+      "  - name: SomethingElse",
       "",
     ].join("\n"),
     moduleHeader() +
-      `@processor("MissingProcessor", import.meta.url)\n` +
-      `export default class MissingProcessor {}\n`,
+      `@processor("NotInTheYamlList", import.meta.url)\n` +
+      `export default class NotInTheYamlList {}\n`,
   );
   try {
-    let caught: unknown = null;
-    try {
-      await import(`file://${fixture.modulePath}`);
-    } catch (e) {
-      caught = e;
-    }
-    assert(caught instanceof Error);
-    const msg = (caught as Error).message;
-    assert(msg.includes("Available processors"), msg);
-    assert(msg.includes("Camera"), msg);
-    assert(msg.includes("Display"), msg);
+    const mod = await import(`file://${fixture.modulePath}`);
+    const cls = mod.default as unknown as StreamlibClassMetadata;
+    const ident = cls.streamlibSchemaIdent;
+    assertEquals(ident.type, "NotInTheYamlList");
+    assertEquals(String(ident), "@tatolab/example/NotInTheYamlList@0.1.0");
   } finally {
     await Deno.remove(fixture.dir, { recursive: true });
   }

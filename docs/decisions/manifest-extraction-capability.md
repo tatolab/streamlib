@@ -32,6 +32,37 @@ for an external one — the same way it already projects a bare `Named` ref
 through the `schemas:` map. A `-dev.N` package projects to its release-core
 version at build time; that is a build-time projection, not a publish gate.
 
+## Polyglot analogue: extraction is import
+
+The same "code is the truth-source" decision holds for the Python and Deno
+SDKs, but the mechanism inverts to fit each runtime. A `syn` AST scan reads
+Rust source without running it; Python and Deno have no comparable
+parse-without-run path for decorator semantics, so **extraction is import**:
+applying `@processor(...)` at import time registers the processor's structured
+identity into a process-global registry (`_processor_registry`), and the
+per-language extractor imports every top-level module beside the
+`streamlib.yaml` and enumerates what registered. Only the package identity
+(`package: { org, name, version }`) is still read from `streamlib.yaml`; the
+decorator no longer validates its short name against a hand-authored
+`processors:` list — the decorator *is* that list.
+
+The extractors are designed to run in a fresh subprocess (`python -m
+streamlib.extract_processors <dir>` / `deno run --allow-read
+extract_processors.ts <dir>`) so the registry starts empty; the in-process
+entrypoints clear the registry themselves. Once the pkg-build truth-flip lands,
+`pkg build` will invoke them on that path; today they ship as the standalone
+capability. Output is sorted by joined schema-ident string for determinism
+regardless of import order.
+
+The import-runs-code property is the cost of the inversion: a processor module
+whose third-party imports are unavailable cannot be enumerated, whereas the
+Rust AST scan is inert. Extraction therefore assumes the package's dependencies
+are installed — true at `pkg build` time, unlike the Rust `src/` walk. Full
+per-processor manifest fields (execution mode, entrypoint, ports) still come
+from `streamlib.yaml` for Python/Deno until ports-in-code lands for those
+runtimes; today's extractor supplies the processor identity set and declared
+port schemas, which is what the decorator carries.
+
 ## Rejected alternatives
 
 - **Grammar in the proc-macro crate.** A `proc-macro = true` crate can only
