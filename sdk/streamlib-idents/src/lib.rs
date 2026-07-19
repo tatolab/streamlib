@@ -21,6 +21,7 @@ mod registry;
 mod release;
 mod resolver;
 mod semver;
+mod session;
 
 pub use catalog::{
     CATALOG_INDEX_PATH, CatalogClient, CatalogConfig, CatalogIndexLine, CatalogPort,
@@ -55,3 +56,4 @@ pub use resolver::{
     content_hash_for_package_dir, resolve, resolve_bare_schema_name, resolve_with,
 };
 pub use semver::{Prerelease, PrereleaseKind, SemVer, SemVerRange};
+pub use session::{MintedSessionIdent, mint_session_module_ident, next_session_module_version};
