@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.5](https://github.com/tatolab/streamlib/compare/v0.7.4...v0.7.5) (2026-07-19)
+
+
+### Features
+
+* **cli:** reachability-precursor extraction for [#1411](https://github.com/tatolab/streamlib/issues/1411) manifest scan ([#1445](https://github.com/tatolab/streamlib/issues/1445)) ([05c3e99](https://github.com/tatolab/streamlib/commit/05c3e99933f6de86fccb6de764de585eef990511))
+
 ## [0.7.4](https://github.com/tatolab/streamlib/compare/v0.7.3...v0.7.4) (2026-07-19)
 
 
