@@ -17,8 +17,8 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 toml = { workspace = true }
 tracing = { workspace = true }
-streamlib-idents = { path = "../../sdk/streamlib-idents", version = "0.7.12" }
-streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.7.12" }
+streamlib-idents = { path = "../../sdk/streamlib-idents", version = "0.7.13" }
+streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.7.13" }
 
 [dev-dependencies]
 tempfile = "3.14"
