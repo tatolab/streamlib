@@ -53,13 +53,20 @@ version at build time; that is a build-time projection, not a publish gate.
   identically after the move (its unit + integration tests are unchanged).
 - The scan is a lean text-in / manifest-out transform reusable by any build or
   submit path.
-- `extract_rust_processors` visits every `.rs` under `src/`, including platform
-  arms a given host does not compile (`linux/` vs `apple/`) and parked
-  directories (`_apple_impl_pending_/`). Two platform arms that both declare the
-  same processor both surface from one scan. Resolving the scan to the set
-  actually compiled for the build target — honoring `#[cfg]` and the parked-
-  directory convention — is required before extraction replaces the hand-
-  authored `processors:` as the authoritative truth-source, and before a drift
-  check between the two can be a hard `pkg build` error without false-positives
-  on cfg-gated packages. That module-reachability resolution builds on this scan
-  capability and its shared grammar.
+- `extract_rust_processors` is the RAW scan: it visits every `.rs` under `src/`,
+  including platform arms a given host does not compile (`linux/` vs `apple/`)
+  and parked directories (`_apple_impl_pending_/`), so two platform arms that
+  both declare the same processor both surface. `extract_reachable_rust_processors`
+  resolves that raw scan to the set the build **target** actually compiles: it
+  walks the module tree from the crate root (`lib.rs` / `main.rs`), follows each
+  `mod` the way `rustc` resolves module files (honoring `#[path]`), and evaluates
+  the `#[cfg(...)]` predicate on every `mod` and every `#[processor(...)]`-bearing
+  struct against a `ModuleReachabilityTarget` (the target's cfg atoms:
+  `target_os` / `target_arch` / `target_family` / features / family flags). The
+  parked-directory convention is not special-cased: a parked module is declared
+  `#[cfg(any())]`, an always-false predicate, so it is skipped by the same cfg
+  rule `rustc` applies — one rule, not a hard-coded directory name. This
+  reachability resolution is the precursor that makes extraction sound enough to
+  replace the hand-authored `processors:` as the authoritative truth-source, and
+  a drift check between the two a hard `pkg build` error without false positives
+  on cfg-gated packages.

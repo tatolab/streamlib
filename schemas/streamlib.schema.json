@@ -267,7 +267,7 @@
       "additionalProperties": false
     },
     "ProcessorSchema": {
-      "description": "A complete processor schema definition parsed from YAML.",
+      "description": "A complete processor schema definition — the manifest-shaped view of one processor, derived from its `#[processor(...)]` attribute (the source of truth) by the source-scan extractor.",
       "type": "object",
       "required": [
         "name",
@@ -320,7 +320,7 @@
           }
         },
         "name": {
-          "description": "Processor name in reverse domain notation (e.g., \"com.example.blur\").",
+          "description": "The `Type` segment of the processor's `@org/package/Type` identity — the PascalCase short name (e.g. \"Camera\"), NOT reverse-DNS.",
           "type": "string"
         },
         "outputs": {

@@ -587,11 +587,14 @@ pub struct ProcessorScheduling {
     pub priority: ThreadPriority,
 }
 
-/// A complete processor schema definition parsed from YAML.
+/// A complete processor schema definition — the manifest-shaped view of one
+/// processor, derived from its `#[processor(...)]` attribute (the source of
+/// truth) by the source-scan extractor.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ProcessorSchema {
-    /// Processor name in reverse domain notation (e.g., "com.example.blur").
+    /// The `Type` segment of the processor's `@org/package/Type` identity — the
+    /// PascalCase short name (e.g. "Camera"), NOT reverse-DNS.
     pub name: String,
 
     /// Processor version (e.g., "1.0.0").
