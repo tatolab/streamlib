@@ -399,6 +399,34 @@ mod tests {
     }
 
     #[test]
+    fn add_rejects_app_dir_manifest_declaring_dependencies() {
+        let dir = tempfile::tempdir().unwrap();
+        // Project-flavor (no `package:`) manifest carrying a phantom
+        // `dependencies:` block — an app resolves refs against its installed
+        // set, so `add` must reject before touching streamlib_modules/.
+        std::fs::write(
+            dir.path().join("streamlib.yaml"),
+            "dependencies:\n  '@tatolab/core': ^1.0.0\n",
+        )
+        .unwrap();
+
+        let err = add("./anything", Some(dir.path()), None)
+            .expect_err("add must reject an app-dir manifest that declares dependencies");
+        match err.downcast_ref::<streamlib::sdk::error::Error>() {
+            Some(streamlib::sdk::error::Error::AppManifestDeclaresDependencies {
+                declared_count,
+                ..
+            }) => assert_eq!(*declared_count, 1),
+            other => panic!("expected AppManifestDeclaresDependencies, got {other:?}"),
+        }
+        // The rejection is before any adoption side-effect.
+        assert!(
+            !dir.path().join("streamlib_modules").exists(),
+            "add must not create streamlib_modules/ when it rejects the manifest"
+        );
+    }
+
+    #[test]
     fn record_dependency_range_writes_caret_and_preserves_fields() {
         let dir = tempfile::tempdir().unwrap();
         let manifest_path = dir.path().join("streamlib.yaml");
