@@ -3330,4 +3330,75 @@ mod tests {
             other => panic!("expected InstallUnsupportedSource, got {other:?}"),
         }
     }
+
+    /// Acquire-on-reference's install-shaped half: a `range → concrete`
+    /// resolution against a `file://` registry that materializes the highest
+    /// matching version into `streamlib_modules/` and WRITES the lock — the
+    /// exact byte-source add flow. Mentally revert `acquire_from_registry` to a
+    /// no-op and both the materialized slot and the lock entry vanish.
+    #[test]
+    fn acquire_from_registry_resolves_range_materializes_and_locks() {
+        let tree = tempfile::tempdir().unwrap();
+        let config = RegistryConfig::for_local_tree(tree.path()).unwrap();
+        let client = RegistryClient::new(&config);
+        let pr = pkg_ref("tatolab", "foo");
+        client
+            .upload_slpkg(&pr, SemVer::new(1, 0, 0), &slpkg_bytes("tatolab", "foo", "1.0.0"))
+            .unwrap();
+        client
+            .upload_slpkg(&pr, SemVer::new(1, 2, 0), &slpkg_bytes("tatolab", "foo", "1.2.0"))
+            .unwrap();
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        // A caret range resolves to the highest matching concrete version.
+        let report = app
+            .acquire_from_registry(&pr, &SemVerRange::Caret(SemVer::new(1, 0, 0)), &config)
+            .unwrap();
+        assert_eq!(report.version, SemVer::new(1, 2, 0));
+        assert!(
+            app.package_dir(&pr).join("streamlib.yaml").is_file(),
+            "the acquired package must be materialized into streamlib_modules/"
+        );
+
+        // The lock records the acquired package at the resolved version via the
+        // registry download URL — indistinguishable from a hand `streamlib add`.
+        let lock = app.read_lockfile().unwrap();
+        let entry = lock
+            .packages
+            .get("@tatolab/foo")
+            .expect("acquired package must be locked");
+        assert_eq!(entry.version, SemVer::new(1, 2, 0));
+        assert!(
+            matches!(entry.source, LockfileSource::Url { .. }),
+            "acquired via a registry download URL, got {:?}",
+            entry.source
+        );
+    }
+
+    /// A range no published version satisfies is a typed acquire failure — not
+    /// a silent no-op that would leave the load stuck.
+    #[test]
+    fn acquire_from_registry_errors_when_no_version_matches() {
+        let tree = tempfile::tempdir().unwrap();
+        let config = RegistryConfig::for_local_tree(tree.path()).unwrap();
+        let client = RegistryClient::new(&config);
+        let pr = pkg_ref("tatolab", "foo");
+        client
+            .upload_slpkg(&pr, SemVer::new(1, 0, 0), &slpkg_bytes("tatolab", "foo", "1.0.0"))
+            .unwrap();
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let err = app
+            .acquire_from_registry(&pr, &SemVerRange::Caret(SemVer::new(2, 0, 0)), &config)
+            .expect_err("no 2.x version is published");
+        assert!(
+            matches!(err, AppModulesError::AcquireRegistryFailed { .. }),
+            "expected AcquireRegistryFailed, got {err:?}"
+        );
+        // Nothing materialized, nothing locked.
+        assert!(!app.package_dir(&pr).exists());
+        assert!(!app.lockfile_path().exists());
+    }
 }

@@ -60,6 +60,7 @@ use super::Runner;
 use super::runtime::TokioRuntimeVariant;
 use crate::iceoryx2::Iceoryx2Node;
 
+mod acquire;
 mod added_module;
 mod build_orchestrator;
 mod errors;
@@ -80,6 +81,7 @@ mod tests;
 #[cfg(test)]
 mod session_tests;
 
+pub use acquire::{AcquireConfirmationHandler, AcquireOnReferencePolicy};
 pub use added_module::{AddedModule, LoadedModule, ModuleLoadEvent};
 pub use build_orchestrator::{
     BuildError, BuildEvent, BuildEventSink, BuildOrchestrator, BuildPolicy, BuildRequest,
@@ -710,6 +712,33 @@ impl Runner {
     }
 }
 
+/// Installed-set-only gate at the runtime load boundary: an app dir's
+/// `streamlib.yaml` must not declare `dependencies:`. A project-flavor (app)
+/// manifest carrying deps is a phantom-dependency list the runtime never
+/// resolves — return the typed fix-it. A missing or unparseable manifest, or a
+/// package-flavor manifest (whose deps are legitimate), passes.
+fn check_app_manifest_declares_no_dependencies(
+    app_root: &std::path::Path,
+) -> std::result::Result<(), crate::core::error::Error> {
+    let manifest_path = app_root.join(streamlib_idents::Manifest::FILE_NAME);
+    if !manifest_path.is_file() {
+        return Ok(());
+    }
+    // An unreadable / unparseable manifest is not this gate's concern — the
+    // resolver surfaces its own parse error elsewhere; here we only reject a
+    // well-formed app manifest that declares phantom deps.
+    let Ok(manifest) = streamlib_idents::Manifest::load(app_root) else {
+        return Ok(());
+    };
+    if let Some(count) = manifest.app_dependency_violation_count() {
+        return Err(crate::core::error::Error::AppManifestDeclaresDependencies {
+            manifest_path: manifest_path.display().to_string(),
+            declared_count: count,
+        });
+    }
+    Ok(())
+}
+
 /// Build the recoverable [`Error::LazyModuleLoadFailed`] for a discovered
 /// package that failed to load, naming the type and its providing package.
 fn lazy_module_load_failed(
@@ -748,6 +777,26 @@ impl Runner {
         source::set_app_modules_root_override(None);
     }
 
+    /// Set the process-wide [`AcquireOnReferencePolicy`] — whether, on a load
+    /// miss against the installed set, the runtime may fetch the providing
+    /// package from the static registry and record it in `streamlib.lock`.
+    /// **Process-wide** (last write wins), like [`Self::set_app_modules_dir`].
+    /// `None` clears the override, restoring the [`acquire::ACQUIRE_ON_REFERENCE_ENV`]
+    /// env / [`AcquireOnReferencePolicy::Off`] default. Off by default: a normal
+    /// run resolves refs installed-set-only and never reaches the network.
+    pub fn set_acquire_on_reference_policy(policy: Option<AcquireOnReferencePolicy>) {
+        acquire::set_acquire_on_reference_policy(policy);
+    }
+
+    /// Install (or clear, with `None`) the confirmation handler consulted under
+    /// [`AcquireOnReferencePolicy::Prompt`]: it is called with the package +
+    /// resolution range about to be acquired and returns `true` to proceed.
+    /// The engine performs no interactive I/O itself — a host (e.g. the CLI)
+    /// wires a TTY prompt here. Process-wide.
+    pub fn set_acquire_confirmation_handler(handler: Option<AcquireConfirmationHandler>) {
+        acquire::set_acquire_confirmation_handler(handler);
+    }
+
     /// Begin a lazy load of the package that provides `processor_type`, when
     /// the type isn't registered yet. Returns the in-flight [`AddedModule`] to
     /// drive to completion, or `None` when nothing needs loading (the type is
@@ -780,6 +829,11 @@ impl Runner {
         let Some(app_modules_root) = source::app_modules_root() else {
             return Ok(None);
         };
+        // Installed-set-only gate: an app is code, not a manifest. If the app
+        // dir carries a project-flavor `streamlib.yaml` that declares
+        // `dependencies:`, those are phantom deps the runtime never resolves —
+        // fail loud with the fix-it rather than silently ignoring them.
+        check_app_manifest_declares_no_dependencies(&app_modules_root)?;
         // Discovery ignores the reference-site version and matches on
         // `(org, package, type)`; it takes a concrete `SchemaIdent` only for
         // its diagnostics, so a version-free reference projects to
@@ -791,6 +845,79 @@ impl Runner {
             )),
             None => Ok(None),
         }
+    }
+
+    /// Begin a **policy-gated acquire-on-reference** load: on a miss against the
+    /// installed set, fetch the providing package from the static registry,
+    /// record it in `streamlib.lock`, then load it from the (now-populated)
+    /// installed cache. Returns `Ok(None)` — no acquisition — when the policy is
+    /// `Off` (the default), a `Prompt` handler declines, the referenced package
+    /// is a `@session/` type, no app-modules root or registry URL is configured;
+    /// `Ok(Some(added))` with the in-flight cache load once acquired; a typed
+    /// `Err` when acquisition was permitted but the registry resolve / download
+    /// failed.
+    ///
+    /// This is the install-shaped resolver (range → concrete, WRITES the lock)
+    /// via [`AppModulesDir::acquire_from_registry`], never the locked-run
+    /// resolver — the two-resolver split holds.
+    ///
+    /// [`AppModulesDir::acquire_from_registry`]: streamlib_idents::app_modules::AppModulesDir::acquire_from_registry
+    fn begin_acquire_on_reference(
+        &self,
+        processor_type: &crate::core::processors::ProcessorTypeReference,
+    ) -> std::result::Result<Option<AddedModule>, crate::core::error::Error> {
+        use streamlib_idents::app_modules::AppModulesDir;
+
+        // Session types register live via `add_local`; they are never installed
+        // and so never acquired.
+        if processor_type.org().as_str() == "session" {
+            return Ok(None);
+        }
+        let pkg_ref = streamlib_idents::PackageRef::new(
+            processor_type.org().clone(),
+            processor_type.package().clone(),
+        );
+        // The range comes from the reference itself, not any app manifest: a
+        // version-pinned ref acquires that exact version; a version-free ref
+        // takes the highest release the registry holds.
+        let range = match processor_type.as_version_pinned() {
+            Some(ident) => streamlib_idents::SemVerRange::Exact(ident.version),
+            None => streamlib_idents::SemVerRange::Any,
+        };
+        if !acquire::acquisition_permitted(&pkg_ref, &range) {
+            return Ok(None);
+        }
+        let Some(app_root) = source::app_modules_root() else {
+            return Ok(None);
+        };
+        let Some(config) = streamlib_idents::RegistryConfig::from_env() else {
+            tracing::warn!(
+                package = %pkg_ref,
+                "acquire-on-reference is enabled but no registry URL is configured \
+                 (STREAMLIB_REGISTRY_URL) — cannot acquire"
+            );
+            return Ok(None);
+        };
+        let report = AppModulesDir::at(&app_root)
+            .acquire_from_registry(&pkg_ref, &range, &config)
+            .map_err(|e| {
+                crate::core::error::Error::Configuration(format!(
+                    "acquire-on-reference for {pkg_ref} failed: {e}"
+                ))
+            })?;
+        tracing::info!(
+            package = %pkg_ref,
+            version = %report.version,
+            "acquire-on-reference: acquired package; loading from the installed cache"
+        );
+        let module_ident = streamlib_idents::ModuleIdent::new(
+            pkg_ref.org.clone(),
+            pkg_ref.name.clone(),
+            streamlib_idents::SemVerRange::Any,
+        );
+        Ok(Some(
+            self.add_module_with(module_ident, Strategy::InstalledCache),
+        ))
     }
 
     /// Lazily discover + load the plugin providing `processor_type` on first
@@ -810,7 +937,16 @@ impl Runner {
                 Ok(_) => None,
                 Err(e) => Some(lazy_module_load_failed(processor_type, e)),
             },
-            Ok(None) => None,
+            // Miss against the installed set — try policy-gated
+            // acquire-on-reference (off by default → `Ok(None)` here).
+            Ok(None) => match self.begin_acquire_on_reference(processor_type) {
+                Ok(Some(added)) => match added.await {
+                    Ok(_) => None,
+                    Err(e) => Some(lazy_module_load_failed(processor_type, e)),
+                },
+                Ok(None) => None,
+                Err(e) => Some(e),
+            },
             Err(e) => Some(e),
         }
     }
@@ -824,7 +960,12 @@ impl Runner {
     ) -> Option<crate::core::error::Error> {
         let added = match self.begin_lazy_provider_load(processor_type) {
             Ok(Some(added)) => added,
-            Ok(None) => return None,
+            // Miss — try policy-gated acquire-on-reference (off by default).
+            Ok(None) => match self.begin_acquire_on_reference(processor_type) {
+                Ok(Some(added)) => added,
+                Ok(None) => return None,
+                Err(e) => return Some(e),
+            },
             Err(e) => return Some(e),
         };
         match self.drive_added_module_to_completion_blocking(added) {
@@ -857,6 +998,48 @@ impl Runner {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod app_manifest_gate_tests {
+    use super::*;
+
+    /// The installed-set-only gate rejects a project-flavor (app) manifest that
+    /// declares `dependencies:`, names the manifest path + count, and passes a
+    /// package-flavor manifest, an app with no deps, and a dir with no manifest.
+    #[test]
+    fn rejects_app_manifest_dependencies_only() {
+        let dir = tempfile::tempdir().unwrap();
+        // No manifest → pass.
+        check_app_manifest_declares_no_dependencies(dir.path()).unwrap();
+
+        // Project-flavor (app) manifest with deps → typed rejection.
+        std::fs::write(
+            dir.path().join("streamlib.yaml"),
+            "dependencies:\n  '@tatolab/core': ^1.0.0\n  '@tatolab/camera': ^2.0.0\n",
+        )
+        .unwrap();
+        match check_app_manifest_declares_no_dependencies(dir.path()) {
+            Err(crate::core::error::Error::AppManifestDeclaresDependencies {
+                declared_count,
+                ..
+            }) => assert_eq!(declared_count, 2),
+            other => panic!("expected AppManifestDeclaresDependencies, got {other:?}"),
+        }
+
+        // Package-flavor manifest with deps → legitimate, passes.
+        std::fs::write(
+            dir.path().join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: widget\n  version: 0.1.0\n\
+             dependencies:\n  '@tatolab/core': ^1.0.0\n",
+        )
+        .unwrap();
+        check_app_manifest_declares_no_dependencies(dir.path()).unwrap();
+
+        // Project-flavor with no deps → passes.
+        std::fs::write(dir.path().join("streamlib.yaml"), "dependencies: {}\n").unwrap();
+        check_app_manifest_declares_no_dependencies(dir.path()).unwrap();
     }
 }
 

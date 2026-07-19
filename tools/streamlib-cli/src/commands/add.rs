@@ -37,14 +37,22 @@ use streamlib_processor_schema::StreamlibYaml;
 /// `streamlib_modules/`.
 pub fn add(spec: &str, dir: Option<&Path>, expect_sha256: Option<&str>) -> Result<()> {
     let anchor = anchor_dir(dir)?;
-    if let Some(manifest_path) = package_authoring_manifest(&anchor)? {
-        if expect_sha256.is_some() {
-            eprintln!(
-                "warning: --expect-sha256 is ignored when recording a dependency range in a \
-                 package's streamlib.yaml; it applies only to archive and URL byte sources"
-            );
+    if let Some(manifest) = load_anchor_manifest(&anchor)? {
+        if manifest.is_package_flavor() {
+            if expect_sha256.is_some() {
+                eprintln!(
+                    "warning: --expect-sha256 is ignored when recording a dependency range in a \
+                     package's streamlib.yaml; it applies only to archive and URL byte sources"
+                );
+            }
+            return record_dependency_range(&anchor.join(Manifest::FILE_NAME), spec);
         }
-        return record_dependency_range(&manifest_path, spec);
+        // A project-flavor (app) manifest that declares `dependencies:` is a
+        // phantom-dependency list — an app resolves refs against its installed
+        // set, not a manifest. Reject before touching streamlib_modules/.
+        if let Some(count) = manifest.app_dependency_violation_count() {
+            anyhow::bail!(app_dependencies_rejection(&anchor, count));
+        }
     }
 
     let app = app_modules_dir(dir)?;
@@ -137,16 +145,29 @@ fn anchor_dir(dir: Option<&Path>) -> Result<PathBuf> {
     }
 }
 
-/// The `streamlib.yaml` path when `dir` holds a **package-authoring** manifest
-/// (one with a `package:` block), else `None`. A missing manifest or a
-/// project-flavor manifest (no `package:`) routes `add` to the consumer flow.
-fn package_authoring_manifest(dir: &Path) -> Result<Option<PathBuf>> {
-    let manifest_path = dir.join(Manifest::FILE_NAME);
-    if !manifest_path.is_file() {
+/// Load the `streamlib.yaml` at `dir`, or `None` when the dir carries no
+/// manifest (the common consumer-app case — an app is code, not a manifest).
+fn load_anchor_manifest(dir: &Path) -> Result<Option<Manifest>> {
+    if !dir.join(Manifest::FILE_NAME).is_file() {
         return Ok(None);
     }
-    let manifest = Manifest::load(dir).map_err(|e| anyhow::anyhow!("{e}"))?;
-    Ok(manifest.is_package_flavor().then_some(manifest_path))
+    Manifest::load(dir)
+        .map(Some)
+        .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// The rejection shown when `streamlib add` runs in an app dir whose
+/// `streamlib.yaml` declares `dependencies:` — an app resolves refs against its
+/// installed set, never a manifest dependency list.
+fn app_dependencies_rejection(dir: &Path, count: usize) -> String {
+    format!(
+        "this app's {} declares `dependencies:` ({count} package(s)), but an app is code, \
+         not a manifest — it resolves processor refs against its installed set \
+         (streamlib_modules/ + streamlib.lock), never a manifest dependency list.\n  \
+         Fix: remove the `dependencies:` block, then install each package with \
+         `streamlib add <source>` (a folder, a .slpkg archive, or a URL).",
+        dir.join(Manifest::FILE_NAME).display()
+    )
 }
 
 /// Record `spec` (`@org/name@<version>`) as a caret dependency in the package
@@ -364,24 +385,39 @@ mod tests {
     }
 
     #[test]
-    fn package_authoring_manifest_detects_only_package_flavor() {
+    fn load_anchor_manifest_reads_flavor_and_deps() {
         let dir = tempfile::tempdir().unwrap();
-        // No manifest → consumer flow.
-        assert!(package_authoring_manifest(dir.path()).unwrap().is_none());
-        // Project-flavor (no `package:`) → consumer flow.
+        // No manifest → None (consumer flow).
+        assert!(load_anchor_manifest(dir.path()).unwrap().is_none());
+
+        // Project-flavor (no `package:`) with deps → flagged as an app-deps
+        // violation, so `add` rejects rather than routing to consumer flow.
         std::fs::write(
             dir.path().join("streamlib.yaml"),
             "dependencies:\n  '@tatolab/core': ^1.0.0\n",
         )
         .unwrap();
-        assert!(package_authoring_manifest(dir.path()).unwrap().is_none());
-        // Package-flavor → authoring.
+        let app = load_anchor_manifest(dir.path()).unwrap().unwrap();
+        assert!(!app.is_package_flavor());
+        assert_eq!(app.app_dependency_violation_count(), Some(1));
+
+        // Package-flavor → authoring dir (deps are legitimate there).
         std::fs::write(
             dir.path().join("streamlib.yaml"),
             "package:\n  org: tatolab\n  name: widget\n  version: 0.1.0\n",
         )
         .unwrap();
-        assert!(package_authoring_manifest(dir.path()).unwrap().is_some());
+        let pkg = load_anchor_manifest(dir.path()).unwrap().unwrap();
+        assert!(pkg.is_package_flavor());
+        assert_eq!(pkg.app_dependency_violation_count(), None);
+    }
+
+    #[test]
+    fn app_dependencies_rejection_names_the_installed_set_fix_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let msg = app_dependencies_rejection(dir.path(), 2);
+        assert!(msg.contains("streamlib_modules/"), "message: {msg}");
+        assert!(msg.contains("streamlib add <source>"), "message: {msg}");
     }
 
     #[test]
