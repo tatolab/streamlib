@@ -83,6 +83,9 @@ pub enum Error {
         detail: String,
     },
 
+    #[error("acquire-on-reference for package {package} failed: {detail}")]
+    AcquireOnReferenceFailed { package: PackageRef, detail: String },
+
     #[error(
         "This app's streamlib.yaml at {manifest_path} declares `dependencies:` \
          ({declared_count} package(s)), but an app is code, not a manifest — it \

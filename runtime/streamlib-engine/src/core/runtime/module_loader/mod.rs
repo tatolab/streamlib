@@ -869,7 +869,7 @@ impl Runner {
 
         // Session types register live via `add_local`; they are never installed
         // and so never acquired.
-        if processor_type.org().as_str() == "session" {
+        if processor_type.org().as_str() == streamlib_idents::SESSION_ORG {
             return Ok(None);
         }
         let pkg_ref = streamlib_idents::PackageRef::new(
@@ -899,10 +899,9 @@ impl Runner {
         };
         let report = AppModulesDir::at(&app_root)
             .acquire_from_registry(&pkg_ref, &range, &config)
-            .map_err(|e| {
-                crate::core::error::Error::Configuration(format!(
-                    "acquire-on-reference for {pkg_ref} failed: {e}"
-                ))
+            .map_err(|e| crate::core::error::Error::AcquireOnReferenceFailed {
+                package: pkg_ref.clone(),
+                detail: e.to_string(),
             })?;
         tracing::info!(
             package = %pkg_ref,

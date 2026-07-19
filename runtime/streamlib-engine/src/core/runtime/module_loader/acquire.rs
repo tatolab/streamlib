@@ -64,8 +64,9 @@ impl AcquireOnReferencePolicy {
 
 /// A host-installed acquisition confirmation gate for
 /// [`AcquireOnReferencePolicy::Prompt`]: given the package + resolution range
-/// about to be acquired, return `true` to proceed. The CLI wires a TTY prompt
-/// here; the engine performs no interactive I/O itself (engine purity).
+/// about to be acquired, return `true` to proceed. A host (such as the CLI) can
+/// install a confirmation handler here; with none installed, `Prompt` fails
+/// closed. The engine performs no interactive I/O itself (engine purity).
 pub type AcquireConfirmationHandler = Arc<dyn Fn(&PackageRef, &SemVerRange) -> bool + Send + Sync>;
 
 /// Process-wide policy override. `None` falls back to [`ACQUIRE_ON_REFERENCE_ENV`],
