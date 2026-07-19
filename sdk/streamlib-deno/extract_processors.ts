@@ -111,6 +111,9 @@ export function toManifestJson(procs: readonly RegisteredProcessor[]): string {
   const payload = procs.map((entry) => ({
     name: entry.shortName,
     schema_ident: entry.schemaIdent.toWireObject(),
+    execution: entry.execution,
+    scheduling: entry.scheduling,
+    description: entry.description,
     inputs: entry.inputs.map((port) => ({
       name: port.name,
       schema: port.schema === null ? null : port.schema.toWireObject(),

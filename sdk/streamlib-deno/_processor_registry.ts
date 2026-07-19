@@ -22,17 +22,28 @@
  */
 
 import type { SchemaIdent } from "./schema_ident.ts";
-import type { PortMetadata } from "./decorators.ts";
+import type {
+  ExecutionSpec,
+  PortMetadata,
+  SchedulingSpec,
+} from "./decorators.ts";
 
 /**
  * One processor derived from a `@processor(...)` decorator at import time.
  *
- * Mirrors Rust's `streamlib_processor_extract::ExtractedProcessor` and
- * Python's `RegisteredProcessor`.
+ * Mirrors Rust's `streamlib_processor_extract::ExtractedProcessor` and Python's
+ * `RegisteredProcessor`: the structured identity the manifest/`.slpkg` assembly
+ * consumes, the execution mode and scheduling the decorator declared, plus the
+ * port metadata declared by `@input` / `@output` and the class it was written
+ * on (for diagnostics). This is the single metadata shape the
+ * import-and-enumerate extractor reads.
  */
 export interface RegisteredProcessor {
   readonly shortName: string;
   readonly schemaIdent: SchemaIdent;
+  readonly execution: ExecutionSpec;
+  readonly scheduling: SchedulingSpec;
+  readonly description: string | null;
   readonly inputs: readonly PortMetadata[];
   readonly outputs: readonly PortMetadata[];
   readonly className: string;
