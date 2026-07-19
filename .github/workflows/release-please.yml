@@ -17,6 +17,8 @@ jobs:
       tag_name: ${{ steps.tag.outputs.tag_name || steps.open.outputs.tag_name }}
       version: ${{ steps.tag.outputs.major || steps.open.outputs.major }}.${{ steps.tag.outputs.minor || steps.open.outputs.minor }}.${{ steps.tag.outputs.patch || steps.open.outputs.patch }}
     steps:
+      - uses: actions/checkout@v4
+
       # Pass 1 — open / refresh the standing release PR (version bump + changelog)
       # for the feat/fix commits landed since the last release.
       - uses: googleapis/release-please-action@v4
@@ -24,6 +26,39 @@ jobs:
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
+
+      # The `simple` release-type bumps [workspace.package].version in Cargo.toml
+      # (via extra-files) but has no Cargo.lock updater, so the workspace-member
+      # entries in Cargo.lock keep the old version. CI runs cargo with --locked,
+      # so a merged bump with a stale lock errors before any check runs. Sync the
+      # lock on the release-PR branch (found by the same `autorelease: pending`
+      # label the auto-merge step below uses) so the squash-merge folds it into
+      # the release commit. `cargo update --workspace` rewrites only the member
+      # versions and leaves external deps pinned (resolution only, no build);
+      # no-ops when nothing is pending or the lock is already in sync.
+      - name: Sync Cargo.lock to the release version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
+            --json headRefName,labels \
+            --jq 'map(select(.labels[].name == "autorelease: pending")) | .[0].headRefName // empty')
+          if [ -z "$BRANCH" ]; then
+            echo "no open release PR this run"
+            exit 0
+          fi
+          git fetch origin "$BRANCH"
+          git checkout "$BRANCH"
+          cargo update --workspace
+          if git diff --quiet -- Cargo.lock; then
+            echo "Cargo.lock already in sync"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock
+          git commit -m "chore: sync Cargo.lock to the release version"
+          git push origin "$BRANCH"
 
       # A version cut is pure bookkeeping — version + changelog, no code — so it
       # needs no human gate; auto-merge the release PR the moment it exists. The
