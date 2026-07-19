@@ -1276,6 +1276,38 @@ impl ProcessorInstanceFactory {
         self.descriptors.read().get(processor_type).cloned()
     }
 
+    /// Warn when `ident`'s short type name collides with an already-registered
+    /// processor under a different `(org, package)` — the session-local vs
+    /// installed name-shadow case. Both stay addressable by full ident (the
+    /// registry keys on the structured `SchemaIdent`, never the short name), so
+    /// this only surfaces the ambiguity a bare short-name reference would hit;
+    /// it never removes or overwrites either registration. Returns the shadowed
+    /// idents (for tests / diagnostics).
+    pub fn warn_on_short_name_shadow(&self, ident: &SchemaIdent) -> Vec<SchemaIdent> {
+        let shadowed: Vec<SchemaIdent> = self
+            .descriptors
+            .read()
+            .keys()
+            .filter(|other| {
+                other.r#type == ident.r#type
+                    && (other.org != ident.org || other.package != ident.package)
+            })
+            .cloned()
+            .collect();
+        for other in &shadowed {
+            tracing::warn!(
+                registering = %ident,
+                shadows = %other,
+                "processor short type name '{}' is now registered under two \
+                 distinct packages; both remain addressable by their full \
+                 `@org/package/Type@version` ident, but a bare short-name \
+                 reference is ambiguous",
+                ident.r#type,
+            );
+        }
+        shadowed
+    }
+
     /// List all registered processor types with their full descriptors.
     pub fn list_registered(&self) -> Vec<ProcessorDescriptor> {
         self.descriptors.read().values().cloned().collect()

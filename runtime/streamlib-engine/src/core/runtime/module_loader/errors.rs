@@ -438,6 +438,59 @@ pub enum AddModuleError {
         package: streamlib_idents::PackageRef,
         processor_type: crate::core::descriptors::SchemaIdent,
     },
+
+    /// [`Runner::add_local`] was handed a type whose
+    /// [`GeneratedProcessor::descriptor`] returned `None` — it carries no
+    /// registerable descriptor, so there is nothing to register under
+    /// `@session/…`. Annotate the type with `#[processor(...)]`.
+    ///
+    /// [`Runner::add_local`]: super::super::Runner::add_local
+    /// [`GeneratedProcessor::descriptor`]: crate::core::processors::GeneratedProcessor::descriptor
+    #[error(
+        "add_local::<{type_name}>() failed: the type carries no processor \
+         descriptor. Annotate it with `#[processor(...)]` so it has a \
+         registerable identity."
+    )]
+    SessionProcessorHasNoDescriptor { type_name: String },
+
+    /// [`Runner::add_local`] derived a session package name that fails the
+    /// ident grammar (`[a-z][a-z0-9-]*`). `detail` carries the underlying
+    /// [`streamlib_idents::IdentError`].
+    ///
+    /// [`Runner::add_local`]: super::super::Runner::add_local
+    #[error(
+        "add_local::<{type_name}>() failed: cannot mint a `@session/<name>` \
+         ident from the type name: {detail}"
+    )]
+    SessionProcessorNameInvalid { type_name: String, detail: String },
+
+    /// [`Runner::add_local`] was handed a config that does not deserialize
+    /// into the processor type's `Config` — refused before registering, so a
+    /// session type never registers with a config its own schema rejects.
+    ///
+    /// [`Runner::add_local`]: super::super::Runner::add_local
+    #[error(
+        "add_local::<{type_name}>() failed: the supplied config is not valid \
+         for the processor's Config type: {detail}"
+    )]
+    SessionProcessorConfigInvalid { type_name: String, detail: String },
+
+    /// [`Runner::add_local`] found a live `@session/<name>` registration
+    /// already in the ledger — the same session-local name is registered and
+    /// was not removed. Never silently overwritten. Remove it first
+    /// ([`Runner::remove_module`]), or register the new type under a distinct
+    /// name.
+    ///
+    /// [`Runner::add_local`]: super::super::Runner::add_local
+    /// [`Runner::remove_module`]: super::super::Runner::remove_module
+    #[error(
+        "add_local failed: a session-local processor is already registered as \
+         '{module}'. Remove it (remove_module) before re-registering the same \
+         name, or use a distinct type name."
+    )]
+    DuplicateSessionProcessorName {
+        module: streamlib_idents::ModuleIdent,
+    },
 }
 
 impl From<AddModuleError> for Error {
