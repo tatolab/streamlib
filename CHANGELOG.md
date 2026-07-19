@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.4](https://github.com/tatolab/streamlib/compare/v0.7.3...v0.7.4) (2026-07-19)
+
+
+### Features
+
+* **cli:** manifest extraction capability — syn source-scan + shared grammar ([#1411](https://github.com/tatolab/streamlib/issues/1411) stage 1) ([#1439](https://github.com/tatolab/streamlib/issues/1439)) ([50df8cf](https://github.com/tatolab/streamlib/commit/50df8cfe859d4deb1f1354d1335b8ea7e1697aa3))
+
 ## [0.7.3](https://github.com/tatolab/streamlib/compare/v0.7.2...v0.7.3) (2026-07-19)
 
 
