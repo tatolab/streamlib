@@ -20,6 +20,7 @@
 //! here rather than the proc-macro crate, and the identity/version model the
 //! scan produces.
 
+pub mod derive;
 pub mod grammar;
 pub mod reachable;
 
@@ -27,6 +28,11 @@ use std::path::{Path, PathBuf};
 
 use streamlib_processor_schema::ProcessorSchema;
 
+pub use derive::{
+    DeriveError, ManifestDriftReport, PackageLanguage, PortSchemaSurface, PortSurface,
+    ProcessorSurface, SubprocessProcessorExtractor, SystemSubprocessProcessorExtractor,
+    check_processor_manifest_drift, derive_package_processor_surfaces, detect_package_languages,
+};
 pub use grammar::{ParsedPort, ParsedProcessorAttr};
 pub use reachable::{ModuleReachabilityTarget, extract_reachable_rust_processors};
 
