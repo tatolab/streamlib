@@ -86,6 +86,10 @@ impl<T> Config for T where
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct EmptyConfig;
 
+// twin-guard(empty-config-serde): BEGIN — wire-load-bearing twin of the engine's
+// EmptyConfig serde in runtime/streamlib-engine/src/core/processors/mod.rs. Config
+// crosses the plugin ABI, so both sides must serialize to the same empty named map
+// and tolerate any decode shape. twin_drift_guard.rs trip-wires an edit to either.
 impl Serialize for EmptyConfig {
     fn serialize<S: serde::Serializer>(
         &self,
@@ -104,6 +108,7 @@ impl<'de> Deserialize<'de> for EmptyConfig {
         Ok(EmptyConfig)
     }
 }
+// twin-guard(empty-config-serde): END
 
 // =============================================================================
 // Mode traits

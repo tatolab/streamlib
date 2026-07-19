@@ -25,6 +25,18 @@ const SDK_DIR: &str = concat!(
     "/../../sdk/streamlib-plugin-sdk/src/plugin/"
 );
 
+/// Engine-side `EmptyConfig` serde twin file (outside the `plugin/` dir).
+const ENGINE_EMPTY_CONFIG_FILE: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/src/core/processors/mod.rs");
+/// SDK-side `EmptyConfig` serde twin file (outside the `plugin/` dir).
+const SDK_EMPTY_CONFIG_FILE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../sdk/streamlib-plugin-sdk/src/processors.rs"
+);
+/// Line marker bracketing the guarded `EmptyConfig` serde region in each twin.
+const EMPTY_CONFIG_TWIN_BEGIN: &str = "twin-guard(empty-config-serde): BEGIN";
+const EMPTY_CONFIG_TWIN_END: &str = "twin-guard(empty-config-serde): END";
+
 /// Strip full-line comments + blank lines, apply the one known import-path shim
 /// (`super::host_services::` → `super::`), then drop all remaining whitespace.
 /// The result preserves the marshalling LOGIC (identifiers, calls, control
@@ -59,6 +71,30 @@ fn read(dir: &str, name: &str) -> String {
             "twin-drift guard: cannot read `{path}`: {e} — did a twin file move? update this guard."
         )
     })
+}
+
+fn read_path(path: &str) -> String {
+    std::fs::read_to_string(path).unwrap_or_else(|e| {
+        panic!(
+            "twin-drift guard: cannot read `{path}`: {e} — did a twin file move? update this guard."
+        )
+    })
+}
+
+/// Extract the lines strictly between the `BEGIN`/`END` marker lines. Panics if
+/// either marker is missing (a twin file whose guard region was renamed/removed
+/// must not silently pass this guard).
+fn extract_marked_region(src: &str, path: &str) -> String {
+    let lines: Vec<&str> = src.lines().collect();
+    let begin = lines
+        .iter()
+        .position(|l| l.contains(EMPTY_CONFIG_TWIN_BEGIN))
+        .unwrap_or_else(|| panic!("twin-drift guard: `{EMPTY_CONFIG_TWIN_BEGIN}` marker missing in `{path}`"));
+    let end = lines
+        .iter()
+        .position(|l| l.contains(EMPTY_CONFIG_TWIN_END))
+        .unwrap_or_else(|| panic!("twin-drift guard: `{EMPTY_CONFIG_TWIN_END}` marker missing in `{path}`"));
+    lines[begin + 1..end].join("\n")
 }
 
 /// FNV-1a — a deterministic (platform/version-stable) hash, unlike
@@ -143,6 +179,42 @@ fn divergent_processor_vtable_twin_is_tripwired() {
          Verify the same logic change belongs in the OTHER copy \
          (runtime/streamlib-engine/src/core/plugin/ AND \
          sdk/streamlib-plugin-sdk/src/plugin/), then set:\n  \
+         EXPECTED_ENGINE = {eng:#018x}\n  EXPECTED_SDK = {sdk:#018x}\n"
+    );
+}
+
+/// `EmptyConfig`'s `Serialize`/`Deserialize` is a wire-load-bearing twin: config
+/// crosses the plugin ABI, so the host's copy
+/// (`core/processors/mod.rs`) and the engine-free SDK's copy
+/// (`streamlib-plugin-sdk/src/processors.rs`) MUST serialize to the same empty
+/// named map and tolerate the same decode shapes. The two copies LEGITIMATELY
+/// differ in path-qualification (`serde::` prefix) and serialize style (engine
+/// UFCS vs SDK method-chain), so they can't be asserted identical — this is a
+/// TRIP-WIRE like `divergent_processor_vtable_twin_is_tripwired`: any edit to
+/// either `EmptyConfig` serde region changes its hash, failing CI, so a one-sided
+/// edit can't ship in a `.slpkg`. When it trips: confirm the matching wire-shape
+/// change landed in the OTHER copy, then update the expected hash.
+#[test]
+fn divergent_empty_config_serde_twin_is_tripwired() {
+    // Updated whenever an EmptyConfig serde region is intentionally edited in
+    // either copy — updating it is the moment to confirm the wire shape stayed
+    // identical across the ABI.
+    const EXPECTED_ENGINE: u64 = 0x6a69_bb57_54ed_0c2d;
+    const EXPECTED_SDK: u64 = 0xc993_bbca_439a_6d75;
+    let eng = fnv1a(&normalize(&extract_marked_region(
+        &read_path(ENGINE_EMPTY_CONFIG_FILE),
+        ENGINE_EMPTY_CONFIG_FILE,
+    )));
+    let sdk = fnv1a(&normalize(&extract_marked_region(
+        &read_path(SDK_EMPTY_CONFIG_FILE),
+        SDK_EMPTY_CONFIG_FILE,
+    )));
+    assert!(
+        eng == EXPECTED_ENGINE && sdk == EXPECTED_SDK,
+        "\nEmptyConfig serde twin trip-wire fired — a copy was edited.\n\
+         Verify the same wire-shape change belongs in the OTHER copy \
+         (runtime/streamlib-engine/src/core/processors/mod.rs AND \
+         sdk/streamlib-plugin-sdk/src/processors.rs), then set:\n  \
          EXPECTED_ENGINE = {eng:#018x}\n  EXPECTED_SDK = {sdk:#018x}\n"
     );
 }
