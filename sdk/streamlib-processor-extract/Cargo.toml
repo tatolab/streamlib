@@ -1,0 +1,26 @@
+[package]
+name = "streamlib-processor-extract"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[dependencies]
+# The `#[processor(...)]` attribute grammar lives here (not in the proc-macro
+# crate) so BOTH the macro AND the source-scan extractor parse it through the
+# exact same parser — one grammar, never two. A `proc-macro = true` crate can
+# only export proc-macros, so the grammar cannot be shared from there.
+syn = { version = "2.0", features = ["full", "extra-traits"] }
+proc-macro2 = "1.0"
+
+streamlib-processor-schema = { path = "../streamlib-processor-schema", version = "0.7.0" }
+
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+[dev-dependencies]
+quote = "1.0"
+
+[lints]
+workspace = true

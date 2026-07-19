@@ -6,7 +6,7 @@
 //! - `#[streamlib::processor("@org/package/Type", execution = …, …)]`
 //!   — processor definition. The attribute is the single source of truth:
 //!   identity, execution mode, and input/output ports are declared in code,
-//!   read from no file at expansion. See [`attribute_grammar`] for the full
+//!   read from no file at expansion. See [`streamlib_processor_extract::grammar`] for the full
 //!   grammar. An identity string omitted from the attribute synthesizes an
 //!   `@app/local/<StructName>` identity so a bare crate with no
 //!   `streamlib.yaml` compiles.
@@ -23,9 +23,13 @@
 //!   reason to refuse newer-but-compatible registered versions; the
 //!   `_any_version` form is the right default for everything else.
 
-mod attribute_grammar;
 mod codegen;
 mod config_descriptor;
+
+// The `#[processor(...)]` grammar lives in `streamlib-processor-extract` so the
+// source-scan extractor and this macro parse it through one shared parser (a
+// `proc-macro = true` crate cannot export the grammar as a library). #1411.
+use streamlib_processor_extract::grammar as attribute_grammar;
 
 use proc_macro::TokenStream;
 use quote::quote;
@@ -47,7 +51,7 @@ use syn::{
 /// Main processor attribute macro.
 ///
 /// The attribute is the single source of truth for a processor's identity,
-/// execution mode, and ports — see [`attribute_grammar`] for the grammar. It
+/// execution mode, and ports — see [`streamlib_processor_extract::grammar`] for the grammar. It
 /// reads no file at expansion. An omitted identity string synthesizes an
 /// `@app/local/<StructName>` identity so a bare crate compiles with no
 /// `streamlib.yaml`.
@@ -69,7 +73,7 @@ use syn::{
 pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item_struct = parse_macro_input!(item as ItemStruct);
 
-    let parsed = match attribute_grammar::parse(attr, &item_struct.ident) {
+    let parsed = match attribute_grammar::parse2(attr.into(), &item_struct.ident) {
         Ok(parsed) => parsed,
         Err(err) => return err.to_compile_error().into(),
     };
