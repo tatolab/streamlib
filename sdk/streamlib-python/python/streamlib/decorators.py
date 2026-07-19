@@ -28,17 +28,21 @@ the Python analogue of the Rust `syn` source-scan in
 it; here extraction is import). See
 [`streamlib.extract_processors`][].
 
-Schema references in port declarations (`@input(schema=...)` /
-`@output(schema=...)`) are cross-package by definition. The only accepted
-forms are a [`SchemaIdent`][streamlib.schema_ident.SchemaIdent] instance
-or a codegen-emitted class carrying `__streamlib_schema_ident__` as a
-class attribute (produced by `streamlib generate` from the package's
-JTD/YAML schemas). There is no Python-side authoring decorator for
-declaring new schemas — JTD-in-YAML is the canonical schema source, and
-deriving JTD from Python field declarations would leak Python-native
-expressivity that doesn't translate cross-language. See the architecture
-preamble in issue #704 and
-`docs/architecture/schema-identity-and-packaging.md`.
+Schema references in port declarations follow the two-door descriptor
+model (`docs/architecture/zero-ceremony-authoring.md`). A port needs
+**no** schema to move data: the wire is self-describing (msgpack named
+maps / `Bag`), so send and receive work with zero type. When a port
+*does* declare a schema — for validation, the visual builder, or opt-in
+typed views — the reference is cross-package by definition, and the only
+accepted forms are a [`SchemaIdent`][streamlib.schema_ident.SchemaIdent]
+instance or a codegen-emitted class carrying `__streamlib_schema_ident__`
+as a class attribute (produced by the opt-in `streamlib generate` from
+the package's JTD/YAML schemas). There is still no Python-side decorator
+for *authoring* a new schema: `streamlib generate` typed views are sugar
+consumed as data, JTD-in-YAML remains the authored source for a shared
+vocabulary type, and deriving JTD from Python field declarations would
+leak Python-native expressivity that doesn't translate cross-language.
+See `docs/architecture/schema-identity-and-packaging.md`.
 
 Timestamps
 ----------
