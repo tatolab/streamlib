@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.3](https://github.com/tatolab/streamlib/compare/v0.7.2...v0.7.3) (2026-07-19)
+
+
+### Features
+
+* **engine:** Runner::add_local — register a #[processor] host type live ([#1441](https://github.com/tatolab/streamlib/issues/1441)) ([8aeba38](https://github.com/tatolab/streamlib/commit/8aeba387935ac47ece9678f2f5690a26ce05a05d))
+
 ## [0.7.2](https://github.com/tatolab/streamlib/compare/v0.7.1...v0.7.2) (2026-07-19)
 
 
