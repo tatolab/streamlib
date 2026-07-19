@@ -549,7 +549,7 @@ pub fn validate_type(s: &str) -> IdentResult<()> {
     Ok(())
 }
 
-fn is_lower_alnum_or_hyphen(c: char) -> bool {
+pub(crate) fn is_lower_alnum_or_hyphen(c: char) -> bool {
     matches!(c, 'a'..='z' | '0'..='9' | '-')
 }
 
