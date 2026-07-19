@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.6](https://github.com/tatolab/streamlib/compare/v0.7.5...v0.7.6) (2026-07-19)
+
+
+### Features
+
+* **idents:** channel-name grammar + connect() generator + fix PortKey silent truncation ([#1416](https://github.com/tatolab/streamlib/issues/1416)) ([#1446](https://github.com/tatolab/streamlib/issues/1446)) ([15eb9c0](https://github.com/tatolab/streamlib/commit/15eb9c07d6447f939d50b19c9125fdf99fe868ae))
+
 ## [0.7.5](https://github.com/tatolab/streamlib/compare/v0.7.4...v0.7.5) (2026-07-19)
 
 
