@@ -4779,6 +4779,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 name = "streamlib"
 version = "0.7.10"
 dependencies = [
+ "iceoryx2",
  "serde",
  "serde_json",
  "streamlib-build-orchestrator",

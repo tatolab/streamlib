@@ -43,3 +43,8 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+# The headless E2E (`hello_streamlib_example_e2e`) wires one real iceoryx2
+# publish/subscribe edge to capture the frame the inline example processor
+# forwards. Pinned to the engine's iceoryx2 version so the host-side inner
+# types accept the publisher/subscriber built here.
+iceoryx2 = "0.8.1"
