@@ -36,7 +36,9 @@ import type { VideoFrame } from "./_generated_/tatolab__core/video_frame.ts";
 
 const BOGUS_SURFACE_ID = "00000000-0000-0000-0000-000000000000";
 
-@processor("DmaBufConsumer", import.meta.url)
+@processor("@tatolab/polyglot-dma-buf-consumer-deno/DmaBufConsumer", {
+  execution: "reactive",
+})
 export default class DmaBufConsumer implements ReactiveProcessor {
   private forceBadId = false;
   private logEvery = 60;

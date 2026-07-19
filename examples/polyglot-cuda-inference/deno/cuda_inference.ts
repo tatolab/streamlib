@@ -51,7 +51,9 @@ interface CudaInferenceConfig {
 const DEVICE_TYPE_CUDA = 2;
 const DEVICE_TYPE_CUDA_HOST = 3;
 
-@processor("CudaInferenceProcessor", import.meta.url)
+@processor("@tatolab/polyglot-cuda-inference-deno/CudaInferenceProcessor", {
+  execution: "reactive",
+})
 export default class CudaInferenceProcessor implements ReactiveProcessor {
   private surfaceId: bigint = 0n;
   private width = 0;

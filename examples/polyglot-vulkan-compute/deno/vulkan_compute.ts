@@ -48,7 +48,9 @@ function hexToBytes(hex: string): Uint8Array {
   return out;
 }
 
-@processor("VulkanComputeProcessor", import.meta.url)
+@processor("@tatolab/polyglot-vulkan-compute-deno/VulkanComputeProcessor", {
+  execution: "reactive",
+})
 export default class VulkanComputeProcessor implements ReactiveProcessor {
   private uuid = "";
   private width = 0;

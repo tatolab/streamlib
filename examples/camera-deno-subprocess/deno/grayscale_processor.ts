@@ -16,7 +16,9 @@ import {
 } from "streamlib";
 import type { VideoFrame } from "./_generated_/tatolab__core/video_frame.ts";
 
-@processor("GrayscaleProcessor", import.meta.url)
+@processor("@tatolab/camera-deno-subprocess/GrayscaleProcessor", {
+  execution: "reactive",
+})
 export default class GrayscaleProcessor implements ReactiveProcessor {
   setup(ctx: RuntimeContextFullAccess): void {
     console.error("[GrayscaleProcessor] setup — config:", JSON.stringify(ctx.config));

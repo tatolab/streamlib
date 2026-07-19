@@ -103,7 +103,9 @@ interface PoolSlot {
   handleId: string;
 }
 
-@processor("HalftoneProcessor", import.meta.url)
+@processor("@tatolab/camera-deno-subprocess/HalftoneProcessor", {
+  execution: "reactive",
+})
 export default class HalftoneProcessor implements ReactiveProcessor {
   private gpu: GpuResources | null = null;
   private outputPool: PoolSlot[] = [];

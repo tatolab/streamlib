@@ -87,7 +87,9 @@ function identityTransform(): readonly number[] {
   ];
 }
 
-@processor("VulkanRayTracingProcessor", import.meta.url)
+@processor("@tatolab/polyglot-vulkan-ray-tracing-deno/VulkanRayTracingProcessor", {
+  execution: "reactive",
+})
 export default class VulkanRayTracingProcessor implements ReactiveProcessor {
   private uuid = "";
   private width = 0;

@@ -41,7 +41,9 @@ import {
 } from "streamlib";
 import type { OutputPorts } from "streamlib/types.ts";
 
-@processor("PolyglotManualSource", import.meta.url)
+@processor("@tatolab/polyglot-manual-source-deno/PolyglotManualSource", {
+  execution: "manual",
+})
 export default class PolyglotManualSource implements ManualProcessor {
   private intervalNs = 33n * 1_000_000n;
   private width = 32;

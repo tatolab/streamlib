@@ -33,7 +33,10 @@ import {
   type RuntimeContextLimitedAccess,
 } from "streamlib";
 
-@processor("PolyglotContinuousProcessor", import.meta.url)
+@processor("@tatolab/polyglot-continuous-processor-deno/PolyglotContinuousProcessor", {
+  execution: "continuous",
+  intervalMs: 16,
+})
 export default class PolyglotContinuousProcessor
   implements ContinuousProcessor {
   private outputFile = "";
