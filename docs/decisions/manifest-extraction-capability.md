@@ -46,22 +46,49 @@ per-language extractor imports every top-level module beside the
 decorator no longer validates its short name against a hand-authored
 `processors:` list — the decorator *is* that list.
 
-The extractors are designed to run in a fresh subprocess (`python -m
+The extractors run in a fresh subprocess (`python -m
 streamlib.extract_processors <dir>` / `deno run --allow-read
 extract_processors.ts <dir>`) so the registry starts empty; the in-process
-entrypoints clear the registry themselves. Once the pkg-build truth-flip lands,
-`pkg build` will invoke them on that path; today they ship as the standalone
-capability. Output is sorted by joined schema-ident string for determinism
-regardless of import order.
+entrypoints clear the registry themselves. Output is sorted by joined
+schema-ident string for determinism regardless of import order.
 
 The import-runs-code property is the cost of the inversion: a processor module
 whose third-party imports are unavailable cannot be enumerated, whereas the
 Rust AST scan is inert. Extraction therefore assumes the package's dependencies
-are installed — true at `pkg build` time, unlike the Rust `src/` walk. Full
-per-processor manifest fields (execution mode, entrypoint, ports) still come
-from `streamlib.yaml` for Python/Deno until ports-in-code lands for those
-runtimes; today's extractor supplies the processor identity set and declared
-port schemas, which is what the decorator carries.
+are installed — true at `pkg build` time, unlike the Rust `src/` walk.
+
+## The pkg-build drift gate
+
+`streamlib pkg build` (and `pkg publish`) derives the processor set from code —
+Rust in-process, Python/Deno via the subprocess extractors — and refuses to
+build a distributable `.slpkg` whose committed `processors:` section disagrees.
+The comparison is a **language-uniform identity surface**: processor `Type`
+name, execution mode, and each port's name + schema-type (or `any`). It
+deliberately excludes fields no code scan produces uniformly or that are
+authored/build-derived rather than code-derived — `version` (the release-core
+projection is a build concern), `entrypoint` (author/loader concern), the
+`config` binding, `description`, and the consumer-side port policies
+(`read_mode` / `overflow` / `buffer_size`, which the Python/Deno wire shape does
+not carry). What remains is exactly the surface a stale hand-authored
+`processors:` would misstate: a processor added, removed, or renamed in code; a
+port added, removed, reordered, or re-typed. The committed manifest stays the
+carrier of the excluded authored/build fields — the `processors:` section is not
+auto-overwritten, it is validated against code.
+
+Rust drift is always enforced (the `syn` scan is always runnable in-process). A
+Python/Deno extractor that cannot **run** — the runtime is absent, its import
+failed, or (Deno) it is unconfigured — is a logged skip, not a build break:
+extraction-is-import needs the runtime present, and a `pkg build` that merely
+bundles a Python/Deno package as source on a host without that runtime must
+still work. A skipped language's committed processors are excluded from the
+comparison rather than falsely flagged. A malformed *output* from an extractor
+that DID run is a hard error (the extractor ran and produced garbage — a real
+bug, not an absent runtime). Real Python/Deno drift enforcement is exercised
+live, where the runtime is present.
+
+The gate is scoped to the distributable `.slpkg` authoring path; the runtime
+orchestrator's staged-directory materialization assembles an already-validated
+artifact and does not re-run it.
 
 ## Rejected alternatives
 
