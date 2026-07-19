@@ -3,12 +3,12 @@
 
 //! Procedural macros for streamlib.
 //!
-//! - `#[streamlib::processor("@org/package/Type@version", execution = …, …)]`
+//! - `#[streamlib::processor("@org/package/Type", execution = …, …)]`
 //!   — processor definition. The attribute is the single source of truth:
 //!   identity, execution mode, and input/output ports are declared in code,
 //!   read from no file at expansion. See [`attribute_grammar`] for the full
 //!   grammar. An identity string omitted from the attribute synthesizes an
-//!   `@app/local/<StructName>@0.0.0` identity so a bare crate with no
+//!   `@app/local/<StructName>` identity so a bare crate with no
 //!   `streamlib.yaml` compiles.
 //! - `streamlib::sdk::schema_ident_any_version!("org", "package", "Type")`
 //!   — **canonical, default form.** Validates `(org, package, type)` at
@@ -49,7 +49,7 @@ use syn::{
 /// The attribute is the single source of truth for a processor's identity,
 /// execution mode, and ports — see [`attribute_grammar`] for the grammar. It
 /// reads no file at expansion. An omitted identity string synthesizes an
-/// `@app/local/<StructName>@0.0.0` identity so a bare crate compiles with no
+/// `@app/local/<StructName>` identity so a bare crate compiles with no
 /// `streamlib.yaml`.
 ///
 /// The macro emits the processor's type, port markers, descriptor, and

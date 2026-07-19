@@ -9,23 +9,25 @@
 //!
 //! ```ignore
 //! #[processor(
-//!     "@tatolab/camera/Camera@1.0.0",   // identity (omit → @app/local/<StructName>@0.0.0)
+//!     "@tatolab/camera/Camera",         // identity, version-free (omit → @app/local/<StructName>)
 //!     execution = manual,               // reactive | manual | continuous | continuous(interval_ms = 10)
 //!     scheduling = high,                // realtime | high | normal (default: normal)
 //!     unsafe_send,                      // flag — emit `unsafe impl Send`
 //!     config = crate::CameraConfig,     // Rust type path for the typed Config alias
-//!     config_schema = "@tatolab/camera/CameraConfig@1.0.0", // descriptor metadata (optional)
-//!     input("video_in", "@tatolab/core/VideoFrame@1.0.0",
+//!     input("video_in", "@tatolab/core/VideoFrame",
 //!           read_mode = "skip_to_latest", buffer_size = 4, overflow = "drop_oldest"),
-//!     output("video", "@tatolab/core/VideoFrame@1.0.0"),
+//!     output("video", "@tatolab/core/VideoFrame"),
 //! )]
 //! ```
 //!
-//! Port schema references are **resolve-free**: the attribute carries the
-//! fully-qualified `@org/package/Type@version` verbatim, so the macro never
-//! walks the dependency graph. Deep schema validation (does the referenced
-//! schema exist / stay compatible) is out of scope here and handled at the
-//! runtime layer.
+//! Every schema reference — the processor identity and each port schema — is
+//! **version-free** (`@org/package/Type`, no `@version`): a schema ref is an
+//! identity the runtime binds version-blind to whatever a node provides, and
+//! versions are derived at package-build time, never hand-authored (#1409).
+//! References are **resolve-free**: the attribute carries the `@org/package/Type`
+//! verbatim, so the macro never walks the dependency graph. Deep schema
+//! validation (does the referenced schema exist / stay compatible) is out of
+//! scope here and handled at the runtime layer.
 
 use proc_macro::TokenStream;
 use streamlib_processor_schema::{
@@ -210,7 +212,7 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
                     format!(
                         "cannot synthesize `@app/local` identity: `{type_str}` is not a valid \
                          PascalCase TypeName ({e}). Declare an explicit identity string \
-                         (`\"@org/package/Type@version\"`) or a valid `type = \"...\"`."
+                         (`\"@org/package/Type\"`) or a valid `type = \"...\"`."
                     ),
                 )
             })?;
@@ -224,16 +226,16 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
     };
 
     // Synthesize the descriptor config-schema id from the config type when the
-    // author didn't spell one out: `@<org>/<package>/<ConfigTypeName>@<version>`.
+    // author didn't spell one out: version-free `@<org>/<package>/<ConfigTypeName>`
+    // (the runtime schema registry stores and looks up unversioned).
     if config_schema_id.is_none() {
         if let Some(path) = &config_type {
             if let Some(last) = path.segments.last() {
                 config_schema_id = Some(format!(
-                    "@{}/{}/{}@{}",
+                    "@{}/{}/{}",
                     ident.org.as_str(),
                     ident.package.as_str(),
                     last.ident,
-                    ident.version,
                 ));
             }
         }
@@ -313,7 +315,7 @@ fn parse_execution(input: ParseStream<'_>) -> syn::Result<ProcessorSchemaExecuti
 ///
 /// `<name-string>, <schema>, [read_mode = "...", overflow = "...", buffer_size = N,
 /// description = "..."]` — where `<schema>` is either the bare identifier `any`
-/// or a fully-qualified `"@org/package/Type@version"` string.
+/// or a version-free `"@org/package/Type"` string.
 fn parse_port(input: ParseStream<'_>) -> syn::Result<ParsedPort> {
     let content;
     parenthesized!(content in input);
@@ -378,8 +380,8 @@ fn parse_port(input: ParseStream<'_>) -> syn::Result<ParsedPort> {
     })
 }
 
-/// Parse a port schema reference: `any` (bare ident) or a fully-qualified
-/// `"@org/package/Type@version"` string literal.
+/// Parse a port schema reference: `any` (bare ident) or a version-free
+/// `"@org/package/Type"` string literal.
 fn parse_port_schema(content: ParseStream<'_>) -> syn::Result<PortSchemaSpec> {
     if content.peek(LitStr) {
         let lit: LitStr = content.parse()?;
@@ -393,33 +395,44 @@ fn parse_port_schema(content: ParseStream<'_>) -> syn::Result<PortSchemaSpec> {
             Err(syn::Error::new(
                 kw.span(),
                 format!(
-                    "port schema must be `any` or a fully-qualified \
-                     `\"@org/package/Type@version\"` string; got `{kw}`"
+                    "port schema must be `any` or a version-free \
+                     `\"@org/package/Type\"` string; got `{kw}`"
                 ),
             ))
         }
     }
 }
 
-/// Parse `@org/package/Type@version` into a validated [`SchemaIdent`].
+/// Parse a **version-free** `@org/package/Type` into a validated
+/// [`SchemaIdent`].
+///
+/// The attribute grammar is version-free (#1409): a schema ref is an identity
+/// the runtime binds version-blind, and versions are derived at package-build
+/// time — never hand-authored. A trailing `@<version>` is rejected. The
+/// synthesized `SchemaIdent` carries the `0.0.0` version-free sentinel — the
+/// same placeholder `ProcessorTypeReference::ResolveToInstalled` renders and
+/// the runtime schema registry (which stores/looks up unversioned) ignores.
 pub fn parse_schema_ident_str(raw: &str, span: proc_macro2::Span) -> syn::Result<SchemaIdent> {
     let err = |msg: String| syn::Error::new(span, msg);
 
     let stripped = raw.strip_prefix('@').ok_or_else(|| {
         err(format!(
-            "schema identity `{raw}` must start with `@` (e.g. `@tatolab/core/VideoFrame@1.0.0`)"
+            "schema identity `{raw}` must start with `@` (e.g. `@tatolab/core/VideoFrame`)"
         ))
     })?;
-    let (path_part, version_part) = stripped.rsplit_once('@').ok_or_else(|| {
-        err(format!(
-            "schema identity `{raw}` must end with `@<version>` (e.g. `@tatolab/core/VideoFrame@1.0.0`)"
-        ))
-    })?;
-    let segments: Vec<&str> = path_part.split('/').collect();
+    if stripped.contains('@') {
+        return Err(err(format!(
+            "schema identity `{raw}` must be version-free `@<org>/<package>/<Type>` \
+             with no `@<version>` — a schema ref is an identity the runtime binds \
+             version-blind; versions are derived at package-build time, never \
+             hand-authored (#1409)"
+        )));
+    }
+    let segments: Vec<&str> = stripped.split('/').collect();
     if segments.len() != 3 {
         return Err(err(format!(
-            "schema identity `{raw}` must be `@<org>/<package>/<Type>@<version>` \
-             (exactly three `/`-separated segments before the version)"
+            "schema identity `{raw}` must be `@<org>/<package>/<Type>` \
+             (exactly three `/`-separated segments)"
         )));
     }
     let org = Org::new(segments[0]).map_err(|e| err(format!("invalid org in `{raw}`: {e}")))?;
@@ -427,33 +440,8 @@ pub fn parse_schema_ident_str(raw: &str, span: proc_macro2::Span) -> syn::Result
         Package::new(segments[1]).map_err(|e| err(format!("invalid package in `{raw}`: {e}")))?;
     let type_name =
         TypeName::new(segments[2]).map_err(|e| err(format!("invalid type in `{raw}`: {e}")))?;
-    let version =
-        parse_semver(version_part).map_err(|e| err(format!("invalid version in `{raw}`: {e}")))?;
 
-    Ok(SchemaIdent::new(org, package, type_name, version))
-}
-
-fn parse_semver(s: &str) -> Result<SemVer, String> {
-    if s.contains('-') {
-        return Err(format!(
-            "schema-ident version `{s}` must be a release `MAJOR.MINOR.PATCH`; \
-             prerelease versions are not valid for schema idents"
-        ));
-    }
-    let mut parts = s.split('.');
-    let major = parse_part(parts.next())?;
-    let minor = parse_part(parts.next())?;
-    let patch = parse_part(parts.next())?;
-    if parts.next().is_some() {
-        return Err("expected exactly three dot-separated integers (e.g. 1.0.0)".into());
-    }
-    Ok(SemVer::new(major, minor, patch))
-}
-
-fn parse_part(part: Option<&str>) -> Result<u32, String> {
-    let p = part.ok_or_else(|| "expected three dot-separated integers".to_string())?;
-    p.parse::<u32>()
-        .map_err(|_| format!("`{p}` is not a non-negative integer"))
+    Ok(SchemaIdent::new(org, package, type_name, SemVer::new(0, 0, 0)))
 }
 
 #[cfg(test)]
@@ -480,16 +468,17 @@ mod tests {
     #[test]
     fn full_identity_execution_and_ports() {
         let parsed = parse_ok(quote! {
-            "@tatolab/camera/Camera@1.2.3",
+            "@tatolab/camera/Camera",
             execution = manual,
             scheduling = high,
-            input("video_in", "@tatolab/core/VideoFrame@1.0.0", read_mode = "skip_to_latest", buffer_size = 4),
-            output("video", "@tatolab/core/VideoFrame@1.0.0"),
+            input("video_in", "@tatolab/core/VideoFrame", read_mode = "skip_to_latest", buffer_size = 4),
+            output("video", "@tatolab/core/VideoFrame"),
         });
         assert_eq!(parsed.ident.org.as_str(), "tatolab");
         assert_eq!(parsed.ident.package.as_str(), "camera");
         assert_eq!(parsed.ident.r#type.as_str(), "Camera");
-        assert_eq!(parsed.ident.version, SemVer::new(1, 2, 3));
+        // Version-free identity synthesizes the 0.0.0 version-free sentinel.
+        assert_eq!(parsed.ident.version, SemVer::new(0, 0, 0));
         assert_eq!(parsed.execution, ProcessorSchemaExecution::Manual);
         assert_eq!(parsed.scheduling, Some(ThreadPriority::High));
         assert_eq!(parsed.inputs.len(), 1);
@@ -507,9 +496,26 @@ mod tests {
     }
 
     #[test]
+    fn processor_and_port_descriptions_parse() {
+        // The descriptor's introspection description surface (#1409): both the
+        // processor description and each port description are carried by the
+        // attribute and reach the ParsedProcessorAttr.
+        let parsed = parse_ok(quote! {
+            "@tatolab/camera/Camera",
+            description = "Captures video from cameras",
+            execution = manual,
+            input("video_in", "@tatolab/core/VideoFrame", description = "Frames to convert"),
+            output("video", "@tatolab/core/VideoFrame", description = "Live video frames"),
+        });
+        assert_eq!(parsed.description.as_deref(), Some("Captures video from cameras"));
+        assert_eq!(parsed.inputs[0].description.as_deref(), Some("Frames to convert"));
+        assert_eq!(parsed.outputs[0].description.as_deref(), Some("Live video frames"));
+    }
+
+    #[test]
     fn continuous_with_interval() {
         let parsed = parse_ok(quote! {
-            "@tatolab/audio/ChordGenerator@1.0.0",
+            "@tatolab/audio/ChordGenerator",
             execution = continuous(interval_ms = 10),
         });
         assert_eq!(
@@ -521,7 +527,7 @@ mod tests {
     #[test]
     fn continuous_without_interval_defaults_to_zero() {
         let parsed = parse_ok(quote! {
-            "@tatolab/audio/ChordGenerator@1.0.0",
+            "@tatolab/audio/ChordGenerator",
             execution = continuous,
         });
         assert_eq!(
@@ -533,7 +539,7 @@ mod tests {
     #[test]
     fn any_port_schema() {
         let parsed = parse_ok(quote! {
-            "@tatolab/testing/Mock@1.0.0",
+            "@tatolab/testing/Mock",
             execution = manual,
             input("in1", any),
             output("out1", any),
@@ -545,22 +551,23 @@ mod tests {
     #[test]
     fn config_type_and_synthesized_schema_id() {
         let parsed = parse_ok(quote! {
-            "@tatolab/camera/Camera@1.0.0",
+            "@tatolab/camera/Camera",
             execution = manual,
             config = crate::_generated_::tatolab__camera::CameraConfig,
         });
         assert!(parsed.config_type.is_some());
         assert_eq!(parsed.config_field_name, "config");
+        // The synthesized config-schema id is version-free.
         assert_eq!(
             parsed.config_schema_id.as_deref(),
-            Some("@tatolab/camera/CameraConfig@1.0.0")
+            Some("@tatolab/camera/CameraConfig")
         );
     }
 
     #[test]
     fn explicit_config_schema_overrides_synthesis() {
         let parsed = parse_ok(quote! {
-            "@tatolab/audio/BufferRechunker@1.0.0",
+            "@tatolab/audio/BufferRechunker",
             execution = reactive,
             config = crate::BufferRechunkerConfig,
             config_schema = "com.tatolab.buffer_rechunker.config@1.0.0",
@@ -574,7 +581,7 @@ mod tests {
     #[test]
     fn no_config_has_no_schema_id() {
         let parsed = parse_ok(quote! {
-            "@tatolab/testing/Mock@1.0.0",
+            "@tatolab/testing/Mock",
             execution = manual,
         });
         assert!(parsed.config_type.is_none());
@@ -609,7 +616,7 @@ mod tests {
     #[test]
     fn unsafe_send_flag() {
         let parsed = parse_ok(quote! {
-            "@tatolab/camera/Camera@1.0.0",
+            "@tatolab/camera/Camera",
             execution = manual,
             unsafe_send,
         });
@@ -620,14 +627,14 @@ mod tests {
 
     #[test]
     fn missing_execution_is_an_error() {
-        let msg = parse_err(quote! { "@tatolab/camera/Camera@1.0.0" });
+        let msg = parse_err(quote! { "@tatolab/camera/Camera" });
         assert!(msg.contains("missing required `execution`"), "got: {msg}");
     }
 
     #[test]
     fn duplicate_input_port_is_an_error() {
         let msg = parse_err(quote! {
-            "@tatolab/testing/Mock@1.0.0",
+            "@tatolab/testing/Mock",
             execution = manual,
             input("dup", any),
             input("dup", any),
@@ -638,7 +645,7 @@ mod tests {
     #[test]
     fn duplicate_output_port_is_an_error() {
         let msg = parse_err(quote! {
-            "@tatolab/testing/Mock@1.0.0",
+            "@tatolab/testing/Mock",
             execution = manual,
             output("dup", any),
             output("dup", any),
@@ -649,7 +656,7 @@ mod tests {
     #[test]
     fn unknown_key_is_an_error() {
         let msg = parse_err(quote! {
-            "@tatolab/testing/Mock@1.0.0",
+            "@tatolab/testing/Mock",
             execution = manual,
             frobnicate = "yes",
         });
@@ -659,7 +666,7 @@ mod tests {
     #[test]
     fn unknown_execution_mode_is_an_error() {
         let msg = parse_err(quote! {
-            "@tatolab/testing/Mock@1.0.0",
+            "@tatolab/testing/Mock",
             execution = sideways,
         });
         assert!(msg.contains("unknown execution mode `sideways`"), "got: {msg}");
@@ -668,25 +675,39 @@ mod tests {
     #[test]
     fn malformed_identity_is_an_error() {
         let msg = parse_err(quote! {
-            "tatolab/camera/Camera@1.0.0",
+            "tatolab/camera/Camera",
             execution = manual,
         });
         assert!(msg.contains("must start with `@`"), "got: {msg}");
     }
 
     #[test]
-    fn identity_missing_version_is_an_error() {
+    fn versioned_identity_is_rejected() {
+        // The grammar is version-free (#1409): a hand-authored `@<version>` on
+        // the identity is rejected. Mentally revert the version-free
+        // `parse_schema_ident_str` and this passes when it must fail.
+        let msg = parse_err(quote! {
+            "@tatolab/camera/Camera@1.0.0",
+            execution = manual,
+        });
+        assert!(msg.contains("must be version-free"), "got: {msg}");
+    }
+
+    #[test]
+    fn versioned_port_schema_is_rejected() {
+        // A hand-authored `@<version>` on a port schema ref is rejected too.
         let msg = parse_err(quote! {
             "@tatolab/camera/Camera",
             execution = manual,
+            output("video", "@tatolab/core/VideoFrame@1.0.0"),
         });
-        assert!(msg.contains("must end with `@<version>`"), "got: {msg}");
+        assert!(msg.contains("must be version-free"), "got: {msg}");
     }
 
     #[test]
     fn identity_wrong_segment_count_is_an_error() {
         let msg = parse_err(quote! {
-            "@tatolab/Camera@1.0.0",
+            "@tatolab/Camera",
             execution = manual,
         });
         assert!(msg.contains("three `/`-separated segments"), "got: {msg}");
@@ -695,7 +716,7 @@ mod tests {
     #[test]
     fn port_schema_bad_ident_is_an_error() {
         let msg = parse_err(quote! {
-            "@tatolab/testing/Mock@1.0.0",
+            "@tatolab/testing/Mock",
             execution = manual,
             input("in1", something_else),
         });
@@ -703,18 +724,9 @@ mod tests {
     }
 
     #[test]
-    fn prerelease_version_rejected() {
-        let msg = parse_err(quote! {
-            "@tatolab/camera/Camera@1.0.0-dev.1",
-            execution = manual,
-        });
-        assert!(msg.contains("prerelease"), "got: {msg}");
-    }
-
-    #[test]
     fn continuous_unknown_key_is_an_error() {
         let msg = parse_err(quote! {
-            "@tatolab/camera/Camera@1.0.0",
+            "@tatolab/camera/Camera",
             execution = continuous(period = 5),
         });
         assert!(msg.contains("expected `interval_ms`"), "got: {msg}");
@@ -725,9 +737,9 @@ mod tests {
         // Regression: a resolve-free grammar must still produce Specific idents
         // for the runtime (Named panics at iceoryx2 service open).
         let parsed = parse_ok(quote! {
-            "@tatolab/camera/Camera@1.0.0",
+            "@tatolab/camera/Camera",
             execution = manual,
-            output("video", "@tatolab/core/VideoFrame@1.0.0"),
+            output("video", "@tatolab/core/VideoFrame"),
         });
         let PortSchemaSpec::Specific(id) = &parsed.outputs[0].schema else {
             panic!("expected Specific port schema");

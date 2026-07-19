@@ -1,9 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Code generation for processor attribute macro
+//! Code generation for the `#[processor(...)]` attribute macro.
 //!
-//! Generates module wrapper with:
+//! Generates the module wrapper with:
 //! - `Processor` struct with public fields
 //! - `InputLink` module with port markers
 //! - `OutputLink` module with port markers
@@ -15,7 +15,7 @@ use streamlib_processor_schema::{PortSchemaSpec, ProcessorSchema, SchemaIdent};
 use syn::{ItemStruct, Path};
 
 /// Emit a `SchemaIdent` literal expression. Inputs are pre-validated by the
-/// manifest parser so the `expect("validated")` calls are infallible.
+/// attribute parser so the `expect("validated")` calls are infallible.
 fn schema_ident_tokens(ident: &SchemaIdent) -> TokenStream {
     let org = ident.org.as_str();
     let pkg = ident.package.as_str();
@@ -35,11 +35,9 @@ fn schema_ident_tokens(ident: &SchemaIdent) -> TokenStream {
 
 /// Emit a `PortSchemaSpec` literal expression.
 ///
-/// `PortSchemaSpec::Named` should never reach this function — the macro's
-/// `load_processor_schema` pre-resolves every `Named` reference against
-/// the manifest's `schemas:` map (#767) before handing the schema to
-/// codegen. A `Named` here means the resolution pass was skipped or
-/// returned an unresolved spec, which is a macro implementation bug.
+/// `PortSchemaSpec::Named` should never reach this function — the attribute
+/// grammar only ever produces `Any` or a fully-qualified `Specific`. A `Named`
+/// here means the spec arrived unresolved, which is a macro implementation bug.
 fn port_schema_spec_tokens(spec: &PortSchemaSpec) -> TokenStream {
     match spec {
         PortSchemaSpec::Any => quote! { __streamlib_sdk::processors::PortSchemaSpec::Any },
@@ -57,10 +55,6 @@ fn port_schema_spec_tokens(spec: &PortSchemaSpec) -> TokenStream {
         }
     }
 }
-
-// ============================================================================
-// YAML-based code generation
-// ============================================================================
 
 /// Generate a processor module from the attribute-declared [`ProcessorSchema`]
 /// and its fully-qualified [`SchemaIdent`]. Identity, execution, and ports are
@@ -423,9 +417,9 @@ fn generate_processor_impl_from_schema(
             }
 
             /// Returns the structured wire identity for this processor —
-            /// `@<org>/<package>/<Type>@<version>` resolved at codegen
-            /// time from the sibling `streamlib.yaml`'s `package:` block
-            /// plus the processor's PascalCase short name.
+            /// the version-free `@<org>/<package>/<Type>` declared in the
+            /// `#[processor(...)]` attribute (carrying the `0.0.0`
+            /// version-free sentinel).
             pub fn schema_ident() -> __streamlib_sdk::descriptors::SchemaIdent {
                 #schema_ident_literal
             }
@@ -433,10 +427,9 @@ fn generate_processor_impl_from_schema(
             /// Create a [`ProcessorSpec`](__streamlib_sdk::processors::ProcessorSpec)
             /// for adding this processor to a runtime.
             pub fn node(config: #config_type) -> __streamlib_sdk::processors::ProcessorSpec {
-                // Version-pinned reference to this processor's own compiled-in
-                // version. `ProcessorSpec::new` takes the SchemaIdent directly
-                // on the engine-free SDK and via `From<SchemaIdent>` on the
-                // engine SDK (where `name` is a `ProcessorTypeReference`).
+                // `ProcessorSpec::new` takes the SchemaIdent directly on the
+                // engine-free SDK and via `From<SchemaIdent>` on the engine SDK
+                // (where `name` is a `ProcessorTypeReference`).
                 __streamlib_sdk::processors::ProcessorSpec::new(
                     Self::schema_ident(),
                     __streamlib_sdk::serde_json::to_value(&config)
@@ -642,9 +635,9 @@ fn generate_descriptor_from_schema(
         }
     });
 
-    // Declarative scheduling block sourced from the manifest. Absent →
-    // `Normal` priority. The OS thread name is derived by the compiler
-    // from the processor type + node id at spawn time, not authored.
+    // Declarative scheduling intent. Absent → `Normal` priority. The OS
+    // thread name is derived by the compiler from the processor type + node
+    // id at spawn time, not authored.
     let scheduling = schema.scheduling.as_ref().map(|s| {
         let priority_tokens = thread_priority_tokens(s.priority);
         quote! {
