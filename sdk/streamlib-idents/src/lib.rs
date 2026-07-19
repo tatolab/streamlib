@@ -21,6 +21,7 @@ mod registry;
 mod release;
 mod resolver;
 mod semver;
+mod session;
 
 pub use catalog::{
     CATALOG_INDEX_PATH, CatalogClient, CatalogConfig, CatalogIndexLine, CatalogPort,
@@ -31,8 +32,8 @@ pub use catalog::{
 pub use error::{IdentError, IdentResult, ResolverError, ResolverResult};
 pub use git::fetch_git;
 pub use ident::{
-    ModuleIdent, Org, Package, PackageRef, SchemaIdent, TypeName, validate_org, validate_package,
-    validate_type,
+    ModuleIdent, Org, Package, PackageRef, SESSION_ORG, SchemaIdent, TypeName, validate_org,
+    validate_package, validate_type,
 };
 pub use lockfile::{
     APP_LOCKFILE_NAME, CODEGEN_LOCKFILE_NAME, Lockfile, LockfileEntry, LockfileSource,
@@ -55,3 +56,4 @@ pub use resolver::{
     content_hash_for_package_dir, resolve, resolve_bare_schema_name, resolve_with,
 };
 pub use semver::{Prerelease, PrereleaseKind, SemVer, SemVerRange};
+pub use session::{MintedSessionIdent, mint_session_module_ident, next_session_module_version};

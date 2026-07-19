@@ -28,6 +28,18 @@ use crate::semver::{SemVer, SemVerRange};
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Org(String);
 
+/// Org segment reserved for in-app / session-local processors.
+///
+/// A processor registered live at runtime (e.g. via the in-app authoring
+/// path) lives under `@session/…` so it never collides with an installed
+/// `@org/…` package on the registry key. This org is **constructible** —
+/// [`validate_org`] accepts it, so runtime `@session/…` idents can be built —
+/// but it is **not publishable**: `streamlib pkg build` / `pkg publish` reject
+/// a package that declares it (see [`Org::is_reserved_for_session`]). The two
+/// facts are deliberately separate seams: grammar admits it; the publish
+/// boundary refuses it.
+pub const SESSION_ORG: &str = "session";
+
 impl Org {
     pub fn new(s: impl Into<String>) -> IdentResult<Self> {
         let s = s.into();
@@ -37,6 +49,15 @@ impl Org {
 
     pub fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Whether this org is the [`SESSION_ORG`] reserved for in-app /
+    /// session-local processors — constructible for runtime idents, but
+    /// rejected at the publish boundary. Callers on the `pkg build` /
+    /// `pkg publish` path use this to refuse a distribution artifact that
+    /// would squat the reserved namespace.
+    pub fn is_reserved_for_session(&self) -> bool {
+        self.0 == SESSION_ORG
     }
 }
 
@@ -725,6 +746,25 @@ version: 0.4.33-dev.2
             validate_type("Video-Frame"),
             Err(IdentError::InvalidTypeCharacter(_, '-'))
         ));
+    }
+
+    #[test]
+    fn session_org_stays_constructible_via_grammar() {
+        // The reserved `session` org MUST keep passing `validate_org` /
+        // `Org::new` — runtime `@session/…` idents are built from it. The
+        // publish rejection lives at the `pkg build` boundary, never in the
+        // grammar. Revert the "keep accepting" contract (reject `session` in
+        // `validate_org`) and this fails, catching the wrong-seam mistake.
+        assert!(validate_org(SESSION_ORG).is_ok());
+        let org = Org::new(SESSION_ORG).expect("session org must be constructible");
+        assert_eq!(org.as_str(), "session");
+    }
+
+    #[test]
+    fn is_reserved_for_session_flags_only_session_org() {
+        assert!(Org::new(SESSION_ORG).unwrap().is_reserved_for_session());
+        assert!(!Org::new("tatolab").unwrap().is_reserved_for_session());
+        assert!(!Org::new("sessions").unwrap().is_reserved_for_session());
     }
 
     #[test]

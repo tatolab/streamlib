@@ -39,11 +39,15 @@
 //!   process-lifetime plugin-image retention.
 //! - [`ledger`] — process-global record of committed loads consumed by
 //!   [`Runner::remove_module`].
+//! - [`session`] — [`Runner::add_local`]: register a `#[processor]` host
+//!   type live under `@session/<name>@0.0.N` through the same staging seam,
+//!   with no package on disk.
 //! - [`slpkg`] — `.slpkg` archive extraction.
 //!
 //! [`Runner::remove_module`]: super::Runner::remove_module
 //! [`Runner::add_module`]: super::Runner::add_module
 //! [`Runner::add_module_with`]: super::Runner::add_module_with
+//! [`Runner::add_local`]: super::Runner::add_local
 //! [`Runner::await_modules`]: super::Runner::await_modules
 
 use std::collections::HashSet;
@@ -65,12 +69,16 @@ mod locked;
 mod processor_registration;
 mod recursive_walker;
 mod schema_registration;
+mod session;
 mod slpkg;
 mod source;
 mod staging;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod session_tests;
 
 pub use added_module::{AddedModule, LoadedModule, ModuleLoadEvent};
 pub use build_orchestrator::{

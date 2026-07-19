@@ -508,3 +508,97 @@ pub(super) fn commit_module_load_registrations(
         signal.publish_committed();
     }
 }
+
+/// Register a single already-compiled session-local processor (the
+/// `add_local` path) through the SAME staging → commit → ledger seam a
+/// disk-backed module load uses, minus the manifest walk a runtime-authored
+/// host type has no need of. Stages the one processor, then — under
+/// [`MODULE_REGISTRY_COMMIT_LOCK`] — registers its host-address-space vtable
+/// (`cdylib_resident: false`, identical to [`crate::core::processors::ProcessorInstanceFactory::register`])
+/// and writes a ledger record keyed by `@session/<name>`, so
+/// [`super::super::Runner::remove_module`] unregisters it symmetrically.
+///
+/// Fail-loud on a live name collision: a `@session/<name>` already in the
+/// ledger is an unremoved live registration of the same name, refused with
+/// [`AddModuleError::DuplicateSessionProcessorName`] rather than silently
+/// deduped by the vtable registry's ident key. The short-type-name shadow of
+/// an installed processor is a warning (both stay addressable), never a
+/// refusal — that check runs before the ident-key registration.
+pub(super) fn commit_session_processor_registration(
+    staging: &ModuleLoadRegistrationStaging,
+    module: &streamlib_idents::ModuleIdent,
+    version: streamlib_idents::SemVer,
+    descriptor: ProcessorDescriptor,
+    vtable: &'static ProcessorVTable,
+) -> std::result::Result<SchemaIdent, super::errors::AddModuleError> {
+    use super::ledger;
+
+    let package_ref = module.package_ref();
+    let processor_ident = descriptor.name.clone();
+
+    let _commit_guard = MODULE_REGISTRY_COMMIT_LOCK.lock();
+
+    // Live-name collision: an unremoved `@session/<name>` registration.
+    if ledger::with_loaded_module_registration_record(&package_ref, |_| ()).is_some() {
+        return Err(super::errors::AddModuleError::DuplicateSessionProcessorName {
+            module: module.clone(),
+        });
+    }
+
+    // Short-type-name shadow of an installed processor: warn, keep both.
+    crate::core::processors::PROCESSOR_REGISTRY.warn_on_short_name_shadow(&processor_ident);
+
+    staging.stage_processor(
+        descriptor,
+        StagedProcessorRegistrationKind::VTable {
+            vtable,
+            cdylib_resident: false,
+        },
+        package_ref.clone(),
+    );
+
+    let staged: Vec<StagedProcessorRegistration> = staging.processors.lock().drain(..).collect();
+    let mut committed_idents: Vec<SchemaIdent> = Vec::new();
+    for staged_processor in staged {
+        let ident = staged_processor.descriptor.name.clone();
+        match staged_processor.kind {
+            StagedProcessorRegistrationKind::VTable {
+                vtable,
+                cdylib_resident,
+            } => {
+                match crate::core::processors::PROCESSOR_REGISTRY.register_via_vtable(
+                    staged_processor.descriptor,
+                    vtable,
+                    cdylib_resident,
+                ) {
+                    Ok(()) => committed_idents.push(ident),
+                    Err(e) => tracing::error!(
+                        processor = %ident,
+                        "add_local commit failed to apply the staged session \
+                         processor registration (bug-grade): {e}",
+                    ),
+                }
+            }
+            StagedProcessorRegistrationKind::Dynamic { .. } => {
+                tracing::error!(
+                    processor = %ident,
+                    "add_local staged a Dynamic-kind processor (bug-grade — \
+                     session registration stages only host vtables)",
+                );
+            }
+        }
+    }
+
+    ledger::insert_loaded_module_registration_record(
+        package_ref,
+        ledger::LoadedModuleRegistrationRecord {
+            version,
+            schema_ids: Vec::new(),
+            processor_idents: committed_idents,
+            dylib_paths: Vec::new(),
+            required_by: Vec::new(),
+        },
+    );
+
+    Ok(processor_ident)
+}
