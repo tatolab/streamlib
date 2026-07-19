@@ -11,10 +11,17 @@
 //! zero-ceremony path — no GPU, no camera, no display (those are the
 //! `/verify-live` scenario).
 //!
-//! Including the example source directly is also the DX-budget enforcement
-//! mechanism: reintroducing any ceremony file the example is meant to avoid
-//! (a `build.rs`, a `streamlib.yaml`, a `schemas:` list, a `_generated_`
-//! module) would break this include and fail the build.
+//! Two independent mechanisms keep the zero-ceremony budget honest, together:
+//!
+//! - The `#[path]` source-include compiles `hello_forward.rs` inside this
+//!   crate's own test build, so any inline dependence the example grows on a
+//!   generated or codegen module (a `_generated_` import, a schema-derived
+//!   type) fails to compile here and breaks the build.
+//! - [`example_dir_has_no_ceremony_files`] walks the example directory and
+//!   asserts it contains no `build.rs`, no `streamlib.yaml`, no `schemas/`
+//!   dir, and no `_generated_` dir — because the source-include alone never
+//!   compiles the standalone example crate, a reintroduced ceremony file that
+//!   `hello_forward.rs` doesn't reference would otherwise be invisible to CI.
 
 // The example authors `#[streamlib::sdk::processor(...)]` against the public
 // facade; inside this crate `streamlib` resolves to self via the crate's
@@ -49,12 +56,19 @@ fn unique_service_name(tag: &str) -> String {
     )
 }
 
+/// The single `@tatolab/core/VideoFrame` wire identity for this edge. Both the
+/// input framing and the output connection must agree on it or the edge
+/// silently mismatches, so it lives in exactly one place.
+fn video_frame_schema() -> SchemaIdentWire {
+    SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0)
+        .expect("VideoFrame identity fits the wire capacity")
+}
+
 /// Frame the given opaque payload for `port` exactly as the runtime does, so it
 /// can be routed straight into an [`InputMailboxesInner`] without an iceoryx2
 /// subscriber (the in-memory injection path the runtime's own tests use).
 fn framed_payload(port: &str, payload: &[u8], timestamp_ns: i64) -> Vec<u8> {
-    let schema = SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0)
-        .expect("VideoFrame identity fits the wire capacity");
+    let schema = video_frame_schema();
     let mut buf = vec![0u8; FRAME_HEADER_SIZE + payload.len()];
     FrameHeader::new(port, schema, timestamp_ns, payload.len() as u32)
         .expect("port name fits the wire capacity")
@@ -113,9 +127,13 @@ fn fixture_frame_traverses_the_inline_forward_processor() {
     let notifier = event.notifier_builder().create().expect("notifier");
 
     let output_writer_inner = Arc::new(OutputWriterInner::new());
-    let wire_schema = SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0)
-        .expect("VideoFrame identity");
-    output_writer_inner.add_connection("video_out", wire_schema, "video_in", publisher, notifier);
+    output_writer_inner.add_connection(
+        "video_out",
+        video_frame_schema(),
+        "video_in",
+        publisher,
+        notifier,
+    );
 
     // Sink: an input mailbox subscribed to the same edge. `read_raw` drains the
     // subscriber and hands back the forwarded payload.
@@ -180,4 +198,55 @@ fn fixture_frame_traverses_the_inline_forward_processor() {
         "no frame is pending after the single fixture frame is consumed"
     );
     assert_eq!(processor.frames_forwarded(), 1);
+}
+
+/// The example directory carries no ceremony: acceptance criterion #4 ("the
+/// file list is the ceremony budget") is machine-checked here rather than left
+/// to review. The `#[path]` source-include never compiles the standalone
+/// example crate, so a reintroduced `build.rs` / `streamlib.yaml` / `schemas/`
+/// / `_generated_` that `hello_forward.rs` doesn't reference would otherwise
+/// slip past CI.
+#[test]
+fn example_dir_has_no_ceremony_files() {
+    let example_dir =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/hello-streamlib");
+    assert!(
+        example_dir.is_dir(),
+        "the hello-streamlib example directory must exist at {}",
+        example_dir.display()
+    );
+
+    let forbidden_files = ["build.rs", "streamlib.yaml"];
+    let forbidden_dirs = ["schemas", "_generated_"];
+    // Gitignored build/link artifacts (the `node_modules`-equivalents) carry
+    // their own committed ceremony from the packages they mirror; the budget
+    // this test enforces is the example's own committed tree.
+    let skip_dirs = ["streamlib_modules", "target"];
+
+    let mut offenders: Vec<std::path::PathBuf> = Vec::new();
+    let mut stack = vec![example_dir.clone()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("the example directory must be readable") {
+            let entry = entry.expect("a directory entry must be readable");
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            let file_type = entry.file_type().expect("entry file type must be readable");
+            if file_type.is_dir() {
+                if forbidden_dirs.iter().any(|forbidden| *forbidden == name) {
+                    offenders.push(path.clone());
+                }
+                if !skip_dirs.iter().any(|skip| *skip == name) {
+                    stack.push(path);
+                }
+            } else if forbidden_files.iter().any(|forbidden| *forbidden == name) {
+                offenders.push(path);
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "the hello-streamlib example must stay zero-ceremony, but these files reintroduce it: {offenders:?}"
+    );
 }
