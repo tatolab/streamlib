@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.10](https://github.com/tatolab/streamlib/compare/v0.7.9...v0.7.10) (2026-07-19)
+
+
+### Features
+
+* **polyglot:** ports-in-code parity for the Python/Deno processor decorators ([#1456](https://github.com/tatolab/streamlib/issues/1456)) ([acbf828](https://github.com/tatolab/streamlib/commit/acbf828a0ef3843671bd626bc5b89926e73f749e))
+
 ## [0.7.9](https://github.com/tatolab/streamlib/compare/v0.7.8...v0.7.9) (2026-07-19)
 
 
