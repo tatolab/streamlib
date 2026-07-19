@@ -12,7 +12,6 @@ dependencies:
 
 processors:
   - name: PolyglotContinuousProcessor
-    version: "1.0.0"
     description: "Continuous processor: process() called by the runner at interval_ms cadence (now timerfd-paced); each call writes the tick count + a monotonic timestamp into the host cpu-readback surface. Reference example for the no-setTimeout pacing contract."
     runtime: deno
     execution:

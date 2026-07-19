@@ -937,8 +937,8 @@ pub(super) fn read_version_from_manifest_dir(
 mod tests {
     use super::*;
 
-    const RUST_YAML: &str = "package:\n  org: tatolab\n  name: rp\n  version: 0.1.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n";
-    const PY_YAML: &str = "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    inputs: []\n    outputs: []\n";
+    const RUST_YAML: &str = "package:\n  org: tatolab\n  name: rp\n  version: 0.1.0\nprocessors:\n  - name: P\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n";
+    const PY_YAML: &str = "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    inputs: []\n    outputs: []\n";
 
     fn manifest(dir: &std::path::Path, body: &str) {
         std::fs::write(dir.join("streamlib.yaml"), body).unwrap();
@@ -1113,7 +1113,7 @@ mod tests {
     // `.venv/bin/python: No such file or directory`.
     // =====================================================================
 
-    const DENO_YAML: &str = "package:\n  org: tatolab\n  name: ts\n  version: 0.1.0\nprocessors:\n  - name: T\n    version: 1.0.0\n    description: d\n    runtime: deno\n    execution: manual\n    entrypoint: \"t.ts:default\"\n    inputs: []\n    outputs: []\n";
+    const DENO_YAML: &str = "package:\n  org: tatolab\n  name: ts\n  version: 0.1.0\nprocessors:\n  - name: T\n    description: d\n    runtime: deno\n    execution: manual\n    entrypoint: \"t.ts:default\"\n    inputs: []\n    outputs: []\n";
 
     /// CRUX (bug-reproduce): a resolved (extracted `.slpkg` / installed-cache /
     /// `streamlib_modules`) Python-only package (no Rust, no `Cargo.toml`) with
@@ -1402,7 +1402,7 @@ mod tests {
             pkg.join("streamlib.yaml"),
             format!(
                 "package:\n  org: tatolab\n  name: {pkg_name}\n  version: 0.1.0\nprocessors:\n  \
-                 - name: P\n    version: 1.0.0\n    description: d\n    runtime: python\n    \
+                 - name: P\n    description: d\n    runtime: python\n    \
                  execution: manual\n    entrypoint: \"p:P\"\n    inputs: []\n    outputs: []\n"
             ),
         )
@@ -1595,7 +1595,7 @@ mod tests {
             dir.join("streamlib.yaml"),
             format!(
                 "package:\n  org: tatolab\n  name: {declared_name}\n  version: 0.9.0\n\
-                 processors:\n  - name: P\n    version: 1.0.0\n    description: d\n    \
+                 processors:\n  - name: P\n    description: d\n    \
                  runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    \
                  inputs: []\n    outputs: []\n"
             ),
@@ -1617,7 +1617,7 @@ mod tests {
             slot.join("streamlib.yaml"),
             format!(
                 "package:\n  org: tatolab\n  name: {name}\n  version: 1.0.0\n\
-                 processors:\n  - name: P\n    version: 1.0.0\n    description: d\n    \
+                 processors:\n  - name: P\n    description: d\n    \
                  runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    \
                  inputs: []\n    outputs: []\n"
             ),

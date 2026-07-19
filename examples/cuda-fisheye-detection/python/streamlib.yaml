@@ -20,7 +20,6 @@ schemas:
 
 processors:
   - name: CudaFisheyeUndistortion
-    version: "1.0.0"
     description: "Acquires the host-pre-registered OPAQUE_FD VkImage as a cudaTextureObject_t, runs a cupy.RawKernel undistortion + YOLOv8n detection, writes annotated PNG"
     runtime: python
     execution: reactive

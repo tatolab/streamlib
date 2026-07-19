@@ -5335,7 +5335,6 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
- "sha2",
  "streamlib-idents",
  "thiserror 2.0.18",
  "utoipa",

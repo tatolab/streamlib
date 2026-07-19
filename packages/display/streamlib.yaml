@@ -20,7 +20,6 @@ schemas:
     package: '@tatolab/core'
 processors:
 - name: Display
-  version: 1.0.0
   description: Displays video frames in a window with vsync
   runtime: rust
   entrypoint: null

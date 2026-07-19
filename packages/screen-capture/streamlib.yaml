@@ -20,7 +20,6 @@ schemas:
     package: '@tatolab/core'
 processors:
 - name: ScreenCapture
-  version: 1.0.0
   description: Captures display, window, or application content using ScreenCaptureKit (macOS 12.3+)
   runtime:
     language: rust

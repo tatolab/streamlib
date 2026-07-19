@@ -21,7 +21,6 @@ schemas:
 
 processors:
   - name: Grayscale
-    version: "1.0.0"
     description: "Grayscale processor — converts video frames to grayscale via Python subprocess"
     runtime: python
     execution: reactive

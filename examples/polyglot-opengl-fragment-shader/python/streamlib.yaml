@@ -22,7 +22,6 @@ schemas:
 
 processors:
   - name: OpenGlFragmentShader
-    version: "1.0.0"
     description: "Acquires a host-pre-registered render-target DMA-BUF surface as a GL_TEXTURE_2D, renders a Mandelbrot fragment shader, releases"
     runtime: python
     execution: reactive

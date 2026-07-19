@@ -19,7 +19,6 @@ schemas:
     file: schemas/api_server_config.yaml
 processors:
 - name: ApiServer
-  version: 1.0.0
   description: Runtime API server — HTTP + WebSocket control plane
   runtime: rust
   entrypoint: null

@@ -586,7 +586,6 @@ env:
 
 processors:
   - name: Grayscale
-    version: "1.0.0"
     description: Grayscale processor
     runtime: python
     execution: reactive
@@ -671,7 +670,6 @@ schemas:
     package: "@tatolab/core"
 processors:
   - name: Consumer
-    version: 1.0.0
     description: d
     runtime: rust
     execution: manual

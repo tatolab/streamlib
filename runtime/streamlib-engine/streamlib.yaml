@@ -38,7 +38,6 @@ processors:
   # === Test mock processors ===
 
   - name: TestMockProcessor
-    version: 1.0.0
     description: "Mock processor for testing graph operations"
     execution: manual
     inputs:
@@ -57,7 +56,6 @@ processors:
         description: Test output port 2
 
   - name: TestMockInputOnlyProcessor
-    version: 1.0.0
     description: "Mock processor with only input ports for testing"
     execution: manual
     inputs:
@@ -69,7 +67,6 @@ processors:
         description: Test input port 2
 
   - name: TestMockOutputOnlyProcessor
-    version: 1.0.0
     description: "Mock processor with only output ports for testing"
     execution: manual
     outputs:
@@ -83,7 +80,6 @@ processors:
   # === Test attribute macro processors ===
 
   - name: TestProcessor
-    version: 1.0.0
     description: "Test processor for attribute macro tests"
     execution: manual
     inputs:

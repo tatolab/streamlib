@@ -403,8 +403,6 @@ mod tests {
         assert_eq!(procs.len(), 1);
         assert_eq!(procs[0].schema.name, "MyLocalThing");
         assert_eq!(procs[0].struct_name, "MyLocalThing");
-        // App-local synthesized identity carries the version-free 0.0.0 sentinel.
-        assert_eq!(procs[0].schema.version, "0.0.0");
     }
 
     #[test]

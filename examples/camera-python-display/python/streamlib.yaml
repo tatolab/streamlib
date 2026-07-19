@@ -21,7 +21,6 @@ schemas:
 
 processors:
   - name: AvatarCharacter
-    version: "1.0.0"
     description: "MediaPipe pose detection + stylized 3D character as PiP overlay"
     runtime: python
     execution: reactive
@@ -34,7 +33,6 @@ processors:
         schema: VideoFrame
 
   - name: CyberpunkLowerThird
-    version: "1.0.0"
     description: "Cyberpunk animated lower third overlay — continuous RGBA generator"
     runtime: python
     execution:
@@ -46,7 +44,6 @@ processors:
         schema: VideoFrame
 
   - name: CyberpunkWatermark
-    version: "1.0.0"
     description: "Spray paint style watermark overlay — continuous RGBA generator"
     runtime: python
     execution:
@@ -58,7 +55,6 @@ processors:
         schema: VideoFrame
 
   - name: CyberpunkGlitch
-    version: "1.0.0"
     description: "Glitch post-processing — RGB separation, scanlines, slice displacement"
     runtime: python
     execution: reactive
@@ -71,7 +67,6 @@ processors:
         schema: VideoFrame
 
   - name: CyberpunkProcessor
-    version: "1.0.0"
     description: "Cyberpunk overlay with Skia GPU rendering — reference @processor adopter"
     runtime: python
     execution: reactive

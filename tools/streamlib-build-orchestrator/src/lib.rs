@@ -1282,7 +1282,6 @@ mod tests {
   version: 0.1.0
 processors:
   - name: RustProc
-    version: 1.0.0
     description: "rust processor fixture (never built - pre-check fires first)"
     runtime: rust
     execution: manual

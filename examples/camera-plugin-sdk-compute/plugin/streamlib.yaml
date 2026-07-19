@@ -21,7 +21,6 @@ schemas:
 
 processors:
   - name: GrayscaleCompute
-    version: 1.0.0
     description: "Grayscale video effect via an engine-free SPIR-V compute kernel"
     runtime: rust
     execution: reactive

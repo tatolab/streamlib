@@ -25,7 +25,6 @@ schemas:
 
 processors:
   - name: PolyglotManualSourceCountingSink
-    version: 1.0.0
     description: "Reactive sink that counts Videoframes and writes count + first/last timestamp to a stats file on teardown. Used to validate that polyglot manual sources can publish via iceoryx2 from a worker thread (#604)."
     runtime: rust
     execution: reactive

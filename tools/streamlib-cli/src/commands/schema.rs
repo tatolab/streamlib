@@ -15,7 +15,6 @@ pub fn validate_processor(path: &Path) -> Result<()> {
         Ok(schema) => {
             println!();
             println!("  Name:        {}", schema.name);
-            println!("  Version:     {}", schema.version);
             if let Some(desc) = &schema.description {
                 println!("  Description: {}", desc);
             }

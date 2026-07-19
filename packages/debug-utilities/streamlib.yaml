@@ -30,7 +30,6 @@ schemas:
     file: schemas/video_frame_counter_config.yaml
 processors:
 - name: SimplePassthrough
-  version: 1.0.0
   description: Passes video frames through unchanged (for testing)
   runtime: rust
   entrypoint: null
@@ -55,7 +54,6 @@ processors:
     overflow: null
     buffer_size: null
 - name: BgraFileSource
-  version: 1.0.0
   description: Streams raw BGRA frames from a file as Videoframes
   runtime: rust
   entrypoint: null
@@ -74,7 +72,6 @@ processors:
     overflow: null
     buffer_size: null
 - name: JpegBytesSource
-  version: 1.0.0
   description: Loads a JPEG file from disk at setup time and republishes it as EncodedJpegFrame on a paced background thread (for testing the JPEG decoder pipeline)
   runtime: rust
   entrypoint: null
@@ -93,7 +90,6 @@ processors:
     overflow: null
     buffer_size: null
 - name: VideoFrameCounter
-  version: 1.0.0
   description: Counts incoming VideoFrames into process-global atomics so integration tests can assert on frame count + first-frame dimensions after runtime.stop()
   runtime: rust
   entrypoint: null

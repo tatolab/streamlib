@@ -20,7 +20,6 @@ schemas:
     package: '@tatolab/core'
 processors:
 - name: LinuxMp4Writer
-  version: 1.0.0
   description: Writes video frames to MP4 via ffmpeg encode + mux with silent audio track
   runtime: rust
   entrypoint: null

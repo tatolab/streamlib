@@ -22,7 +22,6 @@ schemas:
     file: schemas/moq_subscribe_track_config.yaml
 processors:
 - name: MoqPublishTrack
-  version: 1.0.0
   description: Publishes raw bytes from a single graph input to a named MoQ track
   runtime: rust
   entrypoint: null
@@ -41,7 +40,6 @@ processors:
     buffer_size: null
   outputs: []
 - name: MoqSubscribeTrack
-  version: 1.0.0
   description: Subscribes to a named MoQ track and outputs raw bytes to the graph
   runtime: rust
   entrypoint: null

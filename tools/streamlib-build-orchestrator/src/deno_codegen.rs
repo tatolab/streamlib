@@ -137,7 +137,7 @@ mod tests {
         let deno = tempdir().unwrap();
         std::fs::write(
             deno.path().join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: ts\n  version: 0.1.0\nprocessors:\n  - name: T\n    version: 1.0.0\n    description: d\n    runtime: deno\n    execution: manual\n    entrypoint: \"t.ts:default\"\n    inputs: []\n    outputs: []\n",
+            "package:\n  org: tatolab\n  name: ts\n  version: 0.1.0\nprocessors:\n  - name: T\n    description: d\n    runtime: deno\n    execution: manual\n    entrypoint: \"t.ts:default\"\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
         assert!(staged_package_has_deno(deno.path()));
@@ -183,7 +183,7 @@ mod tests {
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: ts\n  version: 0.1.0\nschemas:\n  Foo:\n    file: schemas/foo.yaml\nprocessors:\n  - name: T\n    version: 1.0.0\n    description: d\n    runtime: deno\n    execution: manual\n    entrypoint: \"t.ts:default\"\n    inputs: []\n    outputs: []\n",
+            "package:\n  org: tatolab\n  name: ts\n  version: 0.1.0\nschemas:\n  Foo:\n    file: schemas/foo.yaml\nprocessors:\n  - name: T\n    description: d\n    runtime: deno\n    execution: manual\n    entrypoint: \"t.ts:default\"\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
         std::fs::create_dir(dir.path().join("schemas")).unwrap();

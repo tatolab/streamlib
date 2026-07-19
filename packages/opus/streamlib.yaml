@@ -18,7 +18,6 @@ schemas:
     file: schemas/opus_encoder_config.yaml
 processors:
 - name: OpusEncoder
-  version: 1.0.0
   description: Encodes AudioFrame to EncodedAudioFrame (Opus)
   runtime: rust
   entrypoint: null
@@ -44,7 +43,6 @@ processors:
     overflow: null
     buffer_size: null
 - name: OpusDecoder
-  version: 1.0.0
   description: Decodes EncodedAudioFrame (Opus) to AudioFrame
   runtime: rust
   entrypoint: null

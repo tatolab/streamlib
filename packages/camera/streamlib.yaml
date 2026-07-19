@@ -22,7 +22,6 @@ schemas:
     package: '@tatolab/core'
 processors:
 - name: Camera
-  version: 1.0.0
   description: Captures video from cameras (V4L2 on Linux, AVFoundation on macOS/iOS)
   runtime: rust
   entrypoint: null
@@ -42,7 +41,6 @@ processors:
     overflow: null
     buffer_size: null
 - name: CameraToCudaCopy
-  version: 1.0.0
   description: 'Host-pipeline producer: camera VkImage -> cuda OPAQUE_FD VkBuffer with timeline signal for cross-API CUDA interop. Linux-only (CUDA is Linux-only on the in-tree adapter set).'
   runtime: rust
   entrypoint: null

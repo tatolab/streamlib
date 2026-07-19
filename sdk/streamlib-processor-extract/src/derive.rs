@@ -19,12 +19,12 @@
 //! uniformly — processor `Type` name, execution mode, and each port's name +
 //! schema-type (or `any`). It deliberately excludes fields not every runtime's
 //! extractor emits or that are authored/build-derived rather than code-derived:
-//! `version` (release-core projection is a build concern), `entrypoint`
-//! (author/loader concern), `config` binding, `description`, and the consumer-
-//! side port policies (`read_mode` / `overflow` / `buffer_size`, which the
-//! Python/Deno wire shape does not carry). What remains is exactly the surface a
-//! stale hand-authored `processors:` would misstate: a processor added, removed,
-//! or renamed in code; a port added, removed, reordered, or re-typed.
+//! `entrypoint` (author/loader concern), `config` binding, `description`, and
+//! the consumer-side port policies (`read_mode` / `overflow` / `buffer_size`,
+//! which the Python/Deno wire shape does not carry). What remains is exactly
+//! the surface a stale hand-authored `processors:` would misstate: a
+//! processor added, removed, or renamed in code; a port added, removed,
+//! reordered, or re-typed.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -792,14 +792,12 @@ mod tests {
             r#"
 processors:
 - name: Camera
-  version: 1.0.0
   runtime: rust
   execution: manual
   outputs:
   - name: video
     schema: VideoFrame
 - name: PassThrough
-  version: 1.0.0
   runtime: python
   entrypoint: src.pass:PassThrough
   execution: reactive
@@ -813,8 +811,8 @@ processors:
 "#,
         );
         // In sync — a committed manifest that names both processors with the
-        // same execution + ports as code. `read_mode` / version / entrypoint on
-        // the committed side are outside the drift surface, so they don't trip it.
+        // same execution + ports as code. `read_mode` / entrypoint on the
+        // committed side are outside the drift surface, so they don't trip it.
         check_processor_manifest_drift(root, &committed.iter().collect::<Vec<_>>(), &derived)
             .unwrap();
     }
@@ -849,7 +847,6 @@ processors:
             r#"
 processors:
 - name: Alpha
-  version: 1.0.0
   runtime: rust
   execution: reactive
 "#,
@@ -885,11 +882,9 @@ processors:
             r#"
 processors:
 - name: Alpha
-  version: 1.0.0
   runtime: rust
   execution: reactive
 - name: Ghost
-  version: 1.0.0
   runtime: rust
   execution: reactive
 "#,
@@ -922,7 +917,6 @@ processors:
             r#"
 processors:
 - name: Alpha
-  version: 1.0.0
   runtime: rust
   execution: reactive
 "#,
@@ -958,7 +952,6 @@ processors:
             r#"
 processors:
 - name: Alpha
-  version: 1.0.0
   runtime: rust
   execution: reactive
   outputs:
@@ -1008,7 +1001,6 @@ processors:
             r#"
 processors:
 - name: PassThrough
-  version: 1.0.0
   runtime: python
   entrypoint: src.pass:PassThrough
   execution: reactive

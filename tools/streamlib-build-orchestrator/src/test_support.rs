@@ -73,7 +73,6 @@ pub(crate) fn write_python_source_package(pkg_dir: &Path, sdk: &Path) {
   version: 0.1.0
 processors:
   - name: PyProc
-    version: 1.0.0
     description: "offline python processor fixture"
     runtime: python
     execution: manual

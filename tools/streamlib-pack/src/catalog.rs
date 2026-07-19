@@ -561,7 +561,6 @@ schemas:
     package: '@tatolab/core'
 processors:
 - name: Camera
-  version: 1.0.0
   description: Captures video
   runtime: rust
   execution: manual
@@ -574,7 +573,6 @@ processors:
     schema: VideoFrame
     description: Live frames
 - name: PassThrough
-  version: 1.0.0
   runtime: python
   entrypoint: src.pass:PassThrough
   execution: reactive
@@ -711,7 +709,6 @@ schemas:
     package: '@tatolab/b'
 processors:
 - name: A
-  version: 1.0.0
   runtime: rust
   execution: reactive
   outputs:
@@ -810,7 +807,6 @@ schemas:
     file: schemas/widget_config.yaml
 processors:
 - name: Widget
-  version: 1.0.0
   runtime: rust
   execution: reactive
   config:
@@ -859,7 +855,6 @@ schemas:
     file: schemas/known.yaml
 processors:
 - name: Widget
-  version: 1.0.0
   runtime: rust
   execution: reactive
   outputs:
