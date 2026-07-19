@@ -38,6 +38,25 @@ use syn::ext::IdentExt;
 use syn::parse::{ParseStream, Parser};
 use syn::{Ident, LitInt, LitStr, Path, Token, parenthesized};
 
+/// Which side of a link a port sits on. Producer-side policy keys
+/// (`read_mode` / `overflow` / `buffer_size`) are consumer-side settings and
+/// are only valid on an `input(...)`; the grammar rejects them on an
+/// `output(...)`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PortDirection {
+    Input,
+    Output,
+}
+
+impl PortDirection {
+    fn keyword(self) -> &'static str {
+        match self {
+            PortDirection::Input => "input",
+            PortDirection::Output => "output",
+        }
+    }
+}
+
 /// A parsed input/output port declaration.
 pub struct ParsedPort {
     pub name: String,
@@ -155,16 +174,8 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
                 let lit: LitStr = input.parse()?;
                 app_local_type = Some((lit.value(), lit.span()));
             }
-            "input" => inputs.push(parse_port(input)?),
-            "output" => {
-                let mut port = parse_port(input)?;
-                // Output ports never carry a producer-side overflow / read
-                // policy — the destination input port declares those.
-                port.overflow = None;
-                port.read_mode = None;
-                port.buffer_size = None;
-                outputs.push(port);
-            }
+            "input" => inputs.push(parse_port(input, PortDirection::Input)?),
+            "output" => outputs.push(parse_port(input, PortDirection::Output)?),
             other => {
                 return Err(syn::Error::new(
                     key.span(),
@@ -228,17 +239,16 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
     // Synthesize the descriptor config-schema id from the config type when the
     // author didn't spell one out: version-free `@<org>/<package>/<ConfigTypeName>`
     // (the runtime schema registry stores and looks up unversioned).
-    if config_schema_id.is_none() {
-        if let Some(path) = &config_type {
-            if let Some(last) = path.segments.last() {
-                config_schema_id = Some(format!(
-                    "@{}/{}/{}",
-                    ident.org.as_str(),
-                    ident.package.as_str(),
-                    last.ident,
-                ));
-            }
-        }
+    if config_schema_id.is_none()
+        && let Some(path) = &config_type
+        && let Some(last) = path.segments.last()
+    {
+        config_schema_id = Some(format!(
+            "@{}/{}/{}",
+            ident.org.as_str(),
+            ident.package.as_str(),
+            last.ident,
+        ));
     }
 
     let config_field_name = config_field_name.unwrap_or_else(|| "config".to_string());
@@ -316,7 +326,12 @@ fn parse_execution(input: ParseStream<'_>) -> syn::Result<ProcessorSchemaExecuti
 /// `<name-string>, <schema>, [read_mode = "...", overflow = "...", buffer_size = N,
 /// description = "..."]` — where `<schema>` is either the bare identifier `any`
 /// or a version-free `"@org/package/Type"` string.
-fn parse_port(input: ParseStream<'_>) -> syn::Result<ParsedPort> {
+///
+/// The producer-side policy keys (`read_mode` / `overflow` / `buffer_size`) are
+/// consumer-side settings the destination input port declares; they are
+/// rejected with a spanned error on an `output(...)` rather than silently
+/// dropped.
+fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<ParsedPort> {
     let content;
     parenthesized!(content in input);
 
@@ -340,6 +355,7 @@ fn parse_port(input: ParseStream<'_>) -> syn::Result<ParsedPort> {
             break;
         }
         let key: Ident = content.parse()?;
+        let key_span = key.span();
         content.parse::<Token![=]>()?;
         match key.to_string().as_str() {
             "description" => {
@@ -348,14 +364,17 @@ fn parse_port(input: ParseStream<'_>) -> syn::Result<ParsedPort> {
             }
             "read_mode" => {
                 let lit: LitStr = content.parse()?;
+                reject_producer_key_on_output(direction, "read_mode", &name, key_span)?;
                 read_mode = Some(lit.value());
             }
             "overflow" => {
                 let lit: LitStr = content.parse()?;
+                reject_producer_key_on_output(direction, "overflow", &name, key_span)?;
                 overflow = Some(lit.value());
             }
             "buffer_size" => {
                 let lit: LitInt = content.parse()?;
+                reject_producer_key_on_output(direction, "buffer_size", &name, key_span)?;
                 buffer_size = Some(lit.base10_parse()?);
             }
             other => {
@@ -378,6 +397,29 @@ fn parse_port(input: ParseStream<'_>) -> syn::Result<ParsedPort> {
         overflow,
         buffer_size,
     })
+}
+
+/// Reject a producer-side policy key on an `output(...)` with a spanned error.
+/// A no-op on an `input(...)`.
+fn reject_producer_key_on_output(
+    direction: PortDirection,
+    key: &str,
+    port_name: &str,
+    span: proc_macro2::Span,
+) -> syn::Result<()> {
+    if direction == PortDirection::Output {
+        return Err(syn::Error::new(
+            span,
+            format!(
+                "`{key}` is a consumer-side policy key and is not valid on \
+                 `{}(\"{port_name}\", ...)` — `read_mode`, `overflow`, and \
+                 `buffer_size` are declared by the destination input port, not \
+                 the producing output port",
+                direction.keyword()
+            ),
+        ));
+    }
+    Ok(())
 }
 
 /// Parse a port schema reference: `any` (bare ident) or a version-free
@@ -651,6 +693,43 @@ mod tests {
             output("dup", any),
         });
         assert!(msg.contains("duplicate output port name `dup`"), "got: {msg}");
+    }
+
+    #[test]
+    fn output_producer_side_policy_keys_are_rejected() {
+        // Regression: producer-side policy keys on an `output(...)` were
+        // silently parsed-then-nulled. They must now be a spanned error.
+        // Mentally revert `reject_producer_key_on_output` and each of these
+        // parses cleanly (bug) instead of erroring.
+        for key in ["overflow", "read_mode", "buffer_size"] {
+            let value = if key == "buffer_size" { "4" } else { "\"drop_oldest\"" };
+            let tokens: proc_macro2::TokenStream = format!(
+                "\"@tatolab/camera/Camera\", execution = manual, \
+                 output(\"video\", \"@tatolab/core/VideoFrame\", {key} = {value})"
+            )
+            .parse()
+            .expect("token stream parses");
+            let msg = parse_err(tokens);
+            assert!(
+                msg.contains(&format!("`{key}` is a consumer-side policy key")),
+                "key `{key}` got: {msg}"
+            );
+        }
+    }
+
+    #[test]
+    fn input_producer_side_policy_keys_are_accepted() {
+        // The mirror of the rejection test: the same keys stay valid on an
+        // `input(...)` and reach the parsed port.
+        let parsed = parse_ok(quote! {
+            "@tatolab/camera/Camera",
+            execution = manual,
+            input("video_in", "@tatolab/core/VideoFrame",
+                  read_mode = "skip_to_latest", overflow = "drop_oldest", buffer_size = 4),
+        });
+        assert_eq!(parsed.inputs[0].read_mode.as_deref(), Some("skip_to_latest"));
+        assert_eq!(parsed.inputs[0].overflow.as_deref(), Some("drop_oldest"));
+        assert_eq!(parsed.inputs[0].buffer_size, Some(4));
     }
 
     #[test]
