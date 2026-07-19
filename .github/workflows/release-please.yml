@@ -28,6 +28,43 @@ jobs:
           manifest-file: .release-please-manifest.json
 
       # The `simple` release-type bumps [workspace.package].version in Cargo.toml
+      # but ships no cargo dependency-requirement updater. Every in-tree crate
+      # pins its workspace-versioned sibling crates with a frozen
+      # `version = "X.Y.Z"` requirement (e.g. streamlib-error, vulkan-jpeg). Those
+      # requirements never move on their own: caret-compatible within a 0.7.x line
+      # but silently EXCLUDING the next breaking bump (0.8.0), which would make the
+      # whole tree fail to resolve after the release. Rewrite them to the release
+      # version on the release-PR branch (found by the same `autorelease: pending`
+      # label the lock-sync and auto-merge steps use) so the squash-merge folds it
+      # into the release commit. Runs BEFORE the lock sync so `cargo update` below
+      # records the rewritten requirements. Independently-versioned `packages/*`
+      # domain crates are left alone by the script. No-ops when nothing is pending
+      # or the requirements are already in sync.
+      - name: Sync inter-crate version requirements to the release version
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BRANCH=$(gh pr list --repo "$GITHUB_REPOSITORY" --state open --limit 100 \
+            --json headRefName,labels \
+            --jq 'map(select(.labels[].name == "autorelease: pending")) | .[0].headRefName // empty')
+          if [ -z "$BRANCH" ]; then
+            echo "no open release PR this run"
+            exit 0
+          fi
+          git fetch origin "$BRANCH"
+          git checkout "$BRANCH"
+          python3 scripts/sync-inter-crate-versions.py
+          if git diff --quiet; then
+            echo "inter-crate requirements already in sync"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "chore: sync inter-crate version requirements to the release version"
+          git push origin "$BRANCH"
+
+      # The `simple` release-type bumps [workspace.package].version in Cargo.toml
       # (via extra-files) but has no Cargo.lock updater, so the workspace-member
       # entries in Cargo.lock keep the old version. CI runs cargo with --locked,
       # so a merged bump with a stale lock errors before any check runs. Sync the
