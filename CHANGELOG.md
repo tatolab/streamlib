@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.8](https://github.com/tatolab/streamlib/compare/v0.7.7...v0.7.8) (2026-07-19)
+
+
+### Bug Fixes
+
+* **runtime:** connect() with default processor ids no longer returns InvalidLink ([#1416](https://github.com/tatolab/streamlib/issues/1416) regression) ([#1451](https://github.com/tatolab/streamlib/issues/1451)) ([06c39c8](https://github.com/tatolab/streamlib/commit/06c39c86b0d5f70503a4439b13e03750086a27ef))
+
 ## [0.7.7](https://github.com/tatolab/streamlib/compare/v0.7.6...v0.7.7) (2026-07-19)
 
 
