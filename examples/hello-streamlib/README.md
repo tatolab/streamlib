@@ -53,9 +53,12 @@ src/hello_forward.rs  # the inline #[processor]
 ```
 
 There is no `build.rs`, no `streamlib.yaml`, no `schemas/`, and no `_generated_`.
-A headless E2E in the engine workspace imports `src/hello_forward.rs` directly
-(`cargo test --lib -p streamlib`) and drives a fixture frame through the
-processor, so reintroducing any ceremony file breaks the build and fails review.
+A headless E2E in the engine workspace (`cargo test --lib -p streamlib`) keeps
+that budget honest with two checks: it imports `src/hello_forward.rs` directly
+and drives a fixture frame through it — so any inline dependence on a generated
+or codegen module breaks the build — and it walks this directory to assert none
+of those ceremony files or dirs have been reintroduced, even ones the inline
+processor never references.
 
 ## Run it
 
