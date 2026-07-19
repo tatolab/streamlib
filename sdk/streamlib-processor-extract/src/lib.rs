@@ -303,7 +303,7 @@ mod tests {
             "src/lib.rs",
             r#"
             pub mod camera;
-            #[streamlib::processor(
+            #[streamlib::sdk::processor(
                 "@tatolab/demo/Blur",
                 execution = reactive,
                 input("frames_in", "@tatolab/core/VideoFrame", read_mode = "skip_to_latest", buffer_size = 4),
