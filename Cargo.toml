@@ -17,6 +17,7 @@ members = [
     "sdk/streamlib-jtd-codegen", # JTD-codegen pipeline: schema YAML → typed Rust/Python/TypeScript bindings
     "sdk/streamlib-idents",    # Structured schema identifiers, semver, manifest/lockfile types (#399)
     "sdk/streamlib-macros",    # Procedural macros for reducing boilerplate
+    "sdk/streamlib-processor-extract", # Shared `#[processor(...)]` grammar + syn source-scan that derives the `processors:` manifest from code (#1411)
     "runtime/streamlib-plugin-abi", # ABI-stable FFI types for dynamic plugins
     "adapters/streamlib-adapter-abi", # ABI-stable surface adapter contract (in-tree + 3rd-party adapters)
     "runtime/streamlib-consumer-rhi", # Consumer-side carve-out of the Vulkan RHI — DMA-BUF FD import + bind + map. cdylibs depend on this NOT the full streamlib so the FullAccess capability boundary is type-system enforced (Linux)

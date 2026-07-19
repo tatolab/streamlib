@@ -5238,6 +5238,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "streamlib-idents",
+ "streamlib-processor-extract",
  "streamlib-processor-schema",
  "syn",
 ]
@@ -5303,6 +5304,19 @@ dependencies = [
  "streamlib-macros",
  "streamlib-plugin-abi",
  "streamlib-processor-schema",
+ "tracing",
+]
+
+[[package]]
+name = "streamlib-processor-extract"
+version = "0.7.2"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "streamlib-processor-schema",
+ "syn",
+ "thiserror 2.0.18",
  "tracing",
 ]
 

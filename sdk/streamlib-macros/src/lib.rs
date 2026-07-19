@@ -6,7 +6,7 @@
 //! - `#[streamlib::processor("@org/package/Type", execution = …, …)]`
 //!   — processor definition. The attribute is the single source of truth:
 //!   identity, execution mode, and input/output ports are declared in code,
-//!   read from no file at expansion. See [`attribute_grammar`] for the full
+//!   read from no file at expansion. See [`streamlib_processor_extract::grammar`] for the full
 //!   grammar. An identity string omitted from the attribute synthesizes an
 //!   `@app/local/<StructName>` identity so a bare crate with no
 //!   `streamlib.yaml` compiles.
@@ -23,16 +23,17 @@
 //!   reason to refuse newer-but-compatible registered versions; the
 //!   `_any_version` form is the right default for everything else.
 
-mod attribute_grammar;
 mod codegen;
 mod config_descriptor;
 
+// The `#[processor(...)]` grammar lives in `streamlib-processor-extract` so the
+// source-scan extractor and this macro parse it through one shared parser (a
+// `proc-macro = true` crate cannot export the grammar as a library). #1411.
+use streamlib_processor_extract::grammar as attribute_grammar;
+
 use proc_macro::TokenStream;
 use quote::quote;
-use streamlib_processor_schema::{
-    Org, Package, ProcessorPortSchema, ProcessorSchema, ProcessorScheduling, RuntimeConfig,
-    RuntimeOptions, SemVer, TypeName,
-};
+use streamlib_processor_schema::{Org, Package, SemVer, TypeName};
 
 // Range parsing for `module_ident!*` macros. The streamlib_idents crate
 // owns the SemVerRange grammar; the macro just forwards the input through
@@ -47,7 +48,7 @@ use syn::{
 /// Main processor attribute macro.
 ///
 /// The attribute is the single source of truth for a processor's identity,
-/// execution mode, and ports — see [`attribute_grammar`] for the grammar. It
+/// execution mode, and ports — see [`streamlib_processor_extract::grammar`] for the grammar. It
 /// reads no file at expansion. An omitted identity string synthesizes an
 /// `@app/local/<StructName>` identity so a bare crate compiles with no
 /// `streamlib.yaml`.
@@ -69,12 +70,12 @@ use syn::{
 pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item_struct = parse_macro_input!(item as ItemStruct);
 
-    let parsed = match attribute_grammar::parse(attr, &item_struct.ident) {
+    let parsed = match attribute_grammar::parse2(attr.into(), &item_struct.ident) {
         Ok(parsed) => parsed,
         Err(err) => return err.to_compile_error().into(),
     };
 
-    let schema = processor_schema_from_parsed(&parsed);
+    let schema = parsed.to_processor_schema();
     let schema_ident = parsed.ident.clone();
     let config_field_name = parsed
         .config_type
@@ -92,45 +93,6 @@ pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
     );
 
     TokenStream::from(generated)
-}
-
-/// Build a [`ProcessorSchema`] from a parsed attribute so the existing codegen
-/// (identity / execution / scheduling / ports emission) is reused unchanged.
-/// Config binding is threaded separately (the Rust config type comes from the
-/// attribute, not a resolved manifest schema), so `config` is always `None`
-/// here.
-fn processor_schema_from_parsed(parsed: &attribute_grammar::ParsedProcessorAttr) -> ProcessorSchema {
-    let to_port = |p: &attribute_grammar::ParsedPort| ProcessorPortSchema {
-        name: p.name.clone(),
-        schema: p.schema.clone(),
-        description: p.description.clone(),
-        read_mode: p.read_mode.clone(),
-        overflow: p.overflow.clone(),
-        buffer_size: p.buffer_size,
-    };
-
-    ProcessorSchema {
-        name: parsed.ident.r#type.as_str().to_string(),
-        version: parsed.ident.version.to_string(),
-        description: parsed.description.clone(),
-        runtime: RuntimeConfig {
-            language: Default::default(),
-            options: RuntimeOptions {
-                unsafe_send: parsed.unsafe_send,
-                python_version: None,
-            },
-            env: Default::default(),
-        },
-        entrypoint: None,
-        execution: parsed.execution.clone(),
-        scheduling: parsed
-            .scheduling
-            .map(|priority| ProcessorScheduling { priority }),
-        config: None,
-        state: Vec::new(),
-        inputs: parsed.inputs.iter().map(to_port).collect(),
-        outputs: parsed.outputs.iter().map(to_port).collect(),
-    }
 }
 
 /// Resolve the path to the `sdk` module the emitted code authors against.

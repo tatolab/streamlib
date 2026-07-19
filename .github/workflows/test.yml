@@ -64,4 +64,4 @@ jobs:
       # streamlib-engine's lib tests (host-body tier-1 + engine twin) are a tracked
       # follow-up, pending a fix to a parallel-run test flake.
       - name: Run unit tests
-        run: cargo test --locked -p streamlib -p streamlib-plugin-abi -p streamlib-plugin-sdk --lib
+        run: cargo test --locked -p streamlib -p streamlib-plugin-abi -p streamlib-plugin-sdk -p streamlib-processor-extract --lib
