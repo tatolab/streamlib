@@ -145,11 +145,10 @@ impl ModuleLoadRegistrationStaging {
     /// `SchemaIdent` would miss every real load, since the normal graph
     /// lookup is already version-blind (`highest_registered_for_tuple`).
     pub(super) fn contains_staged_processor_for_tuple(&self, ident: &SchemaIdent) -> bool {
-        self.processors.lock().iter().any(|staged| {
-            staged.descriptor.name.org == ident.org
-                && staged.descriptor.name.package == ident.package
-                && staged.descriptor.name.r#type == ident.r#type
-        })
+        self.processors
+            .lock()
+            .iter()
+            .any(|staged| staged.descriptor.name.matches_schema_tuple(ident))
     }
 
     /// End-of-walk gate for subprocess (`Dynamic`-kind) processors:
