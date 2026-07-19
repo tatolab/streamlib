@@ -1,23 +1,21 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Code generation for processor attribute macro
+//! Code generation for the `#[processor(...)]` attribute macro.
 //!
-//! Generates module wrapper with:
+//! Generates the module wrapper with:
 //! - `Processor` struct with public fields
 //! - `InputLink` module with port markers
 //! - `OutputLink` module with port markers
 //! - Processor trait implementation
 
-#[allow(unused_imports)]
-use crate::analysis::AnalysisResult;
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::quote;
 use streamlib_processor_schema::{PortSchemaSpec, ProcessorSchema, SchemaIdent};
-use syn::ItemStruct;
+use syn::{ItemStruct, Path};
 
 /// Emit a `SchemaIdent` literal expression. Inputs are pre-validated by the
-/// manifest parser so the `expect("validated")` calls are infallible.
+/// attribute parser so the `expect("validated")` calls are infallible.
 fn schema_ident_tokens(ident: &SchemaIdent) -> TokenStream {
     let org = ident.org.as_str();
     let pkg = ident.package.as_str();
@@ -37,11 +35,9 @@ fn schema_ident_tokens(ident: &SchemaIdent) -> TokenStream {
 
 /// Emit a `PortSchemaSpec` literal expression.
 ///
-/// `PortSchemaSpec::Named` should never reach this function — the macro's
-/// `load_processor_schema` pre-resolves every `Named` reference against
-/// the manifest's `schemas:` map (#767) before handing the schema to
-/// codegen. A `Named` here means the resolution pass was skipped or
-/// returned an unresolved spec, which is a macro implementation bug.
+/// `PortSchemaSpec::Named` should never reach this function — the attribute
+/// grammar only ever produces `Any` or a fully-qualified `Specific`. A `Named`
+/// here means the spec arrived unresolved, which is a macro implementation bug.
 fn port_schema_spec_tokens(spec: &PortSchemaSpec) -> TokenStream {
     match spec {
         PortSchemaSpec::Any => quote! { __streamlib_sdk::processors::PortSchemaSpec::Any },
@@ -60,54 +56,32 @@ fn port_schema_spec_tokens(spec: &PortSchemaSpec) -> TokenStream {
     }
 }
 
-// ============================================================================
-// YAML-based code generation
-// ============================================================================
-
-/// Generate a processor module from a YAML ProcessorSchema and the resolved
-/// structured [`SchemaIdent`] (org/package/type/version composed from the
-/// enclosing `streamlib.yaml`'s `package:` block + processor short name).
+/// Generate a processor module from the attribute-declared [`ProcessorSchema`]
+/// and its fully-qualified [`SchemaIdent`]. Identity, execution, and ports are
+/// authored in the `#[processor(...)]` attribute — nothing here reads a file.
 ///
-/// `config_schema_id` is the canonical id string for the processor's
-/// config schema, pre-resolved by the macro entrypoint by walking the
-/// manifest's `schemas:` map (#767). `None` when the processor declares
-/// no config block. The string is one of two grammars (handled by
-/// [`derive_config_type_from_schema`]): new-shape
-/// `@<org>/<package>/<TypeName>@<version>` or legacy reverse-DNS
-/// `<segments>.config@<version>`.
+/// `config_type_path` is the Rust type path for the processor's typed `Config`
+/// alias, taken verbatim from the attribute's `config = <Path>`; `None` binds
+/// the tolerant [`EmptyConfig`]. `config_field_name` is the generated struct
+/// field (present iff `config_type_path` is `Some`). `config_schema_id` is the
+/// descriptor-metadata id string emitted into `with_config_schema(...)`.
 pub fn generate_from_processor_schema(
     item: &ItemStruct,
     schema: &ProcessorSchema,
     schema_ident: &SchemaIdent,
+    config_type_path: Option<&Path>,
+    config_field_name: Option<&str>,
     config_schema_id: Option<&str>,
     sdk_root: TokenStream,
 ) -> TokenStream {
     let module_name = &item.ident;
 
-    // Derive config type from schema reference if present
-    let config_type = schema
-        .config
-        .as_ref()
-        .map(|_| {
-            // The bare-name TypeName from the manifest was resolved at
-            // macro entry; always pass the canonical id string here.
-            let id = config_schema_id.unwrap_or_else(|| {
-                // schema.config.is_some() implies the macro entry
-                // resolved a canonical id and supplied it. Reaching here
-                // is an internal bug in the macro flow.
-                panic!(
-                    "internal error: ProcessorSchema declares config but no \
-                     resolved canonical id was supplied to codegen"
-                )
-            });
-            derive_config_type_from_schema(id)
-        })
-        .unwrap_or_else(|| quote! { __streamlib_sdk::processors::EmptyConfig });
+    let config_type = match config_type_path {
+        Some(path) => quote! { #path },
+        None => quote! { __streamlib_sdk::processors::EmptyConfig },
+    };
 
-    let config_field_name = schema
-        .config
-        .as_ref()
-        .map(|c| Ident::new(&c.name, Span::call_site()));
+    let config_field_name = config_field_name.map(|name| Ident::new(name, Span::call_site()));
 
     // Extract custom fields from the user's struct
     let custom_fields = extract_custom_fields(item);
@@ -127,9 +101,8 @@ pub fn generate_from_processor_schema(
 
     let schema_ident_const = quote! {
         /// Structured wire identity for this processor —
-        /// `@<org>/<package>/<Type>@<version>` resolved at codegen
-        /// from sibling `streamlib.yaml`'s `package:` block plus
-        /// the processor's PascalCase short name.
+        /// `@<org>/<package>/<Type>@<version>` declared in the
+        /// `#[processor(...)]` attribute.
         #[allow(dead_code)]
         pub fn schema_ident() -> __streamlib_sdk::descriptors::SchemaIdent {
             Processor::schema_ident()
@@ -182,189 +155,6 @@ pub fn generate_from_processor_schema(
             #processor_impl
         }
     }
-}
-
-/// Derive the path to a Rust config type from a schema reference.
-///
-/// Two grammars are supported, and the emitted path differs between them
-/// **on purpose**:
-///
-/// - New-shape `@<org>/<package>/<TypeName>@<version>` (e.g.
-///   `@tatolab/audio/AudioMixerConfig@1.0.0`) emits the package-qualified
-///   path `crate::_generated_::<org>__<package>::<TypeName>` (e.g.
-///   `crate::_generated_::tatolab__audio::AudioMixerConfig`). The qualifier
-///   prevents two carve-out packages from colliding when they declare
-///   same-named types: `crate::_generated_::tatolab__audio::Strategy` and
-///   `crate::_generated_::tatolab__camera::Strategy` are distinct paths,
-///   not a Rust E0252 ambiguity.
-/// - Legacy reverse-DNS `com.<org>.<processor>.config@<version>` (e.g.
-///   `com.tatolab.buffer_rechunker.config@1.0.0`) emits the unqualified
-///   path `crate::_generated_::<TypeName>Config`. Legacy schemas land at
-///   the `_generated_/` root by codegen convention (the reverse-DNS
-///   filename already encodes org/processor — `com_streamlib_h265_*` vs
-///   `com_tatolab_screen_capture_*` — so collisions are filename-prevented at the
-///   codegen layer).
-///
-/// Defensive shape, not future-proofing: the qualified path makes
-/// cross-package type collisions a compile error rather than a
-/// codegen-time `pub use` ambiguity dependent on no two packages happening
-/// to choose the same short type name. CLAUDE.md "type-system enforcement
-/// beats convention" — this is the engine-grade variant of that rule.
-///
-/// The actual type must be defined by codegen at the emitted path; the
-/// `_generated_/` tree's `pub mod tatolab__<package>;` declaration plus the
-/// per-package `pub use <snake_case>::<TypeName>;` inside that submodule
-/// resolves the path.
-fn derive_config_type_from_schema(schema_ref: &str) -> TokenStream {
-    if let Some(rest) = schema_ref.strip_prefix('@') {
-        // New-shape grammar: <org>/<package>/<TypeName>[@<version>].
-        let ident_part = rest.split('@').next().unwrap_or(rest);
-        let segments: Vec<&str> = ident_part.split('/').collect();
-
-        // A well-formed new-shape schema has exactly three `/`-separated
-        // segments: org, package, TypeName. Anything shorter is a bug in
-        // the manifest parser (which validates the grammar before this
-        // macro runs); fall back to the unqualified path so the user sees
-        // a clear "type not found" error rather than a confusing path
-        // emission failure.
-        if segments.len() == 3 {
-            let org = segments[0];
-            let package = segments[1];
-            let type_name = segments[2];
-            // Package grammar (`[a-z][a-z0-9-]*`) permits hyphens, but Rust
-            // module identifiers don't. The codegen-side `_generated_/`
-            // tree maps `api-server` → `api_server` (snake_case mod name);
-            // mirror that here so `crate::_generated_::tatolab__api_server`
-            // resolves.
-            let package_ident_form = package.replace('-', "_");
-            let module_ident = Ident::new(
-                &format!("{}__{}", org, package_ident_form),
-                Span::call_site(),
-            );
-            let type_ident = Ident::new(type_name, Span::call_site());
-            quote! { crate::_generated_::#module_ident::#type_ident }
-        } else {
-            let fallback = segments.last().copied().unwrap_or("Unknown");
-            let ident = Ident::new(fallback, Span::call_site());
-            quote! { crate::_generated_::#ident }
-        }
-    } else {
-        // Legacy reverse-DNS grammar: <segments>.config[@<version>].
-        // Filename convention encodes org/processor; collisions are
-        // prevented at the codegen-output layer. Emit unqualified path
-        // for backward compatibility with the legacy `_generated_/mod.rs`
-        // top-level re-export shape.
-        let name_part = schema_ref.split('@').next().unwrap_or(schema_ref);
-        let segments: Vec<&str> = name_part.split('.').collect();
-
-        let processor_segment = if segments.len() >= 2 {
-            let last = segments[segments.len() - 1];
-            if last == "config" {
-                segments[segments.len() - 2]
-            } else {
-                last
-            }
-        } else {
-            segments.last().copied().unwrap_or("Unknown")
-        };
-
-        // e.g. "buffer_rechunker" -> "BufferRechunkerConfig"
-        let pascal_name = format!("{}Config", to_pascal_case(processor_segment));
-        let ident = Ident::new(&pascal_name, Span::call_site());
-        quote! { crate::_generated_::#ident }
-    }
-}
-
-#[cfg(test)]
-mod derive_config_type_tests {
-    use super::*;
-
-    fn render(schema_ref: &str) -> String {
-        derive_config_type_from_schema(schema_ref).to_string()
-    }
-
-    #[test]
-    fn new_shape_emits_package_qualified_path() {
-        // The defensive shape: package-qualified path means two carve-outs
-        // declaring the same short type name compile to distinct types.
-        assert_eq!(
-            render("@tatolab/audio/AudioMixerConfig@1.0.0"),
-            "crate :: _generated_ :: tatolab__audio :: AudioMixerConfig",
-        );
-        assert_eq!(
-            render("@tatolab/camera/CameraConfig@1.0.0"),
-            "crate :: _generated_ :: tatolab__camera :: CameraConfig",
-        );
-    }
-
-    #[test]
-    fn new_shape_qualifier_disambiguates_same_named_types() {
-        // Hypothetical collision: two packages each ship a `Strategy` enum.
-        // Without the package qualifier, the macro would emit
-        // `crate::_generated_::Strategy` for both — `_generated_/mod.rs`
-        // would `pub use ... ::Strategy;` twice and the codegen output
-        // would fail with E0252. With the qualifier each path is distinct.
-        let audio = render("@tatolab/audio/Strategy@1.0.0");
-        let camera = render("@tatolab/camera/Strategy@1.0.0");
-        assert_ne!(audio, camera);
-        assert!(audio.ends_with("tatolab__audio :: Strategy"));
-        assert!(camera.ends_with("tatolab__camera :: Strategy"));
-    }
-
-    #[test]
-    fn legacy_reverse_dns_emits_unqualified_path() {
-        // Legacy filenames already encode org/processor (com_tatolab_*,
-        // com_streamlib_*); the unqualified path is the established shape
-        // and the legacy schemas live at the `_generated_/` root.
-        assert_eq!(
-            render("com.tatolab.buffer_rechunker.config@1.0.0"),
-            "crate :: _generated_ :: BufferRechunkerConfig",
-        );
-        assert_eq!(
-            render("com.tatolab.jtd_codegen_fixture_a.config@1.0.0"),
-            "crate :: _generated_ :: JtdCodegenFixtureAConfig",
-        );
-    }
-
-    #[test]
-    fn new_shape_sanitizes_hyphenated_package_name() {
-        // Package grammar allows hyphens (`api-server`), Rust module
-        // identifiers do not. The macro emits the snake_case form so
-        // `crate::_generated_::tatolab__api_server` resolves against the
-        // codegen-side `pub mod tatolab__api_server;`.
-        assert_eq!(
-            render("@tatolab/api-server/ApiServerConfig@1.0.0"),
-            "crate :: _generated_ :: tatolab__api_server :: ApiServerConfig",
-        );
-    }
-
-    #[test]
-    fn malformed_new_shape_falls_back_without_panicking() {
-        // A new-shape string missing org or package doesn't panic; it
-        // falls back to the unqualified path so the user gets a clear
-        // "type not found" compile error instead of a macro panic.
-        let result = render("@tatolab/AudioMixerConfig@1.0.0");
-        assert!(result.contains("AudioMixerConfig"));
-    }
-}
-
-/// Convert a string to PascalCase.
-fn to_pascal_case(s: &str) -> String {
-    let mut result = String::new();
-    let mut capitalize_next = true;
-
-    for c in s.chars() {
-        if c == '_' || c == '-' || c == '.' {
-            capitalize_next = true;
-        } else if capitalize_next {
-            result.push(c.to_ascii_uppercase());
-            capitalize_next = false;
-        } else {
-            result.push(c);
-        }
-    }
-
-    result
 }
 
 /// Custom field extracted from the user's struct definition.
@@ -627,9 +417,9 @@ fn generate_processor_impl_from_schema(
             }
 
             /// Returns the structured wire identity for this processor —
-            /// `@<org>/<package>/<Type>@<version>` resolved at codegen
-            /// time from the sibling `streamlib.yaml`'s `package:` block
-            /// plus the processor's PascalCase short name.
+            /// the version-free `@<org>/<package>/<Type>` declared in the
+            /// `#[processor(...)]` attribute (carrying the `0.0.0`
+            /// version-free sentinel).
             pub fn schema_ident() -> __streamlib_sdk::descriptors::SchemaIdent {
                 #schema_ident_literal
             }
@@ -637,10 +427,9 @@ fn generate_processor_impl_from_schema(
             /// Create a [`ProcessorSpec`](__streamlib_sdk::processors::ProcessorSpec)
             /// for adding this processor to a runtime.
             pub fn node(config: #config_type) -> __streamlib_sdk::processors::ProcessorSpec {
-                // Version-pinned reference to this processor's own compiled-in
-                // version. `ProcessorSpec::new` takes the SchemaIdent directly
-                // on the engine-free SDK and via `From<SchemaIdent>` on the
-                // engine SDK (where `name` is a `ProcessorTypeReference`).
+                // `ProcessorSpec::new` takes the SchemaIdent directly on the
+                // engine-free SDK and via `From<SchemaIdent>` on the engine SDK
+                // (where `name` is a `ProcessorTypeReference`).
                 __streamlib_sdk::processors::ProcessorSpec::new(
                     Self::schema_ident(),
                     __streamlib_sdk::serde_json::to_value(&config)
@@ -779,10 +568,10 @@ fn generate_from_config_from_schema(
 
 /// Generate descriptor method from schema.
 ///
-/// `config_schema_id` is the canonical id string emitted into
-/// `with_config_schema(...)` — the bare-name `TypeName` from the manifest
-/// has been resolved by the macro entrypoint via the `schemas:` map
-/// (#767). `None` when the processor declares no config.
+/// `config_schema_id` is the descriptor-metadata id string emitted into
+/// `with_config_schema(...)`, declared (or synthesized from the config type)
+/// by the `#[processor(...)]` attribute. `None` when the processor declares
+/// no config.
 fn generate_descriptor_from_schema(
     schema: &ProcessorSchema,
     description: &str,
@@ -838,25 +627,17 @@ fn generate_descriptor_from_schema(
         })
         .collect();
 
-    // Config schema reference (if present). The bare-name `TypeName`
-    // from the manifest was resolved to a canonical id string by the
-    // macro entrypoint (#767); we emit that string into
-    // `with_config_schema(...)` directly.
-    let config_schema = schema.config.as_ref().map(|_c| {
-        let schema_ref = config_schema_id.unwrap_or_else(|| {
-            panic!(
-                "internal error: ProcessorSchema declares config but no \
-                 resolved canonical id was supplied to descriptor codegen"
-            )
-        });
+    // Config schema reference (descriptor metadata), declared or synthesized
+    // by the attribute. Emitted verbatim into `with_config_schema(...)`.
+    let config_schema = config_schema_id.map(|schema_ref| {
         quote! {
             .with_config_schema(#schema_ref)
         }
     });
 
-    // Declarative scheduling block sourced from the manifest. Absent →
-    // `Normal` priority. The OS thread name is derived by the compiler
-    // from the processor type + node id at spawn time, not authored.
+    // Declarative scheduling intent. Absent → `Normal` priority. The OS
+    // thread name is derived by the compiler from the processor type + node
+    // id at spawn time, not authored.
     let scheduling = schema.scheduling.as_ref().map(|s| {
         let priority_tokens = thread_priority_tokens(s.priority);
         quote! {

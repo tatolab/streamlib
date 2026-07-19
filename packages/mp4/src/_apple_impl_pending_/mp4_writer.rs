@@ -26,7 +26,12 @@ extern "C" {
     fn CVPixelBufferGetIOSurface(pixelBuffer: *const CVPixelBuffer) -> *mut IOSurface;
 }
 
-#[crate::processor("Mp4Writer")]
+#[crate::processor(
+    "@tatolab/mp4/Mp4Writer",
+    execution = reactive,
+    config = crate::_generated_::LinuxMp4WriterConfig,
+    input("video_in", "@tatolab/core/VideoFrame", read_mode = "read_next_in_order", overflow = "block", buffer_size = 32),
+)]
 pub struct AppleMp4WriterProcessor {
     // RuntimeContext for main thread dispatch
     ctx: Option<crate::core::RuntimeContext>,

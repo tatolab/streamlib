@@ -33,7 +33,15 @@ use streamlib_plugin_abi::{
 // PROCESSOR
 // ============================================================================
 
-#[streamlib_plugin_sdk::sdk::processor("H264Encoder")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/h264/H264Encoder",
+    description = "Encodes VideoFrame to EncodedVideoFrame (H.264) via Vulkan Video",
+    execution = reactive,
+    scheduling = high,
+    config = crate::_generated_::H264EncoderConfig,
+    input("video_in", "@tatolab/core/VideoFrame", read_mode = "read_next_in_order", buffer_size = 8, description = "Raw video frames to encode"),
+    output("encoded_video_out", "@tatolab/core/EncodedVideoFrame", description = "H.264 encoded video frames"),
+)]
 pub struct H264EncoderProcessor {
     /// Vulkan Video hardware encoder session (minted lazily from the first
     /// frame). `!Clone` — owns exclusive Vulkan Video session / DPB /

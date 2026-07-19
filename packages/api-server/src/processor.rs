@@ -103,7 +103,12 @@ fn generate_runtime_name() -> String {
     format!("{}-{}", adj, noun)
 }
 
-#[streamlib::sdk::processor("ApiServer")]
+#[streamlib::sdk::processor(
+    "@tatolab/api-server/ApiServer",
+    description = "Runtime API server — HTTP + WebSocket control plane",
+    execution = manual,
+    config = crate::_generated_::ApiServerConfig,
+)]
 pub struct ApiServerProcessor {
     handles: Option<StashedHandles>,
     /// Processor-owned tokio runtime. Constructed in `setup()`, dropped in

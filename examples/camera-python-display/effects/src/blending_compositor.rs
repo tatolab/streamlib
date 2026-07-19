@@ -214,7 +214,17 @@ struct Intermediate {
     current_layout: VulkanLayout,
 }
 
-#[streamlib_plugin_sdk::sdk::processor("BlendingCompositor")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/camera-python-display-effects/BlendingCompositor",
+    description = "Multi-layer alpha blending compositor with PiP support",
+    execution = manual,
+    scheduling = realtime,
+    input("video_in", "@tatolab/core/VideoFrame", description = "Video frames (base layer)"),
+    input("lower_third_in", "@tatolab/core/VideoFrame", description = "Lower third overlay (RGBA with transparency)"),
+    input("watermark_in", "@tatolab/core/VideoFrame", description = "Watermark overlay (RGBA with transparency)"),
+    input("pip_in", "@tatolab/core/VideoFrame", description = "PiP overlay (avatar character with transparent background)"),
+    output("video_out", "@tatolab/core/VideoFrame", description = "Composited video frames"),
+)]
 pub struct BlendingCompositorProcessor {
     config: BlendingCompositorConfig,
 

@@ -47,7 +47,13 @@ pub fn reset() {
     *FIRST_FRAME.lock().expect("FIRST_FRAME mutex poisoned") = None;
 }
 
-#[streamlib_plugin_sdk::sdk::processor("VideoFrameCounter")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/debug-utilities/VideoFrameCounter",
+    description = "Counts incoming VideoFrames into process-global atomics so integration tests can assert on frame count + first-frame dimensions after runtime.stop()",
+    execution = reactive,
+    config = crate::_generated_::VideoFrameCounterConfig,
+    input("input", "@tatolab/core/VideoFrame", read_mode = "read_next_in_order", buffer_size = 16, description = "VideoFrame stream to observe"),
+)]
 pub struct VideoFrameCounterProcessor;
 
 impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for VideoFrameCounterProcessor::Processor {

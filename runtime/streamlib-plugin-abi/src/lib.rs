@@ -34,15 +34,19 @@
 //! use streamlib::prelude::*;
 //! use streamlib_plugin_abi::export_plugin;
 //!
-//! #[streamlib::sdk::processor(execution = Continuous)]
-//! pub struct MyProcessor {
-//!     #[streamlib::sdk::processors::input(description = "Video input")]
-//!     video_in: LinkInput<VideoFrame>,
-//! }
+//! // The `#[processor(...)]` attribute is the single source of truth for
+//! // identity, execution mode, and ports — nothing is read from a file.
+//! #[streamlib::sdk::processor(
+//!     "@org/pkg/MyProcessor",
+//!     execution = continuous,
+//!     input("video_in", "@tatolab/core/VideoFrame", description = "Video input"),
+//!     output("video_out", "@tatolab/core/VideoFrame"),
+//! )]
+//! pub struct MyProcessor;
 //!
 //! impl ContinuousProcessor for MyProcessor::Processor {
 //!     fn process(&mut self) -> Result<()> {
-//!         if let Some(frame) = self.video_in.read() { /* ... */ }
+//!         if let Some(frame) = self.inputs.read("video_in") { /* ... */ }
 //!         Ok(())
 //!     }
 //! }

@@ -326,7 +326,14 @@ unsafe fn forward_camera_iosurface_directly(
     }
 }
 
-#[streamlib::sdk::processor("Camera")]
+#[streamlib::sdk::processor(
+    "@tatolab/camera/Camera",
+    description = "Captures video from cameras (V4L2 on Linux, AVFoundation on macOS/iOS)",
+    execution = manual,
+    scheduling = high,
+    config = crate::_generated_::CameraConfig,
+    output("video", "@tatolab/core/VideoFrame", description = "Live video frames from the camera"),
+)]
 pub struct AppleCameraProcessor {
     camera_name: String,
     /// Async init state - None means init not started yet.

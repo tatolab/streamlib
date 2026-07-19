@@ -23,7 +23,13 @@ use std::sync::Arc;
 
 const DEFAULT_FPS: u32 = 10;
 
-#[streamlib_plugin_sdk::sdk::processor("JpegBytesSource")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/debug-utilities/JpegBytesSource",
+    description = "Loads a JPEG file from disk at setup time and republishes it as EncodedJpegFrame on a paced background thread (for testing the JPEG decoder pipeline)",
+    execution = manual,
+    config = crate::_generated_::JpegBytesSourceConfig,
+    output("encoded_jpeg", "@tatolab/jpeg/EncodedJpegFrame", description = "JPEG-encoded bytes wrapped in an EncodedJpegFrame"),
+)]
 pub struct JpegBytesSourceProcessor {
     /// JPEG bytes loaded from disk at setup time.
     jpeg_bytes: Option<Arc<Vec<u8>>>,

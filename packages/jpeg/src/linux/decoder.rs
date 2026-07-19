@@ -29,7 +29,15 @@ const DEFAULT_MAX_WIDTH: u32 = 3840;
 /// Default max height when `JpegDecoderConfig::max_height` is unset.
 const DEFAULT_MAX_HEIGHT: u32 = 2160;
 
-#[streamlib_plugin_sdk::sdk::processor("JpegDecoder")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/jpeg/JpegDecoder",
+    description = "Decodes EncodedJpegFrame to VideoFrame via the GPU SimpleJpegDecoder primitive",
+    execution = reactive,
+    scheduling = high,
+    config = crate::_generated_::JpegDecoderConfig,
+    input("encoded_jpeg_in", "@tatolab/jpeg/EncodedJpegFrame", read_mode = "read_next_in_order", buffer_size = 16, description = "JPEG-encoded frames to decode"),
+    output("video_out", "@tatolab/core/VideoFrame", description = "Decoded video frames"),
+)]
 pub struct JpegDecoderProcessor {
     /// Underlying GPU JPEG decoder primitive. Owns the texture ring +
     /// per-slot surface_id registration internally.

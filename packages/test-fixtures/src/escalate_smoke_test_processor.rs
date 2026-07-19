@@ -51,7 +51,12 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
 
-#[streamlib::sdk::processor("EscalateSmokeTestProcessor")]
+#[streamlib::sdk::processor(
+    "@tatolab/test-fixtures/EscalateSmokeTestProcessor",
+    description = "Phase C3 (#903) dlopen-cdylib escalate smoke test fixture — runs gpu.escalate(|_full| Ok(())) end-to-end through the escalate_begin/escalate_end vtable + cdylib-side FullAccess construction via from_scope_token",
+    execution = manual,
+    config = crate::_generated_::EscalateSmokeTestProcessorConfig,
+)]
 pub struct EscalateSmokeTest {}
 
 impl ManualProcessor for EscalateSmokeTest::Processor {

@@ -18,7 +18,14 @@ pub struct LinuxAudioInputDevice {
     pub is_default: bool,
 }
 
-#[streamlib_plugin_sdk::sdk::processor("AudioCapture")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/audio/AudioCapture",
+    description = "Captures mono audio from microphones in device-native format (CoreAudio on macOS, ALSA on Linux)",
+    execution = manual,
+    scheduling = realtime,
+    config = crate::_generated_::AudioCaptureConfig,
+    output("audio", "@tatolab/core/AudioFrame", description = "Captured mono audio frames in device-native sample rate"),
+)]
 pub struct LinuxAudioCaptureProcessor {
     device_info: Option<LinuxAudioInputDevice>,
     _device: Option<Device>,

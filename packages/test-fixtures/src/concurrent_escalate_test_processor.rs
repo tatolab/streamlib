@@ -31,7 +31,12 @@ use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAcc
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
 
-#[streamlib::sdk::processor("ConcurrentEscalateTestProcessor")]
+#[streamlib::sdk::processor(
+    "@tatolab/test-fixtures/ConcurrentEscalateTestProcessor",
+    description = "Phase H (#1006 scenario 1) dlopen-cdylib concurrent-escalate fixture. Spawns thread_count threads from start(); each clones gpu_limited_access() and calls escalate concurrently. Output captures overlap count; expected overlaps=0 — proves the escalate gate serializes cdylib-path callers through escalate_via_vtable.",
+    execution = manual,
+    config = crate::_generated_::ConcurrentEscalateTestProcessorConfig,
+)]
 pub struct ConcurrentEscalateTest {}
 
 impl ManualProcessor for ConcurrentEscalateTest::Processor {

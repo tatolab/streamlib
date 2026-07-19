@@ -33,7 +33,12 @@ use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAcc
 use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::{ContinuousProcessor, ManualProcessor};
 
-#[streamlib::sdk::processor("PanickingManualLifecycleProcessor")]
+#[streamlib::sdk::processor(
+    "@tatolab/test-fixtures/PanickingManualLifecycleProcessor",
+    description = "Phase H (#1005) dlopen-cdylib panic-injection Manual fixture. Panics in the configured lifecycle hook (setup / start / stop / teardown / on_pause / on_resume); the host's run_host_extern_c panic-safety net is expected to absorb the panic and keep the runtime alive.",
+    execution = manual,
+    config = crate::_generated_::PanickingManualLifecycleProcessorConfig,
+)]
 pub struct PanickingManualLifecycle {}
 
 impl ManualProcessor for PanickingManualLifecycle::Processor {
@@ -80,7 +85,12 @@ impl ManualProcessor for PanickingManualLifecycle::Processor {
     }
 }
 
-#[streamlib::sdk::processor("PanickingContinuousLifecycleProcessor")]
+#[streamlib::sdk::processor(
+    "@tatolab/test-fixtures/PanickingContinuousLifecycleProcessor",
+    description = "Phase H (#1005) dlopen-cdylib panic-injection Continuous fixture. Panics in the configured lifecycle hook (process); the host's run_host_extern_c panic-safety net is expected to absorb the panic and keep the runtime alive.",
+    execution = continuous,
+    config = crate::_generated_::PanickingContinuousLifecycleProcessorConfig,
+)]
 pub struct PanickingContinuousLifecycle {}
 
 impl ContinuousProcessor for PanickingContinuousLifecycle::Processor {

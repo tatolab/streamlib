@@ -67,7 +67,12 @@ const SMOKE_BINDINGS: &[GraphicsBindingSpec] = &[];
 const SMOKE_PUSH_CONSTANT_SIZE: u32 = std::mem::size_of::<u32>() as u32;
 const SMOKE_SURFACE_SIZE: u32 = 64;
 
-#[streamlib::sdk::processor("GraphicsKernelSmokeTestProcessor")]
+#[streamlib::sdk::processor(
+    "@tatolab/test-fixtures/GraphicsKernelSmokeTestProcessor",
+    description = "Phase E (#951) dlopen-cdylib graphics-kernel methods-vtable smoke test fixture — creates a graphics kernel via FullAccess, acquires a render-target Texture, runs a single offscreen_render() through the per-type binding-method vtable to assert the vtable round-trips don't panic. Smoke-only; pixel correctness not asserted.",
+    execution = manual,
+    config = crate::_generated_::GraphicsKernelSmokeTestProcessorConfig,
+)]
 pub struct GraphicsKernelSmokeTest {}
 
 impl ManualProcessor for GraphicsKernelSmokeTest::Processor {

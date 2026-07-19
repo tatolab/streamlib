@@ -25,7 +25,14 @@ pub struct AppleWindowId(pub u64);
 
 static NEXT_WINDOW_ID: AtomicU64 = AtomicU64::new(1);
 
-#[crate::processor("Display")]
+#[crate::processor(
+    "@tatolab/display/Display",
+    description = "Displays video frames in a window with vsync",
+    execution = manual,
+    scheduling = high,
+    config = crate::_generated_::DisplayConfig,
+    input("video", "@tatolab/core/VideoFrame", read_mode = "skip_to_latest", buffer_size = 4, description = "Video frames to display in the window"),
+)]
 pub struct AppleDisplayProcessor {
     /// Window address stored as usize (NSWindow is !Send, but we leak it anyway)
     window_addr: AtomicUsize,

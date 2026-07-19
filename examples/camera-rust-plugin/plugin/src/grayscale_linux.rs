@@ -35,7 +35,13 @@ struct LinuxBackend {
     output_ring: TextureRing,
 }
 
-#[streamlib_plugin_sdk::sdk::processor("GrayscaleRust")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/camera-rust-plugin/GrayscaleRust",
+    description = "Grayscale video effect (Rust dylib plugin)",
+    execution = reactive,
+    input("video_in", "@tatolab/core/VideoFrame"),
+    output("video_out", "@tatolab/core/VideoFrame"),
+)]
 pub struct GrayscaleProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,
     frame_count: AtomicU64,

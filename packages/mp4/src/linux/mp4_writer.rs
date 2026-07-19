@@ -9,7 +9,13 @@ use streamlib_plugin_sdk::sdk::processors::ReactiveProcessor;
 use std::io::Write;
 use std::process::{Child, Command, Stdio};
 
-#[streamlib_plugin_sdk::sdk::processor("LinuxMp4Writer")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/mp4/LinuxMp4Writer",
+    description = "Writes video frames to MP4 via ffmpeg encode + mux with silent audio track",
+    execution = reactive,
+    config = crate::_generated_::LinuxMp4WriterConfig,
+    input("video_in", "@tatolab/core/VideoFrame", read_mode = "read_next_in_order", overflow = "block", buffer_size = 32, description = "Decoded video frames (raw pixels) to encode and write"),
+)]
 pub struct LinuxMp4WriterProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,
 

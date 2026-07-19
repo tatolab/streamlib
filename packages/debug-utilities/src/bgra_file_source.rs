@@ -24,7 +24,13 @@ use std::sync::Arc;
 /// `docs/learnings/vulkan-frames-in-flight.md`.
 const RING_DEPTH: usize = 2;
 
-#[streamlib_plugin_sdk::sdk::processor("BgraFileSource")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/debug-utilities/BgraFileSource",
+    description = "Streams raw BGRA frames from a file as Videoframes",
+    execution = manual,
+    config = crate::_generated_::BgraFileSourceConfig,
+    output("video", "@tatolab/core/VideoFrame", description = "Video frames read from the BGRA file"),
+)]
 pub struct BgraFileSourceProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,
     is_running: Arc<AtomicBool>,

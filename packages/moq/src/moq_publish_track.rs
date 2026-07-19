@@ -10,7 +10,13 @@ use std::sync::Arc;
 use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib_plugin_sdk::sdk::error::{Error, Result};
 
-#[streamlib_plugin_sdk::sdk::processor("MoqPublishTrack")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/moq/MoqPublishTrack",
+    description = "Publishes raw bytes from a single graph input to a named MoQ track",
+    execution = reactive,
+    config = crate::_generated_::MoqPublishTrackConfig,
+    input("data_in", any, description = "Input data to publish to MoQ track (any serialized type)"),
+)]
 pub struct MoqPublishTrackProcessor {
     shared_publish_session: Option<Arc<Mutex<MoqPublishSession>>>,
     sessions: Option<SharedMoqSessions>,

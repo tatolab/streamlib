@@ -25,7 +25,12 @@ use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAcc
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
 
-#[streamlib::sdk::processor("TcpBindTestProcessor")]
+#[streamlib::sdk::processor(
+    "@tatolab/test-fixtures/TcpBindTestProcessor",
+    description = "dlopen-owns-tokio integration test fixture from #885 — binds a tokio::net::TcpListener on the plugin's own runtime",
+    execution = manual,
+    config = crate::_generated_::TcpBindTestProcessorConfig,
+)]
 pub struct TcpBindTest {
     tokio_runtime: Option<tokio::runtime::Runtime>,
 }

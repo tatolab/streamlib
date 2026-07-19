@@ -6,7 +6,16 @@ use crate::_generated_::AudioFrame;
 use streamlib_plugin_sdk::sdk::error::{Result, Error};
 use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
-#[streamlib_plugin_sdk::sdk::processor("AudioMixer")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/audio/AudioMixer",
+    description = "Mixes two mono audio signals into a single stereo signal",
+    execution = reactive,
+    scheduling = realtime,
+    config = crate::_generated_::AudioMixerConfig,
+    input("left", "@tatolab/core/AudioFrame", read_mode = "read_next_in_order", buffer_size = 32, description = "Left channel mono audio frame"),
+    input("right", "@tatolab/core/AudioFrame", read_mode = "read_next_in_order", buffer_size = 32, description = "Right channel mono audio frame"),
+    output("audio", "@tatolab/core/AudioFrame", description = "Mixed stereo audio frame"),
+)]
 pub struct AudioMixerProcessor {
     sample_rate: u32,
     buffer_size: usize,
