@@ -846,21 +846,12 @@ impl Runner {
         }
     }
 
-    /// Begin a **policy-gated acquire-on-reference** load: on a miss against the
-    /// installed set, fetch the providing package from the static registry,
-    /// record it in `streamlib.lock`, then load it from the (now-populated)
-    /// installed cache. Returns `Ok(None)` — no acquisition — when the policy is
-    /// `Off` (the default), a `Prompt` handler declines, the referenced package
-    /// is a `@session/` type, no app-modules root or registry URL is configured;
-    /// `Ok(Some(added))` with the in-flight cache load once acquired; a typed
-    /// `Err` when acquisition was permitted but the registry resolve / download
-    /// failed.
-    ///
-    /// This is the install-shaped resolver (range → concrete, WRITES the lock)
-    /// via [`AppModulesDir::acquire_from_registry`], never the locked-run
-    /// resolver — the two-resolver split holds.
-    ///
-    /// [`AppModulesDir::acquire_from_registry`]: streamlib_idents::app_modules::AppModulesDir::acquire_from_registry
+    /// Begin a **policy-gated acquire-on-reference** load: on an installed-set
+    /// miss, fetch the providing package from the registry, record it in
+    /// `streamlib.lock`, and load it from the now-populated cache. `Ok(None)`
+    /// signals a declined acquisition (policy `Off`, a `Prompt` handler
+    /// declines, a `@session/` type, or no app-modules root / registry URL
+    /// configured) — distinct from a typed `Err` on a permitted-but-failed fetch.
     fn begin_acquire_on_reference(
         &self,
         processor_type: &crate::core::processors::ProcessorTypeReference,
@@ -869,7 +860,7 @@ impl Runner {
 
         // Session types register live via `add_local`; they are never installed
         // and so never acquired.
-        if processor_type.org().as_str() == streamlib_idents::SESSION_ORG {
+        if processor_type.org().is_reserved_for_session() {
             return Ok(None);
         }
         let pkg_ref = streamlib_idents::PackageRef::new(

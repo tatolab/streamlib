@@ -207,7 +207,7 @@ pub enum Error {
 /// `Runner::add_local` and are never installable, so no `streamlib add` fix-it
 /// is offered for them.
 fn unknown_processor_type_message(ident: &SchemaIdent) -> String {
-    if ident.org.as_str() == "session" {
+    if ident.org.is_reserved_for_session() {
         format!("Unknown processor type: {ident} (not registered)")
     } else {
         format!(
