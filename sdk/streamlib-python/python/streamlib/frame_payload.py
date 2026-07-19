@@ -36,9 +36,17 @@ class PortKey(ctypes.Structure):
 
     @staticmethod
     def from_str(s: str) -> "PortKey":
+        # Mirrors Rust `PortKey::new` (#1416): an over-length name is a hard
+        # error, never a silent truncation that would route frames to a
+        # different (clipped) port than the one the author named.
         key = PortKey()
         data = s.encode("utf-8")
-        key.len = min(len(data), MAX_PORT_KEY_SIZE - 1)
+        if len(data) > MAX_PORT_KEY_SIZE - 1:
+            raise ValueError(
+                f"port key name is {len(data)} bytes, exceeding the fixed wire "
+                f"capacity of {MAX_PORT_KEY_SIZE - 1} bytes"
+            )
+        key.len = len(data)
         ctypes.memmove(key.name, data, key.len)
         return key
 

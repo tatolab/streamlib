@@ -732,7 +732,7 @@ mod tests {
         .expect("schema ident");
         let make_frame = |port: &str| -> Vec<u8> {
             let mut buf = vec![0u8; FRAME_HEADER_SIZE + 4];
-            let header = FrameHeader::new(port, schema_ident, 0, 4);
+            let header = FrameHeader::new(port, schema_ident, 0, 4).expect("port fits PortKey");
             header.write_to_slice(&mut buf);
             buf[FRAME_HEADER_SIZE..].copy_from_slice(&[1, 2, 3, 4]);
             buf

@@ -285,6 +285,7 @@ fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
     let schema_ident = SchemaIdentWire::from_segments("test", "wire", "LargeFrame", 1, 0, 0)
         .expect("LargeFrame segments fit SchemaIdentWire bounds");
     FrameHeader::new("dest_port", schema_ident, 42, data_size as u32)
+        .expect("dest_port fits PortKey bounds")
         .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
     frame[FRAME_HEADER_SIZE..].copy_from_slice(&data);
 
