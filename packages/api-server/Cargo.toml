@@ -31,12 +31,12 @@ moq = ["dep:streamlib-moq"]
 # Host-side member: the zone crates resolve by path (this package is never
 # published, so there is no registry closure to satisfy by version).
 [build-dependencies]
-streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.7.11" }
+streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.7.12" }
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.7.11" }
-streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.7.11" }
-streamlib-moq = { path = "../../runtime/streamlib-moq", version = "0.7.11", optional = true }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.7.12" }
+streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.7.12" }
+streamlib-moq = { path = "../../runtime/streamlib-moq", version = "0.7.12", optional = true }
 
 tower-http = { version = "0.6", features = ["trace"] }
 futures-util = "0.3"
