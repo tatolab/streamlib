@@ -159,9 +159,9 @@ async fn connect_impl(
     // The one channel name this link publishes to / subscribes from — the
     // deterministic `connect()` sugar (#1416). Intra-node it currently maps
     // onto the per-destination iceoryx2 service; the name is what phase [L]
-    // cross-node routing keys on. An out-of-grammar endpoint (e.g. an
-    // underscore-bearing port name) surfaces as a typed link error rather than
-    // an invalid wire name.
+    // cross-node routing keys on. An out-of-grammar endpoint (e.g. a port name
+    // carrying `/` or uppercase) surfaces as a typed link error rather than an
+    // invalid wire name; underscore is legal and rides through.
     let channel = streamlib_idents::connect_channel_name(
         from_processor.as_str(),
         &from_port,
