@@ -27,12 +27,12 @@ publish = false
 path = "src/lib.rs"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.7.13" }
-streamlib-engine = { path = "../../runtime/streamlib-engine", version = "0.7.13" }
-streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.7.13" }
-streamlib-adapter-cpu-readback = { path = "../streamlib-adapter-cpu-readback", version = "0.7.13" }
-streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.7.13" }
-streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.7.13" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.7.14" }
+streamlib-engine = { path = "../../runtime/streamlib-engine", version = "0.7.14" }
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.7.14" }
+streamlib-adapter-cpu-readback = { path = "../streamlib-adapter-cpu-readback", version = "0.7.14" }
+streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.7.14" }
+streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.7.14" }
 vulkanalia.workspace = true
 serde.workspace = true
 serde_json.workspace = true
