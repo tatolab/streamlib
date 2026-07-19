@@ -125,6 +125,48 @@ fn test_processor_schema_ident_declared_in_attribute() {
     assert_eq!(ident.version.patch, 0);
 }
 
+// A bare processor with NO identity string. This test crate has no sibling
+// streamlib.yaml and the macro reads no file — the identity is synthesized
+// purely from the struct name as `@app/local/<StructName>@0.0.0`. This is the
+// full macro-expansion proof of the named acceptance criterion (#1409): a bare
+// crate with no streamlib.yaml compiles under @app/local.
+#[streamlib::sdk::processor(execution = manual)]
+pub struct BareAppLocalProcessor;
+
+impl streamlib_engine::ManualProcessor for BareAppLocalProcessor::Processor {
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn test_bare_processor_synthesizes_app_local_identity() {
+    // No identity string in the attribute and no file read: the emitted
+    // `schema_ident()` is `@app/local/<StructName>@0.0.0`, the struct name
+    // supplying the Type segment and the 0.0.0 version-free sentinel the
+    // version. Reverting the @app/local synthesis (or making it read a file)
+    // flips this assertion — that is the regression it guards.
+    let ident = BareAppLocalProcessor::schema_ident();
+    assert_eq!(ident.org.as_str(), "app");
+    assert_eq!(ident.package.as_str(), "local");
+    assert_eq!(ident.r#type.as_str(), "BareAppLocalProcessor");
+    assert_eq!(ident.version.major, 0);
+    assert_eq!(ident.version.minor, 0);
+    assert_eq!(ident.version.patch, 0);
+    assert_eq!(
+        BareAppLocalProcessor::schema_ident().to_string(),
+        "@app/local/BareAppLocalProcessor@0.0.0"
+    );
+}
+
 #[test]
 fn test_processor_schema_ident_renders_canonical_joined_form() {
     // The structured SchemaIdent's Display impl produces the canonical
