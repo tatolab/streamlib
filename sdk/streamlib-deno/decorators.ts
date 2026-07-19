@@ -30,12 +30,19 @@
  * `sdk/streamlib-processor-extract` (there the scan reads the AST without
  * running it; here extraction is import). See `extract_processors.ts`.
  *
- * Schema references in port declarations (`@input(...)` / `@output(...)`)
- * are cross-package by definition. The only accepted forms are a
- * {@linkcode SchemaIdent} instance or a class carrying
- * `streamlibSchemaIdent` as a static field. String forms (bare type
- * name or joined `@org/pkg/Type@v`) are rejected — schemas have no
- * shorthand. See `docs/architecture/schema-identity-and-packaging.md`.
+ * Schema references in port declarations follow the two-door descriptor
+ * model (`docs/architecture/zero-ceremony-authoring.md`). A port needs
+ * **no** schema to move data: the wire is self-describing (msgpack named
+ * maps / `Bag`), so send and receive work with zero type. When a port
+ * *does* declare a schema — for validation, the visual builder, or
+ * opt-in typed views — the reference is cross-package by definition, and
+ * the only accepted forms are a {@linkcode SchemaIdent} instance or a
+ * class carrying `streamlibSchemaIdent` as a static field (produced by
+ * the opt-in `streamlib generate`). String forms (bare type name or
+ * joined `@org/pkg/Type@v`) are rejected — schemas have no shorthand.
+ * `streamlib generate` typed views are sugar consumed as data;
+ * JTD-in-YAML remains the authored source for a shared vocabulary type.
+ * See `docs/architecture/schema-identity-and-packaging.md`.
  *
  * Timestamps
  * ----------

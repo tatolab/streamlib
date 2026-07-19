@@ -543,22 +543,36 @@ to the authoring path:
   `__streamlib_schema_ident__`. Bare-string and joined-string
   forms are rejected at decoration time, mirroring the no-parse
   invariant on the Rust side.
-- **Schemas enter Python only through codegen.** Authors import
-  generated dataclasses from `streamlib._generated_.<package>`
-  (or their own package's `_generated_/`); the codegen Python
-  post-processor injects
-  `__streamlib_schema_ident__: ClassVar[SchemaIdent] =
-  SchemaIdent(org=…, package=…, type_=…, version=…)` as a class
-  attribute on every new-shape (`metadata.type` + package
-  context) generated dataclass, so `@input(schema=GeneratedClass)`
-  resolves to a structured `SchemaIdent` directly. There is no
-  language-side authoring affordance for declaring schemas —
-  JTD-in-YAML is the canonical schema source, and deriving JTD
-  from Python field declarations would leak Python-native
-  expressivity (custom classes, numpy types, pydantic types)
-  that doesn't translate cross-language. The same constraint
-  applies to Rust and Deno: schemas are always YAML-authored,
-  generated code is what authors import.
+- > ~~**Schemas enter Python only through codegen.** Authors import
+  > generated dataclasses from `streamlib._generated_.<package>`
+  > (or their own package's `_generated_/`) … There is no
+  > language-side authoring affordance for declaring schemas —
+  > JTD-in-YAML is the canonical schema source … schemas are always
+  > YAML-authored, generated code is what authors import.~~ —
+  > Superseded 2026-07-19 by the two-door descriptor model (see
+  > [`zero-ceremony-authoring.md`](zero-ceremony-authoring.md)).
+  > Codegen is no longer the *only* door schemas enter a language, and
+  > importing generated types is no longer required to move data:
+  >
+  > 1. **Self-describing wire** — a processor sends / receives msgpack
+  >    named maps (`Bag`) with **zero type**; the wire carries its own
+  >    field names, so no schema and no generated type is needed to
+  >    interoperate.
+  > 2. **An optional by-ID JTD descriptor** — for validation, the visual
+  >    builder, and opt-in typed views, referenced by identity and
+  >    **consumed as data, with no codegen**.
+  > 3. **`streamlib generate` typed views are opt-in sugar** — importing
+  >    a generated dataclass for static field access is a convenience,
+  >    never a requirement.
+  >
+  > JTD-in-YAML survives as the authored source **only** for a shared
+  > vocabulary type (one small contract-only file). What still holds:
+  > when codegen *is* run, the Python post-processor injects
+  > `__streamlib_schema_ident__: ClassVar[SchemaIdent]` on every
+  > generated dataclass so `@input(schema=GeneratedClass)` resolves to a
+  > structured `SchemaIdent` directly; and deriving JTD from Python /
+  > Deno field declarations is still rejected (it would leak
+  > language-native expressivity that doesn't translate cross-language).
 
 The reason for the focused subset rather than full parity:
 structured-everywhere eliminates the need for non-Rust callers to

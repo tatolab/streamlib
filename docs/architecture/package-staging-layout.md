@@ -20,10 +20,17 @@ package is laid out, and all three runtimes use it. The payoff is that
 every relative path the author wrote resolves identically in dev and in
 the artifact:
 
-- A processor's sibling `streamlib.yaml` (the `@processor` decorator and
-  the Rust/Python proc-macros resolve the manifest as a sibling of the
-  source file).
-- A Deno processor's `./_generated_/<org>__<pkg>/<type>.ts` import.
+- > ~~A processor's sibling `streamlib.yaml` (the `@processor` decorator
+  > and the Rust/Python proc-macros resolve the manifest as a sibling of
+  > the source file).~~ — Superseded 2026-07-19: the decorator / proc-macro
+  > is the truth-source and reads **nothing** from disk at decoration time
+  > (see [`zero-ceremony-authoring.md`](zero-ceremony-authoring.md) and the
+  > `@processor` docstrings). Identity, execution, and ports are declared
+  > in code; a bare module with no `streamlib.yaml` is a working local
+  > processor. The mirror invariant still matters for *authored assets a
+  > package ships and reads at runtime* (below), not for manifest lookup.
+- A Deno processor's `./_generated_/<org>__<pkg>/<type>.ts` import (only
+  when the consumer opts into `streamlib generate` typed views).
 - Any asset a package ships and reads at runtime (`./shaders/x.wgsl`,
   `./models/y.bin`, embedded video/html/data) — at its authored path.
 
@@ -121,12 +128,19 @@ failure mode this rule prevents: a language whose assembler dropped the
 entrypoint into a subdir (`deno/<file>.ts`) while leaving
 `streamlib.yaml` at the root, and which bundled only the entrypoint
 rather than the full tree. The result was a staged layout the author
-never wrote — the sibling-manifest lookup failed, `_generated_` and
-`.npmrc` and assets never travelled, and the symptom (`@processor`
-reporting `streamlib.yaml not found`) pointed at the decorator rather
-than at the relocation that actually caused it. The fix was not to teach
-the decorator to climb directories; it was to stop relocating, so the
-authored layout and the staged layout agree by construction.
+never wrote — `_generated_` and `.npmrc` and assets never travelled, and
+the symptom pointed at the decorator rather than at the relocation that
+actually caused it. The fix was not to teach the decorator to climb
+directories; it was to stop relocating, so the authored layout and the
+staged layout agree by construction.
+
+> ~~The historical trigger for this rule was `@processor` reporting
+> `streamlib.yaml not found` after a relocation.~~ — Corrected 2026-07-19:
+> the decorator no longer reads a sibling `streamlib.yaml` at all
+> ([`zero-ceremony-authoring.md`](zero-ceremony-authoring.md)), so that
+> particular symptom can no longer occur. The rule still holds for the
+> asset / `_generated_` / `.npmrc` paths that *are* resolved relative to
+> the authored layout.
 
 If a new runtime or a new asset class tempts a relocation "for
 symmetry," stop — the symmetry that matters is dev-layout ==
@@ -141,8 +155,7 @@ staged-layout, and that is achieved by mirroring, not by moving.
   `provision_python_venv` (+ `ensure_streamlib_generated_in_venv`) in
   `src/python_venv.rs`; `provision_deno_typescript` (+
   `staged_package_has_deno`) in `src/deno_codegen.rs`.
-- **Consumers of the layout**: the `@processor` sibling-manifest lookup
-  in `sdk/streamlib-deno/decorators.ts`; the entrypoint resolution in
+- **Consumers of the layout**: the entrypoint resolution in
   `sdk/streamlib-deno/subprocess_runner.ts` (`resolveDenoModulePath`
   resolves against the package root); the Deno spawn op
   (`--config <pkg>/deno.json`) in
