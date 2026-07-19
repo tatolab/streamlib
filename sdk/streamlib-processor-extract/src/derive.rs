@@ -608,11 +608,44 @@ fn describe_difference(name: &str, manifest: &ProcessorSurface, code: &Processor
             code_outputs.join(", ")
         );
     }
+    // Port names match on both sides, so the surfaces zip by position; the only
+    // remaining difference is a port that kept its name but changed schema type.
+    // Name the port and both types so the author knows exactly what moved.
+    let differing_port = manifest
+        .inputs
+        .iter()
+        .zip(&code.inputs)
+        .map(|(manifest_port, code_port)| ("input", manifest_port, code_port))
+        .chain(
+            manifest
+                .outputs
+                .iter()
+                .zip(&code.outputs)
+                .map(|(manifest_port, code_port)| ("output", manifest_port, code_port)),
+        )
+        .find(|(_, manifest_port, code_port)| manifest_port.schema != code_port.schema);
+    if let Some((direction, manifest_port, code_port)) = differing_port {
+        return format!(
+            "`{name}` {direction} port `{}` schema type differs: `processors:` says {}, code declares {}",
+            manifest_port.name,
+            describe_port_schema(&manifest_port.schema),
+            describe_port_schema(&code_port.schema),
+        );
+    }
     format!("`{name}` port schema types differ between `processors:` and code")
 }
 
 fn port_names(ports: &[PortSurface]) -> Vec<String> {
     ports.iter().map(|p| p.name.clone()).collect()
+}
+
+/// Render a port's schema surface for a drift message: the `any` wildcard or
+/// the backtick-quoted schema `Type`.
+fn describe_port_schema(schema: &PortSchemaSurface) -> String {
+    match schema {
+        PortSchemaSurface::Any => "`any`".to_string(),
+        PortSchemaSurface::Type(type_name) => format!("`{type_name}`"),
+    }
 }
 
 #[cfg(test)]
@@ -1017,6 +1050,34 @@ processors:
             .extract_deno(root)
             .unwrap_err();
         assert!(matches!(err, DeriveError::ExtractorUnconfigured { .. }));
+    }
+
+    #[test]
+    fn describe_difference_names_port_and_both_schema_types() {
+        // A port that keeps its name but changes schema type (VideoFrame →
+        // AudioFrame) must name the port and both types, not fall through to a
+        // generic "schema types differ" that identifies neither.
+        let port = |name: &str, schema: PortSchemaSurface| PortSurface {
+            name: name.to_string(),
+            schema,
+        };
+        let manifest = ProcessorSurface {
+            name: "Mixer".to_string(),
+            execution: ProcessorSchemaExecution::default(),
+            inputs: vec![port("frame", PortSchemaSurface::Type("VideoFrame".to_string()))],
+            outputs: vec![],
+        };
+        let code = ProcessorSurface {
+            name: "Mixer".to_string(),
+            execution: ProcessorSchemaExecution::default(),
+            inputs: vec![port("frame", PortSchemaSurface::Type("AudioFrame".to_string()))],
+            outputs: vec![],
+        };
+
+        let message = describe_difference("Mixer", &manifest, &code);
+        assert!(message.contains("input port `frame`"), "{message}");
+        assert!(message.contains("VideoFrame"), "{message}");
+        assert!(message.contains("AudioFrame"), "{message}");
     }
 
     struct TmpDir(PathBuf);
