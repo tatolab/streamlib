@@ -610,12 +610,6 @@ fn port_names(ports: &[PortSurface]) -> Vec<String> {
     ports.iter().map(|p| p.name.clone()).collect()
 }
 
-/// The `label`s of every present language whose extractor a build must invoke —
-/// used by `pkg build` to report the polyglot extraction it ran.
-pub fn language_labels(languages: &BTreeSet<PackageLanguage>) -> Vec<&'static str> {
-    languages.iter().map(|l| l.label()).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
