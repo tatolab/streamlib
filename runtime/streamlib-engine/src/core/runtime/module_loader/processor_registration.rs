@@ -384,11 +384,14 @@ pub(super) fn register_manifest_processors(
                 }
 
                 // Validate the processor was registered by the dylib —
-                // compare by structured `SchemaIdent`, not bare PascalCase
-                // (two packages can declare the same short name). Reads the
-                // load's staging buffer: mid-walk, nothing has landed in
-                // the global registry yet.
-                if !staging.contains_staged_processor(&proc_schema_ident) {
+                // compare by structured `(org, package, type)` tuple, not
+                // bare PascalCase (two packages can declare the same short
+                // name) and not the full versioned `SchemaIdent` (the
+                // cdylib stages its identity at `0.0.0` while this ident
+                // carries the manifest version). Reads the load's staging
+                // buffer: mid-walk, nothing has landed in the global
+                // registry yet.
+                if !staging.contains_staged_processor_for_tuple(&proc_schema_ident) {
                     return Err(Error::Configuration(format!(
                         "Processor '{}' declared in streamlib.yaml but not \
                          registered by the dylib. Ensure export_plugin!() \

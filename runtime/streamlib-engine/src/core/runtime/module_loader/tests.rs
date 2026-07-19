@@ -990,6 +990,60 @@ package:
         .expect("schemas-only package must load without touching lib/");
 }
 
+/// The manifest-vs-dylib cross-check must match a staged processor by its
+/// `(org, package, type)` tuple, ignoring the version — the cdylib always
+/// stages its own identity at `0.0.0` (the `#[processor]` grammar rejects
+/// any inline version, #1409), while the loader composes the expected
+/// ident from the package manifest's version. A version-strict compare
+/// (`0.0.0 != 1.0.0`) misses every real load and reports the processor as
+/// "declared but not registered" — issue #1460.
+#[test]
+fn staged_processor_cross_check_matches_across_versions() {
+    use crate::core::descriptors::{ProcessorDescriptor, SchemaIdent};
+    use streamlib_idents::{Org, Package, PackageRef, SemVer, TypeName};
+
+    let staging = staging::ModuleLoadRegistrationStaging::new();
+
+    let owner = PackageRef::new(
+        Org::new("tatolab").unwrap(),
+        Package::new("camera").unwrap(),
+    );
+
+    // The cdylib stages its own processor identity at `0.0.0`.
+    let cdylib_code_identity = SchemaIdent::new(
+        Org::new("tatolab").unwrap(),
+        Package::new("camera").unwrap(),
+        TypeName::new("CameraCapture").unwrap(),
+        SemVer::new(0, 0, 0),
+    );
+    staging.stage_processor(
+        ProcessorDescriptor::new(cdylib_code_identity, "camera capture"),
+        staging::StagedProcessorRegistrationKind::Dynamic {
+            constructor: Box::new(|_node| {
+                Err(crate::core::Error::Configuration(
+                    "test constructor never invoked".into(),
+                ))
+            }),
+        },
+        owner,
+    );
+
+    // The loader composes the expected ident from the manifest version
+    // (the camera manifest is `1.0.0`).
+    let manifest_composed_identity = SchemaIdent::new(
+        Org::new("tatolab").unwrap(),
+        Package::new("camera").unwrap(),
+        TypeName::new("CameraCapture").unwrap(),
+        SemVer::new(1, 0, 0),
+    );
+
+    assert!(
+        staging.contains_staged_processor_for_tuple(&manifest_composed_identity),
+        "the cross-check must match on (org, package, type), ignoring the \
+         version the cdylib staged its identity at",
+    );
+}
+
 // =========================================================================
 // add_module / add_module_with — imperative module API + BuildPolicy
 // =========================================================================

@@ -355,6 +355,11 @@ impl SchemaIdent {
             version: version.release_core(),
         }
     }
+
+    /// Whether two idents share the same `(org, package, type)` identity tuple, version-blind (the registry is version-lookup-blind).
+    pub fn matches_schema_tuple(&self, other: &SchemaIdent) -> bool {
+        self.org == other.org && self.package == other.package && self.r#type == other.r#type
+    }
 }
 
 /// Deserialize a [`SchemaIdent`] version, rejecting prereleases. Input text
