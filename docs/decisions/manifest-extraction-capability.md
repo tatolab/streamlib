@@ -46,11 +46,13 @@ per-language extractor imports every top-level module beside the
 decorator no longer validates its short name against a hand-authored
 `processors:` list — the decorator *is* that list.
 
-The extractors run in a fresh subprocess (`python -m
+The extractors are designed to run in a fresh subprocess (`python -m
 streamlib.extract_processors <dir>` / `deno run --allow-read
 extract_processors.ts <dir>`) so the registry starts empty; the in-process
-entrypoints clear the registry themselves. Output is sorted by joined
-schema-ident string for determinism regardless of import order.
+entrypoints clear the registry themselves. Once the pkg-build truth-flip lands,
+`pkg build` will invoke them on that path; today they ship as the standalone
+capability. Output is sorted by joined schema-ident string for determinism
+regardless of import order.
 
 The import-runs-code property is the cost of the inversion: a processor module
 whose third-party imports are unavailable cannot be enumerated, whereas the

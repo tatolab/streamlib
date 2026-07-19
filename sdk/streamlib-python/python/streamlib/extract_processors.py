@@ -12,12 +12,13 @@ extraction *is* import — every top-level module is imported, which runs the
 [`_processor_registry`][streamlib._processor_registry]; the registered set is
 then emitted.
 
-`streamlib pkg build` invokes this in a fresh subprocess
-(`python -m streamlib.extract_processors <package_dir>`), reads the JSON on
-stdout, and writes the manifest `processors:` section — the same shape the
-Rust extractor feeds the catalog. Running in a fresh process guarantees an
-empty registry to start; the in-process [`extract_processors_from_dir`][]
-entrypoint clears the registry itself so it is safe to call repeatedly.
+Once the pkg-build truth-flip lands, `streamlib pkg build` will invoke this
+in a fresh subprocess (`python -m streamlib.extract_processors
+<package_dir>`), read the JSON on stdout, and write the manifest
+`processors:` section — the same shape the Rust extractor feeds the catalog.
+Running in a fresh process guarantees an empty registry to start; the
+in-process [`extract_processors_from_dir`][] entrypoint clears the registry
+itself so it is safe to call repeatedly.
 
 Discovery matches the Rust scan's `collect_rs_files` + sort: every top-level
 `*.py` beside the `streamlib.yaml`, imported in sorted filename order. Modules
