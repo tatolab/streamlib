@@ -443,13 +443,14 @@ use tatolab_core::VIDEO_FRAME_IDENT;
 graph.add_edge(VIDEO_FRAME_IDENT, …);   // No org/package on the wire
 ```
 
-The package-internal short-name pattern
-(`#[streamlib::processor("Camera")]` — positional PascalCase short
-name resolved against the enclosing `streamlib.yaml`'s `package:`
-block, exposed via `Processor::schema_ident()`) is the canonical
-shorthand mechanism for **owning** a processor's identity inside its
-own crate. Three macros sit alongside it for **referencing**
-processors at a call site (typically the spawning binary that doesn't
+> ~~The package-internal short-name pattern (`#[streamlib::processor("Camera")]` — positional
+> PascalCase short name resolved against the enclosing `streamlib.yaml`'s `package:` block) is the
+> canonical shorthand for **owning** a processor's identity.~~ — Superseded 2026-07-19: a
+> `#[processor("@org/package/Type")]` declares a **version-free identity in code** (or synthesizes
+> `@app/local/<Type>`), reading nothing from a manifest. See
+> [`zero-ceremony-authoring.md`](zero-ceremony-authoring.md).
+
+Three macros **reference** a processor at a call site (typically the spawning binary that doesn't
 own the processor's Rust module):
 
 - **`streamlib::sdk::processor_type_ref!("org", "package", "Type")`**
@@ -527,17 +528,12 @@ to the authoring path:
   `streamlib_idents::Org` / `Package` / `TypeName` / `SemVer`
   enforce). No `parse` / `from_str` API; the joined `__str__` form
   is render-only and never round-trips through a parser.
-- **`streamlib._manifest`** — hand-rolled minimal YAML reader
-  that extracts the `package: { org, name, version }` block plus
-  the processor-name list. Avoids adding PyYAML as the SDK's first
-  runtime dep. Full manifest deserialization stays Rust-side.
-- **`@streamlib.processor("PascalCase")`** — mirrors Rust's
-  `#[streamlib::processor("Camera")]` proc-macro: positional
-  PascalCase short name resolved at decoration time against the
-  enclosing package's `streamlib.yaml`. The decorator validates
-  that the short name appears in the manifest's `processors:`
-  list and attaches `__streamlib_schema_ident__: SchemaIdent` to
-  the class.
+- > ~~**`streamlib._manifest`** — hand-rolled YAML reader for the `package:` block + processor-name
+  > list; **`@streamlib.processor("PascalCase")`** — positional short name resolved at decoration
+  > time against the enclosing `streamlib.yaml`, validated against the manifest's `processors:` list.~~
+  > — Superseded 2026-07-19: `_manifest` was removed and `@processor("@org/package/Type")` declares a
+  > version-free identity from the decorator arguments, reading nothing from disk. See
+  > [`zero-ceremony-authoring.md`](zero-ceremony-authoring.md).
 - **`@streamlib.input(schema=...)` / `@streamlib.output(schema=...)`**
   — accept a `SchemaIdent` instance or a class that carries
   `__streamlib_schema_ident__`. Bare-string and joined-string
@@ -619,13 +615,12 @@ const today.
   - `sdk/streamlib-python/python/streamlib/schema_ident.py` —
     Python `SchemaIdent` dataclass with regex-validating
     constructors and render-only joined `__str__`.
-  - `sdk/streamlib-python/python/streamlib/_manifest.py` —
-    hand-rolled minimal YAML reader for `package:` block +
-    `processors[].name` list.
+  - ~~`sdk/streamlib-python/python/streamlib/_manifest.py`~~ — removed 2026-07-19 (the decorators no
+    longer read a manifest).
   - `sdk/streamlib-python/python/streamlib/decorators.py` —
-    `@processor("PascalCase")` / `@input` / `@output`
-    decorators; manifest-driven structured ident attached at
-    decoration time.
+    `@processor("@org/package/Type")` / `@input` / `@output`
+    decorators; version-free identity from the decorator arguments,
+    read from code, not a manifest.
 - **Tests**:
   - `sdk/streamlib-idents/src/{ident,semver,manifest,lockfile,resolver}.rs::tests`
     — unit tests covering grammar conformance, semver-range matching,
@@ -649,13 +644,10 @@ const today.
   - `xtask/src/check_no_streamlib_metadata.rs::tests` —
     legacy-metadata lint fixtures.
   - `sdk/streamlib-python/python/streamlib/tests/test_processor_decorator.py`
-    — `SchemaIdent` validation, `@processor` manifest-driven
-    decoration paths, `@input` / `@output` schema rejection of
+    — `SchemaIdent` validation, `@processor` version-free identity
+    decoration, `@input` / `@output` schema rejection of
     bare-string and joined-string forms.
-  - `sdk/streamlib-python/python/streamlib/tests/test_manifest_reader.py`
-    — minimal YAML reader edge cases (quoted scalars, comments,
-    nested processor bodies, missing fields, name-first ordering
-    constraint).
+  - ~~`test_manifest_reader.py`~~ — removed 2026-07-19 with the `_manifest` reader.
 - **Sibling architecture docs**:
   - [`compute-kernel.md`](compute-kernel.md), [`graphics-kernel.md`](graphics-kernel.md),
     [`ray-tracing-kernel.md`](ray-tracing-kernel.md) — the kernel-shape
