@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
 """Sync inter-crate dependency version requirements to the workspace version.
 
 The `simple` release-please release-type bumps `[workspace.package].version` in
