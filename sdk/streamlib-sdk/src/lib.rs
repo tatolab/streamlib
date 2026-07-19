@@ -132,6 +132,17 @@ pub mod sdk {
     pub use streamlib_engine::core::sync;
     pub use streamlib_engine::core::texture;
 
+    // ---- App authoring sugar ----
+
+    /// [`App`] — thin authoring sugar over [`runtime::Runner`]. Construct, add
+    /// processors, connect ports, run; every method forwards to an existing
+    /// `Runner` op.
+    #[cfg(feature = "auto-build")]
+    pub mod app;
+
+    #[cfg(feature = "auto-build")]
+    pub use app::{App, AppPortEndpoint};
+
     // ---- Processors namespace ----
     //
     // Combines engine's `core::processors::*` with the platform-
