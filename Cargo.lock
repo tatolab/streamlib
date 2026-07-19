@@ -5277,6 +5277,7 @@ dependencies = [
  "serde_yaml",
  "streamlib-cargo-build",
  "streamlib-idents",
+ "streamlib-processor-extract",
  "streamlib-processor-schema",
  "tempfile",
  "thiserror 2.0.18",
@@ -5316,7 +5317,9 @@ version = "0.7.10"
 dependencies = [
  "proc-macro2",
  "quote",
+ "serde",
  "serde_json",
+ "serde_yaml",
  "streamlib-processor-schema",
  "syn",
  "thiserror 2.0.18",
