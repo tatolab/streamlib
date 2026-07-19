@@ -296,13 +296,40 @@ Because the lazy load rides transactional registration, a failure leaves
 keeps running. `add_processor` returns a typed, recoverable error rather
 than crashing:
 
-- **No package provides the type** → `Error::UnknownProcessorType` (the
-  pre-existing miss behavior; the failed node stays in the graph in
-  `Error` state for observability).
+- **No package provides the type** → `Error::UnknownProcessorType`, whose
+  message names the exact `streamlib add @org/name` fix-it (the install
+  recovery for the installed-set-only gate). A `@session/` type is exempt —
+  session processors register live via `Runner::add_local` and are never
+  installable, so no install fix-it is offered. The failed node stays in the
+  graph in `Error` state for observability.
 - **Two folders declare the same type** → `Error::AmbiguousProcessorTypeProviders`
   (a malformed install; discovery refuses to guess).
 - **A discovered package fails to load** → `Error::LazyModuleLoadFailed`
   naming the type, the package, and the underlying reason.
+
+### Installed-set-only, and acquire-on-reference
+
+An app is code, not a manifest: it resolves processor refs against its
+**installed set** (`streamlib_modules/` + `streamlib.lock`), never a manifest
+dependency list. An app-dir `streamlib.yaml` that is project-flavor (no
+`package:` block) yet declares `dependencies:` is a phantom-dependency list the
+runtime never resolves — both `streamlib add` and the load gate reject it with
+`Error::AppManifestDeclaresDependencies`, naming the fix-it (remove the block;
+install each package with `streamlib add <source>`).
+
+On a miss against the installed set, a fleet may opt into
+**acquire-on-reference** — off by default (`AcquireOnReferencePolicy::Off`),
+set via `Runner::set_acquire_on_reference_policy` or the
+`STREAMLIB_ACQUIRE_ON_REFERENCE` env var (`off` / `on` / `prompt`). When on, the
+runtime resolves the reference's range → concrete against the static registry,
+materializes that version's `.slpkg` into `streamlib_modules/`, records it in
+`streamlib.lock` (the install-shaped resolver — the byte-source add flow), then
+loads it from the now-populated installed cache. `prompt` gates each
+acquisition behind a host-installed confirmation handler and fails closed when
+none is installed; a normal (`off`) run stays installed-set-only and never
+reaches the network. This is never the locked-run resolver — the two-resolver
+split (range→concrete WRITES the lock at install; a locked run loads the pinned
+set offline) holds.
 
 ### The modules-dir
 

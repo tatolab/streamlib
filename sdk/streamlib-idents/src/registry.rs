@@ -367,7 +367,7 @@ impl<'a> RegistryClient<'a> {
 
     /// Canonical `.slpkg` download URL (recorded in the lockfile):
     /// `<base>/slpkg/<name>/<version>/<name>.slpkg`.
-    fn download_url(&self, pkg_ref: &PackageRef, version: SemVer) -> String {
+    pub(crate) fn download_url(&self, pkg_ref: &PackageRef, version: SemVer) -> String {
         let name = pkg_ref.name.as_str();
         format!(
             "{}/{}/{}/{}/{}.slpkg",
