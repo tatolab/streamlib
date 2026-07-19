@@ -1,5 +1,6 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
+# streamlib:lint-logging:allow-file — pkg-build subprocess CLI; emits the manifest JSON on stdout and usage/errors on stderr with no log pipeline installed
 
 """Import-and-enumerate processor extractor for a Python package directory.
 
