@@ -91,7 +91,8 @@ impl Serialize for EmptyConfig {
         &self,
         serializer: S,
     ) -> std::result::Result<S::Ok, S::Error> {
-        serde::ser::SerializeMap::end(serializer.serialize_map(Some(0))?)
+        use serde::ser::SerializeMap;
+        serializer.serialize_map(Some(0))?.end()
     }
 }
 
