@@ -19,7 +19,7 @@
 //! prefix-truncated, which would collide).
 
 use crate::error::{IdentError, IdentResult};
-use crate::ident::is_lower_alnum_or_hyphen;
+use crate::ident::validate_lower_hyphen_grammar;
 use std::fmt;
 
 /// Maximum channel-name length in UTF-8 bytes.
@@ -57,10 +57,12 @@ impl ChannelName {
         Ok(Self(s))
     }
 
+    /// Borrow the validated channel name as a string slice.
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
+    /// Consume the wrapper and return the owned validated channel name.
     pub fn into_string(self) -> String {
         self.0
     }
@@ -72,12 +74,23 @@ impl fmt::Display for ChannelName {
     }
 }
 
+/// Validate the channel charset grammar (`[a-z][a-z0-9-]*`) without the
+/// [`MAX_CHANNEL_NAME_BYTES`] length bound — the charset half shared by
+/// [`validate_channel_name`] and [`connect_channel_name`]'s pre-hash input
+/// guard (the joined form is length-legalized by hashing, so only its charset
+/// is checked up front).
+fn validate_channel_charset(s: &str) -> IdentResult<()> {
+    validate_lower_hyphen_grammar(
+        s,
+        || IdentError::EmptyChannelName,
+        |s| IdentError::ChannelNameMustStartWithLowercase(s.to_string()),
+        |s, c| IdentError::InvalidChannelNameCharacter(s.to_string(), c),
+    )
+}
+
 /// Validate a channel name against the canonical grammar
 /// (`[a-z][a-z0-9-]*`, at most [`MAX_CHANNEL_NAME_BYTES`] UTF-8 bytes).
 pub fn validate_channel_name(s: &str) -> IdentResult<()> {
-    if s.is_empty() {
-        return Err(IdentError::EmptyChannelName);
-    }
     if s.len() > MAX_CHANNEL_NAME_BYTES {
         return Err(IdentError::ChannelNameTooLong {
             name: s.to_string(),
@@ -85,40 +98,38 @@ pub fn validate_channel_name(s: &str) -> IdentResult<()> {
             max: MAX_CHANNEL_NAME_BYTES,
         });
     }
-    let mut chars = s.chars();
-    let first = chars.next().expect("non-empty");
-    if !first.is_ascii_lowercase() {
-        return Err(IdentError::ChannelNameMustStartWithLowercase(s.to_string()));
-    }
-    for c in chars {
-        if !is_lower_alnum_or_hyphen(c) {
-            return Err(IdentError::InvalidChannelNameCharacter(s.to_string(), c));
-        }
-    }
-    Ok(())
+    validate_channel_charset(s)
 }
 
 /// Deterministically derive the channel name `connect()` assigns to both ends
 /// of a link: `{src_processor}-{src_output}--{dst_processor}-{dst_input}`.
 ///
 /// The `--` double-hyphen separates the source `proc-port` pair from the
-/// destination pair; single hyphens join a processor to its port. All four
-/// inputs are already lowercase idents, so the joined form is grammar-legal by
-/// construction. If it overflows [`MAX_CHANNEL_NAME_BYTES`], the human-readable
-/// prefix is shortened and a stable hash of the *full* joined form is appended
+/// destination pair; single hyphens join a processor to its port. If the joined
+/// form overflows [`MAX_CHANNEL_NAME_BYTES`], the human-readable prefix is
+/// shortened and a stable hash of the *full* joined form is appended
 /// (`{prefix}-{hash}`) — a pure function of the inputs that stays unique rather
 /// than a prefix truncation that would collide two long links onto one channel.
 ///
-/// The result is always a valid [`ChannelName`]; construction cannot fail.
+/// The four inputs are not grammar-guaranteed: a port name may carry characters
+/// outside the channel charset (e.g. `video_in`), and a processor id need not be
+/// lowercase. Such an input would otherwise produce a silently-invalid wire
+/// name, so it surfaces here as the matching [`IdentError`] charset variant —
+/// the joined form (which carries every input character) is grammar-checked
+/// before the length-legalizing hash step.
 pub fn connect_channel_name(
     src_processor: &str,
     src_output: &str,
     dst_processor: &str,
     dst_input: &str,
-) -> ChannelName {
+) -> IdentResult<ChannelName> {
     let joined = format!("{src_processor}-{src_output}--{dst_processor}-{dst_input}");
+    validate_channel_charset(&joined)?;
+
     if joined.len() <= MAX_CHANNEL_NAME_BYTES {
-        return ChannelName(joined);
+        let name = ChannelName(joined);
+        debug_assert!(validate_channel_name(name.as_str()).is_ok());
+        return Ok(name);
     }
 
     let hash = fnv1a_64(joined.as_bytes());
@@ -133,7 +144,9 @@ pub fn connect_channel_name(
         cut -= 1;
     }
     let prefix = &joined[..cut];
-    ChannelName(format!("{prefix}-{suffix}"))
+    let name = ChannelName(format!("{prefix}-{suffix}"));
+    debug_assert!(validate_channel_name(name.as_str()).is_ok());
+    Ok(name)
 }
 
 /// FNV-1a 64-bit — a fixed, platform-stable hash so a regenerated channel name
@@ -229,15 +242,15 @@ mod tests {
 
     #[test]
     fn connect_name_is_deterministic() {
-        let a = connect_channel_name("cam", "frame", "sink", "in");
-        let b = connect_channel_name("cam", "frame", "sink", "in");
+        let a = connect_channel_name("cam", "frame", "sink", "in").unwrap();
+        let b = connect_channel_name("cam", "frame", "sink", "in").unwrap();
         assert_eq!(a, b);
         assert_eq!(a.as_str(), "cam-frame--sink-in");
     }
 
     #[test]
     fn connect_name_is_a_valid_channel_name() {
-        let name = connect_channel_name("camera", "output", "encoder", "input");
+        let name = connect_channel_name("camera", "output", "encoder", "input").unwrap();
         validate_channel_name(name.as_str()).unwrap();
     }
 
@@ -245,9 +258,9 @@ mod tests {
     fn connect_name_distinct_endpoints_are_unique() {
         // Distinct links must land on distinct channels — the whole point of a
         // per-link generated name.
-        let a = connect_channel_name("cam", "frame", "sink", "in");
-        let b = connect_channel_name("cam", "frame", "sink", "aux");
-        let c = connect_channel_name("cam", "alt", "sink", "in");
+        let a = connect_channel_name("cam", "frame", "sink", "in").unwrap();
+        let b = connect_channel_name("cam", "frame", "sink", "aux").unwrap();
+        let c = connect_channel_name("cam", "alt", "sink", "in").unwrap();
         assert_ne!(a, b);
         assert_ne!(a, c);
         assert_ne!(b, c);
@@ -259,8 +272,8 @@ mod tests {
         // collapse onto one channel — the hash suffix keeps them distinct while
         // both stay inside the wire bound.
         let long = "verylongprocessorname".repeat(3); // 63 bytes, > budget
-        let a = connect_channel_name(&long, "outputport", "downstreamsink", "inputport");
-        let b = connect_channel_name(&long, "outputport", "downstreamsink", "otherport");
+        let a = connect_channel_name(&long, "outputport", "downstreamsink", "inputport").unwrap();
+        let b = connect_channel_name(&long, "outputport", "downstreamsink", "otherport").unwrap();
         assert!(a.as_str().len() <= MAX_CHANNEL_NAME_BYTES);
         assert!(b.as_str().len() <= MAX_CHANNEL_NAME_BYTES);
         validate_channel_name(a.as_str()).unwrap();
@@ -269,7 +282,29 @@ mod tests {
         // Deterministic even on the hashed path.
         assert_eq!(
             a,
-            connect_channel_name(&long, "outputport", "downstreamsink", "inputport")
+            connect_channel_name(&long, "outputport", "downstreamsink", "inputport").unwrap()
         );
+    }
+
+    #[test]
+    fn connect_name_rejects_out_of_grammar_input() {
+        // A port name carrying an out-of-grammar char (underscore is legal for a
+        // port ident but not for the iceoryx2/keyexpr channel charset) must
+        // surface as a typed connect-time error, never a silently-invalid wire
+        // name. Mental-revert guard: without the input charset check the
+        // underscore would ride through into the emitted ChannelName.
+        assert_eq!(
+            connect_channel_name("cam", "video_in", "sink", "in"),
+            Err(IdentError::InvalidChannelNameCharacter(
+                "cam-video_in--sink-in".to_string(),
+                '_'
+            ))
+        );
+        // An uppercase (non-lowercase-leading) source processor id is likewise
+        // rejected rather than emitting a name iceoryx2 would refuse.
+        assert!(matches!(
+            connect_channel_name("Cam", "frame", "sink", "in"),
+            Err(IdentError::ChannelNameMustStartWithLowercase(_))
+        ));
     }
 }

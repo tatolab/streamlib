@@ -495,40 +495,51 @@ pub(crate) fn parse_module_ident_wire(raw: &str) -> IdentResult<ModuleIdent> {
     Ok(ModuleIdent { org, name, version })
 }
 
-/// Validate an org segment per the grammar: `[a-z][a-z0-9-]*`.
-pub fn validate_org(s: &str) -> IdentResult<()> {
+/// Validate a segment against the shared lowercase-hyphen grammar
+/// (`[a-z][a-z0-9-]*`): non-empty, first char `[a-z]`, remaining chars
+/// `[a-z0-9-]`. The three `on_*` selectors map each failure to the caller's
+/// segment-specific [`IdentError`] variant so org / package / channel names
+/// keep distinct messages while sharing one grammar loop.
+pub(crate) fn validate_lower_hyphen_grammar(
+    s: &str,
+    on_empty: fn() -> IdentError,
+    on_first_not_lowercase: fn(&str) -> IdentError,
+    on_invalid_char: fn(&str, char) -> IdentError,
+) -> IdentResult<()> {
     if s.is_empty() {
-        return Err(IdentError::EmptyOrg);
+        return Err(on_empty());
     }
     let mut chars = s.chars();
     let first = chars.next().expect("non-empty");
     if !first.is_ascii_lowercase() {
-        return Err(IdentError::OrgMustStartWithLowercase(s.to_string()));
+        return Err(on_first_not_lowercase(s));
     }
     for c in chars {
         if !is_lower_alnum_or_hyphen(c) {
-            return Err(IdentError::InvalidOrgCharacter(s.to_string(), c));
+            return Err(on_invalid_char(s, c));
         }
     }
     Ok(())
 }
 
+/// Validate an org segment per the grammar: `[a-z][a-z0-9-]*`.
+pub fn validate_org(s: &str) -> IdentResult<()> {
+    validate_lower_hyphen_grammar(
+        s,
+        || IdentError::EmptyOrg,
+        |s| IdentError::OrgMustStartWithLowercase(s.to_string()),
+        |s, c| IdentError::InvalidOrgCharacter(s.to_string(), c),
+    )
+}
+
 /// Validate a package segment per the grammar: `[a-z][a-z0-9-]*`.
 pub fn validate_package(s: &str) -> IdentResult<()> {
-    if s.is_empty() {
-        return Err(IdentError::EmptyPackage);
-    }
-    let mut chars = s.chars();
-    let first = chars.next().expect("non-empty");
-    if !first.is_ascii_lowercase() {
-        return Err(IdentError::PackageMustStartWithLowercase(s.to_string()));
-    }
-    for c in chars {
-        if !is_lower_alnum_or_hyphen(c) {
-            return Err(IdentError::InvalidPackageCharacter(s.to_string(), c));
-        }
-    }
-    Ok(())
+    validate_lower_hyphen_grammar(
+        s,
+        || IdentError::EmptyPackage,
+        |s| IdentError::PackageMustStartWithLowercase(s.to_string()),
+        |s, c| IdentError::InvalidPackageCharacter(s.to_string(), c),
+    )
 }
 
 /// Validate a type segment per the grammar: `[A-Z][A-Za-z0-9]*` (PascalCase).

@@ -159,13 +159,16 @@ async fn connect_impl(
     // The one channel name this link publishes to / subscribes from — the
     // deterministic `connect()` sugar (#1416). Intra-node it currently maps
     // onto the per-destination iceoryx2 service; the name is what phase [L]
-    // cross-node routing keys on. Always a valid `ChannelName` by construction.
+    // cross-node routing keys on. An out-of-grammar endpoint (e.g. an
+    // underscore-bearing port name) surfaces as a typed link error rather than
+    // an invalid wire name.
     let channel = streamlib_idents::connect_channel_name(
         from_processor.as_str(),
         &from_port,
         to_processor.as_str(),
         &to_port,
-    );
+    )
+    .map_err(|source| Error::InvalidLink(source.to_string()))?;
 
     PUBSUB.publish(
         topics::RUNTIME_GLOBAL,
@@ -454,7 +457,8 @@ mod channel_wire_bound_tests {
         // must construct a PortKey without the fallible constructor rejecting it.
         let long = "verylongprocessorname".repeat(4);
         let channel =
-            streamlib_idents::connect_channel_name(&long, "outputport", "sinkproc", "inputport");
+            streamlib_idents::connect_channel_name(&long, "outputport", "sinkproc", "inputport")
+                .expect("a grammar-legal set of endpoints must produce a channel name");
         streamlib_ipc_types::PortKey::new(channel.as_str())
             .expect("a grammar-legal channel name must always fit the PortKey wire");
     }
