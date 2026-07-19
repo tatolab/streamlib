@@ -423,13 +423,15 @@ pub fn derive_package_processor_surfaces(
             .extend(rust.iter().map(ProcessorSurface::from_extracted));
         set.derived_languages.insert(PackageLanguage::Rust);
     }
-    for (language, run) in [
-        (PackageLanguage::Python, extractor.extract_python(package_dir)),
-        (PackageLanguage::TypeScript, extractor.extract_deno(package_dir)),
-    ] {
+    for language in [PackageLanguage::Python, PackageLanguage::TypeScript] {
         if !languages.contains(&language) {
             continue;
         }
+        let run = match language {
+            PackageLanguage::Python => extractor.extract_python(package_dir),
+            PackageLanguage::TypeScript => extractor.extract_deno(package_dir),
+            PackageLanguage::Rust => continue,
+        };
         match run {
             Ok(json) => {
                 set.surfaces
@@ -461,14 +463,13 @@ pub fn derive_package_processor_surfaces(
 /// language is in `languages` — the languages actually derived. A drift check
 /// must never flag a committed processor whose language was skipped for want of
 /// a runtime as "only in manifest".
-pub fn filter_committed_to_languages(
-    committed: &[ProcessorSchema],
+pub fn filter_committed_to_languages<'committed>(
+    committed: &'committed [ProcessorSchema],
     languages: &BTreeSet<PackageLanguage>,
-) -> Vec<ProcessorSchema> {
+) -> Vec<&'committed ProcessorSchema> {
     committed
         .iter()
         .filter(|schema| languages.contains(&PackageLanguage::of_processor(schema)))
-        .cloned()
         .collect()
 }
 
@@ -531,7 +532,7 @@ impl std::error::Error for ManifestDriftReport {}
 #[tracing::instrument(skip_all, fields(package = %package_dir.display()))]
 pub fn check_processor_manifest_drift(
     package_dir: &Path,
-    committed: &[ProcessorSchema],
+    committed: &[&ProcessorSchema],
     derived: &[ProcessorSurface],
 ) -> Result<(), ManifestDriftReport> {
     use std::collections::BTreeMap;
@@ -540,7 +541,7 @@ pub fn check_processor_manifest_drift(
         derived.iter().map(|p| (p.name.as_str(), p)).collect();
     let committed_surfaces: Vec<ProcessorSurface> = committed
         .iter()
-        .map(ProcessorSurface::from_processor_schema)
+        .map(|schema| ProcessorSurface::from_processor_schema(schema))
         .collect();
     let committed_by_name: BTreeMap<&str, &ProcessorSurface> = committed_surfaces
         .iter()
@@ -589,18 +590,22 @@ fn describe_difference(name: &str, manifest: &ProcessorSurface, code: &Processor
             manifest.execution, code.execution
         );
     }
-    if port_names(&manifest.inputs) != port_names(&code.inputs) {
+    let manifest_inputs = port_names(&manifest.inputs);
+    let code_inputs = port_names(&code.inputs);
+    if manifest_inputs != code_inputs {
         return format!(
             "`{name}` input ports differ: `processors:` has [{}], code declares [{}]",
-            port_names(&manifest.inputs).join(", "),
-            port_names(&code.inputs).join(", ")
+            manifest_inputs.join(", "),
+            code_inputs.join(", ")
         );
     }
-    if port_names(&manifest.outputs) != port_names(&code.outputs) {
+    let manifest_outputs = port_names(&manifest.outputs);
+    let code_outputs = port_names(&code.outputs);
+    if manifest_outputs != code_outputs {
         return format!(
             "`{name}` output ports differ: `processors:` has [{}], code declares [{}]",
-            port_names(&manifest.outputs).join(", "),
-            port_names(&code.outputs).join(", ")
+            manifest_outputs.join(", "),
+            code_outputs.join(", ")
         );
     }
     format!("`{name}` port schema types differ between `processors:` and code")
@@ -777,7 +782,8 @@ processors:
         // In sync — a committed manifest that names both processors with the
         // same execution + ports as code. `read_mode` / version / entrypoint on
         // the committed side are outside the drift surface, so they don't trip it.
-        check_processor_manifest_drift(root, &committed, &derived).unwrap();
+        check_processor_manifest_drift(root, &committed.iter().collect::<Vec<_>>(), &derived)
+            .unwrap();
     }
 
     #[test]
@@ -815,7 +821,9 @@ processors:
   execution: reactive
 "#,
         );
-        let report = check_processor_manifest_drift(root, &committed, &derived).unwrap_err();
+        let report =
+            check_processor_manifest_drift(root, &committed.iter().collect::<Vec<_>>(), &derived)
+                .unwrap_err();
         assert_eq!(report.only_in_code, vec!["Beta"]);
         assert!(report.only_in_manifest.is_empty());
         assert!(report.to_string().contains("Beta"));
@@ -853,7 +861,9 @@ processors:
   execution: reactive
 "#,
         );
-        let report = check_processor_manifest_drift(root, &committed, &derived).unwrap_err();
+        let report =
+            check_processor_manifest_drift(root, &committed.iter().collect::<Vec<_>>(), &derived)
+                .unwrap_err();
         assert_eq!(report.only_in_manifest, vec!["Ghost"]);
     }
 
@@ -884,7 +894,9 @@ processors:
   execution: reactive
 "#,
         );
-        let report = check_processor_manifest_drift(root, &committed, &derived).unwrap_err();
+        let report =
+            check_processor_manifest_drift(root, &committed.iter().collect::<Vec<_>>(), &derived)
+                .unwrap_err();
         assert_eq!(report.differing.len(), 1);
         assert!(report.differing[0].contains("execution differs"));
     }
@@ -921,7 +933,9 @@ processors:
     schema: VideoFrame
 "#,
         );
-        let report = check_processor_manifest_drift(root, &committed, &derived).unwrap_err();
+        let report =
+            check_processor_manifest_drift(root, &committed.iter().collect::<Vec<_>>(), &derived)
+                .unwrap_err();
         assert!(report.differing[0].contains("output ports differ"));
     }
 
