@@ -1,20 +1,25 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Test for YAML-based #[streamlib_engine::processor] attribute macro syntax
+//! Test for the ports-in-code `#[processor(...)]` attribute macro.
 //!
-//! This test verifies the module-based processor generation works correctly
-//! with YAML schema definitions.
+//! The attribute is the single source of truth for identity, execution mode,
+//! and ports — nothing is read from any file at expansion. This test exercises
+//! the macro's typed-API surface (descriptor + ident + port markers) and
+//! intentionally does not register the processor in the global
+//! `PROCESSOR_REGISTRY`.
 
 use streamlib_engine::core::GeneratedProcessor;
 use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextFullAccess};
 
-// Define a simple processor using YAML schema. The macro emits the
-// type, port markers, descriptor, and `schema_ident()` accessor — it
-// never auto-registers. This test exercises the macro's typed-API
-// surface (descriptor + ident + port markers) and intentionally does
-// not register the processor in the global `PROCESSOR_REGISTRY`.
-#[streamlib::sdk::processor("TestProcessor")]
+// Define a simple processor. The macro emits the type, port markers,
+// descriptor, and `schema_ident()` accessor — it never auto-registers.
+#[streamlib::sdk::processor(
+    "@tatolab/streamlib-engine/TestProcessor@1.0.0",
+    execution = manual,
+    input("video_in", any),
+    output("video_out", any),
+)]
 pub struct TestProcessor;
 
 // User implements the Processor trait on the generated Processor struct
@@ -100,23 +105,22 @@ fn empty_config_is_a_tolerant_bag() {
 }
 
 #[test]
-fn test_processor_schema_ident_resolves_from_package_block() {
+fn test_processor_schema_ident_declared_in_attribute() {
     // The macro emits `Processor::schema_ident()` returning the structured
-    // SchemaIdent composed from `streamlib.yaml`'s `package:` block plus
-    // the processor's PascalCase short name. This locks the codegen
-    // contract end-to-end: package metadata read, structured const emit,
-    // SchemaIdent::new + segment validators all wired through the
-    // generated module.
+    // SchemaIdent parsed from the attribute's identity string. This locks the
+    // codegen contract end-to-end: identity parse, structured const emit,
+    // SchemaIdent::new + segment validators all wired through the generated
+    // module.
     //
-    // Reverting the macro's `package:` resolution (e.g. hardcoding org)
-    // would flip this assertion — that's the regression the test guards.
+    // Reverting the attribute's identity parse (e.g. hardcoding org) would
+    // flip this assertion — that's the regression the test guards.
     let ident = TestProcessor::schema_ident();
     assert_eq!(ident.org.as_str(), "tatolab");
     assert_eq!(ident.package.as_str(), "streamlib-engine");
     assert_eq!(ident.r#type.as_str(), "TestProcessor");
-    assert_eq!(ident.version.major, 0);
-    assert_eq!(ident.version.minor, 4);
-    assert_eq!(ident.version.patch, 28);
+    assert_eq!(ident.version.major, 1);
+    assert_eq!(ident.version.minor, 0);
+    assert_eq!(ident.version.patch, 0);
 }
 
 #[test]
@@ -124,10 +128,8 @@ fn test_processor_schema_ident_renders_canonical_joined_form() {
     // The structured SchemaIdent's Display impl produces the canonical
     // `@<org>/<package>/<Type>@<major.minor.patch>` joined form used by
     // `max_payload_bytes_for_port_spec` and other lookup paths.
-    //
-    // Package name is `streamlib-engine`.
     assert_eq!(
         TestProcessor::schema_ident().to_string(),
-        "@tatolab/streamlib-engine/TestProcessor@0.4.28"
+        "@tatolab/streamlib-engine/TestProcessor@1.0.0"
     );
 }

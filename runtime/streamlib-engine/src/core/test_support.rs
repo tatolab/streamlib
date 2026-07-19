@@ -13,7 +13,14 @@ use std::sync::Once;
 use crate::core::processors::PROCESSOR_REGISTRY;
 
 /// Mock processor with two input ports + two output ports.
-#[crate::processor("TestMockProcessor")]
+#[crate::processor(
+    "@tatolab/streamlib-engine/TestMockProcessor@1.0.0",
+    execution = manual,
+    input("in1", any),
+    input("in2", any),
+    output("out1", any),
+    output("out2", any),
+)]
 pub(crate) struct MockProcessor;
 
 impl crate::core::ManualProcessor for MockProcessor::Processor {
@@ -38,7 +45,12 @@ impl crate::core::ManualProcessor for MockProcessor::Processor {
 }
 
 /// Mock processor with only output ports.
-#[crate::processor("TestMockOutputOnlyProcessor")]
+#[crate::processor(
+    "@tatolab/streamlib-engine/TestMockOutputOnlyProcessor@1.0.0",
+    execution = manual,
+    output("out1", any),
+    output("out2", any),
+)]
 pub(crate) struct MockOutputOnlyProcessor;
 
 impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
@@ -63,7 +75,12 @@ impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
 }
 
 /// Mock processor with only input ports.
-#[crate::processor("TestMockInputOnlyProcessor")]
+#[crate::processor(
+    "@tatolab/streamlib-engine/TestMockInputOnlyProcessor@1.0.0",
+    execution = manual,
+    input("in1", any),
+    input("in2", any),
+)]
 pub(crate) struct MockInputOnlyProcessor;
 
 impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {

@@ -67,7 +67,11 @@ const SMOKE_BINDINGS: &[GraphicsBindingSpec] = &[];
 const SMOKE_PUSH_CONSTANT_SIZE: u32 = std::mem::size_of::<u32>() as u32;
 const SMOKE_SURFACE_SIZE: u32 = 64;
 
-#[streamlib::sdk::processor("GraphicsKernelSmokeTestProcessor")]
+#[streamlib::sdk::processor(
+    "@tatolab/test-fixtures/GraphicsKernelSmokeTestProcessor@1.0.0",
+    execution = manual,
+    config = crate::_generated_::GraphicsKernelSmokeTestProcessorConfig,
+)]
 pub struct GraphicsKernelSmokeTest {}
 
 impl ManualProcessor for GraphicsKernelSmokeTest::Processor {

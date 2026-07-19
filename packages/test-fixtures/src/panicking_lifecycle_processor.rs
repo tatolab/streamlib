@@ -33,7 +33,11 @@ use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAcc
 use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::{ContinuousProcessor, ManualProcessor};
 
-#[streamlib::sdk::processor("PanickingManualLifecycleProcessor")]
+#[streamlib::sdk::processor(
+    "@tatolab/test-fixtures/PanickingManualLifecycleProcessor@1.0.0",
+    execution = manual,
+    config = crate::_generated_::PanickingManualLifecycleProcessorConfig,
+)]
 pub struct PanickingManualLifecycle {}
 
 impl ManualProcessor for PanickingManualLifecycle::Processor {
@@ -80,7 +84,11 @@ impl ManualProcessor for PanickingManualLifecycle::Processor {
     }
 }
 
-#[streamlib::sdk::processor("PanickingContinuousLifecycleProcessor")]
+#[streamlib::sdk::processor(
+    "@tatolab/test-fixtures/PanickingContinuousLifecycleProcessor@1.0.0",
+    execution = continuous,
+    config = crate::_generated_::PanickingContinuousLifecycleProcessorConfig,
+)]
 pub struct PanickingContinuousLifecycle {}
 
 impl ContinuousProcessor for PanickingContinuousLifecycle::Processor {

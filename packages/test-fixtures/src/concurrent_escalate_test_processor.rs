@@ -31,7 +31,11 @@ use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAcc
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
 
-#[streamlib::sdk::processor("ConcurrentEscalateTestProcessor")]
+#[streamlib::sdk::processor(
+    "@tatolab/test-fixtures/ConcurrentEscalateTestProcessor@1.0.0",
+    execution = manual,
+    config = crate::_generated_::ConcurrentEscalateTestProcessorConfig,
+)]
 pub struct ConcurrentEscalateTest {}
 
 impl ManualProcessor for ConcurrentEscalateTest::Processor {

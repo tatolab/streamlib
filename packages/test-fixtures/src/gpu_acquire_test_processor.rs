@@ -31,7 +31,11 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
 use streamlib::sdk::rhi::PixelFormat;
 
-#[streamlib::sdk::processor("GpuAcquireTestProcessor")]
+#[streamlib::sdk::processor(
+    "@tatolab/test-fixtures/GpuAcquireTestProcessor@1.0.0",
+    execution = manual,
+    config = crate::_generated_::GpuAcquireTestProcessorConfig,
+)]
 pub struct GpuAcquireTest {
     gpu: Option<GpuContextLimitedAccess>,
 }

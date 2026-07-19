@@ -31,7 +31,11 @@ use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAcc
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ContinuousProcessor;
 
-#[streamlib::sdk::processor("LifecycleProbeProcessor")]
+#[streamlib::sdk::processor(
+    "@tatolab/test-fixtures/LifecycleProbeProcessor@1.0.0",
+    execution = continuous,
+    config = crate::_generated_::LifecycleProbeProcessorConfig,
+)]
 pub struct LifecycleProbe {
     iter_count: AtomicU32,
 }

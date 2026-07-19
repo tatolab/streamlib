@@ -9,7 +9,11 @@ use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAcc
 use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::ContinuousProcessor;
 
-#[streamlib::sdk::processor("TestConfiguredProcessor")]
+#[streamlib::sdk::processor(
+    "@tatolab/test-fixtures/TestConfiguredProcessor@1.0.0",
+    execution = continuous,
+    config = crate::_generated_::TestConfiguredProcessorConfig,
+)]
 pub struct ConfiguredProcessor;
 
 impl ContinuousProcessor for ConfiguredProcessor::Processor {

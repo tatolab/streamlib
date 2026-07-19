@@ -25,7 +25,11 @@ use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAcc
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
 
-#[streamlib::sdk::processor("TcpBindTestProcessor")]
+#[streamlib::sdk::processor(
+    "@tatolab/test-fixtures/TcpBindTestProcessor@1.0.0",
+    execution = manual,
+    config = crate::_generated_::TcpBindTestProcessorConfig,
+)]
 pub struct TcpBindTest {
     tokio_runtime: Option<tokio::runtime::Runtime>,
 }

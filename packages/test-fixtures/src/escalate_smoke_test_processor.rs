@@ -51,7 +51,11 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ManualProcessor;
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
 
-#[streamlib::sdk::processor("EscalateSmokeTestProcessor")]
+#[streamlib::sdk::processor(
+    "@tatolab/test-fixtures/EscalateSmokeTestProcessor@1.0.0",
+    execution = manual,
+    config = crate::_generated_::EscalateSmokeTestProcessorConfig,
+)]
 pub struct EscalateSmokeTest {}
 
 impl ManualProcessor for EscalateSmokeTest::Processor {

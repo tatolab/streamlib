@@ -90,7 +90,11 @@ const SMOKE_RCHIT_SPV: &[u8] = include_bytes!(concat!(
 #[cfg(target_os = "linux")]
 const SMOKE_SURFACE_SIZE: u32 = 64;
 
-#[streamlib::sdk::processor("RayTracingKernelSmokeTestProcessor")]
+#[streamlib::sdk::processor(
+    "@tatolab/test-fixtures/RayTracingKernelSmokeTestProcessor@1.0.0",
+    execution = manual,
+    config = crate::_generated_::RayTracingKernelSmokeTestProcessorConfig,
+)]
 pub struct RayTracingKernelSmokeTest {}
 
 impl ManualProcessor for RayTracingKernelSmokeTest::Processor {
