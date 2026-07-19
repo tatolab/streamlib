@@ -33,10 +33,7 @@ use streamlib_processor_extract::grammar as attribute_grammar;
 
 use proc_macro::TokenStream;
 use quote::quote;
-use streamlib_processor_schema::{
-    Org, Package, ProcessorPortSchema, ProcessorSchema, ProcessorScheduling, RuntimeConfig,
-    RuntimeOptions, SemVer, TypeName,
-};
+use streamlib_processor_schema::{Org, Package, SemVer, TypeName};
 
 // Range parsing for `module_ident!*` macros. The streamlib_idents crate
 // owns the SemVerRange grammar; the macro just forwards the input through
@@ -78,7 +75,7 @@ pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
         Err(err) => return err.to_compile_error().into(),
     };
 
-    let schema = processor_schema_from_parsed(&parsed);
+    let schema = parsed.to_processor_schema();
     let schema_ident = parsed.ident.clone();
     let config_field_name = parsed
         .config_type
@@ -96,45 +93,6 @@ pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
     );
 
     TokenStream::from(generated)
-}
-
-/// Build a [`ProcessorSchema`] from a parsed attribute so the existing codegen
-/// (identity / execution / scheduling / ports emission) is reused unchanged.
-/// Config binding is threaded separately (the Rust config type comes from the
-/// attribute, not a resolved manifest schema), so `config` is always `None`
-/// here.
-fn processor_schema_from_parsed(parsed: &attribute_grammar::ParsedProcessorAttr) -> ProcessorSchema {
-    let to_port = |p: &attribute_grammar::ParsedPort| ProcessorPortSchema {
-        name: p.name.clone(),
-        schema: p.schema.clone(),
-        description: p.description.clone(),
-        read_mode: p.read_mode.clone(),
-        overflow: p.overflow.clone(),
-        buffer_size: p.buffer_size,
-    };
-
-    ProcessorSchema {
-        name: parsed.ident.r#type.as_str().to_string(),
-        version: parsed.ident.version.to_string(),
-        description: parsed.description.clone(),
-        runtime: RuntimeConfig {
-            language: Default::default(),
-            options: RuntimeOptions {
-                unsafe_send: parsed.unsafe_send,
-                python_version: None,
-            },
-            env: Default::default(),
-        },
-        entrypoint: None,
-        execution: parsed.execution.clone(),
-        scheduling: parsed
-            .scheduling
-            .map(|priority| ProcessorScheduling { priority }),
-        config: None,
-        state: Vec::new(),
-        inputs: parsed.inputs.iter().map(to_port).collect(),
-        outputs: parsed.outputs.iter().map(to_port).collect(),
-    }
 }
 
 /// Resolve the path to the `sdk` module the emitted code authors against.

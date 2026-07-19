@@ -24,9 +24,7 @@ pub mod grammar;
 
 use std::path::{Path, PathBuf};
 
-use streamlib_processor_schema::{
-    ProcessorPortSchema, ProcessorSchema, ProcessorScheduling, RuntimeConfig, RuntimeOptions,
-};
+use streamlib_processor_schema::ProcessorSchema;
 
 pub use grammar::{ParsedPort, ParsedProcessorAttr};
 
@@ -229,56 +227,12 @@ fn parse_processor_attr(
     })?;
 
     Ok(ExtractedProcessor {
-        schema: processor_schema_from_parsed(&parsed),
+        schema: parsed.to_processor_schema(),
         config_schema_id: parsed.config_schema_id.clone(),
         config_field_name: parsed.config_field_name.clone(),
         struct_name: struct_ident.to_string(),
         source_file: rel_path.to_path_buf(),
     })
-}
-
-/// Build the manifest-shaped [`ProcessorSchema`] from a parsed attribute.
-///
-/// Mirrors the proc-macro's own `ProcessorSchema` construction so the extracted
-/// manifest matches the descriptor the macro emits: `name` is the identity's
-/// `Type` segment, ports carry the resolve-free `Specific` idents the attribute
-/// declared, and the runtime language defaults to Rust (the only language a
-/// source scan of a Rust crate can produce). `config` stays `None` here — the
-/// attribute binds a config *type*, not a resolved manifest schema; the
-/// consuming layer projects [`ExtractedProcessor::config_schema_id`] to a
-/// release-core catalog entry.
-fn processor_schema_from_parsed(parsed: &ParsedProcessorAttr) -> ProcessorSchema {
-    let to_port = |p: &ParsedPort| ProcessorPortSchema {
-        name: p.name.clone(),
-        schema: p.schema.clone(),
-        description: p.description.clone(),
-        read_mode: p.read_mode.clone(),
-        overflow: p.overflow.clone(),
-        buffer_size: p.buffer_size,
-    };
-
-    ProcessorSchema {
-        name: parsed.ident.r#type.as_str().to_string(),
-        version: parsed.ident.version.to_string(),
-        description: parsed.description.clone(),
-        runtime: RuntimeConfig {
-            language: Default::default(),
-            options: RuntimeOptions {
-                unsafe_send: parsed.unsafe_send,
-                python_version: None,
-            },
-            env: Default::default(),
-        },
-        entrypoint: None,
-        execution: parsed.execution.clone(),
-        scheduling: parsed
-            .scheduling
-            .map(|priority| ProcessorScheduling { priority }),
-        config: None,
-        state: Vec::new(),
-        inputs: parsed.inputs.iter().map(to_port).collect(),
-        outputs: parsed.outputs.iter().map(to_port).collect(),
-    }
 }
 
 #[cfg(test)]
@@ -361,6 +315,48 @@ mod tests {
         assert_eq!(
             inner.schema.execution,
             ProcessorSchemaExecution::Continuous { interval_ms: 10 }
+        );
+    }
+
+    #[test]
+    fn scan_schema_equals_the_macro_descriptor_projection() {
+        // The 'one grammar, no drift' invariant, made structural: the schema the
+        // source scan puts in the manifest and the descriptor the proc-macro
+        // emits are BOTH `ParsedProcessorAttr::to_processor_schema()`. This locks
+        // that the scanner routes through the shared projection rather than a
+        // reintroduced parallel copy — a whole-struct serde comparison catches
+        // any field the two would otherwise disagree on. Mentally reroute the
+        // scanner to a hand-rolled builder and this fails.
+        let attr = r#""@tatolab/demo/Blur",
+            execution = reactive,
+            scheduling = high,
+            unsafe_send,
+            description = "Blurs frames",
+            input("frames_in", "@tatolab/core/VideoFrame", read_mode = "skip_to_latest", buffer_size = 4),
+            output("frames_out", "@tatolab/core/VideoFrame")"#;
+
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "src/lib.rs",
+            &format!("#[processor({attr})]\npub struct Blur;\n"),
+        );
+        let procs = extract_rust_processors(root).unwrap();
+        assert_eq!(procs.len(), 1);
+        let scanned = &procs[0].schema;
+
+        // The proc-macro's own descriptor path: parse the same attribute tokens
+        // through the shared grammar and project them the same way the macro does.
+        let tokens: proc_macro2::TokenStream = attr.parse().unwrap();
+        let struct_ident = syn::Ident::new("Blur", proc_macro2::Span::call_site());
+        let macro_descriptor = grammar::parse2(tokens, &struct_ident)
+            .unwrap()
+            .to_processor_schema();
+
+        assert_eq!(
+            serde_json::to_value(scanned).unwrap(),
+            serde_json::to_value(&macro_descriptor).unwrap(),
         );
     }
 

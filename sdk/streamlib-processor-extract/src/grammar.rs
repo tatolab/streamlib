@@ -30,7 +30,8 @@
 //! scope here and handled at the runtime layer.
 
 use streamlib_processor_schema::{
-    Org, Package, PortSchemaSpec, ProcessorSchemaExecution, SchemaIdent, SemVer, ThreadPriority,
+    Org, Package, PortSchemaSpec, ProcessorPortSchema, ProcessorSchema, ProcessorSchemaExecution,
+    ProcessorScheduling, RuntimeConfig, RuntimeOptions, SchemaIdent, SemVer, ThreadPriority,
     TypeName,
 };
 use syn::ext::IdentExt;
@@ -80,13 +81,62 @@ pub struct ParsedProcessorAttr {
     pub outputs: Vec<ParsedPort>,
 }
 
+impl ParsedProcessorAttr {
+    /// Project the parsed attribute into the manifest-shaped [`ProcessorSchema`].
+    ///
+    /// This is the single projection both readers of the attribute share: the
+    /// proc-macro emits its descriptor from this, and the source-scan extractor
+    /// builds each manifest entry from it — so an added `ParsedProcessorAttr` or
+    /// `ProcessorSchema` field can never silently diverge the two. `name` is the
+    /// identity's `Type` segment, ports carry the resolve-free `Specific` idents
+    /// the attribute declared, and the runtime language defaults to Rust (the
+    /// only language a source scan of a Rust crate can produce). `config` stays
+    /// `None`: the attribute binds a config *type*, not a resolved manifest
+    /// schema; the consuming layer projects the config-schema id to a
+    /// release-core catalog entry.
+    pub fn to_processor_schema(&self) -> ProcessorSchema {
+        let to_port = |p: &ParsedPort| ProcessorPortSchema {
+            name: p.name.clone(),
+            schema: p.schema.clone(),
+            description: p.description.clone(),
+            read_mode: p.read_mode.clone(),
+            overflow: p.overflow.clone(),
+            buffer_size: p.buffer_size,
+        };
+
+        ProcessorSchema {
+            name: self.ident.r#type.as_str().to_string(),
+            version: self.ident.version.to_string(),
+            description: self.description.clone(),
+            runtime: RuntimeConfig {
+                language: Default::default(),
+                options: RuntimeOptions {
+                    unsafe_send: self.unsafe_send,
+                    python_version: None,
+                },
+                env: Default::default(),
+            },
+            entrypoint: None,
+            execution: self.execution.clone(),
+            scheduling: self
+                .scheduling
+                .map(|priority| ProcessorScheduling { priority }),
+            config: None,
+            state: Vec::new(),
+            inputs: self.inputs.iter().map(to_port).collect(),
+            outputs: self.outputs.iter().map(to_port).collect(),
+        }
+    }
+}
+
 /// Parse the `#[processor(...)]` attribute tokens into a [`ParsedProcessorAttr`].
 ///
 /// This is the single, shared grammar entrypoint: the proc-macro calls it with
 /// the attribute tokens it receives at expansion (converting its
 /// `proc_macro::TokenStream` via `.into()`), and the source-scan
-/// [`crate::extract`] calls it with the tokens a `syn`-parsed `#[processor(...)]`
-/// attribute carries. There is deliberately no second parser — code is the
+/// [`crate::extract_rust_processors`] calls it with the tokens a `syn`-parsed
+/// `#[processor(...)]` attribute carries. There is deliberately no second
+/// parser — code is the
 /// source of truth, so both readers of that truth share one grammar.
 ///
 /// `struct_ident` provides the `Type` segment for the synthesized `@app/local`

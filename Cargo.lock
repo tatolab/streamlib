@@ -5313,6 +5313,7 @@ version = "0.7.2"
 dependencies = [
  "proc-macro2",
  "quote",
+ "serde_json",
  "streamlib-processor-schema",
  "syn",
  "thiserror 2.0.18",

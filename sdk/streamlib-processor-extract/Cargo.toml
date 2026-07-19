@@ -21,6 +21,7 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 quote = "1.0"
+serde_json = { workspace = true }
 
 [lints]
 workspace = true
