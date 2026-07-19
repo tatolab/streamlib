@@ -4,14 +4,17 @@
 /**
  * Decorator-side reader for `streamlib.yaml` package metadata.
  *
- * Reads only the shape needed by the `@processor` decorator:
+ * Reads only the top-level `package: { org, name, version, ... }` block — the
+ * package identity the `@processor` decorator needs to compose a structured
+ * `SchemaIdent`.
  *
- * - top-level `package: { org, name, version, ... }` block
- * - top-level `processors:` list, returning the `name` of each entry
+ * The `processors:` list is NOT read here: the decorator is the truth-source
+ * for which processors a package declares (extraction is import — see
+ * `extract_processors.ts`). Only the package identity lives in the manifest;
+ * the processor set is derived from `@processor` usage in code.
  *
- * The full manifest is parsed by the Rust runtime via `serde_yaml` when
- * the host loads it; this reader only needs enough fields to validate
- * the decorator's short name and compose a structured `SchemaIdent`.
+ * The full manifest is parsed by the Rust runtime via `serde_yaml` when the
+ * host loads it; this reader only needs the package identity fields.
  *
  * Uses the npm `yaml` parser (declared as a registry dependency) rather
  * than a `jsr:` import: the SDK is published to npm via `deno pack`, and
@@ -30,12 +33,6 @@ export interface ManifestPackage {
   readonly version: string;
 }
 
-/** Decorator-side view of a streamlib.yaml. */
-export interface ManifestSummary {
-  readonly package: ManifestPackage;
-  readonly processorNames: readonly string[];
-}
-
 /** Raised when a streamlib.yaml cannot be parsed for decorator use. */
 export class ManifestParseError extends Error {
   constructor(message: string) {
@@ -45,14 +42,13 @@ export class ManifestParseError extends Error {
 }
 
 /**
- * Parse the `package:` block + `processors[].name` list from a
- * streamlib.yaml at `path`.
+ * Parse the `package:` block from a streamlib.yaml at `path`.
  *
  * Throws `Deno.errors.NotFound` if the file does not exist, and
  * `ManifestParseError` if the manifest is missing `package:`, missing
  * any of `org`/`name`/`version`, or otherwise malformed.
  */
-export function readManifestSummary(path: string): ManifestSummary {
+export function readPackageBlock(path: string): ManifestPackage {
   let text: string;
   try {
     text = Deno.readTextFileSync(path);
@@ -109,25 +105,9 @@ export function readManifestSummary(path: string): ManifestSummary {
     );
   }
 
-  const processorNames: string[] = [];
-  const procsRaw = root["processors"];
-  if (Array.isArray(procsRaw)) {
-    for (const entry of procsRaw) {
-      if (entry !== null && typeof entry === "object" && !Array.isArray(entry)) {
-        const entryName = (entry as Record<string, unknown>)["name"];
-        if (typeof entryName === "string" && entryName.length > 0) {
-          processorNames.push(entryName);
-        }
-      }
-    }
-  }
-
   return {
-    package: {
-      org: org as string,
-      name: name as string,
-      version: version as string,
-    },
-    processorNames,
+    org: org as string,
+    name: name as string,
+    version: version as string,
   };
 }
