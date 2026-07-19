@@ -13,13 +13,14 @@
  * decorators, which register into `_processor_registry.ts`; the registered set
  * is then emitted.
  *
- * `streamlib pkg build` invokes this in a fresh subprocess
- * (`deno run --allow-read <this> <package_dir>`), reads the JSON on stdout, and
- * writes the manifest `processors:` section — the same shape the Rust extractor
- * feeds the catalog. Running in a fresh process guarantees an empty registry to
- * start; the in-process {@linkcode extractProcessorsFromDir} entrypoint clears
- * the registry itself so it is safe to call repeatedly (over distinct dirs —
- * Deno caches dynamic imports by URL).
+ * Once the pkg-build truth-flip lands, `streamlib pkg build` will invoke this in
+ * a fresh subprocess (`deno run --allow-read <this> <package_dir>`), read the
+ * JSON on stdout, and write the manifest `processors:` section — the same shape
+ * the Rust extractor feeds the catalog. Running in a fresh process guarantees an
+ * empty registry to start; the in-process {@linkcode extractProcessorsFromDir}
+ * entrypoint clears the registry and forces a fresh module evaluation per call,
+ * so repeated calls (including over the same dir) stay isolated despite Deno
+ * caching dynamic imports by URL.
  *
  * Discovery matches the Rust scan's `collect_rs_files` + sort: every top-level
  * `*.ts` beside the `streamlib.yaml`, imported in sorted filename order (test
@@ -45,12 +46,15 @@ export class ProcessorExtractionError extends Error {
   }
 }
 
+let extractionGeneration = 0;
+
 /**
  * Import every top-level module under `packageDir` and enumerate processors.
  *
  * Returns the processors registered by `@processor` during import, sorted by
- * joined schema-ident string. The registry is cleared first, so repeated calls
- * over distinct directories in one process are isolated.
+ * joined schema-ident string. The registry is cleared first and every module is
+ * re-evaluated under a per-call generation token, so repeated calls in one
+ * process — including repeated calls over the same directory — are isolated.
  *
  * Throws {@linkcode ProcessorExtractionError} if `packageDir` is not a
  * directory.
@@ -83,9 +87,16 @@ export async function extractProcessorsFromDir(
   tsFiles.sort();
 
   clearRegisteredProcessors();
+  // Deno caches dynamic imports by URL, so a second call over the same dir
+  // would re-import nothing and re-run no `@processor` decorators. Append a
+  // per-call generation token to the module URL so each extraction forces a
+  // fresh evaluation of the top-level module and re-registers its processors.
+  // Sibling relative imports (the SDK, the shared registry) drop the query and
+  // resolve to their canonical URLs, so the registry stays a single instance.
+  const generation = ++extractionGeneration;
   for (const name of tsFiles) {
     const href = toFileUrl(join(packageDir, name)).href;
-    await import(href);
+    await import(`${href}?streamlib_extract=${generation}`);
   }
 
   const procs = getRegisteredProcessors().slice();

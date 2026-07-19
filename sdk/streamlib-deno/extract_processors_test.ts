@@ -113,6 +113,21 @@ Deno.test("extractor emits manifest JSON pkg build consumes", async () => {
   }
 });
 
+Deno.test("repeated calls over the same dir are isolated", async () => {
+  // Deno caches dynamic imports by URL: without forced re-evaluation the
+  // second extraction over the same dir would re-run no decorators and return
+  // []. The extractor must re-register per call and yield the same set.
+  const dir = await makeFixturePackage();
+  try {
+    const first = (await extractProcessorsFromDir(dir)).map((p) => p.shortName);
+    const second = (await extractProcessorsFromDir(dir)).map((p) => p.shortName);
+    assertEquals(first, ["Blur", "Camera"]);
+    assertEquals(second, first);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
 Deno.test("schema-only package yields no processors", async () => {
   const dir = await Deno.makeTempDir({ prefix: "streamlib-extract-" });
   try {
