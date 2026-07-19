@@ -830,13 +830,25 @@ pub unsafe extern "C" fn sldn_output_write(
 
     let total_len = FRAME_HEADER_SIZE + data_slice.len();
     let mut frame = vec![0u8; total_len];
-    FrameHeader::new(
+    let header = match FrameHeader::new(
         &state.dest_port,
         state.schema_ident,
         timestamp_ns,
         data_slice.len() as u32,
-    )
-    .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+    ) {
+        Ok(h) => h,
+        Err(e) => {
+            tracing::error!(
+                "[sldn:{}] Invalid dest port '{}' for output port '{}': {}",
+                ctx.processor_id,
+                state.dest_port,
+                port_name,
+                e
+            );
+            return -1;
+        }
+    };
+    header.write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
     frame[FRAME_HEADER_SIZE..].copy_from_slice(data_slice);
 
     let sample = match state.publisher.loan_slice_uninit(total_len) {

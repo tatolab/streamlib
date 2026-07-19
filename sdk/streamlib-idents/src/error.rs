@@ -41,6 +41,24 @@ pub enum IdentError {
     #[error("type `{0}` must start with A-Z (PascalCase)")]
     TypeMustStartWithUppercase(String),
 
+    #[error("channel name is empty")]
+    EmptyChannelName,
+
+    #[error(
+        "channel `{0}` contains invalid character `{1}` (allowed: a-z, 0-9, hyphen, must start with a-z)"
+    )]
+    InvalidChannelNameCharacter(String, char),
+
+    #[error("channel `{0}` must start with a-z")]
+    ChannelNameMustStartWithLowercase(String),
+
+    #[error("channel `{name}` is {len} bytes, exceeding the {max}-byte wire capacity")]
+    ChannelNameTooLong {
+        name: String,
+        len: usize,
+        max: usize,
+    },
+
     #[error("invalid semver `{0}`: {1}")]
     InvalidSemVer(String, String),
 

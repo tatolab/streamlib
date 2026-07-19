@@ -132,6 +132,12 @@ impl OutputWriterInner {
                 timestamp_ns,
                 data.len() as u32,
             )
+            .map_err(|e| {
+                Error::Link(format!(
+                    "output port '{}' → dest '{}': {}",
+                    port, conn.dest_port, e
+                ))
+            })?
             .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
             frame[FRAME_HEADER_SIZE..].copy_from_slice(data);
 

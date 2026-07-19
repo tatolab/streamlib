@@ -79,6 +79,36 @@ pub const MAX_SUBSCRIBERS_PER_DESTINATION: usize = 1;
 /// Size of the frame header in the `[u8]` slice wire format.
 pub const FRAME_HEADER_SIZE: usize = MAX_PORT_KEY_SIZE + SCHEMA_IDENT_WIRE_SIZE + 8 + 4; // 204 bytes
 
+/// Error constructing a [`PortKey`] from a name that overflows the fixed
+/// wire capacity.
+///
+/// This is the engine-layer replacement for the pre-#1416 silent truncation:
+/// a port / channel name longer than [`MAX_PORT_KEY_SIZE`] `- 1` bytes used to
+/// be quietly clipped, routing frames to a different (truncated) port than the
+/// one the author named. Over-length is now a hard, named error the caller
+/// must handle rather than a data-corruption surface. Names crossing this
+/// boundary have already passed the charset + length grammar in
+/// `streamlib_idents::validate_channel_name`; this guard is the wire-level
+/// backstop that makes truncation unrepresentable.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PortKeyError {
+    /// The UTF-8 name is `len` bytes, past the fixed `max`-byte capacity.
+    TooLong { len: usize, max: usize },
+}
+
+impl std::fmt::Display for PortKeyError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TooLong { len, max } => write!(
+                f,
+                "port key name is {len} bytes, exceeding the fixed wire capacity of {max} bytes"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for PortKeyError {}
+
 /// Fixed-size port name for zero-copy IPC.
 #[derive(Clone, Copy, Eq, PartialEq, Hash, Debug, ZeroCopySend)]
 #[repr(C)]
@@ -88,15 +118,28 @@ pub struct PortKey {
 }
 
 impl PortKey {
-    pub fn new(name: &str) -> Self {
+    /// Maximum UTF-8 byte length a port / channel name may occupy on the wire
+    /// (the fixed `name` field is [`MAX_PORT_KEY_SIZE`] `- 1` bytes).
+    pub const MAX_NAME_BYTES: usize = MAX_PORT_KEY_SIZE - 1;
+
+    /// Construct a [`PortKey`], rejecting an over-length name.
+    ///
+    /// A name past [`PortKey::MAX_NAME_BYTES`] is a [`PortKeyError::TooLong`]
+    /// rather than a silent truncation — see [`PortKeyError`].
+    pub fn new(name: &str) -> Result<Self, PortKeyError> {
         let bytes = name.as_bytes();
-        let len = bytes.len().min(MAX_PORT_KEY_SIZE - 1) as u8;
+        if bytes.len() > Self::MAX_NAME_BYTES {
+            return Err(PortKeyError::TooLong {
+                len: bytes.len(),
+                max: Self::MAX_NAME_BYTES,
+            });
+        }
         let mut key = Self {
-            len,
+            len: bytes.len() as u8,
             name: [0u8; MAX_PORT_KEY_SIZE - 1],
         };
-        key.name[..len as usize].copy_from_slice(&bytes[..len as usize]);
-        key
+        key.name[..bytes.len()].copy_from_slice(bytes);
+        Ok(key)
     }
 
     pub fn as_str(&self) -> &str {
@@ -322,17 +365,25 @@ pub struct FramePayload {
 
 impl FramePayload {
     /// Create a new payload with the given port, structured schema ident, and data.
-    pub fn new(port: &str, schema_ident: SchemaIdentWire, timestamp_ns: i64, data: &[u8]) -> Self {
+    ///
+    /// Fails with [`PortKeyError`] if `port` overflows the fixed wire capacity —
+    /// see [`PortKey::new`].
+    pub fn new(
+        port: &str,
+        schema_ident: SchemaIdentWire,
+        timestamp_ns: i64,
+        data: &[u8],
+    ) -> Result<Self, PortKeyError> {
         let len = data.len().min(MAX_PAYLOAD_SIZE) as u32;
         let mut payload = Self {
-            port_key: PortKey::new(port),
+            port_key: PortKey::new(port)?,
             schema_ident,
             timestamp_ns,
             len,
             data: [0u8; MAX_PAYLOAD_SIZE],
         };
         payload.data[..len as usize].copy_from_slice(&data[..len as usize]);
-        payload
+        Ok(payload)
     }
 
     /// Get the actual data slice (excluding padding).
@@ -391,18 +442,21 @@ pub struct FrameHeader {
 
 impl FrameHeader {
     /// Create a new frame header from a structured schema identifier.
+    ///
+    /// Fails with [`PortKeyError`] if `port` overflows the fixed wire capacity —
+    /// see [`PortKey::new`].
     pub fn new(
         port: &str,
         schema_ident: SchemaIdentWire,
         timestamp_ns: i64,
         data_len: u32,
-    ) -> Self {
-        Self {
-            port_key: PortKey::new(port),
+    ) -> Result<Self, PortKeyError> {
+        Ok(Self {
+            port_key: PortKey::new(port)?,
             schema_ident,
             timestamp_ns,
             len: data_len,
-        }
+        })
     }
 
     /// Write the header to the first [`FRAME_HEADER_SIZE`] bytes of `buf`.
@@ -656,7 +710,7 @@ mod tests {
     fn frame_header_round_trip_via_slice() {
         let ident = SchemaIdentWire::from_segments("tatolab", "core", "EncodedVideoFrame", 1, 2, 3)
             .unwrap();
-        let header = FrameHeader::new("dest_port", ident, 42, 1024);
+        let header = FrameHeader::new("dest_port", ident, 42, 1024).unwrap();
         let mut buf = [0u8; FRAME_HEADER_SIZE];
         header.write_to_slice(&mut buf);
         let back = FrameHeader::read_from_slice(&buf);
@@ -719,6 +773,43 @@ mod tests {
         assert_eq!(u32::from_le_bytes(buf[116..120].try_into().unwrap()), 1);
         assert_eq!(u32::from_le_bytes(buf[120..124].try_into().unwrap()), 2);
         assert_eq!(u32::from_le_bytes(buf[124..128].try_into().unwrap()), 3);
+    }
+
+    #[test]
+    fn port_key_accepts_max_length_name() {
+        // Exact-fit boundary: a name of MAX_NAME_BYTES must construct.
+        let name = "a".repeat(PortKey::MAX_NAME_BYTES);
+        let key = PortKey::new(&name).expect("max-length name must construct");
+        assert_eq!(key.as_str(), name);
+    }
+
+    #[test]
+    fn port_key_rejects_over_length_name_instead_of_truncating() {
+        // Mental-revert guard for the pre-#1416 silent truncation: a name one
+        // byte past the wire capacity must be a named error, NOT a clipped key
+        // that routes frames to the wrong port. Revert `PortKey::new` to the
+        // `.min(MAX_PORT_KEY_SIZE - 1)` truncation and this fails — the
+        // construction would succeed and `as_str()` would return the clipped
+        // 63-byte prefix.
+        let over = "b".repeat(PortKey::MAX_NAME_BYTES + 1);
+        assert_eq!(over.len(), 64);
+        assert_eq!(
+            PortKey::new(&over),
+            Err(PortKeyError::TooLong { len: 64, max: 63 })
+        );
+    }
+
+    #[test]
+    fn frame_header_rejects_over_length_port() {
+        // The truncation defect surfaced through FrameHeader::new on the write
+        // path — over-length must propagate as the typed error, not silently
+        // build a header with a clipped port key.
+        let ident = sample_ident();
+        let over = "c".repeat(PortKey::MAX_NAME_BYTES + 1);
+        assert!(matches!(
+            FrameHeader::new(&over, ident, 0, 0),
+            Err(PortKeyError::TooLong { .. })
+        ));
     }
 
     #[test]

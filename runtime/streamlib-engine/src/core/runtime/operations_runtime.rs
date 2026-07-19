@@ -156,6 +156,20 @@ async fn connect_impl(
     let to_processor = to.processor_id.clone();
     let to_port = to.port_name.clone();
 
+    // The one channel name this link publishes to / subscribes from — the
+    // deterministic `connect()` sugar (#1416). Intra-node it currently maps
+    // onto the per-destination iceoryx2 service; the name is what phase [L]
+    // cross-node routing keys on. An out-of-grammar endpoint (e.g. a port name
+    // carrying `/` or uppercase) surfaces as a typed link error rather than an
+    // invalid wire name; underscore is legal and rides through.
+    let channel = streamlib_idents::connect_channel_name(
+        from_processor.as_str(),
+        &from_port,
+        to_processor.as_str(),
+        &to_port,
+    )
+    .map_err(|source| Error::InvalidLink(source.to_string()))?;
+
     PUBSUB.publish(
         topics::RUNTIME_GLOBAL,
         &Event::RuntimeGlobal(RuntimeEvent::RuntimeWillConnect {
@@ -210,6 +224,12 @@ async fn connect_impl(
             .map(|link| link.id.clone())
             .ok_or_else(|| Error::GraphError("failed to create link after validation".into()))
     })?;
+
+    tracing::debug!(
+        link_id = %link_id,
+        channel = channel.as_str(),
+        "connect assigned channel"
+    );
 
     PUBSUB.publish(
         topics::RUNTIME_GLOBAL,
@@ -412,5 +432,34 @@ impl RuntimeOperations for Runner {
 
     fn to_json(&self) -> Result<serde_json::Value> {
         Runner::to_json(self)
+    }
+}
+
+#[cfg(test)]
+mod channel_wire_bound_tests {
+    // The channel-name grammar (streamlib_idents) and the fixed PortKey wire
+    // capacity (streamlib_ipc_types) live in separate crates that cannot depend
+    // on each other, so the max-length bound is duplicated. This engine layer
+    // depends on both and is the one place that reconciles them: a channel name
+    // that passes the grammar must always fit the wire.
+    #[test]
+    fn channel_name_bound_matches_port_key_wire_capacity() {
+        assert_eq!(
+            streamlib_idents::MAX_CHANNEL_NAME_BYTES,
+            streamlib_ipc_types::PortKey::MAX_NAME_BYTES,
+            "channel-name grammar bound drifted from the PortKey wire capacity"
+        );
+    }
+
+    #[test]
+    fn generated_connect_channel_name_fits_the_wire() {
+        // A generated name — including the hash-suffixed over-budget path —
+        // must construct a PortKey without the fallible constructor rejecting it.
+        let long = "verylongprocessorname".repeat(4);
+        let channel =
+            streamlib_idents::connect_channel_name(&long, "outputport", "sinkproc", "inputport")
+                .expect("a grammar-legal set of endpoints must produce a channel name");
+        streamlib_ipc_types::PortKey::new(channel.as_str())
+            .expect("a grammar-legal channel name must always fit the PortKey wire");
     }
 }

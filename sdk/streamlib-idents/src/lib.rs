@@ -11,6 +11,7 @@
 pub mod app_modules;
 pub mod archive;
 mod catalog;
+mod channel;
 mod error;
 mod git;
 mod ident;
@@ -29,6 +30,9 @@ pub use catalog::{
     parse_catalog_index_ndjson, render_catalog_index_ndjson, schema_jtd_file_name,
 };
 
+pub use channel::{
+    ChannelName, MAX_CHANNEL_NAME_BYTES, connect_channel_name, validate_channel_name,
+};
 pub use error::{IdentError, IdentResult, ResolverError, ResolverResult};
 pub use git::fetch_git;
 pub use ident::{
