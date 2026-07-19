@@ -120,7 +120,9 @@ Deno.test("repeated calls over the same dir are isolated", async () => {
   const dir = await makeFixturePackage();
   try {
     const first = (await extractProcessorsFromDir(dir)).map((p) => p.shortName);
-    const second = (await extractProcessorsFromDir(dir)).map((p) => p.shortName);
+    const second = (await extractProcessorsFromDir(dir)).map((p) =>
+      p.shortName
+    );
     assertEquals(first, ["Blur", "Camera"]);
     assertEquals(second, first);
   } finally {

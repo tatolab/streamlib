@@ -100,7 +100,9 @@ export async function extractProcessorsFromDir(
   }
 
   const procs = getRegisteredProcessors().slice();
-  procs.sort((a, b) => String(a.schemaIdent).localeCompare(String(b.schemaIdent)));
+  procs.sort((a, b) =>
+    String(a.schemaIdent).localeCompare(String(b.schemaIdent))
+  );
   return procs;
 }
 
