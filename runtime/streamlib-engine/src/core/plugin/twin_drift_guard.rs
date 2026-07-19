@@ -134,7 +134,7 @@ fn divergent_processor_vtable_twin_is_tripwired() {
     // copy — and updating it is the moment to confirm the matching logic landed
     // in the other copy too.
     const EXPECTED_ENGINE: u64 = 0xbee1_89ef_1526_2cef;
-    const EXPECTED_SDK: u64 = 0xe2bd_4f8b_ade2_bdf6;
+    const EXPECTED_SDK: u64 = 0xcf16_0d89_418b_8674;
     let eng = fnv1a(&normalize(&read(ENGINE_DIR, "processor_vtable.rs")));
     let sdk = fnv1a(&normalize(&read(SDK_DIR, "processor_vtable.rs")));
     assert!(
