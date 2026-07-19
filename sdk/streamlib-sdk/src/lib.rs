@@ -367,3 +367,9 @@ pub mod sdk {
 pub mod engine_internal {
     pub use streamlib_engine::*;
 }
+
+// Headless E2E for the `hello-streamlib` example — `#[path]`-includes the
+// example's inline processor source and drives a fixture frame through it, so
+// the zero-ceremony DX path stays honest under `cargo test --lib`.
+#[cfg(test)]
+mod hello_streamlib_example_e2e;
