@@ -16,8 +16,9 @@
 //! carrying `#[processor(...)]` / `#[streamlib::processor(...)]`, and the
 //! attribute tokens are parsed through the SAME [`grammar`] the proc-macro uses
 //! — never a second, drift-prone parser. See
-//! `docs/architecture/manifest-extraction.md` for the capability-placement and
-//! identity/version reconciliation decisions.
+//! `docs/decisions/manifest-extraction-capability.md` for why the grammar lives
+//! here rather than the proc-macro crate, and the identity/version model the
+//! scan produces.
 
 pub mod grammar;
 
@@ -162,7 +163,7 @@ fn extract_from_file(
 
     let rel = path.strip_prefix(crate_root).unwrap_or(path).to_path_buf();
     for item in &file.items {
-        walk_item(item, path, &rel, out)?;
+        walk_item(item, &rel, out)?;
     }
     Ok(())
 }
@@ -171,21 +172,20 @@ fn extract_from_file(
 /// `#[processor(...)]`-bearing structs.
 fn walk_item(
     item: &syn::Item,
-    abs_path: &Path,
     rel_path: &Path,
     out: &mut Vec<ExtractedProcessor>,
 ) -> Result<(), ExtractError> {
     match item {
         syn::Item::Struct(item_struct) => {
             if let Some(attr) = processor_attr(&item_struct.attrs) {
-                let extracted = parse_processor_attr(attr, &item_struct.ident, abs_path, rel_path)?;
+                let extracted = parse_processor_attr(attr, &item_struct.ident, rel_path)?;
                 out.push(extracted);
             }
         }
         syn::Item::Mod(item_mod) => {
             if let Some((_, items)) = &item_mod.content {
                 for inner in items {
-                    walk_item(inner, abs_path, rel_path, out)?;
+                    walk_item(inner, rel_path, out)?;
                 }
             }
         }
@@ -211,7 +211,6 @@ fn processor_attr(attrs: &[syn::Attribute]) -> Option<&syn::Attribute> {
 fn parse_processor_attr(
     attr: &syn::Attribute,
     struct_ident: &syn::Ident,
-    abs_path: &Path,
     rel_path: &Path,
 ) -> Result<ExtractedProcessor, ExtractError> {
     // A `#[processor]` with no argument list (`Meta::Path`) synthesizes an
@@ -228,7 +227,6 @@ fn parse_processor_attr(
         struct_name: struct_ident.to_string(),
         message: e.to_string(),
     })?;
-    let _ = abs_path;
 
     Ok(ExtractedProcessor {
         schema: processor_schema_from_parsed(&parsed),
