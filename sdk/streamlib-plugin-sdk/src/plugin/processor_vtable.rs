@@ -518,3 +518,132 @@ fn write_out_bytes(bytes: &[u8], out_buf: *mut u8, out_cap: usize, out_len: *mut
     }
     bytes.len()
 }
+
+#[cfg(test)]
+mod config_delivery_tests {
+    //! End-to-end coverage of config-as-bag delivery across the plugin ABI:
+    //! config crosses `construct` as a msgpack named map and deserializes
+    //! plugin-side into the processor's `Config`. Exercises the three
+    //! authoring shapes an acceptance criterion names — no-config
+    //! (`EmptyConfig`), dynamic-bag (`Bag`), and a tolerant typed view — plus
+    //! the malformed-required-field error path.
+
+    use super::*;
+    use crate::bag::Bag;
+    use crate::processors::EmptyConfig;
+    use serde::{Deserialize, Serialize};
+    use streamlib_error::Result;
+    use streamlib_processor_schema::descriptors::ProcessorDescriptor;
+
+    /// Drive a `P`'s `construct` slot with `config` encoded as a msgpack named
+    /// map, returning either the constructed instance pointer (freed here) or
+    /// the typed error string the slot wrote.
+    fn construct_with_config<P>(config: &serde_json::Value) -> std::result::Result<(), String>
+    where
+        P: GeneratedProcessor + 'static,
+        P::Config: Config,
+    {
+        let vtable = vtable_for::<P>();
+        let bytes = rmp_serde::to_vec_named(config).unwrap();
+        let mut err_buf = vec![0u8; 512];
+        let mut err_len: usize = 0;
+        let instance = unsafe {
+            (vtable.construct)(
+                bytes.as_ptr(),
+                bytes.len(),
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len,
+            )
+        };
+        if instance.is_null() {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len]).into_owned();
+            return Err(msg);
+        }
+        unsafe { (vtable.destroy)(instance) };
+        Ok(())
+    }
+
+    macro_rules! trivial_generated_processor {
+        ($proc:ident, $cfg:ty, $name:literal) => {
+            struct $proc {
+                _config: $cfg,
+            }
+            impl GeneratedProcessor for $proc {
+                type Config = $cfg;
+                fn name(&self) -> &str {
+                    $name
+                }
+                fn from_config(config: Self::Config) -> Result<Self> {
+                    Ok(Self { _config: config })
+                }
+                fn process(
+                    &mut self,
+                    _ctx: &RuntimeContextLimitedAccess<'_>,
+                ) -> Result<()> {
+                    Ok(())
+                }
+                fn descriptor() -> Option<ProcessorDescriptor> {
+                    None
+                }
+            }
+        };
+    }
+
+    #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+    struct TolerantTypedConfig {
+        required_gain: u32,
+        #[serde(default)]
+        optional_label: Option<String>,
+    }
+
+    trivial_generated_processor!(NoConfigProcessor, EmptyConfig, "NoConfig");
+    trivial_generated_processor!(BagConfigProcessor, Bag, "BagConfig");
+    trivial_generated_processor!(TypedConfigProcessor, TolerantTypedConfig, "TypedConfig");
+
+    #[test]
+    fn no_config_processor_constructs_and_ignores_unexpected_fields() {
+        // EmptyConfig takes no knobs; a stray field on the wire is tolerated.
+        construct_with_config::<NoConfigProcessor>(&serde_json::json!({}))
+            .expect("empty config constructs");
+        construct_with_config::<NoConfigProcessor>(&serde_json::json!({ "leftover": 1 }))
+            .expect("EmptyConfig ignores an unexpected field");
+    }
+
+    #[test]
+    fn bag_config_processor_constructs_dynamically() {
+        // Dynamic-by-default: a `Bag` config captures every field with no
+        // schema, no codegen struct.
+        construct_with_config::<BagConfigProcessor>(
+            &serde_json::json!({ "any": "shape", "count": 3 }),
+        )
+        .expect("bag config constructs");
+    }
+
+    #[test]
+    fn typed_config_view_tolerates_unknown_fields_and_defaults_optionals() {
+        // Missing optional defaults; an unknown/forward-compat field is ignored
+        // (the typed view is sugar over a tolerant bag). This is the semantic
+        // the jtd-codegen deny_unknown_fields ban delivers for real *Config
+        // types.
+        construct_with_config::<TypedConfigProcessor>(&serde_json::json!({
+            "required_gain": 7,
+            "future_knob": true,
+        }))
+        .expect("typed config tolerates an unknown field and defaults the optional");
+    }
+
+    #[test]
+    fn typed_config_malformed_required_field_is_a_named_error() {
+        // A required field present with the wrong shape is a construct error,
+        // surfaced through the slot's error buffer — not a silent default.
+        let err = construct_with_config::<TypedConfigProcessor>(&serde_json::json!({
+            "required_gain": "not a number",
+        }))
+        .expect_err("malformed required field must fail construction");
+        assert!(
+            err.contains("config deser"),
+            "error must name the config deserialize failure, got: {err}"
+        );
+    }
+}

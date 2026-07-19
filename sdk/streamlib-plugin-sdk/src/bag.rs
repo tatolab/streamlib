@@ -30,6 +30,10 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 use streamlib_error::{Error, Result};
 
+use serde::de::{MapAccess, Visitor};
+use serde::ser::SerializeMap;
+use serde::{Deserialize, Deserializer, Serializer};
+
 /// An owned, eagerly-decoded msgpack named map with string keys.
 ///
 /// Construct with [`Bag::new`], the [`crate::bag`] literal macro, or
@@ -219,6 +223,49 @@ impl Bag {
     }
 }
 
+/// A [`Bag`] serializes as a named map — byte-for-byte the shape
+/// [`Bag::to_msgpack`] emits under `rmp_serde` and a plain JSON object under
+/// `serde_json`. This is what makes `Bag` a valid processor
+/// [`Config`](crate::processors::Config): a processor can declare
+/// `type Config = Bag` to receive its entire configuration dynamically,
+/// with no codegen struct and no schema.
+impl Serialize for Bag {
+    fn serialize<S: Serializer>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(Some(self.entries.len()))?;
+        for (key, value) in &self.entries {
+            map.serialize_entry(key, value)?;
+        }
+        map.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for Bag {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> std::result::Result<Self, D::Error> {
+        struct BagVisitor;
+
+        impl<'de> Visitor<'de> for BagVisitor {
+            type Value = Bag;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("a named map with string keys")
+            }
+
+            fn visit_map<A: MapAccess<'de>>(
+                self,
+                mut access: A,
+            ) -> std::result::Result<Bag, A::Error> {
+                let mut entries = Vec::with_capacity(access.size_hint().unwrap_or(0));
+                while let Some((key, value)) = access.next_entry::<String, Value>()? {
+                    entries.push((key, value));
+                }
+                Ok(Bag { entries })
+            }
+        }
+
+        deserializer.deserialize_map(BagVisitor)
+    }
+}
+
 /// Human-readable msgpack value class, for error messages only.
 fn value_kind(value: &Value) -> &'static str {
     match value {
@@ -401,6 +448,65 @@ mod tests {
         assert_eq!(bag.get::<u32>("width").unwrap(), 1920);
         assert_eq!(bag.get::<String>("label").unwrap(), "cam0");
         assert!(bag.get::<bool>("enabled").unwrap());
+    }
+
+    #[test]
+    fn serde_round_trips_through_msgpack_named_map() {
+        // The serde `Serialize`/`Deserialize` impls must agree byte-for-byte
+        // with the hand-rolled `to_msgpack`/`from_msgpack` wire contract, so a
+        // `Bag`-typed config crosses the ABI exactly like a codegen struct.
+        let bag = bag! {
+            "width" => 1920_u32,
+            "label" => "cam0",
+            "enabled" => true,
+        };
+        let via_serde = rmp_serde::to_vec_named(&bag).unwrap();
+        let via_wire = bag.to_msgpack().unwrap();
+        assert_eq!(via_serde, via_wire);
+
+        let decoded: Bag = rmp_serde::from_slice(&via_serde).unwrap();
+        assert_eq!(decoded, bag);
+    }
+
+    #[test]
+    fn serde_round_trips_through_json_object() {
+        let bag = bag! { "gain" => 3_i64, "name" => "mixer" };
+        let json = serde_json::to_value(&bag).unwrap();
+        assert!(json.is_object());
+        assert_eq!(json["gain"], serde_json::json!(3));
+        let decoded: Bag = serde_json::from_value(json).unwrap();
+        assert_eq!(decoded.get::<i64>("gain").unwrap(), 3);
+        assert_eq!(decoded.get::<String>("name").unwrap(), "mixer");
+    }
+
+    /// A `Bag` config is inherently tolerant: it keeps every wire field, so an
+    /// "extra" key a typed struct would have to ignore is simply readable.
+    #[test]
+    fn bag_config_captures_every_field_including_unexpected() {
+        #[derive(Serialize)]
+        struct WireConfig {
+            known: u32,
+            future_knob: bool,
+        }
+        let bytes = rmp_serde::to_vec_named(&WireConfig {
+            known: 7,
+            future_knob: true,
+        })
+        .unwrap();
+        let bag: Bag = rmp_serde::from_slice(&bytes).unwrap();
+        assert_eq!(bag.get::<u32>("known").unwrap(), 7);
+        assert!(bag.get::<bool>("future_knob").unwrap());
+    }
+
+    /// Locks the "dynamic-bag config constructs" acceptance path: `Bag`
+    /// satisfies the `Config` trait bound (`Default + Serialize +
+    /// DeserializeOwned + PartialEq`) so a processor can declare
+    /// `type Config = Bag`. Mentally revert the serde impls above and this
+    /// stops compiling.
+    #[test]
+    fn bag_satisfies_config_bound() {
+        fn assert_is_config<T: crate::processors::Config>() {}
+        assert_is_config::<Bag>();
     }
 
     #[test]

@@ -78,8 +78,37 @@ impl<T> Config for T where
 }
 
 /// Empty config type for processors that don't need configuration.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+///
+/// Config-as-bag delivers config as a named map, so `EmptyConfig` must
+/// tolerate any wire shape: an empty map `{}`, a legacy `nil`, or a
+/// populated map (whose fields it discards). It serializes back as an
+/// empty named map so it round-trips as a bag.
+#[derive(Debug, Clone, Default, PartialEq)]
 pub struct EmptyConfig;
+
+// twin-guard(empty-config-serde): BEGIN — wire-load-bearing twin of the engine's
+// EmptyConfig serde in runtime/streamlib-engine/src/core/processors/mod.rs. Config
+// crosses the plugin ABI, so both sides must serialize to the same empty named map
+// and tolerate any decode shape. twin_drift_guard.rs trip-wires an edit to either.
+impl Serialize for EmptyConfig {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> std::result::Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        serializer.serialize_map(Some(0))?.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for EmptyConfig {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        deserializer.deserialize_ignored_any(serde::de::IgnoredAny)?;
+        Ok(EmptyConfig)
+    }
+}
+// twin-guard(empty-config-serde): END
 
 // =============================================================================
 // Mode traits

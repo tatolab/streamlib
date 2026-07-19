@@ -82,6 +82,24 @@ fn test_processor_instantiation() {
 }
 
 #[test]
+fn empty_config_is_a_tolerant_bag() {
+    // config-as-bag: a no-config processor's `EmptyConfig` deserializes from
+    // any named map, discarding unknown / forward-compat keys, and serializes
+    // back as an empty named map. Mentally revert the custom EmptyConfig serde
+    // impls and this fails (a unit struct rejects a map).
+    let from_populated: EmptyConfig =
+        serde_json::from_value(serde_json::json!({ "leftover": 1, "future": true })).unwrap();
+    let processor = TestProcessor::Processor::from_config(from_populated).unwrap();
+    assert_eq!(processor.name(), "TestProcessor");
+
+    let from_empty: EmptyConfig = serde_json::from_value(serde_json::json!({})).unwrap();
+    assert_eq!(
+        serde_json::to_value(from_empty).unwrap(),
+        serde_json::json!({})
+    );
+}
+
+#[test]
 fn test_processor_schema_ident_resolves_from_package_block() {
     // The macro emits `Processor::schema_ident()` returning the structured
     // SchemaIdent composed from `streamlib.yaml`'s `package:` block plus
