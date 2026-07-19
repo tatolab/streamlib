@@ -303,16 +303,45 @@ pub enum DependencySpec {
     Git(GitDependency),
 }
 
+impl DependencySpec {
+    /// Whether this dependency is a **runtime** dependency — one the package
+    /// composes at runtime without importing any of its schema types. The
+    /// build-time dependency reconciler derives a package's referenced set from
+    /// its schema/port references; a declared dependency that resolves to none
+    /// of them is otherwise reported as prunable. `runtime: true` marks the
+    /// dependency as intentionally schema-unreferenced so the reconciler keeps
+    /// it. Registry-string shorthand (`^1.2.3`) is never a runtime dependency.
+    pub fn is_runtime(&self) -> bool {
+        match self {
+            Self::Registry(r) => r.runtime,
+            Self::Path(p) => p.runtime,
+            Self::Git(g) => g.runtime,
+        }
+    }
+}
+
+/// `skip_serializing_if` predicate for the default-`false` `runtime` flag, so a
+/// plain dependency serializes without a redundant `runtime: false`.
+fn is_false(flag: &bool) -> bool {
+    !*flag
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct RegistryDependency {
     pub version: SemVerRange,
+    /// Runtime-only dependency marker — see [`DependencySpec::is_runtime`].
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub runtime: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct PathDependency {
     pub path: PathBuf,
+    /// Runtime-only dependency marker — see [`DependencySpec::is_runtime`].
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub runtime: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -323,6 +352,9 @@ pub struct GitDependency {
     /// pinning is required for reproducible resolution. Mirrors the
     /// workspace rule from `CLAUDE.md` (`Conventions → Dependencies`).
     pub rev: String,
+    /// Runtime-only dependency marker — see [`DependencySpec::is_runtime`].
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub runtime: bool,
 }
 
 impl JsonSchema for DependencySpec {
@@ -375,7 +407,10 @@ impl<'de> Deserialize<'de> for DependencySpec {
 
         let repr = Repr::deserialize(d)?;
         Ok(match repr {
-            Repr::Range(v) => Self::Registry(RegistryDependency { version: v }),
+            Repr::Range(v) => Self::Registry(RegistryDependency {
+                version: v,
+                runtime: false,
+            }),
             Repr::Map(StructuredRepr::Registry(r)) => Self::Registry(r),
             Repr::Map(StructuredRepr::Path(p)) => Self::Path(p),
             Repr::Map(StructuredRepr::Git(g)) => Self::Git(g),

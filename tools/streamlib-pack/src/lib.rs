@@ -46,6 +46,7 @@ use streamlib_processor_schema::ProcessorLanguage;
 pub use streamlib_cargo_build::CargoProfile;
 
 pub mod catalog;
+pub mod dependency_reconcile;
 pub mod static_registry;
 
 // The `streamlib link` marker schema + discovery moved to `streamlib-idents`
@@ -534,6 +535,13 @@ pub fn assemble_artifact_with_cargo_config(
         // orchestrator load-time build) is exempt — it assembles an already-
         // published, drift-validated artifact.
         enforce_processor_manifest_matches_code(pkg_dir, &config.processors)?;
+        // Reconcile the hand-declared `dependencies:` against the dependency
+        // set derived from the package's schema/port references. An undeclared
+        // reference is a hard error; an unreferenced, non-`runtime` dependency
+        // is warned as prunable dead weight. `StagedDir` is exempt for the same
+        // reason as the processor drift gate — it assembles an already-
+        // reconciled, published artifact.
+        enforce_declared_dependencies_match_code(pkg_dir, &config.processors)?;
     }
 
     // (archive_path, source_path) pairs for every file EXCEPT the
@@ -788,6 +796,59 @@ fn enforce_processor_manifest_matches_code(
         &derived.surfaces,
     )
     .map_err(|report| anyhow::anyhow!("{report}"))
+}
+
+/// Reconcile the hand-declared `dependencies:` against the dependency set
+/// derived from the package's schema/port references (see
+/// [`crate::dependency_reconcile`]). A referenced-but-undeclared package is a
+/// hard error carrying a `streamlib add` fix-it; a declared-but-unreferenced
+/// package that is not marked `runtime: true` is warned as prunable dead
+/// weight. Called only for the [`AssembleTarget::Slpkg`] target.
+///
+/// Pruning is intentionally non-destructive: the shipped manifest stays
+/// byte-identical to the one an orchestrator `StagedDir` build produces, so the
+/// author is told to remove the dead dependency (or mark it `runtime: true`)
+/// rather than the build silently rewriting the manifest under them.
+fn enforce_declared_dependencies_match_code(
+    pkg_dir: &Path,
+    processors: &[streamlib_processor_schema::ProcessorSchema],
+) -> Result<()> {
+    let manifest = Manifest::load(pkg_dir)
+        .with_context(|| format!("read {} for dependency reconcile", pkg_dir.display()))?;
+    let reconciliation =
+        crate::dependency_reconcile::reconcile_package_dependencies(&manifest, processors);
+
+    if !reconciliation.undeclared.is_empty() {
+        let fix_its = reconciliation
+            .undeclared
+            .iter()
+            .map(|pkg| format!("  streamlib add {pkg}@<version>"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let refs = reconciliation
+            .undeclared
+            .iter()
+            .map(|pkg| pkg.to_string())
+            .collect::<Vec<_>>()
+            .join(", ");
+        anyhow::bail!(
+            "{} references schema(s) from undeclared dependenc(ies) [{}] — a package's \
+             `dependencies:` must declare every package its code references. Declare each:\n{}",
+            pkg_dir.join(Manifest::FILE_NAME).display(),
+            refs,
+            fix_its,
+        );
+    }
+
+    for pkg in &reconciliation.pruned {
+        tracing::warn!(
+            package = %pkg,
+            manifest = %pkg_dir.join(Manifest::FILE_NAME).display(),
+            "declared dependency is referenced by no schema/port — remove it, or mark it \
+             `runtime: true` if the package composes it at runtime without importing its types"
+        );
+    }
+    Ok(())
 }
 
 /// Enforce the standalone, registry-only contract for a published `.slpkg`:
@@ -1719,6 +1780,76 @@ mod tests {
             msg.contains("source of truth"),
             "drift error must explain code is truth: {msg}"
         );
+    }
+
+    /// Write a minimal schema-owning package: one `Local` schema plus whatever
+    /// extra manifest sections (`dependencies:` / `schemas:` imports) a test
+    /// splices in. No processors — the dependency reconcile runs regardless.
+    fn write_schema_pkg(dir: &Path, extra_manifest: &str) {
+        std::fs::create_dir_all(dir.join("schemas")).unwrap();
+        std::fs::write(
+            dir.join("schemas/local.yaml"),
+            "metadata:\n  type: LocalT\n  max_payload_bytes: 16\n",
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("streamlib.yaml"),
+            format!(
+                "package:\n  org: tatolab\n  name: leaf\n  version: 0.1.0\n\
+                 schemas:\n  LocalT:\n    file: schemas/local.yaml\n{extra_manifest}"
+            ),
+        )
+        .unwrap();
+    }
+
+    /// A `.slpkg` build hard-errors when code references a schema from a
+    /// dependency the manifest never declares, and the error carries the
+    /// `streamlib add` fix-it. Mentally revert
+    /// `enforce_declared_dependencies_match_code` and this build succeeds while
+    /// shipping a manifest whose `dependencies:` lies about what it needs.
+    #[test]
+    fn slpkg_build_fails_on_undeclared_schema_dependency() {
+        let dir = tempdir().unwrap();
+        write_schema_pkg(
+            dir.path(),
+            "  Imported:\n    package: '@other/dep'\n",
+        );
+        let out = dir.path().join("o.slpkg");
+        let err = assemble_artifact(
+            dir.path(),
+            &AssembleTarget::Slpkg(out),
+            &slpkg_opts(false),
+            &(),
+        )
+        .unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("@other/dep"), "must name the dep: {msg}");
+        assert!(
+            msg.contains("streamlib add @other/dep@<version>"),
+            "must carry the streamlib add fix-it: {msg}"
+        );
+    }
+
+    /// A declared dependency referenced by no schema still builds — pruning is a
+    /// non-fatal advisory — and a `runtime: true` marker is the sanctioned way
+    /// to keep a runtime-composition dependency that imports no schema types.
+    #[test]
+    fn slpkg_build_prunes_are_non_fatal_and_runtime_marker_is_honored() {
+        for dep_block in [
+            "dependencies:\n  '@tatolab/audio':\n    version: ^1.0.0\n",
+            "dependencies:\n  '@tatolab/audio':\n    version: ^1.0.0\n    runtime: true\n",
+        ] {
+            let dir = tempdir().unwrap();
+            write_schema_pkg(dir.path(), dep_block);
+            let out = dir.path().join("o.slpkg");
+            assemble_artifact(
+                dir.path(),
+                &AssembleTarget::Slpkg(out),
+                &slpkg_opts(false),
+                &(),
+            )
+            .expect("an unreferenced dep is pruned non-fatally, not a build error");
+        }
     }
 
     #[test]
