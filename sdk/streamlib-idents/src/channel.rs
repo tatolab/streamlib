@@ -115,19 +115,26 @@ pub fn validate_channel_name(s: &str) -> IdentResult<()> {
 /// (`{prefix}-{hash}`) — a pure function of the inputs that stays unique rather
 /// than a prefix truncation that would collide two long links onto one channel.
 ///
-/// The four inputs are not grammar-guaranteed: a port name may carry a genuinely
-/// illegal character (uppercase, `/`, `.`, whitespace), or a processor id need
-/// not be lowercase. Such an input would otherwise produce a silently-invalid
-/// wire name, so it surfaces here as the matching [`IdentError`] charset variant
-/// — the joined form (which carries every input character) is grammar-checked
-/// before the length-legalizing hash step. Underscore is a legal channel
-/// character, so a port like `video_in` rides through with no error.
+/// The processor ids are engine-generated (`ProcessorUniqueId` is `P{cuid2}` —
+/// an uppercase-leading `P` over a lowercase base-36 body), so their raw form is
+/// never lowercase-leading-legal. They are normalized to lowercase before
+/// joining: the cuid2 body already keeps the id unique, and lowercasing the
+/// leading `P` is what makes a valid `connect()` with default ids produce a
+/// grammar-legal wire name instead of erroring. A port name, by contrast, is
+/// author-supplied and is NOT normalized: a genuinely illegal character
+/// (uppercase, `/`, `.`, whitespace) surfaces here as the matching
+/// [`IdentError`] charset variant rather than a silently-invalid wire name — the
+/// joined form is grammar-checked before the length-legalizing hash step.
+/// Underscore is a legal channel character, so a port like `video_in` rides
+/// through with no error.
 pub fn connect_channel_name(
     src_processor: &str,
     src_output: &str,
     dst_processor: &str,
     dst_input: &str,
 ) -> IdentResult<ChannelName> {
+    let src_processor = src_processor.to_ascii_lowercase();
+    let dst_processor = dst_processor.to_ascii_lowercase();
     let joined = format!("{src_processor}-{src_output}--{dst_processor}-{dst_input}");
     validate_channel_charset(&joined)?;
 
@@ -318,12 +325,12 @@ mod tests {
     }
 
     #[test]
-    fn connect_name_rejects_out_of_grammar_input() {
-        // A port name carrying a genuinely-illegal char (`/` is not
+    fn connect_name_rejects_out_of_grammar_port_name() {
+        // A PORT name carrying a genuinely-illegal char (`/` is not
         // iceoryx2/keyexpr-safe) must surface as a typed connect-time error,
-        // never a silently-invalid wire name. Mental-revert guard: without the
-        // input charset check the slash would ride through into the emitted
-        // ChannelName.
+        // never a silently-invalid wire name. Port names are author-supplied and
+        // NOT normalized. Mental-revert guard: without the input charset check
+        // the slash would ride through into the emitted ChannelName.
         assert_eq!(
             connect_channel_name("cam", "video/in", "sink", "in"),
             Err(IdentError::InvalidChannelNameCharacter(
@@ -331,11 +338,33 @@ mod tests {
                 '/'
             ))
         );
-        // An uppercase (non-lowercase-leading) source processor id is likewise
-        // rejected rather than emitting a name iceoryx2 would refuse.
-        assert!(matches!(
-            connect_channel_name("Cam", "frame", "sink", "in"),
-            Err(IdentError::ChannelNameMustStartWithLowercase(_))
-        ));
+        // An uppercase char in a port name is also an author error — the port
+        // name is not normalized, only the processor ids are. It lands
+        // mid-string (the processor id leads), so it reads as an invalid
+        // character rather than a bad leading char.
+        assert_eq!(
+            connect_channel_name("cam", "Frame", "sink", "in"),
+            Err(IdentError::InvalidChannelNameCharacter(
+                "cam-Frame--sink-in".to_string(),
+                'F'
+            ))
+        );
+    }
+
+    #[test]
+    fn connect_name_lowercases_uppercase_leading_processor_id() {
+        // Real `ProcessorUniqueId`s are `P{cuid2}` — uppercase-leading `P` over
+        // a lowercase base-36 body. The derivation lowercases the processor-id
+        // components so a valid connect with default ids yields a grammar-legal
+        // channel name instead of erroring. Mental-revert guard: drop the
+        // `to_ascii_lowercase` normalization and this errors with
+        // ChannelNameMustStartWithLowercase.
+        let name = connect_channel_name("Pabc123def", "video", "Pxyz789ghi", "video_in").unwrap();
+        assert_eq!(name.as_str(), "pabc123def-video--pxyz789ghi-video_in");
+        validate_channel_name(name.as_str()).unwrap();
+
+        // Distinct P-ids stay distinct after lowercasing (cuid2 bodies differ).
+        let other = connect_channel_name("Pabc123def", "video", "Pxyz789jkl", "video_in").unwrap();
+        assert_ne!(name, other);
     }
 }

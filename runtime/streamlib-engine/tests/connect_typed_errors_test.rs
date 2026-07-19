@@ -17,9 +17,13 @@
 //!   empty, so any port name fails the input/output lookup).
 
 use serial_test::serial;
+use streamlib::sdk::descriptors::{
+    Org, Package, PortDescriptor, PortSchemaSpec, ProcessorDescriptor, SchemaIdent, SemVer,
+    TypeName,
+};
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib::sdk::processors::ProcessorSpec;
+use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
 use streamlib_engine::core::PortDirection;
 
@@ -30,6 +34,24 @@ fn unknown_ident() -> streamlib::sdk::descriptors::SchemaIdent {
         "DefinitelyNotARegisteredProcessor",
         "9.9.9"
     )
+}
+
+/// Register a descriptor-only processor type with one real input and one real
+/// output port — enough to satisfy `connect`'s port-existence check. Idempotent
+/// under `serial_test` (a re-register returns an already-registered error we
+/// discard).
+fn register_test_type(short: &str, input: &str, output: &str) -> SchemaIdent {
+    let id = SchemaIdent::new(
+        Org::new("tatolab").unwrap(),
+        Package::new("connect-typed-errors-test").unwrap(),
+        TypeName::new(short).unwrap(),
+        SemVer::new(1, 0, 0),
+    );
+    let descriptor = ProcessorDescriptor::new(id.clone(), "connect typed-errors test")
+        .with_input(PortDescriptor::new(input, "", PortSchemaSpec::Any, false))
+        .with_output(PortDescriptor::new(output, "", PortSchemaSpec::Any, false));
+    let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
+    id
 }
 
 #[test]
@@ -133,5 +155,79 @@ fn connect_with_unknown_target_processor_id_returns_processor_not_found() {
             assert_eq!(id, "nonexistent-source");
         }
         other => panic!("expected ProcessorNotFound for source, got {:?}", other),
+    }
+}
+
+#[test]
+#[serial]
+fn connect_default_id_processors_with_valid_ports_returns_ok() {
+    // Regression for #1416: a real `connect()` uses default `ProcessorUniqueId`s
+    // (`P{cuid2}` — uppercase-leading `P`). The channel-name derivation lowercases
+    // the processor-id components, so a valid output->input link returns
+    // `Ok(LinkUniqueId)` instead of `Error::InvalidLink("channel `P…`")`. Mentally
+    // revert the `to_ascii_lowercase` normalization in `connect_channel_name` and
+    // this fails with InvalidLink for every default-id link.
+    let cam = register_test_type("CameraSource", "_unused_in", "video");
+    let sink = register_test_type("DisplaySink", "video_in", "_unused_out");
+
+    let runtime = Runner::new().unwrap();
+    let cam_id = runtime
+        .add_processor(ProcessorSpec::new(cam, serde_json::json!({})))
+        .unwrap();
+    let sink_id = runtime
+        .add_processor(ProcessorSpec::new(sink, serde_json::json!({})))
+        .unwrap();
+
+    // The generated ids are the default uppercase-leading form.
+    assert!(cam_id.as_str().starts_with('P'));
+    assert!(sink_id.as_str().starts_with('P'));
+
+    let link = runtime
+        .connect(
+            OutputLinkPortRef::new(&cam_id, "video"),
+            InputLinkPortRef::new(&sink_id, "video_in"),
+        )
+        .expect("default-id connect with valid ports must return Ok, not InvalidLink");
+    // A non-empty LinkUniqueId came back.
+    assert!(!link.to_string().is_empty());
+}
+
+#[test]
+#[serial]
+fn connect_valid_processors_nonexistent_port_returns_port_not_found_not_invalid_link() {
+    // Port-validation now runs BEFORE the channel-name derivation, so a connect
+    // to a port that doesn't exist on a real (default-id) processor surfaces as
+    // the typed `ProcessorPortNotFound`, never a masking `InvalidLink`. The port
+    // name here is also grammar-illegal (`/` is not iceoryx2/keyexpr-safe), which
+    // is exactly what pre-reorder produced an InvalidLink for — real ports are
+    // always grammar-legal, so a grammar-illegal port is always a nonexistent
+    // one, and the port-existence error is the actionable one. Mentally revert
+    // the reorder in `connect_impl` (derive the channel name first) and this
+    // reads as InvalidLink instead.
+    let cam = register_test_type("CameraSource", "_unused_in", "video");
+    let sink = register_test_type("DisplaySink", "video_in", "_unused_out");
+
+    let runtime = Runner::new().unwrap();
+    let cam_id = runtime
+        .add_processor(ProcessorSpec::new(cam, serde_json::json!({})))
+        .unwrap();
+    let sink_id = runtime
+        .add_processor(ProcessorSpec::new(sink, serde_json::json!({})))
+        .unwrap();
+
+    match runtime.connect(
+        OutputLinkPortRef::new(&cam_id, "video"),
+        InputLinkPortRef::new(&sink_id, "no/such/input"),
+    ) {
+        Err(Error::ProcessorPortNotFound {
+            processor_id,
+            port_name,
+            direction,
+        }) => {
+            assert_eq!(processor_id, sink_id.to_string());
+            assert_eq!(port_name, "no/such/input");
+            assert_eq!(direction, PortDirection::Input);
+        }
+        other => panic!("expected ProcessorPortNotFound, got {:?}", other),
     }
 }

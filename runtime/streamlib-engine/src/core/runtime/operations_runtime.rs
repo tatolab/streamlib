@@ -14,6 +14,7 @@ use crate::core::graph::{
 use crate::core::processors::{ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, PortDirection, Result};
+use streamlib_idents::ChannelName;
 
 // =============================================================================
 // Core Implementation Functions ('static async fns for spawn compatibility)
@@ -156,35 +157,22 @@ async fn connect_impl(
     let to_processor = to.processor_id.clone();
     let to_port = to.port_name.clone();
 
-    // The one channel name this link publishes to / subscribes from — the
-    // deterministic `connect()` sugar (#1416). Intra-node it currently maps
-    // onto the per-destination iceoryx2 service; the name is what phase [L]
-    // cross-node routing keys on. An out-of-grammar endpoint (e.g. a port name
-    // carrying `/` or uppercase) surfaces as a typed link error rather than an
-    // invalid wire name; underscore is legal and rides through.
-    let channel = streamlib_idents::connect_channel_name(
-        from_processor.as_str(),
-        &from_port,
-        to_processor.as_str(),
-        &to_port,
-    )
-    .map_err(|source| Error::InvalidLink(source.to_string()))?;
-
     PUBSUB.publish(
         topics::RUNTIME_GLOBAL,
         &Event::RuntimeGlobal(RuntimeEvent::RuntimeWillConnect {
-            from_processor,
+            from_processor: from_processor.clone(),
             from_port: from_port.clone(),
-            to_processor,
+            to_processor: to_processor.clone(),
             to_port: to_port.clone(),
         }),
     );
 
-    let link_id = compiler.scope(|graph, tx| -> Result<LinkUniqueId> {
-        // Validate endpoints + ports up-front so failures surface as typed
-        // errors instead of the generic `add_e`-returns-empty-traversal path.
-        // The `add_e` call still does its own checks defensively, but this
-        // pre-validation is what gets the typed error to the caller.
+    let (link_id, channel) = compiler.scope(|graph, tx| -> Result<(LinkUniqueId, ChannelName)> {
+        // Validate endpoints + ports FIRST — before the channel-name
+        // derivation — so a missing processor/port reads as the typed
+        // ProcessorNotFound / ProcessorPortNotFound and never gets masked by an
+        // InvalidLink from the wire-name grammar. The `add_e` call still checks
+        // defensively; this pre-validation is what gets the typed error out.
         // Validate source processor + output port.
         {
             let from_node = graph
@@ -216,13 +204,31 @@ async fn connect_impl(
             }
         }
 
-        graph
+        // The one channel name this link publishes to / subscribes from — the
+        // deterministic `connect()` sugar (#1416). Intra-node it currently maps
+        // onto the per-destination iceoryx2 service; the name is what phase [L]
+        // cross-node routing keys on. Endpoints are validated above, so a
+        // grammar failure here is a genuinely-illegal PORT name (author error),
+        // surfaced as InvalidLink. Processor ids are lowercased inside
+        // `connect_channel_name`; underscore is legal and rides through.
+        // Deriving inside the transaction means an illegal port name rolls the
+        // pending link back rather than committing a half-built edge.
+        let channel = streamlib_idents::connect_channel_name(
+            from.processor_id.as_str(),
+            &from.port_name,
+            to.processor_id.as_str(),
+            &to.port_name,
+        )
+        .map_err(|source| Error::InvalidLink(source.to_string()))?;
+
+        let link_id = graph
             .traversal_mut()
             .add_e(from, to)
             .inspect(|link| tx.log(PendingOperation::AddLink(link.id.clone())))
             .first()
             .map(|link| link.id.clone())
-            .ok_or_else(|| Error::GraphError("failed to create link after validation".into()))
+            .ok_or_else(|| Error::GraphError("failed to create link after validation".into()))?;
+        Ok((link_id, channel))
     })?;
 
     tracing::debug!(
