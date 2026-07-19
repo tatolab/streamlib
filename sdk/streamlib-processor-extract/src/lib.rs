@@ -21,12 +21,14 @@
 //! scan produces.
 
 pub mod grammar;
+pub mod reachable;
 
 use std::path::{Path, PathBuf};
 
 use streamlib_processor_schema::ProcessorSchema;
 
 pub use grammar::{ParsedPort, ParsedProcessorAttr};
+pub use reachable::{ModuleReachabilityTarget, extract_reachable_rust_processors};
 
 /// One processor derived from a `#[processor(...)]` attribute in source.
 ///
@@ -87,6 +89,21 @@ pub enum ExtractError {
         path: PathBuf,
         struct_name: String,
         message: String,
+    },
+
+    /// A `mod <name>;` declaration reachable from the crate root resolved to no
+    /// file on disk (neither `<name>.rs` nor `<name>/mod.rs`, nor a `#[path]`
+    /// override). A compilable crate never hits this — the module-reachability
+    /// walk surfaces it rather than silently dropping a subtree that the build
+    /// target would have compiled.
+    #[error(
+        "`mod {module}` declared in {declared_in} resolves to no file \
+         (looked for {candidates})"
+    )]
+    UnresolvedModule {
+        module: String,
+        declared_in: PathBuf,
+        candidates: String,
     },
 }
 
@@ -195,7 +212,7 @@ fn walk_item(
 /// The `#[processor(...)]` attribute on an item, if present. Matches both the
 /// bare `#[processor(...)]` and the path-qualified `#[streamlib::processor(...)]`
 /// forms by their final path segment.
-fn processor_attr(attrs: &[syn::Attribute]) -> Option<&syn::Attribute> {
+pub(crate) fn processor_attr(attrs: &[syn::Attribute]) -> Option<&syn::Attribute> {
     attrs.iter().find(|attr| {
         attr.path()
             .segments
@@ -206,7 +223,7 @@ fn processor_attr(attrs: &[syn::Attribute]) -> Option<&syn::Attribute> {
 
 /// Parse a single `#[processor(...)]` attribute through the shared grammar and
 /// build the manifest-shaped [`ExtractedProcessor`].
-fn parse_processor_attr(
+pub(crate) fn parse_processor_attr(
     attr: &syn::Attribute,
     struct_ident: &syn::Ident,
     rel_path: &Path,
