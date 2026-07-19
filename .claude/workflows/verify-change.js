@@ -20,6 +20,15 @@ const issue = input.issue;
 const branch = input.branch; // K4: verify addresses a branch, not just an issue number.
 const zones = Array.isArray(input.zones) ? input.zones : [];
 const claimsE2e = input.claims_e2e === true;
+// Opt-in delta re-verify for a post-fix re-check. A full verify re-runs the
+// change-verifier PLUS the whole path-routed domain-lens fan-out and the
+// craftsmanship lens every fix round (~N parallel opus reviewers), almost all of
+// it re-reviewing code the fix never touched. When the caller sets fix_round, we
+// keep the always-on change-verifier (scoped to the fix delta, still running the
+// full gate battery) and the evidence re-audit when E2E is claimed, but skip the
+// domain-lens + craftsmanship fan-out — the expensive part that a tiny fix delta
+// does not warrant re-running wholesale. The first verify of a branch stays full.
+const fixRound = input.fix_round === true;
 
 // Zones → the domain experts to run as read-only lenses over the diff.
 // KEEP-IN-SYNC(zone-router): implement-ticket.js, verify-change.js, draft-design.js, run-research.js, fix-ticket.js
@@ -113,7 +122,7 @@ async function resilientAgent(prompt, opts) {
   return { degraded: true };
 }
 
-const experts = expertsForZones(zones);
+const experts = fixRound ? [] : expertsForZones(zones);
 
 // K4: cheap mechanical pre-flight BEFORE the expensive verifier + parallel lenses
 // spawn. The runtime exposes no direct shell, so a single sonnet guard runs the
@@ -155,7 +164,14 @@ phase('Verify');
 // schema) is treated as blocked, not a pass.
 const stageARaw = await resilientAgent(
   `Independently review the diff on issue #${issue}'s branch \`${branch}\` against the ticket. You are read-only; run ` +
-    `the tests yourself and trust no claim. Emit exactly your verdict JSON. ${severityTaxonomy}`,
+    `the tests yourself and trust no claim. Emit exactly your verdict JSON. ${severityTaxonomy}` +
+    (fixRound
+      ? ` This is a fix-round DELTA re-verify: the branch already cleared a full verify and has since had verify ` +
+        `findings applied. Concentrate on the fix delta — the files changed since the prior verified state — and ` +
+        `confirm the applied findings are correctly resolved and introduced no regression. Still run the FULL gate ` +
+        `battery / tests yourself (a fix can break an untouched file); the domain-lens fan-out is intentionally ` +
+        `skipped this round, so you are the sole reviewer — do not assume another lens will catch a delta regression.`
+      : ``),
   { agentType: 'change-verifier', phase: 'Verify', label: 'change-verifier', schema: verdictSchema },
 );
 const stageA =
@@ -165,6 +181,7 @@ const stageA =
 log(`change-verifier verdict=${stageA.verdict} findings=${(stageA.findings || []).length}`);
 
 phase('Lenses');
+if (fixRound) log('verify-change: fix-round delta re-verify — domain-lens + craftsmanship fan-out skipped; change-verifier + evidence only');
 const lensThunks = experts.map((expert) => () =>
   resilientAgent(
     `Read-only lens over the diff on issue #${issue}'s branch \`${branch}\`, from your domain's angle ` +
@@ -176,7 +193,7 @@ const lensThunks = experts.map((expert) => () =>
 );
 // The always-on Rust clean-code lens — duplication/smell/idiom/ownership/API shape
 // the mechanical gates and the correctness verifier don't judge. Gated on touches_rust.
-if (guard.touches_rust) {
+if (guard.touches_rust && !fixRound) {
   lensThunks.push(() =>
     resilientAgent(
       `Read-only senior-Rust craftsmanship review of the added/changed Rust in the diff on issue #${issue}'s branch \`${branch}\`. ` +
@@ -231,6 +248,9 @@ if (hasBlocker || hasReject) {
         `merge, so it must not sit in draft. NEVER merge, though — merging is the owner's call. Fill the PR body with the ` +
         `ticket link, the change summary, the test evidence, any E2E report, and a "Review items (non-blocking)" section ` +
         `listing these findings verbatim so the owner sees them in-context: ${JSON.stringify(reviewItems)}. ` +
+        `Write that body to a file and pass it with \`gh pr create --body-file <path>\` (or inline via ` +
+        `\`--body "$(cat <path>)"\`). NEVER pass \`--body "@<path>"\`: gh does NOT expand \`@file\` for \`--body\` ` +
+        `(that is a curl / \`gh api\` idiom), so \`@/tmp/.../body.md\` would be posted as the literal PR body text. ` +
         `Return the PR number.`,
       { phase: 'Adjudicate', label: 'open-pr', model: 'sonnet', schema: { type: 'object', properties: { pr_number: { type: 'number' } }, required: ['pr_number'] } },
     )) || {};

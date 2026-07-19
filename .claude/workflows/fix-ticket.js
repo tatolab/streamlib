@@ -108,6 +108,7 @@ const fixReportSchema = {
     unresolved: { type: 'array', items: { type: 'string' } },
     rebased: { type: 'boolean' },
     force_pushed: { type: 'boolean' },
+    pushed: { type: 'boolean' },
   },
   required: ['worktree_path', 'branch', 'commits', 'diff_stat'],
 };
@@ -132,7 +133,8 @@ const applyPrompt =
       `it out in a git worktree (\`git worktree add <path> ${branch}\` if one is not already live) — do NOT create a ` +
       `fresh feature branch and do NOT restart from Rederive. Then: \`git fetch origin\`; rebase \`${branch}\` onto ` +
       `origin/main; resolve every conflict preserving the branch's intent; make checkpoint commits as needed; and ` +
-      `force-push with lease (\`git push --force-with-lease\`). Set rebased and force_pushed. Return the report over ` +
+      `force-push with lease (\`git push --force-with-lease\`). Set rebased, force_pushed, and pushed all true once ` +
+      `the push succeeds. Return the report over ` +
       `the rebased tree — absolute \`worktree_path\`, \`branch\`, the resulting \`commits\`, and ` +
       `\`git diff origin/main --stat\` in \`diff_stat\`.`
     : `Apply the enumerated verify findings to branch \`${branch}\` (issue #${issue}). Work IN the existing branch: ` +
@@ -140,7 +142,10 @@ const applyPrompt =
       `create a fresh feature branch and do NOT restart from Rederive. Apply ONLY the findings listed below (no ` +
       `scope creep, no unrelated auto-fixes); hold the engine doctrine and licensing/logging conventions. Make ` +
       `checkpoint commits at logical boundaries. List which findings you addressed in \`applied\` and any you could ` +
-      `not in \`unresolved\`. Return the report over the fixed tree — absolute \`worktree_path\`, \`branch\`, the ` +
+      `not in \`unresolved\`. Then PUSH the branch to origin with a normal fast-forward push ` +
+      `(\`git push origin ${branch}\`) so the branch under review is up to date — this is a fix on top of the ` +
+      `existing branch, NOT a rebase, so do NOT force-push. Set \`pushed: true\` once the push succeeds and leave ` +
+      `\`force_pushed: false\`. Return the report over the fixed tree — absolute \`worktree_path\`, \`branch\`, the ` +
       `resulting \`commits\`, and \`git diff origin/main --stat\` in \`diff_stat\`.\n\n` +
       `Findings to apply (JSON): ${JSON.stringify(findings)}`;
 
@@ -188,6 +193,7 @@ return {
   unresolved: applied.unresolved || [],
   rebased: applied.rebased === true,
   force_pushed: applied.force_pushed === true,
+  pushed: applied.pushed === true,
   gates: ciTable,
   lead: lead || 'generic',
 };

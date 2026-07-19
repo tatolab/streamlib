@@ -170,6 +170,8 @@ const implemented =
       `just-merged surfaces (a stale base is what lets a fabricated no-diff "success" slip through). ` +
       `Create — or rename your worktree branch to — the canonical \`feat/${issue}-<slug>\` branch, and return its exact ` +
       `name in the \`branch\` field. Make checkpoint commits at logical boundaries (commits are contractual, not optional). ` +
+      `BEFORE returning your report, PUSH the canonical branch to origin (\`git push -u origin feat/${issue}-<slug>\`) so ` +
+      `verify-change's branch pre-flight can find it on origin — a report whose branch is not on origin is incomplete. ` +
       `Hold the engine doctrine: extend the existing core system, never spin up a parallel abstraction; production-grade ` +
       `error taxonomy + tracing on engine work; new .rs files carry the BUSL header; tracing not println!/eprintln!. ` +
       `If the change crosses the plugin ABI, the abi module of your report must reflect the abi_version bump, updated ` +
