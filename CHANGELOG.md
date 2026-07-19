@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.14](https://github.com/tatolab/streamlib/compare/v0.7.13...v0.7.14) (2026-07-19)
+
+
+### Features
+
+* **runtime:** load-gate installed-set-only resolution; apps carry no dependencies ([#1467](https://github.com/tatolab/streamlib/issues/1467)) ([f21b3d3](https://github.com/tatolab/streamlib/commit/f21b3d3e0c73da0760c5365d302acb21f84072c1))
+
 ## [0.7.13](https://github.com/tatolab/streamlib/compare/v0.7.12...v0.7.13) (2026-07-19)
 
 
