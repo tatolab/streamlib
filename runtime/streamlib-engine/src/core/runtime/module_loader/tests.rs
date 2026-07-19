@@ -1038,7 +1038,7 @@ fn staged_processor_cross_check_matches_across_versions() {
     );
 
     assert!(
-        staging.contains_staged_processor(&manifest_composed_identity),
+        staging.contains_staged_processor_for_tuple(&manifest_composed_identity),
         "the cross-check must match on (org, package, type), ignoring the \
          version the cdylib staged its identity at",
     );

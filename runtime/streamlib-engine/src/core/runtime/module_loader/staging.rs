@@ -133,14 +133,23 @@ impl ModuleLoadRegistrationStaging {
         });
     }
 
-    /// Whether a processor with this ident is staged (mid-walk
+    /// Whether a processor matching this ident's `(org, package, type)`
+    /// tuple is staged, ignoring the version — mid-walk
     /// declared-but-not-registered validation reads this, not the global
-    /// registry — registrations are invisible globally until commit).
-    pub(super) fn contains_staged_processor(&self, ident: &SchemaIdent) -> bool {
-        self.processors
-            .lock()
-            .iter()
-            .any(|staged| staged.descriptor.name == *ident)
+    /// registry (registrations are invisible globally until commit).
+    ///
+    /// Version-blind by construction: a cdylib always stages its own
+    /// processor identity at `0.0.0` (the `#[processor]` grammar rejects
+    /// any inline version), while the loader composes the expected ident
+    /// from the package manifest's version. Matching on the full
+    /// `SchemaIdent` would miss every real load, since the normal graph
+    /// lookup is already version-blind (`highest_registered_for_tuple`).
+    pub(super) fn contains_staged_processor_for_tuple(&self, ident: &SchemaIdent) -> bool {
+        self.processors.lock().iter().any(|staged| {
+            staged.descriptor.name.org == ident.org
+                && staged.descriptor.name.package == ident.package
+                && staged.descriptor.name.r#type == ident.r#type
+        })
     }
 
     /// End-of-walk gate for subprocess (`Dynamic`-kind) processors:
