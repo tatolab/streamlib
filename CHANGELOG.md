@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.9](https://github.com/tatolab/streamlib/compare/v0.7.8...v0.7.9) (2026-07-19)
+
+
+### Features
+
+* **sdk:** App entrypoint sugar over Runner ([#1412](https://github.com/tatolab/streamlib/issues/1412)) ([#1453](https://github.com/tatolab/streamlib/issues/1453)) ([9ed563a](https://github.com/tatolab/streamlib/commit/9ed563ac1cb015bfa5a23499adcefdb3b2067d4e))
+
 ## [0.7.8](https://github.com/tatolab/streamlib/compare/v0.7.7...v0.7.8) (2026-07-19)
 
 
