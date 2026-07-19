@@ -77,15 +77,29 @@ const severityTaxonomy =
 // K3: degrade-not-crash — see implement-ticket.js. On a null/failed structured
 // result, retry ONCE schema-free and parse; then continue degraded, not dead.
 async function resilientAgent(prompt, opts) {
-  const first = await agent(prompt, opts);
-  if (first) return first;
   const options = opts || {};
   const { schema, ...schemaFree } = options;
+  let first;
+  try {
+    first = await agent(prompt, opts);
+  } catch (structuredThrow) {
+    // agent({schema}) throws when it exhausts the StructuredOutput retry cap;
+    // degrade to the schema-free retry below instead of killing the whole run.
+    log(`resilientAgent: structured attempt threw (${options.label || 'unlabeled'}); falling back to schema-free retry`);
+    first = null;
+  }
+  if (first) return first;
   const shape = schema ? JSON.stringify(schema) : '{}';
-  const retry = await agent(
-    `${prompt}\n\nReturn ONLY a single JSON object matching this shape — no prose, no code fence: ${shape}`,
-    schemaFree,
-  );
+  let retry;
+  try {
+    retry = await agent(
+      `${prompt}\n\nReturn ONLY a single JSON object matching this shape — no prose, no code fence: ${shape}`,
+      schemaFree,
+    );
+  } catch (retryThrow) {
+    log(`resilientAgent: schema-free retry also threw (${options.label || 'unlabeled'}); continuing degraded`);
+    return { degraded: true };
+  }
   if (retry && typeof retry === 'object') return retry;
   if (typeof retry === 'string') {
     try {
