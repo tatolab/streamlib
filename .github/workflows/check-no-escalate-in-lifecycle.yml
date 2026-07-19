@@ -1,0 +1,47 @@
+name: Check No Escalate In Lifecycle
+
+# CI gate for the sandbox lifecycle contract.
+# `cargo xtask check-no-escalate-in-lifecycle` walks the engine sources
+# and fails if any `.escalate(...)` call appears inside a FullAccess
+# lifecycle body (setup / teardown / start / stop and their `_inner`
+# helpers), where escalate ops are not permitted.
+#
+# Grep-shaped on purpose: sub-second on a clean runner, no workspace build.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  xtask-check-no-escalate-in-lifecycle:
+    name: xtask check-no-escalate-in-lifecycle
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        # A cache-service flake must never fail the job; a miss just means a cold build.
+        continue-on-error: true
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-xtask-${{ hashFiles('xtask/Cargo.toml', 'xtask/Cargo.lock', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-xtask-
+
+      - name: cargo xtask check-no-escalate-in-lifecycle
+        run: cargo run --locked -q -p xtask -- check-no-escalate-in-lifecycle
+
+      - name: cargo test -p xtask check_no_escalate_in_lifecycle (fixture tests)
+        run: cargo test --locked -p xtask check_no_escalate_in_lifecycle
