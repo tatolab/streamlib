@@ -54,7 +54,12 @@ struct ComputeBackend {
     height: u32,
 }
 
-#[streamlib_plugin_sdk::sdk::processor("GrayscaleCompute")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/camera-plugin-sdk-compute/GrayscaleCompute@0.1.0",
+    execution = reactive,
+    input("video_in", "@tatolab/core/VideoFrame@1.0.0"),
+    output("video_out", "@tatolab/core/VideoFrame@1.0.0"),
+)]
 pub struct GrayscaleComputeProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,
     backend: Option<ComputeBackend>,

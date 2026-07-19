@@ -114,7 +114,12 @@ impl Default for CrtFilmGrainConfig {
     }
 }
 
-#[streamlib_plugin_sdk::sdk::processor("CrtFilmGrain")]
+#[streamlib_plugin_sdk::sdk::processor(
+    "@tatolab/camera-python-display-effects/CrtFilmGrain@0.1.0",
+    execution = reactive,
+    input("video_in", "@tatolab/core/VideoFrame@1.0.0"),
+    output("video_out", "@tatolab/core/VideoFrame@1.0.0"),
+)]
 pub struct CrtFilmGrainProcessor {
     config: CrtFilmGrainConfig,
     gpu_context: Option<GpuContextLimitedAccess>,

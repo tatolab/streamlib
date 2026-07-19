@@ -27,7 +27,12 @@ unsafe extern "C" {
     fn CVPixelBufferGetBytesPerRow(pixel_buffer: *mut c_void) -> usize;
 }
 
-#[streamlib::sdk::processor("GrayscaleRust")]
+#[streamlib::sdk::processor(
+    "@tatolab/camera-rust-plugin/GrayscaleRust@0.1.0",
+    execution = reactive,
+    input("video_in", "@tatolab/core/VideoFrame@1.0.0"),
+    output("video_out", "@tatolab/core/VideoFrame@1.0.0"),
+)]
 pub struct GrayscaleProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,
     running: Arc<AtomicBool>,
