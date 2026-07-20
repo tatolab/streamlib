@@ -63,6 +63,7 @@ pub use streamlib_macros::{
 };
 
 pub use core::{
+    ConnectOptions,
     ConnectionDefinition,
     // Processor traits (mode-specific)
     ContinuousProcessor,
@@ -85,6 +86,7 @@ pub use core::{
     RuntimeContext,
     RuntimeContextFullAccess,
     RuntimeContextLimitedAccess,
+    SchemaValidationPosture,
     Texture,
     TextureDescriptor,
     TextureFormat,

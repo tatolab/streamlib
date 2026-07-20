@@ -11,6 +11,55 @@ use std::pin::Pin;
 /// Boxed future type for async trait methods (required for dyn compatibility).
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+pub use crate::core::schema_agreement::SchemaValidationPosture;
+
+/// Per-wiring-site options for a connect call.
+///
+/// The default is the engine-wide loose-but-observed schema validation
+/// ([`SchemaValidationPosture::Loose`]): a concrete producer/consumer schema
+/// mismatch warns but the link is still wired. A safety-critical channel selects
+/// [`ConnectOptions::strict`] so the same mismatch instead hard-fails at the
+/// wiring site with [`Error::SchemaIdentMismatch`].
+///
+/// Non-exhaustive so new per-wiring-site knobs can be added without breaking
+/// call sites — construct via [`ConnectOptions::default`],
+/// [`ConnectOptions::strict`], or [`ConnectOptions::with_validation`].
+///
+/// [`Error::SchemaIdentMismatch`]: crate::core::error::Error::SchemaIdentMismatch
+#[derive(Debug, Clone, Default)]
+#[non_exhaustive]
+pub struct ConnectOptions {
+    /// Schema-agreement posture applied when the link is wired.
+    pub validation: SchemaValidationPosture,
+}
+
+impl ConnectOptions {
+    /// Loose-but-observed validation — the engine-wide default; a concrete
+    /// schema mismatch warns, then wires the link anyway.
+    pub fn loose() -> Self {
+        Self {
+            validation: SchemaValidationPosture::Loose,
+        }
+    }
+
+    /// Strict validation — a concrete producer/consumer schema mismatch is
+    /// rejected at the wiring site with [`Error::SchemaIdentMismatch`].
+    ///
+    /// [`Error::SchemaIdentMismatch`]: crate::core::error::Error::SchemaIdentMismatch
+    pub fn strict() -> Self {
+        Self {
+            validation: SchemaValidationPosture::Strict,
+        }
+    }
+
+    /// Set the schema-validation posture explicitly.
+    #[must_use]
+    pub fn with_validation(mut self, validation: SchemaValidationPosture) -> Self {
+        self.validation = validation;
+        self
+    }
+}
+
 /// Unified interface for runtime graph operations.
 ///
 /// Implemented by `Runner` (direct) and `RuntimeProxy` (channel-based).
