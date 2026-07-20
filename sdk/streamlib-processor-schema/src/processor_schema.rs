@@ -5,7 +5,6 @@ use schemars::JsonSchema;
 use schemars::r#gen::SchemaGenerator;
 use schemars::schema::{InstanceType, Schema, SchemaObject, SubschemaValidation};
 use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use streamlib_idents::{SchemaIdent, TypeName};
 
@@ -597,9 +596,6 @@ pub struct ProcessorSchema {
     /// PascalCase short name (e.g. "Camera"), NOT reverse-DNS.
     pub name: String,
 
-    /// Processor version (e.g., "1.0.0").
-    pub version: String,
-
     /// Human-readable description.
     #[serde(default)]
     pub description: Option<String>,
@@ -639,16 +635,6 @@ pub struct ProcessorSchema {
 }
 
 impl ProcessorSchema {
-    /// Returns the full processor name with version (e.g., "com.example.blur@1.0.0").
-    pub fn full_name(&self) -> String {
-        format!("{}@{}", self.name, self.version)
-    }
-
-    /// Computes the processor ID (hash of full name).
-    pub fn processor_id(&self) -> u64 {
-        compute_schema_id(&self.full_name())
-    }
-
     /// Returns the Rust struct name derived from the processor name.
     pub fn rust_struct_name(&self) -> String {
         let last_segment = self.name.split('.').next_back().unwrap_or(&self.name);
@@ -659,14 +645,6 @@ impl ProcessorSchema {
     pub fn rust_module_name(&self) -> String {
         self.name.replace('.', "_").to_lowercase()
     }
-}
-
-/// Compute schema ID from full name (first 8 bytes of SHA-256).
-pub fn compute_schema_id(full_name: &str) -> u64 {
-    let mut hasher = Sha256::new();
-    hasher.update(full_name.as_bytes());
-    let result = hasher.finalize();
-    u64::from_be_bytes(result[0..8].try_into().unwrap())
 }
 
 /// Convert a string to PascalCase.

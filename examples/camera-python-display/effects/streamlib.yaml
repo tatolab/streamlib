@@ -34,7 +34,6 @@ schemas:
 
 processors:
   - name: CrtFilmGrain
-    version: 1.0.0
     description: "CRT display + 80s film grain effect"
     execution: reactive
     runtime:
@@ -50,7 +49,6 @@ processors:
         description: "Processed video frames"
 
   - name: BlendingCompositor
-    version: 1.0.0
     description: "Multi-layer alpha blending compositor with PiP support"
     execution: manual
     scheduling:

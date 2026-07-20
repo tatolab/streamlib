@@ -302,7 +302,7 @@ pub fn inspect(path: &std::path::Path) -> Result<()> {
         println!();
         println!("Processors ({}):", config.processors.len());
         for proc in &config.processors {
-            println!("  {} v{}", proc.name, proc.version);
+            println!("  {}", proc.name);
             if let Some(desc) = &proc.description {
                 println!("    {}", desc);
             }

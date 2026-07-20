@@ -22,7 +22,6 @@ schemas:
 
 processors:
   - name: CudaInferenceProcessor
-    version: "1.0.0"
     description: "Acquires a host-pre-registered cuda OPAQUE_FD surface, validates the DLPack capsule shape, logs VALIDATION_PASSED / VALIDATION_FAILED to stderr"
     runtime: deno
     execution: reactive

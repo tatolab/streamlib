@@ -22,7 +22,6 @@ schemas:
     package: '@tatolab/core'
 processors:
 - name: JpegDecoder
-  version: 1.0.0
   description: Decodes EncodedJpegFrame to VideoFrame via the GPU SimpleJpegDecoder primitive
   runtime: rust
   entrypoint: null

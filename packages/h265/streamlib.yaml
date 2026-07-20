@@ -24,7 +24,6 @@ schemas:
     package: '@tatolab/core'
 processors:
 - name: H265Encoder
-  version: 1.0.0
   description: Encodes VideoFrame to EncodedVideoFrame (H.265) via Vulkan Video
   runtime: rust
   entrypoint: null
@@ -50,7 +49,6 @@ processors:
     overflow: null
     buffer_size: null
 - name: H265Decoder
-  version: 1.0.0
   description: Decodes EncodedVideoFrame (H.265) to VideoFrame via Vulkan Video
   runtime: rust
   entrypoint: null

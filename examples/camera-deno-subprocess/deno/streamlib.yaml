@@ -21,7 +21,6 @@ schemas:
 
 processors:
   - name: GrayscaleProcessor
-    version: "1.0.0"
     description: "Grayscale processor — TypeScript/Deno"
     runtime: deno
     execution: reactive
@@ -34,7 +33,6 @@ processors:
         schema: VideoFrame
 
   - name: HalftoneProcessor
-    version: "1.0.0"
     description: "Halftone dot pattern via TypeGPU/WebGPU compute shader"
     runtime: deno
     execution: reactive

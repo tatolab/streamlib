@@ -14,7 +14,6 @@ schemas:
     file: schemas/clap_effect_config.yaml
 processors:
 - name: ClapEffect
-  version: 1.0.0
   description: CLAP audio plugin processor with parameter control and automation
   runtime: rust
   entrypoint: null

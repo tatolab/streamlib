@@ -22,7 +22,6 @@ schemas:
 
 processors:
   - name: CpuReadbackBlurProcessor
-    version: "1.0.0"
     description: "Acquires a host-pre-registered cpu-readback surface, applies a separable Gaussian blur, releases"
     runtime: deno
     execution: reactive

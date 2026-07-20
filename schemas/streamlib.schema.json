@@ -278,8 +278,7 @@
       "description": "A complete processor schema definition — the manifest-shaped view of one processor, derived from its `#[processor(...)]` attribute (the source of truth) by the source-scan extractor.",
       "type": "object",
       "required": [
-        "name",
-        "version"
+        "name"
       ],
       "properties": {
         "config": {
@@ -367,10 +366,6 @@
           "items": {
             "$ref": "#/definitions/ProcessorStateField"
           }
-        },
-        "version": {
-          "description": "Processor version (e.g., \"1.0.0\").",
-          "type": "string"
         }
       },
       "additionalProperties": false

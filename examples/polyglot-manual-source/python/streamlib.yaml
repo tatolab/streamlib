@@ -22,7 +22,6 @@ schemas:
 
 processors:
   - name: PolyglotManualSource
-    version: "1.0.0"
     description: "Manual source: spawns a worker thread in start() that publishes Videoframes on the frame_out port at MonotonicTimer cadence. Reference example for the start()-must-return-promptly contract and #604's worker-thread iceoryx2 publish path."
     runtime: python
     execution: manual

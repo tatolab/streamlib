@@ -43,7 +43,6 @@ schemas:
 
 processors:
   - name: TestConfiguredProcessor
-    version: 1.0.0
     description: "Attribute-macro test fixture verifying config-emit against a streamlib.yaml package block"
     execution: continuous
     config:
@@ -51,7 +50,6 @@ processors:
       schema: TestConfiguredProcessorConfig
 
   - name: TcpBindTestProcessor
-    version: 1.0.0
     description: "dlopen-owns-tokio integration test fixture from #885 — binds a tokio::net::TcpListener on the plugin's own runtime"
     execution: manual
     config:
@@ -59,7 +57,6 @@ processors:
       schema: TcpBindTestProcessorConfig
 
   - name: GpuAcquireTestProcessor
-    version: 1.0.0
     description: "Phase C1 (#901) dlopen-cdylib GPU vtable integration test fixture — exercises clone_handle/acquire_pixel_buffer/plane_base_address_pixel_buffer/drop_pixel_buffer/drop_handle through the GpuContextLimitedAccessVTable"
     execution: manual
     config:
@@ -67,7 +64,6 @@ processors:
       schema: GpuAcquireTestProcessorConfig
 
   - name: EscalateSmokeTestProcessor
-    version: 1.0.0
     description: "Phase C3 (#903) dlopen-cdylib escalate smoke test fixture — runs gpu.escalate(|_full| Ok(())) end-to-end through the escalate_begin/escalate_end vtable + cdylib-side FullAccess construction via from_scope_token"
     execution: manual
     config:
@@ -75,7 +71,6 @@ processors:
       schema: EscalateSmokeTestProcessorConfig
 
   - name: ComputeKernelTestProcessor
-    version: 1.0.0
     description: "Phase E (#963) dlopen-cdylib compute-kernel CPU-reference integration test fixture — creates a kernel via FullAccess, allocates input + output storage buffers via LimitedAccess, dispatches output[i] = input[i] * 2 via the per-type binding-method vtable, and asserts CPU-reference match"
     execution: manual
     config:
@@ -83,7 +78,6 @@ processors:
       schema: ComputeKernelTestProcessorConfig
 
   - name: GraphicsKernelSmokeTestProcessor
-    version: 1.0.0
     description: "Phase E (#951) dlopen-cdylib graphics-kernel methods-vtable smoke test fixture — creates a graphics kernel via FullAccess, acquires a render-target Texture, runs a single offscreen_render() through the per-type binding-method vtable to assert the vtable round-trips don't panic. Smoke-only; pixel correctness not asserted."
     execution: manual
     config:
@@ -91,7 +85,6 @@ processors:
       schema: GraphicsKernelSmokeTestProcessorConfig
 
   - name: RayTracingKernelSmokeTestProcessor
-    version: 1.0.0
     description: "Phase E (#953) dlopen-cdylib ray-tracing-kernel methods-vtable smoke test fixture — builds a single-triangle BLAS + identity TLAS via FullAccess, creates an RT kernel, acquires a STORAGE_BINDING Texture, runs a single trace_rays() through the per-type binding-method vtable to assert the vtable round-trips (set_acceleration_structure / set_storage_image / set_push_constants / trace_rays) don't panic. Smoke-only; pixel correctness not asserted."
     execution: manual
     config:
@@ -99,7 +92,6 @@ processors:
       schema: RayTracingKernelSmokeTestProcessorConfig
 
   - name: LifecycleProbeProcessor
-    version: 1.0.0
     description: "Phase G (#961) dlopen-cdylib lifecycle-probe processor — appends marker lines for each ProcessorVTable lifecycle hook (setup / process / on_pause / on_resume / teardown) to a file so the integration test can confirm every hook dispatched through the cdylib boundary correctly."
     execution: continuous
     config:
@@ -107,7 +99,6 @@ processors:
       schema: LifecycleProbeProcessorConfig
 
   - name: PanickingManualLifecycleProcessor
-    version: 1.0.0
     description: "Phase H (#1005) dlopen-cdylib panic-injection Manual fixture. Panics in the configured lifecycle hook (setup / start / stop / teardown / on_pause / on_resume); the host's run_host_extern_c panic-safety net is expected to absorb the panic and keep the runtime alive."
     execution: manual
     config:
@@ -115,7 +106,6 @@ processors:
       schema: PanickingManualLifecycleProcessorConfig
 
   - name: PanickingContinuousLifecycleProcessor
-    version: 1.0.0
     description: "Phase H (#1005) dlopen-cdylib panic-injection Continuous fixture. Panics in the configured lifecycle hook (process); the host's run_host_extern_c panic-safety net is expected to absorb the panic and keep the runtime alive."
     execution: continuous
     config:
@@ -123,7 +113,6 @@ processors:
       schema: PanickingContinuousLifecycleProcessorConfig
 
   - name: ConcurrentEscalateTestProcessor
-    version: 1.0.0
     description: "Phase H (#1006 scenario 1) dlopen-cdylib concurrent-escalate fixture. Spawns thread_count threads from start(); each clones gpu_limited_access() and calls escalate concurrently. Output captures overlap count; expected overlaps=0 — proves the escalate gate serializes cdylib-path callers through escalate_via_vtable."
     execution: manual
     config:

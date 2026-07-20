@@ -106,7 +106,6 @@ impl ParsedProcessorAttr {
 
         ProcessorSchema {
             name: self.ident.r#type.as_str().to_string(),
-            version: self.ident.version.to_string(),
             description: self.description.clone(),
             runtime: RuntimeConfig {
                 language: Default::default(),

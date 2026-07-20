@@ -24,6 +24,5 @@ patch:
 
 processors:
   - name: AbiMismatchSentinel
-    version: 1.0.0
     description: "Sentinel processor whose only job is to make load_project enter the Rust-dylib code path; never gets registered because the abi_version check rejects the plugin first."
     execution: manual

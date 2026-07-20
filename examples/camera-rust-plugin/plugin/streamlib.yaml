@@ -21,7 +21,6 @@ schemas:
 
 processors:
   - name: GrayscaleRust
-    version: 1.0.0
     description: "Grayscale video effect (Rust dylib plugin)"
     runtime: rust
     execution: reactive

@@ -436,7 +436,7 @@ pub(super) fn register_manifest_processors(
             proc_schema_ident.clone(),
             proc_schema.description.as_deref().unwrap_or(""),
         )
-        .with_version(&proc_schema.version)
+        .with_version(proc_schema_ident.version.to_string())
         .with_runtime(runtime.clone());
 
         if let Some(entrypoint) = &proc_schema.entrypoint {

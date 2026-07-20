@@ -23,7 +23,6 @@ schemas:
 
 processors:
   - name: PluginAbiObjectRoundTripProcessor
-    version: 1.0.0
     description: "Cdylib processor that creates + clones + drops every #917 PluginAbiObject return type and writes a sentinel result file. Locks the cross-rustc-version plugin ABI contract end-to-end."
     execution: manual
     config:

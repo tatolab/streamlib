@@ -288,7 +288,10 @@ fn generate_processor_impl_from_schema(
 
     let processor_name = &schema.name;
     let description = schema.description.as_deref().unwrap_or("Processor");
-    let version = &schema.version;
+    // The descriptor version mirrors the processor's own identity version — the
+    // version-free `0.0.0` sentinel in the attribute grammar (#1409); the load
+    // path re-registers the descriptor under the package version.
+    let version = schema_ident.version.to_string();
     let schema_ident_literal = schema_ident_tokens(schema_ident);
 
     // Derive execution mode from schema
@@ -361,7 +364,7 @@ fn generate_processor_impl_from_schema(
     let from_config_body =
         generate_from_config_from_schema(schema, config_field_name, custom_fields);
     let descriptor_impl =
-        generate_descriptor_from_schema(schema, description, version, config_schema_id);
+        generate_descriptor_from_schema(schema, description, &version, config_schema_id);
     let iceoryx2_accessors = generate_iceoryx2_accessors_from_schema(schema);
 
     let update_config = config_field_name.as_ref().map(|name| {
@@ -818,7 +821,6 @@ mod processor_struct_emit_tests {
     fn minimal_schema() -> ProcessorSchema {
         ProcessorSchema {
             name: "MinimalProbe".to_string(),
-            version: "0.1.0".to_string(),
             description: None,
             runtime: Default::default(),
             entrypoint: None,

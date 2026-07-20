@@ -22,7 +22,6 @@ schemas:
 
 processors:
   - name: DmaBufConsumer
-    version: "1.0.0"
     description: "Resolves an upstream surface_id to a DMA-BUF, locks/reads it, and forwards the frame downstream"
     runtime: python
     execution: reactive

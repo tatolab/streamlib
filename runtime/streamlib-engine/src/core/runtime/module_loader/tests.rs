@@ -836,7 +836,6 @@ package:
   version: "0.1.0"
 processors:
   - name: TestProcessor
-    version: 1.0.0
     description: "Test"
     runtime: rust
     execution: manual
@@ -906,7 +905,6 @@ package:
   version: "0.1.0"
 processors:
   - name: TestProcessor
-    version: 1.0.0
     description: "Test"
     runtime: rust
     execution: manual
@@ -1429,7 +1427,6 @@ package:
   version: "0.1.0"
 processors:
   - name: PyProc
-    version: 1.0.0
     description: "source-only python processor"
     runtime: python
     execution: manual
@@ -2851,7 +2848,6 @@ processors:
              schemas:\n  TxnProcConfigSchema:\n    file: schemas/txn_proc_config.yaml\n\
              processors:\n\
              \x20 - name: TxnAlphaProcessor\n\
-             \x20   version: 1.0.0\n\
              \x20   runtime: typescript\n\
              \x20   entrypoint: main.ts\n\
              \x20   execution: manual\n\
@@ -2859,7 +2855,6 @@ processors:
              \x20     name: config\n\
              \x20     schema: TxnProcConfigSchema\n\
              \x20 - name: TxnBetaProcessor\n\
-             \x20   version: 1.0.0\n\
              \x20   runtime: typescript\n\
              \x20   entrypoint: main.ts\n\
              \x20   execution: manual\n\
@@ -2933,12 +2928,10 @@ processors:
             "package:\n  org: tatolab\n  name: txn-dupname\n  version: \"1.0.0\"\n\
              processors:\n\
              \x20 - name: TxnDupProcessor\n\
-             \x20   version: 1.0.0\n\
              \x20   runtime: typescript\n\
              \x20   entrypoint: main.ts\n\
              \x20   execution: manual\n\
              \x20 - name: TxnDupProcessor\n\
-             \x20   version: 1.0.0\n\
              \x20   runtime: typescript\n\
              \x20   entrypoint: main.ts\n\
              \x20   execution: manual\n",
@@ -3015,7 +3008,6 @@ processors:
             "package:\n  org: tatolab\n  name: txn-global\n  version: \"1.0.0\"\n\
              processors:\n\
              \x20 - name: TxnGlobalProcessor\n\
-             \x20   version: 1.0.0\n\
              \x20   runtime: typescript\n\
              \x20   entrypoint: main.ts\n\
              \x20   execution: manual\n",
@@ -3187,7 +3179,6 @@ processors:
              \x20 \"@tatolab/conc-root-e\":\n    path: ../e\n\
              processors:\n\
              \x20 - name: ConcRootFailingProcessor\n\
-             \x20   version: 1.0.0\n\
              \x20   runtime: typescript\n\
              \x20   entrypoint: main.ts\n\
              \x20   execution: manual\n\
@@ -3406,7 +3397,6 @@ processors:
              schemas:\n  RmInUseConfigSchema:\n    file: schemas/rm_inuse_config.yaml\n\
              processors:\n\
              \x20 - name: RmInUseProcessor\n\
-             \x20   version: 1.0.0\n\
              \x20   runtime: typescript\n\
              \x20   entrypoint: main.ts\n\
              \x20   execution: manual\n\

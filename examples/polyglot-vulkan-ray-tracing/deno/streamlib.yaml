@@ -22,7 +22,6 @@ schemas:
 
 processors:
   - name: VulkanRayTracingProcessor
-    version: "1.0.0"
     description: "Builds a single-triangle BLAS + identity TLAS via escalate IPC, registers an RT kernel, and dispatches one trace into a host-pre-registered storage image"
     runtime: deno
     execution: reactive

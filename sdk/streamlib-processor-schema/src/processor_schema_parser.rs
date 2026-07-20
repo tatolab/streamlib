@@ -51,30 +51,6 @@ fn validate_processor_schema(schema: &ProcessorSchema) -> SchemaResult<()> {
         });
     }
 
-    // Validate version format (semver-like)
-    if schema.version.is_empty() {
-        return Err(SchemaError::MissingField {
-            field: "version".to_string(),
-        });
-    }
-
-    let version_parts: Vec<&str> = schema.version.split('.').collect();
-    if version_parts.len() < 2 || version_parts.len() > 3 {
-        return Err(SchemaError::InvalidName {
-            name: schema.version.clone(),
-            reason: "version must be in format X.Y or X.Y.Z".to_string(),
-        });
-    }
-
-    for part in &version_parts {
-        if part.parse::<u32>().is_err() {
-            return Err(SchemaError::InvalidName {
-                name: schema.version.clone(),
-                reason: "version parts must be numeric".to_string(),
-            });
-        }
-    }
-
     // Config schema reference: shape (non-empty bare PascalCase TypeName)
     // is locked by `TypeName`'s typed deserializer in
     // `streamlib_idents::TypeName`. Resolution against the enclosing
@@ -120,12 +96,10 @@ mod tests {
     fn test_parse_processor_schema_minimal() {
         let yaml = r#"
 name: Passthrough
-version: 1.0.0
 "#;
 
         let schema = parse_processor_yaml(yaml).unwrap();
         assert_eq!(schema.name, "Passthrough");
-        assert_eq!(schema.version, "1.0.0");
         assert!(schema.description.is_none());
         assert!(schema.entrypoint.is_none());
         assert!(schema.config.is_none());
@@ -137,7 +111,6 @@ version: 1.0.0
     fn test_parse_processor_schema_full() {
         let yaml = r#"
 name: Blur
-version: 1.0.0
 description: "Gaussian blur filter"
 
 runtime: rust
@@ -160,7 +133,6 @@ outputs:
 
         let schema = parse_processor_yaml(yaml).unwrap();
         assert_eq!(schema.name, "Blur");
-        assert_eq!(schema.version, "1.0.0");
         assert_eq!(schema.description, Some("Gaussian blur filter".to_string()));
         assert_eq!(
             schema.runtime.language,
@@ -187,7 +159,6 @@ outputs:
     fn test_parse_processor_schema_python_runtime() {
         let yaml = r#"
 name: ObjectDetector
-version: 1.0.0
 runtime: python
 entrypoint: detector:ObjectDetector
 
@@ -213,7 +184,6 @@ outputs:
         // `(org, package)` come from the enclosing `streamlib.yaml`.
         let yaml = r#"
 name: Camera
-version: 1.0.0
 "#;
 
         let schema = parse_processor_yaml(yaml).unwrap();
@@ -227,7 +197,6 @@ version: 1.0.0
         // PascalCase short name.
         let yaml = r#"
 name: com.example.legacy_processor
-version: 1.0.0
 "#;
 
         let result = parse_processor_yaml(yaml);
@@ -243,7 +212,6 @@ version: 1.0.0
     fn test_processor_schema_rejects_snake_case_name() {
         let yaml = r#"
 name: blur_filter
-version: 1.0.0
 "#;
 
         let result = parse_processor_yaml(yaml);
@@ -254,18 +222,6 @@ version: 1.0.0
     fn test_processor_schema_rejects_empty_name() {
         let yaml = r#"
 name: ""
-version: 1.0.0
-"#;
-
-        let result = parse_processor_yaml(yaml);
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_processor_schema_invalid_version() {
-        let yaml = r#"
-name: Test
-version: invalid
 "#;
 
         let result = parse_processor_yaml(yaml);
@@ -280,7 +236,6 @@ version: invalid
         // `schemas:` map.
         let yaml = r#"
 name: Test
-version: 1.0.0
 
 inputs:
   - name: video
@@ -300,7 +255,6 @@ inputs:
     fn test_processor_schema_rejects_structured_port_form() {
         let yaml = r#"
 name: Test
-version: 1.0.0
 inputs:
   - name: video
     schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
@@ -320,7 +274,6 @@ inputs:
         // payloads (e.g. MoQ tracks).
         let yaml = r#"
 name: Test
-version: 1.0.0
 
 inputs:
   - name: data
@@ -335,7 +288,6 @@ inputs:
     fn test_processor_schema_config_local_type() {
         let yaml = r#"
 name: Test
-version: 1.0.0
 
 config:
   name: config
@@ -349,21 +301,9 @@ config:
     }
 
     #[test]
-    fn test_processor_schema_full_name() {
-        let yaml = r#"
-name: Blur
-version: 1.0.0
-"#;
-
-        let schema = parse_processor_yaml(yaml).unwrap();
-        assert_eq!(schema.full_name(), "Blur@1.0.0");
-    }
-
-    #[test]
     fn test_processor_schema_rust_struct_name_is_identity_for_pascal_case() {
         let yaml = r#"
 name: BlurFilter
-version: 1.0.0
 "#;
 
         let schema = parse_processor_yaml(yaml).unwrap();
@@ -374,7 +314,6 @@ version: 1.0.0
     fn test_input_port_read_mode_and_buffer_size() {
         let yaml = r#"
 name: Decoder
-version: 1.0.0
 
 inputs:
   - name: encoded_video_in
@@ -396,7 +335,6 @@ inputs:
     fn test_input_port_defaults_without_read_mode_and_buffer_size() {
         let yaml = r#"
 name: Passthrough
-version: 1.0.0
 
 inputs:
   - name: video
@@ -413,7 +351,6 @@ inputs:
     fn scheduling_block_round_trips_priority() {
         let yaml = r#"
 name: Audio
-version: 1.0.0
 
 scheduling:
   priority: realtime
@@ -427,7 +364,6 @@ scheduling:
     fn scheduling_block_absent_yields_none() {
         let yaml = r#"
 name: Passthrough
-version: 1.0.0
 "#;
         let schema = parse_processor_yaml(yaml).unwrap();
         assert!(schema.scheduling.is_none());
@@ -437,7 +373,6 @@ version: 1.0.0
     fn scheduling_block_rejects_invalid_priority() {
         let yaml = r#"
 name: Bogus
-version: 1.0.0
 
 scheduling:
   priority: NotAValidVariant
@@ -456,7 +391,6 @@ scheduling:
     fn scheduling_block_rejects_unknown_field() {
         let yaml = r#"
 name: Bogus
-version: 1.0.0
 
 scheduling:
   priority: high
@@ -473,7 +407,6 @@ scheduling:
     fn thread_priority_accepts_legacy_pascal_case_aliases() {
         let yaml = r#"
 name: Audio
-version: 1.0.0
 
 scheduling:
   priority: RealTime
@@ -487,7 +420,6 @@ scheduling:
     fn test_input_port_buffer_size_zero_rejected() {
         let yaml = r#"
 name: Test
-version: 1.0.0
 
 inputs:
   - name: video

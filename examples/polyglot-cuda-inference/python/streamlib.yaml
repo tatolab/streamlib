@@ -22,7 +22,6 @@ schemas:
 
 processors:
   - name: CudaInference
-    version: "1.0.0"
     description: "Acquires a host-pre-registered cuda OPAQUE_FD surface, uploads a test image, runs YOLOv8n via torch.from_dlpack, writes annotated PNG"
     runtime: python
     execution: reactive

@@ -23,7 +23,6 @@ schemas:
 
 processors:
   - name: FrameTap
-    version: 1.0.0
     description: "Samples video frames to disk (JPEG) on a configurable strategy, off the hot path. A sink: attach it to any video output port (fan-out) to inspect that output without rerouting the pipeline."
     runtime: rust
     execution: reactive

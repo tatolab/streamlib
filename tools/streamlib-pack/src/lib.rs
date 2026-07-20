@@ -1740,7 +1740,7 @@ mod tests {
         let dir = tempdir().unwrap();
         write_rust_processor_pkg(
             dir.path(),
-            "processors:\n- name: Camera\n  version: 1.0.0\n  runtime: rust\n  execution: manual\n  outputs:\n  - name: video\n    schema: VideoFrame\n",
+            "processors:\n- name: Camera\n  runtime: rust\n  execution: manual\n  outputs:\n  - name: video\n    schema: VideoFrame\n",
         );
         let out = dir.path().join("o.slpkg");
         let outcome = assemble_artifact(
@@ -1764,7 +1764,7 @@ mod tests {
         // Manifest lists a different processor name than code declares.
         write_rust_processor_pkg(
             dir.path(),
-            "processors:\n- name: Stale\n  version: 1.0.0\n  runtime: rust\n  execution: manual\n",
+            "processors:\n- name: Stale\n  runtime: rust\n  execution: manual\n",
         );
         let out = dir.path().join("o.slpkg");
         let err = assemble_artifact(
@@ -1972,7 +1972,7 @@ mod tests {
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: rp\n  version: 0.1.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
+            "package:\n  org: tatolab\n  name: rp\n  version: 0.1.0\nprocessors:\n  - name: P\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
         std::fs::write(dir.path().join("Cargo.toml"), b"[package]\nname='rp'\n").unwrap();
@@ -2022,7 +2022,7 @@ mod tests {
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: rp\n  version: 0.1.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
+            "package:\n  org: tatolab\n  name: rp\n  version: 0.1.0\nprocessors:\n  - name: P\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
         std::fs::write(
@@ -2083,7 +2083,7 @@ mod tests {
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    inputs: []\n    outputs: []\n",
+            "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
         std::fs::write(
@@ -2170,7 +2170,7 @@ mod tests {
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    inputs: []\n    outputs: []\n",
+            "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
         std::fs::write(
@@ -2235,7 +2235,7 @@ mod tests {
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"cuda_fisheye.processor:P\"\n    inputs: []\n    outputs: []\n",
+            "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"cuda_fisheye.processor:P\"\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
         std::fs::write(
@@ -2279,7 +2279,7 @@ mod tests {
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    inputs: []\n    outputs: []\n",
+            "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
         std::fs::write(
@@ -2327,7 +2327,7 @@ mod tests {
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    inputs: []\n    outputs: []\n",
+            "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
         std::fs::write(dir.path().join("p.py"), b"# stub").unwrap();
@@ -2361,7 +2361,7 @@ mod tests {
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: ts\n  version: 0.1.0\nprocessors:\n  - name: T\n    version: 1.0.0\n    description: d\n    runtime: deno\n    execution: manual\n    entrypoint: \"t.ts:default\"\n    inputs: []\n    outputs: []\n",
+            "package:\n  org: tatolab\n  name: ts\n  version: 0.1.0\nprocessors:\n  - name: T\n    description: d\n    runtime: deno\n    execution: manual\n    entrypoint: \"t.ts:default\"\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
         std::fs::write(dir.path().join("t.ts"), b"export default class {}").unwrap();
@@ -2423,7 +2423,7 @@ mod tests {
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: ts\n  version: 0.1.0\nprocessors:\n  - name: T\n    version: 1.0.0\n    description: d\n    runtime: deno\n    execution: manual\n    entrypoint: \"t.ts:default\"\n    inputs: []\n    outputs: []\n",
+            "package:\n  org: tatolab\n  name: ts\n  version: 0.1.0\nprocessors:\n  - name: T\n    description: d\n    runtime: deno\n    execution: manual\n    entrypoint: \"t.ts:default\"\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
         std::fs::write(dir.path().join("t.ts"), b"export default class {}").unwrap();
@@ -2721,7 +2721,7 @@ mod tests {
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: rp\n  version: 1.1.3-dev.4\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
+            "package:\n  org: tatolab\n  name: rp\n  version: 1.1.3-dev.4\nprocessors:\n  - name: P\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
         std::fs::write(
@@ -2771,7 +2771,7 @@ mod tests {
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: rp\n  version: 1.1.3-dev.4\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
+            "package:\n  org: tatolab\n  name: rp\n  version: 1.1.3-dev.4\nprocessors:\n  - name: P\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
         std::fs::write(
@@ -2842,7 +2842,7 @@ mod tests {
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: rp\n  version: 1.0.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
+            "package:\n  org: tatolab\n  name: rp\n  version: 1.0.0\nprocessors:\n  - name: P\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
         std::fs::write(dir.path().join("Cargo.toml"), ":::: not toml ::::\n").unwrap();
@@ -2885,7 +2885,7 @@ mod tests {
         let dir = tempdir().unwrap();
         std::fs::write(
             dir.path().join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: rp\n  version: 1.0.0\nprocessors:\n  - name: P\n    version: 1.0.0\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
+            "package:\n  org: tatolab\n  name: rp\n  version: 1.0.0\nprocessors:\n  - name: P\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
         std::fs::write(

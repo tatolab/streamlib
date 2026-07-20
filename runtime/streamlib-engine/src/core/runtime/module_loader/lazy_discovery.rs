@@ -234,7 +234,7 @@ mod tests {
         );
         for proc in processors {
             yaml.push_str(&format!(
-                "  - name: {proc}\n    version: 1.0.0\n    description: d\n    runtime: rust\n    \
+                "  - name: {proc}\n    description: d\n    runtime: rust\n    \
                  execution: manual\n    inputs: []\n    outputs: []\n"
             ));
         }

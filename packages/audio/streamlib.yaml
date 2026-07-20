@@ -26,7 +26,6 @@ schemas:
     file: schemas/chord_generator_config.yaml
 processors:
 - name: AudioCapture
-  version: 1.0.0
   description: Captures mono audio from microphones in device-native format (CoreAudio on macOS, ALSA on Linux)
   runtime:
     language: rust
@@ -51,7 +50,6 @@ processors:
     overflow: null
     buffer_size: null
 - name: AudioOutput
-  version: 1.0.0
   description: Plays audio through speakers/headphones (CoreAudio on macOS, ALSA on Linux)
   runtime:
     language: rust
@@ -76,7 +74,6 @@ processors:
     buffer_size: 32
   outputs: []
 - name: AudioMixer
-  version: 1.0.0
   description: Mixes two mono audio signals into a single stereo signal
   runtime: rust
   entrypoint: null
@@ -108,7 +105,6 @@ processors:
     overflow: null
     buffer_size: null
 - name: AudioChannelConverter
-  version: 1.0.0
   description: Converts mono audio to N-channel audio according to the configured mode
   runtime: rust
   entrypoint: null
@@ -134,7 +130,6 @@ processors:
     overflow: null
     buffer_size: null
 - name: AudioResampler
-  version: 1.0.0
   description: Resamples audio between sample rates
   runtime: rust
   entrypoint: null
@@ -160,7 +155,6 @@ processors:
     overflow: null
     buffer_size: null
 - name: BufferRechunker
-  version: 1.0.0
   description: Rechunks audio buffers to a fixed sample count
   runtime: rust
   entrypoint: null
@@ -186,7 +180,6 @@ processors:
     overflow: null
     buffer_size: null
 - name: ChordGenerator
-  version: 1.0.0
   description: Generates a C major chord (C4 + E4 + G4) driven by the runtime audio clock
   runtime: rust
   entrypoint: null

@@ -22,7 +22,6 @@ schemas:
 
 processors:
   - name: CpuReadbackBlur
-    version: "1.0.0"
     description: "Acquires a host-pre-registered cpu-readback surface, applies a Gaussian blur, releases"
     runtime: python
     execution: reactive

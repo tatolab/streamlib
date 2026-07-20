@@ -84,7 +84,6 @@ schemas:
     package: '@tatolab/fixcore'
 processors:
 - name: FixSource
-  version: 1.0.0
   runtime: python
   entrypoint: src.fix:FixSource
   execution: reactive
