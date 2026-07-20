@@ -801,4 +801,54 @@ mod connect_schema_agreement_tests {
             )
             .expect("loose connect_with over the same pair must still wire the link");
     }
+
+    /// Async counterpart to
+    /// [`connect_with_strict_rejects_a_mismatched_link_via_the_public_surface`]:
+    /// awaiting `Runner::connect_with_async` from inside a tokio task under
+    /// [`ConnectOptions::strict`] hard-fails a concrete producer/consumer schema
+    /// mismatch with the typed [`Error::SchemaIdentMismatch`] and does not wire
+    /// the link, while [`ConnectOptions::default`] (loose) over the same pair
+    /// still wires it.
+    ///
+    /// Mentally reverting `connect_with_async` to thread a hardcoded `Loose`
+    /// posture instead of `options.validation` makes the strict half return `Ok`
+    /// and fails here — the sync `connect_with` test never drives the async
+    /// opt-in path, so it doesn't catch that regression.
+    #[test]
+    #[serial]
+    fn connect_with_async_strict_rejects_a_mismatched_link_via_the_public_surface() {
+        ensure_mismatch_types_registered();
+        let runtime = Runner::new().expect("runner builds");
+
+        let producer = runtime
+            .add_processor(ProcessorSpec::new(
+                ident("connectcheck", PRODUCER_TYPE),
+                Value::Null,
+            ))
+            .expect("producer node adds");
+        let consumer = runtime
+            .add_processor(ProcessorSpec::new(
+                ident("connectcheck", CONSUMER_TYPE),
+                Value::Null,
+            ))
+            .expect("consumer node adds");
+
+        let err = block_on(runtime.connect_with_async(
+            OutputLinkPortRef::new(producer.clone(), "out"),
+            InputLinkPortRef::new(consumer.clone(), "in"),
+            ConnectOptions::strict(),
+        ))
+        .expect_err("strict connect_with_async must reject the mismatched link");
+        assert!(
+            matches!(err, Error::SchemaIdentMismatch { .. }),
+            "public async strict opt-in must surface Error::SchemaIdentMismatch; got {err:?}"
+        );
+
+        block_on(runtime.connect_with_async(
+            OutputLinkPortRef::new(producer, "out"),
+            InputLinkPortRef::new(consumer, "in"),
+            ConnectOptions::default(),
+        ))
+        .expect("loose connect_with_async over the same pair must still wire the link");
+    }
 }
