@@ -264,7 +264,6 @@ package:
   version: 0.1.0
 processors:
   - name: ForeignTripleStub
-    version: 1.0.0
     description: "stub"
     execution: manual
     runtime:

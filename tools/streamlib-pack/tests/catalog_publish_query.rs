@@ -69,7 +69,6 @@ schemas:
     package: '@tatolab/core'
 processors:
 - name: Camera
-  version: 1.0.0
   description: Captures video
   runtime: rust
   execution: manual
@@ -81,7 +80,6 @@ processors:
     schema: VideoFrame
     description: Live frames
 - name: Sink
-  version: 1.0.0
   runtime: python
   entrypoint: src.sink:Sink
   execution: reactive
@@ -245,7 +243,6 @@ schemas:
     file: schemas/widget_config.yaml
 processors:
 - name: Widget
-  version: 1.0.0
   runtime: rust
   execution: reactive
   config:

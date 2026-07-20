@@ -137,7 +137,6 @@ schemas:
     package: '@tatolab/core'
 processors:
 - name: Bar
-  version: 1.0.0
   runtime: rust
   execution: reactive
   outputs:
