@@ -34,7 +34,7 @@ pub const INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION: u32 = 2;
 /// The cdylib's `process()` body reaches input data through this
 /// vtable: `read_raw` consumes the next queued frame for a port
 /// according to its read mode, `has_data` queries without consuming.
-/// All other `InputMailboxes` methods (`add_port`, `set_subscriber`,
+/// All other `InputMailboxes` methods (`add_port`, `add_channel_subscriber`,
 /// `set_listener`, `listener_fd`, `drain_listener`,
 /// `receive_pending`, `route`, `any_port_has_data`) are host-side
 /// only and do not appear on this vtable.
