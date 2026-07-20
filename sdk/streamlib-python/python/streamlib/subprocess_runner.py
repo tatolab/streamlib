@@ -147,37 +147,47 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
     read_buf_bytes = compute_read_buf_bytes(inputs)
     for inp in inputs:
         port_name = inp["name"]
-        service_name = inp["service_name"]
+        channel_service_name = inp["channel_service_name"]
         read_mode = inp.get("read_mode", "skip_to_latest")
         max_queued_messages = inp.get("max_queued_messages", 16)
+        max_subscribers = inp.get("max_subscribers", 2)
         log.info(
-            "Subscribing to input",
+            "Subscribing to input channel",
             port=port_name,
-            service=service_name,
+            channel=channel_service_name,
             read_mode=read_mode,
             max_payload_bytes=inp.get("max_payload_bytes"),
             max_queued_messages=max_queued_messages,
+            max_subscribers=max_subscribers,
         )
         result = lib.slpn_input_subscribe(
-            ctx_ptr, service_name.encode("utf-8"), max_queued_messages,
+            ctx_ptr,
+            channel_service_name.encode("utf-8"),
+            port_name.encode("utf-8"),
+            max_queued_messages,
+            max_subscribers,
         )
         if result != 0:
-            log.error("Failed to subscribe to input", service=service_name)
+            log.error("Failed to subscribe to input channel", channel=channel_service_name)
         # Configure per-port read mode (0 = skip_to_latest, 1 = read_next_in_order)
         mode_int = 0 if read_mode == "skip_to_latest" else 1
         lib.slpn_input_set_read_mode(ctx_ptr, port_name.encode("utf-8"), mode_int)
 
-    # All inputs share one destination-paired Notify service. Pick the first
+    # All inputs share one destination-keyed Notify service. Pick the first
     # non-empty notify_service_name and subscribe (slpn_event_subscribe is
-    # idempotent so repeating it is harmless).
-    notify_service_name = next(
-        (inp.get("notify_service_name", "") for inp in inputs
-         if inp.get("notify_service_name")),
-        "",
+    # idempotent so repeating it is harmless). max_notifiers is the destination's
+    # fan-in and must match the host's.
+    notify_entry = next(
+        (inp for inp in inputs if inp.get("notify_service_name")),
+        None,
     )
-    if notify_service_name:
+    if notify_entry:
+        notify_service_name = notify_entry["notify_service_name"]
+        notify_max_notifiers = notify_entry.get("notify_max_notifiers", 1)
         result = lib.slpn_event_subscribe(
-            ctx_ptr, notify_service_name.encode("utf-8"),
+            ctx_ptr,
+            notify_service_name.encode("utf-8"),
+            notify_max_notifiers,
         )
         if result != 0:
             log.warn(
@@ -195,24 +205,21 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
     # ever runs on the way to the wire bytes.
     for out in ports.get("outputs", []):
         port_name = out["name"]
-        dest_port = out["dest_port"]
-        dest_service = out["dest_service_name"]
+        channel_service_name = out["channel_service_name"]
         schema_org, schema_pkg, schema_type, ver_major, ver_minor, ver_patch = (
             _schema_ident_segments(out.get("schema"))
         )
         dest_notify_service = out.get("dest_notify_service_name", "")
         log.info(
-            "Publishing to output",
+            "Publishing to output channel",
             port=port_name,
-            dest=dest_port,
-            service=dest_service,
+            channel=channel_service_name,
             notify_service=dest_notify_service or None,
         )
         result = lib.slpn_output_publish(
             ctx_ptr,
-            dest_service.encode("utf-8"),
+            channel_service_name.encode("utf-8"),
             port_name.encode("utf-8"),
-            dest_port.encode("utf-8"),
             schema_org.encode("utf-8"),
             schema_pkg.encode("utf-8"),
             schema_type.encode("utf-8"),
@@ -221,10 +228,12 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
             ver_patch,
             out.get("max_payload_bytes", 65536),
             out.get("max_queued_messages", 16),
+            out.get("max_subscribers", 2),
             dest_notify_service.encode("utf-8"),
+            out.get("notify_max_notifiers", 1),
         )
         if result != 0:
-            log.error("Failed to create publisher", service=dest_service)
+            log.error("Failed to create publisher", channel=channel_service_name)
 
     # Connect to the surface-share service for surface resolution.
     #

@@ -315,17 +315,19 @@ async function main(): Promise<void> {
           const ports = (msg.ports as {
             inputs?: {
               name: string;
-              service_name: string;
+              channel_service_name: string;
               notify_service_name?: string;
+              notify_max_notifiers?: number;
               read_mode?: string;
               max_payload_bytes?: number;
               max_queued_messages?: number;
+              max_subscribers?: number;
             }[];
             outputs?: {
               name: string;
-              dest_port: string;
-              dest_service_name: string;
+              channel_service_name: string;
               dest_notify_service_name?: string;
+              notify_max_notifiers?: number;
               // Wire shape (#401 phase 2): structured ident, or null for
               // legacy reverse-DNS / unknown identifiers. The host's
               // compiler IPC envelope emits `null` rather than omitting
@@ -333,6 +335,7 @@ async function main(): Promise<void> {
               schema?: SchemaIdentEnvelope | null;
               max_payload_bytes?: number;
               max_queued_messages?: number;
+              max_subscribers?: number;
             }[];
           }) ?? { inputs: [], outputs: [] };
 
@@ -341,21 +344,25 @@ async function main(): Promise<void> {
           for (const input of inputPorts) {
             const readMode = input.read_mode ?? "skip_to_latest";
             const maxQueuedMessages = input.max_queued_messages ?? 16;
-            log.info("Subscribing to input", {
+            const maxSubscribers = input.max_subscribers ?? 2;
+            log.info("Subscribing to input channel", {
               port: input.name,
-              service: input.service_name,
+              channel: input.channel_service_name,
               read_mode: readMode,
               max_payload_bytes: input.max_payload_bytes ?? null,
               max_queued_messages: maxQueuedMessages,
+              max_subscribers: maxSubscribers,
             });
             const result = lib.symbols.sldn_input_subscribe(
               ctxPtr,
-              cString(input.service_name),
+              cString(input.channel_service_name),
+              cString(input.name),
               BigInt(maxQueuedMessages),
+              BigInt(maxSubscribers),
             );
             if (result !== 0) {
-              log.error("Failed to subscribe to input", {
-                service: input.service_name,
+              log.error("Failed to subscribe to input channel", {
+                channel: input.channel_service_name,
               });
             }
             // Configure per-port read mode (0 = skip_to_latest, 1 = read_next_in_order)
@@ -363,17 +370,19 @@ async function main(): Promise<void> {
             lib.symbols.sldn_input_set_read_mode(ctxPtr, cString(input.name), modeInt);
           }
 
-          // All inputs share one destination-paired Notify service. Subscribe
+          // All inputs share one destination-keyed Notify service. Subscribe
           // once via the first non-empty notify_service_name; the FFI is
           // idempotent so duplicates would be harmless. Stored at outer scope
           // so the `run` handler knows whether to call sldn_event_wait.
-          notifyServiceName = (inputPorts
-            .map((i) => i.notify_service_name)
-            .find((n) => n && n.length > 0)) ?? "";
+          const notifyEntry = inputPorts.find(
+            (i) => i.notify_service_name && i.notify_service_name.length > 0,
+          );
+          notifyServiceName = notifyEntry?.notify_service_name ?? "";
           if (notifyServiceName) {
             const result = lib.symbols.sldn_event_subscribe(
               ctxPtr,
               cString(notifyServiceName),
+              BigInt(notifyEntry?.notify_max_notifiers ?? 1),
             );
             if (result !== 0) {
               log.warn("Failed to subscribe to notify service", {
@@ -394,10 +403,9 @@ async function main(): Promise<void> {
           for (const output of outputPorts) {
             const destNotify = output.dest_notify_service_name ?? "";
             const segs = schemaIdentSegments(output.schema);
-            log.info("Publishing to output", {
+            log.info("Publishing to output channel", {
               port: output.name,
-              dest_port: output.dest_port,
-              service: output.dest_service_name,
+              channel: output.channel_service_name,
               schema_org: segs.org || null,
               schema_package: segs.package || null,
               schema_type: segs.type || null,
@@ -408,9 +416,8 @@ async function main(): Promise<void> {
             });
             const result = lib.symbols.sldn_output_publish(
               ctxPtr,
-              cString(output.dest_service_name),
+              cString(output.channel_service_name),
               cString(output.name),
-              cString(output.dest_port),
               cString(segs.org),
               cString(segs.package),
               cString(segs.type),
@@ -419,11 +426,13 @@ async function main(): Promise<void> {
               segs.patch,
               BigInt(output.max_payload_bytes ?? 65536),
               BigInt(output.max_queued_messages ?? 16),
+              BigInt(output.max_subscribers ?? 2),
               cString(destNotify),
+              BigInt(output.notify_max_notifiers ?? 1),
             );
             if (result !== 0) {
               log.error("Failed to create publisher", {
-                service: output.dest_service_name,
+                channel: output.channel_service_name,
               });
             }
           }
