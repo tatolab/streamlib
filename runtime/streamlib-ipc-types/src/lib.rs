@@ -50,31 +50,29 @@ pub const SCHEMA_IDENT_WIRE_MAX_PACKAGE_LEN: usize = 31;
 /// neatly at 128 bytes.
 pub const SCHEMA_IDENT_WIRE_MAX_TYPE_LEN: usize = 51;
 
-/// Maximum number of upstream sources that can fan in to one destination processor.
+/// Publishers on a channel-centric iceoryx2 pub/sub data service.
 ///
-/// Sized in lockstep across the per-destination iceoryx2 pub/sub service
-/// (`max_publishers`) and its paired Notify service (`max_notifiers`) so both fail
-/// at the same fan-in. The graph compiler validates this at compile time so that
-/// overcap wiring surfaces as a named-destination configuration error instead of
-/// an opaque iceoryx2 "failed to create notifier/publisher" deep inside the FFI.
-pub const MAX_FANIN_PER_DESTINATION: usize = 16;
+/// A channel is keyed on its **source output port** — one source port publishes
+/// to exactly one channel — so every data service carries exactly ONE publisher
+/// and fans a single zero-copy loan out to its N compile-time-known subscribers.
+/// iceoryx2 verifies the publisher count on `open`, so this is pinned in lockstep
+/// on the host service builder and both subprocess SDK builders (Python, Deno);
+/// a per-runtime divergence would itself break cross-language wiring.
+pub const MAX_PUBLISHERS_PER_CHANNEL: usize = 1;
 
-/// Number of subscribers on a per-destination iceoryx2 pub/sub data service.
+/// Subscriber slots reserved on every channel data service beyond its
+/// compile-time-known destination count.
 ///
-/// Every `streamlib/{dest}` data service has exactly one subscriber — the
-/// destination processor itself (the `has_subscriber()` first-connection-wins
-/// guard in the wiring op enforces this). iceoryx2 sizes each publisher's
-/// shared-memory data segment as
-/// `max_subscribers × (subscriber_max_buffer_size + borrowed) + …`, so the
-/// library default of 8 over-allocates every publisher 8× for subscribers that
-/// never exist. Pinning this to the true value reclaims that 8×. It is set in
-/// lockstep on the host service builder and both subprocess SDK builders
-/// (Python, Deno) — iceoryx2 verifies the subscriber count on `open`, so a
-/// per-runtime divergence would itself break cross-language wiring. A future
-/// broadcast / tap consumer that genuinely needs a second subscriber on a data
-/// service bumps this deliberately (the runtime event bus is a separate
-/// `Iceoryx2EventService` and is unaffected).
-pub const MAX_SUBSCRIBERS_PER_DESTINATION: usize = 1;
+/// A channel's data service is created with `max_subscribers = N + this`, where
+/// `N` is the number of destinations wired to the source output port at
+/// graph-compile time. The reserved slot lets the phase-3.5 `tap` op attach a
+/// broadcast consumer as a pure subscriber-add with no service re-open — iceoryx2
+/// fixes `max_subscribers` at create time, so the headroom must exist up front.
+/// iceoryx2 sizes each publisher's shared-memory data segment as
+/// `max_subscribers × (subscriber_max_buffer_size + borrowed) + …`, so this is
+/// deliberately 1 (not the iceoryx2 default of 8) to keep the per-channel segment
+/// sized to its true consumer count plus one tap.
+pub const RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL: usize = 1;
 
 /// Size of the frame header in the `[u8]` slice wire format.
 pub const FRAME_HEADER_SIZE: usize = MAX_PORT_KEY_SIZE + SCHEMA_IDENT_WIRE_SIZE + 8 + 4; // 204 bytes

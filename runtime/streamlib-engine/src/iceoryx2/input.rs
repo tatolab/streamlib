@@ -44,39 +44,58 @@ use super::{FRAME_HEADER_SIZE, FrameHeader, SchemaIdentWire};
 use crate::core::error::{Error, Result};
 use crate::core::schema_agreement::{SchemaAgreement, classify_wire_schema_agreement};
 
-/// Thread-local subscriber wrapper.
+/// One channel subscriber bound to the local input port it feeds.
+///
+/// The transport inversion (#1419): a channel is keyed on its source output
+/// port, so a destination consuming N inbound channels holds N subscribers.
+/// Routing is by this binding — the receive path pushes every frame a subscriber
+/// delivers into `local_port`'s mailbox — NOT by the frame's stamped port key
+/// (a channel's single publisher stamps its own source port, which two
+/// destinations subscribing the same channel would each map to a different local
+/// port).
+struct PortBoundSubscriber {
+    local_port: String,
+    subscriber: Subscriber<ipc::Service, [u8], ()>,
+}
+
+/// Thread-local set of channel subscribers.
 ///
 /// # Safety
-/// This wrapper is safe to send between threads because:
-/// 1. The Subscriber is only ever set AFTER the processor is spawned on its execution thread
-/// 2. Once set, the Subscriber is only accessed from that same thread
-/// 3. The wrapper starts with `None` and is populated during wiring on the target thread
-struct SendableSubscriber(UnsafeCell<Option<Subscriber<ipc::Service, [u8], ()>>>);
+/// Safe to send between threads because:
+/// 1. Subscribers are only ever pushed AFTER the processor is spawned on its
+///    execution thread (during wiring).
+/// 2. Once pushed, each subscriber is only accessed from that same thread.
+/// 3. The set starts empty (safe to send) and is populated on the target thread.
+struct SendableChannelSubscribers(UnsafeCell<Vec<PortBoundSubscriber>>);
 
-// SAFETY: The Subscriber is only accessed from a single thread after being set.
-// The processor lifecycle ensures that:
-// 1. InputMailboxesInner is created with subscriber = None (safe to send)
-// 2. After spawn, the processor is on its execution thread
-// 3. set_subscriber() is called from that execution thread during wiring
-// 4. All subsequent access is from the same thread
-unsafe impl Send for SendableSubscriber {}
-unsafe impl Sync for SendableSubscriber {}
+// SAFETY: subscribers are only accessed from a single thread after being pushed;
+// see the numbered discipline above.
+unsafe impl Send for SendableChannelSubscribers {}
+unsafe impl Sync for SendableChannelSubscribers {}
 
-impl SendableSubscriber {
+impl SendableChannelSubscribers {
     fn new() -> Self {
-        Self(UnsafeCell::new(None))
+        Self(UnsafeCell::new(Vec::new()))
     }
 
-    fn set(&self, subscriber: Subscriber<ipc::Service, [u8], ()>) {
-        // SAFETY: Only called from the processor's execution thread after spawn
+    fn push(&self, local_port: String, subscriber: Subscriber<ipc::Service, [u8], ()>) {
+        // SAFETY: Only called from the processor's execution thread during wiring.
         unsafe {
-            *self.0.get() = Some(subscriber);
+            (*self.0.get()).push(PortBoundSubscriber {
+                local_port,
+                subscriber,
+            });
         }
     }
 
-    fn get(&self) -> Option<&Subscriber<ipc::Service, [u8], ()>> {
-        // SAFETY: Only called from the processor's execution thread
-        unsafe { (*self.0.get()).as_ref() }
+    fn iter(&self) -> &[PortBoundSubscriber] {
+        // SAFETY: Only called from the processor's execution thread.
+        unsafe { &*self.0.get() }
+    }
+
+    fn is_empty(&self) -> bool {
+        // SAFETY: Only called from the processor's execution thread.
+        unsafe { (*self.0.get()).is_empty() }
     }
 }
 
@@ -155,7 +174,7 @@ struct PortConfig {
 /// reference to the same inner.
 pub struct InputMailboxesInner {
     ports: parking_lot::Mutex<HashMap<String, PortConfig>>,
-    subscriber: SendableSubscriber,
+    subscribers: SendableChannelSubscribers,
     listener: SendableListener,
 }
 
@@ -164,7 +183,7 @@ impl InputMailboxesInner {
     pub fn new() -> Self {
         Self {
             ports: parking_lot::Mutex::new(HashMap::new()),
-            subscriber: SendableSubscriber::new(),
+            subscribers: SendableChannelSubscribers::new(),
             listener: SendableListener::new(),
         }
     }
@@ -252,16 +271,25 @@ impl InputMailboxesInner {
             .unwrap_or(false)
     }
 
-    /// Check if a subscriber has already been configured.
-    pub fn has_subscriber(&self) -> bool {
-        self.subscriber.get().is_some()
+    /// Whether any channel subscriber has been configured yet.
+    pub fn has_subscribers(&self) -> bool {
+        !self.subscribers.is_empty()
     }
 
-    /// Set the iceoryx2 Subscriber for receiving payloads.
+    /// Bind an iceoryx2 channel Subscriber to the local input port it feeds.
+    ///
+    /// One call per inbound `connect()` link — a destination consuming N
+    /// channels holds N subscribers. The receive path routes every frame a
+    /// subscriber delivers into `local_port`'s mailbox (binding-based routing;
+    /// see [`PortBoundSubscriber`]).
     ///
     /// Note: This should only be called from the processor's execution thread.
-    pub fn set_subscriber(&self, subscriber: Subscriber<ipc::Service, [u8], ()>) {
-        self.subscriber.set(subscriber);
+    pub fn add_channel_subscriber(
+        &self,
+        local_port: &str,
+        subscriber: Subscriber<ipc::Service, [u8], ()>,
+    ) {
+        self.subscribers.push(local_port.to_string(), subscriber);
     }
 
     /// Check if a listener has already been configured.
@@ -308,42 +336,43 @@ impl InputMailboxesInner {
         }
     }
 
-    /// Receive all pending payloads from the iceoryx2 Subscriber and route them to mailboxes.
+    /// Receive all pending payloads from every channel subscriber and route them
+    /// to mailboxes by the subscriber's local-port binding.
     ///
-    /// This is called automatically by `read()` and `has_data()`, but can be called
-    /// explicitly if needed.
+    /// This is called automatically by `read()` and `has_data()`, but can be
+    /// called explicitly if needed.
     ///
-    /// Note: This should only be called from the thread that owns the subscriber.
+    /// Note: This should only be called from the thread that owns the subscribers.
     pub fn receive_pending(&self) {
-        let Some(subscriber) = self.subscriber.get() else {
-            return;
-        };
-
-        // Receive [u8] slices and route to mailboxes
-        loop {
-            match subscriber.receive() {
-                Ok(Some(sample)) => {
-                    let slice: &[u8] = sample.payload();
-                    if slice.len() < FRAME_HEADER_SIZE {
-                        tracing::warn!(
-                            "InputMailboxes: received slice too small ({} < {})",
-                            slice.len(),
-                            FRAME_HEADER_SIZE
-                        );
-                        continue;
+        for bound in self.subscribers.iter() {
+            loop {
+                match bound.subscriber.receive() {
+                    Ok(Some(sample)) => {
+                        let slice: &[u8] = sample.payload();
+                        if slice.len() < FRAME_HEADER_SIZE {
+                            tracing::warn!(
+                                "InputMailboxes: received slice too small ({} < {})",
+                                slice.len(),
+                                FRAME_HEADER_SIZE
+                            );
+                            continue;
+                        }
+                        let ports = self.ports.lock();
+                        if let Some(port_config) = ports.get(&bound.local_port) {
+                            port_config.mailbox.push(slice.to_vec());
+                        } else {
+                            tracing::warn!(
+                                port = %bound.local_port,
+                                "InputMailboxes: channel delivered a frame but its bound \
+                                 local port has no mailbox"
+                            );
+                        }
                     }
-                    let port_name = FrameHeader::read_port_from_slice(slice);
-                    let ports = self.ports.lock();
-                    if let Some(port_config) = ports.get(port_name) {
-                        port_config.mailbox.push(slice.to_vec());
-                    } else {
-                        tracing::warn!("InputMailboxes: received sample but no matching port");
+                    Ok(None) => break, // no more samples on this subscriber
+                    Err(e) => {
+                        tracing::error!("InputMailboxes: subscriber.receive() FAILED: {:?}", e);
+                        break;
                     }
-                }
-                Ok(None) => break, // no more samples
-                Err(e) => {
-                    tracing::error!("InputMailboxes: subscriber.receive() FAILED: {:?}", e);
-                    break;
                 }
             }
         }

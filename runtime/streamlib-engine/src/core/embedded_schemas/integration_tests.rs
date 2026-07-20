@@ -207,6 +207,7 @@ fn test_small_frame_schema_publisher_rejects_256kb() {
     let service = node
         .open_or_create_service(
             "streamlib/test/schema-small-reject",
+            2,
             crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES,
             true,
         )
@@ -233,6 +234,7 @@ fn test_large_frame_schema_publisher_accepts_256kb() {
     let service = node
         .open_or_create_service(
             "streamlib/test/schema-large-ok",
+            2,
             crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES,
             true,
         )
@@ -264,6 +266,7 @@ fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
     let service = node
         .open_or_create_service(
             "streamlib/test/frame-header-256kb",
+            2,
             crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES,
             true,
         )
@@ -338,6 +341,7 @@ fn test_large_frame_schema_publisher_subscriber_roundtrip_256kb() {
     let service = node
         .open_or_create_service(
             "streamlib/test/schema-large-roundtrip",
+            2,
             crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES,
             true,
         )

@@ -19,9 +19,7 @@ use iceoryx2::port::notifier::Notifier;
 use iceoryx2::port::publisher::Publisher;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
-use streamlib_ipc_types::{
-    FRAME_HEADER_SIZE, FrameHeader, MAX_FANIN_PER_DESTINATION, MAX_SUBSCRIBERS_PER_DESTINATION,
-};
+use streamlib_ipc_types::{FRAME_HEADER_SIZE, FrameHeader, MAX_PUBLISHERS_PER_CHANNEL};
 
 // ============================================================================
 // Tracing subscriber init
@@ -76,19 +74,29 @@ pub struct PythonNativeContext {
 
 /// Mutable iceoryx2 port state guarded by [`PythonNativeContext::inner`].
 struct PythonNativeContextInner {
-    subscribers: HashMap<String, SubscriberState>,
+    /// One channel subscriber per inbound link, bound to the local input port it
+    /// feeds. A processor consuming N channels holds N entries; routing is by the
+    /// binding, not the frame's stamped port key (channel-centric transport,
+    /// #1419).
+    subscribers: Vec<SubscriberState>,
+    /// One publisher per SOURCE output port (a channel carries exactly one
+    /// publisher), keyed by source port name.
     publishers: HashMap<String, PublisherState>,
     /// Per-port read mode (port_name → READ_MODE_*). Default is SkipToLatest.
     port_read_modes: HashMap<String, i32>,
-    /// Single Listener for this processor's destination-paired Notify service.
-    /// All inputs share this listener (destination-centric service shape).
+    /// Single Listener for this processor's destination-keyed Notify service.
+    /// All inputs share this listener (the notify service stays destination-keyed
+    /// so a processor waits on one fd regardless of fan-in).
     notify_listener: Option<Listener<ipc::Service>>,
 }
 
 struct SubscriberState {
+    /// Local input port this channel subscriber feeds — the receive path routes
+    /// every frame this subscriber delivers into this port.
+    local_port: String,
     subscriber: Subscriber<ipc::Service, [u8], ()>,
-    /// Buffered payloads per port name (after poll).
-    pending: HashMap<String, Vec<(Vec<u8>, i64)>>,
+    /// Buffered `(payload, timestamp)` pairs for `local_port` after poll.
+    pending: Vec<(Vec<u8>, i64)>,
 }
 
 struct PublisherState {
@@ -97,10 +105,12 @@ struct PublisherState {
     /// `FrameHeader.schema_ident` block. Resolved once at publisher
     /// creation from the structured FFI args (#401 phase 2).
     schema_ident: streamlib_ipc_types::SchemaIdentWire,
-    dest_port: String,
-    /// Notifier into the destination's paired Event service. Some when the
-    /// destination wired a notify_service_name; None for legacy callers.
-    notifier: Option<Notifier<ipc::Service>>,
+    /// Source output port name stamped into the frame's `port_key` — provenance
+    /// only; destinations route by their subscriber binding, not this key.
+    source_port: String,
+    /// One notifier per destination `connect()` link out of this source port.
+    /// The channel is published ONCE; each destination's listener is woken here.
+    notifiers: Vec<Notifier<ipc::Service>>,
 }
 
 impl PythonNativeContext {
@@ -110,7 +120,7 @@ impl PythonNativeContext {
             processor_id: processor_id.to_string(),
             node,
             inner: Mutex::new(PythonNativeContextInner {
-                subscribers: HashMap::new(),
+                subscribers: Vec::new(),
                 publishers: HashMap::new(),
                 port_read_modes: HashMap::new(),
                 notify_listener: None,
@@ -368,25 +378,34 @@ mod timerfd {
 // C ABI — Input (subscribe + read)
 // ============================================================================
 
-/// Subscribe to an iceoryx2 service for reading data.
+/// Subscribe to a channel-centric iceoryx2 data service, bound to the local
+/// input port it feeds.
 ///
-/// `max_queued_messages` caps how many `[u8]` samples this subscriber can buffer;
-/// pass the value the host runtime emitted in the wiring envelope (`max_queued_messages`
-/// field on the per-input entry; resolved on the host side from the wire schema's
-/// `metadata.max_queued_messages` via `max_queued_messages_for_port_spec`).
+/// `channel_service_name` is the SOURCE channel (`{source}/{source_port}`);
+/// `local_port` is this subscriber's destination input port (the receive path
+/// routes every frame this subscriber delivers into `local_port`). `max_subscribers`
+/// is the channel's destination fan-out plus the reserved tap slot — it must match
+/// what the host and every other opener request (iceoryx2 verifies it on `open`).
+/// `max_queued_messages` caps how many `[u8]` samples this subscriber can buffer.
 ///
 /// Returns 0 on success, -1 on failure.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn slpn_input_subscribe(
     ctx: *mut PythonNativeContext,
-    service_name: *const c_char,
+    channel_service_name: *const c_char,
+    local_port: *const c_char,
     max_queued_messages: usize,
+    max_subscribers: usize,
 ) -> i32 {
     let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
     };
-    let service_name = match unsafe { c_str_to_str(service_name) } {
+    let service_name = match unsafe { c_str_to_str(channel_service_name) } {
+        Some(s) => s,
+        None => return -1,
+    };
+    let local_port = match unsafe { c_str_to_str(local_port) } {
         Some(s) => s,
         None => return -1,
     };
@@ -408,8 +427,8 @@ pub unsafe extern "C" fn slpn_input_subscribe(
         .node
         .service_builder(&service_name_iox)
         .publish_subscribe::<[u8]>()
-        .max_publishers(MAX_FANIN_PER_DESTINATION)
-        .max_subscribers(MAX_SUBSCRIBERS_PER_DESTINATION)
+        .max_publishers(MAX_PUBLISHERS_PER_CHANNEL)
+        .max_subscribers(max_subscribers)
         .subscriber_max_buffer_size(max_queued_messages)
         .open_or_create()
     {
@@ -446,13 +465,11 @@ pub unsafe extern "C" fn slpn_input_subscribe(
         Ok(g) => g,
         Err(p) => p.into_inner(),
     };
-    inner.subscribers.insert(
-        service_name.to_string(),
-        SubscriberState {
-            subscriber,
-            pending: HashMap::new(),
-        },
-    );
+    inner.subscribers.push(SubscriberState {
+        local_port: local_port.to_string(),
+        subscriber,
+        pending: Vec::new(),
+    });
 
     0
 }
@@ -503,7 +520,10 @@ pub unsafe extern "C" fn slpn_input_poll(ctx: *mut PythonNativeContext) -> i32 {
 
     let mut has_data = false;
 
-    for (_service_name, state) in inner.subscribers.iter_mut() {
+    // Route by subscriber binding: every frame a channel subscriber delivers
+    // belongs to that subscriber's local port, NOT the frame's stamped port key
+    // (a channel's single publisher stamps its own source port).
+    for state in inner.subscribers.iter_mut() {
         while let Ok(Some(sample)) = state.subscriber.receive() {
             let buf: &[u8] = sample.payload();
             if buf.len() < FRAME_HEADER_SIZE {
@@ -511,7 +531,6 @@ pub unsafe extern "C" fn slpn_input_poll(ctx: *mut PythonNativeContext) -> i32 {
                 continue;
             }
             let header = FrameHeader::read_from_slice(buf);
-            let port_name = header.port().to_string();
             let ts = header.timestamp_ns;
             let data_len = header.len as usize;
             if FRAME_HEADER_SIZE + data_len > buf.len() {
@@ -524,7 +543,7 @@ pub unsafe extern "C" fn slpn_input_poll(ctx: *mut PythonNativeContext) -> i32 {
             }
             let data = buf[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + data_len].to_vec();
 
-            state.pending.entry(port_name).or_default().push((data, ts));
+            state.pending.push((data, ts));
             has_data = true;
         }
     }
@@ -571,36 +590,40 @@ pub unsafe extern "C" fn slpn_input_read(
         .copied()
         .unwrap_or(READ_MODE_SKIP_TO_LATEST);
 
-    // Search all subscribers for pending data on this port
-    for (_service_name, state) in inner.subscribers.iter_mut() {
-        if let Some(queue) = state.pending.get_mut(port_name) {
-            if queue.is_empty() {
-                continue;
-            }
-
-            let (data, ts) = if read_mode == READ_MODE_READ_NEXT_IN_ORDER {
-                // FIFO: return oldest
-                queue.remove(0)
-            } else {
-                // SkipToLatest: drain buffer, return newest
-                let last = queue.len() - 1;
-                let item = queue.swap_remove(last);
-                queue.clear();
-                item
-            };
-
-            let copy_len = data.len().min(buf_len as usize);
-            if !out_buf.is_null() && copy_len > 0 {
-                unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), out_buf, copy_len) };
-            }
-            if !out_len.is_null() {
-                unsafe { *out_len = data.len() as u32 };
-            }
-            if !out_ts.is_null() {
-                unsafe { *out_ts = ts };
-            }
-            return 0;
+    // Search the subscribers bound to this local port for pending data. Fan-in
+    // (several channels into one input port) means more than one may match; the
+    // first non-empty one satisfies the read.
+    for state in inner.subscribers.iter_mut() {
+        if state.local_port != port_name {
+            continue;
         }
+        let queue = &mut state.pending;
+        if queue.is_empty() {
+            continue;
+        }
+
+        let (data, ts) = if read_mode == READ_MODE_READ_NEXT_IN_ORDER {
+            // FIFO: return oldest
+            queue.remove(0)
+        } else {
+            // SkipToLatest: drain buffer, return newest
+            let last = queue.len() - 1;
+            let item = queue.swap_remove(last);
+            queue.clear();
+            item
+        };
+
+        let copy_len = data.len().min(buf_len as usize);
+        if !out_buf.is_null() && copy_len > 0 {
+            unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), out_buf, copy_len) };
+        }
+        if !out_len.is_null() {
+            unsafe { *out_len = data.len() as u32 };
+        }
+        if !out_ts.is_null() {
+            unsafe { *out_ts = ts };
+        }
+        return 0;
     }
 
     // No data available
@@ -614,13 +637,16 @@ pub unsafe extern "C" fn slpn_input_read(
 // C ABI — Output (publish + write)
 // ============================================================================
 
-/// Create a publisher for an iceoryx2 service, plus an optional notifier into
-/// the destination's paired Event service.
+/// Bind this source output port to its channel: install the single channel
+/// publisher (first call for the port) and append this destination's notifier.
 ///
-/// `dest_port` is the destination processor's input port name, used in FramePayload routing.
-/// `notify_service_name` may be the empty string or null to skip notifier setup
-/// (legacy / no-notify path). When non-empty, `slpn_output_write` will call
-/// `notify()` after every successful `send()`.
+/// `channel_service_name` is the SOURCE channel (`{source}/{source_port}`) — the
+/// port's single publisher is created once and reused; subsequent calls for the
+/// same `port_name` only append another destination notifier. `max_subscribers`
+/// is the channel's destination fan-out plus the reserved tap slot;
+/// `notify_max_notifiers` is the DESTINATION's fan-in — both must match the host
+/// (iceoryx2 verifies them on `open`, so a mismatch breaks cross-language wiring).
+/// `notify_service_name` may be the empty string or null to skip notifier setup.
 ///
 /// The schema identifier is passed as six structured arguments
 /// (`schema_org`, `schema_package`, `schema_type`, `schema_version_major`,
@@ -632,9 +658,8 @@ pub unsafe extern "C" fn slpn_input_read(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn slpn_output_publish(
     ctx: *mut PythonNativeContext,
-    service_name: *const c_char,
+    channel_service_name: *const c_char,
     port_name: *const c_char,
-    dest_port: *const c_char,
     schema_org: *const c_char,
     schema_package: *const c_char,
     schema_type: *const c_char,
@@ -643,21 +668,19 @@ pub unsafe extern "C" fn slpn_output_publish(
     schema_version_patch: u32,
     max_payload_bytes: usize,
     max_queued_messages: usize,
+    max_subscribers: usize,
     notify_service_name: *const c_char,
+    notify_max_notifiers: usize,
 ) -> i32 {
     let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
         None => return -1,
     };
-    let service_name = match unsafe { c_str_to_str(service_name) } {
+    let service_name = match unsafe { c_str_to_str(channel_service_name) } {
         Some(s) => s,
         None => return -1,
     };
     let port_name = match unsafe { c_str_to_str(port_name) } {
-        Some(s) => s,
-        None => return -1,
-    };
-    let dest_port_str = match unsafe { c_str_to_str(dest_port) } {
         Some(s) => s,
         None => return -1,
     };
@@ -701,8 +724,8 @@ pub unsafe extern "C" fn slpn_output_publish(
         .node
         .service_builder(&service_name_iox)
         .publish_subscribe::<[u8]>()
-        .max_publishers(MAX_FANIN_PER_DESTINATION)
-        .max_subscribers(MAX_SUBSCRIBERS_PER_DESTINATION)
+        .max_publishers(MAX_PUBLISHERS_PER_CHANNEL)
+        .max_subscribers(max_subscribers)
         .subscriber_max_buffer_size(max_queued_messages)
         .open_or_create()
     {
@@ -718,30 +741,14 @@ pub unsafe extern "C" fn slpn_output_publish(
         }
     };
 
-    let publisher = match service
-        .publisher_builder()
-        .initial_max_slice_len(max_payload_bytes + FRAME_HEADER_SIZE)
-        .create()
-    {
-        Ok(p) => p,
-        Err(e) => {
-            tracing::error!(
-                "[slpn:{}] Failed to create publisher for '{}': {}",
-                ctx.processor_id,
-                service_name,
-                e
-            );
-            return -1;
-        }
-    };
-
+    // One notifier per destination link into the destination's notify service.
     let notifier = match unsafe { c_str_to_str(notify_service_name) } {
         Some(name) if !name.is_empty() => match ServiceName::new(name) {
             Ok(notify_name_iox) => match ctx
                 .node
                 .service_builder(&notify_name_iox)
                 .event()
-                .max_notifiers(MAX_FANIN_PER_DESTINATION)
+                .max_notifiers(notify_max_notifiers)
                 .max_listeners(1)
                 .open_or_create()
             {
@@ -784,15 +791,39 @@ pub unsafe extern "C" fn slpn_output_publish(
         Ok(g) => g,
         Err(p) => p.into_inner(),
     };
-    inner.publishers.insert(
-        port_name.to_string(),
-        PublisherState {
-            publisher,
-            schema_ident,
-            dest_port: dest_port_str.to_string(),
-            notifier,
-        },
-    );
+    // The channel carries one publisher: install it on the first link out of the
+    // source port, then only append this destination's notifier for later links.
+    if let Some(existing) = inner.publishers.get_mut(port_name) {
+        if let Some(n) = notifier {
+            existing.notifiers.push(n);
+        }
+    } else {
+        let publisher = match service
+            .publisher_builder()
+            .initial_max_slice_len(max_payload_bytes + FRAME_HEADER_SIZE)
+            .create()
+        {
+            Ok(p) => p,
+            Err(e) => {
+                tracing::error!(
+                    "[slpn:{}] Failed to create publisher for '{}': {}",
+                    ctx.processor_id,
+                    service_name,
+                    e
+                );
+                return -1;
+            }
+        };
+        inner.publishers.insert(
+            port_name.to_string(),
+            PublisherState {
+                publisher,
+                schema_ident,
+                source_port: port_name.to_string(),
+                notifiers: notifier.into_iter().collect(),
+            },
+        );
+    }
 
     0
 }
@@ -848,8 +879,10 @@ pub unsafe extern "C" fn slpn_output_write(
 
     let total_len = FRAME_HEADER_SIZE + data_slice.len();
     let mut frame = vec![0u8; total_len];
+    // Stamp the SOURCE port as provenance; destinations route by their subscriber
+    // binding, not this key.
     let header = match FrameHeader::new(
-        &state.dest_port,
+        &state.source_port,
         state.schema_ident,
         timestamp_ns,
         data_slice.len() as u32,
@@ -857,10 +890,9 @@ pub unsafe extern "C" fn slpn_output_write(
         Ok(h) => h,
         Err(e) => {
             tracing::error!(
-                "[slpn:{}] Invalid dest port '{}' for output port '{}': {}",
+                "[slpn:{}] Invalid source port '{}': {}",
                 ctx.processor_id,
-                state.dest_port,
-                port_name,
+                state.source_port,
                 e
             );
             return -1;
@@ -869,6 +901,7 @@ pub unsafe extern "C" fn slpn_output_write(
     header.write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
     frame[FRAME_HEADER_SIZE..].copy_from_slice(data_slice);
 
+    // One zero-copy loan reaches every channel subscriber.
     let sample = match state.publisher.loan_slice_uninit(total_len) {
         Ok(s) => s,
         Err(e) => {
@@ -892,15 +925,16 @@ pub unsafe extern "C" fn slpn_output_write(
         return -1;
     }
 
-    if let Some(notifier) = state.notifier.as_ref()
-        && let Err(e) = notifier.notify()
-    {
-        tracing::trace!(
-            "[slpn:{}] notify() failed for port '{}': {:?}",
-            ctx.processor_id,
-            port_name,
-            e
-        );
+    // Wake every destination listener fd.
+    for notifier in &state.notifiers {
+        if let Err(e) = notifier.notify() {
+            tracing::trace!(
+                "[slpn:{}] notify() failed for port '{}': {:?}",
+                ctx.processor_id,
+                port_name,
+                e
+            );
+        }
     }
 
     0
@@ -914,12 +948,14 @@ pub unsafe extern "C" fn slpn_output_write(
 ///
 /// Creates a Listener whose fd Python can `select` on alongside stdin. Idempotent
 /// per ctx — first call wins; subsequent calls are no-ops since each processor
-/// only ever has one destination-paired Event service. Returns 0 on success,
-/// -1 on failure.
+/// only ever has one destination-keyed Event service. `notify_max_notifiers` is
+/// the destination's fan-in and must match the host's (iceoryx2 verifies it on
+/// `open`). Returns 0 on success, -1 on failure.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn slpn_event_subscribe(
     ctx: *mut PythonNativeContext,
     notify_service_name: *const c_char,
+    notify_max_notifiers: usize,
 ) -> i32 {
     let ctx = match unsafe { ctx.as_ref() } {
         Some(c) => c,
@@ -954,7 +990,7 @@ pub unsafe extern "C" fn slpn_event_subscribe(
         .node
         .service_builder(&name_iox)
         .event()
-        .max_notifiers(MAX_FANIN_PER_DESTINATION)
+        .max_notifiers(notify_max_notifiers)
         .max_listeners(1)
         .open_or_create()
     {

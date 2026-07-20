@@ -113,7 +113,8 @@ fn build_inner_with_connection(tag: &str) -> BenchFixture {
     let inner = Arc::new(OutputWriterInner::new());
     let schema_ident =
         SchemaIdentWire::from_segments("tatolab", "bench", "FfiHop", 1, 0, 0).unwrap();
-    inner.add_connection("out", schema_ident, "in", publisher, notifier);
+    inner.set_channel_publisher("out", schema_ident, publisher);
+    inner.add_channel_notifier("out", notifier);
 
     BenchFixture {
         inner,

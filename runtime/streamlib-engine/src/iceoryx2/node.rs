@@ -11,9 +11,7 @@ use iceoryx2::port::notifier::Notifier;
 use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 
-use super::{
-    EventPayload, FRAME_HEADER_SIZE, MAX_FANIN_PER_DESTINATION, MAX_SUBSCRIBERS_PER_DESTINATION,
-};
+use super::{EventPayload, FRAME_HEADER_SIZE, MAX_PUBLISHERS_PER_CHANNEL};
 use crate::core::error::{Error, Result};
 
 /// Thread-safe wrapper for iceoryx2 Node.
@@ -59,13 +57,17 @@ impl Iceoryx2Node {
 
     /// Open or create an iceoryx2 Event service for fd-multiplexed wakeups.
     ///
-    /// Pairs 1:1 with a destination's pub/sub service (`streamlib/<dest>`) — N upstream
-    /// `Notifier`s fan in to one `Listener` whose file descriptor a runner can wait on
-    /// via epoll/select instead of busy-polling. Distinct from [`Iceoryx2EventService`]
-    /// which is a typed pub/sub for runtime events.
+    /// Pairs with a destination's data channels for fd-multiplexed wakeups: the
+    /// notify service stays destination-keyed (`streamlib/<dest>/notify`) so a
+    /// destination waits on ONE `Listener` fd regardless of fan-in, while every
+    /// upstream source publishing into one of its channels holds a `Notifier`
+    /// here. `max_notifiers` is the destination's compile-time fan-in (the count
+    /// of inbound links). Distinct from [`Iceoryx2EventService`] which is a typed
+    /// pub/sub for runtime events.
     pub fn open_or_create_notify_service(
         &self,
         service_name: &str,
+        max_notifiers: usize,
     ) -> Result<Iceoryx2NotifyService> {
         let node = self.inner.lock();
         let service_name: ServiceName = service_name.try_into().map_err(|e| {
@@ -75,7 +77,7 @@ impl Iceoryx2Node {
         let service = node
             .service_builder(&service_name)
             .event()
-            .max_notifiers(MAX_FANIN_PER_DESTINATION)
+            .max_notifiers(max_notifiers)
             .max_listeners(1)
             .open_or_create()
             .map_err(|e| {
@@ -85,26 +87,34 @@ impl Iceoryx2Node {
         Ok(Iceoryx2NotifyService { inner: service })
     }
 
-    /// Open or create a publish-subscribe service for `[u8]` slices.
+    /// Open or create a channel-centric publish-subscribe service for `[u8]`
+    /// slices.
     ///
-    /// The service name should follow the format: "streamlib/{source_processor}/{dest_processor}".
-    /// `max_queued_messages` caps how many `[u8]` samples any subscriber on this service
-    /// can buffer — resolved from the wire schema's `metadata.max_queued_messages` via
-    /// [`crate::core::embedded_schemas::max_queued_messages_for_port_spec`], defaulting
-    /// to [`crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES`].
+    /// The service name is the source-port channel
+    /// (`{source_processor}/{source_output_port}`). The service carries exactly
+    /// [`MAX_PUBLISHERS_PER_CHANNEL`] (1) publisher — the source — and
+    /// `max_subscribers` slots: one per compile-time-known destination plus the
+    /// reserved tap slot ([`crate::iceoryx2::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`]).
+    /// Every opener (host + subprocess SDKs) must request the SAME `max_subscribers`
+    /// — iceoryx2 verifies it on `open`.
     ///
-    /// `enable_safe_overflow` derives from the destination input port's
-    /// declared overflow policy (see
-    /// [`crate::core::embedded_schemas::overflow_for_input_port`]). When
-    /// `true` (the realtime default — `Overflow::DropOldest`), the
-    /// subscriber buffer auto-evicts the oldest sample on overflow and
-    /// the publisher's `send()` never blocks. When `false`
-    /// (`Overflow::Block`), the producer blocks until the consumer
-    /// drains a slot — reserve for muxers / file writers that need
-    /// every sample in order.
+    /// `max_queued_messages` caps how many `[u8]` samples any subscriber on this
+    /// service can buffer — resolved from the channel's wire schema's
+    /// `metadata.max_queued_messages` via
+    /// [`crate::core::embedded_schemas::max_queued_messages_for_port_spec`],
+    /// defaulting to [`crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES`].
+    ///
+    /// `enable_safe_overflow` derives from the channel's destination overflow
+    /// policy (see [`crate::core::embedded_schemas::overflow_for_input_port`]).
+    /// When `true` (the realtime default — `Overflow::DropOldest`), the subscriber
+    /// buffer auto-evicts the oldest sample on overflow and the publisher's
+    /// `send()` never blocks. When `false` (`Overflow::Block`), the producer blocks
+    /// until the consumer drains a slot — reserve for muxers / file writers that
+    /// need every sample in order.
     pub fn open_or_create_service(
         &self,
         service_name: &str,
+        max_subscribers: usize,
         max_queued_messages: usize,
         enable_safe_overflow: bool,
     ) -> Result<Iceoryx2Service> {
@@ -116,8 +126,8 @@ impl Iceoryx2Node {
         let service = node
             .service_builder(&service_name)
             .publish_subscribe::<[u8]>()
-            .max_publishers(MAX_FANIN_PER_DESTINATION)
-            .max_subscribers(MAX_SUBSCRIBERS_PER_DESTINATION)
+            .max_publishers(MAX_PUBLISHERS_PER_CHANNEL)
+            .max_subscribers(max_subscribers)
             .subscriber_max_buffer_size(max_queued_messages)
             .enable_safe_overflow(enable_safe_overflow)
             .open_or_create()
@@ -246,19 +256,21 @@ mod tests {
         )
     }
 
-    /// `open_or_create_notify_service` must honor [`MAX_FANIN_PER_DESTINATION`]
-    /// in lockstep with the constant — exactly that many notifiers can be
-    /// created, and the (cap+1)th must fail. Catches drift if either the
-    /// service-builder cap or the constant is changed without the other.
+    /// The destination-keyed notify service honors the requested `max_notifiers`
+    /// (its compile-time fan-in) — exactly that many notifiers can be created and
+    /// the (fan-in+1)th must fail. Every source publishing into one of the
+    /// destination's channels holds one notifier here, so the cap must equal the
+    /// inbound-link count the compiler passes.
     #[test]
-    fn notify_service_max_notifiers_matches_const() {
+    fn notify_service_honors_requested_max_notifiers() {
+        let fanin = 3usize;
         let node = Iceoryx2Node::new().expect("create iceoryx2 node");
         let service = node
-            .open_or_create_notify_service(&unique_service_name("notify_cap"))
+            .open_or_create_notify_service(&unique_service_name("notify_cap"), fanin)
             .expect("open notify service");
 
-        let mut notifiers = Vec::with_capacity(MAX_FANIN_PER_DESTINATION);
-        for i in 0..MAX_FANIN_PER_DESTINATION {
+        let mut notifiers = Vec::with_capacity(fanin);
+        for i in 0..fanin {
             notifiers.push(
                 service
                     .create_notifier()
@@ -267,78 +279,94 @@ mod tests {
         }
         assert!(
             service.create_notifier().is_err(),
-            "creating notifier {} must fail — service-builder cap drifted from MAX_FANIN_PER_DESTINATION ({})",
-            MAX_FANIN_PER_DESTINATION + 1,
-            MAX_FANIN_PER_DESTINATION,
+            "creating notifier {} must fail — notify service was opened with \
+             max_notifiers={fanin}",
+            fanin + 1,
         );
     }
 
-    /// A per-destination data service carries exactly one subscriber (the
-    /// destination). `open_or_create_service` pins `max_subscribers` to
-    /// [`MAX_SUBSCRIBERS_PER_DESTINATION`] (1) so each publisher's
-    /// shared-memory data segment isn't sized for the iceoryx2 default of 8
-    /// nonexistent subscribers (the standing 8× over-allocation the pin
-    /// reclaims). Locks the pin: a second subscriber must be rejected.
+    /// A channel data service carries exactly ONE publisher (the source) and
+    /// `N + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL` subscribers. This is the
+    /// transport inversion (#1419): the old destination-centric service pinned
+    /// `max_subscribers = 1` and let N publishers fan in; a channel service pins
+    /// `max_publishers = 1` and lets N subscribers fan OUT one zero-copy loan,
+    /// reserving one extra slot for a phase-3.5 tap.
     ///
-    /// Mentally-revert: drop the `.max_subscribers(...)` line in
-    /// [`Iceoryx2Node::open_or_create_service`] and the second
-    /// `create_subscriber` succeeds against the default of 8 — this test
-    /// goes green-by-accident only if the pin is removed, so it fails when
-    /// the contract is broken.
+    /// Mentally-revert: raise `max_publishers` back above 1 in
+    /// [`Iceoryx2Node::open_or_create_service`] and the second `create_publisher`
+    /// stops failing; drop the reserved tap slot and the (N+1)th subscriber (the
+    /// tap) stops fitting. Both halves fail here when the contract is broken.
     #[test]
-    fn data_service_caps_subscribers_at_one() {
+    fn channel_service_single_publisher_n_plus_tap_subscribers() {
+        use streamlib_ipc_types::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
+
+        let destinations = 3usize;
+        let max_subscribers = destinations + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
         let node = Iceoryx2Node::new().expect("create iceoryx2 node");
         let service = node
-            .open_or_create_service(&unique_service_name("subs_cap"), 4, true)
-            .expect("open data service");
+            .open_or_create_service(&unique_service_name("chan_caps"), max_subscribers, 4, true)
+            .expect("open channel data service");
 
-        let _first = service
-            .create_subscriber()
-            .expect("first subscriber (the destination) must succeed");
+        // Exactly one publisher — the source.
+        let _publisher = service.create_publisher(64).expect("the source publisher");
+        assert!(
+            service.create_publisher(64).is_err(),
+            "a channel carries exactly one publisher — max_publishers drifted above \
+             MAX_PUBLISHERS_PER_CHANNEL (1)",
+        );
+
+        // N destination subscribers plus the one reserved tap slot fit; the slot
+        // after that does not.
+        let mut subscribers = Vec::with_capacity(max_subscribers);
+        for i in 0..max_subscribers {
+            subscribers.push(
+                service
+                    .create_subscriber()
+                    .unwrap_or_else(|e| panic!("subscriber {i} (destination or tap) must fit: {e:?}")),
+            );
+        }
         assert!(
             service.create_subscriber().is_err(),
-            "second subscriber must fail — max_subscribers drifted from \
-             MAX_SUBSCRIBERS_PER_DESTINATION ({})",
-            MAX_SUBSCRIBERS_PER_DESTINATION,
+            "the {}th subscriber must fail — max_subscribers was N({destinations}) + \
+             reserved tap({RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL})",
+            max_subscribers + 1,
         );
     }
 
-    /// The shared per-destination service is created once and reopened by
-    /// every inbound link. iceoryx2 rejects reopening with a LARGER buffer
-    /// than the existing service — `DoesNotSupportRequestedMinBufferSize`,
-    /// the exact crash the drone-racer pilot hit (a VideoFrame link at
-    /// depth 4 wired before a MavlinkMessage link at depth 64) — but
-    /// accepts reopening with a SMALLER one. This is the premise the
-    /// `max_queued_messages_for_dest` sizing relies on: create the shared
-    /// service at the deepest inbound depth and every shallower link fits,
-    /// regardless of wiring order. If a future iceoryx2 changes this
-    /// open-validation behavior, the destination-max strategy needs to be
-    /// revisited and this test is the trip-wire.
+    /// A channel data service is created once and reopened by every subscriber
+    /// (each destination + a subprocess SDK opening the same name). iceoryx2
+    /// rejects reopening with a LARGER buffer than the existing service —
+    /// `DoesNotSupportRequestedMinBufferSize`, the exact crash the drone-racer
+    /// pilot hit — but accepts reopening with a SMALLER one. Channel sizing relies
+    /// on this: create the service at the channel's declared depth and every
+    /// shallower reopen fits, regardless of wiring order. If a future iceoryx2
+    /// changes this open-validation behavior, this test is the trip-wire.
     #[test]
-    fn shared_service_reopen_larger_fails_smaller_succeeds() {
+    fn channel_service_reopen_larger_fails_smaller_succeeds() {
         let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let subs = 2usize;
 
-        // Bug shape: a shallow-depth link creates the service first, then a
-        // deeper link's reopen is rejected.
+        // Bug shape: a shallow-depth open creates the service first, then a
+        // deeper reopen is rejected.
         let bug_name = unique_service_name("reopen_bug");
         let _shallow = node
-            .open_or_create_service(&bug_name, 4, true)
-            .expect("create shared service at depth 4");
+            .open_or_create_service(&bug_name, subs, 4, true)
+            .expect("create channel service at depth 4");
         assert!(
-            node.open_or_create_service(&bug_name, 64, true).is_err(),
-            "reopening the shared service with a deeper buffer must fail — \
+            node.open_or_create_service(&bug_name, subs, 64, true).is_err(),
+            "reopening the channel service with a deeper buffer must fail — \
              this is the DoesNotSupportRequestedMinBufferSize crash the \
-             destination-max sizing prevents",
+             channel-depth sizing prevents",
         );
 
         // Fix shape: create at the deepest depth first, then every shallower
-        // inbound link reopens cleanly.
+        // reopen succeeds cleanly.
         let fixed_name = unique_service_name("reopen_fixed");
         let _deep = node
-            .open_or_create_service(&fixed_name, 64, true)
-            .expect("create shared service at depth 64");
-        node.open_or_create_service(&fixed_name, 4, true)
-            .expect("reopening the shared service with a shallower buffer must succeed");
+            .open_or_create_service(&fixed_name, subs, 64, true)
+            .expect("create channel service at depth 64");
+        node.open_or_create_service(&fixed_name, subs, 4, true)
+            .expect("reopening the channel service with a shallower buffer must succeed");
     }
 
     /// With `enable_safe_overflow(true)` (the engine-wide realtime
@@ -366,6 +394,7 @@ mod tests {
         let service = node
             .open_or_create_service(
                 &unique_service_name("overflow_true"),
+                2,
                 depth,
                 /* enable_safe_overflow */ true,
             )
@@ -422,7 +451,7 @@ mod tests {
 
         // Open with overflow disabled — back-pressure on.
         let service_for_main = node
-            .open_or_create_service(&service_name, depth, /* enable_safe_overflow */ false)
+            .open_or_create_service(&service_name, 2, depth, /* enable_safe_overflow */ false)
             .expect("open service");
         drop(service_for_main); // keep the service alive only via the
         // worker-side reopen; iceoryx2 services
@@ -441,6 +470,7 @@ mod tests {
             .spawn(move || {
                 let svc = match node_clone.open_or_create_service(
                     &service_name_clone,
+                    2,
                     depth,
                     /* enable_safe_overflow */ false,
                 ) {
@@ -544,7 +574,7 @@ mod tests {
     fn data_service_records_configured_max_queued_messages() {
         let node = Iceoryx2Node::new().expect("create iceoryx2 node");
         let service = node
-            .open_or_create_service(&unique_service_name("mqm_recorded"), 42, true)
+            .open_or_create_service(&unique_service_name("mqm_recorded"), 2, 42, true)
             .expect("open data service");
         assert_eq!(
             service.max_queued_messages(),
@@ -618,7 +648,7 @@ mod tests {
             let startup_p = startup.clone();
             let producer = std::thread::spawn(move || {
                 let svc = node_p
-                    .open_or_create_service(&s1_p, s1_depth, true)
+                    .open_or_create_service(&s1_p, 2, s1_depth, true)
                     .expect("producer s1 open");
                 let publisher = svc.create_publisher(64).expect("publisher");
                 startup_p.wait();
@@ -646,10 +676,10 @@ mod tests {
             let startup_r = startup.clone();
             let relay = std::thread::spawn(move || {
                 let svc_in = node_r
-                    .open_or_create_service(&s1_r, s1_depth, true)
+                    .open_or_create_service(&s1_r, 2, s1_depth, true)
                     .expect("relay s1 open");
                 let svc_out = node_r
-                    .open_or_create_service(&s2_r, s2_depth, true)
+                    .open_or_create_service(&s2_r, 2, s2_depth, true)
                     .expect("relay s2 open");
                 let subscriber = svc_in.create_subscriber().expect("relay sub");
                 let publisher = svc_out.create_publisher(64).expect("relay pub");
@@ -700,7 +730,7 @@ mod tests {
             let startup_c = startup.clone();
             let consumer_handle = std::thread::spawn(move || {
                 let svc = node_c
-                    .open_or_create_service(&s2_c, s2_depth, true)
+                    .open_or_create_service(&s2_c, 2, s2_depth, true)
                     .expect("consumer s2 open");
                 let subscriber = svc.create_subscriber().expect("consumer sub");
                 startup_c.wait();
@@ -768,7 +798,7 @@ mod tests {
         let send_count: usize = depth + 3; // 3 extra overwrites
         let node = Iceoryx2Node::new().expect("create iceoryx2 node");
         let service = node
-            .open_or_create_service(&unique_service_name("ring_overwrite"), depth, true)
+            .open_or_create_service(&unique_service_name("ring_overwrite"), 2, depth, true)
             .expect("open data service");
 
         let max_payload = 64usize;

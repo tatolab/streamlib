@@ -3,7 +3,14 @@
 
 //! iceoryx2 service operations for the compiler.
 //!
-//! Opens iceoryx2 publish-subscribe services between processor ports.
+//! Opens the channel-centric iceoryx2 publish-subscribe services between
+//! processor ports. A channel is keyed on its **source output port**
+//! (`{source_processor}/{source_output_port}`), so one source output port maps
+//! to exactly one iceoryx2 data service: ONE publisher fans a single zero-copy
+//! loan out to its N compile-time-known subscribers (one per `connect()` link),
+//! plus one reserved slot for a phase-3.5 tap. The paired Event (notify) service
+//! stays destination-keyed (`streamlib/{dest}/notify`) so a destination waits on
+//! ONE listener fd regardless of fan-in.
 
 use std::sync::Arc;
 
@@ -14,7 +21,7 @@ use crate::core::ProcessorUniqueId;
 use crate::core::context::RuntimeContext;
 use crate::core::embedded_schemas::{
     max_payload_bytes_for_port_spec, max_queued_messages_for_port_spec, overflow_for_input_port,
-    resolve_node_port_schema,
+    port_schema_spec,
 };
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
@@ -23,7 +30,13 @@ use crate::core::graph::{
 };
 use crate::core::json_schema::SchemaIdentOutput;
 use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorInstance};
-use crate::iceoryx2::{MAX_FANIN_PER_DESTINATION, SchemaIdentWire};
+use crate::iceoryx2::{
+    Iceoryx2NotifyService, Iceoryx2Service, RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
+    SchemaIdentWire,
+};
+
+use super::spawn_deno_subprocess_op::DenoSubprocessHostProcessor;
+use super::spawn_python_native_subprocess_op::PythonNativeSubprocessHostProcessor;
 
 /// Render a port's structured schema spec as the JSON value embedded in the
 /// subprocess wiring envelope: a structured `SchemaIdentOutput` object for
@@ -39,9 +52,6 @@ fn schema_ident_json(spec: &PortSchemaSpec) -> serde_json::Value {
 /// tag. `Any` ports yield the default zero-segment wire bytes (unset routing
 /// tag — preserves the existing wildcard semantics). `Specific(...)` ports
 /// build the wire bytes directly from the validated structured fields.
-///
-/// Used both to stamp a producer's output tag onto every frame and to record
-/// a consumer port's expected tag for the per-frame read-side check.
 fn schema_ident_wire_for_spec(spec: &PortSchemaSpec) -> SchemaIdentWire {
     match spec {
         PortSchemaSpec::Any => SchemaIdentWire::default(),
@@ -66,38 +76,292 @@ fn schema_ident_wire_for_spec(spec: &PortSchemaSpec) -> SchemaIdentWire {
     }
 }
 
-use super::spawn_deno_subprocess_op::DenoSubprocessHostProcessor;
-use super::spawn_python_native_subprocess_op::PythonNativeSubprocessHostProcessor;
-
-/// Resolve the iceoryx2 service-level `enable_safe_overflow` flag from
-/// the destination input port's declared overflow policy. Falls back to
-/// the engine-wide realtime default (`drop_oldest` →
-/// `enable_safe_overflow(true)`) when the destination processor or
-/// port can't be located (legitimate when the destination is a
-/// subprocess processor whose registry entry doesn't carry per-port
-/// overflow yet — those default to drop-oldest, the realtime
-/// invariant).
-fn resolve_enable_safe_overflow(
+/// Open an iceoryx2 channel for a `connect()` link in the graph.
+///
+/// The data service is source-channel-keyed (single publisher, N subscribers);
+/// the notify service is destination-keyed. Handles four endpoint combinations:
+/// - Rust→Rust: full wiring (publisher + notifier on source, subscriber +
+///   listener on dest).
+/// - Rust→subprocess: source-side Rust wiring; the subprocess opens its own
+///   subscriber from the wiring envelope.
+/// - subprocess→Rust: dest-side Rust wiring; the subprocess opens its own
+///   publisher from the wiring envelope.
+/// - subprocess→subprocess: both sides open their own ports; the host only
+///   pre-creates the services so their sizing is fixed once.
+#[tracing::instrument(
+    name = "compiler.open_iceoryx2_service",
+    skip(graph, runtime_ctx),
+    fields(link_id = %link_id)
+)]
+pub fn open_iceoryx2_service(
     graph: &mut Graph,
-    dest_proc_id: &ProcessorUniqueId,
-    dest_port: &str,
-) -> Result<bool> {
-    let dest_proc_type = graph
-        .traversal_mut()
-        .v(dest_proc_id)
-        .first()
-        .map(|node| node.processor_type().clone());
-
-    let overflow = match dest_proc_type.as_ref() {
-        Some(ident) => overflow_for_input_port(ident, dest_port)?,
-        None => crate::iceoryx2::Overflow::default(),
+    link_id: &LinkUniqueId,
+    runtime_ctx: &Arc<RuntimeContext>,
+) -> Result<()> {
+    let (from_port, to_port) = {
+        let link =
+            graph.traversal_mut().e(link_id).first().ok_or_else(|| {
+                Error::LinkNotFound(format!("Link '{}' not found in graph", link_id))
+            })?;
+        (link.from_port().clone(), link.to_port().clone())
     };
-    Ok(overflow.enable_safe_overflow())
+
+    let (source_proc_id, source_port) =
+        (from_port.processor_id.clone(), from_port.port_name.clone());
+    let (dest_proc_id, dest_port) = (to_port.processor_id.clone(), to_port.port_name.clone());
+
+    let source_is_subprocess = is_subprocess_processor(graph, &source_proc_id);
+    let dest_is_subprocess = is_subprocess_processor(graph, &dest_proc_id);
+
+    let channel_service_name = channel_service_name(&source_proc_id, &source_port)?;
+    let notify_service_name = notify_service_name_for(&dest_proc_id);
+
+    tracing::info!(
+        channel = %channel_service_name,
+        notify = %notify_service_name,
+        "Opening iceoryx2 channel: {} ({}:{}) -> ({}:{}) [{}] (source_subprocess={}, dest_subprocess={})",
+        from_port,
+        source_proc_id,
+        source_port,
+        dest_proc_id,
+        dest_port,
+        link_id,
+        source_is_subprocess,
+        dest_is_subprocess,
+    );
+
+    // Resolve schemas + channel sizing. The channel carries one publisher (the
+    // source), so its ring depth and slot size derive from the source output
+    // schema; its subscriber count is the compile-time destination fan-out plus
+    // the reserved tap slot; its overflow policy is the destinations' agreed
+    // policy.
+    let output_schema = resolve_output_schema(graph, &source_proc_id, &source_port);
+    let dest_schema = resolve_port_schema(
+        graph,
+        &dest_proc_id,
+        &dest_port,
+        crate::core::PortDirection::Input,
+    );
+    let max_payload = max_payload_bytes_for_port_spec(&output_schema)?;
+    let max_queued_messages = max_queued_messages_for_port_spec(&output_schema)?;
+    let max_subscribers = channel_max_subscribers(graph, &source_proc_id, &source_port);
+    let enable_safe_overflow =
+        channel_enable_safe_overflow(graph, &source_proc_id, &source_port)?;
+    let max_notifiers = destination_fanin(graph, &dest_proc_id);
+
+    let iceoryx2_node = runtime_ctx.iceoryx2_node();
+    let service = iceoryx2_node.open_or_create_service(
+        &channel_service_name,
+        max_subscribers,
+        max_queued_messages,
+        enable_safe_overflow,
+    )?;
+    let notify_service =
+        iceoryx2_node.open_or_create_notify_service(&notify_service_name, max_notifiers)?;
+
+    // Source side: install the single channel publisher (first link out of this
+    // port) and append this link's destination notifier.
+    if source_is_subprocess {
+        wire_subprocess_source(
+            graph,
+            &source_proc_id,
+            &source_port,
+            &channel_service_name,
+            &notify_service_name,
+            &output_schema,
+            max_payload,
+            max_queued_messages,
+            max_subscribers,
+            max_notifiers,
+        )?;
+    } else {
+        let source_processor = get_single_processor(graph, &source_proc_id)?;
+        wire_rust_source(
+            &source_processor,
+            &source_port,
+            &output_schema,
+            &service,
+            &notify_service,
+            max_payload,
+        )?;
+    }
+
+    // Destination side: subscribe to the channel bound to this local input port,
+    // and ensure the destination's single listener exists.
+    if dest_is_subprocess {
+        wire_subprocess_dest(
+            graph,
+            &dest_proc_id,
+            &dest_port,
+            &channel_service_name,
+            &notify_service_name,
+            max_payload,
+            max_queued_messages,
+            max_subscribers,
+            max_notifiers,
+        )?;
+    } else {
+        let dest_processor = get_single_processor(graph, &dest_proc_id)?;
+        wire_rust_dest(
+            &dest_processor,
+            &dest_port,
+            &dest_schema,
+            &service,
+            &notify_service,
+            max_payload,
+        )?;
+    }
+
+    let link = graph
+        .traversal_mut()
+        .e(link_id)
+        .first_mut()
+        .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
+    link.insert(LinkStateComponent(LinkState::Wired));
+
+    tracing::info!(
+        channel = %channel_service_name,
+        "Opened iceoryx2 channel: [{}] (state: Wired)",
+        link_id
+    );
+    Ok(())
 }
 
-/// Check if a processor is a subprocess (Python, TypeScript, etc.)
+/// Close an iceoryx2 service by link ID.
+#[tracing::instrument(name = "compiler.close_iceoryx2_service", skip(graph), fields(link_id = %link_id))]
+pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Result<()> {
+    tracing::info!("Closing iceoryx2 service: {}", link_id);
+    if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
+        link.insert(LinkStateComponent(LinkState::Disconnected));
+    }
+    tracing::info!("Closed iceoryx2 service: {} (state: Disconnected)", link_id);
+    Ok(())
+}
+
+// ============================================================================
+// Internal helpers
+// ============================================================================
+
+/// The channel service name a source output port publishes to —
+/// `{source_processor}/{source_output_port}`, the single source of truth for
+/// channel identity (`streamlib_idents::source_channel_name`). A grammar-illegal
+/// port name surfaces as a named [`Error::Configuration`] here rather than an
+/// opaque iceoryx2 `Invalid service name` deep in the FFI.
+fn channel_service_name(source_proc_id: &ProcessorUniqueId, source_port: &str) -> Result<String> {
+    streamlib_idents::source_channel_name(source_proc_id.as_str(), source_port)
+        .map(|name| name.into_string())
+        .map_err(|source| {
+            Error::Configuration(format!(
+                "cannot derive channel name for source '{}:{}': {}",
+                source_proc_id, source_port, source
+            ))
+        })
+}
+
+/// Destination-keyed notify (Event) service name — `streamlib/{dest}/notify`.
+///
+/// Every source publishing into one of a destination's channels holds a
+/// `Notifier` here; the destination waits on ONE `Listener` fd, so fan-in never
+/// multiplies the fds a runner multiplexes. Subprocess SDKs derive this name the
+/// same way.
+fn notify_service_name_for(dest_proc_id: &ProcessorUniqueId) -> String {
+    format!("streamlib/{}/notify", dest_proc_id)
+}
+
+/// The `max_subscribers` a channel data service must be created with: the count
+/// of `connect()` links out of the source output port (each is one destination
+/// subscriber) plus [`RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`].
+///
+/// The full graph is built by the time the compiler op runs, so this outbound
+/// count is stable — every link out of the same source port computes the same
+/// value, which is what lets the incremental `open_or_create` calls agree
+/// (iceoryx2 verifies `max_subscribers` on reopen).
+fn channel_max_subscribers(
+    graph: &mut Graph,
+    source_proc_id: &ProcessorUniqueId,
+    source_port: &str,
+) -> usize {
+    let destinations = graph
+        .traversal_mut()
+        .v(source_proc_id)
+        .out_e()
+        .iter()
+        .filter(|link| link.from_port().port_name == source_port)
+        .count();
+    destinations + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL
+}
+
+/// The destination's compile-time fan-in — the count of inbound `connect()`
+/// links — which sizes `max_notifiers` on its destination-keyed notify service.
+fn destination_fanin(graph: &mut Graph, dest_proc_id: &ProcessorUniqueId) -> usize {
+    graph.traversal_mut().v(dest_proc_id).in_e().iter().count()
+}
+
+/// The channel's `enable_safe_overflow`, agreed across every destination the
+/// channel feeds.
+///
+/// `enable_safe_overflow` is a service-level property shared by all subscribers,
+/// so a channel whose destinations declare conflicting overflow policies
+/// (`drop_oldest` vs `block`) is genuinely ambiguous — that is a named
+/// [`Error::Configuration`] rather than a silent pick. A channel with a single
+/// destination (the common case) uses that destination's policy.
+fn channel_enable_safe_overflow(
+    graph: &mut Graph,
+    source_proc_id: &ProcessorUniqueId,
+    source_port: &str,
+) -> Result<bool> {
+    // Collect (dest_proc_id, dest_port) for every link out of this source port,
+    // releasing the traversal borrow before re-traversing per edge.
+    let destinations: Vec<(ProcessorUniqueId, String)> = graph
+        .traversal_mut()
+        .v(source_proc_id)
+        .out_e()
+        .iter()
+        .filter(|link| link.from_port().port_name == source_port)
+        .map(|link| {
+            (
+                link.to_port().processor_id.clone(),
+                link.to_port().port_name.clone(),
+            )
+        })
+        .collect();
+
+    let mut agreed: Option<bool> = None;
+    for (dest_proc_id, dest_port) in &destinations {
+        let dest_type = graph
+            .traversal_mut()
+            .v(dest_proc_id)
+            .first()
+            .map(|node| node.processor_type().clone());
+        let overflow = match dest_type.as_ref() {
+            Some(ident) => overflow_for_input_port(ident, dest_port)?,
+            None => crate::iceoryx2::Overflow::default(),
+        };
+        let enable = overflow.enable_safe_overflow();
+        match agreed {
+            None => agreed = Some(enable),
+            Some(prev) if prev != enable => {
+                return Err(Error::Configuration(format!(
+                    "channel '{}:{}' feeds destinations with conflicting overflow \
+                     policies — one wants drop_oldest (enable_safe_overflow) and \
+                     another wants block. A channel's single publisher shares one \
+                     overflow policy across all subscribers; give the destinations \
+                     the same input-port overflow, or fan them out through distinct \
+                     source ports.",
+                    source_proc_id, source_port,
+                )));
+            }
+            Some(_) => {}
+        }
+    }
+
+    // Every wired link has at least the current destination, so `agreed` is Some;
+    // the realtime default is the correct fallback if the outbound set were empty.
+    Ok(agreed.unwrap_or_else(|| crate::iceoryx2::Overflow::default().enable_safe_overflow()))
+}
+
+/// Check if a processor is a subprocess (Python-native, TypeScript, etc.).
 fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bool {
-    // Check for SubprocessHandleComponent (legacy path)
     let has_component = graph
         .traversal_mut()
         .v(proc_id)
@@ -108,14 +372,12 @@ fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bo
         return true;
     }
 
-    // Check if TypeScript or Python-native runtime (FFI manages own iceoryx2)
     let proc_type = graph
         .traversal_mut()
         .v(proc_id)
         .first()
         .map(|n| n.processor_type().clone());
 
-    // Check runtime type from descriptor
     if let Some(proc_type) = proc_type.as_ref() {
         if let Some(descriptor) = PROCESSOR_REGISTRY.descriptor(proc_type) {
             if matches!(
@@ -127,7 +389,6 @@ fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bo
         }
     }
 
-    // Check if this is a Python native host (by downcasting the processor instance)
     if let Some(proc_arc) = graph
         .traversal_mut()
         .v(proc_id)
@@ -150,163 +411,7 @@ fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bo
     false
 }
 
-/// Open an iceoryx2 service for a connection in the graph.
-///
-/// Handles four cases:
-/// - Rust→Rust: Full wiring (publisher + OutputWriter, subscriber + InputMailboxes)
-/// - Rust→Python: Only source-side wiring (publisher + OutputWriter). Python creates its own subscriber.
-/// - Python→Rust: Only dest-side wiring (subscriber + InputMailboxes). Python creates its own publisher.
-/// - Python→Python: Service created but no Rust-side wiring. Both subprocesses manage their own connections.
-#[tracing::instrument(name = "compiler.open_iceoryx2_service", skip(graph, runtime_ctx), fields(link_id = %link_id))]
-pub fn open_iceoryx2_service(
-    graph: &mut Graph,
-    link_id: &LinkUniqueId,
-    runtime_ctx: &Arc<RuntimeContext>,
-) -> Result<()> {
-    let (from_port, to_port) = {
-        let link =
-            graph.traversal_mut().e(link_id).first().ok_or_else(|| {
-                Error::LinkNotFound(format!("Link '{}' not found in graph", link_id))
-            })?;
-        (link.from_port().clone(), link.to_port().clone())
-    };
-
-    let (source_proc_id, source_port) =
-        (from_port.processor_id.clone(), from_port.port_name.clone());
-    let (dest_proc_id, dest_port) = (to_port.processor_id.clone(), to_port.port_name.clone());
-
-    reject_overcap_destination_fanin(graph, &dest_proc_id)?;
-
-    let source_is_subprocess = is_subprocess_processor(graph, &source_proc_id);
-    let dest_is_subprocess = is_subprocess_processor(graph, &dest_proc_id);
-
-    tracing::info!(
-        "Opening iceoryx2 service: {} ({}:{}) -> ({}:{}) [{}] (source_subprocess={}, dest_subprocess={})",
-        from_port,
-        source_proc_id,
-        source_port,
-        dest_proc_id,
-        dest_port,
-        link_id,
-        source_is_subprocess,
-        dest_is_subprocess,
-    );
-
-    if source_is_subprocess && dest_is_subprocess {
-        // Both are subprocesses - just create the service and mark as wired.
-        // Both subprocesses handle their own pub/sub connections.
-        open_iceoryx2_subprocess_to_subprocess(
-            graph,
-            &source_proc_id,
-            &dest_proc_id,
-            &source_port,
-            &dest_port,
-            link_id,
-            runtime_ctx,
-        )
-    } else if source_is_subprocess {
-        // Source is subprocess, dest is Rust - only configure dest side
-        let dest_processor = get_single_processor(graph, &dest_proc_id)?;
-        open_iceoryx2_subprocess_to_rust(
-            graph,
-            &dest_processor,
-            &source_proc_id,
-            &dest_proc_id,
-            &source_port,
-            &dest_port,
-            link_id,
-            runtime_ctx,
-        )
-    } else if dest_is_subprocess {
-        // Source is Rust, dest is subprocess - only configure source side
-        let source_processor = get_single_processor(graph, &source_proc_id)?;
-        open_iceoryx2_rust_to_subprocess(
-            graph,
-            &source_processor,
-            &source_proc_id,
-            &dest_proc_id,
-            &source_port,
-            &dest_port,
-            link_id,
-            runtime_ctx,
-        )
-    } else {
-        // Both are Rust - full wiring (original path)
-        let (source_processor, dest_processor) =
-            get_processor_pair(graph, &source_proc_id, &dest_proc_id)?;
-        open_iceoryx2_pubsub(
-            graph,
-            &source_processor,
-            &dest_processor,
-            &source_proc_id,
-            &dest_proc_id,
-            &source_port,
-            &dest_port,
-            link_id,
-            runtime_ctx,
-        )
-    }
-}
-
-/// Close an iceoryx2 service by link ID.
-#[tracing::instrument(name = "compiler.close_iceoryx2_service", skip(graph), fields(link_id = %link_id))]
-pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Result<()> {
-    tracing::info!("Closing iceoryx2 service: {}", link_id);
-
-    // Set link state to Disconnected
-    if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
-        link.insert(LinkStateComponent(LinkState::Disconnected));
-    }
-
-    tracing::info!("Closed iceoryx2 service: {} (state: Disconnected)", link_id);
-    Ok(())
-}
-
-// ============================================================================
-// Internal helpers
-// ============================================================================
-
-/// Notify (Event) service name paired 1:1 with a destination's pub/sub service.
-///
-/// The shape mirrors the existing destination-centric pub/sub naming
-/// (`streamlib/<dest_proc_id>`) — every upstream Notifier feeding a destination
-/// signals the same Listener, giving the destination's runner a single fd to
-/// wait on regardless of fan-in. Subprocess SDKs derive this name the same way.
-fn notify_service_name_for(dest_proc_id: &ProcessorUniqueId) -> String {
-    format!("streamlib/{}/notify", dest_proc_id)
-}
-
-/// Reject wiring that would push a destination's fan-in past
-/// [`MAX_FANIN_PER_DESTINATION`].
-///
-/// The new link is already in the graph by the time this runs, so the
-/// incoming-edge count IS the post-wiring fan-in. Without this check the
-/// (cap+1)th wiring fails inside iceoryx2's `notifier_builder().create()` /
-/// `publisher_builder().create()` — opaque, non-actionable, deep inside the
-/// FFI. Rejecting here surfaces a configuration error naming the destination.
-fn reject_overcap_destination_fanin(
-    graph: &mut Graph,
-    dest_proc_id: &ProcessorUniqueId,
-) -> Result<()> {
-    let fanin = graph.traversal_mut().v(dest_proc_id).in_e().iter().count();
-    if fanin > MAX_FANIN_PER_DESTINATION {
-        return Err(Error::Configuration(format!(
-            "destination processor '{}' would have {} upstream sources, \
-             exceeding the per-destination iceoryx2 fan-in cap of {} \
-             (max_publishers / max_notifiers).",
-            dest_proc_id, fanin, MAX_FANIN_PER_DESTINATION,
-        )));
-    }
-    Ok(())
-}
-
 /// Resolve the wire schema declared on a source processor's output port.
-///
-/// Returns the port's `data_type` ([`PortSchemaSpec`]) from
-/// [`PROCESSOR_REGISTRY`], or the default ([`PortSchemaSpec::Any`]) when the
-/// processor type or named port can't be resolved — the downstream
-/// port-spec metadata helpers treat that as "unconstrained" and substitute
-/// engine defaults.
 fn resolve_output_schema(
     graph: &mut Graph,
     source_proc_id: &ProcessorUniqueId,
@@ -321,76 +426,23 @@ fn resolve_output_schema(
 }
 
 /// Resolve the [`PortSchemaSpec`] on one port of a graph node, in either
-/// direction. Delegates to the shared graph→port-schema primitive
-/// [`resolve_node_port_schema`].
+/// direction. Returns [`PortSchemaSpec::Any`] when the node is absent.
 fn resolve_port_schema(
-    graph: &Graph,
+    graph: &mut Graph,
     proc_id: &ProcessorUniqueId,
     port: &str,
     direction: crate::core::PortDirection,
 ) -> PortSchemaSpec {
-    resolve_node_port_schema(graph, proc_id, port, direction)
-}
-
-/// Deepest `max_queued_messages` across all of a destination's inbound links.
-///
-/// The per-destination iceoryx2 pub/sub service (`streamlib/{dest}`) is shared
-/// by every inbound link, so its `subscriber_max_buffer_size` must satisfy the
-/// DEEPEST consumer. Sizing it from only the link currently being wired lets a
-/// later, deeper link's `open_or_create` trip
-/// `DoesNotSupportRequestedMinBufferSize` against the already-created service —
-/// the order-dependent failure this resolves. iceoryx2 permits opening an
-/// existing service with a *smaller* requested buffer, so creating at the max
-/// makes every inbound link fit regardless of wiring order. Each publisher
-/// still sizes its own shared-memory slot to its own payload
-/// ([`max_payload_bytes_for_port_spec`]); only the shared ring depth is unified.
-///
-/// The link currently being wired is already in the graph (see
-/// [`reject_overcap_destination_fanin`]), so the result is always ≥ that link's
-/// own declared depth — never a regression below the pre-unification sizing.
-fn max_queued_messages_for_dest(
-    graph: &mut Graph,
-    dest_proc_id: &ProcessorUniqueId,
-) -> Result<usize> {
-    // Collect (source, port) for every inbound link first to release the
-    // traversal borrow before re-traversing per edge to resolve schemas.
-    let inbound: Vec<(ProcessorUniqueId, String)> = graph
+    let proc_type = graph
         .traversal_mut()
-        .v(dest_proc_id)
-        .in_e()
-        .iter()
-        .map(|link| {
-            (
-                link.from_port().processor_id.clone(),
-                link.from_port().port_name.clone(),
-            )
-        })
-        .collect();
+        .v(proc_id)
+        .first()
+        .map(|node| node.processor_type().clone());
 
-    let inbound_count = inbound.len();
-    let mut max_depth = 0usize;
-    for (source_proc_id, source_port) in &inbound {
-        let schema = resolve_output_schema(graph, source_proc_id, source_port);
-        max_depth = max_depth.max(max_queued_messages_for_port_spec(&schema)?);
+    match proc_type {
+        Some(ident) => port_schema_spec(&ident, port, direction),
+        None => PortSchemaSpec::Any,
     }
-
-    tracing::debug!(
-        dest = %dest_proc_id,
-        max_queued_messages = max_depth,
-        inbound_links = inbound_count,
-        "sized shared per-destination iceoryx2 service to its deepest inbound link",
-    );
-    Ok(max_depth)
-}
-
-fn get_processor_pair(
-    graph: &mut Graph,
-    source_proc_id: &ProcessorUniqueId,
-    dest_proc_id: &ProcessorUniqueId,
-) -> Result<(Arc<Mutex<ProcessorInstance>>, Arc<Mutex<ProcessorInstance>>)> {
-    let source_arc = get_single_processor(graph, source_proc_id)?;
-    let dest_arc = get_single_processor(graph, dest_proc_id)?;
-    Ok((source_arc, dest_arc))
 }
 
 fn get_single_processor(
@@ -408,552 +460,158 @@ fn get_single_processor(
         .ok_or_else(|| Error::Configuration(format!("Processor '{}' not found", proc_id)))
 }
 
-#[allow(clippy::too_many_arguments)]
-fn open_iceoryx2_pubsub(
-    graph: &mut Graph,
+/// Install (once) the source's single channel publisher and append this link's
+/// destination notifier onto the Rust source's [`OutputWriterInner`].
+fn wire_rust_source(
     source_processor: &Arc<Mutex<ProcessorInstance>>,
-    dest_processor: &Arc<Mutex<ProcessorInstance>>,
-    source_proc_id: &ProcessorUniqueId,
-    dest_proc_id: &ProcessorUniqueId,
     source_port: &str,
-    dest_port: &str,
-    link_id: &LinkUniqueId,
-    runtime_ctx: &Arc<RuntimeContext>,
+    output_schema: &PortSchemaSpec,
+    service: &Iceoryx2Service,
+    notify_service: &Iceoryx2NotifyService,
+    max_payload: usize,
 ) -> Result<()> {
-    // Service name is destination-centric: all upstream processors publish to the same service
-    // This allows multiple inputs to a single processor to share one subscriber
-    let service_name = format!("streamlib/{}", dest_proc_id);
-    let notify_service_name = notify_service_name_for(dest_proc_id);
+    let source_guard = source_processor.lock();
+    let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() else {
+        return Ok(());
+    };
 
-    tracing::debug!(
-        "Opening iceoryx2 service '{}' for connection {} -> {}",
-        service_name,
-        source_proc_id,
-        dest_proc_id
-    );
+    if !output_inner.has_channel_publisher(source_port) {
+        let publisher = service.create_publisher(max_payload)?;
+        output_inner.set_channel_publisher(
+            source_port,
+            schema_ident_wire_for_spec(output_schema),
+            publisher,
+        );
+        tracing::debug!(
+            "Installed channel publisher for source output port '{}'",
+            source_port
+        );
+    }
 
-    // Look up schema for the output port before creating the publisher so we can size
-    // the shared memory slot correctly via max_payload_bytes_for_port_spec.
-    let output_schema = resolve_output_schema(graph, source_proc_id, source_port);
-    let dest_schema = resolve_port_schema(
-        graph,
-        dest_proc_id,
-        dest_port,
-        crate::core::PortDirection::Input,
-    );
-
-    tracing::debug!(
-        "Output port '{}' has schema '{}'",
-        source_port,
-        output_schema
-    );
-
-    // Create iceoryx2 Service (pub/sub) and paired Notify service (event/fd-wake).
-    let iceoryx2_node = runtime_ctx.iceoryx2_node();
-    let max_queued_messages = max_queued_messages_for_dest(graph, dest_proc_id)?;
-    let max_payload = max_payload_bytes_for_port_spec(&output_schema)?;
-    let enable_safe_overflow = resolve_enable_safe_overflow(graph, dest_proc_id, dest_port)?;
-    let service = iceoryx2_node.open_or_create_service(
-        &service_name,
-        max_queued_messages,
-        enable_safe_overflow,
-    )?;
-    let notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
-
-    // Create Publisher sized for this schema's declared max payload.
-    let publisher = service.create_publisher(max_payload)?;
     let notifier = notify_service.create_notifier()?;
-    tracing::debug!(
-        "Created iceoryx2 Publisher+Notifier for '{}' -> service '{}' (enable_safe_overflow={})",
-        source_proc_id,
-        service_name,
-        enable_safe_overflow
-    );
-
-    // Configure source OutputWriterInner with port mapping,
-    // publisher, and notifier (issue #894 — host operates on the
-    // inner Arc directly, no FFI hop).
-    {
-        let source_guard = source_processor.lock();
-        if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
-            output_inner.add_connection(
-                source_port,
-                schema_ident_wire_for_spec(&output_schema),
-                dest_port,
-                publisher,
-                notifier,
-            );
-            tracing::debug!(
-                "Configured OutputWriter port '{}' -> '{}' with Publisher+Notifier",
-                source_port,
-                dest_port
-            );
-        }
-    }
-
-    // Configure destination InputMailboxesInner with port
-    // (issue #894 — host operates on the inner Arc directly).
-    // Only create subscriber if destination doesn't already have one
-    // (first connection wins).
-    {
-        let dest_guard = dest_processor.lock();
-        if let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() {
-            // Only add the port if the macro-generated code didn't already
-            // configure it. The macro reads schema metadata (read_mode,
-            // buffer_size) and sets the correct values per port type.
-            // Overwriting here would discard the schema-driven settings.
-            if !input_inner.has_port(dest_port) {
-                input_inner.add_port(dest_port, 1, Default::default());
-            }
-
-            // Plumb the schema's `metadata.max_payload_bytes` to the
-            // destination port so the cdylib's v2
-            // `max_payload_for_port` vtable slot returns the same
-            // bound the publisher uses to size the iceoryx2 slot.
-            // The cdylib's read_raw then allocates exactly this
-            // size — no truncation, no retry, no silent drop.
-            input_inner.set_port_max_payload_bytes(dest_port, max_payload);
-
-            // Record the consumer port's expected schema tag so the host-side
-            // read path can compare it against each inbound frame's stamped
-            // tag (#1430 — the tag was stamped-but-unread before this).
-            input_inner
-                .set_port_expected_schema_ident(dest_port, schema_ident_wire_for_spec(&dest_schema));
-
-            // Only set subscriber+listener if this is the first connection to this destination
-            // All subsequent connections reuse the same pair (max_listeners=1 enforces this).
-            if !input_inner.has_subscriber() {
-                let subscriber = service.create_subscriber()?;
-                input_inner.set_subscriber(subscriber);
-                tracing::debug!(
-                    "Created iceoryx2 Subscriber for '{}' on service '{}'",
-                    dest_proc_id,
-                    service_name
-                );
-            } else {
-                tracing::debug!(
-                    "Reusing existing Subscriber for '{}' (adding port '{}')",
-                    dest_proc_id,
-                    dest_port
-                );
-            }
-            if !input_inner.has_listener() {
-                let listener = notify_service.create_listener()?;
-                input_inner.set_listener(listener);
-                tracing::debug!(
-                    "Created iceoryx2 Listener for '{}' on notify service '{}'",
-                    dest_proc_id,
-                    notify_service_name
-                );
-            }
-        }
-    }
-
-    // Set link state to Wired
-    let link = graph
-        .traversal_mut()
-        .e(link_id)
-        .first_mut()
-        .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
-    link.insert(LinkStateComponent(LinkState::Wired));
-
-    tracing::info!(
-        "Opened iceoryx2 service: {} [{}] (state: Wired)",
-        service_name,
-        link_id
-    );
+    output_inner.add_channel_notifier(source_port, notifier);
     Ok(())
 }
 
-/// Both source and dest are subprocesses - create the iceoryx2 service but no Rust-side wiring.
-#[allow(clippy::too_many_arguments)]
-fn open_iceoryx2_subprocess_to_subprocess(
-    graph: &mut Graph,
-    source_proc_id: &ProcessorUniqueId,
-    dest_proc_id: &ProcessorUniqueId,
-    source_port: &str,
-    dest_port: &str,
-    link_id: &LinkUniqueId,
-    runtime_ctx: &Arc<RuntimeContext>,
-) -> Result<()> {
-    let service_name = format!("streamlib/{}", dest_proc_id);
-    let notify_service_name = notify_service_name_for(dest_proc_id);
-
-    tracing::debug!(
-        "Opening iceoryx2 service '{}' for subprocess-to-subprocess connection",
-        service_name
-    );
-
-    let output_schema = resolve_output_schema(graph, source_proc_id, source_port);
-    let max_payload = max_payload_bytes_for_port_spec(&output_schema)?;
-    let max_queued_messages = max_queued_messages_for_dest(graph, dest_proc_id)?;
-    let enable_safe_overflow = resolve_enable_safe_overflow(graph, dest_proc_id, dest_port)?;
-
-    // Ensure both services exist (both subprocesses will open them independently).
-    let iceoryx2_node = runtime_ctx.iceoryx2_node();
-    let _service = iceoryx2_node.open_or_create_service(
-        &service_name,
-        max_queued_messages,
-        enable_safe_overflow,
-    )?;
-    let _notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
-
-    // Store output wiring info on the source subprocess
-    {
-        let source_proc_arc = get_single_processor(graph, source_proc_id)?;
-        let mut source_guard = source_proc_arc.lock();
-        if let Some(deno_host) = source_guard
-            .as_any_mut()
-            .downcast_mut::<DenoSubprocessHostProcessor>()
-        {
-            deno_host.output_port_wiring.push(serde_json::json!({
-                "name": source_port,
-                "dest_port": dest_port,
-                "dest_service_name": service_name,
-                "dest_notify_service_name": notify_service_name,
-                "schema": schema_ident_json(&output_schema),
-                "max_payload_bytes": max_payload,
-                "max_queued_messages": max_queued_messages,
-            }));
-        } else if let Some(python_native_host) = source_guard
-            .as_any_mut()
-            .downcast_mut::<PythonNativeSubprocessHostProcessor>(
-        ) {
-            python_native_host
-                .output_port_wiring
-                .push(serde_json::json!({
-                    "name": source_port,
-                    "dest_port": dest_port,
-                    "dest_service_name": service_name,
-                    "dest_notify_service_name": notify_service_name,
-                    "schema": schema_ident_json(&output_schema),
-                    "max_payload_bytes": max_payload,
-                    "max_queued_messages": max_queued_messages,
-                }));
-        }
-    }
-
-    // Store input wiring info on the dest subprocess
-    {
-        let dest_proc_arc = get_single_processor(graph, dest_proc_id)?;
-        let mut dest_guard = dest_proc_arc.lock();
-        if let Some(deno_host) = dest_guard
-            .as_any_mut()
-            .downcast_mut::<DenoSubprocessHostProcessor>()
-        {
-            deno_host.input_port_wiring.push(serde_json::json!({
-                "name": dest_port,
-                "service_name": service_name,
-                "notify_service_name": notify_service_name,
-                "read_mode": "skip_to_latest",
-                "max_payload_bytes": max_payload,
-                "max_queued_messages": max_queued_messages,
-            }));
-        } else if let Some(python_native_host) = dest_guard
-            .as_any_mut()
-            .downcast_mut::<PythonNativeSubprocessHostProcessor>(
-        ) {
-            python_native_host
-                .input_port_wiring
-                .push(serde_json::json!({
-                    "name": dest_port,
-                    "service_name": service_name,
-                    "notify_service_name": notify_service_name,
-                    "read_mode": "skip_to_latest",
-                    "max_payload_bytes": max_payload,
-                    "max_queued_messages": max_queued_messages,
-                }));
-        }
-    }
-
-    // Set link state to Wired
-    let link = graph
-        .traversal_mut()
-        .e(link_id)
-        .first_mut()
-        .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
-    link.insert(LinkStateComponent(LinkState::Wired));
-
-    tracing::info!(
-        "Opened iceoryx2 service: {} [{}] (subprocess-to-subprocess, state: Wired)",
-        service_name,
-        link_id
-    );
-    Ok(())
-}
-
-/// Source is subprocess, dest is Rust - only configure dest side (subscriber + InputMailboxes).
-#[allow(clippy::too_many_arguments)]
-fn open_iceoryx2_subprocess_to_rust(
-    graph: &mut Graph,
+/// Subscribe the Rust destination to the channel bound to its local input port,
+/// and ensure its single listener exists.
+fn wire_rust_dest(
     dest_processor: &Arc<Mutex<ProcessorInstance>>,
-    source_proc_id: &ProcessorUniqueId,
-    dest_proc_id: &ProcessorUniqueId,
-    source_port: &str,
     dest_port: &str,
-    link_id: &LinkUniqueId,
-    runtime_ctx: &Arc<RuntimeContext>,
+    dest_schema: &PortSchemaSpec,
+    service: &Iceoryx2Service,
+    notify_service: &Iceoryx2NotifyService,
+    max_payload: usize,
 ) -> Result<()> {
-    let service_name = format!("streamlib/{}", dest_proc_id);
-    let notify_service_name = notify_service_name_for(dest_proc_id);
+    let dest_guard = dest_processor.lock();
+    let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() else {
+        return Ok(());
+    };
 
+    if !input_inner.has_port(dest_port) {
+        input_inner.add_port(dest_port, 1, Default::default());
+    }
+    input_inner.set_port_max_payload_bytes(dest_port, max_payload);
+    input_inner.set_port_expected_schema_ident(dest_port, schema_ident_wire_for_spec(dest_schema));
+
+    let subscriber = service.create_subscriber()?;
+    input_inner.add_channel_subscriber(dest_port, subscriber);
     tracing::debug!(
-        "Opening iceoryx2 service '{}' for subprocess({}) -> rust({}) connection",
-        service_name,
-        source_proc_id,
-        dest_proc_id
+        "Bound channel subscriber to destination input port '{}'",
+        dest_port
     );
 
-    // Look up schema for the output port from the registry
-    let output_schema = resolve_output_schema(graph, source_proc_id, source_port);
-    let dest_schema = resolve_port_schema(
-        graph,
-        dest_proc_id,
-        dest_port,
-        crate::core::PortDirection::Input,
-    );
-    let max_payload = max_payload_bytes_for_port_spec(&output_schema)?;
-    let max_queued_messages = max_queued_messages_for_dest(graph, dest_proc_id)?;
-    let enable_safe_overflow = resolve_enable_safe_overflow(graph, dest_proc_id, dest_port)?;
-
-    let iceoryx2_node = runtime_ctx.iceoryx2_node();
-    let service = iceoryx2_node.open_or_create_service(
-        &service_name,
-        max_queued_messages,
-        enable_safe_overflow,
-    )?;
-    let notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
-
-    // Source is subprocess - it creates its own publisher and notifier via FFI.
-    // Store output wiring info on the subprocess processor so it can publish via FFI.
-    {
-        let source_proc_arc = get_single_processor(graph, source_proc_id)?;
-        let mut source_guard = source_proc_arc.lock();
-        if let Some(deno_host) = source_guard
-            .as_any_mut()
-            .downcast_mut::<DenoSubprocessHostProcessor>()
-        {
-            deno_host.output_port_wiring.push(serde_json::json!({
-                "name": source_port,
-                "dest_port": dest_port,
-                "dest_service_name": service_name,
-                "dest_notify_service_name": notify_service_name,
-                "schema": schema_ident_json(&output_schema),
-                "max_payload_bytes": max_payload,
-                "max_queued_messages": max_queued_messages,
-            }));
-            tracing::debug!(
-                "Stored output wiring on Deno processor '{}': port='{}', dest_port='{}', dest_service='{}', schema='{}'",
-                source_proc_id,
-                source_port,
-                dest_port,
-                service_name,
-                output_schema
-            );
-        } else if let Some(python_native_host) = source_guard
-            .as_any_mut()
-            .downcast_mut::<PythonNativeSubprocessHostProcessor>(
-        ) {
-            python_native_host
-                .output_port_wiring
-                .push(serde_json::json!({
-                    "name": source_port,
-                    "dest_port": dest_port,
-                    "dest_service_name": service_name,
-                    "dest_notify_service_name": notify_service_name,
-                    "schema": schema_ident_json(&output_schema),
-                    "max_payload_bytes": max_payload,
-                    "max_queued_messages": max_queued_messages,
-                }));
-            tracing::debug!(
-                "Stored output wiring on Python native processor '{}': port='{}', dest_port='{}', dest_service='{}', schema='{}'",
-                source_proc_id,
-                source_port,
-                dest_port,
-                service_name,
-                output_schema
-            );
-        }
+    if !input_inner.has_listener() {
+        let listener = notify_service.create_listener()?;
+        input_inner.set_listener(listener);
+        tracing::debug!("Created listener for destination on its notify service");
     }
-
-    // Configure destination InputMailboxesInner with port (Rust
-    // side; issue #894 — host operates on the inner Arc directly).
-    {
-        let dest_guard = dest_processor.lock();
-        if let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() {
-            if !input_inner.has_port(dest_port) {
-                input_inner.add_port(dest_port, 1, Default::default());
-            }
-
-            // Plumb the schema's `metadata.max_payload_bytes` to the
-            // destination port so the cdylib's v2
-            // `max_payload_for_port` vtable slot honors the same
-            // bound the publisher uses. See the same call in the
-            // local-source branch above for full rationale.
-            input_inner.set_port_max_payload_bytes(dest_port, max_payload);
-
-            // Record the consumer port's expected schema tag for the
-            // host-side per-frame read-side check (#1430).
-            input_inner
-                .set_port_expected_schema_ident(dest_port, schema_ident_wire_for_spec(&dest_schema));
-
-            if !input_inner.has_subscriber() {
-                let subscriber = service.create_subscriber()?;
-                input_inner.set_subscriber(subscriber);
-                tracing::debug!(
-                    "Created iceoryx2 Subscriber for '{}' on service '{}' (source is subprocess)",
-                    dest_proc_id,
-                    service_name
-                );
-            }
-            if !input_inner.has_listener() {
-                let listener = notify_service.create_listener()?;
-                input_inner.set_listener(listener);
-                tracing::debug!(
-                    "Created iceoryx2 Listener for '{}' on notify service '{}' (source is subprocess)",
-                    dest_proc_id,
-                    notify_service_name
-                );
-            }
-        }
-    }
-
-    // Set link state to Wired
-    let link = graph
-        .traversal_mut()
-        .e(link_id)
-        .first_mut()
-        .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
-    link.insert(LinkStateComponent(LinkState::Wired));
-
-    tracing::info!(
-        "Opened iceoryx2 service: {} [{}] (subprocess-to-rust, state: Wired)",
-        service_name,
-        link_id
-    );
     Ok(())
 }
 
-/// Source is Rust, dest is subprocess - only configure source side (publisher + OutputWriter).
+/// Record this link's source-side wiring on a subprocess host processor so the
+/// subprocess opens its own channel publisher + destination notifier from the
+/// envelope. One entry per link — the subprocess installs the single publisher
+/// once (keyed by source port) and appends a notifier per entry.
 #[allow(clippy::too_many_arguments)]
-fn open_iceoryx2_rust_to_subprocess(
+fn wire_subprocess_source(
     graph: &mut Graph,
-    source_processor: &Arc<Mutex<ProcessorInstance>>,
     source_proc_id: &ProcessorUniqueId,
-    dest_proc_id: &ProcessorUniqueId,
     source_port: &str,
-    dest_port: &str,
-    link_id: &LinkUniqueId,
-    runtime_ctx: &Arc<RuntimeContext>,
+    channel_service_name: &str,
+    notify_service_name: &str,
+    output_schema: &PortSchemaSpec,
+    max_payload: usize,
+    max_queued_messages: usize,
+    max_subscribers: usize,
+    notify_max_notifiers: usize,
 ) -> Result<()> {
-    let service_name = format!("streamlib/{}", dest_proc_id);
-    let notify_service_name = notify_service_name_for(dest_proc_id);
+    let entry = serde_json::json!({
+        "name": source_port,
+        "channel_service_name": channel_service_name,
+        "dest_notify_service_name": notify_service_name,
+        "schema": schema_ident_json(output_schema),
+        "max_payload_bytes": max_payload,
+        "max_queued_messages": max_queued_messages,
+        "max_subscribers": max_subscribers,
+        "notify_max_notifiers": notify_max_notifiers,
+    });
 
-    tracing::debug!(
-        "Opening iceoryx2 service '{}' for rust({}) -> subprocess({}) connection",
-        service_name,
-        source_proc_id,
-        dest_proc_id
-    );
-
-    // Look up schema before creating the publisher to size the slot correctly.
-    let output_schema = resolve_output_schema(graph, source_proc_id, source_port);
-
-    let iceoryx2_node = runtime_ctx.iceoryx2_node();
-    let max_payload = max_payload_bytes_for_port_spec(&output_schema)?;
-    let max_queued_messages = max_queued_messages_for_dest(graph, dest_proc_id)?;
-    let enable_safe_overflow = resolve_enable_safe_overflow(graph, dest_proc_id, dest_port)?;
-    let service = iceoryx2_node.open_or_create_service(
-        &service_name,
-        max_queued_messages,
-        enable_safe_overflow,
-    )?;
-    let notify_service = iceoryx2_node.open_or_create_notify_service(&notify_service_name)?;
-
-    // Create Publisher sized for this schema's declared max payload.
-    let publisher = service.create_publisher(max_payload)?;
-    let notifier = notify_service.create_notifier()?;
-
-    // Configure source OutputWriterInner with port mapping,
-    // publisher, and notifier (issue #894 — host operates on the
-    // inner Arc directly).
+    let source_proc_arc = get_single_processor(graph, source_proc_id)?;
+    let mut source_guard = source_proc_arc.lock();
+    if let Some(deno_host) = source_guard
+        .as_any_mut()
+        .downcast_mut::<DenoSubprocessHostProcessor>()
     {
-        let source_guard = source_processor.lock();
-        if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
-            output_inner.add_connection(
-                source_port,
-                schema_ident_wire_for_spec(&output_schema),
-                dest_port,
-                publisher,
-                notifier,
-            );
-            tracing::debug!(
-                "Configured OutputWriter port '{}' -> '{}' with Publisher+Notifier (dest is subprocess)",
-                source_port,
-                dest_port
-            );
-        }
-    }
-
-    // Dest is subprocess - it creates its own subscriber+listener. No Rust-side dest wiring.
-    // Store input wiring info on the subprocess processor so it can subscribe via FFI.
+        deno_host.output_port_wiring.push(entry);
+    } else if let Some(python_native_host) = source_guard
+        .as_any_mut()
+        .downcast_mut::<PythonNativeSubprocessHostProcessor>()
     {
-        let dest_proc_arc = get_single_processor(graph, dest_proc_id)?;
-        let mut dest_guard = dest_proc_arc.lock();
-        if let Some(deno_host) = dest_guard
-            .as_any_mut()
-            .downcast_mut::<DenoSubprocessHostProcessor>()
-        {
-            deno_host.input_port_wiring.push(serde_json::json!({
-                "name": dest_port,
-                "service_name": service_name,
-                "notify_service_name": notify_service_name,
-                "read_mode": "skip_to_latest",
-                "max_payload_bytes": max_payload,
-                "max_queued_messages": max_queued_messages,
-            }));
-            tracing::debug!(
-                "Stored input wiring on Deno processor '{}': port='{}', service='{}'",
-                dest_proc_id,
-                dest_port,
-                service_name
-            );
-        } else if let Some(python_native_host) = dest_guard
-            .as_any_mut()
-            .downcast_mut::<PythonNativeSubprocessHostProcessor>(
-        ) {
-            python_native_host
-                .input_port_wiring
-                .push(serde_json::json!({
-                    "name": dest_port,
-                    "service_name": service_name,
-                    "notify_service_name": notify_service_name,
-                    "read_mode": "skip_to_latest",
-                    "max_payload_bytes": max_payload,
-                    "max_queued_messages": max_queued_messages,
-                }));
-            tracing::debug!(
-                "Stored input wiring on Python native processor '{}': port='{}', service='{}'",
-                dest_proc_id,
-                dest_port,
-                service_name
-            );
-        }
+        python_native_host.output_port_wiring.push(entry);
     }
+    Ok(())
+}
 
-    // Set link state to Wired
-    let link = graph
-        .traversal_mut()
-        .e(link_id)
-        .first_mut()
-        .ok_or_else(|| Error::LinkNotFound(link_id.to_string()))?;
-    link.insert(LinkStateComponent(LinkState::Wired));
+/// Record this link's dest-side wiring on a subprocess host processor so the
+/// subprocess opens its own channel subscriber (bound to its local input port)
+/// from the envelope.
+#[allow(clippy::too_many_arguments)]
+fn wire_subprocess_dest(
+    graph: &mut Graph,
+    dest_proc_id: &ProcessorUniqueId,
+    dest_port: &str,
+    channel_service_name: &str,
+    notify_service_name: &str,
+    max_payload: usize,
+    max_queued_messages: usize,
+    max_subscribers: usize,
+    notify_max_notifiers: usize,
+) -> Result<()> {
+    let entry = serde_json::json!({
+        "name": dest_port,
+        "channel_service_name": channel_service_name,
+        "notify_service_name": notify_service_name,
+        "read_mode": "skip_to_latest",
+        "max_payload_bytes": max_payload,
+        "max_queued_messages": max_queued_messages,
+        "max_subscribers": max_subscribers,
+        "notify_max_notifiers": notify_max_notifiers,
+    });
 
-    tracing::info!(
-        "Opened iceoryx2 service: {} [{}] (rust-to-subprocess, state: Wired)",
-        service_name,
-        link_id
-    );
+    let dest_proc_arc = get_single_processor(graph, dest_proc_id)?;
+    let mut dest_guard = dest_proc_arc.lock();
+    if let Some(deno_host) = dest_guard
+        .as_any_mut()
+        .downcast_mut::<DenoSubprocessHostProcessor>()
+    {
+        deno_host.input_port_wiring.push(entry);
+    } else if let Some(python_native_host) = dest_guard
+        .as_any_mut()
+        .downcast_mut::<PythonNativeSubprocessHostProcessor>()
+    {
+        python_native_host.input_port_wiring.push(entry);
+    }
     Ok(())
 }
 
@@ -965,12 +623,7 @@ mod tests {
     use crate::core::processors::ProcessorSpec;
 
     /// Look up a registered mock processor's structured ident by its
-    /// PascalCase short name. The mock processors live in
-    /// [`crate::core::test_support`] and are registered explicitly via
-    /// `ensure_test_mocks_registered()`; their full ident is composed
-    /// from the engine `streamlib.yaml`'s `package:` block, so reading
-    /// the version off the registry rather than hardcoding it keeps
-    /// these tests robust to package-version bumps.
+    /// PascalCase short name.
     fn lookup_registered_ident(short: &str) -> SchemaIdent {
         crate::core::test_support::ensure_test_mocks_registered();
         PROCESSOR_REGISTRY
@@ -1012,74 +665,55 @@ mod tests {
             .to_string()
     }
 
+    /// The channel service name a link's source output port publishes to is
+    /// source-centric (`{source}/{port}`), NOT destination-centric. This is the
+    /// transport inversion (#1419): channel identity keys on the source only.
+    /// Mentally revert to `streamlib/{dest}` and this fails — the derived name is
+    /// a pure function of the source processor id + output port.
     #[test]
-    fn rejects_destination_with_overcap_fanin() {
-        let mut graph = Graph::new();
-        let dest_id = add_mock_input_only(&mut graph);
+    fn channel_service_name_is_source_port_shaped() {
+        let name = channel_service_name(&"Pabc123".into(), "video_out")
+            .expect("legal source port derives a channel name");
+        assert_eq!(name, "pabc123/video_out");
+    }
 
-        // Wire MAX_FANIN_PER_DESTINATION + 1 distinct upstream sources into the
-        // same destination port. petgraph permits parallel edges, so all share
-        // the destination's `in1`.
-        for _ in 0..=MAX_FANIN_PER_DESTINATION {
-            let src_id = add_mock_output_only(&mut graph);
+    /// A source output port feeding N destinations opens ONE channel sized for
+    /// `N + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL` subscribers — the 1→N
+    /// fan-out subscriber count. Mentally revert the outbound-edge count to a
+    /// fixed `1` (the pre-inversion single-subscriber destination service) and
+    /// this returns the wrong count; drop the reserved tap term and the tap slot
+    /// disappears.
+    #[test]
+    fn channel_max_subscribers_counts_destinations_plus_tap() {
+        let mut graph = Graph::new();
+        let src_id = add_mock_output_only(&mut graph);
+
+        // Three distinct destinations subscribe to the SAME source output port.
+        for _ in 0..3 {
+            let dest_id = add_mock_input_only(&mut graph);
             graph.traversal_mut().add_e(
                 OutputLinkPortRef::new(&src_id, "out1"),
                 InputLinkPortRef::new(&dest_id, "in1"),
             );
         }
 
-        let dest_uid: ProcessorUniqueId = dest_id.as_str().into();
-        let err = reject_overcap_destination_fanin(&mut graph, &dest_uid)
-            .expect_err("fan-in cap+1 must be rejected");
-
-        let msg = err.to_string();
-        assert!(
-            msg.contains(dest_id.as_str()),
-            "error must name the destination ('{dest_id}'); got: {msg}"
-        );
-        assert!(
-            msg.contains(&MAX_FANIN_PER_DESTINATION.to_string()),
-            "error must name the cap ('{MAX_FANIN_PER_DESTINATION}'); got: {msg}"
+        let src_uid: ProcessorUniqueId = src_id.as_str().into();
+        let subs = channel_max_subscribers(&mut graph, &src_uid, "out1");
+        assert_eq!(
+            subs,
+            3 + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
+            "one source port feeding 3 destinations must size the channel for 3 \
+             subscribers plus the reserved tap slot",
         );
     }
 
+    /// The destination fan-in (inbound link count) sizes the destination-keyed
+    /// notify service's `max_notifiers` — the N→1 fan-in half. Three sources fan
+    /// into one destination; the notify service must accept three notifiers.
     #[test]
-    fn accepts_destination_at_fanin_cap() {
+    fn destination_fanin_counts_inbound_links() {
         let mut graph = Graph::new();
         let dest_id = add_mock_input_only(&mut graph);
-
-        for _ in 0..MAX_FANIN_PER_DESTINATION {
-            let src_id = add_mock_output_only(&mut graph);
-            graph.traversal_mut().add_e(
-                OutputLinkPortRef::new(&src_id, "out1"),
-                InputLinkPortRef::new(&dest_id, "in1"),
-            );
-        }
-
-        let dest_uid: ProcessorUniqueId = dest_id.as_str().into();
-        reject_overcap_destination_fanin(&mut graph, &dest_uid)
-            .expect("fan-in == cap must succeed");
-    }
-
-    /// `max_queued_messages_for_dest` walks ALL of a destination's inbound
-    /// links (not just the link currently being wired) and returns the
-    /// deepest declared depth, so the shared per-destination service is
-    /// sized to satisfy every inbound link regardless of wiring order. The
-    /// engine's schema-free mocks declare `out1: any`, so every inbound link
-    /// resolves to the default depth — this locks the multi-edge
-    /// enumeration, the re-traversal borrow-collect, and the
-    /// resolve-to-default contract (a regression to 0, a panic on the
-    /// re-traversal borrow, or skipping edges all fail here). The
-    /// mismatched-depth discrimination — where `.max()` and `.min()`
-    /// actually differ — is locked by the sibling
-    /// [`max_queued_messages_for_dest_sizes_to_deepest_inbound_link`], which
-    /// fans two distinct declared depths into one destination.
-    #[test]
-    fn max_queued_messages_for_dest_spans_all_inbound_links() {
-        let mut graph = Graph::new();
-        let dest_id = add_mock_input_only(&mut graph);
-
-        // Three distinct upstream sources fan into the same destination port.
         for _ in 0..3 {
             let src_id = add_mock_output_only(&mut graph);
             graph.traversal_mut().add_e(
@@ -1087,36 +721,15 @@ mod tests {
                 InputLinkPortRef::new(&dest_id, "in1"),
             );
         }
-
         let dest_uid: ProcessorUniqueId = dest_id.as_str().into();
-        let depth = max_queued_messages_for_dest(&mut graph, &dest_uid)
-            .expect("sizing the shared service across inbound links must succeed");
-        assert_eq!(
-            depth,
-            crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES,
-            "schema-free `any` mock sources resolve to the default depth; the \
-             helper must return it across all inbound links, never 0 or a panic",
-        );
+        assert_eq!(destination_fanin(&mut graph, &dest_uid), 3);
     }
 
-    /// Wire-time integration lock: when a processor's registered output
-    /// port carries a `PortSchemaSpec::Specific(ident)` whose canonical
-    /// id is NOT in the runtime schema registry (the "forgot to call
-    /// `runtime.add_module(...)`" footgun), the helper chain
-    /// `port_info → data_type → max_payload_bytes_for_port_spec`
-    /// surfaces a typed configuration error pointing at `add_module`
-    /// rather than silently falling back to the iceoryx2 default and
-    /// deferring the failure to first publish.
-    ///
-    /// Locks the registry-miss-vs-add-module boundary at the same
-    /// shape `open_iceoryx2_pubsub` exercises: descriptor declares port
-    /// schema → `PROCESSOR_REGISTRY.port_info(...)` reads it → the
-    /// resolver gates allocation on registry membership. The compiler-
-    /// enforced `?` operator at every helper call site in this module
-    /// guarantees the error propagates out of `open_iceoryx2_service`,
-    /// out of `compile_phase`, out of `Runner::start()`. Reverting the
-    /// helper signature back to infallible `usize` would fail compilation
-    /// of every call site immediately.
+    /// Wire-time integration lock: a registered output port carrying a
+    /// `PortSchemaSpec::Specific(ident)` whose canonical id is NOT in the runtime
+    /// schema registry (the "forgot to call `runtime.add_module(...)`" footgun)
+    /// surfaces a typed configuration error pointing at `add_module` rather than
+    /// silently deferring the failure to first publish.
     #[test]
     fn unregistered_specific_port_schema_surfaces_typed_error_at_wire_time() {
         use crate::core::descriptors::{
@@ -1127,17 +740,12 @@ mod tests {
         use streamlib_idents::{Org, Package, SemVer, TypeName};
         use streamlib_processor_schema::PortSchemaSpec;
 
-        // Mint a processor identity (the carrying processor) that's
-        // unique to this test so the registry can hold it across runs.
         let processor_ident = SchemaIdent::new(
             Org::new("tatolab").unwrap(),
             Package::new("test-wire-time-registry-miss").unwrap(),
             TypeName::new("CarryingProcessor").unwrap(),
             SemVer::new(1, 0, 0),
         );
-        // Mint a wire schema identity whose package was NEVER loaded
-        // via `runtime.add_module(...)`. The processor declares an
-        // output port carrying this schema.
         let unloaded_schema_ident = SchemaIdent::new(
             Org::new("tatolab").unwrap(),
             Package::new("test-wire-time-unloaded-schema-pkg").unwrap(),
@@ -1167,9 +775,6 @@ mod tests {
             .register_descriptor_only(descriptor)
             .expect("register_descriptor_only must accept a fresh ident");
 
-        // Drive the exact lookup chain the open_iceoryx2_pubsub /
-        // open_iceoryx2_rust_to_subprocess / open_iceoryx2_subprocess_to_*
-        // helpers run when wiring a service.
         let (_, outputs) = PROCESSOR_REGISTRY
             .port_info(&processor_ident)
             .expect("port_info must return the descriptor's ports");
@@ -1193,129 +798,6 @@ mod tests {
         assert!(
             matches!(err, crate::core::error::Error::Configuration(_)),
             "registry miss at wire time must surface as Error::Configuration; got: {err:?}"
-        );
-    }
-
-    /// The load-bearing half of the iceoryx2 sizing fix: when a destination
-    /// has inbound links of DIFFERENT declared depths, the shared
-    /// per-destination service is sized to the DEEPEST one. Two sources fan
-    /// into one destination at depths 4 and 64 (both ≠ the engine default of
-    /// 16); the helper must return 64.
-    ///
-    /// This locks the order-dependent `DoesNotSupportRequestedMinBufferSize`
-    /// crash directly: iceoryx2 rejects opening an existing service with a
-    /// LARGER subscriber buffer than it was created with, so creating the
-    /// shared service from the shallow link (4) then reopening it for the
-    /// deep link (64) fails. Sizing to the max up front avoids it.
-    ///
-    /// Mentally revert `.max()` → `.min()` (or "use only one link's depth")
-    /// and this returns 4, failing. The schema-free `any` sibling test
-    /// cannot catch that — every `any` source resolves to the same default,
-    /// so min and max coincide. This test deliberately gives the two inbound
-    /// links DIFFERENT depths so only `.max()` produces 64.
-    #[test]
-    fn max_queued_messages_for_dest_sizes_to_deepest_inbound_link() {
-        use crate::core::descriptors::{
-            CodeExamples, PortDescriptor, ProcessorDescriptor, ProcessorRuntime,
-            ProcessorScheduling,
-        };
-        use crate::core::embedded_schemas::register_schema;
-        use streamlib_idents::{Org, Package, SemVer, TypeName};
-        use streamlib_processor_schema::PortSchemaSpec;
-
-        // Two wire schemas with distinct, non-default ring depths.
-        register_schema(
-            "@test/qdepth-shallow/ShallowFrame",
-            "metadata:\n  type: ShallowFrame\n  max_queued_messages: 4\n",
-        );
-        register_schema(
-            "@test/qdepth-deep/DeepFrame",
-            "metadata:\n  type: DeepFrame\n  max_queued_messages: 64\n",
-        );
-        let shallow_schema = PortSchemaSpec::Specific(SchemaIdent::new(
-            Org::new("test").unwrap(),
-            Package::new("qdepth-shallow").unwrap(),
-            TypeName::new("ShallowFrame").unwrap(),
-            SemVer::new(1, 0, 0),
-        ));
-        let deep_schema = PortSchemaSpec::Specific(SchemaIdent::new(
-            Org::new("test").unwrap(),
-            Package::new("qdepth-deep").unwrap(),
-            TypeName::new("DeepFrame").unwrap(),
-            SemVer::new(1, 0, 0),
-        ));
-
-        // Register an output-only source whose `out` port carries `carries`,
-        // then return its processor ident. A closure (not a nested `fn`) so
-        // the test's `use` imports are in scope.
-        let register_source =
-            |type_name: &str, pkg: &str, carries: PortSchemaSpec| -> SchemaIdent {
-                let ident = SchemaIdent::new(
-                    Org::new("tatolab").unwrap(),
-                    Package::new(pkg).unwrap(),
-                    TypeName::new(type_name).unwrap(),
-                    SemVer::new(1, 0, 0),
-                );
-                let descriptor = ProcessorDescriptor {
-                    name: ident.clone(),
-                    description: "qdepth source mock".into(),
-                    version: "1.0.0".into(),
-                    repository: String::new(),
-                    runtime: ProcessorRuntime::Rust,
-                    entrypoint: None,
-                    config_schema: None,
-                    scheduling: ProcessorScheduling::default(),
-                    inputs: Vec::new(),
-                    outputs: vec![PortDescriptor::iceoryx2(
-                        "out",
-                        "carries a depth-tagged frame",
-                        carries,
-                    )],
-                    examples: CodeExamples::default(),
-                };
-                PROCESSOR_REGISTRY
-                    .register_descriptor_only(descriptor)
-                    .expect("register_descriptor_only accepts a fresh ident");
-                ident
-            };
-
-        let shallow_src = register_source(
-            "QDepthShallowSource",
-            "test-qdepth-shallow-src",
-            shallow_schema,
-        );
-        let deep_src = register_source("QDepthDeepSource", "test-qdepth-deep-src", deep_schema);
-
-        let mut graph = Graph::new();
-        let dest_id = add_mock_input_only(&mut graph);
-
-        // Wire the SHALLOW source first, the DEEP source second: a naive
-        // "first inbound link" regression would pick 4, "last" would pick 64,
-        // and only the correct `.max()` over all inbound links is robust to
-        // ordering while returning 64.
-        for ident in [&shallow_src, &deep_src] {
-            let src_id = graph
-                .traversal_mut()
-                .add_v(ProcessorSpec::new(ident.clone(), serde_json::Value::Null))
-                .first()
-                .expect("descriptor-only source registers as a graph vertex")
-                .id
-                .to_string();
-            graph.traversal_mut().add_e(
-                OutputLinkPortRef::new(&src_id, "out"),
-                InputLinkPortRef::new(&dest_id, "in1"),
-            );
-        }
-
-        let dest_uid: ProcessorUniqueId = dest_id.as_str().into();
-        let depth = max_queued_messages_for_dest(&mut graph, &dest_uid)
-            .expect("sizing across mismatched-depth inbound links must succeed");
-        assert_eq!(
-            depth, 64,
-            "shared per-destination service must size to the DEEPEST inbound link \
-             (deep=64, shallow=4, default=16); got {depth}. Reverting `.max()` to \
-             `.min()` yields 4 — the order-dependent \
-             DoesNotSupportRequestedMinBufferSize regression this locks.",
         );
     }
 }
