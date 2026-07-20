@@ -939,7 +939,7 @@ pub unsafe extern "C" fn slpn_output_write(
                 channel = %state.channel_service_name,
                 payload_bytes = total_len,
                 ceiling_bytes = state.channel_ceiling_bytes,
-                tier = "untrusted-session",
+                tier = streamlib_ipc_types::ChannelTrustTier::UntrustedSession.as_str(),
                 refused_count,
                 "[slpn:{}] output channel refused a payload above its per-channel ceiling",
                 ctx.processor_id,
@@ -952,7 +952,7 @@ pub unsafe extern "C" fn slpn_output_write(
                     channel = %state.channel_service_name,
                     old_segment_bytes = growth.old_segment_bytes,
                     new_segment_bytes = growth.new_segment_bytes,
-                    tier = "untrusted-session",
+                    tier = streamlib_ipc_types::ChannelTrustTier::UntrustedSession.as_str(),
                     "[slpn:{}] iceoryx2 publisher data segment grew (PowerOfTwo)",
                     ctx.processor_id,
                 );
@@ -961,7 +961,7 @@ pub unsafe extern "C" fn slpn_output_write(
                         channel = %state.channel_service_name,
                         segment_bytes = growth.new_segment_bytes,
                         ceiling_bytes = state.channel_ceiling_bytes,
-                        tier = "untrusted-session",
+                        tier = streamlib_ipc_types::ChannelTrustTier::UntrustedSession.as_str(),
                         "[slpn:{}] iceoryx2 publisher segment crossed a quarter of the channel ceiling",
                         ctx.processor_id,
                     );
