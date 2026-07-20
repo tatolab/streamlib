@@ -1,11 +1,11 @@
 ---
 name: verify-live
-description: The live end-to-end verification handshake for changes that touch GPU / camera / display / codec. Use when a change needs a real pipeline run (a sandboxed session can't — the rig-brake blocks it), when the owner asks to verify a change on the rig, or when a PR claims E2E evidence that needs auditing. Two modes — emit the exact command block for the owner's terminal, then audit the output (log gates, PNG content, PSNR).
+description: The live end-to-end verification for changes that touch GPU / camera / display / codec. Use when a change needs a real pipeline run (a plain Bash call can't — the rig-brake blocks it), when the owner asks to verify a change on the rig, or when a PR claims E2E evidence that needs auditing. Primary LOOP-RUN mode — the loop runs the pipeline itself via the dangerouslyDisableSandbox bypass, captures the window, and audits it (log gates, PNG content, PSNR); falls back to the owner-terminal command-block handshake only when the rig is unavailable.
 ---
 
 # verify-live — real-pipeline verification
 
-Unit tests come first and catch most bugs. This skill is for the cases they can't reach: GPU/driver, V4L2, swapchain — where a run is the only proof. A sandboxed session cannot run the pipeline (exit 144; the `rig-brake` hook blocks rig-consuming commands), so verification is a **handshake**: emit the command for the owner's terminal, then audit what it produced. The `evidence-verifier` agent executes both phases; this skill is the reference it and any reviewer share.
+Unit tests come first and catch most bugs. This skill is for the cases they can't reach: GPU/driver, V4L2, swapchain — where a run is the only proof. A plain `Bash` call cannot run the pipeline (exit 144; the `rig-brake` hook blocks rig-consuming commands), but the Bash `dangerouslyDisableSandbox` bypass unlocks the rig — so when the rig is present the loop runs the pipeline **itself** (LOOP-RUN mode, primary) rather than handing it to the owner. Only when the loop can't run it (rig unavailable, bypass denied) does it fall back to the **handshake**: emit the command for the owner's terminal, then audit what it produced. The `evidence-verifier` agent executes both; this skill is the reference it and any reviewer share.
 
 ## Device indices are never hardcoded
 Read `docs/rig-profile.local.md` for this machine's video-node / GPU topology, then confirm with a probe (`v4l2-ctl --list-devices`, `--get-fmt-video`). A runtime probe always beats the file. Every `/dev/videoN` in a command block is resolved this way — the indices below are placeholders.
@@ -38,11 +38,13 @@ Three fixture rigs guard the color path; each has bug-injection modes that must 
 
 **PSNR pass bar:** Y ≥ 35 dB good · 30–35 dB acceptable, flag it · < 30 dB regression (investigate color matrix / range / plane layout).
 
-## Two modes
-- **Interactive** — print the command block for the owner's terminal now; they run it; you audit the output directory in the same session.
-- **Async** — the owner comments "done, output in `<dir>`" on the issue; the next `milestone-loop` turn spawns `evidence-verifier` to audit `<dir>`.
+## Modes
+- **LOOP-RUN (primary — rig available).** The loop runs the pipeline itself, no owner in the path. Build in the sandbox as usual, then run the built binary under the Bash `dangerouslyDisableSandbox` bypass (the sandbox blocks the rig; the bypass is what unlocks GPU/V4L2/X11). Recipe that works on this rig: run with `DISPLAY=:1` and `STREAMLIB_CAMERA_DEVICE=/dev/video0` for the vivid virtual camera (the default `None` grabs the Cam Link 4K on `/dev/video4`); set the PNG-sampler env vars below (always `STREAMLIB_DISPLAY_FRAME_LIMIT` so the window self-terminates); capture the window with `xdotool search --name <window> | import -window <id> <png>`; then Read the PNG and describe it / compute PSNR, and audit per the checklist below. Attach the PNG(s) to R2 and embed them in the PR (see the `attach-artifact` skill). Gate on `capabilities.live_verify == available` (milestone-loop step 1 preflight); read-only observation evals auto-run, but a real-world SAFETY gate (actuators, motors, drone control) still asks the owner first.
+- **Handshake fallback (rig unavailable / bypass denied).** Print the command block for the owner's terminal, then audit what it produced. Two sub-modes:
+  - *Interactive* — print the command block now; the owner runs it; you audit the output directory in the same session.
+  - *Async* — the owner comments "done, output in `<dir>`" on the issue; the next `milestone-loop` turn spawns `evidence-verifier` to audit `<dir>`.
 
-## Auditing the output (both modes)
+## Auditing the output (all modes)
 1. **Log gates — all zero.** Grep the pipeline log for `OUT_OF_DEVICE_MEMORY`, `DEVICE_LOST`, `process() failed`, `Validation Error`. Any nonzero fails (a `Validation Error` is acceptable only if it also exists on `main` for the same scenario — say so if you claim it).
 2. **Progress markers** — first-frame-encoded/-decoded/-captured and ≥1 progress line fired.
 3. **Read every sampled PNG with the Read tool and describe what it shows.** "Looks fine" is banned. A black/uniform frame with clean logs **IS a regression**.

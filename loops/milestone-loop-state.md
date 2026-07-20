@@ -1,6 +1,12 @@
 ---
 paused: false
 owner_login: tato123
+capabilities:
+  live_verify: available   # available | unavailable | unknown — set by the preflight probe; owner may hand-override
+  camera: true
+  gpu: true
+  display: true
+  probed_utcdate: 2026-07-21
 ---
 
 # milestone-loop state
@@ -11,6 +17,15 @@ GitHub login — operator-set here, never derived from `gh repo view` (which ret
 the identity the parked-question detection in the milestone-loop skill (step 2) keys off. The
 reconciler rewrites the sections below each pass; they reflect the loop's current picture of the
 focused milestone, plus the caches (comment-id ledger, delta-probe fields) the next pass reads.
+
+`capabilities:` is the rig picture the loop's verify step reads. It is BOTH auto-probed AND a
+hand-settable owner override — the "checklist". The milestone-loop preflight (skill step 1) sets
+`live_verify`, `camera`, `gpu`, and `display` from a read-only device probe plus a one-time bypass
+smoke, and stamps `probed_utcdate`; a hand-set value wins over the probe (the owner may force-enable
+or force-disable a capability per milestone, and the loop must not clobber a hand-set value on a
+same-day pass). `live_verify: available` means the loop runs `/verify-live` itself via the Bash
+`dangerouslyDisableSandbox` bypass for every rig-touching ticket; `unavailable` means it parks the
+live check for the human instead. `unknown` forces a re-probe next pass.
 
 ## Acting on
 Tickets the loop is actively working this pass — in-flight attempts, open PRs, worktrees alive.
