@@ -43,7 +43,8 @@ const symbols = {
 
   // Input
   sldn_input_subscribe: {
-    parameters: ["pointer", "buffer", "usize"] as const,
+    // ctx, channel_service_name, local_port, max_queued_messages, max_subscribers
+    parameters: ["pointer", "buffer", "buffer", "usize", "usize"] as const,
     result: "i32" as const,
   },
   sldn_input_poll: {
@@ -64,9 +65,8 @@ const symbols = {
   sldn_output_publish: {
     parameters: [
       "pointer", // ctx
-      "buffer", // service_name
-      "buffer", // port_name
-      "buffer", // dest_port
+      "buffer", // channel_service_name (source-keyed channel)
+      "buffer", // port_name (source output port)
       "buffer", // schema_org
       "buffer", // schema_package
       "buffer", // schema_type
@@ -75,7 +75,9 @@ const symbols = {
       "u32", // schema_version_patch
       "usize", // max_payload_bytes
       "usize", // max_queued_messages
+      "usize", // max_subscribers (channel fan-out + reserved tap)
       "buffer", // notify_service_name
+      "usize", // notify_max_notifiers (destination fan-in)
     ] as const,
     result: "i32" as const,
   },
@@ -87,7 +89,8 @@ const symbols = {
   // Event service (fd-multiplexed wakeups). sldn_event_wait is nonblocking
   // so the JS event loop can stay responsive while we wait in a worker thread.
   sldn_event_subscribe: {
-    parameters: ["pointer", "buffer"] as const,
+    // ctx, notify_service_name, notify_max_notifiers (destination fan-in)
+    parameters: ["pointer", "buffer", "usize"] as const,
     result: "i32" as const,
   },
   sldn_event_wait: {

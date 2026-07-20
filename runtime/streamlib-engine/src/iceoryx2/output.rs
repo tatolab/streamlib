@@ -24,9 +24,11 @@
 //!   inner.
 //!
 //! Host-side code that needs to mutate the inner (e.g. compiler ops
-//! adding downstream connections at wiring time) operates on
-//! `Arc<OutputWriterInner>` directly via
-//! [`OutputWriterInner::add_connection`] — no PluginAbiObject, no plugin ABI hop.
+//! installing a channel publisher + destination notifiers at wiring
+//! time) operates on `Arc<OutputWriterInner>` directly via
+//! [`OutputWriterInner::set_channel_publisher`] and
+//! [`OutputWriterInner::add_channel_notifier`] — no PluginAbiObject, no
+//! plugin ABI hop.
 //! The cdylib's per-frame `write` calls cross extern "C" exactly
 //! once per emit (sub-microsecond on amd64; see the PR microbench
 //! for issue #894).
@@ -46,28 +48,33 @@ use super::{FRAME_HEADER_SIZE, FrameHeader, SchemaIdentWire};
 use crate::core::error::{Error, Result};
 use crate::core::media_clock::MediaClock;
 
-/// One downstream connection: structured schema identifier, destination
-/// port, publisher, and a notifier into the destination's paired iceoryx2
-/// Event service that wakes the downstream processor's listener-fd-
-/// multiplexed runner loop.
-struct DownstreamConnection {
+/// One source output port's channel egress: the single channel publisher
+/// (a channel carries exactly one publisher — see
+/// [`streamlib_ipc_types::MAX_PUBLISHERS_PER_CHANNEL`]), the structured schema
+/// tag it stamps into every [`FrameHeader`], and one notifier per destination.
+///
+/// The transport inversion (#1419): one source output port maps to one channel,
+/// so a single zero-copy loan reaches every subscriber. The per-destination
+/// notifiers stay separate because each destination keeps its own listener-fd
+/// (the notify service is destination-keyed for fd-multiplexed wakeups); the
+/// data itself is published ONCE.
+struct ChannelEgress {
     schema_ident: SchemaIdentWire,
-    dest_port: String,
     publisher: Publisher<ipc::Service, [u8], ()>,
-    notifier: Notifier<ipc::Service>,
+    notifiers: Vec<Notifier<ipc::Service>>,
 }
 
-/// Host-side inner state for an output writer. Owns the
-/// per-port-name `HashMap` and the iceoryx2 publishers and
-/// notifiers; all per-frame publish + notify work runs here.
+/// Host-side inner state for an output writer. Owns the per-output-port
+/// channel publisher and its destination notifiers; all per-frame publish +
+/// notify work runs here.
 ///
 /// Never crosses the plugin ABI. Held by the host via
 /// `Arc<OutputWriterInner>`; the cdylib's [`OutputWriter`] PluginAbiObject
 /// stores a separate `Arc::into_raw`-encoded strong reference to
 /// the same inner.
 pub struct OutputWriterInner {
-    /// Map from output port name to downstream connections.
-    connections: Mutex<HashMap<String, Vec<DownstreamConnection>>>,
+    /// Map from source output port name to its channel egress.
+    channels: Mutex<HashMap<String, ChannelEgress>>,
 }
 
 // OutputWriterInner is Send + Sync via Mutex.
@@ -75,91 +82,93 @@ unsafe impl Send for OutputWriterInner {}
 unsafe impl Sync for OutputWriterInner {}
 
 impl OutputWriterInner {
-    /// Create a new inner with no connections (populated during wiring).
+    /// Create a new inner with no channels (populated during wiring).
     pub fn new() -> Self {
         Self {
-            connections: Mutex::new(HashMap::new()),
+            channels: Mutex::new(HashMap::new()),
         }
     }
 
-    /// Add a downstream connection for the given output port.
+    /// Whether a channel publisher has already been installed for this output
+    /// port. The compiler op creates the single channel publisher on the FIRST
+    /// link out of a source port and only appends notifiers thereafter.
+    pub fn has_channel_publisher(&self, output_port: &str) -> bool {
+        self.has_port(output_port)
+    }
+
+    /// Install the single channel publisher for an output port.
     ///
-    /// Each call adds a new publisher+notifier+routing pair. Multiple
-    /// connections per output port enables fan-out (one source port →
-    /// multiple destinations).
-    ///
-    /// `schema_ident` is the structured wire identifier the publisher
-    /// will stamp into every [`FrameHeader`] for this connection. Callers
-    /// build it once at wiring time from the port's structured
-    /// `PortSchemaSpec` via [`SchemaIdentWire::from_segments`] — no
-    /// parser runs on the per-frame hot path.
-    pub fn add_connection(
+    /// `schema_ident` is the structured wire identifier stamped into every
+    /// [`FrameHeader`] this port publishes. Callers build it once at wiring time
+    /// from the port's structured `PortSchemaSpec` via
+    /// [`SchemaIdentWire::from_segments`] — no parser runs on the per-frame hot
+    /// path. Called once per output port (the first link out of it); a second
+    /// call replaces the publisher, which the wiring op avoids via
+    /// [`Self::has_channel_publisher`].
+    pub fn set_channel_publisher(
         &self,
         output_port: &str,
         schema_ident: SchemaIdentWire,
-        dest_port: &str,
         publisher: Publisher<ipc::Service, [u8], ()>,
-        notifier: Notifier<ipc::Service>,
     ) {
-        self.connections
-            .lock()
-            .entry(output_port.to_string())
-            .or_default()
-            .push(DownstreamConnection {
+        self.channels.lock().insert(
+            output_port.to_string(),
+            ChannelEgress {
                 schema_ident,
-                dest_port: dest_port.to_string(),
                 publisher,
-                notifier,
-            });
+                notifiers: Vec::new(),
+            },
+        );
+    }
+
+    /// Append a destination notifier to an output port's channel.
+    ///
+    /// One notifier per `connect()` link out of this port — each wakes a distinct
+    /// destination's listener fd. No-op (the notifier is dropped) if the channel
+    /// publisher has not been installed yet, which the wiring op never does.
+    pub fn add_channel_notifier(&self, output_port: &str, notifier: Notifier<ipc::Service>) {
+        if let Some(egress) = self.channels.lock().get_mut(output_port) {
+            egress.notifiers.push(notifier);
+        }
     }
 
     /// Write raw bytes to the specified output port without serialization.
     ///
     /// The data is assumed to be pre-serialized (e.g., msgpack from a
     /// subprocess bridge OR the PluginAbiObject's serialize-then-plugin-ABI path).
+    /// One zero-copy loan reaches every channel subscriber; the frame is built
+    /// and sent ONCE, then every destination notifier is signalled.
     pub fn write_raw(&self, port: &str, data: &[u8], timestamp_ns: i64) -> Result<()> {
-        let connections = self.connections.lock();
-        let port_connections = connections
+        let channels = self.channels.lock();
+        let egress = channels
             .get(port)
             .ok_or_else(|| Error::Link(format!("Unknown output port: {}", port)))?;
 
-        for conn in port_connections {
-            let total_len = FRAME_HEADER_SIZE + data.len();
-            let mut frame = vec![0u8; total_len];
-            FrameHeader::new(
-                &conn.dest_port,
-                conn.schema_ident,
-                timestamp_ns,
-                data.len() as u32,
-            )
-            .map_err(|e| {
-                Error::Link(format!(
-                    "output port '{}' → dest '{}': {}",
-                    port, conn.dest_port, e
-                ))
-            })?
+        let total_len = FRAME_HEADER_SIZE + data.len();
+        let mut frame = vec![0u8; total_len];
+        FrameHeader::new(port, egress.schema_ident, timestamp_ns, data.len() as u32)
+            .map_err(|e| Error::Link(format!("output port '{}': {}", port, e)))?
             .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
-            frame[FRAME_HEADER_SIZE..].copy_from_slice(data);
+        frame[FRAME_HEADER_SIZE..].copy_from_slice(data);
 
-            let sample = conn
-                .publisher
-                .loan_slice_uninit(total_len)
-                .map_err(|e| Error::Link(format!("Failed to loan slice: {:?}", e)))?;
+        let sample = egress
+            .publisher
+            .loan_slice_uninit(total_len)
+            .map_err(|e| Error::Link(format!("Failed to loan slice: {:?}", e)))?;
+        let sample = sample.write_from_slice(&frame);
+        sample
+            .send()
+            .map_err(|e| Error::Link(format!("Failed to send sample: {:?}", e)))?;
 
-            let sample = sample.write_from_slice(&frame);
-            sample
-                .send()
-                .map_err(|e| Error::Link(format!("Failed to send sample: {:?}", e)))?;
-
-            // Wake the downstream listener fd. notify() may transiently fail
-            // (e.g. listener not yet created) — log and continue rather than
-            // failing the publish; the data is already in shared memory and
-            // the next send() will wake the listener anyway.
-            if let Err(e) = conn.notifier.notify() {
+        // Wake every downstream listener fd. notify() may transiently fail
+        // (e.g. a listener not yet created) — log and continue rather than
+        // failing the publish; the data is already in shared memory and the
+        // next send() will wake the listener anyway.
+        for notifier in &egress.notifiers {
+            if let Err(e) = notifier.notify() {
                 tracing::trace!(
-                    "OutputWriter: notify() failed for port '{}' -> '{}': {:?}",
+                    "OutputWriter: notify() failed for port '{}': {:?}",
                     port,
-                    conn.dest_port,
                     e
                 );
             }
@@ -170,12 +179,12 @@ impl OutputWriterInner {
 
     /// Check if a port is configured.
     pub fn has_port(&self, port: &str) -> bool {
-        self.connections.lock().contains_key(port)
+        self.channels.lock().contains_key(port)
     }
 
     /// Get the list of configured output port names.
     pub fn port_names(&self) -> Vec<String> {
-        self.connections.lock().keys().cloned().collect()
+        self.channels.lock().keys().cloned().collect()
     }
 }
 
@@ -455,7 +464,8 @@ mod tests {
         let inner = Arc::new(OutputWriterInner::new());
         let schema_ident =
             SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
-        inner.add_connection("out", schema_ident, "in", publisher, notifier);
+        inner.set_channel_publisher("out", schema_ident, publisher);
+        inner.add_channel_notifier("out", notifier);
 
         // Pre-flight: the listener has no events queued.
         let mut count: usize = 0;
@@ -482,6 +492,84 @@ mod tests {
             "expected at least one notify after write_raw, got {}",
             count
         );
+    }
+
+    /// 1→N fan-out DELIVERY lock (#1419): a single `write_raw` publishes ONE
+    /// frame that reaches EVERY subscriber on the channel through one zero-copy
+    /// loan + one send. Three subscribers each receive exactly one copy of the
+    /// payload.
+    ///
+    /// Revert lock: change `write_raw` to a per-connection copy loop (loan +
+    /// send once per destination notifier) and each subscriber on the shared
+    /// service receives N frames instead of one — the exactly-one assertion
+    /// fails. The capacity-only tests (subscriber-count sizing) stay green under
+    /// that revert; this is what pins the delivery guarantee.
+    #[test]
+    fn write_raw_fans_out_single_loan_to_all_subscribers() {
+        const N: usize = 3;
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let pubsub_name = unique_suffix("fanout/pubsub");
+
+        let pubsub = node
+            .service_builder(&ServiceName::new(&pubsub_name).unwrap())
+            .publish_subscribe::<[u8]>()
+            .max_publishers(2)
+            .max_subscribers(N + 1)
+            .open_or_create()
+            .unwrap();
+        let publisher = pubsub
+            .publisher_builder()
+            .initial_max_slice_len(4096)
+            .create()
+            .unwrap();
+        let subscribers: Vec<_> = (0..N)
+            .map(|_| pubsub.subscriber_builder().create().unwrap())
+            .collect();
+
+        let inner = Arc::new(OutputWriterInner::new());
+        let schema_ident =
+            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
+        inner.set_channel_publisher("out", schema_ident, publisher);
+
+        // N destination notifiers on the one channel — the compiler op's wiring
+        // shape for N destinations. `write_raw` signals each, but the frame is
+        // published exactly ONCE.
+        let mut listeners = Vec::with_capacity(N);
+        for i in 0..N {
+            let notify = node
+                .service_builder(
+                    &ServiceName::new(&unique_suffix(&format!("fanout/notify/{i}"))).unwrap(),
+                )
+                .event()
+                .max_notifiers(2)
+                .max_listeners(1)
+                .open_or_create()
+                .unwrap();
+            inner.add_channel_notifier("out", notify.notifier_builder().create().unwrap());
+            listeners.push(notify.listener_builder().create().unwrap());
+        }
+
+        let writer = OutputWriter::from_inner_arc(inner);
+        writer.write_raw("out", b"fanout-payload", 4242).unwrap();
+
+        for (i, subscriber) in subscribers.iter().enumerate() {
+            let mut received: Vec<Vec<u8>> = Vec::new();
+            while let Ok(Some(sample)) = subscriber.receive() {
+                let slice: &[u8] = sample.payload();
+                received.push(slice[FRAME_HEADER_SIZE..].to_vec());
+            }
+            assert_eq!(
+                received.len(),
+                1,
+                "subscriber {i} must receive exactly one frame from a single-loan \
+                 fan-out (a per-connection copy loop would deliver {N}), got {}",
+                received.len()
+            );
+            assert_eq!(
+                received[0], b"fanout-payload",
+                "subscriber {i} received the wrong payload",
+            );
+        }
     }
 
     /// Empty (unwired) writers should fail cleanly rather than crash.

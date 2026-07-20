@@ -453,8 +453,9 @@ impl ProcessorInstance {
     ///
     /// Used by the host's connection-wiring path (compiler ops) to
     /// mutate the inner directly via
-    /// [`crate::iceoryx2::OutputWriterInner::add_connection`] —
-    /// no plugin ABI hop to the cdylib.
+    /// [`crate::iceoryx2::OutputWriterInner::set_channel_publisher`]
+    /// and [`crate::iceoryx2::OutputWriterInner::add_channel_notifier`]
+    /// — no plugin ABI hop to the cdylib.
     pub fn iceoryx2_output_writer_inner(&self) -> Option<Arc<crate::iceoryx2::OutputWriterInner>> {
         match self {
             Self::VTable {
@@ -470,7 +471,7 @@ impl ProcessorInstance {
     /// processor has no input ports.
     ///
     /// Used by the host's wiring + scheduler paths to call
-    /// `add_port`, `set_subscriber`, `set_listener`, `listener_fd`,
+    /// `add_port`, `add_channel_subscriber`, `set_listener`, `listener_fd`,
     /// `drain_listener`, `any_port_has_data`, etc. directly — all
     /// host-side, no plugin ABI hop to the cdylib.
     pub fn iceoryx2_input_mailboxes_inner(

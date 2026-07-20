@@ -73,8 +73,8 @@ pub struct OutputWriterVTable {
     ) -> i32,
 
     /// Check whether a port has been configured. Returns `true` if
-    /// the host's `OutputWriterInner` has at least one
-    /// `add_connection` entry for the named port.
+    /// the host's `OutputWriterInner` has a channel publisher
+    /// installed for the named port.
     pub has_port:
         unsafe extern "C" fn(handle: *const c_void, port_ptr: *const u8, port_len: usize) -> bool,
 

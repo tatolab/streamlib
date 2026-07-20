@@ -132,8 +132,10 @@ def load_native_lib(lib_path):
     # Input
     lib.slpn_input_subscribe.argtypes = [
         ctypes.c_void_p,    # ctx
-        ctypes.c_char_p,    # service_name
+        ctypes.c_char_p,    # channel_service_name (source-keyed channel)
+        ctypes.c_char_p,    # local_port (the destination input port this feeds)
         ctypes.c_size_t,    # max_queued_messages
+        ctypes.c_size_t,    # max_subscribers (channel fan-out + reserved tap)
     ]
     lib.slpn_input_subscribe.restype = ctypes.c_int32
     lib.slpn_input_poll.argtypes = [ctypes.c_void_p]
@@ -152,9 +154,8 @@ def load_native_lib(lib_path):
     # structured-everywhere wire format.
     lib.slpn_output_publish.argtypes = [
         ctypes.c_void_p,    # ctx
-        ctypes.c_char_p,    # service_name
-        ctypes.c_char_p,    # port_name
-        ctypes.c_char_p,    # dest_port
+        ctypes.c_char_p,    # channel_service_name (source-keyed channel)
+        ctypes.c_char_p,    # port_name (source output port)
         ctypes.c_char_p,    # schema_org
         ctypes.c_char_p,    # schema_package
         ctypes.c_char_p,    # schema_type
@@ -163,7 +164,9 @@ def load_native_lib(lib_path):
         ctypes.c_uint32,    # schema_version_patch
         ctypes.c_size_t,    # max_payload_bytes
         ctypes.c_size_t,    # max_queued_messages
+        ctypes.c_size_t,    # max_subscribers (channel fan-out + reserved tap)
         ctypes.c_char_p,    # notify_service_name (may be empty/null)
+        ctypes.c_size_t,    # notify_max_notifiers (destination fan-in)
     ]
     lib.slpn_output_publish.restype = ctypes.c_int32
     lib.slpn_output_write.argtypes = [
@@ -173,7 +176,11 @@ def load_native_lib(lib_path):
     lib.slpn_output_write.restype = ctypes.c_int32
 
     # Event service (fd-multiplexed wakeups)
-    lib.slpn_event_subscribe.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    lib.slpn_event_subscribe.argtypes = [
+        ctypes.c_void_p,    # ctx
+        ctypes.c_char_p,    # notify_service_name
+        ctypes.c_size_t,    # notify_max_notifiers (destination fan-in)
+    ]
     lib.slpn_event_subscribe.restype = ctypes.c_int32
     lib.slpn_event_listener_fd.argtypes = [ctypes.c_void_p]
     lib.slpn_event_listener_fd.restype = ctypes.c_int32
