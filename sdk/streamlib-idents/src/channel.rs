@@ -24,13 +24,9 @@
 //! SDK and the engine both validate through it rather than forking a parallel
 //! copy.
 //!
-//! # Non-injective single-`-` fold retired
-//!
-//! The predecessor folded `{src}-{out}--{dst}-{in}` with single hyphens, which
-//! is non-injective: `cam-x` + output `out` and `cam` + output `x-out` both
-//! render `cam-x-out`. The `/`-separator between the processor-id chunk and the
-//! port chunk makes the mapping injective — two distinct `(processor, port)`
-//! pairs can never collide onto one channel.
+//! The `/` between the processor-id chunk and the port chunk makes the mapping
+//! injective: two distinct `(processor, port)` pairs can never collide onto one
+//! channel name.
 //!
 //! The wire carries a channel name through a fixed-width `PortKey`
 //! ([`MAX_CHANNEL_NAME_BYTES`] bytes). An over-length explicit name is a hard
@@ -372,12 +368,8 @@ mod tests {
         // so every link out of one source output port — regardless of which
         // destination processor / input port it feeds — resolves to the ONE
         // channel a single publisher fans out over (N subscribers, one loan).
-        //
-        // The retired per-link fold took `(src, out, dst, in)` and produced a
-        // DISTINCT name per destination — which is exactly the N-publisher
-        // shape that forced the fan-out copy loop. Keying on `(src, out)` alone
-        // is what dissolves it. Same source port ⇒ same channel; the channel
-        // moves only when the source port does.
+        // Same source port ⇒ same channel; the channel moves only when the
+        // source port does.
         let a = source_channel_name("cam", "frame").unwrap();
         let same_source = source_channel_name("cam", "frame").unwrap();
         let other_port = source_channel_name("cam", "thumbnail").unwrap();
