@@ -525,3 +525,192 @@ mod channel_wire_bound_tests {
             .expect("a grammar-legal channel name must always fit the PortKey wire");
     }
 }
+
+#[cfg(test)]
+mod connect_schema_agreement_tests {
+    //! End-to-end connect-path revert lock for the connect-time schema
+    //! agreement check (#1430). Drives [`connect_impl`] against two registered
+    //! processor types whose concrete output / input schemas disagree, and
+    //! asserts the posture-dependent outcome: [`Loose`] warns but still wires
+    //! the link; [`Strict`] rejects it with a typed [`Error::SchemaIdentMismatch`].
+    //!
+    //! Mentally reverting the connect-time `enforce_connect_schema_agreement`
+    //! call in [`connect_impl`] collapses both halves — the Loose warn stops
+    //! firing and Strict stops rejecting — failing this module. The unit tests
+    //! on `enforce_connect_schema_agreement` alone do NOT catch that regression:
+    //! they never exercise the wiring site.
+    //!
+    //! [`Loose`]: SchemaValidationPosture::Loose
+    //! [`Strict`]: SchemaValidationPosture::Strict
+
+    use std::sync::{Arc, Mutex, Once};
+
+    use serde_json::Value;
+    use tracing::field::{Field, Visit};
+    use tracing_subscriber::Layer;
+    use tracing_subscriber::layer::{Context, SubscriberExt};
+
+    use super::connect_impl;
+    use crate::core::Error;
+    use crate::core::compiler::Compiler;
+    use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
+    use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef, ProcessorUniqueId};
+    use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
+    use crate::core::schema_agreement::SchemaValidationPosture;
+    use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
+    use streamlib_processor_schema::PortSchemaSpec;
+
+    const PRODUCER_TYPE: &str = "SchemaMismatchProducer";
+    const CONSUMER_TYPE: &str = "SchemaMismatchConsumer";
+
+    fn ident(package: &str, ty: &str) -> SchemaIdent {
+        SchemaIdent::new(
+            Org::new("test").unwrap(),
+            Package::new(package).unwrap(),
+            TypeName::new(ty).unwrap(),
+            SemVer::new(1, 0, 0),
+        )
+    }
+
+    fn schema(ty: &str) -> PortSchemaSpec {
+        PortSchemaSpec::Specific(ident("core", ty))
+    }
+
+    /// Register a producer type (`out` → VideoFrame) and a consumer type
+    /// (`in` → AudioFrame) so any wired producer→consumer link is a concrete
+    /// schema mismatch. Idempotent across tests in the process.
+    fn ensure_mismatch_types_registered() {
+        static REGISTER: Once = Once::new();
+        REGISTER.call_once(|| {
+            let mut producer =
+                ProcessorDescriptor::new(ident("connectcheck", PRODUCER_TYPE), "mismatch producer");
+            producer
+                .outputs
+                .push(PortDescriptor::iceoryx2("out", "output", schema("VideoFrame")));
+            PROCESSOR_REGISTRY
+                .register_descriptor_only(producer)
+                .expect("register mismatch producer descriptor");
+
+            let mut consumer =
+                ProcessorDescriptor::new(ident("connectcheck", CONSUMER_TYPE), "mismatch consumer");
+            consumer
+                .inputs
+                .push(PortDescriptor::iceoryx2("in", "input", schema("AudioFrame")));
+            PROCESSOR_REGISTRY
+                .register_descriptor_only(consumer)
+                .expect("register mismatch consumer descriptor");
+        });
+    }
+
+    /// Fresh compiler holding one producer node and one consumer node, plus the
+    /// wiring refs for their mismatched ports.
+    fn compiler_with_mismatched_pair() -> (Arc<Compiler>, OutputLinkPortRef, InputLinkPortRef) {
+        ensure_mismatch_types_registered();
+        let compiler = Arc::new(Compiler::new());
+        let (from_id, to_id): (ProcessorUniqueId, ProcessorUniqueId) =
+            compiler.scope(|graph, _tx| {
+                let from = graph
+                    .traversal_mut()
+                    .add_v(ProcessorSpec::new(
+                        ident("connectcheck", PRODUCER_TYPE),
+                        Value::Null,
+                    ))
+                    .first()
+                    .expect("producer node must be created")
+                    .id
+                    .clone();
+                let to = graph
+                    .traversal_mut()
+                    .add_v(ProcessorSpec::new(
+                        ident("connectcheck", CONSUMER_TYPE),
+                        Value::Null,
+                    ))
+                    .first()
+                    .expect("consumer node must be created")
+                    .id
+                    .clone();
+                (from, to)
+            });
+        (
+            compiler,
+            OutputLinkPortRef::new(from_id, "out"),
+            InputLinkPortRef::new(to_id, "in"),
+        )
+    }
+
+    fn block_on<F: std::future::Future>(fut: F) -> F::Output {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("current-thread runtime")
+            .block_on(fut)
+    }
+
+    /// Collects the message of every `WARN`-level tracing event so a test can
+    /// assert the connect-time schema warn actually fired.
+    #[derive(Clone, Default)]
+    struct CapturedWarnings(Arc<Mutex<Vec<String>>>);
+
+    struct WarnMessageVisitor<'a>(&'a mut String);
+    impl Visit for WarnMessageVisitor<'_> {
+        fn record_debug(&mut self, field: &Field, value: &dyn std::fmt::Debug) {
+            if field.name() == "message" {
+                use std::fmt::Write;
+                let _ = write!(self.0, "{value:?}");
+            }
+        }
+    }
+
+    impl<S: tracing::Subscriber> Layer<S> for CapturedWarnings {
+        fn on_event(&self, event: &tracing::Event<'_>, _ctx: Context<'_, S>) {
+            if *event.metadata().level() == tracing::Level::WARN {
+                let mut message = String::new();
+                event.record(&mut WarnMessageVisitor(&mut message));
+                self.0.lock().unwrap().push(message);
+            }
+        }
+    }
+
+    #[test]
+    fn loose_connect_warns_but_wires_a_mismatched_link() {
+        let (compiler, from, to) = compiler_with_mismatched_pair();
+        let warnings = CapturedWarnings::default();
+        let subscriber = tracing_subscriber::registry().with(warnings.clone());
+
+        let result = tracing::subscriber::with_default(subscriber, || {
+            block_on(connect_impl(
+                compiler,
+                from,
+                to,
+                SchemaValidationPosture::Loose,
+            ))
+        });
+
+        result.expect("loose posture must wire the mismatched link, not fail");
+
+        let captured = warnings.0.lock().unwrap();
+        assert!(
+            captured
+                .iter()
+                .any(|m| m.contains("does not match consumer input")),
+            "loose connect over a concrete producer/consumer schema mismatch must \
+             emit the connect-time warn; captured WARN messages: {captured:?}"
+        );
+    }
+
+    #[test]
+    fn strict_connect_rejects_a_mismatched_link() {
+        let (compiler, from, to) = compiler_with_mismatched_pair();
+        let err = block_on(connect_impl(
+            compiler,
+            from,
+            to,
+            SchemaValidationPosture::Strict,
+        ))
+        .expect_err("strict posture must reject the mismatched link");
+        assert!(
+            matches!(err, Error::SchemaIdentMismatch { .. }),
+            "strict connect over a concrete schema mismatch must surface \
+             Error::SchemaIdentMismatch; got {err:?}"
+        );
+    }
+}
