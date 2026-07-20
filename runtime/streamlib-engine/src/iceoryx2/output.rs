@@ -205,50 +205,53 @@ impl OutputWriterInner {
 
         let total_len = FRAME_HEADER_SIZE + data.len();
 
-        // Per-channel ceiling: the graceful, observable layer in front of the
-        // subprocess cgroup `memory.max` backstop. Refuse + count, never die.
-        if total_len > egress.ceiling_bytes {
-            egress.refused_over_ceiling_count += 1;
-            tracing::warn!(
-                channel = %egress.channel_service_name,
-                payload_bytes = total_len,
-                ceiling_bytes = egress.ceiling_bytes,
-                tier = egress.trust_tier.as_str(),
-                refused_count = egress.refused_over_ceiling_count,
-                "output channel refused a payload above its per-channel ceiling"
-            );
-            return Err(Error::PayloadExceedsChannelCeiling {
-                channel: egress.channel_service_name.clone(),
-                payload_bytes: total_len,
-                ceiling_bytes: egress.ceiling_bytes,
-                tier: egress.trust_tier.as_str().to_string(),
-            });
-        }
-
-        // PowerOfTwo growth is transparent inside iceoryx2; surface it here so a
-        // segment regrow (channel + old/new segment size) is observable, and
-        // warn once the segment crosses a quarter of the ceiling.
-        if total_len > egress.current_slot_capacity_bytes {
-            let old = egress.current_slot_capacity_bytes;
-            let new = total_len.next_power_of_two();
-            tracing::info!(
-                channel = %egress.channel_service_name,
-                old_segment_bytes = old,
-                new_segment_bytes = new,
-                tier = egress.trust_tier.as_str(),
-                "iceoryx2 publisher data segment grew (PowerOfTwo)"
-            );
-            let quarter = egress.ceiling_bytes / 4;
-            if new > quarter && old <= quarter {
+        // Per-channel ceiling refusal + PowerOfTwo growth bookkeeping share their
+        // authority with the subprocess natives via
+        // `decide_channel_egress_admission`; the host layers its typed error and
+        // the quarter-of-ceiling warning on top of the shared decision.
+        match streamlib_ipc_types::decide_channel_egress_admission(
+            total_len,
+            egress.ceiling_bytes,
+            &mut egress.refused_over_ceiling_count,
+            &mut egress.current_slot_capacity_bytes,
+        ) {
+            streamlib_ipc_types::ChannelEgressAdmission::RefusedOverCeiling { refused_count } => {
                 tracing::warn!(
                     channel = %egress.channel_service_name,
-                    segment_bytes = new,
+                    payload_bytes = total_len,
                     ceiling_bytes = egress.ceiling_bytes,
                     tier = egress.trust_tier.as_str(),
-                    "iceoryx2 publisher segment crossed a quarter of the channel ceiling"
+                    refused_count,
+                    "output channel refused a payload above its per-channel ceiling"
                 );
+                return Err(Error::PayloadExceedsChannelCeiling {
+                    channel: egress.channel_service_name.clone(),
+                    payload_bytes: total_len,
+                    ceiling_bytes: egress.ceiling_bytes,
+                    tier: egress.trust_tier.as_str().to_string(),
+                });
             }
-            egress.current_slot_capacity_bytes = new;
+            streamlib_ipc_types::ChannelEgressAdmission::Admitted { grew_to } => {
+                if let Some((old, new)) = grew_to {
+                    tracing::info!(
+                        channel = %egress.channel_service_name,
+                        old_segment_bytes = old,
+                        new_segment_bytes = new,
+                        tier = egress.trust_tier.as_str(),
+                        "iceoryx2 publisher data segment grew (PowerOfTwo)"
+                    );
+                    let quarter = egress.ceiling_bytes / 4;
+                    if new > quarter && old <= quarter {
+                        tracing::warn!(
+                            channel = %egress.channel_service_name,
+                            segment_bytes = new,
+                            ceiling_bytes = egress.ceiling_bytes,
+                            tier = egress.trust_tier.as_str(),
+                            "iceoryx2 publisher segment crossed a quarter of the channel ceiling"
+                        );
+                    }
+                }
+            }
         }
 
         let mut frame = vec![0u8; total_len];

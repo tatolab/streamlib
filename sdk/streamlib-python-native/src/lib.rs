@@ -923,35 +923,41 @@ pub unsafe extern "C" fn slpn_output_write(
 
     let total_len = FRAME_HEADER_SIZE + data_slice.len();
 
-    // Per-channel ceiling (untrusted-session tier): refuse + count, never die.
-    // Returns SLPN_WRITE_REFUSED_OVER_CEILING so the SDK drops without raising.
-    if total_len > state.channel_ceiling_bytes {
-        state.refused_over_ceiling_count += 1;
-        tracing::warn!(
-            channel = %state.channel_service_name,
-            payload_bytes = total_len,
-            ceiling_bytes = state.channel_ceiling_bytes,
-            tier = "untrusted-session",
-            refused_count = state.refused_over_ceiling_count,
-            "[slpn:{}] output channel refused a payload above its per-channel ceiling",
-            ctx.processor_id,
-        );
-        return SLPN_WRITE_REFUSED_OVER_CEILING;
-    }
-
-    // Observe PowerOfTwo segment growth (channel + old/new segment size).
-    if total_len > state.current_slot_capacity_bytes {
-        let old = state.current_slot_capacity_bytes;
-        let new = total_len.next_power_of_two();
-        tracing::info!(
-            channel = %state.channel_service_name,
-            old_segment_bytes = old,
-            new_segment_bytes = new,
-            tier = "untrusted-session",
-            "[slpn:{}] iceoryx2 publisher data segment grew (PowerOfTwo)",
-            ctx.processor_id,
-        );
-        state.current_slot_capacity_bytes = new;
+    // Per-channel ceiling refusal + PowerOfTwo growth bookkeeping share their
+    // authority with the host writer via `decide_channel_egress_admission`. The
+    // refusal surfaces as SLPN_WRITE_REFUSED_OVER_CEILING (the SDK drops without
+    // raising); the host's parallel typed `PayloadExceedsChannelCeiling` error
+    // is an intentional per-boundary split, not drift.
+    match streamlib_ipc_types::decide_channel_egress_admission(
+        total_len,
+        state.channel_ceiling_bytes,
+        &mut state.refused_over_ceiling_count,
+        &mut state.current_slot_capacity_bytes,
+    ) {
+        streamlib_ipc_types::ChannelEgressAdmission::RefusedOverCeiling { refused_count } => {
+            tracing::warn!(
+                channel = %state.channel_service_name,
+                payload_bytes = total_len,
+                ceiling_bytes = state.channel_ceiling_bytes,
+                tier = "untrusted-session",
+                refused_count,
+                "[slpn:{}] output channel refused a payload above its per-channel ceiling",
+                ctx.processor_id,
+            );
+            return SLPN_WRITE_REFUSED_OVER_CEILING;
+        }
+        streamlib_ipc_types::ChannelEgressAdmission::Admitted { grew_to } => {
+            if let Some((old, new)) = grew_to {
+                tracing::info!(
+                    channel = %state.channel_service_name,
+                    old_segment_bytes = old,
+                    new_segment_bytes = new,
+                    tier = "untrusted-session",
+                    "[slpn:{}] iceoryx2 publisher data segment grew (PowerOfTwo)",
+                    ctx.processor_id,
+                );
+            }
+        }
     }
 
     let mut frame = vec![0u8; total_len];

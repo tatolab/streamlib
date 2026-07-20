@@ -75,6 +75,57 @@ impl ChannelTrustTier {
     }
 }
 
+/// Outcome of [`decide_channel_egress_admission`]: whether the frame a channel
+/// publisher is about to loan should be published or dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelEgressAdmission {
+    /// The frame is above the channel's per-channel payload ceiling and was
+    /// refused. The caller drops it — surfacing the refusal in its own way (a
+    /// typed `PayloadExceedsChannelCeiling` error in the host, a refuse return
+    /// code in a subprocess native) — and logs it; `refused_count` is the
+    /// running total after this refusal.
+    RefusedOverCeiling { refused_count: u64 },
+    /// The frame fits under the ceiling; the caller publishes it. When `grew_to`
+    /// is `Some((old_bytes, new_bytes))` the tracked data-segment capacity
+    /// crossed the frame size and was advanced to `new_bytes`
+    /// (`next_power_of_two`) — a PowerOfTwo growth the caller logs.
+    Admitted { grew_to: Option<(usize, usize)> },
+}
+
+/// Single authority for the per-channel-egress ceiling refusal + PowerOfTwo
+/// growth-observability bookkeeping every channel publisher runs before loaning
+/// a frame.
+///
+/// Refusing above `channel_ceiling_bytes` is the graceful, observable layer in
+/// front of the subprocess cgroup `memory.max` backstop. This crate owns the
+/// thresholds so the host writer and the Python / Deno subprocess natives cannot
+/// drift: it increments `refused_over_ceiling_count` on a refusal and advances
+/// `current_slot_capacity_bytes` to the next power of two on a growth, both in
+/// place. The caller owns the tracing and the refusal surface (typed error vs.
+/// refuse return code), keeping this wire-types crate logging-free.
+pub fn decide_channel_egress_admission(
+    frame_total_bytes: usize,
+    channel_ceiling_bytes: usize,
+    refused_over_ceiling_count: &mut u64,
+    current_slot_capacity_bytes: &mut usize,
+) -> ChannelEgressAdmission {
+    if frame_total_bytes > channel_ceiling_bytes {
+        *refused_over_ceiling_count += 1;
+        return ChannelEgressAdmission::RefusedOverCeiling {
+            refused_count: *refused_over_ceiling_count,
+        };
+    }
+    let grew_to = if frame_total_bytes > *current_slot_capacity_bytes {
+        let old = *current_slot_capacity_bytes;
+        let new = frame_total_bytes.next_power_of_two();
+        *current_slot_capacity_bytes = new;
+        Some((old, new))
+    } else {
+        None
+    };
+    ChannelEgressAdmission::Admitted { grew_to }
+}
+
 /// Default iceoryx2 ring depth (slot count, not bytes) for the data
 /// pub/sub channel between two processors. Wire schemas override this
 /// per-vocabulary via `metadata.max_queued_messages` in their YAML.
