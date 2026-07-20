@@ -65,8 +65,7 @@ impl ChannelTrustTier {
         }
     }
 
-    /// Stable lowercase label used in tracing fields and the
-    /// `PayloadExceedsChannelCeiling` error's `tier` field.
+    /// Stable lowercase label used in the channel-egress tracing fields.
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Trusted => "trusted",

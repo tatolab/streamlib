@@ -45,8 +45,19 @@ use serde::Serialize;
 use streamlib_plugin_abi::OutputWriterVTable;
 
 use super::{ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader, SchemaIdentWire};
-use crate::core::error::{Error, Result};
+use crate::core::error::{ChannelTrustTierLabel, Error, Result};
 use crate::core::media_clock::MediaClock;
+
+/// Map the engine's [`ChannelTrustTier`] onto the engine-free
+/// [`ChannelTrustTierLabel`] the [`Error::PayloadExceedsChannelCeiling`] variant
+/// carries. Lives at the error boundary because the orphan rule forbids a `From`
+/// between the two foreign enums, and it keeps the ceiling error engine-free.
+fn trust_tier_label(trust_tier: ChannelTrustTier) -> ChannelTrustTierLabel {
+    match trust_tier {
+        ChannelTrustTier::Trusted => ChannelTrustTierLabel::Trusted,
+        ChannelTrustTier::UntrustedSession => ChannelTrustTierLabel::UntrustedSession,
+    }
+}
 
 /// One source output port's channel egress: the single channel publisher
 /// (a channel carries exactly one publisher — see
@@ -228,7 +239,7 @@ impl OutputWriterInner {
                     channel: egress.channel_service_name.clone(),
                     payload_bytes: total_len,
                     ceiling_bytes: egress.ceiling_bytes,
-                    tier: egress.trust_tier.as_str().to_string(),
+                    tier: trust_tier_label(egress.trust_tier),
                 });
             }
             streamlib_ipc_types::ChannelEgressAdmission::Admitted { grew_to } => {
@@ -809,12 +820,12 @@ mod tests {
                 ref channel,
                 payload_bytes,
                 ceiling_bytes,
-                ref tier,
+                tier,
             } => {
                 assert_eq!(channel, "test/ceiling/out");
                 assert_eq!(payload_bytes, FRAME_HEADER_SIZE + over.len());
                 assert_eq!(ceiling_bytes, ceiling);
-                assert_eq!(tier, "untrusted-session");
+                assert_eq!(tier, ChannelTrustTierLabel::UntrustedSession);
             }
             other => panic!("expected PayloadExceedsChannelCeiling, got {other:?}"),
         }
