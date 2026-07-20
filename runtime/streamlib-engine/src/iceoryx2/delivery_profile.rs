@@ -12,15 +12,12 @@
 //! default derives from the wire type's [`FlowClass`], carried in the schema
 //! `metadata` block — so authors mostly never touch it.
 
-use serde::{Deserialize, Serialize};
-
 use super::overflow::Overflow;
 use super::read_mode::ReadMode;
 
 /// The one per-port delivery knob. Each profile bundles a fixed
 /// (drain order, overflow policy, ring depth) triple; see [`DeliveryProfile::resolve`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeliveryProfile {
     /// Newest-wins: drain to the latest sample, evict oldest under pressure,
     /// shallow ring. State snapshots — video frames, control state — where a
@@ -105,8 +102,7 @@ impl DeliveryProfile {
 /// The per-wire-type data class carried in a schema's `metadata.flow_class`.
 /// It sets the *default* [`DeliveryProfile`] for any port carrying that type,
 /// which a port-site profile override still wins over.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlowClass {
     /// Ordered samples where every one matters — audio, encoded frames.
     /// Defaults to [`DeliveryProfile::EverySample`].
