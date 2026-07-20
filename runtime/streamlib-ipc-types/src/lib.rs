@@ -16,23 +16,79 @@
 
 use iceoryx2::prelude::*;
 
-pub const MAX_PAYLOAD_SIZE: usize = 65536;
+/// Default hint used to prime a publisher's initial iceoryx2 slot capacity
+/// when a wire schema declares no `metadata.expected_payload_bytes`.
+///
+/// This is a HINT, never a cap. Publishers open under
+/// [`iceoryx2::prelude::AllocationStrategy::PowerOfTwo`]; the first loan larger
+/// than the primed capacity grows the shared-memory segment and subscribers
+/// remap transparently. Sizing the hint to the common-case payload keeps the
+/// steady state at a single segment while leaving oversized frames (a first
+/// multi-MB keyframe) free to grow rather than crash.
+pub const DEFAULT_EXPECTED_PAYLOAD_BYTES: usize = 65536;
 pub const MAX_PORT_KEY_SIZE: usize = 64;
 pub const MAX_EVENT_PAYLOAD_SIZE: usize = 8192;
 pub const MAX_TOPIC_KEY_SIZE: usize = 128;
+
+/// Per-channel payload ceiling for a trusted (in-process host) data channel —
+/// the graceful, observable layer in front of the subprocess cgroup
+/// `memory.max` hard backstop. A payload above this is refused with a named
+/// `PayloadExceedsChannelCeiling` error, counted, and the stream continues;
+/// the process never dies.
+pub const TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES: usize = 64 * 1024 * 1024;
+
+/// Per-channel payload ceiling for an untrusted-session (subprocess) data
+/// channel. Tighter than the trusted tier because a subprocess payload crosses
+/// a trust boundary and a runaway producer must be bounded well below host RAM.
+pub const UNTRUSTED_SESSION_CHANNEL_PAYLOAD_CEILING_BYTES: usize = 16 * 1024 * 1024;
+
+/// Trust tier of an iceoryx2 data channel, selecting the default per-channel
+/// payload ceiling.
+///
+/// Determined structurally by the process boundary at wire time: an in-process
+/// host link is [`ChannelTrustTier::Trusted`]; a link crossing a subprocess
+/// boundary is [`ChannelTrustTier::UntrustedSession`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelTrustTier {
+    /// In-process host-to-host channel.
+    Trusted,
+    /// Channel with a subprocess (Python / Deno) on either end.
+    UntrustedSession,
+}
+
+impl ChannelTrustTier {
+    /// The default per-channel payload ceiling in bytes for this tier.
+    pub const fn default_ceiling_bytes(self) -> usize {
+        match self {
+            Self::Trusted => TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            Self::UntrustedSession => UNTRUSTED_SESSION_CHANNEL_PAYLOAD_CEILING_BYTES,
+        }
+    }
+
+    /// Stable lowercase label used in tracing fields and the
+    /// `PayloadExceedsChannelCeiling` error's `tier` field.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Trusted => "trusted",
+            Self::UntrustedSession => "untrusted-session",
+        }
+    }
+}
 
 /// Default iceoryx2 ring depth (slot count, not bytes) for the data
 /// pub/sub channel between two processors. Wire schemas override this
 /// per-vocabulary via `metadata.max_queued_messages` in their YAML.
 ///
-/// iceoryx2 pre-allocates `DEFAULT_MAX_QUEUED_MESSAGES * MAX_PAYLOAD_SIZE`
-/// of shared memory per publisher when the wire schema does not declare
-/// its own depth, so this value is a per-publisher memory commitment too.
+/// iceoryx2 pre-allocates `DEFAULT_MAX_QUEUED_MESSAGES * (primed slot bytes)`
+/// of shared memory per publisher when the wire schema does not declare its
+/// own depth, so this value is a per-publisher memory commitment too. The slot
+/// bytes are primed from [`DEFAULT_EXPECTED_PAYLOAD_BYTES`] (or the schema's
+/// `metadata.expected_payload_bytes` hint) and grow on demand.
 pub const DEFAULT_MAX_QUEUED_MESSAGES: usize = 16;
 
 /// On-wire size of a [`SchemaIdentWire`]. Held constant at 128 bytes so
-/// the total [`FrameHeader`] / [`FramePayload`] layout matches the
-/// pre-#401-phase-2 [`SchemaName`]-shaped predecessor.
+/// the total [`FrameHeader`] layout matches the pre-#401-phase-2
+/// `SchemaName`-shaped predecessor.
 pub const SCHEMA_IDENT_WIRE_SIZE: usize = 128;
 
 /// Maximum byte length of the org segment when serialized into a
@@ -360,84 +416,6 @@ impl std::fmt::Debug for SchemaIdentWire {
     }
 }
 
-/// Frame payload for iceoryx2 pub/sub communication.
-///
-/// This is the message type sent between processors via iceoryx2.
-/// It includes routing information (`port_key`), structured schema
-/// identifier (`schema_ident`), and the serialized frame data.
-#[derive(Clone, Copy, ZeroCopySend)]
-#[type_name("FramePayload")]
-#[repr(C)]
-pub struct FramePayload {
-    pub port_key: PortKey,
-    pub schema_ident: SchemaIdentWire,
-    pub timestamp_ns: i64,
-    pub len: u32,
-    pub data: [u8; MAX_PAYLOAD_SIZE],
-}
-
-impl FramePayload {
-    /// Create a new payload with the given port, structured schema ident, and data.
-    ///
-    /// Fails with [`PortKeyError`] if `port` overflows the fixed wire capacity —
-    /// see [`PortKey::new`].
-    pub fn new(
-        port: &str,
-        schema_ident: SchemaIdentWire,
-        timestamp_ns: i64,
-        data: &[u8],
-    ) -> Result<Self, PortKeyError> {
-        let len = data.len().min(MAX_PAYLOAD_SIZE) as u32;
-        let mut payload = Self {
-            port_key: PortKey::new(port)?,
-            schema_ident,
-            timestamp_ns,
-            len,
-            data: [0u8; MAX_PAYLOAD_SIZE],
-        };
-        payload.data[..len as usize].copy_from_slice(&data[..len as usize]);
-        Ok(payload)
-    }
-
-    /// Get the actual data slice (excluding padding).
-    pub fn data(&self) -> &[u8] {
-        &self.data[..self.len as usize]
-    }
-
-    /// Get the port key as a string.
-    pub fn port(&self) -> &str {
-        self.port_key.as_str()
-    }
-
-    /// Get the structured schema identifier.
-    pub fn schema(&self) -> &SchemaIdentWire {
-        &self.schema_ident
-    }
-}
-
-impl Default for FramePayload {
-    fn default() -> Self {
-        Self {
-            port_key: PortKey::default(),
-            schema_ident: SchemaIdentWire::default(),
-            timestamp_ns: 0,
-            len: 0,
-            data: [0u8; MAX_PAYLOAD_SIZE],
-        }
-    }
-}
-
-impl std::fmt::Debug for FramePayload {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FramePayload")
-            .field("port_key", &self.port_key.as_str())
-            .field("schema_ident", &self.schema_ident)
-            .field("timestamp_ns", &self.timestamp_ns)
-            .field("len", &self.len)
-            .finish()
-    }
-}
-
 /// Header for slice-based iceoryx2 frame transport.
 ///
 /// Wire format in a `[u8]` slice (little-endian for multi-byte fields):
@@ -745,6 +723,28 @@ mod tests {
     }
 
     #[test]
+    fn channel_trust_tier_defaults_and_labels() {
+        assert_eq!(
+            ChannelTrustTier::Trusted.default_ceiling_bytes(),
+            TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES
+        );
+        assert_eq!(
+            ChannelTrustTier::UntrustedSession.default_ceiling_bytes(),
+            UNTRUSTED_SESSION_CHANNEL_PAYLOAD_CEILING_BYTES
+        );
+        assert!(
+            ChannelTrustTier::UntrustedSession.default_ceiling_bytes()
+                < ChannelTrustTier::Trusted.default_ceiling_bytes(),
+            "untrusted-session ceiling must be tighter than trusted"
+        );
+        assert_eq!(ChannelTrustTier::Trusted.as_str(), "trusted");
+        assert_eq!(
+            ChannelTrustTier::UntrustedSession.as_str(),
+            "untrusted-session"
+        );
+    }
+
+    #[test]
     fn schema_ident_wire_max_segment_lengths() {
         // Boundary values — exact-fit segments must succeed.
         let max_org = "a".repeat(SCHEMA_IDENT_WIRE_MAX_ORG_LEN);
@@ -825,13 +825,4 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn frame_payload_default_has_zeroed_schema_ident() {
-        let p = FramePayload::default();
-        assert_eq!(p.schema_ident, SchemaIdentWire::default());
-        assert_eq!(p.schema_ident.org_str(), "");
-        assert_eq!(p.schema_ident.package_str(), "");
-        assert_eq!(p.schema_ident.type_str(), "");
-        assert_eq!(p.schema_ident.version_major, 0);
-    }
 }

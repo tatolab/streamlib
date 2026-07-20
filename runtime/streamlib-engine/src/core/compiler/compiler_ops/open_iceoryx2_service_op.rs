@@ -20,7 +20,7 @@ use crate::core::PortSchemaSpec;
 use crate::core::ProcessorUniqueId;
 use crate::core::context::RuntimeContext;
 use crate::core::embedded_schemas::{
-    max_payload_bytes_for_port_spec, max_queued_messages_for_port_spec, overflow_for_input_port,
+    expected_payload_bytes_for_port_spec, max_queued_messages_for_port_spec, overflow_for_input_port,
     port_schema_spec,
 };
 use crate::core::error::{Error, Result};
@@ -31,8 +31,8 @@ use crate::core::graph::{
 use crate::core::json_schema::SchemaIdentOutput;
 use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorInstance};
 use crate::iceoryx2::{
-    Iceoryx2NotifyService, Iceoryx2Service, RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
-    SchemaIdentWire,
+    ChannelTrustTier, Iceoryx2NotifyService, Iceoryx2Service,
+    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, SchemaIdentWire,
 };
 
 use super::spawn_deno_subprocess_op::DenoSubprocessHostProcessor;
@@ -142,7 +142,17 @@ pub fn open_iceoryx2_service(
         &dest_port,
         crate::core::PortDirection::Input,
     );
-    let max_payload = max_payload_bytes_for_port_spec(&output_schema)?;
+    let expected_payload = expected_payload_bytes_for_port_spec(&output_schema)?;
+    // A channel touching a subprocess on either end crosses a trust boundary and
+    // gets the tighter untrusted-session ceiling; a host-to-host channel is
+    // trusted. The ceiling is the graceful, observable layer in front of the
+    // subprocess cgroup `memory.max` hard backstop.
+    let trust_tier = if source_is_subprocess || dest_is_subprocess {
+        ChannelTrustTier::UntrustedSession
+    } else {
+        ChannelTrustTier::Trusted
+    };
+    let channel_ceiling_bytes = trust_tier.default_ceiling_bytes();
     let max_queued_messages = max_queued_messages_for_port_spec(&output_schema)?;
     let max_subscribers = channel_max_subscribers(graph, &source_proc_id, &source_port);
     let enable_safe_overflow =
@@ -169,7 +179,8 @@ pub fn open_iceoryx2_service(
             &channel_service_name,
             &notify_service_name,
             &output_schema,
-            max_payload,
+            expected_payload,
+            channel_ceiling_bytes,
             max_queued_messages,
             max_subscribers,
             max_notifiers,
@@ -182,7 +193,10 @@ pub fn open_iceoryx2_service(
             &output_schema,
             &service,
             &notify_service,
-            max_payload,
+            &channel_service_name,
+            trust_tier,
+            expected_payload,
+            channel_ceiling_bytes,
         )?;
     }
 
@@ -195,7 +209,6 @@ pub fn open_iceoryx2_service(
             &dest_port,
             &channel_service_name,
             &notify_service_name,
-            max_payload,
             max_queued_messages,
             max_subscribers,
             max_notifiers,
@@ -208,7 +221,6 @@ pub fn open_iceoryx2_service(
             &dest_schema,
             &service,
             &notify_service,
-            max_payload,
         )?;
     }
 
@@ -468,13 +480,17 @@ fn get_single_processor(
 
 /// Install (once) the source's single channel publisher and append this link's
 /// destination notifier onto the Rust source's [`OutputWriterInner`].
+#[allow(clippy::too_many_arguments)]
 fn wire_rust_source(
     source_processor: &Arc<Mutex<ProcessorInstance>>,
     source_port: &str,
     output_schema: &PortSchemaSpec,
     service: &Iceoryx2Service,
     notify_service: &Iceoryx2NotifyService,
-    max_payload: usize,
+    channel_service_name: &str,
+    trust_tier: ChannelTrustTier,
+    expected_payload: usize,
+    channel_ceiling_bytes: usize,
 ) -> Result<()> {
     let source_guard = source_processor.lock();
     let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() else {
@@ -482,11 +498,15 @@ fn wire_rust_source(
     };
 
     if !output_inner.has_channel_publisher(source_port) {
-        let publisher = service.create_publisher(max_payload)?;
+        let publisher = service.create_publisher(expected_payload)?;
         output_inner.set_channel_publisher(
             source_port,
             schema_ident_wire_for_spec(output_schema),
             publisher,
+            channel_service_name.to_string(),
+            trust_tier,
+            expected_payload,
+            channel_ceiling_bytes,
         );
         tracing::debug!(
             "Installed channel publisher for source output port '{}'",
@@ -507,7 +527,6 @@ fn wire_rust_dest(
     dest_schema: &PortSchemaSpec,
     service: &Iceoryx2Service,
     notify_service: &Iceoryx2NotifyService,
-    max_payload: usize,
 ) -> Result<()> {
     let dest_guard = dest_processor.lock();
     let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() else {
@@ -517,7 +536,6 @@ fn wire_rust_dest(
     if !input_inner.has_port(dest_port) {
         input_inner.add_port(dest_port, 1, Default::default());
     }
-    input_inner.set_port_max_payload_bytes(dest_port, max_payload);
     input_inner.set_port_expected_schema_ident(dest_port, schema_ident_wire_for_spec(dest_schema));
 
     let subscriber = service.create_subscriber()?;
@@ -547,7 +565,8 @@ fn wire_subprocess_source(
     channel_service_name: &str,
     notify_service_name: &str,
     output_schema: &PortSchemaSpec,
-    max_payload: usize,
+    expected_payload: usize,
+    channel_ceiling_bytes: usize,
     max_queued_messages: usize,
     max_subscribers: usize,
     notify_max_notifiers: usize,
@@ -557,7 +576,8 @@ fn wire_subprocess_source(
         "channel_service_name": channel_service_name,
         "dest_notify_service_name": notify_service_name,
         "schema": schema_ident_json(output_schema),
-        "max_payload_bytes": max_payload,
+        "expected_payload_bytes": expected_payload,
+        "max_payload_bytes_per_channel": channel_ceiling_bytes,
         "max_queued_messages": max_queued_messages,
         "max_subscribers": max_subscribers,
         "notify_max_notifiers": notify_max_notifiers,
@@ -589,17 +609,18 @@ fn wire_subprocess_dest(
     dest_port: &str,
     channel_service_name: &str,
     notify_service_name: &str,
-    max_payload: usize,
     max_queued_messages: usize,
     max_subscribers: usize,
     notify_max_notifiers: usize,
 ) -> Result<()> {
+    // The dest reader no longer carries a payload-size hint: the subprocess read
+    // buffer starts at the default and grows to the frame it actually receives
+    // (PowerOfTwo segment growth on the publisher side, grow-and-retry on read).
     let entry = serde_json::json!({
         "name": dest_port,
         "channel_service_name": channel_service_name,
         "notify_service_name": notify_service_name,
         "read_mode": "skip_to_latest",
-        "max_payload_bytes": max_payload,
         "max_queued_messages": max_queued_messages,
         "max_subscribers": max_subscribers,
         "notify_max_notifiers": notify_max_notifiers,
@@ -812,7 +833,7 @@ mod tests {
             CodeExamples, PortDescriptor, ProcessorDescriptor, ProcessorRuntime,
             ProcessorScheduling,
         };
-        use crate::core::embedded_schemas::max_payload_bytes_for_port_spec;
+        use crate::core::embedded_schemas::expected_payload_bytes_for_port_spec;
         use streamlib_idents::{Org, Package, SemVer, TypeName};
         use streamlib_processor_schema::PortSchemaSpec;
 
@@ -860,7 +881,7 @@ mod tests {
             .map(|p| p.data_type.clone())
             .expect("descriptor advertises `out_unloaded`");
 
-        let err = max_payload_bytes_for_port_spec(&output_spec)
+        let err = expected_payload_bytes_for_port_spec(&output_spec)
             .expect_err("registry miss must surface as Err at wire time");
         let msg = err.to_string();
         assert!(

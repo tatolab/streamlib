@@ -152,18 +152,23 @@ impl Iceoryx2Service {
         self.max_queued_messages
     }
 
-    /// Create a publisher for this service.
+    /// Create a channel publisher under [`AllocationStrategy::PowerOfTwo`].
     ///
-    /// `max_payload_bytes` sets the per-slot shared memory capacity (data only, header is added
-    /// internally). Use `embedded_schemas::max_payload_bytes_for_port_spec` to derive this value
-    /// from the output port's schema declaration.
+    /// `expected_payload_bytes` primes the initial per-slot data segment (the
+    /// [`FRAME_HEADER_SIZE`] header is added internally) — it is a HINT, never a
+    /// cap. The first loan larger than the primed slot grows the shared-memory
+    /// segment (rounded to the next power of two) and subscribers remap
+    /// transparently, so an oversized payload delivers instead of failing with
+    /// `ExceedsMaxLoanSize`. Derive the hint from the output port's schema via
+    /// [`crate::core::embedded_schemas::expected_payload_bytes_for_port_spec`].
     pub fn create_publisher(
         &self,
-        max_payload_bytes: usize,
+        expected_payload_bytes: usize,
     ) -> Result<iceoryx2::port::publisher::Publisher<ipc::Service, [u8], ()>> {
         self.inner
             .publisher_builder()
-            .initial_max_slice_len(max_payload_bytes + FRAME_HEADER_SIZE)
+            .initial_max_slice_len(expected_payload_bytes + FRAME_HEADER_SIZE)
+            .allocation_strategy(AllocationStrategy::PowerOfTwo)
             .create()
             .map_err(|e| Error::Runtime(format!("Failed to create publisher: {:?}", e)))
     }

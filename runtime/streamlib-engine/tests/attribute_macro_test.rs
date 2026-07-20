@@ -171,7 +171,7 @@ fn test_bare_processor_synthesizes_app_local_identity() {
 fn test_processor_schema_ident_renders_canonical_joined_form() {
     // The structured SchemaIdent's Display impl produces the canonical
     // `@<org>/<package>/<Type>@<major.minor.patch>` joined form used by
-    // `max_payload_bytes_for_port_spec` and other lookup paths. The
+    // `expected_payload_bytes_for_port_spec` and other lookup paths. The
     // version-free grammar renders the 0.0.0 sentinel.
     assert_eq!(
         TestProcessor::schema_ident().to_string(),

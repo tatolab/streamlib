@@ -11,17 +11,18 @@ mod overflow;
 mod payload;
 mod read_mode;
 
-pub use input::{InputMailboxes, InputMailboxesInner};
+pub use input::{BoundedReadOutcome, InputMailboxes, InputMailboxesInner};
 pub use mailbox::PortMailbox;
 pub use node::{Iceoryx2EventService, Iceoryx2Node, Iceoryx2NotifyService, Iceoryx2Service};
 pub use output::{OutputWriter, OutputWriterInner};
 pub use overflow::Overflow;
 pub use payload::{
-    DEFAULT_MAX_QUEUED_MESSAGES, EventPayload, FRAME_HEADER_SIZE, FrameHeader, FramePayload,
-    MAX_EVENT_PAYLOAD_SIZE, MAX_PAYLOAD_SIZE, MAX_PUBLISHERS_PER_CHANNEL,
-    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, MAX_TOPIC_KEY_SIZE, PortKey,
-    SCHEMA_IDENT_WIRE_MAX_ORG_LEN,
-    SCHEMA_IDENT_WIRE_MAX_PACKAGE_LEN, SCHEMA_IDENT_WIRE_MAX_TYPE_LEN, SCHEMA_IDENT_WIRE_SIZE,
-    SchemaIdentWire, SchemaIdentWireError, TopicKey,
+    ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, DEFAULT_MAX_QUEUED_MESSAGES, EventPayload,
+    FRAME_HEADER_SIZE, FrameHeader, MAX_EVENT_PAYLOAD_SIZE, MAX_PUBLISHERS_PER_CHANNEL,
+    MAX_TOPIC_KEY_SIZE, PortKey, RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
+    SCHEMA_IDENT_WIRE_MAX_ORG_LEN, SCHEMA_IDENT_WIRE_MAX_PACKAGE_LEN, SCHEMA_IDENT_WIRE_MAX_TYPE_LEN,
+    SCHEMA_IDENT_WIRE_SIZE, SchemaIdentWire, SchemaIdentWireError,
+    TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES, TopicKey,
+    UNTRUSTED_SESSION_CHANNEL_PAYLOAD_CEILING_BYTES,
 };
 pub use read_mode::ReadMode;

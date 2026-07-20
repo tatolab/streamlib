@@ -1089,12 +1089,12 @@ mod layout_tests {
         // v1 (issue #894): initial shape — `write_raw`, `has_port`,
         // `clone_arc`, `drop_arc`.
         assert_eq!(OUTPUT_WRITER_VTABLE_LAYOUT_VERSION, 1);
-        // v2 (#1097 audio-mixer-demo silent-output fix): appends
-        // `max_payload_for_port` so cdylib `read_raw` allocates
-        // exactly the schema-declared `metadata.max_payload_bytes`
-        // and never truncates. Slots: `read_raw`, `has_data`,
-        // `clone_arc`, `drop_arc`, `max_payload_for_port`.
-        assert_eq!(INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION, 2);
+        // v3 (#1421 dynamic PowerOfTwo slot allocation): removes
+        // `max_payload_for_port` — publishers grow their segment on
+        // demand, so `read_raw` is a grow-and-retry protocol and the
+        // authored-budget sizing slot is retired. Slots: `read_raw`,
+        // `has_data`, `clone_arc`, `drop_arc`.
+        assert_eq!(INPUT_MAILBOXES_VTABLE_LAYOUT_VERSION, 3);
         // v11/v15 (M32 #1253) — the five new surface methods vtables all
         // mint at layout version 1.
         assert_eq!(PRESENT_TARGET_METHODS_VTABLE_LAYOUT_VERSION, 1);

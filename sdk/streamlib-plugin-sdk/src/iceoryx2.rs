@@ -38,31 +38,16 @@ use serde::{Deserialize, Serialize as SerdeSerialize};
 use crate::bag::Bag;
 use crate::media_clock::MediaClock;
 
-/// Interim per-channel payload budget for a schema-free [`Bag`] write, in
-/// bytes. Matches the host's `streamlib_ipc_types::MAX_PAYLOAD_SIZE` fixed
-/// iceoryx2 slot size, restated here because the engine-free SDK does not
-/// depend on the host IPC crate.
+/// Default receive-buffer size (bytes) the cdylib read path starts with before
+/// growing to the frame it actually receives. Mirrors the host's
+/// `streamlib_ipc_types::DEFAULT_EXPECTED_PAYLOAD_BYTES`, restated here because
+/// the engine-free SDK does not depend on the host IPC crate.
 ///
-/// This is the phase-1 interim guard (design #1345 §11): a bag with no
-/// declared bound must surface an oversize payload as the named
-/// [`Error::BagPayloadOverflow`] on the write side, never a downstream slot
-/// overrun. It is removed once hint-primed dynamic slot allocation (#1421)
-/// lands.
-pub const BAG_MAX_PAYLOAD_BYTES: usize = 65536;
-
-/// Reject an encoded [`Bag`] payload that would overrun the fixed iceoryx2
-/// slot, before the ABI hop. A length equal to [`BAG_MAX_PAYLOAD_BYTES`]
-/// fits; strictly larger is [`Error::BagPayloadOverflow`].
-fn check_bag_payload_within_budget(port: &str, encoded_len: usize) -> Result<()> {
-    if encoded_len > BAG_MAX_PAYLOAD_BYTES {
-        return Err(Error::BagPayloadOverflow {
-            port: port.to_owned(),
-            actual_bytes: encoded_len,
-            budget_bytes: BAG_MAX_PAYLOAD_BYTES,
-        });
-    }
-    Ok(())
-}
+/// A frame larger than this is delivered by the host grow-and-retry protocol
+/// (#1421), not truncated — so this is a starting hint, never a cap. It retires
+/// the phase-1 interim `BAG_MAX_PAYLOAD_BYTES` write-side budget guard, which
+/// PowerOfTwo dynamic slot allocation obviated.
+pub const BAG_DEFAULT_EXPECTED_PAYLOAD_BYTES: usize = 65536;
 
 /// How frames should be read from an input port's buffer. Engine-free
 /// twin of the engine's `iceoryx2::ReadMode`; the macro emits
@@ -251,15 +236,14 @@ impl OutputWriter {
 
     /// Write a schema-free [`Bag`] to `port` with an explicit timestamp.
     ///
-    /// Encodes the bag as a msgpack named map and writes it over the same
-    /// wire as [`Self::write`]. An encoded payload larger than
-    /// [`BAG_MAX_PAYLOAD_BYTES`] fails with the named
-    /// [`Error::BagPayloadOverflow`] before the ABI hop, never a silent
-    /// truncation or a downstream slot overrun.
+    /// Encodes the bag as a msgpack named map and writes it over the same wire
+    /// as [`Self::write`]. There is no write-side size budget: the host
+    /// publisher grows its iceoryx2 segment (PowerOfTwo) to fit an oversized
+    /// payload, and the node-level per-channel ceiling is the graceful bound
+    /// enforced host-side.
     #[tracing::instrument(level = "trace", skip(self, bag), fields(port = %port))]
     pub fn write_bag(&self, port: &str, bag: &Bag, timestamp_ns: i64) -> Result<()> {
         let data = bag.to_msgpack()?;
-        check_bag_payload_within_budget(port, data.len())?;
         self.write_raw(port, &data, timestamp_ns)
     }
 
@@ -370,68 +354,64 @@ impl InputMailboxes {
     /// Read raw bytes and timestamp from the given port without
     /// deserialization. Returns `Ok(Some((data, timestamp_ns)))` on
     /// success, `Ok(None)` when the mailbox is empty.
+    ///
+    /// Grow-and-retry (#1421): starts with a [`BAG_DEFAULT_EXPECTED_PAYLOAD_BYTES`]
+    /// buffer and, when the host reports the next frame is larger
+    /// (`out_len > buf.len()`, `has_data == true`), resizes to that length and
+    /// reads again. The host stashes the oversized frame across the two calls, so
+    /// a PowerOfTwo-grown payload is delivered rather than dropped.
     pub fn read_raw(&self, port: &str) -> Result<Option<(Vec<u8>, i64)>> {
         if !self.is_configured() {
             return Ok(None);
         }
 
-        // SAFETY: vtable + handle are non-null per is_configured().
-        let max_payload = unsafe {
-            ((*self.vtable).max_payload_for_port)(self.handle, port.as_ptr(), port.len())
-        };
-        if max_payload == 0 {
-            return Err(Error::Link(format!(
-                "InputMailboxes::read_raw(port='{}'): max_payload_for_port \
-                 returned 0 — port is not registered (wiring error: was \
-                 add_port called on this side of the link?)",
-                port
-            )));
+        let mut cap = BAG_DEFAULT_EXPECTED_PAYLOAD_BYTES;
+        for _ in 0..8 {
+            let mut buf = vec![0u8; cap];
+            let mut out_len = 0usize;
+            let mut out_timestamp = 0i64;
+            let mut has_data = false;
+            let mut err_buf = [0u8; 256];
+            let mut err_len = 0usize;
+            // SAFETY: vtable + handle are non-null per is_configured().
+            let rc = unsafe {
+                ((*self.vtable).read_raw)(
+                    self.handle,
+                    port.as_ptr(),
+                    port.len(),
+                    buf.as_mut_ptr(),
+                    buf.len(),
+                    &mut out_len as *mut usize,
+                    &mut out_timestamp as *mut i64,
+                    &mut has_data as *mut bool,
+                    err_buf.as_mut_ptr(),
+                    err_buf.len(),
+                    &mut err_len as *mut usize,
+                )
+            };
+            if rc != 0 {
+                let msg =
+                    String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+                return Err(Error::Link(format!(
+                    "InputMailboxes::read_raw(port='{}') failed: {}",
+                    port, msg
+                )));
+            }
+            if !has_data {
+                return Ok(None);
+            }
+            if out_len > buf.len() {
+                cap = out_len;
+                continue;
+            }
+            buf.truncate(out_len);
+            return Ok(Some((buf, out_timestamp)));
         }
-
-        let mut buf = vec![0u8; max_payload];
-        let mut out_len = 0usize;
-        let mut out_timestamp = 0i64;
-        let mut has_data = false;
-        let mut err_buf = [0u8; 256];
-        let mut err_len = 0usize;
-        // SAFETY: vtable + handle are non-null per is_configured().
-        let rc = unsafe {
-            ((*self.vtable).read_raw)(
-                self.handle,
-                port.as_ptr(),
-                port.len(),
-                buf.as_mut_ptr(),
-                buf.len(),
-                &mut out_len as *mut usize,
-                &mut out_timestamp as *mut i64,
-                &mut has_data as *mut bool,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if rc != 0 {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            return Err(Error::Link(format!(
-                "InputMailboxes::read_raw(port='{}') failed: {}",
-                port, msg
-            )));
-        }
-        if !has_data {
-            return Ok(None);
-        }
-        if out_len > buf.len() {
-            return Err(Error::Link(format!(
-                "InputMailboxes::read_raw(port='{}'): host returned frame \
-                 of {} bytes exceeding the queried max_payload {} — \
-                 protocol violation",
-                port,
-                out_len,
-                buf.len()
-            )));
-        }
-        buf.truncate(out_len);
-        Ok(Some((buf, out_timestamp)))
+        Err(Error::Link(format!(
+            "InputMailboxes::read_raw(port='{}'): frame kept growing across \
+             grow-and-retry attempts — giving up to avoid an unbounded loop",
+            port
+        )))
     }
 
     /// Read the latest frame on `port` as a schema-free [`Bag`].
@@ -500,24 +480,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn payload_at_budget_boundary_is_accepted() {
-        assert!(check_bag_payload_within_budget("frames", BAG_MAX_PAYLOAD_BYTES - 1).is_ok());
-        assert!(check_bag_payload_within_budget("frames", BAG_MAX_PAYLOAD_BYTES).is_ok());
-    }
-
-    #[test]
-    fn payload_over_budget_is_named_overflow() {
-        match check_bag_payload_within_budget("frames", BAG_MAX_PAYLOAD_BYTES + 1) {
-            Err(Error::BagPayloadOverflow {
-                port,
-                actual_bytes,
-                budget_bytes,
-            }) => {
-                assert_eq!(port, "frames");
-                assert_eq!(actual_bytes, BAG_MAX_PAYLOAD_BYTES + 1);
-                assert_eq!(budget_bytes, BAG_MAX_PAYLOAD_BYTES);
-            }
-            other => panic!("expected BagPayloadOverflow, got {:?}", other),
-        }
+    fn bag_default_expected_payload_bytes_matches_host_default() {
+        // The engine-free SDK restates the host's
+        // `streamlib_ipc_types::DEFAULT_EXPECTED_PAYLOAD_BYTES` (64 KiB) as its
+        // read-buffer starting size; a drift here would grow-and-retry from the
+        // wrong floor.
+        assert_eq!(BAG_DEFAULT_EXPECTED_PAYLOAD_BYTES, 65536);
     }
 }

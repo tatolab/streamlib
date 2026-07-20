@@ -170,7 +170,7 @@ pub mod sdk {
     /// `*Inner` placeholders, and `ReadMode`.
     pub mod iceoryx2 {
         pub use crate::iceoryx2::{
-            BAG_MAX_PAYLOAD_BYTES, InputMailboxes, InputMailboxesInner, OutputWriter,
+            BAG_DEFAULT_EXPECTED_PAYLOAD_BYTES, InputMailboxes, InputMailboxesInner, OutputWriter,
             OutputWriterInner, ReadMode,
         };
     }

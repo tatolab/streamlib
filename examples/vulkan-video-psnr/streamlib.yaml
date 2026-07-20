@@ -6,10 +6,10 @@
 # registers the wire-vocabulary schemas (VideoFrame, EncodedVideoFrame,
 # …) — via the recursive dep walker that runs when each
 # `runtime.add_module(...)` in `src/main.rs` follows its package's
-# transitive deps. Required so iceoryx2 publishers size from each
-# schema's declared `max_payload_bytes` instead of the 64 KiB default —
-# without it the encoder's first IDR is rejected as ExceedsMaxLoanSize
-# and the decoder never sees SPS/PPS.
+# transitive deps. Required so iceoryx2 publishers prime from each
+# schema's declared `expected_payload_bytes` hint instead of the 64 KiB
+# default — the publisher grows its PowerOfTwo segment for a larger first
+# IDR, and the hint just avoids a first-frame regrow.
 
 package:
   org: tatolab

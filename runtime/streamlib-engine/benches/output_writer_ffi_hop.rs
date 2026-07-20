@@ -50,7 +50,10 @@ use std::sync::Arc;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use iceoryx2::prelude::*;
 
-use streamlib_engine::iceoryx2::{OutputWriter, OutputWriterInner, SchemaIdentWire};
+use streamlib_engine::iceoryx2::{
+    ChannelTrustTier, OutputWriter, OutputWriterInner, SchemaIdentWire,
+    TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+};
 
 /// Per-bench-run unique service-name suffix so parallel benches
 /// don't collide on iceoryx2's machine-global `/dev/shm` namespace.
@@ -121,7 +124,15 @@ fn build_inner_with_connection(tag: &str) -> BenchFixture {
     let inner = Arc::new(OutputWriterInner::new());
     let schema_ident =
         SchemaIdentWire::from_segments("tatolab", "bench", "FfiHop", 1, 0, 0).unwrap();
-    inner.set_channel_publisher("out", schema_ident, publisher);
+    inner.set_channel_publisher(
+        "out",
+        schema_ident,
+        publisher,
+        "bench/out".to_string(),
+        ChannelTrustTier::Trusted,
+        4096,
+        TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+    );
     inner.add_channel_notifier("out", notifier);
 
     BenchFixture {
@@ -238,7 +249,15 @@ fn build_inner_with_fanout(tag: &str, subscriber_count: usize) -> FanoutFixture 
     let inner = Arc::new(OutputWriterInner::new());
     let schema_ident =
         SchemaIdentWire::from_segments("tatolab", "bench", "FfiHop", 1, 0, 0).unwrap();
-    inner.set_channel_publisher("out", schema_ident, publisher);
+    inner.set_channel_publisher(
+        "out",
+        schema_ident,
+        publisher,
+        "bench/out".to_string(),
+        ChannelTrustTier::Trusted,
+        4096,
+        TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+    );
 
     let mut listeners = Vec::with_capacity(subscriber_count);
     for i in 0..subscriber_count {

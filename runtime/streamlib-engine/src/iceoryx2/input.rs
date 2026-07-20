@@ -126,6 +126,31 @@ impl SendableListener {
     }
 }
 
+/// Outcome of a bounded read for the cdylib grow-and-retry read protocol.
+///
+/// A publisher under PowerOfTwo growth can deliver a frame larger than any fixed
+/// receive buffer; [`InputMailboxesInner::read_raw_bounded`] reports that as
+/// [`BoundedReadOutcome::NeedsLargerBuffer`] (the frame is stashed, not dropped)
+/// so the caller resizes and retries.
+pub enum BoundedReadOutcome {
+    /// The port's mailbox was empty.
+    Empty,
+    /// A frame fit the caller's buffer and is being returned.
+    Frame {
+        /// The frame's serialized body (header stripped).
+        data: Vec<u8>,
+        /// The frame's monotonic timestamp.
+        timestamp_ns: i64,
+    },
+    /// The next frame is `required_bytes` long — larger than the caller's
+    /// buffer. The caller must resize to at least this many bytes and read
+    /// again; the frame is held for that retry.
+    NeedsLargerBuffer {
+        /// Byte length the caller's next buffer must reach.
+        required_bytes: usize,
+    },
+}
+
 /// Per-port configuration: mailbox and read mode.
 ///
 /// Interior mutability: the host-side wiring path discovers
@@ -137,17 +162,12 @@ impl SendableListener {
 struct PortConfig {
     mailbox: PortMailbox,
     read_mode: ReadMode,
-    /// Schema-declared upper bound on serialized frame size for this
-    /// port — mirrors the value used by the publisher to size the
-    /// iceoryx2 service's slot. The cdylib's `read_raw` queries this
-    /// via the v2 `max_payload_for_port` vtable slot to allocate the
-    /// receive buffer exactly, eliminating the v1 4 KiB-then-retry
-    /// dance. Defaults to [`crate::iceoryx2::MAX_PAYLOAD_SIZE`] when
-    /// the port is added without an explicit max (test paths;
-    /// in-tree wire path overrides via
-    /// [`InputMailboxesInner::set_port_max_payload_bytes`] from the
-    /// compiler op).
-    max_payload_bytes: usize,
+    /// A frame popped by [`InputMailboxesInner::read_raw_bounded`] that did not
+    /// fit the caller's buffer. It is stashed here (not lost) and re-delivered
+    /// on the next call once the caller resizes — the grow-and-retry contract
+    /// that lets a PowerOfTwo-grown oversized payload reach the cdylib without
+    /// dropping it or re-running the per-frame schema-mismatch check.
+    staged_oversized: Option<(Vec<u8>, i64)>,
     /// Schema-ident tag this consumer port expects every inbound frame to
     /// carry — the wire form of the port's declared input schema, set by the
     /// compiler op at wire time via
@@ -195,13 +215,6 @@ impl InputMailboxesInner {
 
     /// Add a mailbox for the given port with the specified buffer
     /// size and read mode.
-    ///
-    /// The port's `max_payload_bytes` is set to
-    /// [`crate::iceoryx2::MAX_PAYLOAD_SIZE`] by default — the
-    /// compiler op overrides it via
-    /// [`set_port_max_payload_bytes`] at wire time based on the
-    /// link's schema (`metadata.max_payload_bytes`). The cdylib's
-    /// v2 `max_payload_for_port` vtable slot reads this value.
     pub fn add_port(&self, port: &str, buffer_size: usize, read_mode: ReadMode) {
         tracing::debug!(
             port = port,
@@ -214,34 +227,11 @@ impl InputMailboxesInner {
             PortConfig {
                 mailbox: PortMailbox::new(buffer_size),
                 read_mode,
-                max_payload_bytes: crate::iceoryx2::MAX_PAYLOAD_SIZE,
+                staged_oversized: None,
                 expected_schema_ident: SchemaIdentWire::default(),
                 schema_mismatch_observed: AtomicBool::new(false),
             },
         );
-    }
-
-    /// Override the schema-declared `metadata.max_payload_bytes`
-    /// for a port that has already been added via [`add_port`].
-    /// Called by the compiler op at wire time after computing the
-    /// link's max via
-    /// `embedded_schemas::max_payload_bytes_for_port_spec`. The
-    /// cdylib's v2 `max_payload_for_port` vtable slot returns this
-    /// value so its `read_raw` allocates exactly.
-    ///
-    /// No-op for unknown ports (the compiler op calls this only
-    /// after [`add_port`] is known to have succeeded).
-    pub fn set_port_max_payload_bytes(&self, port: &str, max_payload_bytes: usize) {
-        if let Some(cfg) = self.ports.lock().get_mut(port) {
-            cfg.max_payload_bytes = max_payload_bytes;
-        }
-    }
-
-    /// Read the per-port `max_payload_bytes` set by the wire path.
-    /// Returns `None` for unknown ports (the v2 vtable callback
-    /// surfaces this as `0`, the caller's wiring-error sentinel).
-    pub fn max_payload_for_port(&self, port: &str) -> Option<usize> {
-        self.ports.lock().get(port).map(|cfg| cfg.max_payload_bytes)
     }
 
     /// Record the schema-ident tag this port expects inbound frames to carry.
@@ -378,46 +368,84 @@ impl InputMailboxesInner {
         }
     }
 
-    /// Read raw bytes and timestamp from the given port without
-    /// deserialization. Uses the port's read mode. Returns
-    /// `Ok(Some((data, timestamp_ns)))` if data is available, `Ok(None)`
-    /// if the mailbox is empty.
-    pub fn read_raw(&self, port: &str) -> Result<Option<(Vec<u8>, i64)>> {
+    /// Read the next frame for `port` into a caller buffer bounded by `out_cap`
+    /// bytes, following the port's read mode.
+    ///
+    /// This is the grow-and-retry primitive behind the cdylib read path: with
+    /// PowerOfTwo publisher growth a frame can exceed any fixed receive buffer,
+    /// so a frame that would not fit `out_cap` is stashed
+    /// ([`PortConfig::staged_oversized`]) rather than dropped and reported as
+    /// [`BoundedReadOutcome::NeedsLargerBuffer`]. The caller resizes to
+    /// `required_bytes` and calls again; the staged frame is re-delivered in
+    /// order, without re-running the per-frame schema-mismatch check.
+    pub fn read_raw_bounded(&self, port: &str, out_cap: usize) -> Result<BoundedReadOutcome> {
         self.receive_pending();
 
-        let ports = self.ports.lock();
+        let mut ports = self.ports.lock();
         let port_config = ports
-            .get(port)
+            .get_mut(port)
             .ok_or_else(|| Error::Link(format!("Unknown input port: {}", port)))?;
 
-        let raw = match port_config.read_mode {
-            ReadMode::SkipToLatest => port_config.mailbox.pop_latest(),
-            ReadMode::ReadNextInOrder => port_config.mailbox.pop(),
+        let candidate: (Vec<u8>, i64) = if let Some(staged) = port_config.staged_oversized.take() {
+            staged
+        } else {
+            let raw = match port_config.read_mode {
+                ReadMode::SkipToLatest => port_config.mailbox.pop_latest(),
+                ReadMode::ReadNextInOrder => port_config.mailbox.pop(),
+            };
+            match raw {
+                None => return Ok(BoundedReadOutcome::Empty),
+                Some(r) => {
+                    let header = FrameHeader::read_from_slice(&r);
+                    if classify_wire_schema_agreement(
+                        header.schema(),
+                        &port_config.expected_schema_ident,
+                    ) == SchemaAgreement::Mismatch
+                        && !port_config
+                            .schema_mismatch_observed
+                            .swap(true, Ordering::Relaxed)
+                    {
+                        tracing::warn!(
+                            port = port,
+                            stamped_schema = %header.schema().render_joined(),
+                            expected_schema = %port_config.expected_schema_ident.render_joined(),
+                            "read_raw: inbound frame carries a schema tag that does not \
+                             match this port's expected input schema (loose validation; \
+                             warned once per port). A producer was re-typed, or the \
+                             wrong producer is wired to this port."
+                        );
+                    }
+                    let data =
+                        r[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + header.len as usize].to_vec();
+                    (data, header.timestamp_ns)
+                }
+            }
         };
 
-        match raw {
-            Some(r) => {
-                let header = FrameHeader::read_from_slice(&r);
-                if classify_wire_schema_agreement(header.schema(), &port_config.expected_schema_ident)
-                    == SchemaAgreement::Mismatch
-                    && !port_config
-                        .schema_mismatch_observed
-                        .swap(true, Ordering::Relaxed)
-                {
-                    tracing::warn!(
-                        port = port,
-                        stamped_schema = %header.schema().render_joined(),
-                        expected_schema = %port_config.expected_schema_ident.render_joined(),
-                        "read_raw: inbound frame carries a schema tag that does not \
-                         match this port's expected input schema (loose validation; \
-                         warned once per port). A producer was re-typed, or the \
-                         wrong producer is wired to this port."
-                    );
-                }
-                let data = r[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + header.len as usize].to_vec();
-                Ok(Some((data, header.timestamp_ns)))
-            }
-            None => Ok(None),
+        if candidate.0.len() <= out_cap {
+            Ok(BoundedReadOutcome::Frame {
+                data: candidate.0,
+                timestamp_ns: candidate.1,
+            })
+        } else {
+            let required_bytes = candidate.0.len();
+            port_config.staged_oversized = Some(candidate);
+            Ok(BoundedReadOutcome::NeedsLargerBuffer { required_bytes })
+        }
+    }
+
+    /// Read the next frame for `port` with no buffer bound — the host-internal
+    /// convenience over [`Self::read_raw_bounded`]. Returns
+    /// `Ok(Some((data, timestamp_ns)))` if data is available, `Ok(None)` if the
+    /// mailbox is empty.
+    pub fn read_raw(&self, port: &str) -> Result<Option<(Vec<u8>, i64)>> {
+        match self.read_raw_bounded(port, usize::MAX)? {
+            BoundedReadOutcome::Empty => Ok(None),
+            BoundedReadOutcome::Frame { data, timestamp_ns } => Ok(Some((data, timestamp_ns))),
+            // Unreachable: usize::MAX cap always fits.
+            BoundedReadOutcome::NeedsLargerBuffer { required_bytes } => Err(Error::Link(format!(
+                "read_raw: frame of {required_bytes} bytes did not fit an unbounded buffer"
+            ))),
         }
     }
 
@@ -612,80 +640,73 @@ impl InputMailboxes {
     /// deserialization. Returns `Ok(Some((data, timestamp_ns)))` on
     /// success, `Ok(None)` when the mailbox is empty.
     ///
-    /// Allocates `out_buf` to the schema-declared
-    /// `metadata.max_payload_bytes` for the port (queried via the
-    /// v2 `max_payload_for_port` vtable slot). The iceoryx2 service
-    /// is sized by the same bound on the publisher side, so no
-    /// inbound frame can exceed `out_cap` — truncation is
-    /// structurally impossible and surfaces as a hard error
-    /// (protocol violation).
+    /// Sizes the receive buffer to [`DEFAULT_EXPECTED_PAYLOAD_BYTES`] and grows
+    /// on demand: a publisher under PowerOfTwo growth can deliver a frame larger
+    /// than any fixed buffer, so when the host reports the next frame is bigger
+    /// than `out_cap` (`out_len > buf.len()`, `has_data == true`) this resizes to
+    /// exactly that length and reads again. The host stashes the oversized frame
+    /// across the two calls (grow-and-retry), so nothing is dropped — retiring
+    /// the pre-#1421 `max_payload_for_port` up-front sizing that dropped every
+    /// frame past the authored budget.
     pub fn read_raw(&self, port: &str) -> Result<Option<(Vec<u8>, i64)>> {
+        use streamlib_ipc_types::DEFAULT_EXPECTED_PAYLOAD_BYTES;
+
         if !self.is_configured() {
             return Ok(None);
         }
 
-        // SAFETY: vtable + handle are non-null per is_configured().
-        let max_payload = unsafe {
-            ((*self.vtable).max_payload_for_port)(self.handle, port.as_ptr(), port.len())
-        };
-        if max_payload == 0 {
-            return Err(Error::Link(format!(
-                "InputMailboxes::read_raw(port='{}'): max_payload_for_port \
-                 returned 0 — port is not registered (wiring error: was \
-                 add_port called on this side of the link?)",
-                port
-            )));
+        let mut cap = DEFAULT_EXPECTED_PAYLOAD_BYTES;
+        // The host stashes an oversized frame and re-delivers it at the exact
+        // required size, so two iterations suffice; the small bound guards
+        // against a pathological producer growing the frame between calls.
+        for _ in 0..8 {
+            let mut buf = vec![0u8; cap];
+            let mut out_len = 0usize;
+            let mut out_timestamp = 0i64;
+            let mut has_data = false;
+            let mut err_buf = [0u8; 256];
+            let mut err_len = 0usize;
+            // SAFETY: vtable + handle are non-null per is_configured().
+            let rc = unsafe {
+                ((*self.vtable).read_raw)(
+                    self.handle,
+                    port.as_ptr(),
+                    port.len(),
+                    buf.as_mut_ptr(),
+                    buf.len(),
+                    &mut out_len as *mut usize,
+                    &mut out_timestamp as *mut i64,
+                    &mut has_data as *mut bool,
+                    err_buf.as_mut_ptr(),
+                    err_buf.len(),
+                    &mut err_len as *mut usize,
+                )
+            };
+            if rc != 0 {
+                let msg =
+                    String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+                return Err(Error::Link(format!(
+                    "InputMailboxes::read_raw(port='{}') failed: {}",
+                    port, msg
+                )));
+            }
+            if !has_data {
+                return Ok(None);
+            }
+            if out_len > buf.len() {
+                // Host held the oversized frame; resize to exactly its length
+                // and read again (grow-and-retry, no data loss).
+                cap = out_len;
+                continue;
+            }
+            buf.truncate(out_len);
+            return Ok(Some((buf, out_timestamp)));
         }
-
-        let mut buf = vec![0u8; max_payload];
-        let mut out_len = 0usize;
-        let mut out_timestamp = 0i64;
-        let mut has_data = false;
-        let mut err_buf = [0u8; 256];
-        let mut err_len = 0usize;
-        // SAFETY: vtable + handle are non-null per is_configured().
-        let rc = unsafe {
-            ((*self.vtable).read_raw)(
-                self.handle,
-                port.as_ptr(),
-                port.len(),
-                buf.as_mut_ptr(),
-                buf.len(),
-                &mut out_len as *mut usize,
-                &mut out_timestamp as *mut i64,
-                &mut has_data as *mut bool,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if rc != 0 {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            return Err(Error::Link(format!(
-                "InputMailboxes::read_raw(port='{}') failed: {}",
-                port, msg
-            )));
-        }
-        if !has_data {
-            return Ok(None);
-        }
-        // Truncation is impossible by service-creation invariant
-        // (publisher can't loan slot > max_payload, and we sized
-        // our buffer to max_payload). Defensive check so a future
-        // protocol mismatch surfaces loudly rather than silently
-        // corrupting downstream deserialization.
-        if out_len > buf.len() {
-            return Err(Error::Link(format!(
-                "InputMailboxes::read_raw(port='{}'): host returned frame \
-                 of {} bytes exceeding the queried max_payload {} — \
-                 protocol violation",
-                port,
-                out_len,
-                buf.len()
-            )));
-        }
-        buf.truncate(out_len);
-        Ok(Some((buf, out_timestamp)))
+        Err(Error::Link(format!(
+            "InputMailboxes::read_raw(port='{}'): frame kept growing across \
+             grow-and-retry attempts — giving up to avoid an unbounded loop",
+            port
+        )))
     }
 
     /// Check if a port has any payloads available.

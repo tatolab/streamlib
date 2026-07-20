@@ -44,7 +44,7 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use streamlib_plugin_abi::OutputWriterVTable;
 
-use super::{FRAME_HEADER_SIZE, FrameHeader, SchemaIdentWire};
+use super::{ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader, SchemaIdentWire};
 use crate::core::error::{Error, Result};
 use crate::core::media_clock::MediaClock;
 
@@ -62,6 +62,23 @@ struct ChannelEgress {
     schema_ident: SchemaIdentWire,
     publisher: Publisher<ipc::Service, [u8], ()>,
     notifiers: Vec<Notifier<ipc::Service>>,
+    /// iceoryx2 service name for this channel (`{source}/{output_port}`) —
+    /// carried only for the growth / ceiling tracing fields.
+    channel_service_name: String,
+    /// Trust tier selecting the per-channel ceiling; set at wire time from the
+    /// process boundary (host-to-host is trusted; a subprocess destination is
+    /// untrusted-session).
+    trust_tier: ChannelTrustTier,
+    /// Per-channel payload ceiling in bytes. A frame above this is refused with
+    /// [`Error::PayloadExceedsChannelCeiling`], counted, and the stream
+    /// continues.
+    ceiling_bytes: usize,
+    /// Best-effort tracking of the publisher's current data-segment capacity so
+    /// a PowerOfTwo growth event is observable. Primed to the hint's slot size;
+    /// bumped (to `next_power_of_two`) the first time a loan exceeds it.
+    current_slot_capacity_bytes: usize,
+    /// Count of samples refused for crossing [`Self::ceiling_bytes`].
+    refused_over_ceiling_count: u64,
 }
 
 /// Host-side inner state for an output writer. Owns the per-output-port
@@ -102,14 +119,21 @@ impl OutputWriterInner {
     /// [`FrameHeader`] this port publishes. Callers build it once at wiring time
     /// from the port's structured `PortSchemaSpec` via
     /// [`SchemaIdentWire::from_segments`] — no parser runs on the per-frame hot
-    /// path. Called once per output port (the first link out of it); a second
-    /// call replaces the publisher, which the wiring op avoids via
-    /// [`Self::has_channel_publisher`].
+    /// path. `channel_service_name`, `trust_tier`, `expected_payload_bytes`, and
+    /// `ceiling_bytes` prime the growth / ceiling observability the per-frame
+    /// [`Self::write_raw`] enforces. Called once per output port (the first link
+    /// out of it); a second call replaces the publisher, which the wiring op
+    /// avoids via [`Self::has_channel_publisher`].
+    #[allow(clippy::too_many_arguments)]
     pub fn set_channel_publisher(
         &self,
         output_port: &str,
         schema_ident: SchemaIdentWire,
         publisher: Publisher<ipc::Service, [u8], ()>,
+        channel_service_name: String,
+        trust_tier: ChannelTrustTier,
+        expected_payload_bytes: usize,
+        ceiling_bytes: usize,
     ) {
         self.channels.lock().insert(
             output_port.to_string(),
@@ -117,8 +141,23 @@ impl OutputWriterInner {
                 schema_ident,
                 publisher,
                 notifiers: Vec::new(),
+                channel_service_name,
+                trust_tier,
+                ceiling_bytes,
+                current_slot_capacity_bytes: expected_payload_bytes + FRAME_HEADER_SIZE,
+                refused_over_ceiling_count: 0,
             },
         );
+    }
+
+    /// Number of samples this output port's channel refused for crossing its
+    /// per-channel ceiling. Observation surface for tests and diagnostics.
+    pub fn refused_over_ceiling_count(&self, output_port: &str) -> u64 {
+        self.channels
+            .lock()
+            .get(output_port)
+            .map(|e| e.refused_over_ceiling_count)
+            .unwrap_or(0)
     }
 
     /// Append a destination notifier to an output port's channel.
@@ -139,12 +178,59 @@ impl OutputWriterInner {
     /// One zero-copy loan reaches every channel subscriber; the frame is built
     /// and sent ONCE, then every destination notifier is signalled.
     pub fn write_raw(&self, port: &str, data: &[u8], timestamp_ns: i64) -> Result<()> {
-        let channels = self.channels.lock();
+        let mut channels = self.channels.lock();
         let egress = channels
-            .get(port)
+            .get_mut(port)
             .ok_or_else(|| Error::Link(format!("Unknown output port: {}", port)))?;
 
         let total_len = FRAME_HEADER_SIZE + data.len();
+
+        // Per-channel ceiling: the graceful, observable layer in front of the
+        // subprocess cgroup `memory.max` backstop. Refuse + count, never die.
+        if total_len > egress.ceiling_bytes {
+            egress.refused_over_ceiling_count += 1;
+            tracing::warn!(
+                channel = %egress.channel_service_name,
+                payload_bytes = total_len,
+                ceiling_bytes = egress.ceiling_bytes,
+                tier = egress.trust_tier.as_str(),
+                refused_count = egress.refused_over_ceiling_count,
+                "output channel refused a payload above its per-channel ceiling"
+            );
+            return Err(Error::PayloadExceedsChannelCeiling {
+                channel: egress.channel_service_name.clone(),
+                payload_bytes: total_len,
+                ceiling_bytes: egress.ceiling_bytes,
+                tier: egress.trust_tier.as_str().to_string(),
+            });
+        }
+
+        // PowerOfTwo growth is transparent inside iceoryx2; surface it here so a
+        // segment regrow (channel + old/new segment size) is observable, and
+        // warn once the segment crosses a quarter of the ceiling.
+        if total_len > egress.current_slot_capacity_bytes {
+            let old = egress.current_slot_capacity_bytes;
+            let new = total_len.next_power_of_two();
+            tracing::info!(
+                channel = %egress.channel_service_name,
+                old_segment_bytes = old,
+                new_segment_bytes = new,
+                tier = egress.trust_tier.as_str(),
+                "iceoryx2 publisher data segment grew (PowerOfTwo)"
+            );
+            let quarter = egress.ceiling_bytes / 4;
+            if new > quarter && old <= quarter {
+                tracing::warn!(
+                    channel = %egress.channel_service_name,
+                    segment_bytes = new,
+                    ceiling_bytes = egress.ceiling_bytes,
+                    tier = egress.trust_tier.as_str(),
+                    "iceoryx2 publisher segment crossed a quarter of the channel ceiling"
+                );
+            }
+            egress.current_slot_capacity_bytes = new;
+        }
+
         let mut frame = vec![0u8; total_len];
         FrameHeader::new(port, egress.schema_ident, timestamp_ns, data.len() as u32)
             .map_err(|e| Error::Link(format!("output port '{}': {}", port, e)))?
@@ -464,7 +550,15 @@ mod tests {
         let inner = Arc::new(OutputWriterInner::new());
         let schema_ident =
             SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
-        inner.set_channel_publisher("out", schema_ident, publisher);
+        inner.set_channel_publisher(
+            "out",
+            schema_ident,
+            publisher,
+            "test/out".to_string(),
+            crate::iceoryx2::ChannelTrustTier::Trusted,
+            4096,
+            crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+        );
         inner.add_channel_notifier("out", notifier);
 
         // Pre-flight: the listener has no events queued.
@@ -529,7 +623,15 @@ mod tests {
         let inner = Arc::new(OutputWriterInner::new());
         let schema_ident =
             SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
-        inner.set_channel_publisher("out", schema_ident, publisher);
+        inner.set_channel_publisher(
+            "out",
+            schema_ident,
+            publisher,
+            "test/out".to_string(),
+            crate::iceoryx2::ChannelTrustTier::Trusted,
+            4096,
+            crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+        );
 
         // N destination notifiers on the one channel — the compiler op's wiring
         // shape for N destinations. `write_raw` signals each, but the frame is

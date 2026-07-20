@@ -201,14 +201,16 @@ pub enum Error {
     BagEncodeFailed(String),
 
     #[error(
-        "Bag payload of {actual_bytes} bytes on port '{port}' exceeds the \
-         per-channel budget of {budget_bytes} bytes — split the payload or \
-         raise the port's declared max_payload_bytes"
+        "payload of {payload_bytes} bytes on channel '{channel}' exceeds the \
+         per-channel ceiling of {ceiling_bytes} bytes ({tier} tier) — the sample \
+         was refused and counted, the stream continues; raise the node's \
+         max_payload_bytes_per_channel for this tier or split the payload"
     )]
-    BagPayloadOverflow {
-        port: String,
-        actual_bytes: usize,
-        budget_bytes: usize,
+    PayloadExceedsChannelCeiling {
+        channel: String,
+        payload_bytes: usize,
+        ceiling_bytes: usize,
+        tier: String,
     },
 
     #[error(transparent)]
