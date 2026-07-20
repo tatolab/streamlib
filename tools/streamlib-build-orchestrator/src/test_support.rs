@@ -50,7 +50,7 @@ packages = ["src/streamlib"]
     .unwrap();
     std::fs::write(
         pkg.join("schemas").join("test_schema.yaml"),
-        "metadata:\n  type: TestSchema\n  max_payload_bytes: 1024\nproperties:\n  value:\n    type: uint32\n",
+        "metadata:\n  type: TestSchema\n  expected_payload_bytes: 1024\nproperties:\n  value:\n    type: uint32\n",
     )
     .unwrap();
     sdk

@@ -1532,7 +1532,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.join("schemas/t.yaml"),
-            "metadata:\n  type: T\n  max_payload_bytes: 16\n",
+            "metadata:\n  type: T\n  expected_payload_bytes: 16\n",
         )
         .unwrap();
     }
@@ -1682,7 +1682,7 @@ mod tests {
         std::fs::create_dir(dir.path().join("schemas")).unwrap();
         std::fs::write(
             dir.path().join("schemas/t.yaml"),
-            "metadata:\n  type: T\n  max_payload_bytes: 16\n",
+            "metadata:\n  type: T\n  expected_payload_bytes: 16\n",
         )
         .unwrap();
 
@@ -1789,7 +1789,7 @@ mod tests {
         std::fs::create_dir_all(dir.join("schemas")).unwrap();
         std::fs::write(
             dir.join("schemas/local.yaml"),
-            "metadata:\n  type: LocalT\n  max_payload_bytes: 16\n",
+            "metadata:\n  type: LocalT\n  expected_payload_bytes: 16\n",
         )
         .unwrap();
         std::fs::write(
@@ -1876,7 +1876,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             pkg.join("schemas/t.yaml"),
-            "metadata:\n  type: T\n  max_payload_bytes: 16\n",
+            "metadata:\n  type: T\n  expected_payload_bytes: 16\n",
         )
         .unwrap();
 
@@ -1930,7 +1930,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.path().join("schemas/t.yaml"),
-            "metadata:\n  type: T\n  max_payload_bytes: 16\n",
+            "metadata:\n  type: T\n  expected_payload_bytes: 16\n",
         )
         .unwrap();
 
@@ -2057,7 +2057,7 @@ mod tests {
         std::fs::create_dir(dir.path().join("schemas")).unwrap();
         std::fs::write(
             dir.path().join("schemas/t.yaml"),
-            "metadata:\n  type: T\n  max_payload_bytes: 16\n",
+            "metadata:\n  type: T\n  expected_payload_bytes: 16\n",
         )
         .unwrap();
         let err = assemble_artifact(
@@ -2462,7 +2462,7 @@ mod tests {
         std::fs::create_dir(dir.path().join("schemas")).unwrap();
         std::fs::write(
             dir.path().join("schemas/t.yaml"),
-            "metadata:\n  type: T\n  max_payload_bytes: 16\n",
+            "metadata:\n  type: T\n  expected_payload_bytes: 16\n",
         )
         .unwrap();
         let err = assemble_artifact(
@@ -2555,7 +2555,7 @@ mod tests {
         std::fs::create_dir(dir.path().join("schemas")).unwrap();
         std::fs::write(
             dir.path().join("schemas/t.yaml"),
-            "metadata:\n  type: T\n  max_payload_bytes: 16\n",
+            "metadata:\n  type: T\n  expected_payload_bytes: 16\n",
         )
         .unwrap();
 
@@ -2594,7 +2594,7 @@ mod tests {
         std::fs::create_dir(pkg.join("schemas")).unwrap();
         std::fs::write(
             pkg.join("schemas/t.yaml"),
-            "metadata:\n  type: T\n  max_payload_bytes: 16\n",
+            "metadata:\n  type: T\n  expected_payload_bytes: 16\n",
         )
         .unwrap();
 
