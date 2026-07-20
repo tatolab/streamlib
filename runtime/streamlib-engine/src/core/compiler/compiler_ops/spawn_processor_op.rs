@@ -158,8 +158,10 @@ fn spawn_dedicated_thread(
 
     let processor_arc_clone = Arc::clone(&processor_arc);
 
-    // 4 MB stack — FramePayload is 128 KB inline (MAX_PAYLOAD_SIZE) and
-    // multiple instances may be on the stack during IPC read/write operations.
+    // Generous 8 MB stack — processors run arbitrary codec / plugin code
+    // with deep call stacks. IPC payloads are slice-based (`[u8]`) in
+    // iceoryx2 shared-memory segments, so frame bytes never sit inline on
+    // this stack.
     //
     // No `.name()` set on the Builder — Linux's `pthread_setname_np`
     // truncates at 15 chars and most apps that name threads use fixed
