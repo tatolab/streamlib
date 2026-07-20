@@ -387,13 +387,7 @@ impl RuntimeOperations for Runner {
         from: OutputLinkPortRef,
         to: InputLinkPortRef,
     ) -> BoxFuture<'_, Result<LinkUniqueId>> {
-        let compiler = Arc::clone(&self.compiler);
-        Box::pin(connect_impl(
-            compiler,
-            from,
-            to,
-            SchemaValidationPosture::Loose,
-        ))
+        self.connect_with_async(from, to, ConnectOptions::loose())
     }
 
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
@@ -453,20 +447,7 @@ impl RuntimeOperations for Runner {
     }
 
     fn connect(&self, from: OutputLinkPortRef, to: InputLinkPortRef) -> Result<LinkUniqueId> {
-        match &self.tokio_runtime_variant {
-            TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.block_on(self.connect_async(from, to)),
-            TokioRuntimeVariant::ExternalTokioHandle(handle) => {
-                let compiler = Arc::clone(&self.compiler);
-                let (tx, rx) = std::sync::mpsc::channel();
-                handle.spawn(async move {
-                    let result =
-                        connect_impl(compiler, from, to, SchemaValidationPosture::Loose).await;
-                    let _ = tx.send(result);
-                });
-                rx.recv()
-                    .map_err(|_| Error::Runtime("Task channel closed".into()))?
-            }
-        }
+        self.connect_with(from, to, ConnectOptions::loose())
     }
 
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {

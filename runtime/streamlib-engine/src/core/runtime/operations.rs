@@ -21,10 +21,6 @@ pub use crate::core::schema_agreement::SchemaValidationPosture;
 /// [`ConnectOptions::strict`] so the same mismatch instead hard-fails at the
 /// wiring site with [`Error::SchemaIdentMismatch`].
 ///
-/// Non-exhaustive so new per-wiring-site knobs can be added without breaking
-/// call sites — construct via [`ConnectOptions::default`],
-/// [`ConnectOptions::strict`], or [`ConnectOptions::with_validation`].
-///
 /// [`Error::SchemaIdentMismatch`]: crate::core::error::Error::SchemaIdentMismatch
 #[derive(Debug, Clone, Default)]
 #[non_exhaustive]
