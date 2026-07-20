@@ -749,7 +749,7 @@ mod connect_schema_agreement_tests {
     /// `Runner::connect_with` authoring surface with [`ConnectOptions::strict`]
     /// over a concrete producer/consumer schema mismatch hard-fails with the
     /// typed [`Error::SchemaIdentMismatch`] and does not wire the link, while
-    /// [`ConnectOptions::default`] (loose) over the same pair still wires it.
+    /// [`ConnectOptions::loose`] over the same pair still wires it.
     ///
     /// Mentally reverting `connect_with` to drop `options.validation` — routing
     /// through the loose `connect` — makes the strict half return `Ok` and fails
@@ -790,7 +790,7 @@ mod connect_schema_agreement_tests {
             .connect_with(
                 OutputLinkPortRef::new(producer, "out"),
                 InputLinkPortRef::new(consumer, "in"),
-                ConnectOptions::default(),
+                ConnectOptions::loose(),
             )
             .expect("loose connect_with over the same pair must still wire the link");
     }
@@ -800,7 +800,7 @@ mod connect_schema_agreement_tests {
     /// awaiting `Runner::connect_with_async` from inside a tokio task under
     /// [`ConnectOptions::strict`] hard-fails a concrete producer/consumer schema
     /// mismatch with the typed [`Error::SchemaIdentMismatch`] and does not wire
-    /// the link, while [`ConnectOptions::default`] (loose) over the same pair
+    /// the link, while [`ConnectOptions::loose`] over the same pair
     /// still wires it.
     ///
     /// Mentally reverting `connect_with_async` to thread a hardcoded `Loose`
@@ -840,7 +840,7 @@ mod connect_schema_agreement_tests {
         block_on(runtime.connect_with_async(
             OutputLinkPortRef::new(producer, "out"),
             InputLinkPortRef::new(consumer, "in"),
-            ConnectOptions::default(),
+            ConnectOptions::loose(),
         ))
         .expect("loose connect_with_async over the same pair must still wire the link");
     }

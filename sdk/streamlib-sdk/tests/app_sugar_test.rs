@@ -190,7 +190,7 @@ fn app_connect_with_forwards_strict_posture_to_runner() {
     app.connect_with(
         (&producer, "out"),
         (&consumer, "in"),
-        ConnectOptions::default(),
+        ConnectOptions::loose(),
     )
     .expect("loose App::connect_with over the same pair must still wire the link");
 }
