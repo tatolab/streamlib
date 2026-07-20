@@ -14,7 +14,7 @@ mod read_mode;
 pub use input::{BoundedReadOutcome, InputMailboxes, InputMailboxesInner};
 pub use mailbox::PortMailbox;
 pub use node::{Iceoryx2EventService, Iceoryx2Node, Iceoryx2NotifyService, Iceoryx2Service};
-pub use output::{OutputWriter, OutputWriterInner};
+pub use output::{ChannelEgressConfig, OutputWriter, OutputWriterInner};
 pub use overflow::Overflow;
 pub use payload::{
     ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, DEFAULT_MAX_QUEUED_MESSAGES, EventPayload,

@@ -37,8 +37,8 @@ use std::time::{Duration, Instant};
 use iceoryx2::prelude::*;
 
 use crate::sdk::iceoryx2::{
-    ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader, InputMailboxes, InputMailboxesInner,
-    OutputWriter, OutputWriterInner, ReadMode, SchemaIdentWire,
+    ChannelEgressConfig, ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader, InputMailboxes,
+    InputMailboxesInner, OutputWriter, OutputWriterInner, ReadMode, SchemaIdentWire,
     TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
 };
 use crate::sdk::processors::{EmptyConfig, GeneratedProcessor};
@@ -132,10 +132,12 @@ fn fixture_frame_traverses_the_inline_forward_processor() {
         "video_out",
         video_frame_schema(),
         publisher,
-        "e2e/video_out".to_string(),
-        ChannelTrustTier::Trusted,
-        4096,
-        TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+        ChannelEgressConfig {
+            service_name: "e2e/video_out".to_string(),
+            trust_tier: ChannelTrustTier::Trusted,
+            expected_payload_bytes: 4096,
+            ceiling_bytes: TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+        },
     );
     output_writer_inner.add_channel_notifier("video_out", notifier);
 

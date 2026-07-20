@@ -51,7 +51,7 @@ use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use iceoryx2::prelude::*;
 
 use streamlib_engine::iceoryx2::{
-    ChannelTrustTier, OutputWriter, OutputWriterInner, SchemaIdentWire,
+    ChannelEgressConfig, ChannelTrustTier, OutputWriter, OutputWriterInner, SchemaIdentWire,
     TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
 };
 
@@ -128,10 +128,12 @@ fn build_inner_with_connection(tag: &str) -> BenchFixture {
         "out",
         schema_ident,
         publisher,
-        "bench/out".to_string(),
-        ChannelTrustTier::Trusted,
-        4096,
-        TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+        ChannelEgressConfig {
+            service_name: "bench/out".to_string(),
+            trust_tier: ChannelTrustTier::Trusted,
+            expected_payload_bytes: 4096,
+            ceiling_bytes: TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+        },
     );
     inner.add_channel_notifier("out", notifier);
 
@@ -253,10 +255,12 @@ fn build_inner_with_fanout(tag: &str, subscriber_count: usize) -> FanoutFixture 
         "out",
         schema_ident,
         publisher,
-        "bench/out".to_string(),
-        ChannelTrustTier::Trusted,
-        4096,
-        TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+        ChannelEgressConfig {
+            service_name: "bench/out".to_string(),
+            trust_tier: ChannelTrustTier::Trusted,
+            expected_payload_bytes: 4096,
+            ceiling_bytes: TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+        },
     );
 
     let mut listeners = Vec::with_capacity(subscriber_count);

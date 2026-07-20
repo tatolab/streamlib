@@ -81,6 +81,25 @@ struct ChannelEgress {
     refused_over_ceiling_count: u64,
 }
 
+/// The channel-egress primitives that prime an output port's channel
+/// publisher, passed by value into [`OutputWriterInner::set_channel_publisher`].
+///
+/// Reifying the trust-tier→ceiling coupling in one place: the `trust_tier`
+/// selects the process boundary (trusted host-to-host vs. untrusted-session
+/// subprocess) and `ceiling_bytes` is its per-channel payload ceiling.
+pub struct ChannelEgressConfig {
+    /// iceoryx2 service name for this channel (`{source}/{output_port}`);
+    /// carried for the growth / ceiling tracing fields.
+    pub service_name: String,
+    /// Trust tier of the process boundary this channel crosses; selects the
+    /// per-channel ceiling.
+    pub trust_tier: ChannelTrustTier,
+    /// Initial expected-payload hint sizing the publisher's data segment.
+    pub expected_payload_bytes: usize,
+    /// Per-channel payload ceiling in bytes; a frame above it is refused.
+    pub ceiling_bytes: usize,
+}
+
 /// Host-side inner state for an output writer. Owns the per-output-port
 /// channel publisher and its destination notifiers; all per-frame publish +
 /// notify work runs here.
@@ -119,29 +138,30 @@ impl OutputWriterInner {
     /// [`FrameHeader`] this port publishes. Callers build it once at wiring time
     /// from the port's structured `PortSchemaSpec` via
     /// [`SchemaIdentWire::from_segments`] — no parser runs on the per-frame hot
-    /// path. `channel_service_name`, `trust_tier`, `expected_payload_bytes`, and
-    /// `ceiling_bytes` prime the growth / ceiling observability the per-frame
-    /// [`Self::write_raw`] enforces. Called once per output port (the first link
-    /// out of it); a second call replaces the publisher, which the wiring op
-    /// avoids via [`Self::has_channel_publisher`].
-    #[allow(clippy::too_many_arguments)]
+    /// path. The [`ChannelEgressConfig`] primes the growth / ceiling
+    /// observability the per-frame [`Self::write_raw`] enforces. Called once per
+    /// output port (the first link out of it); a second call replaces the
+    /// publisher, which the wiring op avoids via [`Self::has_channel_publisher`].
     pub fn set_channel_publisher(
         &self,
         output_port: &str,
         schema_ident: SchemaIdentWire,
         publisher: Publisher<ipc::Service, [u8], ()>,
-        channel_service_name: String,
-        trust_tier: ChannelTrustTier,
-        expected_payload_bytes: usize,
-        ceiling_bytes: usize,
+        egress_config: ChannelEgressConfig,
     ) {
+        let ChannelEgressConfig {
+            service_name,
+            trust_tier,
+            expected_payload_bytes,
+            ceiling_bytes,
+        } = egress_config;
         self.channels.lock().insert(
             output_port.to_string(),
             ChannelEgress {
                 schema_ident,
                 publisher,
                 notifiers: Vec::new(),
-                channel_service_name,
+                channel_service_name: service_name,
                 trust_tier,
                 ceiling_bytes,
                 current_slot_capacity_bytes: expected_payload_bytes + FRAME_HEADER_SIZE,
@@ -554,10 +574,12 @@ mod tests {
             "out",
             schema_ident,
             publisher,
-            "test/out".to_string(),
-            crate::iceoryx2::ChannelTrustTier::Trusted,
-            4096,
-            crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            ChannelEgressConfig {
+                service_name: "test/out".to_string(),
+                trust_tier: crate::iceoryx2::ChannelTrustTier::Trusted,
+                expected_payload_bytes: 4096,
+                ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            },
         );
         inner.add_channel_notifier("out", notifier);
 
@@ -627,10 +649,12 @@ mod tests {
             "out",
             schema_ident,
             publisher,
-            "test/out".to_string(),
-            crate::iceoryx2::ChannelTrustTier::Trusted,
-            4096,
-            crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            ChannelEgressConfig {
+                service_name: "test/out".to_string(),
+                trust_tier: crate::iceoryx2::ChannelTrustTier::Trusted,
+                expected_payload_bytes: 4096,
+                ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            },
         );
 
         // N destination notifiers on the one channel — the compiler op's wiring
@@ -748,10 +772,12 @@ mod tests {
             "out",
             schema,
             publisher,
-            "test/ceiling/out".to_string(),
-            ChannelTrustTier::UntrustedSession,
-            64,
-            ceiling,
+            ChannelEgressConfig {
+                service_name: "test/ceiling/out".to_string(),
+                trust_tier: ChannelTrustTier::UntrustedSession,
+                expected_payload_bytes: 64,
+                ceiling_bytes: ceiling,
+            },
         );
 
         // Within ceiling but far above the primed 4 KiB slot — grows + delivers.

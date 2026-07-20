@@ -31,7 +31,7 @@ use crate::core::graph::{
 use crate::core::json_schema::SchemaIdentOutput;
 use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorInstance};
 use crate::iceoryx2::{
-    ChannelTrustTier, Iceoryx2NotifyService, Iceoryx2Service,
+    ChannelEgressConfig, ChannelTrustTier, Iceoryx2NotifyService, Iceoryx2Service,
     RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, SchemaIdentWire,
 };
 
@@ -193,10 +193,12 @@ pub fn open_iceoryx2_service(
             &output_schema,
             &service,
             &notify_service,
-            &channel_service_name,
-            trust_tier,
-            expected_payload,
-            channel_ceiling_bytes,
+            ChannelEgressConfig {
+                service_name: channel_service_name.clone(),
+                trust_tier,
+                expected_payload_bytes: expected_payload,
+                ceiling_bytes: channel_ceiling_bytes,
+            },
         )?;
     }
 
@@ -480,17 +482,13 @@ fn get_single_processor(
 
 /// Install (once) the source's single channel publisher and append this link's
 /// destination notifier onto the Rust source's [`OutputWriterInner`].
-#[allow(clippy::too_many_arguments)]
 fn wire_rust_source(
     source_processor: &Arc<Mutex<ProcessorInstance>>,
     source_port: &str,
     output_schema: &PortSchemaSpec,
     service: &Iceoryx2Service,
     notify_service: &Iceoryx2NotifyService,
-    channel_service_name: &str,
-    trust_tier: ChannelTrustTier,
-    expected_payload: usize,
-    channel_ceiling_bytes: usize,
+    egress_config: ChannelEgressConfig,
 ) -> Result<()> {
     let source_guard = source_processor.lock();
     let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() else {
@@ -498,15 +496,12 @@ fn wire_rust_source(
     };
 
     if !output_inner.has_channel_publisher(source_port) {
-        let publisher = service.create_publisher(expected_payload)?;
+        let publisher = service.create_publisher(egress_config.expected_payload_bytes)?;
         output_inner.set_channel_publisher(
             source_port,
             schema_ident_wire_for_spec(output_schema),
             publisher,
-            channel_service_name.to_string(),
-            trust_tier,
-            expected_payload,
-            channel_ceiling_bytes,
+            egress_config,
         );
         tracing::debug!(
             "Installed channel publisher for source output port '{}'",
