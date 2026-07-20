@@ -935,8 +935,8 @@ pub unsafe extern "C" fn slpn_output_write(
         &mut state.current_slot_capacity_bytes,
     );
     streamlib_plugin_abi::emit_channel_egress_admission_tracing(
-        "slpn",
-        &ctx.processor_id,
+        Some(("slpn", &ctx.processor_id)),
+        streamlib_ipc_types::ChannelTrustTier::UntrustedSession,
         &state.channel_service_name,
         state.channel_ceiling_bytes,
         total_len,
