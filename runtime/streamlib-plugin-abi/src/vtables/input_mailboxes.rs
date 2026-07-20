@@ -122,6 +122,85 @@ pub struct InputMailboxesVTable {
 unsafe impl Send for InputMailboxesVTable {}
 unsafe impl Sync for InputMailboxesVTable {}
 
+/// Upper bound on grow-and-retry passes in [`grow_and_retry_read`]. The
+/// host stashes an oversized frame and re-delivers it at the exact required
+/// size, so two passes suffice; the small bound guards against a pathological
+/// producer growing the frame between calls.
+const MAX_GROW_AND_RETRY_ATTEMPTS: usize = 8;
+
+/// Run the [`InputMailboxesVTable::read_raw`] grow-and-retry protocol,
+/// shared by the host's and the engine-free SDK's `InputMailboxes::read_raw`
+/// wrappers so both arms of the ABI stay lock-step.
+///
+/// Starts with a `start_cap`-byte receive buffer and, when the host reports
+/// the next frame is larger (`*out_len > out_cap`, `*has_data == true`),
+/// resizes to `*out_len` and reads again — the host holds the oversized frame
+/// across the two calls, so nothing is dropped. Returns
+/// `Ok(Some((body, timestamp_ns)))` on a delivered frame, `Ok(None)` when the
+/// mailbox is empty, and `Err(message)` on a host-side failure or when the
+/// frame keeps growing past [`MAX_GROW_AND_RETRY_ATTEMPTS`]. Callers wrap the
+/// message in their own link-error variant.
+///
+/// # Safety
+///
+/// `vtable` and `handle` must both be non-null and point at a live host-side
+/// `InputMailboxesInner` and its vtable (the caller's `is_configured()`
+/// guarantees this).
+pub unsafe fn grow_and_retry_read(
+    vtable: *const InputMailboxesVTable,
+    handle: *const c_void,
+    port: &str,
+    start_cap: usize,
+) -> Result<Option<(Vec<u8>, i64)>, String> {
+    let mut cap = start_cap;
+    for _ in 0..MAX_GROW_AND_RETRY_ATTEMPTS {
+        let mut buf = vec![0u8; cap];
+        let mut out_len = 0usize;
+        let mut out_timestamp = 0i64;
+        let mut has_data = false;
+        let mut err_buf = [0u8; 256];
+        let mut err_len = 0usize;
+        // SAFETY: `vtable` and `handle` are non-null and live per the caller's
+        // contract; the out-pointers all address stack locals valid for the call.
+        let rc = unsafe {
+            ((*vtable).read_raw)(
+                handle,
+                port.as_ptr(),
+                port.len(),
+                buf.as_mut_ptr(),
+                buf.len(),
+                &mut out_len as *mut usize,
+                &mut out_timestamp as *mut i64,
+                &mut has_data as *mut bool,
+                err_buf.as_mut_ptr(),
+                err_buf.len(),
+                &mut err_len as *mut usize,
+            )
+        };
+        if rc != 0 {
+            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
+            return Err(format!(
+                "InputMailboxes::read_raw(port='{}') failed: {}",
+                port, msg
+            ));
+        }
+        if !has_data {
+            return Ok(None);
+        }
+        if out_len > buf.len() {
+            cap = out_len;
+            continue;
+        }
+        buf.truncate(out_len);
+        return Ok(Some((buf, out_timestamp)));
+    }
+    Err(format!(
+        "InputMailboxes::read_raw(port='{}'): frame kept growing across \
+         grow-and-retry attempts — giving up to avoid an unbounded loop",
+        port
+    ))
+}
+
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
     use super::*;

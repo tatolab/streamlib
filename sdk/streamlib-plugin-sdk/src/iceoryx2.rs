@@ -361,59 +361,20 @@ impl InputMailboxes {
     /// reads again. The host stashes the oversized frame across the two calls, so
     /// a PowerOfTwo-grown payload is delivered rather than dropped.
     pub fn read_raw(&self, port: &str) -> Result<Option<(Vec<u8>, i64)>> {
-        const MAX_GROW_AND_RETRY_ATTEMPTS: usize = 8;
-
         if !self.is_configured() {
             return Ok(None);
         }
 
-        let mut cap = BAG_DEFAULT_EXPECTED_PAYLOAD_BYTES;
-        for _ in 0..MAX_GROW_AND_RETRY_ATTEMPTS {
-            let mut buf = vec![0u8; cap];
-            let mut out_len = 0usize;
-            let mut out_timestamp = 0i64;
-            let mut has_data = false;
-            let mut err_buf = [0u8; 256];
-            let mut err_len = 0usize;
-            // SAFETY: vtable + handle are non-null per is_configured().
-            let rc = unsafe {
-                ((*self.vtable).read_raw)(
-                    self.handle,
-                    port.as_ptr(),
-                    port.len(),
-                    buf.as_mut_ptr(),
-                    buf.len(),
-                    &mut out_len as *mut usize,
-                    &mut out_timestamp as *mut i64,
-                    &mut has_data as *mut bool,
-                    err_buf.as_mut_ptr(),
-                    err_buf.len(),
-                    &mut err_len as *mut usize,
-                )
-            };
-            if rc != 0 {
-                let msg =
-                    String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-                return Err(Error::Link(format!(
-                    "InputMailboxes::read_raw(port='{}') failed: {}",
-                    port, msg
-                )));
-            }
-            if !has_data {
-                return Ok(None);
-            }
-            if out_len > buf.len() {
-                cap = out_len;
-                continue;
-            }
-            buf.truncate(out_len);
-            return Ok(Some((buf, out_timestamp)));
+        // SAFETY: vtable + handle are non-null per is_configured().
+        unsafe {
+            streamlib_plugin_abi::grow_and_retry_read(
+                self.vtable,
+                self.handle,
+                port,
+                BAG_DEFAULT_EXPECTED_PAYLOAD_BYTES,
+            )
         }
-        Err(Error::Link(format!(
-            "InputMailboxes::read_raw(port='{}'): frame kept growing across \
-             grow-and-retry attempts — giving up to avoid an unbounded loop",
-            port
-        )))
+        .map_err(Error::Link)
     }
 
     /// Read the latest frame on `port` as a schema-free [`Bag`].
