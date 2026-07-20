@@ -198,31 +198,36 @@ fn test_large_frame_larger_than_small_frame() {
 // and verify that large payloads actually transit end-to-end.
 // =============================================================================
 
-/// Publisher sized from the small-frame schema (128 KiB) rejects a 256 KiB
-/// payload — mirrors the pre-fix failure mode for any sub-256-KiB connection.
+/// Publisher primed from the small-frame schema (128 KiB HINT) still delivers a
+/// 256 KiB payload — the hint is no longer a cap. Under PowerOfTwo growth the
+/// data segment grows on the first oversized loan (#1421), deleting the
+/// pre-fix `ExceedsMaxLoanSize` crash class this test used to assert.
+///
+/// Fail-without-fix: drop the `.allocation_strategy(AllocationStrategy::PowerOfTwo)`
+/// in `create_publisher` and the 256 KiB `loan_slice_uninit` fails on the
+/// 128-KiB-primed publisher, tripping the `.expect`.
 #[test]
-fn test_small_frame_schema_publisher_rejects_256kb() {
+fn test_small_frame_hint_publisher_grows_and_delivers_256kb() {
     test_support::register_test_wire_vocabulary();
     let node = Iceoryx2Node::new().unwrap();
     let service = node
         .open_or_create_service(
-            "streamlib/test/schema-small-reject",
+            "streamlib/test/schema-small-grows",
             2,
             crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES,
             true,
         )
         .unwrap();
 
-    let max_bytes = expected_payload_bytes_for_port_spec(&test_wire_spec("SmallFrame")).unwrap();
-    let publisher = service.create_publisher(max_bytes).unwrap();
+    let hint_bytes = expected_payload_bytes_for_port_spec(&test_wire_spec("SmallFrame")).unwrap();
+    let publisher = service.create_publisher(hint_bytes).unwrap();
 
-    // 256 KiB exceeds the 64 KiB small-frame limit.
-    let result = publisher.loan_slice_uninit(256 * 1024);
-    assert!(
-        result.is_err(),
-        "Expected 256 KB loan to fail on small-frame-sized publisher ({} bytes)",
-        max_bytes
+    // 256 KiB is well above the 128 KiB hint — PowerOfTwo grows to fit.
+    let sample = publisher.loan_slice_uninit(256 * 1024).expect(
+        "PowerOfTwo publisher primed at the small-frame hint must grow to loan a \
+         256 KiB slice instead of rejecting it",
     );
+    sample.write_from_slice(&vec![0u8; 256 * 1024]).send().unwrap();
 }
 
 /// Publisher sized from the large-frame schema accepts a 256 KiB payload.

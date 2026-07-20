@@ -1044,6 +1044,60 @@ mod tests {
         assert!(!mb.has_data("any"));
     }
 
+    /// Grow-and-retry staging (#1421): a frame larger than the caller's buffer
+    /// is NOT dropped — [`InputMailboxesInner::read_raw_bounded`] reports its
+    /// required length and stashes it, then re-delivers it intact on the retry
+    /// with a large-enough buffer, without re-running the per-frame
+    /// schema-mismatch check.
+    ///
+    /// Fail-without-fix: revert `read_raw_bounded` to consume-then-error on a
+    /// too-small buffer and the second read returns `Empty` (the frame was
+    /// dropped) — the byte-for-byte re-delivery assertion fails.
+    #[test]
+    fn read_raw_bounded_stages_oversized_frame_and_redelivers() {
+        let inner = InputMailboxesInner::new();
+        inner.add_port("in", 8, ReadMode::ReadNextInOrder);
+
+        let body: Vec<u8> = (0..300u32).map(|i| (i % 251) as u8).collect();
+        let schema = SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0)
+            .expect("schema ident");
+        let mut frame = vec![0u8; FRAME_HEADER_SIZE + body.len()];
+        FrameHeader::new("in", schema, 42, body.len() as u32)
+            .expect("port fits PortKey")
+            .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+        frame[FRAME_HEADER_SIZE..].copy_from_slice(&body);
+        assert!(inner.route(frame), "frame must route to port 'in'");
+
+        // Buffer too small: the frame is reported (not consumed).
+        match inner.read_raw_bounded("in", 100).expect("bounded read") {
+            BoundedReadOutcome::NeedsLargerBuffer { required_bytes } => {
+                assert_eq!(required_bytes, body.len());
+            }
+            BoundedReadOutcome::Empty => panic!("expected NeedsLargerBuffer, got Empty"),
+            BoundedReadOutcome::Frame { .. } => {
+                panic!("expected NeedsLargerBuffer, but the too-small buffer delivered a Frame")
+            }
+        }
+
+        // Retry with a large-enough buffer: the SAME frame is re-delivered.
+        match inner
+            .read_raw_bounded("in", body.len())
+            .expect("bounded read retry")
+        {
+            BoundedReadOutcome::Frame { data, timestamp_ns } => {
+                assert_eq!(data, body, "staged frame must re-deliver byte-for-byte");
+                assert_eq!(timestamp_ns, 42);
+            }
+            _ => panic!("expected the staged frame to be re-delivered"),
+        }
+
+        // The staged frame was consumed exactly once — the mailbox is now empty.
+        assert!(matches!(
+            inner.read_raw_bounded("in", body.len()).expect("bounded read"),
+            BoundedReadOutcome::Empty
+        ));
+    }
+
     /// Clone bumps the strong count via the host-installed
     /// refcount fn; both clones drop independently.
     #[test]

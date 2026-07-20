@@ -710,4 +710,99 @@ mod tests {
         drop(writer1);
         assert_eq!(Arc::strong_count(&inner_for_test), 1);
     }
+
+    /// Per-channel ceiling + PowerOfTwo growth (#1421): a payload UNDER the
+    /// channel ceiling but far over the primed slot grows the segment and
+    /// delivers intact; a payload OVER the ceiling is refused with the named
+    /// [`Error::PayloadExceedsChannelCeiling`], counted, and the stream
+    /// continues (a subsequent in-bounds write still delivers).
+    ///
+    /// Fail-without-fix: remove the ceiling branch in `write_raw` and the
+    /// over-ceiling write returns `Ok` (no error, count stays 0) — the graceful
+    /// refusal this issue adds is gone. Remove the growth/PowerOfTwo path and the
+    /// 100 KiB loan fails instead of delivering.
+    #[test]
+    fn write_raw_refuses_over_ceiling_and_grows_within_it() {
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let pubsub = node
+            .service_builder(&ServiceName::new(&unique_suffix("ceiling/pubsub")).unwrap())
+            .publish_subscribe::<[u8]>()
+            .max_publishers(2)
+            .max_subscribers(2)
+            .open_or_create()
+            .unwrap();
+        // Prime tiny (4 KiB) under PowerOfTwo so a 100 KiB write must grow.
+        let publisher = pubsub
+            .publisher_builder()
+            .initial_max_slice_len(4096)
+            .allocation_strategy(AllocationStrategy::PowerOfTwo)
+            .create()
+            .unwrap();
+        let subscriber = pubsub.subscriber_builder().create().unwrap();
+
+        let inner = Arc::new(OutputWriterInner::new());
+        let schema =
+            SchemaIdentWire::from_segments("tatolab", "core", "EncodedVideoFrame", 1, 0, 0).unwrap();
+        let ceiling = 128 * 1024usize;
+        inner.set_channel_publisher(
+            "out",
+            schema,
+            publisher,
+            "test/ceiling/out".to_string(),
+            ChannelTrustTier::UntrustedSession,
+            64,
+            ceiling,
+        );
+
+        // Within ceiling but far above the primed 4 KiB slot — grows + delivers.
+        let within = vec![0x5Au8; 100 * 1024];
+        inner
+            .write_raw("out", &within, 111)
+            .expect("in-bounds payload must grow the segment and send");
+        assert_eq!(
+            inner.refused_over_ceiling_count("out"),
+            0,
+            "an in-bounds payload must not be counted as refused"
+        );
+        let got = subscriber
+            .receive()
+            .expect("receive")
+            .expect("grown in-bounds frame must be delivered");
+        assert_eq!(got.payload().len(), FRAME_HEADER_SIZE + within.len());
+
+        // Above ceiling — refused with the named error + counted, never a panic.
+        let over = vec![0u8; ceiling + 1];
+        let err = inner
+            .write_raw("out", &over, 222)
+            .expect_err("a payload above the channel ceiling must be refused");
+        match err {
+            Error::PayloadExceedsChannelCeiling {
+                ref channel,
+                payload_bytes,
+                ceiling_bytes,
+                ref tier,
+            } => {
+                assert_eq!(channel, "test/ceiling/out");
+                assert_eq!(payload_bytes, FRAME_HEADER_SIZE + over.len());
+                assert_eq!(ceiling_bytes, ceiling);
+                assert_eq!(tier, "untrusted-session");
+            }
+            other => panic!("expected PayloadExceedsChannelCeiling, got {other:?}"),
+        }
+        assert_eq!(
+            inner.refused_over_ceiling_count("out"),
+            1,
+            "the refused sample must be counted"
+        );
+
+        // Stream continues: a subsequent in-bounds write still delivers.
+        inner
+            .write_raw("out", b"still-alive", 333)
+            .expect("stream must continue after a refusal");
+        let got = subscriber
+            .receive()
+            .expect("receive")
+            .expect("post-refusal frame must be delivered");
+        assert_eq!(got.payload().len(), FRAME_HEADER_SIZE + b"still-alive".len());
+    }
 }
