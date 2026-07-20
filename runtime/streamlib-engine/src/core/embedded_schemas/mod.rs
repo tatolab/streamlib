@@ -209,6 +209,44 @@ pub fn overflow_for_input_port(
     })
 }
 
+/// Resolve the [`PortSchemaSpec`] declared on one port of a registered
+/// processor type.
+///
+/// Reads [`PROCESSOR_REGISTRY`]'s `port_info` for `processor_type`, selects the
+/// input or output port list per `direction`, and returns the named port's
+/// `data_type`. Falls back to [`PortSchemaSpec::Any`] (the tolerant wildcard)
+/// when the processor type isn't registered or the named port doesn't exist —
+/// the same "unconstrained" default the port-spec metadata resolvers assume.
+///
+/// This is the single registry-lookup primitive behind both the connect-time
+/// agreement check (`operations_runtime`) and the wire-time output-schema
+/// resolution (`open_iceoryx2_service_op`).
+///
+/// [`PROCESSOR_REGISTRY`]: crate::core::processors::PROCESSOR_REGISTRY
+/// [`PortSchemaSpec`]: streamlib_processor_schema::PortSchemaSpec
+pub fn port_schema_spec(
+    processor_type: &streamlib_idents::SchemaIdent,
+    port_name: &str,
+    direction: crate::core::PortDirection,
+) -> streamlib_processor_schema::PortSchemaSpec {
+    use crate::core::PortDirection;
+
+    let Some((inputs, outputs)) =
+        crate::core::processors::PROCESSOR_REGISTRY.port_info(processor_type)
+    else {
+        return streamlib_processor_schema::PortSchemaSpec::Any;
+    };
+    let ports = match direction {
+        PortDirection::Input => inputs,
+        PortDirection::Output => outputs,
+    };
+    ports
+        .iter()
+        .find(|p| p.name == port_name)
+        .map(|p| p.data_type.clone())
+        .unwrap_or_default()
+}
+
 /// Shared lookup helper for both port-spec metadata resolvers.
 ///
 /// `Any` → `Ok(None)` (caller substitutes default).

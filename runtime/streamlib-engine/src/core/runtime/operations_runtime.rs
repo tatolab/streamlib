@@ -11,8 +11,12 @@ use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
     ProcessorUniqueId, StateComponent,
 };
+use crate::core::embedded_schemas::port_schema_spec;
 use crate::core::processors::{ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
+use crate::core::schema_agreement::{
+    ConnectSchemaContext, SchemaValidationPosture, enforce_connect_schema_agreement,
+};
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, PortDirection, Result};
 use streamlib_idents::ChannelName;
 
@@ -147,10 +151,17 @@ async fn remove_processor_impl(
 }
 
 /// Core implementation for connect - takes owned Arcs for 'static lifetime.
+///
+/// `validation` selects the schema-agreement posture for this wiring site.
+/// The public `connect` / `connect_async` entrypoints pass
+/// [`SchemaValidationPosture::Loose`] (warn-but-wire); a safety-critical
+/// wiring site passes [`SchemaValidationPosture::Strict`] to hard-fail on a
+/// producer/consumer schema mismatch.
 async fn connect_impl(
     compiler: Arc<Compiler>,
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
+    validation: SchemaValidationPosture,
 ) -> Result<LinkUniqueId> {
     let from_processor = from.processor_id.clone();
     let from_port = from.port_name.clone();
@@ -201,6 +212,43 @@ async fn connect_impl(
                     port_name: to.port_name.clone(),
                     direction: PortDirection::Input,
                 });
+            }
+        }
+
+        // Schema-agreement check at the wiring site: resolve the producer's
+        // output schema and the consumer's input schema from the registry and
+        // compare. A wildcard (`any`) on either side never mismatches; two
+        // concrete-but-unequal schemas warn (loose) or hard-fail (strict).
+        // Runs before `add_e` so a strict rejection rolls the pending link
+        // back rather than committing a mismatched edge. Endpoints are already
+        // validated to exist above.
+        {
+            let producer_type = graph
+                .traversal()
+                .v(&from.processor_id)
+                .first()
+                .map(|node| node.processor_type().clone());
+            let consumer_type = graph
+                .traversal()
+                .v(&to.processor_id)
+                .first()
+                .map(|node| node.processor_type().clone());
+            if let (Some(producer_type), Some(consumer_type)) = (producer_type, consumer_type) {
+                let producer_schema =
+                    port_schema_spec(&producer_type, &from.port_name, PortDirection::Output);
+                let consumer_schema =
+                    port_schema_spec(&consumer_type, &to.port_name, PortDirection::Input);
+                enforce_connect_schema_agreement(
+                    &producer_schema,
+                    &consumer_schema,
+                    validation,
+                    ConnectSchemaContext {
+                        from_processor: from.processor_id.as_str(),
+                        from_port: &from.port_name,
+                        to_processor: to.processor_id.as_str(),
+                        to_port: &to.port_name,
+                    },
+                )?;
             }
         }
 
@@ -336,7 +384,12 @@ impl RuntimeOperations for Runner {
         to: InputLinkPortRef,
     ) -> BoxFuture<'_, Result<LinkUniqueId>> {
         let compiler = Arc::clone(&self.compiler);
-        Box::pin(connect_impl(compiler, from, to))
+        Box::pin(connect_impl(
+            compiler,
+            from,
+            to,
+            SchemaValidationPosture::Loose,
+        ))
     }
 
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
@@ -402,7 +455,8 @@ impl RuntimeOperations for Runner {
                 let compiler = Arc::clone(&self.compiler);
                 let (tx, rx) = std::sync::mpsc::channel();
                 handle.spawn(async move {
-                    let result = connect_impl(compiler, from, to).await;
+                    let result =
+                        connect_impl(compiler, from, to, SchemaValidationPosture::Loose).await;
                     let _ = tx.send(result);
                 });
                 rx.recv()

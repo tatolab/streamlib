@@ -14,6 +14,7 @@ use crate::core::ProcessorUniqueId;
 use crate::core::context::RuntimeContext;
 use crate::core::embedded_schemas::{
     max_payload_bytes_for_port_spec, max_queued_messages_for_port_spec, overflow_for_input_port,
+    port_schema_spec,
 };
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
@@ -38,7 +39,10 @@ fn schema_ident_json(spec: &PortSchemaSpec) -> serde_json::Value {
 /// tag. `Any` ports yield the default zero-segment wire bytes (unset routing
 /// tag — preserves the existing wildcard semantics). `Specific(...)` ports
 /// build the wire bytes directly from the validated structured fields.
-fn schema_ident_wire_for_producer(spec: &PortSchemaSpec) -> SchemaIdentWire {
+///
+/// Used both to stamp a producer's output tag onto every frame and to record
+/// a consumer port's expected tag for the per-frame read-side check.
+fn schema_ident_wire_for_spec(spec: &PortSchemaSpec) -> SchemaIdentWire {
     match spec {
         PortSchemaSpec::Any => SchemaIdentWire::default(),
         PortSchemaSpec::Specific(ident) => SchemaIdentWire::from_segments(
@@ -308,22 +312,34 @@ fn resolve_output_schema(
     source_proc_id: &ProcessorUniqueId,
     source_port: &str,
 ) -> PortSchemaSpec {
-    let source_proc_type = graph
+    resolve_port_schema(
+        graph,
+        source_proc_id,
+        source_port,
+        crate::core::PortDirection::Output,
+    )
+}
+
+/// Resolve the [`PortSchemaSpec`] on one port of a graph node, in either
+/// direction. Looks the node's processor type up in the graph, then delegates
+/// to the shared registry primitive [`port_schema_spec`]. Returns
+/// [`PortSchemaSpec::Any`] when the node is absent (no processor type to read).
+fn resolve_port_schema(
+    graph: &mut Graph,
+    proc_id: &ProcessorUniqueId,
+    port: &str,
+    direction: crate::core::PortDirection,
+) -> PortSchemaSpec {
+    let proc_type = graph
         .traversal_mut()
-        .v(source_proc_id)
+        .v(proc_id)
         .first()
         .map(|node| node.processor_type().clone());
 
-    source_proc_type
-        .as_ref()
-        .and_then(|ident| PROCESSOR_REGISTRY.port_info(ident))
-        .and_then(|(_, outputs)| {
-            outputs
-                .iter()
-                .find(|p| p.name == source_port)
-                .map(|p| p.data_type.clone())
-        })
-        .unwrap_or_default()
+    match proc_type {
+        Some(ident) => port_schema_spec(&ident, port, direction),
+        None => PortSchemaSpec::Any,
+    }
 }
 
 /// Deepest `max_queued_messages` across all of a destination's inbound links.
@@ -429,6 +445,12 @@ fn open_iceoryx2_pubsub(
     // Look up schema for the output port before creating the publisher so we can size
     // the shared memory slot correctly via max_payload_bytes_for_port_spec.
     let output_schema = resolve_output_schema(graph, source_proc_id, source_port);
+    let dest_schema = resolve_port_schema(
+        graph,
+        dest_proc_id,
+        dest_port,
+        crate::core::PortDirection::Input,
+    );
 
     tracing::debug!(
         "Output port '{}' has schema '{}'",
@@ -466,7 +488,7 @@ fn open_iceoryx2_pubsub(
         if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
             output_inner.add_connection(
                 source_port,
-                schema_ident_wire_for_producer(&output_schema),
+                schema_ident_wire_for_spec(&output_schema),
                 dest_port,
                 publisher,
                 notifier,
@@ -501,6 +523,12 @@ fn open_iceoryx2_pubsub(
             // The cdylib's read_raw then allocates exactly this
             // size — no truncation, no retry, no silent drop.
             input_inner.set_port_max_payload_bytes(dest_port, max_payload);
+
+            // Record the consumer port's expected schema tag so the host-side
+            // read path can compare it against each inbound frame's stamped
+            // tag (#1430 — the tag was stamped-but-unread before this).
+            input_inner
+                .set_port_expected_schema_ident(dest_port, schema_ident_wire_for_spec(&dest_schema));
 
             // Only set subscriber+listener if this is the first connection to this destination
             // All subsequent connections reuse the same pair (max_listeners=1 enforces this).
@@ -688,6 +716,12 @@ fn open_iceoryx2_subprocess_to_rust(
 
     // Look up schema for the output port from the registry
     let output_schema = resolve_output_schema(graph, source_proc_id, source_port);
+    let dest_schema = resolve_port_schema(
+        graph,
+        dest_proc_id,
+        dest_port,
+        crate::core::PortDirection::Input,
+    );
     let max_payload = max_payload_bytes_for_port_spec(&output_schema)?;
     let max_queued_messages = max_queued_messages_for_dest(graph, dest_proc_id)?;
     let enable_safe_overflow = resolve_enable_safe_overflow(graph, dest_proc_id, dest_port)?;
@@ -767,6 +801,11 @@ fn open_iceoryx2_subprocess_to_rust(
             // bound the publisher uses. See the same call in the
             // local-source branch above for full rationale.
             input_inner.set_port_max_payload_bytes(dest_port, max_payload);
+
+            // Record the consumer port's expected schema tag for the
+            // host-side per-frame read-side check (#1430).
+            input_inner
+                .set_port_expected_schema_ident(dest_port, schema_ident_wire_for_spec(&dest_schema));
 
             if !input_inner.has_subscriber() {
                 let subscriber = service.create_subscriber()?;
@@ -853,7 +892,7 @@ fn open_iceoryx2_rust_to_subprocess(
         if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
             output_inner.add_connection(
                 source_port,
-                schema_ident_wire_for_producer(&output_schema),
+                schema_ident_wire_for_spec(&output_schema),
                 dest_port,
                 publisher,
                 notifier,

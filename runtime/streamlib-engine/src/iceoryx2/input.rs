@@ -30,6 +30,7 @@ use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use iceoryx2::port::listener::Listener;
 use iceoryx2::port::subscriber::Subscriber;
@@ -39,8 +40,9 @@ use streamlib_plugin_abi::InputMailboxesVTable;
 
 use super::mailbox::PortMailbox;
 use super::read_mode::ReadMode;
-use super::{FRAME_HEADER_SIZE, FrameHeader};
+use super::{FRAME_HEADER_SIZE, FrameHeader, SchemaIdentWire};
 use crate::core::error::{Error, Result};
+use crate::core::schema_agreement::{SchemaAgreement, classify_wire_schema_agreement};
 
 /// Thread-local subscriber wrapper.
 ///
@@ -127,6 +129,20 @@ struct PortConfig {
     /// [`InputMailboxesInner::set_port_max_payload_bytes`] from the
     /// compiler op).
     max_payload_bytes: usize,
+    /// Schema-ident tag this consumer port expects every inbound frame to
+    /// carry — the wire form of the port's declared input schema, set by the
+    /// compiler op at wire time via
+    /// [`InputMailboxesInner::set_port_expected_schema_ident`]. Default
+    /// [`SchemaIdentWire::default`] (unset) means "no expectation" (an `any`
+    /// port), which never triggers a mismatch. `read_raw` compares each
+    /// frame's stamped tag against this and warns on a concrete mismatch.
+    expected_schema_ident: SchemaIdentWire,
+    /// Latched once `read_raw` observes an inbound tag that disagrees with
+    /// [`Self::expected_schema_ident`]. Doubles as the warn-once guard (the
+    /// realtime read path must not re-log every frame) and the test / graph
+    /// observation surface via
+    /// [`InputMailboxesInner::schema_mismatch_observed`].
+    schema_mismatch_observed: AtomicBool,
 }
 
 /// Host-side inner state for input mailboxes. Owns the per-port
@@ -180,6 +196,8 @@ impl InputMailboxesInner {
                 mailbox: PortMailbox::new(buffer_size),
                 read_mode,
                 max_payload_bytes: crate::iceoryx2::MAX_PAYLOAD_SIZE,
+                expected_schema_ident: SchemaIdentWire::default(),
+                schema_mismatch_observed: AtomicBool::new(false),
             },
         );
     }
@@ -205,6 +223,33 @@ impl InputMailboxesInner {
     /// surfaces this as `0`, the caller's wiring-error sentinel).
     pub fn max_payload_for_port(&self, port: &str) -> Option<usize> {
         self.ports.lock().get(port).map(|cfg| cfg.max_payload_bytes)
+    }
+
+    /// Record the schema-ident tag this port expects inbound frames to carry.
+    /// Called by the compiler op at wire time from the consumer's declared
+    /// input schema; [`read_raw`] compares each frame's stamped tag against it
+    /// and warns on a concrete mismatch. No-op for unknown ports.
+    ///
+    /// [`read_raw`]: Self::read_raw
+    pub fn set_port_expected_schema_ident(&self, port: &str, expected: SchemaIdentWire) {
+        if let Some(cfg) = self.ports.lock().get_mut(port) {
+            cfg.expected_schema_ident = expected;
+            cfg.schema_mismatch_observed.store(false, Ordering::Relaxed);
+        }
+    }
+
+    /// Whether [`read_raw`] has observed at least one inbound frame whose
+    /// stamped schema tag disagreed with the port's expected tag. Latches on
+    /// the first mismatch (the read path warns once, not per frame). `false`
+    /// for unknown ports.
+    ///
+    /// [`read_raw`]: Self::read_raw
+    pub fn schema_mismatch_observed(&self, port: &str) -> bool {
+        self.ports
+            .lock()
+            .get(port)
+            .map(|cfg| cfg.schema_mismatch_observed.load(Ordering::Relaxed))
+            .unwrap_or(false)
     }
 
     /// Check if a subscriber has already been configured.
@@ -324,6 +369,22 @@ impl InputMailboxesInner {
         match raw {
             Some(r) => {
                 let header = FrameHeader::read_from_slice(&r);
+                if classify_wire_schema_agreement(header.schema(), &port_config.expected_schema_ident)
+                    == SchemaAgreement::Mismatch
+                    && !port_config
+                        .schema_mismatch_observed
+                        .swap(true, Ordering::Relaxed)
+                {
+                    tracing::warn!(
+                        port = port,
+                        stamped_schema = %header.schema().render_joined(),
+                        expected_schema = %port_config.expected_schema_ident.render_joined(),
+                        "read_raw: inbound frame carries a schema tag that does not \
+                         match this port's expected input schema (loose validation; \
+                         warned once per port). A producer was re-typed, or the \
+                         wrong producer is wired to this port."
+                    );
+                }
                 let data = r[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + header.len as usize].to_vec();
                 Ok(Some((data, header.timestamp_ns)))
             }
@@ -782,6 +843,70 @@ mod tests {
             !mailboxes.any_port_has_data(),
             "both ports drained — must report no data",
         );
+    }
+
+    fn frame_with_schema(port: &str, schema: SchemaIdentWire) -> Vec<u8> {
+        let mut buf = vec![0u8; FRAME_HEADER_SIZE + 4];
+        let header = FrameHeader::new(port, schema, 0, 4).expect("port fits PortKey");
+        header.write_to_slice(&mut buf);
+        buf[FRAME_HEADER_SIZE..].copy_from_slice(&[9, 8, 7, 6]);
+        buf
+    }
+
+    /// Runtime read-side schema check (#1430): a frame whose stamped schema
+    /// tag disagrees with the port's expected input schema is observed as a
+    /// mismatch, but the read still succeeds (loose-but-observed posture).
+    ///
+    /// Revert lock: mentally revert `read_raw`'s tag comparison (stop reading
+    /// `header.schema()`) and `schema_mismatch_observed` stays `false` — this
+    /// asserts `true`, so the test fails, catching a regression back to the
+    /// pre-#1430 "stamped-but-unread" state.
+    #[test]
+    fn read_raw_observes_schema_tag_mismatch_but_still_delivers() {
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_port("in", 64, ReadMode::ReadNextInOrder);
+
+        let expected =
+            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
+        mailboxes.set_port_expected_schema_ident("in", expected);
+
+        let stamped_wrong =
+            SchemaIdentWire::from_segments("tatolab", "core", "AudioFrame", 1, 0, 0).unwrap();
+        assert!(mailboxes.route(frame_with_schema("in", stamped_wrong)));
+
+        let read = mailboxes
+            .read_raw("in")
+            .expect("read_raw must succeed under loose validation")
+            .expect("a frame is queued");
+        assert_eq!(read.0, vec![9, 8, 7, 6], "payload delivered despite mismatch");
+        assert!(
+            mailboxes.schema_mismatch_observed("in"),
+            "the disagreeing tag must be observed as a mismatch",
+        );
+    }
+
+    /// A frame whose stamped tag matches the port's expected schema is NOT
+    /// flagged; the wildcard cases (unset expected, or unset stamp) are
+    /// likewise silent.
+    #[test]
+    fn read_raw_is_silent_on_matching_or_wildcard_schema() {
+        let matching = SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0)
+            .unwrap();
+
+        // Exact match → no mismatch.
+        let mb_match = InputMailboxesInner::new();
+        mb_match.add_port("in", 64, ReadMode::ReadNextInOrder);
+        mb_match.set_port_expected_schema_ident("in", matching);
+        assert!(mb_match.route(frame_with_schema("in", matching)));
+        mb_match.read_raw("in").unwrap().unwrap();
+        assert!(!mb_match.schema_mismatch_observed("in"));
+
+        // Unset expected (an `any` port) accepts any stamped tag.
+        let mb_any = InputMailboxesInner::new();
+        mb_any.add_port("in", 64, ReadMode::ReadNextInOrder);
+        assert!(mb_any.route(frame_with_schema("in", matching)));
+        mb_any.read_raw("in").unwrap().unwrap();
+        assert!(!mb_any.schema_mismatch_observed("in"));
     }
 
     /// Empty (unwired) PluginAbiObject should return Ok(None) from read_raw

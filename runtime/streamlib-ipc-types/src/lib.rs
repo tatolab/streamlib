@@ -284,6 +284,21 @@ impl SchemaIdentWire {
         Ok(wire)
     }
 
+    /// Whether this is the zero-segment "unset" wire tag a producer stamps
+    /// for a [`PortSchemaSpec::Any`] output — no org / package / type and a
+    /// `0.0.0` version. Schema-agreement checks treat an unset tag on either
+    /// side as the tolerant wildcard: it never triggers a mismatch.
+    ///
+    /// [`PortSchemaSpec::Any`]: https://docs.rs/streamlib-processor-schema
+    pub fn is_unset(&self) -> bool {
+        self.org_len == 0
+            && self.package_len == 0
+            && self.type_len == 0
+            && self.version_major == 0
+            && self.version_minor == 0
+            && self.version_patch == 0
+    }
+
     pub fn org_str(&self) -> &str {
         std::str::from_utf8(&self.org[..self.org_len as usize]).unwrap_or("")
     }
