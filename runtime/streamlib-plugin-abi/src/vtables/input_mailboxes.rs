@@ -201,10 +201,36 @@ pub unsafe fn grow_and_retry_read(
     ))
 }
 
+/// Byte length of the frame a read would return next from a native SDK's local
+/// `pending` receive queue, so the Python and Deno natives share one peek rule.
+/// `read_next_in_order` selects the FIFO front (`0`); otherwise the SkipToLatest
+/// newest (`queue.len() - 1`). The caller guarantees `queue` is non-empty (its
+/// `is_empty()` continue runs first) and compares the returned length against
+/// its receive buffer to decide whether to grow before consuming the frame.
+pub fn next_read_required_len(queue: &[(Vec<u8>, i64)], read_next_in_order: bool) -> usize {
+    let next_index = if read_next_in_order {
+        0
+    } else {
+        queue.len() - 1
+    };
+    queue[next_index].0.len()
+}
+
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
     use super::*;
     use core::mem::{align_of, offset_of, size_of};
+
+    #[test]
+    fn next_read_required_len_picks_front_or_back_by_read_mode() {
+        let queue: Vec<(Vec<u8>, i64)> = vec![
+            (vec![0u8; 4], 1),
+            (vec![0u8; 16], 2),
+            (vec![0u8; 64], 3),
+        ];
+        assert_eq!(next_read_required_len(&queue, true), 4);
+        assert_eq!(next_read_required_len(&queue, false), 64);
+    }
 
     #[test]
     fn input_mailboxes_vtable_layout() {

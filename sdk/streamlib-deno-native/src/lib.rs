@@ -605,15 +605,12 @@ pub unsafe extern "C" fn sldn_input_read(
 
         // Grow-and-retry: a publisher under PowerOfTwo growth can deliver a frame
         // larger than the caller's buffer. Peek the frame that would be returned
-        // (FIFO front or SkipToLatest newest) WITHOUT consuming it; if it does not
-        // fit, report its length and leave it in place so the SDK can resize and
-        // read again. Nothing is dropped.
-        let next_index = if read_mode == READ_MODE_READ_NEXT_IN_ORDER {
-            0
-        } else {
-            queue.len() - 1
-        };
-        let required = queue[next_index].0.len();
+        // WITHOUT consuming it; if it does not fit, report its length and leave it
+        // in place so the SDK can resize and read again. Nothing is dropped.
+        let required = streamlib_plugin_abi::next_read_required_len(
+            queue,
+            read_mode == READ_MODE_READ_NEXT_IN_ORDER,
+        );
         if required > buf_len as usize {
             if !out_len.is_null() {
                 unsafe { *out_len = required as u32 };
