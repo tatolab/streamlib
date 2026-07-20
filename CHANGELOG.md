@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.16](https://github.com/tatolab/streamlib/compare/v0.7.15...v0.7.16) (2026-07-20)
+
+
+### Features
+
+* **manifest:** drop the vestigial per-processor version field ([#1474](https://github.com/tatolab/streamlib/issues/1474)) ([08c3c7b](https://github.com/tatolab/streamlib/commit/08c3c7b9958e1484beac1c52af4c141a5a57238b))
+
 ## [0.7.15](https://github.com/tatolab/streamlib/compare/v0.7.14...v0.7.15) (2026-07-20)
 
 
