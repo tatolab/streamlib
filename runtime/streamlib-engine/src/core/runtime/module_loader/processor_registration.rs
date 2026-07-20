@@ -410,12 +410,16 @@ pub(super) fn register_manifest_processors(
             .inputs
             .iter()
             .map(|p| {
-                PortDescriptor::new(
+                let descriptor = PortDescriptor::new(
                     &p.name,
                     p.description.as_deref().unwrap_or(""),
                     p.schema.clone(),
                     true,
-                )
+                );
+                match &p.delivery_profile {
+                    Some(profile) => descriptor.with_delivery_profile(profile),
+                    None => descriptor,
+                }
             })
             .collect();
 
