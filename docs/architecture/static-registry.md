@@ -159,12 +159,9 @@ version (a missing dep is `ExternalDepMissing`, a cycle is
 
 ### Deliberate omissions
 
-`CatalogPort` carries `name`, `description`, `schema`, `read_mode` only. Two
-classes of manifest field are intentionally dropped:
+`CatalogPort` carries `name`, `description`, `schema`, `delivery_profile` only.
+One class of manifest field is intentionally dropped:
 
-- `overflow` / `buffer_size` — present on the authored manifest port, but
-  they are per-edge *buffering knobs*, not wiring topology, so they don't
-  belong in a palette the editor wires graphs from.
 - `required` — has no authored-manifest source at all; it exists only on the
   runtime port descriptors, not on the `streamlib.yaml` port.
 
