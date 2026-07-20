@@ -489,12 +489,10 @@ impl Runner {
     /// [`Error::SchemaIdentMismatch`] and the link is not wired.
     pub fn connect_with(
         &self,
-        from: impl Into<OutputLinkPortRef>,
-        to: impl Into<InputLinkPortRef>,
+        from: OutputLinkPortRef,
+        to: InputLinkPortRef,
         options: ConnectOptions,
     ) -> Result<LinkUniqueId> {
-        let from = from.into();
-        let to = to.into();
         match &self.tokio_runtime_variant {
             TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.block_on(connect_impl(
                 Arc::clone(&self.compiler),
@@ -519,17 +517,12 @@ impl Runner {
     /// context, including a tokio task.
     pub fn connect_with_async(
         &self,
-        from: impl Into<OutputLinkPortRef>,
-        to: impl Into<InputLinkPortRef>,
+        from: OutputLinkPortRef,
+        to: InputLinkPortRef,
         options: ConnectOptions,
     ) -> BoxFuture<'_, Result<LinkUniqueId>> {
         let compiler = Arc::clone(&self.compiler);
-        Box::pin(connect_impl(
-            compiler,
-            from.into(),
-            to.into(),
-            options.validation,
-        ))
+        Box::pin(connect_impl(compiler, from, to, options.validation))
     }
 }
 
