@@ -201,9 +201,9 @@ pub fn delivery_profile_for_input_port(
 ///
 /// `Any` → `Ok(None)` (wildcard, no type-level default). A registered schema
 /// that declares no `flow_class` → `Ok(None)` (caller substitutes the realtime
-/// default). A registry miss → [`Error::Configuration`] naming the missing
-/// canonical id and pointing at `runtime.add_module(...)`. A present-but-
-/// unrecognized `flow_class` string → [`Error::Configuration`].
+/// default). A registry miss or malformed schema YAML → [`Error::Configuration`]
+/// naming the schema (registry misses also point at `runtime.add_module(...)`).
+/// A present-but-unrecognized `flow_class` string → [`Error::Configuration`].
 ///
 /// [`FlowClass`]: crate::iceoryx2::FlowClass
 /// [`Error::Configuration`]: crate::core::error::Error::Configuration
@@ -212,31 +212,14 @@ pub fn flow_class_for_port_spec(
 ) -> crate::core::error::Result<Option<crate::iceoryx2::FlowClass>> {
     use crate::iceoryx2::FlowClass;
 
-    if matches!(schema_spec, streamlib_processor_schema::PortSchemaSpec::Any) {
+    let Some(value) = metadata_value_for_port_spec(schema_spec, "flow_class")? else {
         return Ok(None);
-    }
-    let canonical = schema_spec.to_string();
-    let yaml = get_embedded_schema_definition(&canonical).ok_or_else(|| {
-        crate::core::error::Error::Configuration(format!(
-            "schema '{canonical}' referenced by a port spec but not in the \
-             runtime schema registry — did you forget to call \
-             `runtime.add_module(...)` for the package providing it? \
-             (Use `list_embedded_schema_names()` to inspect what's currently \
-             registered.)"
-        ))
-    })?;
-    let value: serde_yaml::Value = match serde_yaml::from_str(&yaml) {
-        Ok(v) => v,
-        Err(_) => return Ok(None),
     };
-    let declared = value
-        .get("metadata")
-        .and_then(|m| m.get("flow_class"))
-        .and_then(|v| v.as_str());
-    match declared {
+    match value.as_str() {
         Some(s) => FlowClass::from_manifest_str(s).map(Some).map_err(|err| {
             crate::core::error::Error::Configuration(format!(
-                "schema '{canonical}' declared {err}"
+                "schema '{}' declared {err}",
+                schema_spec
             ))
         }),
         None => Ok(None),
@@ -312,20 +295,25 @@ pub fn resolve_node_port_schema(
     }
 }
 
-/// Shared lookup helper for both port-spec metadata resolvers.
+/// Shared registry-lookup preamble for every port-spec metadata resolver.
+///
+/// Owns the three concerns each leaf resolver would otherwise copy: the `Any`
+/// wildcard guard, the registry-miss error, and the schema-YAML parse. Returns
+/// the `metadata.<field>` node cloned out of the parsed schema so callers can
+/// project only their leaf (`.as_u64()`, `.as_str()`).
 ///
 /// `Any` → `Ok(None)` (caller substitutes default).
-/// `Specific` / `Named` with registry hit → `Ok(Some(value))` if the
-/// declared `metadata.<field>` parses as a `u64`, else `Ok(None)`
-/// (caller substitutes default — registered schema chose not to
-/// constrain).
-/// `Specific` / `Named` with registry miss → `Err(Configuration(...))`
-/// naming the missing canonical id and pointing the developer at
-/// `runtime.add_module(...)`.
-fn resolve_metadata_u64_for_port_spec(
+/// Registry hit, field present → `Ok(Some(value))`.
+/// Registry hit, field absent → `Ok(None)` (caller substitutes default —
+/// registered schema chose not to constrain).
+/// Registry miss → `Err(Configuration(...))` naming the missing canonical id
+/// and pointing the developer at `runtime.add_module(...)`.
+/// Malformed schema YAML → `Err(Configuration(...))` naming the schema — a
+/// wire-time error, not a silent default substitution.
+fn metadata_value_for_port_spec(
     schema_spec: &streamlib_processor_schema::PortSchemaSpec,
     field: &str,
-) -> crate::core::error::Result<Option<usize>> {
+) -> crate::core::error::Result<Option<serde_yaml::Value>> {
     if matches!(schema_spec, streamlib_processor_schema::PortSchemaSpec::Any) {
         return Ok(None);
     }
@@ -339,16 +327,26 @@ fn resolve_metadata_u64_for_port_spec(
              registered.)"
         ))
     })?;
-    let value: serde_yaml::Value = match serde_yaml::from_str(&yaml) {
-        Ok(v) => v,
-        Err(_) => return Ok(None),
-    };
-    let declared = value
-        .get("metadata")
-        .and_then(|m| m.get(field))
-        .and_then(|v| v.as_u64())
-        .map(|n| n as usize);
-    Ok(declared)
+    let value: serde_yaml::Value = serde_yaml::from_str(&yaml).map_err(|err| {
+        crate::core::error::Error::Configuration(format!(
+            "schema '{canonical}' has malformed metadata YAML in the runtime \
+             schema registry: {err}"
+        ))
+    })?;
+    Ok(value.get("metadata").and_then(|m| m.get(field)).cloned())
+}
+
+/// `u64` leaf projection over [`metadata_value_for_port_spec`]. A present-but-
+/// non-`u64` value resolves to `Ok(None)` (caller substitutes default —
+/// registered schema chose not to constrain).
+fn resolve_metadata_u64_for_port_spec(
+    schema_spec: &streamlib_processor_schema::PortSchemaSpec,
+    field: &str,
+) -> crate::core::error::Result<Option<usize>> {
+    Ok(metadata_value_for_port_spec(schema_spec, field)?
+        .as_ref()
+        .and_then(serde_yaml::Value::as_u64)
+        .map(|n| n as usize))
 }
 
 /// List every registered schema's canonical identifier (unversioned).
@@ -657,6 +655,30 @@ mod tests {
         assert!(
             msg.contains("add_module"),
             "error must point at `runtime.add_module(...)`; got: {msg}"
+        );
+        assert!(matches!(err, crate::core::error::Error::Configuration(_)));
+    }
+
+    /// A registered schema whose body is malformed YAML surfaces a typed
+    /// configuration error naming the schema — a wire-time error, never a
+    /// silent fall-through to the realtime default. Mentally reverting the
+    /// shared helper's parse to `Err(_) => Ok(None)` makes this fail.
+    #[test]
+    fn flow_class_errors_on_malformed_schema_yaml() {
+        let canonical = "@tatolab/test-flowclass-malformed/Broken";
+        register_schema(canonical, "metadata: {unterminated flow mapping\n");
+        let spec = PortSchemaSpec::Specific(SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("test-flowclass-malformed").unwrap(),
+            TypeName::new("Broken").unwrap(),
+            SemVer::new(1, 0, 0),
+        ));
+        let err =
+            flow_class_for_port_spec(&spec).expect_err("malformed schema YAML must surface as Err");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("@tatolab/test-flowclass-malformed/Broken"),
+            "error must name the schema with malformed YAML; got: {msg}"
         );
         assert!(matches!(err, crate::core::error::Error::Configuration(_)));
     }
