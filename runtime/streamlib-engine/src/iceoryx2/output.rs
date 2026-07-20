@@ -844,4 +844,32 @@ mod tests {
             .expect("post-refusal frame must be delivered");
         assert_eq!(got.payload().len(), FRAME_HEADER_SIZE + b"still-alive".len());
     }
+
+    /// Drift guard for the two trust-tier spellings: `ChannelTrustTier::as_str`
+    /// (ipc-types) and `ChannelTrustTierLabel`'s `Display` (the engine-free error
+    /// crate) name the tier independently — a forced layering cost (the orphan
+    /// rule + engine purity keep the error crate off ipc-types), not duplication
+    /// to merge. The engine is the one place that sees both, so it locks the two
+    /// string forms — and `trust_tier_label`'s mapping between them — so they
+    /// can't silently drift.
+    #[test]
+    fn trust_tier_label_spellings_do_not_drift() {
+        for tier in [ChannelTrustTier::Trusted, ChannelTrustTier::UntrustedSession] {
+            let label = trust_tier_label(tier);
+            assert_eq!(
+                tier.as_str(),
+                label.to_string(),
+                "ChannelTrustTier::as_str must match ChannelTrustTierLabel's Display",
+            );
+        }
+        // Pin the exact variant pairing too, so a swapped mapping is caught.
+        assert_eq!(
+            ChannelTrustTier::Trusted.as_str(),
+            ChannelTrustTierLabel::Trusted.to_string()
+        );
+        assert_eq!(
+            ChannelTrustTier::UntrustedSession.as_str(),
+            ChannelTrustTierLabel::UntrustedSession.to_string()
+        );
+    }
 }
