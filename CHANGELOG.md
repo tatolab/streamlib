@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.17](https://github.com/tatolab/streamlib/compare/v0.7.16...v0.7.17) (2026-07-20)
+
+
+### Features
+
+* **engine:** read the wire schema-ident tag — connect-time + runtime schema-mismatch checks ([#1477](https://github.com/tatolab/streamlib/issues/1477)) ([a158b50](https://github.com/tatolab/streamlib/commit/a158b508abcac760b02a0913fafd94012010095f))
+
 ## [0.7.16](https://github.com/tatolab/streamlib/compare/v0.7.15...v0.7.16) (2026-07-20)
 
 
