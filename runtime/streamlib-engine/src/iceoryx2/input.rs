@@ -640,8 +640,9 @@ impl InputMailboxes {
     /// deserialization. Returns `Ok(Some((data, timestamp_ns)))` on
     /// success, `Ok(None)` when the mailbox is empty.
     ///
-    /// Sizes the receive buffer to [`DEFAULT_EXPECTED_PAYLOAD_BYTES`] and grows
-    /// on demand: a publisher under PowerOfTwo growth can deliver a frame larger
+    /// Sizes the receive buffer to
+    /// [`streamlib_ipc_types::DEFAULT_EXPECTED_PAYLOAD_BYTES`] and grows on
+    /// demand: a publisher under PowerOfTwo growth can deliver a frame larger
     /// than any fixed buffer, so when the host reports the next frame is bigger
     /// than `out_cap` (`out_len > buf.len()`, `has_data == true`) this resizes to
     /// exactly that length and reads again. The host stashes the oversized frame
