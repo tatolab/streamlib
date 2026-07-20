@@ -32,7 +32,7 @@ use crate::core::json_schema::SchemaIdentOutput;
 use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorInstance};
 use crate::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, Iceoryx2NotifyService, Iceoryx2Service,
-    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, SchemaIdentWire,
+    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, SchemaIdentWire, effective_channel_ceiling_bytes,
 };
 
 use super::spawn_deno_subprocess_op::DenoSubprocessHostProcessor;
@@ -152,7 +152,9 @@ pub fn open_iceoryx2_service(
     } else {
         ChannelTrustTier::Trusted
     };
-    let channel_ceiling_bytes = trust_tier.default_ceiling_bytes();
+    // The tier default is the structural ceiling; an operator raises or lowers it
+    // per deployment through the tier's node-level env override.
+    let channel_ceiling_bytes = effective_channel_ceiling_bytes(trust_tier);
     let max_queued_messages = max_queued_messages_for_port_spec(&output_schema)?;
     let max_subscribers = channel_max_subscribers(graph, &source_proc_id, &source_port);
     let enable_safe_overflow =
