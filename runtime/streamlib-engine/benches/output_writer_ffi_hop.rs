@@ -29,6 +29,14 @@
 //!   hop's per-call cost is dominated by the fixed overhead (call
 //!   indirection + msgpack envelope) or scales with payload size
 //!   (the inner's `Vec::with_capacity` + slice copy).
+//! - `fanout_1_to_n` — one channel publisher feeding N ∈ {1,2,4,8}
+//!   subscribers. `write_raw` issues a SINGLE zero-copy loan + send
+//!   that reaches every subscriber (the transport inversion, #1419);
+//!   only the per-destination `notify()` is O(N). Throughput is
+//!   reported as frames-delivered (N per call), so the curve stays
+//!   near-flat per delivered frame — the signature the retired
+//!   per-connection copy loop (one frame build + send PER subscriber,
+//!   O(N) copies) could not produce.
 //!
 //! Run: `cargo bench -p streamlib-engine --bench output_writer_ffi_hop`.
 //! The bench writes to a per-run-unique iceoryx2 service name so
@@ -191,10 +199,113 @@ fn bench_payload_size_sweep(c: &mut Criterion) {
     group.finish();
 }
 
+/// Fan-out fixture: one channel publisher feeding N subscribers, each with its
+/// own destination notifier + listener. The iter loop drains all N subscribers
+/// and listeners in-line so the publisher's ring doesn't back-pressure.
+struct FanoutFixture {
+    inner: Arc<OutputWriterInner>,
+    subscribers:
+        Vec<iceoryx2::port::subscriber::Subscriber<iceoryx2::service::ipc::Service, [u8], ()>>,
+    listeners: Vec<iceoryx2::port::listener::Listener<iceoryx2::service::ipc::Service>>,
+    _node: Node<iceoryx2::service::ipc::Service>,
+}
+
+/// Build an `OutputWriterInner` whose single "out" channel feeds
+/// `subscriber_count` subscribers, mirroring the compiler op's 1→N wiring: ONE
+/// `set_channel_publisher` + N `add_channel_notifier`, N subscribers on the one
+/// pubsub service.
+fn build_inner_with_fanout(tag: &str, subscriber_count: usize) -> FanoutFixture {
+    let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+    let pubsub_name = unique_suffix(&format!("{tag}/pubsub"));
+
+    let pubsub = node
+        .service_builder(&ServiceName::new(&pubsub_name).unwrap())
+        .publish_subscribe::<[u8]>()
+        .max_publishers(2)
+        .max_subscribers(subscriber_count + 1)
+        .subscriber_max_buffer_size(8192)
+        .open_or_create()
+        .unwrap();
+    let publisher = pubsub
+        .publisher_builder()
+        .initial_max_slice_len(128 * 1024)
+        .create()
+        .unwrap();
+    let subscribers = (0..subscriber_count)
+        .map(|_| pubsub.subscriber_builder().create().unwrap())
+        .collect();
+
+    let inner = Arc::new(OutputWriterInner::new());
+    let schema_ident =
+        SchemaIdentWire::from_segments("tatolab", "bench", "FfiHop", 1, 0, 0).unwrap();
+    inner.set_channel_publisher("out", schema_ident, publisher);
+
+    let mut listeners = Vec::with_capacity(subscriber_count);
+    for i in 0..subscriber_count {
+        let notify_name = unique_suffix(&format!("{tag}/notify/{i}"));
+        let notify = node
+            .service_builder(&ServiceName::new(&notify_name).unwrap())
+            .event()
+            .max_notifiers(2)
+            .max_listeners(1)
+            .open_or_create()
+            .unwrap();
+        let notifier = notify.notifier_builder().create().unwrap();
+        let listener = notify.listener_builder().create().unwrap();
+        inner.add_channel_notifier("out", notifier);
+        listeners.push(listener);
+    }
+
+    FanoutFixture {
+        inner,
+        subscribers,
+        listeners,
+        _node: node,
+    }
+}
+
+#[inline(always)]
+fn drain_fanout_in_line(fx: &FanoutFixture) {
+    for subscriber in &fx.subscribers {
+        let _ = subscriber.receive();
+    }
+    for listener in &fx.listeners {
+        let _ = listener.try_wait_all(|_| {});
+    }
+}
+
+/// One publisher fanning out to N ∈ {1,2,4,8} subscribers. Throughput is
+/// reported as frames delivered (N per `write_raw` call), so a flat
+/// per-delivered-frame cost is the single-loan signature; the retired
+/// per-connection copy loop would show cost climbing linearly with N.
+fn bench_write_raw_fanout(c: &mut Criterion) {
+    let payload = vec![0u8; 256];
+    let mut group = c.benchmark_group("output_writer_write_raw/fanout_1_to_n");
+    for subscriber_count in [1usize, 2, 4, 8] {
+        let fx = build_inner_with_fanout("fanout", subscriber_count);
+        let writer = OutputWriter::from_inner_arc(fx.inner.clone());
+        group.throughput(criterion::Throughput::Elements(subscriber_count as u64));
+        group.bench_with_input(
+            criterion::BenchmarkId::from_parameter(subscriber_count),
+            &subscriber_count,
+            |b, _| {
+                b.iter(|| {
+                    writer
+                        .write_raw(black_box("out"), black_box(&payload), black_box(0))
+                        .unwrap();
+                    drain_fanout_in_line(&fx);
+                });
+            },
+        );
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_baseline_direct_inner,
     bench_vtable_dispatch,
     bench_payload_size_sweep,
+    bench_write_raw_fanout,
 );
 criterion_main!(benches);
