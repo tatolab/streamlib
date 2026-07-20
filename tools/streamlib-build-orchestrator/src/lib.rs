@@ -677,7 +677,7 @@ mod tests {
         std::fs::create_dir(dir.join("schemas")).unwrap();
         std::fs::write(
             dir.join("schemas/test_schema.yaml"),
-            "metadata:\n  type: TestSchema\n  max_payload_bytes: 1024\n",
+            "metadata:\n  type: TestSchema\n  expected_payload_bytes: 1024\n",
         )
         .unwrap();
     }
@@ -755,7 +755,7 @@ mod tests {
         // lands in the cache slot).
         std::fs::write(
             src.path().join("schemas/test_schema.yaml"),
-            "metadata:\n  type: TestSchema\n  max_payload_bytes: 2048\n",
+            "metadata:\n  type: TestSchema\n  expected_payload_bytes: 2048\n",
         )
         .unwrap();
         let third = orch

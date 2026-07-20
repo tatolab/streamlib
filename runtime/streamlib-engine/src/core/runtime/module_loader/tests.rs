@@ -261,7 +261,7 @@ fn path_strategy_registers_package_schemas_for_runtime_lookup() {
     std::fs::create_dir(pkg.join("schemas")).unwrap();
     std::fs::write(
         pkg.join("schemas/my_test_config.yaml"),
-        "metadata:\n  type: MyTestConfig\n  max_payload_bytes: 8192\n",
+        "metadata:\n  type: MyTestConfig\n  expected_payload_bytes: 8192\n",
     )
     .unwrap();
     std::fs::write(
@@ -310,9 +310,9 @@ schemas:
             streamlib_idents::SemVer::new(1, 0, 0),
         ));
     assert_eq!(
-        crate::core::embedded_schemas::max_payload_bytes_for_port_spec(&port_spec).unwrap(),
+        crate::core::embedded_schemas::expected_payload_bytes_for_port_spec(&port_spec).unwrap(),
         8192,
-        "max_payload_bytes_for_port_spec must read metadata declared by the loaded package"
+        "expected_payload_bytes_for_port_spec must read metadata declared by the loaded package"
     );
 }
 
@@ -589,7 +589,7 @@ fn write_schemas_only_slpkg(out: &std::path::Path, name: &str, type_name: &str) 
         "package:\n  org: tatolab\n  name: {name}\n  version: \"0.1.0\"\n\
          schemas:\n  {type_name}:\n    file: schemas/{stem}.yaml\n"
     );
-    let schema = format!("metadata:\n  type: {type_name}\n  max_payload_bytes: 4096\n");
+    let schema = format!("metadata:\n  type: {type_name}\n  expected_payload_bytes: 4096\n");
 
     let mut buf = Vec::new();
     {
@@ -1095,7 +1095,7 @@ mod add_module_tests {
             std::fs::create_dir_all(dir.join("schemas")).unwrap();
             std::fs::write(
                 dir.join("schemas").join(format!("{stem}.yaml")),
-                format!("metadata:\n  type: {type_name}\n  max_payload_bytes: 4096\n"),
+                format!("metadata:\n  type: {type_name}\n  expected_payload_bytes: 4096\n"),
             )
             .unwrap();
             format!(
@@ -1490,17 +1490,17 @@ processors:
         std::fs::create_dir(c.join("schemas")).unwrap();
         std::fs::write(
             a.join("schemas/depwalkallthreeaschema.yaml"),
-            format!("metadata:\n  type: {TYPE_A}\n  max_payload_bytes: 4096\n"),
+            format!("metadata:\n  type: {TYPE_A}\n  expected_payload_bytes: 4096\n"),
         )
         .unwrap();
         std::fs::write(
             b.join("schemas/depwalkallthreebschema.yaml"),
-            format!("metadata:\n  type: {TYPE_B}\n  max_payload_bytes: 4096\n"),
+            format!("metadata:\n  type: {TYPE_B}\n  expected_payload_bytes: 4096\n"),
         )
         .unwrap();
         std::fs::write(
             c.join("schemas/depwalkallthreecschema.yaml"),
-            format!("metadata:\n  type: {TYPE_C}\n  max_payload_bytes: 4096\n"),
+            format!("metadata:\n  type: {TYPE_C}\n  expected_payload_bytes: 4096\n"),
         )
         .unwrap();
         std::fs::write(
@@ -1827,7 +1827,7 @@ processors:
         std::fs::create_dir(d.join("schemas")).unwrap();
         std::fs::write(
             d.join("schemas/diamondagreedschema.yaml"),
-            format!("metadata:\n  type: {TYPE_D}\n  max_payload_bytes: 4096\n"),
+            format!("metadata:\n  type: {TYPE_D}\n  expected_payload_bytes: 4096\n"),
         )
         .unwrap();
         std::fs::write(
@@ -2113,7 +2113,7 @@ processors:
         std::fs::create_dir(pkg.path().join("schemas")).unwrap();
         std::fs::write(
             pkg.path().join("schemas/poisonretryschema.yaml"),
-            format!("metadata:\n  type: {TYPE_POISON}\n  max_payload_bytes: 4096\n"),
+            format!("metadata:\n  type: {TYPE_POISON}\n  expected_payload_bytes: 4096\n"),
         )
         .unwrap();
         runtime
@@ -2160,7 +2160,7 @@ processors:
         std::fs::create_dir(d.join("schemas")).unwrap();
         std::fs::write(
             d.join("schemas/concagreedschema.yaml"),
-            format!("metadata:\n  type: {TYPE_D}\n  max_payload_bytes: 4096\n"),
+            format!("metadata:\n  type: {TYPE_D}\n  expected_payload_bytes: 4096\n"),
         )
         .unwrap();
         std::fs::write(
@@ -3619,7 +3619,7 @@ processors:
                 "dependencies:\n  \"@tatolab/{dep_name}\": \"^{dep_range}\"\n"
             ));
         }
-        let schema = format!("metadata:\n  type: {type_name}\n  max_payload_bytes: 4096\n");
+        let schema = format!("metadata:\n  type: {type_name}\n  expected_payload_bytes: 4096\n");
         let mut zw = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
         let opts: zip::write::FileOptions<()> =
             zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
@@ -3768,7 +3768,7 @@ processors:
         .unwrap();
         std::fs::write(
             dep.join("schemas/detdepschema.yaml"),
-            "metadata:\n  type: DetDepSchema\n  max_payload_bytes: 1024\n",
+            "metadata:\n  type: DetDepSchema\n  expected_payload_bytes: 1024\n",
         )
         .unwrap();
         let project = work.path().join("proj");
@@ -3840,7 +3840,7 @@ processors:
         .unwrap();
         std::fs::write(
             slot.join("schemas/misspkgschema.yaml"),
-            "metadata:\n  type: MissPkgSchema\n  max_payload_bytes: 1024\n",
+            "metadata:\n  type: MissPkgSchema\n  expected_payload_bytes: 1024\n",
         )
         .unwrap();
 
@@ -3936,7 +3936,7 @@ packages:
         .unwrap();
         std::fs::write(
             slot.join(format!("schemas/{stem}.yaml")),
-            format!("metadata:\n  type: {type_name}\n  max_payload_bytes: 1024\n"),
+            format!("metadata:\n  type: {type_name}\n  expected_payload_bytes: 1024\n"),
         )
         .unwrap();
         let hash = streamlib_idents::content_hash_for_package_dir(&slot).unwrap();
@@ -4001,7 +4001,7 @@ packages:
         // Tamper the slot's schema post-install → hash busts → typed error.
         std::fs::write(
             slot.join("schemas/tamperpkgschema.yaml"),
-            "metadata:\n  type: TamperPkgSchema\n  max_payload_bytes: 9999\n",
+            "metadata:\n  type: TamperPkgSchema\n  expected_payload_bytes: 9999\n",
         )
         .unwrap();
         let runtime = Runner::new().unwrap();
@@ -4043,7 +4043,7 @@ packages:
         .unwrap();
         std::fs::write(
             slot.join("schemas/driftpkgschema.yaml"),
-            "metadata:\n  type: DriftPkgSchema\n  max_payload_bytes: 1024\n",
+            "metadata:\n  type: DriftPkgSchema\n  expected_payload_bytes: 1024\n",
         )
         .unwrap();
         let hash = streamlib_idents::content_hash_for_package_dir(&slot).unwrap();

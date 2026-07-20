@@ -152,18 +152,23 @@ impl Iceoryx2Service {
         self.max_queued_messages
     }
 
-    /// Create a publisher for this service.
+    /// Create a channel publisher under [`AllocationStrategy::PowerOfTwo`].
     ///
-    /// `max_payload_bytes` sets the per-slot shared memory capacity (data only, header is added
-    /// internally). Use `embedded_schemas::max_payload_bytes_for_port_spec` to derive this value
-    /// from the output port's schema declaration.
+    /// `expected_payload_bytes` primes the initial per-slot data segment (the
+    /// [`FRAME_HEADER_SIZE`] header is added internally) — it is a HINT, never a
+    /// cap. The first loan larger than the primed slot grows the shared-memory
+    /// segment (rounded to the next power of two) and subscribers remap
+    /// transparently, so an oversized payload delivers instead of failing with
+    /// `ExceedsMaxLoanSize`. Derive the hint from the output port's schema via
+    /// [`crate::core::embedded_schemas::expected_payload_bytes_for_port_spec`].
     pub fn create_publisher(
         &self,
-        max_payload_bytes: usize,
+        expected_payload_bytes: usize,
     ) -> Result<iceoryx2::port::publisher::Publisher<ipc::Service, [u8], ()>> {
         self.inner
             .publisher_builder()
-            .initial_max_slice_len(max_payload_bytes + FRAME_HEADER_SIZE)
+            .initial_max_slice_len(expected_payload_bytes + FRAME_HEADER_SIZE)
+            .allocation_strategy(AllocationStrategy::PowerOfTwo)
             .create()
             .map_err(|e| Error::Runtime(format!("Failed to create publisher: {:?}", e)))
     }
@@ -847,5 +852,52 @@ mod tests {
             received.contains(&newest_sent),
             "newest-sent sample (payload byte {newest_sent}) should survive ring overwrites, drained: {received:?}"
         );
+    }
+
+    /// PowerOfTwo growth (#1421): a publisher primed with a small
+    /// `expected_payload_bytes` HINT must still loan — and deliver — a slice far
+    /// larger than the hint, because [`Iceoryx2Service::create_publisher`] opens
+    /// under [`iceoryx2::prelude::AllocationStrategy::PowerOfTwo`] and grows the
+    /// data segment on the first oversized loan; the subscriber remaps
+    /// transparently.
+    ///
+    /// Fail-without-fix: drop the `.allocation_strategy(AllocationStrategy::PowerOfTwo)`
+    /// line in `create_publisher` and iceoryx2 falls back to the Static strategy,
+    /// so the oversized `loan_slice_uninit` fails with `ExceedsMaxLoanSize` — the
+    /// exact crash class this issue deletes — and the `.expect("loan")` panics.
+    #[test]
+    fn publisher_grows_segment_for_oversized_loan_and_delivers() {
+        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let service = node
+            .open_or_create_service(&unique_service_name("powertwo_growth"), 2, 4, true)
+            .expect("open data service");
+
+        // Prime the publisher with a deliberately tiny 64-byte hint.
+        let hint_bytes = 64usize;
+        let publisher = service
+            .create_publisher(hint_bytes)
+            .expect("create PowerOfTwo publisher");
+        let subscriber = service.create_subscriber().expect("subscriber");
+
+        // Loan a 1 MiB slice — ~16000x the primed slot. Under Static this is an
+        // ExceedsMaxLoanSize failure; under PowerOfTwo it grows and succeeds.
+        let oversized = 1024 * 1024usize;
+        let mut payload = vec![0u8; oversized];
+        payload[0] = 0xAB;
+        payload[oversized - 1] = 0xCD;
+
+        let sample = publisher
+            .loan_slice_uninit(oversized)
+            .expect("PowerOfTwo publisher must loan a slice far larger than its primed hint");
+        let sample = sample.write_from_slice(&payload);
+        sample.send().expect("send oversized sample");
+
+        let received = subscriber
+            .receive()
+            .expect("receive")
+            .expect("subscriber must transparently remap the grown segment and deliver");
+        assert_eq!(received.payload().len(), oversized, "full payload delivered");
+        assert_eq!(received.payload()[0], 0xAB);
+        assert_eq!(received.payload()[oversized - 1], 0xCD);
     }
 }

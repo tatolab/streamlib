@@ -201,14 +201,16 @@ pub enum Error {
     BagEncodeFailed(String),
 
     #[error(
-        "Bag payload of {actual_bytes} bytes on port '{port}' exceeds the \
-         per-channel budget of {budget_bytes} bytes — split the payload or \
-         raise the port's declared max_payload_bytes"
+        "payload of {payload_bytes} bytes on channel '{channel}' exceeds the \
+         per-channel ceiling of {ceiling_bytes} bytes ({tier} tier) — the sample \
+         was refused and counted, the stream continues; raise the node's \
+         max_payload_bytes_per_channel for this tier or split the payload"
     )]
-    BagPayloadOverflow {
-        port: String,
-        actual_bytes: usize,
-        budget_bytes: usize,
+    PayloadExceedsChannelCeiling {
+        channel: String,
+        payload_bytes: usize,
+        ceiling_bytes: usize,
+        tier: ChannelTrustTierLabel,
     },
 
     #[error(transparent)]
@@ -253,6 +255,27 @@ impl std::fmt::Display for PortDirection {
         match self {
             Self::Input => f.write_str("input"),
             Self::Output => f.write_str("output"),
+        }
+    }
+}
+
+/// Trust tier of the iceoryx2 data channel a payload was refused on, named in
+/// [`Error::PayloadExceedsChannelCeiling`]. Mirrors the engine's
+/// `iceoryx2::ChannelTrustTier` at the error boundary so the ceiling error stays
+/// engine-free; the engine maps its own enum onto this at the construction site.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelTrustTierLabel {
+    /// In-process host-to-host channel.
+    Trusted,
+    /// Channel with a subprocess (Python / Deno) on either end.
+    UntrustedSession,
+}
+
+impl std::fmt::Display for ChannelTrustTierLabel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Trusted => f.write_str("trusted"),
+            Self::UntrustedSession => f.write_str("untrusted-session"),
         }
     }
 }

@@ -94,6 +94,69 @@ pub struct OutputWriterVTable {
 unsafe impl Send for OutputWriterVTable {}
 unsafe impl Sync for OutputWriterVTable {}
 
+/// Emit the channel-egress admission tracing shared by the host writer and the
+/// subprocess SDK natives' output-write path, so the host, Python, and Deno
+/// stay lock-step on the refusal / segment-growth / quarter-of-ceiling
+/// diagnostics off the same [`decide_channel_egress_admission`] decision.
+/// `trust_tier` labels each line; `log_prefix` is `None` for the host and
+/// `Some((runtime_tag, processor_id))` for a native (`"slpn"` / `"sldn"` plus
+/// its processor id) to scope the message with a `[tag:id] ` prefix. The caller
+/// still maps [`ChannelEgressAdmission::RefusedOverCeiling`] to its own refuse
+/// return code or typed error.
+///
+/// [`decide_channel_egress_admission`]: streamlib_ipc_types::decide_channel_egress_admission
+pub fn emit_channel_egress_admission_tracing(
+    log_prefix: Option<(&str, &str)>,
+    trust_tier: streamlib_ipc_types::ChannelTrustTier,
+    channel_service_name: &str,
+    channel_ceiling_bytes: usize,
+    payload_total_bytes: usize,
+    admission: &streamlib_ipc_types::ChannelEgressAdmission,
+) {
+    use streamlib_ipc_types::ChannelEgressAdmission;
+
+    let prefix = match log_prefix {
+        Some((runtime_tag, processor_id)) => format!("[{}:{}] ", runtime_tag, processor_id),
+        None => String::new(),
+    };
+
+    match admission {
+        ChannelEgressAdmission::RefusedOverCeiling { refused_count } => {
+            tracing::warn!(
+                channel = channel_service_name,
+                payload_bytes = payload_total_bytes,
+                ceiling_bytes = channel_ceiling_bytes,
+                tier = trust_tier.as_str(),
+                refused_count = *refused_count,
+                "{}output channel refused a payload above its per-channel ceiling",
+                prefix,
+            );
+        }
+        ChannelEgressAdmission::Admitted { grew_to } => {
+            if let Some(growth) = grew_to {
+                tracing::info!(
+                    channel = channel_service_name,
+                    old_segment_bytes = growth.old_segment_bytes,
+                    new_segment_bytes = growth.new_segment_bytes,
+                    tier = trust_tier.as_str(),
+                    "{}iceoryx2 publisher data segment grew (PowerOfTwo)",
+                    prefix,
+                );
+                if growth.crossed_quarter_ceiling {
+                    tracing::warn!(
+                        channel = channel_service_name,
+                        segment_bytes = growth.new_segment_bytes,
+                        ceiling_bytes = channel_ceiling_bytes,
+                        tier = trust_tier.as_str(),
+                        "{}iceoryx2 publisher segment crossed a quarter of the channel ceiling",
+                        prefix,
+                    );
+                }
+            }
+        }
+    }
+}
+
 #[cfg(all(test, target_pointer_width = "64"))]
 mod tests {
     use super::*;

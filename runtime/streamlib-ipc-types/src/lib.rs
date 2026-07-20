@@ -16,23 +16,155 @@
 
 use iceoryx2::prelude::*;
 
-pub const MAX_PAYLOAD_SIZE: usize = 65536;
+/// Default hint used to prime a publisher's initial iceoryx2 slot capacity
+/// when a wire schema declares no `metadata.expected_payload_bytes`.
+///
+/// This is a HINT, never a cap. Publishers open under
+/// [`iceoryx2::prelude::AllocationStrategy::PowerOfTwo`]; the first loan larger
+/// than the primed capacity grows the shared-memory segment and subscribers
+/// remap transparently. Sizing the hint to the common-case payload keeps the
+/// steady state at a single segment while leaving oversized frames (a first
+/// multi-MB keyframe) free to grow rather than crash.
+pub const DEFAULT_EXPECTED_PAYLOAD_BYTES: usize = 65536;
 pub const MAX_PORT_KEY_SIZE: usize = 64;
 pub const MAX_EVENT_PAYLOAD_SIZE: usize = 8192;
 pub const MAX_TOPIC_KEY_SIZE: usize = 128;
+
+/// Per-channel payload ceiling for a trusted (in-process host) data channel —
+/// the graceful, observable layer in front of the subprocess cgroup
+/// `memory.max` hard backstop. A payload above this is refused with a named
+/// `PayloadExceedsChannelCeiling` error, counted, and the stream continues;
+/// the process never dies.
+pub const TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES: usize = 64 * 1024 * 1024;
+
+/// Per-channel payload ceiling for an untrusted-session (subprocess) data
+/// channel. Tighter than the trusted tier because a subprocess payload crosses
+/// a trust boundary and a runaway producer must be bounded well below host RAM.
+pub const UNTRUSTED_SESSION_CHANNEL_PAYLOAD_CEILING_BYTES: usize = 16 * 1024 * 1024;
+
+/// Trust tier of an iceoryx2 data channel, selecting the default per-channel
+/// payload ceiling.
+///
+/// Determined structurally by the process boundary at wire time: an in-process
+/// host link is [`ChannelTrustTier::Trusted`]; a link crossing a subprocess
+/// boundary is [`ChannelTrustTier::UntrustedSession`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelTrustTier {
+    /// In-process host-to-host channel.
+    Trusted,
+    /// Channel with a subprocess (Python / Deno) on either end.
+    UntrustedSession,
+}
+
+impl ChannelTrustTier {
+    /// The default per-channel payload ceiling in bytes for this tier.
+    pub const fn default_ceiling_bytes(self) -> usize {
+        match self {
+            Self::Trusted => TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            Self::UntrustedSession => UNTRUSTED_SESSION_CHANNEL_PAYLOAD_CEILING_BYTES,
+        }
+    }
+
+    /// Stable lowercase label used in the channel-egress tracing fields.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Trusted => "trusted",
+            Self::UntrustedSession => "untrusted-session",
+        }
+    }
+}
+
+/// A PowerOfTwo data-segment growth event a channel publisher observed while
+/// admitting a frame: the tracked slot capacity crossed the frame size and was
+/// advanced from `old_segment_bytes` to `new_segment_bytes` (`next_power_of_two`).
+///
+/// `crossed_quarter_ceiling` is `true` when this growth is the one that first
+/// pushed the segment past a quarter of the channel's ceiling (`old <= ceiling/4
+/// < new`) — the early-warning threshold every runtime raises a `tracing::warn`
+/// on. The threshold lives here, alongside the growth bookkeeping, so the host
+/// writer and the Python / Deno subprocess natives cannot drift on where it sits.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChannelSegmentGrowth {
+    /// Tracked slot capacity before this growth, in bytes.
+    pub old_segment_bytes: usize,
+    /// Tracked slot capacity after this growth (`next_power_of_two`), in bytes.
+    pub new_segment_bytes: usize,
+    /// Whether this growth first crossed a quarter of the channel ceiling.
+    pub crossed_quarter_ceiling: bool,
+}
+
+/// Outcome of [`decide_channel_egress_admission`]: whether the frame a channel
+/// publisher is about to loan should be published or dropped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ChannelEgressAdmission {
+    /// The frame is above the channel's per-channel payload ceiling and was
+    /// refused. The caller drops it — surfacing the refusal in its own way (a
+    /// typed `PayloadExceedsChannelCeiling` error in the host, a refuse return
+    /// code in a subprocess native) — and logs it; `refused_count` is the
+    /// running total after this refusal.
+    RefusedOverCeiling { refused_count: u64 },
+    /// The frame fits under the ceiling; the caller publishes it. When `grew_to`
+    /// is `Some(growth)` the tracked data-segment capacity crossed the frame size
+    /// and was advanced — a PowerOfTwo growth the caller logs, additionally
+    /// raising a `warn` when [`ChannelSegmentGrowth::crossed_quarter_ceiling`].
+    Admitted { grew_to: Option<ChannelSegmentGrowth> },
+}
+
+/// Single authority for the per-channel-egress ceiling refusal + PowerOfTwo
+/// growth-observability bookkeeping every channel publisher runs before loaning
+/// a frame.
+///
+/// Refusing above `channel_ceiling_bytes` is the graceful, observable layer in
+/// front of the subprocess cgroup `memory.max` backstop. This crate owns the
+/// thresholds so the host writer and the Python / Deno subprocess natives cannot
+/// drift: it increments `refused_over_ceiling_count` on a refusal, advances
+/// `current_slot_capacity_bytes` to the next power of two on a growth (both in
+/// place), and reports whether that growth first crossed a quarter of the
+/// ceiling. The caller owns the tracing and the refusal surface (typed error vs.
+/// refuse return code), keeping this wire-types crate logging-free.
+pub fn decide_channel_egress_admission(
+    frame_total_bytes: usize,
+    channel_ceiling_bytes: usize,
+    refused_over_ceiling_count: &mut u64,
+    current_slot_capacity_bytes: &mut usize,
+) -> ChannelEgressAdmission {
+    if frame_total_bytes > channel_ceiling_bytes {
+        *refused_over_ceiling_count += 1;
+        return ChannelEgressAdmission::RefusedOverCeiling {
+            refused_count: *refused_over_ceiling_count,
+        };
+    }
+    let grew_to = if frame_total_bytes > *current_slot_capacity_bytes {
+        let old_segment_bytes = *current_slot_capacity_bytes;
+        let new_segment_bytes = frame_total_bytes.next_power_of_two();
+        *current_slot_capacity_bytes = new_segment_bytes;
+        let quarter_ceiling_bytes = channel_ceiling_bytes / 4;
+        Some(ChannelSegmentGrowth {
+            old_segment_bytes,
+            new_segment_bytes,
+            crossed_quarter_ceiling: new_segment_bytes > quarter_ceiling_bytes
+                && old_segment_bytes <= quarter_ceiling_bytes,
+        })
+    } else {
+        None
+    };
+    ChannelEgressAdmission::Admitted { grew_to }
+}
 
 /// Default iceoryx2 ring depth (slot count, not bytes) for the data
 /// pub/sub channel between two processors. Wire schemas override this
 /// per-vocabulary via `metadata.max_queued_messages` in their YAML.
 ///
-/// iceoryx2 pre-allocates `DEFAULT_MAX_QUEUED_MESSAGES * MAX_PAYLOAD_SIZE`
-/// of shared memory per publisher when the wire schema does not declare
-/// its own depth, so this value is a per-publisher memory commitment too.
+/// iceoryx2 pre-allocates `DEFAULT_MAX_QUEUED_MESSAGES * (primed slot bytes)`
+/// of shared memory per publisher when the wire schema does not declare its
+/// own depth, so this value is a per-publisher memory commitment too. The slot
+/// bytes are primed from [`DEFAULT_EXPECTED_PAYLOAD_BYTES`] (or the schema's
+/// `metadata.expected_payload_bytes` hint) and grow on demand.
 pub const DEFAULT_MAX_QUEUED_MESSAGES: usize = 16;
 
 /// On-wire size of a [`SchemaIdentWire`]. Held constant at 128 bytes so
-/// the total [`FrameHeader`] / [`FramePayload`] layout matches the
-/// pre-#401-phase-2 [`SchemaName`]-shaped predecessor.
+/// the total [`FrameHeader`] layout matches the pre-#401-phase-2
+/// `SchemaName`-shaped predecessor.
 pub const SCHEMA_IDENT_WIRE_SIZE: usize = 128;
 
 /// Maximum byte length of the org segment when serialized into a
@@ -360,84 +492,6 @@ impl std::fmt::Debug for SchemaIdentWire {
     }
 }
 
-/// Frame payload for iceoryx2 pub/sub communication.
-///
-/// This is the message type sent between processors via iceoryx2.
-/// It includes routing information (`port_key`), structured schema
-/// identifier (`schema_ident`), and the serialized frame data.
-#[derive(Clone, Copy, ZeroCopySend)]
-#[type_name("FramePayload")]
-#[repr(C)]
-pub struct FramePayload {
-    pub port_key: PortKey,
-    pub schema_ident: SchemaIdentWire,
-    pub timestamp_ns: i64,
-    pub len: u32,
-    pub data: [u8; MAX_PAYLOAD_SIZE],
-}
-
-impl FramePayload {
-    /// Create a new payload with the given port, structured schema ident, and data.
-    ///
-    /// Fails with [`PortKeyError`] if `port` overflows the fixed wire capacity —
-    /// see [`PortKey::new`].
-    pub fn new(
-        port: &str,
-        schema_ident: SchemaIdentWire,
-        timestamp_ns: i64,
-        data: &[u8],
-    ) -> Result<Self, PortKeyError> {
-        let len = data.len().min(MAX_PAYLOAD_SIZE) as u32;
-        let mut payload = Self {
-            port_key: PortKey::new(port)?,
-            schema_ident,
-            timestamp_ns,
-            len,
-            data: [0u8; MAX_PAYLOAD_SIZE],
-        };
-        payload.data[..len as usize].copy_from_slice(&data[..len as usize]);
-        Ok(payload)
-    }
-
-    /// Get the actual data slice (excluding padding).
-    pub fn data(&self) -> &[u8] {
-        &self.data[..self.len as usize]
-    }
-
-    /// Get the port key as a string.
-    pub fn port(&self) -> &str {
-        self.port_key.as_str()
-    }
-
-    /// Get the structured schema identifier.
-    pub fn schema(&self) -> &SchemaIdentWire {
-        &self.schema_ident
-    }
-}
-
-impl Default for FramePayload {
-    fn default() -> Self {
-        Self {
-            port_key: PortKey::default(),
-            schema_ident: SchemaIdentWire::default(),
-            timestamp_ns: 0,
-            len: 0,
-            data: [0u8; MAX_PAYLOAD_SIZE],
-        }
-    }
-}
-
-impl std::fmt::Debug for FramePayload {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("FramePayload")
-            .field("port_key", &self.port_key.as_str())
-            .field("schema_ident", &self.schema_ident)
-            .field("timestamp_ns", &self.timestamp_ns)
-            .field("len", &self.len)
-            .finish()
-    }
-}
-
 /// Header for slice-based iceoryx2 frame transport.
 ///
 /// Wire format in a `[u8]` slice (little-endian for multi-byte fields):
@@ -745,6 +799,28 @@ mod tests {
     }
 
     #[test]
+    fn channel_trust_tier_defaults_and_labels() {
+        assert_eq!(
+            ChannelTrustTier::Trusted.default_ceiling_bytes(),
+            TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES
+        );
+        assert_eq!(
+            ChannelTrustTier::UntrustedSession.default_ceiling_bytes(),
+            UNTRUSTED_SESSION_CHANNEL_PAYLOAD_CEILING_BYTES
+        );
+        assert!(
+            ChannelTrustTier::UntrustedSession.default_ceiling_bytes()
+                < ChannelTrustTier::Trusted.default_ceiling_bytes(),
+            "untrusted-session ceiling must be tighter than trusted"
+        );
+        assert_eq!(ChannelTrustTier::Trusted.as_str(), "trusted");
+        assert_eq!(
+            ChannelTrustTier::UntrustedSession.as_str(),
+            "untrusted-session"
+        );
+    }
+
+    #[test]
     fn schema_ident_wire_max_segment_lengths() {
         // Boundary values — exact-fit segments must succeed.
         let max_org = "a".repeat(SCHEMA_IDENT_WIRE_MAX_ORG_LEN);
@@ -813,6 +889,101 @@ mod tests {
     }
 
     #[test]
+    fn egress_admission_refuses_over_ceiling_and_counts() {
+        let ceiling = 128 * 1024usize;
+        let mut refused = 0u64;
+        let mut slot = 64usize;
+        // First over-ceiling frame: refused, count → 1, slot untouched.
+        assert_eq!(
+            decide_channel_egress_admission(ceiling + 1, ceiling, &mut refused, &mut slot),
+            ChannelEgressAdmission::RefusedOverCeiling { refused_count: 1 }
+        );
+        assert_eq!(slot, 64, "a refusal must not grow the tracked slot");
+        // Second over-ceiling frame: count keeps climbing.
+        assert_eq!(
+            decide_channel_egress_admission(ceiling + 999, ceiling, &mut refused, &mut slot),
+            ChannelEgressAdmission::RefusedOverCeiling { refused_count: 2 }
+        );
+    }
+
+    #[test]
+    fn egress_admission_grows_without_crossing_quarter_ceiling() {
+        let ceiling = 128 * 1024usize; // quarter = 32 KiB
+        let mut refused = 0u64;
+        let mut slot = 4096usize;
+        // A frame that grows the slot but stays at or below the quarter ceiling
+        // (32 KiB) must NOT flag a crossing. 20_000 → next_pow2 = 32_768 == quarter.
+        match decide_channel_egress_admission(20_000, ceiling, &mut refused, &mut slot) {
+            ChannelEgressAdmission::Admitted {
+                grew_to: Some(growth),
+            } => {
+                assert_eq!(growth.old_segment_bytes, 4096);
+                assert_eq!(growth.new_segment_bytes, 32_768);
+                assert!(
+                    !growth.crossed_quarter_ceiling,
+                    "new == ceiling/4 is not yet past the quarter — must not warn"
+                );
+            }
+            other => panic!("expected an Admitted growth, got {other:?}"),
+        }
+        assert_eq!(slot, 32_768, "the slot advances to next_power_of_two");
+        assert_eq!(refused, 0);
+    }
+
+    #[test]
+    fn egress_admission_flags_the_growth_that_crosses_quarter_ceiling() {
+        // Mental-revert guard for the quarter-ceiling early warning: this is the
+        // single authority the host writer + Python/Deno natives all read the
+        // `crossed_quarter_ceiling` flag from, so the threshold can't drift across
+        // the three call sites. Drop the `> quarter && old <= quarter` computation
+        // and this crossing goes unflagged — no runtime raises the warn.
+        let ceiling = 128 * 1024usize; // quarter = 32 KiB = 32_768
+        let mut refused = 0u64;
+        let mut slot = 4096usize;
+        // 40_000 → next_pow2 = 65_536, which is past the 32_768 quarter while the
+        // old 4096 slot was under it: exactly the first crossing.
+        match decide_channel_egress_admission(40_000, ceiling, &mut refused, &mut slot) {
+            ChannelEgressAdmission::Admitted {
+                grew_to: Some(growth),
+            } => {
+                assert_eq!(growth.old_segment_bytes, 4096);
+                assert_eq!(growth.new_segment_bytes, 65_536);
+                assert!(
+                    growth.crossed_quarter_ceiling,
+                    "old <= ceiling/4 < new must flag the quarter-ceiling crossing"
+                );
+            }
+            other => panic!("expected an Admitted growth, got {other:?}"),
+        }
+
+        // A subsequent still-larger growth does NOT re-flag — the segment already
+        // sits past the quarter, so only the FIRST crossing warns.
+        match decide_channel_egress_admission(100_000, ceiling, &mut refused, &mut slot) {
+            ChannelEgressAdmission::Admitted {
+                grew_to: Some(growth),
+            } => assert!(
+                !growth.crossed_quarter_ceiling,
+                "a growth already above the quarter must not re-flag"
+            ),
+            other => panic!("expected an Admitted growth, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn egress_admission_admits_within_slot_without_growth() {
+        let ceiling = 128 * 1024usize;
+        let mut refused = 0u64;
+        let mut slot = 65_536usize;
+        // A frame at or under the tracked slot neither grows nor flags.
+        assert_eq!(
+            decide_channel_egress_admission(4096, ceiling, &mut refused, &mut slot),
+            ChannelEgressAdmission::Admitted { grew_to: None }
+        );
+        assert_eq!(slot, 65_536, "an in-slot frame leaves the tracked slot as-is");
+        assert_eq!(refused, 0);
+    }
+
+    #[test]
     fn frame_header_rejects_over_length_port() {
         // The truncation defect surfaced through FrameHeader::new on the write
         // path — over-length must propagate as the typed error, not silently
@@ -825,13 +996,4 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn frame_payload_default_has_zeroed_schema_ident() {
-        let p = FramePayload::default();
-        assert_eq!(p.schema_ident, SchemaIdentWire::default());
-        assert_eq!(p.schema_ident.org_str(), "");
-        assert_eq!(p.schema_ident.package_str(), "");
-        assert_eq!(p.schema_ident.type_str(), "");
-        assert_eq!(p.schema_ident.version_major, 0);
-    }
 }

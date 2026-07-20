@@ -71,46 +71,37 @@ def bridge_send_message(stdout, msg):
 # ============================================================================
 
 
-#: Default read-buffer capacity when the host sends no per-input
-#: ``max_payload_bytes``. Matches Rust's ``streamlib_ipc_types::MAX_PAYLOAD_SIZE``.
+#: Starting read-buffer capacity. A publisher under PowerOfTwo growth can
+#: deliver a frame larger than this, so it is a starting hint, never a cap: the
+#: read path grows and retries. Matches the host's
+#: ``streamlib_ipc_types::DEFAULT_EXPECTED_PAYLOAD_BYTES``.
 DEFAULT_READ_BUF_BYTES = 65536
 
+#: ``slpn_input_read`` return code: a frame is available but larger than the
+#: caller's buffer; ``out_len`` holds the required byte length. Resize to
+#: ``out_len`` and read again (grow-and-retry). The frame is NOT consumed.
+SLPN_READ_NEEDS_LARGER_BUFFER = 2
 
-def compute_read_buf_bytes(inputs) -> int:
-    """Size the input read buffer to the largest per-port ``max_payload_bytes``
-    the host declared, floored at :data:`DEFAULT_READ_BUF_BYTES`.
+#: ``slpn_output_write`` return code: the frame crossed the channel's per-channel
+#: ceiling and was refused (counted + logged host-side). The write is dropped
+#: without raising — the process never dies.
+SLPN_WRITE_REFUSED_OVER_CEILING = 2
 
-    A fixed smaller buffer silently truncates payloads larger than it —
-    including encoded video frames, which can be arbitrarily large depending
-    on how the schema is configured.
-    """
-    declared = [
-        inp.get("max_payload_bytes") or 0
-        for inp in inputs
-    ]
-    return max(DEFAULT_READ_BUF_BYTES, *declared) if declared else DEFAULT_READ_BUF_BYTES
+#: Bound on grow-and-retry attempts — the host stashes the oversized frame and
+#: re-delivers it at the exact size, so two suffice; the bound guards against a
+#: pathological producer growing the frame between calls.
+_MAX_READ_GROW_ATTEMPTS = 8
 
 
 def decode_read_result(read_buf, read_buf_bytes: int, data_len: int, timestamp_ns: int, port_name: str):
-    """Build the return value of a single FFI read given the output state
-    ``slpn_input_read`` populated.
+    """Return ``(bytes, timestamp_ns)`` for a fitting read, or ``(None, None)``
+    for an empty read.
 
-    Returns ``(bytes, timestamp_ns)`` for a valid read, ``(None, None)`` when
-    the read produced no data or when the native side reported more bytes than
-    the read buffer can hold (truncation). Extracted for testing so the empty
-    / happy / truncated branches can be exercised without spinning up iceoryx2.
+    ``data_len > read_buf_bytes`` is the grow-and-retry signal handled by the
+    caller (``NativeInputs._read_raw``) before this is reached, so a
+    still-too-large ``data_len`` here would be a bug — treated as no data.
     """
-    if data_len == 0:
-        return None, None
-    if data_len > read_buf_bytes:
-        from . import log
-
-        log.warn(
-            "payload truncated on input port",
-            port=port_name,
-            reported_bytes=data_len,
-            read_buf_bytes=read_buf_bytes,
-        )
+    if data_len == 0 or data_len > read_buf_bytes:
         return None, None
     return bytes(read_buf[:data_len]), timestamp_ns
 
@@ -162,7 +153,8 @@ def load_native_lib(lib_path):
         ctypes.c_uint32,    # schema_version_major
         ctypes.c_uint32,    # schema_version_minor
         ctypes.c_uint32,    # schema_version_patch
-        ctypes.c_size_t,    # max_payload_bytes
+        ctypes.c_size_t,    # expected_payload_bytes (slot-priming hint)
+        ctypes.c_size_t,    # channel_ceiling_bytes (per-channel payload ceiling)
         ctypes.c_size_t,    # max_queued_messages
         ctypes.c_size_t,    # max_subscribers (channel fan-out + reserved tap)
         ctypes.c_char_p,    # notify_service_name (may be empty/null)
@@ -305,26 +297,45 @@ class NativeInputs:
 
     def _read_raw(self, port_name):
         """Call into FFI and return ``(data_bytes, timestamp_ns)`` or
-        ``(None, None)``. Logs on truncation."""
+        ``(None, None)``.
+
+        Grow-and-retry (#1421): a publisher under PowerOfTwo growth can deliver a
+        frame larger than the current buffer; the native side then returns
+        :data:`SLPN_READ_NEEDS_LARGER_BUFFER` with ``out_len`` set to the required
+        size and holds the frame. We grow the buffer and read again, so nothing is
+        dropped."""
         import ctypes
 
-        result = self._lib.slpn_input_read(
-            self._ctx_ptr,
-            port_name.encode("utf-8"),
-            ctypes.cast(self._read_buf, ctypes.c_void_p),
-            self._read_buf_bytes,
-            ctypes.byref(self._out_len),
-            ctypes.byref(self._out_ts),
-        )
-        if result != 0:
-            return None, None
-        return decode_read_result(
-            self._read_buf,
-            self._read_buf_bytes,
-            self._out_len.value,
-            self._out_ts.value,
-            port_name,
-        )
+        port_bytes = port_name.encode("utf-8")
+        for _ in range(_MAX_READ_GROW_ATTEMPTS):
+            result = self._lib.slpn_input_read(
+                self._ctx_ptr,
+                port_bytes,
+                ctypes.cast(self._read_buf, ctypes.c_void_p),
+                self._read_buf_bytes,
+                ctypes.byref(self._out_len),
+                ctypes.byref(self._out_ts),
+            )
+            if result == SLPN_READ_NEEDS_LARGER_BUFFER:
+                self._grow_read_buf(self._out_len.value)
+                continue
+            if result != 0:
+                return None, None
+            return decode_read_result(
+                self._read_buf,
+                self._read_buf_bytes,
+                self._out_len.value,
+                self._out_ts.value,
+                port_name,
+            )
+        return None, None
+
+    def _grow_read_buf(self, required_bytes: int):
+        """Enlarge the reusable read buffer to at least ``required_bytes``."""
+        import ctypes
+
+        self._read_buf_bytes = required_bytes
+        self._read_buf = (ctypes.c_uint8 * required_bytes)()
 
     def read(self, port_name):
         """Read latest data from a port. Returns deserialized msgpack data or None."""
@@ -365,6 +376,10 @@ class NativeOutputs:
             len(packed),
             timestamp_ns,
         )
+        if result == SLPN_WRITE_REFUSED_OVER_CEILING:
+            # The frame crossed the channel's per-channel ceiling: refused +
+            # counted host-side, the stream continues. Never raise (never die).
+            return
         if result != 0:
             raise RuntimeError(f"Failed to write to port '{port_name}'")
 

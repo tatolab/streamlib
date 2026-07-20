@@ -5093,6 +5093,7 @@ dependencies = [
  "streamlib-adapter-vulkan",
  "streamlib-consumer-rhi",
  "streamlib-ipc-types",
+ "streamlib-plugin-abi",
  "streamlib-surface-client",
  "tracing",
  "tracing-subscriber",
@@ -5290,6 +5291,10 @@ dependencies = [
 [[package]]
 name = "streamlib-plugin-abi"
 version = "0.7.18"
+dependencies = [
+ "streamlib-ipc-types",
+ "tracing",
+]
 
 [[package]]
 name = "streamlib-plugin-sdk"
@@ -5357,6 +5362,7 @@ dependencies = [
  "streamlib-adapter-vulkan",
  "streamlib-consumer-rhi",
  "streamlib-ipc-types",
+ "streamlib-plugin-abi",
  "streamlib-surface-client",
  "tracing",
  "tracing-subscriber",

@@ -120,25 +120,28 @@ pub fn get_embedded_schema_definition(name: &str) -> Option<Arc<str>> {
     SCHEMA_REGISTRY.read().get(canonical).cloned()
 }
 
-/// Resolve `max_payload_bytes` from a structured port-schema spec.
+/// Resolve the `expected_payload_bytes` slot-priming hint from a structured
+/// port-schema spec.
 ///
-/// Returns the iceoryx2 default for `Any` (legitimate wildcard) and for
-/// registered schemas that don't declare `metadata.max_payload_bytes`.
-/// Returns [`Error::Configuration`] when a [`PortSchemaSpec::Specific`]
-/// (or [`PortSchemaSpec::Named`]) refers to a schema absent from the
-/// runtime registry — the actionable shape catches the "forgot
-/// `runtime.add_module(...)`" footgun at wire time rather than at
-/// first-frame `ExceedsMaxLoanSize`.
+/// This is a HINT that primes the publisher's initial PowerOfTwo slot capacity,
+/// never a cap and never validated against actual payloads. Returns
+/// [`DEFAULT_EXPECTED_PAYLOAD_BYTES`] for `Any` (legitimate wildcard) and for
+/// registered schemas that don't declare `metadata.expected_payload_bytes`.
+/// Returns [`Error::Configuration`] when a [`PortSchemaSpec::Specific`] (or
+/// [`PortSchemaSpec::Named`]) refers to a schema absent from the runtime
+/// registry — the actionable shape catches the "forgot `runtime.add_module(...)`"
+/// footgun at wire time.
 ///
+/// [`DEFAULT_EXPECTED_PAYLOAD_BYTES`]: crate::iceoryx2::DEFAULT_EXPECTED_PAYLOAD_BYTES
 /// [`Error::Configuration`]: crate::core::error::Error::Configuration
 /// [`PortSchemaSpec::Specific`]: streamlib_processor_schema::PortSchemaSpec::Specific
 /// [`PortSchemaSpec::Named`]: streamlib_processor_schema::PortSchemaSpec::Named
-pub fn max_payload_bytes_for_port_spec(
+pub fn expected_payload_bytes_for_port_spec(
     schema_spec: &streamlib_processor_schema::PortSchemaSpec,
 ) -> crate::core::error::Result<usize> {
-    use crate::iceoryx2::MAX_PAYLOAD_SIZE;
-    resolve_metadata_u64_for_port_spec(schema_spec, "max_payload_bytes")
-        .map(|opt| opt.unwrap_or(MAX_PAYLOAD_SIZE as usize))
+    use crate::iceoryx2::DEFAULT_EXPECTED_PAYLOAD_BYTES;
+    resolve_metadata_u64_for_port_spec(schema_spec, "expected_payload_bytes")
+        .map(|opt| opt.unwrap_or(DEFAULT_EXPECTED_PAYLOAD_BYTES))
 }
 
 /// Resolve the iceoryx2 ring depth (slot count) for a port's wire schema
@@ -367,20 +370,20 @@ pub(crate) mod test_support {
     use super::register_schema;
     use std::sync::Once;
 
-    /// Synthetic "small" wire schema — 128 KiB payload bound. Deliberately
-    /// NOT the iceoryx2 default ([`MAX_PAYLOAD_SIZE`] = 64 KiB) so that
-    /// asserting the resolved value distinguishes "read the declared
+    /// Synthetic "small" wire schema — 128 KiB expected-payload hint.
+    /// Deliberately NOT the default ([`DEFAULT_EXPECTED_PAYLOAD_BYTES`] = 64 KiB)
+    /// so that asserting the resolved value distinguishes "read the declared
     /// metadata" from "fell back to the default".
     ///
-    /// [`MAX_PAYLOAD_SIZE`]: crate::iceoryx2::MAX_PAYLOAD_SIZE
+    /// [`DEFAULT_EXPECTED_PAYLOAD_BYTES`]: crate::iceoryx2::DEFAULT_EXPECTED_PAYLOAD_BYTES
     pub const SMALL_FRAME_ID: &str = "@test/wire/SmallFrame";
-    /// Declared `max_payload_bytes` for [`SMALL_FRAME_ID`] (128 KiB).
-    pub const SMALL_FRAME_MAX_PAYLOAD_BYTES: usize = 131072;
-    /// Synthetic "large" wire schema — 16 MiB payload bound, sized for the
-    /// 256 KiB publish/subscribe roundtrip tests.
+    /// Declared `expected_payload_bytes` for [`SMALL_FRAME_ID`] (128 KiB).
+    pub const SMALL_FRAME_EXPECTED_PAYLOAD_BYTES: usize = 131072;
+    /// Synthetic "large" wire schema — 16 MiB expected-payload hint, sized for
+    /// the 256 KiB publish/subscribe roundtrip tests.
     pub const LARGE_FRAME_ID: &str = "@test/wire/LargeFrame";
-    /// Declared `max_payload_bytes` for [`LARGE_FRAME_ID`] (16 MiB).
-    pub const LARGE_FRAME_MAX_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
+    /// Declared `expected_payload_bytes` for [`LARGE_FRAME_ID`] (16 MiB).
+    pub const LARGE_FRAME_EXPECTED_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
 
     /// Register the synthetic wire schemas. Idempotent across tests in the
     /// same process.
@@ -389,11 +392,11 @@ pub(crate) mod test_support {
         INIT.call_once(|| {
             register_schema(
                 SMALL_FRAME_ID,
-                "metadata:\n  type: SmallFrame\n  max_payload_bytes: 131072\n  max_queued_messages: 32\n",
+                "metadata:\n  type: SmallFrame\n  expected_payload_bytes: 131072\n  max_queued_messages: 32\n",
             );
             register_schema(
                 LARGE_FRAME_ID,
-                "metadata:\n  type: LargeFrame\n  max_payload_bytes: 16777216\n  max_queued_messages: 16\n",
+                "metadata:\n  type: LargeFrame\n  expected_payload_bytes: 16777216\n  max_queued_messages: 16\n",
             );
         });
     }
@@ -507,10 +510,10 @@ mod tests {
     /// A `Specific` spec referencing a schema absent from the registry
     /// must return a typed configuration error naming the missing
     /// canonical id and pointing at `runtime.add_module(...)`. Mentally
-    /// reverting the resolver to silently fall back to `MAX_PAYLOAD_SIZE`
-    /// will make this test fail.
+    /// reverting the resolver to silently fall back to
+    /// `DEFAULT_EXPECTED_PAYLOAD_BYTES` will make this test fail.
     #[test]
-    fn max_payload_bytes_errors_on_registry_miss_with_add_module_hint() {
+    fn expected_payload_bytes_errors_on_registry_miss_with_add_module_hint() {
         let spec = PortSchemaSpec::Specific(SchemaIdent::new(
             Org::new("tatolab").unwrap(),
             Package::new("does-not-exist-payload").unwrap(),
@@ -518,7 +521,7 @@ mod tests {
             SemVer::new(1, 0, 0),
         ));
         let err =
-            max_payload_bytes_for_port_spec(&spec).expect_err("registry miss must surface as Err");
+            expected_payload_bytes_for_port_spec(&spec).expect_err("registry miss must surface as Err");
         let msg = err.to_string();
         assert!(
             msg.contains("@tatolab/does-not-exist-payload/Nothing"),
@@ -535,30 +538,30 @@ mod tests {
     }
 
     #[test]
-    fn max_payload_bytes_resolves_declared_value() {
-        use crate::iceoryx2::MAX_PAYLOAD_SIZE;
+    fn expected_payload_bytes_resolves_declared_value() {
+        use crate::iceoryx2::DEFAULT_EXPECTED_PAYLOAD_BYTES;
         test_support::register_test_wire_vocabulary();
-        let bytes = max_payload_bytes_for_port_spec(&test_wire_spec("SmallFrame")).unwrap();
+        let bytes = expected_payload_bytes_for_port_spec(&test_wire_spec("SmallFrame")).unwrap();
         assert_eq!(
             bytes,
-            test_support::SMALL_FRAME_MAX_PAYLOAD_BYTES,
-            "resolver must return the schema's declared metadata.max_payload_bytes"
+            test_support::SMALL_FRAME_EXPECTED_PAYLOAD_BYTES,
+            "resolver must return the schema's declared metadata.expected_payload_bytes"
         );
         // Guard against a reverted resolver that ignores metadata and always
         // returns the default: the declared value is deliberately not the default.
         assert_ne!(
-            test_support::SMALL_FRAME_MAX_PAYLOAD_BYTES,
-            MAX_PAYLOAD_SIZE as usize,
-            "test fixture must declare a non-default payload bound to be meaningful"
+            test_support::SMALL_FRAME_EXPECTED_PAYLOAD_BYTES,
+            DEFAULT_EXPECTED_PAYLOAD_BYTES,
+            "test fixture must declare a non-default payload hint to be meaningful"
         );
     }
 
     #[test]
-    fn max_payload_bytes_any_returns_default() {
-        use crate::iceoryx2::MAX_PAYLOAD_SIZE;
+    fn expected_payload_bytes_any_returns_default() {
+        use crate::iceoryx2::DEFAULT_EXPECTED_PAYLOAD_BYTES;
         assert_eq!(
-            max_payload_bytes_for_port_spec(&PortSchemaSpec::Any).unwrap(),
-            MAX_PAYLOAD_SIZE as usize
+            expected_payload_bytes_for_port_spec(&PortSchemaSpec::Any).unwrap(),
+            DEFAULT_EXPECTED_PAYLOAD_BYTES
         );
     }
 
@@ -631,7 +634,7 @@ mod tests {
         let canonical = "@tatolab/test-mqm-fallback/NoMqm";
         register_schema(
             canonical,
-            "metadata:\n  type: NoMqm\n  max_payload_bytes: 4096\n",
+            "metadata:\n  type: NoMqm\n  expected_payload_bytes: 4096\n",
         );
         let spec = PortSchemaSpec::Specific(SchemaIdent::new(
             Org::new("tatolab").unwrap(),
@@ -814,7 +817,7 @@ mod tests {
     fn register_schema_inserts_runtime_entry() {
         // Use a unique key the test owns end-to-end.
         let canonical = "@tatolab/test-register-inserts/RuntimeOnlyType";
-        let body = "metadata:\n  type: RuntimeOnlyType\n  max_payload_bytes: 4096\n";
+        let body = "metadata:\n  type: RuntimeOnlyType\n  expected_payload_bytes: 4096\n";
 
         assert!(get_embedded_schema_definition(canonical).is_none());
 
@@ -830,7 +833,7 @@ mod tests {
             TypeName::new("RuntimeOnlyType").unwrap(),
             SemVer::new(1, 0, 0),
         ));
-        assert_eq!(max_payload_bytes_for_port_spec(&spec).unwrap(), 4096);
+        assert_eq!(expected_payload_bytes_for_port_spec(&spec).unwrap(), 4096);
 
         assert!(list_embedded_schema_names().iter().any(|n| n == canonical));
     }
@@ -846,14 +849,14 @@ mod tests {
         ));
         register_schema(
             canonical,
-            "metadata:\n  type: RewrittenType\n  max_payload_bytes: 1024\n",
+            "metadata:\n  type: RewrittenType\n  expected_payload_bytes: 1024\n",
         );
-        assert_eq!(max_payload_bytes_for_port_spec(&spec).unwrap(), 1024);
+        assert_eq!(expected_payload_bytes_for_port_spec(&spec).unwrap(), 1024);
         register_schema(
             canonical,
-            "metadata:\n  type: RewrittenType\n  max_payload_bytes: 2048\n",
+            "metadata:\n  type: RewrittenType\n  expected_payload_bytes: 2048\n",
         );
-        assert_eq!(max_payload_bytes_for_port_spec(&spec).unwrap(), 2048);
+        assert_eq!(expected_payload_bytes_for_port_spec(&spec).unwrap(), 2048);
     }
 
     #[test]

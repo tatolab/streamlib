@@ -54,6 +54,16 @@ fn init_subprocess_logging() {
 const READ_MODE_SKIP_TO_LATEST: i32 = 0;
 const READ_MODE_READ_NEXT_IN_ORDER: i32 = 1;
 
+/// `slpn_output_write` return code: the frame crossed the channel's per-channel
+/// ceiling and was refused (counted, logged). The SDK drops it without raising —
+/// the process never dies. Distinct from `-1` (a real write failure).
+const SLPN_WRITE_REFUSED_OVER_CEILING: i32 = 2;
+
+/// `slpn_input_read` return code: a frame is available but larger than the
+/// caller's buffer; `out_len` holds the required byte length. The SDK resizes to
+/// `out_len` and reads again (grow-and-retry). The frame is NOT consumed.
+const SLPN_READ_NEEDS_LARGER_BUFFER: i32 = 2;
+
 /// Per-processor native context holding iceoryx2 node and port state.
 ///
 /// Mutable interior state lives behind [`Self::inner`]'s [`Mutex`] so that
@@ -111,6 +121,17 @@ struct PublisherState {
     /// One notifier per destination `connect()` link out of this source port.
     /// The channel is published ONCE; each destination's listener is woken here.
     notifiers: Vec<Notifier<ipc::Service>>,
+    /// iceoryx2 channel service name — the growth / ceiling tracing label.
+    channel_service_name: String,
+    /// Per-channel payload ceiling (bytes). A frame above this is refused +
+    /// counted, the stream continues. Subprocess channels are the
+    /// untrusted-session tier.
+    channel_ceiling_bytes: usize,
+    /// Best-effort tracking of the publisher's PowerOfTwo data-segment capacity
+    /// so a growth event is observable via `tracing`.
+    current_slot_capacity_bytes: usize,
+    /// Count of frames refused for crossing [`Self::channel_ceiling_bytes`].
+    refused_over_ceiling_count: u64,
 }
 
 impl PythonNativeContext {
@@ -602,6 +623,21 @@ pub unsafe extern "C" fn slpn_input_read(
             continue;
         }
 
+        // Grow-and-retry: a publisher under PowerOfTwo growth can deliver a frame
+        // larger than the caller's buffer. Peek the frame that would be returned
+        // WITHOUT consuming it; if it does not fit, report its length and leave it
+        // in place so the SDK can resize and read again. Nothing is dropped.
+        let required = streamlib_plugin_abi::next_read_required_len(
+            queue,
+            read_mode == READ_MODE_READ_NEXT_IN_ORDER,
+        );
+        if required > buf_len as usize {
+            if !out_len.is_null() {
+                unsafe { *out_len = required as u32 };
+            }
+            return SLPN_READ_NEEDS_LARGER_BUFFER;
+        }
+
         let (data, ts) = if read_mode == READ_MODE_READ_NEXT_IN_ORDER {
             // FIFO: return oldest
             queue.remove(0)
@@ -613,9 +649,8 @@ pub unsafe extern "C" fn slpn_input_read(
             item
         };
 
-        let copy_len = data.len().min(buf_len as usize);
-        if !out_buf.is_null() && copy_len > 0 {
-            unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), out_buf, copy_len) };
+        if !out_buf.is_null() && !data.is_empty() {
+            unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), out_buf, data.len()) };
         }
         if !out_len.is_null() {
             unsafe { *out_len = data.len() as u32 };
@@ -666,7 +701,8 @@ pub unsafe extern "C" fn slpn_output_publish(
     schema_version_major: u32,
     schema_version_minor: u32,
     schema_version_patch: u32,
-    max_payload_bytes: usize,
+    expected_payload_bytes: usize,
+    channel_ceiling_bytes: usize,
     max_queued_messages: usize,
     max_subscribers: usize,
     notify_service_name: *const c_char,
@@ -800,7 +836,8 @@ pub unsafe extern "C" fn slpn_output_publish(
     } else {
         let publisher = match service
             .publisher_builder()
-            .initial_max_slice_len(max_payload_bytes + FRAME_HEADER_SIZE)
+            .initial_max_slice_len(expected_payload_bytes + FRAME_HEADER_SIZE)
+            .allocation_strategy(AllocationStrategy::PowerOfTwo)
             .create()
         {
             Ok(p) => p,
@@ -821,6 +858,10 @@ pub unsafe extern "C" fn slpn_output_publish(
                 schema_ident,
                 source_port: port_name.to_string(),
                 notifiers: notifier.into_iter().collect(),
+                channel_service_name: service_name.to_string(),
+                channel_ceiling_bytes,
+                current_slot_capacity_bytes: expected_payload_bytes + FRAME_HEADER_SIZE,
+                refused_over_ceiling_count: 0,
             },
         );
     }
@@ -854,12 +895,12 @@ pub unsafe extern "C" fn slpn_output_write(
         None => return -1,
     };
 
-    let inner = match ctx.inner.lock() {
+    let mut inner = match ctx.inner.lock() {
         Ok(g) => g,
         Err(p) => p.into_inner(),
     };
 
-    let state = match inner.publishers.get(port_name) {
+    let state = match inner.publishers.get_mut(port_name) {
         Some(s) => s,
         None => {
             tracing::error!(
@@ -878,6 +919,30 @@ pub unsafe extern "C" fn slpn_output_write(
     };
 
     let total_len = FRAME_HEADER_SIZE + data_slice.len();
+
+    // Per-channel ceiling refusal + PowerOfTwo growth bookkeeping share their
+    // authority with the host writer via `decide_channel_egress_admission`. The
+    // refusal surfaces as SLPN_WRITE_REFUSED_OVER_CEILING (the SDK drops without
+    // raising); the host's parallel typed `PayloadExceedsChannelCeiling` error
+    // is an intentional per-boundary split, not drift.
+    let admission = streamlib_ipc_types::decide_channel_egress_admission(
+        total_len,
+        state.channel_ceiling_bytes,
+        &mut state.refused_over_ceiling_count,
+        &mut state.current_slot_capacity_bytes,
+    );
+    streamlib_plugin_abi::emit_channel_egress_admission_tracing(
+        Some(("slpn", &ctx.processor_id)),
+        streamlib_ipc_types::ChannelTrustTier::UntrustedSession,
+        &state.channel_service_name,
+        state.channel_ceiling_bytes,
+        total_len,
+        &admission,
+    );
+    if let streamlib_ipc_types::ChannelEgressAdmission::RefusedOverCeiling { .. } = admission {
+        return SLPN_WRITE_REFUSED_OVER_CEILING;
+    }
+
     let mut frame = vec![0u8; total_len];
     // Stamp the SOURCE port as provenance; destinations route by their subscriber
     // binding, not this key.

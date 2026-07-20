@@ -1,85 +1,32 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Unit tests for buffer-sizing + truncation-detection logic.
+"""Unit tests for the subprocess read path's grow-and-retry buffer sizing (#1421).
 
-These cover every branch of the read-path size check:
+Under PowerOfTwo publisher growth a frame can exceed any fixed receive buffer.
+The native `slpn_input_read` then returns `SLPN_READ_NEEDS_LARGER_BUFFER` with
+`out_len` set to the required size and holds the frame; `NativeInputs._read_raw`
+grows its buffer and reads again, so nothing is dropped. These tests drive that
+loop with a fake native lib — no iceoryx2, no subprocess.
 
-  A) ``compute_read_buf_bytes`` — picks the largest declared input size with
-     a default floor. Happy paths for every kind of input shape a host might
-     emit (empty, missing field, below default, above default, multiple).
-
-  B) ``decode_read_result`` — the pure post-FFI decode step. Runs the full
-     matrix of (data_len, read_buf_bytes) cases to confirm:
-
-     - Zero-length reads return ``(None, None)`` without logging.
-     - Reads where ``data_len <= read_buf_bytes`` return the first
-       ``data_len`` bytes of the buffer exactly, with the reported
-       timestamp.
-     - Reads where ``data_len > read_buf_bytes`` (the truncation case the
-       pre-fix 32 KB hard-coded buffer triggered) return
-       ``(None, None)`` and log a descriptive error.
-
-The iceoryx2 / FFI wire itself is covered by the Rust integration test
-``test_frame_header_plus_256kb_roundtrip_through_slice_service``; this suite
-is deliberately pure so it runs without spawning a subprocess or loading
-the cdylib.
+  A) ``decode_read_result`` — the pure post-FFI decode step for a fitting read.
+  B) ``NativeInputs._read_raw`` — the grow-and-retry loop that resizes on
+     ``SLPN_READ_NEEDS_LARGER_BUFFER`` and delivers the oversized frame intact
+     (the fail-without-fix growth case).
 """
 
 from __future__ import annotations
 
 import ctypes
-import sys
 
 import pytest
 
-from streamlib import log
 from streamlib.processor_context import (
     DEFAULT_READ_BUF_BYTES,
-    compute_read_buf_bytes,
+    SLPN_READ_NEEDS_LARGER_BUFFER,
+    NativeInputs,
     decode_read_result,
 )
-
-
-@pytest.fixture(autouse=True)
-def _reset_log_queue():
-    """Drain the streamlib.log queue between tests so truncation records
-    from one case don't leak into the next."""
-    log._reset_for_tests()
-    yield
-    log._reset_for_tests()
-
-
-def _drain_log_records():
-    """Pull every queued record out of `streamlib.log` (no writer thread
-    is running here) and return them as `_QueuedRecord` instances."""
-    records = []
-    while True:
-        try:
-            records.append(log._queue.get_nowait())
-        except Exception:
-            break
-    return records
-
-
-# ============================================================================
-# Helpers
-# ============================================================================
-
-
-def make_ffi_result(read_buf_bytes: int, data: bytes):
-    """Build the scratch state ``NativeInputs`` owns and simulate an FFI read
-    completing: copy ``data`` into the first ``min(len(data), read_buf_bytes)``
-    bytes of the buffer and return the reported data length.
-
-    Mirrors what ``slpn_input_read`` does: it reports the ORIGINAL payload
-    length even when ``len(data) > read_buf_bytes``, leaving the caller to
-    detect truncation.
-    """
-    read_buf = (ctypes.c_uint8 * read_buf_bytes)()
-    copy_len = min(len(data), read_buf_bytes)
-    ctypes.memmove(read_buf, data, copy_len)
-    return read_buf, len(data)
 
 
 def pattern_bytes(size: int) -> bytes:
@@ -88,155 +35,88 @@ def pattern_bytes(size: int) -> bytes:
 
 
 # ============================================================================
-# A) compute_read_buf_bytes — host-declared size derivation
+# A) decode_read_result — pure decode of a fitting read
 # ============================================================================
 
 
-def test_compute_read_buf_bytes_no_inputs_returns_default():
-    assert compute_read_buf_bytes([]) == DEFAULT_READ_BUF_BYTES
-
-
-def test_compute_read_buf_bytes_missing_field_falls_back_to_default():
-    assert compute_read_buf_bytes([{}]) == DEFAULT_READ_BUF_BYTES
-
-
-def test_compute_read_buf_bytes_declared_below_default_clamps_up():
-    # A schema may legitimately declare something small (say 16 KB for an
-    # audio-only port). We still ceiling the buffer at the default so shared
-    # code paths have a consistent minimum.
-    small = 16 * 1024
-    assert small < DEFAULT_READ_BUF_BYTES
-    assert (
-        compute_read_buf_bytes([{"max_payload_bytes": small}])
-        == DEFAULT_READ_BUF_BYTES
-    )
-
-
-def test_compute_read_buf_bytes_declared_equal_to_default():
-    assert (
-        compute_read_buf_bytes([{"max_payload_bytes": DEFAULT_READ_BUF_BYTES}])
-        == DEFAULT_READ_BUF_BYTES
-    )
-
-
-def test_compute_read_buf_bytes_declared_above_default_wins():
-    one_mb = 1 * 1024 * 1024
-    assert compute_read_buf_bytes([{"max_payload_bytes": one_mb}]) == one_mb
-
-
-def test_compute_read_buf_bytes_multi_input_picks_max():
-    small = 16 * 1024
-    medium = 128 * 1024
-    large = 512 * 1024
-    assert compute_read_buf_bytes(
-        [
-            {"max_payload_bytes": small},
-            {},
-            {"max_payload_bytes": medium},
-            {"max_payload_bytes": large},
-        ]
-    ) == large
-
-
-def test_compute_read_buf_bytes_multi_input_all_below_default_clamps():
-    assert compute_read_buf_bytes(
-        [
-            {"max_payload_bytes": 1024},
-            {"max_payload_bytes": 8192},
-            {"max_payload_bytes": 16384},
-        ]
-    ) == DEFAULT_READ_BUF_BYTES
-
-
-# ============================================================================
-# B) decode_read_result — post-FFI decode matrix
-# ============================================================================
-
-
-def test_decode_read_result_zero_length_returns_none_without_logging():
-    read_buf, _ = make_ffi_result(DEFAULT_READ_BUF_BYTES, b"")
-    data, ts = decode_read_result(
-        read_buf, DEFAULT_READ_BUF_BYTES, 0, 123, "port_a"
-    )
+def test_decode_read_result_zero_length_returns_none():
+    read_buf = (ctypes.c_uint8 * DEFAULT_READ_BUF_BYTES)()
+    data, ts = decode_read_result(read_buf, DEFAULT_READ_BUF_BYTES, 0, 123, "port_a")
     assert data is None
     assert ts is None
-    # A zero-length read must not enqueue a truncation record.
-    assert _drain_log_records() == []
 
 
-# Happy paths — parameterize over a matrix of (read_buf_bytes, data_len)
-# chosen to exercise several boundary conditions:
-#
-#   - 1 KB data in a default-sized buffer             (tiny payload, default buf)
-#   - 32 KB data in a default-sized buffer            (former hard-coded limit; must still work)
-#   - 32 KB + 1 B data in a default-sized buffer      (proves old cap is gone)
-#   - DEFAULT_READ_BUF_BYTES exactly in a default buf (boundary)
-#   - 256 KB data in a 1 MB buffer                    (grown buffer via schema)
-#   - 1 MB data in a 1 MB buffer                      (exact fit at the top end)
-HAPPY_PATH_MATRIX = [
-    pytest.param(DEFAULT_READ_BUF_BYTES, 1024,                      id="1KB-in-default-buf"),
-    pytest.param(DEFAULT_READ_BUF_BYTES, 32 * 1024,                 id="32KB-in-default-buf"),
-    pytest.param(DEFAULT_READ_BUF_BYTES, 32 * 1024 + 1,             id="32KB+1B-in-default-buf"),
-    pytest.param(DEFAULT_READ_BUF_BYTES, DEFAULT_READ_BUF_BYTES,    id="exact-default-in-default-buf"),
-    pytest.param(1024 * 1024, 256 * 1024,                           id="256KB-in-1MB-buf"),
-    pytest.param(1024 * 1024, 1024 * 1024,                          id="1MB-in-1MB-buf-exact-fit"),
-]
-
-
-@pytest.mark.parametrize(("read_buf_bytes", "data_len"), HAPPY_PATH_MATRIX)
-def test_decode_read_result_happy_path(read_buf_bytes, data_len):
+@pytest.mark.parametrize(
+    "data_len",
+    [1, 1024, 32 * 1024, DEFAULT_READ_BUF_BYTES],
+)
+def test_decode_read_result_fitting_read_returns_bytes(data_len):
     payload = pattern_bytes(data_len)
-    read_buf, reported_len = make_ffi_result(read_buf_bytes, payload)
-    ts = data_len * 1000
-
-    data, out_ts = decode_read_result(
-        read_buf, read_buf_bytes, reported_len, ts, "happy_port"
-    )
-
-    assert data is not None
-    assert len(data) == data_len
-    assert data == payload, (
-        "decoded bytes should match source payload byte-for-byte"
-    )
-    assert out_ts == ts
-    # Ensure decode_read_result hands back a distinct `bytes` — mutating the
-    # scratch read buffer after the call must not affect the returned value.
-    read_buf[0] = (read_buf[0] + 1) % 256
-    assert data[0] == payload[0]
-
-    # Happy path must not enqueue truncation warnings.
-    assert _drain_log_records() == []
+    read_buf = (ctypes.c_uint8 * DEFAULT_READ_BUF_BYTES)()
+    ctypes.memmove(read_buf, payload, data_len)
+    data, ts = decode_read_result(read_buf, DEFAULT_READ_BUF_BYTES, data_len, 77, "p")
+    assert data == payload
+    assert ts == 77
 
 
-# Truncation paths — native reported more bytes than the read buffer can hold.
-# This is the exact shape the pre-fix 32 KB hard-coded buffer triggered when a
-# publisher sent encoded-video-sized frames.
-TRUNCATION_MATRIX = [
-    pytest.param(DEFAULT_READ_BUF_BYTES, DEFAULT_READ_BUF_BYTES + 1,  id="1B-over-default"),
-    pytest.param(32 * 1024, DEFAULT_READ_BUF_BYTES,                   id="32KB-buf-vs-65KB-payload"),
-    pytest.param(DEFAULT_READ_BUF_BYTES, 256 * 1024,                  id="256KB-in-default-buf"),
-    pytest.param(512 * 1024, 1024 * 1024,                             id="1MB-in-512KB-buf"),
-]
+# ============================================================================
+# B) NativeInputs._read_raw — grow-and-retry loop
+# ============================================================================
 
 
-@pytest.mark.parametrize(("read_buf_bytes", "data_len"), TRUNCATION_MATRIX)
-def test_decode_read_result_truncation(read_buf_bytes, data_len):
+class _FakeReadLib:
+    """A stand-in native lib whose ``slpn_input_read`` first reports the frame is
+    too big (``SLPN_READ_NEEDS_LARGER_BUFFER``, out_len = full size) and, once the
+    caller's buffer is large enough, copies the payload and returns 0.
+
+    Mirrors the real native contract: the oversized frame is held across the two
+    calls, so the second read delivers it intact.
+    """
+
+    def __init__(self, payload: bytes, timestamp_ns: int):
+        self._payload = payload
+        self._timestamp_ns = timestamp_ns
+
+    def slpn_input_read(self, _ctx, _port, out_buf, buf_len, out_len, out_ts):
+        required = len(self._payload)
+        out_len._obj.value = required
+        if required > buf_len:
+            return SLPN_READ_NEEDS_LARGER_BUFFER
+        # Buffer is now large enough — deliver the frame.
+        ctypes.memmove(out_buf, self._payload, required)
+        out_ts._obj.value = self._timestamp_ns
+        return 0
+
+
+@pytest.mark.parametrize(
+    "data_len",
+    [
+        DEFAULT_READ_BUF_BYTES + 1,   # one byte over the starting buffer
+        256 * 1024,                   # a 256 KiB grown frame
+        4 * 1024 * 1024,              # a 4 MiB keyframe-sized frame
+    ],
+)
+def test_read_raw_grows_and_delivers_oversized_frame(data_len):
+    # A frame larger than the DEFAULT starting buffer must still be delivered
+    # intact via grow-and-retry. Fail-without-fix: revert `_read_raw` to a single
+    # fixed-buffer read (no SLPN_READ_NEEDS_LARGER_BUFFER handling) and this frame
+    # is dropped (returns None), failing the byte-for-byte assertion.
     payload = pattern_bytes(data_len)
-    read_buf, reported_len = make_ffi_result(read_buf_bytes, payload)
+    inputs = NativeInputs(_FakeReadLib(payload, timestamp_ns=4242), ctx_ptr=0)
+    assert inputs._read_buf_bytes == DEFAULT_READ_BUF_BYTES
 
-    data, out_ts = decode_read_result(
-        read_buf, read_buf_bytes, reported_len, 42, "truncated_port"
-    )
+    data, ts = inputs._read_raw("video_in")
 
-    assert data is None, "truncation must surface as None, not a short/corrupt payload"
-    assert out_ts is None
+    assert data == payload, "grown frame must be delivered byte-for-byte"
+    assert ts == 4242
+    assert inputs._read_buf_bytes >= data_len, "buffer must have grown to fit"
 
-    records = _drain_log_records()
-    assert len(records) == 1, f"expected one truncation record, got {records!r}"
-    rec = records[0]
-    assert rec.level == "warn"
-    assert rec.message == "payload truncated on input port"
-    assert rec.attrs["port"] == "truncated_port"
-    assert rec.attrs["reported_bytes"] == data_len
-    assert rec.attrs["read_buf_bytes"] == read_buf_bytes
-    assert rec.intercepted is False
+
+def test_read_raw_returns_none_when_no_data():
+    class _NoData:
+        def slpn_input_read(self, _ctx, _port, _out_buf, _buf_len, out_len, _out_ts):
+            out_len._obj.value = 0
+            return 1  # native "no data available"
+
+    inputs = NativeInputs(_NoData(), ctx_ptr=0)
+    assert inputs._read_raw("p") == (None, None)

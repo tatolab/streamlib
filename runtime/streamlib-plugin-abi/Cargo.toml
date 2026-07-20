@@ -10,14 +10,17 @@ description = "Plugin interface for StreamLib dynamic processor loading"
 repository.workspace = true
 
 # The plugin-abi crate is the wire-protocol header for the
-# `STREAMLIB_PLUGIN` symbol. It carries no streamlib dependencies —
-# the macro expansion calls into `streamlib::sdk::plugin::*` (defined
-# in streamlib-engine) at the cdylib's call site, where the streamlib
-# dep already lives. Keeping plugin-abi dep-free resolves the cyclic
+# `STREAMLIB_PLUGIN` symbol. It depends only on the leaf wire-types crate
+# (`streamlib-ipc-types`) and `tracing` — never on `streamlib-sdk` /
+# `streamlib-engine`, which would re-introduce the cyclic
 # `streamlib-engine → streamlib-plugin-abi → streamlib-sdk →
-# streamlib-engine` cycle the engine used to dodge by redeclaring
-# `PluginDeclaration` locally.
+# streamlib-engine` the engine used to dodge by redeclaring
+# `PluginDeclaration` locally. The macro expansion still calls into
+# `streamlib::sdk::plugin::*` at the cdylib's call site, where the
+# streamlib dep already lives.
 [dependencies]
+streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.7.18" }
+tracing.workspace = true
 
 [lints]
 workspace = true

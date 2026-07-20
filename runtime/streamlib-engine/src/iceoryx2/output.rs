@@ -44,9 +44,20 @@ use parking_lot::Mutex;
 use serde::Serialize;
 use streamlib_plugin_abi::OutputWriterVTable;
 
-use super::{FRAME_HEADER_SIZE, FrameHeader, SchemaIdentWire};
-use crate::core::error::{Error, Result};
+use super::{ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader, SchemaIdentWire};
+use crate::core::error::{ChannelTrustTierLabel, Error, Result};
 use crate::core::media_clock::MediaClock;
+
+/// Map the engine's [`ChannelTrustTier`] onto the engine-free
+/// [`ChannelTrustTierLabel`] the [`Error::PayloadExceedsChannelCeiling`] variant
+/// carries. Lives at the error boundary because the orphan rule forbids a `From`
+/// between the two foreign enums, and it keeps the ceiling error engine-free.
+fn trust_tier_label(trust_tier: ChannelTrustTier) -> ChannelTrustTierLabel {
+    match trust_tier {
+        ChannelTrustTier::Trusted => ChannelTrustTierLabel::Trusted,
+        ChannelTrustTier::UntrustedSession => ChannelTrustTierLabel::UntrustedSession,
+    }
+}
 
 /// One source output port's channel egress: the single channel publisher
 /// (a channel carries exactly one publisher — see
@@ -62,6 +73,42 @@ struct ChannelEgress {
     schema_ident: SchemaIdentWire,
     publisher: Publisher<ipc::Service, [u8], ()>,
     notifiers: Vec<Notifier<ipc::Service>>,
+    /// iceoryx2 service name for this channel (`{source}/{output_port}`) —
+    /// carried only for the growth / ceiling tracing fields.
+    channel_service_name: String,
+    /// Trust tier selecting the per-channel ceiling; set at wire time from the
+    /// process boundary (host-to-host is trusted; a subprocess destination is
+    /// untrusted-session).
+    trust_tier: ChannelTrustTier,
+    /// Per-channel payload ceiling in bytes. A frame above this is refused with
+    /// [`Error::PayloadExceedsChannelCeiling`], counted, and the stream
+    /// continues.
+    ceiling_bytes: usize,
+    /// Best-effort tracking of the publisher's current data-segment capacity so
+    /// a PowerOfTwo growth event is observable. Primed to the hint's slot size;
+    /// bumped (to `next_power_of_two`) the first time a loan exceeds it.
+    current_slot_capacity_bytes: usize,
+    /// Count of samples refused for crossing [`Self::ceiling_bytes`].
+    refused_over_ceiling_count: u64,
+}
+
+/// The channel-egress primitives that prime an output port's channel
+/// publisher, passed by value into [`OutputWriterInner::set_channel_publisher`].
+///
+/// Reifying the trust-tier→ceiling coupling in one place: the `trust_tier`
+/// selects the process boundary (trusted host-to-host vs. untrusted-session
+/// subprocess) and `ceiling_bytes` is its per-channel payload ceiling.
+pub struct ChannelEgressConfig {
+    /// iceoryx2 service name for this channel (`{source}/{output_port}`);
+    /// carried for the growth / ceiling tracing fields.
+    pub service_name: String,
+    /// Trust tier of the process boundary this channel crosses; selects the
+    /// per-channel ceiling.
+    pub trust_tier: ChannelTrustTier,
+    /// Initial expected-payload hint sizing the publisher's data segment.
+    pub expected_payload_bytes: usize,
+    /// Per-channel payload ceiling in bytes; a frame above it is refused.
+    pub ceiling_bytes: usize,
 }
 
 /// Host-side inner state for an output writer. Owns the per-output-port
@@ -102,23 +149,46 @@ impl OutputWriterInner {
     /// [`FrameHeader`] this port publishes. Callers build it once at wiring time
     /// from the port's structured `PortSchemaSpec` via
     /// [`SchemaIdentWire::from_segments`] — no parser runs on the per-frame hot
-    /// path. Called once per output port (the first link out of it); a second
-    /// call replaces the publisher, which the wiring op avoids via
-    /// [`Self::has_channel_publisher`].
+    /// path. The [`ChannelEgressConfig`] primes the growth / ceiling
+    /// observability the per-frame [`Self::write_raw`] enforces. Called once per
+    /// output port (the first link out of it); a second call replaces the
+    /// publisher, which the wiring op avoids via [`Self::has_channel_publisher`].
     pub fn set_channel_publisher(
         &self,
         output_port: &str,
         schema_ident: SchemaIdentWire,
         publisher: Publisher<ipc::Service, [u8], ()>,
+        egress_config: ChannelEgressConfig,
     ) {
+        let ChannelEgressConfig {
+            service_name,
+            trust_tier,
+            expected_payload_bytes,
+            ceiling_bytes,
+        } = egress_config;
         self.channels.lock().insert(
             output_port.to_string(),
             ChannelEgress {
                 schema_ident,
                 publisher,
                 notifiers: Vec::new(),
+                channel_service_name: service_name,
+                trust_tier,
+                ceiling_bytes,
+                current_slot_capacity_bytes: expected_payload_bytes + FRAME_HEADER_SIZE,
+                refused_over_ceiling_count: 0,
             },
         );
+    }
+
+    /// Number of samples this output port's channel refused for crossing its
+    /// per-channel ceiling. Observation surface for tests and diagnostics.
+    pub fn refused_over_ceiling_count(&self, output_port: &str) -> u64 {
+        self.channels
+            .lock()
+            .get(output_port)
+            .map(|e| e.refused_over_ceiling_count)
+            .unwrap_or(0)
     }
 
     /// Append a destination notifier to an output port's channel.
@@ -139,12 +209,40 @@ impl OutputWriterInner {
     /// One zero-copy loan reaches every channel subscriber; the frame is built
     /// and sent ONCE, then every destination notifier is signalled.
     pub fn write_raw(&self, port: &str, data: &[u8], timestamp_ns: i64) -> Result<()> {
-        let channels = self.channels.lock();
+        let mut channels = self.channels.lock();
         let egress = channels
-            .get(port)
+            .get_mut(port)
             .ok_or_else(|| Error::Link(format!("Unknown output port: {}", port)))?;
 
         let total_len = FRAME_HEADER_SIZE + data.len();
+
+        // Per-channel ceiling refusal + PowerOfTwo growth bookkeeping share their
+        // authority with the subprocess natives via
+        // `decide_channel_egress_admission`; the host layers its typed error and
+        // the quarter-of-ceiling warning on top of the shared decision.
+        let admission = streamlib_ipc_types::decide_channel_egress_admission(
+            total_len,
+            egress.ceiling_bytes,
+            &mut egress.refused_over_ceiling_count,
+            &mut egress.current_slot_capacity_bytes,
+        );
+        streamlib_plugin_abi::emit_channel_egress_admission_tracing(
+            None,
+            egress.trust_tier,
+            &egress.channel_service_name,
+            egress.ceiling_bytes,
+            total_len,
+            &admission,
+        );
+        if let streamlib_ipc_types::ChannelEgressAdmission::RefusedOverCeiling { .. } = admission {
+            return Err(Error::PayloadExceedsChannelCeiling {
+                channel: egress.channel_service_name.clone(),
+                payload_bytes: total_len,
+                ceiling_bytes: egress.ceiling_bytes,
+                tier: trust_tier_label(egress.trust_tier),
+            });
+        }
+
         let mut frame = vec![0u8; total_len];
         FrameHeader::new(port, egress.schema_ident, timestamp_ns, data.len() as u32)
             .map_err(|e| Error::Link(format!("output port '{}': {}", port, e)))?
@@ -464,7 +562,17 @@ mod tests {
         let inner = Arc::new(OutputWriterInner::new());
         let schema_ident =
             SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
-        inner.set_channel_publisher("out", schema_ident, publisher);
+        inner.set_channel_publisher(
+            "out",
+            schema_ident,
+            publisher,
+            ChannelEgressConfig {
+                service_name: "test/out".to_string(),
+                trust_tier: crate::iceoryx2::ChannelTrustTier::Trusted,
+                expected_payload_bytes: 4096,
+                ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            },
+        );
         inner.add_channel_notifier("out", notifier);
 
         // Pre-flight: the listener has no events queued.
@@ -529,7 +637,17 @@ mod tests {
         let inner = Arc::new(OutputWriterInner::new());
         let schema_ident =
             SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
-        inner.set_channel_publisher("out", schema_ident, publisher);
+        inner.set_channel_publisher(
+            "out",
+            schema_ident,
+            publisher,
+            ChannelEgressConfig {
+                service_name: "test/out".to_string(),
+                trust_tier: crate::iceoryx2::ChannelTrustTier::Trusted,
+                expected_payload_bytes: 4096,
+                ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            },
+        );
 
         // N destination notifiers on the one channel — the compiler op's wiring
         // shape for N destinations. `write_raw` signals each, but the frame is
@@ -607,5 +725,130 @@ mod tests {
         assert_eq!(Arc::strong_count(&inner_for_test), 2);
         drop(writer1);
         assert_eq!(Arc::strong_count(&inner_for_test), 1);
+    }
+
+    /// Per-channel ceiling + PowerOfTwo growth (#1421): a payload UNDER the
+    /// channel ceiling but far over the primed slot grows the segment and
+    /// delivers intact; a payload OVER the ceiling is refused with the named
+    /// [`Error::PayloadExceedsChannelCeiling`], counted, and the stream
+    /// continues (a subsequent in-bounds write still delivers).
+    ///
+    /// Fail-without-fix: remove the ceiling branch in `write_raw` and the
+    /// over-ceiling write returns `Ok` (no error, count stays 0) — the graceful
+    /// refusal this issue adds is gone. Remove the growth/PowerOfTwo path and the
+    /// 100 KiB loan fails instead of delivering.
+    #[test]
+    fn write_raw_refuses_over_ceiling_and_grows_within_it() {
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let pubsub = node
+            .service_builder(&ServiceName::new(&unique_suffix("ceiling/pubsub")).unwrap())
+            .publish_subscribe::<[u8]>()
+            .max_publishers(2)
+            .max_subscribers(2)
+            .open_or_create()
+            .unwrap();
+        // Prime tiny (4 KiB) under PowerOfTwo so a 100 KiB write must grow.
+        let publisher = pubsub
+            .publisher_builder()
+            .initial_max_slice_len(4096)
+            .allocation_strategy(AllocationStrategy::PowerOfTwo)
+            .create()
+            .unwrap();
+        let subscriber = pubsub.subscriber_builder().create().unwrap();
+
+        let inner = Arc::new(OutputWriterInner::new());
+        let schema =
+            SchemaIdentWire::from_segments("tatolab", "core", "EncodedVideoFrame", 1, 0, 0).unwrap();
+        let ceiling = 128 * 1024usize;
+        inner.set_channel_publisher(
+            "out",
+            schema,
+            publisher,
+            ChannelEgressConfig {
+                service_name: "test/ceiling/out".to_string(),
+                trust_tier: ChannelTrustTier::UntrustedSession,
+                expected_payload_bytes: 64,
+                ceiling_bytes: ceiling,
+            },
+        );
+
+        // Within ceiling but far above the primed 4 KiB slot — grows + delivers.
+        let within = vec![0x5Au8; 100 * 1024];
+        inner
+            .write_raw("out", &within, 111)
+            .expect("in-bounds payload must grow the segment and send");
+        assert_eq!(
+            inner.refused_over_ceiling_count("out"),
+            0,
+            "an in-bounds payload must not be counted as refused"
+        );
+        let got = subscriber
+            .receive()
+            .expect("receive")
+            .expect("grown in-bounds frame must be delivered");
+        assert_eq!(got.payload().len(), FRAME_HEADER_SIZE + within.len());
+
+        // Above ceiling — refused with the named error + counted, never a panic.
+        let over = vec![0u8; ceiling + 1];
+        let err = inner
+            .write_raw("out", &over, 222)
+            .expect_err("a payload above the channel ceiling must be refused");
+        match err {
+            Error::PayloadExceedsChannelCeiling {
+                ref channel,
+                payload_bytes,
+                ceiling_bytes,
+                tier,
+            } => {
+                assert_eq!(channel, "test/ceiling/out");
+                assert_eq!(payload_bytes, FRAME_HEADER_SIZE + over.len());
+                assert_eq!(ceiling_bytes, ceiling);
+                assert_eq!(tier, ChannelTrustTierLabel::UntrustedSession);
+            }
+            other => panic!("expected PayloadExceedsChannelCeiling, got {other:?}"),
+        }
+        assert_eq!(
+            inner.refused_over_ceiling_count("out"),
+            1,
+            "the refused sample must be counted"
+        );
+
+        // Stream continues: a subsequent in-bounds write still delivers.
+        inner
+            .write_raw("out", b"still-alive", 333)
+            .expect("stream must continue after a refusal");
+        let got = subscriber
+            .receive()
+            .expect("receive")
+            .expect("post-refusal frame must be delivered");
+        assert_eq!(got.payload().len(), FRAME_HEADER_SIZE + b"still-alive".len());
+    }
+
+    /// Drift guard for the two trust-tier spellings: `ChannelTrustTier::as_str`
+    /// (ipc-types) and `ChannelTrustTierLabel`'s `Display` (the engine-free error
+    /// crate) name the tier independently — a forced layering cost (the orphan
+    /// rule + engine purity keep the error crate off ipc-types), not duplication
+    /// to merge. The engine is the one place that sees both, so it locks the two
+    /// string forms — and `trust_tier_label`'s mapping between them — so they
+    /// can't silently drift.
+    #[test]
+    fn trust_tier_label_spellings_do_not_drift() {
+        for tier in [ChannelTrustTier::Trusted, ChannelTrustTier::UntrustedSession] {
+            let label = trust_tier_label(tier);
+            assert_eq!(
+                tier.as_str(),
+                label.to_string(),
+                "ChannelTrustTier::as_str must match ChannelTrustTierLabel's Display",
+            );
+        }
+        // Pin the exact variant pairing too, so a swapped mapping is caught.
+        assert_eq!(
+            ChannelTrustTier::Trusted.as_str(),
+            ChannelTrustTierLabel::Trusted.to_string()
+        );
+        assert_eq!(
+            ChannelTrustTier::UntrustedSession.as_str(),
+            ChannelTrustTierLabel::UntrustedSession.to_string()
+        );
     }
 }

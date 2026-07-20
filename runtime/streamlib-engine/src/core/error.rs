@@ -14,4 +14,4 @@
 //! moved into `streamlib-error` (both types are engine-foreign, so it cannot
 //! live here).
 
-pub use streamlib_error::{Error, PortDirection, Result};
+pub use streamlib_error::{ChannelTrustTierLabel, Error, PortDirection, Result};

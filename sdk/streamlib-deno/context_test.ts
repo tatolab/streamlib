@@ -2,50 +2,29 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 /**
- * Unit tests for buffer-sizing + truncation-detection logic.
+ * Unit tests for the subprocess read path's grow-and-retry buffer sizing (#1421).
  *
- * These cover every branch of the read-path size check:
+ * Under PowerOfTwo publisher growth a frame can exceed any fixed receive
+ * buffer; the native `sldn_input_read` reports the required size and holds the
+ * frame, and the caller grows and retries. These tests cover:
  *
- *   A) `computeReadBufBytes` — picks the largest declared input size with a
- *      default floor. Happy paths for every kind of input shape a host might
- *      emit (empty, missing field, below default, above default, multiple).
- *
- *   B) `decodeReadResult` — the pure post-FFI decode step. Runs the full
- *      matrix of (data_len, read_buf_bytes) cases to confirm:
- *        - Zero-length reads return null without logging.
- *        - Reads where `data_len <= read_buf_bytes` return the first
- *          `data_len` bytes of the buffer exactly, with the reported
- *          timestamp.
- *        - Reads where `data_len > read_buf_bytes` (the truncation case the
- *          pre-fix 32 KB hard-coded buffer triggered) return null and log a
- *          descriptive error.
- *
- * The iceoryx2 / FFI wire itself is covered by the Rust integration test
- * `test_frame_header_plus_256kb_roundtrip_through_slice_service`; this suite
- * is deliberately pure so it runs without spawning a subprocess or loading
- * the cdylib.
+ *   A) `decodeReadResult` — the pure post-FFI decode step for a fitting read.
+ *   B) `NativeInputPorts.readRaw` — the grow-and-retry loop that resizes on
+ *      `SLDN_READ_NEEDS_LARGER_BUFFER` and delivers the oversized frame intact
+ *      (parity with the Python `test_read_raw_grows_and_delivers_oversized_frame`
+ *      loop test) — driven with a fake native lib, no iceoryx2, no subprocess.
  */
 
-import { assert, assertEquals, assertStringIncludes } from "@std/assert";
+import { assertEquals } from "@std/assert";
+import type { NativeLib } from "./native.ts";
 import {
-  computeReadBufBytes,
   decodeReadResult,
   DEFAULT_READ_BUF_BYTES,
+  NativeProcessorState,
+  SLDN_READ_NEEDS_LARGER_BUFFER,
 } from "./context.ts";
-import * as log from "./log.ts";
 
-// ============================================================================
-// Helpers
-// ============================================================================
-
-/**
- * Build the scratch state `NativeInputPorts` owns: a read buffer, a one-slot
- * Uint32Array for the reported length, and a one-slot BigInt64Array for the
- * timestamp. Simulates an FFI read completing by writing `data` into the
- * first `data.length` bytes of the buffer and populating the length/timestamp
- * the way `sldn_input_read` does — including reporting the original
- * (pre-truncation) length when `data` is larger than `readBufBytes`.
- */
+/** Build the scratch state a decode call reads from. */
 function makeFfiResult(
   readBufBytes: number,
   data: Uint8Array,
@@ -56,271 +35,193 @@ function makeFfiResult(
   outTs: BigInt64Array<ArrayBuffer>;
 } {
   const readBuf = new Uint8Array(new ArrayBuffer(readBufBytes));
-  // Native does `copy_nonoverlapping(data, out_buf, min(data.len, buf_len))`.
   const copyLen = Math.min(data.length, readBufBytes);
   readBuf.set(data.subarray(0, copyLen));
   const outLen = new Uint32Array(new ArrayBuffer(4));
-  // Native writes the original data.len, not copyLen — that's what makes the
-  // `data_len > read_buf_bytes` branch observable to the caller.
   outLen[0] = data.length;
   const outTs = new BigInt64Array(new ArrayBuffer(8));
   outTs[0] = timestampNs;
   return { readBuf, outLen, outTs };
 }
 
-/** Build a `data_len`-byte buffer with a deterministic, non-trivial pattern. */
+/** Build a `size`-byte buffer with a deterministic, non-trivial pattern. */
 function patternBytes(size: number): Uint8Array {
   const out = new Uint8Array(size);
   for (let i = 0; i < size; i++) {
-    out[i] = i % 251; // prime modulus — non-trivial, easy to regenerate
+    out[i] = i % 251; // prime modulus
   }
   return out;
 }
 
-/**
- * Run `fn`, then drain the `streamlib.log` queue and return a single
- * string containing every queued message + serialized attrs. The
- * truncation path under test enqueues into the local queue without
- * needing the writer task / escalate channel to be running.
- */
-function withLogCapture(fn: () => void): string {
-  // No `install()` — the queue accepts records without a writer running,
-  // and `_drainForTests()` reads them directly. Reset first so tests
-  // don't see records from other tests in the same process.
-  void log._resetForTests();
-  fn();
-  return log
-    ._drainForTests()
-    .map((rec) => `${rec.message} ${JSON.stringify(rec.attrs)}`)
-    .join("\n");
-}
-
 // ============================================================================
-// A) computeReadBufBytes — host-declared size derivation
+// decodeReadResult — pure decode of a fitting read
 // ============================================================================
 
-Deno.test("computeReadBufBytes: no inputs returns default floor", () => {
-  assertEquals(computeReadBufBytes([]), DEFAULT_READ_BUF_BYTES);
-});
-
-Deno.test("computeReadBufBytes: input missing max_payload_bytes falls back to default", () => {
-  assertEquals(
-    computeReadBufBytes([{}]),
-    DEFAULT_READ_BUF_BYTES,
-  );
-});
-
-Deno.test("computeReadBufBytes: declared size below default clamps up to default", () => {
-  // A schema may legitimately declare something small (say 16 KB for an
-  // audio-only port). We still ceiling the buffer at the default so shared
-  // code paths have a consistent minimum.
-  const smallSize = 16 * 1024;
-  assert(smallSize < DEFAULT_READ_BUF_BYTES);
-  assertEquals(
-    computeReadBufBytes([{ max_payload_bytes: smallSize }]),
-    DEFAULT_READ_BUF_BYTES,
-  );
-});
-
-Deno.test("computeReadBufBytes: declared size equal to default returns default", () => {
-  assertEquals(
-    computeReadBufBytes([{ max_payload_bytes: DEFAULT_READ_BUF_BYTES }]),
-    DEFAULT_READ_BUF_BYTES,
-  );
-});
-
-Deno.test("computeReadBufBytes: declared size above default wins", () => {
-  const oneMb = 1 * 1024 * 1024;
-  assertEquals(
-    computeReadBufBytes([{ max_payload_bytes: oneMb }]),
-    oneMb,
-  );
-});
-
-Deno.test("computeReadBufBytes: multi-input picks the max across ports", () => {
-  const small = 16 * 1024;
-  const medium = 128 * 1024;
-  const large = 512 * 1024;
-  assertEquals(
-    computeReadBufBytes([
-      { max_payload_bytes: small },
-      {},
-      { max_payload_bytes: medium },
-      { max_payload_bytes: large },
-    ]),
-    large,
-  );
-});
-
-Deno.test("computeReadBufBytes: multi-input all below default clamps to default", () => {
-  assertEquals(
-    computeReadBufBytes([
-      { max_payload_bytes: 1024 },
-      { max_payload_bytes: 8192 },
-      { max_payload_bytes: 16384 },
-    ]),
-    DEFAULT_READ_BUF_BYTES,
-  );
-});
-
-// ============================================================================
-// B) decodeReadResult — post-FFI decode matrix
-// ============================================================================
-
-Deno.test("decodeReadResult: zero-length read returns null without logging", () => {
+Deno.test("decodeReadResult: zero-length read returns null", () => {
   const { readBuf, outLen, outTs } = makeFfiResult(
     DEFAULT_READ_BUF_BYTES,
     new Uint8Array(0),
     123n,
   );
-  const captured = withLogCapture(() => {
+  assertEquals(
+    decodeReadResult(readBuf, outLen, outTs, DEFAULT_READ_BUF_BYTES, "p"),
+    null,
+  );
+});
+
+for (
+  const dataLen of [1, 1024, 32 * 1024, DEFAULT_READ_BUF_BYTES]
+) {
+  Deno.test(`decodeReadResult: ${dataLen}B fitting read returns bytes`, () => {
+    const payload = patternBytes(dataLen);
+    const { readBuf, outLen, outTs } = makeFfiResult(
+      DEFAULT_READ_BUF_BYTES,
+      payload,
+      77n,
+    );
     const result = decodeReadResult(
       readBuf,
       outLen,
       outTs,
       DEFAULT_READ_BUF_BYTES,
-      "port_a",
+      "p",
     );
-    assertEquals(result, null);
+    assertEquals(result?.data, payload);
+    assertEquals(result?.timestampNs, 77n);
   });
-  assertEquals(captured, "");
+}
+
+Deno.test("decodeReadResult: still-too-large len is treated as no data (grow-and-retry owns the resize)", () => {
+  // The caller resizes on SLDN_READ_NEEDS_LARGER_BUFFER before decode; a
+  // len > readBufBytes reaching decode would be a bug, so it yields null
+  // rather than a truncated/corrupt payload.
+  const payload = patternBytes(DEFAULT_READ_BUF_BYTES + 1);
+  const { readBuf, outLen, outTs } = makeFfiResult(
+    DEFAULT_READ_BUF_BYTES,
+    payload,
+    9n,
+  );
+  assertEquals(
+    decodeReadResult(readBuf, outLen, outTs, DEFAULT_READ_BUF_BYTES, "p"),
+    null,
+  );
 });
 
-// Happy paths — parameterize over a matrix of (read_buf_bytes, data_len)
-// chosen to exercise several boundary conditions:
-//
-//   - 1 KB data in a default-sized buffer          (tiny payload, default buf)
-//   - 32 KB data in a default-sized buffer         (former hard-coded limit; must still work)
-//   - 32 KB + 1 byte data in a default-sized buffer (proves old cap is gone)
-//   - `DEFAULT_READ_BUF_BYTES` exactly in a default buffer  (boundary)
-//   - 256 KB data in a 1 MB buffer                 (grown buffer via schema)
-//   - 1 MB data in a 1 MB buffer                   (exact fit at the top end)
-const happyPathMatrix: {
-  label: string;
+// ============================================================================
+// B) NativeInputPorts.readRaw — grow-and-retry loop (parity with Python)
+// ============================================================================
+
+/** The subset of `NativeInputPorts` scratch state a fake native writes into. */
+interface InputPortsScratchState {
+  readBuf: Uint8Array<ArrayBuffer>;
   readBufBytes: number;
-  dataLen: number;
-}[] = [
-  {
-    label: "1 KB data in default-sized buffer",
-    readBufBytes: DEFAULT_READ_BUF_BYTES,
-    dataLen: 1024,
-  },
-  {
-    label: "32 KB data in default-sized buffer",
-    readBufBytes: DEFAULT_READ_BUF_BYTES,
-    dataLen: 32 * 1024,
-  },
-  {
-    label: "32 KB + 1 B in default-sized buffer",
-    readBufBytes: DEFAULT_READ_BUF_BYTES,
-    dataLen: 32 * 1024 + 1,
-  },
-  {
-    label: "exact-default in default-sized buffer",
-    readBufBytes: DEFAULT_READ_BUF_BYTES,
-    dataLen: DEFAULT_READ_BUF_BYTES,
-  },
-  {
-    label: "256 KB data in 1 MB buffer",
-    readBufBytes: 1024 * 1024,
-    dataLen: 256 * 1024,
-  },
-  {
-    label: "1 MB data in 1 MB buffer (exact fit)",
-    readBufBytes: 1024 * 1024,
-    dataLen: 1024 * 1024,
-  },
-];
-
-for (const { label, readBufBytes, dataLen } of happyPathMatrix) {
-  Deno.test(`decodeReadResult: happy path — ${label}`, () => {
-    const data = patternBytes(dataLen);
-    const ts = BigInt(dataLen) * 1000n;
-    const { readBuf, outLen, outTs } = makeFfiResult(readBufBytes, data, ts);
-
-    const captured = withLogCapture(() => {
-      const result = decodeReadResult(
-        readBuf,
-        outLen,
-        outTs,
-        readBufBytes,
-        "happy_port",
-      );
-      assert(result !== null, "happy-path read must return a value");
-      assertEquals(result.data.length, dataLen);
-      assertEquals(
-        result.data,
-        data,
-        "decoded bytes should match source payload byte-for-byte",
-      );
-      assertEquals(result.timestampNs, ts);
-      // The returned buffer must be an independent allocation so mutating the
-      // scratch readBuf afterwards can't corrupt it.
-      assert(
-        result.data.buffer !== readBuf.buffer,
-        "returned Uint8Array should own its own ArrayBuffer",
-      );
-    });
-    assertEquals(captured, "", "happy path must not log truncation warnings");
-  });
+  outLen: Uint32Array<ArrayBuffer>;
+  outTs: BigInt64Array<ArrayBuffer>;
 }
 
-// Truncation paths — native reported more bytes than the read buffer can hold.
-// This is the exact shape the pre-fix 32 KB hard-coded buffer triggered when
-// a publisher sent encoded-video-sized frames.
-const truncationMatrix: {
-  label: string;
-  readBufBytes: number;
-  dataLen: number;
-}[] = [
-  {
-    label: "1 B over default",
-    readBufBytes: DEFAULT_READ_BUF_BYTES,
-    dataLen: DEFAULT_READ_BUF_BYTES + 1,
-  },
-  {
-    label: "old 32 KB buffer vs 65 KB payload",
-    readBufBytes: 32 * 1024,
-    dataLen: DEFAULT_READ_BUF_BYTES,
-  },
-  {
-    label: "256 KB payload in default 64 KB buffer",
-    readBufBytes: DEFAULT_READ_BUF_BYTES,
-    dataLen: 256 * 1024,
-  },
-  {
-    label: "1 MB payload in 512 KB buffer",
-    readBufBytes: 512 * 1024,
-    dataLen: 1024 * 1024,
-  },
-];
+/**
+ * A stand-in native lib whose `sldn_input_read` first reports the frame is too
+ * big (`SLDN_READ_NEEDS_LARGER_BUFFER`, outLen = full size) and, once the
+ * caller's buffer has grown large enough, copies the payload and returns 0.
+ *
+ * Deno FFI pointers are opaque for writing from JS (`Deno.UnsafePointerView` is
+ * read-only), so — unlike Python's ctypes fake writing through `out_buf` — this
+ * fake writes into the bound port's scratch typed arrays directly, which is the
+ * same memory those out-pointers address. Mirrors the real native contract: the
+ * oversized frame is held across the two calls, so the second read delivers it.
+ */
+class FakeReadNativeLib {
+  private scratch: InputPortsScratchState | null = null;
 
-for (const { label, readBufBytes, dataLen } of truncationMatrix) {
-  Deno.test(`decodeReadResult: truncation — ${label}`, () => {
-    const data = patternBytes(dataLen);
-    const { readBuf, outLen, outTs } = makeFfiResult(readBufBytes, data, 42n);
+  constructor(
+    private readonly payload: Uint8Array,
+    private readonly timestampNs: bigint,
+  ) {}
 
-    const captured = withLogCapture(() => {
-      const result = decodeReadResult(
-        readBuf,
-        outLen,
-        outTs,
-        readBufBytes,
-        "truncated_port",
-      );
-      assertEquals(
-        result,
-        null,
-        "truncation must surface as null, not a short/corrupt payload",
-      );
-    });
-    assertStringIncludes(
-      captured,
-      "payload truncated on port",
-      "truncation must log a descriptive message",
+  /** Bind the port instance whose scratch out-params this fake fills. */
+  bind(inputs: unknown): void {
+    this.scratch = inputs as InputPortsScratchState;
+  }
+
+  readonly symbols = {
+    sldn_input_read: (
+      _ctx: unknown,
+      _port: unknown,
+      _outBuf: unknown,
+      bufLen: number,
+      _outLen: unknown,
+      _outTs: unknown,
+    ): number => {
+      const scratch = this.scratch!;
+      const required = this.payload.length;
+      scratch.outLen[0] = required;
+      if (required > bufLen) {
+        return SLDN_READ_NEEDS_LARGER_BUFFER;
+      }
+      scratch.readBuf.set(this.payload);
+      scratch.outTs[0] = this.timestampNs;
+      return 0;
+    },
+  };
+}
+
+/** A dummy non-null context pointer; the fake native ignores it. */
+function dummyCtxPtr(): Deno.PointerObject {
+  return Deno.UnsafePointer.of(new Uint8Array(8))!;
+}
+
+for (
+  const dataLen of [
+    DEFAULT_READ_BUF_BYTES + 1, // one byte over the starting buffer
+    256 * 1024, // a 256 KiB grown frame
+    4 * 1024 * 1024, // a 4 MiB keyframe-sized frame
+  ]
+) {
+  // Needs `--allow-ffi`: readRaw creates FFI pointers over its scratch buffers
+  // on every attempt (exercising the real native call path).
+  Deno.test(`readRaw: ${dataLen}B oversized frame grows and is delivered intact`, () => {
+    // Fail-without-fix: revert `readRaw` to a single fixed-buffer read (no
+    // SLDN_READ_NEEDS_LARGER_BUFFER handling) and this oversized frame is
+    // dropped (returns null), failing the byte-for-byte assertion.
+    const payload = patternBytes(dataLen);
+    const fake = new FakeReadNativeLib(payload, 4242n);
+    const state = new NativeProcessorState(
+      fake as unknown as NativeLib,
+      dummyCtxPtr(),
+      {},
     );
-    assertStringIncludes(captured, "truncated_port");
-    assertStringIncludes(captured, String(dataLen));
-    assertStringIncludes(captured, String(readBufBytes));
+    fake.bind(state.inputs);
+
+    const raw = state.inputs.readRaw("video_in");
+
+    assertEquals(raw?.data, payload, "grown frame must be delivered byte-for-byte");
+    assertEquals(raw?.timestampNs, 4242n);
+    assertEquals(
+      (state.inputs as unknown as InputPortsScratchState).readBufBytes >= dataLen,
+      true,
+      "buffer must have grown to fit",
+    );
   });
 }
+
+// Needs `--allow-ffi` for the same reason as the grow tests above.
+Deno.test("readRaw: native no-data return yields null", () => {
+  const noData = {
+    symbols: {
+      sldn_input_read: (
+        _ctx: unknown,
+        _port: unknown,
+        _outBuf: unknown,
+        _bufLen: number,
+        _outLen: unknown,
+        _outTs: unknown,
+      ): number => 1, // native "no data available"
+    },
+  };
+  const state = new NativeProcessorState(
+    noData as unknown as NativeLib,
+    dummyCtxPtr(),
+    {},
+  );
+  assertEquals(state.inputs.readRaw("p"), null);
+});

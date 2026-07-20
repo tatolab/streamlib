@@ -18,7 +18,7 @@
 
 import { cString, loadNativeLib, type NativeLib } from "./native.ts";
 import {
-  computeReadBufBytes,
+  DEFAULT_READ_BUF_BYTES,
   NativeProcessorState,
   NativeRuntimeContextFullAccess,
   NativeRuntimeContextLimitedAccess,
@@ -319,7 +319,6 @@ async function main(): Promise<void> {
               notify_service_name?: string;
               notify_max_notifiers?: number;
               read_mode?: string;
-              max_payload_bytes?: number;
               max_queued_messages?: number;
               max_subscribers?: number;
             }[];
@@ -333,7 +332,8 @@ async function main(): Promise<void> {
               // compiler IPC envelope emits `null` rather than omitting
               // the key, so the type is `null | object`.
               schema?: SchemaIdentEnvelope | null;
-              max_payload_bytes?: number;
+              expected_payload_bytes?: number;
+              max_payload_bytes_per_channel?: number;
               max_queued_messages?: number;
               max_subscribers?: number;
             }[];
@@ -349,7 +349,6 @@ async function main(): Promise<void> {
               port: input.name,
               channel: input.channel_service_name,
               read_mode: readMode,
-              max_payload_bytes: input.max_payload_bytes ?? null,
               max_queued_messages: maxQueuedMessages,
               max_subscribers: maxSubscribers,
             });
@@ -424,7 +423,8 @@ async function main(): Promise<void> {
               segs.major,
               segs.minor,
               segs.patch,
-              BigInt(output.max_payload_bytes ?? 65536),
+              BigInt(output.expected_payload_bytes ?? DEFAULT_READ_BUF_BYTES),
+              BigInt(output.max_payload_bytes_per_channel ?? 16 * 1024 * 1024),
               BigInt(output.max_queued_messages ?? 16),
               BigInt(output.max_subscribers ?? 2),
               cString(destNotify),
@@ -468,7 +468,9 @@ async function main(): Promise<void> {
               processor = ProcessorClass as ProcessorLifecycle;
             }
 
-            const readBufBytes = computeReadBufBytes(inputPorts);
+            // The read buffer starts at the default and grows to the frame it
+            // actually receives (grow-and-retry), independent of any hint.
+            const readBufBytes = DEFAULT_READ_BUF_BYTES;
 
             // Build shared FFI state and the two capability views once per
             // lifecycle. Each view wraps the same underlying FFI ctx, so

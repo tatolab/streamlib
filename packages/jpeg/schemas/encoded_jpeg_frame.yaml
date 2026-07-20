@@ -15,13 +15,11 @@ metadata:
   description: "JPEG-encoded image bytes (one self-contained frame per message)"
   read_mode: read_next_in_order
   max_queued_messages: 16
-  # 16 MiB per slot accommodates an uncompressed-quality 4K baseline JPEG
-  # (4K @ Q=100 ≈ 4–8 MiB; the worst-case headroom matches what
-  # EncodedVideoFrame allocates for an H.264 IDR at the same resolution
-  # so the AGP vision pipeline doesn't need a per-codec budget). Lower-
-  # resolution drone streams (720p / 1080p, 30 Hz) stay well under this
-  # cap; the schema-level limit just bounds the worst case.
-  max_payload_bytes: 16777216
+  # Slot-priming HINT, never a cap: the publisher grows its PowerOfTwo segment
+  # on the first oversized loan, so a high-quality 4K JPEG (Q=100 ≈ 4–8 MiB)
+  # delivers via one growth event rather than crashing. 1 MiB covers the common
+  # 720p/1080p drone stream (30 Hz) without a first-frame regrow.
+  expected_payload_bytes: 1048576
 
 properties:
   data:

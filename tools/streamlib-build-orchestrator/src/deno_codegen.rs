@@ -189,7 +189,7 @@ mod tests {
         std::fs::create_dir(dir.path().join("schemas")).unwrap();
         std::fs::write(
             dir.path().join("schemas/foo.yaml"),
-            "metadata:\n  type: Foo\n  max_payload_bytes: 16\nproperties:\n  x:\n    type: uint32\n",
+            "metadata:\n  type: Foo\n  expected_payload_bytes: 16\nproperties:\n  x:\n    type: uint32\n",
         )
         .unwrap();
         std::fs::write(dir.path().join("t.ts"), b"export default class {}").unwrap();
