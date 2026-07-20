@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.15](https://github.com/tatolab/streamlib/compare/v0.7.14...v0.7.15) (2026-07-20)
+
+
+### Bug Fixes
+
+* **cli:** make streamlib add format-preserving ([#1473](https://github.com/tatolab/streamlib/issues/1473)) ([9caa64f](https://github.com/tatolab/streamlib/commit/9caa64fdc8a2631bd068cbcce605df1226ab3bea))
+
 ## [0.7.14](https://github.com/tatolab/streamlib/compare/v0.7.13...v0.7.14) (2026-07-19)
 
 
