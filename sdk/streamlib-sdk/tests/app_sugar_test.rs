@@ -149,6 +149,96 @@ fn app_connect_is_a_faithful_passthrough_of_runner_connect() {
     );
 }
 
+/// `App::connect_with` faithfully forwards its [`ConnectOptions`] posture to
+/// `Runner::connect_with`: over a concrete producer/consumer schema mismatch,
+/// `ConnectOptions::strict()` rejects at the App surface with the runtime's
+/// `Error::SchemaIdentMismatch`, while the loose default over the same pair
+/// still wires the link. Hardcoding the posture in `App::connect_with`
+/// (strict-always or loose-always, or dropping the `options` argument) breaks
+/// one half and fails here — guarding the App layer against drift from the
+/// runner surface.
+#[test]
+fn app_connect_with_forwards_strict_posture_to_runner() {
+    use streamlib::sdk::runtime::ConnectOptions;
+
+    let (producer_ref, consumer_ref) = register_schema_mismatched_pair(
+        "AppConnectWithStrictProducer",
+        "AppConnectWithStrictConsumer",
+    );
+
+    let app = App::new().expect("App::new");
+    let producer = app
+        .add(producer_ref, serde_json::json!({}))
+        .expect("app add producer");
+    let consumer = app
+        .add(consumer_ref, serde_json::json!({}))
+        .expect("app add consumer");
+
+    let err = app
+        .connect_with(
+            (&producer, "out"),
+            (&consumer, "in"),
+            ConnectOptions::strict(),
+        )
+        .expect_err("strict App::connect_with must reject the mismatched link");
+    assert!(
+        matches!(err, Error::SchemaIdentMismatch { .. }),
+        "App::connect_with must forward the strict posture and surface \
+         Error::SchemaIdentMismatch; got {err:?}"
+    );
+
+    app.connect_with(
+        (&producer, "out"),
+        (&consumer, "in"),
+        ConnectOptions::default(),
+    )
+    .expect("loose App::connect_with over the same pair must still wire the link");
+}
+
+/// Register a producer type (`out` → a `VideoFrame` schema) and a consumer type
+/// (`in` → an `AudioFrame` schema) so any wired producer→consumer link is a
+/// concrete schema mismatch. Unique short names per call keep the
+/// process-global registry collision-free across the parallel test binary.
+fn register_schema_mismatched_pair(
+    producer_short: &str,
+    consumer_short: &str,
+) -> (ProcessorTypeReference, ProcessorTypeReference) {
+    use streamlib::sdk::descriptors::{
+        Org, Package, PortDescriptor, PortSchemaSpec, ProcessorDescriptor, SchemaIdent, SemVer,
+        TypeName,
+    };
+    use streamlib::sdk::processors::PROCESSOR_REGISTRY;
+
+    let schema = |ty: &str| {
+        PortSchemaSpec::Specific(SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("app-sugar-test").unwrap(),
+            TypeName::new(ty).unwrap(),
+            SemVer::new(1, 0, 0),
+        ))
+    };
+    let type_id = |short: &str| {
+        SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("app-sugar-test").unwrap(),
+            TypeName::new(short).unwrap(),
+            SemVer::new(1, 0, 0),
+        )
+    };
+
+    let producer_id = type_id(producer_short);
+    let producer = ProcessorDescriptor::new(producer_id.clone(), "app-sugar strict producer")
+        .with_output(PortDescriptor::new("out", "", schema("VideoFrame"), false));
+    let _ = PROCESSOR_REGISTRY.register_descriptor_only(producer);
+
+    let consumer_id = type_id(consumer_short);
+    let consumer = ProcessorDescriptor::new(consumer_id.clone(), "app-sugar strict consumer")
+        .with_input(PortDescriptor::new("in", "", schema("AudioFrame"), false));
+    let _ = PROCESSOR_REGISTRY.register_descriptor_only(consumer);
+
+    (producer_id.into(), consumer_id.into())
+}
+
 /// Register a descriptor-only processor type with one real input and one real
 /// output port — enough to satisfy `connect`'s port-existence check without
 /// instantiating. Unique short names per call keep the process-global registry
