@@ -11,7 +11,7 @@ use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
     ProcessorUniqueId, StateComponent,
 };
-use crate::core::embedded_schemas::port_schema_spec;
+use crate::core::embedded_schemas::resolve_node_port_schema;
 use crate::core::processors::{ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
 use crate::core::schema_agreement::{
@@ -223,33 +223,29 @@ async fn connect_impl(
         // back rather than committing a mismatched edge. Endpoints are already
         // validated to exist above.
         {
-            let producer_type = graph
-                .traversal()
-                .v(&from.processor_id)
-                .first()
-                .map(|node| node.processor_type().clone());
-            let consumer_type = graph
-                .traversal()
-                .v(&to.processor_id)
-                .first()
-                .map(|node| node.processor_type().clone());
-            if let (Some(producer_type), Some(consumer_type)) = (producer_type, consumer_type) {
-                let producer_schema =
-                    port_schema_spec(&producer_type, &from.port_name, PortDirection::Output);
-                let consumer_schema =
-                    port_schema_spec(&consumer_type, &to.port_name, PortDirection::Input);
-                enforce_connect_schema_agreement(
-                    &producer_schema,
-                    &consumer_schema,
-                    validation,
-                    ConnectSchemaContext {
-                        from_processor: from.processor_id.as_str(),
-                        from_port: &from.port_name,
-                        to_processor: to.processor_id.as_str(),
-                        to_port: &to.port_name,
-                    },
-                )?;
-            }
+            let producer_schema = resolve_node_port_schema(
+                graph,
+                &from.processor_id,
+                &from.port_name,
+                PortDirection::Output,
+            );
+            let consumer_schema = resolve_node_port_schema(
+                graph,
+                &to.processor_id,
+                &to.port_name,
+                PortDirection::Input,
+            );
+            enforce_connect_schema_agreement(
+                &producer_schema,
+                &consumer_schema,
+                validation,
+                ConnectSchemaContext {
+                    from_processor: from.processor_id.as_str(),
+                    from_port: &from.port_name,
+                    to_processor: to.processor_id.as_str(),
+                    to_port: &to.port_name,
+                },
+            )?;
         }
 
         // The one channel this link's source output port publishes to — keyed

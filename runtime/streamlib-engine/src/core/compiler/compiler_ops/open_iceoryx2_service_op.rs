@@ -14,7 +14,7 @@ use crate::core::ProcessorUniqueId;
 use crate::core::context::RuntimeContext;
 use crate::core::embedded_schemas::{
     max_payload_bytes_for_port_spec, max_queued_messages_for_port_spec, overflow_for_input_port,
-    port_schema_spec,
+    resolve_node_port_schema,
 };
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
@@ -321,25 +321,15 @@ fn resolve_output_schema(
 }
 
 /// Resolve the [`PortSchemaSpec`] on one port of a graph node, in either
-/// direction. Looks the node's processor type up in the graph, then delegates
-/// to the shared registry primitive [`port_schema_spec`]. Returns
-/// [`PortSchemaSpec::Any`] when the node is absent (no processor type to read).
+/// direction. Delegates to the shared graph→port-schema primitive
+/// [`resolve_node_port_schema`].
 fn resolve_port_schema(
-    graph: &mut Graph,
+    graph: &Graph,
     proc_id: &ProcessorUniqueId,
     port: &str,
     direction: crate::core::PortDirection,
 ) -> PortSchemaSpec {
-    let proc_type = graph
-        .traversal_mut()
-        .v(proc_id)
-        .first()
-        .map(|node| node.processor_type().clone());
-
-    match proc_type {
-        Some(ident) => port_schema_spec(&ident, port, direction),
-        None => PortSchemaSpec::Any,
-    }
+    resolve_node_port_schema(graph, proc_id, port, direction)
 }
 
 /// Deepest `max_queued_messages` across all of a destination's inbound links.
