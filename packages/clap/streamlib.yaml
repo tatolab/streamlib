@@ -27,13 +27,9 @@ processors:
   - name: audio_in
     schema: AudioFrame
     description: Stereo audio frame to process through CLAP plugin (2 channels)
-    read_mode: read_next_in_order
-    overflow: null
-    buffer_size: 32
+    delivery_profile: null
   outputs:
   - name: audio_out
     schema: AudioFrame
     description: Processed stereo audio frame from CLAP plugin (2 channels)
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null

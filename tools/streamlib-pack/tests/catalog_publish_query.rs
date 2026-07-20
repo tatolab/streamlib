@@ -86,7 +86,7 @@ processors:
   inputs:
   - name: video_in
     schema: VideoFrame
-    read_mode: skip_to_latest
+    delivery_profile: latest
 "#,
     );
     write(
@@ -164,8 +164,8 @@ fn reconstruct_wiring_graph_from_catalog_without_touching_slpkg() {
     );
     assert_eq!(out_schema.to_string(), "@tatolab/core/VideoFrame@1.4.0");
     assert_eq!(
-        sink_line.processor.inputs[0].read_mode.as_deref(),
-        Some("skip_to_latest")
+        sink_line.processor.inputs[0].delivery_profile.as_deref(),
+        Some("latest")
     );
     assert_eq!(camera_line.processor.runtime, CatalogRuntime::Rust);
     assert_eq!(sink_line.processor.runtime, CatalogRuntime::Python);

@@ -302,7 +302,7 @@ fn build_port(
         name: port.name.clone(),
         description: port.description.clone(),
         schema,
-        read_mode: port.read_mode.clone(),
+        delivery_profile: port.delivery_profile.clone(),
     })
 }
 
@@ -579,7 +579,7 @@ processors:
   inputs:
   - name: any_in
     schema: any
-    read_mode: skip_to_latest
+    delivery_profile: latest
   outputs:
   - name: video_out
     schema: VideoFrame
@@ -630,8 +630,8 @@ processors:
         // `any` port stays a wildcard.
         assert_eq!(passthrough.inputs[0].schema, CatalogSchemaRef::Any);
         assert_eq!(
-            passthrough.inputs[0].read_mode.as_deref(),
-            Some("skip_to_latest")
+            passthrough.inputs[0].delivery_profile.as_deref(),
+            Some("latest")
         );
     }
 

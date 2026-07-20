@@ -526,11 +526,11 @@ fn generate_from_config_from_schema(
     // emits empty PluginAbiObjects; the host's
     // `ProcessorInstance::install_iceoryx2_resources` patches in
     // real handles via `ProcessorVTable::set_iceoryx2_resources`
-    // immediately after `from_config` returns. Per-port read_mode
-    // / buffer_size live in the macro-emitted
-    // `__post_install_iceoryx2_resources` body run from
-    // `set_iceoryx2_resources` so the schema-driven settings still
-    // reach the host-side `InputMailboxesInner::add_port` call.
+    // immediately after `from_config` returns. Per-port delivery
+    // resolution (drain order + ring depth) is owned entirely by the
+    // host wire path, which reads the wire type's `flow_class` and any
+    // port-site `delivery_profile` override at wire time — the macro
+    // registers no ports here.
     let ipc_input_init = if !schema.inputs.is_empty() {
         quote! { inputs: __streamlib_sdk::iceoryx2::InputMailboxes::empty(), }
     } else {
@@ -592,7 +592,7 @@ fn generate_descriptor_from_schema(
             let port_name = &p.name;
             let port_schema_tokens = port_schema_spec_tokens(&p.schema);
             let port_desc = p.description.as_deref().unwrap_or("");
-            let overflow_tokens = match p.overflow.as_deref() {
+            let delivery_profile_tokens = match p.delivery_profile.as_deref() {
                 Some(value) => quote! { ::std::option::Option::Some(#value.to_string()) },
                 None => quote! { ::std::option::Option::None },
             };
@@ -603,7 +603,7 @@ fn generate_descriptor_from_schema(
                     schema: #port_schema_tokens,
                     required: true,
                     is_iceoryx2: true,
-                    overflow: #overflow_tokens,
+                    delivery_profile: #delivery_profile_tokens,
                 })
             }
         })
@@ -624,7 +624,7 @@ fn generate_descriptor_from_schema(
                     schema: #port_schema_tokens,
                     required: true,
                     is_iceoryx2: true,
-                    overflow: ::std::option::Option::None,
+                    delivery_profile: ::std::option::Option::None,
                 })
             }
         })
@@ -706,42 +706,10 @@ fn generate_iceoryx2_accessors_from_schema(schema: &ProcessorSchema) -> TokenStr
     // Issue #894: emit `set_iceoryx2_resources` to receive host-
     // allocated PluginAbiObjects + the `iceoryx2_output_writer_inner` /
     // `iceoryx2_input_mailboxes_inner` accessors so the host's
-    // wiring path can mutate the inner Arc directly.
-    let add_port_calls: Vec<TokenStream> = if has_iceoryx2_inputs {
-        schema
-            .inputs
-            .iter()
-            .map(|port| {
-                let name = &port.name;
-                let buffer_size = port.buffer_size.unwrap_or(1);
-                let read_mode_tokens = match port.read_mode.as_deref() {
-                    Some("read_next_in_order") => {
-                        quote! { __streamlib_sdk::iceoryx2::ReadMode::ReadNextInOrder }
-                    }
-                    Some("skip_to_latest") | None => {
-                        quote! { __streamlib_sdk::iceoryx2::ReadMode::SkipToLatest }
-                    }
-                    Some(unknown) => {
-                        let msg = format!(
-                            "unknown read_mode '{}' on input port '{}', expected 'skip_to_latest' or 'read_next_in_order'",
-                            unknown, name
-                        );
-                        return quote! { compile_error!(#msg); };
-                    }
-                };
-                quote! {
-                    if let ::std::option::Option::Some(ref input_inner) = input_inner_opt {
-                        if !input_inner.has_port(#name) {
-                            input_inner.add_port(#name, #buffer_size, #read_mode_tokens);
-                        }
-                    }
-                }
-            })
-            .collect()
-    } else {
-        Vec::new()
-    };
-
+    // wiring path can mutate the inner Arc directly. The host owns
+    // per-port registration (`InputMailboxesInner::add_port`) at wire
+    // time, where it resolves the delivery profile from the wire type's
+    // `flow_class` + any port-site override — the macro registers none.
     let assign_outputs = if has_iceoryx2_outputs {
         quote! {
             if let ::std::option::Option::Some(ow) = output_writer {
@@ -754,13 +722,9 @@ fn generate_iceoryx2_accessors_from_schema(schema: &ProcessorSchema) -> TokenStr
 
     let assign_inputs = if has_iceoryx2_inputs {
         quote! {
-            let input_inner_opt = input_mailboxes
-                .as_ref()
-                .and_then(|im| im.inner_arc());
             if let ::std::option::Option::Some(im) = input_mailboxes {
                 self.inputs = im;
             }
-            #(#add_port_calls)*
         }
     } else {
         quote! {

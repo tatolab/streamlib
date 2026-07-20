@@ -118,6 +118,8 @@ export interface PortMetadata {
   readonly name: string;
   readonly schema: SchemaIdent | null;
   readonly description: string;
+  /** Delivery-profile override for an input port, or `null` to default. */
+  readonly deliveryProfile: string | null;
 }
 
 /**
@@ -139,6 +141,12 @@ export interface PortOptions {
   schema?: SchemaCarrier | null;
   /** Human-readable description for introspection. */
   description?: string;
+  /**
+   * The one delivery knob for an input port — `"latest"`, `"every_sample"`,
+   * or `"lossless"`. Omit to default from the wire type's `flow_class`.
+   * Ignored on an output port.
+   */
+  deliveryProfile?: string;
 }
 
 // The version-free sentinel every code-declared identity carries. The concrete
@@ -320,6 +328,7 @@ export function input(opts: PortOptions = {}) {
       name: portName,
       schema: resolveSchemaIdent(opts.schema ?? null),
       description: opts.description ?? "",
+      deliveryProfile: opts.deliveryProfile ?? null,
     } as PortMetadata;
   };
 }
@@ -344,6 +353,7 @@ export function output(opts: PortOptions = {}) {
       name: portName,
       schema: resolveSchemaIdent(opts.schema ?? null),
       description: opts.description ?? "",
+      deliveryProfile: null,
     } as PortMetadata;
   };
 }

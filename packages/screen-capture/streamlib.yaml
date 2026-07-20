@@ -39,6 +39,4 @@ processors:
   - name: video
     schema: VideoFrame
     description: Captured video frames from screen content
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null

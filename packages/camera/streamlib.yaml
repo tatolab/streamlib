@@ -37,9 +37,7 @@ processors:
   - name: video
     schema: VideoFrame
     description: Live video frames from the camera
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null
 - name: CameraToCudaCopy
   description: 'Host-pipeline producer: camera VkImage -> cuda OPAQUE_FD VkBuffer with timeline signal for cross-API CUDA interop. Linux-only (CUDA is Linux-only on the in-tree adapter set).'
   runtime: rust
@@ -55,13 +53,9 @@ processors:
   - name: video_in
     schema: VideoFrame
     description: Camera ring texture (RGBA8 DMA-BUF) frame metadata
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null
   outputs:
   - name: video_out
     schema: VideoFrame
     description: Camera frame forwarded verbatim; cuda surface side-effect happens during process()
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null

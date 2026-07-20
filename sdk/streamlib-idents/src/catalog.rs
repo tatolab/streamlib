@@ -122,9 +122,9 @@ pub struct CatalogPort {
     pub description: Option<String>,
     /// Resolved schema flowing through this port.
     pub schema: CatalogSchemaRef,
-    /// Declared read mode for an input port (e.g. `skip_to_latest`).
+    /// Declared delivery-profile override for an input port (e.g. `lossless`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub read_mode: Option<String>,
+    pub delivery_profile: Option<String>,
 }
 
 /// The config binding of a catalog processor.
@@ -365,7 +365,7 @@ mod tests {
                 name: "video".into(),
                 description: Some("Live frames".into()),
                 schema: CatalogSchemaRef::Schema(ident("core", "VideoFrame", SemVer::new(1, 0, 0))),
-                read_mode: None,
+                delivery_profile: None,
             }],
         }
     }
@@ -434,7 +434,7 @@ mod tests {
                         name: "video_in".into(),
                         description: None,
                         schema: CatalogSchemaRef::Any,
-                        read_mode: Some("skip_to_latest".into()),
+                        delivery_profile: Some("latest".into()),
                     }],
                     outputs: vec![],
                 },

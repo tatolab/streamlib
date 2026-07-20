@@ -38,15 +38,11 @@ processors:
   - name: encoded_video_out
     schema: EncodedVideoFrame
     description: H.264 encoded video frames from WHEP stream
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null
   - name: encoded_audio_out
     schema: EncodedAudioFrame
     description: Opus encoded audio frames from WHEP stream
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null
 - name: WebrtcWhip
   description: Streams pre-encoded video and audio to a WHIP endpoint (WebRTC ingress)
   runtime: rust
@@ -61,13 +57,9 @@ processors:
   - name: encoded_video_in
     schema: EncodedVideoFrame
     description: H.264 encoded video frames to stream
-    read_mode: read_next_in_order
-    overflow: null
-    buffer_size: 16
+    delivery_profile: null
   - name: encoded_audio_in
     schema: EncodedAudioFrame
     description: Opus encoded audio frames to stream
-    read_mode: skip_to_latest
-    overflow: null
-    buffer_size: 8
+    delivery_profile: null
   outputs: []

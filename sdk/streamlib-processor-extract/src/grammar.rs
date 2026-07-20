@@ -14,8 +14,7 @@
 //!     scheduling = high,                // realtime | high | normal (default: normal)
 //!     unsafe_send,                      // flag — emit `unsafe impl Send`
 //!     config = crate::CameraConfig,     // Rust type path for the typed Config alias
-//!     input("video_in", "@tatolab/core/VideoFrame",
-//!           read_mode = "skip_to_latest", buffer_size = 4, overflow = "drop_oldest"),
+//!     input("video_in", "@tatolab/core/VideoFrame", delivery_profile = "latest"),
 //!     output("video", "@tatolab/core/VideoFrame"),
 //! )]
 //! ```
@@ -38,9 +37,8 @@ use syn::ext::IdentExt;
 use syn::parse::{ParseStream, Parser};
 use syn::{Ident, LitInt, LitStr, Path, Token, parenthesized};
 
-/// Which side of a link a port sits on. Producer-side policy keys
-/// (`read_mode` / `overflow` / `buffer_size`) are consumer-side settings and
-/// are only valid on an `input(...)`; the grammar rejects them on an
+/// Which side of a link a port sits on. `delivery_profile` is a consumer-side
+/// setting only valid on an `input(...)`; the grammar rejects it on an
 /// `output(...)`.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum PortDirection {
@@ -62,9 +60,7 @@ pub struct ParsedPort {
     pub name: String,
     pub schema: PortSchemaSpec,
     pub description: Option<String>,
-    pub read_mode: Option<String>,
-    pub overflow: Option<String>,
-    pub buffer_size: Option<usize>,
+    pub delivery_profile: Option<String>,
 }
 
 /// The fully-parsed `#[processor(...)]` attribute.
@@ -99,9 +95,7 @@ impl ParsedProcessorAttr {
             name: p.name.clone(),
             schema: p.schema.clone(),
             description: p.description.clone(),
-            read_mode: p.read_mode.clone(),
-            overflow: p.overflow.clone(),
-            buffer_size: p.buffer_size,
+            delivery_profile: p.delivery_profile.clone(),
         };
 
         ProcessorSchema {
@@ -374,14 +368,13 @@ fn parse_execution(input: ParseStream<'_>) -> syn::Result<ProcessorSchemaExecuti
 
 /// Parse an `input(...)` / `output(...)` port body.
 ///
-/// `<name-string>, <schema>, [read_mode = "...", overflow = "...", buffer_size = N,
-/// description = "..."]` — where `<schema>` is either the bare identifier `any`
-/// or a version-free `"@org/package/Type"` string.
+/// `<name-string>, <schema>, [delivery_profile = "...", description = "..."]` —
+/// where `<schema>` is either the bare identifier `any` or a version-free
+/// `"@org/package/Type"` string.
 ///
-/// The producer-side policy keys (`read_mode` / `overflow` / `buffer_size`) are
-/// consumer-side settings the destination input port declares; they are
-/// rejected with a spanned error on an `output(...)` rather than silently
-/// dropped.
+/// `delivery_profile` is a consumer-side setting the destination input port
+/// declares; it is rejected with a spanned error on an `output(...)` rather
+/// than silently dropped.
 fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<ParsedPort> {
     let content;
     parenthesized!(content in input);
@@ -396,9 +389,7 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
     let schema = parse_port_schema(&content)?;
 
     let mut description = None;
-    let mut read_mode = None;
-    let mut overflow = None;
-    let mut buffer_size = None;
+    let mut delivery_profile = None;
 
     while !content.is_empty() {
         content.parse::<Token![,]>()?;
@@ -413,27 +404,17 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
                 let lit: LitStr = content.parse()?;
                 description = Some(lit.value());
             }
-            "read_mode" => {
+            "delivery_profile" => {
                 let lit: LitStr = content.parse()?;
-                reject_producer_key_on_output(direction, "read_mode", &name, key_span)?;
-                read_mode = Some(lit.value());
-            }
-            "overflow" => {
-                let lit: LitStr = content.parse()?;
-                reject_producer_key_on_output(direction, "overflow", &name, key_span)?;
-                overflow = Some(lit.value());
-            }
-            "buffer_size" => {
-                let lit: LitInt = content.parse()?;
-                reject_producer_key_on_output(direction, "buffer_size", &name, key_span)?;
-                buffer_size = Some(lit.base10_parse()?);
+                reject_delivery_profile_on_output(direction, &name, key_span)?;
+                delivery_profile = Some(lit.value());
             }
             other => {
                 return Err(syn::Error::new(
                     key.span(),
                     format!(
-                        "unknown port key `{other}` — expected `read_mode`, `overflow`, \
-                         `buffer_size`, or `description`"
+                        "unknown port key `{other}` — expected `delivery_profile` or \
+                         `description`"
                     ),
                 ));
             }
@@ -444,17 +425,15 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
         name,
         schema,
         description,
-        read_mode,
-        overflow,
-        buffer_size,
+        delivery_profile,
     })
 }
 
-/// Reject a producer-side policy key on an `output(...)` with a spanned error.
+/// Reject `delivery_profile` on an `output(...)` with a spanned error — the
+/// profile is a consumer-side setting the destination input port declares.
 /// A no-op on an `input(...)`.
-fn reject_producer_key_on_output(
+fn reject_delivery_profile_on_output(
     direction: PortDirection,
-    key: &str,
     port_name: &str,
     span: proc_macro2::Span,
 ) -> syn::Result<()> {
@@ -462,10 +441,9 @@ fn reject_producer_key_on_output(
         return Err(syn::Error::new(
             span,
             format!(
-                "`{key}` is a consumer-side policy key and is not valid on \
-                 `{}(\"{port_name}\", ...)` — `read_mode`, `overflow`, and \
-                 `buffer_size` are declared by the destination input port, not \
-                 the producing output port",
+                "`delivery_profile` is a consumer-side setting and is not valid on \
+                 `{}(\"{port_name}\", ...)` — it is declared by the destination \
+                 input port, not the producing output port",
                 direction.keyword()
             ),
         ));
@@ -564,7 +542,7 @@ mod tests {
             "@tatolab/camera/Camera",
             execution = manual,
             scheduling = high,
-            input("video_in", "@tatolab/core/VideoFrame", read_mode = "skip_to_latest", buffer_size = 4),
+            input("video_in", "@tatolab/core/VideoFrame", delivery_profile = "latest"),
             output("video", "@tatolab/core/VideoFrame"),
         });
         assert_eq!(parsed.ident.org.as_str(), "tatolab");
@@ -576,16 +554,15 @@ mod tests {
         assert_eq!(parsed.scheduling, Some(ThreadPriority::High));
         assert_eq!(parsed.inputs.len(), 1);
         assert_eq!(parsed.inputs[0].name, "video_in");
-        assert_eq!(parsed.inputs[0].read_mode.as_deref(), Some("skip_to_latest"));
-        assert_eq!(parsed.inputs[0].buffer_size, Some(4));
+        assert_eq!(parsed.inputs[0].delivery_profile.as_deref(), Some("latest"));
         assert!(matches!(
             parsed.inputs[0].schema,
             PortSchemaSpec::Specific(_)
         ));
         assert_eq!(parsed.outputs.len(), 1);
         assert_eq!(parsed.outputs[0].name, "video");
-        // Output ports never carry a producer-side policy.
-        assert_eq!(parsed.outputs[0].read_mode, None);
+        // Output ports never carry a delivery profile.
+        assert_eq!(parsed.outputs[0].delivery_profile, None);
     }
 
     #[test]
@@ -747,40 +724,36 @@ mod tests {
     }
 
     #[test]
-    fn output_producer_side_policy_keys_are_rejected() {
-        // Regression: producer-side policy keys on an `output(...)` were
-        // silently parsed-then-nulled. They must now be a spanned error.
-        // Mentally revert `reject_producer_key_on_output` and each of these
-        // parses cleanly (bug) instead of erroring.
-        for key in ["overflow", "read_mode", "buffer_size"] {
-            let value = if key == "buffer_size" { "4" } else { "\"drop_oldest\"" };
-            let tokens: proc_macro2::TokenStream = format!(
-                "\"@tatolab/camera/Camera\", execution = manual, \
-                 output(\"video\", \"@tatolab/core/VideoFrame\", {key} = {value})"
-            )
-            .parse()
-            .expect("token stream parses");
-            let msg = parse_err(tokens);
-            assert!(
-                msg.contains(&format!("`{key}` is a consumer-side policy key")),
-                "key `{key}` got: {msg}"
-            );
-        }
+    fn output_delivery_profile_is_rejected() {
+        // Regression: `delivery_profile` is a consumer-side setting on an
+        // `output(...)`. It must be a spanned error, not silently nulled.
+        // Mentally revert `reject_delivery_profile_on_output` and this parses
+        // cleanly (bug) instead of erroring.
+        let tokens: proc_macro2::TokenStream =
+            "\"@tatolab/camera/Camera\", execution = manual, \
+             output(\"video\", \"@tatolab/core/VideoFrame\", delivery_profile = \"latest\")"
+                .parse()
+                .expect("token stream parses");
+        let msg = parse_err(tokens);
+        assert!(
+            msg.contains("`delivery_profile` is a consumer-side setting"),
+            "got: {msg}"
+        );
     }
 
     #[test]
-    fn input_producer_side_policy_keys_are_accepted() {
-        // The mirror of the rejection test: the same keys stay valid on an
-        // `input(...)` and reach the parsed port.
+    fn input_delivery_profile_is_accepted() {
+        // The mirror of the rejection test: `delivery_profile` stays valid on
+        // an `input(...)` and reaches the parsed port.
         let parsed = parse_ok(quote! {
             "@tatolab/camera/Camera",
             execution = manual,
-            input("video_in", "@tatolab/core/VideoFrame",
-                  read_mode = "skip_to_latest", overflow = "drop_oldest", buffer_size = 4),
+            input("video_in", "@tatolab/core/VideoFrame", delivery_profile = "lossless"),
         });
-        assert_eq!(parsed.inputs[0].read_mode.as_deref(), Some("skip_to_latest"));
-        assert_eq!(parsed.inputs[0].overflow.as_deref(), Some("drop_oldest"));
-        assert_eq!(parsed.inputs[0].buffer_size, Some(4));
+        assert_eq!(
+            parsed.inputs[0].delivery_profile.as_deref(),
+            Some("lossless")
+        );
     }
 
     #[test]

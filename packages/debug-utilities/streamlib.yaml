@@ -43,16 +43,12 @@ processors:
   - name: input
     schema: VideoFrame
     description: Video frame input
-    read_mode: skip_to_latest
-    overflow: null
-    buffer_size: 4
+    delivery_profile: null
   outputs:
   - name: output
     schema: VideoFrame
     description: Video frame output (unchanged)
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null
 - name: BgraFileSource
   description: Streams raw BGRA frames from a file as Videoframes
   runtime: rust
@@ -68,9 +64,7 @@ processors:
   - name: video
     schema: VideoFrame
     description: Video frames read from the BGRA file
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null
 - name: JpegBytesSource
   description: Loads a JPEG file from disk at setup time and republishes it as EncodedJpegFrame on a paced background thread (for testing the JPEG decoder pipeline)
   runtime: rust
@@ -86,9 +80,7 @@ processors:
   - name: encoded_jpeg
     schema: EncodedJpegFrame
     description: JPEG-encoded bytes wrapped in an EncodedJpegFrame
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null
 - name: VideoFrameCounter
   description: Counts incoming VideoFrames into process-global atomics so integration tests can assert on frame count + first-frame dimensions after runtime.stop()
   runtime: rust
@@ -103,7 +95,5 @@ processors:
   - name: input
     schema: VideoFrame
     description: VideoFrame stream to observe
-    read_mode: read_next_in_order
-    overflow: null
-    buffer_size: 16
+    delivery_profile: every_sample
   outputs: []

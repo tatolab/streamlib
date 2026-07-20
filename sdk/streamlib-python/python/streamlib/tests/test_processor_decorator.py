@@ -269,6 +269,20 @@ class TestPortSchemaResolution:
 
         assert control._streamlib_input_port["schema"] is None
 
+    def test_delivery_profile_override_captured(self) -> None:
+        @input(schema=None, delivery_profile="lossless")
+        def sink(self):
+            pass
+
+        assert sink._streamlib_input_port["delivery_profile"] == "lossless"
+
+    def test_delivery_profile_defaults_to_none(self) -> None:
+        @input(schema=None)
+        def control(self):
+            pass
+
+        assert control._streamlib_input_port["delivery_profile"] is None
+
     def test_processor_collects_ports_declared_in_code(self) -> None:
         VIDEO = SchemaIdent("tatolab", "core", "VideoFrame", "1.0.0")
 

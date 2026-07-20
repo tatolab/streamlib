@@ -35,9 +35,7 @@ processors:
   - name: data_in
     schema: any
     description: Input data to publish to MoQ track (any serialized type)
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null
   outputs: []
 - name: MoqSubscribeTrack
   description: Subscribes to a named MoQ track and outputs raw bytes to the graph
@@ -54,6 +52,4 @@ processors:
   - name: data_out
     schema: any
     description: Received data from MoQ track subscription (any serialized type)
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null

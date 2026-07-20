@@ -36,13 +36,9 @@ processors:
   - name: encoded_jpeg_in
     schema: EncodedJpegFrame
     description: JPEG-encoded frames to decode
-    read_mode: read_next_in_order
-    overflow: null
-    buffer_size: 16
+    delivery_profile: null
   outputs:
   - name: video_out
     schema: VideoFrame
     description: Decoded video frames
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null

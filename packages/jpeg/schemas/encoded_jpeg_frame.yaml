@@ -13,8 +13,7 @@
 metadata:
   type: EncodedJpegFrame
   description: "JPEG-encoded image bytes (one self-contained frame per message)"
-  read_mode: read_next_in_order
-  max_queued_messages: 16
+  flow_class: sample_stream
   # Slot-priming HINT, never a cap: the publisher grows its PowerOfTwo segment
   # on the first oversized loan, so a high-quality 4K JPEG (Q=100 ≈ 4–8 MiB)
   # delivers via one growth event rather than crashing. 1 MiB covers the common

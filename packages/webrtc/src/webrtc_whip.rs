@@ -36,8 +36,8 @@ enum WhipClientMessage {
     description = "Streams pre-encoded video and audio to a WHIP endpoint (WebRTC ingress)",
     execution = reactive,
     config = crate::_generated_::WebrtcWhipConfig,
-    input("encoded_video_in", "@tatolab/core/EncodedVideoFrame", read_mode = "read_next_in_order", buffer_size = 16, description = "H.264 encoded video frames to stream"),
-    input("encoded_audio_in", "@tatolab/core/EncodedAudioFrame", read_mode = "skip_to_latest", buffer_size = 8, description = "Opus encoded audio frames to stream"),
+    input("encoded_video_in", "@tatolab/core/EncodedVideoFrame", description = "H.264 encoded video frames to stream"),
+    input("encoded_audio_in", "@tatolab/core/EncodedAudioFrame", description = "Opus encoded audio frames to stream"),
 )]
 pub struct WebRtcWhipProcessor {
     // Session state

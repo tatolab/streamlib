@@ -67,9 +67,9 @@ name, execution mode, and each port's name + schema-type (or `any`). It
 deliberately excludes fields no code scan produces uniformly or that are
 authored/build-derived rather than code-derived — `version` (the release-core
 projection is a build concern), `entrypoint` (author/loader concern), the
-`config` binding, `description`, and the consumer-side port policies
-(`read_mode` / `overflow` / `buffer_size`, which the Python/Deno wire shape does
-not carry). What remains is exactly the surface a stale hand-authored
+`config` binding, `description`, and the consumer-side `delivery_profile`
+(which the Python/Deno wire shape does not carry uniformly). What remains is
+exactly the surface a stale hand-authored
 `processors:` would misstate: a processor added, removed, or renamed in code; a
 port added, removed, reordered, or re-typed. The committed manifest stays the
 carrier of the excluded authored/build fields — the `processors:` section is not

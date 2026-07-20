@@ -72,7 +72,8 @@ doesn't fire.
 ## Reference
 
 - iceoryx2 sizing fix: `core/compiler/compiler_ops/open_iceoryx2_service_op.rs`
-  (`max_queued_messages_for_dest`) + `iceoryx2/node.rs` (`max_subscribers`).
+  (the channel's agreed delivery-profile ring depth) + `iceoryx2/node.rs`
+  (`max_subscribers`).
 - The latent GPU race's mechanism (main-vs-fan-out glcore contention) and the
   funnel candidate fix live in the tracked issue for it, not here — this file
   is the *diagnostic* learning, not the fix proposal.

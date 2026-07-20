@@ -4,6 +4,7 @@
 //! iceoryx2-based IPC communication layer for cross-process processor communication.
 
 mod channel_ceiling;
+mod delivery_profile;
 mod input;
 mod mailbox;
 mod node;
@@ -16,6 +17,7 @@ pub use channel_ceiling::{
     ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_TRUSTED, ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_UNTRUSTED_SESSION,
     effective_channel_ceiling_bytes,
 };
+pub use delivery_profile::{DeliveryProfile, DeliveryResolution, FlowClass};
 pub use input::{BoundedReadOutcome, InputMailboxes, InputMailboxesInner};
 pub use mailbox::PortMailbox;
 pub use node::{Iceoryx2EventService, Iceoryx2Node, Iceoryx2NotifyService, Iceoryx2Service};

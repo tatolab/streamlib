@@ -428,6 +428,26 @@ Deno.test("@input port name override", () => {
   assertEquals(meta.name, "video_in");
 });
 
+Deno.test("@input delivery_profile override is captured", () => {
+  class P {
+    @input({ deliveryProfile: "lossless" })
+    sink() {}
+  }
+  // deno-lint-ignore no-explicit-any
+  const meta = (P.prototype as any).sink.streamlibInputPort as PortMetadata;
+  assertEquals(meta.deliveryProfile, "lossless");
+});
+
+Deno.test("@input delivery_profile defaults to null", () => {
+  class P {
+    @input()
+    control() {}
+  }
+  // deno-lint-ignore no-explicit-any
+  const meta = (P.prototype as any).control.streamlibInputPort as PortMetadata;
+  assertEquals(meta.deliveryProfile, null);
+});
+
 Deno.test("@processor collects @input + @output ports declared in code", () => {
   const VIDEO = new SchemaIdent("tatolab", "core", "VideoFrame", "1.0.0");
 

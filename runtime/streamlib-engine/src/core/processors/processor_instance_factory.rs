@@ -908,7 +908,7 @@ impl ProcessorInstanceFactory {
                 name: p.name.clone(),
                 data_type: p.schema.clone(),
                 port_kind: Default::default(),
-                overflow: p.overflow.clone(),
+                delivery_profile: p.delivery_profile.clone(),
             })
             .collect();
 
@@ -919,7 +919,7 @@ impl ProcessorInstanceFactory {
                 name: p.name.clone(),
                 data_type: p.schema.clone(),
                 port_kind: Default::default(),
-                overflow: p.overflow.clone(),
+                delivery_profile: p.delivery_profile.clone(),
             })
             .collect();
 
@@ -992,7 +992,7 @@ impl ProcessorInstanceFactory {
                 name: p.name.clone(),
                 data_type: p.schema.clone(),
                 port_kind: Default::default(),
-                overflow: p.overflow.clone(),
+                delivery_profile: p.delivery_profile.clone(),
             })
             .collect();
 
@@ -1003,7 +1003,7 @@ impl ProcessorInstanceFactory {
                 name: p.name.clone(),
                 data_type: p.schema.clone(),
                 port_kind: Default::default(),
-                overflow: p.overflow.clone(),
+                delivery_profile: p.delivery_profile.clone(),
             })
             .collect();
 
@@ -1064,7 +1064,7 @@ impl ProcessorInstanceFactory {
                 name: p.name.clone(),
                 data_type: p.schema.clone(),
                 port_kind: Default::default(),
-                overflow: p.overflow.clone(),
+                delivery_profile: p.delivery_profile.clone(),
             })
             .collect();
 
@@ -1075,7 +1075,7 @@ impl ProcessorInstanceFactory {
                 name: p.name.clone(),
                 data_type: p.schema.clone(),
                 port_kind: Default::default(),
-                overflow: p.overflow.clone(),
+                delivery_profile: p.delivery_profile.clone(),
             })
             .collect();
 

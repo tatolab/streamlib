@@ -286,6 +286,7 @@ def input(
     *,
     schema: Union[SchemaIdent, Type, None] = None,
     description: str = "",
+    delivery_profile: Optional[str] = None,
 ):
     """Mark a method as defining an input port.
 
@@ -297,6 +298,8 @@ def input(
             package's JTD/YAML schemas). String forms (bare type name or
             joined `@org/pkg/Type@v`) are rejected with a clear error.
         description: Human-readable description for introspection.
+        delivery_profile: The one delivery knob — `"latest"`, `"every_sample"`,
+            or `"lossless"`. Omit to default from the wire type's `flow_class`.
 
     Example:
         ```python
@@ -313,6 +316,7 @@ def input(
             "name": port_name,
             "schema": _resolve_schema_ident(schema),
             "description": description,
+            "delivery_profile": delivery_profile,
         }
         return method
 

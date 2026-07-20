@@ -12,8 +12,8 @@ use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContex
     execution = reactive,
     scheduling = realtime,
     config = crate::_generated_::AudioMixerConfig,
-    input("left", "@tatolab/core/AudioFrame", read_mode = "read_next_in_order", buffer_size = 32, description = "Left channel mono audio frame"),
-    input("right", "@tatolab/core/AudioFrame", read_mode = "read_next_in_order", buffer_size = 32, description = "Right channel mono audio frame"),
+    input("left", "@tatolab/core/AudioFrame", description = "Left channel mono audio frame"),
+    input("right", "@tatolab/core/AudioFrame", description = "Right channel mono audio frame"),
     output("audio", "@tatolab/core/AudioFrame", description = "Mixed stereo audio frame"),
 )]
 pub struct AudioMixerProcessor {

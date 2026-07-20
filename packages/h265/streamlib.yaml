@@ -38,16 +38,12 @@ processors:
   - name: video_in
     schema: VideoFrame
     description: Raw video frames to encode
-    read_mode: read_next_in_order
-    overflow: null
-    buffer_size: 8
+    delivery_profile: every_sample
   outputs:
   - name: encoded_video_out
     schema: EncodedVideoFrame
     description: H.265 encoded video frames
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null
 - name: H265Decoder
   description: Decodes EncodedVideoFrame (H.265) to VideoFrame via Vulkan Video
   runtime: rust
@@ -63,13 +59,9 @@ processors:
   - name: encoded_video_in
     schema: EncodedVideoFrame
     description: H.265 encoded video frames to decode
-    read_mode: read_next_in_order
-    overflow: null
-    buffer_size: 16
+    delivery_profile: null
   outputs:
   - name: video_out
     schema: VideoFrame
     description: Decoded video frames
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null

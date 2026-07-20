@@ -186,7 +186,7 @@ impl OpusDecoder {
     execution = reactive,
     scheduling = realtime,
     config = crate::_generated_::OpusDecoderConfig,
-    input("encoded_audio_in", "@tatolab/core/EncodedAudioFrame", read_mode = "skip_to_latest", buffer_size = 8, description = "Opus encoded audio frames to decode"),
+    input("encoded_audio_in", "@tatolab/core/EncodedAudioFrame", description = "Opus encoded audio frames to decode"),
     output("audio_out", "@tatolab/core/AudioFrame", description = "Decoded audio frames"),
 )]
 pub struct OpusDecoderProcessor {

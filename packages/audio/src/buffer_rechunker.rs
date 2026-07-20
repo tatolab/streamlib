@@ -11,7 +11,7 @@ use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContex
     execution = reactive,
     scheduling = realtime,
     config = crate::_generated_::BufferRechunkerConfig,
-    input("audio_in", "@tatolab/core/AudioFrame", read_mode = "read_next_in_order", buffer_size = 32, description = "Variable-size audio frame"),
+    input("audio_in", "@tatolab/core/AudioFrame", description = "Variable-size audio frame"),
     output("audio_out", "@tatolab/core/AudioFrame", description = "Fixed-size audio frame"),
 )]
 pub struct BufferRechunkerProcessor {
