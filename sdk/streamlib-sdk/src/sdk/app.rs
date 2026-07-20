@@ -16,7 +16,7 @@ use crate::sdk::RunnerAutoBuild;
 use crate::sdk::error::{Error, Result};
 use crate::sdk::graph::{InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId};
 use crate::sdk::processors::{Config, GeneratedProcessor, ProcessorSpec, ProcessorTypeReference};
-use crate::sdk::runtime::Runner;
+use crate::sdk::runtime::{ConnectOptions, Runner};
 
 /// A `(processor, port)` endpoint for [`App::connect`]. The processor is
 /// referenced by the [`ProcessorUniqueId`] an `add`/`add_local` call returned;
@@ -100,6 +100,24 @@ impl App {
         self.runner.connect(
             OutputLinkPortRef::new(from.0, from.1),
             InputLinkPortRef::new(to.0, to.1),
+        )
+    }
+
+    /// Connect two endpoints under explicit [`ConnectOptions`] — the strict
+    /// schema-validation opt-in for a safety-critical channel. Under
+    /// [`ConnectOptions::strict`] a concrete producer/consumer schema mismatch
+    /// surfaces the runtime's [`Error::SchemaIdentMismatch`] at the wiring site
+    /// instead of only warning.
+    pub fn connect_with(
+        &self,
+        from: AppPortEndpoint<'_>,
+        to: AppPortEndpoint<'_>,
+        options: ConnectOptions,
+    ) -> Result<LinkUniqueId> {
+        self.runner.connect_with(
+            OutputLinkPortRef::new(from.0, from.1),
+            InputLinkPortRef::new(to.0, to.1),
+            options,
         )
     }
 

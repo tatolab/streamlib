@@ -4,7 +4,7 @@
 use std::sync::Arc;
 
 use super::Runner;
-use super::operations::{BoxFuture, RuntimeOperations};
+use super::operations::{BoxFuture, ConnectOptions, RuntimeOperations};
 use super::runtime::TokioRuntimeVariant;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
@@ -153,14 +153,13 @@ async fn remove_processor_impl(
 /// Core implementation for connect - takes owned Arcs for 'static lifetime.
 ///
 /// `validation` selects the schema-agreement posture for this wiring site.
-/// Every public caller (`connect` / `connect_async`) currently passes
-/// [`SchemaValidationPosture::Loose`] (warn-but-wire). The
-/// [`Strict`][SchemaValidationPosture::Strict] mechanism — hard-failing a
-/// concrete producer/consumer schema mismatch with
-/// [`Error::SchemaIdentMismatch`] — is complete and revert-locked by tests, but
-/// has no public caller yet: the strict opt-in lands with the #1419 per-channel
-/// wiring surface. Until then Strict is intentionally dormant (owner decision
-/// (a), 2026-07-20) and reachable only through this `_impl` entry.
+/// [`connect`](Runner::connect) / [`connect_async`](RuntimeOperations::connect_async)
+/// pass [`SchemaValidationPosture::Loose`] (warn-but-wire); the
+/// [`connect_with`](Runner::connect_with) opt-in passes the caller's
+/// [`ConnectOptions`] posture, so a safety-critical channel selects
+/// [`Strict`][SchemaValidationPosture::Strict] to hard-fail a concrete
+/// producer/consumer schema mismatch with [`Error::SchemaIdentMismatch`]
+/// instead of only warning.
 #[tracing::instrument(
     name = "runtime.connect",
     skip(compiler),
@@ -388,13 +387,7 @@ impl RuntimeOperations for Runner {
         from: OutputLinkPortRef,
         to: InputLinkPortRef,
     ) -> BoxFuture<'_, Result<LinkUniqueId>> {
-        let compiler = Arc::clone(&self.compiler);
-        Box::pin(connect_impl(
-            compiler,
-            from,
-            to,
-            SchemaValidationPosture::Loose,
-        ))
+        self.connect_with_async(from, to, ConnectOptions::loose())
     }
 
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
@@ -454,20 +447,7 @@ impl RuntimeOperations for Runner {
     }
 
     fn connect(&self, from: OutputLinkPortRef, to: InputLinkPortRef) -> Result<LinkUniqueId> {
-        match &self.tokio_runtime_variant {
-            TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.block_on(self.connect_async(from, to)),
-            TokioRuntimeVariant::ExternalTokioHandle(handle) => {
-                let compiler = Arc::clone(&self.compiler);
-                let (tx, rx) = std::sync::mpsc::channel();
-                handle.spawn(async move {
-                    let result =
-                        connect_impl(compiler, from, to, SchemaValidationPosture::Loose).await;
-                    let _ = tx.send(result);
-                });
-                rx.recv()
-                    .map_err(|_| Error::Runtime("Task channel closed".into()))?
-            }
-        }
+        self.connect_with(from, to, ConnectOptions::loose())
     }
 
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {
@@ -495,6 +475,54 @@ impl RuntimeOperations for Runner {
 
     fn to_json(&self) -> Result<serde_json::Value> {
         Runner::to_json(self)
+    }
+}
+
+impl Runner {
+    /// Connect two ports under explicit [`ConnectOptions`] — the strict
+    /// schema-validation opt-in for a safety-critical wiring site.
+    ///
+    /// [`connect`](RuntimeOperations::connect) is the loose-but-observed default
+    /// (a concrete producer/consumer schema mismatch warns, then wires the link
+    /// anyway); this threads the caller's posture into the same wiring path, so
+    /// under [`ConnectOptions::strict`] the mismatch instead hard-fails with
+    /// [`Error::SchemaIdentMismatch`] and the link is not wired.
+    pub fn connect_with(
+        &self,
+        from: OutputLinkPortRef,
+        to: InputLinkPortRef,
+        options: ConnectOptions,
+    ) -> Result<LinkUniqueId> {
+        match &self.tokio_runtime_variant {
+            TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.block_on(connect_impl(
+                Arc::clone(&self.compiler),
+                from,
+                to,
+                options.validation,
+            )),
+            TokioRuntimeVariant::ExternalTokioHandle(handle) => {
+                let compiler = Arc::clone(&self.compiler);
+                let (tx, rx) = std::sync::mpsc::channel();
+                handle.spawn(async move {
+                    let result = connect_impl(compiler, from, to, options.validation).await;
+                    let _ = tx.send(result);
+                });
+                rx.recv()
+                    .map_err(|_| Error::Runtime("Task channel closed".into()))?
+            }
+        }
+    }
+
+    /// Async form of [`connect_with`](Self::connect_with) — safe from any
+    /// context, including a tokio task.
+    pub fn connect_with_async(
+        &self,
+        from: OutputLinkPortRef,
+        to: InputLinkPortRef,
+        options: ConnectOptions,
+    ) -> BoxFuture<'_, Result<LinkUniqueId>> {
+        let compiler = Arc::clone(&self.compiler);
+        Box::pin(connect_impl(compiler, from, to, options.validation))
     }
 }
 
@@ -550,7 +578,10 @@ mod connect_schema_agreement_tests {
     use tracing_subscriber::Layer;
     use tracing_subscriber::layer::{Context, SubscriberExt};
 
+    use serial_test::serial;
+
     use super::connect_impl;
+    use super::{ConnectOptions, Runner};
     use crate::core::Error;
     use crate::core::compiler::Compiler;
     use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
@@ -712,5 +743,105 @@ mod connect_schema_agreement_tests {
             "strict connect over a concrete schema mismatch must surface \
              Error::SchemaIdentMismatch; got {err:?}"
         );
+    }
+
+    /// Criterion-3 revert lock for the *public* strict opt-in: driving the
+    /// `Runner::connect_with` authoring surface with [`ConnectOptions::strict`]
+    /// over a concrete producer/consumer schema mismatch hard-fails with the
+    /// typed [`Error::SchemaIdentMismatch`] and does not wire the link, while
+    /// [`ConnectOptions::loose`] over the same pair still wires it.
+    ///
+    /// Mentally reverting `connect_with` to drop `options.validation` — routing
+    /// through the loose `connect` — makes the strict half return `Ok` and fails
+    /// here. The `connect_impl`-level tests above never exercise the public
+    /// surface, so they don't catch that regression.
+    #[test]
+    #[serial]
+    fn connect_with_strict_rejects_a_mismatched_link_via_the_public_surface() {
+        ensure_mismatch_types_registered();
+        let runtime = Runner::new().expect("runner builds");
+
+        let producer = runtime
+            .add_processor(ProcessorSpec::new(
+                ident("connectcheck", PRODUCER_TYPE),
+                Value::Null,
+            ))
+            .expect("producer node adds");
+        let consumer = runtime
+            .add_processor(ProcessorSpec::new(
+                ident("connectcheck", CONSUMER_TYPE),
+                Value::Null,
+            ))
+            .expect("consumer node adds");
+
+        let err = runtime
+            .connect_with(
+                OutputLinkPortRef::new(producer.clone(), "out"),
+                InputLinkPortRef::new(consumer.clone(), "in"),
+                ConnectOptions::strict(),
+            )
+            .expect_err("strict connect_with must reject the mismatched link");
+        assert!(
+            matches!(err, Error::SchemaIdentMismatch { .. }),
+            "public strict opt-in must surface Error::SchemaIdentMismatch; got {err:?}"
+        );
+
+        runtime
+            .connect_with(
+                OutputLinkPortRef::new(producer, "out"),
+                InputLinkPortRef::new(consumer, "in"),
+                ConnectOptions::loose(),
+            )
+            .expect("loose connect_with over the same pair must still wire the link");
+    }
+
+    /// Async counterpart to
+    /// [`connect_with_strict_rejects_a_mismatched_link_via_the_public_surface`]:
+    /// awaiting `Runner::connect_with_async` from inside a tokio task under
+    /// [`ConnectOptions::strict`] hard-fails a concrete producer/consumer schema
+    /// mismatch with the typed [`Error::SchemaIdentMismatch`] and does not wire
+    /// the link, while [`ConnectOptions::loose`] over the same pair
+    /// still wires it.
+    ///
+    /// Mentally reverting `connect_with_async` to thread a hardcoded `Loose`
+    /// posture instead of `options.validation` makes the strict half return `Ok`
+    /// and fails here — the sync `connect_with` test never drives the async
+    /// opt-in path, so it doesn't catch that regression.
+    #[test]
+    #[serial]
+    fn connect_with_async_strict_rejects_a_mismatched_link_via_the_public_surface() {
+        ensure_mismatch_types_registered();
+        let runtime = Runner::new().expect("runner builds");
+
+        let producer = runtime
+            .add_processor(ProcessorSpec::new(
+                ident("connectcheck", PRODUCER_TYPE),
+                Value::Null,
+            ))
+            .expect("producer node adds");
+        let consumer = runtime
+            .add_processor(ProcessorSpec::new(
+                ident("connectcheck", CONSUMER_TYPE),
+                Value::Null,
+            ))
+            .expect("consumer node adds");
+
+        let err = block_on(runtime.connect_with_async(
+            OutputLinkPortRef::new(producer.clone(), "out"),
+            InputLinkPortRef::new(consumer.clone(), "in"),
+            ConnectOptions::strict(),
+        ))
+        .expect_err("strict connect_with_async must reject the mismatched link");
+        assert!(
+            matches!(err, Error::SchemaIdentMismatch { .. }),
+            "public async strict opt-in must surface Error::SchemaIdentMismatch; got {err:?}"
+        );
+
+        block_on(runtime.connect_with_async(
+            OutputLinkPortRef::new(producer, "out"),
+            InputLinkPortRef::new(consumer, "in"),
+            ConnectOptions::loose(),
+        ))
+        .expect("loose connect_with_async over the same pair must still wire the link");
     }
 }
