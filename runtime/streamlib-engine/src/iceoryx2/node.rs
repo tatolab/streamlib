@@ -99,18 +99,16 @@ impl Iceoryx2Node {
     /// — iceoryx2 verifies it on `open`.
     ///
     /// `max_queued_messages` caps how many `[u8]` samples any subscriber on this
-    /// service can buffer — resolved from the channel's wire schema's
-    /// `metadata.max_queued_messages` via
-    /// [`crate::core::embedded_schemas::max_queued_messages_for_port_spec`],
-    /// defaulting to [`crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES`].
+    /// service can buffer — the ring depth of the channel's agreed
+    /// [`DeliveryProfile`](crate::iceoryx2::DeliveryProfile), resolved via
+    /// [`crate::core::embedded_schemas::delivery_profile_for_input_port`].
     ///
-    /// `enable_safe_overflow` derives from the channel's destination overflow
-    /// policy (see [`crate::core::embedded_schemas::overflow_for_input_port`]).
+    /// `enable_safe_overflow` derives from that same profile's overflow policy.
     /// When `true` (the realtime default — `Overflow::DropOldest`), the subscriber
     /// buffer auto-evicts the oldest sample on overflow and the publisher's
-    /// `send()` never blocks. When `false` (`Overflow::Block`), the producer blocks
-    /// until the consumer drains a slot — reserve for muxers / file writers that
-    /// need every sample in order.
+    /// `send()` never blocks. When `false` (`Overflow::Block`, the `lossless`
+    /// profile), the producer blocks until the consumer drains a slot — reserve
+    /// for muxers / file writers that need every sample in order.
     pub fn open_or_create_service(
         &self,
         service_name: &str,

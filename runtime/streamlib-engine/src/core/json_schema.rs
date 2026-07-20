@@ -461,7 +461,7 @@ mod schema_ident_output_tests {
                 SemVer::new(1, 0, 0),
             )),
             port_kind: crate::core::graph::PortKind::Data,
-            overflow: None,
+            delivery_profile: None,
         };
         let out = PortInfoOutput::from(&port);
         let s = out.data_type.as_ref().expect("Specific must resolve");
@@ -487,7 +487,7 @@ mod schema_ident_output_tests {
             name: "data".to_string(),
             data_type: PortSchemaSpec::Any,
             port_kind: crate::core::graph::PortKind::Data,
-            overflow: None,
+            delivery_profile: None,
         };
         let out = PortInfoOutput::from(&port);
         assert!(out.data_type.is_none());

@@ -144,72 +144,103 @@ pub fn expected_payload_bytes_for_port_spec(
         .map(|opt| opt.unwrap_or(DEFAULT_EXPECTED_PAYLOAD_BYTES))
 }
 
-/// Resolve the iceoryx2 ring depth (slot count) for a port's wire schema
-/// from `metadata.max_queued_messages`.
+/// Resolve the effective [`DeliveryProfile`] for a destination input port.
 ///
-/// Returns [`DEFAULT_MAX_QUEUED_MESSAGES`] for `Any` (legitimate wildcard)
-/// and for registered schemas that don't declare the field. Returns
-/// [`Error::Configuration`] when the spec refers to a schema absent from
-/// the runtime registry — the actionable shape catches the "forgot
-/// `runtime.add_module(...)`" footgun at wire time rather than as a
-/// silently undersized ring dropping messages under burst load.
+/// This is the single delivery-resolution primitive. Precedence:
 ///
-/// [`DEFAULT_MAX_QUEUED_MESSAGES`]: crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES
-/// [`Error::Configuration`]: crate::core::error::Error::Configuration
-pub fn max_queued_messages_for_port_spec(
-    schema_spec: &streamlib_processor_schema::PortSchemaSpec,
-) -> crate::core::error::Result<usize> {
-    use crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES;
-    resolve_metadata_u64_for_port_spec(schema_spec, "max_queued_messages")
-        .map(|opt| opt.unwrap_or(DEFAULT_MAX_QUEUED_MESSAGES))
-}
-
-/// Resolve the producer-side overflow policy for a destination input port.
+/// 1. A port-site `delivery_profile` override (the one delivery knob on the
+///    authoring surface) wins outright.
+/// 2. Otherwise the default derived from the wire type's `metadata.flow_class`
+///    ([`flow_class_for_port_spec`]): `sample_stream` → `every_sample`,
+///    `state_stream` → `latest`.
+/// 3. Otherwise (an `any` wildcard port, or a registered schema that declares
+///    no `flow_class`) [`DeliveryProfile::Latest`] — the newest-wins realtime
+///    default.
 ///
-/// Looks up the destination processor in [`PROCESSOR_REGISTRY`] and reads
-/// the named input port's declared `overflow` field. Falls back to
-/// [`Overflow::default()`] (`DropOldest` — the engine-wide realtime
-/// invariant) when:
-///
-/// - The destination processor type isn't registered (e.g. an in-tree
-///   compiler-op site that fires before registration completes — should
-///   never happen for a Wired link but the conservative fallback is
-///   correct).
-/// - The named port doesn't exist on the destination (shape-mismatched
-///   wiring; the compiler's other validators surface this distinctly).
-/// - The port exists but no `overflow:` is declared (the common case).
-///
-/// Returns [`Error::Configuration`] when the declared string is non-empty
-/// but unrecognized — typo at the manifest level is a wire-time error,
+/// Falls back to [`DeliveryProfile::Latest`] when the destination processor
+/// type isn't registered or the named port doesn't exist (defensive; a Wired
+/// link always resolves both). Returns [`Error::Configuration`] when an
+/// override or `flow_class` string is present but unrecognized, or when the
+/// port's wire schema is absent from the runtime registry — a wire-time error,
 /// not a silent default substitution.
 ///
-/// [`PROCESSOR_REGISTRY`]: crate::core::processors::PROCESSOR_REGISTRY
-/// [`Overflow::default()`]: crate::iceoryx2::Overflow::default
+/// [`DeliveryProfile`]: crate::iceoryx2::DeliveryProfile
+/// [`DeliveryProfile::Latest`]: crate::iceoryx2::DeliveryProfile::Latest
 /// [`Error::Configuration`]: crate::core::error::Error::Configuration
-pub fn overflow_for_input_port(
+pub fn delivery_profile_for_input_port(
     processor_type: &streamlib_idents::SchemaIdent,
     port_name: &str,
-) -> crate::core::error::Result<crate::iceoryx2::Overflow> {
-    use crate::iceoryx2::Overflow;
+) -> crate::core::error::Result<crate::iceoryx2::DeliveryProfile> {
+    use crate::iceoryx2::DeliveryProfile;
 
     let Some((inputs, _outputs)) =
         crate::core::processors::PROCESSOR_REGISTRY.port_info(processor_type)
     else {
-        return Ok(Overflow::default());
+        return Ok(DeliveryProfile::Latest);
     };
     let Some(port) = inputs.iter().find(|p| p.name == port_name) else {
-        return Ok(Overflow::default());
+        return Ok(DeliveryProfile::Latest);
     };
-    let Some(declared) = port.overflow.as_deref() else {
-        return Ok(Overflow::default());
-    };
-    Overflow::from_manifest_str(declared).map_err(|err| {
+
+    if let Some(declared) = port.delivery_profile.as_deref() {
+        return DeliveryProfile::from_manifest_str(declared).map_err(|err| {
+            crate::core::error::Error::Configuration(format!(
+                "input port '{}' on '{}' declared {}",
+                port_name, processor_type, err
+            ))
+        });
+    }
+
+    Ok(flow_class_for_port_spec(&port.data_type)?
+        .map(|fc| fc.default_profile())
+        .unwrap_or(DeliveryProfile::Latest))
+}
+
+/// Resolve the [`FlowClass`] declared in a port's wire schema
+/// `metadata.flow_class`.
+///
+/// `Any` → `Ok(None)` (wildcard, no type-level default). A registered schema
+/// that declares no `flow_class` → `Ok(None)` (caller substitutes the realtime
+/// default). A registry miss → [`Error::Configuration`] naming the missing
+/// canonical id and pointing at `runtime.add_module(...)`. A present-but-
+/// unrecognized `flow_class` string → [`Error::Configuration`].
+///
+/// [`FlowClass`]: crate::iceoryx2::FlowClass
+/// [`Error::Configuration`]: crate::core::error::Error::Configuration
+pub fn flow_class_for_port_spec(
+    schema_spec: &streamlib_processor_schema::PortSchemaSpec,
+) -> crate::core::error::Result<Option<crate::iceoryx2::FlowClass>> {
+    use crate::iceoryx2::FlowClass;
+
+    if matches!(schema_spec, streamlib_processor_schema::PortSchemaSpec::Any) {
+        return Ok(None);
+    }
+    let canonical = schema_spec.to_string();
+    let yaml = get_embedded_schema_definition(&canonical).ok_or_else(|| {
         crate::core::error::Error::Configuration(format!(
-            "input port '{}' on '{}' declared {} — manifest must use one of \
-             'drop_oldest' or 'block'.",
-            port_name, processor_type, err
+            "schema '{canonical}' referenced by a port spec but not in the \
+             runtime schema registry — did you forget to call \
+             `runtime.add_module(...)` for the package providing it? \
+             (Use `list_embedded_schema_names()` to inspect what's currently \
+             registered.)"
         ))
-    })
+    })?;
+    let value: serde_yaml::Value = match serde_yaml::from_str(&yaml) {
+        Ok(v) => v,
+        Err(_) => return Ok(None),
+    };
+    let declared = value
+        .get("metadata")
+        .and_then(|m| m.get("flow_class"))
+        .and_then(|v| v.as_str());
+    match declared {
+        Some(s) => FlowClass::from_manifest_str(s).map(Some).map_err(|err| {
+            crate::core::error::Error::Configuration(format!(
+                "schema '{canonical}' declared {err}"
+            ))
+        }),
+        None => Ok(None),
+    }
 }
 
 /// Resolve the [`PortSchemaSpec`] declared on one port of a registered
@@ -392,11 +423,11 @@ pub(crate) mod test_support {
         INIT.call_once(|| {
             register_schema(
                 SMALL_FRAME_ID,
-                "metadata:\n  type: SmallFrame\n  expected_payload_bytes: 131072\n  max_queued_messages: 32\n",
+                "metadata:\n  type: SmallFrame\n  expected_payload_bytes: 131072\n  flow_class: state_stream\n",
             );
             register_schema(
                 LARGE_FRAME_ID,
-                "metadata:\n  type: LargeFrame\n  expected_payload_bytes: 16777216\n  max_queued_messages: 16\n",
+                "metadata:\n  type: LargeFrame\n  expected_payload_bytes: 16777216\n  flow_class: sample_stream\n",
             );
         });
     }
@@ -565,223 +596,203 @@ mod tests {
         );
     }
 
-    /// Symmetric registry-miss test for `max_queued_messages_for_port_spec`
-    /// — the more insidious half of the helper pair (an undersized ring
-    /// silently drops messages under burst load with no error visible to
-    /// the application).
+    /// `flow_class` resolves the type-level default: `state_stream` → the
+    /// resolver returns `StateStream`, whose default profile is `Latest`.
     #[test]
-    fn max_queued_messages_errors_on_registry_miss_with_add_module_hint() {
+    fn flow_class_resolves_state_stream() {
+        use crate::iceoryx2::FlowClass;
+        test_support::register_test_wire_vocabulary();
+        assert_eq!(
+            flow_class_for_port_spec(&test_wire_spec("SmallFrame")).unwrap(),
+            Some(FlowClass::StateStream),
+            "SmallFrame declares flow_class: state_stream"
+        );
+        assert_eq!(
+            flow_class_for_port_spec(&test_wire_spec("LargeFrame")).unwrap(),
+            Some(FlowClass::SampleStream),
+            "LargeFrame declares flow_class: sample_stream"
+        );
+    }
+
+    /// `Any` and a registered schema with no `flow_class` both resolve to
+    /// `None` — the caller substitutes the realtime default.
+    #[test]
+    fn flow_class_none_for_any_and_field_absent() {
+        assert_eq!(
+            flow_class_for_port_spec(&PortSchemaSpec::Any).unwrap(),
+            None
+        );
+        let canonical = "@tatolab/test-flowclass-absent/NoClass";
+        register_schema(
+            canonical,
+            "metadata:\n  type: NoClass\n  expected_payload_bytes: 4096\n",
+        );
         let spec = PortSchemaSpec::Specific(SchemaIdent::new(
             Org::new("tatolab").unwrap(),
-            Package::new("does-not-exist-mqm").unwrap(),
+            Package::new("test-flowclass-absent").unwrap(),
+            TypeName::new("NoClass").unwrap(),
+            SemVer::new(1, 0, 0),
+        ));
+        assert_eq!(flow_class_for_port_spec(&spec).unwrap(), None);
+    }
+
+    /// A `flow_class` referencing a schema absent from the registry surfaces
+    /// a typed configuration error naming the missing id and pointing at
+    /// `runtime.add_module(...)`.
+    #[test]
+    fn flow_class_errors_on_registry_miss_with_add_module_hint() {
+        let spec = PortSchemaSpec::Specific(SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("does-not-exist-flowclass").unwrap(),
             TypeName::new("Nothing").unwrap(),
             SemVer::new(1, 0, 0),
         ));
-        let err = max_queued_messages_for_port_spec(&spec)
-            .expect_err("registry miss must surface as Err");
+        let err =
+            flow_class_for_port_spec(&spec).expect_err("registry miss must surface as Err");
         let msg = err.to_string();
         assert!(
-            msg.contains("@tatolab/does-not-exist-mqm/Nothing"),
+            msg.contains("@tatolab/does-not-exist-flowclass/Nothing"),
             "error must name the missing canonical id; got: {msg}"
         );
         assert!(
             msg.contains("add_module"),
-            "error must point at `runtime.add_module(...)` as the fix; got: {msg}"
+            "error must point at `runtime.add_module(...)`; got: {msg}"
         );
-        assert!(
-            matches!(err, crate::core::error::Error::Configuration(_)),
-            "registry miss must be Error::Configuration; got: {err:?}"
-        );
-    }
-
-    #[test]
-    fn max_queued_messages_any_returns_default() {
-        use crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES;
-        assert_eq!(
-            max_queued_messages_for_port_spec(&PortSchemaSpec::Any).unwrap(),
-            DEFAULT_MAX_QUEUED_MESSAGES
-        );
-    }
-
-    /// A schema declaring `metadata.max_queued_messages` is honored by the
-    /// resolver. Reverting the resolver's `metadata.max_queued_messages`
-    /// branch to return the default will fail this test.
-    #[test]
-    fn max_queued_messages_resolves_declared_value() {
-        let canonical = "@tatolab/test-mqm-resolves/HighRateStream";
-        register_schema(
-            canonical,
-            "metadata:\n  type: HighRateStream\n  max_queued_messages: 128\n",
-        );
-        let spec = PortSchemaSpec::Specific(SchemaIdent::new(
-            Org::new("tatolab").unwrap(),
-            Package::new("test-mqm-resolves").unwrap(),
-            TypeName::new("HighRateStream").unwrap(),
-            SemVer::new(1, 0, 0),
-        ));
-        assert_eq!(max_queued_messages_for_port_spec(&spec).unwrap(), 128);
-    }
-
-    /// A registered schema without `metadata.max_queued_messages` falls
-    /// back to the default — proves the resolver doesn't accidentally
-    /// read some adjacent field, and proves the registry-miss-vs-field-
-    /// absent split: a schema that IS registered but doesn't declare the
-    /// field is a legitimate "use default" case (no error), whereas a
-    /// registry miss is a configuration error.
-    #[test]
-    fn max_queued_messages_falls_back_when_field_absent() {
-        use crate::iceoryx2::DEFAULT_MAX_QUEUED_MESSAGES;
-        let canonical = "@tatolab/test-mqm-fallback/NoMqm";
-        register_schema(
-            canonical,
-            "metadata:\n  type: NoMqm\n  expected_payload_bytes: 4096\n",
-        );
-        let spec = PortSchemaSpec::Specific(SchemaIdent::new(
-            Org::new("tatolab").unwrap(),
-            Package::new("test-mqm-fallback").unwrap(),
-            TypeName::new("NoMqm").unwrap(),
-            SemVer::new(1, 0, 0),
-        ));
-        assert_eq!(
-            max_queued_messages_for_port_spec(&spec).unwrap(),
-            DEFAULT_MAX_QUEUED_MESSAGES
-        );
+        assert!(matches!(err, crate::core::error::Error::Configuration(_)));
     }
 
     /// Locks the default-fallback path: a processor type that isn't
-    /// registered yields `Overflow::DropOldest` (the engine-wide
-    /// realtime invariant). Mentally reverting the fallback to
-    /// `Block` here would silently re-introduce producer-blocking
-    /// for unregistered (defensively-handled) cases — fail loudly
-    /// rather than ship that quietly.
+    /// registered yields [`DeliveryProfile::Latest`] (the newest-wins
+    /// realtime default). Mentally reverting the fallback to a blocking
+    /// profile would silently re-introduce producer-blocking for
+    /// unregistered (defensively-handled) cases.
     #[test]
-    fn overflow_for_input_port_defaults_when_processor_unregistered() {
-        use crate::iceoryx2::Overflow;
+    fn delivery_profile_defaults_latest_when_processor_unregistered() {
+        use crate::iceoryx2::DeliveryProfile;
         let unknown = SchemaIdent::new(
             Org::new("tatolab").unwrap(),
-            Package::new("does-not-exist-overflow").unwrap(),
+            Package::new("does-not-exist-profile").unwrap(),
             TypeName::new("Nothing").unwrap(),
             SemVer::new(1, 0, 0),
         );
         assert_eq!(
-            overflow_for_input_port(&unknown, "video_in").unwrap(),
-            Overflow::DropOldest
+            delivery_profile_for_input_port(&unknown, "video_in").unwrap(),
+            DeliveryProfile::Latest
         );
     }
 
-    /// Manifest-declared `overflow: "block"` on an input port is
-    /// honored by the registry-side resolver. Built directly against
-    /// the registry helpers used by `register_descriptor_only` — the
-    /// subprocess registration path — so the assertion covers both
-    /// host and subprocess wirings.
+    /// A port-site `delivery_profile` override wins over the flow-class
+    /// default — `lossless` on a video input (whose flow_class default is
+    /// `latest`) resolves to `Lossless`.
     #[test]
-    fn overflow_for_input_port_resolves_block_declaration() {
+    fn delivery_profile_override_wins_over_flow_class() {
         use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
         use crate::core::processors::PROCESSOR_REGISTRY;
-        use crate::iceoryx2::Overflow;
+        use crate::iceoryx2::DeliveryProfile;
 
         let processor_type = SchemaIdent::new(
             Org::new("tatolab").unwrap(),
-            Package::new("test-overflow-block").unwrap(),
+            Package::new("test-profile-override").unwrap(),
             TypeName::new("BlockSink").unwrap(),
             SemVer::new(1, 0, 0),
         );
+        register_schema(
+            "@tatolab/test-profile-override/StateFrame",
+            "metadata:\n  type: StateFrame\n  flow_class: state_stream\n",
+        );
         let video_schema = PortSchemaSpec::Specific(SchemaIdent::new(
             Org::new("tatolab").unwrap(),
-            Package::new("core").unwrap(),
-            TypeName::new("VideoFrame").unwrap(),
+            Package::new("test-profile-override").unwrap(),
+            TypeName::new("StateFrame").unwrap(),
             SemVer::new(1, 0, 0),
         ));
         let mut desc = ProcessorDescriptor::new(processor_type.clone(), "block-sink");
         desc.inputs.push(
-            PortDescriptor::iceoryx2("video_in", "input", video_schema).with_overflow("block"),
+            PortDescriptor::iceoryx2("video_in", "input", video_schema)
+                .with_delivery_profile("lossless"),
         );
         PROCESSOR_REGISTRY
             .register_descriptor_only(desc)
             .expect("descriptor registration");
 
         assert_eq!(
-            overflow_for_input_port(&processor_type, "video_in").unwrap(),
-            Overflow::Block
+            delivery_profile_for_input_port(&processor_type, "video_in").unwrap(),
+            DeliveryProfile::Lossless,
+            "explicit lossless override must beat the state_stream default"
         );
     }
 
-    /// A registered input port without an explicit `overflow:`
-    /// declaration falls back to the engine-wide default. Symmetric to
-    /// the registry-miss test above — distinguishes "field absent" from
-    /// "processor absent" so a future refactor can't conflate them.
+    /// With no override, the flow-class default drives the profile:
+    /// `sample_stream` → `EverySample`.
     #[test]
-    fn overflow_for_input_port_defaults_when_field_absent() {
+    fn delivery_profile_defaults_from_flow_class() {
         use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
         use crate::core::processors::PROCESSOR_REGISTRY;
-        use crate::iceoryx2::Overflow;
+        use crate::iceoryx2::DeliveryProfile;
 
         let processor_type = SchemaIdent::new(
             Org::new("tatolab").unwrap(),
-            Package::new("test-overflow-default").unwrap(),
-            TypeName::new("DefaultSink").unwrap(),
+            Package::new("test-profile-default").unwrap(),
+            TypeName::new("SampleSink").unwrap(),
             SemVer::new(1, 0, 0),
         );
-        let video_schema = PortSchemaSpec::Specific(SchemaIdent::new(
+        register_schema(
+            "@tatolab/test-profile-default/SampleFrame",
+            "metadata:\n  type: SampleFrame\n  flow_class: sample_stream\n",
+        );
+        let schema = PortSchemaSpec::Specific(SchemaIdent::new(
             Org::new("tatolab").unwrap(),
-            Package::new("core").unwrap(),
-            TypeName::new("VideoFrame").unwrap(),
+            Package::new("test-profile-default").unwrap(),
+            TypeName::new("SampleFrame").unwrap(),
             SemVer::new(1, 0, 0),
         ));
-        let mut desc = ProcessorDescriptor::new(processor_type.clone(), "default-sink");
+        let mut desc = ProcessorDescriptor::new(processor_type.clone(), "sample-sink");
         desc.inputs
-            .push(PortDescriptor::iceoryx2("video_in", "input", video_schema));
+            .push(PortDescriptor::iceoryx2("audio_in", "input", schema));
         PROCESSOR_REGISTRY
             .register_descriptor_only(desc)
             .expect("descriptor registration");
 
         assert_eq!(
-            overflow_for_input_port(&processor_type, "video_in").unwrap(),
-            Overflow::DropOldest
+            delivery_profile_for_input_port(&processor_type, "audio_in").unwrap(),
+            DeliveryProfile::EverySample
         );
     }
 
-    /// A typo at the manifest level surfaces as a typed configuration
-    /// error rather than a silent default fallback — wire-time rejection
-    /// of bad declarations is the actionable shape.
+    /// A typo in a port-site `delivery_profile` override surfaces as a typed
+    /// configuration error rather than a silent default fallback.
     #[test]
-    fn overflow_for_input_port_rejects_unknown_string() {
+    fn delivery_profile_rejects_unknown_override() {
         use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
         use crate::core::processors::PROCESSOR_REGISTRY;
 
         let processor_type = SchemaIdent::new(
             Org::new("tatolab").unwrap(),
-            Package::new("test-overflow-typo").unwrap(),
+            Package::new("test-profile-typo").unwrap(),
             TypeName::new("TypoSink").unwrap(),
             SemVer::new(1, 0, 0),
         );
-        let video_schema = PortSchemaSpec::Specific(SchemaIdent::new(
-            Org::new("tatolab").unwrap(),
-            Package::new("core").unwrap(),
-            TypeName::new("VideoFrame").unwrap(),
-            SemVer::new(1, 0, 0),
-        ));
         let mut desc = ProcessorDescriptor::new(processor_type.clone(), "typo-sink");
         desc.inputs.push(
-            PortDescriptor::iceoryx2("video_in", "input", video_schema)
-                .with_overflow("drop-oldest"), // hyphen instead of underscore
+            PortDescriptor::iceoryx2("video_in", "input", PortSchemaSpec::Any)
+                .with_delivery_profile("skip_to_latest"), // retired knob, not a profile
         );
         PROCESSOR_REGISTRY
             .register_descriptor_only(desc)
             .expect("descriptor registration");
 
-        let err = overflow_for_input_port(&processor_type, "video_in")
-            .expect_err("unknown overflow string must error");
+        let err = delivery_profile_for_input_port(&processor_type, "video_in")
+            .expect_err("unknown delivery_profile must error");
         let msg = err.to_string();
+        assert!(msg.contains("latest"), "error must list valid values: {msg}");
         assert!(
-            msg.contains("drop_oldest"),
+            msg.contains("every_sample"),
             "error must list valid values: {msg}"
         );
-        assert!(msg.contains("block"), "error must list valid values: {msg}");
-        assert!(
-            matches!(err, crate::core::error::Error::Configuration(_)),
-            "must be Configuration error: {err:?}"
-        );
+        assert!(matches!(
+            err,
+            crate::core::error::Error::Configuration(_)
+        ));
     }
 
     #[test]

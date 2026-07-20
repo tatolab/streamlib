@@ -20,8 +20,8 @@
 //! schema-type (or `any`). It deliberately excludes fields not every runtime's
 //! extractor emits or that are authored/build-derived rather than code-derived:
 //! `entrypoint` (author/loader concern), `config` binding, `description`, and
-//! the consumer-side port policies (`read_mode` / `overflow` / `buffer_size`,
-//! which the Python/Deno wire shape does not carry). What remains is exactly
+//! the consumer-side `delivery_profile` (which the Python/Deno wire shape does
+//! not carry uniformly). What remains is exactly
 //! the surface a stale hand-authored `processors:` would misstate: a
 //! processor added, removed, or renamed in code; a port added, removed,
 //! reordered, or re-typed.
@@ -804,14 +804,14 @@ processors:
   inputs:
   - name: any_in
     schema: any
-    read_mode: skip_to_latest
+    delivery_profile: latest
   outputs:
   - name: video_out
     schema: VideoFrame
 "#,
         );
         // In sync — a committed manifest that names both processors with the
-        // same execution + ports as code. `read_mode` / entrypoint on the
+        // same execution + ports as code. `delivery_profile` / entrypoint on the
         // committed side are outside the drift surface, so they don't trip it.
         check_processor_manifest_drift(root, &committed.iter().collect::<Vec<_>>(), &derived)
             .unwrap();

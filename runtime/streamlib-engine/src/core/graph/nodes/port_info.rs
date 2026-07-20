@@ -13,12 +13,13 @@ pub struct PortInfo {
     pub data_type: PortSchemaSpec,
     #[serde(default)]
     pub port_kind: PortKind,
-    /// Producer-side overflow policy declared by this input port —
-    /// `Some("drop_oldest")` or `Some("block")`, or `None` for output
-    /// ports / inputs that defer to the engine-wide default. Mirrors
-    /// the field on [`crate::core::descriptors::PortDescriptor`] so
-    /// the compiler op can resolve a destination's overflow at wire
-    /// time without locking the processor instance.
+    /// Delivery-profile override declared by this input port —
+    /// `Some("latest" | "every_sample" | "lossless")`, or `None` for
+    /// output ports / inputs that defer to the wire type's `flow_class`
+    /// default. Mirrors the field on
+    /// [`crate::core::descriptors::PortDescriptor`] so the compiler op
+    /// can resolve a destination's delivery profile at wire time without
+    /// locking the processor instance.
     #[serde(default)]
-    pub overflow: Option<String>,
+    pub delivery_profile: Option<String>,
 }

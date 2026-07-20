@@ -20,8 +20,7 @@ use crate::core::PortSchemaSpec;
 use crate::core::ProcessorUniqueId;
 use crate::core::context::RuntimeContext;
 use crate::core::embedded_schemas::{
-    expected_payload_bytes_for_port_spec, max_queued_messages_for_port_spec, overflow_for_input_port,
-    port_schema_spec,
+    delivery_profile_for_input_port, expected_payload_bytes_for_port_spec, port_schema_spec,
 };
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
@@ -131,10 +130,10 @@ pub fn open_iceoryx2_service(
     );
 
     // Resolve schemas + channel sizing. The channel carries one publisher (the
-    // source), so its ring depth and slot size derive from the source output
-    // schema; its subscriber count is the compile-time destination fan-out plus
-    // the reserved tap slot; its overflow policy is the destinations' agreed
-    // policy.
+    // source), so its slot size derives from the source output schema; its
+    // subscriber count is the compile-time destination fan-out plus the reserved
+    // tap slot. Ring depth, overflow policy, and consumer drain order all derive
+    // from the single delivery profile the channel's destinations agree on.
     let output_schema = resolve_output_schema(graph, &source_proc_id, &source_port);
     let dest_schema = resolve_port_schema(
         graph,
@@ -155,10 +154,11 @@ pub fn open_iceoryx2_service(
     // The tier default is the structural ceiling; an operator raises or lowers it
     // per deployment through the tier's node-level env override.
     let channel_ceiling_bytes = effective_channel_ceiling_bytes(trust_tier);
-    let max_queued_messages = max_queued_messages_for_port_spec(&output_schema)?;
+    let delivery = channel_delivery_profile(graph, &source_proc_id, &source_port)?.resolve();
+    let max_queued_messages = delivery.depth;
+    let enable_safe_overflow = delivery.overflow.enable_safe_overflow();
+    let drain_order = delivery.drain_order;
     let max_subscribers = channel_max_subscribers(graph, &source_proc_id, &source_port);
-    let enable_safe_overflow =
-        channel_enable_safe_overflow(graph, &source_proc_id, &source_port)?;
     let max_notifiers = destination_fanin(graph, &dest_proc_id);
 
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
@@ -213,6 +213,7 @@ pub fn open_iceoryx2_service(
             &dest_port,
             &channel_service_name,
             &notify_service_name,
+            drain_order,
             max_queued_messages,
             max_subscribers,
             max_notifiers,
@@ -223,6 +224,8 @@ pub fn open_iceoryx2_service(
             &dest_processor,
             &dest_port,
             &dest_schema,
+            drain_order,
+            max_queued_messages,
             &service,
             &notify_service,
         )?;
@@ -331,46 +334,50 @@ fn destination_fanin(graph: &mut Graph, dest_proc_id: &ProcessorUniqueId) -> usi
     graph.traversal_mut().v(dest_proc_id).in_e().iter().count()
 }
 
-/// The channel's `enable_safe_overflow`, agreed across every destination the
+/// The channel's [`DeliveryProfile`], agreed across every destination the
 /// channel feeds.
 ///
-/// `enable_safe_overflow` is a service-level property shared by all subscribers,
-/// so a channel whose destinations declare conflicting overflow policies
-/// (`drop_oldest` vs `block`) is genuinely ambiguous — that is a named
-/// [`Error::Configuration`] rather than a silent pick. A channel with a single
-/// destination (the common case) uses that destination's policy.
-fn channel_enable_safe_overflow(
+/// A channel's single publisher shares one ring config
+/// (depth + `enable_safe_overflow`) across all subscribers, so its
+/// destinations must resolve to one delivery profile. A channel whose
+/// destinations disagree (`latest` vs `lossless`, say) is genuinely ambiguous —
+/// a named [`Error::Configuration`] rather than a silent pick. A channel with a
+/// single destination (the common case) uses that destination's profile.
+///
+/// [`DeliveryProfile`]: crate::iceoryx2::DeliveryProfile
+fn channel_delivery_profile(
     graph: &mut Graph,
     source_proc_id: &ProcessorUniqueId,
     source_port: &str,
-) -> Result<bool> {
+) -> Result<crate::iceoryx2::DeliveryProfile> {
     // Collected up front so the traversal borrow is released before re-traversing
     // per edge to read each destination's processor type.
     let destinations = channel_destinations(graph, source_proc_id, source_port);
 
-    let mut agreed: Option<bool> = None;
+    let mut agreed: Option<crate::iceoryx2::DeliveryProfile> = None;
     for (dest_proc_id, dest_port) in &destinations {
         let dest_type = graph
             .traversal_mut()
             .v(dest_proc_id)
             .first()
             .map(|node| node.processor_type().clone());
-        let overflow = match dest_type.as_ref() {
-            Some(ident) => overflow_for_input_port(ident, dest_port)?,
-            None => crate::iceoryx2::Overflow::default(),
+        let profile = match dest_type.as_ref() {
+            Some(ident) => delivery_profile_for_input_port(ident, dest_port)?,
+            None => crate::iceoryx2::DeliveryProfile::Latest,
         };
-        let enable = overflow.enable_safe_overflow();
         match agreed {
-            None => agreed = Some(enable),
-            Some(prev) if prev != enable => {
+            None => agreed = Some(profile),
+            Some(prev) if prev != profile => {
                 return Err(Error::Configuration(format!(
-                    "channel '{}:{}' feeds destinations with conflicting overflow \
-                     policies — one wants drop_oldest (enable_safe_overflow) and \
-                     another wants block. A channel's single publisher shares one \
-                     overflow policy across all subscribers; give the destinations \
-                     the same input-port overflow, or fan them out through distinct \
-                     source ports.",
-                    source_proc_id, source_port,
+                    "channel '{}:{}' feeds destinations with conflicting delivery \
+                     profiles — '{}' vs '{}'. A channel's single publisher shares \
+                     one ring config across all subscribers; give the destinations \
+                     the same input-port delivery profile, or fan them out through \
+                     distinct source ports.",
+                    source_proc_id,
+                    source_port,
+                    prev.as_manifest_str(),
+                    profile.as_manifest_str(),
                 )));
             }
             Some(_) => {}
@@ -379,7 +386,7 @@ fn channel_enable_safe_overflow(
 
     // Every wired link has at least the current destination, so `agreed` is Some;
     // the realtime default is the correct fallback if the outbound set were empty.
-    Ok(agreed.unwrap_or_else(|| crate::iceoryx2::Overflow::default().enable_safe_overflow()))
+    Ok(agreed.unwrap_or(crate::iceoryx2::DeliveryProfile::Latest))
 }
 
 /// Check if a processor is a subprocess (Python-native, TypeScript, etc.).
@@ -522,6 +529,8 @@ fn wire_rust_dest(
     dest_processor: &Arc<Mutex<ProcessorInstance>>,
     dest_port: &str,
     dest_schema: &PortSchemaSpec,
+    drain_order: crate::iceoryx2::ReadMode,
+    depth: usize,
     service: &Iceoryx2Service,
     notify_service: &Iceoryx2NotifyService,
 ) -> Result<()> {
@@ -531,7 +540,7 @@ fn wire_rust_dest(
     };
 
     if !input_inner.has_port(dest_port) {
-        input_inner.add_port(dest_port, 1, Default::default());
+        input_inner.add_port(dest_port, depth, drain_order);
     }
     input_inner.set_port_expected_schema_ident(dest_port, schema_ident_wire_for_spec(dest_schema));
 
@@ -606,6 +615,7 @@ fn wire_subprocess_dest(
     dest_port: &str,
     channel_service_name: &str,
     notify_service_name: &str,
+    drain_order: crate::iceoryx2::ReadMode,
     max_queued_messages: usize,
     max_subscribers: usize,
     notify_max_notifiers: usize,
@@ -613,11 +623,13 @@ fn wire_subprocess_dest(
     // The dest reader no longer carries a payload-size hint: the subprocess read
     // buffer starts at the default and grows to the frame it actually receives
     // (PowerOfTwo segment growth on the publisher side, grow-and-retry on read).
+    // The drain order is the delivery profile's, resolved host-side; the
+    // subprocess maps the string back to its `*_input_set_read_mode` integer.
     let entry = serde_json::json!({
         "name": dest_port,
         "channel_service_name": channel_service_name,
         "notify_service_name": notify_service_name,
-        "read_mode": "skip_to_latest",
+        "read_mode": drain_order.as_manifest_str(),
         "max_queued_messages": max_queued_messages,
         "max_subscribers": max_subscribers,
         "notify_max_notifiers": notify_max_notifiers,
@@ -749,31 +761,31 @@ mod tests {
         assert_eq!(destination_fanin(&mut graph, &dest_uid), 3);
     }
 
-    /// A source output port feeding two destinations whose input ports declare
-    /// CONFLICTING overflow policies (`block` vs `drop_oldest`) is genuinely
-    /// ambiguous: a channel's single publisher shares one `enable_safe_overflow`
-    /// across every subscriber. `channel_enable_safe_overflow` surfaces this as a
-    /// named [`Error::Configuration`], not a silent first-connection-wins pick.
+    /// A source output port feeding two destinations whose input ports resolve
+    /// to CONFLICTING delivery profiles (`lossless` vs `latest`) is genuinely
+    /// ambiguous: a channel's single publisher shares one ring config across
+    /// every subscriber. `channel_delivery_profile` surfaces this as a named
+    /// [`Error::Configuration`], not a silent first-connection-wins pick.
     ///
     /// Revert lock: drop the conflict branch (return the first destination's
-    /// policy) and this returns `Ok(_)` — the `expect_err` fails.
+    /// profile) and this returns `Ok(_)` — the `expect_err` fails.
     #[test]
-    fn conflicting_destination_overflow_is_a_configuration_error() {
+    fn conflicting_destination_profile_is_a_configuration_error() {
         use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
         use streamlib_idents::{Org, Package, SemVer, TypeName};
         use streamlib_processor_schema::PortSchemaSpec;
 
-        let register_sink = |pkg: &str, overflow: &str| -> SchemaIdent {
+        let register_sink = |pkg: &str, profile: &str| -> SchemaIdent {
             let ident = SchemaIdent::new(
                 Org::new("tatolab").unwrap(),
                 Package::new(pkg).unwrap(),
-                TypeName::new("OverflowSink").unwrap(),
+                TypeName::new("ProfileSink").unwrap(),
                 SemVer::new(1, 0, 0),
             );
-            let mut desc = ProcessorDescriptor::new(ident.clone(), "conflicting-overflow sink");
+            let mut desc = ProcessorDescriptor::new(ident.clone(), "conflicting-profile sink");
             desc.inputs.push(
                 PortDescriptor::iceoryx2("in1", "input", PortSchemaSpec::Any)
-                    .with_overflow(overflow),
+                    .with_delivery_profile(profile),
             );
             // Idempotent: a duplicate ident (re-run in the same process) errors;
             // the first registration is the one that stands.
@@ -781,41 +793,41 @@ mod tests {
             ident
         };
 
-        let block_ident = register_sink("test-conflicting-overflow-block", "block");
-        let drop_ident = register_sink("test-conflicting-overflow-drop", "drop_oldest");
+        let lossless_ident = register_sink("test-conflicting-profile-lossless", "lossless");
+        let latest_ident = register_sink("test-conflicting-profile-latest", "latest");
 
         let mut graph = Graph::new();
         let src_id = add_mock_output_only(&mut graph);
-        let block_dest = graph
+        let lossless_dest = graph
             .traversal_mut()
-            .add_v(ProcessorSpec::new(block_ident, serde_json::Value::Null))
+            .add_v(ProcessorSpec::new(lossless_ident, serde_json::Value::Null))
             .first()
-            .expect("block sink node")
+            .expect("lossless sink node")
             .id
             .to_string();
-        let drop_dest = graph
+        let latest_dest = graph
             .traversal_mut()
-            .add_v(ProcessorSpec::new(drop_ident, serde_json::Value::Null))
+            .add_v(ProcessorSpec::new(latest_ident, serde_json::Value::Null))
             .first()
-            .expect("drop sink node")
+            .expect("latest sink node")
             .id
             .to_string();
 
         graph.traversal_mut().add_e(
             OutputLinkPortRef::new(&src_id, "out1"),
-            InputLinkPortRef::new(&block_dest, "in1"),
+            InputLinkPortRef::new(&lossless_dest, "in1"),
         );
         graph.traversal_mut().add_e(
             OutputLinkPortRef::new(&src_id, "out1"),
-            InputLinkPortRef::new(&drop_dest, "in1"),
+            InputLinkPortRef::new(&latest_dest, "in1"),
         );
 
         let src_uid: ProcessorUniqueId = src_id.as_str().into();
-        let err = channel_enable_safe_overflow(&mut graph, &src_uid, "out1")
-            .expect_err("conflicting overflow policies must be a configuration error");
+        let err = channel_delivery_profile(&mut graph, &src_uid, "out1")
+            .expect_err("conflicting delivery profiles must be a configuration error");
         assert!(
             matches!(err, Error::Configuration(_)),
-            "conflicting destination overflow must surface as Error::Configuration; got {err:?}",
+            "conflicting destination profile must surface as Error::Configuration; got {err:?}",
         );
     }
 

@@ -67,12 +67,6 @@ fn validate_processor_schema(schema: &ProcessorSchema) -> SchemaResult<()> {
                 reason: "input port name cannot be empty".to_string(),
             });
         }
-        if input.buffer_size == Some(0) {
-            return Err(SchemaError::InvalidName {
-                name: schema.name.clone(),
-                reason: format!("input '{}' buffer_size cannot be 0", input.name),
-            });
-        }
     }
 
     // Validate output port schema references — port name presence only.
@@ -311,28 +305,26 @@ name: BlurFilter
     }
 
     #[test]
-    fn test_input_port_read_mode_and_buffer_size() {
+    fn test_input_port_delivery_profile() {
         let yaml = r#"
-name: Decoder
+name: Writer
 
 inputs:
-  - name: encoded_video_in
-    schema: EncodedVideoFrame
-    read_mode: read_next_in_order
-    buffer_size: 16
+  - name: video_in
+    schema: VideoFrame
+    delivery_profile: lossless
 "#;
 
         let schema = parse_processor_yaml(yaml).unwrap();
         assert_eq!(schema.inputs.len(), 1);
         assert_eq!(
-            schema.inputs[0].read_mode,
-            Some("read_next_in_order".to_string())
+            schema.inputs[0].delivery_profile,
+            Some("lossless".to_string())
         );
-        assert_eq!(schema.inputs[0].buffer_size, Some(16));
     }
 
     #[test]
-    fn test_input_port_defaults_without_read_mode_and_buffer_size() {
+    fn test_input_port_defaults_without_delivery_profile() {
         let yaml = r#"
 name: Passthrough
 
@@ -343,8 +335,7 @@ inputs:
 
         let schema = parse_processor_yaml(yaml).unwrap();
         assert_eq!(schema.inputs.len(), 1);
-        assert_eq!(schema.inputs[0].read_mode, None);
-        assert_eq!(schema.inputs[0].buffer_size, None);
+        assert_eq!(schema.inputs[0].delivery_profile, None);
     }
 
     #[test]
@@ -416,20 +407,20 @@ scheduling:
         assert_eq!(scheduling.priority, crate::ThreadPriority::RealTime);
     }
 
+    /// A retired per-port knob (`read_mode` / `overflow` / `buffer_size`) is
+    /// now an unknown field — `deny_unknown_fields` rejects it so a stale
+    /// manifest fails loudly rather than silently ignoring the knob.
     #[test]
-    fn test_input_port_buffer_size_zero_rejected() {
+    fn test_input_port_retired_knob_rejected() {
         let yaml = r#"
 name: Test
 
 inputs:
   - name: video
     schema: Frame
-    buffer_size: 0
+    read_mode: skip_to_latest
 "#;
 
-        let result = parse_processor_yaml(yaml);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(err.contains("buffer_size cannot be 0"));
+        assert!(parse_processor_yaml(yaml).is_err());
     }
 }

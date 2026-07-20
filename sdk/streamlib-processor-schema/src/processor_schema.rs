@@ -527,21 +527,14 @@ pub struct ProcessorPortSchema {
     /// Human-readable description.
     #[serde(default)]
     pub description: Option<String>,
-    /// Read mode for this input port (e.g., "skip_to_latest", "read_next_in_order").
+    /// Delivery-profile override for this input port — `"latest"`,
+    /// `"every_sample"`, or `"lossless"`. The one delivery knob on the
+    /// authoring surface: it resolves to the consumer-side drain order,
+    /// the producer-side overflow policy, and the ring depth. `None`
+    /// defers to the default derived from the wire type's `flow_class`.
+    /// Always `None` on output ports.
     #[serde(default)]
-    pub read_mode: Option<String>,
-    /// Producer-side overflow policy for the service feeding this input
-    /// port. `"drop_oldest"` (the engine-wide realtime default) lets
-    /// the publisher's `send()` never block — the iceoryx2 subscriber
-    /// buffer evicts the oldest sample to make room. `"block"` keeps
-    /// the producer waiting until the consumer drains a slot; reserve
-    /// for sinks that need every sample in order (file writers,
-    /// muxers, loggers).
-    #[serde(default)]
-    pub overflow: Option<String>,
-    /// Ring buffer capacity for this input port.
-    #[serde(default)]
-    pub buffer_size: Option<usize>,
+    pub delivery_profile: Option<String>,
 }
 
 /// Config definition within a processor schema.

@@ -139,13 +139,12 @@ pub struct PortDescriptor {
     /// Whether this port uses iceoryx2 IPC.
     #[serde(default)]
     pub is_iceoryx2: bool,
-    /// Producer-side overflow policy declared by an *input* port (the
-    /// destination of an iceoryx2 service). `None` defers to the
-    /// engine-wide default `drop_oldest` at wire time. Always `None`
-    /// on output ports — the producer side reads the destination port's
-    /// declaration.
+    /// Delivery-profile override declared by an *input* port (the
+    /// destination of an iceoryx2 service) — `"latest"`, `"every_sample"`,
+    /// or `"lossless"`. `None` defers to the default derived from the wire
+    /// type's `flow_class` at wire time. Always `None` on output ports.
     #[serde(default)]
-    pub overflow: Option<String>,
+    pub delivery_profile: Option<String>,
 }
 
 impl PortDescriptor {
@@ -161,7 +160,7 @@ impl PortDescriptor {
             schema,
             required,
             is_iceoryx2: false,
-            overflow: None,
+            delivery_profile: None,
         }
     }
 
@@ -177,15 +176,14 @@ impl PortDescriptor {
             schema,
             required: true,
             is_iceoryx2: true,
-            overflow: None,
+            delivery_profile: None,
         }
     }
 
-    /// Builder-style override for the producer-side overflow policy.
-    /// Meaningful only on input ports; engine-side derivation ignores
-    /// this on output ports.
-    pub fn with_overflow(mut self, overflow: impl Into<String>) -> Self {
-        self.overflow = Some(overflow.into());
+    /// Builder-style override for the delivery profile. Meaningful only on
+    /// input ports; engine-side derivation ignores this on output ports.
+    pub fn with_delivery_profile(mut self, delivery_profile: impl Into<String>) -> Self {
+        self.delivery_profile = Some(delivery_profile.into());
         self
     }
 }
