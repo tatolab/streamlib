@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.18](https://github.com/tatolab/streamlib/compare/v0.7.17...v0.7.18) (2026-07-20)
+
+
+### Features
+
+* **engine:** channel-centric iceoryx2 transport, zero-copy fan-out ([#1480](https://github.com/tatolab/streamlib/issues/1480)) ([f248808](https://github.com/tatolab/streamlib/commit/f248808ae7d7f3a986e013d314a94f444c45e613))
+
 ## [0.7.17](https://github.com/tatolab/streamlib/compare/v0.7.16...v0.7.17) (2026-07-20)
 
 

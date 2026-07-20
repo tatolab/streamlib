@@ -17,7 +17,7 @@ path = "src/main.rs"
 [dependencies]
 # Engine + SDK. Every processor EXCEPT the always-present control plane is
 # loaded at runtime through the all-dynamic module loader, not linked here.
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.7.17" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.7.18" }
 
 # The API server is the control plane — a host, not a loadable plugin — so
 # it is statically linked and registered in-process on `PROCESSOR_REGISTRY`
