@@ -14,8 +14,13 @@ Invocation (paste-ready): /loop 30m /goal all issues in the focused milestone ar
       milestone-loop reconciler pass; obey loops/constraints.md; max 8 turns/firing
 Sprint mode: the same /goal without the wrapper, when the owner is present.
 Turn procedure: the milestone-loop skill (one reconciler pass per turn)
-Knobs: heartbeat 30m · max_parallel 2 · attempts_per_ticket 3 · propose_only false
+Knobs: heartbeat 30m · max_parallel 2 · attempts_per_ticket 3 · propose_only false · live_verify auto
 Kill switch: stop the /loop + /goal clear, `paused: true` in the state file, or the budget cap
+
+`live_verify: auto` (default) runs `/verify-live` in-loop for rig-touching tickets when the preflight
+capability probe reports the rig available (parks for the human otherwise); `off` disables in-loop
+live verification and always parks. Safety-gated evals (actuators, motors, drone control) still ask
+the owner first — the auto-run covers read-only observation only.
 
 State file: [`loops/milestone-loop-state.md`](loops/milestone-loop-state.md).
 

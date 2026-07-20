@@ -47,8 +47,11 @@ Merging PRs and milestone scoping are always the owner's calls. "The owner" is t
 repository owner's GitHub login — the human who merges PRs and answers parked questions.
 
 ## Environment
-- Sandboxed sessions cannot observe GPU/IPC runtime (exit 144). Live verification is human-run
-  via `/verify-live`. Read-only device probes (`v4l2-ctl` query verbs) are fine.
+- A plain `Bash` call cannot observe GPU/IPC runtime (exit 144). Live verification is LOOP-run via
+  `/verify-live` — the Bash `dangerouslyDisableSandbox` bypass unlocks the rig, so the loop builds
+  in the sandbox, runs the built binary with the bypass, captures the window, and audits it itself
+  whenever the milestone-loop preflight capability probe confirms the rig; it is human-run (parked)
+  only when the rig is unavailable. Read-only device probes (`v4l2-ctl` query verbs) are fine.
 - One camera consumer per /dev/videoN; single GPU — rig work is serialized by the loop.
 - Host-specific facts (device indices, driver, cameras) live in `docs/rig-profile.local.md`
   (gitignored, per machine); a runtime probe always beats the file.
