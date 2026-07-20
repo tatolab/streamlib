@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.19](https://github.com/tatolab/streamlib/compare/v0.7.18...v0.7.19) (2026-07-20)
+
+
+### Features
+
+* **engine:** dynamic iceoryx2 PowerOfTwo slot allocation; retire authored max_payload_bytes ([#1482](https://github.com/tatolab/streamlib/issues/1482)) ([a050eb7](https://github.com/tatolab/streamlib/commit/a050eb79f6c041521f0f3aefc929ee6341f633f4))
+
 ## [0.7.18](https://github.com/tatolab/streamlib/compare/v0.7.17...v0.7.18) (2026-07-20)
 
 
