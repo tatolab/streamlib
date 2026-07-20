@@ -73,7 +73,8 @@ const symbols = {
       "u32", // schema_version_major
       "u32", // schema_version_minor
       "u32", // schema_version_patch
-      "usize", // max_payload_bytes
+      "usize", // expected_payload_bytes (slot-priming hint)
+      "usize", // channel_ceiling_bytes (per-channel payload ceiling)
       "usize", // max_queued_messages
       "usize", // max_subscribers (channel fan-out + reserved tap)
       "buffer", // notify_service_name

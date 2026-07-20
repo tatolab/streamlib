@@ -55,6 +55,16 @@ fn init_subprocess_logging() {
 const READ_MODE_SKIP_TO_LATEST: i32 = 0;
 const READ_MODE_READ_NEXT_IN_ORDER: i32 = 1;
 
+/// `sldn_output_write` return code: the frame crossed the channel's per-channel
+/// ceiling and was refused (counted, logged). The SDK drops it without raising —
+/// the process never dies. Distinct from `-1` (a real write failure).
+const SLDN_WRITE_REFUSED_OVER_CEILING: i32 = 2;
+
+/// `sldn_input_read` return code: a frame is available but larger than the
+/// caller's buffer; `out_len` holds the required byte length. The SDK resizes to
+/// `out_len` and reads again (grow-and-retry). The frame is NOT consumed.
+const SLDN_READ_NEEDS_LARGER_BUFFER: i32 = 2;
+
 /// Per-processor native context holding iceoryx2 node and port state.
 ///
 /// Mutable interior state lives behind [`Self::inner`]'s [`Mutex`] so
@@ -106,6 +116,16 @@ struct PublisherState {
     source_port: String,
     /// One notifier per destination `connect()` link out of this source port.
     notifiers: Vec<Notifier<ipc::Service>>,
+    /// iceoryx2 channel service name — the growth / ceiling tracing label.
+    channel_service_name: String,
+    /// Per-channel payload ceiling (bytes). A frame above this is refused +
+    /// counted, the stream continues (untrusted-session tier).
+    channel_ceiling_bytes: usize,
+    /// Best-effort tracking of the publisher's PowerOfTwo data-segment capacity
+    /// so a growth event is observable via `tracing`.
+    current_slot_capacity_bytes: usize,
+    /// Count of frames refused for crossing [`Self::channel_ceiling_bytes`].
+    refused_over_ceiling_count: u64,
 }
 
 impl DenoNativeContext {
@@ -583,6 +603,24 @@ pub unsafe extern "C" fn sldn_input_read(
             continue;
         }
 
+        // Grow-and-retry: a publisher under PowerOfTwo growth can deliver a frame
+        // larger than the caller's buffer. Peek the frame that would be returned
+        // (FIFO front or SkipToLatest newest) WITHOUT consuming it; if it does not
+        // fit, report its length and leave it in place so the SDK can resize and
+        // read again. Nothing is dropped.
+        let next_index = if read_mode == READ_MODE_READ_NEXT_IN_ORDER {
+            0
+        } else {
+            queue.len() - 1
+        };
+        let required = queue[next_index].0.len();
+        if required > buf_len as usize {
+            if !out_len.is_null() {
+                unsafe { *out_len = required as u32 };
+            }
+            return SLDN_READ_NEEDS_LARGER_BUFFER;
+        }
+
         let (data, ts) = if read_mode == READ_MODE_READ_NEXT_IN_ORDER {
             // FIFO: return oldest
             queue.remove(0)
@@ -594,9 +632,8 @@ pub unsafe extern "C" fn sldn_input_read(
             item
         };
 
-        let copy_len = data.len().min(buf_len as usize);
-        if !out_buf.is_null() && copy_len > 0 {
-            unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), out_buf, copy_len) };
+        if !out_buf.is_null() && !data.is_empty() {
+            unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), out_buf, data.len()) };
         }
         if !out_len.is_null() {
             unsafe { *out_len = data.len() as u32 };
@@ -645,7 +682,8 @@ pub unsafe extern "C" fn sldn_output_publish(
     schema_version_major: u32,
     schema_version_minor: u32,
     schema_version_patch: u32,
-    max_payload_bytes: usize,
+    expected_payload_bytes: usize,
+    channel_ceiling_bytes: usize,
     max_queued_messages: usize,
     max_subscribers: usize,
     notify_service_name: *const c_char,
@@ -779,7 +817,8 @@ pub unsafe extern "C" fn sldn_output_publish(
     } else {
         let publisher = match service
             .publisher_builder()
-            .initial_max_slice_len(max_payload_bytes + FRAME_HEADER_SIZE)
+            .initial_max_slice_len(expected_payload_bytes + FRAME_HEADER_SIZE)
+            .allocation_strategy(AllocationStrategy::PowerOfTwo)
             .create()
         {
             Ok(p) => p,
@@ -800,6 +839,10 @@ pub unsafe extern "C" fn sldn_output_publish(
                 schema_ident,
                 source_port: port_name.to_string(),
                 notifiers: notifier.into_iter().collect(),
+                channel_service_name: service_name.to_string(),
+                channel_ceiling_bytes,
+                current_slot_capacity_bytes: expected_payload_bytes + FRAME_HEADER_SIZE,
+                refused_over_ceiling_count: 0,
             },
         );
     }
@@ -833,12 +876,12 @@ pub unsafe extern "C" fn sldn_output_write(
         None => return -1,
     };
 
-    let inner = match ctx.inner.lock() {
+    let mut inner = match ctx.inner.lock() {
         Ok(g) => g,
         Err(p) => p.into_inner(),
     };
 
-    let state = match inner.publishers.get(port_name) {
+    let state = match inner.publishers.get_mut(port_name) {
         Some(s) => s,
         None => {
             tracing::error!(
@@ -857,6 +900,37 @@ pub unsafe extern "C" fn sldn_output_write(
     };
 
     let total_len = FRAME_HEADER_SIZE + data_slice.len();
+
+    // Per-channel ceiling (untrusted-session tier): refuse + count, never die.
+    if total_len > state.channel_ceiling_bytes {
+        state.refused_over_ceiling_count += 1;
+        tracing::warn!(
+            channel = %state.channel_service_name,
+            payload_bytes = total_len,
+            ceiling_bytes = state.channel_ceiling_bytes,
+            tier = "untrusted-session",
+            refused_count = state.refused_over_ceiling_count,
+            "[sldn:{}] output channel refused a payload above its per-channel ceiling",
+            ctx.processor_id,
+        );
+        return SLDN_WRITE_REFUSED_OVER_CEILING;
+    }
+
+    // Observe PowerOfTwo segment growth (channel + old/new segment size).
+    if total_len > state.current_slot_capacity_bytes {
+        let old = state.current_slot_capacity_bytes;
+        let new = total_len.next_power_of_two();
+        tracing::info!(
+            channel = %state.channel_service_name,
+            old_segment_bytes = old,
+            new_segment_bytes = new,
+            tier = "untrusted-session",
+            "[sldn:{}] iceoryx2 publisher data segment grew (PowerOfTwo)",
+            ctx.processor_id,
+        );
+        state.current_slot_capacity_bytes = new;
+    }
+
     let mut frame = vec![0u8; total_len];
     // Stamp the SOURCE port as provenance; destinations route by binding.
     let header = match FrameHeader::new(

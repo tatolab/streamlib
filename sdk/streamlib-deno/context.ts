@@ -28,56 +28,49 @@ import type {
 } from "./types.ts";
 
 /**
- * Default read-buffer capacity when the host sends no per-input
- * `max_payload_bytes`. Matches Rust's `streamlib_ipc_types::MAX_PAYLOAD_SIZE`.
+ * Starting read-buffer capacity. A publisher under PowerOfTwo growth can
+ * deliver a frame larger than this, so it is a starting hint, never a cap: the
+ * read path grows and retries. Matches the host's
+ * `streamlib_ipc_types::DEFAULT_EXPECTED_PAYLOAD_BYTES`.
  */
 export const DEFAULT_READ_BUF_BYTES = 65536;
 
 /**
- * Size the input read buffer to the largest per-port `max_payload_bytes` the
- * host declared, with [`DEFAULT_READ_BUF_BYTES`] as a floor. A fixed smaller
- * buffer silently truncates payloads larger than it — including encoded video
- * frames, which can be arbitrarily large depending on how the schema is
- * configured.
+ * `sldn_input_read` return code: a frame is available but larger than the
+ * caller's buffer; `outLen[0]` holds the required byte length. Resize to that
+ * length and read again (grow-and-retry). The frame is NOT consumed.
  */
-export function computeReadBufBytes(
-  inputs: readonly { max_payload_bytes?: number }[],
-): number {
-  return inputs.reduce(
-    (acc, port) => Math.max(acc, port.max_payload_bytes ?? 0),
-    DEFAULT_READ_BUF_BYTES,
-  );
-}
+export const SLDN_READ_NEEDS_LARGER_BUFFER = 2;
+
+/**
+ * `sldn_output_write` return code: the frame crossed the channel's per-channel
+ * ceiling and was refused (counted + logged host-side). The write is dropped
+ * without throwing — the process never dies.
+ */
+export const SLDN_WRITE_REFUSED_OVER_CEILING = 2;
+
+/** Bound on grow-and-retry attempts (the host re-delivers at the exact size). */
+const MAX_READ_GROW_ATTEMPTS = 8;
 
 /**
  * Build the return value of a single FFI read given the output-parameter state
- * after `sldn_input_read` has populated it. Extracted for testing so the
- * empty / happy / truncated branches can be exercised without spinning up
- * iceoryx2.
+ * after `sldn_input_read` has populated it.
  *
- * Returns `null` when the read produced no data or when the payload the native
- * side reported exceeds the caller's read buffer (truncation). Otherwise
- * returns an owned copy of the first `outLen[0]` bytes of `readBuf`.
+ * `outLen[0] > readBufBytes` is the grow-and-retry signal handled by the caller
+ * (`NativeInputPorts.readRaw`) before this is reached, so a still-too-large
+ * `outLen[0]` here would be a bug — treated as no data.
  */
 export function decodeReadResult(
   readBuf: Uint8Array<ArrayBuffer>,
   outLen: Uint32Array<ArrayBuffer>,
   outTs: BigInt64Array<ArrayBuffer>,
   readBufBytes: number,
-  portName: string,
+  _portName: string,
 ): { data: Uint8Array<ArrayBuffer>; timestampNs: bigint } | null {
-  if (outLen[0] === 0) {
+  if (outLen[0] === 0 || outLen[0] > readBufBytes) {
     return null;
   }
   const len = outLen[0];
-  if (len > readBufBytes) {
-    log.warn("payload truncated on port", {
-      port: portName,
-      reported_bytes: len,
-      read_buf_bytes: readBufBytes,
-    });
-    return null;
-  }
   const data = new Uint8Array(new ArrayBuffer(len));
   data.set(readBuf.subarray(0, len));
   return { data, timestampNs: outTs[0] };
@@ -316,27 +309,43 @@ class NativeInputPorts implements InputPorts {
     const portNameBuf = cString(portName);
     const outLenPtr = Deno.UnsafePointer.of(this.outLen);
     const outTsPtr = Deno.UnsafePointer.of(this.outTs);
-    const readBufPtr = Deno.UnsafePointer.of(this.readBuf);
 
-    const result = this.lib.symbols.sldn_input_read(
-      this.ctxPtr,
-      portNameBuf,
-      readBufPtr!,
-      this.readBufBytes,
-      outLenPtr!,
-      outTsPtr!,
-    );
+    // Grow-and-retry (#1421): a publisher under PowerOfTwo growth can deliver a
+    // frame larger than the current buffer; the native side then returns
+    // SLDN_READ_NEEDS_LARGER_BUFFER with outLen set to the required size and
+    // holds the frame. Grow the buffer and read again, so nothing is dropped.
+    for (let attempt = 0; attempt < MAX_READ_GROW_ATTEMPTS; attempt++) {
+      const readBufPtr = Deno.UnsafePointer.of(this.readBuf);
+      const result = this.lib.symbols.sldn_input_read(
+        this.ctxPtr,
+        portNameBuf,
+        readBufPtr!,
+        this.readBufBytes,
+        outLenPtr!,
+        outTsPtr!,
+      );
 
-    if (result !== 0) {
-      return null;
+      if (result === SLDN_READ_NEEDS_LARGER_BUFFER) {
+        this.growReadBuf(this.outLen[0]);
+        continue;
+      }
+      if (result !== 0) {
+        return null;
+      }
+      return decodeReadResult(
+        this.readBuf,
+        this.outLen,
+        this.outTs,
+        this.readBufBytes,
+        portName,
+      );
     }
-    return decodeReadResult(
-      this.readBuf,
-      this.outLen,
-      this.outTs,
-      this.readBufBytes,
-      portName,
-    );
+    return null;
+  }
+
+  private growReadBuf(requiredBytes: number): void {
+    this.readBufBytes = requiredBytes;
+    this.readBuf = new Uint8Array(new ArrayBuffer(requiredBytes));
   }
 }
 
@@ -375,6 +384,11 @@ class NativeOutputPorts implements OutputPorts {
       timestampNs,
     );
 
+    if (result === SLDN_WRITE_REFUSED_OVER_CEILING) {
+      // Frame crossed the channel's per-channel ceiling: refused + counted
+      // host-side, the stream continues. Never throw (never die).
+      return;
+    }
     if (result !== 0) {
       log.error("Failed to write to port", { port: portName });
     }

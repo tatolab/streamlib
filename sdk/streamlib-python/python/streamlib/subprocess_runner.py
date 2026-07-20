@@ -49,11 +49,11 @@ from ._protocol import (
 )
 from .escalate import BridgeReaderThread, EscalateChannel, install_channel
 from .processor_context import (
+    DEFAULT_READ_BUF_BYTES,
     NativeProcessorState,
     NativeRuntimeContextFullAccess,
     NativeRuntimeContextLimitedAccess,
     bridge_send_message,
-    compute_read_buf_bytes,
     load_native_lib,
 )
 
@@ -144,7 +144,9 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
 
     # Subscribe to input iceoryx2 services
     inputs = ports.get("inputs", [])
-    read_buf_bytes = compute_read_buf_bytes(inputs)
+    # The read buffer starts at the default and grows to the frame it actually
+    # receives (grow-and-retry), so it no longer depends on any per-input hint.
+    read_buf_bytes = DEFAULT_READ_BUF_BYTES
     for inp in inputs:
         port_name = inp["name"]
         channel_service_name = inp["channel_service_name"]
@@ -156,7 +158,6 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
             port=port_name,
             channel=channel_service_name,
             read_mode=read_mode,
-            max_payload_bytes=inp.get("max_payload_bytes"),
             max_queued_messages=max_queued_messages,
             max_subscribers=max_subscribers,
         )
@@ -226,7 +227,8 @@ def _setup_native_state(msg, native_lib_path, processor_id, escalate_channel=Non
             ver_major,
             ver_minor,
             ver_patch,
-            out.get("max_payload_bytes", 65536),
+            out.get("expected_payload_bytes", DEFAULT_READ_BUF_BYTES),
+            out.get("max_payload_bytes_per_channel", 16 * 1024 * 1024),
             out.get("max_queued_messages", 16),
             out.get("max_subscribers", 2),
             dest_notify_service.encode("utf-8"),

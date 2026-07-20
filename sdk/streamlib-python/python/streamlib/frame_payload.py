@@ -1,24 +1,20 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""FramePayload ctypes definition matching the Rust iceoryx2 FramePayload layout.
+"""ctypes mirrors of the Rust iceoryx2 wire header types (`PortKey`,
+`SchemaIdentWire`) defined in `runtime/streamlib-ipc-types/src/lib.rs`.
 
-This must match the exact memory layout of the Rust struct defined in
-`runtime/streamlib-ipc-types/src/lib.rs`:
-  - PortKey: 1 byte len + 63 bytes name = 64 bytes
-  - SchemaIdentWire: 128 bytes structured record (org/package/type/version)
-  - timestamp_ns: i64 (8 bytes)
-  - len: u32 (4 bytes)
-  - data: [u8; 32768]
+Frame bodies ride a variable-length `[u8]` slice (`FrameHeader` + data), not a
+fixed struct — the publisher's iceoryx2 data segment grows on demand
+(PowerOfTwo), so there is no fixed payload-size ceiling to mirror here.
 
-Wire format (#401 phase 2, structured-everywhere):
-the schema identifier is a 4-tuple of typed segments rather than a joined
-string subject to per-runtime parsing drift.
+Wire format (#401 phase 2, structured-everywhere): the schema identifier is a
+4-tuple of typed segments rather than a joined string subject to per-runtime
+parsing drift.
 """
 
 import ctypes
 
-MAX_PAYLOAD_SIZE = 32768
 MAX_PORT_KEY_SIZE = 64
 SCHEMA_IDENT_WIRE_SIZE = 128
 SCHEMA_IDENT_WIRE_MAX_ORG_LEN = 31
@@ -147,47 +143,3 @@ assert ctypes.sizeof(SchemaIdentWire) == SCHEMA_IDENT_WIRE_SIZE, (
 )
 
 
-class FramePayload(ctypes.Structure):
-    """Zero-copy frame payload for iceoryx2 pub/sub. Matches Rust FramePayload layout."""
-
-    _fields_ = [
-        ("port_key", PortKey),
-        ("schema_ident", SchemaIdentWire),
-        ("timestamp_ns", ctypes.c_int64),
-        ("len", ctypes.c_uint32),
-        ("data", ctypes.c_uint8 * MAX_PAYLOAD_SIZE),
-    ]
-
-    @staticmethod
-    def type_name() -> str:
-        """Returns the iceoryx2 type name. Must match Rust #[type_name("FramePayload")]."""
-        return "FramePayload"
-
-    def get_data(self) -> bytes:
-        """Get the actual payload data (excluding padding)."""
-        return bytes(self.data[: self.len])
-
-    def set_data(
-        self,
-        port: str,
-        schema_ident: "SchemaIdentWire",
-        timestamp_ns: int,
-        data: bytes,
-    ) -> None:
-        """Set all fields of the payload. `schema_ident` is a structured
-        `SchemaIdentWire` (built via `SchemaIdentWire.from_segments(...)`),
-        not a joined string."""
-        self.port_key = PortKey.from_str(port)
-        self.schema_ident = schema_ident
-        self.timestamp_ns = timestamp_ns
-        data_len = min(len(data), MAX_PAYLOAD_SIZE)
-        self.len = data_len
-        ctypes.memmove(self.data, data, data_len)
-
-    def get_port(self) -> str:
-        """Get the port key as a string."""
-        return self.port_key.as_str()
-
-    def get_schema(self) -> SchemaIdentWire:
-        """Get the structured schema identifier."""
-        return self.schema_ident
