@@ -52,7 +52,7 @@ pub fn reset() {
     description = "Counts incoming VideoFrames into process-global atomics so integration tests can assert on frame count + first-frame dimensions after runtime.stop()",
     execution = reactive,
     config = crate::_generated_::VideoFrameCounterConfig,
-    input("input", "@tatolab/core/VideoFrame", read_mode = "read_next_in_order", buffer_size = 16, description = "VideoFrame stream to observe"),
+    input("input", "@tatolab/core/VideoFrame", delivery_profile = "every_sample", description = "VideoFrame stream to observe"),
 )]
 pub struct VideoFrameCounterProcessor;
 

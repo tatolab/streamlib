@@ -6,8 +6,7 @@
 metadata:
   type: AudioFrame
   description: "Audio frame with interleaved samples (1-8 channels)"
-  read_mode: read_next_in_order
-  max_queued_messages: 32
+  flow_class: sample_stream
 
 properties:
   samples:

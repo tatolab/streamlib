@@ -23,8 +23,7 @@ imports:
 metadata:
   type: VideoFrame
   description: "Video frame for IPC - references GPU surface by ID"
-  read_mode: skip_to_latest
-  max_queued_messages: 4
+  flow_class: state_stream
 
 properties:
   surface_id:

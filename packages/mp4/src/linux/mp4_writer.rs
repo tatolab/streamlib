@@ -14,7 +14,7 @@ use std::process::{Child, Command, Stdio};
     description = "Writes video frames to MP4 via ffmpeg encode + mux with silent audio track",
     execution = reactive,
     config = crate::_generated_::LinuxMp4WriterConfig,
-    input("video_in", "@tatolab/core/VideoFrame", read_mode = "read_next_in_order", overflow = "block", buffer_size = 32, description = "Decoded video frames (raw pixels) to encode and write"),
+    input("video_in", "@tatolab/core/VideoFrame", delivery_profile = "lossless", description = "Decoded video frames (raw pixels) to encode and write"),
 )]
 pub struct LinuxMp4WriterProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,

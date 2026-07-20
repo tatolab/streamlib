@@ -38,7 +38,7 @@ use streamlib_plugin_abi::{VideoCodecRepr, VideoDecoderSessionDescriptorRepr};
     execution = reactive,
     scheduling = high,
     config = crate::_generated_::H265DecoderConfig,
-    input("encoded_video_in", "@tatolab/core/EncodedVideoFrame", read_mode = "read_next_in_order", buffer_size = 16, description = "H.265 encoded video frames to decode"),
+    input("encoded_video_in", "@tatolab/core/EncodedVideoFrame", description = "H.265 encoded video frames to decode"),
     output("video_out", "@tatolab/core/VideoFrame", description = "Decoded video frames"),
 )]
 pub struct H265DecoderProcessor {

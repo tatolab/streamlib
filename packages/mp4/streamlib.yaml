@@ -33,7 +33,5 @@ processors:
   - name: video_in
     schema: VideoFrame
     description: Decoded video frames (raw pixels) to encode and write
-    read_mode: read_next_in_order
-    overflow: block
-    buffer_size: 32
+    delivery_profile: lossless
   outputs: []

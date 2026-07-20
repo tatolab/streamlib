@@ -34,7 +34,5 @@ processors:
   - name: video
     schema: VideoFrame
     description: Video frames to display in the window
-    read_mode: skip_to_latest
-    overflow: null
-    buffer_size: 4
+    delivery_profile: null
   outputs: []

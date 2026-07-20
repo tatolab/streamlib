@@ -23,13 +23,12 @@ imports:
 metadata:
   type: EncodedVideoFrame
   description: "Encoded video frame with H.264/H.265 NAL unit data"
-  read_mode: read_next_in_order
-  max_queued_messages: 16
+  flow_class: sample_stream
   # Slot-priming HINT, never a cap: the publisher opens under PowerOfTwo growth
   # and grows the segment on the first oversized loan (a 4K IDR ≈ 8–12 MiB), so
   # a keyframe past this hint delivers instead of crashing. 4 MiB covers the
   # common 1080p CQP IDR (≈ 2–3 MiB) without a first-frame regrow while keeping
-  # the primed commitment (max_queued_messages * hint) an order of magnitude
+  # the primed commitment (ring depth * hint) an order of magnitude
   # below the old fixed 16 MiB slot.
   expected_payload_bytes: 4194304
 

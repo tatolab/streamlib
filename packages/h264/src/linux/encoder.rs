@@ -39,7 +39,7 @@ use streamlib_plugin_abi::{
     execution = reactive,
     scheduling = high,
     config = crate::_generated_::H264EncoderConfig,
-    input("video_in", "@tatolab/core/VideoFrame", read_mode = "read_next_in_order", buffer_size = 8, description = "Raw video frames to encode"),
+    input("video_in", "@tatolab/core/VideoFrame", delivery_profile = "every_sample", description = "Raw video frames to encode"),
     output("encoded_video_out", "@tatolab/core/EncodedVideoFrame", description = "H.264 encoded video frames"),
 )]
 pub struct H264EncoderProcessor {

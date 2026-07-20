@@ -32,16 +32,12 @@ processors:
   - name: audio_in
     schema: AudioFrame
     description: Raw audio frames to encode
-    read_mode: read_next_in_order
-    overflow: null
-    buffer_size: 32
+    delivery_profile: null
   outputs:
   - name: encoded_audio_out
     schema: EncodedAudioFrame
     description: Opus encoded audio frames
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null
 - name: OpusDecoder
   description: Decodes EncodedAudioFrame (Opus) to AudioFrame
   runtime: rust
@@ -57,13 +53,9 @@ processors:
   - name: encoded_audio_in
     schema: EncodedAudioFrame
     description: Opus encoded audio frames to decode
-    read_mode: skip_to_latest
-    overflow: null
-    buffer_size: 8
+    delivery_profile: null
   outputs:
   - name: audio_out
     schema: AudioFrame
     description: Decoded audio frames
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null

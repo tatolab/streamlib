@@ -35,7 +35,7 @@ const DEFAULT_MAX_HEIGHT: u32 = 2160;
     execution = reactive,
     scheduling = high,
     config = crate::_generated_::JpegDecoderConfig,
-    input("encoded_jpeg_in", "@tatolab/jpeg/EncodedJpegFrame", read_mode = "read_next_in_order", buffer_size = 16, description = "JPEG-encoded frames to decode"),
+    input("encoded_jpeg_in", "@tatolab/jpeg/EncodedJpegFrame", description = "JPEG-encoded frames to decode"),
     output("video_out", "@tatolab/core/VideoFrame", description = "Decoded video frames"),
 )]
 pub struct JpegDecoderProcessor {

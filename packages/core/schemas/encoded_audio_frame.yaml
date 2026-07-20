@@ -6,8 +6,7 @@
 metadata:
   type: EncodedAudioFrame
   description: "Encoded audio frame with Opus/AAC bitstream data"
-  read_mode: skip_to_latest
-  max_queued_messages: 8
+  flow_class: state_stream
 
 properties:
   data:

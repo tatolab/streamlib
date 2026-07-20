@@ -46,9 +46,7 @@ processors:
   - name: audio
     schema: AudioFrame
     description: Captured mono audio frames in device-native sample rate
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null
 - name: AudioOutput
   description: Plays audio through speakers/headphones (CoreAudio on macOS, ALSA on Linux)
   runtime:
@@ -69,9 +67,7 @@ processors:
   - name: audio
     schema: AudioFrame
     description: Stereo audio frame to play through speakers
-    read_mode: read_next_in_order
-    overflow: null
-    buffer_size: 32
+    delivery_profile: null
   outputs: []
 - name: AudioMixer
   description: Mixes two mono audio signals into a single stereo signal
@@ -88,22 +84,16 @@ processors:
   - name: left
     schema: AudioFrame
     description: Left channel mono audio frame
-    read_mode: read_next_in_order
-    overflow: null
-    buffer_size: 32
+    delivery_profile: null
   - name: right
     schema: AudioFrame
     description: Right channel mono audio frame
-    read_mode: read_next_in_order
-    overflow: null
-    buffer_size: 32
+    delivery_profile: null
   outputs:
   - name: audio
     schema: AudioFrame
     description: Mixed stereo audio frame
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null
 - name: AudioChannelConverter
   description: Converts mono audio to N-channel audio according to the configured mode
   runtime: rust
@@ -119,16 +109,12 @@ processors:
   - name: audio_in
     schema: AudioFrame
     description: Mono audio frame
-    read_mode: read_next_in_order
-    overflow: null
-    buffer_size: 32
+    delivery_profile: null
   outputs:
   - name: audio_out
     schema: AudioFrame
     description: Multi-channel audio frame
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null
 - name: AudioResampler
   description: Resamples audio between sample rates
   runtime: rust
@@ -144,16 +130,12 @@ processors:
   - name: audio_in
     schema: AudioFrame
     description: Audio frame to resample
-    read_mode: read_next_in_order
-    overflow: null
-    buffer_size: 32
+    delivery_profile: null
   outputs:
   - name: audio_out
     schema: AudioFrame
     description: Resampled audio frame
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null
 - name: BufferRechunker
   description: Rechunks audio buffers to a fixed sample count
   runtime: rust
@@ -169,16 +151,12 @@ processors:
   - name: audio_in
     schema: AudioFrame
     description: Variable-size audio frame
-    read_mode: read_next_in_order
-    overflow: null
-    buffer_size: 32
+    delivery_profile: null
   outputs:
   - name: audio_out
     schema: AudioFrame
     description: Fixed-size audio frame
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null
 - name: ChordGenerator
   description: Generates a C major chord (C4 + E4 + G4) driven by the runtime audio clock
   runtime: rust
@@ -195,6 +173,4 @@ processors:
   - name: chord
     schema: AudioFrame
     description: Stereo chord audio frame
-    read_mode: null
-    overflow: null
-    buffer_size: null
+    delivery_profile: null

@@ -11,7 +11,7 @@ use streamlib_plugin_sdk::sdk::processors::ManualProcessor;
     description = "Passes video frames through unchanged (for testing)",
     execution = manual,
     config = crate::_generated_::SimplePassthroughConfig,
-    input("input", "@tatolab/core/VideoFrame", read_mode = "skip_to_latest", buffer_size = 4, description = "Video frame input"),
+    input("input", "@tatolab/core/VideoFrame", description = "Video frame input"),
     output("output", "@tatolab/core/VideoFrame", description = "Video frame output (unchanged)"),
 )]
 pub struct SimplePassthroughProcessor;

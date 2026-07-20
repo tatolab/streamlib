@@ -62,7 +62,7 @@ const DISPLAY_BLIT_FRAG_SPV: &[u8] =
     execution = manual,
     scheduling = high,
     config = crate::_generated_::DisplayConfig,
-    input("video", "@tatolab/core/VideoFrame", read_mode = "skip_to_latest", buffer_size = 4, description = "Video frames to display in the window"),
+    input("video", "@tatolab/core/VideoFrame", description = "Video frames to display in the window"),
 )]
 pub struct LinuxDisplayProcessor {
     gpu_context: Option<GpuContextLimitedAccess>,
