@@ -925,15 +925,25 @@ pub unsafe extern "C" fn sldn_output_write(
             return SLDN_WRITE_REFUSED_OVER_CEILING;
         }
         streamlib_ipc_types::ChannelEgressAdmission::Admitted { grew_to } => {
-            if let Some((old, new)) = grew_to {
+            if let Some(growth) = grew_to {
                 tracing::info!(
                     channel = %state.channel_service_name,
-                    old_segment_bytes = old,
-                    new_segment_bytes = new,
+                    old_segment_bytes = growth.old_segment_bytes,
+                    new_segment_bytes = growth.new_segment_bytes,
                     tier = "untrusted-session",
                     "[sldn:{}] iceoryx2 publisher data segment grew (PowerOfTwo)",
                     ctx.processor_id,
                 );
+                if growth.crossed_quarter_ceiling {
+                    tracing::warn!(
+                        channel = %state.channel_service_name,
+                        segment_bytes = growth.new_segment_bytes,
+                        ceiling_bytes = state.channel_ceiling_bytes,
+                        tier = "untrusted-session",
+                        "[sldn:{}] iceoryx2 publisher segment crossed a quarter of the channel ceiling",
+                        ctx.processor_id,
+                    );
+                }
             }
         }
     }

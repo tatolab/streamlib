@@ -243,19 +243,18 @@ impl OutputWriterInner {
                 });
             }
             streamlib_ipc_types::ChannelEgressAdmission::Admitted { grew_to } => {
-                if let Some((old, new)) = grew_to {
+                if let Some(growth) = grew_to {
                     tracing::info!(
                         channel = %egress.channel_service_name,
-                        old_segment_bytes = old,
-                        new_segment_bytes = new,
+                        old_segment_bytes = growth.old_segment_bytes,
+                        new_segment_bytes = growth.new_segment_bytes,
                         tier = egress.trust_tier.as_str(),
                         "iceoryx2 publisher data segment grew (PowerOfTwo)"
                     );
-                    let quarter = egress.ceiling_bytes / 4;
-                    if new > quarter && old <= quarter {
+                    if growth.crossed_quarter_ceiling {
                         tracing::warn!(
                             channel = %egress.channel_service_name,
-                            segment_bytes = new,
+                            segment_bytes = growth.new_segment_bytes,
                             ceiling_bytes = egress.ceiling_bytes,
                             tier = egress.trust_tier.as_str(),
                             "iceoryx2 publisher segment crossed a quarter of the channel ceiling"
