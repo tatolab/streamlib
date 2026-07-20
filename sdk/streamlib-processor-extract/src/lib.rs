@@ -284,7 +284,7 @@ mod tests {
             #[streamlib::sdk::processor(
                 "@tatolab/demo/Blur",
                 execution = reactive,
-                input("frames_in", "@tatolab/core/VideoFrame", read_mode = "skip_to_latest", buffer_size = 4),
+                input("frames_in", "@tatolab/core/VideoFrame", delivery_profile = "latest"),
                 output("frames_out", "@tatolab/core/VideoFrame"),
             )]
             pub struct Blur;
@@ -320,7 +320,7 @@ mod tests {
         assert_eq!(blur.schema.execution, ProcessorSchemaExecution::Reactive);
         assert_eq!(blur.schema.inputs.len(), 1);
         assert_eq!(blur.schema.inputs[0].name, "frames_in");
-        assert_eq!(blur.schema.inputs[0].read_mode.as_deref(), Some("skip_to_latest"));
+        assert_eq!(blur.schema.inputs[0].delivery_profile.as_deref(), Some("latest"));
         assert!(matches!(
             blur.schema.inputs[0].schema,
             PortSchemaSpec::Specific(_)
@@ -356,7 +356,7 @@ mod tests {
             scheduling = high,
             unsafe_send,
             description = "Blurs frames",
-            input("frames_in", "@tatolab/core/VideoFrame", read_mode = "skip_to_latest", buffer_size = 4),
+            input("frames_in", "@tatolab/core/VideoFrame", delivery_profile = "latest"),
             output("frames_out", "@tatolab/core/VideoFrame")"#;
 
         let tmp = tempdir();

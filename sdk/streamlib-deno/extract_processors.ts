@@ -118,6 +118,7 @@ export function toManifestJson(procs: readonly RegisteredProcessor[]): string {
       name: port.name,
       schema: port.schema === null ? null : port.schema.toWireObject(),
       description: port.description,
+      delivery_profile: port.deliveryProfile,
     })),
     outputs: entry.outputs.map((port) => ({
       name: port.name,

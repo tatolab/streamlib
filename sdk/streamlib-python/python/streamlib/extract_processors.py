@@ -114,6 +114,7 @@ def _to_manifest_json(procs: List[RegisteredProcessor]) -> str:
                         else None
                     ),
                     "description": port["description"],
+                    "delivery_profile": port.get("delivery_profile"),
                 }
                 for port in entry.inputs
             ],

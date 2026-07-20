@@ -365,7 +365,7 @@ mod tests {
                 name: "video".into(),
                 description: Some("Live frames".into()),
                 schema: CatalogSchemaRef::Schema(ident("core", "VideoFrame", SemVer::new(1, 0, 0))),
-                read_mode: None,
+                delivery_profile: None,
             }],
         }
     }
@@ -434,7 +434,7 @@ mod tests {
                         name: "video_in".into(),
                         description: None,
                         schema: CatalogSchemaRef::Any,
-                        read_mode: Some("skip_to_latest".into()),
+                        delivery_profile: Some("latest".into()),
                     }],
                     outputs: vec![],
                 },

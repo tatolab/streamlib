@@ -106,7 +106,7 @@ processors:
   inputs:
   - name: video_in
     schema: VideoFrame
-    read_mode: skip_to_latest
+    delivery_profile: latest
 "#;
 
 /// Camera manifest re-authored with ONLY the `Camera` processor (Sink removed) —
@@ -221,7 +221,7 @@ fn pkg_publish_emits_fetchable_catalog_and_republish_does_not_duplicate() {
     let sink = &cam.processors[1];
     assert_eq!(sink.runtime, CatalogRuntime::Python);
     assert_eq!(sink.entrypoint.as_deref(), Some("src.sink:Sink"));
-    assert_eq!(sink.inputs[0].read_mode.as_deref(), Some("skip_to_latest"));
+    assert_eq!(sink.inputs[0].delivery_profile.as_deref(), Some("latest"));
 
     // 3. The aggregate carries one line per processor; core (schema-only)
     //    contributes none.
