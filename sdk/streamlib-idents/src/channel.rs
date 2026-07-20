@@ -1,24 +1,38 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Channel names — the pub/sub rendezvous identifier a port publishes to /
-//! subscribes from.
+//! Channel names — the pub/sub rendezvous identifier a source output port
+//! publishes to and every downstream input port subscribes from.
 //!
-//! A channel name is the same string in two roles: an iceoryx2 service name
-//! intra-node and (phase [L]) a Zenoh key-expression cross-node. Its charset
-//! is the lowercase-leading ident grammar plus `_` (`[a-z][a-z0-9_-]*`) — the
-//! org/package charset widened by underscore so port names like `video_in`
-//! (which `connect()` folds into the channel name) cross intact. Underscore is
-//! transport-legal: iceoryx2 `ServiceName` imposes no charset restriction
-//! beyond non-empty / length / no `iox2://` prefix, and a Zenoh keyexpr segment
-//! forbids only `/ * $ ? #`. This module is the single source of truth for that
-//! grammar; the SDK and the engine both validate through it rather than
-//! forking a parallel copy.
+//! A channel is keyed on the **source output port** (`{source_processor_id}/{source_output_port}`),
+//! not on the link: one source output port maps to exactly one channel, so a
+//! single publisher fans out one zero-copy loan to N compile-time-known
+//! subscribers regardless of how many destinations it feeds. A `connect()` link
+//! is the degenerate 1:1 case of that keying.
+//!
+//! The name is the same string in two roles: an iceoryx2 service name intra-node
+//! and (phase [L]) a Zenoh key-expression cross-node. It is `/`-separated into
+//! chunks; each chunk obeys the lowercase-leading ident grammar plus `_`
+//! (`[a-z][a-z0-9_-]*`) — the org/package charset widened by underscore so port
+//! names like `video_in` cross intact. The `/` is a chunk separator (a Zenoh
+//! keyexpr segment boundary), never a within-chunk character. Underscore and
+//! hyphen are transport-legal: iceoryx2 `ServiceName` imposes no charset
+//! restriction beyond non-empty / length / no `iox2://` prefix, and a Zenoh
+//! keyexpr segment forbids only `/ * $ ? #`. A leading `@` chunk is forbidden
+//! (Zenoh reserved for admin space) — the per-chunk `[a-z]`-leading rule already
+//! excludes it. This module is the single source of truth for that grammar; the
+//! SDK and the engine both validate through it rather than forking a parallel
+//! copy.
+//!
+//! The `/` between the processor-id chunk and the port chunk makes the mapping
+//! injective: two distinct `(processor, port)` pairs can never collide onto one
+//! channel name.
 //!
 //! The wire carries a channel name through a fixed-width `PortKey`
-//! ([`MAX_CHANNEL_NAME_BYTES`] bytes), so an over-length explicit name is a
-//! hard error and a generated name is hash-suffixed to stay in bound (never
-//! prefix-truncated, which would collide).
+//! ([`MAX_CHANNEL_NAME_BYTES`] bytes). An over-length explicit name is a hard
+//! error; a generated name hash-legalizes its machine-generated chunk (the
+//! processor id) in place to stay in bound, never prefix-truncating across a
+//! `/` (which would collide two channels).
 
 use crate::error::{IdentError, IdentResult};
 use crate::ident::{is_lower_alnum_hyphen_or_underscore, validate_lower_hyphen_grammar};
@@ -34,17 +48,22 @@ use std::fmt;
 /// layer that depends on both.
 pub const MAX_CHANNEL_NAME_BYTES: usize = 63;
 
+/// The chunk separator — a Zenoh keyexpr segment boundary. Chunks on either
+/// side obey the per-chunk grammar; the separator itself is never a within-chunk
+/// character.
+pub const CHANNEL_CHUNK_SEPARATOR: char = '/';
+
 /// Number of lowercase-hex characters in the deterministic disambiguating
-/// suffix appended when a generated channel name would overflow
-/// [`MAX_CHANNEL_NAME_BYTES`]. 12 hex chars = 48 bits of the name hash.
+/// suffix appended when a generated channel chunk would overflow the budget.
+/// 12 hex chars = 48 bits of the chunk hash.
 const CHANNEL_NAME_HASH_SUFFIX_HEX_LEN: usize = 12;
 
 /// A validated channel name.
 ///
 /// Constructed via [`ChannelName::new`] (validating an explicit user-supplied
-/// name) or [`connect_channel_name`] (deterministically generating the name
-/// `connect()` assigns to both ends of a link). Both paths guarantee the
-/// charset grammar and the [`MAX_CHANNEL_NAME_BYTES`] bound hold.
+/// name) or [`source_channel_name`] (deterministically generating the name a
+/// source output port publishes to). Both paths guarantee the per-chunk charset
+/// grammar and the [`MAX_CHANNEL_NAME_BYTES`] bound hold.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ChannelName(String);
 
@@ -76,13 +95,11 @@ impl fmt::Display for ChannelName {
     }
 }
 
-/// Validate the channel charset grammar (`[a-z][a-z0-9_-]*`) without the
-/// [`MAX_CHANNEL_NAME_BYTES`] length bound — the charset half shared by
-/// [`validate_channel_name`] and [`connect_channel_name`]'s pre-hash input
-/// guard (the joined form is length-legalized by hashing, so only its charset
-/// is checked up front). Underscore is admitted here (but not for org/package)
-/// so a port name like `video_in` is a legal channel-name character.
-fn validate_channel_charset(s: &str) -> IdentResult<()> {
+/// Validate one `/`-separated chunk's charset grammar (`[a-z][a-z0-9_-]*`)
+/// without any length bound. Underscore is admitted (but not for org/package)
+/// so a port name like `video_in` is a legal chunk. A `/` inside `s` is itself
+/// an invalid character here — callers split on `/` before validating chunks.
+fn validate_channel_chunk_charset(s: &str) -> IdentResult<()> {
     validate_lower_hyphen_grammar(
         s,
         is_lower_alnum_hyphen_or_underscore,
@@ -92,8 +109,25 @@ fn validate_channel_charset(s: &str) -> IdentResult<()> {
     )
 }
 
-/// Validate a channel name against the canonical grammar
-/// (`[a-z][a-z0-9_-]*`, at most [`MAX_CHANNEL_NAME_BYTES`] UTF-8 bytes).
+/// Validate every `/`-separated chunk of `s` against the per-chunk charset
+/// grammar. An empty chunk (a leading, trailing, or doubled `/`) surfaces as
+/// [`IdentError::EmptyChannelName`]. The whole-name length bound is applied
+/// separately by [`validate_channel_name`].
+fn validate_channel_chunks(s: &str) -> IdentResult<()> {
+    if s.is_empty() {
+        return Err(IdentError::EmptyChannelName);
+    }
+    for chunk in s.split(CHANNEL_CHUNK_SEPARATOR) {
+        validate_channel_chunk_charset(chunk)?;
+    }
+    Ok(())
+}
+
+/// Validate a channel name against the canonical grammar: one or more
+/// `/`-separated chunks, each `[a-z][a-z0-9_-]*`, at most
+/// [`MAX_CHANNEL_NAME_BYTES`] UTF-8 bytes total. A leading `@` chunk (Zenoh
+/// admin space) and the Zenoh-reserved wildcard characters `* $ ? #` are
+/// excluded by the per-chunk charset.
 pub fn validate_channel_name(s: &str) -> IdentResult<()> {
     if s.len() > MAX_CHANNEL_NAME_BYTES {
         return Err(IdentError::ChannelNameTooLong {
@@ -102,63 +136,86 @@ pub fn validate_channel_name(s: &str) -> IdentResult<()> {
             max: MAX_CHANNEL_NAME_BYTES,
         });
     }
-    validate_channel_charset(s)
+    validate_channel_chunks(s)
 }
 
-/// Deterministically derive the channel name `connect()` assigns to both ends
-/// of a link: `{src_processor}-{src_output}--{dst_processor}-{dst_input}`.
+/// Deterministically derive the channel name a source output port publishes to:
+/// `{source_processor_id}/{source_output_port}`.
 ///
-/// The `--` double-hyphen separates the source `proc-port` pair from the
-/// destination pair; single hyphens join a processor to its port. If the joined
-/// form overflows [`MAX_CHANNEL_NAME_BYTES`], the human-readable prefix is
-/// shortened and a stable hash of the *full* joined form is appended
-/// (`{prefix}-{hash}`) — a pure function of the inputs that stays unique rather
-/// than a prefix truncation that would collide two long links onto one channel.
+/// Channel identity keys on the **source** only — the same source output port
+/// yields the same channel regardless of how many destinations `connect()` to
+/// it, which is what lets one publisher fan out a single zero-copy loan to N
+/// subscribers. Two `connect()` links from one output share this one channel.
 ///
-/// The processor ids are engine-generated (`ProcessorUniqueId` is `P{cuid2}` —
-/// an uppercase-leading `P` over a lowercase base-36 body), so their raw form is
-/// never lowercase-leading-legal. They are normalized to lowercase before
-/// joining: the cuid2 body already keeps the id unique, and lowercasing the
-/// leading `P` is what makes a valid `connect()` with default ids produce a
-/// grammar-legal wire name instead of erroring. A port name, by contrast, is
-/// author-supplied and is NOT normalized: a genuinely illegal character
-/// (uppercase, `/`, `.`, whitespace) surfaces here as the matching
-/// [`IdentError`] charset variant rather than a silently-invalid wire name — the
-/// joined form is grammar-checked before the length-legalizing hash step.
-/// Underscore is a legal channel character, so a port like `video_in` rides
-/// through with no error.
-pub fn connect_channel_name(
-    src_processor: &str,
-    src_output: &str,
-    dst_processor: &str,
-    dst_input: &str,
+/// The processor id is engine-generated (`ProcessorUniqueId` is `P{cuid2}` — an
+/// uppercase-leading `P` over a lowercase base-36 body), so its raw form is
+/// never lowercase-leading-legal; it is normalized to lowercase before the `/`.
+/// The output port name is author-supplied and is NOT normalized: a genuinely
+/// illegal character (uppercase, `.`, whitespace, a stray `/`) surfaces as the
+/// matching [`IdentError`] charset variant rather than a silently-invalid wire
+/// name. Underscore rides through (`video_out` → `…/video_out`).
+///
+/// If the joined form overflows [`MAX_CHANNEL_NAME_BYTES`], the machine-generated
+/// processor-id chunk is shortened and a stable hash of its full form is
+/// appended (`{prefix}-{hash}`) — a pure function of the inputs that stays
+/// unique. The author-supplied port chunk is never shortened; if the port chunk
+/// alone leaves no room for even a hashed processor chunk, the port name is
+/// [`IdentError::ChannelNameTooLong`].
+pub fn source_channel_name(
+    source_processor: &str,
+    source_output: &str,
 ) -> IdentResult<ChannelName> {
-    let src_processor = src_processor.to_ascii_lowercase();
-    let dst_processor = dst_processor.to_ascii_lowercase();
-    let joined = format!("{src_processor}-{src_output}--{dst_processor}-{dst_input}");
-    validate_channel_charset(&joined)?;
+    let processor = source_processor.to_ascii_lowercase();
+    validate_channel_chunk_charset(&processor)?;
+    validate_channel_chunk_charset(source_output)?;
 
-    if joined.len() <= MAX_CHANNEL_NAME_BYTES {
-        let name = ChannelName(joined);
+    let sep_len = CHANNEL_CHUNK_SEPARATOR.len_utf8();
+    if processor.len() + sep_len + source_output.len() <= MAX_CHANNEL_NAME_BYTES {
+        let name = ChannelName(format!(
+            "{processor}{CHANNEL_CHUNK_SEPARATOR}{source_output}"
+        ));
         debug_assert!(validate_channel_name(name.as_str()).is_ok());
         return Ok(name);
     }
 
-    let hash = fnv1a_64(joined.as_bytes());
+    // Overflow: hash-legalize ONLY the machine-generated processor chunk, never
+    // across the `/`. The author-supplied port chunk rides through whole.
+    let processor_budget = MAX_CHANNEL_NAME_BYTES
+        .checked_sub(sep_len + source_output.len())
+        .filter(|budget| *budget >= CHANNEL_NAME_HASH_SUFFIX_HEX_LEN + 1)
+        .ok_or_else(|| IdentError::ChannelNameTooLong {
+            name: source_output.to_string(),
+            len: source_output.len(),
+            max: MAX_CHANNEL_NAME_BYTES - sep_len - (CHANNEL_NAME_HASH_SUFFIX_HEX_LEN + 1),
+        })?;
+
+    let processor_chunk = hash_legalize_chunk(&processor, processor_budget);
+    let name = ChannelName(format!(
+        "{processor_chunk}{CHANNEL_CHUNK_SEPARATOR}{source_output}"
+    ));
+    debug_assert!(validate_channel_name(name.as_str()).is_ok());
+    Ok(name)
+}
+
+/// Shorten one chunk to fit `budget` bytes while staying a grammar-legal chunk
+/// and a pure function of the full chunk: keep as much of the human-readable
+/// prefix as fits alongside a `-`-joined stable hash suffix. `budget` is
+/// guaranteed by the caller to be at least `CHANNEL_NAME_HASH_SUFFIX_HEX_LEN + 1`.
+fn hash_legalize_chunk(chunk: &str, budget: usize) -> String {
+    if chunk.len() <= budget {
+        return chunk.to_string();
+    }
+    let hash = fnv1a_64(chunk.as_bytes());
     let suffix = format!("{hash:016x}");
     let suffix = &suffix[suffix.len() - CHANNEL_NAME_HASH_SUFFIX_HEX_LEN..];
 
-    // Reserve room for the `-` joiner and the hex suffix, then keep as much of
-    // the human-readable prefix as fits on a UTF-8 char boundary.
-    let prefix_budget = MAX_CHANNEL_NAME_BYTES - 1 - CHANNEL_NAME_HASH_SUFFIX_HEX_LEN;
-    let mut cut = prefix_budget.min(joined.len());
-    while !joined.is_char_boundary(cut) {
+    let prefix_budget = budget - 1 - CHANNEL_NAME_HASH_SUFFIX_HEX_LEN;
+    let mut cut = prefix_budget.min(chunk.len());
+    while cut > 0 && !chunk.is_char_boundary(cut) {
         cut -= 1;
     }
-    let prefix = &joined[..cut];
-    let name = ChannelName(format!("{prefix}-{suffix}"));
-    debug_assert!(validate_channel_name(name.as_str()).is_ok());
-    Ok(name)
+    let prefix = &chunk[..cut];
+    format!("{prefix}-{suffix}")
 }
 
 /// FNV-1a 64-bit — a fixed, platform-stable hash so a regenerated channel name
@@ -181,7 +238,7 @@ mod tests {
 
     #[test]
     fn accepts_canonical_names() {
-        for name in ["a", "camera-out", "cam-frame--sink-in", "a1-b2-c3"] {
+        for name in ["a", "camera-out", "cam/frame", "proc/video_in", "a1/b2"] {
             validate_channel_name(name).unwrap_or_else(|e| panic!("{name}: {e}"));
             assert_eq!(ChannelName::new(name).unwrap().as_str(), name);
         }
@@ -193,6 +250,21 @@ mod tests {
             validate_channel_name(""),
             Err(IdentError::EmptyChannelName)
         ));
+    }
+
+    #[test]
+    fn rejects_empty_chunk_from_slash_boundary() {
+        // A leading, trailing, or doubled `/` produces an empty chunk — an
+        // illegal channel name, never silently accepted.
+        for name in ["/cam", "cam/", "cam//out"] {
+            assert!(
+                matches!(
+                    validate_channel_name(name),
+                    Err(IdentError::EmptyChannelName)
+                ),
+                "{name} must reject as an empty chunk"
+            );
+        }
     }
 
     #[test]
@@ -209,14 +281,26 @@ mod tests {
             validate_channel_name("-cam"),
             Err(IdentError::ChannelNameMustStartWithLowercase(_))
         ));
+        // Per-chunk: the second chunk must also start lowercase-alpha.
+        assert!(matches!(
+            validate_channel_name("cam/1out"),
+            Err(IdentError::ChannelNameMustStartWithLowercase(_))
+        ));
     }
 
     #[test]
-    fn rejects_illegal_charset() {
-        // Dot, slash, space — none are iceoryx2/keyexpr-safe. Underscore is NOT
-        // in this list: it is transport-legal and admitted into the channel
-        // charset (see `underscore_is_legal_for_channels`).
-        for (name, bad) in [("cam.out", '.'), ("cam/out", '/'), ("cam out", ' ')] {
+    fn rejects_zenoh_reserved_and_illegal_charset() {
+        // Dot, space, and the Zenoh-reserved wildcard/pipeline chars `* $ ? #`
+        // are none of them chunk-legal. Underscore and hyphen are NOT in this
+        // list — they are transport-legal within a chunk.
+        for (name, bad) in [
+            ("cam.out", '.'),
+            ("cam out", ' '),
+            ("cam*", '*'),
+            ("cam$out", '$'),
+            ("cam?", '?'),
+            ("cam#x", '#'),
+        ] {
             assert_eq!(
                 validate_channel_name(name),
                 Err(IdentError::InvalidChannelNameCharacter(name.to_string(), bad))
@@ -225,22 +309,25 @@ mod tests {
     }
 
     #[test]
-    fn underscore_is_legal_for_channels() {
-        // Underscore is transport-legal (iceoryx2 ServiceName has no charset
-        // restriction; a Zenoh keyexpr segment forbids only `/ * $ ? #`), so a
-        // shipped underscore port name is a valid channel name. Mental-revert
-        // guard: narrow the channel charset back to `[a-z0-9-]` and this fails.
-        for name in ["video_in", "video_out", "encoded_jpeg_in", "cam_frame--sink_in"] {
-            validate_channel_name(name).unwrap_or_else(|e| panic!("{name}: {e}"));
-            assert_eq!(ChannelName::new(name).unwrap().as_str(), name);
-        }
+    fn rejects_leading_at_chunk() {
+        // A leading `@` chunk is Zenoh admin space — the per-chunk
+        // lowercase-alpha-leading rule excludes it. Mental-revert guard: relax
+        // the chunk-leading rule and this stops erroring.
+        assert!(matches!(
+            validate_channel_name("@admin/thing"),
+            Err(IdentError::ChannelNameMustStartWithLowercase(_))
+        ));
     }
 
     #[test]
-    fn double_hyphen_separator_is_grammar_legal() {
-        // The connect() separator `--` must pass — the charset allows runs of
-        // hyphens, which is what keeps the generated name a single valid ident.
-        validate_channel_name("src-out--dst-in").unwrap();
+    fn underscore_is_legal_within_a_chunk() {
+        // Underscore is transport-legal, so a shipped underscore port name is a
+        // valid chunk. Mental-revert guard: narrow the chunk charset back to
+        // `[a-z0-9-]` and this fails.
+        for name in ["video_in", "proc/video_out", "proc/encoded_jpeg_in"] {
+            validate_channel_name(name).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(ChannelName::new(name).unwrap().as_str(), name);
+        }
     }
 
     #[test]
@@ -267,104 +354,121 @@ mod tests {
     }
 
     #[test]
-    fn connect_name_is_deterministic() {
-        let a = connect_channel_name("cam", "frame", "sink", "in").unwrap();
-        let b = connect_channel_name("cam", "frame", "sink", "in").unwrap();
+    fn source_channel_name_is_deterministic_and_source_shaped() {
+        let a = source_channel_name("proc", "frame").unwrap();
+        let b = source_channel_name("proc", "frame").unwrap();
         assert_eq!(a, b);
-        assert_eq!(a.as_str(), "cam-frame--sink-in");
+        assert_eq!(a.as_str(), "proc/frame");
     }
 
     #[test]
-    fn connect_name_is_a_valid_channel_name() {
-        let name = connect_channel_name("camera", "output", "encoder", "input").unwrap();
-        validate_channel_name(name.as_str()).unwrap();
+    fn channel_identity_keys_on_source_only() {
+        // The load-bearing D1 property: channel identity is a pure function of
+        // the SOURCE output port. The derivation takes no destination argument,
+        // so every link out of one source output port — regardless of which
+        // destination processor / input port it feeds — resolves to the ONE
+        // channel a single publisher fans out over (N subscribers, one loan).
+        // Same source port ⇒ same channel; the channel moves only when the
+        // source port does.
+        let a = source_channel_name("cam", "frame").unwrap();
+        let same_source = source_channel_name("cam", "frame").unwrap();
+        let other_port = source_channel_name("cam", "thumbnail").unwrap();
+        let other_proc = source_channel_name("cam2", "frame").unwrap();
+        assert_eq!(a, same_source, "one source output port ⇒ exactly one channel");
+        assert_ne!(a, other_port, "a different source output port is a different channel");
+        assert_ne!(a, other_proc, "a different source processor is a different channel");
     }
 
     #[test]
-    fn connect_name_distinct_endpoints_are_unique() {
-        // Distinct links must land on distinct channels — the whole point of a
-        // per-link generated name.
-        let a = connect_channel_name("cam", "frame", "sink", "in").unwrap();
-        let b = connect_channel_name("cam", "frame", "sink", "aux").unwrap();
-        let c = connect_channel_name("cam", "alt", "sink", "in").unwrap();
+    fn distinct_source_ports_stay_distinct() {
+        // Injectivity across the `/`: distinct (processor, port) pairs must
+        // never collide. Directly exercises the non-injective single-`-` fold
+        // defect the `/`-separator fixes — `cam-x` + `out` vs `cam` + `x-out`.
+        let a = source_channel_name("camx", "out").unwrap();
+        let b = source_channel_name("cam", "xout").unwrap();
         assert_ne!(a, b);
-        assert_ne!(a, c);
-        assert_ne!(b, c);
-    }
+        assert_eq!(a.as_str(), "camx/out");
+        assert_eq!(b.as_str(), "cam/xout");
 
-    #[test]
-    fn connect_name_over_bound_is_hash_suffixed_not_truncated() {
-        // Two links whose long human prefixes share the first 50 bytes must NOT
-        // collapse onto one channel — the hash suffix keeps them distinct while
-        // both stay inside the wire bound.
-        let long = "verylongprocessorname".repeat(3); // 63 bytes, > budget
-        let a = connect_channel_name(&long, "outputport", "downstreamsink", "inputport").unwrap();
-        let b = connect_channel_name(&long, "outputport", "downstreamsink", "otherport").unwrap();
-        assert!(a.as_str().len() <= MAX_CHANNEL_NAME_BYTES);
-        assert!(b.as_str().len() <= MAX_CHANNEL_NAME_BYTES);
-        validate_channel_name(a.as_str()).unwrap();
-        validate_channel_name(b.as_str()).unwrap();
-        assert_ne!(a, b, "hash suffix must disambiguate prefix-colliding links");
-        // Deterministic even on the hashed path.
-        assert_eq!(
-            a,
-            connect_channel_name(&long, "outputport", "downstreamsink", "inputport").unwrap()
+        // The specific collision the old fold produced: with a single `-`
+        // joiner, `cam-x` + `out` and `cam` + `x-out` both rendered `cam-x-out`.
+        // Under `/`-separation they are `camx.../out`-shaped and cannot collide
+        // because the separator is not a chunk character.
+        let hyphen_a = source_channel_name("cam-x", "out").unwrap();
+        let hyphen_b = source_channel_name("cam", "x-out").unwrap();
+        assert_ne!(
+            hyphen_a, hyphen_b,
+            "the `/`-separator must keep hyphen-bearing pairs injective"
         );
+        assert_eq!(hyphen_a.as_str(), "cam-x/out");
+        assert_eq!(hyphen_b.as_str(), "cam/x-out");
     }
 
     #[test]
-    fn connect_name_accepts_underscore_ports() {
-        // Shipped port names carry underscores (`video_in`, `video_out`, …).
-        // `connect()` folds them into the channel name, so an underscore port
-        // must yield a VALID ChannelName with NO error — a silent fallback here
-        // would break every shipped underscore port. Mental-revert guard:
-        // narrow the channel charset back to `[a-z0-9-]` and this errors.
-        let name = connect_channel_name("cam", "video_out", "sink", "video_in").unwrap();
-        assert_eq!(name.as_str(), "cam-video_out--sink-video_in");
-        validate_channel_name(name.as_str()).unwrap();
-    }
-
-    #[test]
-    fn connect_name_rejects_out_of_grammar_port_name() {
-        // A PORT name carrying a genuinely-illegal char (`/` is not
-        // iceoryx2/keyexpr-safe) must surface as a typed connect-time error,
-        // never a silently-invalid wire name. Port names are author-supplied and
-        // NOT normalized. Mental-revert guard: without the input charset check
-        // the slash would ride through into the emitted ChannelName.
-        assert_eq!(
-            connect_channel_name("cam", "video/in", "sink", "in"),
-            Err(IdentError::InvalidChannelNameCharacter(
-                "cam-video/in--sink-in".to_string(),
-                '/'
-            ))
-        );
-        // An uppercase char in a port name is also an author error — the port
-        // name is not normalized, only the processor ids are. It lands
-        // mid-string (the processor id leads), so it reads as an invalid
-        // character rather than a bad leading char.
-        assert_eq!(
-            connect_channel_name("cam", "Frame", "sink", "in"),
-            Err(IdentError::InvalidChannelNameCharacter(
-                "cam-Frame--sink-in".to_string(),
-                'F'
-            ))
-        );
-    }
-
-    #[test]
-    fn connect_name_lowercases_uppercase_leading_processor_id() {
+    fn source_channel_name_lowercases_uppercase_leading_processor_id() {
         // Real `ProcessorUniqueId`s are `P{cuid2}` — uppercase-leading `P` over
         // a lowercase base-36 body. The derivation lowercases the processor-id
-        // components so a valid connect with default ids yields a grammar-legal
+        // chunk so a valid source with a default id yields a grammar-legal
         // channel name instead of erroring. Mental-revert guard: drop the
         // `to_ascii_lowercase` normalization and this errors with
         // ChannelNameMustStartWithLowercase.
-        let name = connect_channel_name("Pabc123def", "video", "Pxyz789ghi", "video_in").unwrap();
-        assert_eq!(name.as_str(), "pabc123def-video--pxyz789ghi-video_in");
+        let name = source_channel_name("Pabc123def", "video_out").unwrap();
+        assert_eq!(name.as_str(), "pabc123def/video_out");
         validate_channel_name(name.as_str()).unwrap();
 
         // Distinct P-ids stay distinct after lowercasing (cuid2 bodies differ).
-        let other = connect_channel_name("Pabc123def", "video", "Pxyz789jkl", "video_in").unwrap();
+        let other = source_channel_name("Pxyz789ghi", "video_out").unwrap();
         assert_ne!(name, other);
+    }
+
+    #[test]
+    fn source_channel_name_accepts_underscore_ports() {
+        let name = source_channel_name("cam", "video_out").unwrap();
+        assert_eq!(name.as_str(), "cam/video_out");
+        validate_channel_name(name.as_str()).unwrap();
+    }
+
+    #[test]
+    fn source_channel_name_rejects_out_of_grammar_port_name() {
+        // A PORT name carrying a genuinely-illegal char must surface as a typed
+        // error, never a silently-invalid wire name. Port names are
+        // author-supplied and NOT normalized. A `/` in the port name would
+        // forge an extra chunk, so it is rejected as an invalid character.
+        assert_eq!(
+            source_channel_name("cam", "video/in"),
+            Err(IdentError::InvalidChannelNameCharacter("video/in".to_string(), '/'))
+        );
+        // An uppercase char in a port name is an author error — the port name
+        // is not normalized, only the processor id is.
+        assert_eq!(
+            source_channel_name("cam", "Frame"),
+            Err(IdentError::ChannelNameMustStartWithLowercase("Frame".to_string()))
+        );
+    }
+
+    #[test]
+    fn source_channel_name_over_bound_hashes_processor_chunk_not_port() {
+        // When the joined form overflows the wire bound, only the
+        // machine-generated processor chunk is shortened+hashed; the
+        // author-supplied port chunk rides through whole, and the result stays
+        // in bound, grammar-legal, and deterministic. Never a prefix truncation
+        // across the `/`.
+        let long_proc = "p".to_string() + &"processorname".repeat(6); // 79 bytes
+        let a = source_channel_name(&long_proc, "output_port").unwrap();
+        assert!(a.as_str().len() <= MAX_CHANNEL_NAME_BYTES);
+        validate_channel_name(a.as_str()).unwrap();
+        // Port chunk survives intact after the separator.
+        assert!(
+            a.as_str().ends_with("/output_port"),
+            "author port chunk must ride through whole: {}",
+            a.as_str()
+        );
+        // Deterministic on the hashed path.
+        assert_eq!(a, source_channel_name(&long_proc, "output_port").unwrap());
+        // Two long processor ids sharing a prefix must NOT collapse onto one
+        // channel — the hash suffix disambiguates.
+        let long_proc2 = "p".to_string() + &"processornamex".repeat(6);
+        let b = source_channel_name(&long_proc2, "output_port").unwrap();
+        assert_ne!(a, b, "hash suffix must disambiguate prefix-colliding processor ids");
     }
 }

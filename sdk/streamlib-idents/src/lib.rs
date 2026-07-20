@@ -31,7 +31,8 @@ pub use catalog::{
 };
 
 pub use channel::{
-    ChannelName, MAX_CHANNEL_NAME_BYTES, connect_channel_name, validate_channel_name,
+    CHANNEL_CHUNK_SEPARATOR, ChannelName, MAX_CHANNEL_NAME_BYTES, source_channel_name,
+    validate_channel_name,
 };
 pub use error::{IdentError, IdentResult, ResolverError, ResolverResult};
 pub use git::fetch_git;
