@@ -153,10 +153,19 @@ async fn remove_processor_impl(
 /// Core implementation for connect - takes owned Arcs for 'static lifetime.
 ///
 /// `validation` selects the schema-agreement posture for this wiring site.
-/// The public `connect` / `connect_async` entrypoints pass
-/// [`SchemaValidationPosture::Loose`] (warn-but-wire); a safety-critical
-/// wiring site passes [`SchemaValidationPosture::Strict`] to hard-fail on a
-/// producer/consumer schema mismatch.
+/// Every public caller (`connect` / `connect_async`) currently passes
+/// [`SchemaValidationPosture::Loose`] (warn-but-wire). The
+/// [`Strict`][SchemaValidationPosture::Strict] mechanism — hard-failing a
+/// concrete producer/consumer schema mismatch with
+/// [`Error::SchemaIdentMismatch`] — is complete and revert-locked by tests, but
+/// has no public caller yet: the strict opt-in lands with the #1419 per-channel
+/// wiring surface. Until then Strict is intentionally dormant (owner decision
+/// (a), 2026-07-20) and reachable only through this `_impl` entry.
+#[tracing::instrument(
+    name = "runtime.connect",
+    skip(compiler),
+    fields(from = %from, to = %to, validation = ?validation),
+)]
 async fn connect_impl(
     compiler: Arc<Compiler>,
     from: OutputLinkPortRef,
