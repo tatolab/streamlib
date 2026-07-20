@@ -928,46 +928,22 @@ pub unsafe extern "C" fn slpn_output_write(
     // refusal surfaces as SLPN_WRITE_REFUSED_OVER_CEILING (the SDK drops without
     // raising); the host's parallel typed `PayloadExceedsChannelCeiling` error
     // is an intentional per-boundary split, not drift.
-    match streamlib_ipc_types::decide_channel_egress_admission(
+    let admission = streamlib_ipc_types::decide_channel_egress_admission(
         total_len,
         state.channel_ceiling_bytes,
         &mut state.refused_over_ceiling_count,
         &mut state.current_slot_capacity_bytes,
-    ) {
-        streamlib_ipc_types::ChannelEgressAdmission::RefusedOverCeiling { refused_count } => {
-            tracing::warn!(
-                channel = %state.channel_service_name,
-                payload_bytes = total_len,
-                ceiling_bytes = state.channel_ceiling_bytes,
-                tier = streamlib_ipc_types::ChannelTrustTier::UntrustedSession.as_str(),
-                refused_count,
-                "[slpn:{}] output channel refused a payload above its per-channel ceiling",
-                ctx.processor_id,
-            );
-            return SLPN_WRITE_REFUSED_OVER_CEILING;
-        }
-        streamlib_ipc_types::ChannelEgressAdmission::Admitted { grew_to } => {
-            if let Some(growth) = grew_to {
-                tracing::info!(
-                    channel = %state.channel_service_name,
-                    old_segment_bytes = growth.old_segment_bytes,
-                    new_segment_bytes = growth.new_segment_bytes,
-                    tier = streamlib_ipc_types::ChannelTrustTier::UntrustedSession.as_str(),
-                    "[slpn:{}] iceoryx2 publisher data segment grew (PowerOfTwo)",
-                    ctx.processor_id,
-                );
-                if growth.crossed_quarter_ceiling {
-                    tracing::warn!(
-                        channel = %state.channel_service_name,
-                        segment_bytes = growth.new_segment_bytes,
-                        ceiling_bytes = state.channel_ceiling_bytes,
-                        tier = streamlib_ipc_types::ChannelTrustTier::UntrustedSession.as_str(),
-                        "[slpn:{}] iceoryx2 publisher segment crossed a quarter of the channel ceiling",
-                        ctx.processor_id,
-                    );
-                }
-            }
-        }
+    );
+    streamlib_plugin_abi::emit_channel_egress_admission_tracing(
+        "slpn",
+        &ctx.processor_id,
+        &state.channel_service_name,
+        state.channel_ceiling_bytes,
+        total_len,
+        &admission,
+    );
+    if let streamlib_ipc_types::ChannelEgressAdmission::RefusedOverCeiling { .. } = admission {
+        return SLPN_WRITE_REFUSED_OVER_CEILING;
     }
 
     let mut frame = vec![0u8; total_len];
