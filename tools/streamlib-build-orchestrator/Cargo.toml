@@ -17,12 +17,12 @@ thiserror = { workspace = true }
 serde_json = { workspace = true }
 toml_edit = { workspace = true }
 ureq = { workspace = true }
-streamlib-engine = { path = "../../runtime/streamlib-engine", version = "0.7.17" }
-streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.7.17" }
-streamlib-pack = { path = "../streamlib-pack", version = "0.7.17" }
-streamlib-idents = { path = "../../sdk/streamlib-idents", version = "0.7.17" }
-streamlib-plugin-abi = { path = "../../runtime/streamlib-plugin-abi", version = "0.7.17" }
-streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.7.17" }
+streamlib-engine = { path = "../../runtime/streamlib-engine", version = "0.7.18" }
+streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.7.18" }
+streamlib-pack = { path = "../streamlib-pack", version = "0.7.18" }
+streamlib-idents = { path = "../../sdk/streamlib-idents", version = "0.7.18" }
+streamlib-plugin-abi = { path = "../../runtime/streamlib-plugin-abi", version = "0.7.18" }
+streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.7.18" }
 
 [dev-dependencies]
 tempfile = "3.14"
