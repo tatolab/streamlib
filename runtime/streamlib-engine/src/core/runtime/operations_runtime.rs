@@ -204,20 +204,18 @@ async fn connect_impl(
             }
         }
 
-        // The one channel name this link publishes to / subscribes from — the
-        // deterministic `connect()` sugar (#1416). Intra-node it currently maps
-        // onto the per-destination iceoryx2 service; the name is what phase [L]
-        // cross-node routing keys on. Endpoints are validated above, so a
-        // grammar failure here is a genuinely-illegal PORT name (author error),
-        // surfaced as InvalidLink. Processor ids are lowercased inside
-        // `connect_channel_name`; underscore is legal and rides through.
-        // Deriving inside the transaction means an illegal port name rolls the
-        // pending link back rather than committing a half-built edge.
-        let channel = streamlib_idents::connect_channel_name(
+        // The one channel this link's source output port publishes to — keyed
+        // on the SOURCE only (`{src_processor}/{src_output}`), so every link
+        // from this output port shares one channel / one publisher / N
+        // subscribers (D1, #1419). Endpoints are validated above, so a grammar
+        // failure here is a genuinely-illegal source PORT name (author error),
+        // surfaced as InvalidLink. The processor id is lowercased inside
+        // `source_channel_name`; underscore is legal and rides through. Deriving
+        // inside the transaction means an illegal port name rolls the pending
+        // link back rather than committing a half-built edge.
+        let channel = streamlib_idents::source_channel_name(
             from.processor_id.as_str(),
             &from.port_name,
-            to.processor_id.as_str(),
-            &to.port_name,
         )
         .map_err(|source| Error::InvalidLink(source.to_string()))?;
 
@@ -458,13 +456,12 @@ mod channel_wire_bound_tests {
     }
 
     #[test]
-    fn generated_connect_channel_name_fits_the_wire() {
-        // A generated name — including the hash-suffixed over-budget path —
+    fn generated_source_channel_name_fits_the_wire() {
+        // A generated name — including the hash-legalized over-budget path —
         // must construct a PortKey without the fallible constructor rejecting it.
         let long = "verylongprocessorname".repeat(4);
-        let channel =
-            streamlib_idents::connect_channel_name(&long, "outputport", "sinkproc", "inputport")
-                .expect("a grammar-legal set of endpoints must produce a channel name");
+        let channel = streamlib_idents::source_channel_name(&long, "outputport")
+            .expect("a grammar-legal source output port must produce a channel name");
         streamlib_ipc_types::PortKey::new(channel.as_str())
             .expect("a grammar-legal channel name must always fit the PortKey wire");
     }

@@ -165,7 +165,7 @@ fn connect_default_id_processors_with_valid_ports_returns_ok() {
     // (`P{cuid2}` — uppercase-leading `P`). The channel-name derivation lowercases
     // the processor-id components, so a valid output->input link returns
     // `Ok(LinkUniqueId)` instead of `Error::InvalidLink("channel `P…`")`. Mentally
-    // revert the `to_ascii_lowercase` normalization in `connect_channel_name` and
+    // revert the `to_ascii_lowercase` normalization in `source_channel_name` and
     // this fails with InvalidLink for every default-id link.
     let cam = register_test_type("CameraSource", "_unused_in", "video");
     let sink = register_test_type("DisplaySink", "video_in", "_unused_out");
