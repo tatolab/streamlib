@@ -209,15 +209,13 @@
         "schema"
       ],
       "properties": {
-        "buffer_size": {
-          "description": "Ring buffer capacity for this input port.",
+        "delivery_profile": {
+          "description": "Delivery-profile override for this input port — `\"latest\"`, `\"every_sample\"`, or `\"lossless\"`. The one delivery knob on the authoring surface: it resolves to the consumer-side drain order, the producer-side overflow policy, and the ring depth. `None` defers to the default derived from the wire type's `flow_class`. Always `None` on output ports.",
           "default": null,
           "type": [
-            "integer",
+            "string",
             "null"
-          ],
-          "format": "uint",
-          "minimum": 0.0
+          ]
         },
         "description": {
           "description": "Human-readable description.",
@@ -230,22 +228,6 @@
         "name": {
           "description": "Port name (e.g., \"video_in\").",
           "type": "string"
-        },
-        "overflow": {
-          "description": "Producer-side overflow policy for the service feeding this input port. `\"drop_oldest\"` (the engine-wide realtime default) lets the publisher's `send()` never block — the iceoryx2 subscriber buffer evicts the oldest sample to make room. `\"block\"` keeps the producer waiting until the consumer drains a slot; reserve for sinks that need every sample in order (file writers, muxers, loggers).",
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
-        },
-        "read_mode": {
-          "description": "Read mode for this input port (e.g., \"skip_to_latest\", \"read_next_in_order\").",
-          "default": null,
-          "type": [
-            "string",
-            "null"
-          ]
         },
         "schema": {
           "description": "Schema spec — either `any` or a bare PascalCase TypeName resolved against the enclosing manifest's `schemas:` map.",
