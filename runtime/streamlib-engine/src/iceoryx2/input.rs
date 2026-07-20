@@ -21,7 +21,7 @@
 //!   to the host-allocated inner.
 //!
 //! Host-side wiring code that needs to mutate the inner
-//! (`add_port`, `set_subscriber`, `set_listener`, `listener_fd`,
+//! (`add_port`, `add_channel_subscriber`, `set_listener`, `listener_fd`,
 //! `drain_listener`, etc.) operates on `Arc<InputMailboxesInner>`
 //! directly via the methods declared on the inner type — no
 //! PluginAbiObject, no plugin ABI hop.
@@ -457,10 +457,19 @@ impl InputMailboxesInner {
             .collect()
     }
 
-    /// Route a raw frame slice to the appropriate mailbox based on port_key in the header.
+    /// Route a raw frame slice into the mailbox named by the frame's stamped
+    /// source-port key. This is the manual-injection path — used only by
+    /// callers that synthesize a frame directly (SDK e2e harness + unit
+    /// tests), NOT the live receive path (which is [`receive_pending`],
+    /// routing by subscriber-to-local-port binding). The two differ: the live
+    /// path is binding-keyed so two destinations subscribing one channel each
+    /// land in their own local port, whereas this routes by the header's
+    /// stamped source port.
     ///
-    /// Returns true if the payload was routed, false if no matching mailbox exists.
-    /// Thread-safe: can be called from any thread.
+    /// Returns true if the payload was routed, false if no matching mailbox
+    /// exists. Thread-safe: can be called from any thread.
+    ///
+    /// [`receive_pending`]: Self::receive_pending
     pub fn route(&self, raw: Vec<u8>) -> bool {
         if raw.len() < FRAME_HEADER_SIZE {
             return false;
@@ -936,6 +945,71 @@ mod tests {
         assert!(mb_any.route(frame_with_schema("in", matching)));
         mb_any.read_raw("in").unwrap().unwrap();
         assert!(!mb_any.schema_mismatch_observed("in"));
+    }
+
+    /// N→1 fan-in DELIVERY lock (#1419): a destination consuming TWO inbound
+    /// channels binds two subscribers to ONE local input port; `receive_pending`
+    /// routes every frame from both channels into that shared mailbox.
+    ///
+    /// The two source channels stamp DIFFERENT source ports, so the routing must
+    /// be by the subscriber→local-port binding, not the frame's stamped key.
+    /// Revert lock: route by the stamped source port instead (as `route()` does)
+    /// and both frames look for mailboxes named after the source ports — which
+    /// don't exist on this destination — so the "in" mailbox stays empty and the
+    /// two-frame assertion fails.
+    #[test]
+    fn two_channel_subscribers_fan_into_one_local_port() {
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let schema =
+            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
+
+        // Open a fresh channel, publish one frame stamped with its own source
+        // port, and hand back the publisher (kept alive so the sent sample stays
+        // resident) plus the bound subscriber.
+        let open_channel_and_publish = |tag: &str, source_port: &str, data: &[u8]| {
+            let pubsub = node
+                .service_builder(&ServiceName::new(&unique_suffix(tag)).unwrap())
+                .publish_subscribe::<[u8]>()
+                .max_publishers(2)
+                .open_or_create()
+                .unwrap();
+            let publisher = pubsub
+                .publisher_builder()
+                .initial_max_slice_len(4096)
+                .create()
+                .unwrap();
+            let subscriber = pubsub.subscriber_builder().create().unwrap();
+
+            let total = FRAME_HEADER_SIZE + data.len();
+            let mut frame = vec![0u8; total];
+            FrameHeader::new(source_port, schema, 0, data.len() as u32)
+                .expect("source port fits PortKey")
+                .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+            frame[FRAME_HEADER_SIZE..].copy_from_slice(data);
+            let sample = publisher.loan_slice_uninit(total).unwrap();
+            sample.write_from_slice(&frame).send().unwrap();
+
+            (publisher, subscriber)
+        };
+
+        let (_pub_a, sub_a) = open_channel_and_publish("fanin/a", "src_a_out", b"frame-from-a");
+        let (_pub_b, sub_b) = open_channel_and_publish("fanin/b", "src_b_out", b"frame-from-b");
+
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_port("in", 64, ReadMode::ReadNextInOrder);
+        mailboxes.add_channel_subscriber("in", sub_a);
+        mailboxes.add_channel_subscriber("in", sub_b);
+
+        let mut payloads: Vec<Vec<u8>> = Vec::new();
+        while let Some((data, _ts)) = mailboxes.read_raw("in").unwrap() {
+            payloads.push(data);
+        }
+        payloads.sort();
+        assert_eq!(
+            payloads,
+            vec![b"frame-from-a".to_vec(), b"frame-from-b".to_vec()],
+            "both inbound channels must fan into the one local input port's mailbox",
+        );
     }
 
     /// Empty (unwired) PluginAbiObject should return Ok(None) from read_raw

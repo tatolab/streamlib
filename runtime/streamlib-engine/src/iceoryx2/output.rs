@@ -24,9 +24,11 @@
 //!   inner.
 //!
 //! Host-side code that needs to mutate the inner (e.g. compiler ops
-//! adding downstream connections at wiring time) operates on
-//! `Arc<OutputWriterInner>` directly via
-//! [`OutputWriterInner::add_connection`] — no PluginAbiObject, no plugin ABI hop.
+//! installing a channel publisher + destination notifiers at wiring
+//! time) operates on `Arc<OutputWriterInner>` directly via
+//! [`OutputWriterInner::set_channel_publisher`] and
+//! [`OutputWriterInner::add_channel_notifier`] — no PluginAbiObject, no
+//! plugin ABI hop.
 //! The cdylib's per-frame `write` calls cross extern "C" exactly
 //! once per emit (sub-microsecond on amd64; see the PR microbench
 //! for issue #894).
@@ -91,7 +93,7 @@ impl OutputWriterInner {
     /// port. The compiler op creates the single channel publisher on the FIRST
     /// link out of a source port and only appends notifiers thereafter.
     pub fn has_channel_publisher(&self, output_port: &str) -> bool {
-        self.channels.lock().contains_key(output_port)
+        self.has_port(output_port)
     }
 
     /// Install the single channel publisher for an output port.
@@ -490,6 +492,84 @@ mod tests {
             "expected at least one notify after write_raw, got {}",
             count
         );
+    }
+
+    /// 1→N fan-out DELIVERY lock (#1419): a single `write_raw` publishes ONE
+    /// frame that reaches EVERY subscriber on the channel through one zero-copy
+    /// loan + one send. Three subscribers each receive exactly one copy of the
+    /// payload.
+    ///
+    /// Revert lock: change `write_raw` to a per-connection copy loop (loan +
+    /// send once per destination notifier) and each subscriber on the shared
+    /// service receives N frames instead of one — the exactly-one assertion
+    /// fails. The capacity-only tests (subscriber-count sizing) stay green under
+    /// that revert; this is what pins the delivery guarantee.
+    #[test]
+    fn write_raw_fans_out_single_loan_to_all_subscribers() {
+        const N: usize = 3;
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let pubsub_name = unique_suffix("fanout/pubsub");
+
+        let pubsub = node
+            .service_builder(&ServiceName::new(&pubsub_name).unwrap())
+            .publish_subscribe::<[u8]>()
+            .max_publishers(2)
+            .max_subscribers(N + 1)
+            .open_or_create()
+            .unwrap();
+        let publisher = pubsub
+            .publisher_builder()
+            .initial_max_slice_len(4096)
+            .create()
+            .unwrap();
+        let subscribers: Vec<_> = (0..N)
+            .map(|_| pubsub.subscriber_builder().create().unwrap())
+            .collect();
+
+        let inner = Arc::new(OutputWriterInner::new());
+        let schema_ident =
+            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
+        inner.set_channel_publisher("out", schema_ident, publisher);
+
+        // N destination notifiers on the one channel — the compiler op's wiring
+        // shape for N destinations. `write_raw` signals each, but the frame is
+        // published exactly ONCE.
+        let mut listeners = Vec::with_capacity(N);
+        for i in 0..N {
+            let notify = node
+                .service_builder(
+                    &ServiceName::new(&unique_suffix(&format!("fanout/notify/{i}"))).unwrap(),
+                )
+                .event()
+                .max_notifiers(2)
+                .max_listeners(1)
+                .open_or_create()
+                .unwrap();
+            inner.add_channel_notifier("out", notify.notifier_builder().create().unwrap());
+            listeners.push(notify.listener_builder().create().unwrap());
+        }
+
+        let writer = OutputWriter::from_inner_arc(inner);
+        writer.write_raw("out", b"fanout-payload", 4242).unwrap();
+
+        for (i, subscriber) in subscribers.iter().enumerate() {
+            let mut received: Vec<Vec<u8>> = Vec::new();
+            while let Ok(Some(sample)) = subscriber.receive() {
+                let slice: &[u8] = sample.payload();
+                received.push(slice[FRAME_HEADER_SIZE..].to_vec());
+            }
+            assert_eq!(
+                received.len(),
+                1,
+                "subscriber {i} must receive exactly one frame from a single-loan \
+                 fan-out (a per-connection copy loop would deliver {N}), got {}",
+                received.len()
+            );
+            assert_eq!(
+                received[0], b"fanout-payload",
+                "subscriber {i} received the wrong payload",
+            );
+        }
     }
 
     /// Empty (unwired) writers should fail cleanly rather than crash.
