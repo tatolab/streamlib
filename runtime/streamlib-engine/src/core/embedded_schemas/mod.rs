@@ -209,6 +209,75 @@ pub fn overflow_for_input_port(
     })
 }
 
+/// Resolve the [`PortSchemaSpec`] declared on one port of a registered
+/// processor type.
+///
+/// Reads [`PROCESSOR_REGISTRY`]'s `port_info` for `processor_type`, selects the
+/// input or output port list per `direction`, and returns the named port's
+/// `data_type`. Falls back to [`PortSchemaSpec::Any`] (the tolerant wildcard)
+/// when the processor type isn't registered or the named port doesn't exist —
+/// the same "unconstrained" default the port-spec metadata resolvers assume.
+///
+/// The registry-lookup primitive keyed by a resolved processor `SchemaIdent`.
+/// The graph-level wrapper [`resolve_node_port_schema`] reads a node's
+/// processor type out of the graph and delegates here.
+///
+/// [`PROCESSOR_REGISTRY`]: crate::core::processors::PROCESSOR_REGISTRY
+/// [`PortSchemaSpec`]: streamlib_processor_schema::PortSchemaSpec
+pub fn port_schema_spec(
+    processor_type: &streamlib_idents::SchemaIdent,
+    port_name: &str,
+    direction: crate::core::PortDirection,
+) -> streamlib_processor_schema::PortSchemaSpec {
+    use crate::core::PortDirection;
+
+    let Some((inputs, outputs)) =
+        crate::core::processors::PROCESSOR_REGISTRY.port_info(processor_type)
+    else {
+        return streamlib_processor_schema::PortSchemaSpec::Any;
+    };
+    let ports = match direction {
+        PortDirection::Input => inputs,
+        PortDirection::Output => outputs,
+    };
+    ports
+        .iter()
+        .find(|p| p.name == port_name)
+        .map(|p| p.data_type.clone())
+        .unwrap_or_default()
+}
+
+/// Resolve the [`PortSchemaSpec`] on one port of a graph node, in either
+/// direction.
+///
+/// Reads the node's processor type out of `graph`, then delegates to the
+/// registry primitive [`port_schema_spec`]. Returns [`PortSchemaSpec::Any`]
+/// (the tolerant wildcard) when the node is absent — no processor type to read.
+///
+/// This is the single graph→port-schema primitive behind both the connect-time
+/// agreement check (`operations_runtime`) and the wire-time output/destination
+/// schema resolution (`open_iceoryx2_service_op`).
+///
+/// [`PortSchemaSpec`]: streamlib_processor_schema::PortSchemaSpec
+/// [`PortSchemaSpec::Any`]: streamlib_processor_schema::PortSchemaSpec::Any
+pub fn resolve_node_port_schema(
+    graph: &crate::core::graph::Graph,
+    proc_id: &crate::core::graph::ProcessorUniqueId,
+    port_name: &str,
+    direction: crate::core::PortDirection,
+) -> streamlib_processor_schema::PortSchemaSpec {
+    let proc_type = graph
+        .traversal()
+        .v(proc_id)
+        .first()
+        .map(|node| node.processor_type().clone());
+
+    match proc_type {
+        Some(ident) => port_schema_spec(&ident, port_name, direction),
+        None => streamlib_processor_schema::PortSchemaSpec::Any,
+    }
+}
+
 /// Shared lookup helper for both port-spec metadata resolvers.
 ///
 /// `Any` → `Ok(None)` (caller substitutes default).

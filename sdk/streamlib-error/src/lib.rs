@@ -106,6 +106,22 @@ pub enum Error {
         direction: PortDirection,
     },
 
+    #[error(
+        "Schema-ident mismatch on link {from_processor}:{from_port} -> \
+         {to_processor}:{to_port}: producer emits `{producer_schema}` but consumer \
+         port `{to_port}` expects `{consumer_schema}`. Strict schema validation was \
+         requested for this wiring site — align the two schemas, or relax a port to \
+         `any` to accept the mismatch."
+    )]
+    SchemaIdentMismatch {
+        from_processor: String,
+        from_port: String,
+        to_processor: String,
+        to_port: String,
+        producer_schema: String,
+        consumer_schema: String,
+    },
+
     #[error("Buffer operation failed: {0}")]
     BufferError(String),
 
