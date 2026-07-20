@@ -268,27 +268,45 @@ fn notify_service_name_for(dest_proc_id: &ProcessorUniqueId) -> String {
     format!("streamlib/{}/notify", dest_proc_id)
 }
 
-/// The `max_subscribers` a channel data service must be created with: the count
-/// of `connect()` links out of the source output port (each is one destination
-/// subscriber) plus [`RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`].
+/// The `(dest_proc_id, dest_port)` set a channel feeds — every `connect()` link
+/// out of `source_port`. This predicate IS the definition of a channel's
+/// membership: a channel keys on its source output port, so its destinations are
+/// exactly the links leaving that port.
 ///
 /// The full graph is built by the time the compiler op runs, so this outbound
-/// count is stable — every link out of the same source port computes the same
-/// value, which is what lets the incremental `open_or_create` calls agree
-/// (iceoryx2 verifies `max_subscribers` on reopen).
-fn channel_max_subscribers(
+/// set is stable — every link out of the same source port sees the same set,
+/// which is what lets the incremental `open_or_create` calls agree (iceoryx2
+/// verifies `max_subscribers` / `enable_safe_overflow` on reopen).
+fn channel_destinations(
     graph: &mut Graph,
     source_proc_id: &ProcessorUniqueId,
     source_port: &str,
-) -> usize {
-    let destinations = graph
+) -> Vec<(ProcessorUniqueId, String)> {
+    graph
         .traversal_mut()
         .v(source_proc_id)
         .out_e()
         .iter()
         .filter(|link| link.from_port().port_name == source_port)
-        .count();
-    destinations + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL
+        .map(|link| {
+            (
+                link.to_port().processor_id.clone(),
+                link.to_port().port_name.clone(),
+            )
+        })
+        .collect()
+}
+
+/// The `max_subscribers` a channel data service must be created with: the count
+/// of destinations the channel feeds (each is one destination subscriber) plus
+/// [`RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`].
+fn channel_max_subscribers(
+    graph: &mut Graph,
+    source_proc_id: &ProcessorUniqueId,
+    source_port: &str,
+) -> usize {
+    channel_destinations(graph, source_proc_id, source_port).len()
+        + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL
 }
 
 /// The destination's compile-time fan-in — the count of inbound `connect()`
@@ -310,21 +328,9 @@ fn channel_enable_safe_overflow(
     source_proc_id: &ProcessorUniqueId,
     source_port: &str,
 ) -> Result<bool> {
-    // Collect (dest_proc_id, dest_port) for every link out of this source port,
-    // releasing the traversal borrow before re-traversing per edge.
-    let destinations: Vec<(ProcessorUniqueId, String)> = graph
-        .traversal_mut()
-        .v(source_proc_id)
-        .out_e()
-        .iter()
-        .filter(|link| link.from_port().port_name == source_port)
-        .map(|link| {
-            (
-                link.to_port().processor_id.clone(),
-                link.to_port().port_name.clone(),
-            )
-        })
-        .collect();
+    // Collected up front so the traversal borrow is released before re-traversing
+    // per edge to read each destination's processor type.
+    let destinations = channel_destinations(graph, source_proc_id, source_port);
 
     let mut agreed: Option<bool> = None;
     for (dest_proc_id, dest_port) in &destinations {
@@ -723,6 +729,76 @@ mod tests {
         }
         let dest_uid: ProcessorUniqueId = dest_id.as_str().into();
         assert_eq!(destination_fanin(&mut graph, &dest_uid), 3);
+    }
+
+    /// A source output port feeding two destinations whose input ports declare
+    /// CONFLICTING overflow policies (`block` vs `drop_oldest`) is genuinely
+    /// ambiguous: a channel's single publisher shares one `enable_safe_overflow`
+    /// across every subscriber. `channel_enable_safe_overflow` surfaces this as a
+    /// named [`Error::Configuration`], not a silent first-connection-wins pick.
+    ///
+    /// Revert lock: drop the conflict branch (return the first destination's
+    /// policy) and this returns `Ok(_)` — the `expect_err` fails.
+    #[test]
+    fn conflicting_destination_overflow_is_a_configuration_error() {
+        use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
+        use streamlib_idents::{Org, Package, SemVer, TypeName};
+        use streamlib_processor_schema::PortSchemaSpec;
+
+        let register_sink = |pkg: &str, overflow: &str| -> SchemaIdent {
+            let ident = SchemaIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new(pkg).unwrap(),
+                TypeName::new("OverflowSink").unwrap(),
+                SemVer::new(1, 0, 0),
+            );
+            let mut desc = ProcessorDescriptor::new(ident.clone(), "conflicting-overflow sink");
+            desc.inputs.push(
+                PortDescriptor::iceoryx2("in1", "input", PortSchemaSpec::Any)
+                    .with_overflow(overflow),
+            );
+            // Idempotent: a duplicate ident (re-run in the same process) errors;
+            // the first registration is the one that stands.
+            let _ = PROCESSOR_REGISTRY.register_descriptor_only(desc);
+            ident
+        };
+
+        let block_ident = register_sink("test-conflicting-overflow-block", "block");
+        let drop_ident = register_sink("test-conflicting-overflow-drop", "drop_oldest");
+
+        let mut graph = Graph::new();
+        let src_id = add_mock_output_only(&mut graph);
+        let block_dest = graph
+            .traversal_mut()
+            .add_v(ProcessorSpec::new(block_ident, serde_json::Value::Null))
+            .first()
+            .expect("block sink node")
+            .id
+            .to_string();
+        let drop_dest = graph
+            .traversal_mut()
+            .add_v(ProcessorSpec::new(drop_ident, serde_json::Value::Null))
+            .first()
+            .expect("drop sink node")
+            .id
+            .to_string();
+
+        graph.traversal_mut().add_e(
+            OutputLinkPortRef::new(&src_id, "out1"),
+            InputLinkPortRef::new(&block_dest, "in1"),
+        );
+        graph.traversal_mut().add_e(
+            OutputLinkPortRef::new(&src_id, "out1"),
+            InputLinkPortRef::new(&drop_dest, "in1"),
+        );
+
+        let src_uid: ProcessorUniqueId = src_id.as_str().into();
+        let err = channel_enable_safe_overflow(&mut graph, &src_uid, "out1")
+            .expect_err("conflicting overflow policies must be a configuration error");
+        assert!(
+            matches!(err, Error::Configuration(_)),
+            "conflicting destination overflow must surface as Error::Configuration; got {err:?}",
+        );
     }
 
     /// Wire-time integration lock: a registered output port carrying a
