@@ -1,0 +1,47 @@
+name: Check ProcessorSpec Construction
+
+# CI gate for structured processor identity.
+# `cargo xtask check-processor-spec-new` walks `examples/` and fails if
+# any site constructs a `ProcessorSpec` from a bare string or hand-rolls
+# a `SchemaIdent` literal instead of the typed constructors. See
+# `docs/architecture/schema-identity-and-packaging.md`.
+#
+# Grep-shaped on purpose: sub-second on a clean runner, no workspace build.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  xtask-check-processor-spec-new:
+    name: xtask check-processor-spec-new
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        # A cache-service flake must never fail the job; a miss just means a cold build.
+        continue-on-error: true
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-xtask-${{ hashFiles('xtask/Cargo.toml', 'xtask/Cargo.lock', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-xtask-
+
+      - name: cargo xtask check-processor-spec-new
+        run: cargo run --locked -q -p xtask -- check-processor-spec-new
+
+      - name: cargo test -p xtask check_processor_spec_new (fixture tests)
+        run: cargo test --locked -p xtask check_processor_spec_new
