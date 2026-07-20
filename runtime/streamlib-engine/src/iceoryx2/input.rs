@@ -652,6 +652,8 @@ impl InputMailboxes {
     pub fn read_raw(&self, port: &str) -> Result<Option<(Vec<u8>, i64)>> {
         use streamlib_ipc_types::DEFAULT_EXPECTED_PAYLOAD_BYTES;
 
+        const MAX_GROW_AND_RETRY_ATTEMPTS: usize = 8;
+
         if !self.is_configured() {
             return Ok(None);
         }
@@ -660,7 +662,7 @@ impl InputMailboxes {
         // The host stashes an oversized frame and re-delivers it at the exact
         // required size, so two iterations suffice; the small bound guards
         // against a pathological producer growing the frame between calls.
-        for _ in 0..8 {
+        for _ in 0..MAX_GROW_AND_RETRY_ATTEMPTS {
             let mut buf = vec![0u8; cap];
             let mut out_len = 0usize;
             let mut out_timestamp = 0i64;
