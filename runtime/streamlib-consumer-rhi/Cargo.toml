@@ -19,7 +19,7 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.7.20" }
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.7.21" }
 vulkanalia.workspace = true
 libc.workspace = true
 

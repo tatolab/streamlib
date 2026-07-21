@@ -38,33 +38,33 @@ clear_bitstream_buffers_on_create = []
 
 [dependencies]
 # Processor schema types (shared with macros for code generation)
-streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.7.20", features = ["utoipa"] }
+streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.7.21", features = ["utoipa"] }
 
 # Canonical Error / Result / PortDirection, shared with the plugin-SDK so
 # plugin cdylibs author against them without linking the engine. The engine
 # re-exports them at `core::error`.
-streamlib-error = { path = "../../sdk/streamlib-error", version = "0.7.20" }
+streamlib-error = { path = "../../sdk/streamlib-error", version = "0.7.21" }
 
 # Schema identity + manifest types (one source of truth for the
 # structured `dependencies:` shape consumed at runtime).
-streamlib-idents = { path = "../../sdk/streamlib-idents", version = "0.7.20" }
+streamlib-idents = { path = "../../sdk/streamlib-idents", version = "0.7.21" }
 # Runtime-layer codegen: the engine regenerates the source-only Python SDK's
 # wire vocabulary (`streamlib/_generated_`) into each processor venv after
 # install. Same codegen the build script uses; needed at runtime here too.
-streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.7.20" }
+streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.7.21" }
 
 # Procedural macros
-streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.7.20" }
+streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.7.21" }
 
 # Plugin ABI wire-protocol header. Dep direction reversed in #877:
 # streamlib-plugin-abi no longer depends on streamlib (the SDK), so the
 # cyclic dep this dep used to dodge (engine → plugin-abi → sdk → engine)
 # is gone. The engine's dlopen loader uses `PluginDeclaration` and
 # `STREAMLIB_ABI_VERSION` from this crate directly.
-streamlib-plugin-abi = { path = "../streamlib-plugin-abi", version = "0.7.20" }
+streamlib-plugin-abi = { path = "../streamlib-plugin-abi", version = "0.7.21" }
 
 # Shared iceoryx2 payload types (for cross-process IPC)
-streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.7.20" }
+streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.7.21" }
 
 # Consumer-side carve-out — owns the format primitives
 # (TextureFormat / TextureUsages / PixelFormat), the trait machinery
@@ -72,7 +72,7 @@ streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.7.20" }
 # Consumer* RHI types (Linux), and a slim ConsumerRhiError. streamlib
 # re-exports the primitives so existing in-tree call sites (e.g.
 # `crate::core::rhi::TextureFormat`) keep working unchanged.
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.7.20" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.7.21" }
 
 # Core dependencies (always included)
 thiserror.workspace = true
@@ -154,17 +154,17 @@ raw-window-handle = "0.6"  # Raw window handle types for Vulkan surface creation
 # privileged syscall on the requesting thread's behalf.
 zbus = "5"
 # Wire-format helpers for the per-runtime surface-sharing socket
-streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.7.20" }
+streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.7.21" }
 # Surface adapter ABI types referenced by the host-side CpuReadbackBridge
 # trait (linux-only; the cpu-readback adapter is linux-only).
-streamlib-adapter-abi = { path = "../../adapters/streamlib-adapter-abi", version = "0.7.20" }
+streamlib-adapter-abi = { path = "../../adapters/streamlib-adapter-abi", version = "0.7.21" }
 # Consumer-side carve-out — defines the trait machinery
 # (VulkanRhiDevice, DevicePrivilege, *Like, ConsumerMarker), the
 # Consumer* RHI types, and the format/error primitives shared with the
 # host side. streamlib re-exports for in-tree consumers; subprocess
 # cdylibs depend on it directly so the FullAccess capability boundary
 # is enforced by the type system.
-streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.7.20" }
+streamlib-consumer-rhi = { path = "../streamlib-consumer-rhi", version = "0.7.21" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.9"
@@ -205,7 +205,7 @@ path = "tests/bin/surface_share_crash_helper.rs"
 required-features = []
 
 [build-dependencies]
-streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.7.20" }
+streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.7.21" }
 
 # Build dependencies for protobuf compilation (surface-share service gRPC)
 [target.'cfg(target_os = "macos")'.build-dependencies]
