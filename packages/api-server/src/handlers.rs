@@ -31,6 +31,7 @@ use tracing::Level;
 use utoipa::OpenApi;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
+use crate::auth::{ApiServerBearerToken, ForbiddenResponse, UnauthorizedResponse};
 use crate::state::{
     ApiDoc, AppState, CreateConnectionRequest, CreateProcessorRequest, ErrorResponse, IdResponse,
     ProcessorNotFoundResponse, ProcessorPortNotFoundResponse, UnknownProcessorTypeResponse,
@@ -41,20 +42,35 @@ use crate::state::{
 // ============================================================================
 
 /// Build the full router with shared state and trace layer attached.
+///
+/// The four mutating routes (`POST /api/processor`, `DELETE
+/// /api/processors/{id}`, `POST /api/connections`, `DELETE
+/// /api/connections/{id}`) sit behind the bearer-token auth middleware; the
+/// GET routes, health check, WebSocket event stream, and OpenAPI spec stay
+/// open. `route_layer` binds the auth layer to exactly the routes already on
+/// the protected sub-router, so a later `merge` leaves the open routes ungated.
 pub(crate) fn build_router(
     runtime: Arc<dyn RuntimeOperations>,
+    auth_token: ApiServerBearerToken,
     #[cfg(feature = "moq")] runtime_id: String,
 ) -> Router {
-    let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
-        .routes(routes!(health))
-        .routes(routes!(get_graph))
+    let protected = OpenApiRouter::new()
         .routes(routes!(create_processor))
         .routes(routes!(delete_processor))
         .routes(routes!(create_connection))
         .routes(routes!(delete_connection))
+        .route_layer(axum::middleware::from_fn_with_state(
+            auth_token,
+            crate::auth::require_bearer_token,
+        ));
+
+    let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
+        .routes(routes!(health))
+        .routes(routes!(get_graph))
         .routes(routes!(get_registry))
         .routes(routes!(list_schema_definitions))
         .routes(routes!(get_schema_definition))
+        .merge(protected)
         .split_for_parts();
 
     let state = AppState {
@@ -124,6 +140,8 @@ pub(crate) async fn get_graph(
     responses(
         (status = 200, description = "Processor created successfully", body = IdResponse),
         (status = 400, description = "Malformed request (invalid org / package / type / version segment)", body = ErrorResponse),
+        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
+        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
         (status = 422, description = "Processor type is structurally valid but not registered in the runtime; the failed node is left in the graph in `Error` state", body = UnknownProcessorTypeResponse)
     )
 )]
@@ -196,6 +214,8 @@ pub(crate) async fn create_processor(
     ),
     responses(
         (status = 204, description = "Processor deleted successfully"),
+        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
+        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
         (status = 404, description = "Processor not found")
     )
 )]
@@ -220,6 +240,8 @@ pub(crate) async fn delete_processor(
     responses(
         (status = 200, description = "Connection created successfully", body = IdResponse),
         (status = 400, description = "Malformed request or generic graph error", body = ErrorResponse),
+        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
+        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
         (status = 404, description = "One of the referenced processors isn't in the graph", body = ProcessorNotFoundResponse),
         (status = 422, description = "Referenced processor exists but has no port with that name and direction", body = ProcessorPortNotFoundResponse)
     )
@@ -281,6 +303,8 @@ pub(crate) async fn create_connection(
     ),
     responses(
         (status = 204, description = "Connection deleted successfully"),
+        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
+        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
         (status = 404, description = "Connection not found")
     )
 )]

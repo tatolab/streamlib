@@ -20,6 +20,7 @@ struct StashedHandles {
     runtime: Arc<dyn RuntimeOperations>,
     tokio_handle: tokio::runtime::Handle,
     runtime_id: String,
+    auth_token: crate::auth::ApiServerBearerToken,
 }
 
 /// Docker-style adjectives for runtime name generation.
@@ -140,12 +141,21 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         let tokio_handle = runtime.handle().clone();
         self.tokio_runtime = Some(runtime);
 
+        // Auto-generate + persist the bearer token (0600) on first setup;
+        // reused across restarts. Every mutating route is gated behind it.
+        let auth_token = crate::auth::ApiServerBearerToken::load_or_create_under_data_dir()?;
+        tracing::info!(
+            "ApiServer bearer token at {}",
+            crate::auth::ApiServerBearerToken::default_token_path().display()
+        );
+
         // Capture just the narrow handles the HTTP server task needs;
         // the long-lived task never holds a `RuntimeContext`.
         self.handles = Some(StashedHandles {
             runtime: ctx.runtime(),
             tokio_handle,
             runtime_id: ctx.runtime_id().to_string(),
+            auth_token,
         });
         Ok(())
     }
@@ -185,14 +195,19 @@ impl ManualProcessor for ApiServerProcessor::Processor {
 
         self.runtime_id = Some(handles.runtime_id.clone());
 
+        let config = self.config.clone();
+        let host = config.host.clone();
+
+        // A non-loopback bind exposes the graph-mutation control plane to the
+        // network; it stays localhost-only unless explicitly opted into.
+        check_bind_allowed(&host, config.allow_remote_bind)?;
+
         let app = crate::handlers::build_router(
             handles.runtime.clone(),
+            handles.auth_token.clone(),
             #[cfg(feature = "moq")]
             handles.runtime_id.clone(),
         );
-
-        let config = self.config.clone();
-        let host = config.host.clone();
         let base_port = config.port;
         let tokio_handle = handles.tokio_handle.clone();
 
@@ -255,5 +270,71 @@ impl ManualProcessor for ApiServerProcessor::Processor {
             let _ = tx.send(());
         }
         Ok(())
+    }
+}
+
+/// Whether `host` names a loopback interface. `"localhost"` and any address
+/// that parses to a loopback [`std::net::IpAddr`] (`127.0.0.0/8`, `::1`) count;
+/// an unspecified address (`0.0.0.0` / `::`), a routable address, or an
+/// unresolvable name does not — the conservative default is "not loopback".
+fn host_is_loopback(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    host.parse::<std::net::IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
+}
+
+/// Reject a non-loopback bind host unless the config opts into a remote bind.
+/// The default (`allow_remote_bind` absent / false) keeps the control plane
+/// on localhost.
+fn check_bind_allowed(host: &str, allow_remote_bind: Option<bool>) -> Result<()> {
+    if host_is_loopback(host) || allow_remote_bind == Some(true) {
+        return Ok(());
+    }
+    Err(Error::Configuration(format!(
+        "ApiServer: refusing to bind non-loopback host {host:?} — the control plane accepts \
+         graph-mutation requests. Set `allow_remote_bind: true` in the ApiServer config to \
+         expose it beyond localhost."
+    )))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loopback_hosts_are_recognized() {
+        assert!(host_is_loopback("127.0.0.1"));
+        assert!(host_is_loopback("127.0.0.5"));
+        assert!(host_is_loopback("::1"));
+        assert!(host_is_loopback("localhost"));
+        assert!(host_is_loopback("LocalHost"));
+    }
+
+    #[test]
+    fn non_loopback_hosts_are_rejected() {
+        assert!(!host_is_loopback("0.0.0.0"));
+        assert!(!host_is_loopback("::"));
+        assert!(!host_is_loopback("192.168.1.10"));
+        assert!(!host_is_loopback("example.com"));
+    }
+
+    #[test]
+    fn loopback_binds_without_opt_in() {
+        assert!(check_bind_allowed("127.0.0.1", None).is_ok());
+        assert!(check_bind_allowed("localhost", Some(false)).is_ok());
+        assert!(check_bind_allowed("::1", None).is_ok());
+    }
+
+    #[test]
+    fn non_loopback_bind_requires_explicit_opt_in() {
+        // Localhost-only is the default: a wildcard bind is refused unless the
+        // config explicitly opts in.
+        assert!(check_bind_allowed("0.0.0.0", None).is_err());
+        assert!(check_bind_allowed("0.0.0.0", Some(false)).is_err());
+        assert!(check_bind_allowed("0.0.0.0", Some(true)).is_ok());
+        assert!(check_bind_allowed("192.168.1.10", Some(true)).is_ok());
     }
 }

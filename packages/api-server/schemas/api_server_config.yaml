@@ -25,3 +25,7 @@ optionalProperties:
     metadata:
       description: "Log file path for surface-share registration"
     type: string
+  allow_remote_bind:
+    metadata:
+      description: "Permit binding a non-loopback host. Absent / false restricts the listener to loopback (127.0.0.1 / ::1 / localhost); a remote bind exposes the graph-mutation control plane and must be opted into explicitly."
+    type: boolean
