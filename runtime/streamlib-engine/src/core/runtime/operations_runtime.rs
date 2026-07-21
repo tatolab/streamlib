@@ -416,6 +416,55 @@ impl RuntimeOperations for Runner {
         Box::pin(self.replace_processor_from_source(request))
     }
 
+    #[tracing::instrument(name = "runtime.tap", skip(self), fields(channel = %channel, count = ?count))]
+    fn tap_async(
+        &self,
+        channel: String,
+        count: Option<usize>,
+    ) -> BoxFuture<'_, Result<crate::core::runtime::TapSubscription>> {
+        // Resolve the channel's source output port and its iceoryx2 sizing from
+        // the live graph BEFORE spawning: the same derivation the compiler op
+        // used to open the service, so the tap's publisher-free reopen requests
+        // identical, iceoryx2-verified parameters.
+        let resolved = self.compiler.scope(
+            |graph, _tx| -> Result<(String, crate::core::compiler::compiler_ops::ChannelSizing)> {
+                let (source_proc_id, source_port) =
+                    crate::core::compiler::compiler_ops::find_channel_source_port(graph, &channel)
+                        .ok_or_else(|| Error::TapChannelNotFound(channel.clone()))?;
+                let sizing = crate::core::compiler::compiler_ops::resolve_channel_sizing(
+                    graph,
+                    &source_proc_id,
+                    &source_port,
+                )?;
+                Ok((channel.clone(), sizing))
+            },
+        );
+
+        let node = self.iceoryx2_node.clone();
+        Box::pin(async move {
+            let (channel, sizing) = resolved?;
+            // The reserved-slot subscriber is `!Send` and lives on a dedicated
+            // OS thread; `start_channel_tap` blocks briefly for its subscribe
+            // outcome, so it runs on a blocking pool, off the async worker.
+            tokio::task::spawn_blocking(move || {
+                crate::core::runtime::tap::start_channel_tap(
+                    node,
+                    channel,
+                    crate::core::runtime::tap::TapChannelSizing {
+                        max_subscribers: sizing.max_subscribers,
+                        max_queued_messages: sizing.max_queued_messages,
+                        enable_safe_overflow: sizing.enable_safe_overflow,
+                    },
+                    count,
+                )
+            })
+            .await
+            .map_err(|join_error| {
+                Error::Runtime(format!("channel-tap start task failed to join: {join_error}"))
+            })?
+        })
+    }
+
     // =========================================================================
     // Sync Methods (variant-aware blocking strategy)
     // =========================================================================

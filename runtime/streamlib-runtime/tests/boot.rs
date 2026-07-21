@@ -354,6 +354,74 @@ fn websocket_streams_runtime_events_end_to_end() {
 }
 
 #[test]
+fn tap_ws_unknown_channel_closes_with_well_formed_reason() {
+    let base_port = free_port();
+    let temp_home = std::env::temp_dir().join(format!("streamlib-runtime-tap-{base_port}"));
+    let _ = std::fs::remove_dir_all(&temp_home);
+
+    let child = Command::new(env!("CARGO_BIN_EXE_streamlib-runtime"))
+        .arg("--host")
+        .arg("127.0.0.1")
+        .arg("--port")
+        .arg(base_port.to_string())
+        .env("STREAMLIB_HOME", &temp_home)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .expect("spawn streamlib-runtime");
+    let _guard = ChildGuard(child);
+
+    let port =
+        wait_for_health(base_port, Duration::from_secs(60)).expect("runtime should serve /health");
+
+    // Tap an unwired channel. This exercises the full path: route → real
+    // host-shaped RuntimeContext → in-process Runner ops. `ctx.runtime()`
+    // must reach the real Runner (not the byte-shaped shim) so the graph
+    // resolution fails with `TapChannelNotFound`; the handler maps that to the
+    // app-range close code 4404. If `ctx.runtime()` handed back the shim, the
+    // tap would fail with the `NotSupported` string, which the handler maps to
+    // the generic 1011 close (its over-length reason truncated to the 123-byte
+    // cap, so a reason IS written) — the `close_code == 4404` assertion below
+    // would then read 1011 and this test would go red.
+    let mut ws = WsClient::connect(port, "/ws/tap/unknown-channel")
+        .expect("WebSocket upgrade on /ws/tap/{channel} should 101");
+
+    let (opcode, payload) = ws
+        .read_frame(Instant::now() + Duration::from_secs(10))
+        .expect("the tap must answer an unwired channel with a frame, not a silent hang");
+
+    let _ = std::fs::remove_dir_all(&temp_home);
+
+    assert_eq!(opcode, 0x8, "an unwired-channel tap must close the socket");
+    // RFC 6455 caps a control-frame payload at 125 bytes: 2 for the close
+    // code + at most 123 for the reason.
+    assert!(
+        payload.len() <= 125,
+        "close frame payload must fit RFC 6455's 125-byte control-frame cap; got {}",
+        payload.len()
+    );
+    assert!(
+        payload.len() >= 2,
+        "close frame must carry a 2-byte close code"
+    );
+    let close_code = u16::from_be_bytes([payload[0], payload[1]]);
+    assert_eq!(
+        close_code, 4404,
+        "an unwired channel must close with the app-range channel-not-found code"
+    );
+    let reason = String::from_utf8(payload[2..].to_vec()).expect("close reason must be valid UTF-8");
+    assert!(
+        reason.len() <= 123,
+        "close reason must be <= 123 bytes; got {} ({reason:?})",
+        reason.len()
+    );
+    assert!(
+        reason.contains("not found"),
+        "close reason should name the channel-not-found class; got {reason:?}"
+    );
+}
+
+#[test]
 fn rejects_removed_plugin_args() {
     for arg in ["--plugin", "--plugin-dir"] {
         let output = Command::new(env!("CARGO_BIN_EXE_streamlib-runtime"))

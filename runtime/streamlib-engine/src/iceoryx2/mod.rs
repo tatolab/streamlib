@@ -20,7 +20,10 @@ pub use channel_ceiling::{
 pub use delivery_profile::{DeliveryProfile, DeliveryResolution, FlowClass};
 pub use input::{BoundedReadOutcome, InputMailboxes, InputMailboxesInner};
 pub use mailbox::PortMailbox;
-pub use node::{Iceoryx2EventService, Iceoryx2Node, Iceoryx2NotifyService, Iceoryx2Service};
+pub use node::{
+    ChannelTapSubscribeError, Iceoryx2EventService, Iceoryx2Node, Iceoryx2NotifyService,
+    Iceoryx2Service,
+};
 pub use output::{ChannelEgressConfig, OutputWriter, OutputWriterInner};
 pub use overflow::Overflow;
 pub use payload::{

@@ -10,6 +10,7 @@ mod operations_runtime;
 mod runtime;
 mod runtime_unique_id;
 mod status;
+mod tap;
 
 pub use install::{InstallError, InstallOptions, InstallReport, install};
 pub use streamlib_idents::app_modules::{
@@ -34,6 +35,7 @@ pub use operations::{
     SchemaValidationPosture, SubmittedProcessorSource,
 };
 pub use runtime::Runner;
+pub use tap::TapSubscription;
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
 

@@ -289,6 +289,7 @@ pub(crate) struct RegisterProcessorSourceResponse {
 
 #[derive(OpenApi)]
 #[openapi(
+    paths(crate::handlers::tap_websocket_handler),
     info(
         title = "StreamLib Runtime API",
         version = "0.1.0",

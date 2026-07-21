@@ -146,6 +146,20 @@ pub enum Error {
     #[error("Runtime error: {0}")]
     Runtime(String),
 
+    #[error(
+        "no tappable channel named '{0}' in the running graph — a channel's \
+         iceoryx2 data service exists only once a connect() has wired its source \
+         output port"
+    )]
+    TapChannelNotFound(String),
+
+    #[error(
+        "the reserved tap slot on channel '{0}' is already occupied — a channel \
+         reserves exactly one tap subscriber slot, so only one concurrent tap is \
+         allowed; detach the existing tap first"
+    )]
+    TapSlotOccupied(String),
+
     #[error("Plugin host services unavailable: {0}")]
     PluginHostUnavailable(String),
 
