@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.20](https://github.com/tatolab/streamlib/compare/v0.7.19...v0.7.20) (2026-07-21)
+
+
+### Features
+
+* **sdk:** unify read_mode/overflow/buffer_size/max_queued_messages into one delivery profile ([#1486](https://github.com/tatolab/streamlib/issues/1486)) ([c774809](https://github.com/tatolab/streamlib/commit/c77480954fec407b0bc9cbb3c425414b8756d639))
+
 ## [0.7.19](https://github.com/tatolab/streamlib/compare/v0.7.18...v0.7.19) (2026-07-20)
 
 

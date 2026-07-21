@@ -16,23 +16,23 @@ path = "src/main.rs"
 
 [dependencies]
 # Core library (bundles all Rust processors)
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.7.19" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.7.20" }
 
 # Schema types (processor YAML parsing)
-streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.7.19" }
+streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.7.20" }
 
 # Manifest + workspace + dependency-spec types for `streamlib pack` /
 # `streamlib add` / `streamlib remove` — typed PackageRef, Manifest schema, etc.
-streamlib-idents = { path = "../../sdk/streamlib-idents", version = "0.7.19" }
+streamlib-idents = { path = "../../sdk/streamlib-idents", version = "0.7.20" }
 
 # Cargo-build orchestration helpers — `streamlib pack`'s auto-build branch
 # routes through this crate so the same logic is reused by
 # `streamlib-build-orchestrator` without dragging in the full CLI surface.
-streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.7.19" }
-streamlib-pack = { path = "../streamlib-pack", version = "0.7.19" }
+streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.7.20" }
+streamlib-pack = { path = "../streamlib-pack", version = "0.7.20" }
 
 # JTD-codegen pipeline (drives `streamlib generate`)
-streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.7.19" }
+streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.7.20" }
 
 # CLI framework
 clap = { version = "4.5", features = ["derive"] }
