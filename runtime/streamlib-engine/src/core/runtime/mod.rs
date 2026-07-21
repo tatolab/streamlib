@@ -29,7 +29,7 @@ pub(crate) use module_loader::{
     stage_schema_via_active_cdylib_sink,
 };
 pub use operations::{
-    BoxFuture, ConnectOptions, RegisterProcessorReceipt, RegisteredPortReceipt,
+    BoxFuture, ConnectOptions, ProcessorLanguage, RegisterProcessorReceipt, RegisteredPortReceipt,
     RegisteredProcessorReceipt, ReplaceProcessorFromSource, RuntimeOperations,
     SchemaValidationPosture, SubmittedProcessorSource,
 };
