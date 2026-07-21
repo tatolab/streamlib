@@ -13,8 +13,9 @@
 //!
 //! Two of the tools (`tap`, `logs`) front WebSocket *streams* in the REST API.
 //! MCP tools are request/response, so each bridges its stream to a **bounded
-//! sample** — `tap` by a bag count, `logs` by a count and a monotonic sample
-//! window — and returns the collected sample as the tool result.
+//! sample** — both by a count AND a monotonic sample window (a quiet channel /
+//! idle event stream returns the partial sample rather than blocking the tool
+//! call) — and returns the collected sample as the tool result.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -69,6 +70,15 @@ const MAX_TAP_BAG_PREVIEW_BYTES: usize = 4096;
 /// otherwise-unbounded event stream; a sparse / idle runtime returns early with
 /// fewer events rather than blocking. Monotonic (tokio timer), never wall-clock.
 const LOGS_SAMPLE_WINDOW: Duration = Duration::from_millis(500);
+
+/// Upper bound on how long the `tap` tool waits to fill its bag sample before
+/// returning what it has collected. The tap forwarder sends nothing on an idle,
+/// slow, or paused channel (it idles on `TAP_IDLE_POLL_BACKOFF`), so without
+/// this window a request/response tool call would block until `count` bags
+/// actually flow. A quiet channel returns the partial sample (0..N bags)
+/// instead. Monotonic (tokio timer), never wall-clock; mirrors
+/// [`LOGS_SAMPLE_WINDOW`].
+const TAP_SAMPLE_WINDOW: Duration = Duration::from_millis(500);
 
 // ============================================================================
 // JSON-RPC envelope
@@ -182,7 +192,7 @@ fn tool_definitions() -> Vec<Value> {
             "inputSchema": {
                 "type": "object",
                 "properties": {
-                    "language": { "type": "string", "enum": ["rust", "python", "typescript", "deno"], "description": "Source language. `deno` is an alias for `typescript`." },
+                    "language": { "type": "string", "enum": ["rust", "python", "typescript", "deno"], "description": "Source language. `deno` is an alias for `typescript`. `rust` is present for wire-form parity with the SDK enum but is rejected for live source submission (a full cargo build, not a live graph mutation) — use `python`/`typescript`/`deno` for live submit." },
                     "source": { "type": "string", "description": "The processor module source text." },
                     "requested_name": { "type": "string", "description": "The @session/<name> package segment to mint under. Omit to derive from processor_type_name." },
                     "processor_type_name": { "type": "string", "description": "The PascalCase processor type name the source defines. Omit to derive from requested_name." },
@@ -212,7 +222,7 @@ fn tool_definitions() -> Vec<Value> {
                 "type": "object",
                 "properties": {
                     "target_session_module": { "type": "string", "description": "The @session/<name>@<range> module to replace, e.g. @session/widget@*." },
-                    "language": { "type": "string", "enum": ["rust", "python", "typescript", "deno"] },
+                    "language": { "type": "string", "enum": ["rust", "python", "typescript", "deno"], "description": "Replacement source language. `deno` is an alias for `typescript`. `rust` is present for wire-form parity with the SDK enum but is rejected for live source submission (a full cargo build, not a live graph mutation) — use `python`/`typescript`/`deno` for live submit." },
                     "source": { "type": "string" },
                     "requested_name": { "type": "string" },
                     "processor_type_name": { "type": "string" }
@@ -406,10 +416,13 @@ async fn call_tap(state: &AppState, arguments: Value) -> Value {
     };
 
     let mut bags: Vec<Value> = Vec::with_capacity(sample);
+    let deadline = tokio::time::Instant::now() + TAP_SAMPLE_WINDOW;
     while bags.len() < sample {
-        match subscription.recv().await {
-            Some(bytes) => bags.push(tap_bag_json(&bytes)),
-            None => break,
+        match tokio::time::timeout_at(deadline, subscription.recv()).await {
+            Ok(Some(bytes)) => bags.push(tap_bag_json(&bytes)),
+            // Tap exhausted (count reached / forwarder ended), or the bounded
+            // sample window elapsed on a quiet channel — return the partial sample.
+            Ok(None) | Err(_) => break,
         }
     }
     let dropped_bags = subscription.dropped_bags();
@@ -424,6 +437,7 @@ async fn call_tap(state: &AppState, arguments: Value) -> Value {
         "channel": channel,
         "requested": sample,
         "received": bags.len(),
+        "window_ms": TAP_SAMPLE_WINDOW.as_millis(),
         "dropped_bags": dropped_bags,
         "bags": bags,
     }))
@@ -584,12 +598,35 @@ mod tests {
 
     use super::*;
 
+    /// How the stub's `tap_async` answers: either it refuses (no channel), or it
+    /// hands back a synthetic [`TapSubscription`] pre-loaded with `bags` and a
+    /// fixed `dropped_bags` count. `keep_sender_open` retains the forward
+    /// sender so `recv()` pends after the bags drain — modelling a quiet channel
+    /// so the tap tool's monotonic sample window is what ends the collection.
+    /// One recorded `connect` call: `(from_processor, from_port, to_processor,
+    /// to_port)`, so a dispatch test can confirm the tool reached the runtime op
+    /// with the right endpoints.
+    type RecordedConnections = Arc<Mutex<Vec<(String, String, String, String)>>>;
+
+    #[derive(Clone)]
+    struct StubTapPlan {
+        bags: Vec<Vec<u8>>,
+        dropped_bags: u64,
+        keep_sender_open: bool,
+        sender_keepalive: Arc<Mutex<Option<tokio::sync::mpsc::Sender<Vec<u8>>>>>,
+    }
+
     /// Stub runtime that records the last submitted source and answers every op
     /// with a fixed success, so the MCP tool → ops → runtime path can be
-    /// observed end-to-end without a live engine.
+    /// observed end-to-end without a live engine. The `recorded_*` handles let a
+    /// dispatch test confirm a tool reached the matching runtime op.
     struct RecordingStubRuntime {
         last_submitted_source: Arc<Mutex<Option<String>>>,
         instance_id: ProcessorUniqueId,
+        tap_plan: Option<StubTapPlan>,
+        recorded_removed_processors: Arc<Mutex<Vec<String>>>,
+        recorded_connections: RecordedConnections,
+        recorded_replaced_modules: Arc<Mutex<Vec<String>>>,
     }
 
     impl RecordingStubRuntime {
@@ -597,6 +634,40 @@ mod tests {
             Self {
                 last_submitted_source: Arc::new(Mutex::new(None)),
                 instance_id: "mcp-instance".to_string().into(),
+                tap_plan: None,
+                recorded_removed_processors: Arc::new(Mutex::new(Vec::new())),
+                recorded_connections: Arc::new(Mutex::new(Vec::new())),
+                recorded_replaced_modules: Arc::new(Mutex::new(Vec::new())),
+            }
+        }
+
+        /// A stub whose `tap_async` yields a synthetic subscription over `bags`
+        /// with the given dropped-bag count, dropping the forward sender once the
+        /// bags are queued so `recv()` ends (exhaustion path).
+        fn with_tap_bags(bags: Vec<Vec<u8>>, dropped_bags: u64) -> Self {
+            Self {
+                tap_plan: Some(StubTapPlan {
+                    bags,
+                    dropped_bags,
+                    keep_sender_open: false,
+                    sender_keepalive: Arc::new(Mutex::new(None)),
+                }),
+                ..Self::new()
+            }
+        }
+
+        /// A stub whose `tap_async` yields a subscription over `bags` but keeps
+        /// the forward sender alive, so `recv()` pends after the bags drain — a
+        /// quiet channel whose collection ends on the monotonic sample window.
+        fn with_quiet_tap(bags: Vec<Vec<u8>>) -> Self {
+            Self {
+                tap_plan: Some(StubTapPlan {
+                    bags,
+                    dropped_bags: 0,
+                    keep_sender_open: true,
+                    sender_keepalive: Arc::new(Mutex::new(None)),
+                }),
+                ..Self::new()
             }
         }
     }
@@ -637,14 +708,21 @@ mod tests {
             let id = self.instance_id.clone();
             Box::pin(async move { Ok(id) })
         }
-        fn remove_processor_async(&self, _id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>> {
+        fn remove_processor_async(&self, id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>> {
+            self.recorded_removed_processors.lock().push(id.to_string());
             Box::pin(async { Ok(()) })
         }
         fn connect_async(
             &self,
-            _from: OutputLinkPortRef,
-            _to: InputLinkPortRef,
+            from: OutputLinkPortRef,
+            to: InputLinkPortRef,
         ) -> BoxFuture<'_, Result<LinkUniqueId>> {
+            self.recorded_connections.lock().push((
+                from.processor_id.to_string(),
+                from.port_name,
+                to.processor_id.to_string(),
+                to.port_name,
+            ));
             Box::pin(async { Ok("mcp-link".to_string().into()) })
         }
         fn disconnect_async(&self, _link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
@@ -662,8 +740,11 @@ mod tests {
         }
         fn replace_processor_async(
             &self,
-            _request: ReplaceProcessorFromSource,
+            request: ReplaceProcessorFromSource,
         ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
+            self.recorded_replaced_modules
+                .lock()
+                .push(request.target_session_module.to_string());
             Box::pin(async { Ok(stub_register_receipt()) })
         }
         fn tap_async(
@@ -671,7 +752,24 @@ mod tests {
             channel: String,
             _count: Option<usize>,
         ) -> BoxFuture<'_, Result<TapSubscription>> {
-            Box::pin(async move { Err(Error::TapChannelNotFound(channel)) })
+            let Some(plan) = self.tap_plan.clone() else {
+                return Box::pin(async move { Err(Error::TapChannelNotFound(channel)) });
+            };
+            Box::pin(async move {
+                let (sender, receiver) =
+                    tokio::sync::mpsc::channel::<Vec<u8>>(plan.bags.len().max(1));
+                for bag in &plan.bags {
+                    sender.send(bag.clone()).await.expect("stub tap queue send");
+                }
+                if plan.keep_sender_open {
+                    *plan.sender_keepalive.lock() = Some(sender);
+                }
+                Ok(TapSubscription::from_forward_channel(
+                    channel,
+                    receiver,
+                    plan.dropped_bags,
+                ))
+            })
         }
         fn add_processor(&self, _spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
             Ok(self.instance_id.clone())
@@ -917,5 +1015,205 @@ mod tests {
 
         assert_eq!(status, StatusCode::OK);
         assert_eq!(body["error"]["code"], -32601);
+    }
+
+    #[tokio::test]
+    async fn tools_call_tap_shapes_bags_and_reports_dropped_count() {
+        let big_bag = vec![0xABu8; MAX_TAP_BAG_PREVIEW_BYTES + 512];
+        let small_bag = vec![0x01u8, 0x02, 0x03];
+        let runtime = Arc::new(RecordingStubRuntime::with_tap_bags(
+            vec![big_bag.clone(), small_bag.clone()],
+            7,
+        ));
+
+        let (status, body) = mcp_call(
+            runtime,
+            json!({
+                "jsonrpc": "2.0", "id": 10, "method": "tools/call",
+                "params": { "name": "tap", "arguments": { "channel": "cam/frame" } }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        let result = &body["result"];
+        assert_eq!(result["isError"], false, "body={body}");
+        let text = result["content"][0]["text"].as_str().unwrap();
+        let sample: Value = serde_json::from_str(text).expect("tap result text is JSON");
+
+        assert_eq!(sample["channel"], "cam/frame");
+        assert_eq!(sample["received"], 2);
+        assert_eq!(sample["dropped_bags"], 7);
+        assert!(sample["window_ms"].as_u64().unwrap() > 0);
+
+        let bags = sample["bags"].as_array().expect("bags array");
+        // Big bag: the full byte length is reported, the hex preview is capped at
+        // MAX_TAP_BAG_PREVIEW_BYTES, and truncation is flagged.
+        assert_eq!(
+            bags[0]["byte_len"].as_u64().unwrap(),
+            (MAX_TAP_BAG_PREVIEW_BYTES + 512) as u64
+        );
+        assert_eq!(bags[0]["hex_truncated"], true);
+        assert_eq!(
+            bags[0]["hex_preview"].as_str().unwrap().len(),
+            MAX_TAP_BAG_PREVIEW_BYTES * 2,
+            "preview is the hex of exactly the first MAX_TAP_BAG_PREVIEW_BYTES bytes"
+        );
+        // Small bag: previewed whole, not truncated.
+        assert_eq!(bags[1]["byte_len"].as_u64().unwrap(), 3);
+        assert_eq!(bags[1]["hex_truncated"], false);
+        assert_eq!(bags[1]["hex_preview"], "010203");
+    }
+
+    #[tokio::test]
+    async fn tools_call_tap_returns_partial_sample_within_window_on_quiet_channel() {
+        // One bag flows, then the channel goes quiet (the forward sender is kept
+        // open) so `recv()` pends; the request asks for four. Without the
+        // monotonic sample window this tool call would block until three more
+        // bags arrive — the hang this fix closes.
+        let runtime = Arc::new(RecordingStubRuntime::with_quiet_tap(vec![vec![0xAA, 0xBB]]));
+
+        let started = tokio::time::Instant::now();
+        let (status, body) = mcp_call(
+            runtime,
+            json!({
+                "jsonrpc": "2.0", "id": 11, "method": "tools/call",
+                "params": { "name": "tap", "arguments": { "channel": "cam/frame", "count": 4 } }
+            }),
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result"]["isError"], false, "body={body}");
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        let sample: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(sample["requested"], 4);
+        assert_eq!(
+            sample["received"], 1,
+            "a quiet channel returns the partial sample, not a full four"
+        );
+        assert!(
+            elapsed < TAP_SAMPLE_WINDOW * 4,
+            "tap must return within its sample window, not hang; took {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_call_logs_returns_bounded_window_sample() {
+        // Hermetic: PUBSUB is uninitialized here, so no event is delivered and
+        // the collection is bounded by the monotonic sample window, returning an
+        // empty sample rather than hanging. Live event delivery rides iceoryx2
+        // and is exercised by the engine's pubsub integration tests, not here.
+        let started = tokio::time::Instant::now();
+        let (status, body) = mcp_call(
+            Arc::new(RecordingStubRuntime::new()),
+            json!({
+                "jsonrpc": "2.0", "id": 12, "method": "tools/call",
+                "params": { "name": "logs", "arguments": { "count": 4 } }
+            }),
+        )
+        .await;
+        let elapsed = started.elapsed();
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result"]["isError"], false, "body={body}");
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        let sample: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(sample["requested"], 4);
+        assert_eq!(sample["received"], 0);
+        assert_eq!(
+            sample["window_ms"].as_u64().unwrap(),
+            LOGS_SAMPLE_WINDOW.as_millis() as u64
+        );
+        assert!(
+            elapsed < LOGS_SAMPLE_WINDOW * 4,
+            "logs must return within its sample window, not hang; took {elapsed:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_call_remove_processor_reaches_the_runtime() {
+        let runtime = Arc::new(RecordingStubRuntime::new());
+        let recorded_removed = runtime.recorded_removed_processors.clone();
+
+        let (status, body) = mcp_call(
+            runtime,
+            json!({
+                "jsonrpc": "2.0", "id": 13, "method": "tools/call",
+                "params": { "name": "remove_processor", "arguments": { "processor_id": "cam-1" } }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result"]["isError"], false, "body={body}");
+        assert_eq!(*recorded_removed.lock(), vec!["cam-1".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn tools_call_connect_reaches_the_runtime() {
+        let runtime = Arc::new(RecordingStubRuntime::new());
+        let recorded_connections = runtime.recorded_connections.clone();
+
+        let (status, body) = mcp_call(
+            runtime,
+            json!({
+                "jsonrpc": "2.0", "id": 14, "method": "tools/call",
+                "params": { "name": "connect", "arguments": {
+                    "from_processor": "cam", "from_port": "frame",
+                    "to_processor": "enc", "to_port": "video"
+                } }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result"]["isError"], false, "body={body}");
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        let outcome: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(outcome["link_id"], "mcp-link");
+        assert_eq!(
+            *recorded_connections.lock(),
+            vec![(
+                "cam".to_string(),
+                "frame".to_string(),
+                "enc".to_string(),
+                "video".to_string()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn tools_call_replace_processor_reaches_the_runtime() {
+        let runtime = Arc::new(RecordingStubRuntime::new());
+        let recorded_replaced = runtime.recorded_replaced_modules.clone();
+
+        let (status, body) = mcp_call(
+            runtime,
+            json!({
+                "jsonrpc": "2.0", "id": 15, "method": "tools/call",
+                "params": { "name": "replace_processor", "arguments": {
+                    "target_session_module": "@session/widget@*",
+                    "language": "python",
+                    "source": "class Widget:\n    pass\n"
+                } }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result"]["isError"], false, "body={body}");
+        let recorded = recorded_replaced.lock();
+        assert_eq!(
+            recorded.len(),
+            1,
+            "replace_processor must reach replace_processor_async exactly once"
+        );
+        assert!(
+            recorded[0].contains("widget"),
+            "recorded target module = {}",
+            recorded[0]
+        );
     }
 }
