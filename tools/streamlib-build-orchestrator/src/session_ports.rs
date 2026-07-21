@@ -19,12 +19,14 @@
 //! manifest; it never imports the extractor.
 //!
 //! EVERY extractor failure is a HARD [`BuildError`] — a session package must
-//! never register silent empty (unconnectable) ports. That includes
-//! [`DeriveError::ExtractorUnconfigured`] (the Deno extractor script couldn't
-//! be located off a link and with no env override): an off-link Deno live
-//! submit fails LOUDLY with a `run under streamlib link / set
-//! STREAMLIB_DENO_EXTRACTOR` hint, mirroring how Rust-from-source is refused,
-//! rather than shipping a portless processor.
+//! never register silent empty (unconnectable) ports. Off-link Deno extraction
+//! mirrors off-link Python: with no `STREAMLIB_DENO_EXTRACTOR` override and no
+//! active `streamlib link`, the extractor is the npm-published SDK's
+//! `extract_processors.ts` (pinned to this build's version), run over the staged
+//! `deno.json` — the direct analogue of running `.venv/bin/python -m
+//! streamlib.extract_processors` off-link. A resolution that genuinely fails
+//! (the `deno run npm:` fetch itself) surfaces as a hard [`BuildError`] rather
+//! than a portless registration, just as Rust-from-source is refused.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -126,13 +128,12 @@ fn rewrite_staged_manifest_ports(
 }
 
 /// Run one language's extractor for a live-submitted SESSION package. Every
-/// [`DeriveError`] — spawn / non-zero-exit / malformed-output AND
-/// [`DeriveError::ExtractorUnconfigured`] — is a HARD [`BuildError`]: a session
-/// submit must never register a silent portless (unconnectable) processor. An
-/// off-link Deno submit with no resolvable extractor therefore fails LOUDLY
-/// (the [`DeriveError::ExtractorUnconfigured`] Display carries the `run under
-/// streamlib link / set STREAMLIB_DENO_EXTRACTOR` hint), mirroring how
-/// Rust-from-source is explicitly refused, rather than shipping empty ports.
+/// [`DeriveError`] — spawn / non-zero-exit / malformed-output — is a HARD
+/// [`BuildError`]: a session submit must never register a silent portless
+/// (unconnectable) processor. Off-link Deno resolves to the npm-published
+/// extractor, so a genuine resolution failure surfaces as a non-zero `deno run`
+/// exit ([`DeriveError::ExtractorFailed`]), still a hard [`BuildError`], rather
+/// than shipping empty ports — the same refusal Rust-from-source gets.
 fn run_language_extractor(
     language: &'static str,
     language_dir: &Path,
@@ -380,16 +381,58 @@ fn build_failed(package: &str, detail: String) -> BuildError {
     }
 }
 
+/// How the Deno processor extractor for a staged session package is resolved,
+/// in priority order: an explicit `STREAMLIB_DENO_EXTRACTOR` override or the
+/// linked checkout's `extract_processors.ts` (both a local `.ts` script on disk)
+/// win; off-link with neither, the extractor is the npm-published SDK's
+/// `extract_processors.ts` pinned to this build's version — the exact mirror of
+/// how off-link Python runs `.venv/bin/python -m streamlib.extract_processors`.
+#[derive(Debug, PartialEq, Eq)]
+enum DenoExtractorSource {
+    /// A local `extract_processors.ts` on disk (the `STREAMLIB_DENO_EXTRACTOR`
+    /// override, or the active link's checkout).
+    LocalScript(PathBuf),
+    /// The npm-published `@tatolab/streamlib-deno@<sdk_version>/extract_processors.ts`,
+    /// resolved (off-link) through the staged `deno.json` import map.
+    PublishedNpm { sdk_version: String },
+}
+
+/// Resolve the Deno extractor source for a staged session package: the
+/// `STREAMLIB_DENO_EXTRACTOR` override wins, then the linked checkout's
+/// `extract_processors.ts` sibling, and off-link with neither the npm-published
+/// SDK pinned to `sdk_version`. Pure over its inputs so the resolution priority
+/// is unit-testable without mutating the process env.
+fn resolve_deno_extractor_source(
+    env_override: Option<PathBuf>,
+    link: Option<&ActiveBuildLink>,
+    sdk_version: &str,
+) -> DenoExtractorSource {
+    if let Some(script) = env_override {
+        return DenoExtractorSource::LocalScript(script);
+    }
+    if let Some(linked_script) = link.and_then(|l| {
+        l.deno_sdk_entrypoint_path
+            .parent()
+            .map(|dir| dir.join("extract_processors.ts"))
+    }) {
+        return DenoExtractorSource::LocalScript(linked_script);
+    }
+    DenoExtractorSource::PublishedNpm {
+        sdk_version: sdk_version.to_string(),
+    }
+}
+
 /// The build orchestrator's real [`SubprocessProcessorExtractor`]: spawns the
 /// staged package's provisioned venv Python (`.venv/bin/python -m
 /// streamlib.extract_processors <dir>`) and, for Deno, the SDK's
-/// `extract_processors.ts` resolved off the active link (or the
-/// `STREAMLIB_DENO_EXTRACTOR` override), running it against the staged
-/// `deno.json` import map so the source's `streamlib` specifier resolves.
+/// `extract_processors.ts` — resolved from the `STREAMLIB_DENO_EXTRACTOR`
+/// override, the active link's checkout, or (off-link) the npm-published SDK by
+/// pinned version — run against the staged `deno.json` import map so the
+/// source's `streamlib` specifier resolves.
 struct SessionSourceExtractor {
     venv_python: PathBuf,
     deno_binary: String,
-    deno_extractor_script: Option<PathBuf>,
+    deno_extractor_source: DenoExtractorSource,
     deno_config: PathBuf,
 }
 
@@ -400,23 +443,16 @@ impl SessionSourceExtractor {
         #[cfg(windows)]
         let venv_python = staged_dir.join(".venv").join("Scripts").join("python.exe");
 
-        // Resolve the Deno extractor script: an explicit override wins, else the
-        // linked checkout's Deno SDK entrypoint sibling. With neither, Deno
-        // extraction is unconfigured (the bounded fallback).
-        let deno_extractor_script = std::env::var_os("STREAMLIB_DENO_EXTRACTOR")
-            .map(PathBuf::from)
-            .or_else(|| {
-                link.and_then(|l| {
-                    l.deno_sdk_entrypoint_path
-                        .parent()
-                        .map(|dir| dir.join("extract_processors.ts"))
-                })
-            });
+        let deno_extractor_source = resolve_deno_extractor_source(
+            std::env::var_os("STREAMLIB_DENO_EXTRACTOR").map(PathBuf::from),
+            link,
+            env!("CARGO_PKG_VERSION"),
+        );
 
         Self {
             venv_python,
             deno_binary: std::env::var("STREAMLIB_DENO").unwrap_or_else(|_| "deno".to_string()),
-            deno_extractor_script,
+            deno_extractor_source,
             deno_config: staged_dir.join("deno.json"),
         }
     }
@@ -462,23 +498,23 @@ impl SubprocessProcessorExtractor for SessionSourceExtractor {
     }
 
     fn extract_deno(&self, package_dir: &Path) -> Result<String, DeriveError> {
-        let Some(script) = &self.deno_extractor_script else {
-            return Err(DeriveError::ExtractorUnconfigured {
-                language: "deno",
-                package: package_dir.to_path_buf(),
-                hint: "set STREAMLIB_DENO_EXTRACTOR to the Deno SDK's extract_processors.ts, \
-                       or run under an active `streamlib link`"
-                    .to_string(),
-            });
-        };
         let mut command = Command::new(&self.deno_binary);
         command
             .arg("run")
             .arg("--allow-all")
             .arg("--config")
-            .arg(&self.deno_config)
-            .arg(script)
-            .arg(package_dir);
+            .arg(&self.deno_config);
+        match &self.deno_extractor_source {
+            DenoExtractorSource::LocalScript(script) => {
+                command.arg(script);
+            }
+            DenoExtractorSource::PublishedNpm { sdk_version } => {
+                command.arg(format!(
+                    "npm:@tatolab/streamlib-deno@{sdk_version}/extract_processors.ts"
+                ));
+            }
+        }
+        command.arg(package_dir);
         run_extractor_command("deno", package_dir, command)
     }
 }
@@ -505,11 +541,11 @@ mod tests {
         fn extract_python(&self, _dir: &Path) -> Result<String, DeriveError> {
             self.python
                 .as_ref()
-                .map(|s| s.clone())
+                .map(String::clone)
                 .map_err(clone_derive_err)
         }
         fn extract_deno(&self, _dir: &Path) -> Result<String, DeriveError> {
-            self.deno.as_ref().map(|s| s.clone()).map_err(clone_derive_err)
+            self.deno.as_ref().map(String::clone).map_err(clone_derive_err)
         }
     }
 
@@ -637,13 +673,14 @@ mod tests {
     }
 
     #[test]
-    fn deno_unconfigured_is_a_hard_build_error_not_portless() {
-        // Contract lock: a staged Deno session package whose extractor script
-        // can't be located (no link, no env override) is a HARD build error, not
-        // a silent portless registration — an off-link Deno live submit fails
-        // LOUDLY rather than shipping an unconnectable processor. Mentally-revert
-        // the ExtractorUnconfigured→hard-error change and this yields an Ok with
-        // empty placeholder ports.
+    fn deno_extractor_error_hard_fails_the_splice() {
+        // Contract lock: a Deno extractor `DeriveError` (here an unconfigured
+        // extractor) hard-fails the whole splice when a `deno/` dir is staged —
+        // a session submit never registers silent portless (unconnectable) ports.
+        // Mentally-revert the DeriveError→hard-`BuildError` mapping and this
+        // yields an Ok with empty placeholder ports. (Off-link resolution itself
+        // now falls through to the npm-published extractor — see
+        // `deno_extractor_source_prefers_override_then_link_then_npm`.)
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("deno")).unwrap();
         std::fs::write(dir.path().join("deno").join("widget.ts"), "export class Widget {}\n")
@@ -666,6 +703,56 @@ mod tests {
         let err = rewrite_staged_manifest_ports(dir.path(), "session/widget", &extractor)
             .expect_err("an unconfigured deno extractor must hard-fail the session submit");
         assert!(matches!(err, BuildError::BuildFailed { .. }), "got {err:?}");
+    }
+
+    #[test]
+    fn deno_extractor_source_prefers_override_then_link_then_npm() {
+        // Resolution-priority lock for off-link Deno extraction: an explicit
+        // `STREAMLIB_DENO_EXTRACTOR` override wins, then the linked checkout's
+        // `extract_processors.ts` sibling, and off-link with neither the
+        // extractor is the npm-published SDK pinned to this build's version — the
+        // mirror of off-link Python's `.venv/bin/python -m
+        // streamlib.extract_processors`. Mentally-revert the npm tier and the
+        // `neither` case has no extractor (the old hard-refusal / portless gap).
+        let override_script = PathBuf::from("/opt/custom/extract_processors.ts");
+        assert_eq!(
+            resolve_deno_extractor_source(Some(override_script.clone()), None, "9.9.9"),
+            DenoExtractorSource::LocalScript(override_script),
+            "an explicit STREAMLIB_DENO_EXTRACTOR override must win",
+        );
+
+        let link = ActiveBuildLink {
+            checkout: PathBuf::from("/co"),
+            consumer_cargo_config: None,
+            python_sdk_path: PathBuf::from("/co/sdk/streamlib-python"),
+            deno_sdk_entrypoint_path: PathBuf::from("/co/sdk/streamlib-deno/mod.ts"),
+        };
+        assert_eq!(
+            resolve_deno_extractor_source(None, Some(&link), "9.9.9"),
+            DenoExtractorSource::LocalScript(PathBuf::from(
+                "/co/sdk/streamlib-deno/extract_processors.ts"
+            )),
+            "an active link must resolve the checkout's extract_processors.ts sibling",
+        );
+
+        assert_eq!(
+            resolve_deno_extractor_source(None, None, "9.9.9"),
+            DenoExtractorSource::PublishedNpm {
+                sdk_version: "9.9.9".to_string()
+            },
+            "off-link with no override must resolve the npm-published SDK by pinned version",
+        );
+
+        // The override outranks a present link.
+        assert_eq!(
+            resolve_deno_extractor_source(
+                Some(PathBuf::from("/env/extract_processors.ts")),
+                Some(&link),
+                "9.9.9"
+            ),
+            DenoExtractorSource::LocalScript(PathBuf::from("/env/extract_processors.ts")),
+            "the env override must outrank a present link",
+        );
     }
 
     #[test]
@@ -706,7 +793,9 @@ mod tests {
         let extractor = SessionSourceExtractor {
             venv_python: python3,
             deno_binary: "deno".to_string(),
-            deno_extractor_script: None,
+            deno_extractor_source: DenoExtractorSource::PublishedNpm {
+                sdk_version: env!("CARGO_PKG_VERSION").to_string(),
+            },
             deno_config: dir.path().join("deno.json"),
         };
 
