@@ -11,15 +11,13 @@ use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     http::StatusCode,
     response::IntoResponse,
-    routing::get,
+    routing::{get, post},
 };
 use serde::Deserialize;
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use std::sync::Arc;
-use streamlib::sdk::descriptors::{
-    ModuleIdent, Org, Package, SchemaIdent, SemVer, SemVerRange, TypeName,
-};
+use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::json_schema::{
@@ -29,10 +27,7 @@ use streamlib::sdk::json_schema::{
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
-use streamlib::sdk::runtime::{
-    RegisterProcessorReceipt, ReplaceProcessorFromSource, RuntimeOperations,
-    SubmittedProcessorSource,
-};
+use streamlib::sdk::runtime::{RuntimeOperations, SubmittedProcessorSource};
 use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 use utoipa::OpenApi;
@@ -42,9 +37,7 @@ use crate::auth::{ApiServerBearerToken, ForbiddenResponse, UnauthorizedResponse}
 use crate::state::{
     ApiDoc, AppState, CreateConnectionRequest, CreateProcessorRequest, ErrorResponse, IdResponse,
     ProcessorNotFoundResponse, ProcessorPortNotFoundResponse, RegisterProcessorSourceResponse,
-    RegisteredPortResponse, RegisteredProcessorPortsResponse, RegistrationOutcome,
-    ReplaceProcessorSourceRequest, SourceProcessorPortRole, SubmittedProcessorSourceRequest,
-    UnknownProcessorTypeResponse,
+    ReplaceProcessorSourceRequest, SubmittedProcessorSourceRequest, UnknownProcessorTypeResponse,
 };
 
 /// The relative WebSocket URL carrying this runtime's live event stream — the
@@ -79,6 +72,9 @@ pub(crate) fn build_router(
     // mechanism parity, not a trust boundary the tap itself imposes. Clone the
     // token before it is moved into the mutating-route middleware below.
     let tap_auth_token = auth_token.clone();
+    // The MCP endpoint exposes the same mutating ops as tools, so it is gated
+    // exactly like the mutating routes when auth is opted in.
+    let mcp_auth_token = auth_token.clone();
 
     let mut protected = OpenApiRouter::new()
         .routes(routes!(create_processor))
@@ -124,10 +120,19 @@ pub(crate) fn build_router(
         ));
     }
 
+    let mut mcp_router = Router::new().route("/mcp", post(crate::mcp::mcp_endpoint));
+    if let Some(mcp_auth_token) = mcp_auth_token {
+        mcp_router = mcp_router.route_layer(axum::middleware::from_fn_with_state(
+            mcp_auth_token,
+            crate::auth::require_bearer_token,
+        ));
+    }
+
     let router = router
         .route("/ws/events", get(websocket_handler))
         .route("/api/openapi.json", get(get_openapi_spec))
-        .merge(tap_router);
+        .merge(tap_router)
+        .merge(mcp_router);
 
     #[cfg(feature = "moq")]
     let router = router.route("/api/moq/catalog", get(get_moq_catalog));
@@ -240,58 +245,6 @@ pub(crate) async fn create_processor(
     }
 }
 
-/// Project a register/replace receipt's committed ports onto the wire
-/// response shape (`schema` rendered as `"any"` or `@org/package/Type@version`).
-fn project_receipt_ports(
-    receipt: &RegisterProcessorReceipt,
-) -> Vec<RegisteredProcessorPortsResponse> {
-    let project = |ports: &[streamlib::sdk::runtime::RegisteredPortReceipt]| {
-        ports
-            .iter()
-            .map(|port| RegisteredPortResponse {
-                name: port.name.clone(),
-                schema: port.schema.to_string(),
-                delivery_profile: port.delivery_profile.clone(),
-            })
-            .collect()
-    };
-    receipt
-        .processors
-        .iter()
-        .map(|processor| RegisteredProcessorPortsResponse {
-            name: processor.name.clone(),
-            inputs: project(&processor.inputs),
-            outputs: project(&processor.outputs),
-        })
-        .collect()
-}
-
-/// The concrete [`SemVer`] a session-module range pins. Session registrations
-/// mint an `Exact` range, so the other range shapes fall back to their lower
-/// bound and only a wildcard `Any` (never minted for a session) yields `None`.
-fn pinned_version(range: &SemVerRange) -> Option<SemVer> {
-    match range {
-        SemVerRange::Exact(version)
-        | SemVerRange::AtLeast(version)
-        | SemVerRange::Caret(version)
-        | SemVerRange::Tilde(version) => Some(*version),
-        SemVerRange::Any => None,
-    }
-}
-
-/// Build the instantiable [`SchemaIdent`] for a discovered processor `type_name`
-/// under the receipt's minted `@org/name@0.0.N` registration module.
-fn session_processor_ident(module: &ModuleIdent, type_name: &str) -> Option<SchemaIdent> {
-    let r#type = TypeName::new(type_name.to_string()).ok()?;
-    let version = pinned_version(&module.version)?;
-    Some(SchemaIdent::new(
-        module.org.clone(),
-        module.name.clone(),
-        r#type,
-        version,
-    ))
-}
-
 /// Map a register/replace-from-source [`Error`] onto an HTTP response. The
 /// source-submit refusals (unsupported language, missing name, un-mintable
 /// name, build failure, replace-target mismatch) surface as
@@ -381,119 +334,51 @@ pub(crate) async fn create_processor_source(
         requested_name: body.requested_name,
         processor_type_name: body.processor_type_name,
     };
-
-    let receipt = match state
-        .runtime
-        .register_processor_source_async(submitted)
-        .await
-    {
-        Ok(receipt) => receipt,
-        Err(error) => return source_submit_error_response(error),
-    };
-
-    let processors = project_receipt_ports(&receipt);
-    let module = receipt.module.to_string();
-
-    // Composite "app is code" server-side wiring: instantiate the first
-    // discovered processor, then apply the optional connect wirings.
-    let Some(first) = receipt.processors.first() else {
-        return (
-            StatusCode::OK,
-            Json(RegisterProcessorSourceResponse {
-                module,
-                processors,
-                processor_id: None,
-                state: RegistrationOutcome::Registered,
-                connections: Vec::new(),
-                events_url: RUNTIME_EVENTS_URL,
-            }),
-        )
-            .into_response();
-    };
-
-    let Some(ident) = session_processor_ident(&receipt.module, &first.name) else {
-        return (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ErrorResponse {
-                error: format!(
-                    "registered module `{module}` yielded an uninstantiable processor identity for type `{}`",
-                    first.name
-                ),
-            }),
-        )
-            .into_response();
-    };
-
     let config = body.config.unwrap_or_else(|| serde_json::json!({}));
-    let processor_id = match state
-        .runtime
-        .add_processor_async(ProcessorSpec::new(ident, config))
-        .await
+
+    match crate::ops::submit_processor_source(&state.runtime, submitted, config, body.connect).await
     {
-        Ok(id) => id,
-        Err(Error::UnknownProcessorType { ident: _ }) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(ErrorResponse {
-                    error: format!(
-                        "registered module `{module}` did not expose processor type `{}` to the runtime",
-                        first.name
-                    ),
-                }),
-            )
-                .into_response();
-        }
-        Err(error) => return source_submit_error_response(error),
-    };
-
-    let mut created_links = Vec::with_capacity(body.connect.len());
-    for wiring in body.connect {
-        let (from, to) = match wiring.role {
-            SourceProcessorPortRole::Output => (
-                OutputLinkPortRef::new(processor_id.clone(), wiring.local_port),
-                InputLinkPortRef::new(wiring.peer_processor, wiring.peer_port),
-            ),
-            SourceProcessorPortRole::Input => (
-                OutputLinkPortRef::new(wiring.peer_processor, wiring.peer_port),
-                InputLinkPortRef::new(processor_id.clone(), wiring.local_port),
-            ),
-        };
-        match state.runtime.connect_async(from, to).await {
-            Ok(link_id) => created_links.push(link_id),
-            Err(error) => {
-                // Transactional wiring: a failed connect rolls the whole submit
-                // back — disconnect the links created earlier in this call, then
-                // remove the just-instantiated processor — so the endpoint is
-                // all-or-nothing and leaves no orphan node the caller can't reach.
-                for created_link_id in &created_links {
-                    let _ = state
-                        .runtime
-                        .disconnect_async(created_link_id.clone())
-                        .await;
-                }
-                let _ = state
-                    .runtime
-                    .remove_processor_async(processor_id.clone())
-                    .await;
-                return connect_error_response(error);
-            }
-        }
+        Ok(outcome) => submitted_source_ok_response(outcome).into_response(),
+        Err(error) => submit_source_error_response(error),
     }
+}
 
-    let connections = created_links.iter().map(|id| id.to_string()).collect();
-
+/// Render a successful [`crate::ops::SubmittedSourceOutcome`] as the shared
+/// `200` body, stamping in the HTTP-only `events_url`.
+fn submitted_source_ok_response(
+    outcome: crate::ops::SubmittedSourceOutcome,
+) -> (StatusCode, Json<RegisterProcessorSourceResponse>) {
     (
         StatusCode::OK,
         Json(RegisterProcessorSourceResponse {
-            module,
-            processors,
-            processor_id: Some(processor_id.to_string()),
-            state: RegistrationOutcome::Added,
-            connections,
+            module: outcome.module,
+            processors: outcome.processors,
+            processor_id: outcome.processor_id,
+            state: outcome.state,
+            connections: outcome.connections,
             events_url: RUNTIME_EVENTS_URL,
         }),
     )
-        .into_response()
+}
+
+/// Map a staged source-submit failure onto its HTTP response, preserving the
+/// per-stage status codes: register / instantiate runtime errors route through
+/// [`source_submit_error_response`] (422 / 500 / 400), the pre-composed
+/// unprocessable messages are 422, and a connect failure routes through
+/// [`connect_error_response`] (404 / 422 / 400).
+fn submit_source_error_response(error: crate::ops::SubmitSourceError) -> axum::response::Response {
+    use crate::ops::SubmitSourceError;
+    match error {
+        SubmitSourceError::Register(error) | SubmitSourceError::Instantiate(error) => {
+            source_submit_error_response(error)
+        }
+        SubmitSourceError::Unprocessable(message) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ErrorResponse { error: message }),
+        )
+            .into_response(),
+        SubmitSourceError::Connect(error) => connect_error_response(error),
+    }
 }
 
 #[utoipa::path(
@@ -514,50 +399,27 @@ pub(crate) async fn replace_processor_source(
     State(state): State<AppState>,
     Json(body): Json<ReplaceProcessorSourceRequest>,
 ) -> axum::response::Response {
-    use serde::{Deserialize, de::IntoDeserializer};
-    let target_session_module: ModuleIdent = match ModuleIdent::deserialize(
-        body.target_session_module.as_str().into_deserializer(),
-    ) {
-        Ok(module) => module,
-        Err(error) => {
-            let error: serde::de::value::Error = error;
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: format!(
-                        "target_session_module `{}` is not a valid `@org/name@<range>` module ident: {error}",
-                        body.target_session_module
-                    ),
-                }),
-            )
-                .into_response();
-        }
+    let replacement = SubmittedProcessorSource {
+        source_text: body.source,
+        language: body.language.into(),
+        requested_name: body.requested_name,
+        processor_type_name: body.processor_type_name,
     };
 
-    let request = ReplaceProcessorFromSource {
-        target_session_module,
-        replacement: SubmittedProcessorSource {
-            source_text: body.source,
-            language: body.language.into(),
-            requested_name: body.requested_name,
-            processor_type_name: body.processor_type_name,
-        },
-    };
-
-    match state.runtime.replace_processor_async(request).await {
-        Ok(receipt) => (
-            StatusCode::OK,
-            Json(RegisterProcessorSourceResponse {
-                module: receipt.module.to_string(),
-                processors: project_receipt_ports(&receipt),
-                processor_id: None,
-                state: RegistrationOutcome::Registered,
-                connections: Vec::new(),
-                events_url: RUNTIME_EVENTS_URL,
-            }),
+    match crate::ops::replace_processor_source(
+        &state.runtime,
+        &body.target_session_module,
+        replacement,
+    )
+    .await
+    {
+        Ok(outcome) => submitted_source_ok_response(outcome).into_response(),
+        Err(crate::ops::ReplaceSourceError::MalformedTargetModule(message)) => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse { error: message }),
         )
             .into_response(),
-        Err(error) => source_submit_error_response(error),
+        Err(crate::ops::ReplaceSourceError::Replace(error)) => source_submit_error_response(error),
     }
 }
 
@@ -1100,6 +962,13 @@ mod router_auth_gate_tests {
             _request: ReplaceProcessorFromSource,
         ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
             Box::pin(async { Ok(stub_register_receipt()) })
+        }
+        fn tap_async(
+            &self,
+            channel: String,
+            _count: Option<usize>,
+        ) -> BoxFuture<'_, Result<streamlib::sdk::runtime::TapSubscription>> {
+            Box::pin(async move { Err(Error::TapChannelNotFound(channel)) })
         }
         fn add_processor(&self, _spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
             Ok(self.instance_id.clone())
