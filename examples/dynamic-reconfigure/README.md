@@ -5,9 +5,11 @@ then splices a `SimplePassthrough` processor into and out of the middle of the
 **running** graph N times, then auto-exits — no restart between cycles.
 
 This is the manual, visual counterpart to the headless regression test at
-`runtime/streamlib-engine/tests/dynamic_reconfigure_live_splice.rs`, which locks
-the same behavior (live `add_processor` / `remove_processor` against a `start()`ed
-runtime) without a window.
+`runtime/streamlib-engine/tests/dynamic_reconfigure_live_splice.rs`. That test locks
+live `add_processor` / `remove_processor` against a `start()`ed runtime **only**,
+without a window. The live `connect` / `disconnect` rewire this example performs
+(camera → passthrough → display and back) is **not** covered headless — it is
+verified visually here and via `/verify-live`.
 
 ## The model this example teaches
 
@@ -28,9 +30,10 @@ constructs/destroys the processor live.
 
 ## What you see
 
-`SimplePassthrough` is a `manual` one-shot fixture — it forwards the single frame
-present when it starts, not a continuous effect. So while it is spliced in, the
-display **holds** that frame; when it is spliced back out, live camera video
+While the passthrough is spliced in, live frames stop arriving at the display, so
+the display **retains its last frame** — `SimplePassthrough` is a `manual` one-shot
+fixture, not a continuous effect, and does not pump frames through on its own. When
+it is spliced back out and `camera → display` is restored, live camera video
 resumes. The **live → held → live** transition each cycle is the visible proof the
 reroute took effect on the running graph.
 

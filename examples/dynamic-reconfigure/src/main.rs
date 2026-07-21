@@ -1,38 +1,14 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Dynamic Reconfigure — live camera→display graph rewiring
+//! Dynamic Reconfigure — live camera→display graph rewiring.
 //!
-//! Starts a `@tatolab/camera` → `@tatolab/display` pipeline, then repeatedly
-//! reconfigures the graph WHILE IT RUNS: it splices a `SimplePassthrough`
-//! processor into the middle of the live graph (camera → passthrough → display)
-//! and splices it back out (camera → display), N times, then auto-exits.
-//!
-//! There is no restart between reconfigure cycles — every `add_processor`,
-//! `connect`, `disconnect`, and `remove_processor` call lands against the same
-//! already-`start()`ed runtime, driven from the `wait_for_signal_with` callback.
-//! This is the manual, visual counterpart to the headless regression test in
+//! Splices a `SimplePassthrough` in and out of the middle of a running
+//! `@tatolab/camera` → `@tatolab/display` graph N times against the same
+//! already-`start()`ed runtime, then auto-exits. Visual counterpart to the
+//! headless regression test in
 //! `runtime/streamlib-engine/tests/dynamic_reconfigure_live_splice.rs`.
-//!
-//! ## What you see
-//!
-//! `SimplePassthrough` forwards the single frame present when it starts (it is a
-//! `manual` one-shot fixture, not a continuous effect), so while it is spliced
-//! in the display HOLDS that frame; when it is spliced back out the display
-//! resumes live camera video. The live → held → live transition each cycle is
-//! the visible proof the reroute took effect on the running graph.
-//!
-//! ## Visual audit (headless / CI)
-//!
-//! Set `STREAMLIB_DISPLAY_PNG_SAMPLE_DIR` (and optionally
-//! `STREAMLIB_DISPLAY_PNG_SAMPLE_EVERY`, default every 30 frames) before running
-//! and the display samples frames to PNG throughout, so the pre/mid/post
-//! reconfigure frames can be inspected without a window. See `/verify-live`.
-//!
-//! Tunables (all optional):
-//! - `STREAMLIB_RECONFIGURE_CYCLES`   splice in/out this many times (default 3)
-//! - `STREAMLIB_RECONFIGURE_DWELL_MS` monotonic dwell per phase   (default 2500)
-//! - `STREAMLIB_CAMERA_DEVICE`        camera device id (else the camera default)
+//! See `README.md` for what you see, the visual-audit env vars, and tunables.
 
 use std::ops::ControlFlow;
 use std::time::{Duration, Instant};
@@ -110,7 +86,7 @@ fn main() -> Result<()> {
     let mut phase_deadline = Instant::now() + dwell;
 
     // One phase transition. Returns Break once every cycle has run.
-    let mut advance = move |rt: &Runner| -> Result<ControlFlow<()>> {
+    let mut advance = move |started_runtime: &Runner| -> Result<ControlFlow<()>> {
         if Instant::now() < phase_deadline {
             return Ok(ControlFlow::Continue(()));
         }
@@ -122,17 +98,17 @@ fn main() -> Result<()> {
                 let link = direct_link
                     .take()
                     .expect("direct link present while un-spliced");
-                rt.disconnect(&link)?;
+                started_runtime.disconnect(&link)?;
 
-                let passthrough = rt.add_processor(ProcessorSpec::new(
+                let passthrough = started_runtime.add_processor(ProcessorSpec::new(
                     processor_type_ref!("tatolab", "debug-utilities", "SimplePassthrough"),
                     serde_json::json!({ "scale": 1.0 }),
                 ))?;
-                let cam_to_pass = rt.connect(
+                let cam_to_pass = started_runtime.connect(
                     OutputLinkPortRef::new(&camera, "video"),
                     InputLinkPortRef::new(&passthrough, "input"),
                 )?;
-                let pass_to_disp = rt.connect(
+                let pass_to_disp = started_runtime.connect(
                     OutputLinkPortRef::new(&passthrough, "output"),
                     InputLinkPortRef::new(&display, "video"),
                 )?;
@@ -141,10 +117,10 @@ fn main() -> Result<()> {
             Some((passthrough, cam_to_pass, pass_to_disp)) => {
                 // Splice OUT: restore camera → display direct, live.
                 println!("  ↳ cycle {}/{}: splicing passthrough OUT", cycles_done + 1, total_cycles);
-                rt.disconnect(&cam_to_pass)?;
-                rt.disconnect(&pass_to_disp)?;
-                rt.remove_processor(&passthrough)?;
-                direct_link = Some(rt.connect(
+                started_runtime.disconnect(&cam_to_pass)?;
+                started_runtime.disconnect(&pass_to_disp)?;
+                started_runtime.remove_processor(&passthrough)?;
+                direct_link = Some(started_runtime.connect(
                     OutputLinkPortRef::new(&camera, "video"),
                     InputLinkPortRef::new(&display, "video"),
                 )?);
@@ -160,7 +136,7 @@ fn main() -> Result<()> {
         Ok(ControlFlow::Continue(()))
     };
 
-    runtime.wait_for_signal_with(|rt| match advance(rt) {
+    runtime.wait_for_signal_with(|started_runtime| match advance(started_runtime) {
         Ok(flow) => flow,
         Err(e) => {
             println!("✗ reconfigure step failed: {e}");
