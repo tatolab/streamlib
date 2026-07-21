@@ -137,27 +137,48 @@ impl RuntimeOpsShim {
         }
     }
 
-    /// Same as [`submit`] but discards the response payload.
-    async fn submit_unit<F>(&self, request: F) -> Result<()>
+    /// Encode a single-payload request, submit it through `dispatch` (which
+    /// invokes the matching one-buffer `RuntimeOpsVTable` slot), and decode the
+    /// response as `Resp`. Owns the whole encode → early-error-future → submit
+    /// dance shared by every one-payload op; a msgpack encode failure returns an
+    /// immediately-ready error future without touching the vtable. `connect`
+    /// (two payloads) and `to_json` (none) call [`Self::submit`] directly.
+    fn submit_msgpack<Req, Resp>(
+        &self,
+        op_name: &'static str,
+        request: Req,
+        dispatch: fn(
+            *const RuntimeOpsVTable,
+            *const c_void,
+            *const u8,
+            usize,
+            RuntimeOpCompletionCallback,
+            *mut c_void,
+        ),
+    ) -> BoxFuture<'_, Result<Resp>>
     where
-        F: FnOnce(*const c_void, *const RuntimeOpsVTable, RuntimeOpCompletionCallback, *mut c_void)
-            + Send
-            + 'static,
+        Req: serde::Serialize,
+        Resp: serde::de::DeserializeOwned + Send + 'static,
     {
-        let (tx, rx) = tokio::sync::oneshot::channel::<(i32, Vec<u8>)>();
-        let sender_box: Box<tokio::sync::oneshot::Sender<(i32, Vec<u8>)>> = Box::new(tx);
-        let user_data = Box::into_raw(sender_box) as *mut c_void;
-        let completion: RuntimeOpCompletionCallback = runtime_ops_completion_trampoline;
-        request(self.handle, self.vtable, completion, user_data);
-        let (status, payload) = rx
-            .await
-            .map_err(|_| Error::Runtime("runtime-ops completion dropped".into()))?;
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&payload).into_owned();
-            Err(Error::Runtime(msg))
-        }
+        let bytes = match rmp_serde::to_vec_named(&request) {
+            Ok(b) => b,
+            Err(e) => {
+                let err = Err(Error::Config(format!(
+                    "RuntimeOpsShim::{op_name}: request msgpack encode failed: {e}"
+                )));
+                return Box::pin(async move { err });
+            }
+        };
+        Box::pin(
+            self.submit(move |handle, vtable, completion, user_data| {
+                dispatch(vtable, handle, bytes.as_ptr(), bytes.len(), completion, user_data);
+                // `bytes` is moved into the closure and dropped at end-of-call;
+                // the host copies the buffer synchronously before its first
+                // await, per the vtable "valid for the duration of the call"
+                // contract.
+                drop(bytes);
+            }),
+        )
     }
 }
 
@@ -196,56 +217,22 @@ unsafe extern "C" fn runtime_ops_completion_trampoline(
 
 impl RuntimeOperations for RuntimeOpsShim {
     fn add_processor_async(&self, spec: ProcessorSpec) -> BoxFuture<'_, Result<ProcessorUniqueId>> {
-        let bytes = match rmp_serde::to_vec_named(&spec) {
-            Ok(b) => b,
-            Err(e) => {
-                let err = Err(Error::Config(format!(
-                    "RuntimeOpsShim::add_processor_async: spec msgpack encode failed: {e}"
-                )));
-                return Box::pin(async move { err });
-            }
-        };
-        Box::pin(
-            self.submit(move |handle, vtable, completion, user_data| unsafe {
-                ((*vtable).add_processor)(
-                    handle,
-                    bytes.as_ptr(),
-                    bytes.len(),
-                    completion,
-                    user_data,
-                );
-                // Hold bytes alive until the host has consumed them. The
-                // vtable contract is "valid for the duration of the call"
-                // — the spawned host task copies the bytes synchronously
-                // before its first await, so it's safe to drop bytes when
-                // this closure returns. `bytes` is moved into the closure,
-                // so it's dropped at end-of-call here.
-                drop(bytes);
-            }),
+        self.submit_msgpack(
+            "add_processor_async",
+            spec,
+            |vtable, handle, ptr, len, completion, user_data| unsafe {
+                ((*vtable).add_processor)(handle, ptr, len, completion, user_data)
+            },
         )
     }
 
     fn remove_processor_async(&self, processor_id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>> {
-        let bytes = match rmp_serde::to_vec_named(&processor_id) {
-            Ok(b) => b,
-            Err(e) => {
-                let err = Err(Error::Config(format!(
-                    "RuntimeOpsShim::remove_processor_async: id msgpack encode failed: {e}"
-                )));
-                return Box::pin(async move { err });
-            }
-        };
-        Box::pin(
-            self.submit_unit(move |handle, vtable, completion, user_data| unsafe {
-                ((*vtable).remove_processor)(
-                    handle,
-                    bytes.as_ptr(),
-                    bytes.len(),
-                    completion,
-                    user_data,
-                );
-                drop(bytes);
-            }),
+        self.submit_msgpack(
+            "remove_processor_async",
+            processor_id,
+            |vtable, handle, ptr, len, completion, user_data| unsafe {
+                ((*vtable).remove_processor)(handle, ptr, len, completion, user_data)
+            },
         )
     }
 
@@ -290,20 +277,12 @@ impl RuntimeOperations for RuntimeOpsShim {
     }
 
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
-        let bytes = match rmp_serde::to_vec_named(&link_id) {
-            Ok(b) => b,
-            Err(e) => {
-                let err = Err(Error::Config(format!(
-                    "RuntimeOpsShim::disconnect_async: link_id msgpack encode failed: {e}"
-                )));
-                return Box::pin(async move { err });
-            }
-        };
-        Box::pin(
-            self.submit_unit(move |handle, vtable, completion, user_data| unsafe {
-                ((*vtable).disconnect)(handle, bytes.as_ptr(), bytes.len(), completion, user_data);
-                drop(bytes);
-            }),
+        self.submit_msgpack(
+            "disconnect_async",
+            link_id,
+            |vtable, handle, ptr, len, completion, user_data| unsafe {
+                ((*vtable).disconnect)(handle, ptr, len, completion, user_data)
+            },
         )
     }
 
@@ -317,26 +296,12 @@ impl RuntimeOperations for RuntimeOpsShim {
         &self,
         request: SubmittedProcessorSource,
     ) -> BoxFuture<'_, Result<ModuleIdent>> {
-        let bytes = match rmp_serde::to_vec_named(&request) {
-            Ok(b) => b,
-            Err(e) => {
-                let err = Err(Error::Config(format!(
-                    "RuntimeOpsShim::register_processor_source_async: request msgpack encode failed: {e}"
-                )));
-                return Box::pin(async move { err });
-            }
-        };
-        Box::pin(
-            self.submit(move |handle, vtable, completion, user_data| unsafe {
-                ((*vtable).register_processor_source)(
-                    handle,
-                    bytes.as_ptr(),
-                    bytes.len(),
-                    completion,
-                    user_data,
-                );
-                drop(bytes);
-            }),
+        self.submit_msgpack(
+            "register_processor_source_async",
+            request,
+            |vtable, handle, ptr, len, completion, user_data| unsafe {
+                ((*vtable).register_processor_source)(handle, ptr, len, completion, user_data)
+            },
         )
     }
 
@@ -344,26 +309,12 @@ impl RuntimeOperations for RuntimeOpsShim {
         &self,
         request: ReplaceProcessorFromSource,
     ) -> BoxFuture<'_, Result<ModuleIdent>> {
-        let bytes = match rmp_serde::to_vec_named(&request) {
-            Ok(b) => b,
-            Err(e) => {
-                let err = Err(Error::Config(format!(
-                    "RuntimeOpsShim::replace_processor_async: request msgpack encode failed: {e}"
-                )));
-                return Box::pin(async move { err });
-            }
-        };
-        Box::pin(
-            self.submit(move |handle, vtable, completion, user_data| unsafe {
-                ((*vtable).replace_processor)(
-                    handle,
-                    bytes.as_ptr(),
-                    bytes.len(),
-                    completion,
-                    user_data,
-                );
-                drop(bytes);
-            }),
+        self.submit_msgpack(
+            "replace_processor_async",
+            request,
+            |vtable, handle, ptr, len, completion, user_data| unsafe {
+                ((*vtable).replace_processor)(handle, ptr, len, completion, user_data)
+            },
         )
     }
 
