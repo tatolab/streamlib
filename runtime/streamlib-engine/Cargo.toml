@@ -228,11 +228,5 @@ targets = ["x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows
 # CI lint (`cargo xtask check-no-streamlib-metadata`, #402) rejects
 # re-introduction of this block.
 
-# MCP Server Binary removed - needs redesign for Phase 1
-# [[bin]]
-# name = "streamlib-mcp"
-# path = "src/bin/streamlib-mcp.rs"
-# required-features = ["mcp"]
-
 [lints]
 workspace = true
