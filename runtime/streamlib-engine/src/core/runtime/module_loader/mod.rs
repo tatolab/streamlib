@@ -61,6 +61,7 @@ use tokio::sync::{broadcast, mpsc};
 
 use super::Runner;
 use super::runtime::TokioRuntimeVariant;
+use crate::core::context::IsolationTier;
 use crate::iceoryx2::Iceoryx2Node;
 
 mod acquire;
@@ -798,6 +799,22 @@ impl Runner {
     /// wires a TTY prompt here. Process-wide.
     pub fn set_acquire_confirmation_handler(handler: Option<AcquireConfirmationHandler>) {
         acquire::set_acquire_confirmation_handler(handler);
+    }
+
+    /// Set the process-wide isolation tier assigned to `@session/…`
+    /// separately-built (cdylib-resident) modules. **Process-wide** (last write
+    /// wins), like [`Self::set_acquire_on_reference_policy`]. `None` clears the
+    /// override, restoring the `STREAMLIB_SESSION_ISOLATION_TIER` env /
+    /// [`IsolationTier::Untrusted`] default.
+    ///
+    /// `@session` submitted-source code is untrusted by default: it never mints
+    /// an in-process `RuntimeContextFullAccess`. A host running its own
+    /// in-app-authored session processors in-process (the dev flow) opts them
+    /// into [`IsolationTier::TrustedInstalled`] here. Installed packages and
+    /// host-binary-compiled processors are trusted by construction and are
+    /// unaffected by this knob.
+    pub fn set_session_isolation_tier(tier: Option<IsolationTier>) {
+        crate::core::context::isolation::set_session_isolation_tier(tier);
     }
 
     /// Begin a lazy load of the package that provides `processor_type`, when

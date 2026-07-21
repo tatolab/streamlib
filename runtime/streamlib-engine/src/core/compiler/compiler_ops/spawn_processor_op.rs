@@ -10,7 +10,7 @@ use parking_lot::{Mutex, RwLock};
 
 use crate::core::compiler::scheduling::{SchedulingStrategy, scheduling_strategy_for_processor};
 use crate::core::context::{
-    GpuContext, GpuContextLimitedAccess, RuntimeContext, RuntimeContextFullAccess,
+    GpuContext, GpuContextLimitedAccess, IsolationTier, RuntimeContext, RuntimeContextFullAccess,
 };
 use crate::core::descriptors::ProcessorRuntime;
 use crate::core::error::{Error, Result};
@@ -157,6 +157,25 @@ fn spawn_dedicated_thread(
     };
 
     let processor_arc_clone = Arc::clone(&processor_arc);
+
+    // Derive the isolation trust tier by construction from module provenance:
+    // a @session module that was separately built + dlopened (cdylib-resident)
+    // is untrusted; host-compiled code and installed packages are trusted. The
+    // tier gates every FullAccess mint on this thread (setup / start / stop /
+    // teardown). Fail closed (untrusted) if the node vanished from the graph.
+    let isolation_tier = {
+        let graph = graph_arc.read();
+        let org = graph
+            .traversal()
+            .v(&processor_id)
+            .first()
+            .map(|n| n.processor_type().org.clone());
+        let cdylib_resident = processor_arc.lock().is_cdylib_resident();
+        match org {
+            Some(org) => IsolationTier::for_processor(&org, cdylib_resident),
+            None => IsolationTier::Untrusted,
+        }
+    };
 
     // Generous 8 MB stack — processors run arbitrary codec / plugin code
     // with deep call stacks. IPC payloads are slice-based (`[u8]`) in
@@ -324,7 +343,24 @@ fn spawn_dedicated_thread(
                 .with_pause_gate(pause_gate_inner.clone());
             {
                 let tokio_handle = runtime_ctx_clone.tokio_handle();
-                let full_ctx = RuntimeContextFullAccess::new(&processor_context);
+                // The trust-axis moat: an untrusted tier yields no
+                // `FullAccessGrant`, so an in-process FullAccess context is
+                // unrepresentable here. Refuse to run privileged setup()
+                // in-process — the untrusted processor's privileged lifecycle
+                // belongs behind the subprocess sandbox (isolation enforcement).
+                let Some(full_access_grant) = isolation_tier.grant_full_access() else {
+                    tracing::warn!(
+                        "[{}] Untrusted isolation tier ({}): in-process FullAccess denied by \
+                         construction — refusing privileged setup() (belongs behind the \
+                         subprocess sandbox)",
+                        proc_id_clone,
+                        isolation_tier.as_str(),
+                    );
+                    *state_arc.lock() = ProcessorState::Error;
+                    return;
+                };
+                let full_ctx =
+                    RuntimeContextFullAccess::new(&processor_context, full_access_grant);
                 let mut guard = processor_arc_clone.lock();
 
                 tracing::info!(
@@ -368,6 +404,7 @@ fn spawn_dedicated_thread(
                 pause_gate_inner,
                 exec_config,
                 processor_context,
+                isolation_tier,
             );
         })
         .map_err(|e| Error::Runtime(format!("Failed to spawn thread: {}", e)))?;

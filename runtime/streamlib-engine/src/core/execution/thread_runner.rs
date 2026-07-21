@@ -14,7 +14,7 @@ use std::os::fd::OwnedFd;
 use parking_lot::Mutex;
 
 use crate::core::RuntimeContext;
-use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use crate::core::context::{IsolationTier, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
 use crate::core::graph::ProcessorUniqueId;
 use crate::core::processors::{ProcessorInstance, ProcessorState};
@@ -27,7 +27,7 @@ const PAUSE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_mill
 const NO_WAITER_FALLBACK_SLEEP: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Run the processor thread main loop based on execution mode.
-#[tracing::instrument(name = "processor.lifecycle", skip(processor, shutdown_rx, shutdown_eventfd, state, pause_gate, exec_config, runtime_ctx), fields(processor_id = %id))]
+#[tracing::instrument(name = "processor.lifecycle", skip(processor, shutdown_rx, shutdown_eventfd, state, pause_gate, exec_config, runtime_ctx), fields(processor_id = %id, isolation_tier = isolation_tier.as_str()))]
 pub fn run_processor_loop(
     id: ProcessorUniqueId,
     processor: Arc<Mutex<ProcessorInstance>>,
@@ -37,6 +37,7 @@ pub fn run_processor_loop(
     pause_gate: Arc<AtomicBool>,
     exec_config: ExecutionConfig,
     runtime_ctx: RuntimeContext,
+    isolation_tier: IsolationTier,
 ) {
     tracing::info!(
         "[{}] Thread started ({})",
@@ -67,21 +68,41 @@ pub fn run_processor_loop(
             );
         }
         ProcessExecution::Manual => {
-            run_manual_mode(&id, &processor, &shutdown_rx, &pause_gate, &runtime_ctx);
+            run_manual_mode(
+                &id,
+                &processor,
+                &shutdown_rx,
+                &pause_gate,
+                &runtime_ctx,
+                isolation_tier,
+            );
         }
     }
 
-    // Teardown — privileged ctx.
-    tracing::info!("[{}] Invoking teardown()...", id);
-    {
-        let full_ctx = RuntimeContextFullAccess::new(&runtime_ctx);
-        let mut guard = processor.lock();
-        // block_on is now internal to ProcessorInstance::teardown's
-        // dispatch (LegacyDyn variant) or the cdylib's vtable
-        // wrapper (VTable variant).
-        match guard.teardown(&full_ctx) {
-            Ok(()) => tracing::info!("[{}] teardown() completed successfully", id),
-            Err(e) => tracing::warn!("[{}] teardown() failed: {}", id, e),
+    // Teardown — privileged ctx. Gated by the isolation trust axis: an
+    // untrusted tier yields no `FullAccessGrant`, so no in-process FullAccess
+    // teardown runs (privileged lifecycle belongs behind the subprocess
+    // sandbox). An untrusted processor never ran its setup in-process either,
+    // so there is nothing to tear down here.
+    match isolation_tier.grant_full_access() {
+        Some(full_access_grant) => {
+            tracing::info!("[{}] Invoking teardown()...", id);
+            let full_ctx = RuntimeContextFullAccess::new(&runtime_ctx, full_access_grant);
+            let mut guard = processor.lock();
+            // block_on is now internal to ProcessorInstance::teardown's
+            // dispatch (LegacyDyn variant) or the cdylib's vtable
+            // wrapper (VTable variant).
+            match guard.teardown(&full_ctx) {
+                Ok(()) => tracing::info!("[{}] teardown() completed successfully", id),
+                Err(e) => tracing::warn!("[{}] teardown() failed: {}", id, e),
+            }
+        }
+        None => {
+            tracing::debug!(
+                "[{}] Untrusted isolation tier ({}): skipping in-process teardown()",
+                id,
+                isolation_tier.as_str(),
+            );
         }
     }
 
@@ -401,13 +422,27 @@ fn run_manual_mode(
     shutdown_rx: &crossbeam_channel::Receiver<()>,
     pause_gate: &Arc<AtomicBool>,
     runtime_ctx: &RuntimeContext,
+    isolation_tier: IsolationTier,
 ) {
     // Call start() - for callback-driven processors this returns immediately
     // after registering callbacks with OS (AVFoundation, CoreAudio, CVDisplayLink).
-    // start() is resource-lifecycle, so it receives full-access ctx.
+    // start() is resource-lifecycle, so it receives full-access ctx. Gated by
+    // the isolation trust axis: an untrusted tier yields no `FullAccessGrant`,
+    // so an in-process FullAccess start() is unrepresentable — the untrusted
+    // processor's privileged lifecycle belongs behind the subprocess sandbox.
+    let Some(start_grant) = isolation_tier.grant_full_access() else {
+        tracing::warn!(
+            "[{}] Untrusted isolation tier ({}): in-process FullAccess denied by \
+             construction — refusing privileged start() (belongs behind the \
+             subprocess sandbox)",
+            id,
+            isolation_tier.as_str(),
+        );
+        return;
+    };
     tracing::info!("[{}] Invoking start()...", id);
     {
-        let full_ctx = RuntimeContextFullAccess::new(runtime_ctx);
+        let full_ctx = RuntimeContextFullAccess::new(runtime_ctx, start_grant);
         let mut guard = processor.lock();
         match guard.start(&full_ctx) {
             Ok(()) => tracing::info!("[{}] start() completed successfully", id),
@@ -443,14 +478,26 @@ fn run_manual_mode(
         std::thread::sleep(std::time::Duration::from_millis(100));
     }
 
-    // Call stop() - stops callbacks and waits for in-flight work. Privileged ctx.
-    tracing::info!("[{}] Invoking stop()...", id);
-    {
-        let full_ctx = RuntimeContextFullAccess::new(runtime_ctx);
-        let mut guard = processor.lock();
-        match guard.stop(&full_ctx) {
-            Ok(()) => tracing::info!("[{}] stop() completed successfully", id),
-            Err(e) => tracing::warn!("[{}] stop() failed: {}", id, e),
+    // Call stop() - stops callbacks and waits for in-flight work. Privileged
+    // ctx. Reuse the same trust-axis gate as start(): reaching here means
+    // start() ran under a trusted grant, so a fresh grant is available for the
+    // symmetric stop().
+    match isolation_tier.grant_full_access() {
+        Some(stop_grant) => {
+            tracing::info!("[{}] Invoking stop()...", id);
+            let full_ctx = RuntimeContextFullAccess::new(runtime_ctx, stop_grant);
+            let mut guard = processor.lock();
+            match guard.stop(&full_ctx) {
+                Ok(()) => tracing::info!("[{}] stop() completed successfully", id),
+                Err(e) => tracing::warn!("[{}] stop() failed: {}", id, e),
+            }
+        }
+        None => {
+            tracing::debug!(
+                "[{}] Untrusted isolation tier ({}): skipping in-process stop()",
+                id,
+                isolation_tier.as_str(),
+            );
         }
     }
 }

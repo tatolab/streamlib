@@ -111,6 +111,22 @@ impl Drop for ProcessorInstance {
 }
 
 impl ProcessorInstance {
+    /// Whether this instance's code lives in a separately-built cdylib loaded
+    /// via `STREAMLIB_PLUGIN` (`true`), versus host-binary-compiled code
+    /// (`register::<P>()` in-process VTable, or a `LegacyDyn` subprocess host)
+    /// (`false`). Feeds the isolation-tier derivation: only a cdylib-resident
+    /// `@session` module is untrusted — host-compiled `@session` code
+    /// (`add_local::<P>()`) is the host's own code and stays trusted.
+    pub(crate) fn is_cdylib_resident(&self) -> bool {
+        matches!(
+            self,
+            Self::VTable {
+                cdylib_resident: true,
+                ..
+            }
+        )
+    }
+
     /// Issue one vtable lifecycle call against the VTable variant.
     /// Returns the host-side error chained off the extern "C" return
     /// code + scratch buffer.
