@@ -8,6 +8,8 @@ pub mod _generated_ {
 
 mod auth;
 mod handlers;
+mod mcp;
+mod ops;
 mod processor;
 mod state;
 
