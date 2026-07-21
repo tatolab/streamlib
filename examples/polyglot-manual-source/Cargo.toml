@@ -32,12 +32,12 @@ license = "BUSL-1.1"
 
 [workspace.dependencies]
 # Engine facade — used ONLY by the runner (the host app), never the plugin.
-streamlib = { version = "0.7.21" }
+streamlib = { version = "0.7.22" }
 # Engine-free authoring SDK chain — used by the plugin cdylib.
-streamlib-plugin-sdk = { version = "0.7.21" }
-streamlib-macros = { version = "0.7.21" }
-streamlib-jtd-codegen = { version = "0.7.21" }
-streamlib-plugin-abi = { version = "0.7.21" }
+streamlib-plugin-sdk = { version = "0.7.22" }
+streamlib-macros = { version = "0.7.22" }
+streamlib-jtd-codegen = { version = "0.7.22" }
+streamlib-plugin-abi = { version = "0.7.22" }
 tracing = { version = "0.1.41", features = ["release_max_level_debug"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }

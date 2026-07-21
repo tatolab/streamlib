@@ -14,21 +14,21 @@ name = "streamlib_debug_utilities"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = {version = "0.7.21"}
+streamlib-jtd-codegen = {version = "0.7.22"}
 
 [dependencies]
 # Engine-free authoring SDK (never the `streamlib` facade) — runtime context, processor traits, generated config
 # types under `crate::_generated_::tatolab__debug_utilities::*`, the
 # VideoFrame wire type, RHI primitives.
-streamlib-plugin-sdk = {version = "0.7.21"}
+streamlib-plugin-sdk = {version = "0.7.22"}
 
 # Procedural macros — `#[streamlib_plugin_sdk::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = {version = "0.7.21"}
+streamlib-macros = {version = "0.7.22"}
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = {version = "0.7.21"}
+streamlib-plugin-abi = {version = "0.7.22"}
 
 # Serialization (config dataclasses ship as serde-derived).
 # Generated `EncodedJpegFrame.data` rides msgpack `bin` (1× wire) instead of array.
