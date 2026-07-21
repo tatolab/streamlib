@@ -4,6 +4,14 @@
 //! First-class channel tap — a read-only subscriber attachable to any named
 //! channel via the reserved tap slot the channel data service is sized for.
 //!
+//! The tap is a read-only OBSERVABILITY primitive: it forwards each channel bag
+//! VERBATIM (`FrameHeader`-framed) as WS binary frames — no encode, containerize,
+//! or transcode, so decoding is the client's concern (wire-neutral across
+//! Rust/Python/Deno). To observe a viewable video feed, tap an ENCODED
+//! (h264/h265/jpeg) or container (CMAF/fMP4) channel; a RAW video channel carries
+//! zero-copy DMA-BUF/VkImage frame descriptors (meaningless off-host), not pixels.
+//! It is not a realtime-video transport — that is the WebRTC/MoQ/display processors.
+//!
 //! A channel data service is opened with
 //! `max_subscribers = N_destinations + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`
 //! (1), so a tap is a pure subscriber-add onto the pre-sized reserved slot: it
