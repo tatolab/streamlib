@@ -58,10 +58,11 @@ pub(crate) fn build_router(
     auth_token: Option<ApiServerBearerToken>,
     #[cfg(feature = "moq")] runtime_id: String,
 ) -> Router {
-    // The read-only tap WebSocket sits behind the SAME bearer gate as the
-    // mutating routes when auth is on (a tap observes live channel data), and is
-    // open like every other route when auth is off. Clone the token before it is
-    // moved into the mutating-route middleware below.
+    // The read-only tap WebSocket is gated exactly like the mutating routes WHEN
+    // auth is opted in — same bearer middleware, same route_layer binding; the
+    // default (auth off) leaves it open like every other route. This is
+    // mechanism parity, not a trust boundary the tap itself imposes. Clone the
+    // token before it is moved into the mutating-route middleware below.
     let tap_auth_token = auth_token.clone();
 
     let mut protected = OpenApiRouter::new()
@@ -562,10 +563,11 @@ async fn handle_tap_websocket(
         Ok(subscription) => subscription,
         Err(e) => {
             tracing::info!(channel = %channel, "tap attach rejected: {e}");
+            let (close_code, close_reason) = tap_error_close_frame(&e);
             let _ = sender
                 .send(Message::Close(Some(axum::extract::ws::CloseFrame {
-                    code: axum::extract::ws::close_code::ERROR,
-                    reason: e.to_string().into(),
+                    code: close_code,
+                    reason: close_reason.into(),
                 })))
                 .await;
             return;
@@ -605,6 +607,48 @@ async fn handle_tap_websocket(
     }
 
     tracing::info!(channel = %channel, "tap client detached");
+}
+
+/// Longest tap close reason RFC 6455 permits: a control frame caps its payload
+/// at 125 bytes and the 2-byte close code consumes the first two, leaving 123
+/// for the UTF-8 reason. tungstenite refuses to write an over-length close
+/// frame, so an untruncated tap error string (`NotSupported` runs ~180 bytes)
+/// would drop the client into an abnormal close with no reason at all.
+const MAX_WS_CLOSE_REASON_BYTES: usize = 123;
+
+/// Map a typed tap error to a WebSocket close code + a short, RFC-6455-legal
+/// reason (≤ [`MAX_WS_CLOSE_REASON_BYTES`], truncated on a UTF-8 char
+/// boundary). The full error is logged server-side at the call site; this
+/// surface is the machine-readable failure the client (and the #1429 MCP tool)
+/// reads off the close frame. App codes live in the 4000–4999 private range.
+fn tap_error_close_frame(error: &Error) -> (u16, String) {
+    let (code, reason) = match error {
+        Error::TapChannelNotFound(channel) => {
+            (4404, format!("tap channel not found: {channel}"))
+        }
+        Error::TapSlotOccupied(channel) => {
+            (4409, format!("tap slot already occupied: {channel}"))
+        }
+        other => (
+            axum::extract::ws::close_code::ERROR,
+            format!("tap attach failed: {other}"),
+        ),
+    };
+    (code, truncate_on_char_boundary(reason, MAX_WS_CLOSE_REASON_BYTES))
+}
+
+/// Truncate `text` to at most `max_bytes`, cutting on a UTF-8 char boundary so
+/// the result stays valid UTF-8.
+fn truncate_on_char_boundary(mut text: String, max_bytes: usize) -> String {
+    if text.len() <= max_bytes {
+        return text;
+    }
+    let mut boundary = max_bytes;
+    while boundary > 0 && !text.is_char_boundary(boundary) {
+        boundary -= 1;
+    }
+    text.truncate(boundary);
+    text
 }
 
 #[cfg(test)]
@@ -919,10 +963,10 @@ mod router_auth_gate_tests {
 
     #[tokio::test]
     async fn tap_ws_rejects_missing_token_with_401_when_auth_on() {
-        // The read-only tap is a security-relevant surface: with auth on it must
-        // be gated exactly like the mutating routes. Deleting the tap_router
-        // `.route_layer(...)` flips this from 401 to the WS extractor's own
-        // (non-401) rejection, going red here.
+        // With auth opted in, the read-only tap is gated exactly like the
+        // mutating routes — mechanism parity, not a trust boundary the tap
+        // imposes. Deleting the tap_router `.route_layer(...)` flips this from
+        // 401 to the WS extractor's own (non-401) rejection, going red here.
         assert_eq!(status_of(tap_ws_request()).await, StatusCode::UNAUTHORIZED);
     }
 
