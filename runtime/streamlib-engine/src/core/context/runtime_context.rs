@@ -679,9 +679,10 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// Requires a [`FullAccessGrant`](super::isolation::FullAccessGrant) — the
     /// by-construction capability moat. A grant is producible only from an
     /// [`IsolationTier::TrustedInstalled`](super::isolation::IsolationTier),
-    /// so an untrusted (`@session` submitted-source) processor's lifecycle
-    /// dispatch has no token to pass and cannot mint an in-process FullAccess
-    /// context. The token is consumed (not stored): it proves authorization at
+    /// so an untrusted processor's lifecycle dispatch (a `@session`
+    /// submitted-source module once the operator opts into sandboxing) has no
+    /// token to pass and cannot mint an in-process FullAccess context. The token
+    /// is consumed (not stored): it proves authorization at
     /// the minting seam and carries no runtime state.
     pub(crate) fn new(
         base: &'a RuntimeContext,

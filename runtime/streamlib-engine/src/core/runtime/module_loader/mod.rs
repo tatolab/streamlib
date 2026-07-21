@@ -805,14 +805,15 @@ impl Runner {
     /// separately-built (cdylib-resident) modules. **Process-wide** (last write
     /// wins), like [`Self::set_acquire_on_reference_policy`]. `None` clears the
     /// override, restoring the `STREAMLIB_SESSION_ISOLATION_TIER` env /
-    /// [`IsolationTier::Untrusted`] default.
+    /// [`IsolationTier::TrustedInstalled`] default.
     ///
-    /// `@session` submitted-source code is untrusted by default: it never mints
-    /// an in-process `RuntimeContextFullAccess`. A host running its own
-    /// in-app-authored session processors in-process (the dev flow) opts them
-    /// into [`IsolationTier::TrustedInstalled`] here. Installed packages and
-    /// host-binary-compiled processors are trusted by construction and are
-    /// unaffected by this knob.
+    /// Isolation is opt-in: `@session` submitted-source code is
+    /// [`IsolationTier::TrustedInstalled`] by default — it mints an in-process
+    /// `RuntimeContextFullAccess` with the same permissions as an installed
+    /// package. An operator opts into sandboxing it by setting
+    /// [`IsolationTier::Untrusted`] here (or via the env var); only then does it
+    /// stop minting FullAccess. Installed packages and host-binary-compiled
+    /// processors are trusted by construction and are unaffected by this knob.
     pub fn set_session_isolation_tier(tier: Option<IsolationTier>) {
         crate::core::context::isolation::set_session_isolation_tier(tier);
     }

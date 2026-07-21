@@ -11,13 +11,18 @@
 //! answers *which* lifecycle method is running; the trust axis answers *whether
 //! the code running it is trusted enough to hold FullAccess in-process at all*.
 //!
-//! The tier is **derived by construction from module provenance** — never
-//! hand-set on the untrusted path:
-//! - a `@session/…` (in-app authored / agent-submitted) module that was
-//!   separately built and dlopened (cdylib-resident) is [`IsolationTier::Untrusted`];
-//! - an installed, content-hash-locked package, and any host-binary-compiled
-//!   processor (`register::<P>()` / `add_local::<P>()`, which is the host's own
-//!   code under a `@session` namespace key), is [`IsolationTier::TrustedInstalled`].
+//! Isolation is an **opt-in feature**: by default every loaded processor —
+//! including `@session/…` (in-app authored / agent-submitted) separately-built
+//! (cdylib-resident) code — runs [`IsolationTier::TrustedInstalled`], with the
+//! same in-process FullAccess permissions as an installed package (no behavior
+//! change vs before the trust axis existed). An operator opts into sandboxing
+//! submitted code by setting the session tier to `untrusted` (via
+//! [`SESSION_ISOLATION_TIER_ENV`] or [`set_session_isolation_tier`]); only then
+//! is a `@session/…` cdylib-resident module classified
+//! [`IsolationTier::Untrusted`]. Installed, content-hash-locked packages and any
+//! host-binary-compiled processor (`register::<P>()` / `add_local::<P>()`, the
+//! host's own code under a `@session` namespace key) are always
+//! [`IsolationTier::TrustedInstalled`] and are unaffected by the knob.
 //!
 //! The moat is the [`FullAccessGrant`] token: minting a
 //! [`RuntimeContextFullAccess`](super::RuntimeContextFullAccess) requires one,
@@ -36,9 +41,10 @@ use std::sync::RwLock;
 use streamlib_idents::Org;
 
 /// Environment variable selecting the tier assigned to `@session/…`
-/// cdylib-resident (submitted-source) modules — `untrusted` (default) or
-/// `trusted`. A programmatic override ([`set_session_isolation_tier`]) takes
-/// precedence.
+/// cdylib-resident (submitted-source) modules — `trusted` (default) or
+/// `untrusted`. Setting it to `untrusted` is the operator's opt-in to sandbox
+/// submitted code; unset leaves submitted code trusted like installed code. A
+/// programmatic override ([`set_session_isolation_tier`]) takes precedence.
 pub(crate) const SESSION_ISOLATION_TIER_ENV: &str = "STREAMLIB_SESSION_ISOLATION_TIER";
 
 /// Declarative trust tier a loaded processor runs under, derived by
@@ -73,14 +79,16 @@ pub enum IsolationTier {
 impl IsolationTier {
     /// Derive the tier from a processor's module provenance.
     ///
-    /// A `@session/…` module that was separately built and dlopened
-    /// (`cdylib_resident == true`) is untrusted by default — the process-wide
-    /// session override ([`set_session_isolation_tier`]) can opt it into
-    /// [`TrustedInstalled`](Self::TrustedInstalled) for the in-app dev flow.
-    /// Everything else — installed packages (any non-session org) and
-    /// host-binary-compiled processors (`register::<P>()` / `add_local::<P>()`,
-    /// which are not cdylib-resident even under a `@session` key) — is
-    /// [`TrustedInstalled`](Self::TrustedInstalled).
+    /// [`TrustedInstalled`](Self::TrustedInstalled) by default for everything —
+    /// isolation is opt-in. A `@session/…` module that was separately built and
+    /// dlopened (`cdylib_resident == true`) resolves through the process-wide
+    /// session tier ([`session_isolation_tier`]), which is
+    /// [`TrustedInstalled`](Self::TrustedInstalled) unless the operator opts into
+    /// `untrusted` via [`SESSION_ISOLATION_TIER_ENV`] /
+    /// [`set_session_isolation_tier`]. Everything else — installed packages (any
+    /// non-session org) and host-binary-compiled processors (`register::<P>()` /
+    /// `add_local::<P>()`, which are not cdylib-resident even under a `@session`
+    /// key) — is always [`TrustedInstalled`](Self::TrustedInstalled).
     pub fn for_processor(org: &Org, cdylib_resident: bool) -> Self {
         if cdylib_resident && org.is_reserved_for_session() {
             session_isolation_tier()
@@ -144,11 +152,12 @@ pub(crate) struct FullAccessGrant(());
 
 /// Process-wide override for the tier assigned to `@session/…` cdylib-resident
 /// modules. `None` falls back to [`SESSION_ISOLATION_TIER_ENV`], then the
-/// [`IsolationTier::Untrusted`] default.
+/// [`IsolationTier::TrustedInstalled`] default (isolation is opt-in).
 static SESSION_TIER_OVERRIDE: RwLock<Option<IsolationTier>> = RwLock::new(None);
 
 /// Set (or clear, with `None`) the process-wide session isolation tier
-/// override. `None` restores the env / [`IsolationTier::Untrusted`] default.
+/// override. `None` restores the env / [`IsolationTier::TrustedInstalled`]
+/// default.
 pub(crate) fn set_session_isolation_tier(tier: Option<IsolationTier>) {
     *SESSION_TIER_OVERRIDE
         .write()
@@ -157,8 +166,10 @@ pub(crate) fn set_session_isolation_tier(tier: Option<IsolationTier>) {
 
 /// The effective tier for a `@session/…` cdylib-resident module: the runtime
 /// override, else the [`SESSION_ISOLATION_TIER_ENV`] env var, else
-/// [`IsolationTier::Untrusted`]. An unrecognized env value warns once per read
-/// and falls back to `Untrusted` (fail-closed — never silently trusts).
+/// [`IsolationTier::TrustedInstalled`] — isolation is opt-in, so submitted code
+/// runs trusted (like installed code) unless the operator opts into `untrusted`.
+/// An unrecognized env value warns once per read and falls back to the trusted
+/// default (a garbage value is not an opt-in to sandboxing).
 pub(crate) fn session_isolation_tier() -> IsolationTier {
     if let Some(tier) = *SESSION_TIER_OVERRIDE
         .read()
@@ -174,12 +185,12 @@ pub(crate) fn session_isolation_tier() -> IsolationTier {
                     value = %raw,
                     env = SESSION_ISOLATION_TIER_ENV,
                     "unrecognized session isolation tier — expected untrusted/trusted; \
-                     defaulting to untrusted"
+                     defaulting to trusted"
                 );
-                IsolationTier::Untrusted
+                IsolationTier::TrustedInstalled
             }
         },
-        _ => IsolationTier::Untrusted,
+        _ => IsolationTier::TrustedInstalled,
     }
 }
 
@@ -209,11 +220,11 @@ mod tests {
         assert!(IsolationTier::TrustedInstalled.permits_in_process_full_access());
     }
 
-    /// A `@session/…` cdylib-resident module defaults to untrusted; a
-    /// host-binary-compiled `@session` processor (not cdylib-resident) and any
-    /// installed (non-session) module are trusted. Revert the
-    /// `cdylib_resident && is_reserved_for_session` guard and the first
-    /// assertion flips.
+    /// Isolation is opt-in: with no override every provenance — `@session`
+    /// cdylib-resident submitted code included — derives
+    /// [`IsolationTier::TrustedInstalled`], the same permissions as an installed
+    /// package. Revert the `session_isolation_tier` default back to `Untrusted`
+    /// and the first assertion flips.
     #[test]
     fn tier_is_derived_from_provenance() {
         use std::sync::Mutex;
@@ -224,10 +235,10 @@ mod tests {
         let session = session_org();
         let installed = Org::new("tatolab").expect("valid org");
 
-        // @session + separately-built (cdylib) → untrusted by default.
+        // @session + separately-built (cdylib) → trusted by default (opt-in).
         assert_eq!(
             IsolationTier::for_processor(&session, true),
-            IsolationTier::Untrusted
+            IsolationTier::TrustedInstalled
         );
         // @session but host-compiled (not cdylib-resident) → trusted: it's the
         // host binary's own code under a @session namespace key.
@@ -246,11 +257,11 @@ mod tests {
         );
     }
 
-    /// The process-wide override opts a `@session` cdylib module into the
-    /// trusted tier (the in-app dev flow), and clearing it restores the
-    /// untrusted default.
+    /// The operator opt-in: setting the process-wide session tier to `untrusted`
+    /// sandboxes `@session` cdylib submitted code, and clearing it restores the
+    /// trusted (opt-out) default.
     #[test]
-    fn session_override_opts_into_trusted_and_clears() {
+    fn session_override_opts_into_untrusted_and_clears() {
         use std::sync::Mutex;
         static SERIALIZE: Mutex<()> = Mutex::new(());
         let _guard = SERIALIZE.lock().unwrap();
@@ -260,23 +271,45 @@ mod tests {
         set_session_isolation_tier(None);
         assert_eq!(
             IsolationTier::for_processor(&session, true),
-            IsolationTier::Untrusted,
-            "default @session cdylib tier is untrusted"
+            IsolationTier::TrustedInstalled,
+            "default @session cdylib tier is trusted (isolation is opt-in)"
         );
 
-        set_session_isolation_tier(Some(IsolationTier::TrustedInstalled));
+        set_session_isolation_tier(Some(IsolationTier::Untrusted));
         assert_eq!(
             IsolationTier::for_processor(&session, true),
-            IsolationTier::TrustedInstalled,
-            "the override must opt @session into trusted"
+            IsolationTier::Untrusted,
+            "the override must opt @session into untrusted (sandboxed)"
         );
 
         set_session_isolation_tier(None);
         assert_eq!(
             IsolationTier::for_processor(&session, true),
-            IsolationTier::Untrusted,
-            "clearing the override restores the untrusted default"
+            IsolationTier::TrustedInstalled,
+            "clearing the override restores the trusted default"
         );
+    }
+
+    /// Opt-in default in full: an `@session` cdylib-resident module with no
+    /// override mints a [`FullAccessGrant`] — it runs in-process with the same
+    /// FullAccess as installed code, so the interim fail-closed dead-end is gone
+    /// by default. Revert the `session_isolation_tier` default to `Untrusted`
+    /// and the grant vanishes.
+    #[test]
+    fn default_session_cdylib_mints_full_access_grant() {
+        use std::sync::Mutex;
+        static SERIALIZE: Mutex<()> = Mutex::new(());
+        let _guard = SERIALIZE.lock().unwrap();
+        set_session_isolation_tier(None);
+
+        let session = session_org();
+        let tier = IsolationTier::for_processor(&session, true);
+        assert_eq!(tier, IsolationTier::TrustedInstalled);
+        assert!(
+            tier.grant_full_access().is_some(),
+            "default @session cdylib must mint a FullAccess grant (runs in-process like installed)"
+        );
+        assert!(tier.permits_in_process_full_access());
     }
 
     #[test]
