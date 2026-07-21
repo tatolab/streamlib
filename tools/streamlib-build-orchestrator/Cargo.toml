@@ -30,6 +30,9 @@ streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0
 streamlib-processor-extract = { path = "../../sdk/streamlib-processor-extract", version = "0.7.21" }
 streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.7.21" }
 
+[build-dependencies]
+serde_json = { workspace = true }
+
 [dev-dependencies]
 tempfile = "3.14"
 serial_test = "3.2"

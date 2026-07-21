@@ -22,7 +22,7 @@
 //! never register silent empty (unconnectable) ports. Off-link Deno extraction
 //! mirrors off-link Python: with no `STREAMLIB_DENO_EXTRACTOR` override and no
 //! active `streamlib link`, the extractor is the npm-published SDK's
-//! `extract_processors.ts` (pinned to this build's version), run over the staged
+//! `extract_processors.ts` (pinned to the Deno SDK's own published version), run over the staged
 //! `deno.json` — the direct analogue of running `.venv/bin/python -m
 //! streamlib.extract_processors` off-link. A resolution that genuinely fails
 //! (the `deno run npm:` fetch itself) surfaces as a hard [`BuildError`] rather
@@ -385,8 +385,9 @@ fn build_failed(package: &str, detail: String) -> BuildError {
 /// in priority order: an explicit `STREAMLIB_DENO_EXTRACTOR` override or the
 /// linked checkout's `extract_processors.ts` (both a local `.ts` script on disk)
 /// win; off-link with neither, the extractor is the npm-published SDK's
-/// `extract_processors.ts` pinned to this build's version — the exact mirror of
-/// how off-link Python runs `.venv/bin/python -m streamlib.extract_processors`.
+/// `extract_processors.ts` pinned to the Deno SDK's own published version — the
+/// exact mirror of how off-link Python runs `.venv/bin/python -m
+/// streamlib.extract_processors`.
 #[derive(Debug, PartialEq, Eq)]
 enum DenoExtractorSource {
     /// A local `extract_processors.ts` on disk (the `STREAMLIB_DENO_EXTRACTOR`
@@ -446,7 +447,7 @@ impl SessionSourceExtractor {
         let deno_extractor_source = resolve_deno_extractor_source(
             std::env::var_os("STREAMLIB_DENO_EXTRACTOR").map(PathBuf::from),
             link,
-            env!("CARGO_PKG_VERSION"),
+            env!("STREAMLIB_DENO_SDK_VERSION"),
         );
 
         Self {
@@ -710,8 +711,8 @@ mod tests {
         // Resolution-priority lock for off-link Deno extraction: an explicit
         // `STREAMLIB_DENO_EXTRACTOR` override wins, then the linked checkout's
         // `extract_processors.ts` sibling, and off-link with neither the
-        // extractor is the npm-published SDK pinned to this build's version — the
-        // mirror of off-link Python's `.venv/bin/python -m
+        // extractor is the npm-published SDK pinned to the Deno SDK's own
+        // published version — the mirror of off-link Python's `.venv/bin/python -m
         // streamlib.extract_processors`. Mentally-revert the npm tier and the
         // `neither` case has no extractor (the old hard-refusal / portless gap).
         let override_script = PathBuf::from("/opt/custom/extract_processors.ts");
@@ -794,7 +795,7 @@ mod tests {
             venv_python: python3,
             deno_binary: "deno".to_string(),
             deno_extractor_source: DenoExtractorSource::PublishedNpm {
-                sdk_version: env!("CARGO_PKG_VERSION").to_string(),
+                sdk_version: env!("STREAMLIB_DENO_SDK_VERSION").to_string(),
             },
             deno_config: dir.path().join("deno.json"),
         };
