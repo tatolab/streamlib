@@ -42,6 +42,9 @@
 //! - [`session`] — [`Runner::add_local`]: register a `#[processor]` host
 //!   type live under `@session/<name>@0.0.N` through the same staging seam,
 //!   with no package on disk.
+//! - [`from_source`] — [`Runner::register_processor_from_source`]: stage
+//!   live-submitted source text into a `@session/<name>@0.0.N` package and
+//!   load it through the [`Strategy::Path`] build/commit seam.
 //! - [`slpkg`] — `.slpkg` archive extraction.
 //!
 //! [`Runner::remove_module`]: super::Runner::remove_module
@@ -64,6 +67,7 @@ mod acquire;
 mod added_module;
 mod build_orchestrator;
 mod errors;
+mod from_source;
 mod lazy_discovery;
 mod ledger;
 mod locked;

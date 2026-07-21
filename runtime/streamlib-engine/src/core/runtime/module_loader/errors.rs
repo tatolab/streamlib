@@ -491,6 +491,43 @@ pub enum AddModuleError {
     DuplicateSessionProcessorName {
         module: streamlib_idents::ModuleIdent,
     },
+
+    /// [`Runner::register_processor_from_source`] was handed a `language` that
+    /// live source submit does not support. Only the subprocess languages
+    /// (Python / TypeScript) run from source with no host compile; Rust from
+    /// source is a full cargo build (the `streamlib pkg build` flow), never a
+    /// live graph mutation.
+    ///
+    /// [`Runner::register_processor_from_source`]: super::super::Runner::register_processor_from_source
+    #[error(
+        "register_processor_from_source: language '{language}' is not supported \
+         for live source submit — only Python and TypeScript run from source. \
+         Build a Rust processor with `streamlib pkg build` and load the package."
+    )]
+    SourceLanguageUnsupportedForLiveSubmit { language: String },
+
+    /// [`Runner::register_processor_from_source`] was handed a submission with
+    /// neither a `requested_name` nor a `processor_type_name` — there is no
+    /// identity to mint a `@session/<name>` under.
+    ///
+    /// [`Runner::register_processor_from_source`]: super::super::Runner::register_processor_from_source
+    #[error(
+        "register_processor_from_source: the submission carries neither a \
+         requested name nor a processor type name — supply one so a \
+         `@session/<name>` identity can be minted."
+    )]
+    SubmittedSourceMissingName,
+
+    /// [`Runner::register_processor_from_source`] failed to stage the submitted
+    /// source to disk (directory creation, source write, or manifest write).
+    /// `detail` names the failing step.
+    ///
+    /// [`Runner::register_processor_from_source`]: super::super::Runner::register_processor_from_source
+    #[error("register_processor_from_source: failed to stage '{module}' to disk: {detail}")]
+    SubmittedSourceStagingFailed {
+        module: streamlib_idents::ModuleIdent,
+        detail: String,
+    },
 }
 
 impl From<AddModuleError> for Error {

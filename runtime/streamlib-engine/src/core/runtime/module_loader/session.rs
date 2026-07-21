@@ -250,7 +250,7 @@ fn fallback_session_module() -> streamlib_idents::MintedSessionIdent {
 /// package segment: `TestMockProcessor` → `test-mock-processor`. A `-` is
 /// inserted before each interior uppercase run boundary; underscores map to
 /// `-`; the result is lowercased and de-duplicated / trimmed of `-`.
-fn kebab_case(type_name: &str) -> String {
+pub(super) fn kebab_case(type_name: &str) -> String {
     let mut out = String::with_capacity(type_name.len() + 4);
     let mut prev_was_lower_or_digit = false;
     for ch in type_name.chars() {

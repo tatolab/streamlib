@@ -28,7 +28,10 @@ pub(crate) use module_loader::{
     lookup_schema_via_active_cdylib_sink, stage_processor_via_active_cdylib_sink,
     stage_schema_via_active_cdylib_sink,
 };
-pub use operations::{BoxFuture, ConnectOptions, RuntimeOperations, SchemaValidationPosture};
+pub use operations::{
+    BoxFuture, ConnectOptions, ReplaceProcessorFromSource, RuntimeOperations,
+    SchemaValidationPosture, SubmittedProcessorSource,
+};
 pub use runtime::Runner;
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;

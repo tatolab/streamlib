@@ -358,6 +358,94 @@ unsafe extern "C" fn host_rov_to_json(
     )
 }
 
+unsafe extern "C" fn host_rov_register_processor_source(
+    handle: *const c_void,
+    request_msgpack_ptr: *const u8,
+    request_msgpack_len: usize,
+    completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
+    user_data: *mut c_void,
+) {
+    run_host_extern_c(
+        "host_rov_register_processor_source",
+        || {
+            if handle.is_null() {
+                CompletionGuard::new(completion, user_data)
+                    .fire_err_msg(b"register_processor_source: null handle");
+                return;
+            }
+            let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+            let guard = CompletionGuard::new(completion, user_data);
+            let Some(rt) = host_tokio_handle() else {
+                guard.fire_err_msg(b"host tokio handle not installed");
+                return;
+            };
+            let request_bytes = if request_msgpack_len == 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(request_msgpack_ptr, request_msgpack_len) }
+                    .to_vec()
+            };
+            rt.spawn(async move {
+                let result = match rmp_serde::from_slice::<
+                    crate::core::runtime::SubmittedProcessorSource,
+                >(&request_bytes)
+                {
+                    Ok(request) => ops.register_processor_source_async(request).await,
+                    Err(e) => Err(crate::core::Error::Config(format!(
+                        "register_processor_source: request msgpack decode failed: {e}"
+                    ))),
+                };
+                guard.fire_with_result(result);
+            });
+        },
+        (),
+    )
+}
+
+unsafe extern "C" fn host_rov_replace_processor(
+    handle: *const c_void,
+    request_msgpack_ptr: *const u8,
+    request_msgpack_len: usize,
+    completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
+    user_data: *mut c_void,
+) {
+    run_host_extern_c(
+        "host_rov_replace_processor",
+        || {
+            if handle.is_null() {
+                CompletionGuard::new(completion, user_data)
+                    .fire_err_msg(b"replace_processor: null handle");
+                return;
+            }
+            let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+            let guard = CompletionGuard::new(completion, user_data);
+            let Some(rt) = host_tokio_handle() else {
+                guard.fire_err_msg(b"host tokio handle not installed");
+                return;
+            };
+            let request_bytes = if request_msgpack_len == 0 {
+                Vec::new()
+            } else {
+                unsafe { std::slice::from_raw_parts(request_msgpack_ptr, request_msgpack_len) }
+                    .to_vec()
+            };
+            rt.spawn(async move {
+                let result = match rmp_serde::from_slice::<
+                    crate::core::runtime::ReplaceProcessorFromSource,
+                >(&request_bytes)
+                {
+                    Ok(request) => ops.replace_processor_async(request).await,
+                    Err(e) => Err(crate::core::Error::Config(format!(
+                        "replace_processor: request msgpack decode failed: {e}"
+                    ))),
+                };
+                guard.fire_with_result(result);
+            });
+        },
+        (),
+    )
+}
+
 /// Take a (borrowed) handle returned from
 /// `RuntimeContextVTable::runtime_ops_handle` (a `*const Arc<dyn
 /// RuntimeOperations>` pointing into `RuntimeContext`-owned storage)
@@ -412,6 +500,8 @@ pub static HOST_RUNTIME_OPS_VTABLE: RuntimeOpsVTable = RuntimeOpsVTable {
     to_json: host_rov_to_json,
     clone_handle: host_rov_clone_handle,
     drop_handle: host_rov_drop_handle,
+    register_processor_source: host_rov_register_processor_source,
+    replace_processor: host_rov_replace_processor,
 };
 
 /// Pointer to the [`RuntimeOpsVTable`] this DSO should dispatch
@@ -581,19 +671,51 @@ mod runtime_ops_vtable_null_handle_guards {
         assert_single_err_completion(&sink, "to_json: null handle");
         unsafe { reclaim_sink(user_data) };
     }
+
+    #[test]
+    fn register_processor_source_fires_error_completion_on_null_handle() {
+        let (user_data, sink) = install_sink_user_data();
+        unsafe {
+            (HOST_RUNTIME_OPS_VTABLE.register_processor_source)(
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                record_completion,
+                user_data,
+            );
+        }
+        assert_single_err_completion(&sink, "register_processor_source: null handle");
+        unsafe { reclaim_sink(user_data) };
+    }
+
+    #[test]
+    fn replace_processor_fires_error_completion_on_null_handle() {
+        let (user_data, sink) = install_sink_user_data();
+        unsafe {
+            (HOST_RUNTIME_OPS_VTABLE.replace_processor)(
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                record_completion,
+                user_data,
+            );
+        }
+        assert_single_err_completion(&sink, "replace_processor: null handle");
+        unsafe { reclaim_sink(user_data) };
+    }
 }
 
 #[cfg(test)]
 mod runtime_ops_vtable_tier1_wire_format_tests {
     //! Tier-1 wire-format tests for [`HOST_RUNTIME_OPS_VTABLE`].
     //!
-    //! Per-callback null-handle coverage for the 5
-    //! submit-with-completion ops (`add_processor`,
-    //! `remove_processor`, `connect`, `disconnect`, `to_json`)
-    //! lives in [`runtime_ops_vtable_null_handle_guards`] above.
-    //! This module adds:
+    //! Per-callback null-handle coverage for the submit-with-completion
+    //! ops (`add_processor`, `remove_processor`, `connect`,
+    //! `disconnect`, `to_json`, and the v3 `register_processor_source`
+    //! / `replace_processor`) lives in
+    //! [`runtime_ops_vtable_null_handle_guards`] above. This module adds:
     //!
-    //! - `layout_version_matches_constant` — locks the v2 layout
+    //! - `layout_version_matches_constant` — locks the v3 layout
     //!   version against the cdylib-visible constant.
     //! - `clone_handle` / `drop_handle` null-handle coverage — the
     //!   v2 Arc-lifecycle pair already had explicit guards

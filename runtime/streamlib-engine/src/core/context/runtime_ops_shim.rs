@@ -26,8 +26,11 @@ use streamlib_plugin_abi::{RuntimeOpCompletionCallback, RuntimeOpsVTable};
 use crate::core::error::{Error, Result};
 use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
 use crate::core::processors::ProcessorSpec;
-use crate::core::runtime::{BoxFuture, RuntimeOperations};
+use crate::core::runtime::{
+    BoxFuture, ReplaceProcessorFromSource, RuntimeOperations, SubmittedProcessorSource,
+};
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib_idents::ModuleIdent;
 
 /// Cdylib-side handle to the host's graph-mutation operations.
 ///
@@ -308,6 +311,60 @@ impl RuntimeOperations for RuntimeOpsShim {
         Box::pin(self.submit(|handle, vtable, completion, user_data| unsafe {
             ((*vtable).to_json)(handle, completion, user_data);
         }))
+    }
+
+    fn register_processor_source_async(
+        &self,
+        request: SubmittedProcessorSource,
+    ) -> BoxFuture<'_, Result<ModuleIdent>> {
+        let bytes = match rmp_serde::to_vec_named(&request) {
+            Ok(b) => b,
+            Err(e) => {
+                let err = Err(Error::Config(format!(
+                    "RuntimeOpsShim::register_processor_source_async: request msgpack encode failed: {e}"
+                )));
+                return Box::pin(async move { err });
+            }
+        };
+        Box::pin(
+            self.submit(move |handle, vtable, completion, user_data| unsafe {
+                ((*vtable).register_processor_source)(
+                    handle,
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    completion,
+                    user_data,
+                );
+                drop(bytes);
+            }),
+        )
+    }
+
+    fn replace_processor_async(
+        &self,
+        request: ReplaceProcessorFromSource,
+    ) -> BoxFuture<'_, Result<ModuleIdent>> {
+        let bytes = match rmp_serde::to_vec_named(&request) {
+            Ok(b) => b,
+            Err(e) => {
+                let err = Err(Error::Config(format!(
+                    "RuntimeOpsShim::replace_processor_async: request msgpack encode failed: {e}"
+                )));
+                return Box::pin(async move { err });
+            }
+        };
+        Box::pin(
+            self.submit(move |handle, vtable, completion, user_data| unsafe {
+                ((*vtable).replace_processor)(
+                    handle,
+                    bytes.as_ptr(),
+                    bytes.len(),
+                    completion,
+                    user_data,
+                );
+                drop(bytes);
+            }),
+        )
     }
 
     // -------------------------------------------------------------------------
