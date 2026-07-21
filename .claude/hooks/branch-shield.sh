@@ -44,9 +44,19 @@ deny() {
 
 match() { printf '%s' "$norm" | grep -Eq "$1"; }
 
-# gh pr merge — merging is the owner's call.
+# gh pr merge — gated on an owner-controlled authorization toggle, default OFF.
+# The guardrail stays safe-by-default: the agent may merge only when the owner has
+# opted in via the gitignored authorization file (single source of truth at the
+# project root, read regardless of worktree). Owner toggles it from any terminal:
+#   echo on  > .claude/merge-authorization.local   # grant merge to the agent
+#   echo off > .claude/merge-authorization.local   # revoke (or: rm the file)
+# First line must trim to exactly "on" (case-insensitive) to authorize.
 if match 'gh[[:space:]]+pr[[:space:]]+merge'; then
-  deny "merging PRs is the owner's call (gh pr merge)"
+  auth_file="${CLAUDE_PROJECT_DIR:-.}/.claude/merge-authorization.local"
+  auth="$(head -n1 "$auth_file" 2>/dev/null | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
+  if [ "$auth" != "on" ]; then
+    deny "merge authorization is OFF — owner enables with: echo on > .claude/merge-authorization.local (off/rm to revoke) (gh pr merge)"
+  fi
 fi
 
 # git push targeting origin main (force or not): 'origin main', 'origin +main',
