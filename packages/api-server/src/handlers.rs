@@ -1,21 +1,23 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! HTTP + WebSocket handlers backing the routes declared in [`crate::routes`].
+//! HTTP + WebSocket handlers, wired into the router by [`build_router`].
 
 use axum::{
-    extract::ws::{Message, WebSocket, WebSocketUpgrade},
+    Json, Router,
     extract::Path,
     extract::State,
+    extract::ws::{Message, WebSocket, WebSocketUpgrade},
     http::StatusCode,
     response::IntoResponse,
     routing::get,
-    Json, Router,
 };
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use std::sync::Arc;
-use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+use streamlib::sdk::descriptors::{
+    ModuleIdent, Org, Package, SchemaIdent, SemVer, SemVerRange, TypeName,
+};
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::json_schema::{
@@ -24,8 +26,11 @@ use streamlib::sdk::json_schema::{
 };
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::processors::ProcessorSpec;
-use streamlib::sdk::pubsub::{topics, Event, EventListener, PUBSUB};
-use streamlib::sdk::runtime::RuntimeOperations;
+use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
+use streamlib::sdk::runtime::{
+    RegisterProcessorReceipt, ReplaceProcessorFromSource, RuntimeOperations,
+    SubmittedProcessorSource,
+};
 use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 use utoipa::OpenApi;
@@ -34,8 +39,16 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 use crate::auth::{ApiServerBearerToken, ForbiddenResponse, UnauthorizedResponse};
 use crate::state::{
     ApiDoc, AppState, CreateConnectionRequest, CreateProcessorRequest, ErrorResponse, IdResponse,
-    ProcessorNotFoundResponse, ProcessorPortNotFoundResponse, UnknownProcessorTypeResponse,
+    ProcessorNotFoundResponse, ProcessorPortNotFoundResponse, RegisterProcessorSourceResponse,
+    RegisteredPortResponse, RegisteredProcessorPortsResponse, RegistrationOutcome,
+    ReplaceProcessorSourceRequest, SourceProcessorPortRole, SubmittedProcessorSourceRequest,
+    UnknownProcessorTypeResponse,
 };
+
+/// The relative WebSocket URL carrying this runtime's live event stream — the
+/// route registered in [`build_router`]. Returned in the source-submit
+/// response so a client learns where to observe the new instance's live state.
+const RUNTIME_EVENTS_URL: &str = "/ws/events";
 
 // ============================================================================
 // Router Construction
@@ -43,14 +56,16 @@ use crate::state::{
 
 /// Build the full router with shared state and trace layer attached.
 ///
-/// The four mutating routes (`POST /api/processor`, `DELETE
-/// /api/processors/{id}`, `POST /api/connections`, `DELETE
-/// /api/connections/{id}`) sit behind the bearer-token auth middleware only
-/// when `auth_token` is `Some` (auth opted in); with `None` — the
-/// zero-ceremony default — they are open like every other route. The GET
-/// routes, health check, WebSocket event stream, and OpenAPI spec are always
-/// open. `route_layer` binds the auth layer to exactly the routes already on
-/// the protected sub-router, so a later `merge` leaves the open routes ungated.
+/// The mutating routes (`POST /api/processor`, `POST /api/processor/source`,
+/// `POST /api/processor/source/replace`, `DELETE /api/processors/{id}`, `POST
+/// /api/connections`, `DELETE /api/connections/{id}`) sit behind the
+/// bearer-token auth middleware only when `auth_token` is `Some` (auth opted
+/// in); with `None` — the zero-ceremony default — they are open like every
+/// other route. The two source-submit routes are RCE-capable (they execute
+/// submitted source), so they join this gated group. The GET routes, health
+/// check, WebSocket event stream, and OpenAPI spec are always open.
+/// `route_layer` binds the auth layer to exactly the routes already on the
+/// protected sub-router, so a later `merge` leaves the open routes ungated.
 pub(crate) fn build_router(
     runtime: Arc<dyn RuntimeOperations>,
     auth_token: Option<ApiServerBearerToken>,
@@ -58,6 +73,8 @@ pub(crate) fn build_router(
 ) -> Router {
     let mut protected = OpenApiRouter::new()
         .routes(routes!(create_processor))
+        .routes(routes!(create_processor_source))
+        .routes(routes!(replace_processor_source))
         .routes(routes!(delete_processor))
         .routes(routes!(create_connection))
         .routes(routes!(delete_connection));
@@ -186,11 +203,7 @@ pub(crate) async fn create_processor(
     let spec = ProcessorSpec::new(ident, body.config);
 
     match state.runtime.add_processor_async(spec).await {
-        Ok(id) => (
-            StatusCode::OK,
-            Json(IdResponse { id: id.to_string() }),
-        )
-            .into_response(),
+        Ok(id) => (StatusCode::OK, Json(IdResponse { id: id.to_string() })).into_response(),
         Err(Error::UnknownProcessorType { ident: _ }) => (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(UnknownProcessorTypeResponse {
@@ -206,6 +219,327 @@ pub(crate) async fn create_processor(
             }),
         )
             .into_response(),
+    }
+}
+
+/// Project a register/replace receipt's committed ports onto the wire
+/// response shape (`schema` rendered as `"any"` or `@org/package/Type@version`).
+fn project_receipt_ports(
+    receipt: &RegisterProcessorReceipt,
+) -> Vec<RegisteredProcessorPortsResponse> {
+    let project = |ports: &[streamlib::sdk::runtime::RegisteredPortReceipt]| {
+        ports
+            .iter()
+            .map(|port| RegisteredPortResponse {
+                name: port.name.clone(),
+                schema: port.schema.to_string(),
+                delivery_profile: port.delivery_profile.clone(),
+            })
+            .collect()
+    };
+    receipt
+        .processors
+        .iter()
+        .map(|processor| RegisteredProcessorPortsResponse {
+            name: processor.name.clone(),
+            inputs: project(&processor.inputs),
+            outputs: project(&processor.outputs),
+        })
+        .collect()
+}
+
+/// The concrete [`SemVer`] a session-module range pins. Session registrations
+/// mint an `Exact` range, so the other range shapes fall back to their lower
+/// bound and only a wildcard `Any` (never minted for a session) yields `None`.
+fn pinned_version(range: &SemVerRange) -> Option<SemVer> {
+    match range {
+        SemVerRange::Exact(version)
+        | SemVerRange::AtLeast(version)
+        | SemVerRange::Caret(version)
+        | SemVerRange::Tilde(version) => Some(*version),
+        SemVerRange::Any => None,
+    }
+}
+
+/// Build the instantiable [`SchemaIdent`] for a discovered processor `type_name`
+/// under the receipt's minted `@org/name@0.0.N` registration module.
+fn session_processor_ident(module: &ModuleIdent, type_name: &str) -> Option<SchemaIdent> {
+    let r#type = TypeName::new(type_name.to_string()).ok()?;
+    let version = pinned_version(&module.version)?;
+    Some(SchemaIdent::new(
+        module.org.clone(),
+        module.name.clone(),
+        r#type,
+        version,
+    ))
+}
+
+/// Map a register/replace-from-source [`Error`] onto an HTTP response. The
+/// source-submit refusals (unsupported language, missing name, un-mintable
+/// name, build failure, replace-target mismatch) surface as
+/// [`Error::Configuration`] — the JSON request was well-formed but the
+/// submitted source could not be registered — so they map to 422; a runtime
+/// failure (including a catastrophic replace where restoring the prior
+/// registration also failed) maps to 500.
+fn source_submit_error_response(error: Error) -> axum::response::Response {
+    let status = match error {
+        Error::Configuration(_) => StatusCode::UNPROCESSABLE_ENTITY,
+        Error::Runtime(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        _ => StatusCode::BAD_REQUEST,
+    };
+    (
+        status,
+        Json(ErrorResponse {
+            error: error.to_string(),
+        }),
+    )
+        .into_response()
+}
+
+/// Map a `connect`/link [`Error`] onto an HTTP response, shared by
+/// [`create_connection`] and the source-submit composite wiring loop so both
+/// endpoints answer connect failures identically: a missing peer processor →
+/// 404 ([`ProcessorNotFoundResponse`]), a missing port on an existing processor
+/// → 422 ([`ProcessorPortNotFoundResponse`]), anything else → 400.
+fn connect_error_response(error: Error) -> axum::response::Response {
+    match error {
+        Error::ProcessorNotFound(processor_id) => (
+            StatusCode::NOT_FOUND,
+            Json(ProcessorNotFoundResponse {
+                error: "ProcessorNotFound",
+                processor_id,
+            }),
+        )
+            .into_response(),
+        Error::ProcessorPortNotFound {
+            processor_id,
+            port_name,
+            direction,
+        } => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ProcessorPortNotFoundResponse {
+                error: "ProcessorPortNotFound",
+                processor_id,
+                port_name,
+                direction: match direction {
+                    streamlib::sdk::error::PortDirection::Input => "input",
+                    streamlib::sdk::error::PortDirection::Output => "output",
+                },
+            }),
+        )
+            .into_response(),
+        other => (
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse {
+                error: other.to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/processor/source",
+    tag = "processors",
+    request_body = SubmittedProcessorSourceRequest,
+    responses(
+        (status = 200, description = "Source registered, first discovered processor instantiated, and optional connections wired; body carries the minted registration ident, discovered ports, instance id, and connection ids", body = RegisterProcessorSourceResponse),
+        (status = 400, description = "A `connect` wiring failed for a generic graph reason (neither a missing peer processor nor a missing peer port). On any wiring failure the whole submit is rolled back — the instantiated processor and any links created earlier in the call are removed", body = ErrorResponse),
+        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
+        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
+        (status = 404, description = "A `connect` wiring references a peer processor not in the graph (same shape as POST /api/connections)", body = ProcessorNotFoundResponse),
+        (status = 422, description = "The submitted source could not be registered or instantiated (unsupported language, missing name, build failure, unknown processor type); OR a `connect` wiring references a port that doesn't exist on an existing peer processor — the latter carries a ProcessorPortNotFoundResponse body, same shape as POST /api/connections", body = ErrorResponse),
+        (status = 500, description = "Runtime failure while registering the source", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn create_processor_source(
+    State(state): State<AppState>,
+    Json(body): Json<SubmittedProcessorSourceRequest>,
+) -> axum::response::Response {
+    let submitted = SubmittedProcessorSource {
+        source_text: body.source,
+        language: body.language.into(),
+        requested_name: body.requested_name,
+        processor_type_name: body.processor_type_name,
+    };
+
+    let receipt = match state
+        .runtime
+        .register_processor_source_async(submitted)
+        .await
+    {
+        Ok(receipt) => receipt,
+        Err(error) => return source_submit_error_response(error),
+    };
+
+    let processors = project_receipt_ports(&receipt);
+    let module = receipt.module.to_string();
+
+    // Composite "app is code" server-side wiring: instantiate the first
+    // discovered processor, then apply the optional connect wirings.
+    let Some(first) = receipt.processors.first() else {
+        return (
+            StatusCode::OK,
+            Json(RegisterProcessorSourceResponse {
+                module,
+                processors,
+                processor_id: None,
+                state: RegistrationOutcome::Registered,
+                connections: Vec::new(),
+                events_url: RUNTIME_EVENTS_URL,
+            }),
+        )
+            .into_response();
+    };
+
+    let Some(ident) = session_processor_ident(&receipt.module, &first.name) else {
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ErrorResponse {
+                error: format!(
+                    "registered module `{module}` yielded an uninstantiable processor identity for type `{}`",
+                    first.name
+                ),
+            }),
+        )
+            .into_response();
+    };
+
+    let config = body.config.unwrap_or_else(|| serde_json::json!({}));
+    let processor_id = match state
+        .runtime
+        .add_processor_async(ProcessorSpec::new(ident, config))
+        .await
+    {
+        Ok(id) => id,
+        Err(Error::UnknownProcessorType { ident: _ }) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(ErrorResponse {
+                    error: format!(
+                        "registered module `{module}` did not expose processor type `{}` to the runtime",
+                        first.name
+                    ),
+                }),
+            )
+                .into_response();
+        }
+        Err(error) => return source_submit_error_response(error),
+    };
+
+    let mut created_links = Vec::with_capacity(body.connect.len());
+    for wiring in body.connect {
+        let (from, to) = match wiring.role {
+            SourceProcessorPortRole::Output => (
+                OutputLinkPortRef::new(processor_id.clone(), wiring.local_port),
+                InputLinkPortRef::new(wiring.peer_processor, wiring.peer_port),
+            ),
+            SourceProcessorPortRole::Input => (
+                OutputLinkPortRef::new(wiring.peer_processor, wiring.peer_port),
+                InputLinkPortRef::new(processor_id.clone(), wiring.local_port),
+            ),
+        };
+        match state.runtime.connect_async(from, to).await {
+            Ok(link_id) => created_links.push(link_id),
+            Err(error) => {
+                // Transactional wiring: a failed connect rolls the whole submit
+                // back — disconnect the links created earlier in this call, then
+                // remove the just-instantiated processor — so the endpoint is
+                // all-or-nothing and leaves no orphan node the caller can't reach.
+                for created_link_id in &created_links {
+                    let _ = state
+                        .runtime
+                        .disconnect_async(created_link_id.clone())
+                        .await;
+                }
+                let _ = state
+                    .runtime
+                    .remove_processor_async(processor_id.clone())
+                    .await;
+                return connect_error_response(error);
+            }
+        }
+    }
+
+    let connections = created_links.iter().map(|id| id.to_string()).collect();
+
+    (
+        StatusCode::OK,
+        Json(RegisterProcessorSourceResponse {
+            module,
+            processors,
+            processor_id: Some(processor_id.to_string()),
+            state: RegistrationOutcome::Added,
+            connections,
+            events_url: RUNTIME_EVENTS_URL,
+        }),
+    )
+        .into_response()
+}
+
+#[utoipa::path(
+    post,
+    path = "/api/processor/source/replace",
+    tag = "processors",
+    request_body = ReplaceProcessorSourceRequest,
+    responses(
+        (status = 200, description = "Prior `@session/<name>` registration replaced; body carries the new registration ident and discovered ports (type-level replacement — running graph instances are not swapped)", body = RegisterProcessorSourceResponse),
+        (status = 400, description = "`target_session_module` is not a valid `@org/name@<range>` module ident", body = ErrorResponse),
+        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
+        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
+        (status = 422, description = "The replacement source could not be registered, or its name does not resolve to the target's `@session/<name>`", body = ErrorResponse),
+        (status = 500, description = "Runtime failure while replacing (including a replacement that failed and could not restore the prior registration)", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn replace_processor_source(
+    State(state): State<AppState>,
+    Json(body): Json<ReplaceProcessorSourceRequest>,
+) -> axum::response::Response {
+    use serde::{Deserialize, de::IntoDeserializer};
+    let target_session_module: ModuleIdent = match ModuleIdent::deserialize(
+        body.target_session_module.as_str().into_deserializer(),
+    ) {
+        Ok(module) => module,
+        Err(error) => {
+            let error: serde::de::value::Error = error;
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse {
+                    error: format!(
+                        "target_session_module `{}` is not a valid `@org/name@<range>` module ident: {error}",
+                        body.target_session_module
+                    ),
+                }),
+            )
+                .into_response();
+        }
+    };
+
+    let request = ReplaceProcessorFromSource {
+        target_session_module,
+        replacement: SubmittedProcessorSource {
+            source_text: body.source,
+            language: body.language.into(),
+            requested_name: body.requested_name,
+            processor_type_name: body.processor_type_name,
+        },
+    };
+
+    match state.runtime.replace_processor_async(request).await {
+        Ok(receipt) => (
+            StatusCode::OK,
+            Json(RegisterProcessorSourceResponse {
+                module: receipt.module.to_string(),
+                processors: project_receipt_ports(&receipt),
+                processor_id: None,
+                state: RegistrationOutcome::Registered,
+                connections: Vec::new(),
+                events_url: RUNTIME_EVENTS_URL,
+            }),
+        )
+            .into_response(),
+        Err(error) => source_submit_error_response(error),
     }
 }
 
@@ -258,43 +592,8 @@ pub(crate) async fn create_connection(
     let to = InputLinkPortRef::new(body.to_processor, body.to_port);
 
     match state.runtime.connect_async(from, to).await {
-        Ok(id) => (
-            StatusCode::OK,
-            Json(IdResponse { id: id.to_string() }),
-        )
-            .into_response(),
-        Err(Error::ProcessorNotFound(processor_id)) => (
-            StatusCode::NOT_FOUND,
-            Json(ProcessorNotFoundResponse {
-                error: "ProcessorNotFound",
-                processor_id,
-            }),
-        )
-            .into_response(),
-        Err(Error::ProcessorPortNotFound {
-            processor_id,
-            port_name,
-            direction,
-        }) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ProcessorPortNotFoundResponse {
-                error: "ProcessorPortNotFound",
-                processor_id,
-                port_name,
-                direction: match direction {
-                    streamlib::sdk::error::PortDirection::Input => "input",
-                    streamlib::sdk::error::PortDirection::Output => "output",
-                },
-            }),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-            .into_response(),
+        Ok(id) => (StatusCode::OK, Json(IdResponse { id: id.to_string() })).into_response(),
+        Err(error) => connect_error_response(error),
     }
 }
 
@@ -494,13 +793,15 @@ mod router_auth_gate_tests {
     use super::*;
     use axum::body::Body;
     use axum::http::{
-        header::{AUTHORIZATION, CONTENT_TYPE},
         Request, StatusCode,
+        header::{AUTHORIZATION, CONTENT_TYPE},
     };
     use streamlib::sdk::descriptors::{ModuleIdent, SemVerRange};
     use streamlib::sdk::graph::{LinkUniqueId, ProcessorUniqueId};
+    use streamlib::sdk::processors::PortSchemaSpec;
     use streamlib::sdk::runtime::{
-        BoxFuture, RegisterProcessorReceipt, ReplaceProcessorFromSource, SubmittedProcessorSource,
+        BoxFuture, RegisterProcessorReceipt, RegisteredPortReceipt, RegisteredProcessorReceipt,
+        ReplaceProcessorFromSource, SubmittedProcessorSource,
     };
     use tower::ServiceExt;
 
@@ -569,10 +870,91 @@ mod router_auth_gate_tests {
         }
     }
 
-    /// A minimal always-succeeds register/replace receipt for [`AlwaysOkStubRuntime`]:
-    /// a dummy `@session/stub` registration ident with no installed processors.
-    /// The register-from-source path is not exercised by the auth-gate tests, so
-    /// the port surface is empty.
+    /// Stub runtime that instantiates one fixed processor, admits the first
+    /// `connect` and fails the second with [`Error::ProcessorNotFound`], and
+    /// records every `remove_processor` / `disconnect` it receives — so a
+    /// source-submit rollback can be observed: the just-instantiated processor
+    /// leaves no orphan, and links created earlier in the same call are undone.
+    struct RollbackObservingStubRuntime {
+        instance_id: ProcessorUniqueId,
+        first_link_id: LinkUniqueId,
+        connect_calls: std::sync::atomic::AtomicUsize,
+        removed_processors: Arc<Mutex<Vec<ProcessorUniqueId>>>,
+        disconnected_links: Arc<Mutex<Vec<LinkUniqueId>>>,
+    }
+
+    impl RuntimeOperations for RollbackObservingStubRuntime {
+        fn add_processor_async(
+            &self,
+            _spec: ProcessorSpec,
+        ) -> BoxFuture<'_, Result<ProcessorUniqueId>> {
+            let id = self.instance_id.clone();
+            Box::pin(async move { Ok(id) })
+        }
+        fn remove_processor_async(
+            &self,
+            processor_id: ProcessorUniqueId,
+        ) -> BoxFuture<'_, Result<()>> {
+            self.removed_processors.lock().push(processor_id);
+            Box::pin(async { Ok(()) })
+        }
+        fn connect_async(
+            &self,
+            _from: OutputLinkPortRef,
+            _to: InputLinkPortRef,
+        ) -> BoxFuture<'_, Result<LinkUniqueId>> {
+            let call = self
+                .connect_calls
+                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if call == 0 {
+                let id = self.first_link_id.clone();
+                Box::pin(async move { Ok(id) })
+            } else {
+                Box::pin(async { Err(Error::ProcessorNotFound("missing-peer".to_string())) })
+            }
+        }
+        fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
+            self.disconnected_links.lock().push(link_id);
+            Box::pin(async { Ok(()) })
+        }
+        fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
+            Box::pin(async { Ok(serde_json::json!({})) })
+        }
+        fn register_processor_source_async(
+            &self,
+            _request: SubmittedProcessorSource,
+        ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
+            Box::pin(async { Ok(stub_register_receipt()) })
+        }
+        fn replace_processor_async(
+            &self,
+            _request: ReplaceProcessorFromSource,
+        ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
+            Box::pin(async { Ok(stub_register_receipt()) })
+        }
+        fn add_processor(&self, _spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
+            Ok(self.instance_id.clone())
+        }
+        fn remove_processor(&self, _processor_id: &ProcessorUniqueId) -> Result<()> {
+            Ok(())
+        }
+        fn connect(&self, _from: OutputLinkPortRef, _to: InputLinkPortRef) -> Result<LinkUniqueId> {
+            Ok(self.first_link_id.clone())
+        }
+        fn disconnect(&self, _link_id: &LinkUniqueId) -> Result<()> {
+            Ok(())
+        }
+        fn to_json(&self) -> Result<serde_json::Value> {
+            Ok(serde_json::json!({}))
+        }
+    }
+
+    /// An always-succeeds register/replace receipt for [`AlwaysOkStubRuntime`]:
+    /// a `@session/stub@0.0.0` registration installing one `Widget` processor
+    /// with a `video` input (`any`) and a `frame` output (a specific
+    /// `@tatolab/core/VideoFrame@1.0.0`). Non-empty so the source-submit
+    /// composite reaches its instantiate step and the port projection is
+    /// exercised; the auth-gate tests ignore the body.
     fn stub_register_receipt() -> RegisterProcessorReceipt {
         RegisterProcessorReceipt::new(
             ModuleIdent::new(
@@ -580,7 +962,24 @@ mod router_auth_gate_tests {
                 Package::new("stub").expect("stub package passes the package grammar"),
                 SemVerRange::Exact(SemVer::new(0, 0, 0)),
             ),
-            vec![],
+            vec![RegisteredProcessorReceipt {
+                name: "Widget".to_string(),
+                inputs: vec![RegisteredPortReceipt {
+                    name: "video".to_string(),
+                    schema: PortSchemaSpec::Any,
+                    delivery_profile: Some("latest".to_string()),
+                }],
+                outputs: vec![RegisteredPortReceipt {
+                    name: "frame".to_string(),
+                    schema: PortSchemaSpec::Specific(SchemaIdent::new(
+                        Org::new("tatolab").expect("tatolab org passes the grammar"),
+                        Package::new("core").expect("core package passes the grammar"),
+                        TypeName::new("VideoFrame").expect("VideoFrame type name is valid"),
+                        SemVer::new(1, 0, 0),
+                    )),
+                    delivery_profile: None,
+                }],
+            }],
         )
     }
 
@@ -643,8 +1042,39 @@ mod router_auth_gate_tests {
         )
     }
 
+    fn create_processor_source_body() -> Body {
+        Body::from(
+            serde_json::json!({
+                "language": "python",
+                "source": "class Widget:\n    pass\n",
+                "requested_name": "widget"
+            })
+            .to_string(),
+        )
+    }
+
+    fn replace_processor_source_body() -> Body {
+        Body::from(
+            serde_json::json!({
+                "target_session_module": "@session/widget@*",
+                "language": "python",
+                "source": "class Widget:\n    pass\n",
+                "requested_name": "widget"
+            })
+            .to_string(),
+        )
+    }
+
     fn bearer(token: &str) -> String {
         format!("Bearer {token}")
+    }
+
+    async fn json_body_on(router: Router, request: Request<Body>) -> serde_json::Value {
+        let response = router.oneshot(request).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        serde_json::from_slice(&bytes).unwrap()
     }
 
     #[tokio::test]
@@ -655,6 +1085,18 @@ mod router_auth_gate_tests {
                 .uri("/api/processor")
                 .header(CONTENT_TYPE, "application/json")
                 .body(create_processor_body())
+                .unwrap(),
+            Request::builder()
+                .method("POST")
+                .uri("/api/processor/source")
+                .header(CONTENT_TYPE, "application/json")
+                .body(create_processor_source_body())
+                .unwrap(),
+            Request::builder()
+                .method("POST")
+                .uri("/api/processor/source/replace")
+                .header(CONTENT_TYPE, "application/json")
+                .body(replace_processor_source_body())
                 .unwrap(),
             Request::builder()
                 .method("POST")
@@ -688,6 +1130,209 @@ mod router_auth_gate_tests {
             .body(create_processor_body())
             .unwrap();
         assert_eq!(status_of(request).await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn create_processor_source_returns_discovered_ports_and_instance() {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/processor/source")
+            .header(AUTHORIZATION, bearer(TEST_TOKEN))
+            .header(CONTENT_TYPE, "application/json")
+            .body(create_processor_source_body())
+            .unwrap();
+        let body = json_body_on(auth_enabled_router(), request).await;
+
+        assert_eq!(body["module"], "@session/stub@=0.0.0");
+        assert_eq!(body["state"], "added");
+        assert!(
+            body["processor_id"].is_string(),
+            "the composite must instantiate the first discovered processor and return its id"
+        );
+        assert_eq!(body["events_url"], "/ws/events");
+
+        let processors = body["processors"].as_array().expect("processors array");
+        assert_eq!(processors.len(), 1);
+        assert_eq!(processors[0]["name"], "Widget");
+        assert_eq!(processors[0]["inputs"][0]["name"], "video");
+        assert_eq!(processors[0]["inputs"][0]["schema"], "any");
+        assert_eq!(processors[0]["inputs"][0]["delivery_profile"], "latest");
+        assert_eq!(processors[0]["outputs"][0]["name"], "frame");
+        assert_eq!(
+            processors[0]["outputs"][0]["schema"],
+            "@tatolab/core/VideoFrame@1.0.0"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_processor_source_wires_optional_connections() {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/processor/source")
+            .header(AUTHORIZATION, bearer(TEST_TOKEN))
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "language": "python",
+                    "source": "class Widget:\n    pass\n",
+                    "requested_name": "widget",
+                    "connect": [{
+                        "local_port": "frame",
+                        "role": "output",
+                        "peer_processor": "display-1",
+                        "peer_port": "video"
+                    }]
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        let body = json_body_on(auth_enabled_router(), request).await;
+
+        let connections = body["connections"].as_array().expect("connections array");
+        assert_eq!(
+            connections.len(),
+            1,
+            "the single requested wiring must produce one link id"
+        );
+        assert!(connections[0].is_string());
+    }
+
+    #[tokio::test]
+    async fn create_processor_source_rolls_back_on_connect_failure() {
+        let removed_processors = Arc::new(Mutex::new(Vec::new()));
+        let disconnected_links = Arc::new(Mutex::new(Vec::new()));
+        let instance_id: ProcessorUniqueId = "orphan-instance".to_string().into();
+        let first_link_id: LinkUniqueId = "link-a".to_string().into();
+        let runtime = Arc::new(RollbackObservingStubRuntime {
+            instance_id: instance_id.clone(),
+            first_link_id: first_link_id.clone(),
+            connect_calls: std::sync::atomic::AtomicUsize::new(0),
+            removed_processors: removed_processors.clone(),
+            disconnected_links: disconnected_links.clone(),
+        });
+        let router = build_router(
+            runtime,
+            None,
+            #[cfg(feature = "moq")]
+            "test-runtime-id".to_string(),
+        );
+        // The first wiring connects; the second targets a missing peer and
+        // fails — the whole submit must roll back.
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/processor/source")
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "language": "python",
+                    "source": "class Widget:\n    pass\n",
+                    "requested_name": "widget",
+                    "connect": [
+                        {
+                            "local_port": "frame",
+                            "role": "output",
+                            "peer_processor": "peer-a",
+                            "peer_port": "video"
+                        },
+                        {
+                            "local_port": "frame",
+                            "role": "output",
+                            "peer_processor": "missing-peer",
+                            "peer_port": "video"
+                        }
+                    ]
+                })
+                .to_string(),
+            ))
+            .unwrap();
+
+        let status = router.oneshot(request).await.unwrap().status();
+        assert_eq!(
+            status,
+            StatusCode::NOT_FOUND,
+            "a connect to a missing peer must surface as 404"
+        );
+        assert_eq!(
+            *removed_processors.lock(),
+            vec![instance_id],
+            "rollback must remove the just-instantiated processor so no orphan is left in the graph"
+        );
+        assert_eq!(
+            *disconnected_links.lock(),
+            vec![first_link_id],
+            "rollback must disconnect links created earlier in the same submit"
+        );
+    }
+
+    #[tokio::test]
+    async fn processor_language_schema_advertises_deno_alias() {
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/openapi.json")
+            .body(Body::empty())
+            .unwrap();
+        let spec = json_body_on(auth_enabled_router(), request).await;
+        let enum_values = spec["components"]["schemas"]["ProcessorLanguageDto"]["enum"]
+            .as_array()
+            .expect("ProcessorLanguageDto must be a documented enum schema");
+        let langs: Vec<&str> = enum_values.iter().filter_map(|v| v.as_str()).collect();
+        for expected in ["rust", "python", "typescript", "deno"] {
+            assert!(
+                langs.contains(&expected),
+                "OpenAPI ProcessorLanguageDto enum must advertise `{expected}`, got {langs:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn replace_processor_source_with_token_is_200() {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/processor/source/replace")
+            .header(AUTHORIZATION, bearer(TEST_TOKEN))
+            .header(CONTENT_TYPE, "application/json")
+            .body(replace_processor_source_body())
+            .unwrap();
+        assert_eq!(status_of(request).await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn replace_processor_source_rejects_malformed_target_module_with_400() {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/processor/source/replace")
+            .header(AUTHORIZATION, bearer(TEST_TOKEN))
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "target_session_module": "not-a-module-ident",
+                    "language": "python",
+                    "source": "class Widget:\n    pass\n",
+                    "requested_name": "widget"
+                })
+                .to_string(),
+            ))
+            .unwrap();
+        assert_eq!(status_of(request).await, StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn source_routes_are_documented_in_the_openapi_spec() {
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/openapi.json")
+            .body(Body::empty())
+            .unwrap();
+        let spec = json_body_on(auth_enabled_router(), request).await;
+        let paths = &spec["paths"];
+        assert!(
+            paths["/api/processor/source"]["post"].is_object(),
+            "POST /api/processor/source must appear in the OpenAPI spec"
+        );
+        assert!(
+            paths["/api/processor/source/replace"]["post"].is_object(),
+            "POST /api/processor/source/replace must appear in the OpenAPI spec"
+        );
     }
 
     #[tokio::test]

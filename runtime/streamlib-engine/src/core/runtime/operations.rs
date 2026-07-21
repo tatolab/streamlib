@@ -8,7 +8,8 @@ use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 use std::future::Future;
 use std::pin::Pin;
 use streamlib_idents::ModuleIdent;
-use streamlib_processor_schema::{PortSchemaSpec, ProcessorLanguage};
+use streamlib_processor_schema::PortSchemaSpec;
+pub use streamlib_processor_schema::ProcessorLanguage;
 
 use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
 
