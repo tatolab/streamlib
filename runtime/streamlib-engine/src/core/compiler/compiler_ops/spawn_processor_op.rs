@@ -9,7 +9,6 @@ use std::os::fd::OwnedFd;
 use parking_lot::{Mutex, RwLock};
 
 use crate::core::compiler::scheduling::{SchedulingStrategy, scheduling_strategy_for_processor};
-use streamlib_idents::Org;
 
 use crate::core::context::{
     FullAccessGrant, GpuContext, GpuContextLimitedAccess, IsolationTier, RuntimeContext,
@@ -149,14 +148,17 @@ fn spawn_dedicated_thread(
     let runtime_ctx_clone = Arc::clone(runtime_ctx);
     let proc_id_clone = processor_id.clone();
 
-    // Create processor instance now (with lock) since factory needs node reference
-    let processor_arc = {
+    // Create processor instance now (with lock) since factory needs node
+    // reference; read the org off the same guaranteed-present node so the
+    // isolation tier is always derived from provenance, never from node absence.
+    let (processor_arc, org) = {
         let graph = graph_arc.read();
         let node = graph.traversal().v(&processor_id).first().ok_or_else(|| {
             Error::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
         })?;
+        let org = node.processor_type().org.clone();
         let processor = factory.create(node)?;
-        Arc::new(Mutex::new(processor))
+        (Arc::new(Mutex::new(processor)), org)
     };
 
     let processor_arc_clone = Arc::clone(&processor_arc);
@@ -165,21 +167,11 @@ fn spawn_dedicated_thread(
     // trusted by default (same as installed), and a @session cdylib is eligible
     // for Untrusted only when the operator opts in (STREAMLIB_SESSION_ISOLATION_TIER
     // / set_session_isolation_tier). The tier gates every FullAccess mint on this
-    // thread (setup / start / stop / teardown).
-    //
-    // cdylib-residency (off the instance) and org (off the graph node) are two
-    // independent reads — taken unnested so no graph(read)→processor(mutex) lock
-    // order is introduced.
+    // thread (setup / start / stop / teardown). cdylib-residency is read off the
+    // instance after the graph lock is released, so no graph(read)→processor(mutex)
+    // lock order is introduced.
     let cdylib_resident = processor_arc.lock().is_cdylib_resident();
-    let org = {
-        let graph = graph_arc.read();
-        graph
-            .traversal()
-            .v(&processor_id)
-            .first()
-            .map(|n| n.processor_type().org.clone())
-    };
-    let isolation_tier = isolation_tier_for_spawn(org.as_ref(), cdylib_resident);
+    let isolation_tier = IsolationTier::for_processor(&org, cdylib_resident);
 
     // Generous 8 MB stack — processors run arbitrary codec / plugin code
     // with deep call stacks. IPC payloads are slice-based (`[u8]`) in
@@ -359,8 +351,7 @@ fn spawn_dedicated_thread(
                 ) else {
                     return;
                 };
-                let full_ctx =
-                    RuntimeContextFullAccess::new(&processor_context, full_access_grant);
+                let full_ctx = RuntimeContextFullAccess::new(&processor_context, full_access_grant);
                 let mut guard = processor_arc_clone.lock();
 
                 tracing::info!(
@@ -423,17 +414,6 @@ fn spawn_dedicated_thread(
     }
 
     Ok(())
-}
-
-/// Derive the isolation trust tier for a spawned processor from its module
-/// provenance. A missing graph node (`org == None`) fails closed to
-/// [`IsolationTier::Untrusted`] — a processor whose node vanished must never be
-/// granted an in-process FullAccess context.
-fn isolation_tier_for_spawn(org: Option<&Org>, cdylib_resident: bool) -> IsolationTier {
-    match org {
-        Some(org) => IsolationTier::for_processor(org, cdylib_resident),
-        None => IsolationTier::Untrusted,
-    }
 }
 
 /// The trust-axis moat at the FullAccess minting seam: yield a
@@ -527,36 +507,6 @@ mod tests {
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
-
-    /// Fail-closed: a processor whose graph node vanished (`org == None`)
-    /// derives [`IsolationTier::Untrusted`], never a trusted tier — a missing
-    /// node must never be granted in-process FullAccess. Mentally revert
-    /// [`isolation_tier_for_spawn`]'s `None` arm to `TrustedInstalled` and this
-    /// flips.
-    #[test]
-    fn spawn_tier_fails_closed_to_untrusted_when_node_missing() {
-        assert_eq!(isolation_tier_for_spawn(None, true), IsolationTier::Untrusted);
-        assert_eq!(
-            isolation_tier_for_spawn(None, false),
-            IsolationTier::Untrusted
-        );
-    }
-
-    /// An installed (non-session) package is trusted however it was loaded —
-    /// its spawn-side derivation is independent of the session override, so
-    /// this assertion is race-free against the global tier override.
-    #[test]
-    fn spawn_tier_trusts_installed_provenance() {
-        let installed = Org::new("tatolab").expect("valid org");
-        assert_eq!(
-            isolation_tier_for_spawn(Some(&installed), true),
-            IsolationTier::TrustedInstalled
-        );
-        assert_eq!(
-            isolation_tier_for_spawn(Some(&installed), false),
-            IsolationTier::TrustedInstalled
-        );
-    }
 
     /// The trust-axis moat wiring at the spawn setup seam: an untrusted tier
     /// yields no [`FullAccessGrant`], and the gate marks the processor
