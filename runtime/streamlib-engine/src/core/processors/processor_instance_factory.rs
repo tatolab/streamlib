@@ -1594,6 +1594,57 @@ mod tests {
     }
 
     #[test]
+    fn version_free_reference_resolves_zero_version_registration_that_a_one_zero_zero_pin_misses() {
+        use crate::core::processors::ProcessorTypeReference;
+
+        // The `streamlib-runtime` boot scenario: the always-present api-server
+        // is declared with the version-free `#[processor("@tatolab/api-server/
+        // ApiServer")]` grammar, so `register::<P>()` registers its descriptor
+        // under the `0.0.0` version-free sentinel (#1409). This reproduces both
+        // `add_v` resolution arms against exactly that registration.
+        let factory = ProcessorInstanceFactory::new();
+        let registered = ident("tatolab", "api-server", "ApiServer", SemVer::new(0, 0, 0));
+        factory
+            .register_descriptor_only(unit_descriptor(registered.clone()))
+            .expect("register the api-server descriptor at the 0.0.0 sentinel");
+
+        // The fix's arm: a version-free `ResolveToInstalled` reference resolves
+        // `(org, package, type)` to the concrete 0.0.0 registration, and that
+        // ident carries a `port_info` entry — so `add_v` resolves the node.
+        let version_free = ProcessorTypeReference::ResolveToInstalled {
+            org: Org::new("tatolab").unwrap(),
+            package: Package::new("api-server").unwrap(),
+            r#type: TypeName::new("ApiServer").unwrap(),
+        };
+        let resolved = factory.resolve_installed_processor_type(
+            version_free.org(),
+            version_free.package(),
+            version_free.r#type(),
+        );
+        assert_eq!(
+            resolved.as_ref(),
+            Some(&registered),
+            "a version-free reference must resolve to the 0.0.0 registration"
+        );
+        assert!(
+            factory.port_info(&registered).is_some(),
+            "the resolved ident must carry a port_info entry so add_v resolves the node"
+        );
+
+        // The reverted-bug arm: the old `schema_ident!(…, \"1.0.0\")` produced a
+        // `VersionPinned(@1.0.0)` reference, which `add_v` resolves version-EXACT
+        // via `port_info`. Against a 0.0.0-only registration that lookup misses —
+        // the node would be added in Error state and the api-server would never
+        // compile (→ /health never served). Mentally reverting main.rs to the
+        // pinned form reproduces exactly this miss.
+        let one_zero_zero = ident("tatolab", "api-server", "ApiServer", SemVer::new(1, 0, 0));
+        assert!(
+            factory.port_info(&one_zero_zero).is_none(),
+            "a 1.0.0-pinned reference must MISS the 0.0.0 registration — the boot bug"
+        );
+    }
+
+    #[test]
     fn resolve_any_version_does_not_cross_org_or_package_or_type_boundaries() {
         let factory = ProcessorInstanceFactory::new();
 

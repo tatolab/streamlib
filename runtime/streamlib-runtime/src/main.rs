@@ -17,9 +17,9 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Parser;
 use streamlib::sdk::RunnerAutoBuild;
+use streamlib::sdk::processor_type_ref;
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::schema_ident;
 
 #[derive(Parser)]
 #[command(name = "streamlib-runtime")]
@@ -88,7 +88,7 @@ async fn run(args: Args) -> Result<()> {
         api_config.insert("log_path".into(), serde_json::Value::from(path));
     }
     runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "api-server", "ApiServer", "1.0.0"),
+        processor_type_ref!("tatolab", "api-server", "ApiServer"),
         serde_json::Value::Object(api_config),
     ))?;
 
