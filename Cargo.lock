@@ -5012,6 +5012,7 @@ version = "0.7.21"
 dependencies = [
  "anyhow",
  "serde_json",
+ "serde_yaml",
  "serial_test",
  "streamlib-cargo-build",
  "streamlib-engine",
@@ -5019,6 +5020,8 @@ dependencies = [
  "streamlib-jtd-codegen",
  "streamlib-pack",
  "streamlib-plugin-abi",
+ "streamlib-processor-extract",
+ "streamlib-processor-schema",
  "tempfile",
  "thiserror 2.0.18",
  "toml_edit 0.22.27",

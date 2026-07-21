@@ -32,8 +32,8 @@ use std::process::Command;
 
 use serde::Deserialize;
 use streamlib_processor_schema::{
-    PortSchemaSpec, ProcessorLanguage, ProcessorPortSchema, ProcessorSchema,
-    ProcessorSchemaExecution,
+    PortSchemaSpec, ProcessorLanguage, ProcessorPortSchema, ProcessorScheduling, ProcessorSchema,
+    ProcessorSchemaExecution, SchemaIdent,
 };
 
 use crate::reachable::{ModuleReachabilityTarget, extract_reachable_rust_processors};
@@ -365,6 +365,122 @@ impl WireProcessor {
                 .outputs
                 .into_iter()
                 .map(WirePort::into_surface)
+                .collect(),
+        }
+    }
+}
+
+/// A full-fidelity manifest projection of one extractor-emitted processor.
+///
+/// Where [`ProcessorSurface`] keeps only the lossy drift-comparison identity
+/// (type name, execution, port names + bare schema type), this retains
+/// everything the manifest `processors:` entry carries — the full schema
+/// identity (org/package/type/version), execution + scheduling, description,
+/// and each port's schema id, description, and delivery-profile override. It is
+/// the shape the build orchestrator splices into a staged `@session/<name>`
+/// manifest so a live-submitted processor mints connectable ports from its real
+/// declared surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractedManifestProcessor {
+    /// The processor's full `@org/package/Type@version` identity.
+    pub schema_ident: SchemaIdent,
+    /// Execution mode.
+    pub execution: ProcessorSchemaExecution,
+    /// Declarative scheduling intent the source declared, if any.
+    pub scheduling: Option<ProcessorScheduling>,
+    /// Human-readable description the source declared, if any.
+    pub description: Option<String>,
+    /// Input ports, in declaration order.
+    pub inputs: Vec<ExtractedManifestPort>,
+    /// Output ports, in declaration order.
+    pub outputs: Vec<ExtractedManifestPort>,
+}
+
+/// One port from a full-fidelity extractor projection: its name, schema
+/// identity (`None` for an `any` wildcard), description, and — inputs only —
+/// the delivery-profile override.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractedManifestPort {
+    pub name: String,
+    pub schema: Option<SchemaIdent>,
+    pub description: Option<String>,
+    pub delivery_profile: Option<String>,
+}
+
+/// Parse a Python/Deno extractor's stdout JSON into the full-fidelity manifest
+/// projection.
+///
+/// The sibling of [`parse_subprocess_manifest_json`]: same wire input, but it
+/// retains org/package/version, per-port schema id + description +
+/// delivery_profile, and execution/scheduling rather than collapsing to the
+/// drift-comparison surface. The build orchestrator consumes this to splice
+/// real ports into a staged `@session/<name>` manifest.
+pub fn parse_subprocess_manifest_json_full(
+    language: &'static str,
+    json: &str,
+) -> Result<Vec<ExtractedManifestProcessor>, DeriveError> {
+    let wire: Vec<WireProcessorFull> = serde_json::from_str(json)
+        .map_err(|source| DeriveError::MalformedExtractorJson { language, source })?;
+    Ok(wire
+        .into_iter()
+        .map(WireProcessorFull::into_manifest)
+        .collect())
+}
+
+#[derive(Debug, Deserialize)]
+struct WireProcessorFull {
+    schema_ident: SchemaIdent,
+    execution: ProcessorSchemaExecution,
+    #[serde(default)]
+    scheduling: Option<ProcessorScheduling>,
+    #[serde(default)]
+    description: Option<String>,
+    #[serde(default)]
+    inputs: Vec<WirePortFull>,
+    #[serde(default)]
+    outputs: Vec<WirePortFull>,
+}
+
+#[derive(Debug, Deserialize)]
+struct WirePortFull {
+    name: String,
+    /// `null` for an `any` wildcard port, else the 4-field schema ident.
+    #[serde(default)]
+    schema: Option<SchemaIdent>,
+    #[serde(default)]
+    description: Option<String>,
+    /// Present on input ports only; `null`/absent on outputs.
+    #[serde(default)]
+    delivery_profile: Option<String>,
+}
+
+impl WirePortFull {
+    fn into_manifest(self) -> ExtractedManifestPort {
+        ExtractedManifestPort {
+            name: self.name,
+            schema: self.schema,
+            description: self.description,
+            delivery_profile: self.delivery_profile,
+        }
+    }
+}
+
+impl WireProcessorFull {
+    fn into_manifest(self) -> ExtractedManifestProcessor {
+        ExtractedManifestProcessor {
+            schema_ident: self.schema_ident,
+            execution: self.execution,
+            scheduling: self.scheduling,
+            description: self.description,
+            inputs: self
+                .inputs
+                .into_iter()
+                .map(WirePortFull::into_manifest)
+                .collect(),
+            outputs: self
+                .outputs
+                .into_iter()
+                .map(WirePortFull::into_manifest)
                 .collect(),
         }
     }
@@ -753,6 +869,69 @@ mod tests {
     #[test]
     fn malformed_extractor_json_is_typed_error() {
         let err = parse_subprocess_manifest_json("python", "not json").unwrap_err();
+        assert!(matches!(err, DeriveError::MalformedExtractorJson { .. }));
+    }
+
+    #[test]
+    fn full_parse_retains_ident_delivery_profile_and_scheduling() {
+        // The full-fidelity parse keeps everything the lossy drift surface drops:
+        // the full 4-field schema ident (org/package/version, not just the type),
+        // per-input `delivery_profile` + `description`, and top-level
+        // `scheduling`. This is exactly what the orchestrator splice needs to
+        // rewrite a staged @session manifest's ports.
+        let json = r#"[
+          {
+            "name": "PassThrough",
+            "schema_ident": {"org":"session","package":"widget","type":"PassThrough","version":"0.0.3"},
+            "execution": "reactive",
+            "scheduling": {"priority":"high"},
+            "description": "a live-submitted pass-through",
+            "inputs": [
+              {"name":"any_in","schema":null,"description":"wildcard input","delivery_profile":"latest"}
+            ],
+            "outputs": [
+              {"name":"video_out","schema":{"org":"tatolab","package":"core","type":"VideoFrame","version":"0.0.0"},"description":null}
+            ]
+          }
+        ]"#;
+        let procs = parse_subprocess_manifest_json_full("python", json).unwrap();
+        assert_eq!(procs.len(), 1);
+        let p = &procs[0];
+        assert_eq!(p.schema_ident.org.as_str(), "session");
+        assert_eq!(p.schema_ident.package.as_str(), "widget");
+        assert_eq!(p.schema_ident.r#type.as_str(), "PassThrough");
+        assert_eq!(p.schema_ident.version.to_string(), "0.0.3");
+        assert_eq!(p.execution, ProcessorSchemaExecution::Reactive);
+        assert_eq!(
+            p.scheduling.map(|s| s.priority),
+            Some(streamlib_processor_schema::ThreadPriority::High)
+        );
+        assert_eq!(p.description.as_deref(), Some("a live-submitted pass-through"));
+        assert_eq!(p.inputs.len(), 1);
+        assert!(p.inputs[0].schema.is_none(), "null schema is an any wildcard");
+        assert_eq!(p.inputs[0].delivery_profile.as_deref(), Some("latest"));
+        assert_eq!(p.inputs[0].description.as_deref(), Some("wildcard input"));
+        assert_eq!(p.outputs.len(), 1);
+        assert_eq!(
+            p.outputs[0].schema.as_ref().map(|s| s.r#type.as_str()),
+            Some("VideoFrame")
+        );
+    }
+
+    #[test]
+    fn full_parse_handles_continuous_execution_and_malformed_json() {
+        let json = r#"[{"name":"Gen",
+            "schema_ident":{"org":"session","package":"gen","type":"Gen","version":"0.0.1"},
+            "execution":{"type":"continuous","interval_ms":10},"scheduling":null,"description":null,
+            "inputs":[],"outputs":[]}]"#;
+        let procs = parse_subprocess_manifest_json_full("deno", json).unwrap();
+        assert_eq!(
+            procs[0].execution,
+            ProcessorSchemaExecution::Continuous { interval_ms: 10 }
+        );
+        assert!(procs[0].scheduling.is_none());
+
+        let err = parse_subprocess_manifest_json_full("python", "not json").unwrap_err();
         assert!(matches!(err, DeriveError::MalformedExtractorJson { .. }));
     }
 

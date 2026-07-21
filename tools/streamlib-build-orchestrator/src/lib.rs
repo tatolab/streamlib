@@ -40,6 +40,7 @@ mod deno_codegen;
 mod native_host;
 mod python_venv;
 mod release_check;
+mod session_ports;
 
 #[cfg(test)]
 mod test_support;
@@ -350,6 +351,24 @@ impl PolyglotBuildOrchestrator {
             e
         })?;
 
+        // ---- session-source port extraction ----
+        // A live-submitted `@session/<name>` package stages a placeholder
+        // `inputs: []` / `outputs: []` manifest (the submit site cannot know the
+        // ports without running the source). Now that the subprocess runtime is
+        // provisioned, derive the REAL ports from the staged source by running
+        // the language's import-and-enumerate extractor and splice them into the
+        // staged manifest before the atomic rename carries it into the cache.
+        // Gated on the reserved session org so a normal package (whose committed
+        // `processors:` is the source of truth, drift-checked at `pkg build`) is
+        // never rewritten here.
+        if package.org.is_reserved_for_session() {
+            session_ports::splice_session_manifest_ports(&temp_dir, active_link.as_ref(), &pkg_label)
+                .map_err(|e| {
+                    let _ = std::fs::remove_dir_all(&temp_dir);
+                    e
+                })?;
+        }
+
         write_sidecar(&temp_dir, triple, self.profile, &fingerprint)
             .map_err(|e| other(&pkg_label, format!("writing build sidecar: {e}")))?;
         atomic_swap(&temp_dir, &cache_slot)
@@ -543,6 +562,10 @@ struct ActiveBuildLink {
     consumer_cargo_config: Option<PathBuf>,
     /// The linked checkout's Python SDK path (uv editable source target).
     python_sdk_path: PathBuf,
+    /// The linked checkout's Deno SDK entrypoint (`.../streamlib-deno/mod.ts`).
+    /// The session port-extraction tail resolves the Deno `extract_processors.ts`
+    /// as its sibling under a link.
+    deno_sdk_entrypoint_path: PathBuf,
 }
 
 /// Discover the active `streamlib link` for the current build from the process
@@ -582,6 +605,7 @@ fn discover_active_build_link_from(
         checkout: manifest.checkout,
         consumer_cargo_config,
         python_sdk_path: manifest.python_sdk_path,
+        deno_sdk_entrypoint_path: manifest.deno_sdk_entrypoint_path,
     }))
 }
 
