@@ -29,6 +29,13 @@
 //! started, and the corresponding marker never appears → the poll times out →
 //! this test fails.
 //!
+//! Scope: this locks live `add_processor` / `remove_processor` on a started
+//! runtime ONLY. It does NOT exercise `connect` / `disconnect` on a started
+//! runtime — the probes are portless, so there is no cross-address-space
+//! delivery marker to assert a rewire against. The live `connect` / `disconnect`
+//! splice the `dynamic-reconfigure` example performs (camera → passthrough →
+//! display and back) is verified visually via `/verify-live`, not here.
+//!
 //! Runs on the rig (GPU-backed `Runner`), headless (no window). Not part of
 //! the `--lib` CI, which never builds `tests/` integration binaries.
 
