@@ -95,20 +95,12 @@ pub struct ReplaceProcessorFromSource {
     pub replacement: SubmittedProcessorSource,
 }
 
-/// The success payload of `register_processor_source` / `replace_processor`.
+/// The success payload of `register_processor_source` / `replace_processor`:
+/// the minted registration [`ModuleIdent`] plus each installed processor's
+/// committed port surface.
 ///
-/// A thin receipt: the minted registration [`ModuleIdent`] plus, for every
-/// processor the registration installed, its committed port surface. Built
-/// engine-side from the committed [`ProcessorDescriptor`]s AFTER the load
-/// commits, so a live-submit caller (filed #1424) learns the connectable ports
-/// — names, schema ids, input delivery profiles — without a second graph
-/// round-trip.
-///
-/// This is a payload-only growth over the former bare `ModuleIdent` return: the
-/// `RuntimeOpsVTable` v3 layout (fn-pointer offsets) is unchanged; only the
-/// msgpack body carried on the success completion grew. It is the msgpack wire
-/// payload the register/replace slots return, so it is serde-stable across the
-/// plugin ABI.
+/// The msgpack wire payload the register/replace slots return; serde-stable
+/// across the plugin ABI.
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct RegisterProcessorReceipt {
     /// The minted `@session/<name>@0.0.N` registration ident (NOT an
