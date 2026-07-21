@@ -429,23 +429,60 @@ fn session_pyproject_toml(name: &str) -> String {
 }
 
 /// A minimal `deno.json` import map for a live-submitted TypeScript session
-/// package: maps the `streamlib` specifier the source imports at the SDK so the
-/// Deno subprocess resolves it (redirected at the linked checkout under an
-/// active `streamlib link`).
+/// package: maps the `streamlib` specifier the source imports at the
+/// npm-published SDK so the Deno subprocess resolves it. The `streamlib-deno`
+/// version is pinned to this build's workspace version (`CARGO_PKG_VERSION` —
+/// the version the static-registry emit publishes every SDK at) so a session
+/// package can never resolve a version-skewed SDK across the msgpack / handshake
+/// ABI. This is a static, pinned npm import map with no `streamlib link`
+/// redirect: unlike Python's editable venv install, a Deno session package
+/// always resolves the published SDK by version.
 fn session_deno_json() -> String {
-    "{\n  \
-       \"imports\": {\n    \
-         \"streamlib\": \"npm:@tatolab/streamlib-deno\",\n    \
-         \"streamlib/\": \"npm:/@tatolab/streamlib-deno/\"\n  \
-       }\n\
-     }\n"
-        .to_string()
+    let version = env!("CARGO_PKG_VERSION");
+    format!(
+        "{{\n  \
+           \"imports\": {{\n    \
+             \"streamlib\": \"npm:@tatolab/streamlib-deno@{version}\",\n    \
+             \"streamlib/\": \"npm:/@tatolab/streamlib-deno@{version}/\"\n  \
+           }}\n\
+         }}\n"
+    )
 }
 
 /// The root under which live-submitted session sources are staged:
 /// `<STREAMLIB_DATA_DIR>/session-source/`.
 fn session_source_staging_root() -> PathBuf {
     crate::core::streamlib_home::get_streamlib_data_dir().join("session-source")
+}
+
+/// Reclaim the whole session-source staging tree exactly once per process, at
+/// runtime start. The `@session/<name>@0.0.N` version counter
+/// ([`streamlib_idents::next_session_module_version`]) is process-global and
+/// restarts at `0` each process, so without this a fresh process would re-mint
+/// `0.0.0` onto a `session-source/<name>/0.0.0/` dir surviving from a prior run
+/// and reuse its stale staged source / venv. Clearing the tree on start makes
+/// every mint in the new process land in a clean staging root; the reclaim is
+/// gated to the FIRST runtime of the process (matching the counter's lifetime),
+/// so a second in-process runtime never clobbers a live registration's on-disk
+/// staged source (the replace/restore transaction's restore artifact).
+pub(crate) fn reclaim_session_source_staging_root_once() {
+    static RECLAIMED: std::sync::Once = std::sync::Once::new();
+    RECLAIMED.call_once(|| reclaim_session_source_staging_tree(&session_source_staging_root()));
+}
+
+/// Best-effort removal of the session-source staging tree at `root`. A missing
+/// tree is the common (clean) case and is not an error; any other failure is
+/// logged and swallowed so a stale-permission staging dir never blocks runtime
+/// start. Pure over `root` so the reclaim is unit-testable without the data dir.
+fn reclaim_session_source_staging_tree(root: &Path) {
+    match std::fs::remove_dir_all(root) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => tracing::debug!(
+            root = %root.display(),
+            "failed to reclaim session-source staging tree at runtime start: {e}",
+        ),
+    }
 }
 
 /// Generate the `streamlib.yaml` for a single-processor `@session/<name>`
@@ -596,8 +633,10 @@ mod tests {
         );
         let deno_body = std::fs::read_to_string(&deno_json).unwrap();
         assert!(
-            deno_body.contains("streamlib"),
-            "the staged deno.json must map the streamlib specifier, got: {deno_body}"
+            deno_body
+                .contains(&format!("npm:@tatolab/streamlib-deno@{}", env!("CARGO_PKG_VERSION"))),
+            "the staged deno.json must pin the streamlib-deno SDK to this build's version so a \
+             session package can't resolve a version-skewed SDK, got: {deno_body}"
         );
         let _ = std::fs::remove_dir_all(&staged.dir);
     }
@@ -1142,5 +1181,31 @@ mod tests {
         runtime
             .remove_module(replaced.module)
             .expect("cleanup remove of the replacement");
+    }
+
+    #[test]
+    fn reclaim_clears_a_stale_on_disk_session_version_dir() {
+        // Restart-collision lock: the `@session/<name>@0.0.N` counter restarts
+        // at 0 each process, so a stale `session-source/<name>/0.0.0/` dir from a
+        // prior run must be reclaimed on runtime start — otherwise a fresh
+        // process re-mints `0.0.0` onto it and reuses its stale source/venv.
+        // Mentally-revert the reclaim and the planted stale dir survives, so a
+        // first-mint-after-restart would collide with it.
+        let root_holder = tempfile::tempdir().unwrap();
+        let root = root_holder.path().join("session-source");
+        let stale_version_dir = root.join("widget").join("0.0.0");
+        std::fs::create_dir_all(&stale_version_dir).unwrap();
+        std::fs::write(stale_version_dir.join("widget.py"), "stale\n").unwrap();
+
+        reclaim_session_source_staging_tree(&root);
+
+        assert!(
+            !root.exists(),
+            "the reclaim must clear the whole session-source staging tree so no stale \
+             version dir survives a restart"
+        );
+
+        // A second reclaim over the now-absent tree is a no-op, not an error.
+        reclaim_session_source_staging_tree(&root);
     }
 }

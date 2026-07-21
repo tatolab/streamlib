@@ -227,6 +227,12 @@ impl Runner {
         tracing::debug!("STREAMLIB_HOME: {}", streamlib_home.display());
         crate::core::runtime_hooks::run_init_hooks(&streamlib_home)?;
 
+        // Reclaim the session-source staging tree once per process. The
+        // `@session/<name>@0.0.N` version counter restarts at 0 each process, so
+        // a stale `session-source/<name>/0.0.0/` dir from a prior run would
+        // otherwise be re-minted onto and its stale source/venv reused.
+        crate::core::runtime::module_loader::reclaim_session_source_staging_root_once();
+
         // The engine substrate is empty by construction — there are no
         // compile-time-linked processors. Callers populate the
         // `PROCESSOR_REGISTRY` after `Runner::new()` returns via
