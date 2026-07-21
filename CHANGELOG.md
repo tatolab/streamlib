@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.23](https://github.com/tatolab/streamlib/compare/v0.7.22...v0.7.23) (2026-07-21)
+
+
+### Features
+
+* **packages:** api-server POST /api/processor/source + replace endpoints ([#1492](https://github.com/tatolab/streamlib/issues/1492)) ([8781b94](https://github.com/tatolab/streamlib/commit/8781b943b3b41bbe152de80b79b1c8dc80f1807a))
+
 ## [0.7.22](https://github.com/tatolab/streamlib/compare/v0.7.21...v0.7.22) (2026-07-21)
 
 
