@@ -31,6 +31,7 @@ use tracing::Level;
 use utoipa::OpenApi;
 use utoipa_axum::{router::OpenApiRouter, routes};
 
+use crate::auth::{ApiServerBearerToken, ForbiddenResponse, UnauthorizedResponse};
 use crate::state::{
     ApiDoc, AppState, CreateConnectionRequest, CreateProcessorRequest, ErrorResponse, IdResponse,
     ProcessorNotFoundResponse, ProcessorPortNotFoundResponse, UnknownProcessorTypeResponse,
@@ -41,20 +42,39 @@ use crate::state::{
 // ============================================================================
 
 /// Build the full router with shared state and trace layer attached.
+///
+/// The four mutating routes (`POST /api/processor`, `DELETE
+/// /api/processors/{id}`, `POST /api/connections`, `DELETE
+/// /api/connections/{id}`) sit behind the bearer-token auth middleware only
+/// when `auth_token` is `Some` (auth opted in); with `None` — the
+/// zero-ceremony default — they are open like every other route. The GET
+/// routes, health check, WebSocket event stream, and OpenAPI spec are always
+/// open. `route_layer` binds the auth layer to exactly the routes already on
+/// the protected sub-router, so a later `merge` leaves the open routes ungated.
 pub(crate) fn build_router(
     runtime: Arc<dyn RuntimeOperations>,
+    auth_token: Option<ApiServerBearerToken>,
     #[cfg(feature = "moq")] runtime_id: String,
 ) -> Router {
-    let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
-        .routes(routes!(health))
-        .routes(routes!(get_graph))
+    let mut protected = OpenApiRouter::new()
         .routes(routes!(create_processor))
         .routes(routes!(delete_processor))
         .routes(routes!(create_connection))
-        .routes(routes!(delete_connection))
+        .routes(routes!(delete_connection));
+    if let Some(auth_token) = auth_token {
+        protected = protected.route_layer(axum::middleware::from_fn_with_state(
+            auth_token,
+            crate::auth::require_bearer_token,
+        ));
+    }
+
+    let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
+        .routes(routes!(health))
+        .routes(routes!(get_graph))
         .routes(routes!(get_registry))
         .routes(routes!(list_schema_definitions))
         .routes(routes!(get_schema_definition))
+        .merge(protected)
         .split_for_parts();
 
     let state = AppState {
@@ -124,6 +144,8 @@ pub(crate) async fn get_graph(
     responses(
         (status = 200, description = "Processor created successfully", body = IdResponse),
         (status = 400, description = "Malformed request (invalid org / package / type / version segment)", body = ErrorResponse),
+        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
+        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
         (status = 422, description = "Processor type is structurally valid but not registered in the runtime; the failed node is left in the graph in `Error` state", body = UnknownProcessorTypeResponse)
     )
 )]
@@ -196,6 +218,8 @@ pub(crate) async fn create_processor(
     ),
     responses(
         (status = 204, description = "Processor deleted successfully"),
+        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
+        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
         (status = 404, description = "Processor not found")
     )
 )]
@@ -220,6 +244,8 @@ pub(crate) async fn delete_processor(
     responses(
         (status = 200, description = "Connection created successfully", body = IdResponse),
         (status = 400, description = "Malformed request or generic graph error", body = ErrorResponse),
+        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
+        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
         (status = 404, description = "One of the referenced processors isn't in the graph", body = ProcessorNotFoundResponse),
         (status = 422, description = "Referenced processor exists but has no port with that name and direction", body = ProcessorPortNotFoundResponse)
     )
@@ -281,6 +307,8 @@ pub(crate) async fn create_connection(
     ),
     responses(
         (status = 204, description = "Connection deleted successfully"),
+        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
+        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
         (status = 404, description = "Connection not found")
     )
 )]
@@ -458,5 +486,269 @@ impl EventListener for WebSocketEventForwarder {
     fn on_event(&mut self, event: &Event) -> Result<()> {
         let _ = self.tx.send(event.clone());
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod router_auth_gate_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{
+        header::{AUTHORIZATION, CONTENT_TYPE},
+        Request, StatusCode,
+    };
+    use streamlib::sdk::graph::{LinkUniqueId, ProcessorUniqueId};
+    use streamlib::sdk::runtime::BoxFuture;
+    use tower::ServiceExt;
+
+    /// Stub runtime whose graph mutations all succeed, so the REAL
+    /// [`build_router`] auth gate can be exercised end-to-end. With auth
+    /// enabled, a mutating handler reaches its `Ok` result (200 / 204) only
+    /// once the bearer-token middleware has admitted the request — deleting the
+    /// `route_layer` gate flips the missing-token cases from 401 to those
+    /// success codes, so the enabled-mode tests go red on that regression. With
+    /// auth off (the default), the same handlers must be reachable with no
+    /// token at all.
+    struct AlwaysOkStubRuntime;
+
+    impl RuntimeOperations for AlwaysOkStubRuntime {
+        fn add_processor_async(
+            &self,
+            _spec: ProcessorSpec,
+        ) -> BoxFuture<'_, Result<ProcessorUniqueId>> {
+            Box::pin(async { Ok(ProcessorUniqueId::new()) })
+        }
+        fn remove_processor_async(
+            &self,
+            _processor_id: ProcessorUniqueId,
+        ) -> BoxFuture<'_, Result<()>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn connect_async(
+            &self,
+            _from: OutputLinkPortRef,
+            _to: InputLinkPortRef,
+        ) -> BoxFuture<'_, Result<LinkUniqueId>> {
+            Box::pin(async { Ok(LinkUniqueId::new()) })
+        }
+        fn disconnect_async(&self, _link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
+            Box::pin(async { Ok(serde_json::json!({})) })
+        }
+        fn add_processor(&self, _spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
+            Ok(ProcessorUniqueId::new())
+        }
+        fn remove_processor(&self, _processor_id: &ProcessorUniqueId) -> Result<()> {
+            Ok(())
+        }
+        fn connect(&self, _from: OutputLinkPortRef, _to: InputLinkPortRef) -> Result<LinkUniqueId> {
+            Ok(LinkUniqueId::new())
+        }
+        fn disconnect(&self, _link_id: &LinkUniqueId) -> Result<()> {
+            Ok(())
+        }
+        fn to_json(&self) -> Result<serde_json::Value> {
+            Ok(serde_json::json!({}))
+        }
+    }
+
+    const TEST_TOKEN: &str = "test-bearer-secret";
+
+    /// Router with bearer auth explicitly enabled — the mutating routes are
+    /// gated behind [`TEST_TOKEN`].
+    fn auth_enabled_router() -> Router {
+        build_router(
+            Arc::new(AlwaysOkStubRuntime),
+            Some(ApiServerBearerToken::from_secret(TEST_TOKEN)),
+            #[cfg(feature = "moq")]
+            "test-runtime-id".to_string(),
+        )
+    }
+
+    /// Router in the default (auth-off) mode — every route, including the
+    /// mutating ones, is open with no token.
+    fn auth_disabled_router() -> Router {
+        build_router(
+            Arc::new(AlwaysOkStubRuntime),
+            None,
+            #[cfg(feature = "moq")]
+            "test-runtime-id".to_string(),
+        )
+    }
+
+    async fn status_on(router: Router, request: Request<Body>) -> StatusCode {
+        router.oneshot(request).await.unwrap().status()
+    }
+
+    async fn status_of(request: Request<Body>) -> StatusCode {
+        status_on(auth_enabled_router(), request).await
+    }
+
+    fn create_processor_body() -> Body {
+        Body::from(
+            serde_json::json!({
+                "processor_type": {
+                    "org": "tatolab",
+                    "package": "debug-utilities",
+                    "type": "SimplePassthroughProcessor",
+                    "version": { "major": 1, "minor": 0, "patch": 0 }
+                },
+                "config": {}
+            })
+            .to_string(),
+        )
+    }
+
+    fn create_connection_body() -> Body {
+        Body::from(
+            serde_json::json!({
+                "from_processor": "p1",
+                "from_port": "output",
+                "to_processor": "p2",
+                "to_port": "input"
+            })
+            .to_string(),
+        )
+    }
+
+    fn bearer(token: &str) -> String {
+        format!("Bearer {token}")
+    }
+
+    #[tokio::test]
+    async fn mutating_routes_reject_missing_token_with_401() {
+        let unauthenticated = [
+            Request::builder()
+                .method("POST")
+                .uri("/api/processor")
+                .header(CONTENT_TYPE, "application/json")
+                .body(create_processor_body())
+                .unwrap(),
+            Request::builder()
+                .method("POST")
+                .uri("/api/connections")
+                .header(CONTENT_TYPE, "application/json")
+                .body(create_connection_body())
+                .unwrap(),
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/processors/some-id")
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/connections/some-id")
+                .body(Body::empty())
+                .unwrap(),
+        ];
+        for request in unauthenticated {
+            assert_eq!(status_of(request).await, StatusCode::UNAUTHORIZED);
+        }
+    }
+
+    #[tokio::test]
+    async fn create_processor_with_token_is_200() {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/processor")
+            .header(AUTHORIZATION, bearer(TEST_TOKEN))
+            .header(CONTENT_TYPE, "application/json")
+            .body(create_processor_body())
+            .unwrap();
+        assert_eq!(status_of(request).await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn create_connection_with_token_is_200() {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/connections")
+            .header(AUTHORIZATION, bearer(TEST_TOKEN))
+            .header(CONTENT_TYPE, "application/json")
+            .body(create_connection_body())
+            .unwrap();
+        assert_eq!(status_of(request).await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn delete_processor_with_token_is_204() {
+        let request = Request::builder()
+            .method("DELETE")
+            .uri("/api/processors/some-id")
+            .header(AUTHORIZATION, bearer(TEST_TOKEN))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(status_of(request).await, StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn delete_connection_with_token_is_204() {
+        let request = Request::builder()
+            .method("DELETE")
+            .uri("/api/connections/some-id")
+            .header(AUTHORIZATION, bearer(TEST_TOKEN))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(status_of(request).await, StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn open_routes_need_no_authorization_header() {
+        let open = ["/health", "/api/registry", "/api/openapi.json"];
+        for uri in open {
+            let request = Request::builder()
+                .method("GET")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap();
+            assert_eq!(
+                status_of(request).await,
+                StatusCode::OK,
+                "GET {uri} must stay open (no bearer token)"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_off_lets_create_routes_through_without_a_token() {
+        // The zero-ceremony default: with auth off, the mutating POST routes
+        // reach their handlers (200) with no `Authorization` header. Reapplying
+        // the gate unconditionally in `build_router` flips these to 401.
+        let posts = [
+            ("/api/processor", create_processor_body()),
+            ("/api/connections", create_connection_body()),
+        ];
+        for (uri, body) in posts {
+            let request = Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(CONTENT_TYPE, "application/json")
+                .body(body)
+                .unwrap();
+            assert_eq!(
+                status_on(auth_disabled_router(), request).await,
+                StatusCode::OK,
+                "POST {uri} must be open with auth off (no token)"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_off_lets_delete_routes_through_without_a_token() {
+        let deletes = ["/api/processors/some-id", "/api/connections/some-id"];
+        for uri in deletes {
+            let request = Request::builder()
+                .method("DELETE")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap();
+            assert_eq!(
+                status_on(auth_disabled_router(), request).await,
+                StatusCode::NO_CONTENT,
+                "DELETE {uri} must be open with auth off (no token)"
+            );
+        }
     }
 }

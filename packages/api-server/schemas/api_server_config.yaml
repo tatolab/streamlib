@@ -25,3 +25,7 @@ optionalProperties:
     metadata:
       description: "Log file path for surface-share registration"
     type: string
+  require_auth:
+    metadata:
+      description: "Opt into bearer-token auth on the four mutating control-plane routes. Absent / false leaves them open (the zero-ceremony default — a node runs locally with full permission); true auto-generates and 0600-persists a shared secret and gates every mutating route behind `Authorization: Bearer <token>`. An opt-in hardening layer for exposed / fleet deployments, not a default."
+    type: boolean

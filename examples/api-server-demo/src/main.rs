@@ -103,6 +103,9 @@ async fn main() -> DemoResult<()> {
     }
     println!("Control plane is up.\n");
 
+    // The runtime runs with the zero-ceremony default (bearer auth off), so the
+    // mutating routes are open — the requests below present no token.
+
     // Start WebSocket event collector as async task
     let events = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
     let ws_events = Arc::clone(&events);

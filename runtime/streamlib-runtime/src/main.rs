@@ -26,7 +26,7 @@ use streamlib::sdk::schema_ident;
 #[command(author, version, about = "StreamLib runtime process", long_about = None)]
 struct Args {
     /// Host address to bind the API server to
-    #[arg(long, default_value = "127.0.0.1")]
+    #[arg(long, default_value = "0.0.0.0")]
     host: String,
 
     /// Port for the API server

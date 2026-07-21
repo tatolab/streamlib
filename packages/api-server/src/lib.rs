@@ -6,6 +6,7 @@ pub mod _generated_ {
     include!(concat!(env!("OUT_DIR"), "/_generated_shim.rs"));
 }
 
+mod auth;
 mod handlers;
 mod processor;
 mod state;

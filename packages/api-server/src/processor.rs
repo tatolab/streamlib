@@ -20,6 +20,9 @@ struct StashedHandles {
     runtime: Arc<dyn RuntimeOperations>,
     tokio_handle: tokio::runtime::Handle,
     runtime_id: String,
+    /// `Some` only when the config opted into bearer auth; `None` leaves the
+    /// mutating routes open (the zero-ceremony default).
+    auth_token: Option<crate::auth::ApiServerBearerToken>,
 }
 
 /// Docker-style adjectives for runtime name generation.
@@ -140,12 +143,28 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         let tokio_handle = runtime.handle().clone();
         self.tokio_runtime = Some(runtime);
 
+        // Bearer auth is opt-in (default off): a node runs locally with full
+        // permission, so the mutating routes stay open unless the config asks
+        // for a token. When enabled, auto-generate + 0600-persist the secret on
+        // first setup (reused across restarts) and gate every mutating route.
+        let auth_token = if self.config.require_auth == Some(true) {
+            let token = crate::auth::ApiServerBearerToken::load_or_create_under_data_dir()?;
+            tracing::info!(
+                "ApiServer bearer token at {}",
+                crate::auth::ApiServerBearerToken::default_token_path().display()
+            );
+            Some(token)
+        } else {
+            None
+        };
+
         // Capture just the narrow handles the HTTP server task needs;
         // the long-lived task never holds a `RuntimeContext`.
         self.handles = Some(StashedHandles {
             runtime: ctx.runtime(),
             tokio_handle,
             runtime_id: ctx.runtime_id().to_string(),
+            auth_token,
         });
         Ok(())
     }
@@ -185,14 +204,15 @@ impl ManualProcessor for ApiServerProcessor::Processor {
 
         self.runtime_id = Some(handles.runtime_id.clone());
 
+        let config = self.config.clone();
+        let host = config.host.clone();
+
         let app = crate::handlers::build_router(
             handles.runtime.clone(),
+            handles.auth_token.clone(),
             #[cfg(feature = "moq")]
             handles.runtime_id.clone(),
         );
-
-        let config = self.config.clone();
-        let host = config.host.clone();
         let base_port = config.port;
         let tokio_handle = handles.tokio_handle.clone();
 
