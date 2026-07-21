@@ -6,7 +6,7 @@
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 use streamlib::sdk::json_schema::SchemaIdentOutput;
-use streamlib::sdk::runtime::RuntimeOperations;
+use streamlib::sdk::runtime::{ProcessorLanguage, RuntimeOperations};
 use utoipa::OpenApi;
 
 /// Shared HTTP handler state.
@@ -98,6 +98,159 @@ pub(crate) struct ProcessorPortNotFoundResponse {
     pub port_name: String,
     /// `"input"` or `"output"`.
     pub direction: &'static str,
+}
+
+/// OpenAPI-documentable mirror of [`ProcessorLanguage`], which derives serde
+/// but not `utoipa::ToSchema`. Kept identical to the SDK enum's wire form
+/// (lowercase; `deno` is accepted as an alias for `typescript`) and mapped
+/// into it on the way in.
+#[derive(Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum ProcessorLanguageDto {
+    /// Rust — rejected for live source submit (a full cargo build, not a
+    /// live graph mutation); present for wire-form parity with the SDK enum.
+    Rust,
+    Python,
+    #[serde(alias = "deno")]
+    TypeScript,
+}
+
+impl From<ProcessorLanguageDto> for ProcessorLanguage {
+    fn from(dto: ProcessorLanguageDto) -> Self {
+        match dto {
+            ProcessorLanguageDto::Rust => ProcessorLanguage::Rust,
+            ProcessorLanguageDto::Python => ProcessorLanguage::Python,
+            ProcessorLanguageDto::TypeScript => ProcessorLanguage::TypeScript,
+        }
+    }
+}
+
+/// Which end of a link the newly-instantiated processor's port sits on, for
+/// an optional `connect` wiring in a [`SubmittedProcessorSourceRequest`].
+#[derive(Deserialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum SourceProcessorPortRole {
+    /// `local_port` is the OUTPUT (upstream) end; it feeds the peer's input.
+    Output,
+    /// `local_port` is the INPUT (downstream) end; it is fed by the peer's output.
+    Input,
+}
+
+/// One optional post-instantiation wiring in a
+/// [`SubmittedProcessorSourceRequest`]: connect a port on the
+/// newly-instantiated processor to a port on a processor already in the graph.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(crate) struct SourceProcessorConnection {
+    /// Port name on the newly-instantiated processor.
+    pub local_port: String,
+    /// Whether `local_port` is the output or the input end of the link.
+    pub role: SourceProcessorPortRole,
+    /// The already-present peer processor's id (as returned by
+    /// `POST /api/processor` or a prior source submit).
+    pub peer_processor: String,
+    /// The peer processor's port name.
+    pub peer_port: String,
+}
+
+/// Body of `POST /api/processor/source`: submit processor source text for
+/// live registration, then instantiate it and (optionally) wire it in.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(crate) struct SubmittedProcessorSourceRequest {
+    /// The runtime language the source is authored in.
+    pub language: ProcessorLanguageDto,
+    /// The processor source text (a Python module / a TypeScript module).
+    pub source: String,
+    /// The `@session/<name>` package-name segment to mint the registration
+    /// under. Omit to derive it from `processor_type_name`. One of
+    /// `requested_name` / `processor_type_name` must be present.
+    #[serde(default)]
+    pub requested_name: Option<String>,
+    /// The PascalCase processor type name the source defines. Omit to derive
+    /// it from `requested_name`.
+    #[serde(default)]
+    pub processor_type_name: Option<String>,
+    /// Config applied when the registered processor is instantiated into the
+    /// graph. Defaults to an empty object.
+    #[serde(default)]
+    pub config: Option<serde_json::Value>,
+    /// Optional wirings applied after instantiation, each connecting a port on
+    /// the new processor to a port on an existing graph processor.
+    #[serde(default)]
+    pub connect: Vec<SourceProcessorConnection>,
+}
+
+/// Body of `POST /api/processor/source/replace`: swap a live
+/// `@session/<name>` source registration for a replacement, transactionally
+/// (a failed replacement restores the prior registration).
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(crate) struct ReplaceProcessorSourceRequest {
+    /// The `@session/<name>@<range>` module whose prior registration is
+    /// removed before the replacement registers (wire form, e.g.
+    /// `@session/widget@*`).
+    pub target_session_module: String,
+    /// The replacement source text.
+    pub source: String,
+    /// The replacement's runtime language.
+    pub language: ProcessorLanguageDto,
+    /// The replacement's `@session/<name>` package-name segment. Must resolve
+    /// to the same `<name>` as `target_session_module` — a replace
+    /// re-registers the same name, never renames.
+    #[serde(default)]
+    pub requested_name: Option<String>,
+    /// The replacement's PascalCase processor type name.
+    #[serde(default)]
+    pub processor_type_name: Option<String>,
+}
+
+/// One committed port in a [`RegisteredProcessorPortsResponse`].
+#[derive(Serialize, utoipa::ToSchema)]
+pub(crate) struct RegisteredPortResponse {
+    /// The port name.
+    pub name: String,
+    /// The port's schema id — `"any"` or a fully-qualified
+    /// `@org/package/Type@version`.
+    pub schema: String,
+    /// Input-port delivery-profile override; always absent on output ports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delivery_profile: Option<String>,
+}
+
+/// One installed processor's committed port surface in a
+/// [`RegisterProcessorSourceResponse`].
+#[derive(Serialize, utoipa::ToSchema)]
+pub(crate) struct RegisteredProcessorPortsResponse {
+    /// The processor's PascalCase short `Type` name.
+    pub name: String,
+    /// Input ports, in declaration order.
+    pub inputs: Vec<RegisteredPortResponse>,
+    /// Output ports, in declaration order.
+    pub outputs: Vec<RegisteredPortResponse>,
+}
+
+/// Response to `POST /api/processor/source` and
+/// `POST /api/processor/source/replace`: the minted registration ident plus
+/// each installed processor's discovered ports, and — for a source submit —
+/// the instantiated instance id and any created connection ids.
+#[derive(Serialize, utoipa::ToSchema)]
+pub(crate) struct RegisterProcessorSourceResponse {
+    /// The minted `@session/<name>@0.0.N` registration module ident (NOT an
+    /// `add_processor` instance id).
+    pub module: String,
+    /// The processors the registration installed, with their committed ports.
+    pub processors: Vec<RegisteredProcessorPortsResponse>,
+    /// The `add_processor` instance id, present when the composite
+    /// instantiated the first discovered processor into the graph.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub processor_id: Option<String>,
+    /// Composite outcome: `"added"` when an instance was created into the
+    /// running graph, `"registered"` when only the definition was registered
+    /// (no instantiable processor discovered). Live per-instance state is
+    /// observed via `GET /api/graph` and the `events_url` event stream.
+    pub state: &'static str,
+    /// Link ids created by the optional `connect` wirings, in request order.
+    pub connections: Vec<String>,
+    /// The WebSocket URL carrying this runtime's live event stream.
+    pub events_url: &'static str,
 }
 
 // ============================================================================
