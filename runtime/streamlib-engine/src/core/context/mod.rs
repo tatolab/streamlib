@@ -53,6 +53,7 @@ pub use ray_tracing_kernel_bridge::{
     RayTracingShaderStageWire, RayTracingStageDecl, TlasInstanceDeclWire, TlasRegisterDecl,
 };
 pub use isolation::IsolationTier;
+pub(crate) use isolation::FullAccessGrant;
 pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 pub use runtime_ops_shim::RuntimeOpsShim;
 pub use surface_store::SurfaceStore;
