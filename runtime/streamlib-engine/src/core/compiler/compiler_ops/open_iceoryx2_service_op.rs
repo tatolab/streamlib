@@ -154,11 +154,12 @@ pub fn open_iceoryx2_service(
     // The tier default is the structural ceiling; an operator raises or lowers it
     // per deployment through the tier's node-level env override.
     let channel_ceiling_bytes = effective_channel_ceiling_bytes(trust_tier);
-    let delivery = channel_delivery_profile(graph, &source_proc_id, &source_port)?.resolve();
-    let max_queued_messages = delivery.depth;
-    let enable_safe_overflow = delivery.overflow.enable_safe_overflow();
-    let drain_order = delivery.drain_order;
-    let max_subscribers = channel_max_subscribers(graph, &source_proc_id, &source_port);
+    let ChannelSizing {
+        max_subscribers,
+        max_queued_messages,
+        enable_safe_overflow,
+        drain_order,
+    } = resolve_channel_sizing(graph, &source_proc_id, &source_port)?;
     let max_notifiers = destination_fanin(graph, &dest_proc_id);
 
     let iceoryx2_node = runtime_ctx.iceoryx2_node();
@@ -326,6 +327,68 @@ fn channel_max_subscribers(
 ) -> usize {
     channel_destinations(graph, source_proc_id, source_port).len()
         + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL
+}
+
+/// The iceoryx2 sizing a channel data service is opened with — the fixed
+/// parameters iceoryx2 verifies on every reopen of the same service name.
+///
+/// Both the compiler op (which creates the service with a publisher) and the
+/// phase-3.5 `tap` op (which reopens it publisher-free to add a reserved-slot
+/// subscriber) derive this from the SAME graph state via
+/// [`resolve_channel_sizing`], so their `open_or_create_service` calls agree —
+/// a mismatched `max_subscribers` / `subscriber_max_buffer_size` /
+/// `enable_safe_overflow` would be rejected by iceoryx2 on open.
+pub(crate) struct ChannelSizing {
+    /// Compile-time destination count plus the reserved tap slot.
+    pub(crate) max_subscribers: usize,
+    /// Ring depth (`subscriber_max_buffer_size`) — the agreed delivery profile's depth.
+    pub(crate) max_queued_messages: usize,
+    /// Overflow policy — `true` drops-oldest (realtime), `false` back-pressures (lossless).
+    pub(crate) enable_safe_overflow: bool,
+    /// The agreed delivery profile's consumer drain order.
+    pub(crate) drain_order: crate::iceoryx2::ReadMode,
+}
+
+/// Derive the [`ChannelSizing`] for the channel keyed on `(source_proc_id,
+/// source_port)` from the current graph — the single derivation both the
+/// service-open compiler op and the `tap` op share so their `open_or_create`
+/// calls request identical, iceoryx2-verified parameters.
+pub(crate) fn resolve_channel_sizing(
+    graph: &mut Graph,
+    source_proc_id: &ProcessorUniqueId,
+    source_port: &str,
+) -> Result<ChannelSizing> {
+    let delivery = channel_delivery_profile(graph, source_proc_id, source_port)?.resolve();
+    Ok(ChannelSizing {
+        max_subscribers: channel_max_subscribers(graph, source_proc_id, source_port),
+        max_queued_messages: delivery.depth,
+        enable_safe_overflow: delivery.overflow.enable_safe_overflow(),
+        drain_order: delivery.drain_order,
+    })
+}
+
+/// Reverse-resolve a channel data-service name to the `(source_proc_id,
+/// source_port)` that publishes to it, by scanning the graph's links for the
+/// one whose source output port derives that channel name.
+///
+/// A channel's iceoryx2 data service only exists once a `connect()` has wired
+/// its source output port, so a channel with no outbound link is genuinely
+/// untappable — the caller maps `None` to [`Error::TapChannelNotFound`]. The
+/// derivation is the same `streamlib_idents::source_channel_name` the compiler
+/// op keys the service on, so a match here is exact (including the
+/// hash-legalized over-budget form).
+pub(crate) fn find_channel_source_port(
+    graph: &mut Graph,
+    channel_service_name: &str,
+) -> Option<(ProcessorUniqueId, String)> {
+    graph.traversal_mut().e(()).iter().find_map(|link| {
+        let source = link.from_port();
+        let derived =
+            streamlib_idents::source_channel_name(source.processor_id.as_str(), &source.port_name)
+                .ok()?;
+        (derived.as_str() == channel_service_name)
+            .then(|| (source.processor_id.clone(), source.port_name.clone()))
+    })
 }
 
 /// The destination's compile-time fan-in — the count of inbound `connect()`
@@ -740,6 +803,74 @@ mod tests {
             3 + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
             "one source port feeding 3 destinations must size the channel for 3 \
              subscribers plus the reserved tap slot",
+        );
+    }
+
+    /// The tap op reconstructs the exact `max_subscribers` the compiler op
+    /// opened the service with — `destinations + reserved tap` — via the shared
+    /// [`resolve_channel_sizing`]. iceoryx2 verifies `max_subscribers` on the
+    /// tap's publisher-free reopen, so a drift here would make every tap fail to
+    /// open. Mentally revert the reserved-tap term in `channel_max_subscribers`
+    /// and this count drops below what the service was created with.
+    #[test]
+    fn resolve_channel_sizing_recovers_service_open_max_subscribers() {
+        let mut graph = Graph::new();
+        let src_id = add_mock_output_only(&mut graph);
+        for _ in 0..2 {
+            let dest_id = add_mock_input_only(&mut graph);
+            graph.traversal_mut().add_e(
+                OutputLinkPortRef::new(&src_id, "out1"),
+                InputLinkPortRef::new(&dest_id, "in1"),
+            );
+        }
+        let src_uid: ProcessorUniqueId = src_id.as_str().into();
+
+        let sizing = resolve_channel_sizing(&mut graph, &src_uid, "out1")
+            .expect("sizing resolves for a wired channel");
+        assert_eq!(
+            sizing.max_subscribers,
+            2 + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL,
+            "the tap must reopen the service with the same max_subscribers the \
+             compiler op created it with (2 destinations + reserved tap)",
+        );
+        assert_eq!(
+            sizing.max_subscribers,
+            channel_max_subscribers(&mut graph, &src_uid, "out1"),
+            "resolve_channel_sizing must agree with channel_max_subscribers — the \
+             single derivation both the service-open op and the tap op share",
+        );
+    }
+
+    /// A wired channel's data-service name reverse-resolves to the exact
+    /// `(source_proc, source_port)` that publishes to it; an unknown name
+    /// resolves to `None` (the tap op maps that to `TapChannelNotFound`).
+    /// Round-trips through the same `source_channel_name` the compiler op keys
+    /// the service on.
+    #[test]
+    fn find_channel_source_port_round_trips_and_misses() {
+        let mut graph = Graph::new();
+        let src_id = add_mock_output_only(&mut graph);
+        let dest_id = add_mock_input_only(&mut graph);
+        graph.traversal_mut().add_e(
+            OutputLinkPortRef::new(&src_id, "out1"),
+            InputLinkPortRef::new(&dest_id, "in1"),
+        );
+
+        let channel_name = streamlib_idents::source_channel_name(&src_id, "out1")
+            .expect("source port derives a channel name")
+            .into_string();
+
+        // The reverse lookup returns the graph node's original processor id (the
+        // channel name lowercases it only for the wire), so it round-trips to the
+        // id we wired, not its lowercased channel form.
+        let (resolved_proc, resolved_port) =
+            find_channel_source_port(&mut graph, &channel_name).expect("wired channel resolves");
+        assert_eq!(resolved_proc.as_str(), src_id.as_str());
+        assert_eq!(resolved_port, "out1");
+
+        assert!(
+            find_channel_source_port(&mut graph, "nosuch/channel").is_none(),
+            "an unwired / unknown channel name must not resolve to any source port",
         );
     }
 

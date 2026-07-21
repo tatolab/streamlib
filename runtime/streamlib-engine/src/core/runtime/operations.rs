@@ -4,6 +4,7 @@
 use crate::core::error::Result;
 use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
 use crate::core::processors::ProcessorSpec;
+use crate::core::runtime::TapSubscription;
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 use std::future::Future;
 use std::pin::Pin;
@@ -244,6 +245,33 @@ pub trait RuntimeOperations: Send + Sync {
         &self,
         request: ReplaceProcessorFromSource,
     ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>>;
+
+    /// Attach a read-only tap to a named channel, streaming its raw bags.
+    ///
+    /// `channel` is a channel data-service name
+    /// (`{source_processor}/{source_output_port}`,
+    /// `streamlib_idents::source_channel_name`); `count` bounds the tap to that
+    /// many bags then ends, `None` streams live until the returned
+    /// [`TapSubscription`] is dropped. The tap consumes the channel's single
+    /// reserved subscriber slot with no publisher re-open, so exactly one
+    /// concurrent tap per channel is allowed — a second attach fails with
+    /// [`Error::TapSlotOccupied`] until the first detaches (drops). An unwired /
+    /// unknown channel fails with [`Error::TapChannelNotFound`].
+    ///
+    /// There is no sync variant: a tap yields a live streaming handle, not a
+    /// one-shot result, so blocking on it is never the intent. Host-side only —
+    /// a subprocess cannot own the host's `!Send` subscriber, so
+    /// implementations reachable only across the plugin ABI reject this with
+    /// [`Error::NotSupported`].
+    ///
+    /// [`Error::TapSlotOccupied`]: crate::core::error::Error::TapSlotOccupied
+    /// [`Error::TapChannelNotFound`]: crate::core::error::Error::TapChannelNotFound
+    /// [`Error::NotSupported`]: crate::core::error::Error::NotSupported
+    fn tap_async(
+        &self,
+        channel: String,
+        count: Option<usize>,
+    ) -> BoxFuture<'_, Result<TapSubscription>>;
 
     // =========================================================================
     // Sync Methods (convenience wrappers - NOT safe from tokio tasks)

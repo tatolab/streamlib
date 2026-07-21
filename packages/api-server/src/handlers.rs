@@ -6,12 +6,14 @@
 use axum::{
     extract::ws::{Message, WebSocket, WebSocketUpgrade},
     extract::Path,
+    extract::Query,
     extract::State,
     http::StatusCode,
     response::IntoResponse,
     routing::get,
     Json, Router,
 };
+use serde::Deserialize;
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -56,6 +58,12 @@ pub(crate) fn build_router(
     auth_token: Option<ApiServerBearerToken>,
     #[cfg(feature = "moq")] runtime_id: String,
 ) -> Router {
+    // The read-only tap WebSocket sits behind the SAME bearer gate as the
+    // mutating routes when auth is on (a tap observes live channel data), and is
+    // open like every other route when auth is off. Clone the token before it is
+    // moved into the mutating-route middleware below.
+    let tap_auth_token = auth_token.clone();
+
     let mut protected = OpenApiRouter::new()
         .routes(routes!(create_processor))
         .routes(routes!(delete_processor))
@@ -90,9 +98,18 @@ pub(crate) fn build_router(
         .on_request(DefaultOnRequest::new().level(Level::INFO))
         .on_response(DefaultOnResponse::new().level(Level::INFO));
 
+    let mut tap_router = Router::new().route("/ws/tap/{channel}", get(tap_websocket_handler));
+    if let Some(tap_auth_token) = tap_auth_token {
+        tap_router = tap_router.route_layer(axum::middleware::from_fn_with_state(
+            tap_auth_token,
+            crate::auth::require_bearer_token,
+        ));
+    }
+
     let router = router
         .route("/ws/events", get(websocket_handler))
-        .route("/api/openapi.json", get(get_openapi_spec));
+        .route("/api/openapi.json", get(get_openapi_spec))
+        .merge(tap_router);
 
     #[cfg(feature = "moq")]
     let router = router.route("/api/moq/catalog", get(get_moq_catalog));
@@ -489,6 +506,86 @@ impl EventListener for WebSocketEventForwarder {
     }
 }
 
+// ============================================================================
+// Channel Tap WebSocket (read-only channel observer)
+// ============================================================================
+
+/// Query parameters for the tap WebSocket: an optional bounded sample count.
+#[derive(Deserialize)]
+pub(crate) struct TapQuery {
+    /// Stream exactly `n` bags then close; absent streams live until the client
+    /// disconnects.
+    n: Option<usize>,
+}
+
+/// `GET /ws/tap/{channel}` — attach a read-only tap to `channel` and stream its
+/// raw bags as binary WebSocket frames.
+///
+/// Bag bytes are forwarded verbatim (the `FrameHeader`-framed wire form);
+/// decoding is the client's concern, which keeps the tap wire-neutral across
+/// Rust / Python / Deno publishers. Dropping the connection detaches the tap
+/// and frees the channel's reserved slot.
+pub(crate) async fn tap_websocket_handler(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+    Path(channel): Path<String>,
+    Query(query): Query<TapQuery>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_tap_websocket(socket, state.runtime, channel, query.n))
+}
+
+async fn handle_tap_websocket(
+    socket: WebSocket,
+    runtime: Arc<dyn RuntimeOperations>,
+    channel: String,
+    count: Option<usize>,
+) {
+    let (mut sender, mut receiver) = socket.split();
+
+    // Attach the tap; a resolution / slot-occupied failure closes the socket
+    // with the typed reason rather than silently hanging.
+    let mut subscription = match runtime.tap_async(channel.clone(), count).await {
+        Ok(subscription) => subscription,
+        Err(e) => {
+            tracing::info!(channel = %channel, "tap attach rejected: {e}");
+            let _ = sender
+                .send(Message::Close(Some(axum::extract::ws::CloseFrame {
+                    code: axum::extract::ws::close_code::ERROR,
+                    reason: e.to_string().into(),
+                })))
+                .await;
+            return;
+        }
+    };
+
+    tracing::info!(channel = %channel, "tap client attached");
+
+    // Own the subscription in this scope: forward bags until the tap ends
+    // (bounded count reached / channel gone) or the client disconnects. On
+    // return, `subscription` drops — detaching the tap and freeing the slot.
+    loop {
+        tokio::select! {
+            maybe_bag = subscription.recv() => match maybe_bag {
+                Some(bytes) => {
+                    if sender.send(Message::Binary(bytes.into())).await.is_err() {
+                        break;
+                    }
+                }
+                None => {
+                    let _ = sender.send(Message::Close(None)).await;
+                    break;
+                }
+            },
+            maybe_msg = receiver.next() => match maybe_msg {
+                Some(Ok(Message::Close(_))) | Some(Err(_)) | None => break,
+                _ => {}
+            },
+        }
+    }
+
+    tracing::info!(channel = %channel, "tap client detached");
+}
+
 #[cfg(test)]
 mod router_auth_gate_tests {
     use super::*;
@@ -551,6 +648,13 @@ mod router_auth_gate_tests {
             _request: ReplaceProcessorFromSource,
         ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
             Box::pin(async { Ok(stub_register_receipt()) })
+        }
+        fn tap_async(
+            &self,
+            channel: String,
+            _count: Option<usize>,
+        ) -> BoxFuture<'_, Result<streamlib::sdk::runtime::TapSubscription>> {
+            Box::pin(async move { Err(Error::TapChannelNotFound(channel)) })
         }
         fn add_processor(&self, _spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
             Ok(ProcessorUniqueId::new())

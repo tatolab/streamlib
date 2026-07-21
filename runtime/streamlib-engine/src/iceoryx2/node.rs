@@ -182,6 +182,47 @@ impl Iceoryx2Service {
             .create()
             .map_err(|e| Error::Runtime(format!("Failed to create subscriber: {:?}", e)))
     }
+
+    /// Create the channel's reserved-slot tap subscriber, discriminating the
+    /// slot-exhaustion case from every other transport failure.
+    ///
+    /// A channel data service is opened with
+    /// `max_subscribers = N_destinations + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL`
+    /// (1). The N destination subscribers occupy their slots at compile time; the
+    /// reserved slot is what a tap consumes here. iceoryx2 fixes `max_subscribers`
+    /// at create time, so a second concurrent tap trips
+    /// [`iceoryx2::port::subscriber::SubscriberCreateError::ExceedsMaxSupportedSubscribers`]
+    /// — surfaced as [`ChannelTapSubscribeError::ReservedSlotOccupied`] so the op
+    /// can map it to the named [`Error::TapSlotOccupied`], distinct from a generic
+    /// subscribe failure.
+    pub fn create_tap_subscriber(
+        &self,
+    ) -> std::result::Result<
+        iceoryx2::port::subscriber::Subscriber<ipc::Service, [u8], ()>,
+        ChannelTapSubscribeError,
+    > {
+        use iceoryx2::port::subscriber::SubscriberCreateError;
+        self.inner
+            .subscriber_builder()
+            .buffer_size(self.max_queued_messages)
+            .create()
+            .map_err(|e| match e {
+                SubscriberCreateError::ExceedsMaxSupportedSubscribers => {
+                    ChannelTapSubscribeError::ReservedSlotOccupied
+                }
+                other => ChannelTapSubscribeError::Transport(format!("{:?}", other)),
+            })
+    }
+}
+
+/// Why creating a channel's reserved-slot tap subscriber failed.
+#[derive(Debug)]
+pub enum ChannelTapSubscribeError {
+    /// The channel's single reserved tap slot is already taken by another tap —
+    /// iceoryx2 rejected the create with `ExceedsMaxSupportedSubscribers`.
+    ReservedSlotOccupied,
+    /// Any other iceoryx2 subscriber-create failure, rendered for the log.
+    Transport(String),
 }
 
 /// Handle to an iceoryx2 Event service used for fd-multiplexed wakeups.
