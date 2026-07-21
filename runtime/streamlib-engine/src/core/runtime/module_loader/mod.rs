@@ -92,7 +92,6 @@ pub use build_orchestrator::{
     BuildSource, BuildStream, StagedArtifact,
 };
 pub use errors::{AddModuleError, RemoveModuleError};
-pub(crate) use from_source::reclaim_session_source_staging_root_once;
 pub(crate) use locked::LockedResolution;
 pub use processor_registration::host_target_triple;
 pub(crate) use recursive_walker::ResolutionMemo;

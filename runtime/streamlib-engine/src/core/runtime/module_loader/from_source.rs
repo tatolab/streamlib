@@ -352,7 +352,7 @@ fn stage_submitted_source(
     let lang = live_submit_language(&request.language)?;
     let (type_name, name_segment) = derive_session_type_and_name(request)?;
 
-    let minted = streamlib_idents::mint_session_module_ident(&name_segment).map_err(|e| {
+    let minted = mint_session_module_ident_above_on_disk(&name_segment).map_err(|e| {
         AddModuleError::SessionProcessorNameInvalid {
             type_name: type_name.clone(),
             detail: e.to_string(),
@@ -431,14 +431,16 @@ fn session_pyproject_toml(name: &str) -> String {
 /// A minimal `deno.json` import map for a live-submitted TypeScript session
 /// package: maps the `streamlib` specifier the source imports at the
 /// npm-published SDK so the Deno subprocess resolves it. The `streamlib-deno`
-/// version is pinned to this build's workspace version (`CARGO_PKG_VERSION` —
-/// the version the static-registry emit publishes every SDK at) so a session
-/// package can never resolve a version-skewed SDK across the msgpack / handshake
-/// ABI. This is a static, pinned npm import map with no `streamlib link`
-/// redirect: unlike Python's editable venv install, a Deno session package
-/// always resolves the published SDK by version.
+/// version is pinned to the Deno SDK's OWN published version
+/// (`STREAMLIB_DENO_SDK_VERSION`, read from `sdk/streamlib-deno/deno.json` at
+/// build time) — NOT the Rust workspace version — because the Deno SDK is on an
+/// independent version line, so a session package resolves the actually-published
+/// SDK and never a version-skewed one across the msgpack / handshake ABI. This
+/// is a static, pinned npm import map with no `streamlib link` redirect: unlike
+/// Python's editable venv install, a Deno session package always resolves the
+/// published SDK by version.
 fn session_deno_json() -> String {
-    let version = env!("CARGO_PKG_VERSION");
+    let version = env!("STREAMLIB_DENO_SDK_VERSION");
     format!(
         "{{\n  \
            \"imports\": {{\n    \
@@ -455,34 +457,63 @@ fn session_source_staging_root() -> PathBuf {
     crate::core::streamlib_home::get_streamlib_data_dir().join("session-source")
 }
 
-/// Reclaim the whole session-source staging tree exactly once per process, at
-/// runtime start. The `@session/<name>@0.0.N` version counter
+/// Mint a `@session/<name>@0.0.N` identity whose version sits strictly ABOVE the
+/// highest version already staged on disk under
+/// `<session-source>/<name>/`. The session version counter
 /// ([`streamlib_idents::next_session_module_version`]) is process-global and
-/// restarts at `0` each process, so without this a fresh process would re-mint
-/// `0.0.0` onto a `session-source/<name>/0.0.0/` dir surviving from a prior run
-/// and reuse its stale staged source / venv. Clearing the tree on start makes
-/// every mint in the new process land in a clean staging root; the reclaim is
-/// gated to the FIRST runtime of the process (matching the counter's lifetime),
-/// so a second in-process runtime never clobbers a live registration's on-disk
-/// staged source (the replace/restore transaction's restore artifact).
-pub(crate) fn reclaim_session_source_staging_root_once() {
-    static RECLAIMED: std::sync::Once = std::sync::Once::new();
-    RECLAIMED.call_once(|| reclaim_session_source_staging_tree(&session_source_staging_root()));
+/// restarts at `0` each process, so a fresh process would otherwise re-mint a low
+/// `0.0.N` onto a `session-source/<name>/0.0.N/` dir surviving from a prior run
+/// and reuse its stale staged source / venv. Reconciling against the on-disk
+/// maximum at mint time keeps every mint cross-run collision-free WITHOUT a
+/// destructive start-up wipe of the shared per-user staging tree — a wipe would
+/// clobber a concurrent runtime process's in-flight replace/restore artifacts.
+///
+/// The disk reconcile lives here (the module_loader owns
+/// [`session_source_staging_root`]), never in the `streamlib-idents` leaf crate:
+/// the pure ident grammar stays unaware of the filesystem. The counter still
+/// provides in-process uniqueness; on-disk reconciliation adds cross-process
+/// uniqueness. Sequential staging (mint → `create_dir_all` → write, all within
+/// [`stage_submitted_source`]) means each mint sees the prior mint's version dir
+/// on disk, so same-process re-mints of one name stay monotonic.
+fn mint_session_module_ident_above_on_disk(
+    name_segment: &str,
+) -> std::result::Result<streamlib_idents::MintedSessionIdent, streamlib_idents::IdentError> {
+    let minted = streamlib_idents::mint_session_module_ident(name_segment)?;
+    match highest_on_disk_session_version(name_segment) {
+        Some(on_disk_ceiling) if minted.version <= on_disk_ceiling => {
+            let version = streamlib_idents::SemVer::new(0, 0, on_disk_ceiling.patch + 1);
+            let module = streamlib_idents::ModuleIdent::new(
+                minted.module.org,
+                minted.package.clone(),
+                streamlib_idents::SemVerRange::Exact(version),
+            );
+            Ok(streamlib_idents::MintedSessionIdent {
+                module,
+                version,
+                package: minted.package,
+            })
+        }
+        _ => Ok(minted),
+    }
 }
 
-/// Best-effort removal of the session-source staging tree at `root`. A missing
-/// tree is the common (clean) case and is not an error; any other failure is
-/// logged and swallowed so a stale-permission staging dir never blocks runtime
-/// start. Pure over `root` so the reclaim is unit-testable without the data dir.
-fn reclaim_session_source_staging_tree(root: &Path) {
-    match std::fs::remove_dir_all(root) {
-        Ok(()) => {}
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => tracing::debug!(
-            root = %root.display(),
-            "failed to reclaim session-source staging tree at runtime start: {e}",
-        ),
-    }
+/// The highest `0.0.N` version already staged on disk under
+/// `<session-source>/<name>/`, or `None` when the name has no staged version
+/// dirs. A non-directory entry or a name that doesn't parse as a [`SemVer`] is
+/// skipped. Pure over the on-disk tree so [`mint_session_module_ident_above_on_disk`]
+/// places a fresh mint above any surviving staged dir.
+fn highest_on_disk_session_version(name_segment: &str) -> Option<streamlib_idents::SemVer> {
+    std::fs::read_dir(session_source_staging_root().join(name_segment))
+        .ok()?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_type().map(|t| t.is_dir()).unwrap_or(false))
+        .filter_map(|entry| {
+            entry
+                .file_name()
+                .to_str()
+                .and_then(|name| name.parse::<streamlib_idents::SemVer>().ok())
+        })
+        .max()
 }
 
 /// Generate the `streamlib.yaml` for a single-processor `@session/<name>`
@@ -633,12 +664,36 @@ mod tests {
         );
         let deno_body = std::fs::read_to_string(&deno_json).unwrap();
         assert!(
-            deno_body
-                .contains(&format!("npm:@tatolab/streamlib-deno@{}", env!("CARGO_PKG_VERSION"))),
-            "the staged deno.json must pin the streamlib-deno SDK to this build's version so a \
-             session package can't resolve a version-skewed SDK, got: {deno_body}"
+            deno_body.contains(&format!(
+                "npm:@tatolab/streamlib-deno@{}",
+                env!("STREAMLIB_DENO_SDK_VERSION")
+            )),
+            "the staged deno.json must pin the streamlib-deno SDK to the Deno SDK's own \
+             published version so a session package can't resolve a version-skewed SDK, \
+             got: {deno_body}"
         );
         let _ = std::fs::remove_dir_all(&staged.dir);
+    }
+
+    #[test]
+    fn deno_session_pin_matches_the_deno_sdk_manifest_version() {
+        // The baked `STREAMLIB_DENO_SDK_VERSION` must equal the `version` field
+        // of `sdk/streamlib-deno/deno.json` (the authoritative Deno SDK version,
+        // on an independent line from the Rust workspace `CARGO_PKG_VERSION`).
+        // This catches a future skew — e.g. reverting the build-script read back
+        // to `CARGO_PKG_VERSION` — via `cargo test`, so an off-link Deno
+        // register-from-source can never pin an unpublished version.
+        let deno_json = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../sdk/streamlib-deno/deno.json");
+        let body = std::fs::read_to_string(&deno_json)
+            .unwrap_or_else(|e| panic!("reading {}: {e}", deno_json.display()));
+        let manifest: serde_json::Value = serde_json::from_str(&body).unwrap();
+        let manifest_version = manifest["version"].as_str().expect("deno.json has a version");
+        assert_eq!(
+            env!("STREAMLIB_DENO_SDK_VERSION"),
+            manifest_version,
+            "the baked Deno SDK pin must track sdk/streamlib-deno/deno.json"
+        );
     }
 
     #[test]
@@ -1184,28 +1239,44 @@ mod tests {
     }
 
     #[test]
-    fn reclaim_clears_a_stale_on_disk_session_version_dir() {
-        // Restart-collision lock: the `@session/<name>@0.0.N` counter restarts
-        // at 0 each process, so a stale `session-source/<name>/0.0.0/` dir from a
-        // prior run must be reclaimed on runtime start — otherwise a fresh
-        // process re-mints `0.0.0` onto it and reuses its stale source/venv.
-        // Mentally-revert the reclaim and the planted stale dir survives, so a
-        // first-mint-after-restart would collide with it.
-        let root_holder = tempfile::tempdir().unwrap();
-        let root = root_holder.path().join("session-source");
-        let stale_version_dir = root.join("widget").join("0.0.0");
-        std::fs::create_dir_all(&stale_version_dir).unwrap();
-        std::fs::write(stale_version_dir.join("widget.py"), "stale\n").unwrap();
+    #[serial]
+    fn mint_reconciles_above_a_surviving_on_disk_session_version() {
+        // Restart-collision lock WITHOUT a destructive wipe: the
+        // `@session/<name>@0.0.N` counter restarts at 0 each process, so a fresh
+        // process must mint ABOVE any `session-source/<name>/0.0.N/` dir
+        // surviving from a prior run — rather than wiping the shared per-user
+        // tree (which would clobber a concurrent process's in-flight
+        // replace/restore artifacts). A high stale version is planted; a fresh
+        // stage must land above it AND leave the stale dir intact. Mentally-revert
+        // the reconcile and the mint lands at the low counter value (below the
+        // planted version), failing the ordering assertion.
+        let _home = HomeGuard::new();
+        let name = "fromsrc-reconcile";
+        let stale_version = streamlib_idents::SemVer::new(0, 0, 424_242);
+        let stale_dir = session_source_staging_root()
+            .join(name)
+            .join(stale_version.to_string());
+        std::fs::create_dir_all(&stale_dir).unwrap();
+        std::fs::write(stale_dir.join("fromsrc_reconcile.py"), "stale\n").unwrap();
 
-        reclaim_session_source_staging_tree(&root);
-
+        let staged =
+            stage_submitted_source(&python_named(name)).expect("stages above the stale version");
+        let minted_version = match &staged.module.version {
+            streamlib_idents::SemVerRange::Exact(v) => *v,
+            other => panic!("a minted session module carries an exact version, got {other:?}"),
+        };
         assert!(
-            !root.exists(),
-            "the reclaim must clear the whole session-source staging tree so no stale \
-             version dir survives a restart"
+            minted_version > stale_version,
+            "a fresh mint must sit above the surviving on-disk version: \
+             {minted_version} !> {stale_version}"
         );
 
-        // A second reclaim over the now-absent tree is a no-op, not an error.
-        reclaim_session_source_staging_tree(&root);
+        // The concurrent-process staged dir must NOT be wiped.
+        assert!(
+            stale_dir.is_dir(),
+            "the mint-reconcile must not destroy a surviving staged dir"
+        );
+
+        let _ = std::fs::remove_dir_all(session_source_staging_root().join(name));
     }
 }

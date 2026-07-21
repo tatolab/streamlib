@@ -206,6 +206,7 @@ required-features = []
 
 [build-dependencies]
 streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.7.21" }
+serde_json = { workspace = true }
 
 # Build dependencies for protobuf compilation (surface-share service gRPC)
 [target.'cfg(target_os = "macos")'.build-dependencies]

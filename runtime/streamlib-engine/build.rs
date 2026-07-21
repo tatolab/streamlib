@@ -12,6 +12,8 @@
 fn main() {
     streamlib_jtd_codegen::build_rs::run_for_rust_crate();
 
+    emit_deno_sdk_version();
+
     // Propagate the host target triple so `Runner::add_module` can
     // resolve plugin cdylibs by `lib/<triple>/...` at load time.
     let target = std::env::var("TARGET").expect("TARGET env var set by cargo for build.rs");
@@ -45,6 +47,32 @@ fn main() {
 
     #[cfg(target_os = "linux")]
     compile_shaders();
+}
+
+/// Bake the Deno SDK's OWN published version into `STREAMLIB_DENO_SDK_VERSION`
+/// by reading the `version` field of `sdk/streamlib-deno/deno.json`. The Deno
+/// SDK is on an independent version line from the Rust workspace
+/// (`CARGO_PKG_VERSION`), so a live session package's `deno.json` import map and
+/// the off-link `npm:@tatolab/streamlib-deno@<ver>/extract_processors.ts` spec
+/// must pin the actually-published SDK version, not the workspace version.
+/// `deno.json` is the single source of truth; the same read runs in the build
+/// orchestrator's build script.
+fn emit_deno_sdk_version() {
+    let manifest_dir =
+        std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR set by cargo for build.rs");
+    let deno_json = std::path::Path::new(&manifest_dir).join("../../sdk/streamlib-deno/deno.json");
+    println!("cargo:rerun-if-changed={}", deno_json.display());
+    let body = std::fs::read_to_string(&deno_json)
+        .unwrap_or_else(|e| panic!("reading {}: {e}", deno_json.display()));
+    let manifest: serde_json::Value = serde_json::from_str(&body)
+        .unwrap_or_else(|e| panic!("parsing {}: {e}", deno_json.display()));
+    let version = manifest["version"].as_str().unwrap_or_else(|| {
+        panic!(
+            "{} has no string `version` field to pin the Deno SDK",
+            deno_json.display()
+        )
+    });
+    println!("cargo:rustc-env=STREAMLIB_DENO_SDK_VERSION={version}");
 }
 
 #[cfg(target_os = "linux")]
