@@ -161,11 +161,11 @@ fn spawn_dedicated_thread(
 
     let processor_arc_clone = Arc::clone(&processor_arc);
 
-    // Derive the isolation trust tier by construction from module provenance:
-    // a @session module that was separately built + dlopened (cdylib-resident)
-    // is untrusted; host-compiled code and installed packages are trusted. The
-    // tier gates every FullAccess mint on this thread (setup / start / stop /
-    // teardown).
+    // Resolve the isolation trust tier through the opt-in session isolation tier:
+    // trusted by default (same as installed), and a @session cdylib is eligible
+    // for Untrusted only when the operator opts in (STREAMLIB_SESSION_ISOLATION_TIER
+    // / set_session_isolation_tier). The tier gates every FullAccess mint on this
+    // thread (setup / start / stop / teardown).
     //
     // cdylib-residency (off the instance) and org (off the graph node) are two
     // independent reads — taken unnested so no graph(read)→processor(mutex) lock

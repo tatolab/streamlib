@@ -114,9 +114,11 @@ impl ProcessorInstance {
     /// Whether this instance's code lives in a separately-built cdylib loaded
     /// via `STREAMLIB_PLUGIN` (`true`), versus host-binary-compiled code
     /// (`register::<P>()` in-process VTable, or a `LegacyDyn` subprocess host)
-    /// (`false`). Feeds the isolation-tier derivation: only a cdylib-resident
-    /// `@session` module is untrusted — host-compiled `@session` code
-    /// (`add_local::<P>()`) is the host's own code and stays trusted.
+    /// (`false`). Feeds the isolation-tier derivation: a cdylib-resident
+    /// `@session` module is ELIGIBLE for Untrusted when the operator opts into
+    /// isolation — default is trusted (same as installed), and host-compiled
+    /// `@session` code (`add_local::<P>()`) is the host's own code and stays
+    /// trusted.
     pub(crate) fn is_cdylib_resident(&self) -> bool {
         matches!(
             self,
