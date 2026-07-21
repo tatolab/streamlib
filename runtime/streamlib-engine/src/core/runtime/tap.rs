@@ -119,6 +119,30 @@ impl TapSubscription {
     }
 }
 
+#[cfg(feature = "test-support")]
+impl TapSubscription {
+    /// Build an in-memory tap over a preset forward receiver and dropped-bag
+    /// count, with no forwarder thread and no live iceoryx2 subscriber. Lets a
+    /// consumer of [`TapSubscription`] (the api-server tap tools) be exercised
+    /// off a synthetic bag stream. Feature-gated to `test-support`, so it is
+    /// physically excluded from a production build.
+    pub fn from_forward_channel(
+        channel: String,
+        receiver: tokio::sync::mpsc::Receiver<Vec<u8>>,
+        dropped_bags: u64,
+    ) -> Self {
+        Self {
+            channel,
+            receiver,
+            signals: TapForwarderSignals {
+                stop_flag: Arc::new(AtomicBool::new(false)),
+                dropped_bags: Arc::new(AtomicU64::new(dropped_bags)),
+            },
+            forwarder_thread: None,
+        }
+    }
+}
+
 impl Drop for TapSubscription {
     fn drop(&mut self) {
         self.signals.stop_flag.store(true, Ordering::Release);

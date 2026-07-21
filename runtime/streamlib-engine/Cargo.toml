@@ -29,6 +29,13 @@ strip_debug_logging = ["tracing/release_max_level_info"]
 # See `docs/testing-hardware.md`.
 hardware-tests = []
 
+# In-memory constructors for engine primitives (e.g. `TapSubscription`) that
+# normally require a live iceoryx2 channel, so a downstream consumer (the
+# api-server tap tools) can be tested without one. Default-off; enabled only by
+# a consumer's `[dev-dependencies]`, so it is physically excluded from a
+# production build's dependency graph.
+test-support = []
+
 # Codec-layer debug knob (`vulkan/video/codec_utils/vk_buffer_resource.rs`):
 # zero out bitstream buffers when (re)allocating, to make NAL-parser bugs
 # easier to spot in raw memory. Off by default; opt-in for nvpro-style
