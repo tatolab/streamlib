@@ -18,7 +18,16 @@ use core::ffi::c_void;
 ///   handle and releases it via `drop_handle` in its Drop impl,
 ///   keeping the host's `Arc<dyn RuntimeOperations>` alive for the
 ///   shim's lifetime independently of `RuntimeContext`'s lifetime.
-pub const RUNTIME_OPS_VTABLE_LAYOUT_VERSION: u32 = 2;
+/// - v3: added `register_processor_source` / `replace_processor` —
+///   submit a processor definition from source text into a live
+///   runtime. The host stages the source through the module_loader's
+///   transactional session-source seam into a minted
+///   `@session/<name>@0.0.N` identity; the success payload is the
+///   msgpack-encoded minted `ModuleIdent` (a registration ident, NOT
+///   an `add_processor` instance `ProcessorUniqueId`). `replace`
+///   carries a target `@session/<name>` module to remove-then-
+///   re-register at a monotonically-bumped `0.0.N`.
+pub const RUNTIME_OPS_VTABLE_LAYOUT_VERSION: u32 = 3;
 
 /// Completion callback signature for async runtime ops.
 ///
@@ -125,6 +134,37 @@ pub struct RuntimeOpsVTable {
     /// Calling on the same owned handle twice is undefined behaviour
     /// (it would double-free the Arc refcount).
     pub drop_handle: unsafe extern "C" fn(owned_handle: *const c_void),
+
+    // v3 additions: register-from-source + replace.
+    /// Submit a `register_processor_source` operation. `request_msgpack`
+    /// carries a msgpack-encoded register-from-source request (source
+    /// text + language + optional processor name). The host stages the
+    /// source through the module_loader's session-source seam and mints
+    /// a `@session/<name>@0.0.N` identity. On success the result payload
+    /// is the msgpack-encoded minted `ModuleIdent` (a registration
+    /// ident, NOT an `add_processor` instance `ProcessorUniqueId`).
+    pub register_processor_source: unsafe extern "C" fn(
+        handle: *const c_void,
+        request_msgpack_ptr: *const u8,
+        request_msgpack_len: usize,
+        completion: RuntimeOpCompletionCallback,
+        user_data: *mut c_void,
+    ),
+
+    /// Submit a `replace_processor` operation. `request_msgpack` carries
+    /// a msgpack-encoded replace request (a target `@session/<name>`
+    /// module to remove, plus the replacement source text + language +
+    /// optional name). The host removes the prior session registration,
+    /// then re-registers the replacement at a monotonically-bumped
+    /// `0.0.N`. On success the result payload is the msgpack-encoded
+    /// minted `ModuleIdent` for the new registration.
+    pub replace_processor: unsafe extern "C" fn(
+        handle: *const c_void,
+        request_msgpack_ptr: *const u8,
+        request_msgpack_len: usize,
+        completion: RuntimeOpCompletionCallback,
+        user_data: *mut c_void,
+    ),
 }
 
 unsafe impl Send for RuntimeOpsVTable {}
@@ -137,8 +177,9 @@ mod tests {
 
     #[test]
     fn runtime_ops_vtable_layout() {
-        // 4 + 4 + 7 fn pointers (v2: 5 submit ops + clone_handle + drop_handle) = 64 bytes
-        assert_eq!(size_of::<RuntimeOpsVTable>(), 64);
+        // 4 + 4 + 9 fn pointers (v3: 5 submit ops + clone_handle +
+        // drop_handle + register_processor_source + replace_processor) = 80 bytes
+        assert_eq!(size_of::<RuntimeOpsVTable>(), 80);
         assert_eq!(align_of::<RuntimeOpsVTable>(), 8);
         assert_eq!(offset_of!(RuntimeOpsVTable, layout_version), 0);
         assert_eq!(offset_of!(RuntimeOpsVTable, _reserved_padding), 4);
@@ -149,5 +190,7 @@ mod tests {
         assert_eq!(offset_of!(RuntimeOpsVTable, to_json), 40);
         assert_eq!(offset_of!(RuntimeOpsVTable, clone_handle), 48);
         assert_eq!(offset_of!(RuntimeOpsVTable, drop_handle), 56);
+        assert_eq!(offset_of!(RuntimeOpsVTable, register_processor_source), 64);
+        assert_eq!(offset_of!(RuntimeOpsVTable, replace_processor), 72);
     }
 }
