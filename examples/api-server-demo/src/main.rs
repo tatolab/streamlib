@@ -43,6 +43,25 @@ fn free_port() -> std::io::Result<u16> {
     Ok(listener.local_addr()?.port())
 }
 
+/// Read the api-server's persisted bearer token from the runtime's isolated
+/// home. The four mutating control-plane routes are gated behind
+/// `Authorization: Bearer <token>`; the api-server auto-generates the token at
+/// `0600` under `<STREAMLIB_HOME>/.streamlib/api-server/auth-token` on first
+/// setup, so it exists by the time `/health` answers.
+fn read_auth_token(runtime_home: &std::path::Path) -> DemoResult<String> {
+    let token_path = runtime_home
+        .join(".streamlib")
+        .join("api-server")
+        .join("auth-token");
+    let token = std::fs::read_to_string(&token_path).map_err(|e| {
+        format!(
+            "failed to read api-server bearer token at {}: {e}",
+            token_path.display()
+        )
+    })?;
+    Ok(token.trim().to_string())
+}
+
 /// Poll `GET /health` until it returns a success status or the deadline passes.
 async fn wait_for_health(client: &reqwest::Client, base_url: &str, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
@@ -103,6 +122,18 @@ async fn main() -> DemoResult<()> {
     }
     println!("Control plane is up.\n");
 
+    // The four mutating routes are gated behind bearer-token auth; read the
+    // token the runtime persisted under its isolated home so the mutating
+    // requests below can present `Authorization: Bearer <token>`.
+    let auth_token = match read_auth_token(&runtime_home) {
+        Ok(token) => token,
+        Err(e) => {
+            drop(runtime_guard);
+            let _ = std::fs::remove_dir_all(&runtime_home);
+            return Err(e);
+        }
+    };
+
     // Start WebSocket event collector as async task
     let events = Arc::new(Mutex::new(Vec::<serde_json::Value>::new()));
     let ws_events = Arc::clone(&events);
@@ -129,30 +160,31 @@ async fn main() -> DemoResult<()> {
     test_get_graph(&client, &base_url, "Initial graph").await;
 
     // Test 4: Create a processor
-    let processor_id = test_create_processor(&client, &base_url).await;
+    let processor_id = test_create_processor(&client, &base_url, &auth_token).await;
 
     // Test 5: Verify processor in graph
     test_get_graph(&client, &base_url, "After adding processor").await;
 
     // Test 6: Create another processor for connection test
-    let processor_id_2 = test_create_processor_2(&client, &base_url).await;
+    let processor_id_2 = test_create_processor_2(&client, &base_url, &auth_token).await;
 
     // Test 7: Create connection between processors
     let connection_id =
-        test_create_connection(&client, &base_url, &processor_id, &processor_id_2).await;
+        test_create_connection(&client, &base_url, &processor_id, &processor_id_2, &auth_token)
+            .await;
 
     // Test 8: Verify connection in graph
     test_get_graph(&client, &base_url, "After adding connection").await;
 
     // Test 9: Delete connection
-    test_delete_connection(&client, &base_url, &connection_id).await;
+    test_delete_connection(&client, &base_url, &connection_id, &auth_token).await;
 
     // Test 10: Verify connection removed
     test_get_graph(&client, &base_url, "After deleting connection").await;
 
     // Test 11: Delete processors
-    test_delete_processor(&client, &base_url, &processor_id).await;
-    test_delete_processor(&client, &base_url, &processor_id_2).await;
+    test_delete_processor(&client, &base_url, &processor_id, &auth_token).await;
+    test_delete_processor(&client, &base_url, &processor_id_2, &auth_token).await;
 
     // Test 12: Verify processors removed
     test_get_graph(&client, &base_url, "After deleting processors").await;
@@ -371,7 +403,11 @@ async fn test_get_graph(client: &reqwest::Client, base_url: &str, label: &str) {
     }
 }
 
-async fn test_create_processor(client: &reqwest::Client, base_url: &str) -> String {
+async fn test_create_processor(
+    client: &reqwest::Client,
+    base_url: &str,
+    auth_token: &str,
+) -> String {
     print!("Testing POST /api/processor (SimplePassthroughProcessor) ... ");
     let body = serde_json::json!({
         "processor_type": "SimplePassthroughProcessor",
@@ -379,6 +415,7 @@ async fn test_create_processor(client: &reqwest::Client, base_url: &str) -> Stri
     });
     let resp = client
         .post(format!("{}/api/processor", base_url))
+        .bearer_auth(auth_token)
         .json(&body)
         .send()
         .await;
@@ -400,7 +437,11 @@ async fn test_create_processor(client: &reqwest::Client, base_url: &str) -> Stri
     }
 }
 
-async fn test_create_processor_2(client: &reqwest::Client, base_url: &str) -> String {
+async fn test_create_processor_2(
+    client: &reqwest::Client,
+    base_url: &str,
+    auth_token: &str,
+) -> String {
     print!("Testing POST /api/processor (SimplePassthroughProcessor #2) ... ");
     let body = serde_json::json!({
         "processor_type": "SimplePassthroughProcessor",
@@ -408,6 +449,7 @@ async fn test_create_processor_2(client: &reqwest::Client, base_url: &str) -> St
     });
     let resp = client
         .post(format!("{}/api/processor", base_url))
+        .bearer_auth(auth_token)
         .json(&body)
         .send()
         .await;
@@ -434,6 +476,7 @@ async fn test_create_connection(
     base_url: &str,
     from_processor: &str,
     to_processor: &str,
+    auth_token: &str,
 ) -> String {
     print!("Testing POST /api/connections ... ");
     let body = serde_json::json!({
@@ -444,6 +487,7 @@ async fn test_create_connection(
     });
     let resp = client
         .post(format!("{}/api/connections", base_url))
+        .bearer_auth(auth_token)
         .json(&body)
         .send()
         .await;
@@ -466,10 +510,16 @@ async fn test_create_connection(
     }
 }
 
-async fn test_delete_connection(client: &reqwest::Client, base_url: &str, connection_id: &str) {
+async fn test_delete_connection(
+    client: &reqwest::Client,
+    base_url: &str,
+    connection_id: &str,
+    auth_token: &str,
+) {
     print!("Testing DELETE /api/connections/{} ... ", connection_id);
     let resp = client
         .delete(format!("{}/api/connections/{}", base_url, connection_id))
+        .bearer_auth(auth_token)
         .send()
         .await;
     match resp {
@@ -479,10 +529,16 @@ async fn test_delete_connection(client: &reqwest::Client, base_url: &str, connec
     }
 }
 
-async fn test_delete_processor(client: &reqwest::Client, base_url: &str, processor_id: &str) {
+async fn test_delete_processor(
+    client: &reqwest::Client,
+    base_url: &str,
+    processor_id: &str,
+    auth_token: &str,
+) {
     print!("Testing DELETE /api/processors/{} ... ", processor_id);
     let resp = client
         .delete(format!("{}/api/processors/{}", base_url, processor_id))
+        .bearer_auth(auth_token)
         .send()
         .await;
     match resp {
