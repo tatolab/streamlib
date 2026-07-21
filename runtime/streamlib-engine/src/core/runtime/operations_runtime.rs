@@ -450,9 +450,11 @@ impl RuntimeOperations for Runner {
                 crate::core::runtime::tap::start_channel_tap(
                     node,
                     channel,
-                    sizing.max_subscribers,
-                    sizing.max_queued_messages,
-                    sizing.enable_safe_overflow,
+                    crate::core::runtime::tap::TapChannelSizing {
+                        max_subscribers: sizing.max_subscribers,
+                        max_queued_messages: sizing.max_queued_messages,
+                        enable_safe_overflow: sizing.enable_safe_overflow,
+                    },
                     count,
                 )
             })
