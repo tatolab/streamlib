@@ -119,8 +119,8 @@ pub struct RegisterProcessorReceipt {
 }
 
 impl RegisterProcessorReceipt {
-    /// A receipt carrying only the minted ident — the ports vector empty. The
-    /// caller fills `processors` from the committed descriptors post-commit.
+    /// A receipt of the minted registration ident plus each installed
+    /// processor's committed ports.
     pub fn new(module: ModuleIdent, processors: Vec<RegisteredProcessorReceipt>) -> Self {
         Self { module, processors }
     }

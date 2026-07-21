@@ -294,7 +294,12 @@ fn derive_session_type_and_name(
     let type_name = request
         .processor_type_name
         .clone()
-        .or_else(|| request.requested_name.as_deref().map(pascal_case))
+        .or_else(|| {
+            request
+                .requested_name
+                .as_deref()
+                .map(streamlib_processor_schema::to_pascal_case)
+        })
         .filter(|t| !t.is_empty())
         .ok_or(AddModuleError::SubmittedSourceMissingName)?;
 
@@ -469,28 +474,6 @@ fn generate_session_manifest(
     )
 }
 
-/// Project a package-name segment (`my-processor`) or a loose identifier into a
-/// PascalCase type name (`MyProcessor`) — the inverse of
-/// [`kebab_case`](super::session::kebab_case). Interior `-` / `_` boundaries
-/// start a new capitalized run.
-fn pascal_case(name: &str) -> String {
-    let mut out = String::with_capacity(name.len());
-    let mut capitalize_next = true;
-    for ch in name.chars() {
-        if ch == '-' || ch == '_' || ch == ' ' {
-            capitalize_next = true;
-            continue;
-        }
-        if capitalize_next {
-            out.extend(ch.to_uppercase());
-            capitalize_next = false;
-        } else {
-            out.push(ch);
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -505,10 +488,15 @@ mod tests {
     }
 
     #[test]
-    fn pascal_case_projects_kebab_and_snake() {
-        assert_eq!(pascal_case("my-processor"), "MyProcessor");
-        assert_eq!(pascal_case("already_snake"), "AlreadySnake");
-        assert_eq!(pascal_case("camera"), "Camera");
+    fn requested_name_projects_to_a_pascal_type_via_shared_helper() {
+        // The requested-name → PascalCase type projection this module falls back
+        // to when no explicit `processor_type_name` is given. It reuses the
+        // shared `to_pascal_case`; these are the minted-`@session/<name>` inputs
+        // it must handle.
+        use streamlib_processor_schema::to_pascal_case;
+        assert_eq!(to_pascal_case("my-processor"), "MyProcessor");
+        assert_eq!(to_pascal_case("already_snake"), "AlreadySnake");
+        assert_eq!(to_pascal_case("camera"), "Camera");
     }
 
     #[test]
@@ -1075,5 +1063,84 @@ mod tests {
             .expect("the add_local target must remain registered");
         assert!(PROCESSOR_REGISTRY.is_registered(&ident));
         runtime.remove_module(loaded.ident).expect("cleanup remove");
+    }
+
+    #[test]
+    #[serial]
+    fn replace_bumps_the_version_and_swaps_the_registration() {
+        // (7f) HAPPY-PATH replace: a source-backed `@session/<name>`
+        // registration replaced by the same name mints a HIGHER version,
+        // unregisters the OLD ident, registers the NEW one, and (step-6
+        // housekeeping) removes the old staged dir now that the replacement
+        // committed. Mentally-revert the version mint, the removal, or the
+        // step-6 cleanup and one of these assertions fails.
+        let _home = HomeGuard::new();
+        let runtime = Runner::new().unwrap();
+        runtime.set_build_orchestrator(LoadAsIsOrchestrator);
+        let name = "fromsrc-happy-replace";
+
+        let original = drive(
+            &runtime,
+            runtime.register_processor_from_source(python_named(name)),
+        )
+        .expect("original registration succeeds");
+        let original_ident =
+            session_ident_for(&original.module, "Widget").expect("original resolves");
+        assert!(PROCESSOR_REGISTRY.is_registered(&original_ident));
+
+        // Register left the source staged on disk — the restore artifact a
+        // replace compensates from, and the dir step-6 housekeeping reclaims.
+        let original_version = match &original.module.version {
+            streamlib_idents::SemVerRange::Exact(v) => *v,
+            other => panic!("a minted session module carries an exact version, got {other:?}"),
+        };
+        let old_staged_dir = session_source_staging_root()
+            .join(name)
+            .join(original_version.to_string());
+        assert!(
+            old_staged_dir.is_dir(),
+            "a successful register must leave the source staged on disk"
+        );
+
+        let request = ReplaceProcessorFromSource {
+            target_session_module: original.module.clone(),
+            replacement: python_named(name),
+        };
+        let replaced = drive(&runtime, runtime.replace_processor_from_source(request))
+            .expect("the happy-path replace succeeds");
+
+        // The replacement minted a HIGHER version under the SAME name.
+        let replaced_version = match &replaced.module.version {
+            streamlib_idents::SemVerRange::Exact(v) => *v,
+            other => panic!("a minted session module carries an exact version, got {other:?}"),
+        };
+        assert_eq!(replaced.module.name, original.module.name);
+        assert!(
+            replaced_version > original_version,
+            "replace must bump the version: {replaced_version} !> {original_version}"
+        );
+
+        // The OLD ident is gone; the NEW one is registered.
+        assert!(
+            !PROCESSOR_REGISTRY.is_registered(&original_ident),
+            "the replaced (old) ident must be unregistered"
+        );
+        let replaced_ident =
+            session_ident_for(&replaced.module, "Widget").expect("the replacement resolves");
+        assert!(
+            PROCESSOR_REGISTRY.is_registered(&replaced_ident),
+            "the replacement ident must be registered"
+        );
+
+        // Step-6 housekeeping removed the old staged dir (the restore artifact),
+        // now that the new registration has committed.
+        assert!(
+            !old_staged_dir.exists(),
+            "step-6 housekeeping must remove the old staged dir after the replacement commits"
+        );
+
+        runtime
+            .remove_module(replaced.module)
+            .expect("cleanup remove of the replacement");
     }
 }

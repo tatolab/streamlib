@@ -366,3 +366,21 @@ fn block_on_current_runtime<F: std::future::Future>(fut: F) -> F::Output {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    /// Unit-op decode contract: the unit-returning ops (`remove_processor` /
+    /// `disconnect`) route through `submit_msgpack::<_, ()>`, which msgpack-
+    /// DECODES the host's completion payload as `()`. The host emits `to_vec_
+    /// named(&())` (the msgpack nil `0xc0`); `from_slice::<()>` must decode it
+    /// back to `Ok(())`. Revert the unit ops to a no-decode path and this lock
+    /// still passes, but it pins the decode half so the DRY'd `submit_msgpack`
+    /// path can't silently start rejecting the nil the host sends.
+    #[test]
+    fn unit_op_completion_payload_round_trips_through_msgpack() {
+        let encoded = rmp_serde::to_vec_named(&()).expect("() encodes to msgpack nil");
+        let decoded: () = rmp_serde::from_slice(&encoded)
+            .expect("the host's nil completion payload must decode as ()");
+        assert_eq!(decoded, ());
+    }
+}
