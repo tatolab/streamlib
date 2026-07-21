@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.21](https://github.com/tatolab/streamlib/compare/v0.7.20...v0.7.21) (2026-07-21)
+
+
+### Features
+
+* **packages:** api-server bearer-token auth + localhost-default bind ([#1488](https://github.com/tatolab/streamlib/issues/1488)) ([5069cc0](https://github.com/tatolab/streamlib/commit/5069cc072e272460fa2dcc520d7f73cfc62ecbd7))
+
 ## [0.7.20](https://github.com/tatolab/streamlib/compare/v0.7.19...v0.7.20) (2026-07-21)
 
 
