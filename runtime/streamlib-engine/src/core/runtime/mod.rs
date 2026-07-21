@@ -29,7 +29,8 @@ pub(crate) use module_loader::{
     stage_schema_via_active_cdylib_sink,
 };
 pub use operations::{
-    BoxFuture, ConnectOptions, ReplaceProcessorFromSource, RuntimeOperations,
+    BoxFuture, ConnectOptions, RegisterProcessorReceipt, RegisteredPortReceipt,
+    RegisteredProcessorReceipt, ReplaceProcessorFromSource, RuntimeOperations,
     SchemaValidationPosture, SubmittedProcessorSource,
 };
 pub use runtime::Runner;

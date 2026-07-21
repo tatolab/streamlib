@@ -8,7 +8,9 @@ use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 use std::future::Future;
 use std::pin::Pin;
 use streamlib_idents::ModuleIdent;
-use streamlib_processor_schema::ProcessorLanguage;
+use streamlib_processor_schema::{PortSchemaSpec, ProcessorLanguage};
+
+use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
 
 /// Boxed future type for async trait methods (required for dyn compatibility).
 pub type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -93,6 +95,94 @@ pub struct ReplaceProcessorFromSource {
     pub replacement: SubmittedProcessorSource,
 }
 
+/// The success payload of `register_processor_source` / `replace_processor`.
+///
+/// A thin receipt: the minted registration [`ModuleIdent`] plus, for every
+/// processor the registration installed, its committed port surface. Built
+/// engine-side from the committed [`ProcessorDescriptor`]s AFTER the load
+/// commits, so a live-submit caller (filed #1424) learns the connectable ports
+/// — names, schema ids, input delivery profiles — without a second graph
+/// round-trip.
+///
+/// This is a payload-only growth over the former bare `ModuleIdent` return: the
+/// `RuntimeOpsVTable` v3 layout (fn-pointer offsets) is unchanged; only the
+/// msgpack body carried on the success completion grew. It is the msgpack wire
+/// payload the register/replace slots return, so it is serde-stable across the
+/// plugin ABI.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RegisterProcessorReceipt {
+    /// The minted `@session/<name>@0.0.N` registration ident (NOT an
+    /// `add_processor` instance id).
+    pub module: ModuleIdent,
+    /// The processors the registration installed, with their committed ports.
+    pub processors: Vec<RegisteredProcessorReceipt>,
+}
+
+impl RegisterProcessorReceipt {
+    /// A receipt carrying only the minted ident — the ports vector empty. The
+    /// caller fills `processors` from the committed descriptors post-commit.
+    pub fn new(module: ModuleIdent, processors: Vec<RegisteredProcessorReceipt>) -> Self {
+        Self { module, processors }
+    }
+}
+
+/// One processor's committed port surface within a [`RegisterProcessorReceipt`].
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RegisteredProcessorReceipt {
+    /// The processor's PascalCase short `Type` name.
+    pub name: String,
+    /// Input ports, in declaration order.
+    pub inputs: Vec<RegisteredPortReceipt>,
+    /// Output ports, in declaration order.
+    pub outputs: Vec<RegisteredPortReceipt>,
+}
+
+impl RegisteredProcessorReceipt {
+    /// Project a committed [`ProcessorDescriptor`] onto its receipt surface.
+    pub fn from_descriptor(descriptor: &ProcessorDescriptor) -> Self {
+        Self {
+            name: descriptor.name.r#type.as_str().to_string(),
+            inputs: descriptor
+                .inputs
+                .iter()
+                .map(RegisteredPortReceipt::from_port)
+                .collect(),
+            outputs: descriptor
+                .outputs
+                .iter()
+                .map(RegisteredPortReceipt::from_port)
+                .collect(),
+        }
+    }
+}
+
+/// One committed port within a [`RegisteredProcessorReceipt`].
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct RegisteredPortReceipt {
+    /// The port name.
+    pub name: String,
+    /// The port's schema id — `Any` or a fully-qualified `SchemaIdent`.
+    /// Serialized through the plugin-ABI-safe wire codec so `Specific`
+    /// round-trips across the msgpack boundary (the default `PortSchemaSpec`
+    /// serde is YAML-shaped and lossy on `Specific`).
+    #[serde(with = "crate::core::descriptors::port_schema_spec_wire")]
+    pub schema: PortSchemaSpec,
+    /// Input-port delivery-profile override (`"latest"` / `"every_sample"` /
+    /// `"lossless"`); always `None` on output ports.
+    #[serde(default)]
+    pub delivery_profile: Option<String>,
+}
+
+impl RegisteredPortReceipt {
+    fn from_port(port: &PortDescriptor) -> Self {
+        Self {
+            name: port.name.clone(),
+            schema: port.schema.clone(),
+            delivery_profile: port.delivery_profile.clone(),
+        }
+    }
+}
+
 /// Unified interface for runtime graph operations.
 ///
 /// Implemented by `Runner` (direct) and `RuntimeProxy` (channel-based).
@@ -147,20 +237,21 @@ pub trait RuntimeOperations: Send + Sync {
 
     /// Register a processor definition from source text into the live
     /// runtime, minting it a `@session/<name>@0.0.N` identity through the
-    /// module_loader's transactional session-source seam. Returns the minted
-    /// registration [`ModuleIdent`] (NOT an `add_processor` instance id).
+    /// module_loader's transactional session-source seam. Returns a
+    /// [`RegisterProcessorReceipt`] — the minted registration ident plus the
+    /// committed port surface of each installed processor.
     fn register_processor_source_async(
         &self,
         request: SubmittedProcessorSource,
-    ) -> BoxFuture<'_, Result<ModuleIdent>>;
+    ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>>;
 
     /// Remove a prior `@session/<name>` registration, then re-register the
-    /// replacement source at a monotonically-bumped `0.0.N`. Returns the
-    /// minted registration [`ModuleIdent`] for the new definition.
+    /// replacement source at a monotonically-bumped `0.0.N`. Returns a
+    /// [`RegisterProcessorReceipt`] for the new definition.
     fn replace_processor_async(
         &self,
         request: ReplaceProcessorFromSource,
-    ) -> BoxFuture<'_, Result<ModuleIdent>>;
+    ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>>;
 
     // =========================================================================
     // Sync Methods (convenience wrappers - NOT safe from tokio tasks)
@@ -252,6 +343,58 @@ mod source_submit_wire_tests {
             target.to_string()
         );
         assert_eq!(decoded.replacement.language, ProcessorLanguage::TypeScript);
+    }
+
+    #[test]
+    fn register_receipt_round_trips_through_msgpack() {
+        // The v3 SUCCESS payload: minted ident + per-processor committed ports.
+        // Crosses the plugin ABI, so a field rename / reorder or a schema-spec
+        // wire-codec regression must fail here. Covers both an `Any` port and a
+        // `Specific(SchemaIdent)` port (the case the default YAML-shaped
+        // PortSchemaSpec serde would lose) plus an input delivery profile.
+        use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
+
+        let module = streamlib_idents::mint_session_module_ident("widget")
+            .expect("valid name mints")
+            .module;
+        let specific = PortSchemaSpec::Specific(SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("core").unwrap(),
+            TypeName::new("VideoFrame").unwrap(),
+            SemVer::new(1, 2, 3),
+        ));
+        let receipt = RegisterProcessorReceipt::new(
+            module.clone(),
+            vec![RegisteredProcessorReceipt {
+                name: "Widget".to_string(),
+                inputs: vec![RegisteredPortReceipt {
+                    name: "in0".to_string(),
+                    schema: PortSchemaSpec::Any,
+                    delivery_profile: Some("latest".to_string()),
+                }],
+                outputs: vec![RegisteredPortReceipt {
+                    name: "out0".to_string(),
+                    schema: specific.clone(),
+                    delivery_profile: None,
+                }],
+            }],
+        );
+
+        let bytes = rmp_serde::to_vec_named(&receipt).expect("encode");
+        let decoded: RegisterProcessorReceipt = rmp_serde::from_slice(&bytes).expect("decode");
+        assert_eq!(decoded.module.to_string(), module.to_string());
+        assert_eq!(decoded.processors.len(), 1);
+        assert_eq!(decoded.processors[0].name, "Widget");
+        assert_eq!(decoded.processors[0].inputs[0].name, "in0");
+        assert_eq!(
+            decoded.processors[0].inputs[0].delivery_profile.as_deref(),
+            Some("latest")
+        );
+        assert_eq!(decoded.processors[0].outputs[0].name, "out0");
+        assert_eq!(
+            decoded.processors[0].outputs[0].schema, specific,
+            "the Specific schema id must round-trip through the wire codec"
+        );
     }
 
     #[test]

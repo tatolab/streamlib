@@ -22,11 +22,16 @@ use core::ffi::c_void;
 ///   submit a processor definition from source text into a live
 ///   runtime. The host stages the source through the module_loader's
 ///   transactional session-source seam into a minted
-///   `@session/<name>@0.0.N` identity; the success payload is the
-///   msgpack-encoded minted `ModuleIdent` (a registration ident, NOT
-///   an `add_processor` instance `ProcessorUniqueId`). `replace`
-///   carries a target `@session/<name>` module to remove-then-
-///   re-register at a monotonically-bumped `0.0.N`.
+///   `@session/<name>@0.0.N` identity; the success payload is a
+///   msgpack-encoded registration receipt (the minted `ModuleIdent` —
+///   a registration ident, NOT an `add_processor` instance
+///   `ProcessorUniqueId` — plus each installed processor's committed
+///   ports). `replace` carries a target `@session/<name>` module to
+///   remove-then-re-register at a monotonically-bumped `0.0.N`.
+///
+///   The layout version pins the fn-pointer offsets, not the msgpack
+///   body: growing the success payload from a bare `ModuleIdent` to
+///   the receipt is a payload-only change and does NOT re-bump v3.
 pub const RUNTIME_OPS_VTABLE_LAYOUT_VERSION: u32 = 3;
 
 /// Completion callback signature for async runtime ops.
@@ -141,8 +146,10 @@ pub struct RuntimeOpsVTable {
     /// text + language + optional processor name). The host stages the
     /// source through the module_loader's session-source seam and mints
     /// a `@session/<name>@0.0.N` identity. On success the result payload
-    /// is the msgpack-encoded minted `ModuleIdent` (a registration
-    /// ident, NOT an `add_processor` instance `ProcessorUniqueId`).
+    /// is a msgpack-encoded registration receipt: the minted `ModuleIdent`
+    /// (a registration ident, NOT an `add_processor` instance
+    /// `ProcessorUniqueId`) plus each installed processor's committed
+    /// ports (name, schema id, input delivery profile).
     pub register_processor_source: unsafe extern "C" fn(
         handle: *const c_void,
         request_msgpack_ptr: *const u8,
@@ -156,8 +163,9 @@ pub struct RuntimeOpsVTable {
     /// module to remove, plus the replacement source text + language +
     /// optional name). The host removes the prior session registration,
     /// then re-registers the replacement at a monotonically-bumped
-    /// `0.0.N`. On success the result payload is the msgpack-encoded
-    /// minted `ModuleIdent` for the new registration.
+    /// `0.0.N`. On success the result payload is the same msgpack-encoded
+    /// registration receipt `register_processor_source` returns, carrying
+    /// the new registration's minted `ModuleIdent` and committed ports.
     pub replace_processor: unsafe extern "C" fn(
         handle: *const c_void,
         request_msgpack_ptr: *const u8,

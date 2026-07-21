@@ -5,10 +5,9 @@ use std::sync::Arc;
 
 use super::Runner;
 use super::operations::{
-    BoxFuture, ConnectOptions, ReplaceProcessorFromSource, RuntimeOperations,
-    SubmittedProcessorSource,
+    BoxFuture, ConnectOptions, RegisterProcessorReceipt, ReplaceProcessorFromSource,
+    RuntimeOperations, SubmittedProcessorSource,
 };
-use streamlib_idents::ModuleIdent;
 use super::runtime::TokioRuntimeVariant;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
@@ -406,14 +405,14 @@ impl RuntimeOperations for Runner {
     fn register_processor_source_async(
         &self,
         request: SubmittedProcessorSource,
-    ) -> BoxFuture<'_, Result<ModuleIdent>> {
+    ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
         Box::pin(self.register_processor_from_source(request))
     }
 
     fn replace_processor_async(
         &self,
         request: ReplaceProcessorFromSource,
-    ) -> BoxFuture<'_, Result<ModuleIdent>> {
+    ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
         Box::pin(self.replace_processor_from_source(request))
     }
 

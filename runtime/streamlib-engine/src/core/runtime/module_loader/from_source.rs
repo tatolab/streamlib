@@ -30,7 +30,10 @@ use std::path::{Path, PathBuf};
 use streamlib_processor_schema::ProcessorLanguage;
 
 use super::super::Runner;
-use super::super::operations::{ReplaceProcessorFromSource, SubmittedProcessorSource};
+use super::super::operations::{
+    RegisterProcessorReceipt, RegisteredProcessorReceipt, ReplaceProcessorFromSource,
+    SubmittedProcessorSource,
+};
 use super::build_orchestrator::BuildPolicy;
 use super::errors::AddModuleError;
 use super::ledger;
@@ -83,7 +86,7 @@ impl Runner {
     pub async fn register_processor_from_source(
         &self,
         request: SubmittedProcessorSource,
-    ) -> Result<streamlib_idents::ModuleIdent> {
+    ) -> Result<RegisterProcessorReceipt> {
         let staged = stage_submitted_source(&request)?;
         self.load_staged_session_source(staged).await
     }
@@ -101,7 +104,7 @@ impl Runner {
     async fn load_staged_session_source(
         &self,
         staged: StagedSessionSource,
-    ) -> Result<streamlib_idents::ModuleIdent> {
+    ) -> Result<RegisterProcessorReceipt> {
         let StagedSessionSource { module, dir } = staged;
         let added = self.add_module_with(
             module.clone(),
@@ -111,7 +114,7 @@ impl Runner {
             },
         );
         match added.await {
-            Ok(_loaded) => Ok(module),
+            Ok(_loaded) => Ok(build_registration_receipt(&module)),
             Err(load_error) => {
                 remove_staged_dir_and_prune_parent(&dir);
                 Err(Error::from(load_error))
@@ -136,7 +139,7 @@ impl Runner {
     pub async fn replace_processor_from_source(
         &self,
         request: ReplaceProcessorFromSource,
-    ) -> Result<streamlib_idents::ModuleIdent> {
+    ) -> Result<RegisterProcessorReceipt> {
         let target = request.target_session_module.clone();
 
         // (1) PRE-VALIDATE — no mutation.
@@ -195,11 +198,11 @@ impl Runner {
         // (4) Load the pre-staged replacement. `load_staged_session_source`
         // reclaims the replacement's scratch dir on its own failure.
         match self.load_staged_session_source(staged).await {
-            Ok(new_module) => {
+            Ok(receipt) => {
                 // (6) HOUSEKEEPING: the old staged dir was the restore artifact;
                 // delete it only now that the new registration has committed.
                 remove_staged_dir_and_prune_parent(&old_dir);
-                Ok(new_module)
+                Ok(receipt)
             }
             Err(cause) => {
                 // (5) COMPENSATE: restore the target's EXACT prior ModuleIdent
@@ -242,6 +245,28 @@ impl Runner {
             }
         }
     }
+}
+
+/// Build the register/replace success receipt from the committed processor
+/// descriptors for `module`, post-commit. Enumerates the registry for the
+/// processors installed under the minted `(org, package)` at the loaded
+/// version and projects each committed [`ProcessorDescriptor`] onto its port
+/// surface, so the caller learns the connectable ports (names, schema ids,
+/// input delivery profiles) without a second graph round-trip.
+///
+/// [`ProcessorDescriptor`]: crate::core::descriptors::ProcessorDescriptor
+fn build_registration_receipt(module: &streamlib_idents::ModuleIdent) -> RegisterProcessorReceipt {
+    let processors = crate::core::processors::PROCESSOR_REGISTRY
+        .list_registered()
+        .into_iter()
+        .filter(|descriptor| {
+            descriptor.name.org == module.org
+                && descriptor.name.package == module.name
+                && module.version.matches(descriptor.name.version)
+        })
+        .map(|descriptor| RegisteredProcessorReceipt::from_descriptor(&descriptor))
+        .collect();
+    RegisterProcessorReceipt::new(module.clone(), processors)
 }
 
 /// Best-effort reclamation of a staged session-source version dir plus its
@@ -910,7 +935,8 @@ mod tests {
             runtime.register_processor_from_source(python_named(name)),
         )
         .expect("original registration succeeds");
-        let original_ident = session_ident_for(&original, "Widget").expect("original resolves");
+        let original_ident =
+            session_ident_for(&original.module, "Widget").expect("original resolves");
         assert!(PROCESSOR_REGISTRY.is_registered(&original_ident));
 
         // Arm the fault so the replacement's load fails; the compensating
@@ -919,7 +945,7 @@ mod tests {
             armed: AtomicBool::new(true),
         });
         let request = ReplaceProcessorFromSource {
-            target_session_module: original.clone(),
+            target_session_module: original.module.clone(),
             replacement: python_named(name),
         };
         let err = drive(&runtime, runtime.replace_processor_from_source(request))
@@ -946,7 +972,7 @@ mod tests {
 
         // Cleanup.
         runtime
-            .remove_module(original)
+            .remove_module(original.module)
             .expect("cleanup remove of the restored target");
     }
 
@@ -968,13 +994,29 @@ mod tests {
             runtime.register_processor_from_source(python_named("fromsrc-ported")),
         )
         .expect("registration with ports succeeds");
-        let ported_ident = session_ident_for(&ported, "Widget").expect("ported resolves");
+        let ported_ident = session_ident_for(&ported.module, "Widget").expect("ported resolves");
         let (inputs, outputs) = PROCESSOR_REGISTRY
             .port_info(&ported_ident)
             .expect("a registered session processor exposes port info");
         assert_eq!(inputs.len(), 1, "spliced input port must be registered");
         assert_eq!(outputs.len(), 1, "spliced output port must be registered");
-        runtime.remove_module(ported).expect("cleanup ported");
+        // The v3 receipt reports the SAME committed ports, built engine-side
+        // from the descriptors post-commit — no second graph round-trip needed.
+        assert_eq!(ported.processors.len(), 1, "receipt names the installed processor");
+        assert_eq!(ported.processors[0].name, "Widget");
+        assert_eq!(
+            ported.processors[0].inputs.len(),
+            1,
+            "receipt carries the committed input port"
+        );
+        assert_eq!(ported.processors[0].inputs[0].name, "in0");
+        assert_eq!(
+            ported.processors[0].outputs.len(),
+            1,
+            "receipt carries the committed output port"
+        );
+        assert_eq!(ported.processors[0].outputs[0].name, "out0");
+        runtime.remove_module(ported.module).expect("cleanup ported");
 
         // Regression twin: the placeholder manifest (no splice) → portless.
         let plain_runtime = Runner::new().unwrap();
@@ -984,7 +1026,7 @@ mod tests {
             plain_runtime.register_processor_from_source(python_named("fromsrc-portless")),
         )
         .expect("registration without ports succeeds");
-        let plain_ident = session_ident_for(&plain, "Widget").expect("plain resolves");
+        let plain_ident = session_ident_for(&plain.module, "Widget").expect("plain resolves");
         let (plain_in, plain_out) = PROCESSOR_REGISTRY
             .port_info(&plain_ident)
             .expect("port info present");
@@ -993,7 +1035,13 @@ mod tests {
             "the placeholder manifest must yield a portless descriptor — got \
              {plain_in:?} / {plain_out:?}"
         );
-        plain_runtime.remove_module(plain).expect("cleanup portless");
+        // The receipt mirrors the portless descriptor: named, but no ports.
+        assert_eq!(plain.processors.len(), 1);
+        assert!(
+            plain.processors[0].inputs.is_empty() && plain.processors[0].outputs.is_empty(),
+            "the portless receipt must carry no ports"
+        );
+        plain_runtime.remove_module(plain.module).expect("cleanup portless");
     }
 
     #[test]

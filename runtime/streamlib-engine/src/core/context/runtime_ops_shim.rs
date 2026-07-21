@@ -27,10 +27,10 @@ use crate::core::error::{Error, Result};
 use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
 use crate::core::processors::ProcessorSpec;
 use crate::core::runtime::{
-    BoxFuture, ReplaceProcessorFromSource, RuntimeOperations, SubmittedProcessorSource,
+    BoxFuture, RegisterProcessorReceipt, ReplaceProcessorFromSource, RuntimeOperations,
+    SubmittedProcessorSource,
 };
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
-use streamlib_idents::ModuleIdent;
 
 /// Cdylib-side handle to the host's graph-mutation operations.
 ///
@@ -295,7 +295,7 @@ impl RuntimeOperations for RuntimeOpsShim {
     fn register_processor_source_async(
         &self,
         request: SubmittedProcessorSource,
-    ) -> BoxFuture<'_, Result<ModuleIdent>> {
+    ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
         self.submit_msgpack(
             "register_processor_source_async",
             request,
@@ -308,7 +308,7 @@ impl RuntimeOperations for RuntimeOpsShim {
     fn replace_processor_async(
         &self,
         request: ReplaceProcessorFromSource,
-    ) -> BoxFuture<'_, Result<ModuleIdent>> {
+    ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
         self.submit_msgpack(
             "replace_processor_async",
             request,
