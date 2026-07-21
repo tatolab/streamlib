@@ -12,6 +12,7 @@ pub(crate) mod escalate_scope_registry;
 mod gpu_context;
 #[cfg(target_os = "linux")]
 mod graphics_kernel_bridge;
+pub(crate) mod isolation;
 #[cfg(target_os = "linux")]
 mod ray_tracing_kernel_bridge;
 mod runtime_context;
@@ -51,6 +52,8 @@ pub use ray_tracing_kernel_bridge::{
     RayTracingKernelRegisterDecl, RayTracingKernelRunDispatch, RayTracingShaderGroupWire,
     RayTracingShaderStageWire, RayTracingStageDecl, TlasInstanceDeclWire, TlasRegisterDecl,
 };
+pub use isolation::IsolationTier;
+pub(crate) use isolation::FullAccessGrant;
 pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 pub use runtime_ops_shim::RuntimeOpsShim;
 pub use surface_store::SurfaceStore;

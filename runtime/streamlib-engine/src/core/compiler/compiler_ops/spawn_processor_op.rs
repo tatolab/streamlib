@@ -9,8 +9,10 @@ use std::os::fd::OwnedFd;
 use parking_lot::{Mutex, RwLock};
 
 use crate::core::compiler::scheduling::{SchedulingStrategy, scheduling_strategy_for_processor};
+
 use crate::core::context::{
-    GpuContext, GpuContextLimitedAccess, RuntimeContext, RuntimeContextFullAccess,
+    FullAccessGrant, GpuContext, GpuContextLimitedAccess, IsolationTier, RuntimeContext,
+    RuntimeContextFullAccess,
 };
 use crate::core::descriptors::ProcessorRuntime;
 use crate::core::error::{Error, Result};
@@ -146,17 +148,30 @@ fn spawn_dedicated_thread(
     let runtime_ctx_clone = Arc::clone(runtime_ctx);
     let proc_id_clone = processor_id.clone();
 
-    // Create processor instance now (with lock) since factory needs node reference
-    let processor_arc = {
+    // Create processor instance now (with lock) since factory needs node
+    // reference; read the org off the same guaranteed-present node so the
+    // isolation tier is always derived from provenance, never from node absence.
+    let (processor_arc, org) = {
         let graph = graph_arc.read();
         let node = graph.traversal().v(&processor_id).first().ok_or_else(|| {
             Error::ProcessorNotFound(format!("Processor '{}' not found", processor_id))
         })?;
+        let org = node.processor_type().org.clone();
         let processor = factory.create(node)?;
-        Arc::new(Mutex::new(processor))
+        (Arc::new(Mutex::new(processor)), org)
     };
 
     let processor_arc_clone = Arc::clone(&processor_arc);
+
+    // Resolve the isolation trust tier through the opt-in session isolation tier:
+    // trusted by default (same as installed), and a @session cdylib is eligible
+    // for Untrusted only when the operator opts in (STREAMLIB_SESSION_ISOLATION_TIER
+    // / set_session_isolation_tier). The tier gates every FullAccess mint on this
+    // thread (setup / start / stop / teardown). cdylib-residency is read off the
+    // instance after the graph lock is released, so no graph(read)→processor(mutex)
+    // lock order is introduced.
+    let cdylib_resident = processor_arc.lock().is_cdylib_resident();
+    let isolation_tier = IsolationTier::for_processor(&org, cdylib_resident);
 
     // Generous 8 MB stack — processors run arbitrary codec / plugin code
     // with deep call stacks. IPC payloads are slice-based (`[u8]`) in
@@ -324,7 +339,19 @@ fn spawn_dedicated_thread(
                 .with_pause_gate(pause_gate_inner.clone());
             {
                 let tokio_handle = runtime_ctx_clone.tokio_handle();
-                let full_ctx = RuntimeContextFullAccess::new(&processor_context);
+                // The trust-axis moat: an untrusted tier yields no
+                // `FullAccessGrant`, so an in-process FullAccess context is
+                // unrepresentable here — refuse privileged setup() in-process
+                // (the untrusted processor's privileged lifecycle belongs behind
+                // the subprocess sandbox) and leave the processor `Error`.
+                let Some(full_access_grant) = full_access_grant_or_mark_untrusted_error(
+                    isolation_tier,
+                    &state_arc,
+                    &proc_id_clone,
+                ) else {
+                    return;
+                };
+                let full_ctx = RuntimeContextFullAccess::new(&processor_context, full_access_grant);
                 let mut guard = processor_arc_clone.lock();
 
                 tracing::info!(
@@ -368,6 +395,7 @@ fn spawn_dedicated_thread(
                 pause_gate_inner,
                 exec_config,
                 processor_context,
+                isolation_tier,
             );
         })
         .map_err(|e| Error::Runtime(format!("Failed to spawn thread: {}", e)))?;
@@ -386,6 +414,32 @@ fn spawn_dedicated_thread(
     }
 
     Ok(())
+}
+
+/// The trust-axis moat at the FullAccess minting seam: yield a
+/// [`FullAccessGrant`] iff the tier permits an in-process FullAccess context.
+/// On refusal (untrusted), mark the processor [`ProcessorState::Error`] — its
+/// privileged lifecycle belongs behind the subprocess sandbox (isolation
+/// enforcement) — and yield `None` so the caller skips setup and the loop.
+fn full_access_grant_or_mark_untrusted_error(
+    isolation_tier: IsolationTier,
+    state_arc: &Arc<Mutex<ProcessorState>>,
+    processor_id: &ProcessorUniqueId,
+) -> Option<FullAccessGrant> {
+    match isolation_tier.grant_full_access() {
+        Some(grant) => Some(grant),
+        None => {
+            tracing::warn!(
+                "[{}] Untrusted isolation tier ({}): in-process FullAccess denied by \
+                 construction — refusing privileged setup() (belongs behind the \
+                 subprocess sandbox)",
+                processor_id,
+                isolation_tier.as_str(),
+            );
+            *state_arc.lock() = ProcessorState::Error;
+            None
+        }
+    }
 }
 
 /// Run a processor's `__generated_setup` body.
@@ -453,6 +507,53 @@ mod tests {
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
+
+    /// The trust-axis moat wiring at the spawn setup seam: an untrusted tier
+    /// yields no [`FullAccessGrant`], and the gate marks the processor
+    /// [`ProcessorState::Error`] (so setup + the process loop are skipped).
+    /// Mentally revert the gate to yield `Some(..)` unconditionally — the
+    /// grant-absence and the `Error` state both flip.
+    #[test]
+    fn untrusted_tier_gate_refuses_and_marks_error() {
+        let state = Arc::new(Mutex::new(ProcessorState::Idle));
+        let proc_id = ProcessorUniqueId::from("test.untrusted");
+        let grant = full_access_grant_or_mark_untrusted_error(
+            IsolationTier::Untrusted,
+            &state,
+            &proc_id,
+        );
+        assert!(
+            grant.is_none(),
+            "untrusted tier must not yield a FullAccess grant"
+        );
+        assert_eq!(
+            *state.lock(),
+            ProcessorState::Error,
+            "the refused untrusted setup must mark the processor Error"
+        );
+    }
+
+    /// The trusted arm of the same seam: a trusted tier yields a grant and
+    /// never touches processor state (setup proceeds normally).
+    #[test]
+    fn trusted_tier_gate_yields_grant_and_leaves_state() {
+        let state = Arc::new(Mutex::new(ProcessorState::Idle));
+        let proc_id = ProcessorUniqueId::from("test.trusted");
+        let grant = full_access_grant_or_mark_untrusted_error(
+            IsolationTier::TrustedInstalled,
+            &state,
+            &proc_id,
+        );
+        assert!(
+            grant.is_some(),
+            "trusted tier must yield a FullAccess grant"
+        );
+        assert_eq!(
+            *state.lock(),
+            ProcessorState::Idle,
+            "the trusted path must not touch processor state"
+        );
+    }
 
     fn gpu_or_skip(test_name: &str) -> Option<GpuContext> {
         match GpuContext::init_for_platform_sync() {

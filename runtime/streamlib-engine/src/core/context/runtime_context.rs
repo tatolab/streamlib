@@ -675,7 +675,19 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// Construct a full-access view over `base`. Crate-internal: only the
     /// runtime's lifecycle dispatch (attribute macro + `spawn_processor_op`)
     /// is permitted to create these.
-    pub(crate) fn new(base: &'a RuntimeContext) -> Self {
+    ///
+    /// Requires a [`FullAccessGrant`](super::isolation::FullAccessGrant) — the
+    /// by-construction capability moat. A grant is producible only from an
+    /// [`IsolationTier::TrustedInstalled`](super::isolation::IsolationTier),
+    /// so an untrusted processor's lifecycle dispatch (a `@session`
+    /// submitted-source module once the operator opts into sandboxing) has no
+    /// token to pass and cannot mint an in-process FullAccess context. The token
+    /// is consumed (not stored): it proves authorization at
+    /// the minting seam and carries no runtime state.
+    pub(crate) fn new(
+        base: &'a RuntimeContext,
+        _grant: super::isolation::FullAccessGrant,
+    ) -> Self {
         Self {
             handle: base as *const RuntimeContext as *const c_void,
             vtable: crate::core::plugin::host_services::host_runtime_context_vtable(),
