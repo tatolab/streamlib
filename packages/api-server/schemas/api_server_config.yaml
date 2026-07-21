@@ -29,3 +29,7 @@ optionalProperties:
     metadata:
       description: "Permit binding a non-loopback host. Absent / false restricts the listener to loopback (127.0.0.1 / ::1 / localhost); a remote bind exposes the graph-mutation control plane and must be opted into explicitly."
     type: boolean
+  require_auth:
+    metadata:
+      description: "Opt into bearer-token auth on the four mutating control-plane routes. Absent / false leaves them open (the zero-ceremony default — a node runs locally with full permission); true auto-generates and 0600-persists a shared secret and gates every mutating route behind `Authorization: Bearer <token>`. An opt-in hardening layer for exposed / fleet deployments, not a default."
+    type: boolean

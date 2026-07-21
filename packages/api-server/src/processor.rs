@@ -20,7 +20,9 @@ struct StashedHandles {
     runtime: Arc<dyn RuntimeOperations>,
     tokio_handle: tokio::runtime::Handle,
     runtime_id: String,
-    auth_token: crate::auth::ApiServerBearerToken,
+    /// `Some` only when the config opted into bearer auth; `None` leaves the
+    /// mutating routes open (the zero-ceremony default).
+    auth_token: Option<crate::auth::ApiServerBearerToken>,
 }
 
 /// Docker-style adjectives for runtime name generation.
@@ -141,13 +143,20 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         let tokio_handle = runtime.handle().clone();
         self.tokio_runtime = Some(runtime);
 
-        // Auto-generate + persist the bearer token (0600) on first setup;
-        // reused across restarts. Every mutating route is gated behind it.
-        let auth_token = crate::auth::ApiServerBearerToken::load_or_create_under_data_dir()?;
-        tracing::info!(
-            "ApiServer bearer token at {}",
-            crate::auth::ApiServerBearerToken::default_token_path().display()
-        );
+        // Bearer auth is opt-in (default off): a node runs locally with full
+        // permission, so the mutating routes stay open unless the config asks
+        // for a token. When enabled, auto-generate + 0600-persist the secret on
+        // first setup (reused across restarts) and gate every mutating route.
+        let auth_token = if self.config.require_auth == Some(true) {
+            let token = crate::auth::ApiServerBearerToken::load_or_create_under_data_dir()?;
+            tracing::info!(
+                "ApiServer bearer token at {}",
+                crate::auth::ApiServerBearerToken::default_token_path().display()
+            );
+            Some(token)
+        } else {
+            None
+        };
 
         // Capture just the narrow handles the HTTP server task needs;
         // the long-lived task never holds a `RuntimeContext`.

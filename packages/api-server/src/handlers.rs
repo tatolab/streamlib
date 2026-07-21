@@ -45,24 +45,28 @@ use crate::state::{
 ///
 /// The four mutating routes (`POST /api/processor`, `DELETE
 /// /api/processors/{id}`, `POST /api/connections`, `DELETE
-/// /api/connections/{id}`) sit behind the bearer-token auth middleware; the
-/// GET routes, health check, WebSocket event stream, and OpenAPI spec stay
+/// /api/connections/{id}`) sit behind the bearer-token auth middleware only
+/// when `auth_token` is `Some` (auth opted in); with `None` — the
+/// zero-ceremony default — they are open like every other route. The GET
+/// routes, health check, WebSocket event stream, and OpenAPI spec are always
 /// open. `route_layer` binds the auth layer to exactly the routes already on
 /// the protected sub-router, so a later `merge` leaves the open routes ungated.
 pub(crate) fn build_router(
     runtime: Arc<dyn RuntimeOperations>,
-    auth_token: ApiServerBearerToken,
+    auth_token: Option<ApiServerBearerToken>,
     #[cfg(feature = "moq")] runtime_id: String,
 ) -> Router {
-    let protected = OpenApiRouter::new()
+    let mut protected = OpenApiRouter::new()
         .routes(routes!(create_processor))
         .routes(routes!(delete_processor))
         .routes(routes!(create_connection))
-        .routes(routes!(delete_connection))
-        .route_layer(axum::middleware::from_fn_with_state(
+        .routes(routes!(delete_connection));
+    if let Some(auth_token) = auth_token {
+        protected = protected.route_layer(axum::middleware::from_fn_with_state(
             auth_token,
             crate::auth::require_bearer_token,
         ));
+    }
 
     let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
         .routes(routes!(health))
@@ -498,11 +502,13 @@ mod router_auth_gate_tests {
     use tower::ServiceExt;
 
     /// Stub runtime whose graph mutations all succeed, so the REAL
-    /// [`build_router`] auth gate can be exercised end-to-end: a mutating
-    /// handler reaches its `Ok` result (200 / 204) only once the bearer-token
-    /// middleware has admitted the request. Deleting the `route_layer` gate in
-    /// `build_router` flips the missing-token cases from 401 to those success
-    /// codes, so this test goes red on that regression.
+    /// [`build_router`] auth gate can be exercised end-to-end. With auth
+    /// enabled, a mutating handler reaches its `Ok` result (200 / 204) only
+    /// once the bearer-token middleware has admitted the request — deleting the
+    /// `route_layer` gate flips the missing-token cases from 401 to those
+    /// success codes, so the enabled-mode tests go red on that regression. With
+    /// auth off (the default), the same handlers must be reachable with no
+    /// token at all.
     struct AlwaysOkStubRuntime;
 
     impl RuntimeOperations for AlwaysOkStubRuntime {
@@ -550,17 +556,34 @@ mod router_auth_gate_tests {
 
     const TEST_TOKEN: &str = "test-bearer-secret";
 
-    fn real_router() -> Router {
+    /// Router with bearer auth explicitly enabled — the mutating routes are
+    /// gated behind [`TEST_TOKEN`].
+    fn auth_enabled_router() -> Router {
         build_router(
             Arc::new(AlwaysOkStubRuntime),
-            ApiServerBearerToken::from_secret(TEST_TOKEN),
+            Some(ApiServerBearerToken::from_secret(TEST_TOKEN)),
             #[cfg(feature = "moq")]
             "test-runtime-id".to_string(),
         )
     }
 
+    /// Router in the default (auth-off) mode — every route, including the
+    /// mutating ones, is open with no token.
+    fn auth_disabled_router() -> Router {
+        build_router(
+            Arc::new(AlwaysOkStubRuntime),
+            None,
+            #[cfg(feature = "moq")]
+            "test-runtime-id".to_string(),
+        )
+    }
+
+    async fn status_on(router: Router, request: Request<Body>) -> StatusCode {
+        router.oneshot(request).await.unwrap().status()
+    }
+
     async fn status_of(request: Request<Body>) -> StatusCode {
-        real_router().oneshot(request).await.unwrap().status()
+        status_on(auth_enabled_router(), request).await
     }
 
     fn create_processor_body() -> Body {
@@ -684,6 +707,47 @@ mod router_auth_gate_tests {
                 status_of(request).await,
                 StatusCode::OK,
                 "GET {uri} must stay open (no bearer token)"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_off_lets_create_routes_through_without_a_token() {
+        // The zero-ceremony default: with auth off, the mutating POST routes
+        // reach their handlers (200) with no `Authorization` header. Reapplying
+        // the gate unconditionally in `build_router` flips these to 401.
+        let posts = [
+            ("/api/processor", create_processor_body()),
+            ("/api/connections", create_connection_body()),
+        ];
+        for (uri, body) in posts {
+            let request = Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header(CONTENT_TYPE, "application/json")
+                .body(body)
+                .unwrap();
+            assert_eq!(
+                status_on(auth_disabled_router(), request).await,
+                StatusCode::OK,
+                "POST {uri} must be open with auth off (no token)"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn auth_off_lets_delete_routes_through_without_a_token() {
+        let deletes = ["/api/processors/some-id", "/api/connections/some-id"];
+        for uri in deletes {
+            let request = Request::builder()
+                .method("DELETE")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap();
+            assert_eq!(
+                status_on(auth_disabled_router(), request).await,
+                StatusCode::NO_CONTENT,
+                "DELETE {uri} must be open with auth off (no token)"
             );
         }
     }

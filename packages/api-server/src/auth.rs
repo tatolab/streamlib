@@ -4,10 +4,13 @@
 //! Bearer-token authentication for the api-server's mutating routes.
 //!
 //! An endpoint that mutates the runtime graph is remote code execution by
-//! design, so every mutating route is gated behind a shared secret the
-//! client presents as `Authorization: Bearer <token>`. The token is
-//! auto-generated on first `setup()` and persisted at `0600` under the
-//! streamlib data dir, so it survives restarts without being re-issued.
+//! design. Auth is an opt-in hardening layer for exposed / fleet deployments,
+//! not a default: a node runs locally with full permission, so the mutating
+//! routes are open unless the config sets `require_auth`. When opted in, every
+//! mutating route is gated behind a shared secret the client presents as
+//! `Authorization: Bearer <token>`; the token is auto-generated on first
+//! `setup()` and persisted at `0600` under the streamlib data dir, so it
+//! survives restarts without being re-issued.
 
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
