@@ -19,6 +19,12 @@
 //! `max_subscribers`) and creates the reserved subscriber. No new service, no
 //! publisher change, no sizing change.
 //!
+//! The reserved slot is a COUNTING reservation (iceoryx2 only enforces
+//! `max_subscribers = destinations + 1`), not an identity reservation, so a tap
+//! attached during a startup/replace window before a destination subscriber
+//! exists can occupy the slot that destination will need — narrow in practice,
+//! since taps target already-running pipelines.
+//!
 //! iceoryx2's `Subscriber` holds `Rc` internally and is `!Send`, so it cannot
 //! move into the caller's tokio tasks. The tap therefore owns a dedicated OS
 //! thread that holds the subscriber and forwards each raw bag's bytes over a
@@ -236,17 +242,21 @@ fn run_forwarder(
         if signals.stop_flag.load(Ordering::Acquire) {
             break;
         }
+        // Enforce the bound BEFORE receiving/forwarding so `count = Some(0)` ends
+        // the stream with zero bags and a clean close. A post-forward check can
+        // only observe the bound after already delivering one bag, so count=0
+        // would leak a single frame.
+        if let Some(bound) = count {
+            if delivered >= bound {
+                break;
+            }
+        }
         match subscriber.receive() {
             Ok(Some(sample)) => {
                 use tokio::sync::mpsc::error::TrySendError;
                 match forward_tx.try_send(sample.payload().to_vec()) {
                     Ok(()) => {
                         delivered += 1;
-                        if let Some(bound) = count {
-                            if delivered >= bound {
-                                break;
-                            }
-                        }
                     }
                     // Downstream full: DROP the newest bag so the iceoryx2
                     // subscriber stays drained and the source is never
@@ -446,6 +456,43 @@ mod tests {
             assert!(
                 ended.is_none(),
                 "a count=2 tap must end its stream after exactly 2 bags",
+            );
+        });
+    }
+
+    /// A `count = Some(0)` tap forwards ZERO bags and closes its stream cleanly,
+    /// even while the channel keeps publishing. The bound is enforced before the
+    /// first forward, so no frame leaks past a zero bound.
+    ///
+    /// Mentally revert the pre-forward bound check to the post-forward one: the
+    /// first bag is delivered before `delivered >= 0` is observed, so `recv()`
+    /// yields one frame instead of `None` and this test goes red.
+    #[test]
+    fn zero_count_tap_delivers_no_bags_then_closes() {
+        let max_subscribers = RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
+        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let channel = unique_channel_name("zero-count");
+        let service = open_channel(&node, &channel, max_subscribers);
+        let publisher = service.create_publisher(64).expect("channel publisher");
+
+        let mut tap = start_channel_tap(node.clone(), channel.clone(), realtime_sizing(max_subscribers), Some(0))
+            .expect("zero-count tap attaches");
+
+        for marker in 0u8..5 {
+            publish_marker(&publisher, marker);
+        }
+
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("current-thread runtime");
+        runtime.block_on(async {
+            let ended = tokio::time::timeout(Duration::from_secs(2), tap.recv())
+                .await
+                .expect("zero-count tap closes its stream promptly");
+            assert!(
+                ended.is_none(),
+                "a count=0 tap must deliver zero bags and close cleanly",
             );
         });
     }
