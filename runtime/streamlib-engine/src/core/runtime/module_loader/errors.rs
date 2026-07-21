@@ -528,6 +528,76 @@ pub enum AddModuleError {
         module: streamlib_idents::ModuleIdent,
         detail: String,
     },
+
+    /// [`Runner::replace_processor_from_source`] was given a replacement whose
+    /// minted `@session/<name>` segment does not match the target's — a replace
+    /// only ever re-registers the SAME session name at a fresh `0.0.N`. Refused
+    /// before any mutation (no removal, no staging), so the target is untouched.
+    ///
+    /// [`Runner::replace_processor_from_source`]: super::super::Runner::replace_processor_from_source
+    #[error(
+        "replace_processor_from_source: the replacement resolves to session name \
+         '{replacement_name}' but the target is '{target}' — a replace re-registers \
+         the same `@session/<name>`. Submit the replacement under the target's name, \
+         or use remove_module + register_processor_from_source for a rename."
+    )]
+    ReplaceTargetNameMismatch {
+        target: streamlib_idents::ModuleIdent,
+        replacement_name: String,
+    },
+
+    /// [`Runner::replace_processor_from_source`] refused because the target's
+    /// loaded version is not source-backed on disk — no staged
+    /// `session-source/<name>/<loaded-version>/` dir exists to restore from if
+    /// the replacement fails. This is the case for an `add_local` host-vtable
+    /// registration (registered from a compiled type, never staged as source),
+    /// which is outside the live-source-iteration use case. Refused before any
+    /// mutation, so the target is untouched.
+    ///
+    /// [`Runner::replace_processor_from_source`]: super::super::Runner::replace_processor_from_source
+    #[error(
+        "replace_processor_from_source: target '{target}' is not source-backed \
+         (no staged source at {}), so it cannot be transactionally restored if the \
+         replacement fails — this is an `add_local` host-vtable registration. Use \
+         remove_module + register_processor_from_source to swap it explicitly.",
+        expected_dir.display()
+    )]
+    ReplaceTargetNotSourceBacked {
+        target: streamlib_idents::ModuleIdent,
+        expected_dir: std::path::PathBuf,
+    },
+
+    /// [`Runner::replace_processor_from_source`] removed the target and then the
+    /// replacement's registration failed — but the target's prior registration
+    /// was restored from its on-disk staged source, so the runtime is back to
+    /// its pre-replace state. `cause` carries the replacement's failure.
+    ///
+    /// [`Runner::replace_processor_from_source`]: super::super::Runner::replace_processor_from_source
+    #[error(
+        "replace_processor_from_source: the replacement for '{target}' failed to \
+         register ({cause}); the prior registration was restored — the runtime is \
+         unchanged. Fix the replacement source and retry."
+    )]
+    ReplacementRegistrationFailedPriorRegistrationRestored {
+        target: streamlib_idents::ModuleIdent,
+        cause: String,
+    },
+
+    /// [`Runner::replace_processor_from_source`] removed the target, the
+    /// replacement's registration failed, AND the compensating restore of the
+    /// prior registration ALSO failed — the runtime is now missing the target.
+    /// Reachable only if the previously-built target no longer rebuilds from its
+    /// still-present staged source (a degraded, unexpected state).
+    ///
+    /// [`Runner::replace_processor_from_source`]: super::super::Runner::replace_processor_from_source
+    #[error(
+        "replace_processor_from_source: the replacement for '{target}' failed AND \
+         restoring the prior registration also failed — the target is no longer \
+         registered. Re-register it with register_processor_from_source."
+    )]
+    ReplacementRegistrationFailedRestoreAlsoFailed {
+        target: streamlib_idents::ModuleIdent,
+    },
 }
 
 impl From<AddModuleError> for Error {
