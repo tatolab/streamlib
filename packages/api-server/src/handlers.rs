@@ -513,9 +513,9 @@ impl EventListener for WebSocketEventForwarder {
 /// Query parameters for the tap WebSocket: an optional bounded sample count.
 #[derive(Deserialize)]
 pub(crate) struct TapQuery {
-    /// Stream exactly `n` bags then close; absent streams live until the client
-    /// disconnects.
-    n: Option<usize>,
+    /// Stream exactly `count` bags then close; absent streams live until the
+    /// client disconnects.
+    count: Option<usize>,
 }
 
 /// `GET /ws/tap/{channel}` — attach a read-only tap to `channel` and stream its
@@ -531,7 +531,7 @@ pub(crate) async fn tap_websocket_handler(
     Path(channel): Path<String>,
     Query(query): Query<TapQuery>,
 ) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_tap_websocket(socket, state.runtime, channel, query.n))
+    ws.on_upgrade(move |socket| handle_tap_websocket(socket, state.runtime, channel, query.count))
 }
 
 async fn handle_tap_websocket(
@@ -561,8 +561,7 @@ async fn handle_tap_websocket(
     tracing::info!(channel = %channel, "tap client attached");
 
     // Own the subscription in this scope: forward bags until the tap ends
-    // (bounded count reached / channel gone) or the client disconnects. On
-    // return, `subscription` drops — detaching the tap and freeing the slot.
+    // (bounded count reached / channel gone) or the client disconnects.
     loop {
         tokio::select! {
             maybe_bag = subscription.recv() => match maybe_bag {
@@ -581,6 +580,14 @@ async fn handle_tap_websocket(
                 _ => {}
             },
         }
+    }
+
+    // Detach off the async worker: `TapSubscription::drop` joins the forwarder
+    // OS thread, and a synchronous join must never run on a tokio runtime
+    // worker. The join is bounded (the forwarder never parks), but blocking a
+    // shared executor thread on it is still wrong.
+    if let Err(join_error) = tokio::task::spawn_blocking(move || drop(subscription)).await {
+        tracing::warn!(channel = %channel, "tap detach task failed to join: {join_error}");
     }
 
     tracing::info!(channel = %channel, "tap client detached");
@@ -884,5 +891,45 @@ mod router_auth_gate_tests {
                 "DELETE {uri} must be open with auth off (no token)"
             );
         }
+    }
+
+    fn tap_ws_request() -> Request<Body> {
+        // A plain GET (no upgrade headers): enough to exercise the bearer gate,
+        // which runs as a `route_layer` BEFORE the WS upgrade extractor.
+        Request::builder()
+            .method("GET")
+            .uri("/ws/tap/some-channel")
+            .body(Body::empty())
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn tap_ws_rejects_missing_token_with_401_when_auth_on() {
+        // The read-only tap is a security-relevant surface: with auth on it must
+        // be gated exactly like the mutating routes. Deleting the tap_router
+        // `.route_layer(...)` flips this from 401 to the WS extractor's own
+        // (non-401) rejection, going red here.
+        assert_eq!(status_of(tap_ws_request()).await, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn tap_ws_with_token_clears_the_auth_gate() {
+        // A valid token passes the gate; the request then reaches the WS handler,
+        // whose upgrade extractor rejects this non-upgrade GET with a non-401
+        // status — proving the gate admitted it rather than rejecting it.
+        let mut request = tap_ws_request();
+        request
+            .headers_mut()
+            .insert(AUTHORIZATION, bearer(TEST_TOKEN).try_into().unwrap());
+        assert_ne!(status_of(request).await, StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn tap_ws_is_open_with_auth_off() {
+        assert_ne!(
+            status_on(auth_disabled_router(), tap_ws_request()).await,
+            StatusCode::UNAUTHORIZED,
+            "GET /ws/tap/{{channel}} must be reachable with auth off (no token)"
+        );
     }
 }
