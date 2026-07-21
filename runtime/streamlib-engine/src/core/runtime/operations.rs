@@ -260,7 +260,7 @@ pub trait RuntimeOperations: Send + Sync {
     ///
     /// There is no sync variant: a tap yields a live streaming handle, not a
     /// one-shot result, so blocking on it is never the intent. Host-side only —
-    /// a subprocess cannot own the host's `!Send` subscriber, so
+    /// a plugin cdylib cannot own the host's `!Send` subscriber, so
     /// implementations reachable only across the plugin ABI reject this with
     /// [`Error::NotSupported`].
     ///

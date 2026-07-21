@@ -377,11 +377,12 @@ fn tap_ws_unknown_channel_closes_with_well_formed_reason() {
     // Tap an unwired channel. This exercises the full path: route → real
     // host-shaped RuntimeContext → in-process Runner ops. `ctx.runtime()`
     // must reach the real Runner (not the byte-shaped shim) so the graph
-    // resolution fails with `TapChannelNotFound`; the handler then maps that
-    // to a well-formed WS close frame. If `ctx.runtime()` handed back the
-    // shim, the tap would fail with the long `NotSupported` string, whose
-    // >123-byte reason tungstenite refuses to write — the client would see an
-    // abnormal close with no reason and this test would go red.
+    // resolution fails with `TapChannelNotFound`; the handler maps that to the
+    // app-range close code 4404. If `ctx.runtime()` handed back the shim, the
+    // tap would fail with the `NotSupported` string, which the handler maps to
+    // the generic 1011 close (its over-length reason truncated to the 123-byte
+    // cap, so a reason IS written) — the `close_code == 4404` assertion below
+    // would then read 1011 and this test would go red.
     let mut ws = WsClient::connect(port, "/ws/tap/unknown-channel")
         .expect("WebSocket upgrade on /ws/tap/{channel} should 101");
 

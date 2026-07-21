@@ -324,12 +324,12 @@ impl RuntimeOperations for RuntimeOpsShim {
         _count: Option<usize>,
     ) -> BoxFuture<'_, Result<crate::core::runtime::TapSubscription>> {
         // A tap owns the host's `!Send` iceoryx2 subscriber on a host thread;
-        // there is no `RuntimeOpsVTable` op for it, so a subprocess reaching the
-        // runtime across the plugin ABI cannot initiate one. Tap from the
+        // there is no `RuntimeOpsVTable` op for it, so a plugin cdylib reaching
+        // the runtime across the plugin ABI cannot initiate one. Tap from the
         // host-side api-server / MCP surface instead.
         Box::pin(async move {
             Err(Error::NotSupported(
-                "tap is a host-side operation — a subprocess cannot initiate a channel tap across \
+                "tap is a host-side operation — a plugin cdylib cannot initiate a channel tap across \
                  the plugin ABI (no RuntimeOpsVTable op); tap from the host api-server / MCP surface"
                     .to_string(),
             ))
