@@ -102,8 +102,12 @@ impl IsolationTier {
     }
 
     /// Whether this tier permits minting an in-process FullAccess context.
+    ///
+    /// Delegates to [`Self::grant_full_access`] so the moat predicate and the
+    /// grant producer are a single source of truth — a future third tier can't
+    /// desync them.
     pub fn permits_in_process_full_access(self) -> bool {
-        matches!(self, Self::TrustedInstalled)
+        self.grant_full_access().is_some()
     }
 
     /// Stable lowercase label for logs / config round-tripping.
@@ -114,13 +118,14 @@ impl IsolationTier {
         }
     }
 
-    /// Parse the `untrusted` / `trusted` spelling (case-insensitive). An
-    /// unrecognized value is `None` so the caller falls back to the default
-    /// rather than silently widening trust.
+    /// Parse the `untrusted` / `trusted` spelling (case-insensitive) — the two
+    /// canonical labels [`Self::as_str`] round-trips. An unrecognized value is
+    /// `None` so the caller falls back to the default rather than silently
+    /// widening trust.
     pub fn parse(value: &str) -> Option<Self> {
         match value.trim().to_ascii_lowercase().as_str() {
-            "untrusted" | "session" | "off" => Some(Self::Untrusted),
-            "trusted" | "installed" | "on" => Some(Self::TrustedInstalled),
+            "untrusted" => Some(Self::Untrusted),
+            "trusted" => Some(Self::TrustedInstalled),
             _ => None,
         }
     }
