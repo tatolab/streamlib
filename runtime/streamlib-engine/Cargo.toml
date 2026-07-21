@@ -29,6 +29,13 @@ strip_debug_logging = ["tracing/release_max_level_info"]
 # See `docs/testing-hardware.md`.
 hardware-tests = []
 
+# In-memory constructors for engine primitives (e.g. `TapSubscription`) that
+# normally require a live iceoryx2 channel, so a downstream consumer (the
+# api-server tap tools) can be tested without one. Default-off; enabled only by
+# a consumer's `[dev-dependencies]`, so it is physically excluded from a
+# production build's dependency graph.
+test-support = []
+
 # Codec-layer debug knob (`vulkan/video/codec_utils/vk_buffer_resource.rs`):
 # zero out bitstream buffers when (re)allocating, to make NAL-parser bugs
 # easier to spot in raw memory. Off by default; opt-in for nvpro-style
@@ -227,12 +234,6 @@ targets = ["x86_64-apple-darwin", "x86_64-unknown-linux-gnu", "x86_64-pc-windows
 #
 # CI lint (`cargo xtask check-no-streamlib-metadata`, #402) rejects
 # re-introduction of this block.
-
-# MCP Server Binary removed - needs redesign for Phase 1
-# [[bin]]
-# name = "streamlib-mcp"
-# path = "src/bin/streamlib-mcp.rs"
-# required-features = ["mcp"]
 
 [lints]
 workspace = true

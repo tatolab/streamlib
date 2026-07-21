@@ -32,6 +32,7 @@ backend-metal = ["streamlib-engine/backend-metal"]
 backend-vulkan = ["streamlib-engine/backend-vulkan"]
 strip_debug_logging = ["streamlib-engine/strip_debug_logging"]
 hardware-tests = ["streamlib-engine/hardware-tests"]
+test-support = ["streamlib-engine/test-support"]
 
 [dependencies]
 streamlib-engine = { path = "../../runtime/streamlib-engine", version = "0.7.24" }
