@@ -742,16 +742,31 @@ impl<'a> RuntimeContextFullAccess<'a> {
         AudioClockShim::from_ffi(handle, acv)
     }
 
-    /// Host-owned runtime operations as a typed plugin ABI shim. Implements
-    /// [`RuntimeOperations`] so existing call sites
-    /// (`ctx.runtime().add_processor_async(...).await`) keep working
-    /// transparently against a plugin-owned tokio runtime.
+    /// Host-owned runtime operations. Implements [`RuntimeOperations`]
+    /// so existing call sites
+    /// (`ctx.runtime().add_processor_async(...).await`) keep working.
     ///
-    /// The returned `Arc<dyn RuntimeOperations>` owns an Arc refcount
-    /// bump on the host's underlying ops impl via the
-    /// [`RuntimeOpsVTable::clone_handle`](streamlib_plugin_abi::RuntimeOpsVTable)
-    /// callback, so it's sound to stash past `Runner::stop()`.
+    /// When this build IS the host (no host callbacks installed — the
+    /// same host-vs-plugin discriminator
+    /// [`host_runtime_ops_vtable`](crate::core::plugin::host_services::host_runtime_ops_vtable)
+    /// uses), return a direct `Arc::clone` of the Runner-backed ops.
+    /// A host-resident processor (including the in-process api-server)
+    /// then reaches the real ops — the byte-shaped `RuntimeOpsVTable`
+    /// shim carries no transport for streaming ops such as `tap_async`
+    /// (its iceoryx2 subscriber is `!Send` and host-owned), so a
+    /// host-resident caller must bypass it. The `Arc` clone is
+    /// stash-safe past `Runner::stop()` exactly like the shim's
+    /// `clone_handle` refcount bump.
+    ///
+    /// When host callbacks ARE installed (a dlopened plugin), mint the
+    /// typed plugin ABI shim: the returned `Arc<dyn RuntimeOperations>`
+    /// owns an Arc refcount bump on the host's underlying ops impl via
+    /// the [`RuntimeOpsVTable::clone_handle`](streamlib_plugin_abi::RuntimeOpsVTable)
+    /// callback, so it too is sound to stash past `Runner::stop()`.
     pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
+        if crate::core::plugin::host_services::host_callbacks().is_none() {
+            return self.host_base().runtime();
+        }
         let borrowed_handle = unsafe { ((*self.vtable).runtime_ops_handle)(self.handle) };
         let rov = crate::core::plugin::host_services::host_runtime_ops_vtable();
         // SAFETY: rov + borrowed_handle come from the engine's host
@@ -936,9 +951,12 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
         AudioClockShim::from_ffi(handle, acv)
     }
 
-    /// Host-owned runtime operations as a typed plugin ABI shim. See
+    /// Host-owned runtime operations. See
     /// [`RuntimeContextFullAccess::runtime`].
     pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
+        if crate::core::plugin::host_services::host_callbacks().is_none() {
+            return self.host_base().runtime();
+        }
         let borrowed_handle = unsafe { ((*self.vtable).runtime_ops_handle)(self.handle) };
         let rov = crate::core::plugin::host_services::host_runtime_ops_vtable();
         let owned_handle = unsafe { ((*rov).clone_handle)(borrowed_handle) };
@@ -1156,6 +1174,102 @@ mod with_cdylib_scope_tests {
             Ok(())
         });
         result.unwrap_or_else(|e| panic!("{TEST}: with_cdylib_scope returned err: {e}"));
+    }
+}
+
+#[cfg(test)]
+mod host_runtime_ops_wiring_tests {
+    //! Lock-in for the #1426 wiring fix: a host-resident processor's
+    //! `ctx.runtime()` must reach the REAL Runner-backed ops, not the
+    //! byte-shaped [`RuntimeOpsShim`]. The shim has no transport for a
+    //! streaming op, so `RuntimeOpsShim::tap_async` returns
+    //! [`Error::NotSupported`] — if `ctx.runtime()` handed the api-server
+    //! that shim, every host-side tap would be dead on arrival.
+    //!
+    //! The existing router tests inject a mock `RuntimeOperations` and so
+    //! never exercise the `host_callbacks().is_none()` branch this fix adds;
+    //! this test drives the branch through the SAME host-shaped
+    //! `RuntimeContextFullAccess::new(&base)` that lifecycle dispatch mints.
+    //!
+    //! Channel resolution (`find_channel_source_port` over the live graph)
+    //! runs BEFORE any iceoryx2 subscribe, so an unwired channel surfaces
+    //! [`Error::TapChannelNotFound`] with no IPC work. Mentally revert the
+    //! `host_callbacks().is_none()` branch in `runtime()` and the shim
+    //! answers [`Error::NotSupported`] instead — this test goes red, which
+    //! is the regression lock.
+    //!
+    //! GPU-gated because a `RuntimeContext` embeds a `GpuContext` by value;
+    //! the assertion itself needs no GPU work, only the context shell.
+
+    use super::*;
+    use crate::core::context::{
+        AudioClockConfig, GpuContext, SharedAudioClock, SoftwareAudioClock, TimeContext,
+    };
+    use crate::core::error::Error;
+    use crate::core::runtime::Runner;
+
+    fn gpu_or_skip(test_name: &str) -> Option<GpuContext> {
+        match GpuContext::init_for_platform_sync() {
+            Ok(gpu) => Some(gpu),
+            Err(e) => {
+                tracing::warn!("{test_name}: no GPU device ({e}) — skipping");
+                None
+            }
+        }
+    }
+
+    #[test]
+    fn host_ctx_runtime_reaches_real_runner_ops_not_the_shim() {
+        const TEST: &str = "host_ctx_runtime_reaches_real_runner_ops_not_the_shim";
+        // No plugin loaded in a plain lib test, so `host_callbacks()` is
+        // `None` — this build IS the host, exactly the branch under test.
+        assert!(
+            crate::core::plugin::host_services::host_callbacks().is_none(),
+            "{TEST}: precondition — a plain lib test has no host callbacks installed"
+        );
+
+        let Some(gpu) = gpu_or_skip(TEST) else {
+            return;
+        };
+
+        let runner = Runner::new().expect("runner builds");
+        let runtime_ops: Arc<dyn RuntimeOperations> =
+            Arc::clone(&runner) as Arc<dyn RuntimeOperations>;
+
+        let tokio_runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("current-thread tokio runtime");
+        let node = Iceoryx2Node::new().expect("iceoryx2 node");
+        let audio_clock: SharedAudioClock =
+            Arc::new(SoftwareAudioClock::new(AudioClockConfig::default()));
+
+        let base = RuntimeContext::new(
+            gpu,
+            Arc::new(TimeContext::new()),
+            Arc::new(RuntimeUniqueId::new()),
+            runtime_ops,
+            tokio_runtime.handle().clone(),
+            node,
+            audio_clock,
+            #[cfg(target_os = "linux")]
+            std::path::PathBuf::from("/tmp/streamlib-test-tap-wiring.sock"),
+        );
+
+        let ctx = RuntimeContextFullAccess::new(&base);
+        let err = tokio_runtime.block_on(async {
+            ctx.runtime()
+                .tap_async("no-such-channel".to_string(), None)
+                .await
+                .expect_err("tapping an unwired channel must fail")
+        });
+
+        assert!(
+            matches!(err, Error::TapChannelNotFound(_)),
+            "{TEST}: host-resident ctx.runtime() must reach the real Runner ops so an unwired \
+             channel surfaces TapChannelNotFound; the RuntimeOpsShim would answer NotSupported. \
+             got {err:?}"
+        );
     }
 }
 
