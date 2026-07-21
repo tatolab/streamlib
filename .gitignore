@@ -98,5 +98,10 @@ _generated_/
 # covered by *.local.md above; listed explicitly so it's greppable.
 docs/rig-profile.local.md
 
+# Owner-controlled merge-authorization toggle read by .claude/hooks/branch-shield.sh.
+# Absent (default) = the agent may NOT `gh pr merge`; first line "on" grants it.
+# Per-machine, never committed — a committed grant would give every clone merge rights.
+.claude/merge-authorization.local
+
 # Per-developer amos focus state (machine-local, set by /amos:focus).
 .amosrc.toml
