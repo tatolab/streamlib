@@ -36,7 +36,7 @@
 //! (isolation *enforcement*); this module owns only the policy model, the
 //! process-wide config default, and the capability moat at the minting seam.
 
-use std::sync::RwLock;
+use parking_lot::RwLock;
 
 use streamlib_idents::Org;
 
@@ -159,9 +159,7 @@ static SESSION_TIER_OVERRIDE: RwLock<Option<IsolationTier>> = RwLock::new(None);
 /// override. `None` restores the env / [`IsolationTier::TrustedInstalled`]
 /// default.
 pub(crate) fn set_session_isolation_tier(tier: Option<IsolationTier>) {
-    *SESSION_TIER_OVERRIDE
-        .write()
-        .expect("session isolation tier override lock poisoned") = tier;
+    *SESSION_TIER_OVERRIDE.write() = tier;
 }
 
 /// The effective tier for a `@session/…` cdylib-resident module: the runtime
@@ -171,10 +169,7 @@ pub(crate) fn set_session_isolation_tier(tier: Option<IsolationTier>) {
 /// An unrecognized env value warns once per read and falls back to the trusted
 /// default (a garbage value is not an opt-in to sandboxing).
 pub(crate) fn session_isolation_tier() -> IsolationTier {
-    if let Some(tier) = *SESSION_TIER_OVERRIDE
-        .read()
-        .expect("session isolation tier override lock poisoned")
-    {
+    if let Some(tier) = *SESSION_TIER_OVERRIDE.read() {
         return tier;
     }
     match std::env::var(SESSION_ISOLATION_TIER_ENV) {
@@ -203,6 +198,36 @@ mod tests {
         Org::new(SESSION_ORG).expect("session org is constructible")
     }
 
+    /// Serialized (via `#[serial_test::serial]`) reset of the process-wide
+    /// session-tier state shared by the three tests below. On construction and
+    /// on drop it clears the override AND [`SESSION_ISOLATION_TIER_ENV`], so a
+    /// panicking test can't leak `Untrusted` into the next, and a developer
+    /// machine that exports the env var can't perturb the trusted-by-default
+    /// assertions (which fall through to the env when the override is `None`).
+    struct SessionIsolationTierTestStateGuard;
+
+    impl SessionIsolationTierTestStateGuard {
+        fn new() -> Self {
+            Self::reset_session_tier_state();
+            Self
+        }
+
+        fn reset_session_tier_state() {
+            set_session_isolation_tier(None);
+            // SAFETY: the three callers are serialized by
+            // `#[serial_test::serial]`, and this env var is read only by
+            // `session_isolation_tier`, which no other test touches — no
+            // concurrent env access races this write.
+            unsafe { std::env::remove_var(SESSION_ISOLATION_TIER_ENV) };
+        }
+    }
+
+    impl Drop for SessionIsolationTierTestStateGuard {
+        fn drop(&mut self) {
+            Self::reset_session_tier_state();
+        }
+    }
+
     /// The moat: an untrusted tier can never produce a [`FullAccessGrant`];
     /// only the trusted tier can. Revert `grant_full_access` to return
     /// `Some(..)` unconditionally and the untrusted assertion below fails.
@@ -226,11 +251,9 @@ mod tests {
     /// package. Revert the `session_isolation_tier` default back to `Untrusted`
     /// and the first assertion flips.
     #[test]
+    #[serial_test::serial]
     fn tier_is_derived_from_provenance() {
-        use std::sync::Mutex;
-        static SERIALIZE: Mutex<()> = Mutex::new(());
-        let _guard = SERIALIZE.lock().unwrap();
-        set_session_isolation_tier(None);
+        let _guard = SessionIsolationTierTestStateGuard::new();
 
         let session = session_org();
         let installed = Org::new("tatolab").expect("valid org");
@@ -261,14 +284,12 @@ mod tests {
     /// sandboxes `@session` cdylib submitted code, and clearing it restores the
     /// trusted (opt-out) default.
     #[test]
+    #[serial_test::serial]
     fn session_override_opts_into_untrusted_and_clears() {
-        use std::sync::Mutex;
-        static SERIALIZE: Mutex<()> = Mutex::new(());
-        let _guard = SERIALIZE.lock().unwrap();
+        let _guard = SessionIsolationTierTestStateGuard::new();
 
         let session = session_org();
 
-        set_session_isolation_tier(None);
         assert_eq!(
             IsolationTier::for_processor(&session, true),
             IsolationTier::TrustedInstalled,
@@ -296,11 +317,9 @@ mod tests {
     /// by default. Revert the `session_isolation_tier` default to `Untrusted`
     /// and the grant vanishes.
     #[test]
+    #[serial_test::serial]
     fn default_session_cdylib_mints_full_access_grant() {
-        use std::sync::Mutex;
-        static SERIALIZE: Mutex<()> = Mutex::new(());
-        let _guard = SERIALIZE.lock().unwrap();
-        set_session_isolation_tier(None);
+        let _guard = SessionIsolationTierTestStateGuard::new();
 
         let session = session_org();
         let tier = IsolationTier::for_processor(&session, true);
