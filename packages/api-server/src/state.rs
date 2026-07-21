@@ -104,7 +104,7 @@ pub(crate) struct ProcessorPortNotFoundResponse {
 /// but not `utoipa::ToSchema`. Kept identical to the SDK enum's wire form
 /// (lowercase; `deno` is accepted as an alias for `typescript`) and mapped
 /// into it on the way in.
-#[derive(Deserialize, utoipa::ToSchema)]
+#[derive(Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub(crate) enum ProcessorLanguageDto {
     /// Rust — rejected for live source submit (a full cargo build, not a
@@ -114,6 +114,24 @@ pub(crate) enum ProcessorLanguageDto {
     #[serde(alias = "deno")]
     TypeScript,
 }
+
+// A derived `ToSchema` would drop the `deno` alias — utoipa reads serde
+// `rename`/`rename_all` but not `alias` — leaving a spec-driven client unaware
+// `deno` is accepted. Hand-implement the schema with the same 4-value enum the
+// SDK's `ProcessorLanguage` JsonSchema advertises.
+impl utoipa::PartialSchema for ProcessorLanguageDto {
+    fn schema() -> utoipa::openapi::RefOr<utoipa::openapi::schema::Schema> {
+        utoipa::openapi::ObjectBuilder::new()
+            .schema_type(utoipa::openapi::schema::Type::String)
+            .description(Some(
+                "Processor runtime language. `deno` is accepted as an alias for `typescript`.",
+            ))
+            .enum_values(Some(["rust", "python", "typescript", "deno"]))
+            .into()
+    }
+}
+
+impl utoipa::ToSchema for ProcessorLanguageDto {}
 
 impl From<ProcessorLanguageDto> for ProcessorLanguage {
     fn from(dto: ProcessorLanguageDto) -> Self {
@@ -227,6 +245,18 @@ pub(crate) struct RegisteredProcessorPortsResponse {
     pub outputs: Vec<RegisteredPortResponse>,
 }
 
+/// Composite outcome of a source submit: `Added` when an instance was created
+/// into the running graph, `Registered` when only the definition was registered
+/// (no instantiable processor discovered).
+#[derive(Serialize, utoipa::ToSchema)]
+#[serde(rename_all = "lowercase")]
+pub(crate) enum RegistrationOutcome {
+    /// An instance was instantiated into the running graph.
+    Added,
+    /// Only the definition was registered; no instantiable processor discovered.
+    Registered,
+}
+
 /// Response to `POST /api/processor/source` and
 /// `POST /api/processor/source/replace`: the minted registration ident plus
 /// each installed processor's discovered ports, and — for a source submit —
@@ -242,11 +272,11 @@ pub(crate) struct RegisterProcessorSourceResponse {
     /// instantiated the first discovered processor into the graph.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub processor_id: Option<String>,
-    /// Composite outcome: `"added"` when an instance was created into the
-    /// running graph, `"registered"` when only the definition was registered
-    /// (no instantiable processor discovered). Live per-instance state is
-    /// observed via `GET /api/graph` and the `events_url` event stream.
-    pub state: &'static str,
+    /// Composite outcome: `added` when an instance was created into the running
+    /// graph, `registered` when only the definition was registered (no
+    /// instantiable processor discovered). Live per-instance state is observed
+    /// via `GET /api/graph` and the `events_url` event stream.
+    pub state: RegistrationOutcome,
     /// Link ids created by the optional `connect` wirings, in request order.
     pub connections: Vec<String>,
     /// The WebSocket URL carrying this runtime's live event stream.
