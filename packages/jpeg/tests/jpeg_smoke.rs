@@ -35,9 +35,9 @@ use std::time::Duration;
 
 use serial_test::serial;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::processor_type_ref;
 use streamlib::sdk::processors::{ProcessorSpec, PROCESSOR_REGISTRY};
 use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::schema_ident;
 use streamlib_debug_utilities::_generated_::tatolab__core::color_info::{
     Matrix, Primaries, Range, Transfer,
 };
@@ -79,7 +79,7 @@ fn valid_jpeg_runs_through_pipeline_cleanly() {
 
     let source_id = runtime
         .add_processor(ProcessorSpec::new(
-            schema_ident!("tatolab", "debug-utilities", "JpegBytesSource", "1.0.0"),
+            processor_type_ref!("tatolab", "debug-utilities", "JpegBytesSource"),
             serde_json::json!({
                 "file_path": fixture_path("test_320x180.jpg")
                     .to_str()
@@ -92,7 +92,7 @@ fn valid_jpeg_runs_through_pipeline_cleanly() {
 
     let decoder_id = runtime
         .add_processor(ProcessorSpec::new(
-            schema_ident!("tatolab", "jpeg", "JpegDecoder", "1.0.0"),
+            processor_type_ref!("tatolab", "jpeg", "JpegDecoder"),
             serde_json::json!({
                 // Keep GPU resources tight — the fixture is 320×180 so
                 // a smaller declared max keeps the texture-ring backing
@@ -105,7 +105,7 @@ fn valid_jpeg_runs_through_pipeline_cleanly() {
 
     let sink_id = runtime
         .add_processor(ProcessorSpec::new(
-            schema_ident!("tatolab", "debug-utilities", "VideoFrameCounter", "1.0.0"),
+            processor_type_ref!("tatolab", "debug-utilities", "VideoFrameCounter"),
             serde_json::json!({}),
         ))
         .expect("add VideoFrameCounter");
@@ -219,7 +219,7 @@ fn invalid_max_dimensions_do_not_crash_runtime() {
 
     let source_id = runtime
         .add_processor(ProcessorSpec::new(
-            schema_ident!("tatolab", "debug-utilities", "JpegBytesSource", "1.0.0"),
+            processor_type_ref!("tatolab", "debug-utilities", "JpegBytesSource"),
             serde_json::json!({
                 "file_path": fixture_path("test_320x180.jpg")
                     .to_str()
@@ -232,7 +232,7 @@ fn invalid_max_dimensions_do_not_crash_runtime() {
 
     let decoder_id = runtime
         .add_processor(ProcessorSpec::new(
-            schema_ident!("tatolab", "jpeg", "JpegDecoder", "1.0.0"),
+            processor_type_ref!("tatolab", "jpeg", "JpegDecoder"),
             serde_json::json!({
                 // Both zero — primitive will reject at SimpleJpegDecoder::new.
                 "max_width": 0,
@@ -243,7 +243,7 @@ fn invalid_max_dimensions_do_not_crash_runtime() {
 
     let sink_id = runtime
         .add_processor(ProcessorSpec::new(
-            schema_ident!("tatolab", "debug-utilities", "VideoFrameCounter", "1.0.0"),
+            processor_type_ref!("tatolab", "debug-utilities", "VideoFrameCounter"),
             serde_json::json!({}),
         ))
         .expect("add VideoFrameCounter");
@@ -287,7 +287,7 @@ fn malformed_jpeg_bytes_do_not_crash_runtime() {
 
     let source_id = runtime
         .add_processor(ProcessorSpec::new(
-            schema_ident!("tatolab", "debug-utilities", "JpegBytesSource", "1.0.0"),
+            processor_type_ref!("tatolab", "debug-utilities", "JpegBytesSource"),
             serde_json::json!({
                 "file_path": fixture_path("garbage.bin")
                     .to_str()
@@ -300,7 +300,7 @@ fn malformed_jpeg_bytes_do_not_crash_runtime() {
 
     let decoder_id = runtime
         .add_processor(ProcessorSpec::new(
-            schema_ident!("tatolab", "jpeg", "JpegDecoder", "1.0.0"),
+            processor_type_ref!("tatolab", "jpeg", "JpegDecoder"),
             serde_json::json!({
                 "max_width": 640,
                 "max_height": 480,
@@ -310,7 +310,7 @@ fn malformed_jpeg_bytes_do_not_crash_runtime() {
 
     let sink_id = runtime
         .add_processor(ProcessorSpec::new(
-            schema_ident!("tatolab", "debug-utilities", "VideoFrameCounter", "1.0.0"),
+            processor_type_ref!("tatolab", "debug-utilities", "VideoFrameCounter"),
             serde_json::json!({}),
         ))
         .expect("add VideoFrameCounter");
