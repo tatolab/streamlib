@@ -14,14 +14,14 @@ name = "streamlib_moq_processors"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = {version = "0.7.23"}
+streamlib-jtd-codegen = {version = "0.7.24"}
 
 [dependencies]
 # Transport library half of @tatolab/moq (publish/subscribe sessions + catalog).
-streamlib-moq = {version = "0.7.23"}
-streamlib-plugin-sdk = {version = "0.7.23"}
-streamlib-macros = {version = "0.7.23"}
-streamlib-plugin-abi = {version = "0.7.23"}
+streamlib-moq = {version = "0.7.24"}
+streamlib-plugin-sdk = {version = "0.7.24"}
+streamlib-macros = {version = "0.7.24"}
+streamlib-plugin-abi = {version = "0.7.24"}
 
 # Generated `EncodedVideoFrame.data` rides msgpack `bin` instead of array.
 serde = {version = "1.0", features = ["derive"]}

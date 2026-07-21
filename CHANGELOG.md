@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.7.24](https://github.com/tatolab/streamlib/compare/v0.7.23...v0.7.24) (2026-07-21)
+
+
+### Features
+
+* **engine:** isolation policy tier — trust model + capability moat for loaded code ([#1494](https://github.com/tatolab/streamlib/issues/1494)) ([1811b84](https://github.com/tatolab/streamlib/commit/1811b8469c6e6adb7a87b82395673f5998680ae4))
+
+
+### Bug Fixes
+
+* **runtime:** resolve api-server bootstrap by version-free reference ([#1496](https://github.com/tatolab/streamlib/issues/1496)) ([9544553](https://github.com/tatolab/streamlib/commit/954455376e54880b70f3b9b684481d805bb456c9))
+
 ## [0.7.23](https://github.com/tatolab/streamlib/compare/v0.7.22...v0.7.23) (2026-07-21)
 
 
