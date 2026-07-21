@@ -34,7 +34,7 @@ tamper-too-high = []
 tamper-abi-layout-fingerprint = []
 
 [dependencies]
-streamlib-plugin-abi = { path = "../../runtime/streamlib-plugin-abi", version = "0.7.21" }
+streamlib-plugin-abi = { path = "../../runtime/streamlib-plugin-abi", version = "0.7.22" }
 
 [lints]
 workspace = true

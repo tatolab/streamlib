@@ -34,8 +34,8 @@ strip_debug_logging = ["streamlib-engine/strip_debug_logging"]
 hardware-tests = ["streamlib-engine/hardware-tests"]
 
 [dependencies]
-streamlib-engine = { path = "../../runtime/streamlib-engine", version = "0.7.21" }
-streamlib-build-orchestrator = { path = "../../tools/streamlib-build-orchestrator", version = "0.7.21", optional = true }
+streamlib-engine = { path = "../../runtime/streamlib-engine", version = "0.7.22" }
+streamlib-build-orchestrator = { path = "../../tools/streamlib-build-orchestrator", version = "0.7.22", optional = true }
 # `App` sugar takes `impl Serialize` configs and encodes them to the JSON the
 # runtime carries.
 serde = { workspace = true }
