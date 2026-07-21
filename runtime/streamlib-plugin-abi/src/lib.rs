@@ -1059,9 +1059,11 @@ mod layout_tests {
         assert_eq!(PROCESSOR_VTABLE_LAYOUT_VERSION, 2);
         assert_eq!(RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION, 1);
         assert_eq!(AUDIO_CLOCK_VTABLE_LAYOUT_VERSION, 1);
-        // v2: added owning-Arc handle lifetime callbacks
+        // v3: added register-from-source slots
+        // (`register_processor_source` / `replace_processor`); v2
+        // added the owning-Arc handle lifetime callbacks
         // (`clone_handle` / `drop_handle`).
-        assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 2);
+        assert_eq!(RUNTIME_OPS_VTABLE_LAYOUT_VERSION, 3);
         // v15: #1270 removed the v12–v14 video-source-timeline slots.
         assert_eq!(GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION, 15);
         // SurfaceStore stays at v1 for the entire M32 milestone — #1260

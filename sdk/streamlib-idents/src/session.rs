@@ -22,6 +22,13 @@ use crate::semver::{SemVer, SemVerRange};
 /// `@session/<name>@0.0.N` version. Starts at 0 and only ever advances, so
 /// two mints in one process never share a version — even for the same name
 /// across an add/remove/add cycle.
+///
+/// The counter is process-scoped and restarts at 0 each process. Cross-run
+/// uniqueness (so a restart cannot re-mint `0.0.0` onto a
+/// `session-source/<name>/0.0.0/` staging dir surviving from a prior run) is the
+/// module_loader's concern, not this leaf crate's: at mint time it reconciles
+/// the minted version ABOVE the highest version already staged on disk for the
+/// name, so no destructive start-up wipe of the shared staging tree is needed.
 static NEXT_SESSION_VERSION_PATCH: AtomicU32 = AtomicU32::new(0);
 
 /// The concrete next `0.0.N` release version from the session counter. The

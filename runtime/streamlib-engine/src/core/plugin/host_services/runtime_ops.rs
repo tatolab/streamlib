@@ -133,6 +133,76 @@ impl Drop for CompletionGuard {
 unsafe impl Send for CompletionGuard {}
 unsafe impl Sync for CompletionGuard {}
 
+/// Shared host-side body for every single-msgpack-payload runtime op
+/// (`add_processor`, `remove_processor`, `disconnect`,
+/// `register_processor_source`, `replace_processor`): null-handle guard →
+/// clone the ops handle → resolve the host tokio handle → copy the request
+/// bytes → spawn a task that decodes `Req`, runs `run`, and fires the
+/// completion with the serialized `Resp`. `connect` (two payloads) and
+/// `to_json` (none) stay bespoke — this helper deliberately covers only the
+/// one-payload shape.
+///
+/// `op_name` is the operation's short name (e.g. `"add_processor"`) — it names
+/// the null-handle / decode-error messages the cdylib observes and the
+/// `run_host_extern_c` panic label.
+///
+/// # Safety
+/// `handle` must be null or a valid `*const Arc<dyn RuntimeOperations>`, and
+/// `ptr`/`len` must describe a readable byte range (or `len == 0`) — the same
+/// contract every `RuntimeOpsVTable` submit callback carries.
+fn host_rov_submit_single_msgpack<Req, Resp, Fut>(
+    op_name: &'static str,
+    handle: *const c_void,
+    ptr: *const u8,
+    len: usize,
+    completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
+    user_data: *mut c_void,
+    run: impl FnOnce(Arc<dyn RuntimeOperations>, Req) -> Fut + Send + 'static,
+) where
+    Req: serde::de::DeserializeOwned + Send + 'static,
+    Resp: serde::Serialize + Send + 'static,
+    Fut: std::future::Future<Output = crate::core::Result<Resp>> + Send + 'static,
+{
+    run_host_extern_c(
+        op_name,
+        || {
+            if handle.is_null() {
+                CompletionGuard::new(completion, user_data)
+                    .fire_err_msg(format!("{op_name}: null handle").as_bytes());
+                return;
+            }
+            // SAFETY: non-null handle is a `*const Arc<dyn RuntimeOperations>`
+            // per the vtable contract (see fn-level Safety).
+            let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
+            let guard = CompletionGuard::new(completion, user_data);
+            let Some(rt) = host_tokio_handle() else {
+                guard.fire_err_msg(b"host tokio handle not installed");
+                return;
+            };
+            let bytes = if len == 0 {
+                Vec::new()
+            } else {
+                // SAFETY: ptr/len describe a readable range per the contract.
+                unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec()
+            };
+            rt.spawn(async move {
+                let result = match rmp_serde::from_slice::<Req>(&bytes) {
+                    Ok(req) => run(ops, req).await,
+                    Err(e) => Err(crate::core::Error::Config(format!(
+                        "{op_name}: request msgpack decode failed: {e}"
+                    ))),
+                };
+                guard.fire_with_result(result);
+            });
+        },
+        // Sync-body panic: CompletionGuard's Drop fires the abort completion if
+        // `guard` was constructed before the panic; otherwise the cdylib's
+        // `rx.await` hangs. The cdylib's RAII-on-Drop trampoline reclaims its
+        // boxed Sender either way.
+        (),
+    )
+}
+
 unsafe extern "C" fn host_rov_add_processor(
     handle: *const c_void,
     spec_msgpack_ptr: *const u8,
@@ -140,43 +210,14 @@ unsafe extern "C" fn host_rov_add_processor(
     completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
     user_data: *mut c_void,
 ) {
-    run_host_extern_c(
-        "host_rov_add_processor",
-        || {
-            if handle.is_null() {
-                CompletionGuard::new(completion, user_data)
-                    .fire_err_msg(b"add_processor: null handle");
-                return;
-            }
-            let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
-            let guard = CompletionGuard::new(completion, user_data);
-            let Some(rt) = host_tokio_handle() else {
-                guard.fire_err_msg(b"host tokio handle not installed");
-                return;
-            };
-            let spec_bytes = if spec_msgpack_len == 0 {
-                Vec::new()
-            } else {
-                unsafe { std::slice::from_raw_parts(spec_msgpack_ptr, spec_msgpack_len) }.to_vec()
-            };
-            rt.spawn(async move {
-                let result = match rmp_serde::from_slice::<crate::core::processors::ProcessorSpec>(
-                    &spec_bytes,
-                ) {
-                    Ok(spec) => ops.add_processor_async(spec).await,
-                    Err(e) => Err(crate::core::Error::Config(format!(
-                        "add_processor: spec msgpack decode failed: {e}"
-                    ))),
-                };
-                guard.fire_with_result(result);
-            });
-        },
-        // Sync-body panic: CompletionGuard's Drop fires the abort
-        // completion if `guard` was constructed before the panic;
-        // otherwise the cdylib's `rx.await` hangs. The cdylib's
-        // RAII-on-Drop trampoline reclaims its boxed Sender either
-        // way.
-        (),
+    host_rov_submit_single_msgpack::<crate::core::processors::ProcessorSpec, _, _>(
+        "add_processor",
+        handle,
+        spec_msgpack_ptr,
+        spec_msgpack_len,
+        completion,
+        user_data,
+        |ops, spec| async move { ops.add_processor_async(spec).await },
     )
 }
 
@@ -187,41 +228,14 @@ unsafe extern "C" fn host_rov_remove_processor(
     completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
     user_data: *mut c_void,
 ) {
-    run_host_extern_c(
-        "host_rov_remove_processor",
-        || {
-            if handle.is_null() {
-                CompletionGuard::new(completion, user_data)
-                    .fire_err_msg(b"remove_processor: null handle");
-                return;
-            }
-            let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
-            let guard = CompletionGuard::new(completion, user_data);
-            let Some(rt) = host_tokio_handle() else {
-                guard.fire_err_msg(b"host tokio handle not installed");
-                return;
-            };
-            let id_bytes = if processor_id_msgpack_len == 0 {
-                Vec::new()
-            } else {
-                unsafe {
-                    std::slice::from_raw_parts(processor_id_msgpack_ptr, processor_id_msgpack_len)
-                }
-                .to_vec()
-            };
-            rt.spawn(async move {
-                let result =
-                    match rmp_serde::from_slice::<crate::core::graph::ProcessorUniqueId>(&id_bytes)
-                    {
-                        Ok(pid) => ops.remove_processor_async(pid).await,
-                        Err(e) => Err(crate::core::Error::Config(format!(
-                            "remove_processor: processor_id msgpack decode failed: {e}"
-                        ))),
-                    };
-                guard.fire_with_result(result);
-            });
-        },
-        (),
+    host_rov_submit_single_msgpack::<crate::core::graph::ProcessorUniqueId, _, _>(
+        "remove_processor",
+        handle,
+        processor_id_msgpack_ptr,
+        processor_id_msgpack_len,
+        completion,
+        user_data,
+        |ops, pid| async move { ops.remove_processor_async(pid).await },
     )
 }
 
@@ -296,38 +310,14 @@ unsafe extern "C" fn host_rov_disconnect(
     completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
     user_data: *mut c_void,
 ) {
-    run_host_extern_c(
-        "host_rov_disconnect",
-        || {
-            if handle.is_null() {
-                CompletionGuard::new(completion, user_data)
-                    .fire_err_msg(b"disconnect: null handle");
-                return;
-            }
-            let ops = unsafe { Arc::clone(&*(handle as *const Arc<dyn RuntimeOperations>)) };
-            let guard = CompletionGuard::new(completion, user_data);
-            let Some(rt) = host_tokio_handle() else {
-                guard.fire_err_msg(b"host tokio handle not installed");
-                return;
-            };
-            let bytes = if link_id_msgpack_len == 0 {
-                Vec::new()
-            } else {
-                unsafe { std::slice::from_raw_parts(link_id_msgpack_ptr, link_id_msgpack_len) }
-                    .to_vec()
-            };
-            rt.spawn(async move {
-                let result = match rmp_serde::from_slice::<crate::core::graph::LinkUniqueId>(&bytes)
-                {
-                    Ok(link_id) => ops.disconnect_async(link_id).await,
-                    Err(e) => Err(crate::core::Error::Config(format!(
-                        "disconnect: link_id msgpack decode failed: {e}"
-                    ))),
-                };
-                guard.fire_with_result(result);
-            });
-        },
-        (),
+    host_rov_submit_single_msgpack::<crate::core::graph::LinkUniqueId, (), _>(
+        "disconnect",
+        handle,
+        link_id_msgpack_ptr,
+        link_id_msgpack_len,
+        completion,
+        user_data,
+        |ops, link_id| async move { ops.disconnect_async(link_id).await },
     )
 }
 
@@ -355,6 +345,42 @@ unsafe extern "C" fn host_rov_to_json(
             });
         },
         (),
+    )
+}
+
+unsafe extern "C" fn host_rov_register_processor_source(
+    handle: *const c_void,
+    request_msgpack_ptr: *const u8,
+    request_msgpack_len: usize,
+    completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
+    user_data: *mut c_void,
+) {
+    host_rov_submit_single_msgpack::<crate::core::runtime::SubmittedProcessorSource, _, _>(
+        "register_processor_source",
+        handle,
+        request_msgpack_ptr,
+        request_msgpack_len,
+        completion,
+        user_data,
+        |ops, request| async move { ops.register_processor_source_async(request).await },
+    )
+}
+
+unsafe extern "C" fn host_rov_replace_processor(
+    handle: *const c_void,
+    request_msgpack_ptr: *const u8,
+    request_msgpack_len: usize,
+    completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
+    user_data: *mut c_void,
+) {
+    host_rov_submit_single_msgpack::<crate::core::runtime::ReplaceProcessorFromSource, _, _>(
+        "replace_processor",
+        handle,
+        request_msgpack_ptr,
+        request_msgpack_len,
+        completion,
+        user_data,
+        |ops, request| async move { ops.replace_processor_async(request).await },
     )
 }
 
@@ -412,6 +438,8 @@ pub static HOST_RUNTIME_OPS_VTABLE: RuntimeOpsVTable = RuntimeOpsVTable {
     to_json: host_rov_to_json,
     clone_handle: host_rov_clone_handle,
     drop_handle: host_rov_drop_handle,
+    register_processor_source: host_rov_register_processor_source,
+    replace_processor: host_rov_replace_processor,
 };
 
 /// Pointer to the [`RuntimeOpsVTable`] this DSO should dispatch
@@ -581,19 +609,51 @@ mod runtime_ops_vtable_null_handle_guards {
         assert_single_err_completion(&sink, "to_json: null handle");
         unsafe { reclaim_sink(user_data) };
     }
+
+    #[test]
+    fn register_processor_source_fires_error_completion_on_null_handle() {
+        let (user_data, sink) = install_sink_user_data();
+        unsafe {
+            (HOST_RUNTIME_OPS_VTABLE.register_processor_source)(
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                record_completion,
+                user_data,
+            );
+        }
+        assert_single_err_completion(&sink, "register_processor_source: null handle");
+        unsafe { reclaim_sink(user_data) };
+    }
+
+    #[test]
+    fn replace_processor_fires_error_completion_on_null_handle() {
+        let (user_data, sink) = install_sink_user_data();
+        unsafe {
+            (HOST_RUNTIME_OPS_VTABLE.replace_processor)(
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                record_completion,
+                user_data,
+            );
+        }
+        assert_single_err_completion(&sink, "replace_processor: null handle");
+        unsafe { reclaim_sink(user_data) };
+    }
 }
 
 #[cfg(test)]
 mod runtime_ops_vtable_tier1_wire_format_tests {
     //! Tier-1 wire-format tests for [`HOST_RUNTIME_OPS_VTABLE`].
     //!
-    //! Per-callback null-handle coverage for the 5
-    //! submit-with-completion ops (`add_processor`,
-    //! `remove_processor`, `connect`, `disconnect`, `to_json`)
-    //! lives in [`runtime_ops_vtable_null_handle_guards`] above.
-    //! This module adds:
+    //! Per-callback null-handle coverage for the submit-with-completion
+    //! ops (`add_processor`, `remove_processor`, `connect`,
+    //! `disconnect`, `to_json`, and the v3 `register_processor_source`
+    //! / `replace_processor`) lives in
+    //! [`runtime_ops_vtable_null_handle_guards`] above. This module adds:
     //!
-    //! - `layout_version_matches_constant` — locks the v2 layout
+    //! - `layout_version_matches_constant` — locks the v3 layout
     //!   version against the cdylib-visible constant.
     //! - `clone_handle` / `drop_handle` null-handle coverage — the
     //!   v2 Arc-lifecycle pair already had explicit guards

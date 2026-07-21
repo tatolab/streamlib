@@ -4,6 +4,7 @@
   "exports": {
     ".": "./mod.ts",
     "./subprocess_runner.ts": "./subprocess_runner.ts",
+    "./extract_processors.ts": "./extract_processors.ts",
     "./escalate.ts": "./escalate.ts",
     "./types.ts": "./types.ts",
     "./adapters/vulkan.ts": "./adapters/vulkan.ts",

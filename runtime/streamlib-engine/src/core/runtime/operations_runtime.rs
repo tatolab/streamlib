@@ -4,7 +4,10 @@
 use std::sync::Arc;
 
 use super::Runner;
-use super::operations::{BoxFuture, ConnectOptions, RuntimeOperations};
+use super::operations::{
+    BoxFuture, ConnectOptions, RegisterProcessorReceipt, ReplaceProcessorFromSource,
+    RuntimeOperations, SubmittedProcessorSource,
+};
 use super::runtime::TokioRuntimeVariant;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
@@ -397,6 +400,20 @@ impl RuntimeOperations for Runner {
 
     fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
         Box::pin(async move { Runner::to_json(self) })
+    }
+
+    fn register_processor_source_async(
+        &self,
+        request: SubmittedProcessorSource,
+    ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
+        Box::pin(self.register_processor_from_source(request))
+    }
+
+    fn replace_processor_async(
+        &self,
+        request: ReplaceProcessorFromSource,
+    ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
+        Box::pin(self.replace_processor_from_source(request))
     }
 
     // =========================================================================

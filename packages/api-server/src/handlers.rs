@@ -497,8 +497,11 @@ mod router_auth_gate_tests {
         header::{AUTHORIZATION, CONTENT_TYPE},
         Request, StatusCode,
     };
+    use streamlib::sdk::descriptors::{ModuleIdent, SemVerRange};
     use streamlib::sdk::graph::{LinkUniqueId, ProcessorUniqueId};
-    use streamlib::sdk::runtime::BoxFuture;
+    use streamlib::sdk::runtime::{
+        BoxFuture, RegisterProcessorReceipt, ReplaceProcessorFromSource, SubmittedProcessorSource,
+    };
     use tower::ServiceExt;
 
     /// Stub runtime whose graph mutations all succeed, so the REAL
@@ -537,6 +540,18 @@ mod router_auth_gate_tests {
         fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
             Box::pin(async { Ok(serde_json::json!({})) })
         }
+        fn register_processor_source_async(
+            &self,
+            _request: SubmittedProcessorSource,
+        ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
+            Box::pin(async { Ok(stub_register_receipt()) })
+        }
+        fn replace_processor_async(
+            &self,
+            _request: ReplaceProcessorFromSource,
+        ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
+            Box::pin(async { Ok(stub_register_receipt()) })
+        }
         fn add_processor(&self, _spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
             Ok(ProcessorUniqueId::new())
         }
@@ -552,6 +567,21 @@ mod router_auth_gate_tests {
         fn to_json(&self) -> Result<serde_json::Value> {
             Ok(serde_json::json!({}))
         }
+    }
+
+    /// A minimal always-succeeds register/replace receipt for [`AlwaysOkStubRuntime`]:
+    /// a dummy `@session/stub` registration ident with no installed processors.
+    /// The register-from-source path is not exercised by the auth-gate tests, so
+    /// the port surface is empty.
+    fn stub_register_receipt() -> RegisterProcessorReceipt {
+        RegisterProcessorReceipt::new(
+            ModuleIdent::new(
+                Org::new("session").expect("session org passes the org grammar"),
+                Package::new("stub").expect("stub package passes the package grammar"),
+                SemVerRange::Exact(SemVer::new(0, 0, 0)),
+            ),
+            vec![],
+        )
     }
 
     const TEST_TOKEN: &str = "test-bearer-secret";

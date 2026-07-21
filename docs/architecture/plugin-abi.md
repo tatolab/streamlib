@@ -134,8 +134,17 @@ the best of our current knowledge the in-tree set as of this doc is:
   reads.
 - **`RuntimeOpsVTable`** — submit-with-completion runtime mutation
   ops (`add_processor`, `remove_processor`, `connect`, `disconnect`,
-  `to_json`) plus `clone_handle` / `drop_handle` for the cdylib's
-  owning-Arc shim.
+  `to_json`, and the register-from-source pair
+  `register_processor_source` / `replace_processor`) plus
+  `clone_handle` / `drop_handle` for the cdylib's owning-Arc shim.
+  The register-from-source ops stage submitted source text into a
+  `@session/<name>@0.0.N` package through the module_loader's
+  transactional session-source seam; the success payload is a
+  registration receipt — the minted registration `ModuleIdent` plus
+  each installed processor's committed ports (name, schema id, input
+  delivery profile), built engine-side from the descriptors
+  post-commit. Growing the receipt is payload-only; the vtable layout
+  version pins fn-pointer offsets, not the msgpack body.
 
 ### GPU capability tiers
 
