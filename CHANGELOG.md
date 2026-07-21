@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.22](https://github.com/tatolab/streamlib/compare/v0.7.21...v0.7.22) (2026-07-21)
+
+
+### Features
+
+* **runtime:** register-from-source + replace runtime ops (RuntimeOpsVTable v3) ([#1489](https://github.com/tatolab/streamlib/issues/1489)) ([c7a6f68](https://github.com/tatolab/streamlib/commit/c7a6f68342925f0579b5b8d4de9334f46bba383e))
+
 ## [0.7.21](https://github.com/tatolab/streamlib/compare/v0.7.20...v0.7.21) (2026-07-21)
 
 
