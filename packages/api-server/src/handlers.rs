@@ -484,3 +484,207 @@ impl EventListener for WebSocketEventForwarder {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod router_auth_gate_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::http::{
+        header::{AUTHORIZATION, CONTENT_TYPE},
+        Request, StatusCode,
+    };
+    use streamlib::sdk::graph::{LinkUniqueId, ProcessorUniqueId};
+    use streamlib::sdk::runtime::BoxFuture;
+    use tower::ServiceExt;
+
+    /// Stub runtime whose graph mutations all succeed, so the REAL
+    /// [`build_router`] auth gate can be exercised end-to-end: a mutating
+    /// handler reaches its `Ok` result (200 / 204) only once the bearer-token
+    /// middleware has admitted the request. Deleting the `route_layer` gate in
+    /// `build_router` flips the missing-token cases from 401 to those success
+    /// codes, so this test goes red on that regression.
+    struct AlwaysOkStubRuntime;
+
+    impl RuntimeOperations for AlwaysOkStubRuntime {
+        fn add_processor_async(
+            &self,
+            _spec: ProcessorSpec,
+        ) -> BoxFuture<'_, Result<ProcessorUniqueId>> {
+            Box::pin(async { Ok(ProcessorUniqueId::new()) })
+        }
+        fn remove_processor_async(
+            &self,
+            _processor_id: ProcessorUniqueId,
+        ) -> BoxFuture<'_, Result<()>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn connect_async(
+            &self,
+            _from: OutputLinkPortRef,
+            _to: InputLinkPortRef,
+        ) -> BoxFuture<'_, Result<LinkUniqueId>> {
+            Box::pin(async { Ok(LinkUniqueId::new()) })
+        }
+        fn disconnect_async(&self, _link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
+            Box::pin(async { Ok(()) })
+        }
+        fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
+            Box::pin(async { Ok(serde_json::json!({})) })
+        }
+        fn add_processor(&self, _spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
+            Ok(ProcessorUniqueId::new())
+        }
+        fn remove_processor(&self, _processor_id: &ProcessorUniqueId) -> Result<()> {
+            Ok(())
+        }
+        fn connect(&self, _from: OutputLinkPortRef, _to: InputLinkPortRef) -> Result<LinkUniqueId> {
+            Ok(LinkUniqueId::new())
+        }
+        fn disconnect(&self, _link_id: &LinkUniqueId) -> Result<()> {
+            Ok(())
+        }
+        fn to_json(&self) -> Result<serde_json::Value> {
+            Ok(serde_json::json!({}))
+        }
+    }
+
+    const TEST_TOKEN: &str = "test-bearer-secret";
+
+    fn real_router() -> Router {
+        build_router(
+            Arc::new(AlwaysOkStubRuntime),
+            ApiServerBearerToken::from_secret(TEST_TOKEN),
+            #[cfg(feature = "moq")]
+            "test-runtime-id".to_string(),
+        )
+    }
+
+    async fn status_of(request: Request<Body>) -> StatusCode {
+        real_router().oneshot(request).await.unwrap().status()
+    }
+
+    fn create_processor_body() -> Body {
+        Body::from(
+            serde_json::json!({
+                "processor_type": {
+                    "org": "tatolab",
+                    "package": "debug-utilities",
+                    "type": "SimplePassthroughProcessor",
+                    "version": { "major": 1, "minor": 0, "patch": 0 }
+                },
+                "config": {}
+            })
+            .to_string(),
+        )
+    }
+
+    fn create_connection_body() -> Body {
+        Body::from(
+            serde_json::json!({
+                "from_processor": "p1",
+                "from_port": "output",
+                "to_processor": "p2",
+                "to_port": "input"
+            })
+            .to_string(),
+        )
+    }
+
+    fn bearer(token: &str) -> String {
+        format!("Bearer {token}")
+    }
+
+    #[tokio::test]
+    async fn mutating_routes_reject_missing_token_with_401() {
+        let unauthenticated = [
+            Request::builder()
+                .method("POST")
+                .uri("/api/processor")
+                .header(CONTENT_TYPE, "application/json")
+                .body(create_processor_body())
+                .unwrap(),
+            Request::builder()
+                .method("POST")
+                .uri("/api/connections")
+                .header(CONTENT_TYPE, "application/json")
+                .body(create_connection_body())
+                .unwrap(),
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/processors/some-id")
+                .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/connections/some-id")
+                .body(Body::empty())
+                .unwrap(),
+        ];
+        for request in unauthenticated {
+            assert_eq!(status_of(request).await, StatusCode::UNAUTHORIZED);
+        }
+    }
+
+    #[tokio::test]
+    async fn create_processor_with_token_is_200() {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/processor")
+            .header(AUTHORIZATION, bearer(TEST_TOKEN))
+            .header(CONTENT_TYPE, "application/json")
+            .body(create_processor_body())
+            .unwrap();
+        assert_eq!(status_of(request).await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn create_connection_with_token_is_200() {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/connections")
+            .header(AUTHORIZATION, bearer(TEST_TOKEN))
+            .header(CONTENT_TYPE, "application/json")
+            .body(create_connection_body())
+            .unwrap();
+        assert_eq!(status_of(request).await, StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn delete_processor_with_token_is_204() {
+        let request = Request::builder()
+            .method("DELETE")
+            .uri("/api/processors/some-id")
+            .header(AUTHORIZATION, bearer(TEST_TOKEN))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(status_of(request).await, StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn delete_connection_with_token_is_204() {
+        let request = Request::builder()
+            .method("DELETE")
+            .uri("/api/connections/some-id")
+            .header(AUTHORIZATION, bearer(TEST_TOKEN))
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(status_of(request).await, StatusCode::NO_CONTENT);
+    }
+
+    #[tokio::test]
+    async fn open_routes_need_no_authorization_header() {
+        let open = ["/health", "/api/registry", "/api/openapi.json"];
+        for uri in open {
+            let request = Request::builder()
+                .method("GET")
+                .uri(uri)
+                .body(Body::empty())
+                .unwrap();
+            assert_eq!(
+                status_of(request).await,
+                StatusCode::OK,
+                "GET {uri} must stay open (no bearer token)"
+            );
+        }
+    }
+}
