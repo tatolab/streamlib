@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.25](https://github.com/tatolab/streamlib/compare/v0.7.24...v0.7.25) (2026-07-21)
+
+
+### Features
+
+* **packages:** MCP veneer over the api-server ([#1499](https://github.com/tatolab/streamlib/issues/1499)) ([30311b6](https://github.com/tatolab/streamlib/commit/30311b697cb95f06bfff8859ebcdddea8207ca3c))
+
 ## [0.7.24](https://github.com/tatolab/streamlib/compare/v0.7.23...v0.7.24) (2026-07-21)
 
 
