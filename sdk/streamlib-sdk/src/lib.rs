@@ -261,13 +261,13 @@ pub mod sdk {
 
     // ---- streamlib home / data-dir resolution ----
 
-    /// Resolution of the `$STREAMLIB_HOME` tree — the install / clone root and
-    /// its generated `.streamlib/` working tree. Host-side packages that must
-    /// persist per-install state (e.g. `@tatolab/api-server`'s bearer token)
-    /// reach the data dir here rather than re-implementing the walk-up +
-    /// `STREAMLIB_HOME` override the engine already owns.
+    /// Resolution of the generated `.streamlib/` working tree under
+    /// `$STREAMLIB_HOME`. Host-side packages that must persist per-install
+    /// state (e.g. `@tatolab/api-server`'s bearer token) reach the data dir
+    /// here rather than re-implementing the walk-up + `STREAMLIB_HOME`
+    /// override the engine already owns.
     pub mod home {
-        pub use streamlib_engine::core::{get_streamlib_data_dir, get_streamlib_home};
+        pub use streamlib_engine::core::get_streamlib_data_dir;
     }
 
     // =========================================================================

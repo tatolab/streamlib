@@ -84,9 +84,9 @@ impl ApiServerBearerToken {
         }
     }
 
-    /// Constant-time compare of a presented token against the secret. Uses a
-    /// length-independent comparison so a wrong token leaks no byte-position
-    /// timing signal.
+    /// Constant-time compare of a presented token against the secret:
+    /// constant-time over the compared bytes (equal-length inputs leak no
+    /// byte-position timing).
     fn matches(&self, presented: &str) -> bool {
         constant_time_eq::constant_time_eq(self.secret.as_bytes(), presented.as_bytes())
     }
