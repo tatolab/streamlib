@@ -18,12 +18,13 @@
 //! `syn`), a build-tool concern. The engine consumes only the populated
 //! manifest; it never imports the extractor.
 //!
-//! A spawn / non-zero-exit / malformed-output failure is a HARD
-//! [`BuildError`] — a session package must never register silent empty ports.
-//! The single bounded fallback is [`DeriveError::ExtractorUnconfigured`] (the
-//! Deno extractor script couldn't be located off a link and with no env
-//! override): that language is skipped with a warning rather than failing the
-//! whole materialize.
+//! EVERY extractor failure is a HARD [`BuildError`] — a session package must
+//! never register silent empty (unconnectable) ports. That includes
+//! [`DeriveError::ExtractorUnconfigured`] (the Deno extractor script couldn't
+//! be located off a link and with no env override): an off-link Deno live
+//! submit fails LOUDLY with a `run under streamlib link / set
+//! STREAMLIB_DENO_EXTRACTOR` hint, mirroring how Rust-from-source is refused,
+//! rather than shipping a portless processor.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -64,23 +65,25 @@ fn rewrite_staged_manifest_ports(
     // Python source is staged under `python/` (beside the pyproject); the
     // extractor scans the top-level `*.py` there.
     let python_dir = staged_dir.join("python");
-    if python_dir.is_dir()
-        && let Some(procs) = run_language_extractor("python", &python_dir, package_label, || {
-            extractor.extract_python(&python_dir)
-        })?
-    {
-        extracted.extend(procs);
+    if python_dir.is_dir() {
+        extracted.extend(run_language_extractor(
+            "python",
+            &python_dir,
+            package_label,
+            || extractor.extract_python(&python_dir),
+        )?);
     }
 
     // Deno source is staged under `deno/`; the extractor scans the top-level
     // `*.ts` there.
     let deno_dir = staged_dir.join("deno");
-    if deno_dir.is_dir()
-        && let Some(procs) = run_language_extractor("deno", &deno_dir, package_label, || {
-            extractor.extract_deno(&deno_dir)
-        })?
-    {
-        extracted.extend(procs);
+    if deno_dir.is_dir() {
+        extracted.extend(run_language_extractor(
+            "deno",
+            &deno_dir,
+            package_label,
+            || extractor.extract_deno(&deno_dir),
+        )?);
     }
 
     if extracted.is_empty() {
@@ -122,114 +125,210 @@ fn rewrite_staged_manifest_ports(
     Ok(())
 }
 
-/// Run one language's extractor, mapping the [`DeriveError`] taxonomy onto the
-/// hard-vs-bounded contract: a spawn / non-zero-exit / malformed-output failure
-/// is a hard [`BuildError`]; [`DeriveError::ExtractorUnconfigured`] is the sole
-/// bounded fallback (that language is skipped, `Ok(None)`).
+/// Run one language's extractor for a live-submitted SESSION package. Every
+/// [`DeriveError`] — spawn / non-zero-exit / malformed-output AND
+/// [`DeriveError::ExtractorUnconfigured`] — is a HARD [`BuildError`]: a session
+/// submit must never register a silent portless (unconnectable) processor. An
+/// off-link Deno submit with no resolvable extractor therefore fails LOUDLY
+/// (the [`DeriveError::ExtractorUnconfigured`] Display carries the `run under
+/// streamlib link / set STREAMLIB_DENO_EXTRACTOR` hint), mirroring how
+/// Rust-from-source is explicitly refused, rather than shipping empty ports.
 fn run_language_extractor(
     language: &'static str,
     language_dir: &Path,
     package_label: &str,
     run: impl FnOnce() -> Result<String, DeriveError>,
-) -> Result<Option<Vec<ExtractedManifestProcessor>>, BuildError> {
-    match run() {
-        Ok(json) => {
-            let procs = parse_subprocess_manifest_json_full(language, &json)
-                .map_err(|e| map_extract_err(language, package_label, e))?;
-            if procs.is_empty() {
-                tracing::warn!(
-                    package = %package_label,
-                    language,
-                    dir = %language_dir.display(),
-                    "session extractor ran but registered no processors — the submitted \
-                     source declares none for this language; staged ports left empty"
-                );
-            }
-            Ok(Some(procs))
-        }
-        Err(DeriveError::ExtractorUnconfigured { hint, .. }) => {
-            tracing::warn!(
-                package = %package_label,
-                language,
-                hint,
-                "session port extraction skipped: no extractor configured for this language"
-            );
-            Ok(None)
-        }
-        Err(other) => Err(map_extract_err(language, package_label, other)),
+) -> Result<Vec<ExtractedManifestProcessor>, BuildError> {
+    let json = run().map_err(|e| map_extract_err(language, package_label, e))?;
+    let procs = parse_subprocess_manifest_json_full(language, &json)
+        .map_err(|e| map_extract_err(language, package_label, e))?;
+    if procs.is_empty() {
+        tracing::warn!(
+            package = %package_label,
+            language,
+            dir = %language_dir.display(),
+            "session extractor ran but registered no processors — the submitted \
+             source declares none for this language; staged ports left empty"
+        );
     }
+    Ok(procs)
 }
 
 /// Splice each extracted processor's execution / scheduling / description /
-/// ports onto the staged manifest processor of the same `Type` name. Returns
-/// the number of processors spliced.
+/// ports onto the staged manifest processor of the same `Type` name, and
+/// synthesize the `schemas:` / `dependencies:` maps that let the engine rebind
+/// each port's bare `Named` schema ref to its fully-qualified `Specific` ident.
+/// Returns the number of processors spliced.
 fn apply_extracted_to_manifest(
     manifest: &mut serde_yaml::Value,
     extracted: &[ExtractedManifestProcessor],
     package_label: &str,
 ) -> Result<usize, BuildError> {
-    let processors = manifest
-        .as_mapping_mut()
-        .and_then(|m| m.get_mut(serde_yaml::Value::String("processors".to_string())))
-        .and_then(|p| p.as_sequence_mut())
-        .ok_or_else(|| {
-            build_failed(
-                package_label,
-                "staged session manifest has no `processors:` sequence to splice into".to_string(),
-            )
-        })?;
+    // Bare `Type` → owning `@org/package`, and `@org/package` → its concrete
+    // version, harvested from the extracted ports whose schema retains a full
+    // ident. The staged port lines carry only the bare `Type`; without these
+    // maps the engine's `resolve_bare_schema_refs` has nothing to rebind the
+    // bare ref against and the port is left a dangling (unconnectable) `Named`.
+    let mut schema_owner_by_type: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    let mut version_by_owner: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
 
     let mut spliced = 0usize;
-    for entry in processors.iter_mut() {
-        let Some(map) = entry.as_mapping_mut() else {
-            continue;
-        };
-        let name = map
-            .get(serde_yaml::Value::String("name".to_string()))
-            .and_then(|v| v.as_str())
-            .map(str::to_string);
-        let Some(name) = name else { continue };
+    {
+        let processors = manifest
+            .as_mapping_mut()
+            .and_then(|m| m.get_mut(serde_yaml::Value::String("processors".to_string())))
+            .and_then(|p| p.as_sequence_mut())
+            .ok_or_else(|| {
+                build_failed(
+                    package_label,
+                    "staged session manifest has no `processors:` sequence to splice into"
+                        .to_string(),
+                )
+            })?;
 
-        // Match the staged processor to the extractor's projection by `Type`
-        // short name — a session package stages exactly one processor per
-        // submitted source, keyed by the minted type name.
-        let Some(proc) = extracted
-            .iter()
-            .find(|p| p.schema_ident.r#type.as_str() == name)
-        else {
-            continue;
-        };
+        for entry in processors.iter_mut() {
+            let Some(map) = entry.as_mapping_mut() else {
+                continue;
+            };
+            let name = map
+                .get(serde_yaml::Value::String("name".to_string()))
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+            let Some(name) = name else { continue };
 
-        let execution = serde_yaml::to_value(&proc.execution)
-            .map_err(|e| build_failed(package_label, format!("encode execution: {e}")))?;
-        map.insert(serde_yaml::Value::String("execution".to_string()), execution);
+            // Match the staged processor to the extractor's projection by `Type`
+            // short name — a session package stages exactly one processor per
+            // submitted source, keyed by the minted type name.
+            let Some(proc) = extracted
+                .iter()
+                .find(|p| p.schema_ident.r#type.as_str() == name)
+            else {
+                continue;
+            };
 
-        if let Some(scheduling) = &proc.scheduling {
-            let scheduling = serde_yaml::to_value(scheduling)
-                .map_err(|e| build_failed(package_label, format!("encode scheduling: {e}")))?;
+            let execution = serde_yaml::to_value(&proc.execution)
+                .map_err(|e| build_failed(package_label, format!("encode execution: {e}")))?;
+            map.insert(serde_yaml::Value::String("execution".to_string()), execution);
+
+            if let Some(scheduling) = &proc.scheduling {
+                let scheduling = serde_yaml::to_value(scheduling)
+                    .map_err(|e| build_failed(package_label, format!("encode scheduling: {e}")))?;
+                map.insert(
+                    serde_yaml::Value::String("scheduling".to_string()),
+                    scheduling,
+                );
+            }
+            if let Some(description) = &proc.description {
+                map.insert(
+                    serde_yaml::Value::String("description".to_string()),
+                    serde_yaml::Value::String(description.clone()),
+                );
+            }
+
             map.insert(
-                serde_yaml::Value::String("scheduling".to_string()),
-                scheduling,
+                serde_yaml::Value::String("inputs".to_string()),
+                ports_to_yaml(&proc.inputs, true, package_label)?,
             );
-        }
-        if let Some(description) = &proc.description {
             map.insert(
-                serde_yaml::Value::String("description".to_string()),
-                serde_yaml::Value::String(description.clone()),
+                serde_yaml::Value::String("outputs".to_string()),
+                ports_to_yaml(&proc.outputs, false, package_label)?,
             );
-        }
 
-        map.insert(
-            serde_yaml::Value::String("inputs".to_string()),
-            ports_to_yaml(&proc.inputs, true, package_label)?,
-        );
-        map.insert(
-            serde_yaml::Value::String("outputs".to_string()),
-            ports_to_yaml(&proc.outputs, false, package_label)?,
-        );
-        spliced += 1;
+            for port in proc.inputs.iter().chain(proc.outputs.iter()) {
+                if let Some(ident) = &port.schema {
+                    collect_schema_binding(&mut schema_owner_by_type, &mut version_by_owner, ident);
+                }
+            }
+            spliced += 1;
+        }
     }
+
+    splice_schema_bindings(manifest, &schema_owner_by_type, &version_by_owner, package_label)?;
     Ok(spliced)
+}
+
+/// Record the `schemas:`/`dependencies:` binding a single extracted port's
+/// schema ident implies: the bare `Type` maps to its owning `@org/package`,
+/// which pins to the ident's concrete version. A `@session/<name>`-owned type
+/// is skipped — it names no external dependency to import from.
+fn collect_schema_binding(
+    schema_owner_by_type: &mut std::collections::BTreeMap<String, String>,
+    version_by_owner: &mut std::collections::BTreeMap<String, String>,
+    ident: &streamlib_processor_schema::SchemaIdent,
+) {
+    if ident.org.as_str() == streamlib_idents::SESSION_ORG {
+        return;
+    }
+    let owner =
+        streamlib_idents::PackageRef::new(ident.org.clone(), ident.package.clone()).to_string();
+    schema_owner_by_type.insert(ident.r#type.as_str().to_string(), owner.clone());
+    version_by_owner.insert(owner, ident.version.to_string());
+}
+
+/// Merge the synthesized `schemas:` (bare `Type` → `{ package: @org/pkg }`
+/// External imports) and `dependencies:` (`@org/pkg` → `{ version }`) maps into
+/// the staged manifest, so the engine's bare-name schema resolution rebinds
+/// each port's `Named` ref to a `Specific` ident. Existing entries are
+/// preserved; the synthesized bindings never clobber a hand-authored key.
+fn splice_schema_bindings(
+    manifest: &mut serde_yaml::Value,
+    schema_owner_by_type: &std::collections::BTreeMap<String, String>,
+    version_by_owner: &std::collections::BTreeMap<String, String>,
+    package_label: &str,
+) -> Result<(), BuildError> {
+    if schema_owner_by_type.is_empty() {
+        return Ok(());
+    }
+    let root = manifest.as_mapping_mut().ok_or_else(|| {
+        build_failed(
+            package_label,
+            "staged session manifest is not a mapping".to_string(),
+        )
+    })?;
+
+    let schemas = mapping_entry(root, "schemas");
+    for (type_name, owner) in schema_owner_by_type {
+        let mut entry = serde_yaml::Mapping::new();
+        entry.insert(
+            serde_yaml::Value::String("package".to_string()),
+            serde_yaml::Value::String(owner.clone()),
+        );
+        schemas
+            .entry(serde_yaml::Value::String(type_name.clone()))
+            .or_insert(serde_yaml::Value::Mapping(entry));
+    }
+
+    let dependencies = mapping_entry(root, "dependencies");
+    for (owner, version) in version_by_owner {
+        let mut entry = serde_yaml::Mapping::new();
+        entry.insert(
+            serde_yaml::Value::String("version".to_string()),
+            serde_yaml::Value::String(version.clone()),
+        );
+        dependencies
+            .entry(serde_yaml::Value::String(owner.clone()))
+            .or_insert(serde_yaml::Value::Mapping(entry));
+    }
+    Ok(())
+}
+
+/// Borrow (creating if absent) a nested `serde_yaml` mapping under `key` in the
+/// manifest root.
+fn mapping_entry<'a>(
+    root: &'a mut serde_yaml::Mapping,
+    key: &str,
+) -> &'a mut serde_yaml::Mapping {
+    let key = serde_yaml::Value::String(key.to_string());
+    let slot = root
+        .entry(key)
+        .or_insert_with(|| serde_yaml::Value::Mapping(serde_yaml::Mapping::new()));
+    if !slot.is_mapping() {
+        *slot = serde_yaml::Value::Mapping(serde_yaml::Mapping::new());
+    }
+    slot.as_mapping_mut()
+        .expect("slot was just ensured to be a mapping")
 }
 
 /// Project a port list onto its manifest YAML sequence. `is_input` gates the
@@ -538,10 +637,13 @@ mod tests {
     }
 
     #[test]
-    fn deno_unconfigured_is_a_bounded_skip() {
-        // A staged Deno session package whose extractor script can't be located
-        // (no link, no env override) is skipped with a warning, not failed —
-        // the single bounded fallback. The placeholder ports remain.
+    fn deno_unconfigured_is_a_hard_build_error_not_portless() {
+        // Contract lock: a staged Deno session package whose extractor script
+        // can't be located (no link, no env override) is a HARD build error, not
+        // a silent portless registration — an off-link Deno live submit fails
+        // LOUDLY rather than shipping an unconnectable processor. Mentally-revert
+        // the ExtractorUnconfigured→hard-error change and this yields an Ok with
+        // empty placeholder ports.
         let dir = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(dir.path().join("deno")).unwrap();
         std::fs::write(dir.path().join("deno").join("widget.ts"), "export class Widget {}\n")
@@ -558,17 +660,12 @@ mod tests {
             deno: Err(DeriveError::ExtractorUnconfigured {
                 language: "deno",
                 package: dir.path().join("deno"),
-                hint: "no script".to_string(),
+                hint: "set STREAMLIB_DENO_EXTRACTOR or run under `streamlib link`".to_string(),
             }),
         };
-        rewrite_staged_manifest_ports(dir.path(), "session/widget", &extractor)
-            .expect("unconfigured deno must be a bounded skip, not a hard error");
-
-        let body = std::fs::read_to_string(dir.path().join("streamlib.yaml")).unwrap();
-        assert!(
-            body.contains("inputs: []") && body.contains("outputs: []"),
-            "placeholder ports must remain untouched when extraction is skipped: {body}"
-        );
+        let err = rewrite_staged_manifest_ports(dir.path(), "session/widget", &extractor)
+            .expect_err("an unconfigured deno extractor must hard-fail the session submit");
+        assert!(matches!(err, BuildError::BuildFailed { .. }), "got {err:?}");
     }
 
     #[test]
@@ -643,5 +740,118 @@ mod tests {
             }
         }
         None
+    }
+
+    /// A full-fidelity extractor JSON whose OUTPUT port carries a full
+    /// `@tatolab/core/VideoFrame@1.0.0` schema ident — the shape the splice
+    /// harvests into the synthesized `schemas:` / `dependencies:` maps.
+    fn json_with_core_output_port() -> String {
+        r#"[{
+          "name": "Widget",
+          "schema_ident": {"org":"session","package":"widget","type":"Widget","version":"0.0.1"},
+          "execution": "reactive",
+          "scheduling": null,
+          "description": null,
+          "inputs": [],
+          "outputs": [
+            {"name":"out0","schema":{"org":"tatolab","package":"core","type":"VideoFrame","version":"1.0.0"},"description":null}
+          ]
+        }]"#
+        .to_string()
+    }
+
+    /// Write `<checkout>/packages/core` declaring `VideoFrame` as a Local schema
+    /// — the owning package the synthesized `@tatolab/core` dep resolves to
+    /// under a link.
+    fn write_checkout_core(checkout: &Path) {
+        let core = checkout.join("packages").join("core");
+        std::fs::create_dir_all(core.join("schemas")).unwrap();
+        std::fs::write(
+            core.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: core\n  version: 1.0.0\nschemas:\n  VideoFrame:\n    file: schemas/video_frame.yaml\n",
+        )
+        .unwrap();
+        std::fs::write(
+            core.join("schemas/video_frame.yaml"),
+            "metadata:\n  type: VideoFrame\nproperties: {}\n",
+        )
+        .unwrap();
+    }
+
+    /// Clear the resolution env so the load resolves the synthesized dep from
+    /// the checkout only (zero registry). Restores prior values on drop.
+    struct CleanResolutionEnv {
+        prev_registry: Option<String>,
+        prev_link: Option<String>,
+    }
+    impl CleanResolutionEnv {
+        fn new() -> Self {
+            let prev_registry = std::env::var("STREAMLIB_REGISTRY_URL").ok();
+            let prev_link = std::env::var("STREAMLIB_LINK_CHECKOUT").ok();
+            // SAFETY: `#[serial]` serializes the process-global env mutation.
+            unsafe {
+                std::env::remove_var("STREAMLIB_REGISTRY_URL");
+                std::env::remove_var("STREAMLIB_LINK_CHECKOUT");
+            }
+            Self {
+                prev_registry,
+                prev_link,
+            }
+        }
+    }
+    impl Drop for CleanResolutionEnv {
+        fn drop(&mut self) {
+            unsafe {
+                match self.prev_registry.take() {
+                    Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
+                    None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
+                }
+                match self.prev_link.take() {
+                    Some(v) => std::env::set_var("STREAMLIB_LINK_CHECKOUT", v),
+                    None => std::env::remove_var("STREAMLIB_LINK_CHECKOUT"),
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn extracted_schema_port_rebinds_to_a_specific_ident() {
+        // Schema-rebind lock: an extracted port carrying a full schema ident
+        // must yield a synthesized `schemas:` + `dependencies:` pair so the
+        // engine's bare-name resolution rebinds the staged bare `Named` port to
+        // a `Specific` FQ ident. Mentally-revert `splice_schema_bindings` and the
+        // port stays a dangling bare `Named` — the engine load then fails to
+        // resolve it (unconnectable, can't size an iceoryx2 slot).
+        use streamlib_engine::core::ProjectConfig;
+        use streamlib_processor_schema::PortSchemaSpec;
+
+        let _env = CleanResolutionEnv::new();
+        let staged = tempfile::tempdir().unwrap();
+        stage_placeholder_python(staged.path(), "Widget");
+        let extractor = FakeExtractor::python_only(&json_with_core_output_port());
+        rewrite_staged_manifest_ports(staged.path(), "session/widget", &extractor)
+            .expect("splice must succeed");
+
+        // The synthesized maps are present in the rewritten manifest.
+        let body = std::fs::read_to_string(staged.path().join("streamlib.yaml")).unwrap();
+        assert!(
+            body.contains("VideoFrame") && body.contains("@tatolab/core"),
+            "the spliced manifest must synthesize a schemas/dependencies binding: {body}"
+        );
+
+        // The engine resolver rebinds the bare `Named` port to `Specific`,
+        // resolving `@tatolab/core` from the checkout with zero registry.
+        let checkout = tempfile::tempdir().unwrap();
+        write_checkout_core(checkout.path());
+        let config = ProjectConfig::load_with_link(staged.path(), Some(checkout.path()))
+            .expect("the spliced manifest must load and rebind its bare schema ref");
+        let port = &config.processors[0].outputs[0];
+        match &port.schema {
+            PortSchemaSpec::Specific(ident) => {
+                assert_eq!(ident.to_string(), "@tatolab/core/VideoFrame@1.0.0");
+            }
+            other => panic!("extracted port must rebind to a Specific ident, got {other:?}"),
+        }
     }
 }
