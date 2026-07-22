@@ -8,7 +8,7 @@
 //! ([`super::add`]); `pkg` here is scoped to authoring artifacts of THIS
 //! package — build, publish, clean, inspect — plus `list`.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use streamlib::engine_internal::core::InstalledPackageManifest;
@@ -219,6 +219,96 @@ pub fn clean() -> Result<()> {
     Ok(())
 }
 
+/// Reclaim regenerable build scratch across every materialized package slot,
+/// keeping the loadable artifact (`lib/<triple>/*.so` + `.venv/` +
+/// `_generated_/` + manifest). Reclaims each slot's `cargo` `target/` plus any
+/// orphaned `.tmp-*` / `.old-*` staging residue, across BOTH the installed
+/// package cache (`.streamlib/cache/packages/`) and the app's co-located
+/// `streamlib_modules/@org/name/` slots.
+///
+/// Distinct from [`clean`], which cleans the CURRENT package's own source dir:
+/// `cache-gc` is a whole-cache reclaim of on-the-box build output, the disk
+/// counterpart to compile-on-install.
+pub fn cache_gc(dir: Option<&Path>) -> Result<()> {
+    let mut reclaimed: Vec<PathBuf> = Vec::new();
+
+    // Installed package cache: <data_dir>/cache/packages/<name-version>/.
+    let installed_cache = streamlib::engine_internal::core::get_streamlib_data_dir()
+        .join("cache")
+        .join("packages");
+    reclaimed.extend(reclaim_package_target_dirs(&installed_cache));
+    reclaimed.extend(sweep_staging_residue(&installed_cache));
+
+    // Co-located app modules: <app_root>/streamlib_modules/@org/name/.
+    let app_root = match dir {
+        Some(root) => root.to_path_buf(),
+        None => std::env::current_dir().context("resolve current working directory")?,
+    };
+    let modules = app_root.join(streamlib_idents::app_modules::APP_MODULES_DIR_NAME);
+    reclaimed.extend(reclaim_package_target_dirs(&modules));
+    reclaimed.extend(sweep_staging_residue(&modules));
+
+    if reclaimed.is_empty() {
+        println!("Nothing to reclaim.");
+    } else {
+        println!("Reclaimed {} build-scratch dir(s):", reclaimed.len());
+        for path in &reclaimed {
+            println!("  {}", path.display());
+        }
+    }
+    Ok(())
+}
+
+/// Walk `root` and, for every package slot found (a directory carrying a
+/// `streamlib.yaml`), remove its `target/` build scratch. Never recurses into
+/// a package slot, so a nested `target/` inside package source is untouched.
+/// Returns the reclaimed `target/` paths.
+fn reclaim_package_target_dirs(root: &Path) -> Vec<PathBuf> {
+    fn walk(dir: &Path, reclaimed: &mut Vec<PathBuf>) {
+        if dir.join("streamlib.yaml").is_file() {
+            let target = dir.join("target");
+            if target.is_dir() && std::fs::remove_dir_all(&target).is_ok() {
+                reclaimed.push(target);
+            }
+            return;
+        }
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+                walk(&entry.path(), reclaimed);
+            }
+        }
+    }
+    let mut reclaimed = Vec::new();
+    if root.is_dir() {
+        walk(root, &mut reclaimed);
+    }
+    reclaimed
+}
+
+/// Remove orphaned `.tmp-*` (interrupted build stage) and `.old-*` (interrupted
+/// atomic-swap displacement) residue directly under `parent`. Returns the
+/// removed paths.
+fn sweep_staging_residue(parent: &Path) -> Vec<PathBuf> {
+    let mut swept = Vec::new();
+    let Ok(entries) = std::fs::read_dir(parent) else {
+        return swept;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        if name.starts_with(".tmp-") || name.starts_with(".old-") {
+            let path = entry.path();
+            if std::fs::remove_dir_all(&path).is_ok() {
+                swept.push(path);
+            }
+        }
+    }
+    swept
+}
+
 /// Resolve the default `.slpkg` output path (`{name}-{version}.slpkg` in the
 /// package dir) when `--output` isn't given.
 fn resolve_slpkg_output(package_dir: &Path, output: Option<&Path>) -> Result<std::path::PathBuf> {
@@ -365,4 +455,79 @@ pub fn list() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Write a package slot at `dir` (a `streamlib.yaml`), give it a loadable
+    /// `lib/<triple>/*.so` artifact, and a regenerable `target/` scratch tree.
+    fn write_slot_with_scratch(dir: &Path) {
+        std::fs::create_dir_all(dir).unwrap();
+        std::fs::write(dir.join("streamlib.yaml"), b"package:\n  name: x\n").unwrap();
+        let lib = dir.join("lib").join("host-triple");
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("libx.so"), b"cdylib").unwrap();
+        let target = dir.join("target").join("debug");
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("junk.o"), b"scratch").unwrap();
+    }
+
+    #[test]
+    fn reclaim_drops_target_across_both_slot_shapes_keeps_artifacts() {
+        // Both the installed-cache shape (`packages/<name-version>/`) and the
+        // co-located modules shape (`streamlib_modules/@org/name/`) are walked;
+        // each slot's `target/` is reclaimed and its `lib/` artifact survives.
+        // Mentally-revert the `return` after reclaiming a slot and the walk
+        // would descend INTO package source looking for more `target/` dirs —
+        // this asserts the artifact (which is NOT scratch) is never touched.
+        let root = tempfile::tempdir().unwrap();
+
+        let installed = root.path().join("packages").join("foo-1.0.0");
+        write_slot_with_scratch(&installed);
+
+        let modules = root.path().join("streamlib_modules").join("@org").join("bar");
+        write_slot_with_scratch(&modules);
+
+        let reclaimed = reclaim_package_target_dirs(root.path());
+
+        assert_eq!(reclaimed.len(), 2, "both slots' target/ reclaimed: {reclaimed:?}");
+        for slot in [&installed, &modules] {
+            assert!(!slot.join("target").exists(), "target/ must be reclaimed");
+            assert!(
+                slot.join("lib").join("host-triple").join("libx.so").is_file(),
+                "cdylib artifact must survive the reclaim"
+            );
+            assert!(slot.join("streamlib.yaml").is_file(), "manifest must survive");
+        }
+    }
+
+    #[test]
+    fn reclaim_ignores_a_slot_without_target() {
+        let root = tempfile::tempdir().unwrap();
+        let slot = root.path().join("pkg");
+        std::fs::create_dir_all(&slot).unwrap();
+        std::fs::write(slot.join("streamlib.yaml"), b"package:\n").unwrap();
+        assert!(reclaim_package_target_dirs(root.path()).is_empty());
+    }
+
+    #[test]
+    fn sweep_removes_only_staging_residue() {
+        // `.tmp-*` (interrupted stage) and `.old-*` (interrupted swap) are
+        // reclaimed; a real slot dir is left alone. Mentally-revert the prefix
+        // guard and the real slot would be swept too.
+        let parent = tempfile::tempdir().unwrap();
+        for name in [".tmp-pkg-1-0", ".old-pkg-2-1"] {
+            std::fs::create_dir_all(parent.path().join(name)).unwrap();
+        }
+        std::fs::create_dir_all(parent.path().join("real-slot")).unwrap();
+
+        let swept = sweep_staging_residue(parent.path());
+
+        assert_eq!(swept.len(), 2, "both residue dirs swept: {swept:?}");
+        assert!(parent.path().join("real-slot").is_dir(), "a real slot must survive");
+        assert!(!parent.path().join(".tmp-pkg-1-0").exists());
+        assert!(!parent.path().join(".old-pkg-2-1").exists());
+    }
 }
