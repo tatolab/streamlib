@@ -435,6 +435,7 @@ impl PolyglotBuildOrchestrator {
                 triple,
                 self.profile,
                 &fingerprint,
+                source_is_mutable,
             )
             .map_err(|e| other(&pkg_label, format!("promoting build outputs in place: {e}")))?;
             let _ = std::fs::remove_dir_all(&temp_dir);
@@ -695,15 +696,11 @@ fn destination_is_source_dir(destination: &Path, pkg_dir: &Path) -> bool {
     streamlib_pack::is_same_existing_file(destination, pkg_dir)
 }
 
-/// Ensure the package's own `.gitignore` (beside its source) excludes the
-/// in-tree build outputs an in-place promote lands: the host-triple cdylib dir,
-/// the provisioned Python venv, the regenerated Deno wire vocabulary, and the
-/// build completion marker. A dev source (`Strategy::Path` / `Strategy::Git` /
-/// a link checkout) is the user's own git tree, so these must not show as
-/// untracked. Idempotent: only entries not already present are appended, so
-/// repeated builds — and additional host triples, each with its own
-/// `lib/<triple>/` line — accumulate without duplication. `_generated_/` is NOT
-/// globally ignored for an external Path source, so it is listed here too.
+/// Append the in-tree build-output ignore lines (host-triple cdylib dir, venv,
+/// generated wire vocabulary, completion marker) to a mutable dev checkout's own
+/// `.gitignore` so they never show as untracked. Idempotent: only absent lines
+/// are appended, so repeated builds and additional host triples accumulate
+/// without duplication.
 fn ensure_build_outputs_gitignored(destination: &Path, triple: &str) -> anyhow::Result<()> {
     use anyhow::Context;
     use std::collections::HashSet;
@@ -740,7 +737,10 @@ fn ensure_build_outputs_gitignored(destination: &Path, triple: &str) -> anyhow::
 
 /// Promote ONLY the regenerated build-output units from the staging temp dir
 /// into a destination that IS the package's own source dir, leaving every
-/// source file untouched.
+/// source file untouched — except the beside-source `.gitignore`, which is the
+/// one intentional source-file write: for a mutable dev checkout
+/// (`source_is_mutable`) it is created/updated to keep the promoted outputs out
+/// of git. An immutable managed extract (a git-rev-pinned clone) skips even that.
 ///
 /// The publish is atomic at the completion-marker granularity. Each output unit
 /// lands via [`atomic_swap`] (rename the prior unit AWAY to a `.old-*` sibling,
@@ -760,20 +760,22 @@ fn promote_build_outputs_in_place(
     triple: &str,
     profile: build::CargoProfile,
     inputs_hash: &str,
+    source_is_mutable: bool,
 ) -> anyhow::Result<()> {
     use anyhow::Context;
 
-    // The destination IS the user's own git tree (a `Strategy::Path` source or a
-    // link checkout), so keep the regenerated build outputs out of git — without
-    // this they surface as untracked noise on every dev build. Best-effort: a
-    // `.gitignore` is hygiene, never a correctness gate, so a write failure is
-    // logged and the build proceeds rather than aborting.
-    if let Err(e) = ensure_build_outputs_gitignored(destination, triple) {
-        tracing::warn!(
-            dir = %destination.display(),
-            error = %e,
-            "could not gitignore in-tree build outputs; build outputs may show as untracked"
-        );
+    // Only a mutable dev checkout is the user's own git tree; a disposable
+    // rev-pinned managed clone the user never sees carries its own ignore rules,
+    // so writing into it is pointless churn. Best-effort: a `.gitignore` is
+    // hygiene, never a correctness gate, so a write failure is logged.
+    if source_is_mutable {
+        if let Err(e) = ensure_build_outputs_gitignored(destination, triple) {
+            tracing::warn!(
+                dir = %destination.display(),
+                error = %e,
+                "could not gitignore in-tree build outputs; build outputs may show as untracked"
+            );
+        }
     }
 
     // Invalidate the completion marker before touching any output unit: until
@@ -1169,6 +1171,7 @@ mod tests {
             triple,
             build::CargoProfile::Dev,
             "new-fingerprint",
+            true,
         )
         .unwrap();
 
@@ -1221,7 +1224,7 @@ mod tests {
         let temp = root.path().join(".tmp-pkg");
         std::fs::create_dir_all(&temp).unwrap();
 
-        promote_build_outputs_in_place(&temp, &dest, triple, build::CargoProfile::Dev, "fp")
+        promote_build_outputs_in_place(&temp, &dest, triple, build::CargoProfile::Dev, "fp", true)
             .unwrap();
 
         assert!(!dest.join("lib").exists(), "no lib/ unit to promote");
@@ -1261,6 +1264,7 @@ mod tests {
             triple,
             build::CargoProfile::Dev,
             "new",
+            true,
         )
         .expect_err("promote must fail when a unit cannot be swapped into place");
         let _ = err;
@@ -1318,6 +1322,7 @@ mod tests {
             triple,
             build::CargoProfile::Dev,
             "new",
+            true,
         )
         .expect_err("promote must fail when a later unit cannot be published");
         let _ = err;
@@ -1411,6 +1416,7 @@ mod tests {
             triple,
             build::CargoProfile::Dev,
             "fp",
+            true,
         )
         .unwrap();
 
@@ -1421,6 +1427,40 @@ mod tests {
             std::fs::read(dest.path().join("streamlib.yaml")).unwrap(),
             b"package: src",
             "source must be untouched"
+        );
+    }
+
+    /// An immutable managed extract (a disposable rev-pinned git clone,
+    /// `source_is_mutable == false`) gets its build outputs promoted in-tree but
+    /// NO `.gitignore` write — the clone is not the user's tree. Mentally-revert
+    /// the `source_is_mutable` guard and a stray `.gitignore` appears here.
+    #[test]
+    fn promote_build_outputs_in_place_skips_gitignore_for_immutable_extract() {
+        let temp = tempfile::tempdir().unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        let triple = build::host_target_triple();
+        let lib = temp.path().join("lib").join(triple);
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("libpkg.so"), b"cdylib").unwrap();
+        std::fs::write(dest.path().join("streamlib.yaml"), b"package: src").unwrap();
+
+        promote_build_outputs_in_place(
+            temp.path(),
+            dest.path(),
+            triple,
+            build::CargoProfile::Dev,
+            "fp",
+            false,
+        )
+        .unwrap();
+
+        assert!(
+            !dest.path().join(".gitignore").exists(),
+            "an immutable managed extract must not get a beside-source .gitignore"
+        );
+        assert!(
+            dest.path().join("lib").join(triple).join("libpkg.so").is_file(),
+            "the build output is still promoted in-tree for an immutable extract"
         );
     }
 
@@ -1591,6 +1631,50 @@ mod tests {
         assert!(
             restaged.contains("2048"),
             "edited schema must be re-staged into the cache, got: {restaged}"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn in_place_materialize_reuses_despite_the_engine_written_gitignore() {
+        // A dev source builds IN-PLACE (staging destination IS the source dir),
+        // so the promote writes a beside-source `.gitignore`. That engine write
+        // must NOT perturb the reuse fingerprint: a second unchanged in-place
+        // materialize must reuse. Mentally-revert the `.gitignore` exclusion from
+        // the source fingerprint and the sidecar hash (recorded before the
+        // `.gitignore` existed) diverges from a recompute that now sees it, so
+        // the skip is missed and the source needlessly re-materializes.
+        let _home = HomeGuard::new();
+        let src = tempfile::tempdir().unwrap();
+        schemas_only_pkg(src.path());
+
+        // Destination IS the source dir → the in-place promote path.
+        let mut req = request(src.path(), BuildPolicy::IfStale);
+        req.staging_destination_slot_dir = src.path().to_path_buf();
+
+        let orch = PolyglotBuildOrchestrator::default();
+        let first = orch.materialize(&req, &NoopSink).unwrap();
+        assert_eq!(first.staged_dir, src.path());
+        assert!(
+            src.path().join(".gitignore").is_file(),
+            "in-place promote of a mutable source must write the beside-source .gitignore"
+        );
+
+        // The sidecar hash was recorded BEFORE the `.gitignore` write; a recompute
+        // now sees the `.gitignore` on disk. They must still agree — proving the
+        // engine-written ignore file is fingerprint-neutral.
+        let side = read_sidecar(src.path()).expect("first in-place build writes a sidecar");
+        let recomputed = compute_inputs_hash(src.path()).unwrap();
+        assert_eq!(
+            side.inputs_hash, recomputed,
+            "the engine-written .gitignore must not perturb the reuse fingerprint"
+        );
+
+        let second = orch.materialize(&req, &NoopSink).unwrap();
+        assert_eq!(second.staged_dir, src.path());
+        assert!(
+            !second.rebuilt,
+            "an unchanged second in-place materialize must reuse, not rebuild"
         );
     }
 

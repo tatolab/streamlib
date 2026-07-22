@@ -561,15 +561,10 @@ fn source_for_dir(
     provenance: PackageSourceProvenance,
 ) -> std::result::Result<ResolvedSource, AddModuleError> {
     if build.requires_orchestrator() {
-        // A dev source (`Strategy::Path` / `Strategy::Git` / a `streamlib link`
-        // override) builds IN-TREE beside its source: the staging destination
-        // IS the source dir itself, so the orchestrator takes its in-place
-        // promote — landing ONLY the regenerated build outputs (`lib/<triple>/`,
-        // `.venv/`, `_generated_/`) into the source tree and leaving every
-        // source file untouched — rather than copying the whole tree into
-        // `.streamlib/cache/packages/`. The installed / registry / `.slpkg`
-        // arms keep their detached cache slot via `staging_slot_for_dir`; a
-        // locked run pins `NeverBuild` and so never reaches this branch.
+        // A dev source builds IN-TREE beside its source: the staging destination
+        // IS the source dir, so the orchestrator's in-place promote lands only
+        // the regenerated build outputs there instead of copying the whole tree
+        // into the package cache.
         Ok(ResolvedSource::NeedsBuild(BuildRequest {
             package: pkg_ref.clone(),
             source: BuildSource::PackageDir(dir.clone()),
