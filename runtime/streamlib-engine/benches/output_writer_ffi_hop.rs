@@ -135,7 +135,7 @@ fn build_inner_with_connection(tag: &str) -> BenchFixture {
             ceiling_bytes: TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
         },
     );
-    inner.add_channel_notifier("out", notifier);
+    inner.add_channel_notifier("out", "L-bench-ffi-hop", notifier);
 
     BenchFixture {
         inner,
@@ -275,7 +275,7 @@ fn build_inner_with_fanout(tag: &str, subscriber_count: usize) -> FanoutFixture 
             .unwrap();
         let notifier = notify.notifier_builder().create().unwrap();
         let listener = notify.listener_builder().create().unwrap();
-        inner.add_channel_notifier("out", notifier);
+        inner.add_channel_notifier("out", &format!("L-bench-fanout-{i}"), notifier);
         listeners.push(listener);
     }
 

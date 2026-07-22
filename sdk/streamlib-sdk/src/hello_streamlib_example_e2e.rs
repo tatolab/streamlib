@@ -139,14 +139,14 @@ fn fixture_frame_traverses_the_inline_forward_processor() {
             ceiling_bytes: TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
         },
     );
-    output_writer_inner.add_channel_notifier("video_out", notifier);
+    output_writer_inner.add_channel_notifier("video_out", "L-video-forward", notifier);
 
     // Sink: an input mailbox subscribed to the same channel, bound to its local
     // `video_in` port. `read_raw` drains the subscriber and hands back the
     // forwarded payload.
     let sink_inputs = Arc::new(InputMailboxesInner::new());
     sink_inputs.add_port("video_in", 8, ReadMode::ReadNextInOrder);
-    sink_inputs.add_channel_subscriber("video_in", subscriber);
+    sink_inputs.add_channel_subscriber("video_in", "L-video-forward", subscriber);
 
     // Build the example processor and wire in the real host-side inners.
     let mut processor = HelloForward::Processor::from_config(EmptyConfig)
