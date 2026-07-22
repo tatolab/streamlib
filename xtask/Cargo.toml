@@ -46,6 +46,11 @@ jsonschema = { version = "0.30", default-features = false }
 # Error handling
 anyhow = "1.0"
 
+# Scratch consumer dir for the install-packages CI enumerator — the engine
+# link marker + materialized streamlib_modules/ slots live in a tempdir that is
+# discarded on drop (compile-then-discard, never ship a prebuilt).
+tempfile = "3.15"
+
 # Recursive file walk for lint-logging + check-manifest-schema
 walkdir = "2.5"
 
@@ -54,7 +59,4 @@ walkdir = "2.5"
 # file-level #![allow(...)]) without having to compile the workspace.
 syn = { version = "2", features = ["full", "visit", "extra-traits"] }
 proc-macro2 = { version = "1", features = ["span-locations"] }
-
-[dev-dependencies]
-tempfile = "3.15"
 

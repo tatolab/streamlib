@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, Stream, StreamConfig};
+use cpal::{Device, StreamConfig};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::mpsc;
+use std::thread::JoinHandle;
 use streamlib_plugin_sdk::sdk::error::{Result, Error};
 use streamlib_plugin_sdk::sdk::context::RuntimeContextFullAccess;
 use streamlib_plugin_sdk::sdk::iceoryx2::OutputWriter;
@@ -28,11 +30,18 @@ pub struct LinuxAudioInputDevice {
 )]
 pub struct LinuxAudioCaptureProcessor {
     device_info: Option<LinuxAudioInputDevice>,
-    _device: Option<Device>,
-    _stream: Option<Stream>,
     is_capturing: Arc<AtomicBool>,
     frame_counter: Arc<AtomicU64>,
     stream_setup_done: bool,
+    // A `cpal::Stream` is `!Send` (the ALSA backend's handle must not move
+    // across threads), but the `#[processor]` macro requires the processor to
+    // be `Send` (it runs on the runtime thread pool). The stream is therefore
+    // confined to a dedicated thread that builds it, plays it, and holds it
+    // alive; the processor keeps only `Send` handles. Dropping the sender in
+    // `teardown` wakes the thread, which then drops the stream on its own
+    // thread.
+    capture_thread: Option<JoinHandle<()>>,
+    shutdown_sender: Option<mpsc::Sender<()>>,
 }
 
 impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for LinuxAudioCaptureProcessor::Processor {
@@ -56,8 +65,13 @@ impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for LinuxAudioCaptur
 
         self.is_capturing.store(false, Ordering::Relaxed);
 
-        self._stream = None;
-        self._device = None;
+        // Dropping the sender unblocks the capture thread's `recv`, which then
+        // drops the `cpal::Stream` on its owning thread and exits.
+        self.shutdown_sender = None;
+        if let Some(handle) = self.capture_thread.take() {
+            let _ = handle.join();
+        }
+        self.stream_setup_done = false;
         Ok(())
     }
 
@@ -77,10 +91,116 @@ impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for LinuxAudioCaptur
 }
 
 impl LinuxAudioCaptureProcessor::Processor {
+    /// Spawn the stream-owning thread and block until it reports whether the
+    /// `cpal` stream built and started. The `cpal::Stream` is `!Send`, so it is
+    /// built and held entirely on that thread; only the device summary crosses
+    /// back here.
     fn setup_stream(&mut self) -> Result<()> {
+        let device_id = self.config.device_id.clone();
+        let outputs = self.outputs.clone();
+        let frame_counter = Arc::clone(&self.frame_counter);
+        let is_capturing = Arc::clone(&self.is_capturing);
+
+        let (ready_sender, ready_receiver) = mpsc::channel::<Result<LinuxAudioInputDevice>>();
+        let (shutdown_sender, shutdown_receiver) = mpsc::channel::<()>();
+
+        let handle = std::thread::Builder::new()
+            .name("audio-capture".to_string())
+            .spawn(move || {
+                match build_capture_stream(device_id, outputs, frame_counter, &is_capturing) {
+                    Ok((device_info, stream)) => {
+                        is_capturing.store(true, Ordering::Relaxed);
+                        if ready_sender.send(Ok(device_info)).is_err() {
+                            return;
+                        }
+                        // Hold the stream alive on this thread until teardown
+                        // drops the sender; the `cpal` callback fires on the
+                        // backend's own thread meanwhile.
+                        let _ = shutdown_receiver.recv();
+                        drop(stream);
+                    }
+                    Err(e) => {
+                        let _ = ready_sender.send(Err(e));
+                    }
+                }
+            })
+            .map_err(|e| {
+                Error::Configuration(format!("Failed to spawn audio capture thread: {}", e))
+            })?;
+
+        let device_info = ready_receiver
+            .recv()
+            .map_err(|_| {
+                Error::Configuration(
+                    "Audio capture thread exited before reporting stream setup".into(),
+                )
+            })??;
+
+        self.device_info = Some(device_info);
+        self.capture_thread = Some(handle);
+        self.shutdown_sender = Some(shutdown_sender);
+        Ok(())
+    }
+
+    pub fn list_devices() -> Result<Vec<LinuxAudioInputDevice>> {
+        let host = cpal::default_host();
+        let devices: Result<Vec<LinuxAudioInputDevice>> = host
+            .input_devices()
+            .map_err(|e| {
+                Error::Configuration(format!(
+                    "Failed to enumerate audio input devices: {}",
+                    e
+                ))
+            })?
+            .enumerate()
+            .filter_map(|(id, device)| {
+                let name = device.name().ok()?;
+                let config = device.default_input_config().ok()?;
+                let channels = config.channels();
+
+                if channels != 1 {
+                    return None;
+                }
+
+                let sample_rate = config.sample_rate().0;
+
+                let is_default = if let Some(default_device) = host.default_input_device() {
+                    device.name().ok() == default_device.name().ok()
+                } else {
+                    false
+                };
+
+                Some(Ok(LinuxAudioInputDevice {
+                    id,
+                    name,
+                    sample_rate,
+                    channels: 1,
+                    is_default,
+                }))
+            })
+            .collect();
+
+        devices
+    }
+
+    pub fn current_device(&self) -> Option<&LinuxAudioInputDevice> {
+        self.device_info.as_ref()
+    }
+}
+
+/// Select the input device, build the mono `cpal` input stream, and start it.
+/// Runs entirely on the capture thread because a `cpal::Stream` is `!Send`.
+/// The callback writes device-native mono frames to `outputs` until
+/// `is_capturing` is cleared.
+fn build_capture_stream(
+    device_id: Option<String>,
+    outputs: OutputWriter,
+    frame_counter: Arc<AtomicU64>,
+    is_capturing: &Arc<AtomicBool>,
+) -> Result<(LinuxAudioInputDevice, cpal::Stream)> {
         let host = cpal::default_host();
 
-        let device = if let Some(device_name_str) = &self.config.device_id {
+        let device = if let Some(device_name_str) = &device_id {
             let devices: Vec<Device> = host
                 .input_devices()
                 .map_err(|e| {
@@ -134,12 +254,12 @@ impl LinuxAudioCaptureProcessor::Processor {
             name: device_name.clone(),
             sample_rate: device_sample_rate,
             channels: device_channels as u32,
-            is_default: self.config.device_id.is_none(),
+            is_default: device_id.is_none(),
         };
 
-        let outputs_clone: OutputWriter = self.outputs.clone();
-        let frame_counter_clone = self.frame_counter.clone();
-        let is_capturing_clone = Arc::clone(&self.is_capturing);
+        let outputs_clone: OutputWriter = outputs;
+        let frame_counter_clone = frame_counter;
+        let is_capturing_clone = Arc::clone(is_capturing);
         let sample_rate_clone = device_sample_rate;
 
         let stream_config = StreamConfig {
@@ -189,67 +309,16 @@ impl LinuxAudioCaptureProcessor::Processor {
             Error::Configuration(format!("Failed to start audio stream: {}", e))
         })?;
 
-        self.is_capturing.store(true, Ordering::Relaxed);
         tracing::info!(
             "[AudioCapture] Stream active - capturing mono audio at {}Hz",
             device_sample_rate
         );
 
-        self.device_info = Some(device_info);
-        self._device = Some(device);
-        self._stream = Some(stream);
-
         tracing::info!(
             "[AudioCapture] {} Started - outputting device-native mono frames",
             device_name
         );
-        Ok(())
-    }
-
-    pub fn list_devices() -> Result<Vec<LinuxAudioInputDevice>> {
-        let host = cpal::default_host();
-        let devices: Result<Vec<LinuxAudioInputDevice>> = host
-            .input_devices()
-            .map_err(|e| {
-                Error::Configuration(format!(
-                    "Failed to enumerate audio input devices: {}",
-                    e
-                ))
-            })?
-            .enumerate()
-            .filter_map(|(id, device)| {
-                let name = device.name().ok()?;
-                let config = device.default_input_config().ok()?;
-                let channels = config.channels();
-
-                if channels != 1 {
-                    return None;
-                }
-
-                let sample_rate = config.sample_rate().0;
-
-                let is_default = if let Some(default_device) = host.default_input_device() {
-                    device.name().ok() == default_device.name().ok()
-                } else {
-                    false
-                };
-
-                Some(Ok(LinuxAudioInputDevice {
-                    id,
-                    name,
-                    sample_rate,
-                    channels: 1,
-                    is_default,
-                }))
-            })
-            .collect();
-
-        devices
-    }
-
-    pub fn current_device(&self) -> Option<&LinuxAudioInputDevice> {
-        self.device_info.as_ref()
-    }
+        Ok((device_info, stream))
 }
 
 #[cfg(test)]
