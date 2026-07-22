@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.33](https://github.com/tatolab/streamlib/compare/v0.7.32...v0.7.33) (2026-07-22)
+
+
+### Features
+
+* **packages:** promote-outputs-last materialize for a source-dir destination ([#1534](https://github.com/tatolab/streamlib/issues/1534)) ([ebde93d](https://github.com/tatolab/streamlib/commit/ebde93d0ab173222099df4e03cc56f57fc05b6a5))
+
 ## [0.7.32](https://github.com/tatolab/streamlib/compare/v0.7.31...v0.7.32) (2026-07-22)
 
 
