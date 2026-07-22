@@ -14,7 +14,7 @@ name = "streamlib_display"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = {version = "0.7.26"}
+streamlib-jtd-codegen = {version = "0.7.27"}
 
 [dependencies]
 # Engine-free authoring SDK (never the `streamlib` facade) — capability-typed
@@ -25,15 +25,15 @@ streamlib-jtd-codegen = {version = "0.7.26"}
 # resource creation goes through `GpuContextLimitedAccess::escalate` +
 # `create_present_target` / `create_graphics_kernel` / `create_texture_readback`,
 # never the raw host device.
-streamlib-plugin-sdk = {version = "0.7.26"}
+streamlib-plugin-sdk = {version = "0.7.27"}
 
 # Procedural macros — `#[streamlib_plugin_sdk::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = {version = "0.7.26"}
+streamlib-macros = {version = "0.7.27"}
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = {version = "0.7.26"}
+streamlib-plugin-abi = {version = "0.7.27"}
 
 tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 serde = {version = "1.0", features = ["derive"]}
