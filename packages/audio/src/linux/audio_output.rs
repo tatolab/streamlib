@@ -13,34 +13,6 @@ use crate::_generated_::AudioFrame;
 use streamlib_plugin_sdk::sdk::error::{Result, Error};
 use streamlib_plugin_sdk::sdk::context::RuntimeContextFullAccess;
 
-/// Wrapper for InputMailboxes pointer that is Send.
-struct SendableInputsPtr(*const streamlib_plugin_sdk::sdk::iceoryx2::InputMailboxes);
-
-// SAFETY: InputMailboxes is Send, and we control the lifetime
-unsafe impl Send for SendableInputsPtr {}
-
-impl SendableInputsPtr {
-    /// SAFETY: Caller must ensure the pointed-to data is still valid.
-    unsafe fn get(&self) -> &streamlib_plugin_sdk::sdk::iceoryx2::InputMailboxes {
-        unsafe { &*self.0 }
-    }
-}
-
-/// Wrapper for ProcessorAudioConverter pointer that is Send.
-struct SendableAudioConverterPtr(*mut ProcessorAudioConverter);
-
-// SAFETY: Only one thread accesses it, and we join before drop
-unsafe impl Send for SendableAudioConverterPtr {}
-
-#[allow(clippy::mut_from_ref)]
-impl SendableAudioConverterPtr {
-    /// SAFETY: Caller must ensure the pointed-to data is still valid
-    /// and no other thread is accessing it.
-    unsafe fn get_mut(&self) -> &mut ProcessorAudioConverter {
-        unsafe { &mut *self.0 }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct LinuxAudioDevice {
     pub id: usize,
@@ -68,13 +40,15 @@ pub struct LinuxAudioOutputProcessor {
     buffer_size: usize,
     frame_producer: Arc<Mutex<Option<Producer<AudioFrame>>>>,
     // A `cpal::Stream` is `!Send`, but the `#[processor]` macro requires the
-    // processor to be `Send`. The stream is therefore built and held on the
-    // output thread (below) — which also runs the input-poll loop — and never
-    // stored on the processor. The thread drops the stream when `stop_polling`
-    // is set and it exits.
+    // processor to be `Send`. The stream — and the `ProcessorAudioConverter`
+    // that feeds it — are therefore built and held entirely on the output
+    // thread (below), which also runs the input-poll loop; neither is stored on
+    // the processor, so nothing borrows `self` across the thread boundary. The
+    // processor keeps only `Send` handles (an `InputMailboxes` clone, the ring
+    // producer, the stop flag). The thread drops the stream and converter when
+    // `stop_polling` is set and it exits.
     output_thread: Option<thread::JoinHandle<()>>,
     stop_polling: Arc<AtomicBool>,
-    audio: Option<ProcessorAudioConverter>,
 }
 
 /// The device configuration the output thread resolved, reported back to the
@@ -93,7 +67,6 @@ impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for LinuxAudioOutput
             .device_id
             .as_ref()
             .and_then(|s| s.parse::<usize>().ok());
-        self.audio = Some(ProcessorAudioConverter::new());
         tracing::info!(
             "AudioOutput: start() called (Pull mode - will query device for native config)"
         );
@@ -132,17 +105,11 @@ impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for LinuxAudioOutput
         let stop_flag = Arc::clone(&self.stop_polling);
         stop_flag.store(false, Ordering::SeqCst);
 
-        // SAFETY for both raw pointers:
-        // 1. The output thread is stopped in teardown() before self is dropped
-        // 2. Only the output thread accesses these after start() returns
-        // 3. In Manual mode, no other code touches self between start() and teardown()
-        let audio = self.audio.as_mut().ok_or_else(|| {
-            Error::Configuration(
-                "audio converter not initialized — setup() must run before start()".into(),
-            )
-        })?;
-        let inputs_ptr = SendableInputsPtr(&self.inputs as *const _);
-        let audio_ptr = SendableAudioConverterPtr(audio as *mut _);
+        // Cross the thread boundary with owned `Send` handles only — an
+        // `InputMailboxes` clone (its handle is refcounted through the plugin
+        // ABI vtable), never a borrow of `self`. The converter is built inside
+        // the thread below, so nothing the thread touches outlives `self`.
+        let inputs = self.inputs.clone();
         let producer_clone = Arc::clone(&self.frame_producer);
         let stop_clone = Arc::clone(&stop_flag);
         let device_id = self.device_id;
@@ -169,18 +136,19 @@ impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for LinuxAudioOutput
                     buffer_size: None,
                 };
 
+                // The converter lives entirely on this thread — no borrow of
+                // `self` crosses the boundary, so it can never outlive the
+                // processor.
+                let mut audio = ProcessorAudioConverter::new();
+
                 if ready_sender.send(Ok(resolved)).is_err() {
                     return;
                 }
 
                 tracing::info!("[AudioOutput] Polling loop started");
                 while !stop_clone.load(Ordering::SeqCst) {
-                    let inputs = unsafe { inputs_ptr.get() };
-
                     if inputs.has_data("audio") {
                         if let Ok(frame) = inputs.read::<AudioFrame>("audio") {
-                            let audio = unsafe { audio_ptr.get_mut() };
-
                             match audio.convert(&frame, &target) {
                                 Ok(converted_frames) => {
                                     let mut producer_guard = producer_clone.lock().unwrap();
