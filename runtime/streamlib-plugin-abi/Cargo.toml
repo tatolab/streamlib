@@ -19,7 +19,7 @@ repository.workspace = true
 # `streamlib::sdk::plugin::*` at the cdylib's call site, where the
 # streamlib dep already lives.
 [dependencies]
-streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.7.36" }
+streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.7.37" }
 tracing.workspace = true
 
 [lints]
