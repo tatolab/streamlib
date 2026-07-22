@@ -19,7 +19,7 @@ use streamlib_idents::{RegistryClient, RegistryConfig};
 
 use super::build_orchestrator::{BuildPolicy, BuildRequest, BuildSource};
 use super::errors::AddModuleError;
-use super::processor_registration::host_target_triple;
+use super::processor_registration::{host_package_cache_slot_context, host_target_triple};
 use super::slpkg::extract_slpkg_to_cache;
 
 /// Semver requirement carried by [`Strategy::Registry`]. Re-exported from
@@ -391,9 +391,11 @@ pub(super) fn resolve_strategy_to_source(
             // versions are immutable (a content change ships a new version);
             // `streamlib pkg clean` clears the cache to force a re-fetch when a
             // version is republished in place during development.
-            let slot = crate::core::streamlib_home::get_cached_package_dir_for_name_version(
+            let slot = crate::core::streamlib_home::get_cached_package_dir_for_slot(
+                pkg_ref.org.as_str(),
                 pkg_ref.name.as_str(),
                 selected,
+                &host_package_cache_slot_context(),
             );
             let extracted = if matches!(build, BuildPolicy::IfStale) && slot.is_dir() {
                 tracing::debug!(

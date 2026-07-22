@@ -113,16 +113,70 @@ pub fn get_cached_package_dir(cache_key: &str) -> PathBuf {
         .join(cache_key)
 }
 
-/// The installed-cache slot for a package name + version — the single
-/// source of the `{name}-{version}` cache-key convention shared by
-/// `.slpkg` extraction, registry resolution, orchestrator staging, and
-/// locked-run slot derivation. A drift in any one of those sites would
-/// make locked runs look in the wrong slot; route them all through here.
-pub fn get_cached_package_dir_for_name_version(
+/// The host-toolchain discriminators that partition the installed-package
+/// cache so two artifacts that are NOT interchangeable never share a slot.
+///
+/// Keying the slot on these — on top of the package identity — closes two
+/// concrete collisions the bare `{name}-{version}` key had:
+/// - a debug build and a release build of the same version overwriting one
+///   another (`profile_label`), and
+/// - a foreign-triple or foreign-ABI artifact loaded into a host it wasn't
+///   built for (`host_triple` / `plugin_abi_version`).
+///
+/// The **write** side (the build orchestrator) fills this from the build
+/// request's host triple, the linked plugin-ABI version, and its own cargo
+/// profile; the **read** sides (`.slpkg` extraction, registry resolution,
+/// locked-run slot derivation) reconstruct the identical context from the
+/// running engine via [`host_package_cache_slot_context`] — so a slot a
+/// build wrote and a later run reads can never disagree.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PackageCacheSlotContext {
+    /// The rustc target triple the staged cdylib targets
+    /// (e.g. `x86_64-unknown-linux-gnu`).
+    pub host_triple: String,
+    /// The plugin-ABI version the staged artifact was built against
+    /// (`streamlib_plugin_abi::STREAMLIB_ABI_VERSION`).
+    pub plugin_abi_version: u32,
+    /// The cargo profile the artifact was built with (`dev` / `release`).
+    pub profile_label: String,
+}
+
+/// Compose the flat slot-directory NAME for one package identity under one
+/// host-toolchain [`PackageCacheSlotContext`]. The single source of the
+/// cache-key convention shared by `.slpkg` extraction, registry resolution,
+/// orchestrator staging, and locked-run slot derivation — a drift in any
+/// one of those sites would make a locked run look in the wrong slot; route
+/// them all through here.
+///
+/// `__` (double underscore) is a collision-free delimiter: an org and a
+/// package name are `[a-z][a-z0-9-]*` (no underscore at all), a target
+/// triple uses only single underscores (`x86_64`), a semver contains no
+/// underscore, and the profile label is alphabetic — so `__` can never
+/// appear inside a component and the join is unambiguous.
+pub fn package_cache_slot_name(
+    org: &str,
     package_name: &str,
     version: impl std::fmt::Display,
+    context: &PackageCacheSlotContext,
+) -> String {
+    format!(
+        "{org}__{package_name}__{version}__{triple}__abi{abi}__{profile}",
+        triple = context.host_triple,
+        abi = context.plugin_abi_version,
+        profile = context.profile_label,
+    )
+}
+
+/// The installed-cache slot path for a package identity under a host
+/// [`PackageCacheSlotContext`]. Thin join of [`get_cached_package_dir`] over
+/// [`package_cache_slot_name`].
+pub fn get_cached_package_dir_for_slot(
+    org: &str,
+    package_name: &str,
+    version: impl std::fmt::Display,
+    context: &PackageCacheSlotContext,
 ) -> PathBuf {
-    get_cached_package_dir(&format!("{package_name}-{version}"))
+    get_cached_package_dir(&package_cache_slot_name(org, package_name, version, context))
 }
 
 /// Get the path to a runtime's directory.
@@ -163,6 +217,68 @@ mod tests {
         assert_eq!(app_root_from(&bin_dir).as_deref(), Some(root));
         // Resolves from the root itself too.
         assert_eq!(app_root_from(root).as_deref(), Some(root));
+    }
+
+    fn ctx(triple: &str, abi: u32, profile: &str) -> PackageCacheSlotContext {
+        PackageCacheSlotContext {
+            host_triple: triple.to_string(),
+            plugin_abi_version: abi,
+            profile_label: profile.to_string(),
+        }
+    }
+
+    #[test]
+    fn slot_name_partitions_by_org_triple_abi_and_profile() {
+        let linux = ctx("x86_64-unknown-linux-gnu", 7, "release");
+        // Same name+version, different org → distinct slots (cross-org
+        // collision the bare `{name}-{version}` key had).
+        assert_ne!(
+            package_cache_slot_name("acme", "core", "1.0.0", &linux),
+            package_cache_slot_name("tatolab", "core", "1.0.0", &linux),
+        );
+        // Same identity, debug vs release → distinct slots (the thrash the
+        // profile-less key had).
+        assert_ne!(
+            package_cache_slot_name("tatolab", "core", "1.0.0", &linux),
+            package_cache_slot_name(
+                "tatolab",
+                "core",
+                "1.0.0",
+                &ctx("x86_64-unknown-linux-gnu", 7, "dev")
+            ),
+        );
+        // Same identity, different triple / ABI → distinct slots.
+        assert_ne!(
+            package_cache_slot_name("tatolab", "core", "1.0.0", &linux),
+            package_cache_slot_name("tatolab", "core", "1.0.0", &ctx("aarch64-apple-darwin", 7, "release")),
+        );
+        assert_ne!(
+            package_cache_slot_name("tatolab", "core", "1.0.0", &linux),
+            package_cache_slot_name("tatolab", "core", "1.0.0", &ctx("x86_64-unknown-linux-gnu", 8, "release")),
+        );
+    }
+
+    #[test]
+    fn slot_name_is_a_single_flat_path_component() {
+        // install.rs records `staged_dir.file_name()` and the InstalledCache
+        // loader joins it back as one component — the slot name must never
+        // introduce a path separator.
+        let name = package_cache_slot_name(
+            "tatolab",
+            "h264",
+            "0.4.0",
+            &ctx("x86_64-unknown-linux-gnu", 7, "release"),
+        );
+        assert!(!name.contains('/'), "slot name must be one component: {name}");
+        assert_eq!(
+            get_cached_package_dir_for_slot(
+                "tatolab",
+                "h264",
+                "0.4.0",
+                &ctx("x86_64-unknown-linux-gnu", 7, "release")
+            ),
+            get_cached_package_dir(&name),
+        );
     }
 
     #[test]

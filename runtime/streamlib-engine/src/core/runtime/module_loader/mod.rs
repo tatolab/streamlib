@@ -94,7 +94,9 @@ pub use build_orchestrator::{
 };
 pub use errors::{AddModuleError, RemoveModuleError};
 pub(crate) use locked::LockedResolution;
-pub use processor_registration::host_target_triple;
+pub use processor_registration::{
+    host_cargo_profile_label, host_package_cache_slot_context, host_target_triple,
+};
 pub(crate) use recursive_walker::ResolutionMemo;
 pub use slpkg::extract_slpkg_to_cache;
 pub use source::{ArtifactChecksum, SemVerRange, Strategy};

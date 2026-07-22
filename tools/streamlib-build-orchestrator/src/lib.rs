@@ -15,8 +15,10 @@
 //! (via [`streamlib_pack::assemble_artifact`] — the same routine
 //! `streamlib pack` uses: Rust cdylib via cargo + crate source, Python as
 //! full source, Deno bundle, schemas) and stage it as an extracted
-//! directory into the package cache
-//! (`<STREAMLIB_HOME>/.streamlib/cache/packages/<name>-<version>/`).
+//! directory into the package cache, in a slot keyed by the package's
+//! `@org/name` + version under this host's toolchain context (target triple,
+//! plugin-ABI version, cargo profile) so cross-org, cross-triple, and
+//! debug/release artifacts never collide.
 //! A runtime-built staged dir is byte-identical to what extracting the
 //! corresponding `.slpkg` would produce — dev, release, and
 //! install-from-anywhere share the shape, so a package that loads in dev
@@ -170,9 +172,16 @@ impl PolyglotBuildOrchestrator {
                 "streamlib.yaml missing [package] section".into(),
             )
         })?;
-        let cache_slot = streamlib_engine::core::get_cached_package_dir_for_name_version(
+        let slot_context = streamlib_engine::core::PackageCacheSlotContext {
+            host_triple: triple.clone(),
+            plugin_abi_version: streamlib_plugin_abi::STREAMLIB_ABI_VERSION,
+            profile_label: self.profile.label().to_string(),
+        };
+        let cache_slot = streamlib_engine::core::get_cached_package_dir_for_slot(
+            package.org.as_str(),
             package.name.as_str(),
             package.version,
+            &slot_context,
         );
 
         let has_rust = build::has_rust_runtime_processors(&config);
@@ -732,7 +741,12 @@ mod tests {
             .materialize(&request(src.path(), BuildPolicy::IfStale), &NoopSink)
             .expect("schemas-only must materialize");
 
-        let expected = streamlib_engine::core::get_cached_package_dir("schemas-only-0.1.0");
+        let expected = streamlib_engine::core::get_cached_package_dir_for_slot(
+            "tatolab",
+            "schemas-only",
+            "0.1.0",
+            &streamlib_engine::core::runtime::host_package_cache_slot_context(),
+        );
         assert_eq!(
             staged.staged_dir, expected,
             "must stage into the package cache"

@@ -4,7 +4,9 @@
 use crate::core::{Error, Result};
 
 /// Extract a .slpkg ZIP archive to the package cache.
-/// Cache key is `{name}-{version}` from the embedded streamlib.yaml.
+/// The cache slot is keyed by the embedded streamlib.yaml's `@org/name`
+/// identity + version under the running host's toolchain context (triple,
+/// plugin-ABI, profile) — the same slot the build orchestrator stages into.
 /// Always overwrites on load.
 pub fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path::PathBuf> {
     use crate::core::config::ProjectConfig;
@@ -39,9 +41,11 @@ pub fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path:
         Error::Configuration("streamlib.yaml missing [package] section".to_string())
     })?;
 
-    let cache_dir = crate::core::streamlib_home::get_cached_package_dir_for_name_version(
+    let cache_dir = crate::core::streamlib_home::get_cached_package_dir_for_slot(
+        package.org.as_str(),
         package.name.as_str(),
         package.version,
+        &super::processor_registration::host_package_cache_slot_context(),
     );
 
     // Reuse the already-read bytes — extract into the derived cache slot.

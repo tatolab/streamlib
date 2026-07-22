@@ -3557,11 +3557,12 @@ processors:
                 package: request.package.to_string(),
                 detail: "no [package] block".into(),
             })?;
-            let slot = crate::core::get_cached_package_dir(&format!(
-                "{}-{}",
+            let slot = crate::core::get_cached_package_dir_for_slot(
+                pkg.org.as_str(),
                 pkg.name.as_str(),
-                pkg.version
-            ));
+                pkg.version,
+                &host_package_cache_slot_context(),
+            );
             let _ = std::fs::remove_dir_all(&slot);
             copy_dir_recursive(&src, &slot).map_err(|e| BuildError::Other {
                 package: request.package.to_string(),
@@ -3829,7 +3830,12 @@ processors:
         // Hand-stage a package whose manifest declares a dep on `miss-dep`,
         // and a lockfile that pins ONLY the package (stale relative to the
         // manifest graph).
-        let slot = crate::core::get_cached_package_dir("miss-pkg-0.1.0");
+        let slot = crate::core::get_cached_package_dir_for_slot(
+            "tatolab",
+            "miss-pkg",
+            "0.1.0",
+            &host_package_cache_slot_context(),
+        );
         std::fs::create_dir_all(slot.join("schemas")).unwrap();
         std::fs::write(
             slot.join("streamlib.yaml"),
@@ -3923,7 +3929,12 @@ packages:
         version: &str,
         type_name: &str,
     ) -> (std::path::PathBuf, String) {
-        let slot = crate::core::get_cached_package_dir_for_name_version(name, version);
+        let slot = crate::core::get_cached_package_dir_for_slot(
+            "tatolab",
+            name,
+            version,
+            &host_package_cache_slot_context(),
+        );
         let stem = type_name.to_ascii_lowercase();
         std::fs::create_dir_all(slot.join("schemas")).unwrap();
         std::fs::write(
@@ -4033,7 +4044,12 @@ packages:
         // its manifest inside claims 1.0.1 — an in-place republish that kept
         // the dir name. Pin the drifted slot's REAL hash so the content gate
         // passes and the walker's version check is the one that fires.
-        let slot = crate::core::get_cached_package_dir_for_name_version("drift-pkg", "1.0.0");
+        let slot = crate::core::get_cached_package_dir_for_slot(
+            "tatolab",
+            "drift-pkg",
+            "1.0.0",
+            &host_package_cache_slot_context(),
+        );
         std::fs::create_dir_all(slot.join("schemas")).unwrap();
         std::fs::write(
             slot.join("streamlib.yaml"),

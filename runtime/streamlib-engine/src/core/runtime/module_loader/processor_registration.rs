@@ -15,6 +15,32 @@ pub fn host_target_triple() -> &'static str {
     env!("STREAMLIB_HOST_TARGET")
 }
 
+/// The cargo profile the running engine binary was compiled with, as the
+/// `dev` / `release` label that partitions the package cache. Matches the
+/// build orchestrator's own default profile selection (a debug host builds
+/// and loads debug package slots, a release host release slots), so the load
+/// side reconstructs the profile discriminator the write side used.
+pub fn host_cargo_profile_label() -> &'static str {
+    if cfg!(debug_assertions) {
+        "dev"
+    } else {
+        "release"
+    }
+}
+
+/// The running engine's package-cache slot discriminators: its compiled
+/// target triple, linked plugin-ABI version, and cargo profile. The load
+/// side (`.slpkg` extraction, registry resolution, locked-run slot
+/// derivation) composes this so it reconstructs the exact slot the build
+/// orchestrator wrote from the identical three values.
+pub fn host_package_cache_slot_context() -> crate::core::PackageCacheSlotContext {
+    crate::core::PackageCacheSlotContext {
+        host_triple: host_target_triple().to_string(),
+        plugin_abi_version: streamlib_plugin_abi::STREAMLIB_ABI_VERSION,
+        profile_label: host_cargo_profile_label().to_string(),
+    }
+}
+
 /// Enumerate the target triples present as subdirectories of a
 /// package's `lib/` dir. Used in the error path when the host's triple
 /// has no matching artifact, so the user sees which platforms a slpkg

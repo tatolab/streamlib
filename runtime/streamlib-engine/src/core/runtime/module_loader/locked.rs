@@ -29,8 +29,9 @@ use streamlib_idents::{Lockfile, PackageRef, SemVer, SemVerRange};
 
 use super::build_orchestrator::BuildPolicy;
 use super::errors::AddModuleError;
+use super::processor_registration::host_package_cache_slot_context;
 use super::source::Strategy;
-use crate::core::streamlib_home::get_cached_package_dir_for_name_version;
+use crate::core::streamlib_home::get_cached_package_dir_for_slot;
 
 /// One pinned package: its concrete version, the installed-cache slot
 /// `streamlib install` materialized it into, and the content hash the
@@ -53,12 +54,14 @@ pub(crate) struct LockedResolution {
 
 impl LockedResolution {
     /// Build the pin set from a parsed [`Lockfile`]. Each entry's `@org/name`
-    /// key is parsed to a typed [`PackageRef`]; the cache slot is derived by
-    /// the shared `{name}-{version}` convention (where `materialize` stages).
+    /// key is parsed to a typed [`PackageRef`]; the cache slot is derived
+    /// through the shared slot-key helper under the running host's toolchain
+    /// context (where `materialize` stages).
     pub(crate) fn from_lockfile(
         lockfile: &Lockfile,
         lockfile_path: &Path,
     ) -> Result<Self, AddModuleError> {
+        let slot_context = host_package_cache_slot_context();
         let mut pins = HashMap::with_capacity(lockfile.packages.len());
         for (key, entry) in &lockfile.packages {
             let pkg_ref = parse_lockfile_package_ref_key(key).map_err(|detail| {
@@ -67,8 +70,12 @@ impl LockedResolution {
                     detail,
                 }
             })?;
-            let slot_dir =
-                get_cached_package_dir_for_name_version(pkg_ref.name.as_str(), entry.version);
+            let slot_dir = get_cached_package_dir_for_slot(
+                pkg_ref.org.as_str(),
+                pkg_ref.name.as_str(),
+                entry.version,
+                &slot_context,
+            );
             pins.insert(
                 pkg_ref,
                 LockedPin {
@@ -229,11 +236,16 @@ mod tests {
         let pin = locked.pins.get(&pkg).unwrap();
         assert_eq!(pin.version, SemVer::new(1, 2, 3));
         assert_eq!(pin.expected_content_hash, "sha256:aa");
-        // Slot is derived via the shared name-version convention, matching
-        // where `materialize` stages.
+        // Slot is derived via the shared slot-key helper under the host
+        // toolchain context, matching where `materialize` stages.
         assert_eq!(
             pin.slot_dir,
-            get_cached_package_dir_for_name_version("core", SemVer::new(1, 2, 3))
+            get_cached_package_dir_for_slot(
+                "tatolab",
+                "core",
+                SemVer::new(1, 2, 3),
+                &host_package_cache_slot_context()
+            )
         );
     }
 
