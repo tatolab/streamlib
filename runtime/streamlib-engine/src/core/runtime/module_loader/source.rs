@@ -1705,7 +1705,11 @@ mod tests {
     /// the realistic shape an extracted Python `.slpkg` cache slot carries.
     fn record_installed_cache_package(name: &str) -> PathBuf {
         use crate::core::config::{InstalledPackageEntry, InstalledPackageManifest};
-        let slot = crate::core::streamlib_home::get_cached_package_dir(&format!("{name}-1.0.0"));
+        let slot = crate::core::streamlib_home::installed_package_slot_dir(
+            None,
+            &pkg_ref_named(name),
+            streamlib_idents::SemVer::new(1, 0, 0),
+        );
         std::fs::create_dir_all(&slot).unwrap();
         std::fs::write(
             slot.join("streamlib.yaml"),

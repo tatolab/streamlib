@@ -39,8 +39,8 @@
 //!   against.
 //!
 //! Cache scope: the `SlpkgArchive` strategy extracts every slpkg into
-//! the process-global `<STREAMLIB_HOME>/.streamlib/cache/packages/<name>-<version>/`
-//! cache. This test therefore writes to the *real* jpeg / core
+//! the process-global installed-package cache slot the
+//! `installed_package_slot_dir` seam derives. This test therefore writes to the *real* jpeg / core
 //! cache entries (at their current package versions) on the host
 //! running the test. The
 //! extract is idempotent (`extract_slpkg_to_cache` clears the dir
