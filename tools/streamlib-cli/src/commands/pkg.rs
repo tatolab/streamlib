@@ -11,8 +11,8 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use streamlib::engine_internal::core::InstalledPackageManifest;
 use streamlib::engine_internal::core::ProjectConfig;
+use streamlib::sdk::runtime::AppModulesDir;
 use streamlib_idents::{RegistryClient, RegistryConfig};
 use streamlib_pack::catalog::{build_package_catalog, build_sibling_versions};
 use streamlib_pack::static_registry::{merge_catalog_index_lines, write_package_catalog};
@@ -222,22 +222,15 @@ pub fn clean() -> Result<()> {
 /// Reclaim regenerable build scratch across every materialized package slot,
 /// keeping the loadable artifact (`lib/<triple>/*.so` + `.venv/` +
 /// `_generated_/` + manifest). Reclaims each slot's `cargo` `target/` plus any
-/// orphaned `.tmp-*` / `.old-*` staging residue, across BOTH the installed
-/// package cache (`.streamlib/cache/packages/`) and the app's co-located
-/// `streamlib_modules/@org/name/` slots.
+/// orphaned `.tmp-*` / `.old-*` staging residue across the app's co-located
+/// `streamlib_modules/@org/name/` slots — the only place materialized slots
+/// live post-#1506.
 ///
 /// Distinct from [`clean`], which cleans the CURRENT package's own source dir:
 /// `cache-gc` is a whole-cache reclaim of on-the-box build output, the disk
 /// counterpart to compile-on-install.
 pub fn cache_gc(dir: Option<&Path>) -> Result<()> {
     let mut reclaimed: Vec<PathBuf> = Vec::new();
-
-    // Installed package cache: <data_dir>/cache/packages/<name-version>/.
-    let installed_cache = streamlib::engine_internal::core::get_streamlib_data_dir()
-        .join("cache")
-        .join("packages");
-    reclaimed.extend(reclaim_package_target_dirs(&installed_cache));
-    reclaimed.extend(sweep_staging_residue(&installed_cache));
 
     // Co-located app modules: <app_root>/streamlib_modules/@org/name/.
     let app_root = match dir {
@@ -496,33 +489,58 @@ pub fn inspect(path: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-/// List installed packages.
-pub fn list() -> Result<()> {
-    let manifest = InstalledPackageManifest::load()
-        .map_err(|e| anyhow::anyhow!("Failed to load packages manifest: {}", e))?;
+/// List the app's installed packages, read from its `streamlib.lock` — the
+/// record `streamlib add`/`link`/`install` maintain beside the app's
+/// `streamlib_modules/` folder. `dir` is the app root (default: CWD).
+pub fn list(dir: Option<&Path>) -> Result<()> {
+    let app = match dir {
+        Some(root) => AppModulesDir::at(root),
+        None => AppModulesDir::from_cwd().map_err(|e| anyhow::anyhow!("{e}"))?,
+    };
+    let lockfile = app
+        .read_lockfile()
+        .map_err(|e| anyhow::anyhow!("Failed to read {}: {}", app.lockfile_path().display(), e))?;
 
-    if manifest.packages.is_empty() {
-        println!("No packages installed.");
+    if lockfile.packages.is_empty() {
+        println!("No packages installed in {}.", app.modules_dir().display());
         println!();
         println!("Add a package with:");
-        println!("  streamlib add @org/name          # from the registry");
         println!("  streamlib add ./path/to.slpkg    # from a local artifact");
+        println!("  streamlib add https://…/pkg.slpkg  # from a URL");
         return Ok(());
     }
 
-    println!("Installed packages ({}):\n", manifest.packages.len());
+    println!("Installed packages ({}):\n", lockfile.packages.len());
 
-    for pkg in &manifest.packages {
-        println!("  {} v{}", pkg.name, pkg.version);
-        if let Some(desc) = &pkg.description {
-            println!("    {}", desc);
+    for (pkg_ref, entry) in &lockfile.packages {
+        let slot = app.modules_dir();
+        let present = pkg_ref
+            .strip_prefix('@')
+            .and_then(|rest| rest.split_once('/'))
+            .map(|(org, name)| slot.join(format!("@{org}")).join(name).is_dir())
+            .unwrap_or(false);
+        println!("  {} v{}", pkg_ref, entry.version);
+        println!("    Source: {}", describe_lock_source(&entry.source));
+        if !present {
+            println!("    (slot missing on disk — run `streamlib install` to reproduce)");
         }
-        println!("    Installed: {}", pkg.installed_at);
-        println!("    Source:    {}", pkg.installed_from);
         println!();
     }
 
     Ok(())
+}
+
+/// One-line human description of a lockfile source for `pkg list`.
+fn describe_lock_source(source: &streamlib_idents::LockfileSource) -> String {
+    use streamlib_idents::LockfileSource;
+    match source {
+        LockfileSource::Path { path } => format!("path:{}", path.display()),
+        LockfileSource::Archive { path, .. } => format!("archive:{}", path.display()),
+        LockfileSource::Url { url, .. } => format!("url:{url}"),
+        LockfileSource::Link { path } => format!("link:{}", path.display()),
+        LockfileSource::Registry { url } => format!("registry:{url}"),
+        LockfileSource::Git { url, rev } => format!("git:{url}@{rev}"),
+    }
 }
 
 #[cfg(test)]
@@ -543,17 +561,17 @@ mod tests {
     }
 
     #[test]
-    fn reclaim_drops_target_across_both_slot_shapes_keeps_artifacts() {
-        // Both the installed-cache shape (`packages/<name-version>/`) and the
-        // co-located modules shape (`streamlib_modules/@org/name/`) are walked;
-        // each slot's `target/` is reclaimed and its `lib/` artifact survives.
-        // Mentally-revert the `return` after reclaiming a slot and the walk
-        // would descend INTO package source looking for more `target/` dirs —
-        // this asserts the artifact (which is NOT scratch) is never touched.
+    fn reclaim_drops_target_across_nested_slot_shapes_keeps_artifacts() {
+        // The walker reclaims `target/` for a package slot wherever it nests —
+        // both a flat `<name>/` and the co-located `streamlib_modules/@org/name/`
+        // shape — and its `lib/` artifact survives. Mentally-revert the `return`
+        // after reclaiming a slot and the walk would descend INTO package source
+        // looking for more `target/` dirs — this asserts the artifact (which is
+        // NOT scratch) is never touched.
         let root = tempfile::tempdir().unwrap();
 
-        let installed = root.path().join("packages").join("foo-1.0.0");
-        write_slot_with_scratch(&installed);
+        let flat = root.path().join("some-slot");
+        write_slot_with_scratch(&flat);
 
         let modules = root.path().join("streamlib_modules").join("@org").join("bar");
         write_slot_with_scratch(&modules);
@@ -561,7 +579,7 @@ mod tests {
         let reclaimed = reclaim_package_target_dirs(root.path());
 
         assert_eq!(reclaimed.len(), 2, "both slots' target/ reclaimed: {reclaimed:?}");
-        for slot in [&installed, &modules] {
+        for slot in [&flat, &modules] {
             assert!(!slot.join("target").exists(), "target/ must be reclaimed");
             assert!(
                 slot.join("lib").join("host-triple").join("libx.so").is_file(),

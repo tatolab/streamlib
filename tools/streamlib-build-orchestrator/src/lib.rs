@@ -1500,6 +1500,16 @@ mod tests {
         }
     }
 
+    /// A detached staging destination under the sandboxed `STREAMLIB_HOME` — the
+    /// engine injects `staging_destination_slot_dir` on every request, and these
+    /// tests exercise the DETACHED-destination promote path (source ≠ slot). Keyed
+    /// so distinct keys yield distinct slots, letting a test pin write==read.
+    fn detached_slot(key: &str) -> PathBuf {
+        streamlib_engine::core::get_streamlib_data_dir()
+            .join("test-slots")
+            .join(key)
+    }
+
     fn schemas_only_pkg(dir: &Path) {
         std::fs::write(
             dir.join("streamlib.yaml"),
@@ -1521,9 +1531,7 @@ mod tests {
             source_provenance: PackageSourceProvenance::MutableUserCheckout,
             policy,
             host_triple: build::host_target_triple().to_string(),
-            staging_destination_slot_dir: streamlib_engine::core::get_cached_package_dir(
-                "schemas-only-0.1.0",
-            ),
+            staging_destination_slot_dir: detached_slot("schemas-only-0.1.0"),
         }
     }
 
@@ -1543,7 +1551,7 @@ mod tests {
             .materialize(&request(src.path(), BuildPolicy::IfStale), &NoopSink)
             .expect("schemas-only must materialize");
 
-        let expected = streamlib_engine::core::get_cached_package_dir("schemas-only-0.1.0");
+        let expected = detached_slot("schemas-only-0.1.0");
         assert_eq!(
             staged.staged_dir, expected,
             "must stage into the package cache"
@@ -1574,7 +1582,7 @@ mod tests {
         schemas_only_pkg(src.path());
 
         let injected =
-            streamlib_engine::core::get_cached_package_dir("schemas-only-injected-slot");
+            detached_slot("schemas-only-injected-slot");
         let mut req = request(src.path(), BuildPolicy::IfStale);
         req.staging_destination_slot_dir = injected.clone();
 
@@ -1717,9 +1725,7 @@ mod tests {
             source_provenance: PackageSourceProvenance::MutableUserCheckout,
             policy,
             host_triple: build::host_target_triple().to_string(),
-            staging_destination_slot_dir: streamlib_engine::core::get_cached_package_dir(
-                "py-source-0.1.0",
-            ),
+            staging_destination_slot_dir: detached_slot("py-source-0.1.0"),
         }
     }
 
@@ -2134,9 +2140,7 @@ mod tests {
                 source_provenance: PackageSourceProvenance::ImmutableManagedExtract,
                 policy: BuildPolicy::IfStale,
                 host_triple: build::host_target_triple().to_string(),
-                staging_destination_slot_dir: streamlib_engine::core::get_cached_package_dir(
-                    "x-0.1.0",
-                ),
+                staging_destination_slot_dir: detached_slot("x-0.1.0"),
             };
             let err = orch.materialize(&req, &NoopSink).expect_err("must reject");
             assert!(matches!(err, BuildError::UnsupportedSource(_)));
@@ -2251,9 +2255,7 @@ streamlib-plugin-sdk = {version = "0.5.0", registry = "tatolab"}
             source_provenance: PackageSourceProvenance::ImmutableManagedExtract,
             policy: BuildPolicy::IfStale,
             host_triple: build::host_target_triple().to_string(),
-            staging_destination_slot_dir: streamlib_engine::core::get_cached_package_dir(
-                "rust-source-0.1.0",
-            ),
+            staging_destination_slot_dir: detached_slot("rust-source-0.1.0"),
         };
         let err = with_scratch_registry(registry.path(), || {
             orch.materialize(&req, &NoopSink)
