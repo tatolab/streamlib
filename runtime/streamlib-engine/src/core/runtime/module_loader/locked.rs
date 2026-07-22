@@ -53,8 +53,9 @@ pub(crate) struct LockedResolution {
 
 impl LockedResolution {
     /// Build the pin set from a parsed [`Lockfile`]. Each entry's `@org/name`
-    /// key is parsed to a typed [`PackageRef`]; the cache slot is derived by
-    /// the shared `{name}-{version}` convention (where `materialize` stages).
+    /// key is parsed to a typed [`PackageRef`]; the slot is the co-located
+    /// `<app-root>/streamlib_modules/@org/name` dir the seam derives from the
+    /// lockfile's parent (where `materialize` stages).
     pub(crate) fn from_lockfile(
         lockfile: &Lockfile,
         lockfile_path: &Path,
@@ -70,7 +71,7 @@ impl LockedResolution {
                     detail,
                 }
             })?;
-            let slot_dir = installed_package_slot_dir(app_root, &pkg_ref, entry.version);
+            let slot_dir = installed_package_slot_dir(app_root, &pkg_ref);
             pins.insert(
                 pkg_ref,
                 LockedPin {
@@ -225,17 +226,19 @@ mod tests {
 
     #[test]
     fn from_lockfile_maps_slot_version_and_hash() {
+        let lockfile_path = Path::new("/app/streamlib.lock");
         let lf = lockfile_with(&[("@tatolab/core", SemVer::new(1, 2, 3), "sha256:aa")]);
-        let locked = LockedResolution::from_lockfile(&lf, Path::new("x.lock")).unwrap();
+        let locked = LockedResolution::from_lockfile(&lf, lockfile_path).unwrap();
         let pkg = PackageRef::new(Org::new("tatolab").unwrap(), Package::new("core").unwrap());
         let pin = locked.pins.get(&pkg).unwrap();
         assert_eq!(pin.version, SemVer::new(1, 2, 3));
         assert_eq!(pin.expected_content_hash, "sha256:aa");
-        // Slot is derived via the shared name-version convention, matching
-        // where `materialize` stages.
+        // The slot is the co-located `<app-root>/streamlib_modules/@org/name`
+        // dir the seam derives from the lockfile's parent — the app root the
+        // install write and this locked read share (write==read).
         assert_eq!(
             pin.slot_dir,
-            installed_package_slot_dir(None, &pkg, SemVer::new(1, 2, 3))
+            installed_package_slot_dir(lockfile_path.parent(), &pkg)
         );
     }
 

@@ -77,12 +77,14 @@ examples/camera-python-display/assets/*
 .envrc
 .cargo/config.toml
 
-# Co-located package build output (compile-on-install): the compiled cdylib
-# and build-provenance sidecar live beside a package's source, inside its
-# `streamlib_modules/@org/name/` slot — regenerable artifacts, never committed.
+# Co-located package slots (compile-on-install): `streamlib add` / `install`
+# materialize package sources and their build output (compiled cdylib, venv,
+# build-provenance sidecar) into `streamlib_modules/@org/name/`. In THIS repo
+# that tree is only ever regenerable app/test scratch — a real consumer app
+# owns its own tree in its own repo — so ignore it wholesale here.
 # (`.venv/`, `target/`, `_generated_/` are already ignored above/below.)
 .streamlib-build.json
-streamlib_modules/**/lib/
+streamlib_modules/
 
 plan.md
 

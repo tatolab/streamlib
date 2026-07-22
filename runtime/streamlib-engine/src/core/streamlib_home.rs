@@ -3,7 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
-use streamlib_idents::{PackageRef, SemVer};
+use streamlib_idents::app_modules::AppModulesDir;
+use streamlib_idents::PackageRef;
 
 /// The streamlib app root — the install / clone directory, the top level
 /// that holds both the read-only `packages/` source and the generated
@@ -25,11 +26,12 @@ use streamlib_idents::{PackageRef, SemVer};
 /// ```text
 /// <streamlib-home>/                     ← app root (install / clone)
 /// ├── packages/                         # read-only source (NOT under .streamlib)
+/// ├── streamlib_modules/@org/name/      # installed / built package slots,
+/// │                                     #   co-located under the APP root
+/// │                                     #   (installed_package_slot_dir); each
+/// │                                     #   Python slot carries its own `.venv/`
 /// └── .streamlib/                       # generated working tree — get_streamlib_data_dir()
 ///     ├── cache/
-///     │   ├── packages/                 # built / extracted package artifacts
-///     │   │                             #   (each Python package carries its own
-///     │   │                             #   `.venv/`, provisioned by the orchestrator)
 ///     │   └── uv/                        # uv PyPI cache      (Python packages only)
 ///     ├── logs/<runtime_id>-<ts>.jsonl  # per-runtime JSONL logs
 ///     ├── resolver-cache/               # git / URL checkouts (Strategy::Git / Url)
@@ -37,7 +39,7 @@ use streamlib_idents::{PackageRef, SemVer};
 /// ```
 ///
 /// Each subdir is created on demand by its consumer — an all-Rust,
-/// `Strategy::Path` graph populates `cache/packages/` and `logs/`.
+/// `Strategy::Path` graph populates `streamlib_modules/` and `logs/`.
 pub fn get_streamlib_home() -> PathBuf {
     if let Ok(home) = std::env::var("STREAMLIB_HOME") {
         return PathBuf::from(home);
@@ -115,24 +117,70 @@ pub fn get_cached_package_dir(cache_key: &str) -> PathBuf {
         .join(cache_key)
 }
 
-/// The installed-package cache slot for a package at a version — the single
-/// source of the `{name}-{version}` cache-key convention shared by `.slpkg`
-/// extraction, registry resolution, orchestrator staging, and locked-run slot
-/// derivation. A drift in any one of those sites would make locked runs look
-/// in the wrong slot; route them all through here.
+/// Environment override for the directory that contains the app's
+/// `streamlib_modules/` folder — the GST_PLUGIN_PATH-style default a
+/// daemon/host sets. A runtime override ([`set_app_modules_root_override`])
+/// takes precedence.
+pub(crate) const APP_MODULES_DIR_ENV: &str = "STREAMLIB_MODULES_DIR";
+
+/// Process-wide override for the app-modules root, set via
+/// [`Runner::set_app_modules_dir`]. `None` falls back to the env var, then the
+/// process working directory.
 ///
-/// `app_modules_root` is the app root whose `streamlib_modules/` tree the
-/// in-progress co-location relocation (#1506) will prefer over the shared
-/// cache; it and the package org are threaded now so every deriver already
-/// carries the app context, though this body returns the shared
-/// `.streamlib/cache/packages/{name}-{version}` slot regardless of either.
+/// [`Runner::set_app_modules_dir`]: crate::core::runtime::Runner::set_app_modules_dir
+static APP_MODULES_ROOT_OVERRIDE: std::sync::RwLock<Option<PathBuf>> =
+    std::sync::RwLock::new(None);
+
+/// Tell the module loader which directory contains the app's
+/// `streamlib_modules/` folder for lazy discovery, installed-slot derivation,
+/// and locked-run resolution. `None` clears the override (back to env / cwd).
+pub(crate) fn set_app_modules_root_override(root: Option<PathBuf>) {
+    *APP_MODULES_ROOT_OVERRIDE
+        .write()
+        .expect("app-modules root override lock poisoned") = root;
+}
+
+/// The app-modules root: the runtime-set override, else the
+/// `STREAMLIB_MODULES_DIR` env var, else the exact process working directory
+/// (no walk-up). `None` only when the cwd is unresolvable and neither override
+/// nor env is set — resolution then proceeds with the installed cache alone.
+pub(crate) fn app_modules_root() -> Option<PathBuf> {
+    if let Some(root) = APP_MODULES_ROOT_OVERRIDE
+        .read()
+        .expect("app-modules root override lock poisoned")
+        .clone()
+    {
+        return Some(root);
+    }
+    if let Some(env) = std::env::var_os(APP_MODULES_DIR_ENV).filter(|env| !env.is_empty()) {
+        return Some(PathBuf::from(env));
+    }
+    std::env::current_dir().ok()
+}
+
+/// The installed-package slot for a package — the single source of the
+/// co-located `<app-root>/streamlib_modules/@org/name` convention shared by
+/// `.slpkg` extraction, registry resolution, orchestrator staging, install,
+/// and locked-run slot derivation. A drift in any one of those sites would
+/// make locked runs look in the wrong slot; route them all through here.
+///
+/// `explicit_app_modules_root` pins the app root whose `streamlib_modules/`
+/// tree owns the slot (the install/locked path threads the lockfile's parent
+/// so write and read agree byte-for-byte). `None` resolves the app root via
+/// [`app_modules_root`] (override > `STREAMLIB_MODULES_DIR` > cwd), the same
+/// chain the module loader resolves against — so a `None` deriver lands in the
+/// identical slot a resolved caller does. The slot is version-free: a package
+/// occupies one `@org/name` dir; the pinned version is enforced against the
+/// slot's manifest at the walker, not encoded in the path.
 pub fn installed_package_slot_dir(
-    app_modules_root: Option<&Path>,
+    explicit_app_modules_root: Option<&Path>,
     pkg_ref: &PackageRef,
-    version: SemVer,
 ) -> PathBuf {
-    let _ = app_modules_root;
-    get_cached_package_dir(&format!("{}-{}", pkg_ref.name.as_str(), version))
+    let app_root = explicit_app_modules_root
+        .map(Path::to_path_buf)
+        .or_else(app_modules_root)
+        .unwrap_or_else(|| PathBuf::from("."));
+    AppModulesDir::at(app_root).package_dir(pkg_ref)
 }
 
 /// Get the path to a runtime's directory.
@@ -166,41 +214,36 @@ mod tests {
         PackageRef::new(Org::new(org).unwrap(), Package::new(name).unwrap())
     }
 
-    /// Pins the seam's layout literal: the slot is always
-    /// `<data-dir>/cache/packages/{name}-{version}`, regardless of org or the
-    /// (currently unused) app-modules root. A relocation that changes this
-    /// convention must update every deriver and this canary together.
+    /// Pins the seam's layout: an explicit app root scopes the slot to
+    /// `<app-root>/streamlib_modules/@org/name`, version-free. A relocation
+    /// that changes this convention must update every deriver and this canary
+    /// together.
     #[test]
-    fn slot_dir_uses_name_dash_version_under_cache_packages() {
-        let slot = installed_package_slot_dir(
-            None,
-            &pkg_ref("tatolab", "core"),
-            SemVer::new(1, 2, 3),
-        );
-        let expected = get_streamlib_data_dir()
-            .join("cache/packages")
-            .join("core-1.2.3");
+    fn slot_dir_is_org_scoped_and_version_free_under_streamlib_modules() {
+        let app_root = Path::new("/some/app");
+        let slot = installed_package_slot_dir(Some(app_root), &pkg_ref("tatolab", "core"));
+        let expected = app_root
+            .join("streamlib_modules")
+            .join("@tatolab")
+            .join("core");
         assert_eq!(slot, expected);
     }
 
-    /// write==read invariant: the seam is the single derivation, so a fixed
-    /// `(pkg_ref, version)` yields one byte-identical slot no matter the app
-    /// root — the property that lets a locked read find exactly the slot a
-    /// `.slpkg` extract / registry reuse wrote.
+    /// write==read distinctness: the app root and the org each move the slot,
+    /// so an install writing under one `(app-root, @org)` and a locked read
+    /// under another never collide.
     #[test]
-    fn slot_dir_is_app_root_and_org_invariant() {
+    fn slot_dir_moves_with_app_root_and_org() {
         let pkg = pkg_ref("tatolab", "core");
-        let version = SemVer::new(4, 5, 6);
 
-        let no_root = installed_package_slot_dir(None, &pkg, version);
-        let with_root =
-            installed_package_slot_dir(Some(Path::new("/some/app")), &pkg, version);
-        assert_eq!(no_root, with_root, "app root must not move the slot");
+        let app_a = installed_package_slot_dir(Some(Path::new("/app/a")), &pkg);
+        let app_b = installed_package_slot_dir(Some(Path::new("/app/b")), &pkg);
+        assert_ne!(app_a, app_b, "the app root must move the slot");
 
-        // The org is not part of the current key: a same-name package under a
-        // different org derives the same slot.
-        let other_org = installed_package_slot_dir(None, &pkg_ref("acme", "core"), version);
-        assert_eq!(no_root, other_org);
+        // A same-name package under a different org gets a distinct slot.
+        let other_org =
+            installed_package_slot_dir(Some(Path::new("/app/a")), &pkg_ref("acme", "core"));
+        assert_ne!(app_a, other_org, "the org must move the slot");
     }
 
     #[test]

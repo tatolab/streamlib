@@ -11,20 +11,20 @@ use super::processor_registration::{host_target_triple, list_available_triples};
 use super::*;
 use serial_test::serial;
 
-/// Resolve the installed-package cache slot for `@org/name`@`version` through
-/// the production [`installed_package_slot_dir`] seam, so a fixture writes to
-/// (and an assertion reads) the exact slot a locked run derives — never a
-/// hand-rolled `{name}-{version}` string that could silently drift from the
-/// seam. The single place that pins the literal on-disk layout is the
-/// `installed_cache_slot_layout_canary` test.
+/// Resolve the installed-package cache slot for `@org/name` through the
+/// production [`installed_package_slot_dir`] seam, so a fixture writes to (and
+/// an assertion reads) the exact slot a locked run derives — never a
+/// hand-rolled `{name}` string that could silently drift from the seam. The
+/// slot is version-free; the single place that pins the literal on-disk layout
+/// is the `installed_cache_slot_layout_canary` test.
 ///
 /// [`installed_package_slot_dir`]: crate::core::installed_package_slot_dir
-fn installed_package_slot_for_test(org: &str, name: &str, version: &str) -> std::path::PathBuf {
+fn installed_package_slot_for_test(org: &str, name: &str) -> std::path::PathBuf {
     let pkg_ref = streamlib_idents::PackageRef::new(
         streamlib_idents::Org::new(org).unwrap(),
         streamlib_idents::Package::new(name).unwrap(),
     );
-    crate::core::installed_package_slot_dir(None, &pkg_ref, version.parse().unwrap())
+    crate::core::installed_package_slot_dir(None, &pkg_ref)
 }
 
 /// Minimal [`BuildOrchestrator`] for tests: "materializes" a
@@ -561,6 +561,25 @@ impl Drop for StreamlibHomeRestore {
     }
 }
 
+/// Pins the process-global app-modules root override to a test app root for the
+/// scope, clearing it on drop. Post-#1506 the installed slot lives under
+/// `<app-root>/streamlib_modules/`, so a locked-run test that hand-stages via
+/// the `None` seam and reads a lockfile from the same dir must anchor both at
+/// one app root — otherwise the seam falls through to the process cwd and the
+/// staged slot and the locked read diverge.
+struct AppModulesRootOverrideGuard;
+impl AppModulesRootOverrideGuard {
+    fn install(app_root: &std::path::Path) -> Self {
+        crate::core::streamlib_home::set_app_modules_root_override(Some(app_root.to_path_buf()));
+        Self
+    }
+}
+impl Drop for AppModulesRootOverrideGuard {
+    fn drop(&mut self) {
+        crate::core::streamlib_home::set_app_modules_root_override(None);
+    }
+}
+
 /// Clears a set of env vars on construction and restores them on drop, so a
 /// test can assert behavior under "no ambient registry config" deterministically
 /// regardless of the developer/CI shell. `#[serial]` makes the env exclusive.
@@ -737,7 +756,7 @@ fn path_package_registry_dep_routes_to_registry_not_installed_cache() {
 
     // An installed-cache entry for @tatolab/b that WOULD satisfy `^0.1.0` —
     // resolved through the seam so it lands at the real layout.
-    let dep_cache_dir = installed_package_slot_for_test("tatolab", "b", "0.1.0");
+    let dep_cache_dir = installed_package_slot_for_test("tatolab", "b");
     std::fs::create_dir_all(&dep_cache_dir).unwrap();
     std::fs::write(
         dep_cache_dir.join("streamlib.yaml"),
@@ -1068,9 +1087,13 @@ mod add_module_tests {
     use super::*;
     use streamlib_idents::{ModuleIdent, Org, Package, SemVer, SemVerRange};
 
-    /// RAII guard that restores `STREAMLIB_HOME` to its pre-test value on
-    /// drop. Every cache-backed test isolates the installed-package cache
-    /// to a tempdir to keep the host's real cache out of the test surface.
+    /// RAII guard that pins both `STREAMLIB_HOME` and the app-modules root to
+    /// the same tempdir for the test scope, restoring the prior state on drop.
+    /// The installed-package slot lives under `<app-root>/streamlib_modules/`
+    /// (co-location, #1506), so isolating the cache off the host requires
+    /// pinning the app-modules root too — otherwise the seam falls through to
+    /// the process cwd. Both are process-global, so cache-backed tests using
+    /// this guard are `#[serial]`.
     struct HomeGuard {
         home_prev: Option<std::ffi::OsString>,
     }
@@ -1081,12 +1104,14 @@ mod add_module_tests {
             unsafe {
                 std::env::set_var("STREAMLIB_HOME", home_root);
             }
+            crate::core::streamlib_home::set_app_modules_root_override(Some(home_root.to_path_buf()));
             Self { home_prev }
         }
     }
 
     impl Drop for HomeGuard {
         fn drop(&mut self) {
+            crate::core::streamlib_home::set_app_modules_root_override(None);
             unsafe {
                 match self.home_prev.take() {
                     Some(v) => std::env::set_var("STREAMLIB_HOME", v),
@@ -1127,7 +1152,7 @@ mod add_module_tests {
     /// Install a schemas-only package into the sandboxed installed-package
     /// cache so bare `add_module` (which resolves cache-only) can find it.
     fn install_cached_package(org: &str, name: &str, version: &str, schema: Option<&str>) {
-        let dep_cache_dir = installed_package_slot_for_test(org, name, version);
+        let dep_cache_dir = installed_package_slot_for_test(org, name);
         std::fs::create_dir_all(&dep_cache_dir).unwrap();
         write_schemas_only_manifest(&dep_cache_dir, org, name, version, schema);
 
@@ -1151,12 +1176,12 @@ mod add_module_tests {
     }
 
     /// Layout-pin canary: the ONE test in this crate that hard-codes the
-    /// `.streamlib/cache/packages/{name}-{version}` installed-cache slot
-    /// literal. Every other fixture derives its slot through the
+    /// co-located installed-slot literal — `<app-root>/streamlib_modules/@org/name`,
+    /// version-free (#1506). Every other fixture derives its slot through the
     /// [`installed_package_slot_dir`] seam (see `installed_package_slot_for_test`)
-    /// so they track this pin for free — a write==read oracle. The #1506
-    /// co-location relocation that moves the slot under `streamlib_modules/`
-    /// must update THIS assertion and the seam body together; nothing else.
+    /// so they track this pin for free — a write==read oracle. A relocation
+    /// that moves the slot again must update THIS assertion and the seam body
+    /// together; nothing else.
     ///
     /// [`installed_package_slot_dir`]: crate::core::installed_package_slot_dir
     #[test]
@@ -1168,11 +1193,13 @@ mod add_module_tests {
             Org::new("tatolab").unwrap(),
             Package::new("canary-pkg").unwrap(),
         );
-        let slot = crate::core::installed_package_slot_dir(None, &pkg_ref, SemVer::new(1, 0, 0));
+        // `None` resolves the app root via the same chain the module loader
+        // uses; the guard pins it to `home`, so the slot lands under it.
+        let slot = crate::core::installed_package_slot_dir(None, &pkg_ref);
         assert_eq!(
             slot,
             home.path()
-                .join(".streamlib/cache/packages/canary-pkg-1.0.0"),
+                .join("streamlib_modules/@tatolab/canary-pkg"),
             "installed-cache slot layout drifted from the pinned literal",
         );
     }
@@ -1236,8 +1263,7 @@ mod add_module_tests {
         // Cache entry keyed @tatolab/add-module-identity but the on-disk
         // manifest declares a different identity (clobbered cache). Resolve
         // through the seam so the fixture tracks the real layout.
-        let dep_cache_dir =
-            installed_package_slot_for_test("tatolab", "add-module-identity", "1.0.0");
+        let dep_cache_dir = installed_package_slot_for_test("tatolab", "add-module-identity");
         std::fs::create_dir_all(&dep_cache_dir).unwrap();
         write_schemas_only_manifest(&dep_cache_dir, "vendor", "other", "1.0.0", None);
         let mut installed = crate::core::config::InstalledPackageManifest::default();
@@ -3568,10 +3594,10 @@ processors:
 
     use std::io::Write as _;
 
-    /// Orchestrator that stages a `PackageDir` into the installed-package
-    /// cache slot `cache/packages/<name>-<version>/` — where a locked run
-    /// looks — by copying the resolved source tree. No toolchain: enough to
-    /// prove the resolve→materialize→lock→locked-run handoff with
+    /// Orchestrator that stages a `PackageDir` into the co-located slot the
+    /// install seam injects (`<app-root>/streamlib_modules/@org/name/`) — where
+    /// a locked run looks — by copying the resolved source tree. No toolchain:
+    /// enough to prove the resolve→materialize→lock→locked-run handoff with
     /// schemas-only packages. The real `PolyglotBuildOrchestrator` stages
     /// into the identical slot (plus builds cdylibs / venvs / native hosts).
     struct StageIntoCacheOrchestrator;
@@ -3585,20 +3611,10 @@ processors:
                 BuildSource::PackageDir(d) => d.clone(),
                 other => return Err(BuildError::UnsupportedSource(format!("{other:?}"))),
             };
-            let cfg =
-                crate::core::config::ProjectConfig::load(&src).map_err(|e| BuildError::Other {
-                    package: request.package.to_string(),
-                    detail: e.to_string(),
-                })?;
-            let pkg = cfg.package.as_ref().ok_or_else(|| BuildError::Other {
-                package: request.package.to_string(),
-                detail: "no [package] block".into(),
-            })?;
-            let slot = crate::core::installed_package_slot_dir(
-                None,
-                &streamlib_idents::PackageRef::new(pkg.org.clone(), pkg.name.clone()),
-                pkg.version,
-            );
+            // Honor the co-located slot the install seam injected (#1517) rather
+            // than self-deriving — write==read only holds when the orchestrator
+            // stages into the exact dir the locked read later resolves.
+            let slot = request.staging_destination_slot_dir.clone();
             let _ = std::fs::remove_dir_all(&slot);
             copy_dir_recursive(&src, &slot).map_err(|e| BuildError::Other {
                 package: request.package.to_string(),
@@ -3863,10 +3879,14 @@ processors:
         let _restore = StreamlibHomeRestore(prev_home);
         let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
 
+        // Stage and read against one app root: the lockfile lives under
+        // `sandbox`, so the co-located slot must too.
+        let _modules_root = AppModulesRootOverrideGuard::install(sandbox.path());
+
         // Hand-stage a package whose manifest declares a dep on `miss-dep`,
         // and a lockfile that pins ONLY the package (stale relative to the
         // manifest graph).
-        let slot = installed_package_slot_for_test("tatolab", "miss-pkg", "0.1.0");
+        let slot = installed_package_slot_for_test("tatolab", "miss-pkg");
         std::fs::create_dir_all(slot.join("schemas")).unwrap();
         std::fs::write(
             slot.join("streamlib.yaml"),
@@ -3964,11 +3984,7 @@ packages:
             streamlib_idents::Org::new("tatolab").unwrap(),
             streamlib_idents::Package::new(name).unwrap(),
         );
-        let slot = crate::core::installed_package_slot_dir(
-            None,
-            &pkg_ref,
-            version.parse().unwrap(),
-        );
+        let slot = crate::core::installed_package_slot_dir(None, &pkg_ref);
         let stem = type_name.to_ascii_lowercase();
         std::fs::create_dir_all(slot.join("schemas")).unwrap();
         std::fs::write(
@@ -4032,6 +4048,10 @@ packages:
         let _restore = StreamlibHomeRestore(prev_home);
         let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
 
+        // Stage and read against one app root: the lockfile lives under
+        // `sandbox`, so the co-located slot must too.
+        let _modules_root = AppModulesRootOverrideGuard::install(sandbox.path());
+
         let (slot, hash) = stage_schemas_only_slot("tamper-pkg", "0.1.0", "TamperPkgSchema");
         let lock = write_single_pin_lockfile(sandbox.path(), "tamper-pkg", "0.1.0", &hash);
 
@@ -4074,19 +4094,19 @@ packages:
         let _restore = StreamlibHomeRestore(prev_home);
         let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
 
-        // The slot lives at the LOCKED version's key (drift-pkg-1.0.0), but
-        // its manifest inside claims 1.0.1 — an in-place republish that kept
-        // the dir name. Pin the drifted slot's REAL hash so the content gate
-        // passes and the walker's version check is the one that fires.
+        // Stage and read against one app root: the lockfile lives under
+        // `sandbox`, so the co-located slot must too.
+        let _modules_root = AppModulesRootOverrideGuard::install(sandbox.path());
+
+        // The slot lives at the co-located `@org/name` dir, but its manifest
+        // inside claims 1.0.1 while the lock pins 1.0.0 — an in-place republish
+        // that kept the dir. Pin the drifted slot's REAL hash so the content
+        // gate passes and the walker's version check is the one that fires.
         let pkg_ref = streamlib_idents::PackageRef::new(
             streamlib_idents::Org::new("tatolab").unwrap(),
             streamlib_idents::Package::new("drift-pkg").unwrap(),
         );
-        let slot = crate::core::installed_package_slot_dir(
-            None,
-            &pkg_ref,
-            "1.0.0".parse().unwrap(),
-        );
+        let slot = crate::core::installed_package_slot_dir(Some(sandbox.path()), &pkg_ref);
         std::fs::create_dir_all(slot.join("schemas")).unwrap();
         std::fs::write(
             slot.join("streamlib.yaml"),
