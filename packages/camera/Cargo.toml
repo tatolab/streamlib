@@ -14,7 +14,7 @@ name = "streamlib_camera"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = {version = "0.7.32"}
+streamlib-jtd-codegen = {version = "0.7.33"}
 
 [dependencies]
 # Engine-free authoring SDK (never the `streamlib` facade) — capability-typed
@@ -24,15 +24,15 @@ streamlib-jtd-codegen = {version = "0.7.32"}
 # `VulkanLayout` / `PixelFormat` / `TextureFormat` primitives, generated config
 # types under `crate::_generated_::*`, and the `VideoFrame` wire type. Every GPU
 # resource comes through `GpuContextFullAccess`, never the raw host device.
-streamlib-plugin-sdk = {version = "0.7.32"}
+streamlib-plugin-sdk = {version = "0.7.33"}
 
 # Procedural macros — `#[streamlib_plugin_sdk::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = {version = "0.7.32"}
+streamlib-macros = {version = "0.7.33"}
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = {version = "0.7.32"}
+streamlib-plugin-abi = {version = "0.7.33"}
 
 tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 

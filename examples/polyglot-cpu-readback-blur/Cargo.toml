@@ -11,9 +11,9 @@ publish = false
 # crates.io yet, so `./setup.sh` runs `streamlib link --engine <checkout>` to
 # point them at the in-repo SDK for local development.
 [dependencies]
-streamlib = { version = "0.7.32" }
-streamlib-adapter-abi = { version = "0.7.32" }
-streamlib-adapter-cpu-readback = { version = "0.7.32" }
+streamlib = { version = "0.7.33" }
+streamlib-adapter-abi = { version = "0.7.33" }
+streamlib-adapter-cpu-readback = { version = "0.7.33" }
 serde_json = "1.0"
 png = "0.17"
 

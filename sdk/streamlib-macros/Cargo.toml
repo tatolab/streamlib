@@ -23,14 +23,14 @@ serde = { workspace = true }
 serde_yaml = { workspace = true }
 
 # Execution types (shared with streamlib for code generation)
-streamlib-processor-schema = { path = "../streamlib-processor-schema", version = "0.7.32" }
+streamlib-processor-schema = { path = "../streamlib-processor-schema", version = "0.7.33" }
 # The `#[processor(...)]` attribute grammar — shared with the source-scan
 # extractor so both parse the attribute through one parser (#1411).
-streamlib-processor-extract = { path = "../streamlib-processor-extract", version = "0.7.32" }
+streamlib-processor-extract = { path = "../streamlib-processor-extract", version = "0.7.33" }
 # Manifest resolver — used to walk the enclosing manifest's `schemas:` map
 # and resolve bare-name `PortSchemaSpec::Named` references to fully-
 # qualified `SchemaIdent`s at proc-macro expansion time (#767).
-streamlib-idents = { path = "../streamlib-idents", version = "0.7.32" }
+streamlib-idents = { path = "../streamlib-idents", version = "0.7.33" }
 
 
 [dev-dependencies]
