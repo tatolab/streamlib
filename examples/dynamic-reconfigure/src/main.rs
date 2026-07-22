@@ -3,10 +3,12 @@
 
 //! Dynamic Reconfigure — live camera→display graph rewiring.
 //!
-//! Splices a `SimplePassthrough` in and out of the middle of a running
+//! Splices a `LiveVideoFrameForwarder` in and out of the middle of a running
 //! `@tatolab/camera` → `@tatolab/display` graph N times against the same
-//! already-`start()`ed runtime, then auto-exits. Visual counterpart to the
-//! headless regression test in
+//! already-`start()`ed runtime, then auto-exits. The forwarder is a reactive
+//! inline pass-through, so mid-splice the display keeps delivering live frames
+//! (camera → forwarder → display, live→live) rather than freezing. Visual
+//! counterpart to the headless regression test in
 //! `runtime/streamlib-engine/tests/dynamic_reconfigure_live_splice.rs`.
 //! See `README.md` for what you see, the visual-audit env vars, and tunables.
 
@@ -93,33 +95,35 @@ fn main() -> Result<()> {
 
         match spliced.take() {
             None => {
-                // Splice IN: camera → passthrough → display, live.
-                println!("  ↳ cycle {}/{}: splicing passthrough IN", cycles_done + 1, total_cycles);
+                // Splice IN: camera → forwarder → display, live. The reactive
+                // forwarder pumps every frame, so the display keeps delivering
+                // live video through the spliced path (live→live, no freeze).
+                println!("  ↳ cycle {}/{}: splicing forwarder IN", cycles_done + 1, total_cycles);
                 let link = direct_link
                     .take()
                     .expect("direct link present while un-spliced");
                 started_runtime.disconnect(&link)?;
 
-                let passthrough = started_runtime.add_processor(ProcessorSpec::new(
-                    processor_type_ref!("tatolab", "debug-utilities", "SimplePassthrough"),
-                    serde_json::json!({ "scale": 1.0 }),
+                let forwarder = started_runtime.add_processor(ProcessorSpec::new(
+                    processor_type_ref!("tatolab", "debug-utilities", "LiveVideoFrameForwarder"),
+                    serde_json::json!({}),
                 ))?;
-                let cam_to_pass = started_runtime.connect(
+                let cam_to_fwd = started_runtime.connect(
                     OutputLinkPortRef::new(&camera, "video"),
-                    InputLinkPortRef::new(&passthrough, "input"),
+                    InputLinkPortRef::new(&forwarder, "input"),
                 )?;
-                let pass_to_disp = started_runtime.connect(
-                    OutputLinkPortRef::new(&passthrough, "output"),
+                let fwd_to_disp = started_runtime.connect(
+                    OutputLinkPortRef::new(&forwarder, "output"),
                     InputLinkPortRef::new(&display, "video"),
                 )?;
-                spliced = Some((passthrough, cam_to_pass, pass_to_disp));
+                spliced = Some((forwarder, cam_to_fwd, fwd_to_disp));
             }
-            Some((passthrough, cam_to_pass, pass_to_disp)) => {
+            Some((forwarder, cam_to_fwd, fwd_to_disp)) => {
                 // Splice OUT: restore camera → display direct, live.
-                println!("  ↳ cycle {}/{}: splicing passthrough OUT", cycles_done + 1, total_cycles);
-                started_runtime.disconnect(&cam_to_pass)?;
-                started_runtime.disconnect(&pass_to_disp)?;
-                started_runtime.remove_processor(&passthrough)?;
+                println!("  ↳ cycle {}/{}: splicing forwarder OUT", cycles_done + 1, total_cycles);
+                started_runtime.disconnect(&cam_to_fwd)?;
+                started_runtime.disconnect(&fwd_to_disp)?;
+                started_runtime.remove_processor(&forwarder)?;
                 direct_link = Some(started_runtime.connect(
                     OutputLinkPortRef::new(&camera, "video"),
                     InputLinkPortRef::new(&display, "video"),

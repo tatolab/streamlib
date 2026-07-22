@@ -1,14 +1,14 @@
 # dynamic-reconfigure
 
 Live camera→display graph rewiring. Starts `@tatolab/camera` → `@tatolab/display`,
-then splices a `SimplePassthrough` processor into and out of the middle of the
+then splices a `LiveVideoFrameForwarder` processor into and out of the middle of the
 **running** graph N times, then auto-exits — no restart between cycles.
 
 This is the manual, visual counterpart to the headless regression test at
 `runtime/streamlib-engine/tests/dynamic_reconfigure_live_splice.rs`. That test locks
 live `add_processor` / `remove_processor` against a `start()`ed runtime **only**,
 without a window. The live `connect` / `disconnect` rewire this example performs
-(camera → passthrough → display and back) is **not** covered headless — it is
+(camera → forwarder → display and back) is **not** covered headless — it is
 verified visually here and via `/verify-live`.
 
 ## The model this example teaches
@@ -19,23 +19,24 @@ The full splice-in step is:
 
 ```rust
 runtime.disconnect(&direct_link)?;                       // camera → display, gone
-let passthrough = runtime.add_processor(/* SimplePassthrough */)?;
-runtime.connect(camera.video,  passthrough.input)?;      // camera → passthrough
-runtime.connect(passthrough.output, display.video)?;     // passthrough → display
+let forwarder = runtime.add_processor(/* LiveVideoFrameForwarder */)?;
+runtime.connect(camera.video,  forwarder.input)?;        // camera → forwarder
+runtime.connect(forwarder.output, display.video)?;       // forwarder → display
 ```
 
-and the splice-out step removes the passthrough and reconnects `camera → display`.
+and the splice-out step removes the forwarder and reconnects `camera → display`.
 Every call lands on the started runtime; the compiler wires/unwires the links and
 constructs/destroys the processor live.
 
 ## What you see
 
-While the passthrough is spliced in, live frames stop arriving at the display, so
-the display **retains its last frame** — `SimplePassthrough` is a `manual` one-shot
-fixture, not a continuous effect, and does not pump frames through on its own. When
-it is spliced back out and `camera → display` is restored, live camera video
-resumes. The **live → held → live** transition each cycle is the visible proof the
-reroute took effect on the running graph.
+Live camera video **keeps flowing** the whole time. While the forwarder is spliced
+in, frames route camera → forwarder → display, and the forwarder — a `reactive`
+inline pass-through — forwards every frame unchanged, so the display keeps
+delivering live video (no freeze). When it is spliced back out, `camera → display`
+is restored directly. Video stays live→live across each reroute; the visible proof
+the splice took effect is that playback never stalls even as the middle of the
+running graph is rewired.
 
 ## Run it
 
@@ -46,7 +47,7 @@ cargo run
 
 `./setup.sh` links the SDK (`streamlib link --engine <checkout>`) and symlinks
 `@tatolab/camera`, `@tatolab/display`, and `@tatolab/debug-utilities` (the
-passthrough) into `./streamlib_modules/`.
+forwarder) into `./streamlib_modules/`.
 
 ## Visual audit (headless / `/verify-live`)
 
