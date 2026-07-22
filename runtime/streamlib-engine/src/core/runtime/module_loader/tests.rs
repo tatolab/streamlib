@@ -1310,6 +1310,61 @@ mod add_module_tests {
         );
     }
 
+    /// A Rust `streamlib.yaml` (one Rust-runtime processor) for `name`, staged
+    /// into an installed slot as source needing a host build.
+    fn rust_source_manifest(name: &str) -> String {
+        format!(
+            "package:\n  org: tatolab\n  name: {name}\n  version: \"0.1.0\"\n\
+             processors:\n  - name: RustProc\n    description: \"source-only rust processor\"\n\
+             \x20   runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n"
+        )
+    }
+
+    /// ACCEPTANCE (#1508): referencing an installed-but-unbuilt package yields
+    /// the typed `InstalledPackageNotBuilt` fix-it AND the wired orchestrator is
+    /// NEVER asked to materialize it — zero cold-build on the app's critical
+    /// path (so no `Building`/`BuildLog` event can fire, since those come only
+    /// from the orchestrator's build). An installed Rust slot with source but no
+    /// prebuilt is the unbuilt case. Mentally revert the load-only gate in
+    /// `resolve_installed_cache_strategy` and the orchestrator materializes the
+    /// slot (count > 0) and the load succeeds — failing both assertions.
+    #[test]
+    #[serial]
+    fn installed_cache_unbuilt_slot_errors_without_building() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = HomeGuard::install(home.path());
+        // Unbuilt Rust slot: a Rust-runtime manifest + Cargo.toml, no prebuilt.
+        let slot = installed_package_slot_for_test("tatolab", "unbuilt-rust");
+        std::fs::create_dir_all(&slot).unwrap();
+        std::fs::write(slot.join("streamlib.yaml"), rust_source_manifest("unbuilt-rust")).unwrap();
+        std::fs::write(slot.join("Cargo.toml"), b"[package]\nname='unbuilt-rust'\n").unwrap();
+
+        let counts = Arc::new(parking_lot::Mutex::new(
+            std::collections::HashMap::<std::path::PathBuf, usize>::new(),
+        ));
+        let runtime = Runner::new().expect("Runner::new");
+        runtime.set_build_orchestrator(MaterializeCountingOrchestrator {
+            counts: Arc::clone(&counts),
+        });
+
+        let err = runtime
+            .add_module_blocking(ModuleIdent::any(
+                Org::new("tatolab").unwrap(),
+                Package::new("unbuilt-rust").unwrap(),
+            ))
+            .expect_err("an installed-but-unbuilt slot must fail loud");
+        assert!(
+            matches!(err, AddModuleError::InstalledPackageNotBuilt { ref package, version }
+                if package.name.as_str() == "unbuilt-rust" && version == SemVer::new(0, 1, 0)),
+            "expected InstalledPackageNotBuilt(unbuilt-rust 0.1.0), got: {err:?}",
+        );
+        assert_eq!(
+            count_materializations_for_dir_named(&counts, "unbuilt-rust"),
+            0,
+            "the loader must NEVER cold-build an installed slot — no orchestrator call may fire",
+        );
+    }
+
     #[test]
     #[serial]
     fn path_strategy_loads_arbitrary_dir() {

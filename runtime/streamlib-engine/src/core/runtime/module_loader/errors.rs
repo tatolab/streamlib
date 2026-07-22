@@ -23,6 +23,25 @@ pub enum AddModuleError {
         package: streamlib_idents::PackageRef,
     },
 
+    /// An installed `streamlib_modules/@org/name` slot was found but is not
+    /// built for this host: it carries buildable Rust source with no matching
+    /// prebuilt cdylib, or a Python/Deno runtime with no provisioning (no
+    /// `.venv`, no regenerated `_generated_/`). The installed-slot loader is
+    /// load-only — it never cold-builds on the app's critical path (that is
+    /// `streamlib install`'s job) — so an unbuilt slot is this typed fix-it
+    /// rather than a silent runtime compile or a
+    /// [`Self::BuildRequiredButNoOrchestrator`]. `.slpkg` / `Url` / `Registry`
+    /// resolves still build the bundled source; only the installed slot is gated.
+    #[error(
+        "Installed package '{package}' (version {version}) is present but not \
+         built for this host. Run `streamlib install` to build it, then run \
+         again — the runtime never cold-builds an installed package on load."
+    )]
+    InstalledPackageNotBuilt {
+        package: streamlib_idents::PackageRef,
+        version: streamlib_idents::SemVer,
+    },
+
     /// Workspace stage dir or installed-cache entry was found but the
     /// `streamlib.yaml` failed to parse / lacked a `package:` block.
     #[error(

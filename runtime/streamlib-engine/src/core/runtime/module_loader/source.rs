@@ -47,9 +47,12 @@ pub enum Strategy {
     /// populated by `streamlib add` / `install`). Post-#1506 the installed slot
     /// IS this folder: a package's presence is its `@org/name` dir plus its own
     /// manifest, resolved directly with no separate installed-package record.
-    /// Never builds a package that carries a matching prebuilt. The default for
-    /// bare top-level [`Runner::add_module`] loads (transitive registry-flavored
-    /// deps map to [`Strategy::Registry`] instead).
+    /// Load-only: it never builds. An unbuilt slot (no matching prebuilt, or no
+    /// polyglot provisioning) is a typed
+    /// [`AddModuleError::InstalledPackageNotBuilt`] carrying a `streamlib install`
+    /// fix-it, never a runtime cold-build. The default for bare top-level
+    /// [`Runner::add_module`] loads (transitive registry-flavored deps map to
+    /// [`Strategy::Registry`] instead).
     /// Precedence: active `streamlib link` > the co-located slot.
     ///
     /// [`Runner::add_module`]: super::super::Runner::add_module
@@ -458,7 +461,8 @@ pub(super) fn resolve_strategy_to_source(
 /// production, an explicit dir in tests; `None` (unresolvable cwd) or a missing
 /// slot is a typed [`AddModuleError::ModuleNotFound`]. Post-#1506 the installed
 /// slot IS this folder, so there is no separate installed-package cache to fall
-/// back to.
+/// back to. Load-only: a present-but-unbuilt slot is a typed
+/// [`AddModuleError::InstalledPackageNotBuilt`], never a runtime cold-build.
 fn resolve_installed_cache_strategy(
     pkg_ref: &streamlib_idents::PackageRef,
     app_root: Option<&std::path::Path>,
@@ -473,9 +477,24 @@ fn resolve_installed_cache_strategy(
         source = %modules_package_dir.display(),
         "resolving module from the app's streamlib_modules folder"
     );
-    // Same prefer-prebuilt-else-build-source decision as `.slpkg`:
-    // the slot may carry source needing a host build.
-    source_for_resolved_dir(pkg_ref, modules_package_dir)
+    // Load-only, UNLIKE `.slpkg` / `Url` / `Registry` (which build the bundled
+    // source on the host via `source_for_resolved_dir`). An installed slot must
+    // already carry its host-matched prebuilt (Rust) and its provisioning
+    // (Python `.venv` / Deno `_generated_/`) — building it here would be a silent
+    // runtime cold-build on the app's critical path. The build is `streamlib
+    // install`'s job (#1502/#1507); an unbuilt slot is a typed fix-it, so this
+    // strategy NEVER emits `NeedsBuild` and a no-orchestrator run yields
+    // `InstalledPackageNotBuilt`, not `BuildRequiredButNoOrchestrator`. Shares
+    // `needs_build_or_provisioning` with `source_for_resolved_dir`, so "unbuilt"
+    // here means exactly "would have been NeedsBuild there".
+    if needs_build_or_provisioning(&modules_package_dir) {
+        let version = read_version_from_manifest_dir(&modules_package_dir)?;
+        return Err(AddModuleError::InstalledPackageNotBuilt {
+            package: pkg_ref.clone(),
+            version,
+        });
+    }
+    Ok(ResolvedSource::Ready(modules_package_dir))
 }
 
 pub(crate) use crate::core::streamlib_home::{app_modules_root, set_app_modules_root_override};
@@ -567,7 +586,7 @@ fn source_for_resolved_dir(
     pkg_ref: &streamlib_idents::PackageRef,
     dir: PathBuf,
 ) -> std::result::Result<ResolvedSource, AddModuleError> {
-    if needs_host_build(&dir) || needs_polyglot_provisioning(&dir) {
+    if needs_build_or_provisioning(&dir) {
         let staging_destination_slot_dir = staging_slot_for_dir(pkg_ref);
         Ok(ResolvedSource::NeedsBuild(BuildRequest {
             package: pkg_ref.clone(),
@@ -680,6 +699,15 @@ fn needs_polyglot_provisioning(dir: &std::path::Path) -> bool {
     };
     let deno_unprovisioned = declares_deno && !dir.join("_generated_").is_dir();
     python_unprovisioned || deno_unprovisioned
+}
+
+/// Whether a resolved package dir must be built or provisioned before it can
+/// load. The single oracle the installed-slot loader
+/// ([`resolve_installed_cache_strategy`]) and the build resolver
+/// ([`source_for_resolved_dir`]) share so their "unbuilt" verdict is one
+/// definition, not two copies that must be kept identical by hand.
+fn needs_build_or_provisioning(dir: &std::path::Path) -> bool {
+    needs_host_build(dir) || needs_polyglot_provisioning(dir)
 }
 
 /// Whether `dir` declares Rust processors AND carries a `Cargo.toml` to
@@ -1032,6 +1060,118 @@ mod tests {
             streamlib_idents::Org::new("tatolab").unwrap(),
             streamlib_idents::Package::new("rp").unwrap(),
         )
+    }
+
+    fn py_pkg_ref() -> streamlib_idents::PackageRef {
+        streamlib_idents::PackageRef::new(
+            streamlib_idents::Org::new("tatolab").unwrap(),
+            streamlib_idents::Package::new("py").unwrap(),
+        )
+    }
+
+    // =====================================================================
+    // resolve_installed_cache_strategy — the installed slot is LOAD-ONLY:
+    // it prefers the on-box-built artifact and NEVER cold-builds. An unbuilt
+    // slot is the typed `InstalledPackageNotBuilt` fix-it, never `NeedsBuild`
+    // (unlike `.slpkg` / `Url` / `Registry`, which build the bundled source).
+    // =====================================================================
+
+    /// Stage a `<app_root>/streamlib_modules/@tatolab/<name>` slot carrying
+    /// `manifest_body`, returning the slot dir so a test can drop a
+    /// `Cargo.toml` / prebuilt / `pyproject.toml` into it.
+    fn stage_installed_slot(
+        app_root: &std::path::Path,
+        name: &str,
+        manifest_body: &str,
+    ) -> PathBuf {
+        let slot = app_root
+            .join(streamlib_idents::app_modules::APP_MODULES_DIR_NAME)
+            .join("@tatolab")
+            .join(name);
+        std::fs::create_dir_all(&slot).unwrap();
+        manifest(&slot, manifest_body);
+        slot
+    }
+
+    /// CRUX (bug-reproduce): an installed slot with buildable Rust source but
+    /// NO matching prebuilt resolves to the typed `InstalledPackageNotBuilt`
+    /// fix-it (carrying the slot's version), NOT `NeedsBuild`. Mentally revert
+    /// the load-only guard (fall back to `source_for_resolved_dir`) and this
+    /// resolves to `NeedsBuild`, failing the match — a silent runtime cold-build.
+    #[test]
+    fn installed_cache_unbuilt_rust_slot_is_typed_not_built_error() {
+        let app_root = tempfile::tempdir().unwrap();
+        let slot = stage_installed_slot(app_root.path(), "rp", RUST_YAML);
+        std::fs::write(slot.join("Cargo.toml"), b"[package]\nname='rp'\n").unwrap();
+        let err = resolve_installed_cache_strategy(&pkg_ref(), Some(app_root.path()))
+            .expect_err("unbuilt installed slot must fail loud");
+        match err {
+            AddModuleError::InstalledPackageNotBuilt { package, version } => {
+                assert_eq!(package, pkg_ref());
+                assert_eq!(version, streamlib_idents::SemVer::new(0, 1, 0));
+            }
+            other => panic!("expected InstalledPackageNotBuilt, got {other:?}"),
+        }
+    }
+
+    /// An installed slot carrying a host-matched prebuilt loads as-is
+    /// (`Ready`) — zero build. The prefer-prebuilt half of the load-only gate.
+    #[test]
+    fn installed_cache_prebuilt_slot_is_ready() {
+        let app_root = tempfile::tempdir().unwrap();
+        let slot = stage_installed_slot(app_root.path(), "rp", RUST_YAML);
+        std::fs::write(slot.join("Cargo.toml"), b"[package]\nname='rp'\n").unwrap();
+        let triple_dir = slot.join("lib").join(host_target_triple());
+        std::fs::create_dir_all(&triple_dir).unwrap();
+        std::fs::write(triple_dir.join("librp.so"), b"prebuilt").unwrap();
+        let resolved =
+            resolve_installed_cache_strategy(&pkg_ref(), Some(app_root.path())).unwrap();
+        assert!(matches!(resolved, ResolvedSource::Ready(_)));
+    }
+
+    /// A schemas-only installed slot (no Rust, no Python/Deno runtime) needs
+    /// no build and loads as-is — the load-only gate must not over-fire on a
+    /// package that was never buildable.
+    #[test]
+    fn installed_cache_schemas_only_slot_is_ready() {
+        let app_root = tempfile::tempdir().unwrap();
+        stage_installed_slot(
+            app_root.path(),
+            "rp",
+            "package:\n  org: tatolab\n  name: rp\n  version: 0.1.0\n",
+        );
+        let resolved =
+            resolve_installed_cache_strategy(&pkg_ref(), Some(app_root.path())).unwrap();
+        assert!(matches!(resolved, ResolvedSource::Ready(_)));
+    }
+
+    /// An unprovisioned Python installed slot (`pyproject.toml` present, no
+    /// `.venv`) is ALSO the typed fix-it — the polyglot-provisioning half of
+    /// the same load-only gate.
+    #[test]
+    fn installed_cache_unprovisioned_python_slot_is_typed_not_built_error() {
+        let app_root = tempfile::tempdir().unwrap();
+        let slot = stage_installed_slot(app_root.path(), "py", PY_YAML);
+        std::fs::write(slot.join("pyproject.toml"), b"[project]\nname = \"py\"\n").unwrap();
+        let err = resolve_installed_cache_strategy(&py_pkg_ref(), Some(app_root.path()))
+            .expect_err("unprovisioned python installed slot must fail loud");
+        assert!(
+            matches!(err, AddModuleError::InstalledPackageNotBuilt { .. }),
+            "expected InstalledPackageNotBuilt, got {err:?}",
+        );
+    }
+
+    /// A missing slot is `ModuleNotFound`, not `InstalledPackageNotBuilt` —
+    /// the not-built gate only applies to a slot that actually exists.
+    #[test]
+    fn installed_cache_missing_slot_is_module_not_found() {
+        let app_root = tempfile::tempdir().unwrap();
+        let err = resolve_installed_cache_strategy(&pkg_ref(), Some(app_root.path()))
+            .expect_err("missing installed slot must fail loud");
+        assert!(
+            matches!(err, AddModuleError::ModuleNotFound { .. }),
+            "expected ModuleNotFound, got {err:?}",
+        );
     }
 
     /// A Rust box carrying source but no matching prebuilt: `NeverBuild`
@@ -1674,12 +1814,19 @@ mod tests {
         slot
     }
 
+    /// Stage a `.venv/bin/python` under `dir` so a Python fixture slot reads as
+    /// provisioned (built). The load-only installed-slot resolver then returns
+    /// `Ready` for it instead of the `InstalledPackageNotBuilt` fix-it.
+    fn provision_python_venv(dir: &std::path::Path) {
+        let venv_bin = dir.join(".venv").join("bin");
+        std::fs::create_dir_all(&venv_bin).unwrap();
+        std::fs::write(venv_bin.join("python"), b"#!/bin/sh\n").unwrap();
+    }
+
     /// The resolved package dir regardless of whether it loads directly
     /// (`Ready`) or routes through the orchestrator (`NeedsBuild`) — used by
     /// the precedence tests below, which assert *which* dir won independent of
-    /// the build/provision decision. A Python-only fixture (the realistic
-    /// installed-cache / `streamlib_modules` shape) routes to `NeedsBuild`
-    /// because it needs its venv provisioned.
+    /// the build/provision decision.
     fn resolved_dir(resolved: &ResolvedSource) -> PathBuf {
         match resolved {
             ResolvedSource::Ready(dir) => dir.clone(),
@@ -1690,12 +1837,12 @@ mod tests {
         }
     }
 
-    /// A co-located package materialized at its `streamlib_modules/` slot
-    /// resolves to that dir under the app root. Post-#1506 the installed slot
-    /// IS the `<app-root>/streamlib_modules/@org/name` folder the resolver reads
-    /// directly. (The Python-only fixture routes to `NeedsBuild` — see
-    /// [`resolved_dir`] — so the assertion is on the resolved dir, not the
-    /// variant.)
+    /// A co-located package materialized (and provisioned) at its
+    /// `streamlib_modules/` slot resolves to that dir under the app root.
+    /// Post-#1506 the installed slot IS the `<app-root>/streamlib_modules/@org/name`
+    /// folder the resolver reads directly. The slot is provisioned (its venv
+    /// staged) so the load-only resolver returns it `Ready` rather than the
+    /// not-built fix-it.
     #[test]
     #[serial_test::serial]
     fn installed_cache_strategy_resolves_colocated_app_modules_dir() {
@@ -1703,7 +1850,8 @@ mod tests {
         let _guard = sandbox_home(home.path());
         let app_root = tempfile::tempdir().unwrap();
         let modules_dir = write_app_modules_package(app_root.path(), "foo", "foo");
-        record_installed_cache_package(app_root.path(), "foo");
+        let slot = record_installed_cache_package(app_root.path(), "foo");
+        provision_python_venv(&slot);
 
         let resolved =
             resolve_installed_cache_strategy(&pkg_ref_named("foo"), Some(app_root.path()))
@@ -1711,7 +1859,7 @@ mod tests {
         assert_eq!(resolved_dir(&resolved), modules_dir);
     }
 
-    /// A package materialized at its co-located slot resolves to that exact
+    /// A provisioned package at its co-located slot resolves to that exact
     /// slot — the write==read tie between the fixture's on-disk slot and the dir
     /// the resolver derives from the app-modules root through the shared seam.
     #[test]
@@ -1721,6 +1869,7 @@ mod tests {
         let _guard = sandbox_home(home.path());
         let app_root = tempfile::tempdir().unwrap();
         let slot = record_installed_cache_package(app_root.path(), "foo");
+        provision_python_venv(&slot);
 
         let resolved =
             resolve_installed_cache_strategy(&pkg_ref_named("foo"), Some(app_root.path()))
@@ -1749,27 +1898,30 @@ mod tests {
         );
     }
 
-    /// CRUX (bug path): a Python-only package resolved from the app's
-    /// `streamlib_modules/` folder with no provisioned venv must resolve to
-    /// `NeedsBuild` (source = the app-modules dir) so `materialize` provisions
-    /// the venv at the cache slot it loads from — the exact
-    /// `resolve_installed_cache_strategy` path that shipped the module as-is and
-    /// left the subprocess spawn with `.venv/bin/python: No such file or
-    /// directory`. Mentally revert the `needs_polyglot_provisioning` clause in
-    /// `source_for_resolved_dir` and this resolves to `Ready`, failing
-    /// `assert_builds_from`.
+    /// CRUX (#1508): a Python-only package resolved from the app's
+    /// `streamlib_modules/` folder with no provisioned venv is LOAD-ONLY — it
+    /// resolves to the typed `InstalledPackageNotBuilt` fix-it, NOT `NeedsBuild`.
+    /// The installed-slot loader never cold-builds on the app's critical path
+    /// (that is `streamlib install`'s job, #1502/#1507); unlike a `.slpkg` /
+    /// `Url` / `Registry` resolve, it does not fall through to
+    /// `source_for_resolved_dir`. Mentally revert the load-only guard in
+    /// `resolve_installed_cache_strategy` and this resolves to `NeedsBuild` (a
+    /// silent runtime cold-build), failing the match.
     #[test]
     #[serial_test::serial]
-    fn installed_cache_strategy_routes_unprovisioned_python_app_module_to_build() {
+    fn installed_cache_strategy_unprovisioned_python_app_module_is_not_built_error() {
         let home = tempfile::tempdir().unwrap();
         let _guard = sandbox_home(home.path());
         let app_root = tempfile::tempdir().unwrap();
-        let modules_dir = write_app_modules_package(app_root.path(), "foo", "foo");
+        write_app_modules_package(app_root.path(), "foo", "foo");
 
-        let resolved =
-            resolve_installed_cache_strategy(&pkg_ref_named("foo"), Some(app_root.path()))
-                .expect("must resolve");
-        assert_builds_from(resolved, &modules_dir);
+        let err = resolve_installed_cache_strategy(&pkg_ref_named("foo"), Some(app_root.path()))
+            .expect_err("an unprovisioned python installed slot must fail loud, not build");
+        assert!(
+            matches!(err, AddModuleError::InstalledPackageNotBuilt { ref package, version }
+                if package.name.as_str() == "foo" && version == streamlib_idents::SemVer::new(0, 9, 0)),
+            "expected InstalledPackageNotBuilt(foo 0.9.0), got {err:?}",
+        );
     }
 
     /// No streamlib_modules slot for the package ⇒ typed ModuleNotFound.
