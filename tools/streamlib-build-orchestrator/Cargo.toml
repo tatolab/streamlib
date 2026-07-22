@@ -18,17 +18,17 @@ serde_json = { workspace = true }
 serde_yaml = { workspace = true }
 toml_edit = { workspace = true }
 ureq = { workspace = true }
-streamlib-engine = { path = "../../runtime/streamlib-engine", version = "0.7.28" }
-streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.7.28" }
-streamlib-pack = { path = "../streamlib-pack", version = "0.7.28" }
-streamlib-idents = { path = "../../sdk/streamlib-idents", version = "0.7.28" }
-streamlib-plugin-abi = { path = "../../runtime/streamlib-plugin-abi", version = "0.7.28" }
-streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.7.28" }
+streamlib-engine = { path = "../../runtime/streamlib-engine", version = "0.7.29" }
+streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.7.29" }
+streamlib-pack = { path = "../streamlib-pack", version = "0.7.29" }
+streamlib-idents = { path = "../../sdk/streamlib-idents", version = "0.7.29" }
+streamlib-plugin-abi = { path = "../../runtime/streamlib-plugin-abi", version = "0.7.29" }
+streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.7.29" }
 # Extraction stays OUTSIDE the engine: the build orchestrator (a tool) owns the
 # subprocess port-extraction seam and derives a session package's real ports
 # from its submitted source. The engine gains no such dep.
-streamlib-processor-extract = { path = "../../sdk/streamlib-processor-extract", version = "0.7.28" }
-streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.7.28" }
+streamlib-processor-extract = { path = "../../sdk/streamlib-processor-extract", version = "0.7.29" }
+streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.7.29" }
 
 [build-dependencies]
 serde_json = { workspace = true }
