@@ -6,8 +6,8 @@ use streamlib_idents::PackageRef;
 use crate::core::streamlib_home::installed_package_slot_dir;
 use crate::core::{Error, Result};
 
-/// Extract a .slpkg ZIP archive to the installed-package cache slot derived
-/// from the embedded `streamlib.yaml`'s `@org/name`@version. `app_modules_root`
+/// Extract a .slpkg ZIP archive to the co-located `streamlib_modules/@org/name`
+/// slot derived from the embedded `streamlib.yaml`'s `@org/name`. `app_modules_root`
 /// is threaded to the slot deriver (the app whose `streamlib_modules/` a future
 /// relocation prefers). Always overwrites on load.
 pub fn extract_slpkg_to_cache(

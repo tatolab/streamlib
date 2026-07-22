@@ -777,7 +777,7 @@ const STREAMLIB_ENGINE_ALLOWLIST: &[AllowEntry] = &[
     AllowEntry {
         path: "tools/streamlib-build-orchestrator/",
         kind: AllowKind::PathPrefix,
-        rationale: "default BuildOrchestrator impl — implements the engine's BuildOrchestrator trait and calls engine package-cache APIs (get_cached_package_dir); it is engine-tier infrastructure, not consumer code, and CANNOT route through the streamlib::* SDK facade because the SDK depends on it (the auto-build feature) — that would be a dependency cycle. Direct streamlib_engine::* is unavoidable here",
+        rationale: "default BuildOrchestrator impl — implements the engine's BuildOrchestrator trait and calls engine data-dir APIs (get_streamlib_data_dir); it is engine-tier infrastructure, not consumer code, and CANNOT route through the streamlib::* SDK facade because the SDK depends on it (the auto-build feature) — that would be a dependency cycle. Direct streamlib_engine::* is unavoidable here",
     },
 ];
 

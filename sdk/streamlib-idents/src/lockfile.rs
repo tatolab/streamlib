@@ -162,10 +162,10 @@ const APP_LOCKFILE_HEADER: &str = "\
 #
 # This lockfile pins the exact resolved package versions + content hashes
 # an installed application loads. A locked run
-# (`Runner::add_modules_from_lockfile`) consumes it strictly from the
-# installed package cache and performs NO live re-resolution — so the run
-# works offline and is byte-reproducible. Commit it in applications and
-# examples; a deploy ships it.
+# (`Runner::add_modules_from_lockfile`) consumes it strictly from the app's
+# co-located streamlib_modules slots and performs NO live re-resolution — so
+# the run works offline and is byte-reproducible. Commit it in applications
+# and examples; a deploy ships it.
 ";
 
 /// Write a [`Lockfile`] to disk as YAML behind `header`. The wire shape is

@@ -280,9 +280,9 @@ enum PkgCommands {
     Clean,
     /// Reclaim on-the-box build scratch across every materialized package slot,
     /// keeping the loadable artifact. Reclaims each slot's `target/` plus
-    /// orphaned staging residue, across the installed cache and the app's
-    /// co-located `streamlib_modules/`. Unlike `clean` (this package's source
-    /// dir), this is a whole-cache reclaim.
+    /// orphaned staging residue across the app's co-located
+    /// `streamlib_modules/`. Unlike `clean` (this package's source dir), this
+    /// is a whole-cache reclaim.
     CacheGc {
         /// App root whose `streamlib_modules/` is reclaimed (default: CWD).
         #[arg(long)]
@@ -293,8 +293,12 @@ enum PkgCommands {
         /// Path to .slpkg file
         path: PathBuf,
     },
-    /// List installed packages
-    List,
+    /// List installed packages (the app's `streamlib_modules/` folder)
+    List {
+        /// App root whose installed packages are listed (default: CWD).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
 }
 
 fn main() -> Result<()> {
@@ -362,7 +366,7 @@ async fn async_main(cli: Cli) -> Result<()> {
             PkgCommands::Clean => commands::pkg::clean()?,
             PkgCommands::CacheGc { dir } => commands::pkg::cache_gc(dir.as_deref())?,
             PkgCommands::Inspect { path } => commands::pkg::inspect(&path)?,
-            PkgCommands::List => commands::pkg::list()?,
+            PkgCommands::List { dir } => commands::pkg::list(dir.as_deref())?,
         },
         Some(Commands::Link {
             path,

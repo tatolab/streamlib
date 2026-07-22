@@ -751,7 +751,7 @@ fn add_module_recursive_body(
 /// patch wins when present; otherwise the dep declaration's source
 /// variant decides. Path / git source deps are dev-shaped and default to
 /// [`BuildPolicy::IfStale`] (rebuild-on-change via the build tool);
-/// registry deps resolve from the installed cache.
+/// registry deps resolve from the static registry by version.
 ///
 /// [`ModuleIdent`]: streamlib_idents::ModuleIdent
 fn derive_dep_strategy_and_ident(

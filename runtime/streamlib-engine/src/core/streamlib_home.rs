@@ -34,12 +34,14 @@ use streamlib_idents::PackageRef;
 ///     ├── cache/
 ///     │   └── uv/                        # uv PyPI cache      (Python packages only)
 ///     ├── logs/<runtime_id>-<ts>.jsonl  # per-runtime JSONL logs
-///     ├── resolver-cache/               # git / URL checkouts (Strategy::Git / Url)
-///     └── packages.yaml                 # installed-packages manifest (streamlib add)
+///     └── resolver-cache/               # git / URL checkouts (Strategy::Git / Url)
 /// ```
 ///
 /// Each subdir is created on demand by its consumer — an all-Rust,
-/// `Strategy::Path` graph populates `streamlib_modules/` and `logs/`.
+/// `Strategy::Path` graph populates `streamlib_modules/` and `logs/`. Installed
+/// state is NOT a manifest here: a package's presence is its
+/// `streamlib_modules/@org/name` slot, and the app's `streamlib.lock` records
+/// how each was added.
 pub fn get_streamlib_home() -> PathBuf {
     if let Ok(home) = std::env::var("STREAMLIB_HOME") {
         return PathBuf::from(home);
@@ -49,10 +51,9 @@ pub fn get_streamlib_home() -> PathBuf {
 }
 
 /// The generated / regenerable working tree, `<streamlib-home>/.streamlib`.
-/// Counterpart to the read-only `<streamlib-home>/packages` source: holds
-/// the built-package cache, Python venvs / uv cache, per-runtime data +
-/// logs, git resolver checkouts, and the installed-packages manifest. It is
-/// gitignored, so collocating it in a dev workspace doesn't litter the tree.
+/// Counterpart to the read-only `<streamlib-home>/packages` source: holds the
+/// Python uv cache, per-runtime data + logs, and git/URL resolver checkouts. It
+/// is gitignored, so collocating it in a dev workspace doesn't litter the tree.
 pub fn get_streamlib_data_dir() -> PathBuf {
     get_streamlib_home().join(".streamlib")
 }
@@ -99,7 +100,6 @@ pub fn ensure_streamlib_home() -> std::io::Result<PathBuf> {
 
     std::fs::create_dir_all(data.join("cache/wheels"))?;
     std::fs::create_dir_all(data.join("cache/uv"))?;
-    std::fs::create_dir_all(data.join("cache/packages"))?;
     std::fs::create_dir_all(data.join("runtimes"))?;
 
     Ok(get_streamlib_home())
@@ -108,13 +108,6 @@ pub fn ensure_streamlib_home() -> std::io::Result<PathBuf> {
 /// Get the path to the uv cache directory.
 pub fn get_uv_cache_dir() -> PathBuf {
     get_streamlib_data_dir().join("cache/uv")
-}
-
-/// Get the path to a cached extracted package directory.
-pub fn get_cached_package_dir(cache_key: &str) -> PathBuf {
-    get_streamlib_data_dir()
-        .join("cache/packages")
-        .join(cache_key)
 }
 
 /// Environment override for the directory that contains the app's
@@ -143,7 +136,8 @@ pub(crate) fn set_app_modules_root_override(root: Option<PathBuf>) {
 /// The app-modules root: the runtime-set override, else the
 /// `STREAMLIB_MODULES_DIR` env var, else the exact process working directory
 /// (no walk-up). `None` only when the cwd is unresolvable and neither override
-/// nor env is set — resolution then proceeds with the installed cache alone.
+/// nor env is set — an `InstalledCache` resolution then has no slot to probe
+/// and reports `ModuleNotFound`.
 pub(crate) fn app_modules_root() -> Option<PathBuf> {
     if let Some(root) = APP_MODULES_ROOT_OVERRIDE
         .read()

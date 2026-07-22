@@ -45,11 +45,11 @@ pub use streamlib_idents::SemVerRange;
 pub enum Strategy {
     /// The app's co-located package tree (`<app-root>/streamlib_modules/@org/name`,
     /// populated by `streamlib add` / `install`). Post-#1506 the installed slot
-    /// IS this tree, so the physically-present folder and an installed-manifest
-    /// record resolve the same dir. Never builds a package that carries a
-    /// matching prebuilt. The default for bare top-level [`Runner::add_module`]
-    /// loads (transitive registry-flavored deps map to [`Strategy::Registry`]
-    /// instead).
+    /// IS this folder: a package's presence is its `@org/name` dir plus its own
+    /// manifest, resolved directly with no separate installed-package record.
+    /// Never builds a package that carries a matching prebuilt. The default for
+    /// bare top-level [`Runner::add_module`] loads (transitive registry-flavored
+    /// deps map to [`Strategy::Registry`] instead).
     /// Precedence: active `streamlib link` > the co-located slot.
     ///
     /// [`Runner::add_module`]: super::super::Runner::add_module
@@ -452,39 +452,38 @@ pub(super) fn resolve_strategy_to_source(
     }
 }
 
-/// Resolve [`Strategy::InstalledCache`]: the per-app modules folder wins over
-/// the installed-package cache. `app_root` is the exact directory probed for
-/// `streamlib_modules/` — the process working directory in production, an
-/// explicit dir in tests; `None` (unresolvable cwd) skips straight to the
-/// installed cache.
+/// Resolve [`Strategy::InstalledCache`]: the package's co-located
+/// `<app-root>/streamlib_modules/@org/name` slot. `app_root` is the exact
+/// directory probed for `streamlib_modules/` — the process working directory in
+/// production, an explicit dir in tests; `None` (unresolvable cwd) or a missing
+/// slot is a typed [`AddModuleError::ModuleNotFound`]. Post-#1506 the installed
+/// slot IS this folder, so there is no separate installed-package cache to fall
+/// back to.
 fn resolve_installed_cache_strategy(
     pkg_ref: &streamlib_idents::PackageRef,
     app_root: Option<&std::path::Path>,
 ) -> std::result::Result<ResolvedSource, AddModuleError> {
-    if let Some(root) = app_root {
-        if let Some(modules_package_dir) = lookup_app_modules_package_dir(root, pkg_ref) {
-            tracing::info!(
-                package = %pkg_ref,
-                source = %modules_package_dir.display(),
-                "resolving module from the app's streamlib_modules folder"
-            );
-            return source_for_resolved_dir(pkg_ref, modules_package_dir);
-        }
-    }
-    let (dir, _version) =
-        lookup_installed_cache(pkg_ref, app_root)?.ok_or_else(|| AddModuleError::ModuleNotFound {
+    let modules_package_dir = app_root
+        .and_then(|root| lookup_app_modules_package_dir(root, pkg_ref))
+        .ok_or_else(|| AddModuleError::ModuleNotFound {
             package: pkg_ref.clone(),
         })?;
+    tracing::info!(
+        package = %pkg_ref,
+        source = %modules_package_dir.display(),
+        "resolving module from the app's streamlib_modules folder"
+    );
     // Same prefer-prebuilt-else-build-source decision as `.slpkg`:
-    // a cached package may carry source needing a host build.
-    source_for_resolved_dir(pkg_ref, dir)
+    // the slot may carry source needing a host build.
+    source_for_resolved_dir(pkg_ref, modules_package_dir)
 }
 
 pub(crate) use crate::core::streamlib_home::{app_modules_root, set_app_modules_root_override};
 
 /// `<app_root>/streamlib_modules/@org/name` when it exists and its manifest
-/// declares `pkg_ref`; `None` otherwise (a present-but-mismatched entry warns
-/// and falls through to the installed cache).
+/// declares `pkg_ref`; `None` otherwise (a present-but-mismatched entry warns —
+/// the slot is not the requested package, so resolution reports
+/// `ModuleNotFound`).
 fn lookup_app_modules_package_dir(
     app_root: &std::path::Path,
     pkg_ref: &streamlib_idents::PackageRef,
@@ -503,7 +502,7 @@ fn lookup_app_modules_package_dir(
             package = %pkg_ref,
             dir = %dir.display(),
             "streamlib_modules entry does not declare the requested package — \
-             falling through to the installed cache"
+             treating as not found"
         );
         None
     }
@@ -904,40 +903,6 @@ fn fetch_git_checkout(
     })
 }
 
-/// Look the canonical [`PackageRef`] up in the installed-package cache.
-/// Returns `(slot_dir, version)` when present, the slot derived by
-/// [`installed_entry_slot_dir`]. `app_root` is the app-modules root the
-/// caller already resolved.
-///
-/// [`PackageRef`]: streamlib_idents::PackageRef
-fn lookup_installed_cache(
-    pkg_ref: &streamlib_idents::PackageRef,
-    app_root: Option<&std::path::Path>,
-) -> std::result::Result<Option<(PathBuf, streamlib_idents::SemVer)>, AddModuleError> {
-    use crate::core::config::InstalledPackageManifest;
-
-    let manifest =
-        InstalledPackageManifest::load().map_err(|e| AddModuleError::InstalledCacheLoadFailed {
-            detail: e.to_string(),
-        })?;
-    Ok(manifest
-        .find_by_ref(pkg_ref)
-        .map(|entry| (installed_entry_slot_dir(entry, app_root), entry.version)))
-}
-
-/// Slot directory for an installed-package entry, derived from its typed
-/// `name` through the [`installed_package_slot_dir`] seam — never from the
-/// persisted `cache_dir` string, so a stored path can never imply a slot that
-/// disagrees with the typed key.
-///
-/// [`installed_package_slot_dir`]: crate::core::streamlib_home::installed_package_slot_dir
-fn installed_entry_slot_dir(
-    entry: &crate::core::config::InstalledPackageEntry,
-    app_root: Option<&std::path::Path>,
-) -> PathBuf {
-    crate::core::streamlib_home::installed_package_slot_dir(app_root, &entry.name)
-}
-
 /// Read the `[package].version` field from the `streamlib.yaml` at
 /// `dir`. Used by the recursive walker to validate the resolved
 /// manifest against the requested [`SemVerRange`].
@@ -965,26 +930,48 @@ pub(super) fn read_version_from_manifest_dir(
     })
 }
 
-/// Whether an already-materialized registry cache `slot` can be reused for
-/// `selected` without a re-download/extract. Reuse only when the policy
-/// allows stale reuse AND the slot's `streamlib.yaml` reads AND pins exactly
-/// `selected` — a slot left by a divergent version (or an unreadable
-/// manifest) is refused so it gets re-downloaded rather than loaded as the
-/// wrong version.
+/// Whether an already-materialized registry `slot` (a
+/// `<app-root>/streamlib_modules/@org/name` dir) can be reused for `selected`
+/// without a re-download/extract. Reuse only when the policy allows stale reuse
+/// AND the slot's `streamlib.yaml` reads AND pins exactly `selected` — a slot
+/// left by a divergent version (or an unreadable manifest) is refused so it gets
+/// re-downloaded rather than loaded as the wrong version. A materialized slot
+/// refused here is logged: a silent self-heal would hide cache corruption or a
+/// republished-in-place version from the operator.
 fn registry_slot_holds_selected_version(
     build: BuildPolicy,
     slot: &std::path::Path,
     selected: streamlib_idents::SemVer,
 ) -> bool {
-    matches!(build, BuildPolicy::IfStale)
-        && slot.is_dir()
-        && read_version_from_manifest_dir(slot).is_ok_and(|materialized| materialized == selected)
+    if !matches!(build, BuildPolicy::IfStale) || !slot.is_dir() {
+        return false;
+    }
+    match read_version_from_manifest_dir(slot) {
+        Ok(materialized) if materialized == selected => true,
+        Ok(materialized) => {
+            tracing::warn!(
+                slot = %slot.display(),
+                %materialized,
+                %selected,
+                "registry slot holds a different version than selected — refusing reuse, re-downloading"
+            );
+            false
+        }
+        Err(detail) => {
+            tracing::warn!(
+                slot = %slot.display(),
+                %selected,
+                %detail,
+                "registry slot manifest is unreadable — refusing reuse, re-downloading"
+            );
+            false
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::config::InstalledPackageEntry;
 
     const RUST_YAML: &str = "package:\n  org: tatolab\n  name: rp\n  version: 0.1.0\nprocessors:\n  - name: P\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n";
     const PY_YAML: &str = "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    inputs: []\n    outputs: []\n";
@@ -1628,7 +1615,7 @@ mod tests {
     }
 
     // =====================================================================
-    // App-modules bridge — streamlib_modules/ wins over the installed cache
+    // App-modules bridge — the streamlib_modules/ slot IS the installed package
     // =====================================================================
 
     /// Write `<app_root>/streamlib_modules/@tatolab/<pkg_name>/streamlib.yaml`
@@ -1660,15 +1647,14 @@ mod tests {
         dir
     }
 
-    /// Record `@tatolab/<name>` in the installed-package manifest and create
-    /// its co-located slot on disk under `app_root`. Returns the slot dir.
-    /// Post-#1506 the installed slot IS `<app_root>/streamlib_modules/@org/name`
-    /// — the same tree the app-modules probe reads — so the fixture must anchor
-    /// at the app root the resolver is handed. Stages the on-disk Python layout
+    /// Materialize `@tatolab/<name>`'s co-located slot on disk under `app_root`
+    /// and return the slot dir. Post-#1506 the installed slot IS
+    /// `<app_root>/streamlib_modules/@org/name` — the folder the resolver reads
+    /// directly — so a package's presence is that dir plus its own manifest, not
+    /// a separate installed-package record. Stages the on-disk Python layout
     /// (`pyproject.toml`) so the slot trips the filesystem provisioning oracle —
     /// the realistic shape an extracted Python `.slpkg` cache slot carries.
     fn record_installed_cache_package(app_root: &std::path::Path, name: &str) -> PathBuf {
-        use crate::core::config::{InstalledPackageEntry, InstalledPackageManifest};
         let slot = crate::core::streamlib_home::installed_package_slot_dir(
             Some(app_root),
             &pkg_ref_named(name),
@@ -1685,16 +1671,6 @@ mod tests {
         )
         .unwrap();
         std::fs::write(slot.join("pyproject.toml"), b"[project]\nname = \"p\"\n").unwrap();
-        let mut manifest = InstalledPackageManifest::load().unwrap();
-        manifest.add(InstalledPackageEntry {
-            name: pkg_ref_named(name),
-            version: streamlib_idents::SemVer::new(1, 0, 0),
-            description: None,
-            installed_from: "test".into(),
-            installed_at: "t".into(),
-            cache_dir: format!("{name}-1.0.0"),
-        });
-        manifest.save().unwrap();
         slot
     }
 
@@ -1714,13 +1690,12 @@ mod tests {
         }
     }
 
-    /// A co-located package present as both a physical `streamlib_modules/`
-    /// slot and an installed-manifest record resolves to its co-located dir
-    /// under the app root. Post-#1506 the installed-cache slot and the
-    /// app-modules dir are the SAME `<app-root>/streamlib_modules/@org/name`
-    /// tree, so both the physical slot and the recorded entry point here.
-    /// (The Python-only fixture routes to `NeedsBuild` — see [`resolved_dir`] —
-    /// so the assertion is on the resolved dir, not the variant.)
+    /// A co-located package materialized at its `streamlib_modules/` slot
+    /// resolves to that dir under the app root. Post-#1506 the installed slot
+    /// IS the `<app-root>/streamlib_modules/@org/name` folder the resolver reads
+    /// directly. (The Python-only fixture routes to `NeedsBuild` — see
+    /// [`resolved_dir`] — so the assertion is on the resolved dir, not the
+    /// variant.)
     #[test]
     #[serial_test::serial]
     fn installed_cache_strategy_resolves_colocated_app_modules_dir() {
@@ -1736,10 +1711,9 @@ mod tests {
         assert_eq!(resolved_dir(&resolved), modules_dir);
     }
 
-    /// A package recorded in the installed manifest and materialized at its
-    /// co-located slot resolves to that exact slot — the write==read tie between
-    /// the fixture's on-disk slot and the dir the resolver derives from the
-    /// recorded entry through the shared seam.
+    /// A package materialized at its co-located slot resolves to that exact
+    /// slot — the write==read tie between the fixture's on-disk slot and the dir
+    /// the resolver derives from the app-modules root through the shared seam.
     #[test]
     #[serial_test::serial]
     fn installed_cache_strategy_resolves_recorded_colocated_slot() {
@@ -1755,18 +1729,16 @@ mod tests {
     }
 
     /// A co-located `streamlib_modules/@org/name` dir whose manifest declares a
-    /// DIFFERENT package is not resolved as the requested one; with no matching
-    /// installed-manifest entry, resolution is a typed `ModuleNotFound`.
-    /// Mentally revert the `manifest_declares_package` guard and the wrong
-    /// package's dir would resolve as `foo`.
+    /// DIFFERENT package is not resolved as the requested one — resolution is a
+    /// typed `ModuleNotFound`. Mentally revert the `manifest_declares_package`
+    /// guard and the wrong package's dir would resolve as `foo`.
     #[test]
     #[serial_test::serial]
     fn installed_cache_strategy_rejects_mismatched_colocated_manifest() {
         let home = tempfile::tempdir().unwrap();
         let _guard = sandbox_home(home.path());
         let app_root = tempfile::tempdir().unwrap();
-        // Dir named foo, but the manifest declares @tatolab/bar; nothing records
-        // foo in the installed manifest.
+        // Dir named foo, but the manifest declares @tatolab/bar.
         write_app_modules_package(app_root.path(), "foo", "bar");
 
         let err = resolve_installed_cache_strategy(&pkg_ref_named("foo"), Some(app_root.path()))
@@ -1800,7 +1772,7 @@ mod tests {
         assert_builds_from(resolved, &modules_dir);
     }
 
-    /// Neither app modules nor installed cache ⇒ typed ModuleNotFound.
+    /// No streamlib_modules slot for the package ⇒ typed ModuleNotFound.
     #[test]
     #[serial_test::serial]
     fn installed_cache_strategy_module_not_found_when_neither_source_has_it() {
@@ -1860,43 +1832,10 @@ mod tests {
     }
 
     // =====================================================================
-    // #1518 — the two path-implies-version consumers in the loader now derive
-    // the slot from typed identity (name+version), not from a persisted path
-    // string, and gate registry reuse on the materialized manifest version.
+    // #1518 — registry reuse is gated on the materialized manifest version, so
+    // a slot left by a divergent version is re-downloaded, never loaded as the
+    // wrong version.
     // =====================================================================
-
-    fn installed_entry(cache_dir: &str, version: streamlib_idents::SemVer) -> InstalledPackageEntry {
-        InstalledPackageEntry {
-            name: pkg_ref(),
-            version,
-            description: None,
-            installed_from: "test".into(),
-            installed_at: "test".into(),
-            cache_dir: cache_dir.into(),
-        }
-    }
-
-    /// The installed-cache slot is derived from the entry's typed
-    /// `name`/`version` seam, never the persisted `cache_dir` string. Mentally
-    /// revert to `get_cached_package_dir(&entry.cache_dir)` and a divergent
-    /// stored string would win, pointing the loader at the wrong slot.
-    #[test]
-    fn installed_entry_slot_ignores_divergent_cache_dir_string() {
-        let version = streamlib_idents::SemVer::new(0, 1, 0);
-        let entry = installed_entry("garbage-999-should-be-ignored", version);
-
-        let derived = installed_entry_slot_dir(&entry, None);
-
-        assert_eq!(
-            derived,
-            crate::core::streamlib_home::installed_package_slot_dir(None, &pkg_ref()),
-            "slot must come from the typed name seam"
-        );
-        assert!(
-            !derived.to_string_lossy().contains("garbage-999"),
-            "the divergent cache_dir string must not leak into the slot path"
-        );
-    }
 
     /// Registry reuse is refused when the materialized slot pins a different
     /// version than the one selected — the wrong-version slot is rebuilt.

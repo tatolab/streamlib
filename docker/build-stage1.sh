@@ -90,7 +90,7 @@ log "emitting static registry tree at $REGISTRY_DIR (base $REGISTRY_BASE_URL)"
 #    any in-tree package by path. REGISTRY_DIR already lives under $APP_DIR.
 # ---------------------------------------------------------------------------
 log "assembling $APP_DIR"
-mkdir -p "$APP_DIR/bin" "$APP_DIR/.streamlib/cache/packages"
+mkdir -p "$APP_DIR/bin"
 cp "$SRC/target/release/streamlib" "$SRC/target/release/streamlib-runtime" "$APP_DIR/bin/"
 cp -a "$SRC/packages" "$APP_DIR/packages"
 

@@ -394,9 +394,10 @@ manifest field and the leading `# yaml-language-server` comment header. The
 refuses a registry-coordinate byte source.
 
 At load time, `Strategy::InstalledCache` (the bare `Runner::add_module`
-default) probes `<cwd>/streamlib_modules/@org/name` **before** the
-installed-package cache; an active engine `streamlib link --engine` still
-outranks both (precedence: link > app modules > installed cache). The same
+default) resolves `<cwd>/streamlib_modules/@org/name` — the co-located slot IS
+the installed package, so there is no separate installed-package store behind
+it. An active engine `streamlib link --engine` still outranks it (precedence:
+link > app modules slot). The same
 `streamlib_modules/` probe backs **lazy discovery**: app code that references a
 processor version-free (`processor_type_ref!("org","pkg","Type")`) and never
 calls `add_module` triggers a discovery of the providing package in

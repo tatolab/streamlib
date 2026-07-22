@@ -44,7 +44,7 @@ pub struct Manifest {
     /// `[patch.crates-io]` shape but lives in the consumer's own yaml
     /// (no workspace walk-up). When the runtime / resolver iterates a
     /// dep declared in [`Self::dependencies`], it consults this table
-    /// before falling through to the installed-package cache.
+    /// before falling through to the dep's declared source resolution.
     ///
     /// Path-flavor entries are dev-time overrides only — `streamlib pack`
     /// rejects yamls whose `patch:` table contains any `path:` entries

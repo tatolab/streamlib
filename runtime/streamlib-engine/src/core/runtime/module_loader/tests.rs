@@ -11,7 +11,7 @@ use super::processor_registration::{host_target_triple, list_available_triples};
 use super::*;
 use serial_test::serial;
 
-/// Resolve the installed-package cache slot for `@org/name` through the
+/// Resolve the co-located `streamlib_modules/@org/name` slot through the
 /// production [`installed_package_slot_dir`] seam, so a fixture writes to (and
 /// an assertion reads) the exact slot a locked run derives — never a
 /// hand-rolled `{name}` string that could silently drift from the seam. The
@@ -658,6 +658,9 @@ fn url_strategy_fetches_extracts_and_registers_schema() {
         std::env::set_var("STREAMLIB_HOME", sandbox.path());
     }
     let _restore = StreamlibHomeRestore(prev_home);
+    // Pin the app-modules root to the sandbox so the extracted slot lands under
+    // it (not the crate working tree), keeping `cargo test` clean.
+    let _modules_root = AppModulesRootOverrideGuard::install(sandbox.path());
 
     let src = tempfile::tempdir().unwrap();
     let slpkg = src.path().join("url-pkg.slpkg");
@@ -703,6 +706,7 @@ fn url_strategy_rejects_checksum_mismatch() {
         std::env::set_var("STREAMLIB_HOME", sandbox.path());
     }
     let _restore = StreamlibHomeRestore(prev_home);
+    let _modules_root = AppModulesRootOverrideGuard::install(sandbox.path());
 
     let src = tempfile::tempdir().unwrap();
     let slpkg = src.path().join("url-pkg.slpkg");
@@ -750,12 +754,15 @@ fn path_package_registry_dep_routes_to_registry_not_installed_cache() {
         std::env::set_var("STREAMLIB_HOME", sandbox.path());
     }
     let _restore = StreamlibHomeRestore(prev_home);
+    // Pin the app-modules root to the sandbox so the hand-staged slot lands
+    // under it (not the crate working tree), keeping `cargo test` clean.
+    let _modules_root = AppModulesRootOverrideGuard::install(sandbox.path());
     // No ambient registry config, so the routing is observable regardless of
     // the developer / CI shell.
     let _no_registry = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "STREAMLIB_REGISTRY_TOKEN"]);
 
-    // An installed-cache entry for @tatolab/b that WOULD satisfy `^0.1.0` —
-    // resolved through the seam so it lands at the real layout.
+    // A co-located streamlib_modules slot for @tatolab/b that WOULD satisfy
+    // `^0.1.0` — resolved through the seam so it lands at the real layout.
     let dep_cache_dir = installed_package_slot_for_test("tatolab", "b");
     std::fs::create_dir_all(&dep_cache_dir).unwrap();
     std::fs::write(
@@ -763,19 +770,6 @@ fn path_package_registry_dep_routes_to_registry_not_installed_cache() {
         "package:\n  org: tatolab\n  name: b\n  version: \"0.1.0\"\n",
     )
     .unwrap();
-    let mut installed = crate::core::config::InstalledPackageManifest::default();
-    installed.add(crate::core::config::InstalledPackageEntry {
-        name: streamlib_idents::PackageRef::new(
-            streamlib_processor_schema::Org::new("tatolab").unwrap(),
-            streamlib_processor_schema::Package::new("b").unwrap(),
-        ),
-        version: streamlib_processor_schema::SemVer::new(0, 1, 0),
-        description: None,
-        installed_from: "test".into(),
-        installed_at: "1970-01-01T00:00:00Z".into(),
-        cache_dir: "b-0.1.0".to_string(),
-    });
-    installed.save().unwrap();
 
     // ...is ignored: the consumer's dep routes to Strategy::Registry, which
     // fails because no registry is configured.
@@ -1149,30 +1143,13 @@ mod add_module_tests {
         std::fs::write(dir.join("streamlib.yaml"), body).expect("write streamlib.yaml");
     }
 
-    /// Install a schemas-only package into the sandboxed installed-package
-    /// cache so bare `add_module` (which resolves cache-only) can find it.
+    /// Materialize a schemas-only package into the sandboxed app's
+    /// `streamlib_modules/@org/name` slot so bare `add_module` (which resolves
+    /// against that folder) can find it.
     fn install_cached_package(org: &str, name: &str, version: &str, schema: Option<&str>) {
         let dep_cache_dir = installed_package_slot_for_test(org, name);
         std::fs::create_dir_all(&dep_cache_dir).unwrap();
         write_schemas_only_manifest(&dep_cache_dir, org, name, version, schema);
-
-        let (maj, min, pat) = {
-            let mut it = version.split('.').map(|p| p.parse::<u32>().unwrap());
-            (it.next().unwrap(), it.next().unwrap(), it.next().unwrap())
-        };
-        let mut installed = crate::core::config::InstalledPackageManifest::default();
-        installed.add(crate::core::config::InstalledPackageEntry {
-            name: streamlib_idents::PackageRef::new(
-                Org::new(org).unwrap(),
-                Package::new(name).unwrap(),
-            ),
-            version: SemVer::new(maj, min, pat),
-            description: None,
-            installed_from: "test".into(),
-            installed_at: "1970-01-01T00:00:00Z".into(),
-            cache_dir: format!("{name}-{version}"),
-        });
-        installed.save().unwrap();
     }
 
     /// Layout-pin canary: the ONE test in this crate that hard-codes the
@@ -1257,28 +1234,18 @@ mod add_module_tests {
 
     #[test]
     #[serial]
-    fn add_module_rejects_identity_mismatch_on_cached_yaml() {
+    fn add_module_rejects_clobbered_slot_manifest() {
         let home = tempfile::tempdir().unwrap();
         let _guard = HomeGuard::install(home.path());
-        // Cache entry keyed @tatolab/add-module-identity but the on-disk
-        // manifest declares a different identity (clobbered cache). Resolve
-        // through the seam so the fixture tracks the real layout.
+        // Slot at @tatolab/add-module-identity but the on-disk manifest declares
+        // a different identity (clobbered slot). Resolve through the seam so the
+        // fixture tracks the real layout. Post-#1523 the single streamlib_modules
+        // lookup gates on the slot's manifest declaring the requested package, so
+        // a clobbered slot is not the requested module: it warns and reports
+        // ModuleNotFound rather than resolving to the wrong identity.
         let dep_cache_dir = installed_package_slot_for_test("tatolab", "add-module-identity");
         std::fs::create_dir_all(&dep_cache_dir).unwrap();
         write_schemas_only_manifest(&dep_cache_dir, "vendor", "other", "1.0.0", None);
-        let mut installed = crate::core::config::InstalledPackageManifest::default();
-        installed.add(crate::core::config::InstalledPackageEntry {
-            name: streamlib_idents::PackageRef::new(
-                Org::new("tatolab").unwrap(),
-                Package::new("add-module-identity").unwrap(),
-            ),
-            version: SemVer::new(1, 0, 0),
-            description: None,
-            installed_from: "test".into(),
-            installed_at: "1970-01-01T00:00:00Z".into(),
-            cache_dir: "add-module-identity-1.0.0".to_string(),
-        });
-        installed.save().unwrap();
 
         let runtime = Runner::new().expect("Runner::new");
         let err = runtime
@@ -1286,11 +1253,12 @@ mod add_module_tests {
                 Org::new("tatolab").unwrap(),
                 Package::new("add-module-identity").unwrap(),
             ))
-            .expect_err("clobbered cached manifest must error");
+            .expect_err("clobbered slot manifest must error");
 
         assert!(
-            matches!(err, AddModuleError::ManifestIdentityMismatch { ref actual, .. } if actual == "@vendor/other"),
-            "expected ManifestIdentityMismatch(@vendor/other), got: {err:?}",
+            matches!(err, AddModuleError::ModuleNotFound { ref package, .. }
+                if package.name.as_str() == "add-module-identity"),
+            "expected ModuleNotFound(add-module-identity), got: {err:?}",
         );
     }
 
@@ -3586,10 +3554,10 @@ processors:
     // install / run split (#1221)
     //
     // Exercises the full resolver handoff: `install` resolves range→concrete,
-    // materializes every package into the installed-package cache, and writes
-    // the application lockfile; a locked run consumes that lockfile strictly
-    // from the cache with NO live re-resolution — so it works offline even
-    // against a poisoned / unreachable registry.
+    // materializes every package into the app's streamlib_modules/ slots, and
+    // writes the application lockfile; a locked run consumes that lockfile
+    // strictly from those slots with NO live re-resolution — so it works offline
+    // even against a poisoned / unreachable registry.
     // =====================================================================
 
     use std::io::Write as _;
@@ -3973,8 +3941,8 @@ packages:
         );
     }
 
-    /// Hand-stage a schemas-only package into the installed cache slot for
-    /// `name`@`version` and return `(slot_dir, content_hash)`.
+    /// Hand-stage a schemas-only package into the co-located streamlib_modules
+    /// slot for `name`@`version` and return `(slot_dir, content_hash)`.
     fn stage_schemas_only_slot(
         name: &str,
         version: &str,
