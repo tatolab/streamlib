@@ -424,11 +424,10 @@ impl PolyglotBuildOrchestrator {
         //   dir — the #1506 co-located slot): the source files already sit at
         //   their destination, so promote ONLY the regenerated build-output
         //   units (`lib/<triple>/`, `.venv/`, `_generated_/`) into the slot and
-        //   leave every source file untouched. The sidecar is again written
-        //   LAST (`promote_build_outputs_in_place` clears any prior marker up
-        //   front and rewrites it only after the units land), so the same
-        //   aborted-build-leaves-nothing-loadable property holds: a crash
-        //   mid-promote leaves the slot sidecar-less and a rebuild follows.
+        //   leave every source file untouched. Each unit lands via a
+        //   displace-to-`.old` atomic swap and the sidecar completion marker is
+        //   the single atomic flip written LAST, so a reader gating on the
+        //   marker sees the prior or the new complete state, never a torn one.
         if destination_is_source_dir(&cache_slot, pkg_dir) {
             promote_build_outputs_in_place(
                 &temp_dir,
@@ -540,7 +539,12 @@ fn write_sidecar(
         "profile": profile.label(),
         "inputs_hash": inputs_hash,
     }))?;
-    std::fs::write(dest.join(SIDECAR_NAME), body)?;
+    // The marker must appear whole: write to a same-dir temp, then rename it into
+    // place so a concurrent reader never observes a half-written sidecar.
+    let seq = TEMP_SEQ.fetch_add(1, Ordering::Relaxed);
+    let temp = dest.join(format!("{SIDECAR_NAME}.tmp-{}-{seq}", std::process::id()));
+    std::fs::write(&temp, body)?;
+    std::fs::rename(&temp, dest.join(SIDECAR_NAME))?;
     Ok(())
 }
 
@@ -688,21 +692,25 @@ fn promoted_build_output_units(triple: &str) -> [PathBuf; 3] {
 /// not-yet-created detached destination fails to canonicalize and is therefore
 /// never the source dir.
 fn destination_is_source_dir(destination: &Path, pkg_dir: &Path) -> bool {
-    match (destination.canonicalize(), pkg_dir.canonicalize()) {
-        (Ok(destination), Ok(pkg_dir)) => destination == pkg_dir,
-        _ => false,
-    }
+    streamlib_pack::is_same_existing_file(destination, pkg_dir)
 }
 
 /// Promote ONLY the regenerated build-output units from the staging temp dir
 /// into a destination that IS the package's own source dir, leaving every
-/// source file untouched. The `.streamlib-build.json` completion marker is
-/// cleared BEFORE any unit moves and rewritten only AFTER all units land, so a
-/// crash mid-promote leaves the slot sidecar-less: a `NeverBuild` locked read
-/// of a sidecar-less slot fails typed and a build policy re-materializes, never
-/// loading a half-promoted slot (the aborted-build-leaves-nothing-loadable
-/// property). The temp dir is a sibling of the destination, so each unit moves
-/// by a same-filesystem rename.
+/// source file untouched.
+///
+/// The publish is atomic at the completion-marker granularity. Each output unit
+/// lands via [`atomic_swap`] (rename the prior unit AWAY to a `.old-*` sibling,
+/// then rename the staged unit in), so the slot never has an absent window for
+/// that unit — a concurrent reader sees either the prior or the freshly staged
+/// unit, never a missing one. The `.streamlib-build.json` completion marker is
+/// cleared BEFORE any unit moves and rewritten via a same-dir temp+rename as the
+/// LAST step, so it appears in a single atomic flip: a reader that gates on the
+/// marker observes either the prior complete state (marker absent/old) or the
+/// new complete state (marker present), and a crash mid-promote leaves the
+/// marker absent so no partially-published slot is ever marked complete. The
+/// temp dir is a same-filesystem sibling of the destination, so each unit moves
+/// by rename.
 fn promote_build_outputs_in_place(
     stage_temp_dir: &Path,
     destination: &Path,
@@ -713,7 +721,7 @@ fn promote_build_outputs_in_place(
     use anyhow::Context;
 
     // Invalidate the completion marker before touching any output unit: until
-    // the promote completes, the slot must read as needing a rebuild.
+    // the final marker flip, the slot must read as needing a rebuild.
     let _ = std::fs::remove_file(destination.join(SIDECAR_NAME));
 
     for unit in promoted_build_output_units(triple) {
@@ -722,18 +730,11 @@ fn promote_build_outputs_in_place(
             continue;
         }
         let to = destination.join(&unit);
-        if let Some(parent) = to.parent() {
-            std::fs::create_dir_all(parent)
-                .with_context(|| format!("create {}", parent.display()))?;
-        }
-        // Replace any prior build output for this unit: drop the old copy, then
-        // rename the freshly staged one into place.
-        let _ = std::fs::remove_dir_all(&to);
-        std::fs::rename(&from, &to)
+        atomic_swap(&from, &to)
             .with_context(|| format!("promote {} → {}", from.display(), to.display()))?;
     }
 
-    // Completion marker LAST.
+    // Completion marker LAST — the single atomic flip that publishes the set.
     write_sidecar(destination, triple, profile, inputs_hash)
         .with_context(|| "write build sidecar")?;
     Ok(())
@@ -1175,14 +1176,14 @@ mod tests {
 
     #[test]
     fn promote_build_outputs_in_place_failure_clears_sidecar_and_preserves_source() {
-        // Kill-mid-promote analogue: a promote that ERRORS partway (here the
-        // third unit `_generated_` can't be renamed because the destination path
-        // is an un-removable non-dir) must leave the slot with NO completion
-        // sidecar — a prior valid sidecar is cleared BEFORE any unit moves — and
-        // must never touch the source files. Sidecar-last ordering is what makes
-        // an interrupted promote self-heal into a rebuild rather than load a
-        // half-promoted slot. Mentally-revert "clear the sidecar first" and the
-        // prior sidecar survives the failure, marking a torn slot complete.
+        // A promote that ERRORS before any unit publishes (here `lib/<triple>`
+        // can't be staged because a FILE sits where its `lib/` parent dir must
+        // be, so the swap's parent-create fails) must leave the slot with NO
+        // completion sidecar — a prior valid sidecar is cleared BEFORE any unit
+        // moves — and must never touch the source files. Clear-first + write-last
+        // ordering is what keeps an interrupted promote from marking a torn slot
+        // complete. Mentally-revert "clear the sidecar first" and the prior
+        // sidecar survives the failure, marking a torn slot complete.
         let triple = build::host_target_triple();
         let root = tempfile::tempdir().unwrap();
 
@@ -1194,10 +1195,9 @@ mod tests {
         let temp = root.path().join(".tmp-pkg");
         std::fs::create_dir_all(&temp).unwrap();
         write_stage_temp_outputs(&temp, triple);
-        // Block the `_generated_` unit: a FILE already sits at the destination
-        // path, and `rename(dir, existing_file)` fails with ENOTDIR on Linux
-        // (the `remove_dir_all` best-effort no-ops on a file).
-        std::fs::write(dest.join("_generated_"), b"a-file-not-a-dir").unwrap();
+        // Block the first unit (`lib/<triple>`): a FILE sits at `lib`, so
+        // creating the `lib/` parent for the swap fails with ENOTDIR.
+        std::fs::write(dest.join("lib"), b"a-file-not-a-dir").unwrap();
 
         let err = promote_build_outputs_in_place(
             &temp,
@@ -1206,7 +1206,7 @@ mod tests {
             build::CargoProfile::Dev,
             "new",
         )
-        .expect_err("promote must fail when a unit cannot be renamed into place");
+        .expect_err("promote must fail when a unit cannot be swapped into place");
         let _ = err;
 
         // No completion marker after the failure — the slot reads as needing a
@@ -1220,6 +1220,70 @@ mod tests {
             std::fs::read(dest.join("streamlib.yaml")).unwrap(),
             b"package: source-manifest",
             "source files must survive a failed in-place promote"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn promote_build_outputs_in_place_interrupted_between_units_leaves_no_published_marker() {
+        use std::os::unix::fs::PermissionsExt;
+        // Crash-between-units regression: a promote that fails AFTER an earlier
+        // unit has published but BEFORE the completion marker must leave the slot
+        // with NO sidecar, so a reader gating on the marker treats the torn slot
+        // as needing a rebuild rather than loading a half-promoted set. The first
+        // unit (`lib/<triple>`, parent = the writable `lib/`) lands; the second
+        // (`.venv`, parent = the destination dir) then fails because the
+        // destination is read-only. Mentally-revert "write the marker LAST" and
+        // the partial slot below carries a completion marker over a torn set.
+        let triple = build::host_target_triple();
+        let root = tempfile::tempdir().unwrap();
+        let dest = root.path().join("pkg");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("streamlib.yaml"), b"package: source-manifest").unwrap();
+        // Pre-create a writable `lib/` so the FIRST unit publishes into it even
+        // after the destination itself is made read-only.
+        std::fs::create_dir_all(dest.join("lib")).unwrap();
+
+        let temp = root.path().join(".tmp-pkg");
+        std::fs::create_dir_all(&temp).unwrap();
+        write_stage_temp_outputs(&temp, triple);
+
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o555)).unwrap();
+        // Root ignores the read-only bit; skip rather than assert a non-failure.
+        if std::fs::write(dest.join(".root-probe"), b"x").is_ok() {
+            let _ = std::fs::remove_file(dest.join(".root-probe"));
+            let _ = std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755));
+            return;
+        }
+
+        let err = promote_build_outputs_in_place(
+            &temp,
+            &dest,
+            triple,
+            build::CargoProfile::Dev,
+            "new",
+        )
+        .expect_err("promote must fail when a later unit cannot be published");
+        let _ = err;
+
+        // Restore write access for the assertions + tempdir cleanup.
+        std::fs::set_permissions(&dest, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+        // The first unit HAS landed — proving the failure is genuinely mid-set...
+        assert!(
+            dest.join("lib").join(triple).join("libpkg.so").is_file(),
+            "the first unit must have published before the mid-set failure"
+        );
+        // ...yet NO completion marker exists, so the torn slot is never published.
+        assert!(
+            read_sidecar(&dest).is_none(),
+            "a promote interrupted between units must leave NO completion marker"
+        );
+        // Source untouched.
+        assert_eq!(
+            std::fs::read(dest.join("streamlib.yaml")).unwrap(),
+            b"package: source-manifest",
+            "source files must survive an interrupted in-place promote"
         );
     }
 
