@@ -288,10 +288,31 @@ fn reclaim_package_target_dirs(root: &Path) -> Vec<PathBuf> {
     reclaimed
 }
 
+/// A staging-residue dir younger than this is treated as possibly in-flight and
+/// left alone even when its embedded pid can't be confirmed live (pid reuse, a
+/// non-Linux host, or an unparseable name) — the mtime-age safety net beneath
+/// the pid-liveness check, so `cache-gc` is safe to run during a concurrent
+/// build. Generous because a long cargo compile runs in the package source dir,
+/// not the `.tmp-*` stage dir, so the stage dir's mtime can lag the build.
+const STAGING_RESIDUE_MIN_AGE: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
 /// Remove orphaned `.tmp-*` (interrupted build stage) and `.old-*` (interrupted
-/// atomic-swap displacement) residue directly under `parent`. Returns the
-/// removed paths.
+/// atomic-swap displacement) residue directly under `parent`. A residue dir
+/// owned by a LIVE build — its name embeds the builder's pid (`.tmp-<name>-<pid>-<seq>`)
+/// and the process is still alive, or the dir is younger than
+/// [`STAGING_RESIDUE_MIN_AGE`] — is skipped, so the verb never races a running
+/// build into a corrupt slot. Returns the removed paths.
 fn sweep_staging_residue(parent: &Path) -> Vec<PathBuf> {
+    sweep_staging_residue_filtered(parent, staging_residue_is_in_flight)
+}
+
+/// [`sweep_staging_residue`] with an injectable in-flight predicate (test seam):
+/// production passes [`staging_residue_is_in_flight`]; tests pass a stub to
+/// exercise the pure sweep mechanics without depending on real pids / mtimes.
+fn sweep_staging_residue_filtered(
+    parent: &Path,
+    is_in_flight: impl Fn(&str, &Path) -> bool,
+) -> Vec<PathBuf> {
     let mut swept = Vec::new();
     let Ok(entries) = std::fs::read_dir(parent) else {
         return swept;
@@ -299,14 +320,61 @@ fn sweep_staging_residue(parent: &Path) -> Vec<PathBuf> {
     for entry in entries.flatten() {
         let name = entry.file_name();
         let name = name.to_string_lossy();
-        if name.starts_with(".tmp-") || name.starts_with(".old-") {
-            let path = entry.path();
-            if std::fs::remove_dir_all(&path).is_ok() {
-                swept.push(path);
-            }
+        if !(name.starts_with(".tmp-") || name.starts_with(".old-")) {
+            continue;
+        }
+        let path = entry.path();
+        if is_in_flight(&name, &path) {
+            continue;
+        }
+        if std::fs::remove_dir_all(&path).is_ok() {
+            swept.push(path);
         }
     }
     swept
+}
+
+/// Whether a `.tmp-*` / `.old-*` residue dir may belong to a still-running build
+/// and so must NOT be swept: its embedded pid is a live process, or the dir is
+/// younger than [`STAGING_RESIDUE_MIN_AGE`].
+fn staging_residue_is_in_flight(name: &str, path: &Path) -> bool {
+    if parse_embedded_pid(name).is_some_and(pid_is_alive) {
+        return true;
+    }
+    let Ok(elapsed) = path
+        .metadata()
+        .and_then(|meta| meta.modified())
+        .and_then(|modified| modified.elapsed().map_err(std::io::Error::other))
+    else {
+        // Unreadable / future mtime: err toward keeping it.
+        return true;
+    };
+    elapsed < STAGING_RESIDUE_MIN_AGE
+}
+
+/// Extract the builder pid from a `.tmp-<name>-<pid>-<seq>` /
+/// `.old-<name>-<pid>-<seq>` residue name. The package name+version embedded in
+/// `<name>` may itself carry dashes, so the pid is the second-to-last
+/// dash-delimited segment and the seq the last — both numeric.
+fn parse_embedded_pid(name: &str) -> Option<u32> {
+    let mut segments = name.rsplit('-');
+    let _seq: u64 = segments.next()?.parse().ok()?;
+    segments.next()?.parse().ok()
+}
+
+/// Whether `pid` is a currently-live process. Linux-only via `/proc/<pid>`; on
+/// other hosts liveness can't be probed dep-free, so it returns `false` and the
+/// mtime-age net in [`staging_residue_is_in_flight`] is the sole guard there.
+fn pid_is_alive(pid: u32) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        Path::new("/proc").join(pid.to_string()).exists()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = pid;
+        false
+    }
 }
 
 /// Resolve the default `.slpkg` output path (`{name}-{version}.slpkg` in the
@@ -515,19 +583,74 @@ mod tests {
     #[test]
     fn sweep_removes_only_staging_residue() {
         // `.tmp-*` (interrupted stage) and `.old-*` (interrupted swap) are
-        // reclaimed; a real slot dir is left alone. Mentally-revert the prefix
-        // guard and the real slot would be swept too.
+        // reclaimed; a real slot dir is left alone. The in-flight filter is
+        // stubbed off here (nothing is treated as live) to pin the prefix
+        // guard alone. Mentally-revert the prefix guard and the real slot
+        // would be swept too.
         let parent = tempfile::tempdir().unwrap();
         for name in [".tmp-pkg-1-0", ".old-pkg-2-1"] {
             std::fs::create_dir_all(parent.path().join(name)).unwrap();
         }
         std::fs::create_dir_all(parent.path().join("real-slot")).unwrap();
 
-        let swept = sweep_staging_residue(parent.path());
+        let swept = sweep_staging_residue_filtered(parent.path(), |_, _| false);
 
         assert_eq!(swept.len(), 2, "both residue dirs swept: {swept:?}");
         assert!(parent.path().join("real-slot").is_dir(), "a real slot must survive");
         assert!(!parent.path().join(".tmp-pkg-1-0").exists());
         assert!(!parent.path().join(".old-pkg-2-1").exists());
+    }
+
+    #[test]
+    fn sweep_skips_a_live_in_flight_build_residue() {
+        // A `.tmp-*` a concurrent build still owns must survive `cache-gc`.
+        // A freshly-created residue is younger than STAGING_RESIDUE_MIN_AGE, so
+        // the REAL predicate keeps it via the mtime-age net regardless of pid.
+        // Mentally-revert the in-flight guard in `sweep_staging_residue` (sweep
+        // unconditionally) and this fresh residue is destroyed mid-build.
+        let parent = tempfile::tempdir().unwrap();
+        let live = parent.path().join(".tmp-pkg-4242-0");
+        std::fs::create_dir_all(&live).unwrap();
+
+        let swept = sweep_staging_residue(parent.path());
+
+        assert!(swept.is_empty(), "a fresh in-flight residue must not be swept: {swept:?}");
+        assert!(live.is_dir(), "the live build's stage dir must survive cache-gc");
+    }
+
+    #[test]
+    fn embedded_pid_parses_from_dashed_residue_names() {
+        // `<name>` carries the package name+version, itself dash-laden — the pid
+        // is the second-to-last dash segment, the seq the last.
+        assert_eq!(parse_embedded_pid(".tmp-pkg-1-0"), Some(1));
+        assert_eq!(parse_embedded_pid(".old-my-pkg-0.1.0-98765-12"), Some(98765));
+        // Non-numeric trailing segments ⇒ no pid (fall back to the age net).
+        assert_eq!(parse_embedded_pid(".tmp-pkg-abc-def"), None);
+        assert_eq!(parse_embedded_pid(".tmp-pkg"), None);
+    }
+
+    #[test]
+    fn residue_in_flight_keeps_fresh_dirs_even_with_a_dead_pid() {
+        // A just-created residue whose embedded pid is not live is still kept by
+        // the age net (younger than the threshold) — the guard that makes
+        // `cache-gc` safe when pid liveness can't be confirmed.
+        let dir = tempfile::tempdir().unwrap();
+        let fresh = dir.path().join(".tmp-pkg-0-0");
+        std::fs::create_dir_all(&fresh).unwrap();
+        assert!(
+            staging_residue_is_in_flight(".tmp-pkg-0-0", &fresh),
+            "a fresh residue must read as in-flight via the mtime-age net"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn pid_liveness_tracks_proc() {
+        // Reverting `/proc/<pid>` to a constant `false` flips the live case.
+        assert!(pid_is_alive(1), "pid 1 (init) is always live on Linux");
+        assert!(
+            !pid_is_alive(u32::MAX),
+            "an impossible pid must read as dead"
+        );
     }
 }
