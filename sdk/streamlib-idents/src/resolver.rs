@@ -878,12 +878,9 @@ fn warn_when_existing_unsatisfies_spec(
     let DependencySpec::Registry(reg) = spec else {
         return;
     };
-    let installed = existing
-        .manifest
-        .package
-        .as_ref()
-        .map(|p| p.version)
-        .expect("existing dep is package-flavor");
+    let Some(installed) = existing.manifest.package.as_ref().map(|p| p.version) else {
+        return;
+    };
     if !reg.version.matches(installed) {
         tracing::warn!(
             dependency = %dep_id,
@@ -1335,6 +1332,51 @@ dependencies:
             "1.2.0",
             "the shared dep must keep the first-resolved installed winner"
         );
+    }
+
+    /// A dep first resolved via a path/git spec carries a manifest whose
+    /// `package` block can legitimately be `None` (that flavor skips the
+    /// package-id check). Re-referencing it through a Registry range must
+    /// reconcile leniently — the whole point of #1505 is that a version
+    /// mismatch never halts a load, so a missing package block on the installed
+    /// winner must be an early return, not a panic. Regression lock: restoring
+    /// the old `.expect("existing dep is package-flavor")` makes this call
+    /// panic instead of returning.
+    #[test]
+    fn reconcile_against_no_package_block_does_not_panic() {
+        use std::str::FromStr;
+
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("nopkg");
+        write_streamlib_yaml(
+            &dir,
+            r#"
+dependencies:
+  "@tatolab/core":
+    path: ../core
+"#,
+        );
+        let manifest = Manifest::load(&dir).unwrap();
+        assert!(
+            manifest.package.is_none(),
+            "fixture must have no package block to exercise the lenient path"
+        );
+
+        let existing = ResolvedPackage {
+            manifest,
+            root_dir: dir.clone(),
+            schema_files: Vec::new(),
+            source: ResolvedSource::Path {
+                relative: PathBuf::from("../core"),
+            },
+            content_hash: "sha256:0".into(),
+        };
+        let spec = DependencySpec::Registry(RegistryDependency {
+            version: crate::semver::SemVerRange::from_str("^3.0.0").unwrap(),
+            runtime: false,
+        });
+
+        warn_when_existing_unsatisfies_spec(&existing, &spec, &dir, "@tatolab/core");
     }
 
     #[test]
