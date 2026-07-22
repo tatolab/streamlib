@@ -20,6 +20,8 @@ schemas:
     package: '@tatolab/jpeg'
   JpegBytesSourceConfig:
     file: schemas/jpeg_bytes_source_config.yaml
+  LiveVideoFrameForwarderConfig:
+    file: schemas/live_video_frame_forwarder_config.yaml
   MasteringDisplay:
     package: '@tatolab/core'
   SimplePassthroughConfig:
@@ -44,6 +46,26 @@ processors:
     schema: VideoFrame
     description: Video frame input
     delivery_profile: null
+  outputs:
+  - name: output
+    schema: VideoFrame
+    description: Video frame output (unchanged)
+    delivery_profile: null
+- name: LiveVideoFrameForwarder
+  description: Forwards each input VideoFrame to the output port unchanged on every frame, keeping a live-spliced graph delivering frames
+  runtime: rust
+  entrypoint: null
+  execution: reactive
+  scheduling: null
+  config:
+    name: config
+    schema: LiveVideoFrameForwarderConfig
+  state: []
+  inputs:
+  - name: input
+    schema: VideoFrame
+    description: Video frame input
+    delivery_profile: every_sample
   outputs:
   - name: output
     schema: VideoFrame

@@ -9,6 +9,7 @@ pub mod _generated_ {
     include!(concat!(env!("OUT_DIR"), "/_generated_shim.rs"));
 }
 
+pub mod live_video_frame_forwarder;
 pub mod simple_passthrough;
 pub mod video_frame_counter;
 
@@ -21,6 +22,7 @@ pub mod bgra_file_source;
 #[cfg(target_os = "linux")]
 pub mod jpeg_bytes_source;
 
+pub use live_video_frame_forwarder::LiveVideoFrameForwarderProcessor;
 pub use simple_passthrough::SimplePassthroughProcessor;
 pub use video_frame_counter::VideoFrameCounterProcessor;
 
@@ -32,6 +34,7 @@ pub use jpeg_bytes_source::JpegBytesSourceProcessor;
 
 #[cfg(target_os = "linux")]
 streamlib_plugin_abi::export_plugin!(
+    crate::LiveVideoFrameForwarderProcessor::Processor,
     crate::SimplePassthroughProcessor::Processor,
     crate::VideoFrameCounterProcessor::Processor,
     crate::BgraFileSourceProcessor::Processor,
@@ -40,6 +43,7 @@ streamlib_plugin_abi::export_plugin!(
 
 #[cfg(not(target_os = "linux"))]
 streamlib_plugin_abi::export_plugin!(
+    crate::LiveVideoFrameForwarderProcessor::Processor,
     crate::SimplePassthroughProcessor::Processor,
     crate::VideoFrameCounterProcessor::Processor,
 );

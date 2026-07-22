@@ -1,0 +1,13 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# JSON Type Definition (RFC 8927) schema for LiveVideoFrameForwarder config.
+
+metadata:
+  type: LiveVideoFrameForwarderConfig
+  description: "Configuration for the LiveVideoFrameForwarder pass-through."
+
+# Empty struct body — `optionalProperties: {}` (not nothing) is
+# load-bearing: an empty schema becomes `pub type X = Option<Value>`
+# instead of a typed struct.
+optionalProperties: {}
