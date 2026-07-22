@@ -481,8 +481,9 @@ fn resolve_installed_cache_strategy(
 pub(crate) use crate::core::streamlib_home::{app_modules_root, set_app_modules_root_override};
 
 /// `<app_root>/streamlib_modules/@org/name` when it exists and its manifest
-/// declares `pkg_ref`; `None` otherwise (a present-but-mismatched entry warns
-/// and falls through to the installed cache).
+/// declares `pkg_ref`; `None` otherwise (a present-but-mismatched entry warns —
+/// the slot is not the requested package, so resolution reports
+/// `ModuleNotFound`).
 fn lookup_app_modules_package_dir(
     app_root: &std::path::Path,
     pkg_ref: &streamlib_idents::PackageRef,
@@ -501,7 +502,7 @@ fn lookup_app_modules_package_dir(
             package = %pkg_ref,
             dir = %dir.display(),
             "streamlib_modules entry does not declare the requested package — \
-             falling through to the installed cache"
+             treating as not found"
         );
         None
     }
@@ -1614,7 +1615,7 @@ mod tests {
     }
 
     // =====================================================================
-    // App-modules bridge — streamlib_modules/ wins over the installed cache
+    // App-modules bridge — the streamlib_modules/ slot IS the installed package
     // =====================================================================
 
     /// Write `<app_root>/streamlib_modules/@tatolab/<pkg_name>/streamlib.yaml`
@@ -1771,7 +1772,7 @@ mod tests {
         assert_builds_from(resolved, &modules_dir);
     }
 
-    /// Neither app modules nor installed cache ⇒ typed ModuleNotFound.
+    /// No streamlib_modules slot for the package ⇒ typed ModuleNotFound.
     #[test]
     #[serial_test::serial]
     fn installed_cache_strategy_module_not_found_when_neither_source_has_it() {

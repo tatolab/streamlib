@@ -388,9 +388,9 @@ impl Runner {
 
     /// Load every package pinned in an application lockfile
     /// ([`streamlib_idents::APP_LOCKFILE_NAME`], written by `streamlib
-    /// install`) strictly from the installed-package cache — the **locked
-    /// run**. No live re-resolution: every package, top-level and
-    /// transitive, is forced to its pinned version's cache slot, so the run
+    /// install`) strictly from the app's co-located `streamlib_modules/` slots
+    /// — the **locked run**. No live re-resolution: every package, top-level and
+    /// transitive, is forced to its pinned version's slot, so the run
     /// works **offline** (no registry, git, or `.slpkg` fetch reachable)
     /// and is byte-reproducible against the pinned set.
     ///
@@ -919,7 +919,7 @@ impl Runner {
         tracing::info!(
             package = %pkg_ref,
             version = %report.version,
-            "acquire-on-reference: acquired package; loading from the installed cache"
+            "acquire-on-reference: acquired package; loading from its streamlib_modules slot"
         );
         let module_ident = streamlib_idents::ModuleIdent::new(
             pkg_ref.org.clone(),

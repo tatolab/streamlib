@@ -136,7 +136,8 @@ pub(crate) fn set_app_modules_root_override(root: Option<PathBuf>) {
 /// The app-modules root: the runtime-set override, else the
 /// `STREAMLIB_MODULES_DIR` env var, else the exact process working directory
 /// (no walk-up). `None` only when the cwd is unresolvable and neither override
-/// nor env is set — resolution then proceeds with the installed cache alone.
+/// nor env is set — an `InstalledCache` resolution then has no slot to probe
+/// and reports `ModuleNotFound`.
 pub(crate) fn app_modules_root() -> Option<PathBuf> {
     if let Some(root) = APP_MODULES_ROOT_OVERRIDE
         .read()

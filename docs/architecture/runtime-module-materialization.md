@@ -78,14 +78,11 @@ the same `BuildOrchestrator` seam.
 The installed-package slot is the co-located, version-free
 `<app-root>/streamlib_modules/@org/name` dir — the same tree the module
 loader's app-modules probe reads, and the same slot an extracted `.slpkg`
-/ GitHub install lands in.
-
-> ~~The slot was `<STREAMLIB_HOME>/.streamlib/cache/packages/<name>-<version>/`.~~
-> — Superseded 2026-07-22: installed packages now materialize into the
-> co-located version-free `<app-root>/streamlib_modules/@org/name` slot
-> (a package occupies one `@org/name` dir; the pinned version is enforced
-> against the slot's manifest, not encoded in the path). The legacy
-> `.streamlib/cache/packages/` directory is not yet retired.
+/ GitHub install lands in. A package occupies one `@org/name` dir; the
+pinned version is enforced against the slot's manifest, not encoded in the
+path. There is no separate installed-package store or manifest: a package's
+presence IS its slot, and the app's `streamlib.lock` records how each was
+added.
 
 **Python ships as source, not a wheel.** A Python processor runs from
 its source dir (`PYTHONPATH = <staged package dir>`), never from a

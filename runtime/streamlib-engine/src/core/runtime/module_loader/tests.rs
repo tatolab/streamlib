@@ -11,7 +11,7 @@ use super::processor_registration::{host_target_triple, list_available_triples};
 use super::*;
 use serial_test::serial;
 
-/// Resolve the installed-package cache slot for `@org/name` through the
+/// Resolve the co-located `streamlib_modules/@org/name` slot through the
 /// production [`installed_package_slot_dir`] seam, so a fixture writes to (and
 /// an assertion reads) the exact slot a locked run derives — never a
 /// hand-rolled `{name}` string that could silently drift from the seam. The
@@ -3554,10 +3554,10 @@ processors:
     // install / run split (#1221)
     //
     // Exercises the full resolver handoff: `install` resolves range→concrete,
-    // materializes every package into the installed-package cache, and writes
-    // the application lockfile; a locked run consumes that lockfile strictly
-    // from the cache with NO live re-resolution — so it works offline even
-    // against a poisoned / unreachable registry.
+    // materializes every package into the app's streamlib_modules/ slots, and
+    // writes the application lockfile; a locked run consumes that lockfile
+    // strictly from those slots with NO live re-resolution — so it works offline
+    // even against a poisoned / unreachable registry.
     // =====================================================================
 
     use std::io::Write as _;
@@ -3941,8 +3941,8 @@ packages:
         );
     }
 
-    /// Hand-stage a schemas-only package into the installed cache slot for
-    /// `name`@`version` and return `(slot_dir, content_hash)`.
+    /// Hand-stage a schemas-only package into the co-located streamlib_modules
+    /// slot for `name`@`version` and return `(slot_dir, content_hash)`.
     fn stage_schemas_only_slot(
         name: &str,
         version: &str,

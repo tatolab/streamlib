@@ -150,6 +150,9 @@ fn pack_then_load_rust_package_registers_processors() {
     let cli = build_streamlib_cli();
 
     let tmp = tempfile::tempdir().unwrap();
+    // Pin the app-modules root to the tempdir so the extracted slot lands under
+    // it (not the crate working tree), keeping `cargo test` clean.
+    Runner::set_app_modules_dir(tmp.path());
     let pkg_src = workspace_root().join("packages").join("jpeg");
     let slpkg = tmp.path().join("jpeg.slpkg");
     pkg_build_slpkg(&cli, &pkg_src, &slpkg);
@@ -192,6 +195,9 @@ fn pack_then_load_schemas_only_package_registers_schemas() {
     let cli = build_streamlib_cli();
 
     let tmp = tempfile::tempdir().unwrap();
+    // Pin the app-modules root to the tempdir so the extracted slot lands under
+    // it (not the crate working tree), keeping `cargo test` clean.
+    Runner::set_app_modules_dir(tmp.path());
     let pkg_src = workspace_root().join("packages").join("core");
     let slpkg = tmp.path().join("core.slpkg");
     pkg_build_slpkg(&cli, &pkg_src, &slpkg);
@@ -255,6 +261,9 @@ fn add_module_with_slpkg_archive_wrong_triple_errors_with_actionable_message() {
     // wrong artifact or falls back to a legacy flat `lib/<file>`
     // layout instead of erroring at first miss.
     let tmp = tempfile::tempdir().unwrap();
+    // Pin the app-modules root to the tempdir so the extracted slot lands under
+    // it (not the crate working tree), keeping `cargo test` clean.
+    Runner::set_app_modules_dir(tmp.path());
     let slpkg = tmp.path().join("foreign.slpkg");
 
     let manifest = r#"
