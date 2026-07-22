@@ -165,6 +165,16 @@ impl Compiler {
             }
         }
 
+        // A processor removal cascades its incident links out of the graph
+        // (petgraph `remove_node`), so a link queued for wiring against a
+        // processor this same batch removes would vanish before the WIRE
+        // phase and surface a spurious LinkNotFound. Drop those doomed
+        // link-adds now, before any phase runs.
+        {
+            let graph = graph_arc.read();
+            plan.drop_link_adds_into_removed_processors(&graph);
+        }
+
         // Early return if nothing to do
         if plan.is_empty() {
             tracing::debug!("No changes to compile");

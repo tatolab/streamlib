@@ -46,6 +46,24 @@ fn simple_passthrough_descriptor_loads() {
 }
 
 #[test]
+fn live_video_frame_forwarder_descriptor_loads() {
+    let descriptor = <crate::LiveVideoFrameForwarderProcessor::Processor as GeneratedProcessor>::descriptor()
+        .expect("LiveVideoFrameForwarder must expose a macro-generated descriptor");
+
+    assert_eq!(descriptor.name.r#type.as_str(), "LiveVideoFrameForwarder");
+    assert_eq!(
+        port_names(&descriptor.inputs),
+        vec!["input"],
+        "LiveVideoFrameForwarder declares a single `input` port"
+    );
+    assert_eq!(
+        port_names(&descriptor.outputs),
+        vec!["output"],
+        "LiveVideoFrameForwarder declares a single `output` port — unlike the sink counter, it forwards"
+    );
+}
+
+#[test]
 fn video_frame_counter_descriptor_loads() {
     let descriptor = <crate::VideoFrameCounterProcessor::Processor as GeneratedProcessor>::descriptor()
         .expect("VideoFrameCounter must expose a macro-generated descriptor");
