@@ -47,9 +47,12 @@ pub enum Strategy {
     /// populated by `streamlib add` / `install`). Post-#1506 the installed slot
     /// IS this folder: a package's presence is its `@org/name` dir plus its own
     /// manifest, resolved directly with no separate installed-package record.
-    /// Never builds a package that carries a matching prebuilt. The default for
-    /// bare top-level [`Runner::add_module`] loads (transitive registry-flavored
-    /// deps map to [`Strategy::Registry`] instead).
+    /// Load-only: it never builds. An unbuilt slot (no matching prebuilt, or no
+    /// polyglot provisioning) is a typed
+    /// [`AddModuleError::InstalledPackageNotBuilt`] carrying a `streamlib install`
+    /// fix-it, never a runtime cold-build. The default for bare top-level
+    /// [`Runner::add_module`] loads (transitive registry-flavored deps map to
+    /// [`Strategy::Registry`] instead).
     /// Precedence: active `streamlib link` > the co-located slot.
     ///
     /// [`Runner::add_module`]: super::super::Runner::add_module
@@ -481,10 +484,10 @@ fn resolve_installed_cache_strategy(
     // runtime cold-build on the app's critical path. The build is `streamlib
     // install`'s job (#1502/#1507); an unbuilt slot is a typed fix-it, so this
     // strategy NEVER emits `NeedsBuild` and a no-orchestrator run yields
-    // `InstalledPackageNotBuilt`, not `BuildRequiredButNoOrchestrator`. The two
-    // oracles are the SAME ones `source_for_resolved_dir` uses, so "unbuilt" here
-    // means exactly "would have been NeedsBuild there".
-    if needs_host_build(&modules_package_dir) || needs_polyglot_provisioning(&modules_package_dir) {
+    // `InstalledPackageNotBuilt`, not `BuildRequiredButNoOrchestrator`. Shares
+    // `needs_build_or_provisioning` with `source_for_resolved_dir`, so "unbuilt"
+    // here means exactly "would have been NeedsBuild there".
+    if needs_build_or_provisioning(&modules_package_dir) {
         let version = read_version_from_manifest_dir(&modules_package_dir)?;
         return Err(AddModuleError::InstalledPackageNotBuilt {
             package: pkg_ref.clone(),
@@ -583,7 +586,7 @@ fn source_for_resolved_dir(
     pkg_ref: &streamlib_idents::PackageRef,
     dir: PathBuf,
 ) -> std::result::Result<ResolvedSource, AddModuleError> {
-    if needs_host_build(&dir) || needs_polyglot_provisioning(&dir) {
+    if needs_build_or_provisioning(&dir) {
         let staging_destination_slot_dir = staging_slot_for_dir(pkg_ref);
         Ok(ResolvedSource::NeedsBuild(BuildRequest {
             package: pkg_ref.clone(),
@@ -696,6 +699,15 @@ fn needs_polyglot_provisioning(dir: &std::path::Path) -> bool {
     };
     let deno_unprovisioned = declares_deno && !dir.join("_generated_").is_dir();
     python_unprovisioned || deno_unprovisioned
+}
+
+/// Whether a resolved package dir must be built or provisioned before it can
+/// load. The single oracle the installed-slot loader
+/// ([`resolve_installed_cache_strategy`]) and the build resolver
+/// ([`source_for_resolved_dir`]) share so their "unbuilt" verdict is one
+/// definition, not two copies that must be kept identical by hand.
+fn needs_build_or_provisioning(dir: &std::path::Path) -> bool {
+    needs_host_build(dir) || needs_polyglot_provisioning(dir)
 }
 
 /// Whether `dir` declares Rust processors AND carries a `Cargo.toml` to
