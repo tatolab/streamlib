@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.27](https://github.com/tatolab/streamlib/compare/v0.7.26...v0.7.27) (2026-07-22)
+
+
+### Bug Fixes
+
+* **engine:** restore grant-gated RuntimeContextFullAccess::new in tap-wiring test ([#1513](https://github.com/tatolab/streamlib/issues/1513)) ([19c742b](https://github.com/tatolab/streamlib/commit/19c742b7fecd329d721d4c32adf76b1421ce6a29))
+
 ## [0.7.26](https://github.com/tatolab/streamlib/compare/v0.7.25...v0.7.26) (2026-07-22)
 
 
