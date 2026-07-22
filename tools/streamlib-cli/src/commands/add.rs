@@ -40,10 +40,10 @@ use super::build_on_place::{
 /// package-authoring dir, otherwise materializes a byte source into the app's
 /// `streamlib_modules/` and compiles it on-the-box.
 ///
-/// `no_build` is the toolchain-free opt-out: it maps to
-/// [`BuildPolicy::NeverBuild`] (placement only, the old behavior). Otherwise the
-/// just-placed slot is compiled in place with [`BuildPolicy::IfStale`] and a
-/// compile failure rolls the placement back.
+/// `no_build` skips the on-the-box compile (placement/reproduce only). Otherwise
+/// the just-placed slot is compiled in place with [`BuildPolicy::IfStale`] and a
+/// compile failure rolls the placement back — restoring the prior version when
+/// the add replaced one.
 pub fn add(
     spec: &str,
     dir: Option<&Path>,
@@ -88,14 +88,16 @@ pub fn add(
 
     let options = AddPackageOptions {
         expected_archive_sha256: expect_sha256.map(|s| s.to_string()),
+        // When we're about to compile, retain a displaced prior slot so a
+        // compile failure can restore the previously-working version rather
+        // than leaving the operator with nothing.
+        retain_replaced_slot_backup: !no_build,
     };
     let report = app
         .add_package(&source, &options)
         .map_err(|e| anyhow::anyhow!("add failed: {e}"))?;
 
     if !no_build {
-        println!();
-        println!("Compiling {} v{}…", report.package, report.version);
         build_added_slot_or_rollback(
             &app,
             &report,

@@ -18,9 +18,9 @@
 //! After reproduction, every materialized (non-linked) slot is compiled
 //! on-the-box with [`BuildPolicy::IfStale`]: install reproduces rather than
 //! acquires, so it does NOT roll back — it aggregates every non-compiling
-//! package and fails listing them all. `--no-build` maps to
-//! [`BuildPolicy::NeverBuild`] (reproduce only). Linked entries stay
-//! lazy/edit-rebuild and are never compiled here.
+//! package and fails listing them all. `--no-build` skips the on-the-box
+//! compile (reproduce only). Linked entries stay lazy/edit-rebuild and are
+//! never compiled here.
 
 use std::path::Path;
 

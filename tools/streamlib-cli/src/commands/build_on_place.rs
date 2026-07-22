@@ -62,12 +62,23 @@ pub fn build_placed_slot(
     };
     orchestrator
         .materialize(&request, sink)
-        .map_err(|e| anyhow::anyhow!("{e}"))
+        .map_err(anyhow::Error::new)
 }
 
-/// `add`-side compile: build the just-placed slot, rolling the placement
-/// (folder + lock entry) back on failure so a non-compiling `add` leaves no
-/// `streamlib_modules/` slot and no lock entry.
+/// The single per-slot compile banner both `add` and `install` print, so the
+/// verb and shape live in one place.
+fn print_compile_banner(package: &PackageRef, version: &streamlib_idents::SemVer) {
+    println!();
+    println!("Compiling {package} v{version}…");
+}
+
+/// `add`-side compile: build the just-placed slot, undoing the placement on a
+/// build failure. A fresh add (no prior slot) rolls back to empty — no
+/// `streamlib_modules/` slot and no lock entry. An add that REPLACED an
+/// existing slot restores that prior working version (contents + lock entry)
+/// from the backup [`add_package`](streamlib::sdk::runtime::AppModulesDir::add_package)
+/// retained, so a failed re-add leaves the operator's installed set untouched
+/// rather than deleting the version that worked.
 pub fn build_added_slot_or_rollback(
     app: &AppModulesDir,
     report: &AddPackageReport,
@@ -75,22 +86,59 @@ pub fn build_added_slot_or_rollback(
     sink: &dyn BuildEventSink,
     policy: BuildPolicy,
 ) -> Result<()> {
+    print_compile_banner(&report.package, &report.version);
     match build_placed_slot(orchestrator, sink, &report.package, &report.package_dir, policy) {
-        Ok(_) => Ok(()),
-        Err(build_err) => {
-            if let Err(rollback_err) = app.remove_package(&report.package) {
+        Ok(_) => {
+            // The compile succeeded — a retained prior slot (from a replace) is
+            // no longer needed. A discard failure is hygiene, never fatal.
+            if let Some(backup) = &report.replaced_slot_backup
+                && let Err(discard_err) = app.commit_replaced_slot_backup(backup)
+            {
                 tracing::warn!(
                     package = %report.package,
-                    error = %rollback_err,
-                    "add: rolling back placement after a build failure also failed"
+                    error = %discard_err,
+                    "add: discarding the retained prior-version backup after a successful build failed"
                 );
             }
-            anyhow::bail!(
-                "building '{}' failed; rolled back its streamlib_modules/ slot and \
-                 streamlib.lock entry:\n{build_err}",
-                report.package
-            )
+            Ok(())
         }
+        Err(build_err) => match &report.replaced_slot_backup {
+            // The add replaced a prior version: put it back, exactly.
+            Some(backup) => {
+                if let Err(restore_err) = app.restore_replaced_slot(&report.package, backup) {
+                    tracing::warn!(
+                        package = %report.package,
+                        error = %restore_err,
+                        "add: restoring the prior version after a build failure also failed"
+                    );
+                    anyhow::bail!(
+                        "building '{}' failed, AND restoring the previously-installed version also \
+                         failed ({restore_err}) — the slot may be in a broken state:\n{build_err}",
+                        report.package
+                    )
+                }
+                anyhow::bail!(
+                    "building '{}' failed; restored the previously-installed version and left \
+                     streamlib.lock unchanged:\n{build_err}",
+                    report.package
+                )
+            }
+            // Fresh add (nothing was replaced): roll back to empty.
+            None => {
+                if let Err(rollback_err) = app.remove_package(&report.package) {
+                    tracing::warn!(
+                        package = %report.package,
+                        error = %rollback_err,
+                        "add: rolling back placement after a build failure also failed"
+                    );
+                }
+                anyhow::bail!(
+                    "building '{}' failed; rolled back its streamlib_modules/ slot and \
+                     streamlib.lock entry:\n{build_err}",
+                    report.package
+                )
+            }
+        },
     }
 }
 
@@ -105,13 +153,14 @@ pub fn build_installed_slots(
     sink: &dyn BuildEventSink,
     policy: BuildPolicy,
 ) -> Result<()> {
+    use std::fmt::Write;
+
     let mut failures: Vec<(PackageRef, anyhow::Error)> = Vec::new();
     for pkg in &report.packages {
         if pkg.kind == InstalledFromLockKind::Linked {
             continue;
         }
-        println!();
-        println!("Building {} v{}…", pkg.package, pkg.version);
+        print_compile_banner(&pkg.package, &pkg.version);
         if let Err(e) =
             build_placed_slot(orchestrator, sink, &pkg.package, &pkg.package_dir, policy)
         {
@@ -124,7 +173,7 @@ pub fn build_installed_slots(
     }
     let mut message = String::from("install failed to build the following package(s):");
     for (package, error) in &failures {
-        message.push_str(&format!("\n  - {package}: {error}"));
+        write!(message, "\n  - {package}: {error}").ok();
     }
     anyhow::bail!(message)
 }
@@ -153,7 +202,7 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::Mutex;
 
-    use streamlib::sdk::runtime::{AddPackageSource, BuildError};
+    use streamlib::sdk::runtime::{AddPackageOptions, AddPackageSource, BuildError};
     use streamlib_idents::{Org, Package};
 
     use super::*;
@@ -192,12 +241,28 @@ mod tests {
     /// Write a minimal schema-only package folder (a valid `package:` manifest,
     /// no processors, so `add_package` places it with no toolchain needed).
     fn write_schema_only_package(dir: &Path, org: &str, name: &str) {
+        write_schema_only_package_versioned(dir, org, name, "0.1.0", None);
+    }
+
+    /// Like [`write_schema_only_package`] but with an explicit version and an
+    /// optional marker file, so two adds of the same identity are
+    /// content-distinguishable (which version currently occupies the slot).
+    fn write_schema_only_package_versioned(
+        dir: &Path,
+        org: &str,
+        name: &str,
+        version: &str,
+        marker_file: Option<&str>,
+    ) {
         std::fs::create_dir_all(dir).unwrap();
         std::fs::write(
             dir.join("streamlib.yaml"),
-            format!("package:\n  org: {org}\n  name: {name}\n  version: 0.1.0\n"),
+            format!("package:\n  org: {org}\n  name: {name}\n  version: {version}\n"),
         )
         .unwrap();
+        if let Some(marker) = marker_file {
+            std::fs::write(dir.join(marker), version).unwrap();
+        }
     }
 
     fn ref_of(org: &str, name: &str) -> PackageRef {
@@ -270,6 +335,72 @@ mod tests {
                 .contains_key("@tatolab/widget"),
             "lock entry must be gone after rollback"
         );
+    }
+
+    #[test]
+    fn add_replaced_slot_restores_prior_version_on_build_failure() {
+        // A working v1 is installed; re-adding a v2 that fails to compile must
+        // restore v1 (its contents AND its lock entry), not leave the slot
+        // empty. Mentally reverting the restore (the old remove-to-empty
+        // rollback) deletes the working version — this asserts against that.
+        let app_root = tempfile::tempdir().unwrap();
+        let src_v1 = tempfile::tempdir().unwrap();
+        let src_v2 = tempfile::tempdir().unwrap();
+        write_schema_only_package_versioned(src_v1.path(), "tatolab", "widget", "0.1.0", Some("VERSION_V1"));
+        write_schema_only_package_versioned(src_v2.path(), "tatolab", "widget", "0.2.0", Some("VERSION_V2"));
+
+        let app = AppModulesDir::at(app_root.path());
+
+        // Install v1 (a working version — add_package never builds).
+        app.add_package(
+            &AddPackageSource::Folder {
+                path: src_v1.path().to_path_buf(),
+            },
+            &Default::default(),
+        )
+        .unwrap();
+
+        // Re-add v2 with the retain option the compile-on-add path uses.
+        let report_v2 = app
+            .add_package(
+                &AddPackageSource::Folder {
+                    path: src_v2.path().to_path_buf(),
+                },
+                &AddPackageOptions {
+                    retain_replaced_slot_backup: true,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+        assert!(report_v2.replaced_existing, "v2 must replace the v1 slot");
+        assert!(
+            report_v2.replaced_slot_backup.is_some(),
+            "a replace with retention must carry a restorable backup"
+        );
+
+        // v2 fails to compile.
+        let stub = StubOrchestrator {
+            fail_packages: HashSet::from(["@tatolab/widget".to_string()]),
+            ..Default::default()
+        };
+        let err = build_added_slot_or_rollback(
+            &app,
+            &report_v2,
+            &stub,
+            &ConsoleBuildEventSink,
+            BuildPolicy::IfStale,
+        )
+        .expect_err("a failed re-add build must fail");
+        assert!(err.to_string().contains("restored the previously-installed version"), "{err}");
+
+        // v1 is restored: slot present, v1 contents (not v2), lock pins 0.1.0.
+        let slot = app.package_dir(&ref_of("tatolab", "widget"));
+        assert!(slot.exists(), "the prior version's slot must be restored");
+        assert!(slot.join("VERSION_V1").exists(), "restored slot must hold v1 contents");
+        assert!(!slot.join("VERSION_V2").exists(), "the failed v2 contents must be gone");
+        let lock = app.read_lockfile().unwrap();
+        let entry = lock.packages.get("@tatolab/widget").expect("lock entry must survive");
+        assert_eq!(entry.version.to_string(), "0.1.0", "lock must pin the restored v1");
     }
 
     #[test]
