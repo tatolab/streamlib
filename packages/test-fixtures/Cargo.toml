@@ -17,20 +17,20 @@ name = "streamlib_test_fixtures"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.7.40" }
+streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.7.41" }
 
 [dependencies]
 # Engine substrate — runtime context, processor traits, generated config
 # types under `crate::_generated_::tatolab__test_fixtures::*`.
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.7.40" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.7.41" }
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.7.40" }
+streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.7.41" }
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = { path = "../../runtime/streamlib-plugin-abi", version = "0.7.40" }
+streamlib-plugin-abi = { path = "../../runtime/streamlib-plugin-abi", version = "0.7.41" }
 
 # Serialization (config dataclass ships as serde-derived).
 serde.workspace = true

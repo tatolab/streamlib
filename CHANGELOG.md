@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.41](https://github.com/tatolab/streamlib/compare/v0.7.40...v0.7.41) (2026-07-22)
+
+
+### Bug Fixes
+
+* **pack:** ignore in-tree prebuilt cdylib on mutable/linked/AlwaysBuild staged builds ([#1553](https://github.com/tatolab/streamlib/issues/1553)) ([8437fab](https://github.com/tatolab/streamlib/commit/8437fab0c983902a7919238e17d83c14f28b83cc))
+
 ## [0.7.40](https://github.com/tatolab/streamlib/compare/v0.7.39...v0.7.40) (2026-07-22)
 
 

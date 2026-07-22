@@ -15,14 +15,14 @@ name = "streamlib_adapter_cpu_readback"
 path = "src/lib.rs"
 
 [dependencies]
-streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.7.40" }
-streamlib-adapter-cpu-readback-abi = { path = "../streamlib-adapter-cpu-readback-abi", version = "0.7.40" }
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.7.41" }
+streamlib-adapter-cpu-readback-abi = { path = "../streamlib-adapter-cpu-readback-abi", version = "0.7.41" }
 thiserror.workspace = true
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.7.40" }
-streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.7.40" }
+streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.7.41" }
+streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.7.41" }
 vulkanalia.workspace = true
 libc.workspace = true
 serde = { workspace = true }
