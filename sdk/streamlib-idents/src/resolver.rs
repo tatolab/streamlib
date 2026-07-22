@@ -1409,8 +1409,6 @@ patch:
     /// both arms of the source scoping.
     #[test]
     fn registry_source_out_of_range_still_errors() {
-        use std::str::FromStr;
-
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("core");
         write_streamlib_yaml(
@@ -1451,8 +1449,6 @@ patch:
     /// panic instead of returning.
     #[test]
     fn reconcile_against_no_package_block_does_not_panic() {
-        use std::str::FromStr;
-
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("nopkg");
         write_streamlib_yaml(
