@@ -470,6 +470,7 @@ fn assemble_slpkg_bytes(pkg_dir: &Path) -> Result<(PackageRef, String, Vec<u8>)>
             no_build: false,
             profile: crate::CargoProfile::Release,
             path_deps: crate::PathDepPolicy::RejectPathPatches,
+            ignore_in_tree_prebuilt_cdylib: false,
         },
         &(),
     )?;

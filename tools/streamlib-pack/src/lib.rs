@@ -432,6 +432,15 @@ pub struct AssembleOptions {
     pub profile: CargoProfile,
     /// Manifest `path:` handling.
     pub path_deps: PathDepPolicy,
+    /// Ignore an in-tree prebuilt cdylib under `lib/<triple>/` and always
+    /// invoke cargo for the Rust half, letting cargo's own fingerprint be
+    /// the staleness oracle. Set for a `StagedDir` build whose source can
+    /// change out from under a promoted-in-place `.so` — a mutable user
+    /// checkout, an active `streamlib link`, or an unconditional
+    /// `AlwaysBuild` — where honoring the promoted `.so` would silently
+    /// reuse a stale artifact. An immutable managed extract under `IfStale`
+    /// leaves this `false` so a matching prebuilt still loads compiler-free.
+    pub ignore_in_tree_prebuilt_cdylib: bool,
 }
 
 /// Summary of what [`assemble_artifact`] produced.
@@ -606,7 +615,14 @@ pub fn assemble_artifact_with_cargo_config(
         let triple_dir = pkg_dir.join("lib").join(host_triple);
         let prebuilt = streamlib_cargo_build::collect_host_dylibs_in_lib(&triple_dir, dylib_ext)?;
 
-        if !prebuilt.is_empty() {
+        // Under a co-located source-dir slot the prior build's in-place
+        // promote lands the `.so` into the source tree, so an in-tree
+        // prebuilt is present even when the source was just edited. When the
+        // orchestrator flags the source as mutable / linked / AlwaysBuild it
+        // asks us to ignore that promoted `.so` and let cargo's own
+        // fingerprint decide staleness — otherwise a stale artifact is
+        // silently honored.
+        if !prebuilt.is_empty() && !opts.ignore_in_tree_prebuilt_cdylib {
             for path in prebuilt {
                 let filename = dylib_filename(&path)?;
                 files.push((format!("lib/{host_triple}/{filename}"), path));
@@ -1619,6 +1635,7 @@ mod tests {
             no_build,
             profile: CargoProfile::Release,
             path_deps: PathDepPolicy::RejectPathPatches,
+            ignore_in_tree_prebuilt_cdylib: false,
         }
     }
 
@@ -2005,6 +2022,7 @@ mod tests {
                 no_build: false,
                 profile: CargoProfile::Release,
                 path_deps: PathDepPolicy::RewriteRelativeToAbsolute,
+                ignore_in_tree_prebuilt_cdylib: false,
             },
             &(),
         )
@@ -2055,6 +2073,7 @@ mod tests {
                 no_build: false,
                 profile: CargoProfile::Release,
                 path_deps: PathDepPolicy::RewriteRelativeToAbsolute,
+                ignore_in_tree_prebuilt_cdylib: false,
             },
             &(),
         )
@@ -2109,6 +2128,100 @@ mod tests {
         assert!(
             !entries.iter().any(|e| e.starts_with("lib/")),
             "source-only .slpkg must not carry a prebuilt cdylib, got {entries:?}"
+        );
+    }
+
+    #[test]
+    fn staged_dir_ignore_prebuilt_flag_skips_stale_in_tree_cdylib() {
+        // #1550: under the co-located source-dir slot a prior build's
+        // in-place promote lands the cdylib into the source tree, so the next
+        // `StagedDir` materialize finds an in-tree prebuilt even when the
+        // source (mutable checkout / active link / `AlwaysBuild`) was just
+        // edited. With `ignore_in_tree_prebuilt_cdylib` OFF the assemble
+        // honors that stale `.so` and never rebuilds — the bug. With it ON the
+        // prebuilt-preference is skipped so cargo (the real staleness oracle)
+        // is what runs. `no_build` here stands in for "would have to compile":
+        // with the flag OFF the prebuilt is honored (Ok); with it ON the
+        // prebuilt is invisible, so `no_build` has nothing to honor and bails —
+        // deterministically proving the stale `.so` was skipped, no cargo.
+        fn write_stale_prebuilt_pkg(dir: &Path) -> PathBuf {
+            std::fs::write(
+                dir.join("streamlib.yaml"),
+                "package:\n  org: tatolab\n  name: rp\n  version: 0.1.0\nprocessors:\n  - name: P\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n",
+            )
+            .unwrap();
+            std::fs::write(
+                dir.join("Cargo.toml"),
+                "[package]\nname = \"rp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
+            )
+            .unwrap();
+            std::fs::create_dir_all(dir.join("src")).unwrap();
+            std::fs::write(
+                dir.join("src/lib.rs"),
+                b"#[processor(\"@tatolab/rp/P\", execution = manual)]\npub struct P;\n",
+            )
+            .unwrap();
+            let triple_dir = dir.join("lib").join(host_target_triple());
+            std::fs::create_dir_all(&triple_dir).unwrap();
+            let dylib = format!("librp.{}", host_dylib_extension());
+            std::fs::write(triple_dir.join(&dylib), b"stale-in-tree-cdylib").unwrap();
+            triple_dir.join(&dylib)
+        }
+
+        // Flag OFF: the stale in-tree `.so` is honored — no rebuild, and the
+        // stale bytes land in the staged slot. This is exactly the pre-fix
+        // behavior that leaves a co-located slot serving a stale artifact.
+        let src_reuse = tempdir().unwrap();
+        write_stale_prebuilt_pkg(src_reuse.path());
+        let staged_reuse = tempdir().unwrap();
+        let outcome = assemble_artifact(
+            src_reuse.path(),
+            &AssembleTarget::StagedDir(staged_reuse.path().to_path_buf()),
+            &AssembleOptions {
+                no_build: true,
+                profile: CargoProfile::Dev,
+                path_deps: PathDepPolicy::RewriteRelativeToAbsolute,
+                ignore_in_tree_prebuilt_cdylib: false,
+            },
+            &(),
+        )
+        .expect("flag off honors the in-tree prebuilt without rebuilding");
+        assert!(!outcome.rebuilt, "flag off reuses the prebuilt — no compile");
+        let staged_dylib = staged_reuse
+            .path()
+            .join("lib")
+            .join(host_target_triple())
+            .join(format!("librp.{}", host_dylib_extension()));
+        assert_eq!(
+            std::fs::read(&staged_dylib).unwrap(),
+            b"stale-in-tree-cdylib",
+            "flag off carries the stale in-tree cdylib verbatim"
+        );
+
+        // Flag ON: the prebuilt-preference is skipped. With `no_build` there is
+        // then no artifact to honor and cargo is forbidden, so assemble bails —
+        // which proves the stale `.so` was NOT reused. Mentally revert the
+        // `&& !opts.ignore_in_tree_prebuilt_cdylib` guard and this assemble
+        // succeeds by honoring the stale prebuilt, and this assertion fails.
+        let src_build = tempdir().unwrap();
+        write_stale_prebuilt_pkg(src_build.path());
+        let staged_build = tempdir().unwrap();
+        let err = assemble_artifact(
+            src_build.path(),
+            &AssembleTarget::StagedDir(staged_build.path().to_path_buf()),
+            &AssembleOptions {
+                no_build: true,
+                profile: CargoProfile::Dev,
+                path_deps: PathDepPolicy::RewriteRelativeToAbsolute,
+                ignore_in_tree_prebuilt_cdylib: true,
+            },
+            &(),
+        )
+        .expect_err("flag on must ignore the stale prebuilt, leaving no-build nothing to honor");
+        let msg = format!("{err}");
+        assert!(
+            msg.contains("no-build") && msg.contains("host-OS dylib"),
+            "flag on must bail in the no-dylib path, got: {err}"
         );
     }
 
@@ -2535,6 +2648,7 @@ mod tests {
                 no_build: false,
                 profile: CargoProfile::Dev,
                 path_deps: PathDepPolicy::RewriteRelativeToAbsolute,
+                ignore_in_tree_prebuilt_cdylib: false,
             },
             &(),
         )
@@ -2666,6 +2780,7 @@ mod tests {
                 no_build: false,
                 profile: CargoProfile::Dev,
                 path_deps: PathDepPolicy::RewriteRelativeToAbsolute,
+                ignore_in_tree_prebuilt_cdylib: false,
             },
             &(),
         )
@@ -2705,6 +2820,7 @@ mod tests {
                 no_build: false,
                 profile: CargoProfile::Dev,
                 path_deps: PathDepPolicy::RewriteRelativeToAbsolute,
+                ignore_in_tree_prebuilt_cdylib: false,
             },
             &(),
         )
@@ -2896,6 +3012,7 @@ mod tests {
                 no_build: true,
                 profile: CargoProfile::Dev,
                 path_deps: PathDepPolicy::RewriteRelativeToAbsolute,
+                ignore_in_tree_prebuilt_cdylib: false,
             },
             &(),
         )
@@ -2963,6 +3080,7 @@ mod tests {
                 no_build: true,
                 profile: CargoProfile::Dev,
                 path_deps: PathDepPolicy::RewriteRelativeToAbsolute,
+                ignore_in_tree_prebuilt_cdylib: false,
             },
             &(),
         )
@@ -3010,6 +3128,7 @@ mod tests {
                 no_build: true,
                 profile: CargoProfile::Dev,
                 path_deps: PathDepPolicy::RewriteRelativeToAbsolute,
+                ignore_in_tree_prebuilt_cdylib: false,
             },
             &(),
         )

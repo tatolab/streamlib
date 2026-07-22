@@ -82,6 +82,7 @@ fn add_folder_and_slpkg_then_remove_via_app_modules() {
             no_build: false,
             profile: CargoProfile::Release,
             path_deps: PathDepPolicy::RejectPathPatches,
+            ignore_in_tree_prebuilt_cdylib: false,
         },
         &(),
     )
@@ -189,6 +190,7 @@ fn add_with_expect_sha256_mismatch_fails_with_no_partial_state() {
             no_build: false,
             profile: CargoProfile::Release,
             path_deps: PathDepPolicy::RejectPathPatches,
+            ignore_in_tree_prebuilt_cdylib: false,
         },
         &(),
     )

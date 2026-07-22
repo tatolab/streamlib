@@ -406,6 +406,7 @@ fn assemble_source_slpkg(
             no_build: false,
             profile: CargoProfile::Release,
             path_deps: PathDepPolicy::RejectPathPatches,
+            ignore_in_tree_prebuilt_cdylib: false,
         },
         &(),
     )
