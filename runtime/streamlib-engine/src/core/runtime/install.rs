@@ -164,6 +164,16 @@ pub fn install(
     let mut staged_hashes: std::collections::BTreeMap<String, String> =
         std::collections::BTreeMap::new();
 
+    // The app root whose `streamlib_modules/` slot seam the install writes into:
+    // the lockfile's parent dir (default `<root_dir>/streamlib-app.lock`), or
+    // `root_dir` itself when no explicit lockfile path is configured.
+    let app_root: PathBuf = options
+        .lockfile_path
+        .as_deref()
+        .and_then(|p| p.parent())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| root_dir.to_path_buf());
+
     for pkg in resolved.iter_all() {
         let Some(pkg_ref) = package_ref_of(pkg) else {
             // Root project with no `[package]` — nothing to materialize.
@@ -172,12 +182,25 @@ pub fn install(
         // A package-flavor root IS materializable (installing a library),
         // but the resolver's `Root` source carries the root dir directly.
         tracing::info!(package = %pkg_ref, "install: materializing");
+        // `package_ref_of` returned `Some`, so the `[package]` block — and its
+        // version — is present.
+        let version = pkg
+            .manifest
+            .package
+            .as_ref()
+            .expect("package_ref_of is Some, so [package] is present")
+            .version;
         let request = BuildRequest {
             package: pkg_ref.clone(),
             source: BuildSource::PackageDir(pkg.root_dir.clone()),
             source_provenance: provenance_of(&pkg.source),
             policy,
             host_triple: host_target_triple().to_string(),
+            staging_destination_slot_dir: crate::core::installed_package_slot_dir(
+                Some(app_root.as_path()),
+                &pkg_ref,
+                version,
+            ),
         };
         let staged = orchestrator.materialize(&request, sink).map_err(|source| {
             InstallError::Materialize {
