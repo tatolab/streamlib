@@ -69,13 +69,20 @@ pub enum AddModuleError {
         actual: String,
     },
 
-    /// On-disk version doesn't satisfy the ident's [`SemVerRange`].
+    /// Locked-run integrity failure: an installed slot's on-disk version
+    /// doesn't satisfy the lockfile's `Exact` pin — the slot drifted from the
+    /// pinned version after install (an in-place republish that kept the dir).
+    /// Hard by the locked-run reproducibility contract. A *live* (install- or
+    /// dev-derived) walk never raises this: a declared range that no installed
+    /// version satisfies warns and loads the installed version (single-version
+    /// model — a version mismatch never blocks a live load).
     ///
     /// [`SemVerRange`]: streamlib_idents::SemVerRange
     #[error(
-        "Module '{module}' resolved to version {found} at {} which doesn't \
-         satisfy the requested range. Install a matching version or relax \
-         the range.",
+        "Locked run: module '{module}' resolved to version {found} at {} which \
+         doesn't satisfy the lockfile pin — the installed slot drifted from the \
+         pinned version. Re-run `streamlib install` to re-materialize and \
+         re-pin, then run again.",
         source_path.display()
     )]
     VersionRangeUnsatisfied {
@@ -301,33 +308,6 @@ pub enum AddModuleError {
     )]
     DependencyCycleDetected {
         cycle: Vec<streamlib_idents::PackageRef>,
-    },
-
-    /// Two requirers resolved the same `@org/name` package to different
-    /// concrete versions within the runtime's lifetime — a diamond
-    /// version conflict. The engine enforces a single version per package
-    /// across the whole module graph (and across successive `add_module`
-    /// calls), so this is a hard error rather than a silent
-    /// double-registration. Resolve it by pinning a single version via a
-    /// `patch:` entry in the requiring `streamlib.yaml` that redirects the
-    /// package to one `path:` / `git:` source, or by aligning the two
-    /// requirers on a single declared version.
-    #[error(
-        "Single-version conflict for package '{package}': version \
-         {existing_version} (required by {existing_required_by}) conflicts \
-         with version {conflicting_version} (required by \
-         {conflicting_required_by}). streamlib enforces one version per \
-         package across the module graph — pin a single version via a \
-         `patch:` entry in the requiring streamlib.yaml (redirecting \
-         '{package}' to one path/git source), or align the two requirers \
-         on the same version."
-    )]
-    SingleVersionConflict {
-        package: streamlib_idents::PackageRef,
-        existing_version: streamlib_idents::SemVer,
-        existing_required_by: String,
-        conflicting_version: streamlib_idents::SemVer,
-        conflicting_required_by: String,
     },
 
     /// This load skipped registering `package` because a concurrent

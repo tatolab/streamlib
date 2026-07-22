@@ -143,17 +143,18 @@ pub struct Runner {
     /// [`Runner::add_module`] call; persists across calls so a diamond
     /// version divergence — or two successive / concurrent `add_module`s
     /// resolving different concrete versions of the same package —
-    /// surfaces as [`AddModuleError::SingleVersionConflict`] instead of a
-    /// silent double-registration. Lives for the runtime's lifetime;
-    /// [`Runner::remove_module`] clears a removed package's entry so a
-    /// later `add_module` re-resolves it from scratch.
+    /// dedupes to the first-resolved winner (single-version model: a later
+    /// encounter at a different version warns and reuses the winner rather
+    /// than double-registering; if the two are incompatible it surfaces at
+    /// runtime). Lives for the runtime's lifetime; [`Runner::remove_module`]
+    /// clears a removed package's entry so a later `add_module` re-resolves
+    /// it from scratch.
     /// The memo is Runner-scoped while the schema / processor registries
     /// it protects are process-global statics — a second [`Runner`] in
     /// the same process carries its own memo and does not see this one's
     /// resolutions (pre-existing registry topology, unchanged here).
     ///
     /// [`Runner::add_module`]: Self::add_module
-    /// [`AddModuleError::SingleVersionConflict`]: crate::core::runtime::module_loader::AddModuleError::SingleVersionConflict
     pub(crate) resolution_memo: Arc<crate::core::runtime::module_loader::ResolutionMemo>,
 }
 
