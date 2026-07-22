@@ -561,14 +561,22 @@ fn source_for_dir(
     provenance: PackageSourceProvenance,
 ) -> std::result::Result<ResolvedSource, AddModuleError> {
     if build.requires_orchestrator() {
-        let staging_destination_slot_dir = staging_slot_for_dir(pkg_ref, &dir)?;
+        // A dev source (`Strategy::Path` / `Strategy::Git` / a `streamlib link`
+        // override) builds IN-TREE beside its source: the staging destination
+        // IS the source dir itself, so the orchestrator takes its in-place
+        // promote — landing ONLY the regenerated build outputs (`lib/<triple>/`,
+        // `.venv/`, `_generated_/`) into the source tree and leaving every
+        // source file untouched — rather than copying the whole tree into
+        // `.streamlib/cache/packages/`. The installed / registry / `.slpkg`
+        // arms keep their detached cache slot via `staging_slot_for_dir`; a
+        // locked run pins `NeverBuild` and so never reaches this branch.
         Ok(ResolvedSource::NeedsBuild(BuildRequest {
             package: pkg_ref.clone(),
-            source: BuildSource::PackageDir(dir),
+            source: BuildSource::PackageDir(dir.clone()),
             source_provenance: provenance,
             policy: build,
             host_triple: host_target_triple().to_string(),
-            staging_destination_slot_dir,
+            staging_destination_slot_dir: dir,
         }))
     } else {
         Ok(ResolvedSource::Ready(dir))
@@ -1987,6 +1995,109 @@ mod tests {
                 !registry_slot_holds_selected_version(policy, dir.path(), selected),
                 "{policy:?} must not reuse the materialized slot"
             );
+        }
+    }
+
+    // =====================================================================
+    // #1521 — a dev source (`Strategy::Path` / `Strategy::Git` / a link
+    // override) builds IN-TREE beside its source: the injected staging
+    // destination IS the source dir, so the orchestrator's in-place promote
+    // lands only the regenerated outputs and never copies the tree into
+    // `.streamlib/cache/packages/`. Installed / registry / `.slpkg` arms keep
+    // their detached cache slot; a locked run (NeverBuild) never gets here.
+    // =====================================================================
+
+    /// CRUX (bug-reproduce): a `Strategy::Path` source that needs the
+    /// orchestrator stages IN-TREE — `staging_destination_slot_dir` equals the
+    /// source dir itself, AND the build source equals it (the
+    /// `canonical(src) == canonical(dest)` case the in-place promote handles).
+    /// Mentally revert `source_for_dir` to `staging_slot_for_dir` and the
+    /// destination becomes a detached `.streamlib/cache/packages/` slot,
+    /// failing both equalities.
+    #[test]
+    fn path_strategy_stages_in_tree_beside_source() {
+        let dir = tempfile::tempdir().unwrap();
+        manifest(dir.path(), RUST_YAML);
+        std::fs::write(dir.path().join("Cargo.toml"), b"[package]\nname='rp'\n").unwrap();
+        let resolved = resolve_strategy_to_source(
+            &Strategy::Path {
+                path: dir.path().to_path_buf(),
+                build: BuildPolicy::IfStale,
+            },
+            &pkg_ref(),
+            None,
+        )
+        .expect("path source must resolve");
+        match resolved {
+            ResolvedSource::NeedsBuild(req) => {
+                assert_eq!(
+                    req.staging_destination_slot_dir.as_path(),
+                    dir.path(),
+                    "a dev Path source must stage in-tree beside its source"
+                );
+                match req.source {
+                    BuildSource::PackageDir(src) => assert_eq!(
+                        src.as_path(),
+                        dir.path(),
+                        "in-place staging requires source == destination"
+                    ),
+                    other => panic!("expected PackageDir source, got {other:?}"),
+                }
+            }
+            other => panic!("expected NeedsBuild, got {other:?}"),
+        }
+    }
+
+    /// A `NeverBuild` Path source (the locked-run posture) resolves to `Ready`
+    /// with NO build request — so a locked run never takes the in-place staging
+    /// path. Mentally revert the `requires_orchestrator` gate and this would
+    /// emit a build request against the source dir.
+    #[test]
+    fn path_strategy_never_build_is_ready_no_in_tree_stage() {
+        let dir = tempfile::tempdir().unwrap();
+        manifest(dir.path(), RUST_YAML);
+        std::fs::write(dir.path().join("Cargo.toml"), b"[package]\nname='rp'\n").unwrap();
+        let resolved = resolve_strategy_to_source(
+            &Strategy::Path {
+                path: dir.path().to_path_buf(),
+                build: BuildPolicy::NeverBuild,
+            },
+            &pkg_ref(),
+            None,
+        )
+        .expect("path source must resolve");
+        assert!(
+            matches!(resolved, ResolvedSource::Ready(_)),
+            "NeverBuild must load as-is, never emit an in-tree build request, got {resolved:?}"
+        );
+    }
+
+    /// A `streamlib link` override resolves the checkout package and — like a
+    /// `Strategy::Path` — stages IN-TREE beside the checkout source
+    /// (`staging_destination_slot_dir` == the checkout package dir), so the
+    /// link edit loop never copies into the package cache.
+    #[test]
+    fn active_link_stages_in_tree_beside_checkout_source() {
+        let checkout = fake_checkout_with_package("foo", "foo");
+        let consumer = tempfile::tempdir().unwrap();
+        let link = active_link_for(consumer.path(), checkout.path());
+
+        let resolved = resolve_strategy_to_source(
+            &Strategy::Registry {
+                version_req: SemVerRange::Any,
+                build: BuildPolicy::IfStale,
+            },
+            &pkg_ref_named("foo"),
+            Some(&link),
+        )
+        .expect("linked package must resolve from the checkout");
+        let expected = checkout.path().join("packages").join("foo");
+        match resolved {
+            ResolvedSource::NeedsBuild(req) => assert_eq!(
+                req.staging_destination_slot_dir, expected,
+                "a linked source must stage in-tree beside its checkout source"
+            ),
+            other => panic!("expected NeedsBuild(in-tree), got {other:?}"),
         }
     }
 }
