@@ -220,9 +220,15 @@ under one lock: the first resolver to reach a package inserts an
 `InFlightPlaceholder`; a second load that observes the placeholder skips and
 waits on a `PackageResolutionCompletionSignal` at the *end* of the walk
 (600s timeout) rather than blocking inside the gate — so the design is
-deadlock-free (no thread blocks holding the packages lock). A concrete
-version mismatch raises `SingleVersionConflict { package, existing_version,
-existing_required_by, conflicting_version, conflicting_required_by }`.
+deadlock-free (no thread blocks holding the packages lock). A live
+re-encounter that resolves the same package to a *different* concrete
+version warns and dedupes to the first-resolved winner (single-version
+model — a version mismatch never blocks a load; an incompatibility
+surfaces at runtime), never a hard conflict. Range enforcement is hard
+only at a *locked* run: an installed slot whose on-disk version drifts
+from its lockfile `Exact` pin raises `VersionRangeUnsatisfied` (a
+reproducibility/integrity failure), keeping the range→concrete resolver
+(install) and the concrete-enforcement resolver (locked run) separate.
 `InFlightPlaceholderGuard` is RAII: flipped-to-committed by the load's
 whole-load commit on success (registration is transactional — see
 [`runtime-module-materialization.md`](runtime-module-materialization.md)),

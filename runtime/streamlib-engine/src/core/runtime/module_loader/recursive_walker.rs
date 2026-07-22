@@ -27,7 +27,7 @@ pub(super) const SKIPPED_IN_FLIGHT_WAIT_TIMEOUT: Duration = Duration::from_secs(
 
 /// A single requirer edge into a resolved package: the parent
 /// [`PackageRef`] that declared the dependency (or `None` for a
-/// top-level `add_module` call) plus the version range it declared.
+/// top-level `add_module` call).
 ///
 /// [`PackageRef`]: streamlib_idents::PackageRef
 #[derive(Debug, Clone)]
@@ -35,11 +35,6 @@ pub(crate) struct RequirerRecord {
     /// The parent package that pulled this dependency in, or `None` when
     /// the package was the root of a top-level `add_module` call.
     pub requirer: Option<streamlib_idents::PackageRef>,
-    /// The [`SemVerRange`] the requirer declared for this package (`Any`
-    /// for path / git deps, which carry no range).
-    ///
-    /// [`SemVerRange`]: streamlib_idents::SemVerRange
-    pub declared_range: streamlib_idents::SemVerRange,
 }
 
 /// The single-version resolution record for one `@org/name` package.
@@ -142,25 +137,29 @@ pub(crate) struct SkippedInFlightDependency {
 pub(super) enum SingleVersionGateOutcome {
     /// First encounter — placeholder inserted; register + recurse.
     ProceedAsFirstResolution,
-    /// Already committed at the same version — requirer recorded; skip.
-    SkipAlreadyCommittedSameVersion,
+    /// Already committed — requirer recorded; skip. A re-encounter at a
+    /// different version deduped to the first-resolved winner lands here too.
+    SkipAlreadyCommittedWinner,
     /// In flight on THIS load (a same-load diamond re-encounter) —
     /// requirer recorded; skip with no wait entry. Waiting on the owner
     /// would be waiting on ourselves: this load's placeholders only flip
     /// at its own whole-load commit, which runs after the wait phase.
     SkipOwnedByThisLoad,
-    /// In flight on a concurrent load at the same version — requirer
-    /// recorded; skip locally and verify the owner's outcome at the end
-    /// of this walk via the carried signal.
-    SkipInFlightSameVersion(Arc<PackageResolutionCompletionSignal>),
+    /// In flight on a concurrent load — requirer recorded; skip locally and
+    /// verify the owner's outcome at the end of this walk via the carried
+    /// signal. A concurrent re-encounter at a different version deduped to
+    /// the winner lands here too.
+    SkipInFlightWinner(Arc<PackageResolutionCompletionSignal>),
 }
 
 /// Runtime-lifetime memo of every package resolved by the live module
 /// walker, keyed by `@org/name`. Persists across every `add_module` call
 /// on a [`Runner`] so two independently-rooted diamond branches, two
-/// successive `add_module` calls, or two concurrent loads that resolve
-/// the same package to different concrete versions conflict instead of
-/// silently double-registering.
+/// successive `add_module` calls, or two concurrent loads dedupe the same
+/// `@org/name` to a single first-resolved winner instead of
+/// double-registering. A later encounter at a different concrete version
+/// warns and reuses the winner (single-version model; an incompatibility
+/// surfaces at runtime).
 ///
 /// [`Runner`]: crate::core::runtime::Runner
 pub(crate) struct ResolutionMemo {
@@ -209,23 +208,19 @@ impl ResolutionMemo {
                 PackageResolutionState::Committed { record } => record,
             };
             if record.version != on_disk_version {
-                return Err(AddModuleError::SingleVersionConflict {
-                    package: pkg_ref.clone(),
-                    existing_version: record.version,
-                    existing_required_by: format!(
-                        "{} [resolved from {}]",
-                        describe_requirers(&record.required_by),
-                        record.source_path.display(),
-                    ),
-                    conflicting_version: on_disk_version,
-                    conflicting_required_by: format!(
-                        "{} [resolved from {}]",
-                        describe_requirer(&requirer),
-                        manifest_dir.display(),
-                    ),
-                });
-            }
-            if record.source_path != manifest_dir {
+                tracing::warn!(
+                    package = %pkg_ref,
+                    resolved_version = %record.version,
+                    resolved_from = %record.source_path.display(),
+                    conflicting_version = %on_disk_version,
+                    conflicting_from = %manifest_dir.display(),
+                    "single-version gate: package already resolved to a \
+                     different version from an earlier source — keeping the \
+                     first-resolved winner and ignoring the later encounter \
+                     (single-version model; if the two are incompatible it \
+                     will surface at runtime)",
+                );
+            } else if record.source_path != manifest_dir {
                 tracing::warn!(
                     package = %pkg_ref,
                     version = %on_disk_version,
@@ -244,10 +239,10 @@ impl ResolutionMemo {
                 tracing::debug!(
                     package = %pkg_ref,
                     version = %on_disk_version,
-                    "single-version gate: already resolved at this version — \
-                     skipping re-registration and re-recursion",
+                    "single-version gate: already resolved — skipping \
+                     re-registration and re-recursion",
                 );
-                Ok(SingleVersionGateOutcome::SkipAlreadyCommittedSameVersion)
+                Ok(SingleVersionGateOutcome::SkipAlreadyCommittedWinner)
             }
             PackageResolutionState::InFlightPlaceholder {
                 completion_signal,
@@ -258,9 +253,8 @@ impl ResolutionMemo {
                     tracing::debug!(
                         package = %pkg_ref,
                         version = %on_disk_version,
-                        "single-version gate: same version in flight on THIS \
-                         load (diamond re-encounter) — skipping with no wait \
-                         entry",
+                        "single-version gate: already in flight on THIS load \
+                         (diamond re-encounter) — skipping with no wait entry",
                     );
                     return Ok(SingleVersionGateOutcome::SkipOwnedByThisLoad);
                 }
@@ -268,11 +262,10 @@ impl ResolutionMemo {
                     package = %pkg_ref,
                     version = %on_disk_version,
                     owner_load_id = *owner_load_id,
-                    "single-version gate: same version in flight on a \
-                     concurrent load — skipping locally; outcome verified at \
-                     end of walk",
+                    "single-version gate: already in flight on a concurrent \
+                     load — skipping locally; outcome verified at end of walk",
                 );
-                Ok(SingleVersionGateOutcome::SkipInFlightSameVersion(
+                Ok(SingleVersionGateOutcome::SkipInFlightWinner(
                     Arc::clone(completion_signal),
                 ))
             }
@@ -444,27 +437,6 @@ impl Drop for InFlightPlaceholderGuard<'_> {
     }
 }
 
-/// Render one requirer edge for a
-/// [`AddModuleError::SingleVersionConflict`] message.
-fn describe_requirer(requirer: &RequirerRecord) -> String {
-    match &requirer.requirer {
-        Some(pkg) => format!("{pkg} (declared `{}`)", requirer.declared_range),
-        None => format!(
-            "top-level add_module (declared `{}`)",
-            requirer.declared_range
-        ),
-    }
-}
-
-/// Render the accumulated requirers of an already-resolved package.
-fn describe_requirers(requirers: &[RequirerRecord]) -> String {
-    requirers
-        .iter()
-        .map(describe_requirer)
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 /// Everything one top-level module load threads through its recursive
 /// dependency walk: the immutable per-load inputs (node, orchestrator,
 /// memo, staging buffer, lockfile / link context) plus the mutable
@@ -501,6 +473,15 @@ pub(super) struct ModuleLoadWalkContext<'load> {
     /// committed — appended onto their ledger records at commit.
     pub committed_dependency_requirer_edges:
         Vec<(streamlib_idents::PackageRef, streamlib_idents::PackageRef)>,
+}
+
+impl ModuleLoadWalkContext<'_> {
+    /// The package that required the node currently being resolved — the
+    /// penultimate element of the recursion path (the last is the current
+    /// node). `None` for a top-level `add_module` (path length < 2).
+    fn requirer(&self) -> Option<&streamlib_idents::PackageRef> {
+        (self.path.len() >= 2).then(|| &self.path[self.path.len() - 2])
+    }
 }
 
 /// Recursive worker: resolves the [`Strategy`] to a source, materializes
@@ -612,11 +593,36 @@ fn add_module_recursive_body(
         });
     }
     if !module.version.matches(on_disk_version) {
-        return Err(AddModuleError::VersionRangeUnsatisfied {
-            module: module.clone(),
-            found: on_disk_version,
-            source_path: manifest_dir.clone(),
-        });
+        // A locked run resolves each dep to its lockfile `Exact` pin, so a
+        // mismatch here is a slot whose on-disk version drifted from the pin
+        // (an in-place republish after install) — a reproducibility/integrity
+        // failure, hard by the locked-run contract. Only the live (install- or
+        // dev-derived) walk is lenient: a declared range that no installed
+        // version satisfies warns and loads the installed version, matching the
+        // install-time resolver's single-version model — a version mismatch
+        // never blocks a live load.
+        if walk_context.locked.is_some() {
+            return Err(AddModuleError::VersionRangeUnsatisfied {
+                module: module.clone(),
+                found: on_disk_version,
+                source_path: manifest_dir.clone(),
+            });
+        }
+        let requirer_for_warning = walk_context
+            .requirer()
+            .map(ToString::to_string)
+            .unwrap_or_else(|| "top-level add_module".to_string());
+        tracing::warn!(
+            module = %module,
+            requested_range = %module.version,
+            installed_version = %on_disk_version,
+            requirer = %requirer_for_warning,
+            source_path = %manifest_dir.display(),
+            "loading the installed version although the requirer declared a \
+             range no installed version satisfies — no matching version \
+             installed; loading it anyway (single-version model: a version \
+             mismatch never blocks a load)",
+        );
     }
 
     tracing::info!(
@@ -629,23 +635,24 @@ fn add_module_recursive_body(
     // Single-version-per-package gate. The memo persists across the whole
     // runtime lifetime (not per walk), so two independently-rooted diamond
     // branches, two successive `add_module` calls, or two concurrent
-    // loads that resolve the same package to different concrete versions
-    // conflict here instead of silently double-registering. Compares
-    // concrete resolved `SemVer`s, never ranges: path / git deps enter
-    // with range `Any`, so a range-only check would never fire.
+    // loads dedupe the same `@org/name` to one first-resolved winner here
+    // instead of double-registering. A later encounter resolving a
+    // DIFFERENT concrete version warns and reuses the winner (single-version
+    // model; an incompatibility surfaces at compile-on-install for source
+    // packages — a consumer codegen'd against the winner's older schema idents
+    // fails the ident lookup / type-check — or at runtime for prebuilt slots),
+    // never blocks the load.
     //
     // First encounter inserts an in-flight placeholder under the same
     // lock as the check (no check-then-commit window for a concurrent
-    // load to slip through). A same-version re-encounter skips
-    // re-registration + re-recursion; when the same version is in flight
-    // on a CONCURRENT load, the skip is recorded in `skipped_in_flight`
-    // and the owner's outcome is verified at the end of this walk —
-    // nobody ever blocks mid-walk, so concurrent walks cannot deadlock.
-    let requirer_package = (walk_context.path.len() >= 2)
-        .then(|| walk_context.path[walk_context.path.len() - 2].clone());
+    // load to slip through). A re-encounter skips re-registration +
+    // re-recursion; when the winner is in flight on a CONCURRENT load, the
+    // skip is recorded in `skipped_in_flight` and the owner's outcome is
+    // verified at the end of this walk — nobody ever blocks mid-walk, so
+    // concurrent walks cannot deadlock.
+    let requirer_package = walk_context.requirer().cloned();
     let requirer = RequirerRecord {
         requirer: requirer_package.clone(),
-        declared_range: module.version.clone(),
     };
     match walk_context.resolution_memo.gate(
         walk_context.load_id,
@@ -654,7 +661,7 @@ fn add_module_recursive_body(
         &manifest_dir,
         requirer,
     )? {
-        SingleVersionGateOutcome::SkipAlreadyCommittedSameVersion => {
+        SingleVersionGateOutcome::SkipAlreadyCommittedWinner => {
             // The package belongs to an EARLIER committed load; record the
             // requirer edge so this load's commit appends it onto the
             // dependency's ledger record.
@@ -666,7 +673,7 @@ fn add_module_recursive_body(
             return Ok(());
         }
         SingleVersionGateOutcome::SkipOwnedByThisLoad => return Ok(()),
-        SingleVersionGateOutcome::SkipInFlightSameVersion(completion_signal) => {
+        SingleVersionGateOutcome::SkipInFlightWinner(completion_signal) => {
             walk_context
                 .skipped_in_flight
                 .push(SkippedInFlightDependency {

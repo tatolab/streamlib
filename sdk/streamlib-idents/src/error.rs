@@ -116,17 +116,6 @@ pub enum ResolverError {
         range: String,
     },
 
-    #[error(
-        "dependency `{name}` resolution conflict: range `{range_a}` (from `{from_a}`) and `{range_b}` (from `{from_b}`) have no overlap"
-    )]
-    VersionRangeConflict {
-        name: String,
-        range_a: String,
-        from_a: PathBuf,
-        range_b: String,
-        from_b: PathBuf,
-    },
-
     #[error("circular dependency detected: {chain}")]
     CircularDependency { chain: String },
 

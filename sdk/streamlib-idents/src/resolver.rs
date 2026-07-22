@@ -95,8 +95,9 @@ pub enum ResolvedSource {
     Git { url: String, rev: String },
     /// Resolved from a `.slpkg` archive (path to the archive is stored).
     Slpkg { archive: PathBuf },
-    /// Resolved from a registry. Reserved — v1 does not implement a
-    /// registry, so this variant is constructable only by future code paths.
+    /// Resolved from the static registry's generic store: the URL the concrete
+    /// `.slpkg` was fetched from. Constructed by `resolve_registry_dependency`
+    /// and recorded in the lockfile via `ResolvedSource::to_lockfile_source`.
     Registry { url: String },
 }
 
@@ -341,7 +342,7 @@ pub fn resolve_with(
             let dep_id = dep_ref.to_string();
 
             if let Some(existing) = packages.get(&dep_id) {
-                check_existing_satisfies_spec(existing, &spec, &consumer_dir, &dep_id)?;
+                warn_when_existing_unsatisfies_spec(existing, &spec, &consumer_dir, &dep_id);
                 continue;
             }
 
@@ -849,7 +850,21 @@ fn check_resolved_satisfies_spec(
             declared: "<no package block>".into(),
             requested: dep_id.to_string(),
         })?;
-    if !reg.version.matches(v) {
+    if reg.version.matches(v) {
+        return Ok(());
+    }
+    // The resolved concrete is out of the declared range. Only a genuine
+    // registry resolution is hard here: `select_version` already guarantees an
+    // in-range pick from the store, so a mismatch on a `Registry` source is a
+    // registry mis-selection and stays an error as defense-in-depth. A
+    // link/patch override (resolve_one's short-circuit to a linked checkout, or
+    // a dev `patch:` redirect) legitimately produces a Path/Git/Slpkg concrete
+    // whose version diverges from the declared range — its "link resolution
+    // overrides the declared spec" contract. Per #1505 a version mismatch never
+    // blocks a load, so that case warns and keeps the override (mirroring
+    // `warn_when_existing_unsatisfies_spec`). The locked-run drift check stays
+    // hard elsewhere as an integrity guarantee.
+    if matches!(resolved.source, ResolvedSource::Registry { .. }) {
         return Err(ResolverError::VersionRangeUnsatisfied {
             name: dep_id.to_string(),
             from: consumer_dir.join(Manifest::FILE_NAME),
@@ -857,33 +872,51 @@ fn check_resolved_satisfies_spec(
             range: reg.version.to_string(),
         });
     }
+    tracing::warn!(
+        dependency = %dep_id,
+        resolved_version = %v,
+        declared_range = %reg.version,
+        resolved_from = %resolved.root_dir.join(Manifest::FILE_NAME).display(),
+        requirer_from = %consumer_dir.join(Manifest::FILE_NAME).display(),
+        "resolved version does not satisfy the declared range, but a link/patch \
+         override is in effect; keeping the overridden version (a version \
+         mismatch never blocks a load)"
+    );
     Ok(())
 }
 
-fn check_existing_satisfies_spec(
+/// Reconcile a second requirer's range against the already-resolved concrete
+/// version of a shared dependency. Per the compile-on-install model, a range
+/// mismatch resolves to what is already installed rather than failing the walk:
+/// the winning concrete version stays, and the unsatisfied range is surfaced as
+/// a warning naming both the winner's manifest and the requirer that couldn't be
+/// honored. Only range enforcement at a *locked run* (module_loader's
+/// `SemVerRange::Exact` check) is hard — this install/codegen unification stage
+/// is deliberately lenient.
+fn warn_when_existing_unsatisfies_spec(
     existing: &ResolvedPackage,
     spec: &DependencySpec,
     consumer_dir: &Path,
     dep_id: &str,
-) -> ResolverResult<()> {
-    if let DependencySpec::Registry(reg) = spec {
-        let v = existing
-            .manifest
-            .package
-            .as_ref()
-            .map(|p| p.version)
-            .expect("existing dep is package-flavor");
-        if !reg.version.matches(v) {
-            return Err(ResolverError::VersionRangeConflict {
-                name: dep_id.to_string(),
-                range_a: format!("(already-resolved {})", v),
-                from_a: existing.root_dir.join(Manifest::FILE_NAME),
-                range_b: reg.version.to_string(),
-                from_b: consumer_dir.join(Manifest::FILE_NAME),
-            });
-        }
+) {
+    let DependencySpec::Registry(reg) = spec else {
+        return;
+    };
+    let Some(installed) = existing.manifest.package.as_ref().map(|p| p.version) else {
+        return;
+    };
+    if !reg.version.matches(installed) {
+        tracing::warn!(
+            dependency = %dep_id,
+            installed = %installed,
+            unsatisfied_range = %reg.version,
+            winner_from = %existing.root_dir.join(Manifest::FILE_NAME).display(),
+            requirer_from = %consumer_dir.join(Manifest::FILE_NAME).display(),
+            "dependency range not satisfied by the already-resolved version; \
+             keeping the installed version (compile-on-install: a mismatch \
+             resolves to what is installed)"
+        );
     }
-    Ok(())
 }
 
 fn default_cache_dir() -> ResolverResult<PathBuf> {
@@ -1246,6 +1279,207 @@ dependencies:
         assert!(res.packages.contains_key("@tatolab/core"));
         assert!(res.packages.contains_key("@tatolab/a"));
         assert!(res.packages.contains_key("@tatolab/b"));
+    }
+
+    /// #1505 winner-selection: two requirers of the same registry dependency
+    /// declare disjoint semver ranges. The first-walked requirer (`@tatolab/a`,
+    /// `^1.0.0`) resolves the shared dep to the installed `1.2.0`; the second
+    /// (`@tatolab/b`, `^3.0.0`) can't be satisfied by that concrete version.
+    /// Per the compile-on-install model the resolve MUST NOT error — it keeps
+    /// the already-resolved winner and only warns. This is the regression lock:
+    /// restoring the old `VersionRangeConflict` hard error makes `resolve_with`
+    /// return `Err` here and the `unwrap()` panics.
+    #[test]
+    fn disjoint_ranges_resolve_to_installed_winner_not_conflict() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mirror = tmp.path().join("mirror");
+        let cache = tmp.path().join("cache");
+
+        // Only 1.2.0 is published; `@tatolab/a`'s `^1.0.0` selects it, and
+        // `@tatolab/b`'s `^3.0.0` is disjoint from it.
+        write_escalate_slpkg(&mirror, "1.2.0");
+
+        let root = tmp.path().join("project");
+        let a = tmp.path().join("a");
+        let b = tmp.path().join("b");
+
+        write_streamlib_yaml(
+            &a,
+            r#"
+package:
+  org: tatolab
+  name: a
+  version: 1.0.0
+dependencies:
+  "@tatolab/escalate": "^1.0.0"
+"#,
+        );
+        write_streamlib_yaml(
+            &b,
+            r#"
+package:
+  org: tatolab
+  name: b
+  version: 1.0.0
+dependencies:
+  "@tatolab/escalate": "^3.0.0"
+"#,
+        );
+        write_streamlib_yaml(
+            &root,
+            r#"
+dependencies:
+  "@tatolab/a":
+    path: ../a
+  "@tatolab/b":
+    path: ../b
+"#,
+        );
+
+        let opts = ResolverOptions {
+            cache_dir: Some(cache),
+            registry: Some(crate::RegistryConfig {
+                base_url: format!("file://{}", mirror.display()),
+            }),
+            link_checkout: None,
+        };
+        let res = resolve_with(&root, &opts).unwrap();
+        let escalate = res.packages.get("@tatolab/escalate").unwrap();
+        assert_eq!(
+            escalate
+                .manifest
+                .package
+                .as_ref()
+                .unwrap()
+                .version
+                .to_string(),
+            "1.2.0",
+            "the shared dep must keep the first-resolved installed winner"
+        );
+    }
+
+    /// #1505 first-resolution gate leniency: a dep is DECLARED by a Registry
+    /// range but a dev `patch:` redirects it to a local checkout whose version
+    /// is out of that range (the same shape a `streamlib link` produces). The
+    /// resolve MUST NOT error — a version mismatch never blocks a load; the
+    /// override wins and only warns. Regression lock: re-broadening
+    /// `check_resolved_satisfies_spec` to error for a non-`Registry` source
+    /// makes `resolve_with` return `Err` here and the `unwrap()` panics.
+    #[test]
+    fn patch_override_out_of_range_warns_not_conflict() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("project");
+        let core = tmp.path().join("core");
+
+        write_streamlib_yaml(
+            &core,
+            "package:\n  org: tatolab\n  name: core\n  version: 2.0.0\n",
+        );
+        write_streamlib_yaml(
+            &root,
+            r#"
+dependencies:
+  "@tatolab/core": "^1.0.0"
+patch:
+  "@tatolab/core":
+    path: ../core
+"#,
+        );
+
+        let opts = ResolverOptions {
+            cache_dir: Some(tmp.path().join("cache")),
+            registry: None,
+            link_checkout: None,
+        };
+        let res = resolve_with(&root, &opts).unwrap();
+        let core_pkg = res.packages.get("@tatolab/core").unwrap();
+        assert!(matches!(core_pkg.source, ResolvedSource::Path { .. }));
+        assert_eq!(
+            core_pkg.manifest.package.as_ref().unwrap().version.to_string(),
+            "2.0.0",
+            "the patch-overridden out-of-range version must win, not error"
+        );
+    }
+
+    /// The registry-scoping half of the same gate: a GENUINE `Registry`-source
+    /// concrete that somehow falls out of the declared range is still a hard
+    /// `VersionRangeUnsatisfied` (defense-in-depth against a store
+    /// mis-selection), where `select_version` normally guarantees an in-range
+    /// pick. Pairs with `patch_override_out_of_range_warns_not_conflict` to pin
+    /// both arms of the source scoping.
+    #[test]
+    fn registry_source_out_of_range_still_errors() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("core");
+        write_streamlib_yaml(
+            &dir,
+            "package:\n  org: tatolab\n  name: core\n  version: 2.0.0\n",
+        );
+        let manifest = Manifest::load(&dir).unwrap();
+
+        let resolved = ResolvedPackage {
+            manifest,
+            root_dir: dir.clone(),
+            schema_files: Vec::new(),
+            source: ResolvedSource::Registry {
+                url: "file:///mirror/core-2.0.0.slpkg".into(),
+            },
+            content_hash: "sha256:0".into(),
+        };
+        let spec = DependencySpec::Registry(RegistryDependency {
+            version: crate::semver::SemVerRange::from_str("^1.0.0").unwrap(),
+            runtime: false,
+        });
+
+        let err = check_resolved_satisfies_spec(&resolved, &spec, &dir, "@tatolab/core")
+            .unwrap_err();
+        assert!(
+            matches!(err, ResolverError::VersionRangeUnsatisfied { .. }),
+            "a registry-source out-of-range concrete must stay hard, got {err:?}"
+        );
+    }
+
+    /// A dep first resolved via a path/git spec carries a manifest whose
+    /// `package` block can legitimately be `None` (that flavor skips the
+    /// package-id check). Re-referencing it through a Registry range must
+    /// reconcile leniently — the whole point of #1505 is that a version
+    /// mismatch never halts a load, so a missing package block on the installed
+    /// winner must be an early return, not a panic. Regression lock: restoring
+    /// the old `.expect("existing dep is package-flavor")` makes this call
+    /// panic instead of returning.
+    #[test]
+    fn reconcile_against_no_package_block_does_not_panic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("nopkg");
+        write_streamlib_yaml(
+            &dir,
+            r#"
+dependencies:
+  "@tatolab/core":
+    path: ../core
+"#,
+        );
+        let manifest = Manifest::load(&dir).unwrap();
+        assert!(
+            manifest.package.is_none(),
+            "fixture must have no package block to exercise the lenient path"
+        );
+
+        let existing = ResolvedPackage {
+            manifest,
+            root_dir: dir.clone(),
+            schema_files: Vec::new(),
+            source: ResolvedSource::Path {
+                relative: PathBuf::from("../core"),
+            },
+            content_hash: "sha256:0".into(),
+        };
+        let spec = DependencySpec::Registry(RegistryDependency {
+            version: crate::semver::SemVerRange::from_str("^3.0.0").unwrap(),
+            runtime: false,
+        });
+
+        warn_when_existing_unsatisfies_spec(&existing, &spec, &dir, "@tatolab/core");
     }
 
     #[test]

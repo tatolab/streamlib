@@ -1210,25 +1210,33 @@ mod add_module_tests {
         );
     }
 
+    /// #1505 live-walk leniency: a top-level `add_module` requesting a range
+    /// (`^3.0.0`) that the only installed version (`1.0.0`) does not satisfy
+    /// WARNS and loads the installed version rather than hard-failing — the
+    /// single-version model, where a version mismatch never blocks a load.
+    /// Mentally-revertible: restoring the `VersionRangeUnsatisfied` gate makes
+    /// this `add_module` return `Err` and the `expect` below panics.
     #[test]
     #[serial]
-    fn add_module_rejects_version_range_mismatch() {
+    fn add_module_range_mismatch_warns_and_loads_installed() {
+        const TYPE_NAME: &str = "AddModuleRangeSchema";
         let home = tempfile::tempdir().unwrap();
         let _guard = HomeGuard::install(home.path());
-        install_cached_package("tatolab", "add-module-range", "1.0.0", None);
+        install_cached_package("tatolab", "add-module-range", "1.0.0", Some(TYPE_NAME));
 
         let runtime = Runner::new().expect("Runner::new");
-        let err = runtime
+        let canonical = format!("@tatolab/add-module-range/{TYPE_NAME}");
+        runtime
             .add_module_blocking(ModuleIdent::new(
                 Org::new("tatolab").unwrap(),
                 Package::new("add-module-range").unwrap(),
-                SemVerRange::Caret(SemVer::new(2, 0, 0)),
+                SemVerRange::Caret(SemVer::new(3, 0, 0)),
             ))
-            .expect_err("range mismatch must error");
+            .expect("a range no installed version satisfies must warn and load the installed version");
 
         assert!(
-            matches!(err, AddModuleError::VersionRangeUnsatisfied { found, .. } if found == SemVer::new(1, 0, 0)),
-            "expected VersionRangeUnsatisfied(1.0.0), got: {err:?}",
+            crate::core::embedded_schemas::get_embedded_schema_definition(&canonical).is_some(),
+            "the installed 1.0.0 slot must load despite the unsatisfied ^3.0.0 range",
         );
     }
 
@@ -1749,9 +1757,15 @@ processors:
         }
     }
 
+    /// #1505 live-walk leniency through a transitive dep: vmm-a declares
+    /// `@tatolab/vmm-b: ^2.0.0` but the resolved vmm-b is `1.0.0`. The walk
+    /// WARNS and loads vmm-b@1.0.0 rather than propagating a hard error — a
+    /// version mismatch never blocks a live load. Mentally-revertible:
+    /// restoring the `VersionRangeUnsatisfied` gate makes the walk return
+    /// `Err` and the `expect` below panics.
     #[test]
     #[serial]
-    fn dep_walker_surfaces_version_mismatch_from_dep() {
+    fn dep_walker_range_mismatch_from_dep_warns_and_loads() {
         let home = tempfile::tempdir().unwrap();
         let pkg_root = tempfile::tempdir().unwrap();
         let a = pkg_root.path().join("a");
@@ -1773,7 +1787,7 @@ processors:
         let _guard = HomeGuard::install(home.path());
         let runtime = Runner::new().expect("Runner::new");
         runtime.set_build_orchestrator(LoadAsIsOrchestrator);
-        let err = runtime
+        runtime
             .add_module_with_blocking(
                 ModuleIdent::any(Org::new("tatolab").unwrap(), Package::new("vmm-a").unwrap()),
                 Strategy::Path {
@@ -1781,26 +1795,32 @@ processors:
                     build: BuildPolicy::NeverBuild,
                 },
             )
-            .expect_err("version mismatch from dep must propagate");
-        assert!(
-            matches!(err, AddModuleError::VersionRangeUnsatisfied { ref module, found, .. }
-                if module.name.as_str() == "vmm-b" && found == SemVer::new(1, 0, 0)),
-            "expected VersionRangeUnsatisfied for vmm-b@1.0.0, got: {err:?}",
+            .expect("a dep range no resolved version satisfies must warn and load");
+        let vmm_b = streamlib_idents::PackageRef::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("vmm-b").unwrap(),
         );
+        let record = runtime
+            .resolution_memo
+            .committed_record(&vmm_b)
+            .expect("vmm-b must be committed despite the unsatisfied ^2.0.0 range");
+        assert_eq!(record.version, SemVer::new(1, 0, 0));
     }
 
     // =========================================================================
     // Single-version-per-package gate (#1216)
     // =========================================================================
 
-    /// A diamond where the two branches resolve the shared dependency to
-    /// *different* concrete versions (B→D@1.0.0, C→D@1.1.0) must surface a
-    /// typed [`AddModuleError::SingleVersionConflict`] naming both versions
-    /// and both requirers — not a silent double-registration. Path deps
-    /// enter with range `Any`, so the gate must compare concrete `SemVer`s.
+    /// #1505 single-version dedupe: a diamond whose two branches resolve the
+    /// shared dependency to *different* concrete versions (B→D@1.0.0,
+    /// C→D@1.1.0) WARNS and dedupes to the first-resolved winner (D@1.0.0)
+    /// rather than hard-failing. B is walked before C (BTreeMap key order), so
+    /// D@1.0.0 lands in the memo first and D@1.1.0 is the deduped encounter.
+    /// Mentally-revertible: restoring the `SingleVersionConflict` gate makes
+    /// this load return `Err` and the `expect` below panics.
     #[test]
     #[serial]
-    fn diamond_conflicting_versions_error_single_version_conflict() {
+    fn diamond_conflicting_versions_dedupes_to_first_winner() {
         let home = tempfile::tempdir().unwrap();
         let pkg_root = tempfile::tempdir().unwrap();
         let a = pkg_root.path().join("a");
@@ -1844,7 +1864,7 @@ processors:
         let _guard = HomeGuard::install(home.path());
         let runtime = Runner::new().expect("Runner::new");
         runtime.set_build_orchestrator(LoadAsIsOrchestrator);
-        let err = runtime
+        runtime
             .add_module_with_blocking(
                 ModuleIdent::any(
                     Org::new("tatolab").unwrap(),
@@ -1855,31 +1875,25 @@ processors:
                     build: BuildPolicy::NeverBuild,
                 },
             )
-            .expect_err("diamond version conflict must error");
-        match err {
-            AddModuleError::SingleVersionConflict {
-                package,
-                existing_version,
-                existing_required_by,
-                conflicting_version,
-                conflicting_required_by,
-            } => {
-                assert_eq!(package.name.as_str(), "diamond-d");
-                // B is walked before C (BTreeMap key order), so D@1.0.0 lands
-                // in the memo first and D@1.1.0 is the conflicting encounter.
-                assert_eq!(existing_version, SemVer::new(1, 0, 0));
-                assert_eq!(conflicting_version, SemVer::new(1, 1, 0));
-                assert!(
-                    existing_required_by.contains("diamond-b"),
-                    "existing requirer should name diamond-b, got: {existing_required_by}",
-                );
-                assert!(
-                    conflicting_required_by.contains("diamond-c"),
-                    "conflicting requirer should name diamond-c, got: {conflicting_required_by}",
-                );
-            }
-            other => panic!("expected SingleVersionConflict, got: {other:?}"),
-        }
+            .expect("a diamond version divergence must dedupe to the winner, not error");
+        let diamond_d = streamlib_idents::PackageRef::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("diamond-d").unwrap(),
+        );
+        let record = runtime
+            .resolution_memo
+            .committed_record(&diamond_d)
+            .expect("diamond-d must be committed as a single resolution");
+        assert_eq!(
+            record.version,
+            SemVer::new(1, 0, 0),
+            "the first-walked branch (diamond-b → D@1.0.0) must win the dedupe",
+        );
+        assert_eq!(
+            record.required_by.len(),
+            2,
+            "both diamond-b and diamond-c must be recorded as requirers of the single D resolution",
+        );
     }
 
     /// A diamond where both branches agree on the shared dependency's
@@ -2006,10 +2020,14 @@ processors:
 
     /// The memo persists across successive `add_module` calls on the same
     /// runtime: adding X@1.0.0, then adding Y (which depends on X@2.0.0),
-    /// conflicts even though the two loads are independent top-level calls.
+    /// dedupes to the first-resolved winner (X@1.0.0) across the two
+    /// independent top-level calls — the second load WARNS and reuses the
+    /// committed X rather than hard-failing. Mentally-revertible: restoring
+    /// the `SingleVersionConflict` gate makes the second `add_module` return
+    /// `Err` and the `expect` below panics.
     #[test]
     #[serial]
-    fn cross_call_conflicting_versions_error() {
+    fn cross_call_conflicting_versions_dedupe_to_first_winner() {
         let home = tempfile::tempdir().unwrap();
         let pkg_root = tempfile::tempdir().unwrap();
         let xa = pkg_root.path().join("xa");
@@ -2052,7 +2070,7 @@ processors:
             )
             .expect("first add_module (x@1.0.0) must succeed");
 
-        let err = runtime
+        runtime
             .add_module_with_blocking(
                 ModuleIdent::any(
                     Org::new("tatolab").unwrap(),
@@ -2063,26 +2081,20 @@ processors:
                     build: BuildPolicy::NeverBuild,
                 },
             )
-            .expect_err("second add_module pulling x@2.0.0 must conflict");
-        match err {
-            AddModuleError::SingleVersionConflict {
-                package,
-                existing_version,
-                existing_required_by,
-                conflicting_version,
-                ..
-            } => {
-                assert_eq!(package.name.as_str(), "crosscall-x");
-                assert_eq!(existing_version, SemVer::new(1, 0, 0));
-                assert_eq!(conflicting_version, SemVer::new(2, 0, 0));
-                assert!(
-                    existing_required_by.contains("top-level add_module"),
-                    "existing requirer must name the top-level add_module call, \
-                     got: {existing_required_by}",
-                );
-            }
-            other => panic!("expected SingleVersionConflict, got: {other:?}"),
-        }
+            .expect("second add_module pulling x@2.0.0 must dedupe to the winner, not conflict");
+        let crosscall_x = streamlib_idents::PackageRef::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("crosscall-x").unwrap(),
+        );
+        let record = runtime
+            .resolution_memo
+            .committed_record(&crosscall_x)
+            .expect("crosscall-x must remain committed as a single resolution");
+        assert_eq!(
+            record.version,
+            SemVer::new(1, 0, 0),
+            "the first top-level add (x@1.0.0) must win across the two calls",
+        );
     }
 
     /// Re-adding the same package at the same version is a cheap idempotent
@@ -2337,15 +2349,18 @@ processors:
         );
     }
 
-    /// Two CONCURRENT top-level loads pulling DIFFERENT versions of the
-    /// same package (TA→D@1.0.0, TB→D@1.1.0) produce exactly one
-    /// SingleVersionConflict — never a silent last-commit-wins
-    /// double-registration. The rendezvous barrier guarantees both walks
-    /// hit the gate window together; whichever loses the insert race
-    /// conflicts against the winner's placeholder or committed record.
+    /// #1505 single-version dedupe under concurrency: two CONCURRENT
+    /// top-level loads pulling DIFFERENT versions of the same package
+    /// (TA→D@1.0.0, TB→D@1.1.0) both SUCCEED and dedupe to one committed D —
+    /// whichever wins the insert race commits, the other WARNS and reuses the
+    /// winner (never a hard conflict, never a double-registration). The
+    /// rendezvous barrier guarantees both walks hit the gate window together.
+    /// Mentally-revertible: restoring the `SingleVersionConflict` gate makes
+    /// exactly one load return `Err`, dropping `ok_count` below 2 and failing
+    /// the assertion.
     #[test]
     #[serial]
-    fn concurrent_loads_conflicting_shared_dep_exactly_one_conflict() {
+    fn concurrent_loads_conflicting_shared_dep_dedupe_to_one_winner() {
         let home = tempfile::tempdir().unwrap();
         let pkg_root = tempfile::tempdir().unwrap();
         let ta = pkg_root.path().join("ta");
@@ -2414,31 +2429,25 @@ processors:
         let (result_ta, result_tb) = handle.block_on(async { tokio::join!(added_ta, added_tb) });
 
         let results = [result_ta.map(|_| ()), result_tb.map(|_| ())];
-        let conflict_count = results
-            .iter()
-            .filter(|r| {
-                matches!(
-                    r,
-                    Err(AddModuleError::SingleVersionConflict { package, .. })
-                        if package.name.as_str() == "conc-conflict-d"
-                )
-            })
-            .count();
         let ok_count = results.iter().filter(|r| r.is_ok()).count();
         assert_eq!(
-            (ok_count, conflict_count),
-            (1, 1),
-            "exactly one load must succeed and one must conflict on D, got: {results:?}",
+            ok_count, 2,
+            "both concurrent loads must succeed and dedupe to one D, got: {results:?}",
         );
-        // The winner's resolution of D is committed; the loser's own
-        // top-level placeholder was cleared by its drop-guard.
+        // D is committed as a single resolution at whichever version won the
+        // insert race; the loser deduped to it.
         let d_ref = streamlib_idents::PackageRef::new(
             Org::new("tatolab").unwrap(),
             Package::new("conc-conflict-d").unwrap(),
         );
+        let record = runtime
+            .resolution_memo
+            .committed_record(&d_ref)
+            .expect("the winning load's D resolution must be committed");
         assert!(
-            runtime.resolution_memo.committed_record(&d_ref).is_some(),
-            "the winning load's D resolution must be committed",
+            record.version == SemVer::new(1, 0, 0) || record.version == SemVer::new(1, 1, 0),
+            "D must commit at one of the two raced versions, got: {}",
+            record.version,
         );
     }
 
