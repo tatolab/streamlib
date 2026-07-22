@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.28](https://github.com/tatolab/streamlib/compare/v0.7.27...v0.7.28) (2026-07-22)
+
+
+### Features
+
+* **packages:** package-cache build-once-reuse + disk-discipline (precursor to [#1506](https://github.com/tatolab/streamlib/issues/1506)) ([#1515](https://github.com/tatolab/streamlib/issues/1515)) ([f49ede8](https://github.com/tatolab/streamlib/commit/f49ede84540234297d5e792e855f1846be11ee6f))
+
 ## [0.7.27](https://github.com/tatolab/streamlib/compare/v0.7.26...v0.7.27) (2026-07-22)
 
 
