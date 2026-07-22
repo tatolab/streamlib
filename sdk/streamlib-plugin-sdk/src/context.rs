@@ -17,9 +17,12 @@
 //! Beyond the GPU-accessor field reads, the runtime-context views also
 //! surface the host's audio clock via `audio_clock()` — dispatched
 //! through the [`RuntimeContextVTable::audio_clock_handle`] slot paired
-//! with the host's `AudioClockVTable` cached on `HostServices`. The
-//! remaining ABI-mediated accessors (`runtime_id`, `processor_id`,
-//! `runtime`, …) are a later phase.
+//! with the host's `AudioClockVTable` cached on `HostServices` — and the
+//! host-owned identifier / lifecycle-flag accessors `runtime_id()`,
+//! `processor_id()`, `is_paused()`, and `should_process()`, dispatched
+//! through the matching [`RuntimeContextVTable`] slots. The one remaining
+//! ABI-mediated accessor (`runtime`, whose `RuntimeOpsVTable` shim carries
+//! no transport for host-owned streaming ops) is a later phase.
 
 use std::ffi::c_void;
 use std::marker::PhantomData;
@@ -1918,6 +1921,81 @@ impl GpuContextFullAccess {
 }
 
 // =============================================================================
+// RuntimeContext identifier trampolines (shared by both cdylib-arm shims)
+// =============================================================================
+
+/// Turn the ABI's `(out_buf, cap, out_len) -> usize` byte-copy callback for
+/// [`RuntimeContextVTable::runtime_id_copy`] into an owned `String`. Calls
+/// the callback with a stack scratch buffer first, then grows and retries
+/// once when the host reports a required length exceeding the scratch cap.
+///
+/// # Safety
+///
+/// `vtable` must point at a valid [`RuntimeContextVTable`] paired with
+/// `handle`; the `runtime_id_copy` callback writes UTF-8 bytes.
+unsafe fn vtable_copy_runtime_id(
+    handle: *const c_void,
+    vtable: *const RuntimeContextVTable,
+) -> String {
+    // Most runtime ids are short (~26 bytes for cuid2 plus the "R" prefix);
+    // 64 bytes covers every reasonable id without a retry.
+    let mut scratch = [0u8; 64];
+    let mut written: usize = 0;
+    let required = unsafe {
+        ((*vtable).runtime_id_copy)(handle, scratch.as_mut_ptr(), scratch.len(), &mut written)
+    };
+    if required <= scratch.len() {
+        // SAFETY: the callback contractually writes UTF-8 bytes.
+        unsafe { String::from_utf8_unchecked(scratch[..written].to_vec()) }
+    } else {
+        let mut buf = vec![0u8; required];
+        let mut written2: usize = 0;
+        unsafe {
+            ((*vtable).runtime_id_copy)(handle, buf.as_mut_ptr(), buf.len(), &mut written2);
+        }
+        buf.truncate(written2);
+        // SAFETY: the callback contractually writes UTF-8 bytes.
+        unsafe { String::from_utf8_unchecked(buf) }
+    }
+}
+
+/// Turn the ABI's [`RuntimeContextVTable::processor_id_copy`] callback into
+/// an owned `Option<String>` — `None` when the host returns `-1` (the
+/// shared/global context has no processor id). Same grow-and-retry as
+/// [`vtable_copy_runtime_id`].
+///
+/// # Safety
+///
+/// See [`vtable_copy_runtime_id`].
+unsafe fn vtable_copy_processor_id(
+    handle: *const c_void,
+    vtable: *const RuntimeContextVTable,
+) -> Option<String> {
+    let mut scratch = [0u8; 64];
+    let mut written: usize = 0;
+    let required = unsafe {
+        ((*vtable).processor_id_copy)(handle, scratch.as_mut_ptr(), scratch.len(), &mut written)
+    };
+    if required < 0 {
+        return None;
+    }
+    let required = required as usize;
+    if required <= scratch.len() {
+        // SAFETY: the callback contractually writes UTF-8 bytes.
+        Some(unsafe { String::from_utf8_unchecked(scratch[..written].to_vec()) })
+    } else {
+        let mut buf = vec![0u8; required];
+        let mut written2: usize = 0;
+        unsafe {
+            ((*vtable).processor_id_copy)(handle, buf.as_mut_ptr(), buf.len(), &mut written2);
+        }
+        buf.truncate(written2);
+        // SAFETY: the callback contractually writes UTF-8 bytes.
+        Some(unsafe { String::from_utf8_unchecked(buf) })
+    }
+}
+
+// =============================================================================
 // RuntimeContextFullAccess — cdylib arm
 // =============================================================================
 
@@ -1959,6 +2037,36 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// limited-access operations only.
     pub fn gpu_limited_access(&self) -> &GpuContextLimitedAccess {
         &self.gpu_limited
+    }
+
+    /// Runtime unique id as an owned [`String`]. Routed through the
+    /// [`RuntimeContextVTable::runtime_id_copy`] slot.
+    pub fn runtime_id(&self) -> String {
+        // SAFETY: `handle` + `vtable` were paired by the host when it built
+        // this view; the `runtime_id_copy` slot writes UTF-8 bytes.
+        unsafe { vtable_copy_runtime_id(self.handle, self.vtable) }
+    }
+
+    /// Processor unique id as an owned [`String`], or `None` for the
+    /// shared/global context. Routed through
+    /// [`RuntimeContextVTable::processor_id_copy`].
+    pub fn processor_id(&self) -> Option<String> {
+        // SAFETY: see [`Self::runtime_id`].
+        unsafe { vtable_copy_processor_id(self.handle, self.vtable) }
+    }
+
+    /// Whether this processor is currently paused. Routed through
+    /// [`RuntimeContextVTable::is_paused`].
+    pub fn is_paused(&self) -> bool {
+        // SAFETY: `handle` + `vtable` were paired by the host at construction.
+        unsafe { ((*self.vtable).is_paused)(self.handle) }
+    }
+
+    /// Whether processing should proceed (not paused). Routed through
+    /// [`RuntimeContextVTable::should_process`].
+    pub fn should_process(&self) -> bool {
+        // SAFETY: `handle` + `vtable` were paired by the host at construction.
+        unsafe { ((*self.vtable).should_process)(self.handle) }
     }
 
     /// Host-owned audio clock as a typed plugin ABI shim. Backed by the
@@ -2019,6 +2127,36 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
         &self.gpu_limited
     }
 
+    /// Runtime unique id as an owned [`String`]. See
+    /// [`RuntimeContextFullAccess::runtime_id`].
+    pub fn runtime_id(&self) -> String {
+        // SAFETY: see [`RuntimeContextFullAccess::runtime_id`].
+        unsafe { vtable_copy_runtime_id(self.handle, self.vtable) }
+    }
+
+    /// Processor unique id as an owned [`String`], or `None` for the
+    /// shared/global context. See
+    /// [`RuntimeContextFullAccess::processor_id`].
+    pub fn processor_id(&self) -> Option<String> {
+        // SAFETY: see [`RuntimeContextFullAccess::runtime_id`].
+        unsafe { vtable_copy_processor_id(self.handle, self.vtable) }
+    }
+
+    /// Whether this processor is currently paused. See
+    /// [`RuntimeContextFullAccess::is_paused`]. Available on the restricted
+    /// view so a `process()` body can early-out while paused.
+    pub fn is_paused(&self) -> bool {
+        // SAFETY: `handle` + `vtable` were paired by the host at construction.
+        unsafe { ((*self.vtable).is_paused)(self.handle) }
+    }
+
+    /// Whether processing should proceed (not paused). See
+    /// [`RuntimeContextFullAccess::should_process`].
+    pub fn should_process(&self) -> bool {
+        // SAFETY: `handle` + `vtable` were paired by the host at construction.
+        unsafe { ((*self.vtable).should_process)(self.handle) }
+    }
+
     /// Host-owned audio clock as a typed plugin ABI shim. See
     /// [`RuntimeContextFullAccess::audio_clock`]. Available on the
     /// restricted view so a `process()` body can read tick timing.
@@ -2077,6 +2215,175 @@ mod layout_tests {
         assert_eq!(
             offset_of!(RuntimeContextLimitedAccess<'static>, gpu_limited),
             16
+        );
+    }
+}
+
+// =============================================================================
+// RuntimeContext identifier-accessor dispatch tests (GPU-free)
+// =============================================================================
+//
+// A host-built stub `RuntimeContextVTable` locks the SDK-arm cdylib dispatch
+// of `runtime_id()` / `processor_id()` through the shim views: the
+// grow-and-retry path when the host reports a required length exceeding the
+// 64-byte scratch buffer, and the `-1` → `None` processor-id path. Mental-
+// revert the retry arm of `vtable_copy_runtime_id` and the long-id assertion
+// truncates at 64 bytes; mental-revert the `required < 0` arm of
+// `vtable_copy_processor_id` and the None assertion panics on a bogus
+// `String::from_utf8_unchecked`.
+#[cfg(test)]
+mod runtime_context_id_dispatch_tests {
+    use super::*;
+
+    // Deliberately longer than the 64-byte stack scratch buffer so the copy
+    // helpers must grow and re-call the slot.
+    const LONG_RUNTIME_ID: &[u8] =
+        b"R-deliberately-long-runtime-identifier-that-exceeds-the-sixty-four-byte-scratch-buffer";
+    const LONG_PROCESSOR_ID: &[u8] =
+        b"P-deliberately-long-processor-identifier-that-exceeds-the-sixty-four-byte-scratch-buffer";
+
+    // # Safety: `out_buf` (when non-null) has `cap` writable bytes; `out_len`
+    // is a valid `*mut usize`.
+    unsafe fn copy_id_into(id: &[u8], out_buf: *mut u8, cap: usize, out_len: *mut usize) -> usize {
+        let n = id.len().min(cap);
+        if !out_buf.is_null() && n > 0 {
+            unsafe { std::ptr::copy_nonoverlapping(id.as_ptr(), out_buf, n) };
+        }
+        unsafe { *out_len = n };
+        id.len()
+    }
+
+    unsafe extern "C" fn stub_runtime_id_copy_long(
+        _ctx: *const c_void,
+        out_buf: *mut u8,
+        cap: usize,
+        out_len: *mut usize,
+    ) -> usize {
+        unsafe { copy_id_into(LONG_RUNTIME_ID, out_buf, cap, out_len) }
+    }
+
+    unsafe extern "C" fn stub_processor_id_copy_none(
+        _ctx: *const c_void,
+        _out_buf: *mut u8,
+        _cap: usize,
+        out_len: *mut usize,
+    ) -> isize {
+        unsafe { *out_len = 0 };
+        -1
+    }
+
+    unsafe extern "C" fn stub_processor_id_copy_some_long(
+        _ctx: *const c_void,
+        out_buf: *mut u8,
+        cap: usize,
+        out_len: *mut usize,
+    ) -> isize {
+        unsafe { copy_id_into(LONG_PROCESSOR_ID, out_buf, cap, out_len) as isize }
+    }
+
+    unsafe extern "C" fn stub_is_paused(_ctx: *const c_void) -> bool {
+        true
+    }
+
+    unsafe extern "C" fn stub_should_process(_ctx: *const c_void) -> bool {
+        false
+    }
+
+    unsafe extern "C" fn stub_opaque_handle(_ctx: *const c_void) -> *const c_void {
+        std::ptr::null()
+    }
+
+    fn stub_vtable(
+        processor_id_copy: unsafe extern "C" fn(
+            *const c_void,
+            *mut u8,
+            usize,
+            *mut usize,
+        ) -> isize,
+    ) -> RuntimeContextVTable {
+        RuntimeContextVTable {
+            layout_version: streamlib_plugin_abi::RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION,
+            _reserved_padding: 0,
+            runtime_id_copy: stub_runtime_id_copy_long,
+            processor_id_copy,
+            is_paused: stub_is_paused,
+            should_process: stub_should_process,
+            gpu_full_access: stub_opaque_handle,
+            gpu_limited_access: stub_opaque_handle,
+            audio_clock_handle: stub_opaque_handle,
+            runtime_ops_handle: stub_opaque_handle,
+        }
+    }
+
+    fn null_gpu_limited() -> GpuContextLimitedAccess {
+        GpuContextLimitedAccess {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+        }
+    }
+
+    fn null_gpu_full() -> GpuContextFullAccess {
+        GpuContextFullAccess {
+            handle: std::ptr::null(),
+            vtable: std::ptr::null(),
+            handle_kind: HandleKind::ScopeToken,
+            inherited_lim_handle: std::ptr::null(),
+            inherited_lim_vtable: std::ptr::null(),
+        }
+    }
+
+    #[test]
+    fn full_access_runtime_id_survives_grow_and_retry() {
+        let vtable = stub_vtable(stub_processor_id_copy_none);
+        let full = RuntimeContextFullAccess {
+            handle: std::ptr::null(),
+            vtable: &vtable as *const RuntimeContextVTable,
+            gpu_full: null_gpu_full(),
+            gpu_limited: null_gpu_limited(),
+            _marker: PhantomData,
+        };
+        assert_eq!(
+            full.runtime_id().as_bytes(),
+            LONG_RUNTIME_ID,
+            "the >64B runtime id must round-trip fully via the grow-and-retry copy"
+        );
+        assert_eq!(full.processor_id(), None);
+        assert!(full.is_paused());
+        assert!(!full.should_process());
+    }
+
+    #[test]
+    fn limited_access_runtime_id_and_processor_id_dispatch() {
+        let vtable = stub_vtable(stub_processor_id_copy_some_long);
+        let limited = RuntimeContextLimitedAccess {
+            handle: std::ptr::null(),
+            vtable: &vtable as *const RuntimeContextVTable,
+            gpu_limited: null_gpu_limited(),
+            _marker: PhantomData,
+        };
+        assert_eq!(limited.runtime_id().as_bytes(), LONG_RUNTIME_ID);
+        assert_eq!(
+            limited.processor_id().as_deref().map(str::as_bytes),
+            Some(LONG_PROCESSOR_ID),
+            "a Some processor id longer than 64B must round-trip fully"
+        );
+        assert!(limited.is_paused());
+        assert!(!limited.should_process());
+    }
+
+    #[test]
+    fn limited_access_processor_id_none_sentinel_returns_none() {
+        let vtable = stub_vtable(stub_processor_id_copy_none);
+        let limited = RuntimeContextLimitedAccess {
+            handle: std::ptr::null(),
+            vtable: &vtable as *const RuntimeContextVTable,
+            gpu_limited: null_gpu_limited(),
+            _marker: PhantomData,
+        };
+        assert_eq!(
+            limited.processor_id(),
+            None,
+            "the -1 sentinel must map to None, never a bogus empty String"
         );
     }
 }
