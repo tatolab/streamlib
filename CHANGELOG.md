@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.26](https://github.com/tatolab/streamlib/compare/v0.7.25...v0.7.26) (2026-07-22)
+
+
+### Bug Fixes
+
+* **packages:** debug-utilities cdylib-safe frame upload; delete build debris; stale tests ([#1511](https://github.com/tatolab/streamlib/issues/1511)) ([8da8324](https://github.com/tatolab/streamlib/commit/8da83241d992b6e1fa34aa6c7c0dcc767e22a7e6))
+
 ## [0.7.25](https://github.com/tatolab/streamlib/compare/v0.7.24...v0.7.25) (2026-07-21)
 
 
