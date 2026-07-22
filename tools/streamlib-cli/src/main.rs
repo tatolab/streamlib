@@ -278,6 +278,16 @@ enum PkgCommands {
     /// Remove THIS package's build/pack artifacts (run inside the package):
     /// any `*.slpkg`, the prebuilt `lib/` dir, and generated `_generated_/` trees.
     Clean,
+    /// Reclaim on-the-box build scratch across every materialized package slot,
+    /// keeping the loadable artifact. Reclaims each slot's `target/` plus
+    /// orphaned staging residue, across the installed cache and the app's
+    /// co-located `streamlib_modules/`. Unlike `clean` (this package's source
+    /// dir), this is a whole-cache reclaim.
+    CacheGc {
+        /// App root whose `streamlib_modules/` is reclaimed (default: CWD).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+    },
     /// Inspect a .slpkg package (show manifest without installing)
     Inspect {
         /// Path to .slpkg file
@@ -350,6 +360,7 @@ async fn async_main(cli: Cli) -> Result<()> {
             PkgCommands::Build { output } => commands::pkg::build(output.as_deref())?,
             PkgCommands::Publish => commands::pkg::publish()?,
             PkgCommands::Clean => commands::pkg::clean()?,
+            PkgCommands::CacheGc { dir } => commands::pkg::cache_gc(dir.as_deref())?,
             PkgCommands::Inspect { path } => commands::pkg::inspect(&path)?,
             PkgCommands::List => commands::pkg::list()?,
         },

@@ -73,6 +73,35 @@ pub enum BuildSource {
     Remote(String),
 }
 
+/// Whether a [`BuildSource::PackageDir`] is the user's own editable source
+/// tree or an immutable orchestrator-managed extract. The resolver knows which
+/// [`Strategy`] produced the dir; an orchestrator cannot infer it from the path
+/// alone, so it is threaded here. It gates two orchestrator decisions that are
+/// only sound for a self-contained dir: Rust build-once-reuse (a mutable
+/// checkout may carry `path:` / workspace-inherited crate deps resolving
+/// OUTSIDE the package dir, which a package-local content fingerprint cannot
+/// see, so only cargo's own fingerprint is a complete staleness oracle there)
+/// and build-scratch reclamation (a mutable checkout's `target/` is the user's
+/// own cargo incremental state, never reclaimed).
+///
+/// [`Strategy`]: super::Strategy
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PackageSourceProvenance {
+    /// The package dir is the user's own editable checkout: a [`Strategy::Path`]
+    /// dep, an active `streamlib link` checkout override, or an install-time
+    /// `path:` / root source. Crate deps may resolve outside the dir, so the
+    /// package-local fingerprint is not a complete oracle (cargo must always
+    /// re-run) and `target/` belongs to the user.
+    ///
+    /// [`Strategy::Path`]: super::Strategy::Path
+    MutableUserCheckout,
+    /// The package dir is an orchestrator-managed extract: a `.slpkg`, a
+    /// registry download, an installed-cache entry, or a git-rev-pinned
+    /// checkout. Self-contained, so the package-local fingerprint fully gates
+    /// reuse and `target/` is disposable build scratch.
+    ImmutableManagedExtract,
+}
+
 /// Everything a [`BuildOrchestrator`] needs to materialize a loadable
 /// staged package directory for one package. Constructed by the engine;
 /// orchestrators (and their tests) read/build it, so it is a plain
@@ -83,6 +112,9 @@ pub struct BuildRequest {
     pub package: streamlib_idents::PackageRef,
     /// Where the build inputs live.
     pub source: BuildSource,
+    /// Whether the source dir is the user's own editable tree or an immutable
+    /// managed extract — gates Rust build-once-reuse and scratch reclamation.
+    pub source_provenance: PackageSourceProvenance,
     /// Whether / when to (re)build.
     pub policy: BuildPolicy,
     /// Host target triple the staged cdylib must target

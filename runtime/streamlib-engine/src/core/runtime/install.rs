@@ -26,7 +26,10 @@ use streamlib_idents::{
 };
 
 use super::module_loader::host_target_triple;
-use super::{BuildEventSink, BuildOrchestrator, BuildPolicy, BuildRequest, BuildSource};
+use super::{
+    BuildEventSink, BuildOrchestrator, BuildPolicy, BuildRequest, BuildSource,
+    PackageSourceProvenance,
+};
 use crate::core::config::{InstalledPackageEntry, InstalledPackageManifest};
 
 /// Knobs for [`install`]. Defaults are the ordinary "install this app"
@@ -172,6 +175,7 @@ pub fn install(
         let request = BuildRequest {
             package: pkg_ref.clone(),
             source: BuildSource::PackageDir(pkg.root_dir.clone()),
+            source_provenance: provenance_of(&pkg.source),
             policy,
             host_triple: host_target_triple().to_string(),
         };
@@ -291,6 +295,22 @@ fn rfc3339_from_unix_secs(secs: u64) -> String {
     let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
     let year = if m <= 2 { y + 1 } else { y };
     format!("{year:04}-{m:02}-{d:02}T{hour:02}:{minute:02}:{second:02}Z")
+}
+
+/// Map a resolver source kind to the orchestrator's build-time provenance: a
+/// `path:` dep or the root manifest is the user's own editable tree (cargo deps
+/// may resolve outside it, `target/` is the user's), while a git-rev / `.slpkg`
+/// / registry source is a self-contained managed extract.
+fn provenance_of(source: &streamlib_idents::ResolvedSource) -> PackageSourceProvenance {
+    use streamlib_idents::ResolvedSource;
+    match source {
+        ResolvedSource::Root | ResolvedSource::Path { .. } => {
+            PackageSourceProvenance::MutableUserCheckout
+        }
+        ResolvedSource::Git { .. }
+        | ResolvedSource::Slpkg { .. }
+        | ResolvedSource::Registry { .. } => PackageSourceProvenance::ImmutableManagedExtract,
+    }
 }
 
 /// Human-readable provenance for the installed-manifest `installed_from`

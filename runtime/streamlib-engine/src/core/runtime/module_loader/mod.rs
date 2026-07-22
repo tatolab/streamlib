@@ -90,7 +90,7 @@ pub use acquire::{AcquireConfirmationHandler, AcquireOnReferencePolicy};
 pub use added_module::{AddedModule, LoadedModule, ModuleLoadEvent};
 pub use build_orchestrator::{
     BuildError, BuildEvent, BuildEventSink, BuildOrchestrator, BuildPolicy, BuildRequest,
-    BuildSource, BuildStream, StagedArtifact,
+    BuildSource, BuildStream, PackageSourceProvenance, StagedArtifact,
 };
 pub use errors::{AddModuleError, RemoveModuleError};
 pub(crate) use locked::LockedResolution;

@@ -77,6 +77,13 @@ examples/camera-python-display/assets/*
 .envrc
 .cargo/config.toml
 
+# Co-located package build output (compile-on-install): the compiled cdylib
+# and build-provenance sidecar live beside a package's source, inside its
+# `streamlib_modules/@org/name/` slot — regenerable artifacts, never committed.
+# (`.venv/`, `target/`, `_generated_/` are already ignored above/below.)
+.streamlib-build.json
+streamlib_modules/**/lib/
+
 plan.md
 
 # In-flight task handoff notes (working files for cross-session pickup,
