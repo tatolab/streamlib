@@ -51,12 +51,14 @@ jobs:
         # streamlib-engine, whose build.rs compiles GLSL compute shaders with
         # glslc and generates JTD bindings; the Linux engine dep set links
         # Vulkan. No GPU/codec backends — this gate stops at the artifact.
+        # `libasound2-dev`: @tatolab/audio build-links alsa-sys (ALSA headers).
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             pkg-config \
             protobuf-compiler \
             libvulkan-dev \
+            libasound2-dev \
             glslc
 
       - name: Install jtd-codegen
