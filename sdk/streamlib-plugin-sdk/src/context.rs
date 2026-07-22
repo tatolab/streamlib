@@ -1945,8 +1945,12 @@ unsafe fn vtable_copy_runtime_id(
         ((*vtable).runtime_id_copy)(handle, scratch.as_mut_ptr(), scratch.len(), &mut written)
     };
     if required <= scratch.len() {
+        // Bound the host-reported `written` to the scratch capacity: a
+        // misbehaving host reporting written > 64 must not index past the
+        // stack buffer (defense-in-depth at the host-trust ABI boundary).
+        let copied = written.min(scratch.len());
         // SAFETY: the callback contractually writes UTF-8 bytes.
-        unsafe { String::from_utf8_unchecked(scratch[..written].to_vec()) }
+        unsafe { String::from_utf8_unchecked(scratch[..copied].to_vec()) }
     } else {
         let mut buf = vec![0u8; required];
         let mut written2: usize = 0;
@@ -1981,8 +1985,12 @@ unsafe fn vtable_copy_processor_id(
     }
     let required = required as usize;
     if required <= scratch.len() {
+        // Bound the host-reported `written` to the scratch capacity: a
+        // misbehaving host reporting written > 64 must not index past the
+        // stack buffer (defense-in-depth at the host-trust ABI boundary).
+        let copied = written.min(scratch.len());
         // SAFETY: the callback contractually writes UTF-8 bytes.
-        Some(unsafe { String::from_utf8_unchecked(scratch[..written].to_vec()) })
+        Some(unsafe { String::from_utf8_unchecked(scratch[..copied].to_vec()) })
     } else {
         let mut buf = vec![0u8; required];
         let mut written2: usize = 0;
