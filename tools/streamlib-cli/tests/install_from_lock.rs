@@ -60,6 +60,7 @@ fn install_reproduces_modules_in_a_clean_checkout_from_the_lock() {
             no_build: false,
             profile: CargoProfile::Release,
             path_deps: PathDepPolicy::RejectPathPatches,
+            ignore_in_tree_prebuilt_cdylib: false,
         },
         &(),
     )

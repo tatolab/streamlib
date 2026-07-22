@@ -342,6 +342,18 @@ impl PolyglotBuildOrchestrator {
         // `[patch]` above covers for crate deps. `None` off a link ⇒ unchanged.
         let link_checkout = active_link.as_ref().map(|l| l.checkout.as_path());
 
+        // The staleness skip above already spared an immutable-extract slot
+        // with a matching cdylib; reaching here means we ARE rebuilding. A
+        // mutable checkout, an active link, or an unconditional `AlwaysBuild`
+        // must not have assemble honor a `.so` the prior build promoted into
+        // the (co-located) source tree — that would silently reuse a stale
+        // artifact. Let cargo's own fingerprint be the oracle in those cases;
+        // an immutable extract under `IfStale` keeps the prebuilt preference
+        // so a venv-only re-provision stays compiler-free.
+        let ignore_in_tree_prebuilt_cdylib = source_is_mutable
+            || active_link.is_some()
+            || matches!(request.policy, BuildPolicy::AlwaysBuild);
+
         let adapter = EngineSinkAdapter(sink);
         let outcome = assemble_artifact_with_cargo_config(
             pkg_dir,
@@ -353,6 +365,7 @@ impl PolyglotBuildOrchestrator {
                 // `path:` deps to absolute so the transitive walk still
                 // resolves each dep to its real source.
                 path_deps: PathDepPolicy::RewriteRelativeToAbsolute,
+                ignore_in_tree_prebuilt_cdylib,
             },
             &adapter,
             &cargo_config_files,
