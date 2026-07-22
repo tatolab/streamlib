@@ -17,7 +17,9 @@ use std::path::PathBuf;
 
 use streamlib_idents::{RegistryClient, RegistryConfig};
 
-use super::build_orchestrator::{BuildPolicy, BuildRequest, BuildSource};
+use super::build_orchestrator::{
+    BuildPolicy, BuildRequest, BuildSource, PackageSourceProvenance,
+};
 use super::errors::AddModuleError;
 use super::processor_registration::host_target_triple;
 use super::slpkg::extract_slpkg_to_cache;
@@ -308,7 +310,12 @@ pub(super) fn resolve_strategy_to_source(
                 source = %pkg_dir.display(),
                 "streamlib link active — resolving module from linked checkout (overriding strategy)"
             );
-            return Ok(source_for_dir(pkg_ref, pkg_dir, BuildPolicy::IfStale));
+            return Ok(source_for_dir(
+                pkg_ref,
+                pkg_dir,
+                BuildPolicy::IfStale,
+                PackageSourceProvenance::MutableUserCheckout,
+            ));
         }
     }
     match strategy {
@@ -331,11 +338,21 @@ pub(super) fn resolve_strategy_to_source(
             if !path.join("streamlib.yaml").exists() {
                 return Err(AddModuleError::ManifestDirectoryMissing { path: path.clone() });
             }
-            Ok(source_for_dir(pkg_ref, path.clone(), *build))
+            Ok(source_for_dir(
+                pkg_ref,
+                path.clone(),
+                *build,
+                PackageSourceProvenance::MutableUserCheckout,
+            ))
         }
         Strategy::Git { url, rev, build } => {
             let checkout = fetch_git_checkout(pkg_ref, url, rev)?;
-            Ok(source_for_dir(pkg_ref, checkout, *build))
+            Ok(source_for_dir(
+                pkg_ref,
+                checkout,
+                *build,
+                PackageSourceProvenance::ImmutableManagedExtract,
+            ))
         }
         Strategy::Url {
             url,
@@ -526,16 +543,22 @@ fn lookup_app_modules_package_dir(
 }
 
 /// Decide whether a resolved package directory loads as-is or needs a
-/// build, based on its [`BuildPolicy`].
+/// build, based on its [`BuildPolicy`]. `provenance` records whether `dir` is
+/// the user's own editable tree (`Strategy::Path` / a link override) or an
+/// immutable managed extract (a git-rev-pinned checkout) — the orchestrator
+/// cannot tell from the path, and it gates Rust build-once-reuse + scratch
+/// reclamation.
 fn source_for_dir(
     pkg_ref: &streamlib_idents::PackageRef,
     dir: PathBuf,
     build: BuildPolicy,
+    provenance: PackageSourceProvenance,
 ) -> ResolvedSource {
     if build.requires_orchestrator() {
         ResolvedSource::NeedsBuild(BuildRequest {
             package: pkg_ref.clone(),
             source: BuildSource::PackageDir(dir),
+            source_provenance: provenance,
             policy: build,
             host_triple: host_target_triple().to_string(),
         })
@@ -561,6 +584,7 @@ fn source_for_resolved_dir(pkg_ref: &streamlib_idents::PackageRef, dir: PathBuf)
         ResolvedSource::NeedsBuild(BuildRequest {
             package: pkg_ref.clone(),
             source: BuildSource::PackageDir(dir),
+            source_provenance: PackageSourceProvenance::ImmutableManagedExtract,
             // No explicit policy on these arms — a build is required only
             // because the prebuilt / provisioning is absent, so `IfStale`
             // (build iff the output isn't already staged) is the right
@@ -610,6 +634,7 @@ fn source_for_fetched_slpkg(
                 ResolvedSource::NeedsBuild(BuildRequest {
                     package: pkg_ref.clone(),
                     source: BuildSource::PackageDir(dir),
+                    source_provenance: PackageSourceProvenance::ImmutableManagedExtract,
                     policy: BuildPolicy::AlwaysBuild,
                     host_triple: host_target_triple().to_string(),
                 })

@@ -51,7 +51,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use streamlib_cargo_build as build;
 use streamlib_engine::core::runtime::{
     BuildError, BuildEvent, BuildEventSink, BuildOrchestrator, BuildPolicy, BuildRequest,
-    BuildSource, BuildStream, StagedArtifact,
+    BuildSource, BuildStream, PackageSourceProvenance, StagedArtifact,
 };
 use streamlib_pack::{
     AssembleOptions, AssembleTarget, PackEventSink, PackStream, PathDepPolicy,
@@ -153,12 +153,21 @@ fn cache_slot_is_reusable(
 
 /// Whether a package's Rust half may reuse a staged slot instead of invoking
 /// cargo. A non-Rust package always may (its content fingerprint is a complete
-/// oracle). A Rust package may only when there is NO active `streamlib link`
-/// (a link resolves deps to a mutable checkout, so cargo must re-run) AND a
-/// host-triple cdylib is already staged (a sidecar match alone doesn't prove
-/// the loadable artifact exists).
-fn rust_reuse_permitted(has_rust: bool, link_active: bool, cdylib_present: bool) -> bool {
-    !has_rust || (!link_active && cdylib_present)
+/// oracle). A Rust package may only when its source is an IMMUTABLE managed
+/// extract (a mutable user checkout may carry `path:` / workspace-inherited
+/// crate deps resolving OUTSIDE the package dir, which the package-local
+/// fingerprint cannot see, so cargo — whose own fingerprint tracks them — must
+/// always re-run there) AND there is NO active `streamlib link` (a link
+/// resolves deps to a mutable checkout, so cargo must re-run) AND a host-triple
+/// cdylib is already staged (a sidecar match alone doesn't prove the loadable
+/// artifact exists).
+fn rust_reuse_permitted(
+    has_rust: bool,
+    source_is_mutable: bool,
+    link_active: bool,
+    cdylib_present: bool,
+) -> bool {
+    !has_rust || (!source_is_mutable && !link_active && cdylib_present)
 }
 
 impl PolyglotBuildOrchestrator {
@@ -237,14 +246,22 @@ impl PolyglotBuildOrchestrator {
         // complete staleness oracle (nothing links code outside the package
         // dir), so the fingerprint alone gates reuse.
         //
-        // Rust package: reuse only when there is NO active `streamlib link`
-        // (an immutable / registry-pinned source — a link resolves deps to a
-        // mutable checkout, so the package-local fingerprint is not a complete
-        // oracle and cargo must re-run) AND a host-triple cdylib is already
-        // staged. This is the zero-cargo second load for an installed Rust
-        // package; an active-link edit still falls through to a full rebuild.
+        // Rust package: reuse only when the source is an IMMUTABLE managed
+        // extract (a mutable user checkout — `Strategy::Path` / a link
+        // override / an install-time `path:` source — may carry crate deps
+        // resolving outside the package dir, so its package-local fingerprint
+        // is not a complete oracle and cargo must re-run), AND there is NO
+        // active `streamlib link` (a link resolves deps to a mutable checkout),
+        // AND a host-triple cdylib is already staged. This is the zero-cargo
+        // second load for an installed Rust package; a mutable-source or
+        // active-link edit still falls through to a full rebuild.
+        let source_is_mutable = matches!(
+            request.source_provenance,
+            PackageSourceProvenance::MutableUserCheckout
+        );
         let rust_reuse_permitted = rust_reuse_permitted(
             has_rust,
+            source_is_mutable,
             active_link.is_some(),
             slot_has_host_cdylib(&cache_slot, triple),
         );
@@ -408,12 +425,14 @@ impl PolyglotBuildOrchestrator {
         // build scratch. `streamlib pkg cache-gc` reclaims it across slots for
         // a build that was interrupted before reaching here.
         //
-        // NOT under an active `streamlib link`: a linked package is denied the
-        // Rust reuse gate above, so every dev-loop iteration full-rebuilds —
-        // wiping `target/` there would discard cargo's incremental state and
-        // recompile the world on every edit. Keep the scratch for the mutable
-        // link loop; reclaim it only for immutable / installed slots.
-        if active_link.is_none() {
+        // ONLY for an immutable managed extract with NO active `streamlib link`.
+        // For a mutable user checkout (`Strategy::Path` / a link override /
+        // an install-time `path:` source) `pkg_dir` IS the user's own source
+        // tree, so `target/` is the user's cargo incremental state — reclaiming
+        // it would recompile the world on every unlinked local-dev edit. A
+        // linked package is likewise denied the Rust reuse gate above and
+        // full-rebuilds each iteration, so its scratch is kept too.
+        if !source_is_mutable && active_link.is_none() {
             prune_build_scratch(pkg_dir);
         }
 
@@ -573,10 +592,13 @@ fn stage_temp_dir(cache_slot: &Path) -> PathBuf {
 
 /// Replace `final_path` with `temp` atomically (best-effort). A prior slot is
 /// first renamed AWAY to a `.old-*` sibling, then `temp` is renamed into place,
-/// then the displaced slot is removed. This closes the remove-then-rename
-/// window where the slot was briefly absent: a concurrent reader now observes
-/// either the old slot or the new one, never nothing. Each rename moves a
-/// fully-staged dir, so no torn reads.
+/// then the displaced slot is removed. This NARROWS the remove-then-rename
+/// absent window to two back-to-back renames (rename `final`→`.old`, then
+/// `temp`→`final`): a concurrent reader observing between the two still sees
+/// nothing, but the gap is a rename apart rather than spanning a full
+/// `remove_dir_all`. True closure needs `renameat2(RENAME_EXCHANGE)`; this is a
+/// strict improvement short of that. Each rename moves a fully-staged dir, so
+/// no torn reads.
 fn atomic_swap(temp: &Path, final_path: &Path) -> anyhow::Result<()> {
     use anyhow::Context;
     if let Some(parent) = final_path.parent() {
@@ -640,7 +662,7 @@ fn slot_has_host_cdylib(slot: &Path, triple: &str) -> bool {
 /// keeping the loadable artifact (`lib/<triple>/*.so` + `.venv/` +
 /// `_generated_/` + manifest). Best-effort — a removal failure is logged and
 /// ignored, since scratch reclamation is never a correctness gate.
-pub fn prune_build_scratch(pkg_dir: &Path) {
+fn prune_build_scratch(pkg_dir: &Path) {
     let target = pkg_dir.join("target");
     if target.is_dir()
         && let Err(e) = std::fs::remove_dir_all(&target)
@@ -768,23 +790,34 @@ mod tests {
 
     // Mentally-revert check: reverting `rust_reuse_permitted` to a constant
     // `true` (the pre-#1506 behavior where a Rust package short-circuited on
-    // the fingerprint alone) flips the two `false` cases below — a linked Rust
-    // package, and a Rust package whose cdylib isn't staged yet, must NOT
-    // reuse. Reverting to a constant `false` flips the non-Rust and
-    // fully-staged-unlinked cases.
+    // the fingerprint alone) flips the three `false` cases below — a
+    // mutable-source Rust package, a linked Rust package, and a Rust package
+    // whose cdylib isn't staged yet, must NOT reuse. Dropping only the
+    // `!source_is_mutable` clause flips the mutable-source case (the #1506
+    // stale-cdylib trap: a `Strategy::Path` / linked package whose out-of-dir
+    // crate deps the package-local fingerprint can't see). Reverting to a
+    // constant `false` flips the non-Rust and fully-staged-immutable cases.
     #[test]
-    fn rust_reuse_permitted_requires_no_link_and_a_staged_cdylib() {
-        // (has_rust, link_active, cdylib_present)
-        // Non-Rust: always reuses (fingerprint is a complete oracle).
-        assert!(rust_reuse_permitted(false, false, false));
-        assert!(rust_reuse_permitted(false, true, true));
-        // Rust, no link, cdylib staged: the zero-cargo second load.
-        assert!(rust_reuse_permitted(true, false, true));
+    fn rust_reuse_permitted_requires_immutable_source_no_link_and_a_staged_cdylib() {
+        // (has_rust, source_is_mutable, link_active, cdylib_present)
+        // Non-Rust: always reuses (fingerprint is a complete oracle), even for
+        // a mutable source under a link.
+        assert!(rust_reuse_permitted(false, false, false, false));
+        assert!(rust_reuse_permitted(false, true, true, true));
+        // Rust, immutable source, no link, cdylib staged: the zero-cargo second
+        // load for an installed / registry / `.slpkg` / git-rev package.
+        assert!(rust_reuse_permitted(true, false, false, true));
+        // Rust, MUTABLE user checkout, no link, cdylib staged: must rebuild —
+        // its `path:` / workspace deps resolve outside the package dir, so the
+        // package-local fingerprint is not a complete oracle and cargo (whose
+        // own fingerprint short-circuits cheaply when clean) must re-run. This
+        // is the #1506 stale-cdylib trap.
+        assert!(!rust_reuse_permitted(true, true, false, true));
         // Rust under an active link: must rebuild (deps resolve to a mutable
         // checkout), even with a cdylib present.
-        assert!(!rust_reuse_permitted(true, true, true));
-        // Rust, no link, but no cdylib staged yet: must build (nothing to reuse).
-        assert!(!rust_reuse_permitted(true, false, false));
+        assert!(!rust_reuse_permitted(true, false, true, true));
+        // Rust, immutable, no link, but no cdylib staged yet: must build.
+        assert!(!rust_reuse_permitted(true, false, false, false));
     }
 
     #[test]
@@ -810,12 +843,14 @@ mod tests {
     }
 
     #[test]
-    fn atomic_swap_replaces_a_prior_slot_without_an_absent_window() {
+    fn atomic_swap_replaces_a_prior_slot_narrowing_the_absent_window() {
         // A prior slot is displaced to `.old-*` then the new one renamed in;
-        // the swept-in content must win and the parent must never be left
-        // without the slot on the success path. Mentally-revert the
-        // rename-away to a bare `remove_dir_all` + rename and the invariant
-        // "the slot always resolves to old-or-new" is what regresses.
+        // the swept-in content must win and the parent must resolve to the
+        // slot on the success resting state. The displace-then-rename NARROWS
+        // (does not close) the absent window vs a bare `remove_dir_all` +
+        // rename — this test checks the success resting state, which both
+        // shapes pass; the sibling `..._when_the_rename_in_fails` pins the
+        // load-bearing failure-path difference.
         let root = tempfile::tempdir().unwrap();
         let slot = root.path().join("pkg");
         std::fs::create_dir_all(&slot).unwrap();
@@ -851,8 +886,9 @@ mod tests {
         // the remove wipes the prior slot BEFORE the rename fails, and there is
         // no restore, so the slot is gone — this assertion fails. The current
         // displace-then-restore shape keeps "old" in place. The sibling
-        // `..._without_an_absent_window` test only checks the SUCCESS resting
-        // state and passes under both shapes; this one pins the failure path.
+        // `..._narrowing_the_absent_window` test only checks the SUCCESS
+        // resting state and passes under both shapes; this one pins the
+        // failure path.
         let root = tempfile::tempdir().unwrap();
         let slot = root.path().join("pkg");
         std::fs::create_dir_all(&slot).unwrap();
@@ -962,6 +998,7 @@ mod tests {
         BuildRequest {
             package: pkg_ref("tatolab", "schemas-only"),
             source: BuildSource::PackageDir(pkg_dir.to_path_buf()),
+            source_provenance: PackageSourceProvenance::MutableUserCheckout,
             policy,
             host_triple: build::host_target_triple().to_string(),
         }
@@ -1081,6 +1118,7 @@ mod tests {
         BuildRequest {
             package: pkg_ref("tatolab", "py-source"),
             source: BuildSource::PackageDir(pkg_dir.to_path_buf()),
+            source_provenance: PackageSourceProvenance::MutableUserCheckout,
             policy,
             host_triple: build::host_target_triple().to_string(),
         }
@@ -1494,6 +1532,7 @@ mod tests {
             let req = BuildRequest {
                 package: pkg_ref("tatolab", "x"),
                 source,
+                source_provenance: PackageSourceProvenance::ImmutableManagedExtract,
                 policy: BuildPolicy::IfStale,
                 host_triple: build::host_target_triple().to_string(),
             };
@@ -1607,6 +1646,7 @@ streamlib-plugin-sdk = {version = "0.5.0", registry = "tatolab"}
         let req = BuildRequest {
             package: pkg_ref("tatolab", "rust-source"),
             source: BuildSource::PackageDir(src.path().to_path_buf()),
+            source_provenance: PackageSourceProvenance::ImmutableManagedExtract,
             policy: BuildPolicy::IfStale,
             host_triple: build::host_target_triple().to_string(),
         };
