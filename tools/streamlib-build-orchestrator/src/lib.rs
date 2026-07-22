@@ -407,7 +407,15 @@ impl PolyglotBuildOrchestrator {
         // (`lib/<triple>/*.so` + `.venv/` + `_generated_/` + manifest), not the
         // build scratch. `streamlib pkg cache-gc` reclaims it across slots for
         // a build that was interrupted before reaching here.
-        prune_build_scratch(pkg_dir);
+        //
+        // NOT under an active `streamlib link`: a linked package is denied the
+        // Rust reuse gate above, so every dev-loop iteration full-rebuilds —
+        // wiping `target/` there would discard cargo's incremental state and
+        // recompile the world on every edit. Keep the scratch for the mutable
+        // link loop; reclaim it only for immutable / installed slots.
+        if active_link.is_none() {
+            prune_build_scratch(pkg_dir);
+        }
 
         tracing::info!(package = %pkg_label, staged = %cache_slot.display(), rebuilt = outcome.rebuilt, "materialized package");
         Ok(StagedArtifact {
@@ -829,6 +837,52 @@ mod tests {
             .filter(|e| e.file_name().to_string_lossy().starts_with(".old-"))
             .collect();
         assert!(residue.is_empty(), "displaced slot must be reclaimed");
+    }
+
+    #[test]
+    fn atomic_swap_preserves_the_prior_slot_when_the_rename_in_fails() {
+        // The load-bearing invariant the displace-to-`.old-*` shape buys over
+        // the old remove-then-rename: if the rename of `temp` into the slot
+        // FAILS (here: the temp source never exists), the prior slot's content
+        // must still be present afterward — a failed swap never destroys the
+        // last loadable artifact.
+        //
+        // Mentally-revert to `remove_dir_all(final)` + `rename(temp, final)`:
+        // the remove wipes the prior slot BEFORE the rename fails, and there is
+        // no restore, so the slot is gone — this assertion fails. The current
+        // displace-then-restore shape keeps "old" in place. The sibling
+        // `..._without_an_absent_window` test only checks the SUCCESS resting
+        // state and passes under both shapes; this one pins the failure path.
+        let root = tempfile::tempdir().unwrap();
+        let slot = root.path().join("pkg");
+        std::fs::create_dir_all(&slot).unwrap();
+        std::fs::write(slot.join("marker"), b"old").unwrap();
+
+        // A temp path that does not exist ⇒ `rename(temp, final)` fails.
+        let missing_temp = root.path().join(".tmp-never-created");
+        let result = atomic_swap(&missing_temp, &slot);
+
+        assert!(result.is_err(), "swap with a missing temp source must fail");
+        assert!(
+            slot.is_dir(),
+            "the prior slot must survive a failed rename-in — remove-then-rename \
+             would have wiped it before the (failing) rename"
+        );
+        assert_eq!(
+            std::fs::read_to_string(slot.join("marker")).unwrap(),
+            "old",
+            "the prior slot's content must be intact after the failed swap"
+        );
+        // The displaced backup must be restored, not orphaned as `.old-*`.
+        let residue: Vec<_> = std::fs::read_dir(root.path())
+            .unwrap()
+            .flatten()
+            .filter(|e| e.file_name().to_string_lossy().starts_with(".old-"))
+            .collect();
+        assert!(
+            residue.is_empty(),
+            "the displaced slot must be restored into place, not left as .old-* residue"
+        );
     }
 
     #[test]
