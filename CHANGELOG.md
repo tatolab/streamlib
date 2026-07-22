@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.40](https://github.com/tatolab/streamlib/compare/v0.7.39...v0.7.40) (2026-07-22)
+
+
+### Features
+
+* **examples:** dynamic-reconfigure — live camera→display rewiring harness ([#340](https://github.com/tatolab/streamlib/issues/340)) ([#1500](https://github.com/tatolab/streamlib/issues/1500)) ([01c587d](https://github.com/tatolab/streamlib/commit/01c587de673122069bc2790ac74b39f4be02c466))
+
 ## [0.7.39](https://github.com/tatolab/streamlib/compare/v0.7.38...v0.7.39) (2026-07-22)
 
 
