@@ -26,15 +26,30 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use streamlib::sdk::runtime::{
-    AddPackageOptions, AddPackageReport, AddPackageSource, AppModulesDir, LinkPackageReport,
+    AddPackageOptions, AddPackageReport, AddPackageSource, AppModulesDir, BuildPolicy,
+    LinkPackageReport,
 };
 use streamlib_idents::{DependencySpec, Manifest, PackageRef, RegistryDependency, SemVerRange};
 use streamlib_processor_schema::StreamlibYaml;
 
+use super::build_on_place::{
+    ConsoleBuildEventSink, build_added_slot_or_rollback, default_orchestrator,
+};
+
 /// `streamlib add <spec>` — records a dependency range when run in a
 /// package-authoring dir, otherwise materializes a byte source into the app's
-/// `streamlib_modules/`.
-pub fn add(spec: &str, dir: Option<&Path>, expect_sha256: Option<&str>) -> Result<()> {
+/// `streamlib_modules/` and compiles it on-the-box.
+///
+/// `no_build` skips the on-the-box compile (placement/reproduce only). Otherwise
+/// the just-placed slot is compiled in place with [`BuildPolicy::IfStale`] and a
+/// compile failure rolls the placement back — restoring the prior version when
+/// the add replaced one.
+pub fn add(
+    spec: &str,
+    dir: Option<&Path>,
+    expect_sha256: Option<&str>,
+    no_build: bool,
+) -> Result<()> {
     let anchor = anchor_dir(dir)?;
     if let Some(manifest) = load_anchor_manifest(&anchor)? {
         if manifest.is_package_flavor() {
@@ -73,10 +88,24 @@ pub fn add(spec: &str, dir: Option<&Path>, expect_sha256: Option<&str>) -> Resul
 
     let options = AddPackageOptions {
         expected_archive_sha256: expect_sha256.map(|s| s.to_string()),
+        // When we're about to compile, retain a displaced prior slot so a
+        // compile failure can restore the previously-working version rather
+        // than leaving the operator with nothing.
+        retain_replaced_slot_backup: !no_build,
     };
     let report = app
         .add_package(&source, &options)
         .map_err(|e| anyhow::anyhow!("add failed: {e}"))?;
+
+    if !no_build {
+        build_added_slot_or_rollback(
+            &app,
+            &report,
+            &default_orchestrator(),
+            &ConsoleBuildEventSink,
+            BuildPolicy::IfStale,
+        )?;
+    }
 
     print_add_report(&report);
     Ok(())
@@ -485,7 +514,7 @@ mod tests {
         )
         .unwrap();
 
-        let err = add("./anything", Some(dir.path()), None)
+        let err = add("./anything", Some(dir.path()), None, false)
             .expect_err("add must reject an app-dir manifest that declares dependencies");
         match err.downcast_ref::<streamlib::sdk::error::Error>() {
             Some(streamlib::sdk::error::Error::AppManifestDeclaresDependencies {

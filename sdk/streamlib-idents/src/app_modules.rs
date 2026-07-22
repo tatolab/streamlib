@@ -89,6 +89,15 @@ pub struct AddPackageOptions {
     /// and nothing is materialized. Ignored for folder sources (no archive
     /// bytes exist).
     pub expected_archive_sha256: Option<String>,
+    /// When `true` and the add replaces an already-present slot, the displaced
+    /// prior slot (contents + its lockfile entry) is retained as a restorable
+    /// [`ReplacedSlotBackup`] in the report rather than discarded, so a caller
+    /// running a post-add step (compile-on-add) can restore the prior working
+    /// version if that step fails. The caller MUST finalize the returned backup
+    /// with [`AppModulesDir::commit_replaced_slot_backup`] (discard) or
+    /// [`AppModulesDir::restore_replaced_slot`] (restore); an unfinalized backup
+    /// is swept as staging residue by the next add/install in another process.
+    pub retain_replaced_slot_backup: bool,
 }
 
 /// Outcome of a successful [`AppModulesDir::add_package`].
@@ -108,6 +117,27 @@ pub struct AddPackageReport {
     pub source: LockfileSource,
     /// `true` when an existing `streamlib_modules/@org/name/` was replaced.
     pub replaced_existing: bool,
+    /// The displaced prior slot, retained only when the add both replaced an
+    /// existing slot AND [`AddPackageOptions::retain_replaced_slot_backup`] was
+    /// set. `Some` means a prior working version is recoverable via
+    /// [`AppModulesDir::restore_replaced_slot`] and MUST be finalized (restore
+    /// or [`AppModulesDir::commit_replaced_slot_backup`]); `None` means either a
+    /// fresh add (no prior slot) or retention was not requested.
+    pub replaced_slot_backup: Option<ReplacedSlotBackup>,
+}
+
+/// A displaced prior `streamlib_modules/@org/name/` slot retained across a
+/// caller's post-add step (e.g. compile-on-add), so the prior working version
+/// can be restored if that step fails. Held in [`AddPackageReport`]; finalized
+/// via [`AppModulesDir::commit_replaced_slot_backup`] (the step succeeded —
+/// discard) or [`AppModulesDir::restore_replaced_slot`] (the step failed —
+/// put the prior version back).
+#[derive(Debug, Clone)]
+pub struct ReplacedSlotBackup {
+    /// The `.staging-replaced-*` sibling the prior slot contents were moved to.
+    backup_dir: PathBuf,
+    /// The lockfile entry that pointed at the prior slot, to rewrite on restore.
+    prior_lockfile_entry: LockfileEntry,
 }
 
 /// Outcome of a successful [`AppModulesDir::remove_package`].
@@ -530,15 +560,25 @@ impl AppModulesDir {
 
         // Promote: swap the staged root into `streamlib_modules/@org/name`,
         // keeping the displaced previous contents restorable until the new
-        // contents are in place.
+        // contents are in place. When retention is requested, the displaced
+        // prior slot survives the promote so a failed post-add step can restore
+        // it (compile-on-add), instead of being discarded on success.
         let package_dir = self.package_dir(&package);
-        let replaced_existing =
-            promote_staged_package_root(&staged_package_root, &package_dir, &modules_dir)?;
+        let promoted = promote_staged_package_root(
+            &staged_package_root,
+            &package_dir,
+            &modules_dir,
+            options.retain_replaced_slot_backup,
+        )?;
+        let replaced_existing = promoted.replaced;
         drop(staging); // best-effort cleanup of the (now-emptied) staging shell
 
-        // Lock: read-modify-write the modules lockfile, atomically.
+        // Lock: read-modify-write the modules lockfile, atomically. Capture the
+        // prior entry before overwriting it, so a retained backup can rewrite it
+        // on restore.
         let lockfile_path = self.lockfile_path();
         let mut lockfile = self.read_lockfile()?;
+        let prior_lockfile_entry = lockfile.packages.get(&package.to_string()).cloned();
         lockfile.packages.insert(
             package.to_string(),
             LockfileEntry {
@@ -553,6 +593,21 @@ impl AppModulesDir {
                 detail: e.to_string(),
             }
         })?;
+
+        let replaced_slot_backup = match (promoted.retained_backup, prior_lockfile_entry) {
+            (Some(backup_dir), Some(prior_lockfile_entry)) => Some(ReplacedSlotBackup {
+                backup_dir,
+                prior_lockfile_entry,
+            }),
+            (Some(backup_dir), None) => {
+                // Contents were displaced but there was no prior lockfile entry
+                // to restore (a healed orphan slot). Nothing to restore to, so
+                // discard the retained backup rather than leak it.
+                let _ = remove_dir_entry_all(&backup_dir);
+                None
+            }
+            (None, _) => None,
+        };
 
         tracing::info!(
             package = %package,
@@ -569,7 +624,69 @@ impl AppModulesDir {
             content_hash,
             source: lock_source,
             replaced_existing,
+            replaced_slot_backup,
         })
+    }
+
+    /// Discard a [`ReplacedSlotBackup`] retained by
+    /// [`add_package`](Self::add_package): the caller's post-add step succeeded,
+    /// so the prior version is no longer needed. Removes the backup directory.
+    #[tracing::instrument(skip(self, backup), fields(app_root = %self.app_root.display()))]
+    pub fn commit_replaced_slot_backup(
+        &self,
+        backup: &ReplacedSlotBackup,
+    ) -> Result<(), AppModulesError> {
+        remove_dir_entry_all(&backup.backup_dir).map_err(|e| AppModulesError::Io {
+            path: backup.backup_dir.clone(),
+            detail: format!("discarding retained replaced-slot backup: {e}"),
+        })
+    }
+
+    /// Restore a [`ReplacedSlotBackup`] retained by
+    /// [`add_package`](Self::add_package): the caller's post-add step failed, so
+    /// the just-placed (broken) slot is removed and the prior working version —
+    /// its contents AND its lockfile entry — is put back exactly as it was
+    /// before the add. Makes the failed add a no-op for the operator's
+    /// installed set.
+    #[tracing::instrument(skip(self, backup), fields(app_root = %self.app_root.display(), package = %package))]
+    pub fn restore_replaced_slot(
+        &self,
+        package: &PackageRef,
+        backup: &ReplacedSlotBackup,
+    ) -> Result<(), AppModulesError> {
+        let package_dir = self.package_dir(package);
+        // Drop the just-placed (broken) contents, then swing the retained prior
+        // slot back into place.
+        remove_dir_entry_all(&package_dir).map_err(|e| AppModulesError::Io {
+            path: package_dir.clone(),
+            detail: format!("removing the failed replacement slot before restore: {e}"),
+        })?;
+        std::fs::rename(&backup.backup_dir, &package_dir).map_err(|e| {
+            AppModulesError::StagePromoteFailed {
+                package_dir: package_dir.clone(),
+                detail: format!("restoring the prior slot from its backup: {e}"),
+            }
+        })?;
+
+        // Rewrite the prior lockfile entry over the one the failed add wrote.
+        let lockfile_path = self.lockfile_path();
+        let mut lockfile = self.read_lockfile()?;
+        lockfile
+            .packages
+            .insert(package.to_string(), backup.prior_lockfile_entry.clone());
+        write_modules_lockfile(&lockfile_path, &lockfile).map_err(|e| {
+            AppModulesError::LockfileWriteFailed {
+                lockfile_path,
+                detail: e.to_string(),
+            }
+        })?;
+
+        tracing::info!(
+            package = %package,
+            dir = %package_dir.display(),
+            "restore_replaced_slot: restored the prior version after a failed replace"
+        );
+        Ok(())
     }
 
     /// Remove one package: delete `streamlib_modules/@org/name/` (folder
@@ -708,7 +825,7 @@ impl AppModulesDir {
         let staging = StagingSymlink::create(&modules_dir, &canonical)?;
         let package_dir = self.package_dir(&package);
         let replaced_existing =
-            promote_staged_package_root(staging.path(), &package_dir, &modules_dir)?;
+            promote_staged_package_root(staging.path(), &package_dir, &modules_dir, false)?.replaced;
         drop(staging); // the symlink was renamed into place; nothing to clean
 
         let lock_source = LockfileSource::Link {
@@ -970,8 +1087,10 @@ impl AppModulesDir {
                     });
                 }
                 let staging = StagingSymlink::create(modules_dir, path)?;
-                let replaced = promote_staged_package_root(staging.path(), &package_dir, modules_dir)
-                    .map_err(|e| map_stage_error_to_install(package, e))?;
+                let replaced =
+                    promote_staged_package_root(staging.path(), &package_dir, modules_dir, false)
+                        .map_err(|e| map_stage_error_to_install(package, e))?
+                        .replaced;
                 drop(staging);
                 Ok((InstalledFromLockKind::Linked, replaced))
             }
@@ -1309,13 +1428,26 @@ fn locate_staged_package_root(
     })
 }
 
+/// Outcome of [`promote_staged_package_root`].
+struct PromotedSlot {
+    /// Whether previous contents occupied the slot and were displaced.
+    replaced: bool,
+    /// The `.staging-replaced-*` backup of the displaced prior slot, present
+    /// only when `retain_replaced_backup` was requested AND a prior slot was
+    /// displaced. The caller owns finalizing it (discard or restore).
+    retained_backup: Option<PathBuf>,
+}
+
 /// Swap `staged_package_root` into `package_dir`, displacing any previous
-/// contents restorably. Returns whether previous contents were replaced.
+/// contents restorably. When `retain_replaced_backup` is set and a prior slot
+/// was displaced, its backup is kept (not deleted on success) and returned so
+/// the caller can restore it after a failed post-promote step.
 fn promote_staged_package_root(
     staged_package_root: &Path,
     package_dir: &Path,
     modules_dir: &Path,
-) -> Result<bool, AppModulesError> {
+    retain_replaced_backup: bool,
+) -> Result<PromotedSlot, AppModulesError> {
     let promote_err = |detail: String| AppModulesError::StagePromoteFailed {
         package_dir: package_dir.to_path_buf(),
         detail,
@@ -1348,16 +1480,25 @@ fn promote_staged_package_root(
     };
 
     match std::fs::rename(staged_package_root, package_dir) {
-        Ok(()) => {
-            if let Some(backup) = displaced {
+        Ok(()) => match displaced {
+            Some(backup) if retain_replaced_backup => Ok(PromotedSlot {
+                replaced: true,
+                retained_backup: Some(backup),
+            }),
+            Some(backup) => {
                 // The displaced previous slot may be a symlink (a prior link
                 // being replaced); unlink it rather than recursing into it.
                 let _ = remove_dir_entry_all(&backup);
-                Ok(true)
-            } else {
-                Ok(false)
+                Ok(PromotedSlot {
+                    replaced: true,
+                    retained_backup: None,
+                })
             }
-        }
+            None => Ok(PromotedSlot {
+                replaced: false,
+                retained_backup: None,
+            }),
+        },
         Err(e) => {
             if let Some(backup) = &displaced {
                 let _ = std::fs::rename(backup, package_dir);
@@ -1490,6 +1631,7 @@ fn reproduce_materialized_from_lock(
     let staging = StagingDir::create(modules_dir)?;
     let options = AddPackageOptions {
         expected_archive_sha256,
+        ..Default::default()
     };
     let (_lock_source, source_label) = stage_source_contents(&source, &options, staging.path())
         .map_err(|e| map_stage_error_to_install(package, e))?;
@@ -1513,8 +1655,9 @@ fn reproduce_materialized_from_lock(
         });
     }
 
-    let replaced = promote_staged_package_root(&staged_root, package_dir, modules_dir)
-        .map_err(|e| map_stage_error_to_install(package, e))?;
+    let replaced = promote_staged_package_root(&staged_root, package_dir, modules_dir, false)
+        .map_err(|e| map_stage_error_to_install(package, e))?
+        .replaced;
     drop(staging);
     Ok((InstalledFromLockKind::Materialized, replaced))
 }
@@ -2105,6 +2248,7 @@ mod tests {
             &source,
             &AddPackageOptions {
                 expected_archive_sha256: Some(sha256_hex(&bytes)),
+                ..Default::default()
             },
         )
         .expect("matching sha must pass");
@@ -2112,6 +2256,7 @@ mod tests {
             &source,
             &AddPackageOptions {
                 expected_archive_sha256: Some(format!("sha256:{}", sha256_hex(&bytes))),
+                ..Default::default()
             },
         )
         .expect("prefixed matching sha must pass");
@@ -2124,6 +2269,7 @@ mod tests {
                 &source,
                 &AddPackageOptions {
                     expected_archive_sha256: Some("00".repeat(32)),
+                    ..Default::default()
                 },
             )
             .expect_err("mismatched sha must fail loud");
