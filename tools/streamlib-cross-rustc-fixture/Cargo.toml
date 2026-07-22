@@ -33,7 +33,7 @@ name = "streamlib_cross_rustc_fixture"
 crate-type = ["cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.7.35" }
+streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.7.36" }
 
 [dependencies]
 # Engine substrate — runtime context, processor traits,
@@ -41,14 +41,14 @@ streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0
 # the fixture
 # rebuilds the SDK against THIS workspace's resolver pass, not the
 # host workspace's. Same source, different transitive resolution.
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.7.35" }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.7.36" }
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]`.
-streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.7.35" }
+streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.7.36" }
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol
 # the runtime dlopens at load time.
-streamlib-plugin-abi = { path = "../../runtime/streamlib-plugin-abi", version = "0.7.35" }
+streamlib-plugin-abi = { path = "../../runtime/streamlib-plugin-abi", version = "0.7.36" }
 
 # Serialization for the config dataclass + diagnostic tracing. Pinned
 # to specific OLDER patches than what the host workspace resolves
