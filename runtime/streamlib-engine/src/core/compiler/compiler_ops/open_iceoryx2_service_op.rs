@@ -252,18 +252,14 @@ pub fn open_iceoryx2_service(
 /// Reclaim one `connect()` link's iceoryx2 ports on `disconnect`.
 ///
 /// Stamping [`LinkState::Disconnected`] is not enough: the source-side notifier
-/// and dest-side subscriber (plus the destination listener and any orphaned
-/// port mailbox / channel publisher) must be dropped so their iceoryx2 services
-/// are released. Otherwise a reconnect of a persistent endpoint re-appends past
-/// the notify service's create-time `max_notifiers` cap
+/// and dest-side subscriber (plus listener, orphaned mailbox, channel publisher)
+/// must be dropped to release their iceoryx2 services, else a reconnect re-appends
+/// past the notify service's create-time `max_notifiers` cap
 /// (`ExceedsMaxSupportedNotifiers`) and the stale, shallower-sized data service
-/// collides with a deeper-ring reopen (`DoesNotSupportRequestedMinBufferSize`)
-/// — the two #1549 errors, one cause.
+/// collides with a deeper-ring reopen (`DoesNotSupportRequestedMinBufferSize`).
 ///
-/// Rust→Rust reclaim is complete here (both ports are host-owned). A subprocess
-/// endpoint opens its own ports from the wiring envelope and has no host-reachable
-/// drop path, so its live reclaim needs a Python/Deno cdylib drop entry point
-/// (tracked follow-up); this op does not touch a running subprocess's ports.
+/// Rust→Rust reclaim is complete here; a subprocess endpoint owns its own ports
+/// and needs a cdylib drop entry point (follow-up) — this op leaves them untouched.
 #[tracing::instrument(name = "compiler.close_iceoryx2_service", skip(graph), fields(link_id = %link_id))]
 pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Result<()> {
     tracing::info!("Closing iceoryx2 service: {}", link_id);

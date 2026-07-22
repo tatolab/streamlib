@@ -218,20 +218,13 @@ impl OutputWriterInner {
 
     /// Reclaim the source-side egress for one disconnected `connect()` link.
     ///
-    /// Drops the `link_id`-tagged destination notifier from `output_port`'s
-    /// channel egress. When that was the last outbound link from the port, the
-    /// whole [`ChannelEgress`] is removed — dropping the publisher and releasing
-    /// the underlying iceoryx2 data service so a later reconnect recreates a
-    /// fresh-sized, refcounted service rather than colliding with the stale one
-    /// (`DoesNotSupportRequestedMinBufferSize`) or exceeding the notify service's
-    /// create-time `max_notifiers` cap (`ExceedsMaxSupportedNotifiers`). Without
-    /// this reclaim, disconnect left the notifier and publisher live, so a
-    /// reconnect re-appended past the cap — the #1549 leak.
+    /// When the dropped `link_id` notifier was the port's last outbound link, the
+    /// whole [`ChannelEgress`] (publisher + data service) is released so a reconnect
+    /// recreates a fresh-sized, refcounted service rather than colliding with the
+    /// stale one (`DoesNotSupportRequestedMinBufferSize`) or exceeding the notify
+    /// service's create-time `max_notifiers` cap (`ExceedsMaxSupportedNotifiers`).
     ///
-    /// Returns `true` when the channel publisher was fully removed (the last link
-    /// went away), `false` when other outbound links keep it alive. A no-op that
-    /// returns `false` if `output_port` has no channel or no notifier for
-    /// `link_id`.
+    /// Returns `true` when that last link went away and the publisher was removed.
     pub fn remove_channel_link(&self, output_port: &str, link_id: &str) -> bool {
         let mut channels = self.channels.lock();
         let Some(egress) = channels.get_mut(output_port) else {

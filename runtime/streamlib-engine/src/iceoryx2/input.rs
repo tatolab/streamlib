@@ -329,19 +329,14 @@ impl InputMailboxesInner {
 
     /// Reclaim the destination-side ports for one disconnected `connect()` link.
     ///
-    /// Drops the `link_id`-tagged channel subscriber. When the local input port
-    /// it fed has no remaining subscribers, that port's mailbox is removed; when
-    /// the destination has no remaining subscribers at all, the shared listener
-    /// is dropped — releasing the destination-keyed notify service so a later
-    /// reconnect recreates fresh-sized, refcounted ports instead of colliding
-    /// with the stale service (`DoesNotSupportRequestedMinBufferSize`). Without
-    /// this reclaim, disconnect left the subscriber and listener live — the
-    /// #1549 leak on the destination half.
+    /// Drops the `link_id`-tagged subscriber; when its local input port has no
+    /// remaining subscribers the mailbox is removed, and when the destination has
+    /// none at all the shared listener is dropped — releasing the destination-keyed
+    /// notify service so a reconnect recreates fresh-sized, refcounted ports rather
+    /// than colliding with the stale service (`DoesNotSupportRequestedMinBufferSize`).
     ///
-    /// A no-op if no subscriber matches `link_id`.
-    ///
-    /// Note: This should only be called from the processor's execution thread,
-    /// in the same wiring phase a `connect` runs in.
+    /// Must be called from the processor's execution thread, in the same wiring
+    /// phase a `connect` runs in.
     pub fn remove_channel_link(&self, link_id: &str) {
         let Some(local_port) = self.subscribers.remove_by_link(link_id) else {
             return;
