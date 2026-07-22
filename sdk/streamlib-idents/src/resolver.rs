@@ -1001,6 +1001,60 @@ mod tests {
         assert!(matches!(res.root.source, ResolvedSource::Root));
     }
 
+    /// Load-bearing invariant of the #1506 co-location flip: build outputs
+    /// materialized BESIDE a package's source in its `streamlib_modules/@org/name`
+    /// slot (`lib/<triple>/*.so`, `.venv/`, `.streamlib-build.json`, cargo
+    /// `target/`) do NOT change `content_hash_for_package_dir`. The hash covers
+    /// only the manifest + owned schema files, so a locked run re-hashing a
+    /// compiled-in-place slot still matches the lockfile pin instead of tripping
+    /// a spurious `LockedSlotContentMismatch`. Mutating a hashed schema DOES move
+    /// the hash — proving it isn't trivially constant.
+    #[test]
+    fn content_hash_ignores_colocated_build_outputs() {
+        let tmp = tempfile::tempdir().unwrap();
+        let slot = tmp.path().join("streamlib_modules").join("@tatolab").join("core");
+        write_streamlib_yaml(
+            &slot,
+            "package:\n  org: tatolab\n  name: core\n  version: 1.0.0\n",
+        );
+        std::fs::create_dir_all(slot.join("schemas")).unwrap();
+        write_yaml(
+            &slot.join("schemas"),
+            "VideoFrame.yaml",
+            "metadata:\n  name: VideoFrame\nproperties:\n  width:\n    type: uint32\n",
+        );
+
+        let before = content_hash_for_package_dir(&slot).unwrap();
+
+        // Materialize the compile-on-install build outputs beside the source.
+        let lib_triple = slot.join("lib").join("x86_64-unknown-linux-gnu");
+        std::fs::create_dir_all(&lib_triple).unwrap();
+        std::fs::write(lib_triple.join("libcore.so"), b"\x7fELF-not-really").unwrap();
+        std::fs::create_dir_all(slot.join(".venv").join("bin")).unwrap();
+        std::fs::write(slot.join(".venv").join("bin").join("python"), b"#!venv").unwrap();
+        std::fs::write(slot.join(".streamlib-build.json"), b"{\"built\":true}").unwrap();
+        std::fs::create_dir_all(slot.join("target").join("debug")).unwrap();
+        std::fs::write(slot.join("target").join("debug").join("junk"), b"scratch").unwrap();
+
+        let after = content_hash_for_package_dir(&slot).unwrap();
+        assert_eq!(
+            before, after,
+            "co-located build outputs must not move the content hash"
+        );
+
+        // A change to a HASHED input (the schema) does move the hash.
+        write_yaml(
+            &slot.join("schemas"),
+            "VideoFrame.yaml",
+            "metadata:\n  name: VideoFrame\nproperties:\n  width:\n    type: uint64\n",
+        );
+        let mutated = content_hash_for_package_dir(&slot).unwrap();
+        assert_ne!(
+            before, mutated,
+            "a mutated schema must move the content hash"
+        );
+    }
+
     #[test]
     fn resolve_path_dependency() {
         let tmp = tempfile::tempdir().unwrap();
