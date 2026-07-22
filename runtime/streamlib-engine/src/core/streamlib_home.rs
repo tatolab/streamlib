@@ -1,7 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+
+use streamlib_idents::{PackageRef, SemVer};
 
 /// The streamlib app root — the install / clone directory, the top level
 /// that holds both the read-only `packages/` source and the generated
@@ -113,11 +115,30 @@ pub fn get_cached_package_dir(cache_key: &str) -> PathBuf {
         .join(cache_key)
 }
 
-/// The installed-cache slot for a package name + version — the single
-/// source of the `{name}-{version}` cache-key convention shared by
-/// `.slpkg` extraction, registry resolution, orchestrator staging, and
-/// locked-run slot derivation. A drift in any one of those sites would
-/// make locked runs look in the wrong slot; route them all through here.
+/// The installed-package cache slot for a package at a version — the single
+/// source of the `{name}-{version}` cache-key convention shared by `.slpkg`
+/// extraction, registry resolution, orchestrator staging, and locked-run slot
+/// derivation. A drift in any one of those sites would make locked runs look
+/// in the wrong slot; route them all through here.
+///
+/// `app_modules_root` is the app root whose `streamlib_modules/` tree the
+/// in-progress co-location relocation (#1506) will prefer over the shared
+/// cache; it and the package org are threaded now so every deriver already
+/// carries the app context, though this body returns the shared
+/// `.streamlib/cache/packages/{name}-{version}` slot regardless of either.
+pub fn installed_package_slot_dir(
+    app_modules_root: Option<&Path>,
+    pkg_ref: &PackageRef,
+    version: SemVer,
+) -> PathBuf {
+    let _ = app_modules_root;
+    get_cached_package_dir(&format!("{}-{}", pkg_ref.name.as_str(), version))
+}
+
+/// Temporary delegate over [`installed_package_slot_dir`] for the build
+/// orchestrator's cross-crate call, which does not yet thread a
+/// [`PackageRef`]/app root. Removed in the orchestrator-handoff step of the
+/// #1506 relocation; no new caller.
 pub fn get_cached_package_dir_for_name_version(
     package_name: &str,
     version: impl std::fmt::Display,
@@ -150,6 +171,54 @@ pub fn get_processor_data_dir(runtime_id: &str, processor_id: &str) -> PathBuf {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use streamlib_idents::{Org, Package};
+
+    fn pkg_ref(org: &str, name: &str) -> PackageRef {
+        PackageRef::new(Org::new(org).unwrap(), Package::new(name).unwrap())
+    }
+
+    /// Pins the seam's layout literal: the slot is always
+    /// `<data-dir>/cache/packages/{name}-{version}`, regardless of org or the
+    /// (currently unused) app-modules root. A relocation that changes this
+    /// convention must update every deriver and this canary together.
+    #[test]
+    fn slot_dir_uses_name_dash_version_under_cache_packages() {
+        let slot = installed_package_slot_dir(
+            None,
+            &pkg_ref("tatolab", "core"),
+            SemVer::new(1, 2, 3),
+        );
+        let expected = get_streamlib_data_dir()
+            .join("cache/packages")
+            .join("core-1.2.3");
+        assert_eq!(slot, expected);
+    }
+
+    /// write==read invariant: the seam is the single derivation, so a fixed
+    /// `(pkg_ref, version)` yields one byte-identical slot no matter the app
+    /// root — the property that lets a locked read find exactly the slot a
+    /// `.slpkg` extract / registry reuse wrote. Also pins the temporary
+    /// orchestrator delegate to the same output while it lives.
+    #[test]
+    fn slot_dir_is_app_root_invariant_and_matches_delegate() {
+        let pkg = pkg_ref("tatolab", "core");
+        let version = SemVer::new(4, 5, 6);
+
+        let no_root = installed_package_slot_dir(None, &pkg, version);
+        let with_root =
+            installed_package_slot_dir(Some(Path::new("/some/app")), &pkg, version);
+        assert_eq!(no_root, with_root, "app root must not move the slot");
+
+        // The org is not part of the current key: a same-name package under a
+        // different org derives the same slot (as the delegate, which has no
+        // org, must too).
+        let other_org = installed_package_slot_dir(None, &pkg_ref("acme", "core"), version);
+        assert_eq!(no_root, other_org);
+        assert_eq!(
+            no_root,
+            get_cached_package_dir_for_name_version("core", version)
+        );
+    }
 
     #[test]
     fn app_root_is_first_ancestor_with_packages_dir() {
