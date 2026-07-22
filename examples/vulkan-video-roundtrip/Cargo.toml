@@ -16,7 +16,7 @@ publish = false
 [dependencies]
 # SDK by version; not published to crates.io yet, so `./setup.sh` runs
 # `streamlib link --engine <checkout>` to point it at the in-repo SDK.
-streamlib = { version = "0.7.27" }
+streamlib = { version = "0.7.28" }
 serde_json = "1"
 anyhow = "1.0.100"
 
