@@ -1201,7 +1201,7 @@ mod host_runtime_ops_wiring_tests {
     //! The existing router tests inject a mock `RuntimeOperations` and so
     //! never exercise the `host_callbacks().is_none()` branch this fix adds;
     //! this test drives the branch through the SAME host-shaped
-    //! `RuntimeContextFullAccess::new(&base)` that lifecycle dispatch mints.
+    //! `RuntimeContextFullAccess::new(&base, grant)` that lifecycle dispatch mints.
     //!
     //! Channel resolution (`find_channel_source_port` over the live graph)
     //! runs BEFORE any iceoryx2 subscribe, so an unwired channel surfaces
@@ -1268,7 +1268,13 @@ mod host_runtime_ops_wiring_tests {
             std::path::PathBuf::from("/tmp/streamlib-test-tap-wiring.sock"),
         );
 
-        let ctx = RuntimeContextFullAccess::new(&base);
+        // The FullAccess ctor is grant-gated (the isolation capability moat);
+        // a test standing in for lifecycle dispatch mints a grant from the
+        // trusted tier, exactly as `thread_runner` does at teardown.
+        let grant = crate::core::context::isolation::IsolationTier::TrustedInstalled
+            .grant_full_access()
+            .expect("TrustedInstalled mints a FullAccessGrant");
+        let ctx = RuntimeContextFullAccess::new(&base, grant);
         let err = tokio_runtime.block_on(async {
             ctx.runtime()
                 .tap_async("no-such-channel".to_string(), None)
