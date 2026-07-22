@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.42](https://github.com/tatolab/streamlib/compare/v0.7.41...v0.7.42) (2026-07-22)
+
+
+### Bug Fixes
+
+* **engine:** reclaim iceoryx2 ports per-link on disconnect ([#1549](https://github.com/tatolab/streamlib/issues/1549)) ([#1555](https://github.com/tatolab/streamlib/issues/1555)) ([02306f0](https://github.com/tatolab/streamlib/commit/02306f049d3f738a3da4ace5f4ff227a48ce7096))
+
 ## [0.7.41](https://github.com/tatolab/streamlib/compare/v0.7.40...v0.7.41) (2026-07-22)
 
 
