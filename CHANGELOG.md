@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.38](https://github.com/tatolab/streamlib/compare/v0.7.37...v0.7.38) (2026-07-22)
+
+
+### Features
+
+* **engine:** installed slot is load-only — typed InstalledPackageNotBuilt, never a cold-build ([#1544](https://github.com/tatolab/streamlib/issues/1544)) ([fb30cd1](https://github.com/tatolab/streamlib/commit/fb30cd12bd6eaf7936df41a36306ad3cb49a794d))
+
 ## [0.7.37](https://github.com/tatolab/streamlib/compare/v0.7.36...v0.7.37) (2026-07-22)
 
 
