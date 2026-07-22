@@ -30,7 +30,7 @@ use streamlib_idents::{Lockfile, PackageRef, SemVer, SemVerRange};
 use super::build_orchestrator::BuildPolicy;
 use super::errors::AddModuleError;
 use super::source::Strategy;
-use crate::core::streamlib_home::get_cached_package_dir_for_name_version;
+use crate::core::streamlib_home::installed_package_slot_dir;
 
 /// One pinned package: its concrete version, the installed-cache slot
 /// `streamlib install` materialized it into, and the content hash the
@@ -59,6 +59,9 @@ impl LockedResolution {
         lockfile: &Lockfile,
         lockfile_path: &Path,
     ) -> Result<Self, AddModuleError> {
+        // The lockfile sits at `<app-root>/streamlib.lock`, so its parent IS
+        // the app root the slot deriver is threaded with.
+        let app_root = lockfile_path.parent();
         let mut pins = HashMap::with_capacity(lockfile.packages.len());
         for (key, entry) in &lockfile.packages {
             let pkg_ref = parse_lockfile_package_ref_key(key).map_err(|detail| {
@@ -67,8 +70,7 @@ impl LockedResolution {
                     detail,
                 }
             })?;
-            let slot_dir =
-                get_cached_package_dir_for_name_version(pkg_ref.name.as_str(), entry.version);
+            let slot_dir = installed_package_slot_dir(app_root, &pkg_ref, entry.version);
             pins.insert(
                 pkg_ref,
                 LockedPin {
@@ -233,7 +235,7 @@ mod tests {
         // where `materialize` stages.
         assert_eq!(
             pin.slot_dir,
-            get_cached_package_dir_for_name_version("core", SemVer::new(1, 2, 3))
+            installed_package_slot_dir(None, &pkg, SemVer::new(1, 2, 3))
         );
     }
 

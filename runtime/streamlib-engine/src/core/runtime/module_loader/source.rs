@@ -323,7 +323,7 @@ pub(super) fn resolve_strategy_to_source(
             resolve_installed_cache_strategy(pkg_ref, app_modules_root().as_deref())
         }
         Strategy::Slpkg { path } => {
-            let extracted = extract_slpkg_to_cache(path).map_err(|e| {
+            let extracted = extract_slpkg_to_cache(path, app_modules_root().as_deref()).map_err(|e| {
                 AddModuleError::SlpkgExtractionFailed {
                     archive: path.clone(),
                     detail: e.to_string(),
@@ -366,7 +366,7 @@ pub(super) fn resolve_strategy_to_source(
             // build path a local `.slpkg` takes. No build happens here —
             // any build is deferred to the injected orchestrator.
             let slpkg = fetch_remote_slpkg(pkg_ref, url, checksum.as_ref())?;
-            let extracted = extract_slpkg_to_cache(&slpkg).map_err(|e| {
+            let extracted = extract_slpkg_to_cache(&slpkg, app_modules_root().as_deref()).map_err(|e| {
                 AddModuleError::SlpkgExtractionFailed {
                     archive: slpkg.clone(),
                     detail: e.to_string(),
@@ -408,8 +408,9 @@ pub(super) fn resolve_strategy_to_source(
             // versions are immutable (a content change ships a new version);
             // `streamlib pkg clean` clears the cache to force a re-fetch when a
             // version is republished in place during development.
-            let slot = crate::core::streamlib_home::get_cached_package_dir_for_name_version(
-                pkg_ref.name.as_str(),
+            let slot = crate::core::streamlib_home::installed_package_slot_dir(
+                app_modules_root().as_deref(),
+                pkg_ref,
                 selected,
             );
             let extracted = if matches!(build, BuildPolicy::IfStale) && slot.is_dir() {
@@ -434,7 +435,7 @@ pub(super) fn resolve_strategy_to_source(
                     "resolved module from static generic store"
                 );
                 let archive = persist_registry_slpkg(pkg_ref, &url, &bytes)?;
-                extract_slpkg_to_cache(&archive).map_err(|e| {
+                extract_slpkg_to_cache(&archive, app_modules_root().as_deref()).map_err(|e| {
                     AddModuleError::SlpkgExtractionFailed {
                         archive: archive.clone(),
                         detail: e.to_string(),

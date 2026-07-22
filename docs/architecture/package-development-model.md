@@ -418,7 +418,7 @@ a live fetch. At load, a **content-hash integrity gate** re-hashes each
 slot's manifest + schema set (`content_hash_for_package_dir`, SHA-256) and
 refuses on mismatch (`LockedSlotContentMismatch`), closing the
 tampered / republished-in-place hole. Slot paths are re-derived by the shared
-`get_cached_package_dir_for_name_version` helper
+`installed_package_slot_dir` helper
 ([`runtime/streamlib-engine/src/core/streamlib_home.rs`](../../runtime/streamlib-engine/src/core/streamlib_home.rs)) —
 the single `cache/packages/{name}-{version}` convention also used by `.slpkg`
 extraction, registry resolution, and orchestrator staging.

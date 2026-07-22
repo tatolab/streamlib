@@ -3923,7 +3923,15 @@ packages:
         version: &str,
         type_name: &str,
     ) -> (std::path::PathBuf, String) {
-        let slot = crate::core::get_cached_package_dir_for_name_version(name, version);
+        let pkg_ref = streamlib_idents::PackageRef::new(
+            streamlib_idents::Org::new("tatolab").unwrap(),
+            streamlib_idents::Package::new(name).unwrap(),
+        );
+        let slot = crate::core::installed_package_slot_dir(
+            None,
+            &pkg_ref,
+            version.parse().unwrap(),
+        );
         let stem = type_name.to_ascii_lowercase();
         std::fs::create_dir_all(slot.join("schemas")).unwrap();
         std::fs::write(
@@ -4033,7 +4041,15 @@ packages:
         // its manifest inside claims 1.0.1 — an in-place republish that kept
         // the dir name. Pin the drifted slot's REAL hash so the content gate
         // passes and the walker's version check is the one that fires.
-        let slot = crate::core::get_cached_package_dir_for_name_version("drift-pkg", "1.0.0");
+        let pkg_ref = streamlib_idents::PackageRef::new(
+            streamlib_idents::Org::new("tatolab").unwrap(),
+            streamlib_idents::Package::new("drift-pkg").unwrap(),
+        );
+        let slot = crate::core::installed_package_slot_dir(
+            None,
+            &pkg_ref,
+            "1.0.0".parse().unwrap(),
+        );
         std::fs::create_dir_all(slot.join("schemas")).unwrap();
         std::fs::write(
             slot.join("streamlib.yaml"),

@@ -1,12 +1,19 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use streamlib_idents::PackageRef;
+
+use crate::core::streamlib_home::installed_package_slot_dir;
 use crate::core::{Error, Result};
 
-/// Extract a .slpkg ZIP archive to the package cache.
-/// Cache key is `{name}-{version}` from the embedded streamlib.yaml.
-/// Always overwrites on load.
-pub fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path::PathBuf> {
+/// Extract a .slpkg ZIP archive to the installed-package cache slot derived
+/// from the embedded `streamlib.yaml`'s `@org/name`@version. `app_modules_root`
+/// is threaded to the slot deriver (the app whose `streamlib_modules/` a future
+/// relocation prefers). Always overwrites on load.
+pub fn extract_slpkg_to_cache(
+    slpkg_path: &std::path::Path,
+    app_modules_root: Option<&std::path::Path>,
+) -> Result<std::path::PathBuf> {
     use crate::core::config::ProjectConfig;
 
     let slpkg_bytes = std::fs::read(slpkg_path).map_err(|e| {
@@ -39,10 +46,8 @@ pub fn extract_slpkg_to_cache(slpkg_path: &std::path::Path) -> Result<std::path:
         Error::Configuration("streamlib.yaml missing [package] section".to_string())
     })?;
 
-    let cache_dir = crate::core::streamlib_home::get_cached_package_dir_for_name_version(
-        package.name.as_str(),
-        package.version,
-    );
+    let pkg_ref = PackageRef::new(package.org.clone(), package.name.clone());
+    let cache_dir = installed_package_slot_dir(app_modules_root, &pkg_ref, package.version);
 
     // Reuse the already-read bytes — extract into the derived cache slot.
     extract_zip_bytes_to_dir(&slpkg_bytes, &cache_dir, slpkg_path)?;
