@@ -21,8 +21,8 @@ path = "src/lib.rs"
 # links this transport lib, so pulling the facade here would statically bundle
 # a second copy of streamlib-engine into the host process (the direct-dep grep
 # in check-boundaries does not see this transitive path).
-streamlib-error = { path = "../../sdk/streamlib-error", version = "0.7.28" }
-streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.7.28" }
+streamlib-error = { path = "../../sdk/streamlib-error", version = "0.7.29" }
+streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", version = "0.7.29" }
 
 # MoQ-over-QUIC transport stack.
 moq-transport = "0.14.1"

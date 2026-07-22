@@ -14,7 +14,7 @@ name = "streamlib_frame_tap"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = {version = "0.7.28"}
+streamlib-jtd-codegen = {version = "0.7.29"}
 
 [dependencies]
 # Engine-free authoring SDK (never the `streamlib` facade) — capability-typed
@@ -22,15 +22,15 @@ streamlib-jtd-codegen = {version = "0.7.28"}
 # generated wire types under `crate::_generated_::*`, error/result types. GPU
 # resource creation goes through `GpuContextLimitedAccess::escalate` +
 # `create_texture_readback`, never the raw host device.
-streamlib-plugin-sdk = {version = "0.7.28"}
+streamlib-plugin-sdk = {version = "0.7.29"}
 
 # Procedural macros — `#[streamlib_plugin_sdk::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = {version = "0.7.28"}
+streamlib-macros = {version = "0.7.29"}
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = {version = "0.7.28"}
+streamlib-plugin-abi = {version = "0.7.29"}
 
 serde = {version = "1.0", features = ["derive"]}
 serde_json = {version = "1.0", features = ["preserve_order"]}

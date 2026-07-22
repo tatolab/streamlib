@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.29](https://github.com/tatolab/streamlib/compare/v0.7.28...v0.7.29) (2026-07-22)
+
+
+### Features
+
+* **plugin-sdk:** wire runtime_id/processor_id/is_paused/should_process on cdylib-arm RuntimeContext views ([#1525](https://github.com/tatolab/streamlib/issues/1525)) ([884fe99](https://github.com/tatolab/streamlib/commit/884fe9994038c7a5e5357927f5916bb94197c63a))
+
 ## [0.7.28](https://github.com/tatolab/streamlib/compare/v0.7.27...v0.7.28) (2026-07-22)
 
 
