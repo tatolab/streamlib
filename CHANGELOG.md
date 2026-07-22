@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.39](https://github.com/tatolab/streamlib/compare/v0.7.38...v0.7.39) (2026-07-22)
+
+
+### Features
+
+* **idents:** version never blocks a load — remove hard VersionRangeConflict stop ([#1546](https://github.com/tatolab/streamlib/issues/1546)) ([72632bd](https://github.com/tatolab/streamlib/commit/72632bd55aba540821ee7fb117b00855af2b39d7))
+
 ## [0.7.38](https://github.com/tatolab/streamlib/compare/v0.7.37...v0.7.38) (2026-07-22)
 
 
