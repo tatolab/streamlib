@@ -12,6 +12,9 @@ pub mod _generated_ {
 pub mod simple_passthrough;
 pub mod video_frame_counter;
 
+#[cfg(test)]
+mod plugin_load_smoke;
+
 #[cfg(target_os = "linux")]
 pub mod bgra_file_source;
 
