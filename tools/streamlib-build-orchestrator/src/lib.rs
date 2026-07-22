@@ -173,6 +173,21 @@ fn rust_reuse_permitted(
     !has_rust || (!source_is_mutable && !link_active && cdylib_present)
 }
 
+/// Rebuild-time complement of [`rust_reuse_permitted`]: on the paths that reach
+/// an actual rebuild, whether assemble must ignore a `.so` a prior build
+/// promoted into the (co-located) source tree and let cargo's own fingerprint
+/// be the oracle. True for a mutable checkout, an active `streamlib link`, or an
+/// unconditional [`BuildPolicy::AlwaysBuild`]; false only for an immutable
+/// extract under [`BuildPolicy::IfStale`], which keeps the prebuilt preference
+/// so a venv-only re-provision stays compiler-free.
+fn ignore_in_tree_prebuilt_cdylib(
+    source_is_mutable: bool,
+    link_active: bool,
+    policy: BuildPolicy,
+) -> bool {
+    source_is_mutable || link_active || matches!(policy, BuildPolicy::AlwaysBuild)
+}
+
 impl PolyglotBuildOrchestrator {
     fn materialize_package_dir(
         &self,
@@ -350,9 +365,11 @@ impl PolyglotBuildOrchestrator {
         // artifact. Let cargo's own fingerprint be the oracle in those cases;
         // an immutable extract under `IfStale` keeps the prebuilt preference
         // so a venv-only re-provision stays compiler-free.
-        let ignore_in_tree_prebuilt_cdylib = source_is_mutable
-            || active_link.is_some()
-            || matches!(request.policy, BuildPolicy::AlwaysBuild);
+        let ignore_in_tree_prebuilt_cdylib = ignore_in_tree_prebuilt_cdylib(
+            source_is_mutable,
+            active_link.is_some(),
+            request.policy,
+        );
 
         let adapter = EngineSinkAdapter(sink);
         let outcome = assemble_artifact_with_cargo_config(
@@ -991,6 +1008,40 @@ mod tests {
         assert!(!rust_reuse_permitted(true, false, true, true));
         // Rust, immutable, no link, but no cdylib staged yet: must build.
         assert!(!rust_reuse_permitted(true, false, false, false));
+    }
+
+    // Mentally-revert check: dropping the `link_active` clause flips the
+    // active-link case below to `false`, silently reintroducing the #1550 bug
+    // (assemble honors a stale in-tree `.so` under an active `streamlib link`).
+    #[test]
+    fn ignore_in_tree_prebuilt_cdylib_holds_for_mutable_linked_or_always_build() {
+        // (source_is_mutable, link_active, policy)
+        // Mutable checkout: ignore the promoted `.so`, let cargo re-decide.
+        assert!(ignore_in_tree_prebuilt_cdylib(
+            true,
+            false,
+            BuildPolicy::IfStale
+        ));
+        // Active link: ignore (deps resolve to a mutable checkout) — the #1550
+        // case.
+        assert!(ignore_in_tree_prebuilt_cdylib(
+            false,
+            true,
+            BuildPolicy::IfStale
+        ));
+        // AlwaysBuild: ignore unconditionally.
+        assert!(ignore_in_tree_prebuilt_cdylib(
+            false,
+            false,
+            BuildPolicy::AlwaysBuild
+        ));
+        // Immutable extract under IfStale: keep the prebuilt preference so a
+        // venv-only re-provision stays compiler-free.
+        assert!(!ignore_in_tree_prebuilt_cdylib(
+            false,
+            false,
+            BuildPolicy::IfStale
+        ));
     }
 
     #[test]
