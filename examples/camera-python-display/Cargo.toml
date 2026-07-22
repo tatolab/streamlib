@@ -40,14 +40,14 @@ license = "BUSL-1.1"
 [workspace.dependencies]
 # Engine facade — used ONLY by the runner (the host app), never the `effects`
 # plugin cdylib.
-streamlib = { version = "0.7.35" }
+streamlib = { version = "0.7.36" }
 # Engine-free authoring SDK chain — used by the `effects` plugin cdylib.
-streamlib-plugin-sdk = { version = "0.7.35" }
-streamlib-macros = { version = "0.7.35" }
-streamlib-jtd-codegen = { version = "0.7.35" }
-streamlib-plugin-abi = { version = "0.7.35" }
-streamlib-adapter-abi = { version = "0.7.35" }
-streamlib-consumer-rhi = { version = "0.7.35" }
+streamlib-plugin-sdk = { version = "0.7.36" }
+streamlib-macros = { version = "0.7.36" }
+streamlib-jtd-codegen = { version = "0.7.36" }
+streamlib-plugin-abi = { version = "0.7.36" }
+streamlib-adapter-abi = { version = "0.7.36" }
+streamlib-consumer-rhi = { version = "0.7.36" }
 tracing = { version = "0.1.41", features = ["release_max_level_debug"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }

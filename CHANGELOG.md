@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.36](https://github.com/tatolab/streamlib/compare/v0.7.35...v0.7.36) (2026-07-22)
+
+
+### Features
+
+* **engine:** retire .streamlib/cache/packages, fold packages.yaml into streamlib_modules ([#1540](https://github.com/tatolab/streamlib/issues/1540)) ([d344fce](https://github.com/tatolab/streamlib/commit/d344fce90450bf3938b073ddd9dedca4fd83c7b7))
+
 ## [0.7.35](https://github.com/tatolab/streamlib/compare/v0.7.34...v0.7.35) (2026-07-22)
 
 
