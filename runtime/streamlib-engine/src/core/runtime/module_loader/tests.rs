@@ -11,20 +11,20 @@ use super::processor_registration::{host_target_triple, list_available_triples};
 use super::*;
 use serial_test::serial;
 
-/// Resolve the installed-package cache slot for `@org/name`@`version` through
-/// the production [`installed_package_slot_dir`] seam, so a fixture writes to
-/// (and an assertion reads) the exact slot a locked run derives — never a
-/// hand-rolled `{name}-{version}` string that could silently drift from the
-/// seam. The single place that pins the literal on-disk layout is the
-/// `installed_cache_slot_layout_canary` test.
+/// Resolve the installed-package cache slot for `@org/name` through the
+/// production [`installed_package_slot_dir`] seam, so a fixture writes to (and
+/// an assertion reads) the exact slot a locked run derives — never a
+/// hand-rolled `{name}` string that could silently drift from the seam. The
+/// slot is version-free; the single place that pins the literal on-disk layout
+/// is the `installed_cache_slot_layout_canary` test.
 ///
 /// [`installed_package_slot_dir`]: crate::core::installed_package_slot_dir
-fn installed_package_slot_for_test(org: &str, name: &str, version: &str) -> std::path::PathBuf {
+fn installed_package_slot_for_test(org: &str, name: &str) -> std::path::PathBuf {
     let pkg_ref = streamlib_idents::PackageRef::new(
         streamlib_idents::Org::new(org).unwrap(),
         streamlib_idents::Package::new(name).unwrap(),
     );
-    crate::core::installed_package_slot_dir(None, &pkg_ref, version.parse().unwrap())
+    crate::core::installed_package_slot_dir(None, &pkg_ref)
 }
 
 /// Minimal [`BuildOrchestrator`] for tests: "materializes" a
@@ -756,7 +756,7 @@ fn path_package_registry_dep_routes_to_registry_not_installed_cache() {
 
     // An installed-cache entry for @tatolab/b that WOULD satisfy `^0.1.0` —
     // resolved through the seam so it lands at the real layout.
-    let dep_cache_dir = installed_package_slot_for_test("tatolab", "b", "0.1.0");
+    let dep_cache_dir = installed_package_slot_for_test("tatolab", "b");
     std::fs::create_dir_all(&dep_cache_dir).unwrap();
     std::fs::write(
         dep_cache_dir.join("streamlib.yaml"),
@@ -1152,7 +1152,7 @@ mod add_module_tests {
     /// Install a schemas-only package into the sandboxed installed-package
     /// cache so bare `add_module` (which resolves cache-only) can find it.
     fn install_cached_package(org: &str, name: &str, version: &str, schema: Option<&str>) {
-        let dep_cache_dir = installed_package_slot_for_test(org, name, version);
+        let dep_cache_dir = installed_package_slot_for_test(org, name);
         std::fs::create_dir_all(&dep_cache_dir).unwrap();
         write_schemas_only_manifest(&dep_cache_dir, org, name, version, schema);
 
@@ -1195,7 +1195,7 @@ mod add_module_tests {
         );
         // `None` resolves the app root via the same chain the module loader
         // uses; the guard pins it to `home`, so the slot lands under it.
-        let slot = crate::core::installed_package_slot_dir(None, &pkg_ref, SemVer::new(1, 0, 0));
+        let slot = crate::core::installed_package_slot_dir(None, &pkg_ref);
         assert_eq!(
             slot,
             home.path()
@@ -1263,8 +1263,7 @@ mod add_module_tests {
         // Cache entry keyed @tatolab/add-module-identity but the on-disk
         // manifest declares a different identity (clobbered cache). Resolve
         // through the seam so the fixture tracks the real layout.
-        let dep_cache_dir =
-            installed_package_slot_for_test("tatolab", "add-module-identity", "1.0.0");
+        let dep_cache_dir = installed_package_slot_for_test("tatolab", "add-module-identity");
         std::fs::create_dir_all(&dep_cache_dir).unwrap();
         write_schemas_only_manifest(&dep_cache_dir, "vendor", "other", "1.0.0", None);
         let mut installed = crate::core::config::InstalledPackageManifest::default();
@@ -3887,7 +3886,7 @@ processors:
         // Hand-stage a package whose manifest declares a dep on `miss-dep`,
         // and a lockfile that pins ONLY the package (stale relative to the
         // manifest graph).
-        let slot = installed_package_slot_for_test("tatolab", "miss-pkg", "0.1.0");
+        let slot = installed_package_slot_for_test("tatolab", "miss-pkg");
         std::fs::create_dir_all(slot.join("schemas")).unwrap();
         std::fs::write(
             slot.join("streamlib.yaml"),
@@ -3985,11 +3984,7 @@ packages:
             streamlib_idents::Org::new("tatolab").unwrap(),
             streamlib_idents::Package::new(name).unwrap(),
         );
-        let slot = crate::core::installed_package_slot_dir(
-            None,
-            &pkg_ref,
-            version.parse().unwrap(),
-        );
+        let slot = crate::core::installed_package_slot_dir(None, &pkg_ref);
         let stem = type_name.to_ascii_lowercase();
         std::fs::create_dir_all(slot.join("schemas")).unwrap();
         std::fs::write(
@@ -4111,11 +4106,7 @@ packages:
             streamlib_idents::Org::new("tatolab").unwrap(),
             streamlib_idents::Package::new("drift-pkg").unwrap(),
         );
-        let slot = crate::core::installed_package_slot_dir(
-            Some(sandbox.path()),
-            &pkg_ref,
-            "1.0.0".parse().unwrap(),
-        );
+        let slot = crate::core::installed_package_slot_dir(Some(sandbox.path()), &pkg_ref);
         std::fs::create_dir_all(slot.join("schemas")).unwrap();
         std::fs::write(
             slot.join("streamlib.yaml"),

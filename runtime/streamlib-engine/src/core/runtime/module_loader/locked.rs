@@ -71,7 +71,7 @@ impl LockedResolution {
                     detail,
                 }
             })?;
-            let slot_dir = installed_package_slot_dir(app_root, &pkg_ref, entry.version);
+            let slot_dir = installed_package_slot_dir(app_root, &pkg_ref);
             pins.insert(
                 pkg_ref,
                 LockedPin {
@@ -238,7 +238,7 @@ mod tests {
         // install write and this locked read share (write==read).
         assert_eq!(
             pin.slot_dir,
-            installed_package_slot_dir(lockfile_path.parent(), &pkg, SemVer::new(1, 2, 3))
+            installed_package_slot_dir(lockfile_path.parent(), &pkg)
         );
     }
 

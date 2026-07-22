@@ -175,7 +175,7 @@ pub fn install(
         .unwrap_or_else(|| root_dir.to_path_buf());
 
     for pkg in resolved.iter_all() {
-        let Some((pkg_ref, version)) = package_ref_of(pkg) else {
+        let Some((pkg_ref, _version)) = package_ref_of(pkg) else {
             // Root project with no `[package]` — nothing to materialize.
             continue;
         };
@@ -191,7 +191,6 @@ pub fn install(
             staging_destination_slot_dir: crate::core::installed_package_slot_dir(
                 Some(app_root.as_path()),
                 &pkg_ref,
-                version,
             ),
         };
         let staged = orchestrator.materialize(&request, sink).map_err(|source| {

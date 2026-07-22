@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use streamlib_idents::app_modules::AppModulesDir;
-use streamlib_idents::{PackageRef, SemVer};
+use streamlib_idents::PackageRef;
 
 /// The streamlib app root — the install / clone directory, the top level
 /// that holds both the read-only `packages/` source and the generated
@@ -169,15 +169,13 @@ pub(crate) fn app_modules_root() -> Option<PathBuf> {
 /// so write and read agree byte-for-byte). `None` resolves the app root via
 /// [`app_modules_root`] (override > `STREAMLIB_MODULES_DIR` > cwd), the same
 /// chain the module loader resolves against — so a `None` deriver lands in the
-/// identical slot a resolved caller does. The slot is version-free by design
-/// (#1506): a package occupies one `@org/name` dir; the pinned version is
-/// enforced against the slot's manifest at the walker, not encoded in the path.
+/// identical slot a resolved caller does. The slot is version-free: a package
+/// occupies one `@org/name` dir; the pinned version is enforced against the
+/// slot's manifest at the walker, not encoded in the path.
 pub fn installed_package_slot_dir(
     explicit_app_modules_root: Option<&Path>,
     pkg_ref: &PackageRef,
-    version: SemVer,
 ) -> PathBuf {
-    let _ = version;
     let app_root = explicit_app_modules_root
         .map(Path::to_path_buf)
         .or_else(app_modules_root)
@@ -223,47 +221,29 @@ mod tests {
     #[test]
     fn slot_dir_is_org_scoped_and_version_free_under_streamlib_modules() {
         let app_root = Path::new("/some/app");
-        let slot = installed_package_slot_dir(
-            Some(app_root),
-            &pkg_ref("tatolab", "core"),
-            SemVer::new(1, 2, 3),
-        );
+        let slot = installed_package_slot_dir(Some(app_root), &pkg_ref("tatolab", "core"));
         let expected = app_root
             .join("streamlib_modules")
             .join("@tatolab")
             .join("core");
         assert_eq!(slot, expected);
-        assert!(
-            !slot.to_string_lossy().contains("1.2.3"),
-            "the version must not appear in the slot path"
-        );
     }
 
     /// write==read distinctness: the app root and the org each move the slot,
     /// so an install writing under one `(app-root, @org)` and a locked read
-    /// under another never collide — while a fixed `(app-root, @org/name)`
-    /// yields one byte-identical slot across versions (version is not in path).
+    /// under another never collide.
     #[test]
     fn slot_dir_moves_with_app_root_and_org() {
         let pkg = pkg_ref("tatolab", "core");
-        let version = SemVer::new(4, 5, 6);
 
-        let app_a = installed_package_slot_dir(Some(Path::new("/app/a")), &pkg, version);
-        let app_b = installed_package_slot_dir(Some(Path::new("/app/b")), &pkg, version);
+        let app_a = installed_package_slot_dir(Some(Path::new("/app/a")), &pkg);
+        let app_b = installed_package_slot_dir(Some(Path::new("/app/b")), &pkg);
         assert_ne!(app_a, app_b, "the app root must move the slot");
 
         // A same-name package under a different org gets a distinct slot.
-        let other_org = installed_package_slot_dir(
-            Some(Path::new("/app/a")),
-            &pkg_ref("acme", "core"),
-            version,
-        );
+        let other_org =
+            installed_package_slot_dir(Some(Path::new("/app/a")), &pkg_ref("acme", "core"));
         assert_ne!(app_a, other_org, "the org must move the slot");
-
-        // The version is not part of the path: two versions share the slot.
-        let bumped =
-            installed_package_slot_dir(Some(Path::new("/app/a")), &pkg, SemVer::new(9, 9, 9));
-        assert_eq!(app_a, bumped, "the version must not move the slot");
     }
 
     #[test]

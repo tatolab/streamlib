@@ -417,7 +417,6 @@ pub(super) fn resolve_strategy_to_source(
             let slot = crate::core::streamlib_home::installed_package_slot_dir(
                 app_modules_root().as_deref(),
                 pkg_ref,
-                selected,
             );
             let extracted = if registry_slot_holds_selected_version(*build, &slot, selected) {
                 tracing::debug!(
@@ -541,19 +540,16 @@ fn source_for_dir(
 }
 
 /// The installed-package slot the orchestrator must stage `dir` into, derived
-/// through the shared seam from the package's on-disk manifest version and the
-/// active app-modules root — the write side of the write==read invariant a
-/// locked run reads back through the same seam.
+/// through the shared seam from the package ref and the active app-modules root
+/// — the write side of the write==read invariant a locked run reads back
+/// through the same seam.
 fn staging_slot_for_dir(
     pkg_ref: &streamlib_idents::PackageRef,
-    dir: &std::path::Path,
-) -> std::result::Result<PathBuf, AddModuleError> {
-    let version = read_version_from_manifest_dir(dir)?;
-    Ok(crate::core::streamlib_home::installed_package_slot_dir(
+) -> PathBuf {
+    crate::core::streamlib_home::installed_package_slot_dir(
         app_modules_root().as_deref(),
         pkg_ref,
-        version,
-    ))
+    )
 }
 
 /// Decide how to load an already-resolved package directory (an extracted
@@ -573,7 +569,7 @@ fn source_for_resolved_dir(
     dir: PathBuf,
 ) -> std::result::Result<ResolvedSource, AddModuleError> {
     if needs_host_build(&dir) || needs_polyglot_provisioning(&dir) {
-        let staging_destination_slot_dir = staging_slot_for_dir(pkg_ref, &dir)?;
+        let staging_destination_slot_dir = staging_slot_for_dir(pkg_ref);
         Ok(ResolvedSource::NeedsBuild(BuildRequest {
             package: pkg_ref.clone(),
             source: BuildSource::PackageDir(dir),
@@ -625,7 +621,7 @@ fn source_for_fetched_slpkg(
             // AlwaysBuild paths — `streamlib add` and `Strategy::Registry`
             // resolve with AlwaysBuild through here.
             if has_buildable_rust_source(&dir) || needs_polyglot_provisioning(&dir) {
-                let staging_destination_slot_dir = staging_slot_for_dir(pkg_ref, &dir)?;
+                let staging_destination_slot_dir = staging_slot_for_dir(pkg_ref);
                 Ok(ResolvedSource::NeedsBuild(BuildRequest {
                     package: pkg_ref.clone(),
                     source: BuildSource::PackageDir(dir),
@@ -930,16 +926,16 @@ fn lookup_installed_cache(
 }
 
 /// Slot directory for an installed-package entry, derived from its typed
-/// `name`/`version` through the [`installed_package_slot_dir`] seam — never
-/// from the persisted `cache_dir` string, so a stored path can never imply a
-/// version that disagrees with the typed key.
+/// `name` through the [`installed_package_slot_dir`] seam — never from the
+/// persisted `cache_dir` string, so a stored path can never imply a slot that
+/// disagrees with the typed key.
 ///
 /// [`installed_package_slot_dir`]: crate::core::streamlib_home::installed_package_slot_dir
 fn installed_entry_slot_dir(
     entry: &crate::core::config::InstalledPackageEntry,
     app_root: Option<&std::path::Path>,
 ) -> PathBuf {
-    crate::core::streamlib_home::installed_package_slot_dir(app_root, &entry.name, entry.version)
+    crate::core::streamlib_home::installed_package_slot_dir(app_root, &entry.name)
 }
 
 /// Read the `[package].version` field from the `streamlib.yaml` at
@@ -1676,7 +1672,6 @@ mod tests {
         let slot = crate::core::streamlib_home::installed_package_slot_dir(
             Some(app_root),
             &pkg_ref_named(name),
-            streamlib_idents::SemVer::new(1, 0, 0),
         );
         std::fs::create_dir_all(&slot).unwrap();
         std::fs::write(
@@ -1894,8 +1889,8 @@ mod tests {
 
         assert_eq!(
             derived,
-            crate::core::streamlib_home::installed_package_slot_dir(None, &pkg_ref(), version),
-            "slot must come from the typed name+version seam"
+            crate::core::streamlib_home::installed_package_slot_dir(None, &pkg_ref()),
+            "slot must come from the typed name seam"
         );
         assert!(
             !derived.to_string_lossy().contains("garbage-999"),

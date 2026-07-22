@@ -47,7 +47,7 @@ pub fn extract_slpkg_to_cache(
     })?;
 
     let pkg_ref = PackageRef::new(package.org.clone(), package.name.clone());
-    let cache_dir = installed_package_slot_dir(app_modules_root, &pkg_ref, package.version);
+    let cache_dir = installed_package_slot_dir(app_modules_root, &pkg_ref);
 
     // Reuse the already-read bytes — extract into the derived cache slot.
     extract_zip_bytes_to_dir(&slpkg_bytes, &cache_dir, slpkg_path)?;
