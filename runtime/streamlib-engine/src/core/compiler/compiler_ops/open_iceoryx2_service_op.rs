@@ -268,11 +268,17 @@ pub fn open_iceoryx2_service(
 pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Result<()> {
     tracing::info!("Closing iceoryx2 service: {}", link_id);
 
-    let Some((from_port, to_port)) = graph
+    let Some((source_proc_id, source_port, dest_proc_id)) = graph
         .traversal_mut()
         .e(link_id)
         .first()
-        .map(|link| (link.from_port().clone(), link.to_port().clone()))
+        .map(|link| {
+            (
+                link.from_port().processor_id.clone(),
+                link.from_port().port_name.clone(),
+                link.to_port().processor_id.clone(),
+            )
+        })
     else {
         tracing::warn!(
             "close_iceoryx2_service: link '{}' not in graph; nothing to reclaim",
@@ -280,9 +286,6 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
         );
         return Ok(());
     };
-    let source_proc_id = from_port.processor_id.clone();
-    let source_port = from_port.port_name.clone();
-    let dest_proc_id = to_port.processor_id.clone();
 
     let source_is_subprocess = is_subprocess_processor(graph, &source_proc_id);
     let dest_is_subprocess = is_subprocess_processor(graph, &dest_proc_id);
@@ -290,33 +293,47 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
     // Source side: drop this link's destination notifier (and the channel
     // publisher when this was the source port's last outbound link).
     if !source_is_subprocess {
-        if let Ok(source_processor) = get_single_processor(graph, &source_proc_id) {
-            let source_guard = source_processor.lock();
-            if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
-                let channel_released =
-                    output_inner.remove_channel_link(&source_port, link_id.as_str());
-                tracing::debug!(
-                    source = %source_proc_id,
-                    port = %source_port,
-                    channel_released,
-                    "Reclaimed source-side egress for disconnected link"
-                );
+        match get_single_processor(graph, &source_proc_id) {
+            Ok(source_processor) => {
+                let source_guard = source_processor.lock();
+                if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
+                    let channel_released =
+                        output_inner.remove_channel_link(&source_port, link_id.as_str());
+                    tracing::debug!(
+                        source = %source_proc_id,
+                        port = %source_port,
+                        channel_released,
+                        "Reclaimed source-side egress for disconnected link"
+                    );
+                }
             }
+            Err(error) => tracing::warn!(
+                proc_id = %source_proc_id,
+                error = %error,
+                "close_iceoryx2_service: processor missing; port not reclaimed"
+            ),
         }
     }
 
     // Destination side: drop this link's channel subscriber (and the port
     // mailbox / shared listener when their last inbound link went away).
     if !dest_is_subprocess {
-        if let Ok(dest_processor) = get_single_processor(graph, &dest_proc_id) {
-            let dest_guard = dest_processor.lock();
-            if let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() {
-                input_inner.remove_channel_link(link_id.as_str());
-                tracing::debug!(
-                    dest = %dest_proc_id,
-                    "Reclaimed destination-side ports for disconnected link"
-                );
+        match get_single_processor(graph, &dest_proc_id) {
+            Ok(dest_processor) => {
+                let dest_guard = dest_processor.lock();
+                if let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() {
+                    input_inner.remove_channel_link(link_id.as_str());
+                    tracing::debug!(
+                        dest = %dest_proc_id,
+                        "Reclaimed destination-side ports for disconnected link"
+                    );
+                }
             }
+            Err(error) => tracing::warn!(
+                proc_id = %dest_proc_id,
+                error = %error,
+                "close_iceoryx2_service: processor missing; port not reclaimed"
+            ),
         }
     }
 

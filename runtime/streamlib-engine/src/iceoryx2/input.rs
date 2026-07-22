@@ -104,8 +104,8 @@ impl SendableChannelSubscribers {
     /// was bound to (so the caller can decide whether that port's mailbox is now
     /// orphaned). `None` if no subscriber matches — a no-op.
     fn remove_by_link(&self, link_id: &str) -> Option<String> {
-        // SAFETY: same single-thread-during-wiring discipline as `push`; a
-        // per-link `disconnect` runs in the same wiring phase as a `connect`.
+        // SAFETY: sound because every caller (exec thread and compiler thread)
+        // holds the owning ProcessorInstance mutex; never call without that lock.
         unsafe {
             let subscribers = &mut *self.0.get();
             let position = subscribers.iter().position(|b| b.link_id == link_id)?;
@@ -115,7 +115,8 @@ impl SendableChannelSubscribers {
 
     /// Whether any remaining subscriber is still bound to `local_port`.
     fn port_still_bound(&self, local_port: &str) -> bool {
-        // SAFETY: Only called from the processor's execution thread.
+        // SAFETY: sound because every caller (exec thread and compiler thread)
+        // holds the owning ProcessorInstance mutex; never call without that lock.
         unsafe { (*self.0.get()).iter().any(|b| b.local_port == local_port) }
     }
 
@@ -160,7 +161,8 @@ impl SendableListener {
     /// listener slot. Called when a destination's last inbound link disconnects
     /// so a reconnect recreates the notify service fresh.
     fn clear(&self) {
-        // SAFETY: same single-thread-during-wiring discipline as `set`.
+        // SAFETY: sound because every caller (exec thread and compiler thread)
+        // holds the owning ProcessorInstance mutex; never call without that lock.
         unsafe {
             *self.0.get() = None;
         }
