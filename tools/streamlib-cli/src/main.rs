@@ -94,6 +94,11 @@ enum Commands {
         /// (default: current working directory, no walk-up).
         #[arg(long)]
         dir: Option<PathBuf>,
+
+        /// Reproduce only — skip the on-the-box compile of each materialized
+        /// slot (for toolchain-free machines).
+        #[arg(long)]
+        no_build: bool,
     },
 
     /// Record a dependency (in a package dir) or adopt a package (in an app).
@@ -124,6 +129,11 @@ enum Commands {
         /// prefix). A mismatch fails the add with nothing materialized.
         #[arg(long)]
         expect_sha256: Option<String>,
+
+        /// Place only — skip the on-the-box compile of the added slot (for
+        /// toolchain-free machines).
+        #[arg(long)]
+        no_build: bool,
     },
 
     /// Remove a package from this app's streamlib_modules/ folder.
@@ -353,12 +363,15 @@ async fn async_main(cli: Cli) -> Result<()> {
                 commands::schema::validate_processor(&path)?
             }
         },
-        Some(Commands::Install { dir }) => commands::install::install(dir.as_deref())?,
+        Some(Commands::Install { dir, no_build }) => {
+            commands::install::install(dir.as_deref(), no_build)?
+        }
         Some(Commands::Add {
             spec,
             dir,
             expect_sha256,
-        }) => commands::add::add(&spec, dir.as_deref(), expect_sha256.as_deref())?,
+            no_build,
+        }) => commands::add::add(&spec, dir.as_deref(), expect_sha256.as_deref(), no_build)?,
         Some(Commands::Remove { name, dir }) => commands::add::remove(&name, dir.as_deref())?,
         Some(Commands::Pkg { action }) => match action {
             PkgCommands::Build { output } => commands::pkg::build(output.as_deref())?,

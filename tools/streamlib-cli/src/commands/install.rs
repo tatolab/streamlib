@@ -13,21 +13,42 @@
 //! resolution decisions. Each byte-source entry (folder / archive / URL) is
 //! re-materialized and re-verified against its recorded content hash; a linked
 //! entry's symlink is re-created (a gone checkout target is a typed error — a
-//! dev link isn't reproducible on another machine). Never builds.
+//! dev link isn't reproducible on another machine).
+//!
+//! After reproduction, every materialized (non-linked) slot is compiled
+//! on-the-box with [`BuildPolicy::IfStale`]: install reproduces rather than
+//! acquires, so it does NOT roll back — it aggregates every non-compiling
+//! package and fails listing them all. `--no-build` maps to
+//! [`BuildPolicy::NeverBuild`] (reproduce only). Linked entries stay
+//! lazy/edit-rebuild and are never compiled here.
 
 use std::path::Path;
 
 use anyhow::Result;
-use streamlib::sdk::runtime::{AppModulesDir, InstallFromLockfileReport, InstalledFromLockKind};
+use streamlib::sdk::runtime::{
+    AppModulesDir, BuildPolicy, InstallFromLockfileReport, InstalledFromLockKind,
+};
 
-/// Reproduce the app's `streamlib_modules/` from its `streamlib.lock`.
-pub fn install(dir: Option<&Path>) -> Result<()> {
+use super::build_on_place::{ConsoleBuildEventSink, build_installed_slots, default_orchestrator};
+
+/// Reproduce the app's `streamlib_modules/` from its `streamlib.lock`, then
+/// compile every materialized slot (unless `no_build`).
+pub fn install(dir: Option<&Path>, no_build: bool) -> Result<()> {
     let app = app_modules_dir(dir)?;
     println!("Installing from {}…", app.lockfile_path().display());
     let report = app
         .install_from_lockfile()
         .map_err(|e| anyhow::anyhow!("install failed: {e}"))?;
     print_install_report(&report);
+
+    if !no_build {
+        build_installed_slots(
+            &report,
+            &default_orchestrator(),
+            &ConsoleBuildEventSink,
+            BuildPolicy::IfStale,
+        )?;
+    }
     Ok(())
 }
 
