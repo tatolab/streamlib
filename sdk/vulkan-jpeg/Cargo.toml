@@ -19,7 +19,7 @@ bytemuck = { version = "1.16", features = ["derive"] }
 # types, and the GpuContext{Full,Limited}Access views) under
 # `streamlib_plugin_sdk::sdk::*`. Depending on the SDK by its real name keeps
 # this crate engine-free, so it is safe to compile into a `.slpkg` cdylib.
-streamlib-plugin-sdk = { path = "../streamlib-plugin-sdk", version = "0.7.31" }
+streamlib-plugin-sdk = { path = "../streamlib-plugin-sdk", version = "0.7.32" }
 
 [dev-dependencies]
 jpeg-encoder = "0.6"

@@ -16,20 +16,20 @@ path = "src/lib.rs"
 
 [dependencies]
 # Canonical Error / Result / PortDirection (engine-free).
-streamlib-error = { path = "../streamlib-error", version = "0.7.31" }
+streamlib-error = { path = "../streamlib-error", version = "0.7.32" }
 # Schema identity, descriptor types, execution config — engine-free shared
 # data the macro emits against and the views/traits return.
-streamlib-processor-schema = { path = "../streamlib-processor-schema", version = "0.7.31" }
+streamlib-processor-schema = { path = "../streamlib-processor-schema", version = "0.7.32" }
 # Plugin ABI vtables + HostServices + export_plugin! (zero-dep, engine-free).
-streamlib-plugin-abi = { path = "../../runtime/streamlib-plugin-abi", version = "0.7.31" }
+streamlib-plugin-abi = { path = "../../runtime/streamlib-plugin-abi", version = "0.7.32" }
 # Procedural macros (#[processor], schema_ident!, module_ident!, ...). Re-exported
 # under sdk::* so plugins author against this crate by its real name.
-streamlib-macros = { path = "../streamlib-macros", version = "0.7.31" }
+streamlib-macros = { path = "../streamlib-macros", version = "0.7.32" }
 # Engine-free panic-safety helper (run_host_extern_c) shared by the engine
 # and the five surface adapters; the SDK's processor_vtable thunks route
 # every extern "C" boundary crossing through it. Deps: bitflags / parking_lot
 # / thiserror / tracing / libc — no engine.
-streamlib-adapter-abi = { path = "../../adapters/streamlib-adapter-abi", version = "0.7.31" }
+streamlib-adapter-abi = { path = "../../adapters/streamlib-adapter-abi", version = "0.7.32" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }
@@ -50,7 +50,7 @@ iceoryx2-log = "0.8.1"
 # Consumer-side RHI carve-out: TextureFormat / TextureUsages / PixelFormat /
 # VulkanLayout the views surface. Engine-free (the python/deno cdylibs already
 # depend on it instead of the engine).
-streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.7.31" }
+streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.7.32" }
 
 [features]
 # Marker feature gating the `escalate` happy-path round-trip test, which needs
