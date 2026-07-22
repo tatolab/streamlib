@@ -49,12 +49,8 @@ impl CompilationPlan {
                 tracing::debug!("[commit] link-add {link_id} skipped — link absent from graph");
                 return false;
             };
-            let source_removed = processors_to_remove
-                .iter()
-                .any(|removed| removed == &link.from_port().processor_id);
-            let target_removed = processors_to_remove
-                .iter()
-                .any(|removed| removed == &link.to_port().processor_id);
+            let source_removed = processors_to_remove.contains(&link.from_port().processor_id);
+            let target_removed = processors_to_remove.contains(&link.to_port().processor_id);
             if source_removed || target_removed {
                 tracing::debug!(
                     "[commit] link-add {link_id} skipped — endpoint processor removed in same batch"
