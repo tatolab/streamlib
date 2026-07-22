@@ -56,7 +56,7 @@ deployment chooses to wire (or not).
         │              pyproject + uv.lock) — NO wheel               │
         │     deno   → entrypoint under deno/                        │
         │     always → streamlib.yaml + schemas/                     │
-        │  → <STREAMLIB_HOME>/.streamlib/cache/packages/<name>-<ver>/│
+        │  → <app-root>/streamlib_modules/@org/name/                │
         │    (build-to-temp + atomic rename + .streamlib-build       │
         │     sidecar: abi_version, triple, profile, inputs_hash)    │
         │    — byte-identical to extracting a .slpkg / GitHub install│
@@ -67,13 +67,25 @@ There is ONE materialization path, shared with `streamlib pkg build` and
 with installing from a `.slpkg` / GitHub repo. The orchestrator assembles
 the *complete* artifact (Rust cdylib, full Python source, Deno bundle,
 schemas) via [`streamlib-pack`] and stages it as an extracted directory
-into the package cache — the same `cache/packages/<name>-<version>/`
+into the installed slot — the same `<app-root>/streamlib_modules/@org/name`
 location an extracted `.slpkg` lands in. Because dev, release, and
 install-from-anywhere produce the identical artifact shape, a package
 that loads in dev cannot silently break when distributed. The shared
 assembly lib is the programmatic equivalent of the manual pack/build/
 install steps, which is also what a future build *daemon* calls through
 the same `BuildOrchestrator` seam.
+
+The installed-package slot is the co-located, version-free
+`<app-root>/streamlib_modules/@org/name` dir — the same tree the module
+loader's app-modules probe reads, and the same slot an extracted `.slpkg`
+/ GitHub install lands in.
+
+> ~~The slot was `<STREAMLIB_HOME>/.streamlib/cache/packages/<name>-<version>/`.~~
+> — Superseded 2026-07-22: installed packages now materialize into the
+> co-located version-free `<app-root>/streamlib_modules/@org/name` slot
+> (a package occupies one `@org/name` dir; the pinned version is enforced
+> against the slot's manifest, not encoded in the path). The legacy
+> `.streamlib/cache/packages/` directory is not yet retired.
 
 **Python ships as source, not a wheel.** A Python processor runs from
 its source dir (`PYTHONPATH = <staged package dir>`), never from a
@@ -114,7 +126,7 @@ comes from:
 
 | Variant | Source | Builds? |
 |---|---|---|
-| `InstalledCache` | `<STREAMLIB_HOME>/.streamlib/cache/packages/…` | only if Rust source + no matching prebuilt |
+| `InstalledCache` | `<app-root>/streamlib_modules/@org/name` (co-located, version-free) | only if Rust source + no matching prebuilt |
 | `Path { path, build }` | a directory with `streamlib.yaml` | per `build` |
 | `Slpkg { path }` | a `.slpkg` archive (engine extracts) | only if Rust source + no matching prebuilt |
 | `Git { url, rev, build }` | a git checkout (engine fetches) | per `build` |
@@ -471,8 +483,8 @@ is a future refinement of the orchestrator.
 ## Profile parity
 
 The orchestrator builds packages with the **host binary's** compiled
-profile (`cfg!(debug_assertions)` → dev, else release). The package cache
-slot (`cache/packages/<name>-<version>/`) is shared with `.slpkg`
+profile (`cfg!(debug_assertions)` → dev, else release). The installed
+slot (`<app-root>/streamlib_modules/@org/name`) is shared with `.slpkg`
 installs, so it is *not* keyed by profile; the `.streamlib-build.json`
 sidecar records the profile, and a profile mismatch is treated as stale
 (re-assemble). This is a consistency / perf-sanity choice, not an ABI
@@ -520,13 +532,13 @@ Engine ↔ plugin stay in lock-step on two complementary layers:
   the committed-load ledger `remove_module` consumes, `mod.rs` = the
   `Runner` API incl. `remove_module`).
 - Default orchestrator: `tools/streamlib-build-orchestrator/` (calls
-  `streamlib-pack` and stages into `cache/packages/<name>-<version>/`).
+  `streamlib-pack` and stages into `<app-root>/streamlib_modules/@org/name`).
 - Shared assembly: `tools/streamlib-pack/` (`assemble_artifact` —
   emits a `.slpkg` for `streamlib pkg build` or an extracted `StagedDir` for
   the orchestrator).
 - Python venv provisioning (the tail of `materialize`: `uv venv` →
   `uv pip install` → `streamlib/_generated_` codegen → `compileall`,
-  produced into the staged `{name}-{version}/.venv` under the
+  produced into the staged `@org/name/.venv` under the
   orchestrator's single fingerprint):
   `tools/streamlib-build-orchestrator/src/python_venv.rs`.
 - SDK wiring: `sdk/streamlib-sdk/` (`auto-build` feature).

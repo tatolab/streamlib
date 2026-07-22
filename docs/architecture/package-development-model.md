@@ -420,8 +420,9 @@ refuses on mismatch (`LockedSlotContentMismatch`), closing the
 tampered / republished-in-place hole. Slot paths are re-derived by the shared
 `installed_package_slot_dir` helper
 ([`runtime/streamlib-engine/src/core/streamlib_home.rs`](../../runtime/streamlib-engine/src/core/streamlib_home.rs)) —
-the single `cache/packages/{name}-{version}` convention also used by `.slpkg`
-extraction, registry resolution, and orchestrator staging.
+the single co-located, version-free `<app-root>/streamlib_modules/@org/name`
+convention also used by `.slpkg` extraction, registry resolution, and
+orchestrator staging.
 
 **Three lockfiles, three lifecycles.** All serialize the same `Lockfile` wire
 shape ([`sdk/streamlib-idents/src/lockfile.rs`](../../sdk/streamlib-idents/src/lockfile.rs))
