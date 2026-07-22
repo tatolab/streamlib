@@ -20,11 +20,16 @@
 //! exact one the whole-tree static-registry emit skips on and the single-package
 //! `streamlib pkg build` hard-fails on — so the CI skip set equals the emit skip
 //! set by construction. A package carrying a `streamlib.yaml` path-`patch:`
-//! block or a `Cargo.toml` dependency-table `path` dep (the host-side,
-//! non-distributable exceptions: `api-server`, `core`, the test fixtures) is
-//! skipped exactly as the emit skips it. A schema-only package with no
-//! compilable unit (e.g. `escalate`) is a no-op through the install path, never
-//! a failure.
+//! block or a `Cargo.toml` dependency-table `path` dep (e.g. `api-server`,
+//! `clap`, the test fixtures) is skipped exactly as the emit skips it. A TARGET
+//! path (`[lib].path` / `[[bin]].path`) is not a dependency path and never
+//! counts, so a schema-only package like `core` — whose test-only `Cargo.toml`
+//! carries a `[lib].path` and workspace-inherited fields but no `processors:`
+//! block — is DISTRIBUTABLE, not a path-predicate skip. It (like `escalate`)
+//! drives through the install path as a no-op: the on-box compile is gated on
+//! the manifest's `processors:` set, not on the presence of a `Cargo.toml`, so
+//! a package with no Rust processors never builds its Cargo unit and never
+//! fails.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

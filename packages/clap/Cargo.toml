@@ -36,15 +36,10 @@ serde = {version = "1.0", features = ["derive"]}
 tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-# Audio domain package — owns `ProcessorAudioConverter` + `AudioResampler`
-# (carved out of the engine in #734). Used only by the macOS/iOS-gated
-# `clap_effect` (see lib.rs cfg). A cross-PACKAGE crate dep: there is no
-# crates registry, so it cannot resolve by version — it is a monorepo source
-# (`path`) dep, which by design marks this package NON-distributable (the
-# whole-tree emit + the install-packages gate skip it via the shared
-# `non_distributable_path_offenders` predicate). It becomes distributable
-# again once `ProcessorAudioConverter` moves to the authoring SDK (resolvable
-# by version) or the audio package is registry-published.
+# Path dep on the audio domain package (owns `ProcessorAudioConverter`, used by
+# the macOS/iOS-gated `clap_effect`) ⇒ this package is non-distributable via the
+# shared `non_distributable_path_offenders` predicate. Re-enabled when
+# `ProcessorAudioConverter` moves to the authoring SDK and resolves by version.
 streamlib-audio = { path = "../audio" }
 
 # CLAP plugin host bindings — not available on Linux/Windows in this
