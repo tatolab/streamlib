@@ -408,12 +408,17 @@ pub(super) fn resolve_strategy_to_source(
             // versions are immutable (a content change ships a new version);
             // `streamlib pkg clean` clears the cache to force a re-fetch when a
             // version is republished in place during development.
+            //
+            // Reuse is gated on the materialized manifest's version equalling
+            // the selected version, not on the slot merely existing: a slot
+            // left behind by a divergent version (or an unreadable manifest) is
+            // re-downloaded rather than loaded as the wrong version.
             let slot = crate::core::streamlib_home::installed_package_slot_dir(
                 app_modules_root().as_deref(),
                 pkg_ref,
                 selected,
             );
-            let extracted = if matches!(build, BuildPolicy::IfStale) && slot.is_dir() {
+            let extracted = if registry_slot_holds_selected_version(*build, &slot, selected) {
                 tracing::debug!(
                     package = %pkg_ref,
                     version = %selected,
@@ -467,7 +472,7 @@ fn resolve_installed_cache_strategy(
         }
     }
     let (dir, _version) =
-        lookup_installed_cache(pkg_ref)?.ok_or_else(|| AddModuleError::ModuleNotFound {
+        lookup_installed_cache(pkg_ref, app_root)?.ok_or_else(|| AddModuleError::ModuleNotFound {
             package: pkg_ref.clone(),
         })?;
     // Same prefer-prebuilt-else-build-source decision as `.slpkg`:
@@ -914,14 +919,16 @@ fn fetch_git_checkout(
 }
 
 /// Look the canonical [`PackageRef`] up in the installed-package cache.
-/// Returns `(cache_dir, version)` when present.
+/// Returns `(slot_dir, version)` when present, the slot derived by
+/// [`installed_entry_slot_dir`]. `app_root` is the app-modules root the
+/// caller already resolved.
 ///
 /// [`PackageRef`]: streamlib_idents::PackageRef
 fn lookup_installed_cache(
     pkg_ref: &streamlib_idents::PackageRef,
+    app_root: Option<&std::path::Path>,
 ) -> std::result::Result<Option<(PathBuf, streamlib_idents::SemVer)>, AddModuleError> {
     use crate::core::config::InstalledPackageManifest;
-    use crate::core::streamlib_home::get_cached_package_dir;
 
     let manifest =
         InstalledPackageManifest::load().map_err(|e| AddModuleError::InstalledCacheLoadFailed {
@@ -929,7 +936,20 @@ fn lookup_installed_cache(
         })?;
     Ok(manifest
         .find_by_ref(pkg_ref)
-        .map(|entry| (get_cached_package_dir(&entry.cache_dir), entry.version)))
+        .map(|entry| (installed_entry_slot_dir(entry, app_root), entry.version)))
+}
+
+/// Slot directory for an installed-package entry, derived from its typed
+/// `name`/`version` through the [`installed_package_slot_dir`] seam — never
+/// from the persisted `cache_dir` string, so a stored path can never imply a
+/// version that disagrees with the typed key.
+///
+/// [`installed_package_slot_dir`]: crate::core::streamlib_home::installed_package_slot_dir
+fn installed_entry_slot_dir(
+    entry: &crate::core::config::InstalledPackageEntry,
+    app_root: Option<&std::path::Path>,
+) -> PathBuf {
+    crate::core::streamlib_home::installed_package_slot_dir(app_root, &entry.name, entry.version)
 }
 
 /// Read the `[package].version` field from the `streamlib.yaml` at
@@ -959,9 +979,26 @@ pub(super) fn read_version_from_manifest_dir(
     })
 }
 
+/// Whether an already-materialized registry cache `slot` can be reused for
+/// `selected` without a re-download/extract. Reuse only when the policy
+/// allows stale reuse AND the slot's `streamlib.yaml` reads AND pins exactly
+/// `selected` — a slot left by a divergent version (or an unreadable
+/// manifest) is refused so it gets re-downloaded rather than loaded as the
+/// wrong version.
+fn registry_slot_holds_selected_version(
+    build: BuildPolicy,
+    slot: &std::path::Path,
+    selected: streamlib_idents::SemVer,
+) -> bool {
+    matches!(build, BuildPolicy::IfStale)
+        && slot.is_dir()
+        && read_version_from_manifest_dir(slot).is_ok_and(|materialized| materialized == selected)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::config::InstalledPackageEntry;
 
     const RUST_YAML: &str = "package:\n  org: tatolab\n  name: rp\n  version: 0.1.0\nprocessors:\n  - name: P\n    description: d\n    runtime: rust\n    execution: manual\n    inputs: []\n    outputs: []\n";
     const PY_YAML: &str = "package:\n  org: tatolab\n  name: py\n  version: 0.1.0\nprocessors:\n  - name: P\n    description: d\n    runtime: python\n    execution: manual\n    entrypoint: \"p:P\"\n    inputs: []\n    outputs: []\n";
@@ -1819,5 +1856,102 @@ mod tests {
             unlocked.is_some(),
             "an unlocked run over the same marker must discover the link"
         );
+    }
+
+    // =====================================================================
+    // #1518 — the two path-implies-version consumers in the loader now derive
+    // the slot from typed identity (name+version), not from a persisted path
+    // string, and gate registry reuse on the materialized manifest version.
+    // =====================================================================
+
+    fn installed_entry(cache_dir: &str, version: streamlib_idents::SemVer) -> InstalledPackageEntry {
+        InstalledPackageEntry {
+            name: pkg_ref(),
+            version,
+            description: None,
+            installed_from: "test".into(),
+            installed_at: "test".into(),
+            cache_dir: cache_dir.into(),
+        }
+    }
+
+    /// The installed-cache slot is derived from the entry's typed
+    /// `name`/`version` seam, never the persisted `cache_dir` string. Mentally
+    /// revert to `get_cached_package_dir(&entry.cache_dir)` and a divergent
+    /// stored string would win, pointing the loader at the wrong slot.
+    #[test]
+    fn installed_entry_slot_ignores_divergent_cache_dir_string() {
+        let version = streamlib_idents::SemVer::new(0, 1, 0);
+        let entry = installed_entry("garbage-999-should-be-ignored", version);
+
+        let derived = installed_entry_slot_dir(&entry, None);
+
+        assert_eq!(
+            derived,
+            crate::core::streamlib_home::installed_package_slot_dir(None, &pkg_ref(), version),
+            "slot must come from the typed name+version seam"
+        );
+        assert!(
+            !derived.to_string_lossy().contains("garbage-999"),
+            "the divergent cache_dir string must not leak into the slot path"
+        );
+    }
+
+    /// Registry reuse is refused when the materialized slot pins a different
+    /// version than the one selected — the wrong-version slot is rebuilt.
+    /// Mentally revert to a `slot.is_dir()`-only gate and this returns `true`,
+    /// loading `0.1.0`'s bytes as if they were `0.2.0`.
+    #[test]
+    fn registry_reuse_refuses_wrong_version_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        manifest(dir.path(), RUST_YAML); // pins 0.1.0
+        let selected = streamlib_idents::SemVer::new(0, 2, 0);
+        assert!(!registry_slot_holds_selected_version(
+            BuildPolicy::IfStale,
+            dir.path(),
+            selected
+        ));
+    }
+
+    /// Registry reuse is taken when the materialized slot pins exactly the
+    /// selected version under `IfStale`.
+    #[test]
+    fn registry_reuse_accepts_matching_version_slot() {
+        let dir = tempfile::tempdir().unwrap();
+        manifest(dir.path(), RUST_YAML); // pins 0.1.0
+        let selected = streamlib_idents::SemVer::new(0, 1, 0);
+        assert!(registry_slot_holds_selected_version(
+            BuildPolicy::IfStale,
+            dir.path(),
+            selected
+        ));
+    }
+
+    /// A slot with no readable manifest is refused (re-downloaded), never
+    /// reused as the selected version.
+    #[test]
+    fn registry_reuse_refuses_slot_without_manifest() {
+        let dir = tempfile::tempdir().unwrap();
+        let selected = streamlib_idents::SemVer::new(0, 1, 0);
+        assert!(!registry_slot_holds_selected_version(
+            BuildPolicy::IfStale,
+            dir.path(),
+            selected
+        ));
+    }
+
+    /// Only `IfStale` reuses a materialized slot; the other policies always
+    /// fall through to the re-download/extract branch even on a version match.
+    #[test]
+    fn registry_reuse_only_under_if_stale_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        manifest(dir.path(), RUST_YAML); // pins 0.1.0
+        let selected = streamlib_idents::SemVer::new(0, 1, 0);
+        for policy in [BuildPolicy::NeverBuild, BuildPolicy::AlwaysBuild] {
+            assert!(
+                !registry_slot_holds_selected_version(policy, dir.path(), selected),
+                "{policy:?} must not reuse the materialized slot"
+            );
+        }
     }
 }
