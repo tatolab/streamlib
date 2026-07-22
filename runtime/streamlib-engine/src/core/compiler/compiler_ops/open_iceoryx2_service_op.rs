@@ -193,6 +193,7 @@ pub fn open_iceoryx2_service(
         wire_rust_source(
             &source_processor,
             &source_port,
+            link_id,
             &output_schema,
             &service,
             &notify_service,
@@ -224,6 +225,7 @@ pub fn open_iceoryx2_service(
         wire_rust_dest(
             &dest_processor,
             &dest_port,
+            link_id,
             &dest_schema,
             drain_order,
             max_queued_messages,
@@ -247,10 +249,77 @@ pub fn open_iceoryx2_service(
     Ok(())
 }
 
-/// Close an iceoryx2 service by link ID.
+/// Reclaim one `connect()` link's iceoryx2 ports on `disconnect`.
+///
+/// Stamping [`LinkState::Disconnected`] is not enough: the source-side notifier
+/// and dest-side subscriber (plus the destination listener and any orphaned
+/// port mailbox / channel publisher) must be dropped so their iceoryx2 services
+/// are released. Otherwise a reconnect of a persistent endpoint re-appends past
+/// the notify service's create-time `max_notifiers` cap
+/// (`ExceedsMaxSupportedNotifiers`) and the stale, shallower-sized data service
+/// collides with a deeper-ring reopen (`DoesNotSupportRequestedMinBufferSize`)
+/// — the two #1549 errors, one cause.
+///
+/// Rust→Rust reclaim is complete here (both ports are host-owned). A subprocess
+/// endpoint opens its own ports from the wiring envelope and has no host-reachable
+/// drop path, so its live reclaim needs a Python/Deno cdylib drop entry point
+/// (tracked follow-up); this op does not touch a running subprocess's ports.
 #[tracing::instrument(name = "compiler.close_iceoryx2_service", skip(graph), fields(link_id = %link_id))]
 pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Result<()> {
     tracing::info!("Closing iceoryx2 service: {}", link_id);
+
+    let Some((from_port, to_port)) = graph
+        .traversal_mut()
+        .e(link_id)
+        .first()
+        .map(|link| (link.from_port().clone(), link.to_port().clone()))
+    else {
+        tracing::warn!(
+            "close_iceoryx2_service: link '{}' not in graph; nothing to reclaim",
+            link_id
+        );
+        return Ok(());
+    };
+    let source_proc_id = from_port.processor_id.clone();
+    let source_port = from_port.port_name.clone();
+    let dest_proc_id = to_port.processor_id.clone();
+
+    let source_is_subprocess = is_subprocess_processor(graph, &source_proc_id);
+    let dest_is_subprocess = is_subprocess_processor(graph, &dest_proc_id);
+
+    // Source side: drop this link's destination notifier (and the channel
+    // publisher when this was the source port's last outbound link).
+    if !source_is_subprocess {
+        if let Ok(source_processor) = get_single_processor(graph, &source_proc_id) {
+            let source_guard = source_processor.lock();
+            if let Some(output_inner) = source_guard.iceoryx2_output_writer_inner() {
+                let channel_released =
+                    output_inner.remove_channel_link(&source_port, link_id.as_str());
+                tracing::debug!(
+                    source = %source_proc_id,
+                    port = %source_port,
+                    channel_released,
+                    "Reclaimed source-side egress for disconnected link"
+                );
+            }
+        }
+    }
+
+    // Destination side: drop this link's channel subscriber (and the port
+    // mailbox / shared listener when their last inbound link went away).
+    if !dest_is_subprocess {
+        if let Ok(dest_processor) = get_single_processor(graph, &dest_proc_id) {
+            let dest_guard = dest_processor.lock();
+            if let Some(input_inner) = dest_guard.iceoryx2_input_mailboxes_inner() {
+                input_inner.remove_channel_link(link_id.as_str());
+                tracing::debug!(
+                    dest = %dest_proc_id,
+                    "Reclaimed destination-side ports for disconnected link"
+                );
+            }
+        }
+    }
+
     if let Some(link) = graph.traversal_mut().e(link_id).first_mut() {
         link.insert(LinkStateComponent(LinkState::Disconnected));
     }
@@ -557,6 +626,7 @@ fn get_single_processor(
 fn wire_rust_source(
     source_processor: &Arc<Mutex<ProcessorInstance>>,
     source_port: &str,
+    link_id: &LinkUniqueId,
     output_schema: &PortSchemaSpec,
     service: &Iceoryx2Service,
     notify_service: &Iceoryx2NotifyService,
@@ -582,7 +652,7 @@ fn wire_rust_source(
     }
 
     let notifier = notify_service.create_notifier()?;
-    output_inner.add_channel_notifier(source_port, notifier);
+    output_inner.add_channel_notifier(source_port, link_id.as_str(), notifier);
     Ok(())
 }
 
@@ -591,6 +661,7 @@ fn wire_rust_source(
 fn wire_rust_dest(
     dest_processor: &Arc<Mutex<ProcessorInstance>>,
     dest_port: &str,
+    link_id: &LinkUniqueId,
     dest_schema: &PortSchemaSpec,
     drain_order: crate::iceoryx2::ReadMode,
     depth: usize,
@@ -608,7 +679,7 @@ fn wire_rust_dest(
     input_inner.set_port_expected_schema_ident(dest_port, schema_ident_wire_for_spec(dest_schema));
 
     let subscriber = service.create_subscriber()?;
-    input_inner.add_channel_subscriber(dest_port, subscriber);
+    input_inner.add_channel_subscriber(dest_port, link_id.as_str(), subscriber);
     tracing::debug!(
         "Bound channel subscriber to destination input port '{}'",
         dest_port

@@ -72,7 +72,12 @@ fn trust_tier_label(trust_tier: ChannelTrustTier) -> ChannelTrustTierLabel {
 struct ChannelEgress {
     schema_ident: SchemaIdentWire,
     publisher: Publisher<ipc::Service, [u8], ()>,
-    notifiers: Vec<Notifier<ipc::Service>>,
+    /// One `(link_id, notifier)` per outbound `connect()` link from this source
+    /// port. The link id tags each notifier so a per-link `disconnect` reclaims
+    /// exactly its own notifier (see
+    /// [`OutputWriterInner::remove_channel_link`]) rather than the whole
+    /// fan-out — a source feeding N destinations must keep the other N-1 alive.
+    notifiers: Vec<(String, Notifier<ipc::Service>)>,
     /// iceoryx2 service name for this channel (`{source}/{output_port}`) —
     /// carried only for the growth / ceiling tracing fields.
     channel_service_name: String,
@@ -191,14 +196,53 @@ impl OutputWriterInner {
             .unwrap_or(0)
     }
 
-    /// Append a destination notifier to an output port's channel.
+    /// Append a destination notifier to an output port's channel, tagged with
+    /// the `link_id` of the `connect()` link it serves.
     ///
     /// One notifier per `connect()` link out of this port — each wakes a distinct
-    /// destination's listener fd. No-op (the notifier is dropped) if the channel
-    /// publisher has not been installed yet, which the wiring op never does.
-    pub fn add_channel_notifier(&self, output_port: &str, notifier: Notifier<ipc::Service>) {
+    /// destination's listener fd. The `link_id` tag lets a later per-link
+    /// `disconnect` reclaim exactly this notifier via
+    /// [`Self::remove_channel_link`]. No-op (the notifier is dropped) if the
+    /// channel publisher has not been installed yet, which the wiring op never
+    /// does.
+    pub fn add_channel_notifier(
+        &self,
+        output_port: &str,
+        link_id: &str,
+        notifier: Notifier<ipc::Service>,
+    ) {
         if let Some(egress) = self.channels.lock().get_mut(output_port) {
-            egress.notifiers.push(notifier);
+            egress.notifiers.push((link_id.to_string(), notifier));
+        }
+    }
+
+    /// Reclaim the source-side egress for one disconnected `connect()` link.
+    ///
+    /// Drops the `link_id`-tagged destination notifier from `output_port`'s
+    /// channel egress. When that was the last outbound link from the port, the
+    /// whole [`ChannelEgress`] is removed — dropping the publisher and releasing
+    /// the underlying iceoryx2 data service so a later reconnect recreates a
+    /// fresh-sized, refcounted service rather than colliding with the stale one
+    /// (`DoesNotSupportRequestedMinBufferSize`) or exceeding the notify service's
+    /// create-time `max_notifiers` cap (`ExceedsMaxSupportedNotifiers`). Without
+    /// this reclaim, disconnect left the notifier and publisher live, so a
+    /// reconnect re-appended past the cap — the #1549 leak.
+    ///
+    /// Returns `true` when the channel publisher was fully removed (the last link
+    /// went away), `false` when other outbound links keep it alive. A no-op that
+    /// returns `false` if `output_port` has no channel or no notifier for
+    /// `link_id`.
+    pub fn remove_channel_link(&self, output_port: &str, link_id: &str) -> bool {
+        let mut channels = self.channels.lock();
+        let Some(egress) = channels.get_mut(output_port) else {
+            return false;
+        };
+        egress.notifiers.retain(|(id, _)| id != link_id);
+        if egress.notifiers.is_empty() {
+            channels.remove(output_port);
+            true
+        } else {
+            false
         }
     }
 
@@ -262,7 +306,7 @@ impl OutputWriterInner {
         // (e.g. a listener not yet created) — log and continue rather than
         // failing the publish; the data is already in shared memory and the
         // next send() will wake the listener anyway.
-        for notifier in &egress.notifiers {
+        for (_link_id, notifier) in &egress.notifiers {
             if let Err(e) = notifier.notify() {
                 tracing::trace!(
                     "OutputWriter: notify() failed for port '{}': {:?}",
@@ -573,7 +617,7 @@ mod tests {
                 ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
             },
         );
-        inner.add_channel_notifier("out", notifier);
+        inner.add_channel_notifier("out", "L-test-notify", notifier);
 
         // Pre-flight: the listener has no events queued.
         let mut count: usize = 0;
@@ -663,7 +707,11 @@ mod tests {
                 .max_listeners(1)
                 .open_or_create()
                 .unwrap();
-            inner.add_channel_notifier("out", notify.notifier_builder().create().unwrap());
+            inner.add_channel_notifier(
+                "out",
+                &format!("L-test-fanout-{i}"),
+                notify.notifier_builder().create().unwrap(),
+            );
             listeners.push(notify.listener_builder().create().unwrap());
         }
 
@@ -688,6 +736,89 @@ mod tests {
                 "subscriber {i} received the wrong payload",
             );
         }
+    }
+
+    /// Per-link source reclaim (#1549): a source port feeding two destination
+    /// links holds two tagged notifiers on ONE channel egress. Disconnecting one
+    /// link drops only its notifier (the channel — and its publisher — survive so
+    /// the other destination keeps receiving); disconnecting the last link removes
+    /// the whole channel egress, releasing the publisher so a reconnect recreates
+    /// a fresh-sized service.
+    ///
+    /// Fail-without-fix: revert `remove_channel_link` to a no-op (the pre-#1549
+    /// `close_iceoryx2_service` behaviour) and the first removal leaves both
+    /// notifiers, so `has_channel_publisher` stays true after the final
+    /// disconnect and the "channel fully removed" assertion fails.
+    #[test]
+    fn remove_channel_link_reclaims_per_link_then_drops_channel() {
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let pubsub = node
+            .service_builder(&ServiceName::new(&unique_suffix("reclaim/pubsub")).unwrap())
+            .publish_subscribe::<[u8]>()
+            .max_publishers(2)
+            .max_subscribers(4)
+            .open_or_create()
+            .unwrap();
+        let publisher = pubsub
+            .publisher_builder()
+            .initial_max_slice_len(4096)
+            .create()
+            .unwrap();
+
+        let inner = Arc::new(OutputWriterInner::new());
+        let schema =
+            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
+        inner.set_channel_publisher(
+            "out",
+            schema,
+            publisher,
+            ChannelEgressConfig {
+                service_name: "test/reclaim/out".to_string(),
+                trust_tier: ChannelTrustTier::Trusted,
+                expected_payload_bytes: 4096,
+                ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            },
+        );
+
+        let notify = |tag: &str| {
+            node.service_builder(&ServiceName::new(&unique_suffix(tag)).unwrap())
+                .event()
+                .max_notifiers(2)
+                .max_listeners(1)
+                .open_or_create()
+                .unwrap()
+                .notifier_builder()
+                .create()
+                .unwrap()
+        };
+        inner.add_channel_notifier("out", "L-link-a", notify("reclaim/notify/a"));
+        inner.add_channel_notifier("out", "L-link-b", notify("reclaim/notify/b"));
+        assert!(inner.has_channel_publisher("out"));
+
+        // Disconnect one of two links: the channel (and publisher) survive.
+        assert!(
+            !inner.remove_channel_link("out", "L-link-a"),
+            "removing one of two links must NOT drop the shared channel publisher",
+        );
+        assert!(
+            inner.has_channel_publisher("out"),
+            "the channel must stay wired while link-b is still connected",
+        );
+
+        // A stale/unknown link id is a no-op that keeps the channel.
+        assert!(!inner.remove_channel_link("out", "L-does-not-exist"));
+        assert!(inner.has_channel_publisher("out"));
+
+        // Disconnect the last link: the whole channel egress is reclaimed.
+        assert!(
+            inner.remove_channel_link("out", "L-link-b"),
+            "removing the last outbound link must drop the channel publisher",
+        );
+        assert!(
+            !inner.has_channel_publisher("out"),
+            "the publisher (and its data service) must be released after the final \
+             disconnect so a reconnect recreates a fresh-sized service",
+        );
     }
 
     /// Empty (unwired) writers should fail cleanly rather than crash.

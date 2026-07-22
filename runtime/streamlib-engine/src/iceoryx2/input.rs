@@ -54,6 +54,12 @@ use crate::core::schema_agreement::{SchemaAgreement, classify_wire_schema_agreem
 /// destinations subscribing the same channel would each map to a different local
 /// port).
 struct PortBoundSubscriber {
+    /// The inbound `connect()` link this subscriber serves. Tags the subscriber
+    /// so a per-link `disconnect` reclaims exactly it (see
+    /// [`InputMailboxesInner::remove_channel_link`]) — a destination fanning in
+    /// N links holds N subscribers on one local port, and only the disconnected
+    /// one must go.
+    link_id: String,
     local_port: String,
     subscriber: Subscriber<ipc::Service, [u8], ()>,
 }
@@ -78,14 +84,39 @@ impl SendableChannelSubscribers {
         Self(UnsafeCell::new(Vec::new()))
     }
 
-    fn push(&self, local_port: String, subscriber: Subscriber<ipc::Service, [u8], ()>) {
+    fn push(
+        &self,
+        link_id: String,
+        local_port: String,
+        subscriber: Subscriber<ipc::Service, [u8], ()>,
+    ) {
         // SAFETY: Only called from the processor's execution thread during wiring.
         unsafe {
             (*self.0.get()).push(PortBoundSubscriber {
+                link_id,
                 local_port,
                 subscriber,
             });
         }
+    }
+
+    /// Remove the subscriber serving `link_id`, returning the local input port it
+    /// was bound to (so the caller can decide whether that port's mailbox is now
+    /// orphaned). `None` if no subscriber matches — a no-op.
+    fn remove_by_link(&self, link_id: &str) -> Option<String> {
+        // SAFETY: same single-thread-during-wiring discipline as `push`; a
+        // per-link `disconnect` runs in the same wiring phase as a `connect`.
+        unsafe {
+            let subscribers = &mut *self.0.get();
+            let position = subscribers.iter().position(|b| b.link_id == link_id)?;
+            Some(subscribers.remove(position).local_port)
+        }
+    }
+
+    /// Whether any remaining subscriber is still bound to `local_port`.
+    fn port_still_bound(&self, local_port: &str) -> bool {
+        // SAFETY: Only called from the processor's execution thread.
+        unsafe { (*self.0.get()).iter().any(|b| b.local_port == local_port) }
     }
 
     fn iter(&self) -> &[PortBoundSubscriber] {
@@ -123,6 +154,16 @@ impl SendableListener {
     fn get(&self) -> Option<&Listener<ipc::Service>> {
         // SAFETY: Only called from the processor's execution thread
         unsafe { (*self.0.get()).as_ref() }
+    }
+
+    /// Drop the listener, releasing the destination-keyed notify service's
+    /// listener slot. Called when a destination's last inbound link disconnects
+    /// so a reconnect recreates the notify service fresh.
+    fn clear(&self) {
+        // SAFETY: same single-thread-during-wiring discipline as `set`.
+        unsafe {
+            *self.0.get() = None;
+        }
     }
 }
 
@@ -277,9 +318,38 @@ impl InputMailboxesInner {
     pub fn add_channel_subscriber(
         &self,
         local_port: &str,
+        link_id: &str,
         subscriber: Subscriber<ipc::Service, [u8], ()>,
     ) {
-        self.subscribers.push(local_port.to_string(), subscriber);
+        self.subscribers
+            .push(link_id.to_string(), local_port.to_string(), subscriber);
+    }
+
+    /// Reclaim the destination-side ports for one disconnected `connect()` link.
+    ///
+    /// Drops the `link_id`-tagged channel subscriber. When the local input port
+    /// it fed has no remaining subscribers, that port's mailbox is removed; when
+    /// the destination has no remaining subscribers at all, the shared listener
+    /// is dropped — releasing the destination-keyed notify service so a later
+    /// reconnect recreates fresh-sized, refcounted ports instead of colliding
+    /// with the stale service (`DoesNotSupportRequestedMinBufferSize`). Without
+    /// this reclaim, disconnect left the subscriber and listener live — the
+    /// #1549 leak on the destination half.
+    ///
+    /// A no-op if no subscriber matches `link_id`.
+    ///
+    /// Note: This should only be called from the processor's execution thread,
+    /// in the same wiring phase a `connect` runs in.
+    pub fn remove_channel_link(&self, link_id: &str) {
+        let Some(local_port) = self.subscribers.remove_by_link(link_id) else {
+            return;
+        };
+        if !self.subscribers.port_still_bound(&local_port) {
+            self.ports.lock().remove(&local_port);
+        }
+        if self.subscribers.is_empty() {
+            self.listener.clear();
+        }
     }
 
     /// Check if a listener has already been configured.
@@ -977,8 +1047,8 @@ mod tests {
 
         let mailboxes = InputMailboxesInner::new();
         mailboxes.add_port("in", 64, ReadMode::ReadNextInOrder);
-        mailboxes.add_channel_subscriber("in", sub_a);
-        mailboxes.add_channel_subscriber("in", sub_b);
+        mailboxes.add_channel_subscriber("in", "L-fanin-a", sub_a);
+        mailboxes.add_channel_subscriber("in", "L-fanin-b", sub_b);
 
         let mut payloads: Vec<Vec<u8>> = Vec::new();
         while let Some((data, _ts)) = mailboxes.read_raw("in").unwrap() {
@@ -989,6 +1059,78 @@ mod tests {
             payloads,
             vec![b"frame-from-a".to_vec(), b"frame-from-b".to_vec()],
             "both inbound channels must fan into the one local input port's mailbox",
+        );
+    }
+
+    /// Per-link destination reclaim (#1549): a destination fanning two inbound
+    /// links into ONE local port holds two tagged subscribers plus one shared
+    /// listener. Disconnecting one link drops only its subscriber (the port
+    /// mailbox and listener survive so the other link keeps delivering);
+    /// disconnecting the last link removes the port mailbox AND drops the shared
+    /// listener — releasing the notify service so a reconnect recreates it fresh.
+    ///
+    /// Fail-without-fix: revert `remove_channel_link` to a no-op (the pre-#1549
+    /// `close_iceoryx2_service` behaviour) and the final disconnect leaves the
+    /// port and listener live, so `has_port` / `has_listener` stay true and the
+    /// release assertions fail.
+    #[test]
+    fn remove_channel_link_reclaims_per_link_then_drops_port_and_listener() {
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+
+        let open_subscriber = |tag: &str| {
+            node.service_builder(&ServiceName::new(&unique_suffix(tag)).unwrap())
+                .publish_subscribe::<[u8]>()
+                .max_publishers(2)
+                .open_or_create()
+                .unwrap()
+                .subscriber_builder()
+                .create()
+                .unwrap()
+        };
+        let listener = node
+            .service_builder(&ServiceName::new(&unique_suffix("reclaim/notify")).unwrap())
+            .event()
+            .max_notifiers(2)
+            .max_listeners(1)
+            .open_or_create()
+            .unwrap()
+            .listener_builder()
+            .create()
+            .unwrap();
+
+        let inner = InputMailboxesInner::new();
+        inner.add_port("in", 64, ReadMode::ReadNextInOrder);
+        inner.add_channel_subscriber("in", "L-link-a", open_subscriber("reclaim/a"));
+        inner.add_channel_subscriber("in", "L-link-b", open_subscriber("reclaim/b"));
+        inner.set_listener(listener);
+        assert!(inner.has_port("in"));
+        assert!(inner.has_listener());
+
+        // Disconnect one of two links into the shared port: port + listener stay.
+        inner.remove_channel_link("L-link-a");
+        assert!(
+            inner.has_port("in"),
+            "the local port must stay while link-b still feeds it",
+        );
+        assert!(
+            inner.has_listener(),
+            "the shared listener must stay while any inbound link remains",
+        );
+
+        // Unknown link id is a no-op.
+        inner.remove_channel_link("L-does-not-exist");
+        assert!(inner.has_port("in"));
+
+        // Disconnect the last link: port mailbox removed, listener released.
+        inner.remove_channel_link("L-link-b");
+        assert!(
+            !inner.has_port("in"),
+            "the port mailbox must be reclaimed once its last subscriber is gone",
+        );
+        assert!(
+            !inner.has_listener(),
+            "the destination's listener (and its notify service) must be released \
+             after the last inbound link disconnects so a reconnect recreates it",
         );
     }
 
