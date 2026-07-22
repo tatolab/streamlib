@@ -251,28 +251,26 @@ impl PolyglotBuildOrchestrator {
         if matches!(request.policy, BuildPolicy::IfStale)
             && cache_slot.is_dir()
             && rust_reuse_permitted
+            && let Some(side) = read_sidecar(&cache_slot)
         {
-            if let Some(side) = read_sidecar(&cache_slot) {
-                let venv_python_exists =
-                    cache_slot.join(".venv").join("bin").join("python").exists();
-                let generated_exists = cache_slot.join("_generated_").is_dir();
-                if side.abi_version == streamlib_plugin_abi::STREAMLIB_ABI_VERSION
-                    && side.triple == *triple
-                    && side.profile == self.profile.label()
-                    && side.inputs_hash == fingerprint
-                    && cache_slot_is_reusable(
-                        python_venv::staged_package_has_python(&cache_slot),
-                        venv_python_exists,
-                        deno_codegen::staged_package_has_deno(&cache_slot),
-                        generated_exists,
-                    )
-                {
-                    tracing::debug!(package = %pkg_label, staged = %cache_slot.display(), has_rust, "up to date — skipping rebuild");
-                    return Ok(StagedArtifact {
-                        staged_dir: cache_slot,
-                        rebuilt: false,
-                    });
-                }
+            let venv_python_exists = cache_slot.join(".venv").join("bin").join("python").exists();
+            let generated_exists = cache_slot.join("_generated_").is_dir();
+            if side.abi_version == streamlib_plugin_abi::STREAMLIB_ABI_VERSION
+                && side.triple == *triple
+                && side.profile == self.profile.label()
+                && side.inputs_hash == fingerprint
+                && cache_slot_is_reusable(
+                    python_venv::staged_package_has_python(&cache_slot),
+                    venv_python_exists,
+                    deno_codegen::staged_package_has_deno(&cache_slot),
+                    generated_exists,
+                )
+            {
+                tracing::debug!(package = %pkg_label, staged = %cache_slot.display(), has_rust, "up to date — skipping rebuild");
+                return Ok(StagedArtifact {
+                    staged_dir: cache_slot,
+                    rebuilt: false,
+                });
             }
         }
 
