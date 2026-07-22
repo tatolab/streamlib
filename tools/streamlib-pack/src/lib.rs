@@ -964,6 +964,11 @@ fn cargo_path_dep_names(doc: &toml::Value) -> Vec<String> {
 /// `<pkg>/_generated_/`): a build artifact regenerated per-consumer at
 /// install time from the package's schemas, never shipped as source.
 ///
+/// `.gitignore` is excluded because the engine WRITES it beside an
+/// in-tree dev source (the in-place promote appends the build-output
+/// ignore lines); counting it as source would let that engine write
+/// perturb the reuse fingerprint and force a needless re-materialize.
+///
 /// `Cargo.lock` is stripped too: a streamlib package is a cdylib *library*,
 /// and a library's lockfile is neither published nor honored by a downstream
 /// build. Shipping it is actively harmful in the registry model — the lock
@@ -978,6 +983,7 @@ pub fn is_non_source_artifact(name: &std::ffi::OsStr) -> bool {
             "target"
             | "lib"
             | ".git"
+            | ".gitignore"
             | "node_modules"
             | "__pycache__"
             | "_generated_"
