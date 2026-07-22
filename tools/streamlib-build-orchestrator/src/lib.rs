@@ -412,13 +412,39 @@ impl PolyglotBuildOrchestrator {
                 })?;
         }
 
-        // The sidecar is the slot's completion marker: it is written LAST,
-        // just before the atomic swap, so a slot that lacks it (an aborted
-        // build) is treated as needing a rebuild rather than loaded half-built.
-        write_sidecar(&temp_dir, triple, self.profile, &fingerprint)
-            .map_err(|e| other(&pkg_label, format!("writing build sidecar: {e}")))?;
-        atomic_swap(&temp_dir, &cache_slot)
-            .map_err(|e| other(&pkg_label, format!("atomic stage swap: {e}")))?;
+        // Land the staged temp dir into the destination. Two shapes:
+        //
+        // - Detached destination (a distinct cache slot): whole-dir atomic
+        //   swap. The sidecar completion marker is written into the temp dir
+        //   LAST, just before the swap, so a slot lacking it (an aborted build)
+        //   is treated as needing a rebuild rather than loaded half-built. This
+        //   is the sanctioned TEMPORARY seam.
+        //
+        // - In-place destination (the destination IS the package's own source
+        //   dir — the #1506 co-located slot): the source files already sit at
+        //   their destination, so promote ONLY the regenerated build-output
+        //   units (`lib/<triple>/`, `.venv/`, `_generated_/`) into the slot and
+        //   leave every source file untouched. The sidecar is again written
+        //   LAST (`promote_build_outputs_in_place` clears any prior marker up
+        //   front and rewrites it only after the units land), so the same
+        //   aborted-build-leaves-nothing-loadable property holds: a crash
+        //   mid-promote leaves the slot sidecar-less and a rebuild follows.
+        if destination_is_source_dir(&cache_slot, pkg_dir) {
+            promote_build_outputs_in_place(
+                &temp_dir,
+                &cache_slot,
+                triple,
+                self.profile,
+                &fingerprint,
+            )
+            .map_err(|e| other(&pkg_label, format!("promoting build outputs in place: {e}")))?;
+            let _ = std::fs::remove_dir_all(&temp_dir);
+        } else {
+            write_sidecar(&temp_dir, triple, self.profile, &fingerprint)
+                .map_err(|e| other(&pkg_label, format!("writing build sidecar: {e}")))?;
+            atomic_swap(&temp_dir, &cache_slot)
+                .map_err(|e| other(&pkg_label, format!("atomic stage swap: {e}")))?;
+        }
 
         // Artifact-only retention: `cargo build` runs in the package SOURCE dir
         // (`current_dir(pkg_dir)`), so a Rust build leaves a `target/` there —
@@ -642,6 +668,75 @@ fn atomic_swap(temp: &Path, final_path: &Path) -> anyhow::Result<()> {
             Err(e).with_context(|| "rename temp into cache slot")
         }
     }
+}
+
+/// The regenerated build-output units an in-place promote lands into a
+/// co-located source slot. `lib/<triple>/` is host-triple-specific so a slot
+/// carrying another triple's prebuilt cdylib keeps it. A package's SOURCE files
+/// are never in this set — an in-place promote leaves them untouched.
+fn promoted_build_output_units(triple: &str) -> [PathBuf; 3] {
+    [
+        Path::new("lib").join(triple),
+        PathBuf::from(".venv"),
+        PathBuf::from("_generated_"),
+    ]
+}
+
+/// Whether the engine-injected staging destination IS the package's own source
+/// dir (the #1506 co-located slot), selecting the in-place promote over the
+/// whole-dir atomic swap. Both paths must canonicalize to the same real dir; a
+/// not-yet-created detached destination fails to canonicalize and is therefore
+/// never the source dir.
+fn destination_is_source_dir(destination: &Path, pkg_dir: &Path) -> bool {
+    match (destination.canonicalize(), pkg_dir.canonicalize()) {
+        (Ok(destination), Ok(pkg_dir)) => destination == pkg_dir,
+        _ => false,
+    }
+}
+
+/// Promote ONLY the regenerated build-output units from the staging temp dir
+/// into a destination that IS the package's own source dir, leaving every
+/// source file untouched. The `.streamlib-build.json` completion marker is
+/// cleared BEFORE any unit moves and rewritten only AFTER all units land, so a
+/// crash mid-promote leaves the slot sidecar-less: a `NeverBuild` locked read
+/// of a sidecar-less slot fails typed and a build policy re-materializes, never
+/// loading a half-promoted slot (the aborted-build-leaves-nothing-loadable
+/// property). The temp dir is a sibling of the destination, so each unit moves
+/// by a same-filesystem rename.
+fn promote_build_outputs_in_place(
+    stage_temp_dir: &Path,
+    destination: &Path,
+    triple: &str,
+    profile: build::CargoProfile,
+    inputs_hash: &str,
+) -> anyhow::Result<()> {
+    use anyhow::Context;
+
+    // Invalidate the completion marker before touching any output unit: until
+    // the promote completes, the slot must read as needing a rebuild.
+    let _ = std::fs::remove_file(destination.join(SIDECAR_NAME));
+
+    for unit in promoted_build_output_units(triple) {
+        let from = stage_temp_dir.join(&unit);
+        if !from.exists() {
+            continue;
+        }
+        let to = destination.join(&unit);
+        if let Some(parent) = to.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("create {}", parent.display()))?;
+        }
+        // Replace any prior build output for this unit: drop the old copy, then
+        // rename the freshly staged one into place.
+        let _ = std::fs::remove_dir_all(&to);
+        std::fs::rename(&from, &to)
+            .with_context(|| format!("promote {} → {}", from.display(), to.display()))?;
+    }
+
+    // Completion marker LAST.
+    write_sidecar(destination, triple, profile, inputs_hash)
+        .with_context(|| "write build sidecar")?;
+    Ok(())
 }
 
 /// Whether the slot carries a host-triple cdylib under `lib/<triple>/` (any
@@ -945,6 +1040,205 @@ mod tests {
         assert!(
             pkg.path().join("streamlib.yaml").is_file(),
             "manifest must survive"
+        );
+    }
+
+    #[test]
+    fn destination_is_source_dir_true_when_equal_false_when_detached() {
+        let src = tempfile::tempdir().unwrap();
+        // Destination == source dir ⇒ in-place.
+        assert!(destination_is_source_dir(src.path(), src.path()));
+        // A `.`/`..`-decorated spelling of the same dir still canonicalizes equal.
+        let dotted = src.path().join(".");
+        assert!(destination_is_source_dir(&dotted, src.path()));
+        // A distinct existing dir ⇒ detached.
+        let other = tempfile::tempdir().unwrap();
+        assert!(!destination_is_source_dir(other.path(), src.path()));
+        // A not-yet-created destination (the first-build detached case) ⇒
+        // never the source dir (canonicalize fails on the missing path).
+        let missing = src.path().parent().unwrap().join("does-not-exist-slot");
+        assert!(!destination_is_source_dir(&missing, src.path()));
+    }
+
+    /// A synthetic staging temp dir carrying all three build-output units.
+    fn write_stage_temp_outputs(temp: &Path, triple: &str) {
+        let lib = temp.join("lib").join(triple);
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("libpkg.so"), b"fresh-cdylib").unwrap();
+        let venv_bin = temp.join(".venv").join("bin");
+        std::fs::create_dir_all(&venv_bin).unwrap();
+        std::fs::write(venv_bin.join("python"), b"fresh-venv").unwrap();
+        let generated = temp.join("_generated_");
+        std::fs::create_dir_all(&generated).unwrap();
+        std::fs::write(generated.join("wire.ts"), b"fresh-generated").unwrap();
+    }
+
+    #[test]
+    fn promote_build_outputs_in_place_leaves_source_and_writes_sidecar_last() {
+        // The in-place promote lands ONLY the build-output units into a
+        // destination that is the source dir, leaving source files byte-for-byte
+        // untouched, and writes the sidecar completion marker. Mentally-revert
+        // the unit allowlist to "rename the whole temp dir over the source" and
+        // the source-file assertions below fail (source would be clobbered).
+        let triple = build::host_target_triple();
+        let root = tempfile::tempdir().unwrap();
+
+        // Destination IS the source dir: source files + a STALE cdylib for the
+        // host triple + a valid prior sidecar from an earlier build.
+        let dest = root.path().join("pkg");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("streamlib.yaml"), b"package: source-manifest").unwrap();
+        std::fs::create_dir_all(dest.join("src")).unwrap();
+        std::fs::write(dest.join("src").join("proc.py"), b"source-code").unwrap();
+        let stale_lib = dest.join("lib").join(triple);
+        std::fs::create_dir_all(&stale_lib).unwrap();
+        std::fs::write(stale_lib.join("stale.so"), b"stale-cdylib").unwrap();
+        write_sidecar(
+            &dest,
+            triple,
+            build::CargoProfile::Dev,
+            "prior-fingerprint",
+        )
+        .unwrap();
+
+        // Sibling staging temp dir with freshly built outputs.
+        let temp = root.path().join(".tmp-pkg");
+        std::fs::create_dir_all(&temp).unwrap();
+        write_stage_temp_outputs(&temp, triple);
+
+        promote_build_outputs_in_place(
+            &temp,
+            &dest,
+            triple,
+            build::CargoProfile::Dev,
+            "new-fingerprint",
+        )
+        .unwrap();
+
+        // Source files untouched.
+        assert_eq!(
+            std::fs::read(dest.join("streamlib.yaml")).unwrap(),
+            b"package: source-manifest",
+            "source manifest must be left untouched by an in-place promote"
+        );
+        assert_eq!(
+            std::fs::read(dest.join("src").join("proc.py")).unwrap(),
+            b"source-code",
+            "source code must be left untouched by an in-place promote"
+        );
+
+        // Build-output units promoted; the stale cdylib for the same triple is
+        // replaced (the whole `lib/<triple>` unit is swapped).
+        assert_eq!(
+            std::fs::read(dest.join("lib").join(triple).join("libpkg.so")).unwrap(),
+            b"fresh-cdylib"
+        );
+        assert!(
+            !dest.join("lib").join(triple).join("stale.so").exists(),
+            "the stale prior cdylib must be replaced when the lib/<triple> unit is promoted"
+        );
+        assert_eq!(
+            std::fs::read(dest.join(".venv").join("bin").join("python")).unwrap(),
+            b"fresh-venv"
+        );
+        assert_eq!(
+            std::fs::read(dest.join("_generated_").join("wire.ts")).unwrap(),
+            b"fresh-generated"
+        );
+
+        // Sidecar rewritten as the completion marker with the new fingerprint.
+        let side = read_sidecar(&dest).expect("completion sidecar must be present after promote");
+        assert_eq!(side.inputs_hash, "new-fingerprint");
+        assert_eq!(side.triple, triple);
+    }
+
+    #[test]
+    fn promote_build_outputs_in_place_only_promotes_present_units() {
+        // A schemas-only (no lib/.venv/_generated_) in-place promote writes only
+        // the sidecar and touches nothing else — no output unit is fabricated.
+        let triple = build::host_target_triple();
+        let root = tempfile::tempdir().unwrap();
+        let dest = root.path().join("pkg");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("streamlib.yaml"), b"package: schemas-only").unwrap();
+        let temp = root.path().join(".tmp-pkg");
+        std::fs::create_dir_all(&temp).unwrap();
+
+        promote_build_outputs_in_place(&temp, &dest, triple, build::CargoProfile::Dev, "fp")
+            .unwrap();
+
+        assert!(!dest.join("lib").exists(), "no lib/ unit to promote");
+        assert!(!dest.join(".venv").exists(), "no venv unit to promote");
+        assert!(!dest.join("_generated_").exists(), "no generated unit to promote");
+        assert!(read_sidecar(&dest).is_some(), "sidecar completion marker still written");
+    }
+
+    #[test]
+    fn promote_build_outputs_in_place_failure_clears_sidecar_and_preserves_source() {
+        // Kill-mid-promote analogue: a promote that ERRORS partway (here the
+        // third unit `_generated_` can't be renamed because the destination path
+        // is an un-removable non-dir) must leave the slot with NO completion
+        // sidecar — a prior valid sidecar is cleared BEFORE any unit moves — and
+        // must never touch the source files. Sidecar-last ordering is what makes
+        // an interrupted promote self-heal into a rebuild rather than load a
+        // half-promoted slot. Mentally-revert "clear the sidecar first" and the
+        // prior sidecar survives the failure, marking a torn slot complete.
+        let triple = build::host_target_triple();
+        let root = tempfile::tempdir().unwrap();
+
+        let dest = root.path().join("pkg");
+        std::fs::create_dir_all(&dest).unwrap();
+        std::fs::write(dest.join("streamlib.yaml"), b"package: source-manifest").unwrap();
+        // A valid prior completion marker that MUST be gone after a failed promote.
+        write_sidecar(&dest, triple, build::CargoProfile::Dev, "prior").unwrap();
+        let temp = root.path().join(".tmp-pkg");
+        std::fs::create_dir_all(&temp).unwrap();
+        write_stage_temp_outputs(&temp, triple);
+        // Block the `_generated_` unit: a FILE already sits at the destination
+        // path, and `rename(dir, existing_file)` fails with ENOTDIR on Linux
+        // (the `remove_dir_all` best-effort no-ops on a file).
+        std::fs::write(dest.join("_generated_"), b"a-file-not-a-dir").unwrap();
+
+        let err = promote_build_outputs_in_place(
+            &temp,
+            &dest,
+            triple,
+            build::CargoProfile::Dev,
+            "new",
+        )
+        .expect_err("promote must fail when a unit cannot be renamed into place");
+        let _ = err;
+
+        // No completion marker after the failure — the slot reads as needing a
+        // rebuild.
+        assert!(
+            read_sidecar(&dest).is_none(),
+            "the prior sidecar must be cleared before promotion and NOT rewritten on failure"
+        );
+        // Source untouched.
+        assert_eq!(
+            std::fs::read(dest.join("streamlib.yaml")).unwrap(),
+            b"package: source-manifest",
+            "source files must survive a failed in-place promote"
+        );
+    }
+
+    #[test]
+    #[serial]
+    fn production_injected_destination_is_never_the_source_dir() {
+        // Unreachability guard: the engine-injected staging destination for a
+        // normal build is a distinct cache slot, so the in-place promote branch
+        // ships dark (detached path taken) until the #1506 flip co-locates the
+        // slot onto the source. If a future change starts injecting the source
+        // dir as the destination, this flips and the in-place branch goes live.
+        let _home = HomeGuard::new();
+        let src = tempfile::tempdir().unwrap();
+        schemas_only_pkg(src.path());
+        let req = request(src.path(), BuildPolicy::IfStale);
+        assert!(
+            !destination_is_source_dir(&req.staging_destination_slot_dir, src.path()),
+            "today's injected destination must be detached from the source dir — \
+             the in-place promote branch is unreachable in production pre-flip"
         );
     }
 
