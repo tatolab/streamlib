@@ -16,7 +16,7 @@ pub use install::{InstallError, InstallOptions, InstallReport, install};
 pub use streamlib_idents::app_modules::{
     APP_MODULES_DIR_NAME, AddPackageOptions, AddPackageReport, AddPackageSource, AppModulesDir,
     AppModulesError, InstallFromLockfileReport, InstalledFromLockKind, InstalledFromLockPackage,
-    LinkPackageReport, RemovePackageReport, UnlinkPackageReport,
+    LinkPackageReport, RemovePackageReport, UnlinkPackageReport, parse_lockfile_package_key,
 };
 pub use module_loader::{
     AcquireConfirmationHandler, AcquireOnReferencePolicy, AddModuleError, AddedModule,

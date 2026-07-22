@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use streamlib::engine_internal::core::ProjectConfig;
-use streamlib::sdk::runtime::AppModulesDir;
+use streamlib::sdk::runtime::{AppModulesDir, parse_lockfile_package_key};
 use streamlib_idents::{RegistryClient, RegistryConfig};
 use streamlib_pack::catalog::{build_package_catalog, build_sibling_versions};
 use streamlib_pack::static_registry::{merge_catalog_index_lines, write_package_catalog};
@@ -505,7 +505,8 @@ pub fn list(dir: Option<&Path>) -> Result<()> {
         println!("No packages installed in {}.", app.modules_dir().display());
         println!();
         println!("Add a package with:");
-        println!("  streamlib add ./path/to.slpkg    # from a local artifact");
+        println!("  streamlib add @org/name@^1.0.0     # from the registry");
+        println!("  streamlib add ./path/to.slpkg      # from a local artifact");
         println!("  streamlib add https://…/pkg.slpkg  # from a URL");
         return Ok(());
     }
@@ -513,11 +514,8 @@ pub fn list(dir: Option<&Path>) -> Result<()> {
     println!("Installed packages ({}):\n", lockfile.packages.len());
 
     for (pkg_ref, entry) in &lockfile.packages {
-        let slot = app.modules_dir();
-        let present = pkg_ref
-            .strip_prefix('@')
-            .and_then(|rest| rest.split_once('/'))
-            .map(|(org, name)| slot.join(format!("@{org}")).join(name).is_dir())
+        let present = parse_lockfile_package_key(pkg_ref)
+            .map(|package| app.package_dir(&package).is_dir())
             .unwrap_or(false);
         println!("  {} v{}", pkg_ref, entry.version);
         println!("    Source: {}", describe_lock_source(&entry.source));

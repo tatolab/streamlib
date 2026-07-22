@@ -1521,7 +1521,7 @@ fn reproduce_materialized_from_lock(
 
 /// Parse a lockfile map key (`@org/name`) into a typed [`PackageRef`] via the
 /// canonical deserialize path (there is no `PackageRef::parse` by design).
-fn parse_lockfile_package_key(key: &str) -> Result<PackageRef, AppModulesError> {
+pub fn parse_lockfile_package_key(key: &str) -> Result<PackageRef, AppModulesError> {
     serde_yaml::from_value::<PackageRef>(serde_yaml::Value::String(key.to_string())).map_err(|e| {
         AppModulesError::InstallInvalidLockEntry {
             key: key.to_string(),
