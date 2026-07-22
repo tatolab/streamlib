@@ -146,7 +146,8 @@ pub struct Runner {
     /// dedupes to the first-resolved winner (single-version model: a later
     /// encounter at a different version warns and reuses the winner rather
     /// than double-registering; if the two are incompatible it surfaces at
-    /// runtime). Lives for the runtime's lifetime; [`Runner::remove_module`]
+    /// compile-on-install for source packages, or at runtime for prebuilt
+    /// slots). Lives for the runtime's lifetime; [`Runner::remove_module`]
     /// clears a removed package's entry so a later `add_module` re-resolves
     /// it from scratch.
     /// The memo is Runner-scoped while the schema / processor registries

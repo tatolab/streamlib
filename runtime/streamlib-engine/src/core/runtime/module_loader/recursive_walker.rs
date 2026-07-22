@@ -475,6 +475,15 @@ pub(super) struct ModuleLoadWalkContext<'load> {
         Vec<(streamlib_idents::PackageRef, streamlib_idents::PackageRef)>,
 }
 
+impl ModuleLoadWalkContext<'_> {
+    /// The package that required the node currently being resolved — the
+    /// penultimate element of the recursion path (the last is the current
+    /// node). `None` for a top-level `add_module` (path length < 2).
+    fn requirer(&self) -> Option<&streamlib_idents::PackageRef> {
+        (self.path.len() >= 2).then(|| &self.path[self.path.len() - 2])
+    }
+}
+
 /// Recursive worker: resolves the [`Strategy`] to a source, materializes
 /// via the injected [`BuildOrchestrator`] when a build is required,
 /// validates the manifest's identity + version range, stages the
@@ -599,8 +608,9 @@ fn add_module_recursive_body(
                 source_path: manifest_dir.clone(),
             });
         }
-        let requirer_for_warning = (walk_context.path.len() >= 2)
-            .then(|| walk_context.path[walk_context.path.len() - 2].to_string())
+        let requirer_for_warning = walk_context
+            .requirer()
+            .map(ToString::to_string)
             .unwrap_or_else(|| "top-level add_module".to_string());
         tracing::warn!(
             module = %module,
@@ -628,7 +638,10 @@ fn add_module_recursive_body(
     // loads dedupe the same `@org/name` to one first-resolved winner here
     // instead of double-registering. A later encounter resolving a
     // DIFFERENT concrete version warns and reuses the winner (single-version
-    // model; an incompatibility surfaces at runtime), never blocks the load.
+    // model; an incompatibility surfaces at compile-on-install for source
+    // packages — a consumer codegen'd against the winner's older schema idents
+    // fails the ident lookup / type-check — or at runtime for prebuilt slots),
+    // never blocks the load.
     //
     // First encounter inserts an in-flight placeholder under the same
     // lock as the check (no check-then-commit window for a concurrent
@@ -637,8 +650,7 @@ fn add_module_recursive_body(
     // skip is recorded in `skipped_in_flight` and the owner's outcome is
     // verified at the end of this walk — nobody ever blocks mid-walk, so
     // concurrent walks cannot deadlock.
-    let requirer_package = (walk_context.path.len() >= 2)
-        .then(|| walk_context.path[walk_context.path.len() - 2].clone());
+    let requirer_package = walk_context.requirer().cloned();
     let requirer = RequirerRecord {
         requirer: requirer_package.clone(),
     };
