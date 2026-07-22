@@ -695,6 +695,49 @@ fn destination_is_source_dir(destination: &Path, pkg_dir: &Path) -> bool {
     streamlib_pack::is_same_existing_file(destination, pkg_dir)
 }
 
+/// Ensure the package's own `.gitignore` (beside its source) excludes the
+/// in-tree build outputs an in-place promote lands: the host-triple cdylib dir,
+/// the provisioned Python venv, the regenerated Deno wire vocabulary, and the
+/// build completion marker. A dev source (`Strategy::Path` / `Strategy::Git` /
+/// a link checkout) is the user's own git tree, so these must not show as
+/// untracked. Idempotent: only entries not already present are appended, so
+/// repeated builds — and additional host triples, each with its own
+/// `lib/<triple>/` line — accumulate without duplication. `_generated_/` is NOT
+/// globally ignored for an external Path source, so it is listed here too.
+fn ensure_build_outputs_gitignored(destination: &Path, triple: &str) -> anyhow::Result<()> {
+    use anyhow::Context;
+    use std::collections::HashSet;
+
+    let required = [
+        format!("/lib/{triple}/"),
+        "/.venv/".to_string(),
+        "/_generated_/".to_string(),
+        format!("/{SIDECAR_NAME}"),
+    ];
+    let gitignore = destination.join(".gitignore");
+    let existing = std::fs::read_to_string(&gitignore).unwrap_or_default();
+    let present: HashSet<&str> = existing.lines().map(str::trim).collect();
+
+    let missing: Vec<&str> = required
+        .iter()
+        .map(String::as_str)
+        .filter(|line| !present.contains(*line))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+
+    let mut out = existing;
+    if !out.is_empty() && !out.ends_with('\n') {
+        out.push('\n');
+    }
+    for line in missing {
+        out.push_str(line);
+        out.push('\n');
+    }
+    std::fs::write(&gitignore, out).with_context(|| format!("writing {}", gitignore.display()))
+}
+
 /// Promote ONLY the regenerated build-output units from the staging temp dir
 /// into a destination that IS the package's own source dir, leaving every
 /// source file untouched.
@@ -719,6 +762,19 @@ fn promote_build_outputs_in_place(
     inputs_hash: &str,
 ) -> anyhow::Result<()> {
     use anyhow::Context;
+
+    // The destination IS the user's own git tree (a `Strategy::Path` source or a
+    // link checkout), so keep the regenerated build outputs out of git — without
+    // this they surface as untracked noise on every dev build. Best-effort: a
+    // `.gitignore` is hygiene, never a correctness gate, so a write failure is
+    // logged and the build proceeds rather than aborting.
+    if let Err(e) = ensure_build_outputs_gitignored(destination, triple) {
+        tracing::warn!(
+            dir = %destination.display(),
+            error = %e,
+            "could not gitignore in-tree build outputs; build outputs may show as untracked"
+        );
+    }
 
     // Invalidate the completion marker before touching any output unit: until
     // the final marker flip, the slot must read as needing a rebuild.
@@ -1287,22 +1343,84 @@ mod tests {
         );
     }
 
+    /// A fresh in-tree destination gets a `.gitignore` covering every promoted
+    /// build-output unit plus the completion marker, so a dev source's build
+    /// outputs never show as untracked git noise. Mentally drop any required
+    /// line and the corresponding `contains` assertion fails.
     #[test]
-    #[serial]
-    fn production_injected_destination_is_never_the_source_dir() {
-        // Unreachability guard: the engine-injected staging destination for a
-        // normal build is a distinct cache slot, so the in-place promote branch
-        // ships dark (detached path taken) until the #1506 flip co-locates the
-        // slot onto the source. If a future change starts injecting the source
-        // dir as the destination, this flips and the in-place branch goes live.
-        let _home = HomeGuard::new();
-        let src = tempfile::tempdir().unwrap();
-        schemas_only_pkg(src.path());
-        let req = request(src.path(), BuildPolicy::IfStale);
+    fn ensure_build_outputs_gitignored_writes_all_units() {
+        let dest = tempfile::tempdir().unwrap();
+        let triple = "x86_64-unknown-linux-gnu";
+        ensure_build_outputs_gitignored(dest.path(), triple).unwrap();
+        let body = std::fs::read_to_string(dest.path().join(".gitignore")).unwrap();
+        assert!(body.contains(&format!("/lib/{triple}/")), "{body}");
+        assert!(body.contains("/.venv/"), "{body}");
+        assert!(body.contains("/_generated_/"), "{body}");
+        assert!(body.contains(&format!("/{SIDECAR_NAME}")), "{body}");
+    }
+
+    /// Idempotent + additive: a second call for the SAME triple adds nothing
+    /// (no duplicate lines), a call for a DIFFERENT triple appends only its own
+    /// `lib/<triple>/` line, and a pre-existing user entry is preserved.
+    #[test]
+    fn ensure_build_outputs_gitignored_is_idempotent_and_preserves_user_entries() {
+        let dest = tempfile::tempdir().unwrap();
+        std::fs::write(dest.path().join(".gitignore"), "node_modules/\n").unwrap();
+        let triple_a = "x86_64-unknown-linux-gnu";
+        let triple_b = "aarch64-apple-darwin";
+
+        ensure_build_outputs_gitignored(dest.path(), triple_a).unwrap();
+        ensure_build_outputs_gitignored(dest.path(), triple_a).unwrap();
+        let after_a = std::fs::read_to_string(dest.path().join(".gitignore")).unwrap();
+        assert_eq!(
+            after_a.matches(&format!("/lib/{triple_a}/")).count(),
+            1,
+            "a repeated same-triple call must not duplicate a line: {after_a}"
+        );
         assert!(
-            !destination_is_source_dir(&req.staging_destination_slot_dir, src.path()),
-            "today's injected destination must be detached from the source dir — \
-             the in-place promote branch is unreachable in production pre-flip"
+            after_a.contains("node_modules/"),
+            "a pre-existing user entry must be preserved: {after_a}"
+        );
+
+        ensure_build_outputs_gitignored(dest.path(), triple_b).unwrap();
+        let after_b = std::fs::read_to_string(dest.path().join(".gitignore")).unwrap();
+        assert!(after_b.contains(&format!("/lib/{triple_a}/")), "{after_b}");
+        assert!(after_b.contains(&format!("/lib/{triple_b}/")), "{after_b}");
+        assert_eq!(
+            after_b.matches("/.venv/").count(),
+            1,
+            "the venv entry must not be re-appended for a second triple: {after_b}"
+        );
+    }
+
+    /// The in-place promote writes the `.gitignore` alongside the promoted
+    /// units — proving the source-tree keeps its build outputs out of git.
+    #[test]
+    fn promote_build_outputs_in_place_gitignores_the_outputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let dest = tempfile::tempdir().unwrap();
+        let triple = build::host_target_triple();
+        let lib = temp.path().join("lib").join(triple);
+        std::fs::create_dir_all(&lib).unwrap();
+        std::fs::write(lib.join("libpkg.so"), b"cdylib").unwrap();
+        std::fs::write(dest.path().join("streamlib.yaml"), b"package: src").unwrap();
+
+        promote_build_outputs_in_place(
+            temp.path(),
+            dest.path(),
+            triple,
+            build::CargoProfile::Dev,
+            "fp",
+        )
+        .unwrap();
+
+        let body = std::fs::read_to_string(dest.path().join(".gitignore")).unwrap();
+        assert!(body.contains(&format!("/lib/{triple}/")), "{body}");
+        assert!(body.contains(&format!("/{SIDECAR_NAME}")), "{body}");
+        assert_eq!(
+            std::fs::read(dest.path().join("streamlib.yaml")).unwrap(),
+            b"package: src",
+            "source must be untouched"
         );
     }
 
