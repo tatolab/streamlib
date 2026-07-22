@@ -15,15 +15,15 @@ name = "streamlib_adapter_skia"
 path = "src/lib.rs"
 
 [dependencies]
-streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.7.41" }
-streamlib-adapter-skia-abi = { path = "../streamlib-adapter-skia-abi", version = "0.7.41" }
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.7.42" }
+streamlib-adapter-skia-abi = { path = "../streamlib-adapter-skia-abi", version = "0.7.42" }
 thiserror.workspace = true
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan", version = "0.7.41" }
-streamlib-adapter-opengl = { path = "../streamlib-adapter-opengl", version = "0.7.41" }
-streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.7.41" }
+streamlib-adapter-vulkan = { path = "../streamlib-adapter-vulkan", version = "0.7.42" }
+streamlib-adapter-opengl = { path = "../streamlib-adapter-opengl", version = "0.7.42" }
+streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.7.42" }
 vulkanalia.workspace = true
 skia-safe = { workspace = true }
 # vkGetInstanceProcAddr lives on vulkanalia's private StaticCommands;
@@ -37,7 +37,7 @@ libloading = "0.8"
 # live under regular `[dependencies]` rather than `[dev-dependencies]`
 # because Cargo's `[[bin]]` targets don't see dev-deps. Same shape as
 # `streamlib-adapter-opengl/Cargo.toml`.
-streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.7.41" }
+streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.7.42" }
 serde = { workspace = true }
 serde_json.workspace = true
 libc.workspace = true

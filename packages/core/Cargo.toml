@@ -13,7 +13,7 @@ name = "streamlib_core_schema_tests"
 path = "src/lib.rs"
 
 [build-dependencies]
-streamlib-jtd-codegen = { version = "0.7.41" }
+streamlib-jtd-codegen = { version = "0.7.42" }
 
 [dependencies]
 serde.workspace = true
