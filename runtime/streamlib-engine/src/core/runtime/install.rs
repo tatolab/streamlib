@@ -5,12 +5,12 @@
 //!
 //! [`install`] takes an application's `streamlib.yaml` root, resolves its
 //! full transitive package tree range→concrete via the shared
-//! [`streamlib_idents`] resolver, materializes every package into the
-//! installed-package cache through an injected [`BuildOrchestrator`], and
-//! writes an application lockfile ([`streamlib_idents::APP_LOCKFILE_NAME`])
-//! pinning the exact resolved set. A later locked run
-//! ([`Runner::add_modules_from_lockfile`]) consumes that lockfile strictly
-//! from the cache, offline, with no live re-resolution.
+//! [`streamlib_idents`] resolver, materializes every package into the app's
+//! co-located `streamlib_modules/@org/name` slots through an injected
+//! [`BuildOrchestrator`], and writes an application lockfile
+//! ([`streamlib_idents::APP_LOCKFILE_NAME`]) pinning the exact resolved set. A
+//! later locked run ([`Runner::add_modules_from_lockfile`]) consumes that
+//! lockfile strictly from those slots, offline, with no live re-resolution.
 //!
 //! The lockfile is the resolver handoff: range logic lives only here (at
 //! install), concrete enforcement only at run — the two resolvers stay
@@ -30,7 +30,6 @@ use super::{
     BuildEventSink, BuildOrchestrator, BuildPolicy, BuildRequest, BuildSource,
     PackageSourceProvenance,
 };
-use crate::core::config::{InstalledPackageEntry, InstalledPackageManifest};
 
 /// Knobs for [`install`]. Defaults are the ordinary "install this app"
 /// posture — write the lockfile next to the manifest, resolve the registry
@@ -52,10 +51,6 @@ pub struct InstallOptions {
     /// reuse an up-to-date cache slot otherwise. Native hosts + the
     /// release-completeness check ride inside `materialize` regardless.
     pub materialize_policy: Option<BuildPolicy>,
-    /// Also record each materialized package in the installed-package
-    /// manifest (`packages.yaml`) so `streamlib pkg list` and bare
-    /// `Strategy::InstalledCache` loads see them. Defaults to `true`.
-    pub update_installed_manifest: Option<bool>,
 }
 
 /// Outcome of a successful [`install`].
@@ -97,10 +92,6 @@ pub enum InstallError {
         #[source]
         source: streamlib_idents::ResolverError,
     },
-
-    /// Updating the installed-package manifest failed.
-    #[error("updating the installed-package manifest failed: {detail}")]
-    UpdateManifest { detail: String },
 }
 
 /// Resolve + materialize + lock an application's package tree.
@@ -110,10 +101,10 @@ pub enum InstallError {
 /// 1. Resolves `root_dir`'s `streamlib.yaml` range→concrete over the full
 ///    transitive tree (network at install time is expected — registry
 ///    listing / download / git fetch).
-/// 2. Materializes every resolved package into the installed-package cache
-///    via `orchestrator` (building cdylibs / provisioning venvs / **pre-
-///    building the subprocess native hosts** so a later polyglot run is
-///    offline). The orchestrator's own release-completeness pre-check fires
+/// 2. Materializes every resolved package into the app's co-located
+///    `streamlib_modules/@org/name` slots via `orchestrator` (building cdylibs
+///    / provisioning venvs / **pre-building the subprocess native hosts** so a
+///    later polyglot run is offline). The orchestrator's own release-completeness pre-check fires
 ///    here, so a partial registry release fails install before any lockfile
 ///    is written — the lockfile always pins a completeness-checked set.
 /// 3. Writes the application lockfile pinning the exact resolved set.
@@ -141,20 +132,10 @@ pub fn install(
         })?;
 
     let policy = options.materialize_policy.unwrap_or(BuildPolicy::IfStale);
-    let update_manifest = options.update_installed_manifest.unwrap_or(true);
 
     // Materialize every package the resolver produced. The project-flavor
     // root (no `[package]`) is the consumer, not a package to stage — skip
     // it; every dependency is a real package.
-    let mut installed = if update_manifest {
-        Some(
-            InstalledPackageManifest::load().map_err(|e| InstallError::UpdateManifest {
-                detail: e.to_string(),
-            })?,
-        )
-    } else {
-        None
-    };
 
     // Per-package content hash of the STAGED cache slot, keyed by the
     // canonical lockfile key. The lockfile pins this staged hash (not the
@@ -206,27 +187,6 @@ pub fn install(
                 source,
             })?;
         staged_hashes.insert(pkg_ref.to_string(), staged_hash);
-
-        if let (Some(manifest), Some(meta)) = (installed.as_mut(), pkg.manifest.package.as_ref()) {
-            manifest.add(InstalledPackageEntry {
-                name: pkg_ref.clone(),
-                version: meta.version,
-                description: meta.description.clone(),
-                installed_from: describe_source(pkg),
-                installed_at: rfc3339_utc_now(),
-                cache_dir: staged
-                    .staged_dir
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned())
-                    .unwrap_or_default(),
-            });
-        }
-    }
-
-    if let Some(mut manifest) = installed {
-        manifest.save().map_err(|e| InstallError::UpdateManifest {
-            detail: e.to_string(),
-        })?;
     }
 
     // Write the application lockfile from the resolved dep closure (root
@@ -277,38 +237,6 @@ fn package_ref_of(pkg: &ResolvedPackage) -> Option<(PackageRef, SemVer)> {
         .map(|m| (PackageRef::new(m.org.clone(), m.name.clone()), m.version))
 }
 
-/// Current UTC time as an RFC-3339 timestamp, dependency-free (the engine
-/// carries no `chrono` / `time` dep). Shared with [`super::add`] — both write
-/// the same `installed_at` field on `packages.yaml` entries.
-pub(super) fn rfc3339_utc_now() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0);
-    rfc3339_from_unix_secs(secs)
-}
-
-/// Format `secs` since the Unix epoch as an RFC-3339 UTC timestamp. Uses
-/// Howard Hinnant's civil-from-days algorithm to avoid a wall-clock
-/// dependency just for an informational manifest field.
-fn rfc3339_from_unix_secs(secs: u64) -> String {
-    let days = (secs / 86_400) as i64;
-    let rem = secs % 86_400;
-    let (hour, minute, second) = (rem / 3600, (rem % 3600) / 60, rem % 60);
-    // Howard Hinnant's civil-from-days (days since 1970-01-01).
-    let z = days + 719_468;
-    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
-    let doe = z - era * 146_097; // [0, 146096]
-    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365; // [0, 399]
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
-    let mp = (5 * doy + 2) / 153; // [0, 11]
-    let d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
-    let m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
-    let year = if m <= 2 { y + 1 } else { y };
-    format!("{year:04}-{m:02}-{d:02}T{hour:02}:{minute:02}:{second:02}Z")
-}
-
 /// Map a resolver source kind to the orchestrator's build-time provenance: a
 /// `path:` dep or the root manifest is the user's own editable tree (cargo deps
 /// may resolve outside it, `target/` is the user's), while a git-rev / `.slpkg`
@@ -325,36 +253,3 @@ fn provenance_of(source: &streamlib_idents::ResolvedSource) -> PackageSourceProv
     }
 }
 
-/// Human-readable provenance for the installed-manifest `installed_from`
-/// field.
-fn describe_source(pkg: &ResolvedPackage) -> String {
-    use streamlib_idents::ResolvedSource;
-    match &pkg.source {
-        ResolvedSource::Root => "root".into(),
-        ResolvedSource::Path { relative } => format!("path:{}", relative.display()),
-        ResolvedSource::Git { url, rev } => format!("git:{url}@{rev}"),
-        ResolvedSource::Slpkg { archive } => format!("slpkg:{}", archive.display()),
-        ResolvedSource::Registry { url } => format!("registry:{url}"),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn rfc3339_civil_from_days_matches_known_epochs() {
-        // Mentally-revert: any off-by-one in the civil-from-days math shifts
-        // these known instants, so the equality pins the algorithm.
-        assert_eq!(rfc3339_from_unix_secs(0), "1970-01-01T00:00:00Z");
-        assert_eq!(
-            rfc3339_from_unix_secs(1_700_000_000),
-            "2023-11-14T22:13:20Z"
-        );
-        // A leap day (2024-02-29) — the algorithm must place it correctly.
-        assert_eq!(
-            rfc3339_from_unix_secs(1_709_208_000),
-            "2024-02-29T12:00:00Z"
-        );
-    }
-}

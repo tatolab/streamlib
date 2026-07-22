@@ -8,16 +8,16 @@ use crate::core::Error;
 /// [`Runner::add_module`]: super::super::Runner::add_module
 #[derive(Debug, thiserror::Error)]
 pub enum AddModuleError {
-    /// No installed-package cache entry matches `@org/name`. Bare
-    /// [`add_module`] resolves cache-only; load from source instead, or
-    /// install the package.
+    /// No `streamlib_modules/@org/name` slot matches `@org/name`. Bare
+    /// [`add_module`] resolves against the app's `streamlib_modules/` folder
+    /// only; load from source instead, or add the package.
     ///
     /// [`add_module`]: super::super::Runner::add_module
     #[error(
-        "Module '{package}' not found in the installed-package cache. \
+        "Module '{package}' not found in the app's streamlib_modules/ folder. \
          Load it from source with `add_module_with(_, Strategy::Path {{ build: \
          BuildPolicy::IfStale, .. }})` (dev / runtime-authoring), or add it \
-         with `streamlib add @org/name` (distribution)."
+         with `streamlib add <source>` (distribution)."
     )]
     ModuleNotFound {
         package: streamlib_idents::PackageRef,
@@ -64,11 +64,6 @@ pub enum AddModuleError {
         found: streamlib_idents::SemVer,
         source_path: std::path::PathBuf,
     },
-
-    /// `InstalledPackageManifest::load()` errored before lookup could
-    /// run. Catches I/O / parse failures distinct from "no entry."
-    #[error("Failed to load installed-package cache: {detail}")]
-    InstalledCacheLoadFailed { detail: String },
 
     /// The recursive dep walker (or the strategy resolver under it)
     /// rejected the resolved source path. Wraps the underlying engine
