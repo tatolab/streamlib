@@ -939,4 +939,121 @@ mod tests {
         assert_eq!(received.payload()[0], 0xAB);
         assert_eq!(received.payload()[oversized - 1], 0xCD);
     }
+
+    /// End-to-end #1549 reconnect cycle: connect → disconnect → reconnect a
+    /// persistent source+destination pair the way the compiler op wires it, and
+    /// prove the per-link reclaim releases both iceoryx2 services so the reconnect
+    /// recreates them fresh — reproducing (and defeating) BOTH reported errors:
+    ///
+    /// - `ExceedsMaxSupportedNotifiers`: the notify service is created with
+    ///   `max_notifiers = fan-in (1)`. Without reclaim, the first connect's
+    ///   notifier stays live on [`OutputWriterInner`], so the reconnect's
+    ///   `create_notifier` is the SECOND on a max-1 service and fails.
+    /// - `DoesNotSupportRequestedMinBufferSize`: the reconnect opens the data
+    ///   service at a DEEPER ring depth. Without reclaim, the stale shallow
+    ///   service is still held by the leaked publisher/subscriber, so the deeper
+    ///   reopen is rejected.
+    ///
+    /// Fail-without-fix: revert `OutputWriterInner::remove_channel_link` /
+    /// `InputMailboxesInner::remove_channel_link` to no-ops (the pre-#1549
+    /// `close_iceoryx2_service` behaviour) and the reconnect's `create_notifier`
+    /// trips `ExceedsMaxSupportedNotifiers` and the deeper `open_or_create_service`
+    /// trips `DoesNotSupportRequestedMinBufferSize` — the two `.expect`s panic.
+    #[test]
+    fn disconnect_reconnect_cycle_reclaims_notifier_and_data_service() {
+        use crate::iceoryx2::{
+            ChannelEgressConfig, ChannelTrustTier, InputMailboxesInner, OutputWriterInner, ReadMode,
+            TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+        };
+        use streamlib_ipc_types::{RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, SchemaIdentWire};
+
+        let node = Iceoryx2Node::new().expect("create iceoryx2 node");
+        let data_name = unique_service_name("cycle/data");
+        let notify_name = unique_service_name("cycle/notify");
+        let link_id = "L-cycle-1";
+        // fan-in = 1 (one inbound link), fan-out = 1 (+ reserved tap slot).
+        let max_notifiers = 1usize;
+        let max_subscribers = 1 + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
+        let schema =
+            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
+
+        let out_inner = Arc::new(OutputWriterInner::new());
+        let in_inner = Arc::new(InputMailboxesInner::new());
+
+        // One `connect()` wiring pass at ring depth `depth`, exactly as the
+        // compiler op stitches a Rust→Rust link.
+        let connect = |depth: usize| {
+            let data = node
+                .open_or_create_service(&data_name, max_subscribers, depth, true)
+                .expect("open channel data service");
+            let notify = node
+                .open_or_create_notify_service(&notify_name, max_notifiers)
+                .expect("open notify service");
+
+            if !out_inner.has_channel_publisher("out") {
+                let publisher = data.create_publisher(64).expect("source publisher");
+                out_inner.set_channel_publisher(
+                    "out",
+                    schema,
+                    publisher,
+                    ChannelEgressConfig {
+                        service_name: data_name.clone(),
+                        trust_tier: ChannelTrustTier::Trusted,
+                        expected_payload_bytes: 64,
+                        ceiling_bytes: TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+                    },
+                );
+            }
+            out_inner.add_channel_notifier(
+                "out",
+                link_id,
+                notify.create_notifier().expect(
+                    "create_notifier must fit the notify service's max_notifiers cap — a \
+                     leaked notifier from the previous connect would trip \
+                     ExceedsMaxSupportedNotifiers here",
+                ),
+            );
+
+            if !in_inner.has_port("in") {
+                in_inner.add_port("in", depth, ReadMode::ReadNextInOrder);
+            }
+            in_inner.add_channel_subscriber(
+                "in",
+                link_id,
+                data.create_subscriber().expect("dest subscriber"),
+            );
+            if !in_inner.has_listener() {
+                in_inner.set_listener(notify.create_listener().expect("dest listener"));
+            }
+        };
+
+        // Simulate `close_iceoryx2_service`'s per-link reclaim on both halves.
+        let disconnect = || {
+            out_inner.remove_channel_link("out", link_id);
+            in_inner.remove_channel_link(link_id);
+        };
+
+        // First connect at a shallow depth.
+        connect(4);
+        assert!(out_inner.has_channel_publisher("out"));
+        assert!(in_inner.has_listener());
+
+        // Disconnect: the reclaim must drop the publisher, notifier, subscriber
+        // and listener so iceoryx2 releases both services.
+        disconnect();
+        assert!(
+            !out_inner.has_channel_publisher("out"),
+            "the channel publisher must be released on disconnect",
+        );
+        assert!(
+            !in_inner.has_listener(),
+            "the destination listener must be released on disconnect",
+        );
+
+        // Reconnect at a DEEPER ring depth. Both `.expect`s inside `connect`
+        // (create_notifier + open_or_create_service) are the #1549 trip-wires.
+        connect(64);
+        assert!(out_inner.has_channel_publisher("out"));
+        assert!(in_inner.has_listener());
+    }
 }
