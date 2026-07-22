@@ -145,10 +145,12 @@ fn source_thread_loop(
         // Stage the BGRA frame into a pooled host-visible pixel buffer. The
         // pool id is the output `surface_id`: downstream
         // `resolve_texture_by_surface_id` triggers the host to upload this
-        // buffer into a GPU texture. The `pixel_buffer` handle stays live
-        // through the `outputs.write` below so the pool can't rotate this
-        // slot out mid-flight (the pool skips buffers whose Arc is still
-        // held). Cdylib-safe — no engine-only CPU-upload primitive.
+        // buffer into a GPU texture. The slot stays intact until downstream
+        // consumes it because the pool is `POOL_PRE_ALLOCATE_COUNT`-deep and
+        // its acquire skips any buffer whose Arc is still held elsewhere
+        // (strong-count reuse gating) — not because this handle happens to
+        // live through the `outputs.write`. Cdylib-safe — no engine-only
+        // CPU-upload primitive.
         let (pool_id, pixel_buffer) =
             match gpu_context.acquire_pixel_buffer(width, height, PixelFormat::Rgba32) {
                 Ok(result) => result,
@@ -159,8 +161,17 @@ fn source_thread_loop(
             };
 
         let dst_ptr = pixel_buffer.plane_base_address(0);
+        if dst_ptr.is_null() {
+            tracing::error!("[BgraFileSource] Pixel buffer plane base address is null");
+            break;
+        }
+        let copy_len = frame_buf.len().min(pixel_buffer.plane_size(0) as usize);
+        // SAFETY: `dst_ptr` is the mapped host-visible base of a pixel buffer
+        // sized (width, height, Rgba32) = `width*height*4` bytes; `copy_len`
+        // is clamped to both the BGRA source and the plane size, and the
+        // regions do not overlap.
         unsafe {
-            std::ptr::copy_nonoverlapping(frame_buf.as_ptr(), dst_ptr, frame_size);
+            std::ptr::copy_nonoverlapping(frame_buf.as_ptr(), dst_ptr, copy_len);
         }
 
         let surface_id = pool_id.to_string();
