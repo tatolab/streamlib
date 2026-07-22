@@ -153,6 +153,27 @@ fn cache_slot_is_reusable(
     (!has_python || venv_python_exists) && (!has_deno || generated_exists)
 }
 
+/// Whether a cached slot's Rust build output may be reused without
+/// re-invoking cargo. A non-Rust slot is always Rust-reusable (there is no
+/// cdylib whose out-of-package inputs could have drifted). A Rust slot is
+/// reusable only when it was staged with no active `streamlib link`
+/// (`sidecar_link_free` — its streamlib deps resolve to immutable
+/// registry-pinned versions, and its own Cargo.toml pinning them is in the
+/// input fingerprint), no link is active now, and its host-triple cdylib is
+/// still present. `cdylib_present` is a closure so the (filesystem) check is
+/// skipped entirely for the non-Rust and link-active branches.
+fn rust_slot_reusable(
+    has_rust: bool,
+    sidecar_link_free: bool,
+    active_link_present: bool,
+    cdylib_present: impl FnOnce() -> bool,
+) -> bool {
+    if !has_rust {
+        return true;
+    }
+    sidecar_link_free && !active_link_present && cdylib_present()
+}
+
 impl PolyglotBuildOrchestrator {
     fn materialize_package_dir(
         &self,
@@ -222,26 +243,58 @@ impl PolyglotBuildOrchestrator {
         let fingerprint = compute_inputs_hash(pkg_dir)
             .map_err(|e| other(&pkg_label, format!("fingerprinting inputs: {e}")))?;
 
+        // Discover the active `streamlib link` once (from the process working
+        // directory — the consumer's run dir). Resolved BEFORE the staleness
+        // skip because a link changes whether a cached Rust slot is reusable:
+        // under a link the package's streamlib crates resolve from a MUTABLE
+        // checkout ([patch.crates-io] path overrides), so cargo must re-run;
+        // link-free, they resolve from immutable registry-pinned versions and
+        // the cached artifact is reusable. A corrupt marker is a loud error,
+        // never a silent mixed state.
+        let active_link = discover_active_build_link(&pkg_label)?;
+        if let Some(link) = &active_link {
+            tracing::info!(
+                package = %pkg_label,
+                checkout = %link.checkout.display(),
+                cargo_config = ?link.consumer_cargo_config,
+                python_sdk = %link.python_sdk_path.display(),
+                "streamlib link active — building staged package against the linked checkout"
+            );
+        }
+
         // ---- Staleness skip ----
-        // IfStale + a package with NO Rust: a package-local content
-        // fingerprint is a complete staleness oracle (nothing links code
-        // outside the package). If the cached artifact matches the
-        // fingerprint + toolchain context, skip the rebuild.
+        // IfStale + a matching toolchain context + matching input fingerprint:
+        // reuse the staged slot instead of rebuilding. The reuse rule differs
+        // by whether the package builds Rust code:
         //
-        // A package WITH Rust always re-assembles: a Rust cdylib can link
-        // code outside the package dir (the engine, in a dev workspace) a
-        // package-local fingerprint can't see — so cargo's own fingerprint
-        // (invoked inside `assemble_artifact`) is the only correct oracle,
-        // and it short-circuits cheaply when clean.
-        if matches!(request.policy, BuildPolicy::IfStale) && !has_rust && cache_slot.is_dir() {
+        // - NO Rust: a package-local content fingerprint is a complete
+        //   staleness oracle (nothing links code outside the package).
+        //
+        // - Rust: a cdylib can link code outside the package dir a
+        //   package-local fingerprint can't see. That out-of-package input is
+        //   immutable ONLY when the build was — and is still — link-free: the
+        //   package pins its streamlib crates to registry versions, which are
+        //   content-immutable, and its own Cargo.toml (carrying those pins) is
+        //   in the fingerprint. So reuse a Rust slot iff it was staged
+        //   link-free, no link is active now, and its cdylib for this triple
+        //   is present. Under an active link the checkout is mutable, so cargo
+        //   must re-run (its own fingerprint short-circuits cheaply when clean).
+        if matches!(request.policy, BuildPolicy::IfStale) && cache_slot.is_dir() {
             if let Some(side) = read_sidecar(&cache_slot) {
                 let venv_python_exists =
                     cache_slot.join(".venv").join("bin").join("python").exists();
                 let generated_exists = cache_slot.join("_generated_").is_dir();
+                let rust_reusable = rust_slot_reusable(
+                    has_rust,
+                    side.link_free,
+                    active_link.is_some(),
+                    || rust_cdylib_present(&cache_slot, triple),
+                );
                 if side.abi_version == streamlib_plugin_abi::STREAMLIB_ABI_VERSION
                     && side.triple == *triple
                     && side.profile == self.profile.label()
                     && side.inputs_hash == fingerprint
+                    && rust_reusable
                     && cache_slot_is_reusable(
                         python_venv::staged_package_has_python(&cache_slot),
                         venv_python_exists,
@@ -279,24 +332,12 @@ impl PolyglotBuildOrchestrator {
         std::fs::create_dir_all(&temp_dir)
             .map_err(|e| other(&pkg_label, format!("create temp stage dir: {e}")))?;
 
-        // Discover the active `streamlib link` once (from the process working
-        // directory — the consumer's run dir). Under an active link every
-        // staged build resolves its streamlib crates from the linked checkout:
-        // the Rust cdylib via the consumer's `streamlib link`-emitted
-        // `[patch]` cargo config, and the Python venv via the checkout's
-        // Python SDK. Host + plugin then come from one source tree, which is
-        // what removes the mixed host/plugin ABI hazard from the dev loop. A
-        // corrupt marker is a loud error, never a silent mixed state.
-        let active_link = discover_active_build_link(&pkg_label)?;
-        if let Some(link) = &active_link {
-            tracing::info!(
-                package = %pkg_label,
-                checkout = %link.checkout.display(),
-                cargo_config = ?link.consumer_cargo_config,
-                python_sdk = %link.python_sdk_path.display(),
-                "streamlib link active — building staged package against the linked checkout"
-            );
-        }
+        // Under an active link every staged build resolves its streamlib
+        // crates from the linked checkout: the Rust cdylib via the consumer's
+        // `streamlib link`-emitted `[patch]` cargo config, and the Python venv
+        // via the checkout's Python SDK. Host + plugin then come from one
+        // source tree, which is what removes the mixed host/plugin ABI hazard
+        // from the dev loop.
         let cargo_config_files: Vec<PathBuf> = active_link
             .as_ref()
             .and_then(|l| l.consumer_cargo_config.clone())
@@ -378,8 +419,14 @@ impl PolyglotBuildOrchestrator {
                 })?;
         }
 
-        write_sidecar(&temp_dir, triple, self.profile, &fingerprint)
-            .map_err(|e| other(&pkg_label, format!("writing build sidecar: {e}")))?;
+        write_sidecar(
+            &temp_dir,
+            triple,
+            self.profile,
+            &fingerprint,
+            active_link.is_none(),
+        )
+        .map_err(|e| other(&pkg_label, format!("writing build sidecar: {e}")))?;
         atomic_swap(&temp_dir, &cache_slot)
             .map_err(|e| other(&pkg_label, format!("atomic stage swap: {e}")))?;
 
@@ -434,6 +481,12 @@ struct Sidecar {
     triple: String,
     profile: String,
     inputs_hash: String,
+    /// Whether the slot was staged with NO active `streamlib link` — the
+    /// provenance that makes a Rust slot's out-of-package inputs immutable
+    /// (registry-pinned) and therefore reusable without re-invoking cargo.
+    /// Absent in a pre-#1506 sidecar ⇒ parsed as `false` (conservative: a
+    /// Rust slot of unknown provenance is rebuilt).
+    link_free: bool,
 }
 
 /// Sidecar recording the staged artifact's toolchain context + the input
@@ -448,6 +501,7 @@ fn write_sidecar(
     triple: &str,
     profile: build::CargoProfile,
     inputs_hash: &str,
+    link_free: bool,
 ) -> anyhow::Result<()> {
     let body = serde_json::to_string_pretty(&serde_json::json!({
         "abi_version": streamlib_plugin_abi::STREAMLIB_ABI_VERSION,
@@ -456,6 +510,7 @@ fn write_sidecar(
         "triple": triple,
         "profile": profile.label(),
         "inputs_hash": inputs_hash,
+        "link_free": link_free,
     }))?;
     std::fs::write(dest.join(SIDECAR_NAME), body)?;
     Ok(())
@@ -471,7 +526,22 @@ fn read_sidecar(staged_dir: &Path) -> Option<Sidecar> {
         triple: v.get("triple")?.as_str()?.to_string(),
         profile: v.get("profile")?.as_str()?.to_string(),
         inputs_hash: v.get("inputs_hash")?.as_str()?.to_string(),
+        link_free: v.get("link_free").and_then(|f| f.as_bool()).unwrap_or(false),
     })
+}
+
+/// Whether the staged slot carries a host-triple cdylib — the Rust build
+/// output that must be present for a Rust slot to be reusable without
+/// re-invoking cargo. Mirrors the engine's prebuilt-artifact lookup: any
+/// regular file under `lib/<triple>/` qualifies (the cdylib's exact name is
+/// crate-derived and OS-suffixed).
+fn rust_cdylib_present(cache_slot: &Path, triple: &str) -> bool {
+    let triple_dir = cache_slot.join("lib").join(triple);
+    std::fs::read_dir(&triple_dir)
+        .map(|mut entries| {
+            entries.any(|e| e.map(|e| e.path().is_file()).unwrap_or(false))
+        })
+        .unwrap_or(false)
 }
 
 /// Language-agnostic content fingerprint of a package's build inputs:
@@ -537,19 +607,16 @@ fn stage_temp_dir(cache_slot: &Path) -> PathBuf {
         .join(format!(".tmp-{name}-{pid}-{seq}"))
 }
 
-/// Replace `final_path` with `temp` atomically (best-effort): create the
-/// cache parent, remove any existing slot, then rename. Each rename moves
-/// a fully-staged dir, so no torn reads.
+/// Replace `final_path` with the fully-staged `temp` slot gaplessly, so a
+/// concurrent reader observes either the OLD complete slot or the NEW
+/// complete slot — never an absent or half-written one. Delegates to the
+/// registry's canonical swap ([`streamlib_pack::static_registry::publish_staged_tree`]):
+/// on Linux a single `renameat2(RENAME_EXCHANGE)` when the slot already
+/// exists (no remove-then-rename window), a plain atomic rename when it
+/// doesn't. `temp` and `final_path` are siblings under the cache dir, so the
+/// swap is one filesystem operation.
 fn atomic_swap(temp: &Path, final_path: &Path) -> anyhow::Result<()> {
-    use anyhow::Context;
-    if let Some(parent) = final_path.parent() {
-        std::fs::create_dir_all(parent).with_context(|| "create cache parent")?;
-    }
-    if final_path.exists() {
-        std::fs::remove_dir_all(final_path).with_context(|| "remove stale cache slot")?;
-    }
-    std::fs::rename(temp, final_path).with_context(|| "rename temp into cache slot")?;
-    Ok(())
+    streamlib_pack::static_registry::publish_staged_tree(temp, final_path)
 }
 
 /// An active `streamlib link` resolved for a staged package build: the
@@ -663,6 +730,33 @@ mod tests {
         assert!(!cache_slot_is_reusable(true, true, true, false));
         assert!(!cache_slot_is_reusable(true, false, true, true));
         assert!(cache_slot_is_reusable(true, true, true, true));
+    }
+
+    // Mentally-revert check for the Rust build-once-reuse rule. Reverting any
+    // one guard flips exactly one of these cases:
+    //  - drop `!has_rust` early-return → the non-Rust `true` cases fail;
+    //  - drop `sidecar_link_free` → the linked-provenance `false` case passes;
+    //  - drop `!active_link_present` → the active-link `false` case passes;
+    //  - drop `cdylib_present()` → the missing-cdylib `false` case passes.
+    #[test]
+    fn rust_slot_reuse_requires_link_free_provenance_and_present_cdylib() {
+        // Non-Rust slot: always Rust-reusable, cdylib closure never consulted.
+        assert!(rust_slot_reusable(false, false, false, || {
+            panic!("cdylib check must be skipped for a non-Rust slot")
+        }));
+        assert!(rust_slot_reusable(false, false, true, || {
+            panic!("cdylib check must be skipped for a non-Rust slot")
+        }));
+
+        // Rust slot staged link-free, no link active now, cdylib present → reuse.
+        assert!(rust_slot_reusable(true, true, false, || true));
+        // Rust slot staged link-free but its cdylib was GC'd → rebuild.
+        assert!(!rust_slot_reusable(true, true, false, || false));
+        // Rust slot staged UNDER a link (mutable checkout) → rebuild.
+        assert!(!rust_slot_reusable(true, false, false, || true));
+        // Rust slot staged link-free but a link is active NOW → rebuild
+        // (deps now resolve to the mutable checkout).
+        assert!(!rust_slot_reusable(true, true, true, || true));
     }
 
     /// No-op engine event sink for tests that don't assert on build logs.
