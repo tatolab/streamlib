@@ -1444,9 +1444,9 @@ fn emit_slpkg(
 /// Whether two paths resolve to the same existing file. Both must canonicalize;
 /// a not-yet-created destination is never "the same file" as its source, so the
 /// normal detached copy/write proceeds.
-fn is_same_existing_file(a: &Path, b: &Path) -> bool {
-    match (a.canonicalize(), b.canonicalize()) {
-        (Ok(a), Ok(b)) => a == b,
+pub fn is_same_existing_file(source_path: &Path, destination_path: &Path) -> bool {
+    match (source_path.canonicalize(), destination_path.canonicalize()) {
+        (Ok(source_path), Ok(destination_path)) => source_path == destination_path,
         _ => false,
     }
 }
