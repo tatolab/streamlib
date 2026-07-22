@@ -1268,7 +1268,12 @@ mod host_runtime_ops_wiring_tests {
             std::path::PathBuf::from("/tmp/streamlib-test-tap-wiring.sock"),
         );
 
-        let ctx = RuntimeContextFullAccess::new(&base);
+        let ctx = RuntimeContextFullAccess::new(
+            &base,
+            crate::core::context::isolation::IsolationTier::TrustedInstalled
+                .grant_full_access()
+                .unwrap(),
+        );
         let err = tokio_runtime.block_on(async {
             ctx.runtime()
                 .tap_async("no-such-channel".to_string(), None)
