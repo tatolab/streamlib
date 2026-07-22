@@ -2242,6 +2242,7 @@ mod layout_tests {
 #[cfg(test)]
 mod runtime_context_id_dispatch_tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
 
     // Deliberately longer than the 64-byte stack scratch buffer so the copy
     // helpers must grow and re-call the slot.
@@ -2249,6 +2250,16 @@ mod runtime_context_id_dispatch_tests {
         b"R-deliberately-long-runtime-identifier-that-exceeds-the-sixty-four-byte-scratch-buffer";
     const LONG_PROCESSOR_ID: &[u8] =
         b"P-deliberately-long-processor-identifier-that-exceeds-the-sixty-four-byte-scratch-buffer";
+
+    // Comfortably under the 64-byte scratch buffer so the host writes the whole
+    // id on the FIRST call and the copy helper returns without growing.
+    const SHORT_RUNTIME_ID: &[u8] = b"R-short-runtime-id";
+    const SHORT_PROCESSOR_ID: &[u8] = b"P-short-processor-id";
+
+    // Slot-call counters: the first-call no-retry branch must invoke the slot
+    // exactly once for a short id.
+    static SHORT_RUNTIME_ID_SLOT_CALLS: AtomicUsize = AtomicUsize::new(0);
+    static SHORT_PROCESSOR_ID_SLOT_CALLS: AtomicUsize = AtomicUsize::new(0);
 
     // # Safety: `out_buf` (when non-null) has `cap` writable bytes; `out_len`
     // is a valid `*mut usize`.
@@ -2270,6 +2281,16 @@ mod runtime_context_id_dispatch_tests {
         unsafe { copy_id_into(LONG_RUNTIME_ID, out_buf, cap, out_len) }
     }
 
+    unsafe extern "C" fn stub_runtime_id_copy_short(
+        _ctx: *const c_void,
+        out_buf: *mut u8,
+        cap: usize,
+        out_len: *mut usize,
+    ) -> usize {
+        SHORT_RUNTIME_ID_SLOT_CALLS.fetch_add(1, Ordering::SeqCst);
+        unsafe { copy_id_into(SHORT_RUNTIME_ID, out_buf, cap, out_len) }
+    }
+
     unsafe extern "C" fn stub_processor_id_copy_none(
         _ctx: *const c_void,
         _out_buf: *mut u8,
@@ -2289,6 +2310,16 @@ mod runtime_context_id_dispatch_tests {
         unsafe { copy_id_into(LONG_PROCESSOR_ID, out_buf, cap, out_len) as isize }
     }
 
+    unsafe extern "C" fn stub_processor_id_copy_some_short(
+        _ctx: *const c_void,
+        out_buf: *mut u8,
+        cap: usize,
+        out_len: *mut usize,
+    ) -> isize {
+        SHORT_PROCESSOR_ID_SLOT_CALLS.fetch_add(1, Ordering::SeqCst);
+        unsafe { copy_id_into(SHORT_PROCESSOR_ID, out_buf, cap, out_len) as isize }
+    }
+
     unsafe extern "C" fn stub_is_paused(_ctx: *const c_void) -> bool {
         true
     }
@@ -2302,6 +2333,7 @@ mod runtime_context_id_dispatch_tests {
     }
 
     fn stub_vtable(
+        runtime_id_copy: unsafe extern "C" fn(*const c_void, *mut u8, usize, *mut usize) -> usize,
         processor_id_copy: unsafe extern "C" fn(
             *const c_void,
             *mut u8,
@@ -2312,7 +2344,7 @@ mod runtime_context_id_dispatch_tests {
         RuntimeContextVTable {
             layout_version: streamlib_plugin_abi::RUNTIME_CONTEXT_VTABLE_LAYOUT_VERSION,
             _reserved_padding: 0,
-            runtime_id_copy: stub_runtime_id_copy_long,
+            runtime_id_copy,
             processor_id_copy,
             is_paused: stub_is_paused,
             should_process: stub_should_process,
@@ -2342,7 +2374,7 @@ mod runtime_context_id_dispatch_tests {
 
     #[test]
     fn full_access_runtime_id_survives_grow_and_retry() {
-        let vtable = stub_vtable(stub_processor_id_copy_none);
+        let vtable = stub_vtable(stub_runtime_id_copy_long, stub_processor_id_copy_none);
         let full = RuntimeContextFullAccess {
             handle: std::ptr::null(),
             vtable: &vtable as *const RuntimeContextVTable,
@@ -2362,7 +2394,7 @@ mod runtime_context_id_dispatch_tests {
 
     #[test]
     fn limited_access_runtime_id_and_processor_id_dispatch() {
-        let vtable = stub_vtable(stub_processor_id_copy_some_long);
+        let vtable = stub_vtable(stub_runtime_id_copy_long, stub_processor_id_copy_some_long);
         let limited = RuntimeContextLimitedAccess {
             handle: std::ptr::null(),
             vtable: &vtable as *const RuntimeContextVTable,
@@ -2381,7 +2413,7 @@ mod runtime_context_id_dispatch_tests {
 
     #[test]
     fn limited_access_processor_id_none_sentinel_returns_none() {
-        let vtable = stub_vtable(stub_processor_id_copy_none);
+        let vtable = stub_vtable(stub_runtime_id_copy_long, stub_processor_id_copy_none);
         let limited = RuntimeContextLimitedAccess {
             handle: std::ptr::null(),
             vtable: &vtable as *const RuntimeContextVTable,
@@ -2392,6 +2424,38 @@ mod runtime_context_id_dispatch_tests {
             limited.processor_id(),
             None,
             "the -1 sentinel must map to None, never a bogus empty String"
+        );
+    }
+
+    #[test]
+    fn limited_access_short_id_returns_on_first_call_without_retry() {
+        SHORT_RUNTIME_ID_SLOT_CALLS.store(0, Ordering::SeqCst);
+        SHORT_PROCESSOR_ID_SLOT_CALLS.store(0, Ordering::SeqCst);
+        let vtable = stub_vtable(stub_runtime_id_copy_short, stub_processor_id_copy_some_short);
+        let limited = RuntimeContextLimitedAccess {
+            handle: std::ptr::null(),
+            vtable: &vtable as *const RuntimeContextVTable,
+            gpu_limited: null_gpu_limited(),
+            _marker: PhantomData,
+        };
+        assert_eq!(limited.runtime_id().as_bytes(), SHORT_RUNTIME_ID);
+        assert_eq!(
+            limited.processor_id().as_deref().map(str::as_bytes),
+            Some(SHORT_PROCESSOR_ID),
+        );
+        // The whole id fits the 64B scratch on the first call, so the no-retry
+        // branch must return without a grow/re-alloc/re-call. Mental-revert the
+        // `required <= scratch.len()` short-circuit and each slot is invoked a
+        // second time, tripping these counts.
+        assert_eq!(
+            SHORT_RUNTIME_ID_SLOT_CALLS.load(Ordering::SeqCst),
+            1,
+            "a short runtime id must return on the first slot call, no grow-and-retry"
+        );
+        assert_eq!(
+            SHORT_PROCESSOR_ID_SLOT_CALLS.load(Ordering::SeqCst),
+            1,
+            "a short processor id must return on the first slot call, no grow-and-retry"
         );
     }
 }
