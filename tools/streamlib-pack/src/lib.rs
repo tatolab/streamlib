@@ -727,9 +727,13 @@ pub fn assemble_artifact_with_cargo_config(
             &manifest_bytes,
             stamped_cargo_toml.as_deref(),
         )?,
-        AssembleTarget::StagedDir(dir) => {
-            emit_staged_dir(dir, &files, &manifest_bytes, stamped_cargo_toml.as_deref())?
-        }
+        AssembleTarget::StagedDir(dir) => emit_staged_dir(
+            pkg_dir,
+            dir,
+            &files,
+            &manifest_bytes,
+            stamped_cargo_toml.as_deref(),
+        )?,
     }
 
     Ok(AssembleOutcome {
@@ -1437,24 +1441,46 @@ fn emit_slpkg(
     Ok(())
 }
 
+/// Whether two paths resolve to the same existing file. Both must canonicalize;
+/// a not-yet-created destination is never "the same file" as its source, so the
+/// normal detached copy/write proceeds.
+pub fn is_same_existing_file(source_path: &Path, destination_path: &Path) -> bool {
+    match (source_path.canonicalize(), destination_path.canonicalize()) {
+        (Ok(source_path), Ok(destination_path)) => source_path == destination_path,
+        _ => false,
+    }
+}
+
 /// Write the extracted layout into `dir`: the manifest bytes as
 /// `streamlib.yaml`, the version-stamped `Cargo.toml` (when present), then
 /// every collected file at its archive path (parents created). Duplicate
 /// paths skipped — the stamped `Cargo.toml` is written first so the verbatim
 /// source-tree copy is deduped.
+///
+/// In-place staging (`dir` IS the package source dir `src_pkg_dir`): the source
+/// manifest / `Cargo.toml` / every source file already sit at their destination
+/// path. Rewriting the manifest onto itself would mutate the user's source, and
+/// `fs::copy(src, dest)` with `src == dest` truncates the file to zero — so any
+/// write whose source and destination are the same file is skipped.
 fn emit_staged_dir(
+    src_pkg_dir: &Path,
     dir: &Path,
     files: &[(String, PathBuf)],
     manifest_bytes: &[u8],
     stamped_cargo_toml: Option<&[u8]>,
 ) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-    std::fs::write(dir.join("streamlib.yaml"), manifest_bytes).context("write streamlib.yaml")?;
+    if !is_same_existing_file(&src_pkg_dir.join("streamlib.yaml"), &dir.join("streamlib.yaml")) {
+        std::fs::write(dir.join("streamlib.yaml"), manifest_bytes)
+            .context("write streamlib.yaml")?;
+    }
 
     let mut seen = std::collections::HashSet::new();
     seen.insert("streamlib.yaml".to_string());
     if let Some(bytes) = stamped_cargo_toml {
-        std::fs::write(dir.join("Cargo.toml"), bytes).context("write stamped Cargo.toml")?;
+        if !is_same_existing_file(&src_pkg_dir.join("Cargo.toml"), &dir.join("Cargo.toml")) {
+            std::fs::write(dir.join("Cargo.toml"), bytes).context("write stamped Cargo.toml")?;
+        }
         seen.insert("Cargo.toml".to_string());
     }
     for (name, src) in files {
@@ -1462,6 +1488,9 @@ fn emit_staged_dir(
             continue;
         }
         let dest = dir.join(name);
+        if is_same_existing_file(src, &dest) {
+            continue;
+        }
         if let Some(parent) = dest.parent() {
             std::fs::create_dir_all(parent)
                 .with_context(|| format!("create {}", parent.display()))?;
@@ -1513,6 +1542,65 @@ mod tests {
             Some(Some(checkout.as_os_str())),
             "an active link threads the checkout path through as the override"
         );
+    }
+
+    #[test]
+    fn staged_dir_onto_the_source_dir_never_truncates_source_files() {
+        // In-place staging (StagedDir target == the package source dir): the
+        // self-copy guard must skip `fs::copy(src, dest)` where src == dest,
+        // which would otherwise truncate every source file to zero bytes, and
+        // skip rewriting the source manifest onto itself. Mentally-revert the
+        // `is_same_existing_file` guards and `schemas/t.yaml` is copied onto
+        // itself → truncated to 0 bytes, failing the content assertion.
+        let src = tempdir().unwrap();
+        write_schemas_only_pkg(src.path());
+        let schema = src.path().join("schemas").join("t.yaml");
+        let original_schema = std::fs::read(&schema).unwrap();
+        let original_manifest = std::fs::read(src.path().join("streamlib.yaml")).unwrap();
+        assert!(!original_schema.is_empty(), "fixture schema must be non-empty");
+
+        assemble_artifact(
+            src.path(),
+            &AssembleTarget::StagedDir(src.path().to_path_buf()),
+            &slpkg_opts(false),
+            &(),
+        )
+        .expect("in-place staging onto the source dir must succeed");
+
+        assert_eq!(
+            std::fs::read(&schema).unwrap(),
+            original_schema,
+            "an in-place stage must NOT truncate a source file onto itself"
+        );
+        assert_eq!(
+            std::fs::read(src.path().join("streamlib.yaml")).unwrap(),
+            original_manifest,
+            "an in-place stage must leave the source manifest untouched"
+        );
+    }
+
+    #[test]
+    fn staged_dir_detached_still_copies_source_files_verbatim() {
+        // The detached StagedDir path (dest != source) is unchanged by the
+        // self-copy guard: every source file is copied verbatim into the slot.
+        let src = tempdir().unwrap();
+        write_schemas_only_pkg(src.path());
+        let dest = tempdir().unwrap();
+
+        assemble_artifact(
+            src.path(),
+            &AssembleTarget::StagedDir(dest.path().to_path_buf()),
+            &slpkg_opts(false),
+            &(),
+        )
+        .expect("detached staging must succeed");
+
+        assert_eq!(
+            std::fs::read(dest.path().join("schemas").join("t.yaml")).unwrap(),
+            std::fs::read(src.path().join("schemas").join("t.yaml")).unwrap(),
+            "detached staging must copy the schema file byte-for-byte"
+        );
+        assert!(dest.path().join("streamlib.yaml").is_file());
     }
 
     fn slpkg_opts(no_build: bool) -> AssembleOptions {
