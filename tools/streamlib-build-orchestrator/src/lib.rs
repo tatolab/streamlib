@@ -15,8 +15,10 @@
 //! (via [`streamlib_pack::assemble_artifact`] — the same routine
 //! `streamlib pack` uses: Rust cdylib via cargo + crate source, Python as
 //! full source, Deno bundle, schemas) and stage it as an extracted
-//! directory into the package cache
-//! (`<STREAMLIB_HOME>/.streamlib/cache/packages/<name>-<version>/`).
+//! directory at the destination the engine hands over on the
+//! [`BuildRequest`] (`staging_destination_slot_dir`). The orchestrator holds
+//! no slot-path convention of its own — the engine owns the installed-package
+//! slot seam and injects the exact write location.
 //! A runtime-built staged dir is byte-identical to what extracting the
 //! corresponding `.slpkg` would produce — dev, release, and
 //! install-from-anywhere share the shape, so a package that loads in dev
@@ -32,6 +34,7 @@
 //! fingerprint cannot — the original stale-artifact trap).
 //!
 //! [`BuildOrchestrator`]: streamlib_engine::core::runtime::BuildOrchestrator
+//! [`BuildRequest`]: streamlib_engine::core::runtime::BuildRequest
 //! [`Strategy::Path`]: streamlib_engine::core::runtime::Strategy::Path
 //! [`Strategy::Git`]: streamlib_engine::core::runtime::Strategy::Git
 //! [`BuildPolicy`]: streamlib_engine::core::runtime::BuildPolicy
@@ -189,10 +192,11 @@ impl PolyglotBuildOrchestrator {
                 "streamlib.yaml missing [package] section".into(),
             )
         })?;
-        let cache_slot = streamlib_engine::core::get_cached_package_dir_for_name_version(
-            package.name.as_str(),
-            package.version,
-        );
+        // The engine computed the staging destination via the installed-package
+        // slot seam and handed it over on the request; the orchestrator holds no
+        // slot-path convention of its own. `read_minimal_project_config` above is
+        // still needed (has_rust, [package], the reserved-session org check).
+        let cache_slot = request.staging_destination_slot_dir.clone();
 
         let has_rust = build::has_rust_runtime_processors(&config);
 
@@ -1001,6 +1005,9 @@ mod tests {
             source_provenance: PackageSourceProvenance::MutableUserCheckout,
             policy,
             host_triple: build::host_target_triple().to_string(),
+            staging_destination_slot_dir: streamlib_engine::core::get_cached_package_dir(
+                "schemas-only-0.1.0",
+            ),
         }
     }
 
@@ -1008,10 +1015,9 @@ mod tests {
     #[serial]
     fn schemas_only_stages_into_package_cache() {
         // A schemas-only package (no compiler involved) assembles into the
-        // package cache at cache/packages/<name>-<version>/ — the same
-        // location an extracted .slpkg / GitHub install lands in — with
-        // its streamlib.yaml + schemas/ present. rebuilt=false because no
-        // build tool ran.
+        // engine-injected staging destination — the same slot an extracted
+        // .slpkg / GitHub install lands in — with its streamlib.yaml +
+        // schemas/ present. rebuilt=false because no build tool ran.
         let _home = HomeGuard::new();
         let src = tempfile::tempdir().unwrap();
         schemas_only_pkg(src.path());
@@ -1036,6 +1042,36 @@ mod tests {
             staged.staged_dir.join(SIDECAR_NAME).is_file(),
             "sidecar must be written for the IfStale skip-check"
         );
+    }
+
+    /// write==read handoff: the orchestrator stages into EXACTLY the
+    /// `staging_destination_slot_dir` the engine injected on the request — it
+    /// re-derives no slot of its own. The injected destination deliberately
+    /// carries a name that a `{package.name}-{package.version}` self-derivation
+    /// would NOT produce, so restoring the deleted self-derivation would land
+    /// the staged dir at `schemas-only-0.1.0` and fail this assertion.
+    #[test]
+    #[serial]
+    fn stages_into_injected_destination_not_a_self_derived_slot() {
+        let _home = HomeGuard::new();
+        let src = tempfile::tempdir().unwrap();
+        schemas_only_pkg(src.path());
+
+        let injected =
+            streamlib_engine::core::get_cached_package_dir("schemas-only-injected-slot");
+        let mut req = request(src.path(), BuildPolicy::IfStale);
+        req.staging_destination_slot_dir = injected.clone();
+
+        let orch = PolyglotBuildOrchestrator::default();
+        let staged = orch
+            .materialize(&req, &NoopSink)
+            .expect("schemas-only must materialize");
+
+        assert_eq!(
+            staged.staged_dir, injected,
+            "orchestrator must stage into the engine-injected destination, not a re-derived slot"
+        );
+        assert!(staged.staged_dir.join("streamlib.yaml").is_file());
     }
 
     #[test]
@@ -1121,6 +1157,9 @@ mod tests {
             source_provenance: PackageSourceProvenance::MutableUserCheckout,
             policy,
             host_triple: build::host_target_triple().to_string(),
+            staging_destination_slot_dir: streamlib_engine::core::get_cached_package_dir(
+                "py-source-0.1.0",
+            ),
         }
     }
 
@@ -1535,6 +1574,9 @@ mod tests {
                 source_provenance: PackageSourceProvenance::ImmutableManagedExtract,
                 policy: BuildPolicy::IfStale,
                 host_triple: build::host_target_triple().to_string(),
+                staging_destination_slot_dir: streamlib_engine::core::get_cached_package_dir(
+                    "x-0.1.0",
+                ),
             };
             let err = orch.materialize(&req, &NoopSink).expect_err("must reject");
             assert!(matches!(err, BuildError::UnsupportedSource(_)));
@@ -1649,6 +1691,9 @@ streamlib-plugin-sdk = {version = "0.5.0", registry = "tatolab"}
             source_provenance: PackageSourceProvenance::ImmutableManagedExtract,
             policy: BuildPolicy::IfStale,
             host_triple: build::host_target_triple().to_string(),
+            staging_destination_slot_dir: streamlib_engine::core::get_cached_package_dir(
+                "rust-source-0.1.0",
+            ),
         };
         let err = with_scratch_registry(registry.path(), || {
             orch.materialize(&req, &NoopSink)

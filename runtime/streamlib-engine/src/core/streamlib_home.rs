@@ -135,17 +135,6 @@ pub fn installed_package_slot_dir(
     get_cached_package_dir(&format!("{}-{}", pkg_ref.name.as_str(), version))
 }
 
-/// Temporary delegate over [`installed_package_slot_dir`] for the build
-/// orchestrator's cross-crate call, which does not yet thread a
-/// [`PackageRef`]/app root. Removed in the orchestrator-handoff step of the
-/// #1506 relocation; no new caller.
-pub fn get_cached_package_dir_for_name_version(
-    package_name: &str,
-    version: impl std::fmt::Display,
-) -> PathBuf {
-    get_cached_package_dir(&format!("{package_name}-{version}"))
-}
-
 /// Get the path to a runtime's directory.
 pub fn get_runtime_dir(runtime_id: &str) -> PathBuf {
     get_streamlib_data_dir().join("runtimes").join(runtime_id)
@@ -197,10 +186,9 @@ mod tests {
     /// write==read invariant: the seam is the single derivation, so a fixed
     /// `(pkg_ref, version)` yields one byte-identical slot no matter the app
     /// root — the property that lets a locked read find exactly the slot a
-    /// `.slpkg` extract / registry reuse wrote. Also pins the temporary
-    /// orchestrator delegate to the same output while it lives.
+    /// `.slpkg` extract / registry reuse wrote.
     #[test]
-    fn slot_dir_is_app_root_invariant_and_matches_delegate() {
+    fn slot_dir_is_app_root_and_org_invariant() {
         let pkg = pkg_ref("tatolab", "core");
         let version = SemVer::new(4, 5, 6);
 
@@ -210,14 +198,9 @@ mod tests {
         assert_eq!(no_root, with_root, "app root must not move the slot");
 
         // The org is not part of the current key: a same-name package under a
-        // different org derives the same slot (as the delegate, which has no
-        // org, must too).
+        // different org derives the same slot.
         let other_org = installed_package_slot_dir(None, &pkg_ref("acme", "core"), version);
         assert_eq!(no_root, other_org);
-        assert_eq!(
-            no_root,
-            get_cached_package_dir_for_name_version("core", version)
-        );
     }
 
     #[test]

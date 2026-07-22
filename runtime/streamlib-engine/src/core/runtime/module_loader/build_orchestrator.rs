@@ -120,6 +120,15 @@ pub struct BuildRequest {
     /// Host target triple the staged cdylib must target
     /// (e.g. `x86_64-unknown-linux-gnu`).
     pub host_triple: String,
+    /// The exact directory the orchestrator must stage this package into —
+    /// computed by the engine via the installed-package slot seam
+    /// ([`installed_package_slot_dir`]) at request-build time, so the
+    /// orchestrator holds NO slot-path convention of its own. This is the
+    /// write side of the write==read invariant: a locked run derives its
+    /// read slot from the same seam, so the two agree byte-for-byte.
+    ///
+    /// [`installed_package_slot_dir`]: crate::core::installed_package_slot_dir
+    pub staging_destination_slot_dir: PathBuf,
 }
 
 /// A successful [`BuildOrchestrator::materialize`] result. Constructed by

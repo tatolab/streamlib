@@ -310,12 +310,12 @@ pub(super) fn resolve_strategy_to_source(
                 source = %pkg_dir.display(),
                 "streamlib link active — resolving module from linked checkout (overriding strategy)"
             );
-            return Ok(source_for_dir(
+            return source_for_dir(
                 pkg_ref,
                 pkg_dir,
                 BuildPolicy::IfStale,
                 PackageSourceProvenance::MutableUserCheckout,
-            ));
+            );
         }
     }
     match strategy {
@@ -332,27 +332,27 @@ pub(super) fn resolve_strategy_to_source(
             // A `.slpkg` may carry source and/or a prebuilt cdylib. Prefer
             // a prebuilt matching this host; otherwise build the bundled
             // source on the host (pip wheel-vs-sdist for Rust).
-            Ok(source_for_resolved_dir(pkg_ref, extracted))
+            source_for_resolved_dir(pkg_ref, extracted)
         }
         Strategy::Path { path, build } => {
             if !path.join("streamlib.yaml").exists() {
                 return Err(AddModuleError::ManifestDirectoryMissing { path: path.clone() });
             }
-            Ok(source_for_dir(
+            source_for_dir(
                 pkg_ref,
                 path.clone(),
                 *build,
                 PackageSourceProvenance::MutableUserCheckout,
-            ))
+            )
         }
         Strategy::Git { url, rev, build } => {
             let checkout = fetch_git_checkout(pkg_ref, url, rev)?;
-            Ok(source_for_dir(
+            source_for_dir(
                 pkg_ref,
                 checkout,
                 *build,
                 PackageSourceProvenance::ImmutableManagedExtract,
-            ))
+            )
         }
         Strategy::Url {
             url,
@@ -372,7 +372,7 @@ pub(super) fn resolve_strategy_to_source(
                     detail: e.to_string(),
                 }
             })?;
-            Ok(source_for_fetched_slpkg(pkg_ref, extracted, *build))
+            source_for_fetched_slpkg(pkg_ref, extracted, *build)
         }
         Strategy::Registry { version_req, build } => {
             // Same resolve shape as `Strategy::Url`, except the download URL
@@ -447,7 +447,7 @@ pub(super) fn resolve_strategy_to_source(
                     }
                 })?
             };
-            Ok(source_for_fetched_slpkg(pkg_ref, extracted, *build))
+            source_for_fetched_slpkg(pkg_ref, extracted, *build)
         }
     }
 }
@@ -468,7 +468,7 @@ fn resolve_installed_cache_strategy(
                 source = %modules_package_dir.display(),
                 "resolving module from the app's streamlib_modules folder"
             );
-            return Ok(source_for_resolved_dir(pkg_ref, modules_package_dir));
+            return source_for_resolved_dir(pkg_ref, modules_package_dir);
         }
     }
     let (dir, _version) =
@@ -477,7 +477,7 @@ fn resolve_installed_cache_strategy(
         })?;
     // Same prefer-prebuilt-else-build-source decision as `.slpkg`:
     // a cached package may carry source needing a host build.
-    Ok(source_for_resolved_dir(pkg_ref, dir))
+    source_for_resolved_dir(pkg_ref, dir)
 }
 
 /// Environment override for the directory that contains the app's
@@ -559,18 +559,36 @@ fn source_for_dir(
     dir: PathBuf,
     build: BuildPolicy,
     provenance: PackageSourceProvenance,
-) -> ResolvedSource {
+) -> std::result::Result<ResolvedSource, AddModuleError> {
     if build.requires_orchestrator() {
-        ResolvedSource::NeedsBuild(BuildRequest {
+        let staging_destination_slot_dir = staging_slot_for_dir(pkg_ref, &dir)?;
+        Ok(ResolvedSource::NeedsBuild(BuildRequest {
             package: pkg_ref.clone(),
             source: BuildSource::PackageDir(dir),
             source_provenance: provenance,
             policy: build,
             host_triple: host_target_triple().to_string(),
-        })
+            staging_destination_slot_dir,
+        }))
     } else {
-        ResolvedSource::Ready(dir)
+        Ok(ResolvedSource::Ready(dir))
     }
+}
+
+/// The installed-package slot the orchestrator must stage `dir` into, derived
+/// through the shared seam from the package's on-disk manifest version and the
+/// active app-modules root — the write side of the write==read invariant a
+/// locked run reads back through the same seam.
+fn staging_slot_for_dir(
+    pkg_ref: &streamlib_idents::PackageRef,
+    dir: &std::path::Path,
+) -> std::result::Result<PathBuf, AddModuleError> {
+    let version = read_version_from_manifest_dir(dir)?;
+    Ok(crate::core::streamlib_home::installed_package_slot_dir(
+        app_modules_root().as_deref(),
+        pkg_ref,
+        version,
+    ))
 }
 
 /// Decide how to load an already-resolved package directory (an extracted
@@ -585,9 +603,13 @@ fn source_for_dir(
 /// extracted `.slpkg` or installed-cache entry carries source but no venv,
 /// and `materialize` is the only place the venv is provisioned. Loading it
 /// as-is would leave its subprocess spawn with no interpreter.
-fn source_for_resolved_dir(pkg_ref: &streamlib_idents::PackageRef, dir: PathBuf) -> ResolvedSource {
+fn source_for_resolved_dir(
+    pkg_ref: &streamlib_idents::PackageRef,
+    dir: PathBuf,
+) -> std::result::Result<ResolvedSource, AddModuleError> {
     if needs_host_build(&dir) || needs_polyglot_provisioning(&dir) {
-        ResolvedSource::NeedsBuild(BuildRequest {
+        let staging_destination_slot_dir = staging_slot_for_dir(pkg_ref, &dir)?;
+        Ok(ResolvedSource::NeedsBuild(BuildRequest {
             package: pkg_ref.clone(),
             source: BuildSource::PackageDir(dir),
             source_provenance: PackageSourceProvenance::ImmutableManagedExtract,
@@ -598,9 +620,10 @@ fn source_for_resolved_dir(pkg_ref: &streamlib_idents::PackageRef, dir: PathBuf)
             // an already-provisioned cache slot, so there is no rebuild loop.
             policy: BuildPolicy::IfStale,
             host_triple: host_target_triple().to_string(),
-        })
+            staging_destination_slot_dir,
+        }))
     } else {
-        ResolvedSource::Ready(dir)
+        Ok(ResolvedSource::Ready(dir))
     }
 }
 
@@ -624,9 +647,9 @@ fn source_for_fetched_slpkg(
     pkg_ref: &streamlib_idents::PackageRef,
     dir: PathBuf,
     build: BuildPolicy,
-) -> ResolvedSource {
+) -> std::result::Result<ResolvedSource, AddModuleError> {
     match build {
-        BuildPolicy::NeverBuild => ResolvedSource::Ready(dir),
+        BuildPolicy::NeverBuild => Ok(ResolvedSource::Ready(dir)),
         BuildPolicy::IfStale => source_for_resolved_dir(pkg_ref, dir),
         BuildPolicy::AlwaysBuild => {
             // `has_buildable_rust_source` covers the "rebuild the Rust cdylib"
@@ -637,15 +660,17 @@ fn source_for_fetched_slpkg(
             // AlwaysBuild paths — `streamlib add` and `Strategy::Registry`
             // resolve with AlwaysBuild through here.
             if has_buildable_rust_source(&dir) || needs_polyglot_provisioning(&dir) {
-                ResolvedSource::NeedsBuild(BuildRequest {
+                let staging_destination_slot_dir = staging_slot_for_dir(pkg_ref, &dir)?;
+                Ok(ResolvedSource::NeedsBuild(BuildRequest {
                     package: pkg_ref.clone(),
                     source: BuildSource::PackageDir(dir),
                     source_provenance: PackageSourceProvenance::ImmutableManagedExtract,
                     policy: BuildPolicy::AlwaysBuild,
                     host_triple: host_target_triple().to_string(),
-                })
+                    staging_destination_slot_dir,
+                }))
             } else {
-                ResolvedSource::Ready(dir)
+                Ok(ResolvedSource::Ready(dir))
             }
         }
     }
@@ -1074,7 +1099,8 @@ mod tests {
             &pkg_ref(),
             dir.path().to_path_buf(),
             BuildPolicy::NeverBuild,
-        );
+        )
+        .unwrap();
         assert!(matches!(resolved, ResolvedSource::Ready(_)));
     }
 
@@ -1085,7 +1111,8 @@ mod tests {
         manifest(dir.path(), RUST_YAML);
         std::fs::write(dir.path().join("Cargo.toml"), b"[package]\nname='rp'\n").unwrap();
         let resolved =
-            source_for_fetched_slpkg(&pkg_ref(), dir.path().to_path_buf(), BuildPolicy::IfStale);
+            source_for_fetched_slpkg(&pkg_ref(), dir.path().to_path_buf(), BuildPolicy::IfStale)
+                .unwrap();
         assert!(matches!(resolved, ResolvedSource::NeedsBuild(_)));
     }
 
@@ -1099,7 +1126,8 @@ mod tests {
         std::fs::create_dir_all(&triple_dir).unwrap();
         std::fs::write(triple_dir.join("librp.so"), b"prebuilt").unwrap();
         let resolved =
-            source_for_fetched_slpkg(&pkg_ref(), dir.path().to_path_buf(), BuildPolicy::IfStale);
+            source_for_fetched_slpkg(&pkg_ref(), dir.path().to_path_buf(), BuildPolicy::IfStale)
+                .unwrap();
         assert!(matches!(resolved, ResolvedSource::Ready(_)));
     }
 
@@ -1119,7 +1147,8 @@ mod tests {
             &pkg_ref(),
             dir.path().to_path_buf(),
             BuildPolicy::AlwaysBuild,
-        );
+        )
+        .unwrap();
         match resolved {
             ResolvedSource::NeedsBuild(req) => assert_eq!(req.policy, BuildPolicy::AlwaysBuild),
             other => panic!("expected NeedsBuild(AlwaysBuild), got {other:?}"),
@@ -1136,7 +1165,8 @@ mod tests {
             &pkg_ref(),
             dir.path().to_path_buf(),
             BuildPolicy::AlwaysBuild,
-        );
+        )
+        .unwrap();
         assert!(matches!(resolved, ResolvedSource::Ready(_)));
     }
 
@@ -1160,7 +1190,8 @@ mod tests {
             &pkg_ref(),
             dir.path().to_path_buf(),
             BuildPolicy::AlwaysBuild,
-        );
+        )
+        .unwrap();
         match resolved {
             ResolvedSource::NeedsBuild(req) => assert_eq!(req.policy, BuildPolicy::AlwaysBuild),
             other => panic!("expected NeedsBuild(AlwaysBuild), got {other:?}"),
@@ -1198,7 +1229,7 @@ mod tests {
             b"[project]\nname = \"py\"\n",
         )
         .unwrap();
-        let resolved = source_for_resolved_dir(&pkg_ref(), dir.path().to_path_buf());
+        let resolved = source_for_resolved_dir(&pkg_ref(), dir.path().to_path_buf()).unwrap();
         assert!(
             matches!(resolved, ResolvedSource::NeedsBuild(_)),
             "unprovisioned Python-only package must route through materialize, got {resolved:?}"
@@ -1287,7 +1318,7 @@ mod tests {
     fn resolved_dir_routes_unprovisioned_deno_to_build() {
         let dir = tempfile::tempdir().unwrap();
         manifest(dir.path(), DENO_YAML);
-        let resolved = source_for_resolved_dir(&pkg_ref(), dir.path().to_path_buf());
+        let resolved = source_for_resolved_dir(&pkg_ref(), dir.path().to_path_buf()).unwrap();
         assert!(
             matches!(resolved, ResolvedSource::NeedsBuild(_)),
             "unprovisioned Deno-only package must route through materialize, got {resolved:?}"

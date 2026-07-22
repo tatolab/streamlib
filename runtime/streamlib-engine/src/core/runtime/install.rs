@@ -164,8 +164,18 @@ pub fn install(
     let mut staged_hashes: std::collections::BTreeMap<String, String> =
         std::collections::BTreeMap::new();
 
+    // The app root whose `streamlib_modules/` slot seam the install writes into:
+    // the lockfile's parent dir (default `<root_dir>/streamlib-app.lock`), or
+    // `root_dir` itself when no explicit lockfile path is configured.
+    let app_root: PathBuf = options
+        .lockfile_path
+        .as_deref()
+        .and_then(|p| p.parent())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| root_dir.to_path_buf());
+
     for pkg in resolved.iter_all() {
-        let Some(pkg_ref) = package_ref_of(pkg) else {
+        let Some((pkg_ref, version)) = package_ref_of(pkg) else {
             // Root project with no `[package]` — nothing to materialize.
             continue;
         };
@@ -178,6 +188,11 @@ pub fn install(
             source_provenance: provenance_of(&pkg.source),
             policy,
             host_triple: host_target_triple().to_string(),
+            staging_destination_slot_dir: crate::core::installed_package_slot_dir(
+                Some(app_root.as_path()),
+                &pkg_ref,
+                version,
+            ),
         };
         let staged = orchestrator.materialize(&request, sink).map_err(|source| {
             InstallError::Materialize {
@@ -239,9 +254,7 @@ pub fn install(
     let mut packages: Vec<(PackageRef, SemVer)> = resolved
         .packages
         .values()
-        .filter_map(|p| {
-            package_ref_of(p).map(|r| (r, p.manifest.package.as_ref().unwrap().version))
-        })
+        .filter_map(package_ref_of)
         .collect();
     packages.sort_by(|a, b| a.0.to_string().cmp(&b.0.to_string()));
 
@@ -256,13 +269,13 @@ pub fn install(
     })
 }
 
-/// The canonical [`PackageRef`] of a resolved package, or `None` for a
-/// project-flavor manifest (no `[package]` block).
-fn package_ref_of(pkg: &ResolvedPackage) -> Option<PackageRef> {
+/// The canonical [`PackageRef`] and version of a resolved package, or `None`
+/// for a project-flavor manifest (no `[package]` block).
+fn package_ref_of(pkg: &ResolvedPackage) -> Option<(PackageRef, SemVer)> {
     pkg.manifest
         .package
         .as_ref()
-        .map(|m| PackageRef::new(m.org.clone(), m.name.clone()))
+        .map(|m| (PackageRef::new(m.org.clone(), m.name.clone()), m.version))
 }
 
 /// Current UTC time as an RFC-3339 timestamp, dependency-free (the engine
