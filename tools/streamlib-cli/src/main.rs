@@ -278,6 +278,12 @@ enum PkgCommands {
     /// Remove THIS package's build/pack artifacts (run inside the package):
     /// any `*.slpkg`, the prebuilt `lib/` dir, and generated `_generated_/` trees.
     Clean,
+    /// Reclaim disk in the on-the-box package cache
+    /// (`<STREAMLIB_HOME>/.streamlib/cache/packages/`): prune each slot's
+    /// cargo `target/` (keeping the loadable `lib/<triple>/*.so` + manifest +
+    /// `.venv/` + `_generated_/`) and sweep orphaned build-staging dirs an
+    /// aborted build leaked. No loadable package is removed.
+    Gc,
     /// Inspect a .slpkg package (show manifest without installing)
     Inspect {
         /// Path to .slpkg file
@@ -350,6 +356,7 @@ async fn async_main(cli: Cli) -> Result<()> {
             PkgCommands::Build { output } => commands::pkg::build(output.as_deref())?,
             PkgCommands::Publish => commands::pkg::publish()?,
             PkgCommands::Clean => commands::pkg::clean()?,
+            PkgCommands::Gc => commands::pkg::gc()?,
             PkgCommands::Inspect { path } => commands::pkg::inspect(&path)?,
             PkgCommands::List => commands::pkg::list()?,
         },

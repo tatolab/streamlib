@@ -219,6 +219,78 @@ pub fn clean() -> Result<()> {
     Ok(())
 }
 
+/// Reclaim disk in the on-the-box package cache
+/// (`<STREAMLIB_HOME>/.streamlib/cache/packages/`) without invalidating any
+/// loadable package: prune each slot's `target/` (the cargo build tree —
+/// artifact-only retention, keeping `lib/<triple>/*.so` + `streamlib.yaml` +
+/// `.venv/` + `_generated_/`) and sweep orphaned build-staging dirs an
+/// aborted build may have leaked (`.tmp-*` staging, `.*.old.*` swap
+/// backups). A loadable slot is never removed — only reclaimable build
+/// scratch — so the next load stays compiler-free where a prebuilt cdylib
+/// is retained.
+pub fn gc() -> Result<()> {
+    let cache_packages =
+        streamlib::engine_internal::core::get_streamlib_data_dir().join("cache/packages");
+    let report = reclaim_package_cache(&cache_packages)?;
+    if report.reclaimed.is_empty() {
+        println!("Nothing to reclaim in {}.", cache_packages.display());
+    } else {
+        for path in &report.reclaimed {
+            println!("Reclaimed: {path}");
+        }
+        println!(
+            "Reclaimed {} item(s) from {}.",
+            report.reclaimed.len(),
+            cache_packages.display()
+        );
+    }
+    Ok(())
+}
+
+/// What [`reclaim_package_cache`] removed, as cache-relative path strings.
+struct CacheReclaimReport {
+    reclaimed: Vec<String>,
+}
+
+/// Prune reclaimable build scratch under a `cache/packages` dir. A pure
+/// filesystem routine over an explicit dir (no env / cwd) so it is testable.
+/// Removes, per entry:
+/// - a top-level `.tmp-*` / `.*.old.*` / `.*.tmp.*` staging or swap-backup
+///   dir (orphaned by an aborted or interrupted build), and
+/// - a `target/` subdir inside each real slot (retaining the loadable
+///   artifacts beside it).
+fn reclaim_package_cache(cache_packages_dir: &Path) -> Result<CacheReclaimReport> {
+    let mut reclaimed: Vec<String> = Vec::new();
+    if !cache_packages_dir.is_dir() {
+        return Ok(CacheReclaimReport { reclaimed });
+    }
+    for entry in std::fs::read_dir(cache_packages_dir)
+        .with_context(|| format!("reading {}", cache_packages_dir.display()))?
+        .flatten()
+    {
+        let path = entry.path();
+        let name = entry.file_name().to_string_lossy().into_owned();
+        if !path.is_dir() {
+            continue;
+        }
+        // Orphaned build-staging / swap-backup dir (a slot name never begins
+        // with a dot — see `package_cache_slot_name`).
+        if name.starts_with(".tmp-") || (name.starts_with('.') && !name.starts_with("..")) {
+            if std::fs::remove_dir_all(&path).is_ok() {
+                reclaimed.push(format!("{name}/"));
+            }
+            continue;
+        }
+        // A real slot: prune its cargo build tree, keep the artifacts.
+        let target = path.join("target");
+        if target.is_dir() && std::fs::remove_dir_all(&target).is_ok() {
+            reclaimed.push(format!("{name}/target/"));
+        }
+    }
+    reclaimed.sort();
+    Ok(CacheReclaimReport { reclaimed })
+}
+
 /// Resolve the default `.slpkg` output path (`{name}-{version}.slpkg` in the
 /// package dir) when `--output` isn't given.
 fn resolve_slpkg_output(package_dir: &Path, output: Option<&Path>) -> Result<std::path::PathBuf> {
@@ -365,4 +437,67 @@ pub fn list() -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reclaim_prunes_target_and_scratch_but_keeps_artifacts() {
+        let tmp = tempfile::tempdir().unwrap();
+        let cache = tmp.path();
+
+        // A real slot with a loadable cdylib + manifest AND a cargo target/.
+        let slot = cache.join("tatolab__h264__0.4.0__x86_64-unknown-linux-gnu__abi7__release");
+        let triple_lib = slot.join("lib").join("x86_64-unknown-linux-gnu");
+        std::fs::create_dir_all(&triple_lib).unwrap();
+        std::fs::write(triple_lib.join("libh264.so"), b"cdylib").unwrap();
+        std::fs::write(slot.join("streamlib.yaml"), b"package: {}\n").unwrap();
+        std::fs::create_dir_all(slot.join("target").join("debug")).unwrap();
+        std::fs::write(slot.join("target").join("debug").join("junk.o"), b"obj").unwrap();
+
+        // An orphaned build-staging dir an aborted build leaked.
+        std::fs::create_dir_all(cache.join(".tmp-tatolab__h264__0.4.0-1234-0")).unwrap();
+
+        let report = reclaim_package_cache(cache).unwrap();
+
+        // target/ and the orphan are gone; the loadable artifacts survive.
+        assert!(!slot.join("target").exists(), "target/ must be reclaimed");
+        assert!(
+            !cache.join(".tmp-tatolab__h264__0.4.0-1234-0").exists(),
+            "orphaned staging dir must be swept"
+        );
+        assert!(
+            triple_lib.join("libh264.so").exists(),
+            "the prebuilt cdylib must be retained — GC must not force a recompile"
+        );
+        assert!(
+            slot.join("streamlib.yaml").exists(),
+            "the manifest must be retained"
+        );
+        assert_eq!(report.reclaimed.len(), 2, "reclaimed: {:?}", report.reclaimed);
+    }
+
+    #[test]
+    fn reclaim_is_a_noop_on_a_clean_or_absent_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Absent cache dir.
+        assert!(
+            reclaim_package_cache(&tmp.path().join("missing"))
+                .unwrap()
+                .reclaimed
+                .is_empty()
+        );
+        // A slot with only loadable content and no target/ → nothing reclaimed.
+        let slot = tmp.path().join("tatolab__core__1.0.0__x86_64-unknown-linux-gnu__abi7__dev");
+        std::fs::create_dir_all(&slot).unwrap();
+        std::fs::write(slot.join("streamlib.yaml"), b"package: {}\n").unwrap();
+        assert!(
+            reclaim_package_cache(tmp.path())
+                .unwrap()
+                .reclaimed
+                .is_empty()
+        );
+    }
 }
