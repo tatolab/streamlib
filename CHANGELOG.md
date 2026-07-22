@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.34](https://github.com/tatolab/streamlib/compare/v0.7.33...v0.7.34) (2026-07-22)
+
+
+### Bug Fixes
+
+* **engine:** dev sources build in-tree beside their source ([#1536](https://github.com/tatolab/streamlib/issues/1536)) ([2443a0e](https://github.com/tatolab/streamlib/commit/2443a0edc0c26d6b0fda45f1dfbb60337e16a447))
+
 ## [0.7.33](https://github.com/tatolab/streamlib/compare/v0.7.32...v0.7.33) (2026-07-22)
 
 
