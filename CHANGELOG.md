@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.30](https://github.com/tatolab/streamlib/compare/v0.7.29...v0.7.30) (2026-07-22)
+
+
+### Features
+
+* **engine:** app-root-aware installed-package slot seam (behavior-preserving) ([#1527](https://github.com/tatolab/streamlib/issues/1527)) ([c23b552](https://github.com/tatolab/streamlib/commit/c23b552402b90ac52865ec83ba9429365823ab67))
+
 ## [0.7.29](https://github.com/tatolab/streamlib/compare/v0.7.28...v0.7.29) (2026-07-22)
 
 
