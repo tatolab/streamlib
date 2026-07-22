@@ -13,7 +13,7 @@ publish = false
 # local development `./setup.sh` runs `streamlib link --engine <checkout>` to
 # point this dep at the in-repo SDK. Once the SDK publishes, the bare version
 # resolves with no link step.
-streamlib = { version = "0.7.31" }
+streamlib = { version = "0.7.32" }
 tokio = { version = "1", features = ["full"] }
 
 [workspace]

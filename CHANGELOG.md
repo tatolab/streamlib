@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.32](https://github.com/tatolab/streamlib/compare/v0.7.31...v0.7.32) (2026-07-22)
+
+
+### Features
+
+* **engine:** BuildRequest carries the engine-computed staging destination ([#1531](https://github.com/tatolab/streamlib/issues/1531)) ([2638edb](https://github.com/tatolab/streamlib/commit/2638edb2667f7c25e5c93f77012bee9ff341f334))
+
 ## [0.7.31](https://github.com/tatolab/streamlib/compare/v0.7.30...v0.7.31) (2026-07-22)
 
 
