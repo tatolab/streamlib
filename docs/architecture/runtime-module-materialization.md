@@ -123,7 +123,7 @@ comes from:
 
 | Variant | Source | Builds? |
 |---|---|---|
-| `InstalledCache` | `<app-root>/streamlib_modules/@org/name` (co-located, version-free) | only if Rust source + no matching prebuilt |
+| `InstalledCache` | `<app-root>/streamlib_modules/@org/name` (co-located, version-free) | never — load-only (unbuilt slot ⇒ typed `InstalledPackageNotBuilt`) |
 | `Path { path, build }` | a directory with `streamlib.yaml` | per `build` |
 | `Slpkg { path }` | a `.slpkg` archive (engine extracts) | only if Rust source + no matching prebuilt |
 | `Git { url, rev, build }` | a git checkout (engine fetches) | per `build` |
@@ -136,11 +136,13 @@ loaded.
 
 ### A `.slpkg` carries source and/or a prebuilt — host prefers prebuilt, else builds
 
-A `.slpkg` (and an `InstalledCache` entry) is a box that can hold **source
-and/or a prebuilt cdylib**, like a pip package shipping both a wheel and an
-sdist. `assemble_artifact` bundles, for a Rust package, *both* the crate
-source (`Cargo.toml` + `src/` …) and the prebuilt cdylib for the packing
-host's triple. On load, the resolver (`source_for_resolved_dir`) decides:
+A `.slpkg` is a box that can hold **source and/or a prebuilt cdylib**, like
+a pip package shipping both a wheel and an sdist. `assemble_artifact`
+bundles, for a Rust package, *both* the crate source (`Cargo.toml` + `src/`
+…) and the prebuilt cdylib for the packing host's triple. On load, the
+`.slpkg` / `Url` / `Registry` resolver (`source_for_resolved_dir`) decides
+(the co-located `InstalledCache` slot is load-only — it never runs this
+build fallback; an unbuilt slot is a typed `InstalledPackageNotBuilt`):
 
 ```
 manifest has Rust processors?
@@ -222,7 +224,10 @@ If a build-requiring policy (`IfStale` or `AlwaysBuild`) is reached with
 package shape. Future agents get a clear signal instead of a
 silently-loaded, possibly-stale artifact. A no-build deployment uses
 `NeverBuild` / `InstalledCache` / `.slpkg`; a building one wires an
-orchestrator (`Runner::with_auto_build()`).
+orchestrator (`Runner::with_auto_build()`). The co-located `InstalledCache`
+slot never reaches this arm at all — it is load-only, so an unbuilt slot
+fails as `InstalledPackageNotBuilt` (fix-it: `streamlib install`) regardless
+of whether an orchestrator is wired, never `BuildRequiredButNoOrchestrator`.
 
 ## The eager async surface
 
