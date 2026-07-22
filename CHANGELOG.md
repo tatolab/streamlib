@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.35](https://github.com/tatolab/streamlib/compare/v0.7.34...v0.7.35) (2026-07-22)
+
+
+### Features
+
+* **engine:** flip installed-package slot to co-located streamlib_modules ([#1538](https://github.com/tatolab/streamlib/issues/1538)) ([235ee5d](https://github.com/tatolab/streamlib/commit/235ee5df0b277df08eb872cdaabbe847dcbc2d6a))
+
 ## [0.7.34](https://github.com/tatolab/streamlib/compare/v0.7.33...v0.7.34) (2026-07-22)
 
 
