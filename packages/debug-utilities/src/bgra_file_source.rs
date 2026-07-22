@@ -12,17 +12,11 @@ use streamlib_plugin_sdk::sdk::context::{GpuContextLimitedAccess, RuntimeContext
 use streamlib_plugin_sdk::sdk::error::{Error, Result};
 use streamlib_plugin_sdk::sdk::iceoryx2::OutputWriter;
 use streamlib_plugin_sdk::sdk::processors::ManualProcessor;
-use streamlib_plugin_sdk::sdk::rhi::{PixelFormat, TextureFormat, TextureRing, TextureUsages};
+use streamlib_plugin_sdk::sdk::rhi::PixelFormat;
 
 use std::io::Read;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-
-/// Pre-allocated output texture ring depth. Matches `MAX_FRAMES_IN_FLIGHT`
-/// — fixture frames are produced one-at-a-time but the consumer may still
-/// be reading the previous slot when we publish the next. See
-/// `docs/learnings/vulkan-frames-in-flight.md`.
-const RING_DEPTH: usize = 2;
 
 #[streamlib_plugin_sdk::sdk::processor(
     "@tatolab/debug-utilities/BgraFileSource",
@@ -62,7 +56,7 @@ impl ManualProcessor for BgraFileSourceProcessor::Processor {
         Ok(())
     }
 
-    fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let gpu_context = self.gpu_context.clone().ok_or_else(|| {
             Error::Configuration("GPU context not initialized".into())
         })?;
@@ -71,19 +65,6 @@ impl ManualProcessor for BgraFileSourceProcessor::Processor {
         let height = self.config.height;
         let fps = self.config.fps;
         let frame_count = self.config.frame_count;
-
-        // Pre-allocate the output texture ring on FullAccess at start time
-        // — dimensions are known from config, never change, so the ring is
-        // built once and the source thread runs Limited-only.
-        let texture_ring = ctx.gpu_full_access().create_texture_ring(
-            width,
-            height,
-            TextureFormat::Rgba8Unorm,
-            TextureUsages::COPY_DST
-                | TextureUsages::TEXTURE_BINDING
-                | TextureUsages::STORAGE_BINDING,
-            RING_DEPTH,
-        )?;
 
         self.is_running.store(true, Ordering::Release);
 
@@ -105,7 +86,6 @@ impl ManualProcessor for BgraFileSourceProcessor::Processor {
                     frame_counter,
                     outputs,
                     gpu_context,
-                    texture_ring,
                 );
             })
             .map_err(|e| {
@@ -137,7 +117,6 @@ fn source_thread_loop(
     frame_counter: Arc<AtomicU64>,
     outputs: OutputWriter,
     gpu_context: GpuContextLimitedAccess,
-    texture_ring: TextureRing,
 ) {
     let frame_size = (width * height * 4) as usize;
 
@@ -163,7 +142,14 @@ fn source_thread_loop(
             break;
         }
 
-        let (_pool_id, pixel_buffer) =
+        // Stage the BGRA frame into a pooled host-visible pixel buffer. The
+        // pool id is the output `surface_id`: downstream
+        // `resolve_texture_by_surface_id` triggers the host to upload this
+        // buffer into a GPU texture. The `pixel_buffer` handle stays live
+        // through the `outputs.write` below so the pool can't rotate this
+        // slot out mid-flight (the pool skips buffers whose Arc is still
+        // held). Cdylib-safe — no engine-only CPU-upload primitive.
+        let (pool_id, pixel_buffer) =
             match gpu_context.acquire_pixel_buffer(width, height, PixelFormat::Rgba32) {
                 Ok(result) => result,
                 Err(e) => {
@@ -177,17 +163,7 @@ fn source_thread_loop(
             std::ptr::copy_nonoverlapping(frame_buf.as_ptr(), dst_ptr, frame_size);
         }
 
-        // Rotate to the next pre-allocated texture ring slot and copy
-        // the staged pixel buffer into it via the ring's amortized
-        // upload (pre-allocated cb + fence per slot, reset+reused
-        // every frame). All Limited-safe — the ring was built once at
-        // `start()` time on FullAccess.
-        let slot = texture_ring.acquire_next();
-        if let Err(e) = texture_ring.copy_pixel_buffer_to_slot(&slot, &pixel_buffer, width, height) {
-            tracing::error!("[BgraFileSource] Failed to upload frame texture: {e}");
-            break;
-        }
-        let surface_id = slot.surface_id().to_string();
+        let surface_id = pool_id.to_string();
 
         let timestamp_ns =
             clock_start.elapsed().as_nanos() as i64 + frame_idx as i64 * frame_interval_ns;
