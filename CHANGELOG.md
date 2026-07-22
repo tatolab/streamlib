@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.31](https://github.com/tatolab/streamlib/compare/v0.7.30...v0.7.31) (2026-07-22)
+
+
+### Features
+
+* **engine:** loader slot derives version from typed identity, not path string ([#1529](https://github.com/tatolab/streamlib/issues/1529)) ([19fa840](https://github.com/tatolab/streamlib/commit/19fa8407e46e37ef07ed88a7ffe8ab3f977be78c)), closes [#1518](https://github.com/tatolab/streamlib/issues/1518)
+
 ## [0.7.30](https://github.com/tatolab/streamlib/compare/v0.7.29...v0.7.30) (2026-07-22)
 
 
