@@ -35,6 +35,11 @@ GitHub is the source of truth; the state file only caches the loop's picture.
 
 Reconcile via `gh`:
 - **Prune ghosts** — drop state entries for PRs that merged or issues that closed since last turn.
+- **GC merged worktrees** — run `.claude/scripts/gc-merged-worktrees.sh`. It removes any worktree
+  under `.claude/worktrees/` whose branch has a merged PR (whoever merged it — a mobile merge leaves
+  no local event), reclaiming its multi-GB build target. Safe/idempotent: only touches merged-PR
+  worktrees, never an in-flight or unpushed one. (Also fires immediately after the loop's own
+  `gh pr merge` via the `worktree-gc` PostToolUse hook.)
 - **Validate IDs** — every ticket ref in the state file still resolves to an open issue in the focused milestone.
 - **Consume owner answers.** The owner login is `owner_login` in the state frontmatter (operator-set — never derived from `gh repo view`, which returns the org). The loop's own `gh` identity shares that login, so `author.login` equality **cannot** distinguish an owner answer from the loop's own comment. Detection runs off a **comment-id ledger** instead: every time the loop posts a comment on a ticket (a claim, a parked question, any update — step 6), it records that comment's id (returned by `gh api`) in the ticket's state entry. A parked question is cleared by any comment on that ticket that postdates the question **and whose id the loop did NOT record as its own** — never by a comment the loop posted itself.
 - **Conflicting PRs.** A loop-owned open PR that is CONFLICTING vs `main` → launch `.claude/workflows/fix-ticket.js` with `mode: 'rebase'` (a zone-matched lead rebases in-worktree, re-runs the gates, force-pushes). Rebases do **not** occupy `max_parallel` code slots — they add no new surface — so a mergeable PR never queues behind busy code slots, and the main context never hand-rebases.
