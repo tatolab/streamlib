@@ -14,7 +14,7 @@ name = "streamlib_jpeg"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = {version = "0.7.36"}
+streamlib-jtd-codegen = {version = "0.7.37"}
 
 [dependencies]
 # Engine-free authoring SDK — runtime context views, processor traits,
@@ -22,15 +22,15 @@ streamlib-jtd-codegen = {version = "0.7.36"}
 # VideoFrame wire type, RHI texture / color primitives. Depending on the
 # plugin SDK by its real name (never the `streamlib` engine facade) keeps
 # this plugin cdylib from statically linking a second copy of the engine.
-streamlib-plugin-sdk = {version = "0.7.36"}
+streamlib-plugin-sdk = {version = "0.7.37"}
 
 # Procedural macros — `#[streamlib_plugin_sdk::sdk::processor("...")]`
 # reads the crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = {version = "0.7.36"}
+streamlib-macros = {version = "0.7.37"}
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = {version = "0.7.36"}
+streamlib-plugin-abi = {version = "0.7.37"}
 
 # Serialization (config dataclasses ship as serde-derived).
 # Generated `EncodedJpegFrame.data` carries `#[serde(with = "serde_bytes")]`
@@ -46,6 +46,6 @@ tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 # GPU JPEG decode primitive — fused Vulkan compute kernel behind
 # SimpleJpegDecoder. Owns its own texture ring. Engine-free;
 # the nvJPEG fast path was parked in the engine during the SDK extraction.
-vulkan-jpeg = {version = "0.7.36"}
+vulkan-jpeg = {version = "0.7.37"}
 
 [workspace]

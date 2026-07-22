@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.37](https://github.com/tatolab/streamlib/compare/v0.7.36...v0.7.37) (2026-07-22)
+
+
+### Features
+
+* **cli:** add/install compile packages on-the-box + fail-fast ([#1542](https://github.com/tatolab/streamlib/issues/1542)) ([51bd820](https://github.com/tatolab/streamlib/commit/51bd820581cdeb048cdff13f3d7f8b1e57c3c2d0))
+
 ## [0.7.36](https://github.com/tatolab/streamlib/compare/v0.7.35...v0.7.36) (2026-07-22)
 
 
