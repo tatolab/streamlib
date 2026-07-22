@@ -1,0 +1,98 @@
+name: Install Packages
+
+# Standalone `packages/*` are NOT workspace members, so `cargo test --lib`
+# (see test.yml) never compiles them — a package can rot undetected between
+# releases. This gate closes that gap by exercising the SAME on-box user
+# install path: it links the engine into a scratch consumer via
+# `streamlib link --engine` and compiles every distributable package through
+# `streamlib add` (compile-on-place), failing with the per-package compiler
+# error. It compiles then discards; it NEVER ships a prebuilt. CPU-only —
+# it stops at the compiled artifact (no dlopen / GPU).
+#
+# The trigger set is the cdylib-safe dependency surface every distributable
+# package builds against: the authoring SDK crates + the plugin ABI + the
+# consumer-side RHI carve-out. A change to any of them can break a package
+# without touching the package's own files.
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'packages/**'
+      - 'sdk/**'
+      - 'runtime/streamlib-plugin-abi/**'
+      - 'runtime/streamlib-consumer-rhi/**'
+      - 'tools/streamlib-pack/**'
+      - 'xtask/**'
+      - '.github/workflows/install-packages.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'packages/**'
+      - 'sdk/**'
+      - 'runtime/streamlib-plugin-abi/**'
+      - 'runtime/streamlib-consumer-rhi/**'
+      - 'tools/streamlib-pack/**'
+      - 'xtask/**'
+      - '.github/workflows/install-packages.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  install-packages-linux:
+    name: Install Packages (Linux, CPU-only)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        # Same minimal subset as test.yml: building `streamlib-cli` pulls
+        # streamlib-engine, whose build.rs compiles GLSL compute shaders with
+        # glslc and generates JTD bindings; the Linux engine dep set links
+        # Vulkan. No GPU/codec backends — this gate stops at the artifact.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            protobuf-compiler \
+            libvulkan-dev \
+            glslc
+
+      - name: Install jtd-codegen
+        # The engine's build.rs and every package's schema-dep codegen invoke
+        # the upstream jtd-codegen binary (v0.4.1) — see
+        # sdk/streamlib-jtd-codegen/src/lib.rs for the version contract.
+        run: |
+          curl -sSL https://github.com/jsontypedef/json-typedef-codegen/releases/download/v0.4.1/x86_64-unknown-linux-gnu.zip -o /tmp/jtd-codegen.zip
+          unzip -q /tmp/jtd-codegen.zip -d /tmp/jtd-codegen
+          sudo install -m 0755 /tmp/jtd-codegen/jtd-codegen /usr/local/bin/jtd-codegen
+          jtd-codegen --version
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        # A cache-service flake must never fail the job; a miss just means a cold build.
+        continue-on-error: true
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-install-packages-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-install-packages-
+
+      - name: Build the streamlib CLI
+        # The driver drives the on-box install path through this exact binary.
+        run: cargo build --locked -p streamlib-cli
+
+      - name: Compile every distributable package via the on-box install path
+        # The xtask enumerator links the engine into a scratch consumer and
+        # runs `streamlib add` per distributable package, failing with the
+        # per-package compiler error. The skip set is driven from the one
+        # `non_distributable_path_offenders` predicate the whole-tree registry
+        # emit skips on, so it equals the emit skip set by construction.
+        run: cargo run --locked -p xtask -- install-packages --streamlib-bin target/debug/streamlib

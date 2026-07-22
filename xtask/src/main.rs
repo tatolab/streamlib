@@ -25,6 +25,7 @@ pub mod check_package_version_drift;
 pub mod check_processor_spec_new;
 pub mod check_schema_versions;
 pub mod check_vendored_vulkanalia;
+pub mod install_packages;
 pub mod lint_logging;
 pub mod manifest_schema;
 
@@ -204,6 +205,23 @@ enum Commands {
     /// registry daemon, no token. See `docs/architecture/static-registry.md`.
     #[command(subcommand)]
     StaticRegistry(StaticRegistryAction),
+
+    /// Ground-truth enumerator for the `install-packages` CI gate (#1509):
+    /// compile every distributable `packages/*` through the SAME on-box user
+    /// install path (`streamlib link --engine` into a scratch consumer, then
+    /// `streamlib add <pkg>` per package), failing with the per-package
+    /// compiler error. Standalone packages are not workspace members, so
+    /// `cargo test --lib` never compiles them — this closes that gap. The skip
+    /// set is driven from the one `non_distributable_path_offenders` predicate
+    /// the whole-tree emit skips on, so it equals the emit skip set by
+    /// construction. CPU-only: it stops at the compiled artifact (no dlopen /
+    /// GPU) and discards, never shipping a prebuilt.
+    InstallPackages {
+        /// The pre-built `streamlib` CLI binary (default:
+        /// `<workspace>/target/debug/streamlib`).
+        #[arg(long)]
+        streamlib_bin: Option<PathBuf>,
+    },
 }
 
 #[derive(Subcommand)]
@@ -290,6 +308,12 @@ fn main() -> Result<()> {
                 out,
                 dev,
             })?
+        }
+        Commands::InstallPackages { streamlib_bin } => {
+            let root = workspace_root()?;
+            let streamlib_bin =
+                streamlib_bin.unwrap_or_else(|| root.join("target/debug/streamlib"));
+            install_packages::run(&root, &streamlib_bin)?
         }
     }
 

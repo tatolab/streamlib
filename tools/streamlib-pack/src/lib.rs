@@ -1271,7 +1271,12 @@ pub(crate) fn path_patch_offenders(pkg_dir: &Path) -> Result<Vec<String>> {
 /// hard-fail on: the skip set equals the rejection set, sound by construction
 /// (one shared definition per half) rather than a proxy. TARGET paths
 /// (`[[bin]].path` / `[lib].path`) are not dependency paths and never count.
-pub(crate) fn non_distributable_path_offenders(pkg_dir: &Path) -> Result<Vec<String>> {
+///
+/// `pub` so the `install-packages` CI enumerator (xtask) drives its skip set
+/// from this exact predicate — the same one the whole-tree emit and the
+/// single-package pack hard-fail on — so the CI skip set equals the emit skip
+/// set by construction rather than a re-derived YAML list.
+pub fn non_distributable_path_offenders(pkg_dir: &Path) -> Result<Vec<String>> {
     let mut offenders = path_patch_offenders(pkg_dir)?;
     offenders.extend(cargo_path_dep_offenders(pkg_dir)?);
     Ok(offenders)
