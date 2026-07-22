@@ -414,11 +414,13 @@ impl PolyglotBuildOrchestrator {
 
         // Land the staged temp dir into the destination. Two shapes:
         //
-        // - Detached destination (a distinct cache slot): whole-dir atomic
-        //   swap. The sidecar completion marker is written into the temp dir
-        //   LAST, just before the swap, so a slot lacking it (an aborted build)
-        //   is treated as needing a rebuild rather than loaded half-built. This
-        //   is the sanctioned TEMPORARY seam.
+        // - Detached destination (source root_dir ≠ the co-located slot — a
+        //   git-rev or registry checkout materialized into a distinct
+        //   `streamlib_modules` slot): whole-dir atomic swap into the slot. The
+        //   sidecar completion marker is written into the temp dir LAST, just
+        //   before the swap, so a slot lacking it (an aborted build) is treated
+        //   as needing a rebuild rather than loaded half-built. This is the
+        //   permanent copy-to-slot materialize path for a detached checkout.
         //
         // - In-place destination (the destination IS the package's own source
         //   dir — the #1506 co-located slot): the source files already sit at
