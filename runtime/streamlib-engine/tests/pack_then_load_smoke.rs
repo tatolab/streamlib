@@ -39,16 +39,16 @@
 //!   against.
 //!
 //! Cache scope: the `SlpkgArchive` strategy extracts every slpkg into
-//! the process-global installed-package cache slot the
-//! `installed_package_slot_dir` seam derives. This test therefore writes to the *real* jpeg / core
-//! cache entries (at their current package versions) on the host
-//! running the test. The
-//! extract is idempotent (`extract_slpkg_to_cache` clears the dir
-//! before re-extracting) and the package names match the real
-//! workspace packages, so a fresh extract reproduces the same
-//! contents — accepted as low-risk. CI runners are fresh per job; on
-//! developer machines the entries are rebuilt every time the test
-//! runs against the current workspace tree.
+//! the co-located `<app-root>/streamlib_modules/@org/name` slot the
+//! `installed_package_slot_dir` seam derives (app root =
+//! `STREAMLIB_MODULES_DIR` / runtime override / process cwd, version-free).
+//! This test therefore writes to the jpeg / core slots under whichever app
+//! root is active on the host running the test. The extract is idempotent
+//! (`extract_slpkg_to_cache` clears the dir before re-extracting) and the
+//! package names match the real workspace packages, so a fresh extract
+//! reproduces the same contents — accepted as low-risk. CI runners are
+//! fresh per job; on developer machines the slots are rebuilt every time
+//! the test runs against the current workspace tree.
 //!
 //! Companion to `load_project_dylib_smoke.rs`, which exercises the
 //! same dlopen path but feeds `add_module_with(ManifestDirectory)`
