@@ -175,21 +175,13 @@ pub fn install(
         .unwrap_or_else(|| root_dir.to_path_buf());
 
     for pkg in resolved.iter_all() {
-        let Some(pkg_ref) = package_ref_of(pkg) else {
+        let Some((pkg_ref, version)) = package_ref_of(pkg) else {
             // Root project with no `[package]` — nothing to materialize.
             continue;
         };
         // A package-flavor root IS materializable (installing a library),
         // but the resolver's `Root` source carries the root dir directly.
         tracing::info!(package = %pkg_ref, "install: materializing");
-        // `package_ref_of` returned `Some`, so the `[package]` block — and its
-        // version — is present.
-        let version = pkg
-            .manifest
-            .package
-            .as_ref()
-            .expect("package_ref_of is Some, so [package] is present")
-            .version;
         let request = BuildRequest {
             package: pkg_ref.clone(),
             source: BuildSource::PackageDir(pkg.root_dir.clone()),
@@ -262,9 +254,7 @@ pub fn install(
     let mut packages: Vec<(PackageRef, SemVer)> = resolved
         .packages
         .values()
-        .filter_map(|p| {
-            package_ref_of(p).map(|r| (r, p.manifest.package.as_ref().unwrap().version))
-        })
+        .filter_map(package_ref_of)
         .collect();
     packages.sort_by(|a, b| a.0.to_string().cmp(&b.0.to_string()));
 
@@ -279,13 +269,13 @@ pub fn install(
     })
 }
 
-/// The canonical [`PackageRef`] of a resolved package, or `None` for a
-/// project-flavor manifest (no `[package]` block).
-fn package_ref_of(pkg: &ResolvedPackage) -> Option<PackageRef> {
+/// The canonical [`PackageRef`] and version of a resolved package, or `None`
+/// for a project-flavor manifest (no `[package]` block).
+fn package_ref_of(pkg: &ResolvedPackage) -> Option<(PackageRef, SemVer)> {
     pkg.manifest
         .package
         .as_ref()
-        .map(|m| PackageRef::new(m.org.clone(), m.name.clone()))
+        .map(|m| (PackageRef::new(m.org.clone(), m.name.clone()), m.version))
 }
 
 /// Current UTC time as an RFC-3339 timestamp, dependency-free (the engine
