@@ -22,7 +22,6 @@ use std::io::Write;
 use std::time::Duration;
 
 use anyhow::Result;
-use serde_json::json;
 use streamlib_api_server::node_registry::{self, NodeRegistryEntry};
 
 /// A discovered registry entry paired with its liveness verdict.
@@ -134,34 +133,19 @@ fn print_nodes(nodes: &[DiscoveredNode], writer: &mut impl Write) -> Result<()> 
 }
 
 /// Whether the control plane at `control_url` answers a `graph` round-trip.
-/// Any HTTP response — including an auth `401` — counts as reachable (the server
-/// is up); only a transport error (connection refused, timeout) is dead. A short
-/// timeout keeps a hung reused port from stalling the scan. `STREAMLIB_MCP_TOKEN`
-/// rides as a bearer token when set, matching the control verbs.
+/// Delegates to the shared `{url}/mcp` seam ([`super::control::probe_reachable`]):
+/// any HTTP response — including an auth `401` — counts as reachable (the server
+/// is up); only a transport error is dead. Short timeouts keep a hung reused port
+/// from stalling the scan. `STREAMLIB_MCP_TOKEN` rides as a bearer token when set,
+/// matching the control verbs.
 fn control_url_reachable(control_url: &str) -> bool {
-    let agent = ureq::AgentBuilder::new()
-        .timeout_connect(Duration::from_millis(500))
-        .timeout(Duration::from_millis(1500))
-        .build();
-    let endpoint = format!("{}/mcp", control_url.trim_end_matches('/'));
-    let body = json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "tools/call",
-        "params": { "name": "graph", "arguments": {} },
-    })
-    .to_string();
-    let mut request = agent
-        .post(&endpoint)
-        .set("content-type", "application/json");
-    if let Ok(token) = std::env::var("STREAMLIB_MCP_TOKEN") {
-        request = request.set("authorization", &format!("Bearer {token}"));
-    }
-    match request.send_string(&body) {
-        Ok(_) => true,
-        Err(ureq::Error::Status(_, _)) => true,
-        Err(_) => false,
-    }
+    let bearer_token = std::env::var("STREAMLIB_MCP_TOKEN").ok();
+    super::control::probe_reachable(
+        control_url,
+        bearer_token.as_deref(),
+        Duration::from_millis(500),
+        Duration::from_millis(1500),
+    )
 }
 
 /// Whether a process with `pid` currently exists.

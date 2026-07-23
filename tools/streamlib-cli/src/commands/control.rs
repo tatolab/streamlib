@@ -19,6 +19,7 @@
 //! already-pretty text content.
 
 use std::io::{Read, Write};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
@@ -65,7 +66,7 @@ pub fn resolve_control_url(url: Option<String>, node: Option<String>) -> Result<
     }
 }
 
-/// A trailing ` (candidates: ...)` fragment listing each live node's
+/// A trailing ` Live nodes: ...` fragment listing each live node's
 /// `runtime_id` → `control_url`, for a resolver error message. Empty when there
 /// are no live nodes.
 fn render_node_hint(live: &[streamlib_api_server::node_registry::NodeRegistryEntry]) -> String {
@@ -90,11 +91,8 @@ pub fn post_mcp_request(
     bearer_token: Option<&str>,
     request_body: &str,
 ) -> Result<String> {
-    let endpoint = format!("{}/mcp", url.trim_end_matches('/'));
-    let mut request = ureq::post(&endpoint).set("content-type", "application/json");
-    if let Some(bearer_token) = bearer_token {
-        request = request.set("authorization", &format!("Bearer {bearer_token}"));
-    }
+    let endpoint = mcp_endpoint(url);
+    let request = with_mcp_headers(ureq::post(&endpoint), bearer_token);
     match request.send_string(request_body) {
         Ok(response) => Ok(response.into_string()?),
         Err(ureq::Error::Status(code, response)) => {
@@ -102,6 +100,54 @@ pub fn post_mcp_request(
             bail!("POST {endpoint} failed: HTTP {code}: {body}");
         }
         Err(error) => bail!("POST {endpoint} transport error: {error}"),
+    }
+}
+
+/// Whether the control plane at `url` answers its `POST {url}/mcp` at all. Any
+/// HTTP status — including an auth `4xx` — means the server is up (reachable);
+/// only a transport error (connection refused, timeout) is dead. `connect_timeout`
+/// and `response_timeout` bound a hung reused port so a probe never stalls a scan.
+/// `bearer_token` rides as an `authorization: Bearer` header. This shares the
+/// single `{url}/mcp` + bearer seam [`post_mcp_request`] owns, sending a `graph`
+/// `tools/call` purely to elicit a response.
+pub fn probe_reachable(
+    url: &str,
+    bearer_token: Option<&str>,
+    connect_timeout: Duration,
+    response_timeout: Duration,
+) -> bool {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(connect_timeout)
+        .timeout(response_timeout)
+        .build();
+    let endpoint = mcp_endpoint(url);
+    let request = with_mcp_headers(agent.post(&endpoint), bearer_token);
+    let request_body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "graph", "arguments": {} },
+    })
+    .to_string();
+    match request.send_string(&request_body) {
+        Ok(_) => true,
+        Err(ureq::Error::Status(_, _)) => true,
+        Err(_) => false,
+    }
+}
+
+/// The `{url}/mcp` control endpoint, with any trailing slash on `url` trimmed.
+fn mcp_endpoint(url: &str) -> String {
+    format!("{}/mcp", url.trim_end_matches('/'))
+}
+
+/// Apply the `content-type: application/json` and optional `authorization: Bearer`
+/// headers every `{url}/mcp` POST carries.
+fn with_mcp_headers(request: ureq::Request, bearer_token: Option<&str>) -> ureq::Request {
+    let request = request.set("content-type", "application/json");
+    match bearer_token {
+        Some(bearer_token) => request.set("authorization", &format!("Bearer {bearer_token}")),
+        None => request,
     }
 }
 
@@ -554,6 +600,35 @@ mod tests {
 
         assert!(error.to_string().contains("401"), "got: {error}");
         assert!(error.to_string().contains("missing bearer"), "got: {error}");
+    }
+
+    #[test]
+    fn probe_reachable_treats_any_http_status_including_401_as_alive() {
+        let (url, _recorded, server) = spawn_mock_mcp_server(vec![MockReply {
+            status_line: "401 Unauthorized",
+            body: "missing bearer".to_string(),
+        }]);
+        let alive = probe_reachable(
+            &url,
+            None,
+            Duration::from_millis(500),
+            Duration::from_millis(1500),
+        );
+        server.join().unwrap();
+        assert!(alive, "an HTTP response (even 401) means the server is up");
+    }
+
+    #[test]
+    fn probe_reachable_reports_a_closed_port_as_dead() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        assert!(!probe_reachable(
+            &format!("http://127.0.0.1:{port}"),
+            None,
+            Duration::from_millis(500),
+            Duration::from_millis(1500),
+        ));
     }
 
     #[test]
