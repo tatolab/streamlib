@@ -26,6 +26,7 @@ enum Commands {
     /// Stream a runtime's on-disk JSONL log file in pretty format, or — with
     /// `--url` — collect a bounded sample of a running node's live event stream
     /// via its control plane.
+    #[command(group(clap::ArgGroup::new("logs_control_target").args(["url", "node"])))]
     Logs {
         /// Runtime ID to read logs for. Omit when using `--list`, `--url`, or
         /// `--node`.
@@ -43,8 +44,10 @@ enum Commands {
         #[arg(long, value_name = "RUNTIME_ID", conflicts_with_all = ["runtime_id", "url", "list", "follow", "processor", "pipeline", "rhi", "level", "source", "intercepted_only", "since"])]
         node: Option<String>,
 
-        /// (control-plane mode) Max events to collect before returning.
-        #[arg(long, value_name = "COUNT")]
+        /// (control-plane mode) Max events to collect before returning. Requires
+        /// a control target (`--url` or `--node`); it has no meaning for an
+        /// on-disk log read.
+        #[arg(long, value_name = "COUNT", requires = "logs_control_target")]
         count: Option<usize>,
 
         /// Enumerate available runtime log files instead of streaming one.
@@ -799,5 +802,28 @@ mod tests {
             logging_config_for(&None).pretty_mirror_stream,
             PrettyMirrorStream::Stdout
         );
+    }
+
+    /// `--count` is control-plane-only: `logs <runtime_id> --count N` (local
+    /// mode, no `--url`/`--node`) has no field to land in and must be rejected at
+    /// the clap layer rather than silently ignored. Dropping the `requires =
+    /// "logs_control_target"` on `count` goes green here.
+    #[test]
+    fn logs_count_without_a_control_target_is_rejected() {
+        let result = Cli::try_parse_from(["streamlib", "logs", "Rnode", "--count", "5"]);
+        assert!(
+            result.is_err(),
+            "`logs <id> --count N` in local mode must be rejected: count needs `--url` or `--node`"
+        );
+    }
+
+    /// `--count` parses once a control target pins the mode via `--url` or
+    /// `--node`.
+    #[test]
+    fn logs_count_with_a_control_target_parses() {
+        Cli::try_parse_from(["streamlib", "logs", "--url", "http://127.0.0.1:9000", "--count", "5"])
+            .expect("`logs --url ... --count N` must parse");
+        Cli::try_parse_from(["streamlib", "logs", "--node", "Rnode", "--count", "5"])
+            .expect("`logs --node ... --count N` must parse");
     }
 }
