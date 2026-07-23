@@ -3,6 +3,7 @@
 
 pub mod add;
 pub mod build_on_place;
+pub mod control;
 pub mod generate;
 pub mod install;
 pub mod link;
