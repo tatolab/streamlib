@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.45](https://github.com/tatolab/streamlib/compare/v0.7.44...v0.7.45) (2026-07-23)
+
+
+### Features
+
+* **cli:** streamlib nodes discovery + registry-resolved control-verb targets ([#1567](https://github.com/tatolab/streamlib/issues/1567)) ([bc06018](https://github.com/tatolab/streamlib/commit/bc06018f7d66c6ce4fe372ad8325d8874ca37550))
+
 ## [0.7.44](https://github.com/tatolab/streamlib/compare/v0.7.43...v0.7.44) (2026-07-23)
 
 
