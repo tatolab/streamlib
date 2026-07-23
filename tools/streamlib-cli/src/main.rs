@@ -23,11 +23,23 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Stream a runtime's on-disk JSONL log file in pretty format.
+    /// Stream a runtime's on-disk JSONL log file in pretty format, or — with
+    /// `--url` — collect a bounded sample of a running node's live event stream
+    /// via its control plane.
     Logs {
-        /// Runtime ID to read logs for. Omit when using `--list`.
-        #[arg(value_name = "RUNTIME_ID", required_unless_present = "list")]
+        /// Runtime ID to read logs for. Omit when using `--list` or `--url`.
+        #[arg(value_name = "RUNTIME_ID", required_unless_present_any = ["list", "url"])]
         runtime_id: Option<String>,
+
+        /// Control-plane URL: collect a bounded sample of the running node's
+        /// live event stream (all topics) via its `POST /mcp` instead of
+        /// reading an on-disk JSONL log file.
+        #[arg(long, value_name = "URL", conflicts_with_all = ["runtime_id", "list", "follow", "processor", "pipeline", "rhi", "level", "source", "intercepted_only", "since"])]
+        url: Option<String>,
+
+        /// (control-plane mode) Max events to collect before returning.
+        #[arg(long, value_name = "COUNT", requires = "url")]
+        count: Option<usize>,
 
         /// Enumerate available runtime log files instead of streaming one.
         #[arg(long, conflicts_with_all = ["runtime_id", "follow"])]
@@ -83,6 +95,124 @@ enum Commands {
         /// hosting an in-process runtime.
         #[arg(long, value_name = "URL")]
         attach: Option<String>,
+    },
+
+    /// Export a running node's live graph (processors, links, states, metrics)
+    /// as JSON via its control plane.
+    Graph {
+        /// Control-plane base URL of the target node (its `POST /mcp` host).
+        #[arg(long, value_name = "URL")]
+        url: String,
+    },
+
+    /// Author a processor from source and submit it into a running node's graph.
+    ///
+    /// Transactional: registers the source, instantiates the first discovered
+    /// processor, and optionally wires it to existing graph ports; a failed
+    /// wiring rolls the whole submit back.
+    Submit {
+        /// Control-plane base URL of the target node (its `POST /mcp` host).
+        #[arg(long, value_name = "URL")]
+        url: String,
+
+        /// Source language. `rust` is rejected for live submit — it's a full
+        /// cargo build, not a live graph mutation.
+        #[arg(long, value_parser = ["python", "typescript", "deno"])]
+        language: String,
+
+        /// Processor module source: `@<file>` or a plain path reads the file;
+        /// `-` or an omitted flag reads stdin.
+        #[arg(long, value_name = "SOURCE")]
+        source: Option<String>,
+
+        /// The `@session/<name>` segment to mint under (derived from the
+        /// processor type name if omitted).
+        #[arg(long, value_name = "NAME")]
+        requested_name: Option<String>,
+
+        /// The PascalCase processor type the source defines (derived from the
+        /// requested name if omitted).
+        #[arg(long, value_name = "TYPE")]
+        processor_type_name: Option<String>,
+
+        /// Config JSON applied when the processor is instantiated (default `{}`).
+        #[arg(long, value_name = "JSON")]
+        config: Option<String>,
+
+        /// Wire the new processor after instantiation. Repeatable:
+        /// `local_port:role:peer_processor:peer_port` (role ∈ `output`|`input`).
+        #[arg(long, value_name = "SPEC")]
+        connect: Vec<String>,
+    },
+
+    /// Swap a running node's `@session/<name>` source registration for a
+    /// replacement.
+    ///
+    /// Type-level: this swaps the SOURCE REGISTRATION only — already-running
+    /// instances are NOT swapped in place; they keep running the prior source
+    /// until removed and re-instantiated. Transactional: a failed replacement
+    /// restores the prior registration.
+    Replace {
+        /// Control-plane base URL of the target node (its `POST /mcp` host).
+        #[arg(long, value_name = "URL")]
+        url: String,
+
+        /// The `@session/<name>@<range>` module to replace, e.g.
+        /// `@session/widget@*`.
+        #[arg(long, value_name = "MODULE")]
+        target_session_module: String,
+
+        /// Replacement source language. `rust` is rejected for live submit.
+        #[arg(long, value_parser = ["python", "typescript", "deno"])]
+        language: String,
+
+        /// Replacement source: `@<file>` or a plain path reads the file; `-` or
+        /// an omitted flag reads stdin.
+        #[arg(long, value_name = "SOURCE")]
+        source: Option<String>,
+
+        /// The `@session/<name>` segment to mint under.
+        #[arg(long, value_name = "NAME")]
+        requested_name: Option<String>,
+
+        /// The PascalCase processor type the replacement source defines.
+        #[arg(long, value_name = "TYPE")]
+        processor_type_name: Option<String>,
+    },
+
+    /// Connect an output port to an input port between two running processors.
+    Connect {
+        /// Control-plane base URL of the target node (its `POST /mcp` host).
+        #[arg(long, value_name = "URL")]
+        url: String,
+
+        #[arg(long, value_name = "PROCESSOR")]
+        from_processor: String,
+
+        #[arg(long, value_name = "PORT")]
+        from_port: String,
+
+        #[arg(long, value_name = "PROCESSOR")]
+        to_processor: String,
+
+        #[arg(long, value_name = "PORT")]
+        to_port: String,
+    },
+
+    /// Attach a read-only tap to a running node's channel and collect a bounded
+    /// sample of raw bags (a hex preview plus byte length per bag).
+    Tap {
+        /// Control-plane base URL of the target node (its `POST /mcp` host).
+        #[arg(long, value_name = "URL")]
+        url: String,
+
+        /// Channel data-service name, e.g. `{source_processor}/{source_output_port}`.
+        #[arg(value_name = "CHANNEL")]
+        channel: String,
+
+        /// Number of bags to collect before returning.
+        #[arg(long, value_name = "COUNT")]
+        count: Option<usize>,
     },
 
     /// Setup commands
@@ -155,18 +285,32 @@ enum Commands {
         no_build: bool,
     },
 
-    /// Remove a package from this app's streamlib_modules/ folder.
+    /// Remove a package from this app's streamlib_modules/ folder, or — with
+    /// `--url` — remove a processor instance from a running node's graph via
+    /// its control plane.
     ///
-    /// Deletes `streamlib_modules/@org/name/` and drops the package's entry
-    /// from the app's `streamlib.lock`.
+    /// Local mode deletes `streamlib_modules/@org/name/` and drops the
+    /// package's entry from the app's `streamlib.lock`. Control-plane mode
+    /// (`--url` + `--processor-id`) removes a live processor instance by id.
     Remove {
-        /// Canonical `@org/name` reference to remove.
-        name: String,
+        /// Canonical `@org/name` reference to remove (local mode). Omit with
+        /// `--url`.
+        #[arg(required_unless_present = "url", conflicts_with = "url")]
+        name: Option<String>,
 
         /// App root to anchor streamlib_modules/ + streamlib.lock at
         /// (default: current working directory, no walk-up).
         #[arg(long)]
         dir: Option<PathBuf>,
+
+        /// Control-plane URL: remove a processor instance from the running node
+        /// at this URL (its `POST /mcp` host) instead of a package.
+        #[arg(long, value_name = "URL")]
+        url: Option<String>,
+
+        /// Processor instance id to remove (control-plane mode; requires `--url`).
+        #[arg(long, value_name = "ID", requires = "url")]
+        processor_id: Option<String>,
     },
 
     /// Manage installed packages
@@ -359,6 +503,8 @@ async fn async_main(cli: Cli) -> Result<()> {
     match cli.command {
         Some(Commands::Logs {
             runtime_id,
+            url,
+            count,
             list,
             follow,
             processor,
@@ -369,6 +515,9 @@ async fn async_main(cli: Cli) -> Result<()> {
             intercepted_only,
             since,
         }) => {
+            if let Some(url) = url {
+                return commands::control::logs(&url, count);
+            }
             commands::logs::run(commands::logs::LogsArgs {
                 runtime_id: runtime_id.as_deref(),
                 list,
@@ -384,6 +533,53 @@ async fn async_main(cli: Cli) -> Result<()> {
             .await?
         }
         Some(Commands::Mcp { attach }) => commands::mcp::run(attach).await?,
+        Some(Commands::Graph { url }) => commands::control::graph(&url)?,
+        Some(Commands::Submit {
+            url,
+            language,
+            source,
+            requested_name,
+            processor_type_name,
+            config,
+            connect,
+        }) => commands::control::submit(commands::control::SubmitArgs {
+            url,
+            language,
+            source,
+            requested_name,
+            processor_type_name,
+            config,
+            connect,
+        })?,
+        Some(Commands::Replace {
+            url,
+            target_session_module,
+            language,
+            source,
+            requested_name,
+            processor_type_name,
+        }) => commands::control::replace(commands::control::ReplaceArgs {
+            url,
+            target_session_module,
+            language,
+            source,
+            requested_name,
+            processor_type_name,
+        })?,
+        Some(Commands::Connect {
+            url,
+            from_processor,
+            from_port,
+            to_processor,
+            to_port,
+        }) => {
+            commands::control::connect(&url, &from_processor, &from_port, &to_processor, &to_port)?
+        }
+        Some(Commands::Tap {
+            url,
+            channel,
+            count,
+        }) => commands::control::tap(&url, &channel, count)?,
         Some(Commands::Setup { action }) => match action {
             SetupCommands::Shell { shell } => commands::setup::shell(shell.as_deref())?,
         },
@@ -401,7 +597,25 @@ async fn async_main(cli: Cli) -> Result<()> {
             expect_sha256,
             no_build,
         }) => commands::add::add(&spec, dir.as_deref(), expect_sha256.as_deref(), no_build)?,
-        Some(Commands::Remove { name, dir }) => commands::add::remove(&name, dir.as_deref())?,
+        Some(Commands::Remove {
+            name,
+            dir,
+            url,
+            processor_id,
+        }) => match url {
+            Some(url) => {
+                let processor_id = processor_id.ok_or_else(|| {
+                    anyhow::anyhow!("`remove --url <url>` requires `--processor-id <id>`")
+                })?;
+                commands::control::remove(&url, &processor_id)?
+            }
+            None => {
+                let name = name.ok_or_else(|| {
+                    anyhow::anyhow!("`remove` requires either `<name>` (local mode) or `--url` (control-plane mode)")
+                })?;
+                commands::add::remove(&name, dir.as_deref())?
+            }
+        },
         Some(Commands::Pkg { action }) => match action {
             PkgCommands::Build { output } => commands::pkg::build(output.as_deref())?,
             PkgCommands::Publish => commands::pkg::publish()?,

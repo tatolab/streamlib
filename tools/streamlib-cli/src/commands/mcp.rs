@@ -87,32 +87,17 @@ fn bridge_stdio_to_remote(
     reader: impl std::io::BufRead,
     mut writer: impl std::io::Write,
 ) -> Result<()> {
-    let endpoint = format!("{}/mcp", url.trim_end_matches('/'));
-
     for line in reader.lines() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
         }
-        let mut request = ureq::post(&endpoint).set("content-type", "application/json");
-        if let Some(bearer_token) = bearer_token {
-            request = request.set("authorization", &format!("Bearer {bearer_token}"));
-        }
-        match request.send_string(&line) {
-            // 2xx: a request answers `200` with the JSON-RPC envelope; a
-            // notification answers `202` with an empty body → no response line.
-            Ok(response) => {
-                let body = response.into_string()?;
-                if !body.trim().is_empty() {
-                    writeln!(writer, "{body}")?;
-                    writer.flush()?;
-                }
-            }
-            Err(ureq::Error::Status(code, response)) => {
-                let body = response.into_string().unwrap_or_default();
-                anyhow::bail!("attach POST {endpoint} failed: HTTP {code}: {body}");
-            }
-            Err(error) => anyhow::bail!("attach POST {endpoint} transport error: {error}"),
+        // 2xx: a request answers `200` with the JSON-RPC envelope; a
+        // notification answers `202` with an empty body → no response line.
+        let body = super::control::post_mcp_request(url, bearer_token, &line)?;
+        if !body.trim().is_empty() {
+            writeln!(writer, "{body}")?;
+            writer.flush()?;
         }
     }
     Ok(())
