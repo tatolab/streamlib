@@ -34,7 +34,7 @@ enum Commands {
         /// Control-plane URL: collect a bounded sample of the running node's
         /// live event stream (all topics) via its `POST /mcp` instead of
         /// reading an on-disk JSONL log file.
-        #[arg(long, value_name = "URL", conflicts_with_all = ["list", "follow", "processor", "pipeline", "rhi", "level", "source", "intercepted_only", "since"])]
+        #[arg(long, value_name = "URL", conflicts_with_all = ["runtime_id", "list", "follow", "processor", "pipeline", "rhi", "level", "source", "intercepted_only", "since"])]
         url: Option<String>,
 
         /// (control-plane mode) Max events to collect before returning.
@@ -295,7 +295,7 @@ enum Commands {
     Remove {
         /// Canonical `@org/name` reference to remove (local mode). Omit with
         /// `--url`.
-        #[arg(required_unless_present = "url")]
+        #[arg(required_unless_present = "url", conflicts_with = "url")]
         name: Option<String>,
 
         /// App root to anchor streamlib_modules/ + streamlib.lock at
@@ -572,16 +572,14 @@ async fn async_main(cli: Cli) -> Result<()> {
             from_port,
             to_processor,
             to_port,
-        }) => commands::control::connect(
-            &url,
-            &from_processor,
-            &from_port,
-            &to_processor,
-            &to_port,
-        )?,
-        Some(Commands::Tap { url, channel, count }) => {
-            commands::control::tap(&url, &channel, count)?
+        }) => {
+            commands::control::connect(&url, &from_processor, &from_port, &to_processor, &to_port)?
         }
+        Some(Commands::Tap {
+            url,
+            channel,
+            count,
+        }) => commands::control::tap(&url, &channel, count)?,
         Some(Commands::Setup { action }) => match action {
             SetupCommands::Shell { shell } => commands::setup::shell(shell.as_deref())?,
         },
@@ -612,7 +610,9 @@ async fn async_main(cli: Cli) -> Result<()> {
                 commands::control::remove(&url, &processor_id)?
             }
             None => {
-                let name = name.expect("clap requires `name` unless `--url` is set");
+                let name = name.ok_or_else(|| {
+                    anyhow::anyhow!("`remove` requires either `<name>` (local mode) or `--url` (control-plane mode)")
+                })?;
                 commands::add::remove(&name, dir.as_deref())?
             }
         },
