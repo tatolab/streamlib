@@ -239,9 +239,9 @@ dependencies:
 Three dependency source flavors are supported:
 
 - **Registry** (string form `"^1.0.0"` or `{ version: "^1.0.0" }`).
-  Resolved against a registry; the v1 design assumes a Cloudflare R2
-  / GitHub Releases-backed registry, but the resolver is source-
-  agnostic.
+  Resolved by `@org/name` + version range against the static `.slpkg`
+  file tree — the only registry — served tokenless over `file://` or
+  any dumb HTTP directory mount (see `static-registry.md`).
 - **Path** (`{ path: ../foo }`). Local-filesystem dependency, used
   inside the streamlib monorepo for pre-publish work.
 - **Git** (`{ git: <url>, rev: <commit-sha> }`). Pinned-commit-only;
@@ -280,7 +280,7 @@ packages:
     version: 1.0.0
     source:
       kind: registry
-      url: https://packages.streamlib.dev
+      url: file:///path/to/registry-tree
     content_hash: "sha256:0123456789abcdef…"
   "@tatolab/h264":
     version: 0.4.2
