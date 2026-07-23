@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.44](https://github.com/tatolab/streamlib/compare/v0.7.43...v0.7.44) (2026-07-23)
+
+
+### Features
+
+* **cli:** control-client verbs over the running-node MCP seam ([#1566](https://github.com/tatolab/streamlib/issues/1566)) ([9251daa](https://github.com/tatolab/streamlib/commit/9251daa74608aa43769083a8fdde417b8eeec289))
+
 ## [0.7.43](https://github.com/tatolab/streamlib/compare/v0.7.42...v0.7.43) (2026-07-23)
 
 
