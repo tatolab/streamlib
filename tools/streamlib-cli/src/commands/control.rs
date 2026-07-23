@@ -21,7 +21,7 @@
 use std::io::{Read, Write};
 
 use anyhow::{Context, Result, bail};
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 /// POST one JSON-RPC request body to `{url}/mcp` and return the response body.
 /// A 2xx yields the body (empty for a `202` notification); a non-2xx or
@@ -77,28 +77,20 @@ pub fn submit(args: SubmitArgs) -> Result<()> {
         .map(|spec| parse_connect_spec(spec))
         .collect::<Result<Vec<_>>>()?;
 
-    let mut arguments = json!({
-        "language": args.language,
-        "source": source,
-        "config": config,
-    });
-    let map = arguments
-        .as_object_mut()
-        .expect("json! object literal is always an object");
-    if let Some(requested_name) = args.requested_name {
-        map.insert("requested_name".into(), Value::String(requested_name));
-    }
-    if let Some(processor_type_name) = args.processor_type_name {
-        map.insert(
-            "processor_type_name".into(),
-            Value::String(processor_type_name),
-        );
-    }
+    let mut arguments = Map::new();
+    arguments.insert("language".into(), Value::String(args.language));
+    arguments.insert("source".into(), Value::String(source));
+    arguments.insert("config".into(), config);
+    insert_optional_naming(
+        &mut arguments,
+        args.requested_name,
+        args.processor_type_name,
+    );
     if !connect.is_empty() {
-        map.insert("connect".into(), Value::Array(connect));
+        arguments.insert("connect".into(), Value::Array(connect));
     }
 
-    call_tool_to_stdout(&args.url, "submit_processor", arguments)
+    call_tool_to_stdout(&args.url, "submit_processor", Value::Object(arguments))
 }
 
 /// Arguments for the `replace` verb, mirroring the `replace_processor`
@@ -117,24 +109,19 @@ pub struct ReplaceArgs {
 /// in place.
 pub fn replace(args: ReplaceArgs) -> Result<()> {
     let source = read_source(args.source.as_deref())?;
-    let mut arguments = json!({
-        "target_session_module": args.target_session_module,
-        "language": args.language,
-        "source": source,
-    });
-    let map = arguments
-        .as_object_mut()
-        .expect("json! object literal is always an object");
-    if let Some(requested_name) = args.requested_name {
-        map.insert("requested_name".into(), Value::String(requested_name));
-    }
-    if let Some(processor_type_name) = args.processor_type_name {
-        map.insert(
-            "processor_type_name".into(),
-            Value::String(processor_type_name),
-        );
-    }
-    call_tool_to_stdout(&args.url, "replace_processor", arguments)
+    let mut arguments = Map::new();
+    arguments.insert(
+        "target_session_module".into(),
+        Value::String(args.target_session_module),
+    );
+    arguments.insert("language".into(), Value::String(args.language));
+    arguments.insert("source".into(), Value::String(source));
+    insert_optional_naming(
+        &mut arguments,
+        args.requested_name,
+        args.processor_type_name,
+    );
+    call_tool_to_stdout(&args.url, "replace_processor", Value::Object(arguments))
 }
 
 /// Remove a processor instance from the graph by id (`remove_processor`).
@@ -169,26 +156,42 @@ pub fn connect(
 
 /// Attach a read-only tap to `channel` and collect a bounded sample (`tap`).
 pub fn tap(url: &str, channel: &str, count: Option<usize>) -> Result<()> {
-    let mut arguments = json!({ "channel": channel });
-    if let Some(count) = count {
-        arguments
-            .as_object_mut()
-            .expect("json! object literal is always an object")
-            .insert("count".into(), json!(count));
-    }
-    call_tool_to_stdout(url, "tap", arguments)
+    let mut arguments = Map::new();
+    arguments.insert("channel".into(), Value::String(channel.to_string()));
+    insert_optional_count(&mut arguments, count);
+    call_tool_to_stdout(url, "tap", Value::Object(arguments))
 }
 
 /// Collect a bounded sample of the runtime event stream (`logs`).
 pub fn logs(url: &str, count: Option<usize>) -> Result<()> {
-    let mut arguments = json!({});
-    if let Some(count) = count {
-        arguments
-            .as_object_mut()
-            .expect("json! object literal is always an object")
-            .insert("count".into(), json!(count));
+    let mut arguments = Map::new();
+    insert_optional_count(&mut arguments, count);
+    call_tool_to_stdout(url, "logs", Value::Object(arguments))
+}
+
+/// Insert the optional `requested_name` / `processor_type_name` pair the
+/// `submit_processor` and `replace_processor` `inputSchema`s share.
+fn insert_optional_naming(
+    arguments: &mut Map<String, Value>,
+    requested_name: Option<String>,
+    processor_type_name: Option<String>,
+) {
+    if let Some(requested_name) = requested_name {
+        arguments.insert("requested_name".into(), Value::String(requested_name));
     }
-    call_tool_to_stdout(url, "logs", arguments)
+    if let Some(processor_type_name) = processor_type_name {
+        arguments.insert(
+            "processor_type_name".into(),
+            Value::String(processor_type_name),
+        );
+    }
+}
+
+/// Insert the optional `count` cap the `tap` and `logs` `inputSchema`s share.
+fn insert_optional_count(arguments: &mut Map<String, Value>, count: Option<usize>) {
+    if let Some(count) = count {
+        arguments.insert("count".into(), json!(count));
+    }
 }
 
 /// Drive one `tools/call` against `{url}/mcp` and print the result to stdout,
