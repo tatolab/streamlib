@@ -93,7 +93,7 @@ const TAP_SAMPLE_WINDOW: Duration = Duration::from_millis(500);
 /// is dispatched for effect with no reply (HTTP acks it `202 Accepted`; stdio
 /// writes no response line).
 #[derive(Deserialize)]
-pub struct JsonRpcRequest {
+pub(crate) struct JsonRpcRequest {
     #[serde(default)]
     id: Option<Value>,
     method: String,
@@ -134,7 +134,7 @@ pub(crate) async fn mcp_endpoint(
     State(state): State<AppState>,
     Json(request): Json<JsonRpcRequest>,
 ) -> Response {
-    match dispatch_jsonrpc(&state.runtime, request).await {
+    match dispatch_jsonrpc(&state.runtime, &request).await {
         Some(response) => Json(response).into_response(),
         None => StatusCode::ACCEPTED.into_response(),
     }
@@ -148,9 +148,9 @@ pub(crate) async fn mcp_endpoint(
 /// This is the single MCP surface both the HTTP endpoint and the stdio server
 /// call, so the two transports can never diverge.
 #[tracing::instrument(skip_all, fields(mcp_method = %request.method))]
-pub async fn dispatch_jsonrpc(
+pub(crate) async fn dispatch_jsonrpc(
     runtime: &Arc<dyn RuntimeOperations>,
-    request: JsonRpcRequest,
+    request: &JsonRpcRequest,
 ) -> Option<Value> {
     let id = request.id.clone()?;
     let params = request.params.clone().unwrap_or(Value::Null);
@@ -172,13 +172,13 @@ pub async fn dispatch_jsonrpc(
 /// Parse one newline-delimited JSON-RPC 2.0 request line into a
 /// [`JsonRpcRequest`]. A malformed line is a JSON-RPC *parse error* — render it
 /// with [`jsonrpc_parse_error`] rather than dropping the input silently.
-pub fn parse_jsonrpc_request(line: &str) -> serde_json::Result<JsonRpcRequest> {
+pub(crate) fn parse_jsonrpc_request(line: &str) -> serde_json::Result<JsonRpcRequest> {
     serde_json::from_str(line)
 }
 
 /// The JSON-RPC 2.0 envelope for a line that could not be parsed as a request
 /// (`-32700 Parse error`), with a null `id` since none could be recovered.
-pub fn jsonrpc_parse_error(message: &str) -> Value {
+pub(crate) fn jsonrpc_parse_error(message: &str) -> Value {
     json!({
         "jsonrpc": "2.0",
         "id": Value::Null,
@@ -213,11 +213,14 @@ where
             continue;
         }
         let response = match parse_jsonrpc_request(&line) {
-            Ok(request) => dispatch_jsonrpc(&runtime, request).await,
+            Ok(request) => dispatch_jsonrpc(&runtime, &request).await,
             Err(error) => Some(jsonrpc_parse_error(&error.to_string())),
         };
         if let Some(response) = response {
-            let mut encoded = serde_json::to_vec(&response).unwrap_or_else(|_| b"null".to_vec());
+            // `response` is an already-constructed `serde_json::Value`, whose
+            // serialization is infallible.
+            let mut encoded =
+                serde_json::to_vec(&response).expect("a serde_json::Value always serializes");
             encoded.push(b'\n');
             writer.write_all(&encoded).await?;
             writer.flush().await?;

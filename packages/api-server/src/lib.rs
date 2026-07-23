@@ -14,8 +14,5 @@ mod processor;
 mod state;
 
 pub use _generated_::ApiServerConfig;
-pub use mcp::{
-    JsonRpcRequest, dispatch_jsonrpc, jsonrpc_parse_error, parse_jsonrpc_request,
-    serve_stdio_jsonrpc,
-};
+pub use mcp::serve_stdio_jsonrpc;
 pub use processor::ApiServerProcessor;
