@@ -38,7 +38,7 @@ cargo run -- <h264|h265> <bgra-path> <width> <height> <fps> <frame-count>
 `./setup.sh` does the full local setup in one shot:
 
 1. **SDK** — `streamlib link --engine <checkout>` points this app's
-   `streamlib = "0.6"` dependency at the in-repo SDK (a transient
+   `streamlib` dependency at the in-repo SDK (a transient
    `[patch.crates-io]`). There is no hosted registry; the linked checkout is
    the SDK source.
 2. **Packages** — `streamlib link` symlinks `@tatolab/debug-utilities`,

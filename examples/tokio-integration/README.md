@@ -16,7 +16,7 @@ cargo run
 ```
 
 `./setup.sh` runs `streamlib link --engine <checkout>` so the app's
-`streamlib = "0.6"` dependency resolves against the in-repo SDK (a transient
+`streamlib` dependency resolves against the in-repo SDK (a transient
 `[patch.crates-io]`; there is no hosted registry — the linked checkout is the
 SDK source). Because this
 demo loads no processor packages, that is the only setup step. The `streamlib`

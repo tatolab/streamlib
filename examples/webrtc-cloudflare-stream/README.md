@@ -37,7 +37,7 @@ cargo run
 `./setup.sh` does the full local setup in one shot:
 
 1. **SDK** — `streamlib link --engine <checkout>` points this app's
-   `streamlib = "0.6"` dependency (and the `streamlib-jtd-codegen` build-dep) at
+   `streamlib` dependency (and the `streamlib-jtd-codegen` build-dep) at
    the in-repo SDK (a transient `[patch.crates-io]`), and publishes
    `STREAMLIB_LINK_CHECKOUT` to this dir's cargo `[env]` so `build.rs` codegen
    resolves schema deps from the checkout. There is no hosted registry; the

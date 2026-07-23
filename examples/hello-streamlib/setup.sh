@@ -30,7 +30,7 @@ fi
 echo "streamlib CLI: $STREAMLIB"
 echo "checkout:      $CHECKOUT"
 
-# 1. SDK: point this app's `streamlib = "0.7.9"` dep at the local checkout via a
+# 1. SDK: point this app's `streamlib` dep at the local checkout via a
 #    transient [patch.crates-io] (removed by `streamlib unlink --engine`).
 "$STREAMLIB" link --engine "$CHECKOUT"
 
