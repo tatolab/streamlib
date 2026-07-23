@@ -3,13 +3,17 @@
 
 //! Model Context Protocol (MCP) veneer over the api-server's control-plane ops.
 //!
-//! A single Streamable-HTTP endpoint (`POST /mcp`) speaks MCP's JSON-RPC 2.0
-//! wire directly on the existing axum stack — no separate proxy process, and
-//! the same [`crate::auth`] bearer middleware and [`crate::state::AppState`] the
-//! REST routes use. It exposes the runtime graph as MCP *tools* so an LLM agent
-//! can inspect and mutate the live graph the same way the REST client does; the
-//! tool handlers call the shared [`crate::ops`] layer, so the MCP surface and
-//! the REST surface can never drift.
+//! The MCP dispatch is transport-free: [`dispatch_jsonrpc`] answers one parsed
+//! JSON-RPC 2.0 message against an `Arc<dyn RuntimeOperations>` and knows
+//! nothing about how the bytes arrived. Two transports drive that one surface —
+//! the Streamable-HTTP endpoint (`POST /mcp`, [`mcp_endpoint`]) on the existing
+//! axum stack with its [`crate::auth`] bearer middleware, and the
+//! newline-delimited stdio server ([`serve_stdio_jsonrpc`]) an MCP host spawns
+//! over a pipe. Sharing the one dispatch means the two transports can never
+//! diverge. It exposes the runtime graph as MCP *tools* so an LLM agent can
+//! inspect and mutate the live graph the same way the REST client does; the tool
+//! handlers call the shared [`crate::ops`] layer, so the MCP surface and the REST
+//! surface can never drift.
 //!
 //! Two of the tools (`tap`, `logs`) front WebSocket *streams* in the REST API.
 //! MCP tools are request/response, so each bridges its stream to a **bounded
@@ -32,7 +36,7 @@ use serde_json::{Value, json};
 use streamlib::sdk::error::Result;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
-use streamlib::sdk::runtime::SubmittedProcessorSource;
+use streamlib::sdk::runtime::{RuntimeOperations, SubmittedProcessorSource};
 
 use crate::ops::{ReplaceSourceError, SubmitSourceError, SubmittedSourceOutcome};
 use crate::state::{
@@ -86,7 +90,8 @@ const TAP_SAMPLE_WINDOW: Duration = Duration::from_millis(500);
 
 /// An inbound MCP message. A *request* carries an `id` and expects a paired
 /// response; a *notification* (e.g. `notifications/initialized`) omits `id` and
-/// is acknowledged with `202 Accepted` and no body.
+/// is dispatched for effect with no reply (HTTP acks it `202 Accepted`; stdio
+/// writes no response line).
 #[derive(Deserialize)]
 pub(crate) struct JsonRpcRequest {
     #[serde(default)]
@@ -120,37 +125,112 @@ impl RpcError {
 }
 
 /// `POST /mcp` — the MCP Streamable-HTTP endpoint. Dispatches one JSON-RPC
-/// message and answers with a single `application/json` response (this server's
-/// tools are all request/response, so it never opens an SSE stream).
+/// message through the transport-free [`dispatch_jsonrpc`] and answers with a
+/// single `application/json` response (this server's tools are all
+/// request/response, so it never opens an SSE stream); a notification is acked
+/// `202 Accepted` with no body.
 #[tracing::instrument(skip_all, fields(mcp_method = %request.method))]
 pub(crate) async fn mcp_endpoint(
     State(state): State<AppState>,
     Json(request): Json<JsonRpcRequest>,
 ) -> Response {
-    let Some(id) = request.id.clone() else {
-        // A notification expects no response body under Streamable HTTP.
-        return StatusCode::ACCEPTED.into_response();
-    };
-
-    let params = request.params.clone().unwrap_or(Value::Null);
-    match dispatch(&state, &request.method, params).await {
-        Ok(result) => Json(json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": result,
-        }))
-        .into_response(),
-        Err(error) => Json(json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": { "code": error.code, "message": error.message },
-        }))
-        .into_response(),
+    match dispatch_jsonrpc(&state.runtime, &request).await {
+        Some(response) => Json(response).into_response(),
+        None => StatusCode::ACCEPTED.into_response(),
     }
 }
 
+/// Dispatch one parsed MCP JSON-RPC 2.0 message against `runtime`, transport-free.
+///
+/// Returns the full JSON-RPC response envelope (`result` or `error`) for a
+/// request, or `None` for a notification (no `id`) — the caller decides how a
+/// no-reply is framed on its transport (HTTP: `202`; stdio: no output line).
+/// This is the single MCP surface both the HTTP endpoint and the stdio server
+/// call, so the two transports can never diverge.
+#[tracing::instrument(skip_all, fields(mcp_method = %request.method))]
+pub(crate) async fn dispatch_jsonrpc(
+    runtime: &Arc<dyn RuntimeOperations>,
+    request: &JsonRpcRequest,
+) -> Option<Value> {
+    let id = request.id.clone()?;
+    let params = request.params.clone().unwrap_or(Value::Null);
+    let envelope = match dispatch(runtime, &request.method, params).await {
+        Ok(result) => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result,
+        }),
+        Err(error) => json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": { "code": error.code, "message": error.message },
+        }),
+    };
+    Some(envelope)
+}
+
+/// Parse one newline-delimited JSON-RPC 2.0 request line into a
+/// [`JsonRpcRequest`]. A malformed line is a JSON-RPC *parse error* — render it
+/// with [`jsonrpc_parse_error`] rather than dropping the input silently.
+pub(crate) fn parse_jsonrpc_request(line: &str) -> serde_json::Result<JsonRpcRequest> {
+    serde_json::from_str(line)
+}
+
+/// The JSON-RPC 2.0 envelope for a line that could not be parsed as a request
+/// (`-32700 Parse error`), with a null `id` since none could be recovered.
+pub(crate) fn jsonrpc_parse_error(message: &str) -> Value {
+    json!({
+        "jsonrpc": "2.0",
+        "id": Value::Null,
+        "error": { "code": -32700, "message": format!("parse error: {message}") },
+    })
+}
+
+/// Serve MCP over a newline-delimited JSON-RPC 2.0 byte transport — the stdio
+/// framing an MCP host spawns a server with (`claude mcp add streamlib -- …`).
+///
+/// One JSON-RPC message per line is read from `reader`, dispatched through the
+/// shared [`dispatch_jsonrpc`] against `runtime`, and each response written as a
+/// single newline-terminated JSON line to `writer`; a notification produces no
+/// output line, and an unparseable line answers with a [`jsonrpc_parse_error`].
+/// Returns on reader EOF (the host closed the pipe), so the caller can tear its
+/// runtime down. Generic over the byte transport — this crate never touches the
+/// process's own stdio; the CLI passes `tokio::io::stdin`/`stdout`.
+pub async fn serve_stdio_jsonrpc<R, W>(
+    runtime: Arc<dyn RuntimeOperations>,
+    reader: R,
+    mut writer: W,
+) -> std::io::Result<()>
+where
+    R: tokio::io::AsyncBufRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+
+    let mut lines = reader.lines();
+    while let Some(line) = lines.next_line().await? {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let response = match parse_jsonrpc_request(&line) {
+            Ok(request) => dispatch_jsonrpc(&runtime, &request).await,
+            Err(error) => Some(jsonrpc_parse_error(&error.to_string())),
+        };
+        if let Some(response) = response {
+            // `response` is an already-constructed `serde_json::Value`, whose
+            // serialization is infallible.
+            let mut encoded =
+                serde_json::to_vec(&response).expect("a serde_json::Value always serializes");
+            encoded.push(b'\n');
+            writer.write_all(&encoded).await?;
+            writer.flush().await?;
+        }
+    }
+    Ok(())
+}
+
 async fn dispatch(
-    state: &AppState,
+    runtime: &Arc<dyn RuntimeOperations>,
     method: &str,
     params: Value,
 ) -> std::result::Result<Value, RpcError> {
@@ -158,7 +238,7 @@ async fn dispatch(
         "initialize" => Ok(initialize_result()),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tool_definitions() })),
-        "tools/call" => tools_call(state, params).await,
+        "tools/call" => tools_call(runtime, params).await,
         other => Err(RpcError::method_not_found(other)),
     }
 }
@@ -286,7 +366,10 @@ fn tool_definitions() -> Vec<Value> {
 // tools/call dispatch
 // ============================================================================
 
-async fn tools_call(state: &AppState, params: Value) -> std::result::Result<Value, RpcError> {
+async fn tools_call(
+    runtime: &Arc<dyn RuntimeOperations>,
+    params: Value,
+) -> std::result::Result<Value, RpcError> {
     #[derive(Deserialize)]
     struct ToolCallParams {
         name: String,
@@ -302,26 +385,26 @@ async fn tools_call(state: &AppState, params: Value) -> std::result::Result<Valu
     };
 
     let result = match name.as_str() {
-        "graph" => call_graph(state).await,
-        "submit_processor" => call_submit_processor(state, arguments).await,
-        "replace_processor" => call_replace_processor(state, arguments).await,
-        "remove_processor" => call_remove_processor(state, arguments).await,
-        "connect" => call_connect(state, arguments).await,
-        "tap" => call_tap(state, arguments).await,
-        "logs" => call_logs(state, arguments).await,
+        "graph" => call_graph(runtime).await,
+        "submit_processor" => call_submit_processor(runtime, arguments).await,
+        "replace_processor" => call_replace_processor(runtime, arguments).await,
+        "remove_processor" => call_remove_processor(runtime, arguments).await,
+        "connect" => call_connect(runtime, arguments).await,
+        "tap" => call_tap(runtime, arguments).await,
+        "logs" => call_logs(runtime, arguments).await,
         other => tool_error(format!("unknown tool: {other}")),
     };
     Ok(result)
 }
 
-async fn call_graph(state: &AppState) -> Value {
-    match state.runtime.to_json_async().await {
+async fn call_graph(runtime: &Arc<dyn RuntimeOperations>) -> Value {
+    match runtime.to_json_async().await {
         Ok(graph) => tool_ok(graph),
         Err(e) => tool_error(format!("graph export failed: {e}")),
     }
 }
 
-async fn call_submit_processor(state: &AppState, arguments: Value) -> Value {
+async fn call_submit_processor(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
     let request: SubmittedProcessorSourceRequest = match serde_json::from_value(arguments) {
         Ok(request) => request,
         Err(e) => return tool_error(format!("submit_processor arguments: {e}")),
@@ -333,15 +416,13 @@ async fn call_submit_processor(state: &AppState, arguments: Value) -> Value {
         processor_type_name: request.processor_type_name,
     };
     let config = request.config.unwrap_or_else(|| json!({}));
-    match crate::ops::submit_processor_source(&state.runtime, submitted, config, request.connect)
-        .await
-    {
+    match crate::ops::submit_processor_source(runtime, submitted, config, request.connect).await {
         Ok(outcome) => tool_ok(submitted_source_json(outcome)),
         Err(error) => tool_error(submit_source_error_message(error)),
     }
 }
 
-async fn call_replace_processor(state: &AppState, arguments: Value) -> Value {
+async fn call_replace_processor(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
     let request: ReplaceProcessorSourceRequest = match serde_json::from_value(arguments) {
         Ok(request) => request,
         Err(e) => return tool_error(format!("replace_processor arguments: {e}")),
@@ -352,12 +433,8 @@ async fn call_replace_processor(state: &AppState, arguments: Value) -> Value {
         requested_name: request.requested_name,
         processor_type_name: request.processor_type_name,
     };
-    match crate::ops::replace_processor_source(
-        &state.runtime,
-        &request.target_session_module,
-        replacement,
-    )
-    .await
+    match crate::ops::replace_processor_source(runtime, &request.target_session_module, replacement)
+        .await
     {
         Ok(outcome) => tool_ok(submitted_source_json(outcome)),
         Err(ReplaceSourceError::MalformedTargetModule(message)) => tool_error(message),
@@ -365,7 +442,7 @@ async fn call_replace_processor(state: &AppState, arguments: Value) -> Value {
     }
 }
 
-async fn call_remove_processor(state: &AppState, arguments: Value) -> Value {
+async fn call_remove_processor(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
     #[derive(Deserialize)]
     struct RemoveArgs {
         processor_id: String,
@@ -374,8 +451,7 @@ async fn call_remove_processor(state: &AppState, arguments: Value) -> Value {
         Ok(args) => args,
         Err(e) => return tool_error(format!("remove_processor arguments: {e}")),
     };
-    match state
-        .runtime
+    match runtime
         .remove_processor_async(processor_id.clone().into())
         .await
     {
@@ -384,20 +460,20 @@ async fn call_remove_processor(state: &AppState, arguments: Value) -> Value {
     }
 }
 
-async fn call_connect(state: &AppState, arguments: Value) -> Value {
+async fn call_connect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
     let request: CreateConnectionRequest = match serde_json::from_value(arguments) {
         Ok(request) => request,
         Err(e) => return tool_error(format!("connect arguments: {e}")),
     };
     let from = OutputLinkPortRef::new(request.from_processor, request.from_port);
     let to = InputLinkPortRef::new(request.to_processor, request.to_port);
-    match state.runtime.connect_async(from, to).await {
+    match runtime.connect_async(from, to).await {
         Ok(link_id) => tool_ok(json!({ "link_id": link_id.to_string() })),
         Err(e) => tool_error(format!("connect failed: {e}")),
     }
 }
 
-async fn call_tap(state: &AppState, arguments: Value) -> Value {
+async fn call_tap(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
     #[derive(Deserialize)]
     struct TapArgs {
         channel: String,
@@ -410,7 +486,7 @@ async fn call_tap(state: &AppState, arguments: Value) -> Value {
     };
     let sample = bounded_sample_count(count, DEFAULT_TAP_SAMPLE_COUNT);
 
-    let mut subscription = match state.runtime.tap_async(channel.clone(), Some(sample)).await {
+    let mut subscription = match runtime.tap_async(channel.clone(), Some(sample)).await {
         Ok(subscription) => subscription,
         Err(e) => return tool_error(format!("tap attach failed: {e}")),
     };
@@ -443,8 +519,8 @@ async fn call_tap(state: &AppState, arguments: Value) -> Value {
     }))
 }
 
-async fn call_logs(state: &AppState, arguments: Value) -> Value {
-    let _ = state;
+async fn call_logs(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
+    let _ = runtime;
     #[derive(Deserialize)]
     struct LogsArgs {
         #[serde(default)]
@@ -1215,5 +1291,161 @@ mod tests {
             "recorded target module = {}",
             recorded[0]
         );
+    }
+
+    /// Drive [`serve_stdio_jsonrpc`] over an in-memory pipe — the same
+    /// transport-free surface the `streamlib mcp` CLI hosts over the process's
+    /// stdio — feeding newline-delimited request lines and collecting the
+    /// response lines. Reuses [`RecordingStubRuntime`], so it is hermetic (no
+    /// live engine / rig) and runs in CI. Returns the responses in arrival
+    /// order plus the stub's recorded-source handle for a submit assertion.
+    async fn drive_stdio(request_lines: &[Value]) -> (Vec<Value>, Arc<Mutex<Option<String>>>) {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let runtime = Arc::new(RecordingStubRuntime::new());
+        let recorded_source = runtime.last_submitted_source.clone();
+        let runtime: Arc<dyn RuntimeOperations> = runtime;
+
+        // One duplex carries request lines client→server, the other carries
+        // response lines server→client; each duplex is a one-way byte pipe.
+        let (mut client_writer, server_reader) = tokio::io::duplex(64 * 1024);
+        let (server_writer, client_reader) = tokio::io::duplex(64 * 1024);
+
+        let server = tokio::spawn(async move {
+            serve_stdio_jsonrpc(runtime, BufReader::new(server_reader), server_writer)
+                .await
+                .expect("stdio server loop");
+        });
+
+        let mut request_bytes = Vec::new();
+        for line in request_lines {
+            request_bytes.extend_from_slice(line.to_string().as_bytes());
+            request_bytes.push(b'\n');
+        }
+        client_writer
+            .write_all(&request_bytes)
+            .await
+            .expect("write request lines");
+        // Drop the request writer so the server loop sees EOF and finishes.
+        drop(client_writer);
+
+        let mut responses = Vec::new();
+        let mut lines = BufReader::new(client_reader).lines();
+        while let Some(line) = lines.next_line().await.expect("read response line") {
+            if line.trim().is_empty() {
+                continue;
+            }
+            responses.push(serde_json::from_str::<Value>(&line).expect("response line is JSON"));
+        }
+        server.await.expect("stdio server task");
+        (responses, recorded_source)
+    }
+
+    #[tokio::test]
+    async fn stdio_server_handshakes_lists_all_tools_and_submits_over_a_pipe() {
+        let (responses, recorded_source) = drive_stdio(&[
+            json!({
+                "jsonrpc": "2.0", "id": 1, "method": "initialize",
+                "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
+            }),
+            // A notification carries no id and must produce no response line.
+            json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+            json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+            json!({
+                "jsonrpc": "2.0", "id": 3, "method": "tools/call",
+                "params": {
+                    "name": "submit_processor",
+                    "arguments": {
+                        "language": "python",
+                        "source": "class Widget:\n    pass\n",
+                        "requested_name": "widget"
+                    }
+                }
+            }),
+        ])
+        .await;
+
+        assert_eq!(
+            responses.len(),
+            3,
+            "three requests carry ids; the notification yields no line — got {responses:?}"
+        );
+
+        let initialize = &responses[0];
+        assert_eq!(initialize["id"], 1);
+        assert_eq!(initialize["result"]["protocolVersion"], "2025-06-18");
+        assert_eq!(
+            initialize["result"]["serverInfo"]["name"],
+            "streamlib-api-server"
+        );
+
+        let tools_list = &responses[1];
+        assert_eq!(tools_list["id"], 2);
+        let names: Vec<&str> = tools_list["result"]["tools"]
+            .as_array()
+            .expect("tools array")
+            .iter()
+            .filter_map(|tool| tool["name"].as_str())
+            .collect();
+        for expected in [
+            "graph",
+            "submit_processor",
+            "replace_processor",
+            "remove_processor",
+            "connect",
+            "tap",
+            "logs",
+        ] {
+            assert!(
+                names.contains(&expected),
+                "stdio tools/list must advertise `{expected}`, got {names:?}"
+            );
+        }
+
+        let submit = &responses[2];
+        assert_eq!(submit["id"], 3);
+        assert_eq!(submit["result"]["isError"], false, "submit={submit}");
+        let text = submit["result"]["content"][0]["text"]
+            .as_str()
+            .expect("submit result text content block");
+        let outcome: Value = serde_json::from_str(text).expect("submit text is JSON");
+        assert_eq!(outcome["module"], "@session/widget@=0.0.0");
+        assert_eq!(outcome["processor_id"], "mcp-instance");
+        assert_eq!(
+            recorded_source.lock().as_deref(),
+            Some("class Widget:\n    pass\n"),
+            "the submitted source must have reached the stub through the stdio dispatch"
+        );
+    }
+
+    #[tokio::test]
+    async fn stdio_server_answers_a_malformed_line_with_a_parse_error() {
+        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+        let runtime: Arc<dyn RuntimeOperations> = Arc::new(RecordingStubRuntime::new());
+        let (mut client_writer, server_reader) = tokio::io::duplex(4096);
+        let (server_writer, client_reader) = tokio::io::duplex(4096);
+        let server = tokio::spawn(async move {
+            serve_stdio_jsonrpc(runtime, BufReader::new(server_reader), server_writer)
+                .await
+                .expect("stdio server loop");
+        });
+
+        client_writer
+            .write_all(b"this is not json\n")
+            .await
+            .expect("write malformed line");
+        drop(client_writer);
+
+        let mut lines = BufReader::new(client_reader).lines();
+        let response = lines
+            .next_line()
+            .await
+            .expect("read line")
+            .expect("a malformed line must still get a parse-error response line");
+        let response: Value = serde_json::from_str(&response).expect("response is JSON");
+        assert_eq!(response["error"]["code"], -32700);
+        assert!(response["id"].is_null());
+        server.await.expect("stdio server task");
     }
 }

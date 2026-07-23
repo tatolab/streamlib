@@ -5058,6 +5058,7 @@ dependencies = [
  "serde_yaml",
  "sha2",
  "streamlib",
+ "streamlib-api-server",
  "streamlib-cargo-build",
  "streamlib-idents",
  "streamlib-jtd-codegen",
@@ -5069,6 +5070,7 @@ dependencies = [
  "toml 0.8.23",
  "toml_edit 0.22.27",
  "tracing",
+ "ureq",
  "zip",
 ]
 

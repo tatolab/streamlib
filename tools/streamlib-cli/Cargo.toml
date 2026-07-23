@@ -31,6 +31,12 @@ streamlib-idents = { path = "../../sdk/streamlib-idents", version = "0.7.42" }
 streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.7.42" }
 streamlib-pack = { path = "../streamlib-pack", version = "0.7.42" }
 
+# Host-side control plane: the CLI's `mcp` subcommand hosts the api-server's
+# transport-free MCP dispatch (`serve_stdio_jsonrpc`) over stdio, reusing the
+# one dispatch surface `POST /mcp` uses. Path-only (api-server is `publish =
+# false`, never in the registry closure).
+streamlib-api-server = { path = "../../packages/api-server" }
+
 # JTD-codegen pipeline (drives `streamlib generate`)
 streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.7.42" }
 
@@ -59,6 +65,11 @@ thiserror.workspace = true
 
 # Load .env files for development environment
 dotenvy = "0.15"
+
+# Blocking HTTP client for `streamlib mcp --attach <url>`: forwards each stdio
+# JSON-RPC line to a running runtime's `POST /mcp`. Blocking by design — the
+# attach loop runs on `spawn_blocking`, off the tokio runtime.
+ureq.workspace = true
 
 # Logging
 tracing.workspace = true

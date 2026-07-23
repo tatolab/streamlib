@@ -26,6 +26,19 @@ const DEFAULT_BATCH_BYTES: usize = 64 * 1024;
 const DEFAULT_BATCH_MS: u64 = 100;
 const DEFAULT_CHANNEL_CAPACITY: usize = 65_536;
 
+/// Which process stream the pretty mirror is written to. Defaults to
+/// [`Stdout`](PrettyMirrorStream::Stdout) for human-facing invocations;
+/// [`Stderr`](PrettyMirrorStream::Stderr) keeps fd 1 a pure protocol channel
+/// for a subcommand that speaks a byte protocol on stdout (the `streamlib mcp`
+/// stdio transport requires stdout carry only MCP JSON-RPC frames).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PrettyMirrorStream {
+    /// Mirror to fd 1 (`std::io::stdout`).
+    Stdout,
+    /// Mirror to fd 2 (`std::io::stderr`), leaving stdout uncontaminated.
+    Stderr,
+}
+
 /// Configuration passed to [`init`](super::init).
 #[derive(Debug, Clone)]
 pub struct StreamlibLoggingConfig {
@@ -37,9 +50,13 @@ pub struct StreamlibLoggingConfig {
     /// lived CLI invocations that only want env-filtered tracing).
     pub runtime_id: Option<Arc<RuntimeUniqueId>>,
 
-    /// Enable the line-buffered pretty stdout mirror. Overridden to
+    /// Enable the line-buffered pretty mirror. Overridden to
     /// `false` when `STREAMLIB_QUIET=1` is set.
     pub stdout: bool,
+
+    /// Which process stream the pretty mirror writes to. `Stdout` for a
+    /// human-facing CLI; `Stderr` when stdout is a protocol channel.
+    pub pretty_mirror_stream: PrettyMirrorStream,
 
     /// Enable the batched JSONL file writer. Requires `runtime_id` to be
     /// set; silently disabled when `runtime_id == None`.
@@ -105,9 +122,22 @@ impl StreamlibLoggingConfig {
             service_name: service_name.into(),
             runtime_id: None,
             stdout: true,
+            pretty_mirror_stream: PrettyMirrorStream::Stdout,
             jsonl: false,
             intercept_stdio: false,
             tunables: LoggingTunables::default(),
+        }
+    }
+
+    /// Config for a CLI subcommand that speaks a byte protocol on stdout (the
+    /// `streamlib mcp` stdio transport): identical to [`for_cli`](Self::for_cli)
+    /// but the pretty mirror is routed to stderr so fd 1 carries only protocol
+    /// frames. Interception stays off — it would redirect fd 1 out from under
+    /// the protocol writer.
+    pub fn for_stdio_protocol(service_name: impl Into<String>) -> Self {
+        Self {
+            pretty_mirror_stream: PrettyMirrorStream::Stderr,
+            ..Self::for_cli(service_name)
         }
     }
 
@@ -120,6 +150,7 @@ impl StreamlibLoggingConfig {
             service_name: service_name.into(),
             runtime_id: Some(runtime_id),
             stdout: true,
+            pretty_mirror_stream: PrettyMirrorStream::Stdout,
             jsonl: true,
             intercept_stdio: true,
             tunables: LoggingTunables::default(),

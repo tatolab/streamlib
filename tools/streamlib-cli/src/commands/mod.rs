@@ -7,6 +7,7 @@ pub mod generate;
 pub mod install;
 pub mod link;
 pub mod logs;
+pub mod mcp;
 pub mod pkg;
 pub mod schema;
 pub mod setup;
