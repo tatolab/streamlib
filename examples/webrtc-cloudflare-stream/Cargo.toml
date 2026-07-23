@@ -20,14 +20,14 @@ publish = false
 [build-dependencies]
 # The SDK codegen crate is resolved by version (same link-by-checkout dev loop
 # as the `streamlib` dep below).
-streamlib-jtd-codegen = { version = "0.7.44" }
+streamlib-jtd-codegen = { version = "0.7.45" }
 
 [dependencies]
 # The SDK is resolved by version. It is not published to crates.io yet, so for
 # local development `./setup.sh` runs `streamlib link --engine <checkout>` to
 # point this dep at the in-repo SDK. Once the SDK publishes, the bare version
 # resolves with no link step.
-streamlib = { version = "0.7.44" }
+streamlib = { version = "0.7.45" }
 tokio = { version = "1.48.0", features = ["full"] }
 anyhow = "1.0.100"
 libc = "0.2"
