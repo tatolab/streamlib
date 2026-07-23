@@ -251,6 +251,23 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         let api_endpoint = format!("{}:{}", host, actual_port);
 
         tracing::info!("Api server listening on {}", api_endpoint);
+
+        // Publish a discovery entry so a CLI can find this live control plane.
+        // The endpoint exists now (the port is bound), so the entry's existence
+        // tracks the control endpoint's. A write failure is non-fatal — the node
+        // starts regardless; it just won't be discoverable until the next run.
+        let control_url = format!("http://127.0.0.1:{}", actual_port);
+        let entry = crate::node_registry::NodeRegistryEntry::for_current_process(
+            handles.runtime_id.clone(),
+            control_url,
+        );
+        match crate::node_registry::write_entry(&entry) {
+            Ok(path) => tracing::debug!("Node registry entry written at {}", path.display()),
+            Err(error) => {
+                tracing::warn!(%error, "failed to write node registry entry; node not discoverable")
+            }
+        }
+
         tracing::info!(
             "OpenAPI spec available at http://{}/api/openapi.json",
             api_endpoint
@@ -270,7 +287,14 @@ impl ManualProcessor for ApiServerProcessor::Processor {
     }
 
     fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        self.runtime_id.take();
+        // Tear down the discovery entry alongside the control endpoint it
+        // advertises. Non-fatal on failure — a stale entry is pruned by the
+        // reader's liveness check.
+        if let Some(runtime_id) = self.runtime_id.take() {
+            if let Err(error) = crate::node_registry::remove_entry(&runtime_id) {
+                tracing::warn!(%error, "failed to remove node registry entry on stop");
+            }
+        }
         if let Some(tx) = self.shutdown_tx.take() {
             let _ = tx.send(());
         }
