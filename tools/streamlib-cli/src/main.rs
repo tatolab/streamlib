@@ -27,8 +27,9 @@ enum Commands {
     /// `--url` — collect a bounded sample of a running node's live event stream
     /// via its control plane.
     Logs {
-        /// Runtime ID to read logs for. Omit when using `--list` or `--url`.
-        #[arg(value_name = "RUNTIME_ID", required_unless_present_any = ["list", "url"])]
+        /// Runtime ID to read logs for. Omit when using `--list`, `--url`, or
+        /// `--node`.
+        #[arg(value_name = "RUNTIME_ID", required_unless_present_any = ["list", "url", "node"])]
         runtime_id: Option<String>,
 
         /// Control-plane URL: collect a bounded sample of the running node's
@@ -37,8 +38,13 @@ enum Commands {
         #[arg(long, value_name = "URL", conflicts_with_all = ["runtime_id", "list", "follow", "processor", "pipeline", "rhi", "level", "source", "intercepted_only", "since"])]
         url: Option<String>,
 
+        /// Control-plane mode by registered runtime_id (resolved via the node
+        /// registry) instead of `--url`.
+        #[arg(long, value_name = "RUNTIME_ID", conflicts_with_all = ["runtime_id", "url", "list", "follow", "processor", "pipeline", "rhi", "level", "source", "intercepted_only", "since"])]
+        node: Option<String>,
+
         /// (control-plane mode) Max events to collect before returning.
-        #[arg(long, value_name = "COUNT", requires = "url")]
+        #[arg(long, value_name = "COUNT")]
         count: Option<usize>,
 
         /// Enumerate available runtime log files instead of streaming one.
@@ -97,12 +103,32 @@ enum Commands {
         attach: Option<String>,
     },
 
+    /// List running StreamLib nodes discovered from the node registry
+    /// (`$XDG_RUNTIME_DIR/streamlib/nodes/`).
+    ///
+    /// Scans every entry, liveness-checks it (control-plane round-trip plus host
+    /// pid), prunes the ones that are gone, and prints runtime_id, control_url,
+    /// pid, hint, and alive?. Only runtimes hosting an ApiServer control plane
+    /// register here — a runtime without a control endpoint is not listed (and
+    /// is not missing).
+    Nodes,
+
     /// Export a running node's live graph (processors, links, states, metrics)
     /// as JSON via its control plane.
+    ///
+    /// Target selection (shared by every control verb): `--url` pins an explicit
+    /// endpoint; `--node <runtime_id>` resolves one from the registry; with
+    /// neither, the sole live node is used (an error lists candidates when zero
+    /// or more than one is live).
     Graph {
         /// Control-plane base URL of the target node (its `POST /mcp` host).
         #[arg(long, value_name = "URL")]
-        url: String,
+        url: Option<String>,
+
+        /// Registered runtime_id to target instead of `--url` (resolved via the
+        /// node registry).
+        #[arg(long, value_name = "RUNTIME_ID", conflicts_with = "url")]
+        node: Option<String>,
     },
 
     /// Author a processor from source and submit it into a running node's graph.
@@ -113,7 +139,11 @@ enum Commands {
     Submit {
         /// Control-plane base URL of the target node (its `POST /mcp` host).
         #[arg(long, value_name = "URL")]
-        url: String,
+        url: Option<String>,
+
+        /// Registered runtime_id to target instead of `--url`.
+        #[arg(long, value_name = "RUNTIME_ID", conflicts_with = "url")]
+        node: Option<String>,
 
         /// Source language. `rust` is rejected for live submit — it's a full
         /// cargo build, not a live graph mutation.
@@ -155,7 +185,11 @@ enum Commands {
     Replace {
         /// Control-plane base URL of the target node (its `POST /mcp` host).
         #[arg(long, value_name = "URL")]
-        url: String,
+        url: Option<String>,
+
+        /// Registered runtime_id to target instead of `--url`.
+        #[arg(long, value_name = "RUNTIME_ID", conflicts_with = "url")]
+        node: Option<String>,
 
         /// The `@session/<name>@<range>` module to replace, e.g.
         /// `@session/widget@*`.
@@ -184,7 +218,11 @@ enum Commands {
     Connect {
         /// Control-plane base URL of the target node (its `POST /mcp` host).
         #[arg(long, value_name = "URL")]
-        url: String,
+        url: Option<String>,
+
+        /// Registered runtime_id to target instead of `--url`.
+        #[arg(long, value_name = "RUNTIME_ID", conflicts_with = "url")]
+        node: Option<String>,
 
         #[arg(long, value_name = "PROCESSOR")]
         from_processor: String,
@@ -204,7 +242,11 @@ enum Commands {
     Tap {
         /// Control-plane base URL of the target node (its `POST /mcp` host).
         #[arg(long, value_name = "URL")]
-        url: String,
+        url: Option<String>,
+
+        /// Registered runtime_id to target instead of `--url`.
+        #[arg(long, value_name = "RUNTIME_ID", conflicts_with = "url")]
+        node: Option<String>,
 
         /// Channel data-service name, e.g. `{source_processor}/{source_output_port}`.
         #[arg(value_name = "CHANNEL")]
@@ -294,8 +336,8 @@ enum Commands {
     /// (`--url` + `--processor-id`) removes a live processor instance by id.
     Remove {
         /// Canonical `@org/name` reference to remove (local mode). Omit with
-        /// `--url`.
-        #[arg(required_unless_present = "url", conflicts_with = "url")]
+        /// `--url` / `--node`.
+        #[arg(required_unless_present_any = ["url", "node"], conflicts_with_all = ["url", "node"])]
         name: Option<String>,
 
         /// App root to anchor streamlib_modules/ + streamlib.lock at
@@ -308,8 +350,14 @@ enum Commands {
         #[arg(long, value_name = "URL")]
         url: Option<String>,
 
-        /// Processor instance id to remove (control-plane mode; requires `--url`).
-        #[arg(long, value_name = "ID", requires = "url")]
+        /// Control-plane mode by registered runtime_id (resolved via the node
+        /// registry) instead of `--url`.
+        #[arg(long, value_name = "RUNTIME_ID", conflicts_with = "url")]
+        node: Option<String>,
+
+        /// Processor instance id to remove (control-plane mode; requires `--url`
+        /// or `--node`).
+        #[arg(long, value_name = "ID")]
         processor_id: Option<String>,
     },
 
@@ -504,6 +552,7 @@ async fn async_main(cli: Cli) -> Result<()> {
         Some(Commands::Logs {
             runtime_id,
             url,
+            node,
             count,
             list,
             follow,
@@ -515,7 +564,8 @@ async fn async_main(cli: Cli) -> Result<()> {
             intercepted_only,
             since,
         }) => {
-            if let Some(url) = url {
+            if url.is_some() || node.is_some() {
+                let url = commands::control::resolve_control_url(url, node)?;
                 return commands::control::logs(&url, count);
             }
             commands::logs::run(commands::logs::LogsArgs {
@@ -533,53 +583,71 @@ async fn async_main(cli: Cli) -> Result<()> {
             .await?
         }
         Some(Commands::Mcp { attach }) => commands::mcp::run(attach).await?,
-        Some(Commands::Graph { url }) => commands::control::graph(&url)?,
+        Some(Commands::Nodes) => commands::nodes::run()?,
+        Some(Commands::Graph { url, node }) => {
+            let url = commands::control::resolve_control_url(url, node)?;
+            commands::control::graph(&url)?
+        }
         Some(Commands::Submit {
             url,
+            node,
             language,
             source,
             requested_name,
             processor_type_name,
             config,
             connect,
-        }) => commands::control::submit(commands::control::SubmitArgs {
-            url,
-            language,
-            source,
-            requested_name,
-            processor_type_name,
-            config,
-            connect,
-        })?,
+        }) => {
+            let url = commands::control::resolve_control_url(url, node)?;
+            commands::control::submit(commands::control::SubmitArgs {
+                url,
+                language,
+                source,
+                requested_name,
+                processor_type_name,
+                config,
+                connect,
+            })?
+        }
         Some(Commands::Replace {
             url,
+            node,
             target_session_module,
             language,
             source,
             requested_name,
             processor_type_name,
-        }) => commands::control::replace(commands::control::ReplaceArgs {
-            url,
-            target_session_module,
-            language,
-            source,
-            requested_name,
-            processor_type_name,
-        })?,
+        }) => {
+            let url = commands::control::resolve_control_url(url, node)?;
+            commands::control::replace(commands::control::ReplaceArgs {
+                url,
+                target_session_module,
+                language,
+                source,
+                requested_name,
+                processor_type_name,
+            })?
+        }
         Some(Commands::Connect {
             url,
+            node,
             from_processor,
             from_port,
             to_processor,
             to_port,
         }) => {
+            let url = commands::control::resolve_control_url(url, node)?;
             commands::control::connect(&url, &from_processor, &from_port, &to_processor, &to_port)?
         }
         Some(Commands::Tap {
             url,
+            node,
             channel,
             count,
-        }) => commands::control::tap(&url, &channel, count)?,
+        }) => {
+            let url = commands::control::resolve_control_url(url, node)?;
+            commands::control::tap(&url, &channel, count)?
+        }
         Some(Commands::Setup { action }) => match action {
             SetupCommands::Shell { shell } => commands::setup::shell(shell.as_deref())?,
         },
@@ -601,21 +669,28 @@ async fn async_main(cli: Cli) -> Result<()> {
             name,
             dir,
             url,
+            node,
             processor_id,
-        }) => match url {
-            Some(url) => {
+        }) => {
+            if url.is_some() || node.is_some() {
                 let processor_id = processor_id.ok_or_else(|| {
-                    anyhow::anyhow!("`remove --url <url>` requires `--processor-id <id>`")
+                    anyhow::anyhow!(
+                        "`remove` control-plane mode (`--url` / `--node`) requires \
+                         `--processor-id <id>`"
+                    )
                 })?;
+                let url = commands::control::resolve_control_url(url, node)?;
                 commands::control::remove(&url, &processor_id)?
-            }
-            None => {
+            } else {
                 let name = name.ok_or_else(|| {
-                    anyhow::anyhow!("`remove` requires either `<name>` (local mode) or `--url` (control-plane mode)")
+                    anyhow::anyhow!(
+                        "`remove` requires either `<name>` (local mode) or `--url` / \
+                         `--node` (control-plane mode)"
+                    )
                 })?;
                 commands::add::remove(&name, dir.as_deref())?
             }
-        },
+        }
         Some(Commands::Pkg { action }) => match action {
             PkgCommands::Build { output } => commands::pkg::build(output.as_deref())?,
             PkgCommands::Publish => commands::pkg::publish()?,
