@@ -30,7 +30,6 @@ processors:
   runtime:
     language: rust
     options:
-      unsafe_send: true
       python_version: null
     env: {}
   entrypoint: null
@@ -52,7 +51,6 @@ processors:
   runtime:
     language: rust
     options:
-      unsafe_send: true
       python_version: null
     env: {}
   entrypoint: null

@@ -98,7 +98,6 @@ fn fallback_home() -> PathBuf {
 pub fn ensure_streamlib_home() -> std::io::Result<PathBuf> {
     let data = get_streamlib_data_dir();
 
-    std::fs::create_dir_all(data.join("cache/wheels"))?;
     std::fs::create_dir_all(data.join("cache/uv"))?;
     std::fs::create_dir_all(data.join("runtimes"))?;
 

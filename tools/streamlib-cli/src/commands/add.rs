@@ -538,7 +538,7 @@ mod tests {
             &manifest_path,
             "# yaml-language-server: $schema=./schemas/streamlib.schema.json\n\
              package:\n  org: tatolab\n  name: widget\n  version: 0.1.0\n\
-             processors:\n- name: Widget\n  version: 1.0.0\n  runtime: rust\n  execution: reactive\n",
+             processors:\n- name: Widget\n  runtime: rust\n  execution: reactive\n",
         )
         .unwrap();
 
@@ -583,7 +583,6 @@ schemas:
     file: schemas/widget_config.yaml
 processors:
 - name: Widget
-  version: 1.0.0
   runtime: rust
   execution: reactive
 ";
