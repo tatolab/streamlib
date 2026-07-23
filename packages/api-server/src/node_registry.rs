@@ -91,6 +91,18 @@ pub enum NodeRegistryError {
         path: PathBuf,
         source: serde_json::Error,
     },
+    /// An entry decoded but carries a `schema_version` this reader does not
+    /// understand. Only `read_entry`'s strict single-entry lookup raises this;
+    /// `scan_entries` skips such an entry instead.
+    #[error(
+        "node registry entry {path} has unrecognized schema_version {found} \
+         (this reader understands {expected})"
+    )]
+    EntrySchemaVersionMismatch {
+        path: PathBuf,
+        found: u32,
+        expected: u32,
+    },
 }
 
 /// The directory holding node discovery entries.
@@ -160,7 +172,17 @@ pub fn read_entry(runtime_id: &str) -> Result<Option<NodeRegistryEntry>, NodeReg
         Err(source) => return Err(NodeRegistryError::EntryRead { path, source }),
     };
     let entry: NodeRegistryEntry = serde_json::from_slice(&bytes)
-        .map_err(|source| NodeRegistryError::EntryDecode { path, source })?;
+        .map_err(|source| NodeRegistryError::EntryDecode {
+            path: path.clone(),
+            source,
+        })?;
+    if entry.schema_version != NODE_REGISTRY_SCHEMA_VERSION {
+        return Err(NodeRegistryError::EntrySchemaVersionMismatch {
+            path,
+            found: entry.schema_version,
+            expected: NODE_REGISTRY_SCHEMA_VERSION,
+        });
+    }
     Ok(Some(entry))
 }
 
@@ -381,6 +403,22 @@ mod tests {
             assert!(
                 scan_entries().expect("scan").is_empty(),
                 "an unrecognized schema_version must be skipped"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn read_entry_rejects_an_entry_with_an_unrecognized_schema_version() {
+        with_isolated_xdg_runtime_dir(|_xdg| {
+            let mut future = sample_entry("Rfuture-read", 5200);
+            future.schema_version = NODE_REGISTRY_SCHEMA_VERSION + 1;
+            write_entry(&future).expect("write future");
+            let error = read_entry(&future.runtime_id)
+                .expect_err("a version-mismatched entry must be a hard error, not Ok(Some(_))");
+            assert!(
+                matches!(error, NodeRegistryError::EntrySchemaVersionMismatch { .. }),
+                "expected a schema-version-mismatch error; got: {error}"
             );
         });
     }
