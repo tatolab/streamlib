@@ -341,11 +341,20 @@ fn main() -> Result<()> {
         .block_on(async_main(cli))
 }
 
+/// The short-lived-CLI logging config for `command`. Every subcommand mirrors
+/// pretty logs to stdout except `mcp`, which speaks a byte protocol on stdout
+/// and so routes its mirror to stderr to keep fd 1 carrying only MCP JSON-RPC
+/// frames.
+fn logging_config_for(command: &Option<Commands>) -> streamlib::sdk::logging::StreamlibLoggingConfig {
+    if matches!(command, Some(Commands::Mcp { .. })) {
+        streamlib::sdk::logging::StreamlibLoggingConfig::for_stdio_protocol("streamlib-cli")
+    } else {
+        streamlib::sdk::logging::StreamlibLoggingConfig::for_cli("streamlib-cli")
+    }
+}
+
 async fn async_main(cli: Cli) -> Result<()> {
-    // Short-lived CLI invocation: stdout-only tracing, no JSONL file.
-    let _logging_guard = streamlib::sdk::logging::init(
-        streamlib::sdk::logging::StreamlibLoggingConfig::for_cli("streamlib-cli"),
-    )?;
+    let _logging_guard = streamlib::sdk::logging::init(logging_config_for(&cli.command))?;
 
     match cli.command {
         Some(Commands::Logs {
@@ -473,4 +482,33 @@ async fn async_main(cli: Cli) -> Result<()> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use streamlib::sdk::logging::PrettyMirrorStream;
+
+    /// The `mcp` subcommand's stdio transport requires fd 1 carry only MCP
+    /// JSON-RPC frames — its pretty log mirror MUST route to stderr. Reverting
+    /// the mcp branch of [`logging_config_for`] (mirror back to stdout) goes red
+    /// here, catching a regression that would re-pollute the protocol stream.
+    #[test]
+    fn mcp_subcommand_mirrors_logs_to_stderr_not_stdout() {
+        let mcp = logging_config_for(&Some(Commands::Mcp { attach: None }));
+        assert_eq!(
+            mcp.pretty_mirror_stream,
+            PrettyMirrorStream::Stderr,
+            "mcp stdout is a protocol channel — the pretty mirror must go to stderr"
+        );
+    }
+
+    /// Every path other than `mcp` keeps the human-facing stdout mirror.
+    #[test]
+    fn non_mcp_invocation_mirrors_logs_to_stdout() {
+        assert_eq!(
+            logging_config_for(&None).pretty_mirror_stream,
+            PrettyMirrorStream::Stdout
+        );
+    }
 }

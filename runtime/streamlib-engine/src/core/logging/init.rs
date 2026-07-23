@@ -16,7 +16,7 @@ use tracing::Dispatch;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-use crate::core::logging::config::{ResolvedTunables, StreamlibLoggingConfig};
+use crate::core::logging::config::{PrettyMirrorStream, ResolvedTunables, StreamlibLoggingConfig};
 use crate::core::logging::event::Source;
 use crate::core::logging::layer::JsonlSinkLayer;
 use crate::core::logging::paths::runtime_log_path;
@@ -247,10 +247,17 @@ fn build_components(config: StreamlibLoggingConfig) -> Result<(Dispatch, Streaml
 
     let stdout_sink: Option<Box<dyn std::io::Write + Send>> = if !stdout_enabled {
         None
-    } else if let Some(file) = real_stdout_file.take() {
-        Some(Box::new(file))
     } else {
-        Some(Box::new(std::io::stdout()))
+        match config.pretty_mirror_stream {
+            // fd 2 keeps fd 1 a pure protocol channel (the `streamlib mcp`
+            // stdio transport). The dup'd real-stdout handle from the
+            // interceptor is never claimed here, so it drops and closes cleanly.
+            PrettyMirrorStream::Stderr => Some(Box::new(std::io::stderr())),
+            PrettyMirrorStream::Stdout => match real_stdout_file.take() {
+                Some(file) => Some(Box::new(file)),
+                None => Some(Box::new(std::io::stdout())),
+            },
+        }
     };
 
     let worker = spawn_worker(WorkerConfig {
