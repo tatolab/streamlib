@@ -14,8 +14,9 @@ edition = "2024"
 publish = false
 
 [dependencies]
-# SDK by version; not published to crates.io yet, so `./setup.sh` runs
-# `streamlib link --engine <checkout>` to point it at the in-repo SDK.
+# SDK by version; `./setup.sh` runs `streamlib link --engine <checkout>` to
+# point it at the in-repo SDK (no hosted registry; the linked checkout is the
+# source).
 streamlib = { version = "0.7.45" }
 serde_json = "1"
 anyhow = "1.0.100"

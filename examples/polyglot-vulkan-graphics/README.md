@@ -45,8 +45,8 @@ cargo run -- --runtime=deno   --output=/tmp/vulkan-triangle-deno.png
 
 1. **SDK** — `streamlib link --engine <checkout>` points the Rust, Python, and
    Deno streamlib SDK surfaces at the in-repo checkout (crates.io patch + uv
-   source + deno import-map). The SDKs aren't published yet; once they are, the
-   by-version pins resolve with no link step.
+   source + deno import-map). There is no hosted registry; the linked checkout
+   is the SDK source.
 2. **Packages** — `streamlib link` symlinks `@tatolab/debug-utilities` and this
    example's `./python` + `./deno` packages into `./streamlib_modules/`.
 

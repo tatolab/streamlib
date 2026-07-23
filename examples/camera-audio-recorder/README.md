@@ -27,7 +27,8 @@ cargo run         # prints the deferral message and exits
 
 `./setup.sh` runs `streamlib link --engine <checkout>` so the app's
 `streamlib = "0.6"` dependency resolves against the in-repo SDK (a transient
-`[patch.crates-io]`; the SDK isn't published to crates.io yet). The `streamlib`
+`[patch.crates-io]`; there is no hosted registry — the linked checkout is the
+SDK source). The `streamlib`
 CLI must be on your `PATH` (build it with `cargo build -p streamlib-cli` from
 the checkout); `setup.sh` falls back to the checkout's built binary otherwise.
 

@@ -30,7 +30,7 @@ cargo run -- h264 /dev/video2 10 # codec | camera device | seconds
 cargo run -- h265 /dev/video2 10
 ```
 
-`./setup.sh` runs `streamlib link --engine <checkout>` (SDK, until it publishes)
+`./setup.sh` runs `streamlib link --engine <checkout>` (points the SDK dep at the checkout)
 and `streamlib link` for `@tatolab/camera`, `@tatolab/display`, `@tatolab/h264`,
 `@tatolab/h265` into `./streamlib_modules/`. The `streamlib` CLI must be on your
 `PATH` (`cargo build -p streamlib-cli`).

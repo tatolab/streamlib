@@ -25,7 +25,7 @@ fi
 echo "streamlib CLI: $STREAMLIB"
 echo "checkout:      $CHECKOUT"
 
-# 1. SDK: point this app's `streamlib = "0.6"` dep at the local checkout.
+# 1. SDK: point this app's `streamlib` dep at the local checkout.
 "$STREAMLIB" link --engine "$CHECKOUT"
 
 # `link --engine` writes the cargo [patch.crates-io], but the runtime

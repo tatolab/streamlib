@@ -33,9 +33,9 @@ cargo run
 `./setup.sh` does the full local setup in one shot:
 
 1. **SDK** — `streamlib link --engine <checkout>` points the Rust + Python
-   streamlib SDK surfaces at the in-repo checkout. The SDKs aren't published
-   yet; once they are, the by-version pins resolve with no link step. (numpy
-   resolves from public PyPI normally — a truly-external dep.)
+   streamlib SDK surfaces at the in-repo checkout. There is no hosted
+   registry; the linked checkout is the SDK source. (numpy resolves from
+   public PyPI normally — a truly-external dep.)
 2. **Packages** — `streamlib link` symlinks this example's `./pkg-a/python` +
    `./pkg-b/python` packages into `./streamlib_modules/`.
 

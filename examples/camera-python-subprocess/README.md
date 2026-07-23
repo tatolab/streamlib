@@ -35,8 +35,8 @@ cargo run
 `./setup.sh` does the full local setup in one shot:
 
 1. **SDK** — `streamlib link --engine <checkout>` points the Rust + Python
-   streamlib SDK surfaces at the in-repo checkout. The SDKs aren't published
-   yet; once they are, the by-version pins resolve with no link step.
+   streamlib SDK surfaces at the in-repo checkout. There is no hosted
+   registry; the linked checkout is the SDK source.
 2. **Packages** — `streamlib link` symlinks `@tatolab/camera`,
    `@tatolab/display`, and this example's `./python` package into
    `./streamlib_modules/`.
