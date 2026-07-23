@@ -19,9 +19,67 @@
 //! already-pretty text content.
 
 use std::io::{Read, Write};
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value, json};
+
+/// Resolve the control-plane base URL a verb targets from the optional `--url`
+/// and `--node` flags, consulting the node registry when neither pins a URL:
+///
+/// - `--url` wins outright (an explicit endpoint, registered or not).
+/// - else `--node <runtime_id>` resolves that node's `control_url` from the
+///   registry (error if no such entry).
+/// - else the SOLE live node's `control_url` (zero-ceremony single-node default).
+/// - else — zero live nodes, or more than one and neither flag given — an error
+///   that lists the live nodes so the caller can pick one with `--node`.
+pub fn resolve_control_url(url: Option<String>, node: Option<String>) -> Result<String> {
+    if let Some(url) = url {
+        return Ok(url);
+    }
+    if let Some(node) = node {
+        return match streamlib_api_server::node_registry::read_entry(&node)? {
+            Some(entry) => Ok(entry.control_url),
+            None => {
+                let live = super::nodes::live_nodes()?;
+                bail!(
+                    "no registered node with runtime_id `{node}`.{}",
+                    render_node_hint(&live)
+                );
+            }
+        };
+    }
+
+    let mut live = super::nodes::live_nodes()?;
+    match live.len() {
+        1 => Ok(live.remove(0).control_url),
+        0 => bail!(
+            "no live StreamLib nodes found. Start a node that hosts an ApiServer \
+             control plane, or pass `--url <control-plane-url>` explicitly."
+        ),
+        _ => bail!(
+            "{} live nodes found; disambiguate with `--node <runtime_id>` or \
+             `--url <control-plane-url>`.{}",
+            live.len(),
+            render_node_hint(&live)
+        ),
+    }
+}
+
+/// A trailing ` Live nodes: ...` fragment listing each live node's
+/// `runtime_id` → `control_url`, for a resolver error message. Empty when there
+/// are no live nodes.
+fn render_node_hint(live: &[streamlib_api_server::node_registry::NodeRegistryEntry]) -> String {
+    if live.is_empty() {
+        return String::new();
+    }
+    let listed = live
+        .iter()
+        .map(|entry| format!("{} ({})", entry.runtime_id, entry.control_url))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(" Live nodes: {listed}.")
+}
 
 /// POST one JSON-RPC request body to `{url}/mcp` and return the response body.
 /// A 2xx yields the body (empty for a `202` notification); a non-2xx or
@@ -33,11 +91,8 @@ pub fn post_mcp_request(
     bearer_token: Option<&str>,
     request_body: &str,
 ) -> Result<String> {
-    let endpoint = format!("{}/mcp", url.trim_end_matches('/'));
-    let mut request = ureq::post(&endpoint).set("content-type", "application/json");
-    if let Some(bearer_token) = bearer_token {
-        request = request.set("authorization", &format!("Bearer {bearer_token}"));
-    }
+    let endpoint = mcp_endpoint(url);
+    let request = with_mcp_headers(ureq::post(&endpoint), bearer_token);
     match request.send_string(request_body) {
         Ok(response) => Ok(response.into_string()?),
         Err(ureq::Error::Status(code, response)) => {
@@ -45,6 +100,54 @@ pub fn post_mcp_request(
             bail!("POST {endpoint} failed: HTTP {code}: {body}");
         }
         Err(error) => bail!("POST {endpoint} transport error: {error}"),
+    }
+}
+
+/// Whether the control plane at `url` answers its `POST {url}/mcp` at all. Any
+/// HTTP status — including an auth `4xx` — means the server is up (reachable);
+/// only a transport error (connection refused, timeout) is dead. `connect_timeout`
+/// and `response_timeout` bound a hung reused port so a probe never stalls a scan.
+/// `bearer_token` rides as an `authorization: Bearer` header. This shares the
+/// single `{url}/mcp` + bearer seam [`post_mcp_request`] owns, sending a `graph`
+/// `tools/call` purely to elicit a response.
+pub fn probe_reachable(
+    url: &str,
+    bearer_token: Option<&str>,
+    connect_timeout: Duration,
+    response_timeout: Duration,
+) -> bool {
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(connect_timeout)
+        .timeout(response_timeout)
+        .build();
+    let endpoint = mcp_endpoint(url);
+    let request = with_mcp_headers(agent.post(&endpoint), bearer_token);
+    let request_body = json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "tools/call",
+        "params": { "name": "graph", "arguments": {} },
+    })
+    .to_string();
+    match request.send_string(&request_body) {
+        Ok(_) => true,
+        Err(ureq::Error::Status(_, _)) => true,
+        Err(_) => false,
+    }
+}
+
+/// The `{url}/mcp` control endpoint, with any trailing slash on `url` trimmed.
+fn mcp_endpoint(url: &str) -> String {
+    format!("{}/mcp", url.trim_end_matches('/'))
+}
+
+/// Apply the `content-type: application/json` and optional `authorization: Bearer`
+/// headers every `{url}/mcp` POST carries.
+fn with_mcp_headers(request: ureq::Request, bearer_token: Option<&str>) -> ureq::Request {
+    let request = request.set("content-type", "application/json");
+    match bearer_token {
+        Some(bearer_token) => request.set("authorization", &format!("Bearer {bearer_token}")),
+        None => request,
     }
 }
 
@@ -500,6 +603,35 @@ mod tests {
     }
 
     #[test]
+    fn probe_reachable_treats_any_http_status_including_401_as_alive() {
+        let (url, _recorded, server) = spawn_mock_mcp_server(vec![MockReply {
+            status_line: "401 Unauthorized",
+            body: "missing bearer".to_string(),
+        }]);
+        let alive = probe_reachable(
+            &url,
+            None,
+            Duration::from_millis(500),
+            Duration::from_millis(1500),
+        );
+        server.join().unwrap();
+        assert!(alive, "an HTTP response (even 401) means the server is up");
+    }
+
+    #[test]
+    fn probe_reachable_reports_a_closed_port_as_dead() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        assert!(!probe_reachable(
+            &format!("http://127.0.0.1:{port}"),
+            None,
+            Duration::from_millis(500),
+            Duration::from_millis(1500),
+        ));
+    }
+
+    #[test]
     fn submit_arguments_carry_config_and_connect_wirings() {
         let (url, recorded, server) =
             spawn_mock_mcp_server(vec![tool_ok_reply(1, json!({ "processors": [] }))]);
@@ -558,6 +690,112 @@ mod tests {
         assert_eq!(parse_config(None).unwrap(), json!({}));
         assert_eq!(parse_config(Some(r#"{"x":1}"#)).unwrap(), json!({ "x": 1 }));
         assert!(parse_config(Some("not json")).is_err());
+    }
+
+    use serial_test::serial;
+    use streamlib_api_server::node_registry::{self, NodeRegistryEntry};
+
+    /// Point `XDG_RUNTIME_DIR` at a fresh tempdir for the closure so the node
+    /// registry the resolver reads is hermetic; restore the prior value after.
+    /// Guarded `#[serial]` at every call site — the env var is process-global.
+    fn with_isolated_node_registry<F: FnOnce() -> R, R>(f: F) -> R {
+        let prev = std::env::var_os("XDG_RUNTIME_DIR");
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // SAFETY: callers are #[serial]; no concurrent env mutation.
+        unsafe {
+            std::env::set_var("XDG_RUNTIME_DIR", tmp.path());
+        }
+        let result = f();
+        unsafe {
+            match prev {
+                Some(value) => std::env::set_var("XDG_RUNTIME_DIR", value),
+                None => std::env::remove_var("XDG_RUNTIME_DIR"),
+            }
+        }
+        result
+    }
+
+    fn write_node_entry(runtime_id: &str, control_url: &str) {
+        node_registry::write_entry(&NodeRegistryEntry {
+            schema_version: node_registry::NODE_REGISTRY_SCHEMA_VERSION,
+            runtime_id: runtime_id.to_string(),
+            control_url: control_url.to_string(),
+            pid: std::process::id(),
+            hint: "test".to_string(),
+        })
+        .expect("write node entry");
+    }
+
+    #[test]
+    fn resolve_control_url_prefers_an_explicit_url() {
+        let resolved =
+            resolve_control_url(Some("http://explicit:9000".to_string()), None).expect("resolve");
+        assert_eq!(resolved, "http://explicit:9000");
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_control_url_by_node_reads_the_registry_entry() {
+        with_isolated_node_registry(|| {
+            write_node_entry("Rpicked", "http://127.0.0.1:7777");
+            let resolved =
+                resolve_control_url(None, Some("Rpicked".to_string())).expect("resolve by node");
+            assert_eq!(resolved, "http://127.0.0.1:7777");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_control_url_by_unknown_node_errors() {
+        with_isolated_node_registry(|| {
+            let error = resolve_control_url(None, Some("Rghost".to_string()))
+                .expect_err("unknown node must error");
+            assert!(
+                error.to_string().contains("Rghost"),
+                "error must name the unknown runtime_id; got: {error}"
+            );
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_control_url_defaults_to_the_sole_live_node() {
+        // One reachable mock control plane answers the resolver's liveness probe.
+        let (url, _recorded, server) =
+            spawn_mock_mcp_server(vec![tool_ok_reply(1, json!({ "processors": [] }))]);
+        with_isolated_node_registry(|| {
+            write_node_entry("Ronly", &url);
+            let resolved = resolve_control_url(None, None).expect("sole live node resolves");
+            assert_eq!(resolved, url);
+        });
+        server.join().unwrap();
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_control_url_with_no_live_nodes_errors() {
+        with_isolated_node_registry(|| {
+            let error = resolve_control_url(None, None).expect_err("zero live nodes must error");
+            assert!(error.to_string().contains("no live"), "got: {error}");
+        });
+    }
+
+    #[test]
+    #[serial]
+    fn resolve_control_url_with_multiple_live_nodes_errors_and_lists_them() {
+        let (url_a, _ra, server_a) = spawn_mock_mcp_server(vec![tool_ok_reply(1, json!({}))]);
+        let (url_b, _rb, server_b) = spawn_mock_mcp_server(vec![tool_ok_reply(1, json!({}))]);
+        with_isolated_node_registry(|| {
+            write_node_entry("Rnode-a", &url_a);
+            write_node_entry("Rnode-b", &url_b);
+            let error =
+                resolve_control_url(None, None).expect_err("more than one live node must error");
+            let text = error.to_string();
+            assert!(text.contains("Rnode-a"), "got: {text}");
+            assert!(text.contains("Rnode-b"), "got: {text}");
+        });
+        server_a.join().unwrap();
+        server_b.join().unwrap();
     }
 
     #[test]

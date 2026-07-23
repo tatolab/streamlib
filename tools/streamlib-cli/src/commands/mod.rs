@@ -9,6 +9,7 @@ pub mod install;
 pub mod link;
 pub mod logs;
 pub mod mcp;
+pub mod nodes;
 pub mod pkg;
 pub mod schema;
 pub mod setup;

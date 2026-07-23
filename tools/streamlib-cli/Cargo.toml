@@ -86,5 +86,13 @@ zip = "2.2"
 # Temporary directory for `uv build --wheel` output staging inside `streamlib pack`
 tempfile = "3.14"
 
+# Process-liveness check (`kill(pid, 0)`) for `streamlib nodes` pruning of stale
+# node-registry entries whose host process is gone.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
+# Serialize tests that swap the process-global `XDG_RUNTIME_DIR` for a tempdir
+# node registry (resolver branch coverage), matching the engine's env-swap tests.
+serial_test = "3.2"
