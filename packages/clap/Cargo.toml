@@ -14,20 +14,20 @@ name = "streamlib_clap"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]
-streamlib-jtd-codegen = {version = "0.7.43"}
+streamlib-jtd-codegen = {version = "0.7.44"}
 
 [dependencies]
 # Engine-free authoring SDK (never the `streamlib` facade) — runtime context, processor traits, generated wire
 # types under `crate::_generated_::*` (AudioFrame).
-streamlib-plugin-sdk = {version = "0.7.43"}
+streamlib-plugin-sdk = {version = "0.7.44"}
 
 # Procedural macros — `#[streamlib_plugin_sdk::sdk::processor("...")]` reads the
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
-streamlib-macros = {version = "0.7.43"}
+streamlib-macros = {version = "0.7.44"}
 
 # Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
 # runtime dlopens at load time.
-streamlib-plugin-abi = {version = "0.7.43"}
+streamlib-plugin-abi = {version = "0.7.44"}
 
 # Serialization (config dataclasses ship as serde-derived).
 
