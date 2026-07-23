@@ -93,6 +93,7 @@ libc.workspace = true
 
 [dev-dependencies]
 tokio = { workspace = true, features = ["full"] }
-# Serialize tests that swap the process-global `XDG_RUNTIME_DIR` for a tempdir
-# node registry (resolver branch coverage), matching the engine's env-swap tests.
+# Serialize tests that mutate process-global env — the node-registry resolver
+# branch (`XDG_RUNTIME_DIR`) and the #1343 summary-read link tests
+# (`STREAMLIB_PACKAGE_SOURCE` / `STREAMLIB_LINK_CHECKOUT`).
 serial_test = "3.2"
