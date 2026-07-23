@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.7.43](https://github.com/tatolab/streamlib/compare/v0.7.42...v0.7.43) (2026-07-23)
+
+
+### Features
+
+* **cli:** streamlib mcp — stdio MCP server spawnable by any MCP host ([#1559](https://github.com/tatolab/streamlib/issues/1559)) ([6003da6](https://github.com/tatolab/streamlib/commit/6003da6b2aa8acb11bc4ef379bf40f0e27f1da65))
+
 ## [0.7.42](https://github.com/tatolab/streamlib/compare/v0.7.41...v0.7.42) (2026-07-22)
 
 
