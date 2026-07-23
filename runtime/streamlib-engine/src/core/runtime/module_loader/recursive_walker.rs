@@ -821,11 +821,11 @@ fn derive_dep_strategy_and_ident(
                      not another registry range.",
                 )));
             }
-            // A registry-version dependency resolves from the configured the static registry
-            // generic registry by version: pull the `.slpkg` and build it from
+            // A registry-version dependency resolves from the configured static registry
+            // tree by version: pull the `.slpkg` and build it from
             // source on the host (IfStale prefers a matching prebuilt). The
             // registry endpoint comes from the environment
-            // (STREAMLIB_REGISTRY_URL / STREAMLIB_REGISTRY_URL).
+            // (STREAMLIB_REGISTRY_URL).
             Strategy::Registry {
                 version_req: r.version.clone(),
                 build: BuildPolicy::IfStale,

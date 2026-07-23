@@ -155,11 +155,12 @@ pub struct ResolverOptions {
 
 impl ResolverOptions {
     /// Options with the registry config read from the environment
-    /// (`STREAMLIB_REGISTRY_URL`, defaulting to the first-party registry) and
-    /// the default cache dir. This is the codegen-boundary constructor — build
-    /// scripts and `streamlib generate` use it so a registry-cached crate
-    /// resolves its schema deps from the configured registry. Unit tests
-    /// construct [`ResolverOptions`] directly to stay hermetic.
+    /// (`STREAMLIB_REGISTRY_URL`; unset means no registry — `from_env` does NOT
+    /// default to a first-party URL) and the default cache dir. This is the
+    /// codegen-boundary constructor — build scripts and `streamlib generate`
+    /// use it so a registry-cached crate resolves its schema deps from the
+    /// configured registry. Unit tests construct [`ResolverOptions`] directly
+    /// to stay hermetic.
     pub fn from_env() -> Self {
         Self {
             cache_dir: None,

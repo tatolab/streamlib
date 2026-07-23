@@ -98,7 +98,7 @@ pub enum Strategy {
         checksum: Option<ArtifactChecksum>,
     },
 
-    /// Resolve from the configured the static registry **generic** registry by semver
+    /// Resolve from the configured static registry tree (generic .slpkg store) by semver
     /// requirement — the cross-repo consumer path. Lists the package's
     /// published versions from its anonymous, cargo-sparse-shaped version
     /// index (`/api/packages/{org}/generic/{name}/index/index.json`),
@@ -440,7 +440,7 @@ pub(super) fn resolve_strategy_to_source(
                     package = %pkg_ref,
                     version = %selected,
                     %url,
-                    "resolved module from static generic store"
+                    "fetched module .slpkg from the static registry tree"
                 );
                 let archive = persist_registry_slpkg(pkg_ref, &url, &bytes)?;
                 extract_slpkg_to_cache(&archive, app_modules_root().as_deref()).map_err(|e| {

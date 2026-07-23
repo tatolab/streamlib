@@ -136,9 +136,10 @@ pub enum ResolverError {
     SlpkgExtractFailed { path: PathBuf, message: String },
 
     #[error(
-        "registry dependency `{name}` cannot be resolved: no registry is configured. \
-         Set `{env}` to the registry tree-root URL (`file://<root>` or `http(s)://…`), \
-         or add a `patch:` override."
+        "dependency `{name}` requested by version but nothing resolves it: no `streamlib link` \
+         is active and no registry is configured. Run `streamlib link` for a local checkout, \
+         add a dev `patch:` override, or set `{env}` to a static registry tree-root URL \
+         (`file://<root>` or `http(s)://…`)."
     )]
     RegistryNotConfigured { name: String, env: String },
 

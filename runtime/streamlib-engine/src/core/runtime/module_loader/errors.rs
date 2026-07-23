@@ -147,16 +147,19 @@ pub enum AddModuleError {
     },
 
     /// A [`Strategy::Registry`] resolution found no usable registry
-    /// endpoint: neither `STREAMLIB_REGISTRY_URL` nor its `STREAMLIB_REGISTRY_URL`
-    /// fallback is set. Point one at the static registry base URL (e.g.
-    /// `file:///path/to/registry-tree`) so the generic registry is reachable.
-    /// Fail-loud — never silently fall back to a local source for a
-    /// dependency the caller asked to resolve from the registry.
+    /// endpoint: `STREAMLIB_REGISTRY_URL` is not set. Point one at the static
+    /// registry base URL (e.g. `file:///path/to/registry-tree`) so the static
+    /// registry tree is reachable. Fail-loud — never silently fall back to a
+    /// local source for a dependency the caller asked to resolve by version.
     ///
     /// [`Strategy::Registry`]: super::Strategy::Registry
     #[error(
-        "Registry not configured for '{package}': set {env} (e.g. \
-         file:///path/to/registry-tree) to resolve from the static generic store"
+        "No source for '{package}': it is not in the app's streamlib_modules/ \
+         slot, no `streamlib link` is active, and no static registry tree is \
+         configured. Run `streamlib link` to resolve from a local checkout, \
+         `streamlib add {package}@<version>` to install a published version, \
+         or set {env} to a static registry tree (e.g. \
+         file:///path/to/registry-tree)."
     )]
     RegistryNotConfigured {
         package: streamlib_idents::PackageRef,

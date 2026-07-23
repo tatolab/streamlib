@@ -905,8 +905,9 @@ impl Runner {
         let Some(config) = streamlib_idents::RegistryConfig::from_env() else {
             tracing::warn!(
                 package = %pkg_ref,
-                "acquire-on-reference is enabled but no registry URL is configured \
-                 (STREAMLIB_REGISTRY_URL) — cannot acquire"
+                "acquire-on-reference is enabled but nothing can resolve '{pkg_ref}': no \
+                 `streamlib link` is active and STREAMLIB_REGISTRY_URL is unset — run \
+                 `streamlib add {pkg_ref}` or set a static registry tree to acquire"
             );
             return Ok(None);
         };

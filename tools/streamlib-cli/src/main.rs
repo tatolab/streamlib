@@ -442,7 +442,7 @@ enum PkgCommands {
     /// Publish THIS package to the registry (run inside the package).
     ///
     /// Always repacks a fresh source-only `.slpkg` (never trusts an existing
-    /// artifact) and writes it into the static generic store. The registry
+    /// artifact) and writes it into the static registry tree. The registry
     /// tree root comes from `STREAMLIB_REGISTRY_URL` and must be a `file://`
     /// tree — publishing writes files (a static HTTP mount is read-only);
     /// reads are tokenless. Publishing many packages is a script over this

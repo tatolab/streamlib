@@ -1151,7 +1151,7 @@ impl Runner {
 
         for module in to_load {
             tracing::info!(
-                "Snapshot: resolving module '{}' from registry",
+                "Snapshot: resolving module '{}' by version (linked checkout if a streamlib link is active, else the static registry tree)",
                 module.package_ref()
             );
             self.add_module_with(

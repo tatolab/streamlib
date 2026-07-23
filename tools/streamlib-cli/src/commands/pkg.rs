@@ -43,7 +43,7 @@ pub fn build(output: Option<&Path>) -> Result<()> {
 }
 
 /// Publish THIS package (the current working directory) into the static
-/// registry tree's `.slpkg` generic store. Always repacks a fresh source-only
+/// registry tree's `.slpkg` store. Always repacks a fresh source-only
 /// `.slpkg` to a temp file (never trusts a pre-existing artifact), writes it by
 /// version, refreshes the package's version index, and emits the same catalog
 /// artifacts a whole-tree `static-registry emit` would — the per-package

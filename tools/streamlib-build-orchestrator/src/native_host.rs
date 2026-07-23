@@ -129,7 +129,7 @@ pub(crate) fn ensure_native_host(
         crate_name = runtime.crate_name(),
         %version,
         profile = profile.label(),
-        "building subprocess native host from registry source (first use / version change)"
+        "building subprocess native host from the static registry tree's cargo subtree (first use / version change)"
     );
 
     // 1. Fetch the `.crate` source from the static registry tree's cargo

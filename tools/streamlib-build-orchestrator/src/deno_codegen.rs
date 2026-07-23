@@ -14,7 +14,7 @@
 //! `ensure_streamlib_generated_in_venv`: both run in-process JTD codegen so a
 //! staged polyglot package is runnable without a separate `deno task setup`.
 //! Schema deps (e.g. `@tatolab/core`) resolve from the static registry via the
-//! codegen resolver's env-aware config (`STREAMLIB_REGISTRY_URL` / `STREAMLIB_REGISTRY_URL`)
+//! codegen resolver's env-aware config (`STREAMLIB_REGISTRY_URL`)
 //! — the same path the Rust build-script codegen uses.
 //!
 //! Generating into the orchestrator's build-to-temp directory means the
@@ -99,8 +99,9 @@ pub fn provision_deno_typescript(
         build_failed(
             package_label,
             format!(
-                "failed to generate Deno wire vocabulary (schema deps resolve from the \
-                 registry — is STREAMLIB_REGISTRY_URL / STREAMLIB_REGISTRY_URL set?): {e}"
+                "failed to generate Deno wire vocabulary (schema deps resolve from a linked \
+                 checkout or the static registry tree — is a `streamlib link` active, or is \
+                 STREAMLIB_REGISTRY_URL set?): {e}"
             ),
         )
     })
