@@ -66,6 +66,25 @@ enum Commands {
         since: Option<String>,
     },
 
+    /// Speak the Model Context Protocol over stdio so any MCP host can spawn
+    /// StreamLib's agent-operable tools (`claude mcp add streamlib -- streamlib
+    /// mcp`).
+    ///
+    /// Default (no `--attach`): host a fresh in-process runtime and serve its
+    /// MCP over stdio — zero-config; the host gets an operable runtime, torn
+    /// down when it closes stdin. `--attach <url>` instead bridges stdio to a
+    /// running runtime's `POST {url}/mcp` to operate an existing live pipeline.
+    /// Exposes the same 7 tools as `POST /mcp`: graph / submit_processor /
+    /// replace_processor / remove_processor / connect / tap / logs. Auth is off
+    /// by construction on the in-process path; `--attach` forwards a token from
+    /// `STREAMLIB_MCP_TOKEN` when set.
+    Mcp {
+        /// Bridge stdio to this running runtime's `POST {url}/mcp` instead of
+        /// hosting an in-process runtime.
+        #[arg(long, value_name = "URL")]
+        attach: Option<String>,
+    },
+
     /// Setup commands
     Setup {
         #[command(subcommand)]
@@ -355,6 +374,7 @@ async fn async_main(cli: Cli) -> Result<()> {
             })
             .await?
         }
+        Some(Commands::Mcp { attach }) => commands::mcp::run(attach).await?,
         Some(Commands::Setup { action }) => match action {
             SetupCommands::Shell { shell } => commands::setup::shell(shell.as_deref())?,
         },
