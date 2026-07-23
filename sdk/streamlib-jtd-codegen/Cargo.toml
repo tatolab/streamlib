@@ -22,7 +22,7 @@ serde_yaml = { workspace = true }
 
 # Resolver + manifest types (the codegen pipeline ingests resolved package
 # sets produced by the streamlib-yaml resolver — Decision 7 of milestone 10).
-streamlib-idents = { path = "../streamlib-idents", version = "0.7.44" }
+streamlib-idents = { path = "../streamlib-idents", version = "0.7.45" }
 
 # Logging — library crates emit through tracing per docs/logging.md;
 # binary callers (xtask, streamlib-cli) initialize a subscriber.
