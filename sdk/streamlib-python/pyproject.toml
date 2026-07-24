@@ -8,7 +8,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "streamlib"
 # Tracks the workspace [workspace.package].version in Cargo.toml. The static
-# registry emit (`cargo xtask static-registry emit`) is authoritative: it builds
+# package-source emit (`cargo xtask static-package-source emit`) is authoritative: it builds
 # the pypi sdist from the workspace version (+ optional -dev.N) at emit time.
 # Keep it in sync with the workspace on release so a bare local `uv build`
 # produces a sane version.

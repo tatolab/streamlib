@@ -40,10 +40,10 @@ use streamlib_idents::{
     PackageSourceClient, PackageSource, SemVer, SemVerRange, crates_missing_from_release,
 };
 
-/// Registry org the release manifest lives under. Matches the publish
-/// scripts' `STREAMLIB_REGISTRY_ORG` default.
-fn registry_org() -> String {
-    std::env::var("STREAMLIB_REGISTRY_ORG")
+/// Package-source org the release manifest lives under. Matches the publish
+/// scripts' `STREAMLIB_PACKAGE_SOURCE_ORG` default.
+fn package_source_org() -> String {
+    std::env::var("STREAMLIB_PACKAGE_SOURCE_ORG")
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "tatolab".to_string())
@@ -81,7 +81,7 @@ pub(crate) fn assert_release_complete(
         return Ok(());
     };
     let client = PackageSourceClient::new(&config);
-    let org = registry_org();
+    let org = package_source_org();
 
     // Available releases (newest-satisfying selection below). A listing
     // failure degrades to the exact-floor fallback per pin.
@@ -171,7 +171,7 @@ pub(crate) fn assert_release_complete(
         release_version: incomplete_versions.join(", "),
         missing: missing_all.join(", "),
         hint: "the package source has a partial or inconsistent release — re-run the release publish \
-               (cargo xtask static-registry emit) so the full closure lands, or pin a version \
+               (cargo xtask static-package-source emit) so the full closure lands, or pin a version \
                whose release manifest lists every dependency"
             .to_string(),
     })
@@ -391,7 +391,7 @@ mod tests {
             package: "@tatolab/mavlink".to_string(),
             release_version: "0.5.1".to_string(),
             missing: "streamlib-plugin-sdk@^0.5.0, vulkan-jpeg@^0.5.0".to_string(),
-            hint: "re-run the release publish (cargo xtask static-registry emit)".to_string(),
+            hint: "re-run the release publish (cargo xtask static-package-source emit)".to_string(),
         };
         let rendered = err.to_string();
         assert!(
@@ -405,7 +405,7 @@ mod tests {
         assert!(rendered.contains("vulkan-jpeg@^0.5.0"), "{rendered}");
         assert!(rendered.contains("@tatolab/mavlink"), "{rendered}");
         assert!(
-            rendered.contains("cargo xtask static-registry emit"),
+            rendered.contains("cargo xtask static-package-source emit"),
             "{rendered}"
         );
     }
