@@ -42,7 +42,7 @@ function leadForZones(zoneList) {
   const has = (...keys) => keys.some((k) => z.some((zone) => zone.includes(k)));
   if (has('abi', 'plugin')) return 'plugin-abi-expert';
   if (has('python', 'deno', 'polyglot', 'ipc', 'escalate', 'iceoryx')) return 'polyglot-ipc-expert';
-  if (has('package', 'registry', 'schema', 'slpkg', 'module-loader')) return 'package-registry-expert';
+  if (has('package', 'package-source', 'registry', 'schema', 'slpkg', 'module-loader')) return 'package-source-expert';
   if (has('vulkan', 'rhi', 'video', 'gpu', 'codec', 'kernel', 'texture')) return 'gpu-vulkan-expert';
   if (has('camera', 'v4l2', 'media', 'audio', 'display', 'modifier')) return 'linux-media-expert';
   return null;

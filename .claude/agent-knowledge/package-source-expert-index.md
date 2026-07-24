@@ -1,4 +1,4 @@
-# package-registry-expert — symptom index
+# package-source-expert — symptom index
 
 Knowledge lives in `docs/`; this file is only routing. Update in the same PR that adds a learning (see `.claude/rules/docs-policy.md`).
 
