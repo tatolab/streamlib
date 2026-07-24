@@ -16,11 +16,11 @@ use std::path::{Path, PathBuf};
 
 use streamlib_idents::CatalogClient;
 use streamlib_idents::{
-    CATALOG_INDEX_PATH, CatalogRuntime, CatalogSchemaRef, Org, Package, PackageRef, RegistryClient,
-    RegistryConfig, SchemaIdent, SemVer, TypeName, parse_catalog_index_ndjson,
+    CATALOG_INDEX_PATH, CatalogRuntime, CatalogSchemaRef, Org, Package, PackageRef, PackageSourceClient,
+    PackageSource, SchemaIdent, SemVer, TypeName, parse_catalog_index_ndjson,
 };
 use streamlib_pack::catalog::{SiblingVersions, build_package_catalog, build_sibling_versions};
-use streamlib_pack::static_registry::{merge_catalog_index_lines, write_package_catalog};
+use streamlib_pack::static_package_source::{merge_catalog_index_lines, write_package_catalog};
 
 fn write(dir: &Path, rel: &str, body: &str) {
     let path = dir.join(rel);
@@ -146,12 +146,12 @@ processors:
 fn publish_package(tree_root: &Path, pkg_dir: &Path, siblings: &SiblingVersions) {
     let arts = build_package_catalog(pkg_dir, siblings)
         .unwrap_or_else(|e| panic!("build catalog for {}: {e}", pkg_dir.display()));
-    let cfg = RegistryConfig {
+    let cfg = PackageSource {
         base_url: format!("file://{}", tree_root.display()),
     };
     // A real publish writes the `.slpkg` first; the catalog query path never
     // reads it, so opaque bytes suffice.
-    RegistryClient::new(&cfg)
+    PackageSourceClient::new(&cfg)
         .upload_slpkg(
             &arts.catalog.package,
             arts.catalog.version,

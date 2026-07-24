@@ -29,7 +29,7 @@ use streamlib::sdk::runtime::{
     AddPackageOptions, AddPackageReport, AddPackageSource, AppModulesDir, BuildPolicy,
     LinkPackageReport,
 };
-use streamlib_idents::{DependencySpec, Manifest, PackageRef, RegistryDependency, SemVerRange};
+use streamlib_idents::{DependencySpec, Manifest, PackageRef, VersionDependency, SemVerRange};
 use streamlib_processor_schema::StreamlibYaml;
 
 use super::build_on_place::{
@@ -207,7 +207,7 @@ fn record_dependency_range(manifest_path: &Path, spec: &str) -> Result<()> {
         .dependencies
         .insert(
             pkg_ref.clone(),
-            DependencySpec::Registry(RegistryDependency {
+            DependencySpec::Version(VersionDependency {
                 version: range.clone(),
                 runtime: false,
             }),
@@ -554,11 +554,11 @@ mod tests {
         let reparsed: StreamlibYaml = serde_yaml::from_str(&written).unwrap();
         let core = parse_canonical_package_ref("@tatolab/core").unwrap();
         match reparsed.dependencies.get(&core).unwrap() {
-            DependencySpec::Registry(r) => {
+            DependencySpec::Version(r) => {
                 assert_eq!(r.version, SemVerRange::from_str("^1.4.0").unwrap());
                 assert!(!r.runtime);
             }
-            other => panic!("expected registry dep, got {other:?}"),
+            other => panic!("expected version dep, got {other:?}"),
         }
         // Runtime fields (processors) survive the round-trip.
         assert_eq!(reparsed.processors.len(), 1);
@@ -627,10 +627,10 @@ processors:
         let reparsed: StreamlibYaml = serde_yaml::from_str(&written).unwrap();
         let core = parse_canonical_package_ref("@tatolab/core").unwrap();
         match reparsed.dependencies.get(&core).unwrap() {
-            DependencySpec::Registry(r) => {
+            DependencySpec::Version(r) => {
                 assert_eq!(r.version, SemVerRange::from_str("^1.4.0").unwrap());
             }
-            other => panic!("expected registry dep, got {other:?}"),
+            other => panic!("expected version dep, got {other:?}"),
         }
 
         // Nothing but the `dependencies:` block was added: deleting that block

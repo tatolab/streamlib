@@ -7,7 +7,7 @@
 //! ([`streamlib_idents::APP_LOCKFILE_NAME`]) into the pin set the recursive
 //! module walker consults in **locked mode**: every package — top-level or
 //! transitive — is forced to its pinned version's installed-cache slot as a
-//! [`Strategy::Path`] with [`BuildPolicy::NeverBuild`]. No registry list /
+//! [`Strategy::Path`] with [`BuildPolicy::NeverBuild`]. No package source list /
 //! download, no git fetch, no `.slpkg` re-fetch, no build — the run loads
 //! strictly from the pre-materialized cache and is offline by construction.
 //!
@@ -203,7 +203,7 @@ mod tests {
                 key.to_string(),
                 LockfileEntry {
                     version: *version,
-                    source: LockfileSource::Registry {
+                    source: LockfileSource::ByVersion {
                         url: "file:///x".into(),
                     },
                     content_hash: hash.to_string(),

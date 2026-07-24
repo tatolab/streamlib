@@ -13,9 +13,10 @@
 //! This is the Deno mirror of [`crate::python_venv`]'s
 //! `ensure_streamlib_generated_in_venv`: both run in-process JTD codegen so a
 //! staged polyglot package is runnable without a separate `deno task setup`.
-//! Schema deps (e.g. `@tatolab/core`) resolve from the static registry via the
-//! codegen resolver's env-aware config (`STREAMLIB_REGISTRY_URL` / `STREAMLIB_REGISTRY_URL`)
-//! — the same path the Rust build-script codegen uses.
+//! Schema deps (e.g. `@tatolab/core`) resolve by version from the configured
+//! package source via the codegen resolver's env-aware config
+//! (`STREAMLIB_PACKAGE_SOURCE`) — the same path the Rust build-script codegen
+//! uses.
 //!
 //! Generating into the orchestrator's build-to-temp directory means the
 //! existing atomic rename ([`crate::atomic_swap`]) carries `_generated_/` into
@@ -99,8 +100,9 @@ pub fn provision_deno_typescript(
         build_failed(
             package_label,
             format!(
-                "failed to generate Deno wire vocabulary (schema deps resolve from the \
-                 registry — is STREAMLIB_REGISTRY_URL / STREAMLIB_REGISTRY_URL set?): {e}"
+                "failed to generate Deno wire vocabulary (schema deps resolve by version \
+                 from the package source — is STREAMLIB_PACKAGE_SOURCE set, or a `streamlib \
+                 link` active?): {e}"
             ),
         )
     })
@@ -173,7 +175,7 @@ mod tests {
     #[test]
     fn generates_typescript_wire_vocabulary_for_local_schema() {
         // End-to-end against a self-contained package (a Local schema, no
-        // registry dep): proves the tail runs codegen and emits the package's
+        // version dep): proves the tail runs codegen and emits the package's
         // wire vocabulary as `.ts` under `_generated_/`. Skips (does not fail)
         // when `jtd-codegen` is absent so the suite stays green without it.
         if !jtd_codegen_available() {

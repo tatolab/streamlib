@@ -391,7 +391,7 @@ impl Runner {
     /// install`) strictly from the app's co-located `streamlib_modules/` slots
     /// — the **locked run**. No live re-resolution: every package, top-level and
     /// transitive, is forced to its pinned version's slot, so the run
-    /// works **offline** (no registry, git, or `.slpkg` fetch reachable)
+    /// works **offline** (no package source, git, or `.slpkg` fetch reachable)
     /// and is byte-reproducible against the pinned set.
     ///
     /// The lockfile is the flat resolved closure, so each pinned package is
@@ -783,7 +783,8 @@ impl Runner {
 
     /// Set the process-wide [`AcquireOnReferencePolicy`] — whether, on a load
     /// miss against the installed set, the runtime may fetch the providing
-    /// package from the static registry and record it in `streamlib.lock`.
+    /// package by version from the configured package source and record it in
+    /// `streamlib.lock`.
     /// **Process-wide** (last write wins), like [`Self::set_app_modules_dir`].
     /// `None` clears the override, restoring the [`acquire::ACQUIRE_ON_REFERENCE_ENV`]
     /// env / [`AcquireOnReferencePolicy::Off`] default. Off by default: a normal
@@ -869,11 +870,12 @@ impl Runner {
     }
 
     /// Begin a **policy-gated acquire-on-reference** load: on an installed-set
-    /// miss, fetch the providing package from the registry, record it in
-    /// `streamlib.lock`, and load it from the now-populated cache. `Ok(None)`
-    /// signals a declined acquisition (policy `Off`, a `Prompt` handler
-    /// declines, a `@session/` type, or no app-modules root / registry URL
-    /// configured) — distinct from a typed `Err` on a permitted-but-failed fetch.
+    /// miss, fetch the providing package by version from the configured package
+    /// source, record it in `streamlib.lock`, and load it from the
+    /// now-populated cache. `Ok(None)` signals a declined acquisition (policy
+    /// `Off`, a `Prompt` handler declines, a `@session/` type, or no app-modules
+    /// root / package source configured) — distinct from a typed `Err` on a
+    /// permitted-but-failed fetch.
     fn begin_acquire_on_reference(
         &self,
         processor_type: &crate::core::processors::ProcessorTypeReference,
@@ -891,7 +893,7 @@ impl Runner {
         );
         // The range comes from the reference itself, not any app manifest: a
         // version-pinned ref acquires that exact version; a version-free ref
-        // takes the highest release the registry holds.
+        // takes the highest release the package source holds.
         let range = match processor_type.as_version_pinned() {
             Some(ident) => streamlib_idents::SemVerRange::Exact(ident.version),
             None => streamlib_idents::SemVerRange::Any,
@@ -902,11 +904,13 @@ impl Runner {
         let Some(app_root) = source::app_modules_root() else {
             return Ok(None);
         };
-        let Some(config) = streamlib_idents::RegistryConfig::from_env() else {
+        let Some(config) = streamlib_idents::PackageSource::from_env() else {
             tracing::warn!(
                 package = %pkg_ref,
-                "acquire-on-reference is enabled but no registry URL is configured \
-                 (STREAMLIB_REGISTRY_URL) — cannot acquire"
+                "acquire-on-reference is enabled but no package source is configured \
+                 — set STREAMLIB_PACKAGE_SOURCE to a package source root (e.g. \
+                 file:///path/to/slpkg-tree) or run `streamlib link` to resolve from a \
+                 local checkout"
             );
             return Ok(None);
         };

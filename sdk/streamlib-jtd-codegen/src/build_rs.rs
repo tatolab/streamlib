@@ -71,7 +71,7 @@ fn run_for_rust_crate_inner() -> Result<()> {
 
     // Re-run codegen when the resolution-driving environment changes: toggling
     // an active `streamlib link` (STREAMLIB_LINK_CHECKOUT) or the registry
-    // (STREAMLIB_REGISTRY_URL) must re-resolve schema deps rather than reuse a
+    // (STREAMLIB_PACKAGE_SOURCE) must re-resolve schema deps rather than reuse a
     // resolution cargo cached under the prior environment.
     println!(
         "cargo:rerun-if-env-changed={}",
@@ -79,7 +79,7 @@ fn run_for_rust_crate_inner() -> Result<()> {
     );
     println!(
         "cargo:rerun-if-env-changed={}",
-        streamlib_idents::REGISTRY_URL_ENV
+        streamlib_idents::PACKAGE_SOURCE_ENV
     );
 
     // For a direct `cargo build` (env unset), the link is discovered from the
@@ -94,7 +94,7 @@ fn run_for_rust_crate_inner() -> Result<()> {
         println!("cargo:rerun-if-changed={}", marker.display());
     }
 
-    // `from_env_or_marker` reads STREAMLIB_REGISTRY_URL so a registry-cached
+    // `from_env_or_marker` reads STREAMLIB_PACKAGE_SOURCE so a registry-cached
     // crate resolves its schema deps (e.g. `@tatolab/escalate`) from the
     // configured static registry, and resolves the active `streamlib link`
     // checkout MARKER-FIRST — walking up from `CARGO_MANIFEST_DIR` for

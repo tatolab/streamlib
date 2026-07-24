@@ -6,7 +6,7 @@
 //! An emit renders the workspace's `packages/*` into a plain on-disk tree — a
 //! `.slpkg` generic store, a per-package + aggregate catalog, and a release
 //! manifest — that is tokenless to read over `file://` (the existing
-//! [`streamlib_idents::RegistryClient`] transport) and browsable as a plain
+//! [`streamlib_idents::PackageSourceClient`] transport) and browsable as a plain
 //! HTTP directory index. No registry daemon, no database, no token is required
 //! to serve it.
 //!
@@ -21,7 +21,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use streamlib_idents::{
-    CATALOG_INDEX_PATH, CatalogIndexLine, PackageRef, RegistryClient, RegistryConfig,
+    CATALOG_INDEX_PATH, CatalogIndexLine, PackageRef, PackageSourceClient, PackageSource,
     ReleaseManifest, ReleaseManifestMember, SemVer, parse_catalog_index_ndjson,
     render_catalog_index_ndjson, schema_jtd_file_name,
 };
@@ -268,7 +268,7 @@ fn emit_slpkg_and_manifest(
     let slpkg_dir = staging.join("slpkg");
     std::fs::create_dir_all(&slpkg_dir)?;
     // The registry client is rooted at the tree root and writes under `slpkg/`.
-    let config = RegistryConfig {
+    let config = PackageSource {
         base_url: format!("file://{}", staging.display()),
     };
 
@@ -322,7 +322,7 @@ fn emit_slpkg_and_manifest(
             let semver: SemVer = version.parse().with_context(|| {
                 format!("package {} version `{version}` is not semver", pkg_ref)
             })?;
-            RegistryClient::new(&config)
+            PackageSourceClient::new(&config)
                 .upload_slpkg(&pkg_ref, semver, &bytes)
                 .map_err(|e| anyhow::anyhow!("upload {}: {e}", pkg_ref))?;
             package_members.push(ReleaseManifestMember::new(
@@ -352,7 +352,7 @@ fn emit_slpkg_and_manifest(
     manifest.packages = package_members;
 
     // Written LAST — the completion marker.
-    RegistryClient::new(&config)
+    PackageSourceClient::new(&config)
         .upload_release_manifest(org, &manifest)
         .map_err(|e| anyhow::anyhow!("upload release manifest: {e}"))?;
 

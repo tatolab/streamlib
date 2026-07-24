@@ -328,11 +328,11 @@ fn run_uv(args: &[&str], uv_cache_dir: &Path) -> Result<std::process::Output, St
 }
 
 /// The `UV_INDEX` pypi simple-index URL derived from the single configured
-/// registry location (`STREAMLIB_REGISTRY_URL`), or `None` when no registry is
+/// registry location (`STREAMLIB_PACKAGE_SOURCE`), or `None` when no registry is
 /// configured — a link-mode / path-only build resolves `streamlib` from a
 /// `[tool.uv.sources]` override instead of an index.
 fn derive_uv_index() -> Option<String> {
-    streamlib_idents::RegistryConfig::from_env().map(|c| c.pypi_simple_index_url())
+    streamlib_idents::PackageSource::from_env().map(|c| c.pypi_simple_index_url())
 }
 
 fn path_to_str(path: &Path, package_label: &str) -> Result<String, BuildError> {
@@ -450,11 +450,11 @@ packages = ["python"]
         // registry location so the venv build no longer depends on an
         // ambiently-set one. SAFETY: `#[serial]` — no other thread races these
         // process-global env writes.
-        let prev = std::env::var("STREAMLIB_REGISTRY_URL").ok();
+        let prev = std::env::var("STREAMLIB_PACKAGE_SOURCE").ok();
 
         // A local `file://` tree derives its pypi simple-index sub-URL.
         unsafe {
-            std::env::set_var("STREAMLIB_REGISTRY_URL", "file:///tmp/streamlib-tree");
+            std::env::set_var("STREAMLIB_PACKAGE_SOURCE", "file:///tmp/streamlib-tree");
         }
         assert_eq!(
             derive_uv_index().as_deref(),
@@ -463,7 +463,7 @@ packages = ["python"]
 
         // An HTTP mount derives the same simple-index shape.
         unsafe {
-            std::env::set_var("STREAMLIB_REGISTRY_URL", "http://127.0.0.1:8799");
+            std::env::set_var("STREAMLIB_PACKAGE_SOURCE", "http://127.0.0.1:8799");
         }
         assert_eq!(
             derive_uv_index().as_deref(),
@@ -474,14 +474,14 @@ packages = ["python"]
         // reverting the `from_env` gate to a hardcoded fallback would return
         // Some here and reintroduce the ambient dependence this removes.
         unsafe {
-            std::env::remove_var("STREAMLIB_REGISTRY_URL");
+            std::env::remove_var("STREAMLIB_PACKAGE_SOURCE");
         }
         assert_eq!(derive_uv_index(), None);
 
         unsafe {
             match prev {
-                Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
-                None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
+                Some(v) => std::env::set_var("STREAMLIB_PACKAGE_SOURCE", v),
+                None => std::env::remove_var("STREAMLIB_PACKAGE_SOURCE"),
             }
         }
     }

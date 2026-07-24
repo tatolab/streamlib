@@ -744,10 +744,10 @@ fn url_strategy_rejects_checksum_mismatch() {
 #[serial]
 fn path_package_registry_dep_routes_to_registry_not_installed_cache() {
     // Registry-only model: a package's streamlib.yaml dependency resolves from
-    // the static registry (Strategy::Registry), NOT the installed-package cache.
+    // the static registry (Strategy::ByVersion), NOT the installed-package cache.
     // The installed-cache-as-dep fallback an earlier model used is gone — proven
     // by routing: with no registry configured, the dep errors
-    // RegistryNotConfigured even though a satisfying installed-cache entry exists.
+    // PackageSourceNotConfigured even though a satisfying installed-cache entry exists.
     let sandbox = tempfile::tempdir().unwrap();
     let prev_home = std::env::var_os("STREAMLIB_HOME");
     unsafe {
@@ -759,7 +759,7 @@ fn path_package_registry_dep_routes_to_registry_not_installed_cache() {
     let _modules_root = AppModulesRootOverrideGuard::install(sandbox.path());
     // No ambient registry config, so the routing is observable regardless of
     // the developer / CI shell.
-    let _no_registry = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL", "STREAMLIB_REGISTRY_TOKEN"]);
+    let _no_registry = EnvVarsCleared::new(&["STREAMLIB_PACKAGE_SOURCE", "STREAMLIB_REGISTRY_TOKEN"]);
 
     // A co-located streamlib_modules slot for @tatolab/b that WOULD satisfy
     // `^0.1.0` — resolved through the seam so it lands at the real layout.
@@ -771,7 +771,7 @@ fn path_package_registry_dep_routes_to_registry_not_installed_cache() {
     )
     .unwrap();
 
-    // ...is ignored: the consumer's dep routes to Strategy::Registry, which
+    // ...is ignored: the consumer's dep routes to Strategy::ByVersion, which
     // fails because no registry is configured.
     let consumer = tempfile::tempdir().unwrap();
     std::fs::write(
@@ -802,8 +802,8 @@ dependencies:
         .expect_err("a registry dep must route to the registry, not the installed cache");
 
     assert!(
-        matches!(err, AddModuleError::RegistryNotConfigured { ref package, .. } if package.name.as_str() == "b"),
-        "expected RegistryNotConfigured(@tatolab/b) — deps resolve from the registry, \
+        matches!(err, AddModuleError::PackageSourceNotConfigured { ref package, .. } if package.name.as_str() == "b"),
+        "expected PackageSourceNotConfigured(@tatolab/b) — deps resolve from the registry, \
          not the installed cache; got: {err:?}",
     );
 }
@@ -3733,7 +3733,7 @@ processors:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_PACKAGE_SOURCE"]);
 
         // Two-level registry tree: lockrun-lib depends on lockrun-core.
         let mirror = tempfile::tempdir().unwrap();
@@ -3763,7 +3763,7 @@ processors:
         // ---- install (registry reachable) ----
         unsafe {
             std::env::set_var(
-                "STREAMLIB_REGISTRY_URL",
+                "STREAMLIB_PACKAGE_SOURCE",
                 format!("file://{}", mirror.path().display()),
             );
         }
@@ -3791,7 +3791,7 @@ processors:
         // ---- poison the registry ----
         // Any live registry touch now fails (connection refused).
         unsafe {
-            std::env::set_var("STREAMLIB_REGISTRY_URL", "http://127.0.0.1:1");
+            std::env::set_var("STREAMLIB_PACKAGE_SOURCE", "http://127.0.0.1:1");
         }
 
         assert!(
@@ -3839,7 +3839,7 @@ processors:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_PACKAGE_SOURCE"]);
 
         // A local package + a project that path-deps it.
         let work = tempfile::tempdir().unwrap();
@@ -3909,7 +3909,7 @@ processors:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_PACKAGE_SOURCE"]);
 
         // Stage and read against one app root: the lockfile lives under
         // `sandbox`, so the co-located slot must too.
@@ -3945,7 +3945,7 @@ packages:
   "@tatolab/miss-pkg":
     version: 0.1.0
     source:
-      kind: registry
+      kind: by-version
       url: file:///x
     content_hash: "{slot_hash}"
 "#
@@ -3976,7 +3976,7 @@ packages:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_PACKAGE_SOURCE"]);
 
         // Lockfile pins a package but nothing was ever staged into its slot.
         let lock = sandbox.path().join("uninstalled.lock");
@@ -3987,7 +3987,7 @@ packages:
   "@tatolab/uninstalled-xyz":
     version: 9.9.9
     source:
-      kind: registry
+      kind: by-version
       url: file:///x
     content_hash: "sha256:0"
 "#,
@@ -4053,7 +4053,7 @@ packages:
   "@tatolab/{name}":
     version: {version}
     source:
-      kind: registry
+      kind: by-version
       url: file:///x
     content_hash: "{content_hash}"
 "#
@@ -4078,7 +4078,7 @@ packages:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_PACKAGE_SOURCE"]);
 
         // Stage and read against one app root: the lockfile lives under
         // `sandbox`, so the co-located slot must too.
@@ -4124,7 +4124,7 @@ packages:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_PACKAGE_SOURCE"]);
 
         // Stage and read against one app root: the lockfile lives under
         // `sandbox`, so the co-located slot must too.
@@ -4177,7 +4177,7 @@ packages:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_PACKAGE_SOURCE"]);
 
         let lock = sandbox.path().join("corrupt.lock");
         std::fs::write(&lock, "{ this is: [not, a lockfile").unwrap();
@@ -4206,7 +4206,7 @@ packages:
             std::env::set_var("STREAMLIB_HOME", sandbox.path());
         }
         let _restore = StreamlibHomeRestore(prev_home);
-        let _clear = EnvVarsCleared::new(&["STREAMLIB_REGISTRY_URL"]);
+        let _clear = EnvVarsCleared::new(&["STREAMLIB_PACKAGE_SOURCE"]);
 
         let mirror = tempfile::tempdir().unwrap();
         write_mirror_slpkg(
@@ -4227,7 +4227,7 @@ packages:
         // Install with only 0.1.0 published.
         unsafe {
             std::env::set_var(
-                "STREAMLIB_REGISTRY_URL",
+                "STREAMLIB_PACKAGE_SOURCE",
                 format!("file://{}", mirror.path().display()),
             );
         }

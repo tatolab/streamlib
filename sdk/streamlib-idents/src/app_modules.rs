@@ -10,7 +10,7 @@ use crate::lockfile::{
     write_modules_lockfile,
 };
 use crate::manifest::Manifest;
-use crate::registry::{RegistryClient, RegistryConfig, select_version};
+use crate::package_source::{PackageSourceClient, PackageSource, select_version};
 use crate::resolver::content_hash_for_package_dir;
 use crate::semver::{SemVer, SemVerRange};
 
@@ -1038,13 +1038,13 @@ impl AppModulesDir {
         &self,
         pkg_ref: &PackageRef,
         range: &SemVerRange,
-        config: &RegistryConfig,
+        config: &PackageSource,
     ) -> Result<AddPackageReport, AppModulesError> {
         let acquire_err = |detail: String| AppModulesError::AcquireRegistryFailed {
             package: pkg_ref.clone(),
             detail,
         };
-        let client = RegistryClient::new(config);
+        let client = PackageSourceClient::new(config);
         let available = client
             .list_versions(pkg_ref)
             .map_err(|e| acquire_err(format!("listing versions: {e}")))?;
@@ -1124,9 +1124,9 @@ impl AppModulesDir {
                 modules_dir,
                 &package_dir,
             ),
-            LockfileSource::Registry { .. } => Err(AppModulesError::InstallUnsupportedSource {
+            LockfileSource::ByVersion { .. } => Err(AppModulesError::InstallUnsupportedSource {
                 package: package.clone(),
-                kind: "registry".to_string(),
+                kind: "by-version".to_string(),
             }),
             LockfileSource::Git { .. } => Err(AppModulesError::InstallUnsupportedSource {
                 package: package.clone(),
@@ -3439,7 +3439,7 @@ mod tests {
 
     #[test]
     fn install_unsupported_source_kind_is_typed_error() {
-        // A registry/git entry can't be reproduced by install (add/link never
+        // A by-version/git entry can't be reproduced by install (add/link never
         // writes these into streamlib.lock, but be defensive).
         let app_root = tempfile::tempdir().unwrap();
         let app = AppModulesDir::at(app_root.path());
@@ -3449,7 +3449,7 @@ mod tests {
                 "@tatolab/camera",
                 LockfileEntry {
                     version: SemVer::new(2, 0, 0),
-                    source: LockfileSource::Registry {
+                    source: LockfileSource::ByVersion {
                         url: "https://packages.streamlib.dev".to_string(),
                     },
                     content_hash: "sha256:abc".to_string(),
@@ -3458,11 +3458,11 @@ mod tests {
         );
         match app
             .install_from_lockfile()
-            .expect_err("registry source must be refused")
+            .expect_err("by-version source must be refused")
         {
             AppModulesError::InstallUnsupportedSource { package, kind } => {
                 assert_eq!(package, pkg_ref("tatolab", "camera"));
-                assert_eq!(kind, "registry");
+                assert_eq!(kind, "by-version");
             }
             other => panic!("expected InstallUnsupportedSource, got {other:?}"),
         }
@@ -3476,8 +3476,8 @@ mod tests {
     #[test]
     fn acquire_from_registry_resolves_range_materializes_and_locks() {
         let tree = tempfile::tempdir().unwrap();
-        let config = RegistryConfig::for_local_tree(tree.path()).unwrap();
-        let client = RegistryClient::new(&config);
+        let config = PackageSource::for_local_tree(tree.path()).unwrap();
+        let client = PackageSourceClient::new(&config);
         let pr = pkg_ref("tatolab", "foo");
         client
             .upload_slpkg(&pr, SemVer::new(1, 0, 0), &slpkg_bytes("tatolab", "foo", "1.0.0"))
@@ -3518,8 +3518,8 @@ mod tests {
     #[test]
     fn acquire_from_registry_errors_when_no_version_matches() {
         let tree = tempfile::tempdir().unwrap();
-        let config = RegistryConfig::for_local_tree(tree.path()).unwrap();
-        let client = RegistryClient::new(&config);
+        let config = PackageSource::for_local_tree(tree.path()).unwrap();
+        let client = PackageSourceClient::new(&config);
         let pr = pkg_ref("tatolab", "foo");
         client
             .upload_slpkg(&pr, SemVer::new(1, 0, 0), &slpkg_bytes("tatolab", "foo", "1.0.0"))

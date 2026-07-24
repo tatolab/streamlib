@@ -97,7 +97,7 @@ impl ProjectConfig {
     /// `streamlib link`), the bare-name schema-resolution pass resolves a
     /// schema dep present in `<checkout>/packages/<name>` from the checkout —
     /// the load-time mirror of the build-time redirect, so a linked package
-    /// loaded from its staged cache dir with `STREAMLIB_REGISTRY_URL` unset
+    /// loaded from its staged cache dir with `STREAMLIB_PACKAGE_SOURCE` unset
     /// still resolves `@tatolab/core` (the zero-registry dev loop). `None`
     /// (every other caller, and every locked run) is byte-identical to before.
     /// The module loader threads its already-discovered, `is_locked`-gated
@@ -144,13 +144,13 @@ impl ProjectConfig {
             return Ok(());
         }
 
-        // Runtime package-load boundary: read the registry config from the
-        // environment (STREAMLIB_REGISTRY_URL) so a standalone, registry-only
-        // package resolves its schema deps (e.g. @tatolab/core) from the
-        // registry instead of failing as RegistryNotConfigured. An active
-        // `streamlib link` (threaded by the module loader) additionally
+        // Runtime package-load boundary: read the package source from the
+        // environment (STREAMLIB_PACKAGE_SOURCE) so a standalone package
+        // resolves its schema deps (e.g. @tatolab/core) by version from that
+        // package source instead of failing as PackageSourceNotConfigured. An
+        // active `streamlib link` (threaded by the module loader) additionally
         // redirects a schema dep present in the checkout to the checkout — the
-        // load-time half of the zero-registry dev loop; `None` is unchanged.
+        // load-time half of the link dev loop; `None` is unchanged.
         let mut resolver_options = streamlib_idents::ResolverOptions::from_env();
         if let Some(checkout) = link_checkout {
             resolver_options.link_checkout = Some(checkout.to_path_buf());
@@ -466,7 +466,7 @@ dependencies:
     }
 
     #[test]
-    fn test_load_with_registry_dependency_short_form() {
+    fn test_load_with_version_dependency_short_form() {
         let dir = TempDir::new().unwrap();
         let config_path = dir.path().join("streamlib.yaml");
         std::fs::write(
@@ -485,10 +485,10 @@ dependencies:
             .get(&pkg_ref("tatolab", "core"))
             .unwrap()
         {
-            DependencySpec::Registry(r) => {
+            DependencySpec::Version(r) => {
                 assert_eq!(r.version.to_string(), "^1.0.0");
             }
-            other => panic!("expected Registry dep, got {:?}", other),
+            other => panic!("expected Version dep, got {:?}", other),
         }
     }
 
@@ -614,7 +614,7 @@ processors:
     }
 
     /// Removes the resolution-driving env for a test's duration and restores it
-    /// after, so a stray `STREAMLIB_REGISTRY_URL` / `STREAMLIB_LINK_CHECKOUT` in
+    /// after, so a stray `STREAMLIB_PACKAGE_SOURCE` / `STREAMLIB_LINK_CHECKOUT` in
     /// the shell can't make the load-time link tests non-deterministic.
     struct CleanResolutionEnv {
         prev_registry: Option<std::ffi::OsString>,
@@ -622,12 +622,12 @@ processors:
     }
     impl CleanResolutionEnv {
         fn new() -> Self {
-            let prev_registry = std::env::var_os("STREAMLIB_REGISTRY_URL");
+            let prev_registry = std::env::var_os("STREAMLIB_PACKAGE_SOURCE");
             let prev_link = std::env::var_os("STREAMLIB_LINK_CHECKOUT");
             // SAFETY: the tests using this guard are `#[serial]`, so no other
             // thread races the process-global environment for its lifetime.
             unsafe {
-                std::env::remove_var("STREAMLIB_REGISTRY_URL");
+                std::env::remove_var("STREAMLIB_PACKAGE_SOURCE");
                 std::env::remove_var("STREAMLIB_LINK_CHECKOUT");
             }
             Self {
@@ -640,8 +640,8 @@ processors:
         fn drop(&mut self) {
             unsafe {
                 match self.prev_registry.take() {
-                    Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
-                    None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
+                    Some(v) => std::env::set_var("STREAMLIB_PACKAGE_SOURCE", v),
+                    None => std::env::remove_var("STREAMLIB_PACKAGE_SOURCE"),
                 }
                 match self.prev_link.take() {
                     Some(v) => std::env::set_var("STREAMLIB_LINK_CHECKOUT", v),
@@ -704,7 +704,7 @@ processors:
     /// `Named` port is rewritten to a `Specific` ident owned by `@tatolab/core`.
     /// Mentally revert the `link_checkout` threading in `resolve_bare_schema_refs`
     /// (or pass `None`, as the sibling test does) and this fails
-    /// `RegistryNotConfigured` — locking that the checkout is what resolved it.
+    /// `PackageSourceNotConfigured` — locking that the checkout is what resolved it.
     #[test]
     #[serial_test::serial]
     fn load_with_link_resolves_bare_schema_from_checkout_zero_registry() {
@@ -730,7 +730,7 @@ processors:
     }
 
     /// Load-time distribution guardrail: with NO link (`None`) and no registry,
-    /// the same manifest fails `RegistryNotConfigured` — the checkout on disk is
+    /// the same manifest fails `PackageSourceNotConfigured` — the checkout on disk is
     /// ignored without a link, so the no-link path is byte-identical to before.
     /// This is also the mental-revert of the positive test above.
     #[test]
@@ -746,11 +746,11 @@ processors:
         write_checkout_core(&checkout);
 
         let err = ProjectConfig::load_with_link(&consumer, None)
-            .expect_err("without a link + no registry, the bare version dep must fail loud");
+            .expect_err("without a link + no package source, the bare version dep must fail loud");
         let msg = err.to_string();
         assert!(
-            msg.contains("no registry is configured") || msg.contains("cannot be resolved"),
-            "expected a registry-not-configured failure, got: {msg}"
+            msg.contains("no package source is configured") || msg.contains("cannot be resolved"),
+            "expected a package-source-not-configured failure, got: {msg}"
         );
     }
 }

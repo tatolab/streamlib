@@ -21,8 +21,8 @@ use crate::error::{ResolverError, ResolverResult};
 use crate::git::fetch_git;
 use crate::ident::{PackageRef, TypeName};
 use crate::lockfile::{Lockfile, LockfileEntry, LockfileSource, compute_content_hash};
-use crate::manifest::{DependencySpec, Manifest, RegistryDependency, SchemaEntry};
-use crate::registry::{RegistryClient, RegistryConfig, cache_slpkg_bytes, select_version};
+use crate::manifest::{DependencySpec, Manifest, VersionDependency, SchemaEntry};
+use crate::package_source::{PackageSourceClient, PackageSource, cache_slpkg_bytes, select_version};
 
 /// Outcome of resolving a `streamlib.yaml` graph: the root project + every
 /// transitive package, keyed by canonical `"@org/name"` lockfile key.
@@ -95,10 +95,11 @@ pub enum ResolvedSource {
     Git { url: String, rev: String },
     /// Resolved from a `.slpkg` archive (path to the archive is stored).
     Slpkg { archive: PathBuf },
-    /// Resolved from the static registry's generic store: the URL the concrete
-    /// `.slpkg` was fetched from. Constructed by `resolve_registry_dependency`
-    /// and recorded in the lockfile via `ResolvedSource::to_lockfile_source`.
-    Registry { url: String },
+    /// Resolved by version from a package source (the static `.slpkg` tree's
+    /// generic store): the URL the concrete `.slpkg` was fetched from.
+    /// Constructed by `resolve_version_dependency` and recorded in the
+    /// lockfile via `ResolvedSource::to_lockfile_source`.
+    ByVersion { url: String },
 }
 
 impl ResolvedSource {
@@ -115,7 +116,7 @@ impl ResolvedSource {
             Self::Slpkg { archive } => LockfileSource::Path {
                 path: archive.clone(),
             },
-            Self::Registry { url } => LockfileSource::Registry { url: url.clone() },
+            Self::ByVersion { url } => LockfileSource::ByVersion { url: url.clone() },
         }
     }
 }
@@ -127,20 +128,20 @@ pub struct ResolverOptions {
     /// Override the cache directory for git clones and `.slpkg` extractions.
     /// `None` falls back to `$HOME/.streamlib/resolver-cache/`.
     pub cache_dir: Option<PathBuf>,
-    /// Static-registry configuration for resolving `Registry` schema
-    /// dependencies. `None` means no registry is configured — a `Registry`
-    /// dependency then surfaces [`ResolverError::RegistryNotConfigured`].
+    /// Package source for resolving by-version schema dependencies. `None`
+    /// means no package source is configured — a version dependency then
+    /// surfaces [`ResolverError::PackageSourceNotConfigured`].
     /// [`resolve_with`] reads this field only; it never consults the process
     /// environment. Codegen entry points (build scripts, `streamlib
     /// generate`) populate it via [`ResolverOptions::from_env`].
-    pub registry: Option<RegistryConfig>,
+    pub package_source: Option<PackageSource>,
     /// Active `streamlib link` checkout, when a link is in effect. `Some`
     /// redirects any dependency present in `<checkout>/packages/<name>` to that
     /// checkout source — the schema-dep mirror of the module loader's link
-    /// redirect, completing the zero-registry dev loop. `None` (the dominant
+    /// redirect, completing the link dev loop. `None` (the dominant
     /// case) leaves resolution byte-identical to a non-linked build: absent
     /// packages, and every dep when no link is active, resolve by version from
-    /// the store / registry (or via a dev path patch). Populated at the
+    /// the package source (or via a dev path patch). Populated at the
     /// compile-time codegen boundary by [`ResolverOptions::from_env_or_marker`]
     /// — **marker-first** (the `.streamlib/link.json` a `streamlib link` wrote,
     /// discovered by walking up from the crate dir) with
@@ -154,16 +155,18 @@ pub struct ResolverOptions {
 }
 
 impl ResolverOptions {
-    /// Options with the registry config read from the environment
-    /// (`STREAMLIB_REGISTRY_URL`, defaulting to the first-party registry) and
-    /// the default cache dir. This is the codegen-boundary constructor — build
-    /// scripts and `streamlib generate` use it so a registry-cached crate
-    /// resolves its schema deps from the configured registry. Unit tests
-    /// construct [`ResolverOptions`] directly to stay hermetic.
+    /// Options with the package source read from the environment
+    /// ([`crate::PACKAGE_SOURCE_ENV`]) and the default cache dir. An unset env
+    /// leaves [`Self::package_source`] `None` — no package source configured, so
+    /// a dev / path-only build never reaches for one. This is the
+    /// codegen-boundary constructor — build scripts and `streamlib generate` use
+    /// it so a package resolves its schema deps from the configured package
+    /// source. Unit tests construct [`ResolverOptions`] directly to stay
+    /// hermetic.
     pub fn from_env() -> Self {
         Self {
             cache_dir: None,
-            registry: RegistryConfig::from_env(),
+            package_source: PackageSource::from_env(),
             link_checkout: link_checkout_from_env(),
         }
     }
@@ -188,7 +191,7 @@ impl ResolverOptions {
     pub fn from_env_or_marker(manifest_dir: &Path) -> Self {
         Self {
             cache_dir: None,
-            registry: RegistryConfig::from_env(),
+            package_source: PackageSource::from_env(),
             link_checkout: link_checkout_env_or_marker(manifest_dir),
         }
     }
@@ -291,14 +294,14 @@ pub fn resolve_with(
         None => default_cache_dir()?,
     };
 
-    // `resolve_with` is pure: it reads the registry config from `options`
+    // `resolve_with` is pure: it reads the package source from `options`
     // only, never from the process environment. The env read lives at the
     // codegen boundary (`ResolverOptions::from_env`, used by build scripts
     // and `streamlib generate`) so unit tests fully control resolution and
-    // a stray `STREAMLIB_REGISTRY_URL` in the shell can't redirect a resolve
-    // into a live fetch. `None` means "no registry" — a `Registry` dep then
-    // fails loud with `RegistryNotConfigured`.
-    let registry = options.registry.as_ref();
+    // a stray `STREAMLIB_PACKAGE_SOURCE` in the shell can't redirect a resolve
+    // into a live fetch. `None` means "no package source" — a version dep then
+    // fails loud with `PackageSourceNotConfigured`.
+    let package_source = options.package_source.as_ref();
 
     // Active `streamlib link` checkout (a non-locked build only; the
     // orchestrator withholds it for locked/distribution builds). When `Some`, a
@@ -357,7 +360,7 @@ pub fn resolve_with(
                 &spec,
                 &patch,
                 &cache_dir,
-                registry,
+                package_source,
                 link_checkout,
             )?;
 
@@ -391,7 +394,7 @@ fn resolve_one(
     spec: &DependencySpec,
     patch: &BTreeMap<PackageRef, DependencySpec>,
     cache_dir: &Path,
-    registry: Option<&RegistryConfig>,
+    package_source: Option<&PackageSource>,
     link_checkout: Option<&Path>,
 ) -> ResolverResult<ResolvedPackage> {
     // Link-aware short-circuit — the schema-dep mirror of the module loader's
@@ -433,8 +436,8 @@ fn resolve_one(
     //                    in-tree resolve).
     //   * distribution — target absent (a standalone consumer of the published
     //                    crate) → fall back to the declared `spec`, resolving
-    //                    the dep by version from the configured registry /
-    //                    `.slpkg` store.
+    //                    the dep by version from the configured package
+    //                    source's `.slpkg` store.
     // A path declared directly in `dependencies:` (no patch) still fails loud
     // with `PathDependencyNotFound` when absent — there is no version range to
     // fall back to, and a missing direct path source is a genuine error.
@@ -469,8 +472,8 @@ fn resolve_one(
                 },
             )
         }
-        DependencySpec::Registry(reg) => {
-            resolve_registry_dependency(dep_ref, dep_id, reg, cache_dir, registry)
+        DependencySpec::Version(reg) => {
+            resolve_version_dependency(dep_ref, dep_id, reg, cache_dir, package_source)
         }
     }
 }
@@ -535,32 +538,33 @@ fn manifest_declares_package(dir: &Path, dep_ref: &PackageRef) -> bool {
     }
 }
 
-/// Resolve a `Registry` schema dependency from the static registry's generic
-/// store: list the package's available versions, select the highest satisfying
-/// the declared range, fetch + extract that version's `.slpkg`, and load it.
+/// Resolve a by-version schema dependency from the package source's generic
+/// `.slpkg` store: list the package's available versions, select the highest
+/// satisfying the declared range, fetch + extract that version's `.slpkg`, and
+/// load it.
 ///
-/// The flat generic registry has no semver-range query, so range → concrete
+/// The flat generic store has no semver-range query, so range → concrete
 /// version happens client-side (cargo/npm/pip shape). The resolved concrete
-/// version is recorded in the lockfile via [`ResolvedSource::Registry`].
-fn resolve_registry_dependency(
+/// version is recorded in the lockfile via [`ResolvedSource::ByVersion`].
+fn resolve_version_dependency(
     dep_ref: &PackageRef,
     dep_id: &str,
-    reg: &RegistryDependency,
+    reg: &VersionDependency,
     cache_dir: &Path,
-    registry: Option<&RegistryConfig>,
+    package_source: Option<&PackageSource>,
 ) -> ResolverResult<ResolvedPackage> {
-    let config = registry.ok_or_else(|| ResolverError::RegistryNotConfigured {
+    let config = package_source.ok_or_else(|| ResolverError::PackageSourceNotConfigured {
         name: dep_id.to_string(),
-        env: crate::registry::REGISTRY_URL_ENV.to_string(),
+        env: crate::package_source::PACKAGE_SOURCE_ENV.to_string(),
     })?;
-    let client = RegistryClient::new(config);
+    let client = PackageSourceClient::new(config);
     let available = client.list_versions(dep_ref)?;
     let selected = select_version(dep_ref, &reg.version, &available)?;
     let (bytes, url) = client.download_slpkg(dep_ref, selected)?;
     let archive = cache_slpkg_bytes(dep_ref, &bytes, cache_dir)?;
     let extracted = extract_slpkg(&archive, cache_dir)?;
     let manifest = Manifest::load(&extracted)?;
-    build_resolved_package(manifest, extracted, ResolvedSource::Registry { url })
+    build_resolved_package(manifest, extracted, ResolvedSource::ByVersion { url })
 }
 
 /// Absolute path a [`PathDependency`] resolves to, relative to `consumer_dir`
@@ -837,7 +841,7 @@ fn check_resolved_satisfies_spec(
     consumer_dir: &Path,
     dep_id: &str,
 ) -> ResolverResult<()> {
-    let DependencySpec::Registry(reg) = spec else {
+    let DependencySpec::Version(reg) = spec else {
         return Ok(());
     };
     let v = resolved
@@ -854,9 +858,9 @@ fn check_resolved_satisfies_spec(
         return Ok(());
     }
     // The resolved concrete is out of the declared range. Only a genuine
-    // registry resolution is hard here: `select_version` already guarantees an
-    // in-range pick from the store, so a mismatch on a `Registry` source is a
-    // registry mis-selection and stays an error as defense-in-depth. A
+    // by-version resolution is hard here: `select_version` already guarantees an
+    // in-range pick from the store, so a mismatch on a `ByVersion` source is a
+    // package-source mis-selection and stays an error as defense-in-depth. A
     // link/patch override (resolve_one's short-circuit to a linked checkout, or
     // a dev `patch:` redirect) legitimately produces a Path/Git/Slpkg concrete
     // whose version diverges from the declared range — its "link resolution
@@ -864,7 +868,7 @@ fn check_resolved_satisfies_spec(
     // blocks a load, so that case warns and keeps the override (mirroring
     // `warn_when_existing_unsatisfies_spec`). The locked-run drift check stays
     // hard elsewhere as an integrity guarantee.
-    if matches!(resolved.source, ResolvedSource::Registry { .. }) {
+    if matches!(resolved.source, ResolvedSource::ByVersion { .. }) {
         return Err(ResolverError::VersionRangeUnsatisfied {
             name: dep_id.to_string(),
             from: consumer_dir.join(Manifest::FILE_NAME),
@@ -899,7 +903,7 @@ fn warn_when_existing_unsatisfies_spec(
     consumer_dir: &Path,
     dep_id: &str,
 ) {
-    let DependencySpec::Registry(reg) = spec else {
+    let DependencySpec::Version(reg) = spec else {
         return;
     };
     let Some(installed) = existing.manifest.package.as_ref().map(|p| p.version) else {
@@ -1338,7 +1342,7 @@ dependencies:
 
         let opts = ResolverOptions {
             cache_dir: Some(cache),
-            registry: Some(crate::RegistryConfig {
+            package_source: Some(crate::PackageSource {
                 base_url: format!("file://{}", mirror.display()),
             }),
             link_checkout: None,
@@ -1388,7 +1392,7 @@ patch:
 
         let opts = ResolverOptions {
             cache_dir: Some(tmp.path().join("cache")),
-            registry: None,
+            package_source: None,
             link_checkout: None,
         };
         let res = resolve_with(&root, &opts).unwrap();
@@ -1421,12 +1425,12 @@ patch:
             manifest,
             root_dir: dir.clone(),
             schema_files: Vec::new(),
-            source: ResolvedSource::Registry {
+            source: ResolvedSource::ByVersion {
                 url: "file:///mirror/core-2.0.0.slpkg".into(),
             },
             content_hash: "sha256:0".into(),
         };
-        let spec = DependencySpec::Registry(RegistryDependency {
+        let spec = DependencySpec::Version(VersionDependency {
             version: crate::semver::SemVerRange::from_str("^1.0.0").unwrap(),
             runtime: false,
         });
@@ -1474,7 +1478,7 @@ dependencies:
             },
             content_hash: "sha256:0".into(),
         };
-        let spec = DependencySpec::Registry(RegistryDependency {
+        let spec = DependencySpec::Version(VersionDependency {
             version: crate::semver::SemVerRange::from_str("^3.0.0").unwrap(),
             runtime: false,
         });
@@ -1485,10 +1489,10 @@ dependencies:
     #[test]
     fn registry_dependency_without_config_errors() {
         // A bare registry range with `registry: None` fails loud with
-        // RegistryNotConfigured — the actionable successor to the old
+        // PackageSourceNotConfigured — the actionable successor to the old
         // RegistryNotImplemented. `resolve_with` is pure (it never reads the
         // process env), so this is deterministic regardless of any ambient
-        // STREAMLIB_REGISTRY_URL in the shell.
+        // STREAMLIB_PACKAGE_SOURCE in the shell.
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("project");
         write_streamlib_yaml(
@@ -1500,13 +1504,13 @@ dependencies:
         );
         let opts = ResolverOptions {
             cache_dir: Some(tmp.path().join("cache")),
-            registry: None,
+            package_source: None,
             link_checkout: None,
         };
         let err = resolve_with(&root, &opts).unwrap_err();
         assert!(
-            matches!(err, ResolverError::RegistryNotConfigured { .. }),
-            "expected RegistryNotConfigured, got {err:?}"
+            matches!(err, ResolverError::PackageSourceNotConfigured { .. }),
+            "expected PackageSourceNotConfigured, got {err:?}"
         );
     }
 
@@ -1561,14 +1565,14 @@ dependencies:
 
         let opts = ResolverOptions {
             cache_dir: Some(cache),
-            registry: Some(crate::RegistryConfig {
+            package_source: Some(crate::PackageSource {
                 base_url: format!("file://{}", mirror.display()),
             }),
             link_checkout: None,
         };
         let res = resolve_with(&root, &opts).unwrap();
         let escalate = res.packages.get("@tatolab/escalate").unwrap();
-        assert!(matches!(escalate.source, ResolvedSource::Registry { .. }));
+        assert!(matches!(escalate.source, ResolvedSource::ByVersion { .. }));
         // Highest-in-range selected.
         assert_eq!(
             escalate
@@ -1586,7 +1590,7 @@ dependencies:
         let lock = res.to_lockfile();
         let entry = lock.packages.get("@tatolab/escalate").unwrap();
         assert_eq!(entry.version.to_string(), "1.2.0");
-        assert!(matches!(entry.source, LockfileSource::Registry { .. }));
+        assert!(matches!(entry.source, LockfileSource::ByVersion { .. }));
     }
 
     /// Write a minimal escalate schema `.slpkg` into a `file://` mirror's
@@ -1642,7 +1646,7 @@ patch:
 
         let opts = ResolverOptions {
             cache_dir: Some(tmp.path().join("cache")),
-            registry: Some(crate::RegistryConfig {
+            package_source: Some(crate::PackageSource {
                 base_url: format!("file://{}", mirror.display()),
             }),
             link_checkout: None,
@@ -1650,7 +1654,7 @@ patch:
         let res = resolve_with(&root, &opts).unwrap();
         let escalate = res.packages.get("@tatolab/escalate").unwrap();
         // Resolved from the registry (patch path was absent), highest-in-range.
-        assert!(matches!(escalate.source, ResolvedSource::Registry { .. }));
+        assert!(matches!(escalate.source, ResolvedSource::ByVersion { .. }));
         assert_eq!(
             escalate
                 .manifest
@@ -1695,7 +1699,7 @@ patch:
 
         let opts = ResolverOptions {
             cache_dir: Some(tmp.path().join("cache")),
-            registry: Some(crate::RegistryConfig {
+            package_source: Some(crate::PackageSource {
                 base_url: format!("file://{}", mirror.display()),
             }),
             link_checkout: None,
@@ -1741,7 +1745,7 @@ dependencies:
         );
         let opts = ResolverOptions {
             cache_dir: Some(tmp.path().join("cache")),
-            registry: Some(crate::RegistryConfig {
+            package_source: Some(crate::PackageSource {
                 base_url: format!("file://{}", mirror.display()),
             }),
             link_checkout: None,
@@ -1783,7 +1787,7 @@ dependencies:
 
         let opts = ResolverOptions {
             cache_dir: Some(cache),
-            registry: None,
+            package_source: None,
             link_checkout: None,
         };
         let res = resolve_with(&root, &opts).unwrap();
@@ -2061,7 +2065,7 @@ schemas: {}
     ) -> ResolverOptions {
         ResolverOptions {
             cache_dir: Some(cache.to_path_buf()),
-            registry: Some(crate::RegistryConfig {
+            package_source: Some(crate::PackageSource {
                 base_url: format!("file://{}", mirror.display()),
             }),
             link_checkout,
@@ -2127,7 +2131,7 @@ schemas: {}
         let res = resolve_with(&root, &opts).unwrap();
         let core = res.packages.get("@tatolab/core").unwrap();
         assert!(
-            matches!(core.source, ResolvedSource::Registry { .. }),
+            matches!(core.source, ResolvedSource::ByVersion { .. }),
             "without a link the dep must resolve from the store, got {:?}",
             core.source
         );
@@ -2158,7 +2162,7 @@ schemas: {}
         let res = resolve_with(&root, &opts).unwrap();
         let core = res.packages.get("@tatolab/core").unwrap();
         assert!(
-            matches!(core.source, ResolvedSource::Registry { .. }),
+            matches!(core.source, ResolvedSource::ByVersion { .. }),
             "a dep absent from the checkout must fall back to the store, got {:?}",
             core.source
         );
@@ -2467,20 +2471,20 @@ dependencies:
         // Clear the registry env too so the mentally-revert is deterministic:
         // with marker discovery reverted, the bare `^1.0.0` dep would fall
         // through to by-version resolution and — with no registry — fail
-        // `RegistryNotConfigured`, so `.expect` panics. Without this, a stray
-        // `STREAMLIB_REGISTRY_URL` in the shell could send the reverted path to a
+        // `PackageSourceNotConfigured`, so `.expect` panics. Without this, a stray
+        // `STREAMLIB_PACKAGE_SOURCE` in the shell could send the reverted path to a
         // live fetch instead. The positive assertion (Path from the checkout)
         // holds regardless, since the link short-circuit precedes the registry.
         // SAFETY: `#[serial]` + `with_link_checkout_env` serialize env mutation.
-        let prev_registry = std::env::var_os(crate::REGISTRY_URL_ENV);
-        unsafe { std::env::remove_var(crate::REGISTRY_URL_ENV) };
+        let prev_registry = std::env::var_os(crate::PACKAGE_SOURCE_ENV);
+        unsafe { std::env::remove_var(crate::PACKAGE_SOURCE_ENV) };
         let res = with_link_checkout_env(None, || {
             let opts = ResolverOptions::from_env_or_marker(&crate_dir);
             resolve_with(&crate_dir, &opts)
         });
         unsafe {
             if let Some(v) = prev_registry {
-                std::env::set_var(crate::REGISTRY_URL_ENV, v);
+                std::env::set_var(crate::PACKAGE_SOURCE_ENV, v);
             }
         }
         let res = res.expect("marker-discovered checkout must resolve the by-version dep");

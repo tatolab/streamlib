@@ -52,7 +52,7 @@ fn pkg_publish_writes_fetchable_catalog_and_owned_jtd() {
     let out = Command::new(BIN)
         .args(["pkg", "publish"])
         .current_dir(&pkg_dir)
-        .env("STREAMLIB_REGISTRY_URL", &registry)
+        .env("STREAMLIB_PACKAGE_SOURCE", &registry)
         .output()
         .expect("spawn streamlib binary");
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -150,7 +150,7 @@ processors:
     let out = Command::new(BIN)
         .args(["pkg", "publish"])
         .current_dir(&pkg_dir)
-        .env("STREAMLIB_REGISTRY_URL", &registry)
+        .env("STREAMLIB_PACKAGE_SOURCE", &registry)
         .output()
         .expect("spawn streamlib binary");
     assert!(

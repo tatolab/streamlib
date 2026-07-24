@@ -1026,7 +1026,7 @@ impl Runner {
     ///
     /// Assumes every referenced processor type is already registered (it
     /// validates and fails on an unregistered type). For the turnkey case —
-    /// resolve and build referenced packages from the registry first — use
+    /// resolve and build referenced packages by version first — use
     /// [`Self::load_graph_snapshot_with_resolving`].
     pub fn load_graph_snapshot(
         &self,
@@ -1092,7 +1092,7 @@ impl Runner {
     /// Load a graph snapshot from a JSON file path.
     ///
     /// Assumes referenced processor types are already registered; for the
-    /// turnkey path that resolves missing modules from the registry, use
+    /// turnkey path that resolves missing modules by version, use
     /// [`Self::load_graph_snapshot_from_path_with_resolving`].
     pub fn load_graph_snapshot_from_path(&self, path: &std::path::Path) -> Result<()> {
         let snapshot = crate::core::graph_snapshot::GraphSnapshot::from_json_file(path)?;
@@ -1107,15 +1107,15 @@ impl Runner {
     }
 
     /// Like [`Runner::load_graph_snapshot`], but first resolves and loads —
-    /// from the registry — any module referenced by the snapshot whose
-    /// processor type isn't registered yet, so a graph snapshot is
-    /// self-contained: `streamlib-runtime --snapshot graph.json` brings up a
-    /// full pipeline turnkey instead of failing on the first unregistered
-    /// processor type (the bare runtime only registers the api-server
-    /// in-process at boot).
+    /// by version from the configured package source — any module referenced by
+    /// the snapshot whose processor type isn't registered yet, so a graph
+    /// snapshot is self-contained: `streamlib-runtime --snapshot graph.json`
+    /// brings up a full pipeline turnkey instead of failing on the first
+    /// unregistered processor type (the bare runtime only registers the
+    /// api-server in-process at boot).
     ///
-    /// One `add_module` per referenced package (deduped), resolved from the
-    /// registry at its highest published version and built on the host —
+    /// One `add_module` per referenced package (deduped), resolved by version at
+    /// its highest published version and built on the host —
     /// requires a build orchestrator (e.g. `RunnerAutoBuild::with_auto_build`).
     /// Fails loud, naming the package, if a referenced module can't resolve.
     pub async fn load_graph_snapshot_with_resolving(
@@ -1151,12 +1151,12 @@ impl Runner {
 
         for module in to_load {
             tracing::info!(
-                "Snapshot: resolving module '{}' from registry",
+                "Snapshot: resolving module '{}' by version (linked checkout if a streamlib link is active, else the configured package source)",
                 module.package_ref()
             );
             self.add_module_with(
                 module.clone(),
-                Strategy::Registry {
+                Strategy::ByVersion {
                     version_req: SemVerRange::Any,
                     build: BuildPolicy::IfStale,
                 },

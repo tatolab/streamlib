@@ -876,11 +876,11 @@ mod tests {
     }
     impl CleanResolutionEnv {
         fn new() -> Self {
-            let prev_registry = std::env::var("STREAMLIB_REGISTRY_URL").ok();
+            let prev_registry = std::env::var("STREAMLIB_PACKAGE_SOURCE").ok();
             let prev_link = std::env::var("STREAMLIB_LINK_CHECKOUT").ok();
             // SAFETY: `#[serial]` serializes the process-global env mutation.
             unsafe {
-                std::env::remove_var("STREAMLIB_REGISTRY_URL");
+                std::env::remove_var("STREAMLIB_PACKAGE_SOURCE");
                 std::env::remove_var("STREAMLIB_LINK_CHECKOUT");
             }
             Self {
@@ -893,8 +893,8 @@ mod tests {
         fn drop(&mut self) {
             unsafe {
                 match self.prev_registry.take() {
-                    Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
-                    None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
+                    Some(v) => std::env::set_var("STREAMLIB_PACKAGE_SOURCE", v),
+                    None => std::env::remove_var("STREAMLIB_PACKAGE_SOURCE"),
                 }
                 match self.prev_link.take() {
                     Some(v) => std::env::set_var("STREAMLIB_LINK_CHECKOUT", v),

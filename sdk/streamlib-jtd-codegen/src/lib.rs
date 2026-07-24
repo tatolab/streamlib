@@ -122,7 +122,7 @@ pub fn generate(opts: GenerateOptions) -> Result<()> {
     } = opts;
 
     if let Some(project_dir) = project_dir {
-        // `from_env` picks up the static registry config (STREAMLIB_REGISTRY_URL)
+        // `from_env` picks up the static registry config (STREAMLIB_PACKAGE_SOURCE)
         // so a registry-cached crate resolves registry schema deps. The active
         // `streamlib link` checkout is supplied EXPLICITLY by the caller
         // (`link_checkout`), NOT re-derived from the marker here: the user-facing

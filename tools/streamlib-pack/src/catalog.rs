@@ -6,7 +6,7 @@
 //! Turns a package's `streamlib.yaml` into the resolved
 //! [`PackageCatalog`] + per-processor [`CatalogIndexLine`]s + the JSON Type
 //! Definitions for the schemas it OWNS, ready for
-//! [`crate::static_registry`] to write into the registry tree.
+//! [`crate::static_package_source`] to write into the package source tree.
 //!
 //! Bare port / config schema references (`schema: VideoFrame`) are resolved
 //! to release-core [`SchemaIdent`]s against the manifest's `schemas:` map:

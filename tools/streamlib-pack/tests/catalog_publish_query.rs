@@ -11,10 +11,10 @@ use std::path::{Path, PathBuf};
 
 use streamlib_idents::{
     CATALOG_INDEX_PATH, CatalogClient, CatalogRuntime, CatalogSchemaRef, Org, Package, PackageRef,
-    RegistryClient, RegistryConfig, SemVer, render_catalog_index_ndjson,
+    PackageSourceClient, PackageSource, SemVer, render_catalog_index_ndjson,
 };
 use streamlib_pack::catalog::{build_package_catalog, build_sibling_versions};
-use streamlib_pack::static_registry::{build_and_flip, write_package_catalog};
+use streamlib_pack::static_package_source::{build_and_flip, write_package_catalog};
 
 fn write(dir: &Path, rel: &str, body: &str) {
     let path = dir.join(rel);
@@ -104,7 +104,7 @@ fn emit_catalog_tree(root: &Path, pkg_dirs: &[PathBuf]) {
     let slpkg = root.join("slpkg");
     std::fs::create_dir_all(&slpkg).unwrap();
     // Registry client rooted at the tree root; it writes under `slpkg/`.
-    let cfg = RegistryConfig {
+    let cfg = PackageSource {
         base_url: format!("file://{}", root.display()),
     };
     let siblings = build_sibling_versions(pkg_dirs).unwrap();
@@ -113,7 +113,7 @@ fn emit_catalog_tree(root: &Path, pkg_dirs: &[PathBuf]) {
     for dir in pkg_dirs {
         let arts = build_package_catalog(dir, &siblings).unwrap();
         // Upload a DUMMY `.slpkg` — the query path must never read it.
-        RegistryClient::new(&cfg)
+        PackageSourceClient::new(&cfg)
             .upload_slpkg(
                 &arts.catalog.package,
                 arts.catalog.version,

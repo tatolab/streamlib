@@ -47,7 +47,7 @@ pub use streamlib_cargo_build::CargoProfile;
 
 pub mod catalog;
 pub mod dependency_reconcile;
-pub mod static_registry;
+pub mod static_package_source;
 
 // The `streamlib link` marker schema + discovery moved to `streamlib-idents`
 // (its natural home alongside the manifest/lockfile types) so the engine module
@@ -606,7 +606,7 @@ pub fn assemble_artifact_with_cargo_config(
     // A source-only `.slpkg` (the distribution artifact `streamlib pkg build`
     // / `publish` ships) carries NO prebuilt cdylib and NO local compilation —
     // the consumer builds it from the bundled source on their own host
-    // (`streamlib add` / `Strategy::Registry`, AlwaysBuild), resolving every dep
+    // (`streamlib add` / `Strategy::ByVersion`, AlwaysBuild), resolving every dep
     // from the registry. Only the runtime orchestrator's `StagedDir` target
     // compiles the cdylib here, because that materialization IS the host build.
     if has_rust && matches!(target, AssembleTarget::StagedDir(_)) {

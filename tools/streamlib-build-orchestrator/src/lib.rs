@@ -2074,10 +2074,10 @@ mod tests {
         // Control the env: no registry (so a non-link resolve of the bare range
         // fails loud) and no ambient link env. SAFETY: `#[serial]` serializes the
         // env-mutating tests.
-        let prev_registry = std::env::var_os("STREAMLIB_REGISTRY_URL");
+        let prev_registry = std::env::var_os("STREAMLIB_PACKAGE_SOURCE");
         let prev_link = std::env::var_os(streamlib_idents::LINK_CHECKOUT_ENV);
         unsafe {
-            std::env::remove_var("STREAMLIB_REGISTRY_URL");
+            std::env::remove_var("STREAMLIB_PACKAGE_SOURCE");
             std::env::remove_var(streamlib_idents::LINK_CHECKOUT_ENV);
         }
 
@@ -2107,8 +2107,8 @@ mod tests {
 
         unsafe {
             match prev_registry {
-                Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
-                None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
+                Some(v) => std::env::set_var("STREAMLIB_PACKAGE_SOURCE", v),
+                None => std::env::remove_var("STREAMLIB_PACKAGE_SOURCE"),
             }
             match prev_link {
                 Some(v) => std::env::set_var(streamlib_idents::LINK_CHECKOUT_ENV, v),
@@ -2218,11 +2218,11 @@ mod tests {
     /// override. SAFETY: callers are `#[serial]` — no other thread races the
     /// process-global env.
     fn with_scratch_registry<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
-        let prev_url = std::env::var("STREAMLIB_REGISTRY_URL").ok();
+        let prev_url = std::env::var("STREAMLIB_PACKAGE_SOURCE").ok();
         let prev_py_lib = std::env::var("STREAMLIB_PYTHON_NATIVE_LIB").ok();
         unsafe {
             std::env::set_var(
-                "STREAMLIB_REGISTRY_URL",
+                "STREAMLIB_PACKAGE_SOURCE",
                 format!("file://{}", dir.display()),
             );
             std::env::remove_var("STREAMLIB_PYTHON_NATIVE_LIB");
@@ -2230,8 +2230,8 @@ mod tests {
         let out = f();
         unsafe {
             match prev_url {
-                Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
-                None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
+                Some(v) => std::env::set_var("STREAMLIB_PACKAGE_SOURCE", v),
+                None => std::env::remove_var("STREAMLIB_PACKAGE_SOURCE"),
             }
             if let Some(v) = prev_py_lib {
                 std::env::set_var("STREAMLIB_PYTHON_NATIVE_LIB", v);
@@ -2243,7 +2243,7 @@ mod tests {
     /// Publish a PARTIAL release manifest (macros only — plugin-sdk absent)
     /// at `version` into the scratch `file://` registry dir.
     fn publish_partial_manifest(dir: &Path, version: &str) {
-        let cfg = streamlib_idents::RegistryConfig {
+        let cfg = streamlib_idents::PackageSource {
             base_url: format!("file://{}", dir.display()),
         };
         let manifest = streamlib_idents::ReleaseManifest::new(
@@ -2253,7 +2253,7 @@ mod tests {
                 version,
             )],
         );
-        streamlib_idents::RegistryClient::new(&cfg)
+        streamlib_idents::PackageSourceClient::new(&cfg)
             .upload_release_manifest("tatolab", &manifest)
             .unwrap();
     }

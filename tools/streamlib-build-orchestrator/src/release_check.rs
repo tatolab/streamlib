@@ -37,7 +37,7 @@ use std::collections::BTreeMap;
 use streamlib_cargo_build::TatolabRegistryPin;
 use streamlib_engine::core::runtime::BuildError;
 use streamlib_idents::{
-    RegistryClient, RegistryConfig, SemVer, SemVerRange, crates_missing_from_release,
+    PackageSourceClient, PackageSource, SemVer, SemVerRange, crates_missing_from_release,
 };
 
 /// Registry org the release manifest lives under. Matches the publish
@@ -77,10 +77,10 @@ pub(crate) fn assert_release_complete(
     }
     // No registry configured ⇒ deps resolve by path (dev / in-tree); nothing
     // to validate against.
-    let Some(config) = RegistryConfig::from_env() else {
+    let Some(config) = PackageSource::from_env() else {
         return Ok(());
     };
-    let client = RegistryClient::new(&config);
+    let client = PackageSourceClient::new(&config);
     let org = registry_org();
 
     // Available releases (newest-satisfying selection below). A listing
@@ -197,28 +197,28 @@ mod tests {
     /// prior values after. SAFETY: callers are `#[serial]`, so no other
     /// thread races these process-global env writes.
     fn with_file_registry<T>(dir: &std::path::Path, f: impl FnOnce() -> T) -> T {
-        let prev_url = std::env::var("STREAMLIB_REGISTRY_URL").ok();
+        let prev_url = std::env::var("STREAMLIB_PACKAGE_SOURCE").ok();
         unsafe {
             std::env::set_var(
-                "STREAMLIB_REGISTRY_URL",
+                "STREAMLIB_PACKAGE_SOURCE",
                 format!("file://{}", dir.display()),
             );
         }
         let out = f();
         unsafe {
             match prev_url {
-                Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
-                None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
+                Some(v) => std::env::set_var("STREAMLIB_PACKAGE_SOURCE", v),
+                None => std::env::remove_var("STREAMLIB_PACKAGE_SOURCE"),
             }
         }
         out
     }
 
     fn publish_manifest(dir: &std::path::Path, m: &ReleaseManifest) {
-        let cfg = RegistryConfig {
+        let cfg = PackageSource {
             base_url: format!("file://{}", dir.display()),
         };
-        RegistryClient::new(&cfg)
+        PackageSourceClient::new(&cfg)
             .upload_release_manifest("tatolab", m)
             .unwrap();
     }
@@ -248,15 +248,15 @@ mod tests {
     fn no_registry_configured_is_a_noop() {
         // Clear the env entirely; the check must pass vacuously (dev / path).
         // SAFETY: `#[serial]` — no other thread races these env writes.
-        let prev = std::env::var("STREAMLIB_REGISTRY_URL").ok();
+        let prev = std::env::var("STREAMLIB_PACKAGE_SOURCE").ok();
         unsafe {
-            std::env::remove_var("STREAMLIB_REGISTRY_URL");
+            std::env::remove_var("STREAMLIB_PACKAGE_SOURCE");
         }
         let pins = vec![pin("streamlib-plugin-sdk", "0.5.1")];
         assert!(assert_release_complete("pkg", &pins).is_ok());
         unsafe {
             if let Some(v) = prev {
-                std::env::set_var("STREAMLIB_REGISTRY_URL", v);
+                std::env::set_var("STREAMLIB_PACKAGE_SOURCE", v);
             }
         }
     }
@@ -365,16 +365,16 @@ mod tests {
         // and the check must degrade to Ok (cargo remains the hard gate).
         // Mentally revert the Err arms to hard failures and this fails.
         // SAFETY: `#[serial]` — no other thread races these env writes.
-        let prev_url = std::env::var("STREAMLIB_REGISTRY_URL").ok();
+        let prev_url = std::env::var("STREAMLIB_PACKAGE_SOURCE").ok();
         unsafe {
-            std::env::set_var("STREAMLIB_REGISTRY_URL", "http://127.0.0.1:1");
+            std::env::set_var("STREAMLIB_PACKAGE_SOURCE", "http://127.0.0.1:1");
         }
         let pins = vec![pin("streamlib-plugin-sdk", "0.5.0")];
         let out = assert_release_complete("pkg", &pins);
         unsafe {
             match prev_url {
-                Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
-                None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
+                Some(v) => std::env::set_var("STREAMLIB_PACKAGE_SOURCE", v),
+                None => std::env::remove_var("STREAMLIB_PACKAGE_SOURCE"),
             }
         }
         assert!(

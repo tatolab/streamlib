@@ -13,9 +13,9 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result};
 use streamlib::engine_internal::core::ProjectConfig;
 use streamlib::sdk::runtime::{AppModulesDir, parse_lockfile_package_key};
-use streamlib_idents::{RegistryClient, RegistryConfig};
+use streamlib_idents::{PackageSourceClient, PackageSource};
 use streamlib_pack::catalog::{build_package_catalog, build_sibling_versions};
-use streamlib_pack::static_registry::{merge_catalog_index_lines, write_package_catalog};
+use streamlib_pack::static_package_source::{merge_catalog_index_lines, write_package_catalog};
 use streamlib_pack::{
     AssembleOptions, AssembleTarget, CargoProfile, PathDepPolicy, assemble_artifact,
 };
@@ -42,23 +42,25 @@ pub fn build(output: Option<&Path>) -> Result<()> {
     Ok(())
 }
 
-/// Publish THIS package (the current working directory) into the static
-/// registry tree's `.slpkg` generic store. Always repacks a fresh source-only
-/// `.slpkg` to a temp file (never trusts a pre-existing artifact), writes it by
-/// version, refreshes the package's version index, and emits the same catalog
-/// artifacts a whole-tree `static-registry emit` would — the per-package
-/// `<name>.catalog.json` + owned schema JTDs beside the `.slpkg`, plus a merge
-/// into the tree-wide `catalog/index.ndjson` — so a registry populated purely by
-/// `pkg publish` serves a catalog-backed discovery summary, not "no metadata".
-/// The registry tree root comes from `STREAMLIB_REGISTRY_URL` and must be a
-/// `file://` tree — publishing writes files; a static HTTP mount is read-only.
+/// Publish THIS package (the current working directory) into the package
+/// source (a static `.slpkg` tree) generic store. Always repacks a fresh
+/// source-only `.slpkg` to a temp file (never trusts a pre-existing artifact),
+/// writes it by version, refreshes the package's version index, and emits the
+/// same catalog artifacts a whole-tree `static-package-source emit` would — the
+/// per-package `<name>.catalog.json` + owned schema JTDs beside the `.slpkg`,
+/// plus a merge into the tree-wide `catalog/index.ndjson` — so a package source
+/// populated purely by `pkg publish` serves a catalog-backed discovery summary,
+/// not "no metadata". The package source tree root comes from
+/// `STREAMLIB_PACKAGE_SOURCE` and must be a `file://` tree — publishing writes
+/// files; a static HTTP mount is read-only.
 pub fn publish() -> Result<()> {
     let package_dir = std::env::current_dir().context("resolve current working directory")?;
     // Early friendly check; the load-bearing guard runs again inside
     // `assemble_artifact`'s Slpkg branch (streamlib-pack owns the seam).
     streamlib_idents::link_marker::ensure_no_active_link_for_pack(&package_dir)?;
     // Lightweight manifest read — package metadata only, NO dependency
-    // resolution (which would require the registry just to read name/version).
+    // resolution (which would require the package source just to read
+    // name/version).
     let config = streamlib_cargo_build::read_minimal_project_config(&package_dir)
         .context("Failed to read streamlib.yaml")?
         .ok_or_else(|| anyhow::anyhow!("no streamlib.yaml at {}", package_dir.display()))?;
@@ -67,10 +69,10 @@ pub fn publish() -> Result<()> {
         .as_ref()
         .ok_or_else(|| anyhow::anyhow!("streamlib.yaml missing [package] section"))?;
 
-    let registry = RegistryConfig::from_env().ok_or_else(|| {
+    let package_source = PackageSource::from_env().ok_or_else(|| {
         anyhow::anyhow!(
-            "registry not configured: set STREAMLIB_REGISTRY_URL to a file:// registry tree \
-             (e.g. file:///path/to/registry-tree) to publish"
+            "no package source configured: set STREAMLIB_PACKAGE_SOURCE to a file:// package \
+             source tree (e.g. file:///path/to/slpkg-tree) to publish"
         )
     })?;
 
@@ -95,13 +97,13 @@ pub fn publish() -> Result<()> {
     let bytes = std::fs::read(tmp.path()).context("read packed .slpkg")?;
 
     let pkg_ref = streamlib_idents::PackageRef::new(package.org.clone(), package.name.clone());
-    let client = RegistryClient::new(&registry);
+    let client = PackageSourceClient::new(&package_source);
     println!(
         "Publishing {} v{} ({} bytes) to {}…",
         outcome.package_name,
         outcome.package_version,
         bytes.len(),
-        registry.base_url
+        package_source.base_url
     );
     let url = client
         .upload_slpkg(&pkg_ref, package.version, &bytes)
@@ -111,7 +113,7 @@ pub fn publish() -> Result<()> {
     // Publish the catalog alongside the `.slpkg`. `upload_slpkg` already proved
     // the tree is a writable `file://` root, so deriving the on-disk root here is
     // sound.
-    let tree_root = file_tree_root(&registry.base_url)?;
+    let tree_root = file_tree_root(&package_source.base_url)?;
     let slpkg_dir = tree_root.join("slpkg");
     write_package_catalog(&slpkg_dir, &catalog_artifacts)
         .map_err(|e| anyhow::anyhow!("writing the package catalog: {}", e))?;
@@ -159,17 +161,17 @@ fn sibling_package_dirs(package_dir: &Path) -> Vec<std::path::PathBuf> {
     }
 }
 
-/// The on-disk tree root a `file://` registry base URL points at. `pkg publish`
-/// only reaches this after [`RegistryClient::upload_slpkg`] has already required
-/// the `file://` scheme, so a non-`file://` base here is an internal invariant
-/// violation rather than a user-facing case.
+/// The on-disk tree root a `file://` package source base URL points at. `pkg
+/// publish` only reaches this after [`PackageSourceClient::upload_slpkg`] has
+/// already required the `file://` scheme, so a non-`file://` base here is an
+/// internal invariant violation rather than a user-facing case.
 fn file_tree_root(base_url: &str) -> Result<std::path::PathBuf> {
     base_url
         .strip_prefix("file://")
         .map(std::path::PathBuf::from)
         .ok_or_else(|| {
             anyhow::anyhow!(
-                "internal: publishing the catalog requires a file:// registry tree, got `{base_url}`"
+                "internal: publishing the catalog requires a file:// package source tree, got `{base_url}`"
             )
         })
 }
@@ -506,7 +508,7 @@ pub fn list(dir: Option<&Path>) -> Result<()> {
         println!("No packages installed in {}.", app.modules_dir().display());
         println!();
         println!("Add a package with:");
-        println!("  streamlib add @org/name@^1.0.0     # from the registry");
+        println!("  streamlib add @org/name@^1.0.0     # by version from the package source");
         println!("  streamlib add ./path/to.slpkg      # from a local artifact");
         println!("  streamlib add https://…/pkg.slpkg  # from a URL");
         return Ok(());
@@ -537,7 +539,7 @@ fn describe_lock_source(source: &streamlib_idents::LockfileSource) -> String {
         LockfileSource::Archive { path, .. } => format!("archive:{}", path.display()),
         LockfileSource::Url { url, .. } => format!("url:{url}"),
         LockfileSource::Link { path } => format!("link:{}", path.display()),
-        LockfileSource::Registry { url } => format!("registry:{url}"),
+        LockfileSource::ByVersion { url } => format!("by-version:{url}"),
         LockfileSource::Git { url, rev } => format!("git:{url}@{rev}"),
     }
 }

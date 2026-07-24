@@ -1,11 +1,17 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Static-file registry client for schema-package resolution.
+//! Static-file package source client for schema-package resolution.
+//!
+//! A package source is just a location a package's bytes live at — there is no
+//! central registry to log in to. StreamLib's package source is a static
+//! `.slpkg` tree, read tokenlessly over `file://` or a dumb HTTP mount; future
+//! sources (a GitHub release tree, a mesh peer, an offline mirror) are modeled
+//! the same way — another location, not a hosted service.
 //!
 //! Schema packages (`@tatolab/escalate` and friends) are distributed as
-//! source-only `.slpkg`s in the static registry tree's generic store under
-//! `slpkg/<name>/<version>/<name>.slpkg`. Resolving a `Registry` dependency by
+//! source-only `.slpkg`s in the package source tree's generic store under
+//! `slpkg/<name>/<version>/<name>.slpkg`. Resolving a by-version dependency by
 //! a semver *range* takes two steps:
 //!
 //! 1. **List** the available concrete versions of the package, then select the
@@ -21,7 +27,7 @@
 //! ways.
 //!
 //! The `base_url` points at the **tree root** (the directory holding `slpkg/`,
-//! `cargo/`, `pypi/`, `npm/`, `catalog/`) — the single registry location a
+//! `cargo/`, `pypi/`, `npm/`, `catalog/`) — the single package source location a
 //! consumer configures. `file://<root>` is the hermetic local-mirror / test /
 //! offline transport; `http(s)://…` is a static HTTP mount. Publishing is
 //! `file://`-only (an emit writes the tree; a static HTTP mount is read-only).
@@ -41,58 +47,60 @@ pub const RELEASE_MANIFEST_CHANNEL: &str = "streamlib-release";
 pub const RELEASE_MANIFEST_FILE: &str = "manifest.json";
 
 /// The `slpkg/` subtree the generic store lives under, relative to the tree
-/// root the [`RegistryConfig::base_url`] points at.
+/// root the [`PackageSource::base_url`] points at.
 const SLPKG_SUBTREE: &str = "slpkg";
 /// File name of the per-package version index (NDJSON).
 const VERSION_INDEX_FILE: &str = "index.json";
 
-/// Environment variable carrying the registry tree-root URL — `file://<root>`
-/// for a local / offline mirror, or `http(s)://…` for a static HTTP mount.
-pub const REGISTRY_URL_ENV: &str = "STREAMLIB_REGISTRY_URL";
+/// Environment variable carrying the package source tree-root URL —
+/// `file://<root>` for a local / offline mirror, or `http(s)://…` for a static
+/// HTTP mount.
+pub const PACKAGE_SOURCE_ENV: &str = "STREAMLIB_PACKAGE_SOURCE";
 
 /// Environment variable carrying the absolute path of an active `streamlib
 /// link` checkout. Set by the build orchestrator on the staged package's
 /// `cargo build` when a link is active, so a package's `build.rs` schema-dep
 /// codegen resolves a dep present in `<checkout>/packages/<name>` from the
-/// checkout (the zero-registry dev loop) instead of the by-version store.
+/// checkout (the link dev loop) instead of the by-version store.
 /// Unset — the dominant case — leaves resolution byte-identical to before.
 /// Read by [`ResolverOptions::from_env`], never on the pure resolution path.
 ///
 /// [`ResolverOptions::from_env`]: crate::ResolverOptions::from_env
 pub const LINK_CHECKOUT_ENV: &str = "STREAMLIB_LINK_CHECKOUT";
 
-/// Default tree-root URL for the first-party static `.slpkg` registry — the
-/// sensible default when no tree is named. It is a *default*, not a lock-in:
-/// point [`REGISTRY_URL_ENV`] at any other tree root, local (`file://`) or
-/// remote, to resolve from there instead. Note it is NOT eagerly assumed by
-/// [`RegistryConfig::from_env`]: an unset env means "no registry configured"
-/// so a dev / path-only build never tries to reach the network.
-pub const DEFAULT_REGISTRY_URL: &str = "https://registry.tatolab.com";
+/// Suggested tree-root URL for the first-party static `.slpkg` package source —
+/// a sensible default value a consumer can write into config when no source is
+/// named. It is a *suggestion*, not a lock-in, and is NOT eagerly assumed by
+/// [`PackageSource::from_env`]: an unset env means "no package source
+/// configured" so a dev / path-only build never tries to reach the network.
+/// Point [`PACKAGE_SOURCE_ENV`] at any tree root, local (`file://`) or remote,
+/// to resolve from there instead.
+pub const DEFAULT_PACKAGE_SOURCE: &str = "https://registry.tatolab.com";
 
-/// Resolved configuration for the static registry tree.
+/// A resolved package source: the tree-root location a consumer resolves
+/// versioned `.slpkg`s from.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct RegistryConfig {
+pub struct PackageSource {
     /// Tree-root URL — `http(s)://host[:port]` for a static HTTP mount, or
     /// `file:///abs/root` for a local mirror.
     pub base_url: String,
 }
 
-impl RegistryConfig {
-    /// Build from [`REGISTRY_URL_ENV`], returning `None` when it is unset — so
-    /// a dev / path-only build with no registry configured resolves without
-    /// touching the network (a `Registry` dep then fails loud with
-    /// `RegistryNotConfigured`). The first-party [`DEFAULT_REGISTRY_URL`] is a
-    /// tooling default written into a consumer's config, not an eager fallback
-    /// here.
+impl PackageSource {
+    /// Build from [`PACKAGE_SOURCE_ENV`], returning `None` when it is unset — so
+    /// a dev / path-only build with no package source configured resolves
+    /// without touching the network (a version dep then fails loud with
+    /// `PackageSourceNotConfigured`). The first-party [`DEFAULT_PACKAGE_SOURCE`]
+    /// is a suggested config value, not an eager fallback here.
     pub fn from_env() -> Option<Self> {
-        let base_url = std::env::var(REGISTRY_URL_ENV)
+        let base_url = std::env::var(PACKAGE_SOURCE_ENV)
             .ok()
             .map(|s| s.trim_end_matches('/').to_string())
             .filter(|s| !s.is_empty())?;
         Some(Self { base_url })
     }
 
-    /// Build a config for a local on-disk registry tree rooted at `dir` — the
+    /// Build a config for a local on-disk package source tree rooted at `dir` — the
     /// `file://<canonical-abs-dir>` form a `file://` consumer / publisher uses.
     /// `dir` is canonicalized so the derived channel URLs are absolute and
     /// relocation-stable; a non-existent path is a
@@ -102,7 +110,7 @@ impl RegistryConfig {
             .canonicalize()
             .map_err(|e| ResolverError::RegistryFetchFailed {
                 name: "<local tree>".to_string(),
-                detail: format!("canonicalize registry tree dir {} : {e}", dir.display()),
+                detail: format!("canonicalize package source tree dir {} : {e}", dir.display()),
             })?;
         Ok(Self {
             base_url: format!("file://{}", canonical.display()),
@@ -116,14 +124,14 @@ impl RegistryConfig {
         self.base_url.strip_prefix("file://").map(PathBuf::from)
     }
 
-    /// The pypi PEP-503 `simple/` index URL derived from the single registry
-    /// location — the value `uv` reads as `UV_INDEX`. `file://` and `http(s)://`
+    /// The pypi PEP-503 `simple/` index URL derived from the single package
+    /// source location — the value `uv` reads as `UV_INDEX`. `file://` and `http(s)://`
     /// both work: uv consumes a PEP-503 `simple/` tree over either transport.
     pub fn pypi_simple_index_url(&self) -> String {
         format!("{}/pypi/simple", self.base_url)
     }
 
-    /// The npm registry URL derived from the single registry location — the
+    /// The npm registry URL derived from the single package source location — the
     /// value an `.npmrc` `@tatolab:registry=` scope points at. npm/Deno have no
     /// `file://` registry story, so a `file://` tree must first be served over a
     /// static HTTP mount before this is reachable; the string is derived
@@ -132,7 +140,7 @@ impl RegistryConfig {
         format!("{}/npm/", self.base_url)
     }
 
-    /// The cargo **sparse** index URL derived from the single registry location
+    /// The cargo **sparse** index URL derived from the single package source location
     /// (`sparse+<base>/cargo/`). Valid as a `[source]`-replacement target only
     /// for an `http(s)://` mount — cargo's sparse protocol is HTTP-only, so a
     /// `file://` tree is instead consumed via a `local-registry` reshape.
@@ -141,13 +149,13 @@ impl RegistryConfig {
     }
 }
 
-/// Client over a single [`RegistryConfig`].
-pub struct RegistryClient<'a> {
-    config: &'a RegistryConfig,
+/// Client over a single [`PackageSource`].
+pub struct PackageSourceClient<'a> {
+    config: &'a PackageSource,
 }
 
-impl<'a> RegistryClient<'a> {
-    pub fn new(config: &'a RegistryConfig) -> Self {
+impl<'a> PackageSourceClient<'a> {
+    pub fn new(config: &'a PackageSource) -> Self {
         Self { config }
     }
 
@@ -160,7 +168,7 @@ impl<'a> RegistryClient<'a> {
         PathBuf::from(self.config.base_url.trim_start_matches("file://"))
     }
 
-    /// List every concrete version of `pkg_ref` the registry holds.
+    /// List every concrete version of `pkg_ref` the package source holds.
     pub fn list_versions(&self, pkg_ref: &PackageRef) -> ResolverResult<Vec<SemVer>> {
         if self.is_file_scheme() {
             self.list_versions_file(pkg_ref)
@@ -297,7 +305,7 @@ impl<'a> RegistryClient<'a> {
     /// canonical URL it was written to. This is the **atomicity flip** — the
     /// caller runs it *last*, after every crate / SDK / package has landed, so
     /// the manifest's presence marks the release complete. `file://`-only (an
-    /// emit builds the tree). `org` is the registry org the release lives under
+    /// emit builds the tree). `org` is the package source org the release lives under
     /// (e.g. `tatolab`).
     pub fn upload_release_manifest(
         &self,
@@ -332,7 +340,7 @@ impl<'a> RegistryClient<'a> {
 
     /// Fetch the release manifest for `release_version`. `Ok(None)` when no
     /// manifest is published for that version — the back-compat case for a
-    /// pre-atomic-release registry, which the consumer treats as "no
+    /// pre-atomic-release package source, which the consumer treats as "no
     /// completeness signal, proceed". `Err` only on a real transport / parse
     /// failure.
     pub fn fetch_release_manifest(
@@ -467,7 +475,7 @@ impl<'a> RegistryClient<'a> {
             Err(ResolverError::RegistryFetchFailed {
                 name: self.config.base_url.clone(),
                 detail: format!(
-                    "{action} requires a file:// registry tree (a static HTTP mount is \
+                    "{action} requires a file:// package source tree (a static HTTP mount is \
                      read-only); got `{}`",
                     self.config.base_url
                 ),
@@ -620,8 +628,8 @@ mod tests {
         PackageRef::new(Org::new(org).unwrap(), Package::new(name).unwrap())
     }
 
-    fn file_config(root: &std::path::Path) -> RegistryConfig {
-        RegistryConfig {
+    fn file_config(root: &std::path::Path) -> PackageSource {
+        PackageSource {
             base_url: format!("file://{}", root.display()),
         }
     }
@@ -684,7 +692,7 @@ mod tests {
         std::fs::create_dir_all(pkg_dir.join("0.4.33-dev.2")).unwrap();
         std::fs::create_dir_all(pkg_dir.join("0.4.33")).unwrap();
         let cfg = file_config(tmp.path());
-        let client = RegistryClient::new(&cfg);
+        let client = PackageSourceClient::new(&cfg);
         let mut versions = client.list_versions(&pkg_ref("tatolab", "camera")).unwrap();
         versions.sort();
         assert_eq!(
@@ -716,9 +724,9 @@ mod tests {
 
     #[test]
     fn ecosystem_urls_derive_from_the_single_base() {
-        // Every channel derives from the one base URL — the "single registry
-        // location, toolchain-derived" contract.
-        let http = RegistryConfig {
+        // Every channel derives from the one base URL — the "single package
+        // source location, toolchain-derived" contract.
+        let http = PackageSource {
             base_url: "https://registry.tatolab.com".into(),
         };
         assert_eq!(
@@ -732,7 +740,7 @@ mod tests {
         );
         assert!(http.local_tree_root().is_none());
 
-        let file = RegistryConfig {
+        let file = PackageSource {
             base_url: "file:///srv/tree".into(),
         };
         assert_eq!(file.pypi_simple_index_url(), "file:///srv/tree/pypi/simple");
@@ -743,7 +751,7 @@ mod tests {
     #[test]
     fn for_local_tree_canonicalizes_and_errors_on_missing() {
         let tmp = tempfile::tempdir().unwrap();
-        let cfg = RegistryConfig::for_local_tree(tmp.path()).unwrap();
+        let cfg = PackageSource::for_local_tree(tmp.path()).unwrap();
         assert!(cfg.base_url.starts_with("file://"));
         // The canonical root round-trips back to the dir.
         assert_eq!(
@@ -752,27 +760,27 @@ mod tests {
         );
         // A non-existent path is a typed error, not a silent bad URL.
         let missing = tmp.path().join("does-not-exist");
-        assert!(RegistryConfig::for_local_tree(&missing).is_err());
+        assert!(PackageSource::for_local_tree(&missing).is_err());
     }
 
     #[test]
     fn scheme_detection_http_vs_file() {
-        let http = RegistryConfig {
+        let http = PackageSource {
             base_url: "https://registry.tatolab.com".into(),
         };
-        assert!(!RegistryClient::new(&http).is_file_scheme());
-        let file = RegistryConfig {
+        assert!(!PackageSourceClient::new(&http).is_file_scheme());
+        let file = PackageSource {
             base_url: "file:///tmp/tree".into(),
         };
-        assert!(RegistryClient::new(&file).is_file_scheme());
+        assert!(PackageSourceClient::new(&file).is_file_scheme());
     }
 
     #[test]
     fn file_scheme_layout_paths_are_under_slpkg_subtree() {
-        let cfg = RegistryConfig {
+        let cfg = PackageSource {
             base_url: "file:///tmp/tree".into(),
         };
-        let client = RegistryClient::new(&cfg);
+        let client = PackageSourceClient::new(&cfg);
         let pr = pkg_ref("tatolab", "escalate");
         assert_eq!(
             client.download_path(&pr, SemVer::new(1, 2, 0)),
@@ -795,7 +803,7 @@ mod tests {
 
         let tree = tempfile::tempdir().unwrap();
         let cfg = file_config(tree.path());
-        let client = RegistryClient::new(&cfg);
+        let client = PackageSourceClient::new(&cfg);
         let pr = pkg_ref("tatolab", "camera");
 
         client
@@ -843,10 +851,10 @@ mod tests {
             }
         });
 
-        let http_cfg = RegistryConfig {
+        let http_cfg = PackageSource {
             base_url: format!("http://127.0.0.1:{port}"),
         };
-        let http_client = RegistryClient::new(&http_cfg);
+        let http_client = PackageSourceClient::new(&http_cfg);
         let versions = http_client.list_versions(&pr).unwrap();
         assert_eq!(versions, vec![SemVer::new(0, 4, 32), SemVer::new(0, 4, 33)]);
         let (bytes, url) = http_client
@@ -877,10 +885,10 @@ mod tests {
             stream.flush().unwrap();
         });
 
-        let cfg = RegistryConfig {
+        let cfg = PackageSource {
             base_url: format!("http://127.0.0.1:{port}"),
         };
-        let client = RegistryClient::new(&cfg);
+        let client = PackageSourceClient::new(&cfg);
         let versions = client.list_versions(&pkg_ref("tatolab", "nope")).unwrap();
         assert!(
             versions.is_empty(),
@@ -893,10 +901,10 @@ mod tests {
     /// is read-only.
     #[test]
     fn upload_over_http_is_refused() {
-        let cfg = RegistryConfig {
+        let cfg = PackageSource {
             base_url: "https://registry.tatolab.com".into(),
         };
-        let client = RegistryClient::new(&cfg);
+        let client = PackageSourceClient::new(&cfg);
         let err = client
             .upload_slpkg(&pkg_ref("tatolab", "camera"), SemVer::new(1, 0, 0), b"x")
             .unwrap_err();
@@ -947,7 +955,7 @@ mod tests {
     }
 
     /// The release-manifest publish/fetch round-trip over the `file://`
-    /// transport — the hermetic path CI and the scratch-registry integration
+    /// transport — the hermetic path CI and the scratch package source integration
     /// test ride. Mentally revert `upload_release_manifest` to a no-op and
     /// `fetch_release_manifest` returns `None`, so this locks the write→read
     /// contract, not merely a happy path.
@@ -957,7 +965,7 @@ mod tests {
 
         let tmp_guard = tempfile::tempdir().unwrap();
         let cfg = file_config(tmp_guard.path());
-        let client = RegistryClient::new(&cfg);
+        let client = PackageSourceClient::new(&cfg);
 
         // Missing manifest ⇒ None (the pre-atomic-release back-compat case).
         assert!(

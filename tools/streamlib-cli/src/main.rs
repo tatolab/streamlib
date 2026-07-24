@@ -482,19 +482,20 @@ enum PkgCommands {
     ///
     /// Bundles source only — no compilation, no prebuilt cdylib, nothing
     /// path-related. The consumer builds it from source on their host
-    /// (`streamlib add` / runtime registry resolution), pulling every dep
-    /// from the registry. The artifact is for hand-off (email it, hand it to
-    /// a runtime); `publish` repacks independently.
+    /// (`streamlib add` / runtime by-version resolution), pulling every dep by
+    /// version from the package source. The artifact is for hand-off (email it,
+    /// hand it to a runtime); `publish` repacks independently.
     Build {
         /// Output file path (default: {name}-{version}.slpkg in the package dir)
         #[arg(short, long)]
         output: Option<PathBuf>,
     },
-    /// Publish THIS package to the registry (run inside the package).
+    /// Publish THIS package to the package source (run inside the package).
     ///
     /// Always repacks a fresh source-only `.slpkg` (never trusts an existing
-    /// artifact) and writes it into the static generic store. The registry
-    /// tree root comes from `STREAMLIB_REGISTRY_URL` and must be a `file://`
+    /// artifact) and writes it into the package source (a static `.slpkg`
+    /// tree) generic store. The package source tree root comes from
+    /// `STREAMLIB_PACKAGE_SOURCE` and must be a `file://`
     /// tree — publishing writes files (a static HTTP mount is read-only);
     /// reads are tokenless. Publishing many packages is a script over this
     /// single-package command.

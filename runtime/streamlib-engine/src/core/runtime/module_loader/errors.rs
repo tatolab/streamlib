@@ -30,7 +30,7 @@ pub enum AddModuleError {
     /// load-only — it never cold-builds on the app's critical path (that is
     /// `streamlib install`'s job) — so an unbuilt slot is this typed fix-it
     /// rather than a silent runtime compile or a
-    /// [`Self::BuildRequiredButNoOrchestrator`]. `.slpkg` / `Url` / `Registry`
+    /// [`Self::BuildRequiredButNoOrchestrator`]. `.slpkg` / `Url` / `ByVersion`
     /// resolves still build the bundled source; only the installed slot is gated.
     #[error(
         "Installed package '{package}' (version {version}) is present but not \
@@ -146,31 +146,34 @@ pub enum AddModuleError {
         detail: String,
     },
 
-    /// A [`Strategy::Registry`] resolution found no usable registry
-    /// endpoint: neither `STREAMLIB_REGISTRY_URL` nor its `STREAMLIB_REGISTRY_URL`
-    /// fallback is set. Point one at the static registry base URL (e.g.
-    /// `file:///path/to/registry-tree`) so the generic registry is reachable.
-    /// Fail-loud — never silently fall back to a local source for a
-    /// dependency the caller asked to resolve from the registry.
+    /// A [`Strategy::ByVersion`] resolution found no configured package
+    /// source: `STREAMLIB_PACKAGE_SOURCE` is unset. Point it at a package
+    /// source root (e.g. `file:///path/to/slpkg-tree`) so the generic
+    /// `.slpkg` store is reachable, or run `streamlib link` to resolve from a
+    /// local checkout instead. Fail-loud — never silently fall back to a local
+    /// source for a dependency the caller asked to resolve by version.
     ///
-    /// [`Strategy::Registry`]: super::Strategy::Registry
+    /// [`Strategy::ByVersion`]: super::Strategy::ByVersion
     #[error(
-        "Registry not configured for '{package}': set {env} (e.g. \
-         file:///path/to/registry-tree) to resolve from the static generic store"
+        "No source for '{package}': it is not installed in streamlib_modules/, no \
+         `streamlib link` is active, and no package source is configured. Run \
+         `streamlib link` to resolve from a local checkout, `streamlib add {package}@<version>` \
+         to install a published version, or set {env} to a package source (e.g. \
+         file:///path/to/slpkg-tree)."
     )]
-    RegistryNotConfigured {
+    PackageSourceNotConfigured {
         package: streamlib_idents::PackageRef,
         env: String,
     },
 
-    /// A [`Strategy::Registry`] source failed while listing the package's
+    /// A [`Strategy::ByVersion`] source failed while listing the package's
     /// published versions, selecting one for the requested
     /// [`SemVerRange`], downloading the resolved `.slpkg`, or caching the
     /// downloaded bytes. `detail` names the failing step.
     ///
-    /// [`Strategy::Registry`]: super::Strategy::Registry
+    /// [`Strategy::ByVersion`]: super::Strategy::ByVersion
     /// [`SemVerRange`]: streamlib_idents::SemVerRange
-    #[error("Registry resolution failed for '{package}': {detail}")]
+    #[error("resolving '{package}' by version from the package source failed: {detail}")]
     RegistryResolutionFailed {
         package: streamlib_idents::PackageRef,
         detail: String,
@@ -210,7 +213,8 @@ pub enum AddModuleError {
     /// An active `streamlib link` marker exists but its `.streamlib/link.json`
     /// could not be parsed. Never silently ignored — a corrupt marker would
     /// leave resolution in a mixed state (some modules from the checkout, some
-    /// from the registry), the exact failure mode link mode exists to prevent.
+    /// by version from the package source), the exact failure mode link mode
+    /// exists to prevent.
     /// Run `streamlib unlink` to clear the torn state, then re-link.
     #[error(
         "active streamlib link marker is corrupt, refusing to resolve modules \
