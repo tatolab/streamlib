@@ -45,8 +45,8 @@ cargo run -- --output=/tmp/cuda-fisheye-detected.png
 
 1. **SDK** — `streamlib link --engine <checkout>` points the Rust and Python
    streamlib SDK surfaces at the in-repo checkout (crates.io patch + uv source).
-   The SDKs aren't published yet; once they are, the by-version pins resolve with
-   no link step.
+   The linked checkout is the SDK package source; there is no central
+   package registry.
 2. **Packages** — `streamlib link` symlinks `@tatolab/debug-utilities` and this
    example's `./python` package into `./streamlib_modules/`.
 

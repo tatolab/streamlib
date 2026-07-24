@@ -16,10 +16,11 @@ cargo run
 ```
 
 `./setup.sh` runs `streamlib link --engine <checkout>` so the app's
-`streamlib = "0.6"` dependency resolves against the in-repo SDK (a transient
-`[patch.crates-io]`; the SDK isn't published to crates.io yet). Because this
+`streamlib` dependency resolves against the in-repo SDK (a transient
+`[patch.crates-io]`; the linked checkout is the SDK package source — there is
+no central package registry). Because this
 demo loads no processor packages, that is the only setup step. The `streamlib`
 CLI must be on your `PATH` (build it with `cargo build -p streamlib-cli` from
 the checkout); `setup.sh` falls back to the checkout's built binary otherwise.
 
-`Cargo.lock` is not committed (it pins unpublished / linked versions).
+`Cargo.lock` is not committed (it pins linked-checkout versions).

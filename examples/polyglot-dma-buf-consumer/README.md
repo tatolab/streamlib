@@ -39,8 +39,8 @@ cargo run -- --runtime=deno
 `./setup.sh` does the full local setup in one shot:
 
 1. **SDK** — `streamlib link --engine <checkout>` points the Rust, Python, and
-   Deno streamlib SDK surfaces at the in-repo checkout. The SDKs aren't
-   published yet; once they are, the by-version pins resolve with no link step.
+   Deno streamlib SDK surfaces at the in-repo checkout. The linked checkout
+   is the SDK package source; there is no central package registry.
 2. **Packages** — `streamlib link` symlinks `@tatolab/camera`,
    `@tatolab/display`, and this example's `./python` + `./deno` packages into
    `./streamlib_modules/`.

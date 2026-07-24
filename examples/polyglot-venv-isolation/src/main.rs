@@ -34,11 +34,10 @@
 //! no camera / display / Vulkan. The point is venv isolation, not GPU.
 //!
 //! Prerequisite: each package's `python/pyproject.toml` declares `streamlib`
-//! like any dependency (it is not injected). The SDK resolves by version from
-//! PyPI once published; for local development `streamlib link --engine`
-//! (run by `./setup.sh`) points `uv` at the in-repo SDK instead, so no registry
-//! configuration is needed. numpy resolves from public PyPI normally (a
-//! truly-external dep).
+//! like any dependency (it is not injected). The SDK resolves by version via
+//! `streamlib link --engine` (run by `./setup.sh`), which points `uv` at the
+//! in-repo SDK, so no registry configuration is needed. numpy resolves from
+//! public PyPI normally (a truly-external dep).
 //!
 //! Run:
 //!   cargo run -p polyglot-venv-isolation-scenario

@@ -18,10 +18,10 @@ default = []
 backend-vulkan = ["streamlib/backend-vulkan"]
 
 [dependencies]
-# The SDK is resolved by version. It is not published to crates.io yet, so for
-# local development `./setup.sh` runs `streamlib link --engine <checkout>` to
-# point this dep at the in-repo SDK. Once the SDK publishes, the bare version
-# resolves with no link step.
+# The SDK is resolved by version. `./setup.sh` runs
+# `streamlib link --engine <checkout>` to point this dep at the in-repo SDK
+# checkout (the static file tree / linked checkout is the package source; there
+# is no central package registry). Reverse with `streamlib unlink --engine`.
 streamlib = { version = "0.7.45" }
 tokio = { version = "1.48.0", features = ["full"] }
 anyhow = "1.0.100"

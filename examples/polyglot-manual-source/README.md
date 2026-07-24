@@ -48,8 +48,8 @@ cargo run -- --runtime=deno
 
 1. **SDK** — `streamlib link --engine <checkout>` points the Rust, Python, and
    Deno streamlib SDK surfaces at the in-repo checkout (crates.io patch + uv
-   source + deno import-map). The SDKs aren't published yet; once they are, the
-   by-version pins resolve with no link step.
+   source + deno import-map). The linked checkout is the SDK package source;
+   there is no central package registry.
 2. **Packages** — `streamlib link` symlinks this example's `./plugin`, `./python`,
    and `./deno` packages into `./streamlib_modules/`.
 

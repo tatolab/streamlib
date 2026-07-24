@@ -28,9 +28,8 @@ fi
 echo "streamlib CLI: $STREAMLIB"
 echo "checkout:      $CHECKOUT"
 
-# SDK: point this app's `streamlib = "0.6"` dep at the local checkout via a
-# transient [patch.crates-io] (removed by `streamlib unlink --engine`). Once the
-# SDK publishes, drop this step and the bare version resolves directly.
+# SDK: point this app's `streamlib` dep at the local checkout via a
+# transient [patch.crates-io] (removed by `streamlib unlink --engine`).
 "$STREAMLIB" link --engine "$CHECKOUT"
 
 # `link --engine` writes the cargo [patch.crates-io], but the runtime

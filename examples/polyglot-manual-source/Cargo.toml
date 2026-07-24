@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: BUSL-1.1
 
 # Standalone example (headed to its own repo). The `streamlib*` SDK crates
-# resolve by version; they aren't published to crates.io yet, so `./setup.sh`
-# runs `streamlib link --engine <checkout>` to point them at the in-repo SDK.
+# resolve by version; `./setup.sh` runs `streamlib link --engine <checkout>`
+# to point them at the in-repo SDK (the linked checkout is the package source;
+# there is no central package registry).
 # This crate is its own workspace root and includes the sibling `plugin/`
 # cdylib (the counting-sink Rust plugin) as a member. The polyglot packages it
 # uses (the counting-sink plugin, `./python` source, `./deno` source) are NOT
