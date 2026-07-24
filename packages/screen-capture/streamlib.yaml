@@ -18,25 +18,3 @@ schemas:
     file: schemas/screen_capture_config.yaml
   VideoFrame:
     package: '@tatolab/core'
-processors:
-- name: ScreenCapture
-  description: Captures display, window, or application content using ScreenCaptureKit (macOS 12.3+)
-  runtime:
-    language: rust
-    options:
-      unsafe_send: true
-      python_version: null
-    env: {}
-  entrypoint: null
-  execution: manual
-  scheduling: null
-  config:
-    name: config
-    schema: ScreenCaptureConfig
-  state: []
-  inputs: []
-  outputs:
-  - name: video
-    schema: VideoFrame
-    description: Captured video frames from screen content
-    delivery_profile: null
