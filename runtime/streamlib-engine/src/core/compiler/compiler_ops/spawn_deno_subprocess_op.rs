@@ -79,9 +79,9 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
             let deno_binary = which_deno()?;
 
             // Resolve native lib path via the shared resolver (env override →
-            // registry-built home cache → monorepo `target/` dev fallback).
+            // package-source-built home cache → monorepo `target/` dev fallback).
             // Previously this fell through to an unchecked `target/debug` path
-            // string, which handed a registry consumer a dead path silently;
+            // string, which handed a package-source consumer a dead path silently;
             // the shared resolver checks each tier and errors clearly.
             let native_lib_path = if !self.native_lib_path.is_empty() {
                 self.native_lib_path.clone()
@@ -91,14 +91,14 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
                 )?
             };
 
-            // The SDK is resolved from the registry by version, never from a
+            // The SDK is resolved by version from the package source, never from a
             // workspace path: the Deno package's deno.json declares `streamlib`
             // (npm:@tatolab/streamlib-deno@<version>) and a sibling .npmrc
-            // points the @tatolab scope at the static registry. The engine launches the SDK's
+            // points the @tatolab scope at the package source. The engine launches the SDK's
             // runner as the bare specifier `streamlib/subprocess_runner.ts`,
             // resolved through that config — the direct mirror of how the
             // Python op runs `-m streamlib.subprocess_runner` from the
-            // registry-installed venv. The processor's own `import "streamlib"`
+            // package-source-installed venv. The processor's own `import "streamlib"`
             // resolves through the same config. Deno fetches + caches the SDK on
             // first run, so no separate install step is needed. Dev iteration is
             // publish-a-dev-version + bump the package's declared `streamlib`
@@ -108,7 +108,7 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
                 return Err(Error::Runtime(format!(
                     "Deno package at '{}' has no deno.json — it must declare \
                      `streamlib` (npm:@tatolab/streamlib-deno@<version>) plus a \
-                     sibling .npmrc pointing the @tatolab scope at the registry, \
+                     sibling .npmrc pointing the @tatolab scope at the package source, \
                      so the engine can resolve the SDK runner by version.",
                     project_path.display()
                 )));
