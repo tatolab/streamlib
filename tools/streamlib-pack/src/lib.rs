@@ -1254,7 +1254,7 @@ fn manifest_bytes_for(pkg_dir: &Path, policy: PathDepPolicy) -> Result<Vec<u8>> 
 /// non-empty one lists each offender (`` `dep` → `path` ``). A missing
 /// manifest is treated as no offenders.
 ///
-/// The predicate the whole-tree static-registry emit skips on and the CLI
+/// The predicate the whole-tree static package-source emit skips on and the CLI
 /// `.slpkg` gate rejects on share this one definition — the skip is the same
 /// condition, sound by construction rather than a proxy. Filters exactly
 /// [`DependencySpec::Path`], so git/version-range `patch:` overrides never count.
@@ -1282,7 +1282,7 @@ pub(crate) fn path_patch_offenders(pkg_dir: &Path) -> Result<Vec<String>> {
 /// Cargo.toml dependency-table `path` deps ([`cargo_path_dep_offenders`]).
 ///
 /// [`ensure_no_path_artifacts`] rejects on these exact same two helpers for
-/// the [`AssembleTarget::Slpkg`] target, so the whole-tree static-registry
+/// the [`AssembleTarget::Slpkg`] target, so the whole-tree static package-source
 /// emit's skip predicate keys on the same condition it would otherwise
 /// hard-fail on: the skip set equals the rejection set, sound by construction
 /// (one shared definition per half) rather than a proxy. TARGET paths

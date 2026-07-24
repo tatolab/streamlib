@@ -28,7 +28,7 @@ use streamlib_idents::{
 
 use crate::catalog::{build_package_catalog, build_sibling_versions};
 
-/// Options for [`emit_static_registry`].
+/// Options for [`emit_static_package_source`].
 #[derive(Debug, Clone)]
 pub struct EmitOptions {
     pub workspace_root: PathBuf,
@@ -164,9 +164,9 @@ pub fn sibling_temp(path: &Path, tag: &str) -> PathBuf {
     parent.join(format!(".{name}.{tag}.{nonce}"))
 }
 
-/// The registry org the tree is emitted under (`STREAMLIB_REGISTRY_ORG`, default `tatolab`).
-fn registry_org() -> String {
-    std::env::var("STREAMLIB_REGISTRY_ORG")
+/// The package-source org the tree is emitted under (`STREAMLIB_PACKAGE_SOURCE_ORG`, default `tatolab`).
+fn package_source_org() -> String {
+    std::env::var("STREAMLIB_PACKAGE_SOURCE_ORG")
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "tatolab".to_string())
@@ -198,10 +198,10 @@ fn target_version(base: &str, dev: Option<u32>) -> String {
 /// [`EmitOptions::out`], via a staging dir that is flipped in atomically once
 /// the [`ReleaseManifest`] lands (see [`publish_staged_tree`]). The whole tree
 /// is browsable as a plain HTTP directory index or read over `file://`.
-pub fn emit_static_registry(opts: &EmitOptions) -> Result<()> {
+pub fn emit_static_package_source(opts: &EmitOptions) -> Result<()> {
     let base = workspace_version(&opts.workspace_root)?;
     let target = target_version(&base, opts.dev);
-    let org = registry_org();
+    let org = package_source_org();
 
     build_and_flip(&opts.out, |staging| {
         emit_slpkg_and_manifest(opts, staging, &target, &org)
@@ -311,7 +311,7 @@ fn emit_slpkg_and_manifest(
                     tracing::warn!(
                         package = %pkg_dir.display(),
                         offenders = %offenders.join(", "),
-                        "skipping non-distributable package (path patch or cargo path dep) from static-registry .slpkg emit"
+                        "skipping non-distributable package (path patch or cargo path dep) from static package-source .slpkg emit"
                     );
                     skipped += 1;
                     continue;
@@ -341,7 +341,7 @@ fn emit_slpkg_and_manifest(
             catalog_index.extend(artifacts.index_lines);
             emitted += 1;
         }
-        tracing::info!(emitted, skipped, "static-registry .slpkg emit complete");
+        tracing::info!(emitted, skipped, "static package-source .slpkg emit complete");
     }
 
     // The release manifest lists exactly the `.slpkg` packages this emit
@@ -361,7 +361,7 @@ fn emit_slpkg_and_manifest(
     // the same atomic flip (`build_and_flip`) — a `file://` reader never
     // observes the aggregate without the release it describes. Ordering it
     // last keeps the HTTP-direct-write intuition (index after members)
-    // consistent. The CI static-registry emit smoke asserts the aggregate +
+    // consistent. The CI static package-source emit smoke asserts the aggregate +
     // a per-package catalog exist in the emitted tree, locking this
     // staging-relativity through the real emit path.
     let index_path = staging.join(CATALOG_INDEX_PATH);
@@ -536,7 +536,7 @@ mod tests {
     }
 
     /// The mid-publish window guarantee, exercised through the REAL seam
-    /// (`build_and_flip`, the exact path `emit_static_registry` runs) with a
+    /// (`build_and_flip`, the exact path `emit_static_package_source` runs) with a
     /// CONCURRENT reader: while a new release is built, a reader of the
     /// served tree only ever observes a complete release set — the old
     /// `{0.5.0}` or the new `{0.5.1}` — never a partial or mixed one.

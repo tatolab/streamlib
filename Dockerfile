@@ -3,20 +3,21 @@
 # StreamLib — self-contained, headless, GPU-capable runtime image.
 #
 # Multi-stage:
-#   * builder : full toolchain (GPU-free). Emits an image-local STATIC registry
-#               tree (cargo sparse closure + vulkanalia fork + pypi + npm +
-#               `.slpkg` generic store + catalog + release manifest) from THIS
-#               checkout, and builds the runtime binaries.
+#   * builder : full toolchain (GPU-free). Emits an image-local STATIC
+#               package-source tree (cargo sparse closure + vulkanalia fork +
+#               pypi + npm + `.slpkg` generic store + catalog + release manifest)
+#               from THIS checkout, and builds the runtime binaries.
 #               (docker/build-stage1.sh does all of it.)
 #   * final   : nvidia/cuda runtime base + GPU/Vulkan/GLVND + V4L2 + userspace
 #               audio + the build toolchain (build-capable). Carries the static
-#               registry tree, the app dir, and the cargo caches. Runs the
+#               package-source tree, the app dir, and the cargo caches. Runs the
 #               service via docker/entrypoint.sh — no .deb, no systemd.
 #
-# The image is build-capable on purpose: the image-local static registry tree +
-# toolchain let `runtime.add_module` resolve and build packages against the same
-# registry-by-version model used locally (docs/architecture/static-registry.md).
-# There is no registry daemon: cargo + npm resolve over a dumb `python3 -m
+# The image is build-capable on purpose: the image-local static package-source
+# tree + toolchain let `runtime.add_module` resolve and build packages against
+# the same package-source-by-version model used locally
+# (docs/architecture/package-source.md). There is no daemon: cargo + npm resolve
+# over a dumb `python3 -m
 # http.server` mount the entrypoint serves (sparse + npm are HTTP-only by spec),
 # and pypi + `.slpkg` read the same tree straight off `file://`. The api-server
 # core module builds from source on first boot (warm cargo cache -> tens of
@@ -67,14 +68,14 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
 WORKDIR /src
 COPY . /src
 
-# Emit the image-local static registry tree (all internal libs + SDKs +
+# Emit the image-local static package-source tree (all internal libs + SDKs +
 # packages) and build the binaries. SKIP_* map to the emit's per-ecosystem
 # skip flags for faster iteration.
 ARG SKIP_PYTHON_SDK=0
 ARG SKIP_DENO_SDK=0
 ARG SKIP_PACKAGES=0
 ENV SRC=/src APP_DIR=/opt/streamlib \
-    REGISTRY_DIR=/opt/streamlib/registry REGISTRY_PORT=8799
+    PACKAGE_SOURCE_DIR=/opt/streamlib/package-source PACKAGE_SOURCE_PORT=8799
 RUN chmod +x docker/build-stage1.sh \
  && SKIP_PYTHON_SDK=${SKIP_PYTHON_SDK} SKIP_DENO_SDK=${SKIP_DENO_SDK} \
     SKIP_PACKAGES=${SKIP_PACKAGES} \
@@ -105,7 +106,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Language toolchains (Rust + cargo caches, uv, deno, jtd-codegen) and the
-# runtime cargo/npm registry config, lifted from the builder.
+# runtime cargo/npm package-source config, lifted from the builder.
 COPY --from=builder /usr/local/rustup /usr/local/rustup
 COPY --from=builder /usr/local/cargo  /usr/local/cargo
 COPY --from=builder /usr/local/bin/uv /usr/local/bin/uv
@@ -113,17 +114,17 @@ COPY --from=builder /usr/local/bin/deno /usr/local/bin/deno
 COPY --from=builder /usr/local/bin/jtd-codegen /usr/local/bin/jtd-codegen
 COPY --from=builder /root/.npmrc /root/.npmrc
 
-# The app dir: binaries + package source + the image-local static registry tree
-# (under /opt/streamlib/registry) the entrypoint serves / reads for add_module.
+# The app dir: binaries + package source + the image-local static package-source
+# tree (under /opt/streamlib/package-source) the entrypoint serves / reads for add_module.
 COPY --from=builder /opt/streamlib /opt/streamlib
 
 COPY docker/entrypoint.sh /usr/local/bin/streamlib-entrypoint
 COPY docker/pipewire/10-virtual.conf /etc/pipewire/pipewire.conf.d/10-virtual.conf
 RUN chmod +x /usr/local/bin/streamlib-entrypoint
 
-# Registry resolution against the image-local static tree: pypi + `.slpkg` read
+# Package-source resolution against the image-local static tree: pypi + `.slpkg` read
 # `file://` with no server; cargo + npm resolve over the localhost static mount
-# docker/entrypoint.sh serves on ${STREAMLIB_REGISTRY_HTTP_PORT} (sparse + npm
+# docker/entrypoint.sh serves on ${STREAMLIB_PACKAGE_SOURCE_HTTP_PORT} (sparse + npm
 # are HTTP-only by spec). The cargo `[source]`-replacement that redirects the
 # canonical `tatolab` index to that mount lives in $CARGO_HOME/config.toml
 # (written at build time, carried in via the /usr/local/cargo COPY).
@@ -131,10 +132,10 @@ ENV PATH=/opt/streamlib/bin:/usr/local/cargo/bin:/usr/local/bin:/usr/local/sbin:
     RUSTUP_HOME=/usr/local/rustup \
     CARGO_HOME=/usr/local/cargo \
     STREAMLIB_HOME=/opt/streamlib \
-    STREAMLIB_REGISTRY_DIR=/opt/streamlib/registry \
-    STREAMLIB_REGISTRY_HTTP_PORT=8799 \
-    STREAMLIB_PACKAGE_SOURCE=file:///opt/streamlib/registry \
-    UV_INDEX=file:///opt/streamlib/registry/pypi/simple \
+    STREAMLIB_PACKAGE_SOURCE_DIR=/opt/streamlib/package-source \
+    STREAMLIB_PACKAGE_SOURCE_HTTP_PORT=8799 \
+    STREAMLIB_PACKAGE_SOURCE=file:///opt/streamlib/package-source \
+    UV_INDEX=file:///opt/streamlib/package-source/pypi/simple \
     XDG_RUNTIME_DIR=/run/user/0 \
     NVIDIA_DRIVER_CAPABILITIES=all \
     NVIDIA_VISIBLE_DEVICES=all

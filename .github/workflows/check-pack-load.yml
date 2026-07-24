@@ -89,7 +89,7 @@ jobs:
 
       # `.slpkg` store + catalog renderers, atomic staged-swap, and the
       # completeness negative gate (folded in from the retired
-      # static-registry workflow).
+      # static package-source workflow).
       - name: cargo test -p streamlib-pack
         run: cargo test --locked -p streamlib-pack
 

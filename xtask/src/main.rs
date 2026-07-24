@@ -181,9 +181,9 @@ enum Commands {
     /// `streamlib.yaml` so the published manifest is path-free. Intended to
     /// run against a scratch copy of the crate before `cargo publish` (cargo
     /// bundles `streamlib.yaml` verbatim with no file-rewrite hook). The
-    /// publish-side half of the static registry distribution; the resolver's
-    /// `Registry` arm resolves the now-path-free dep from the registry. See
-    /// `docs/architecture/static-registry.md`.
+    /// publish-side half of the static package-source distribution; the resolver
+    /// resolves the now-path-free dep from the package source. See
+    /// `docs/architecture/package-source.md`.
     StripPublishManifest {
         /// Directory containing the `streamlib.yaml` to strip in place.
         #[arg(long)]
@@ -199,12 +199,12 @@ enum Commands {
     /// `docs/architecture/vendored-vulkanalia.md`.
     CheckVendoredVulkanalia,
 
-    /// Emit a daemon-free STATIC `.slpkg` registry tree (generic store +
+    /// Emit a daemon-free STATIC `.slpkg` package-source tree (generic store +
     /// catalog + release manifest) for the current workspace's `packages/*`
     /// into a directory served over `file://` or a dumb static HTTP mount. No
-    /// registry daemon, no token. See `docs/architecture/static-registry.md`.
+    /// daemon, no token. See `docs/architecture/package-source.md`.
     #[command(subcommand)]
-    StaticRegistry(StaticRegistryAction),
+    StaticPackageSource(StaticPackageSourceAction),
 
     /// Ground-truth enumerator for the `install-packages` CI gate (#1509):
     /// compile every distributable `packages/*` through the SAME on-box user
@@ -225,7 +225,7 @@ enum Commands {
 }
 
 #[derive(Subcommand)]
-enum StaticRegistryAction {
+enum StaticPackageSourceAction {
     /// Emit the `.slpkg` store + catalog + release manifest into `--out`,
     /// flipped in atomically once the release manifest lands.
     Emit {
@@ -301,9 +301,9 @@ fn main() -> Result<()> {
                 .with_context(|| format!("stripping path patches from {}", dir.display()))?;
             tracing::info!(dir = %dir.display(), "stripped path-flavor patch entries from streamlib.yaml");
         }
-        Commands::StaticRegistry(StaticRegistryAction::Emit { out, dev }) => {
-            use streamlib_pack::static_package_source::{EmitOptions, emit_static_registry};
-            emit_static_registry(&EmitOptions {
+        Commands::StaticPackageSource(StaticPackageSourceAction::Emit { out, dev }) => {
+            use streamlib_pack::static_package_source::{EmitOptions, emit_static_package_source};
+            emit_static_package_source(&EmitOptions {
                 workspace_root: workspace_root()?,
                 out,
                 dev,

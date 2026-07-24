@@ -5,8 +5,8 @@
 //! consumer offline, and a TRUNCATED tree (a member missing from the release
 //! or its `.slpkg` removed) is REJECTED by the consumer-side completeness
 //! check — not silently half-resolved. This is the daemon-free negative gate
-//! from the static-registry issue, exercised against the exact tree layout
-//! `emit_static_registry` produces (`<out>/slpkg/<pkg>/<ver>/<pkg>.slpkg` +
+//! from the static package-source issue, exercised against the exact tree layout
+//! `emit_static_package_source` produces (`<out>/slpkg/<pkg>/<ver>/<pkg>.slpkg` +
 //! `<out>/slpkg/streamlib-release/<V>/manifest.json`).
 
 use streamlib_idents::{
@@ -170,13 +170,13 @@ fn removed_slpkg_from_tree_is_rejected_at_download() {
     );
 }
 
-/// The truncation gate proven against the manifest `emit_static_registry`
+/// The truncation gate proven against the manifest `emit_static_package_source`
 /// ACTUALLY writes (not a hand-built one): emit a minimal fake workspace's
 /// slpkg ecosystem through the real emit path, then truncate the emitted
 /// tree and assert the consumer-side checks reject it.
 #[test]
 fn emitted_tree_truncation_is_rejected_by_consumer_checks() {
-    use streamlib_pack::static_package_source::{EmitOptions, emit_static_registry};
+    use streamlib_pack::static_package_source::{EmitOptions, emit_static_package_source};
 
     // Minimal fake workspace: empty cargo workspace + one schemas-only
     // package (no cargo build at assemble time).
@@ -211,7 +211,7 @@ fn emitted_tree_truncation_is_rejected_by_consumer_checks() {
     .unwrap();
 
     let out = root.path().join("package-source");
-    emit_static_registry(&EmitOptions {
+    emit_static_package_source(&EmitOptions {
         workspace_root: ws.clone(),
         out: out.clone(),
         dev: None,

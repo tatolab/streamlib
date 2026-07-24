@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Integration: the REAL `emit_static_registry` path (→
+//! Integration: the REAL `emit_static_package_source` path (→
 //! `emit_slpkg_and_manifest` → `build_and_flip`) writes the per-package
 //! catalog + owned JTDs + the `catalog/index.ndjson` aggregate INSIDE the
 //! staged tree, so the served tree carries them after the atomic flip.
@@ -13,7 +13,7 @@
 use std::path::Path;
 
 use streamlib_idents::{CatalogClient, Org, Package, PackageRef, SemVer};
-use streamlib_pack::static_package_source::{EmitOptions, emit_static_registry};
+use streamlib_pack::static_package_source::{EmitOptions, emit_static_package_source};
 
 fn write(dir: &Path, rel: &str, body: &str) {
     let path = dir.join(rel);
@@ -102,7 +102,7 @@ fn real_emit_writes_catalog_inside_the_flipped_tree() {
     fixture_workspace(&workspace);
     let out = tmp.path().join("served");
 
-    emit_static_registry(&EmitOptions {
+    emit_static_package_source(&EmitOptions {
         workspace_root: workspace,
         out: out.clone(),
         dev: None,

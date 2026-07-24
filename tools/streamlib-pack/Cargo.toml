@@ -28,7 +28,7 @@ streamlib-idents = { path = "../../sdk/streamlib-idents", version = "0.7.45" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Gapless atomic directory swap (renameat2 RENAME_EXCHANGE) for the static
-# registry staged-tree flip — see static_registry::publish_staged_tree.
+# package-source staged-tree flip — see static_package_source::publish_staged_tree.
 libc = { workspace = true }
 
 [lints]

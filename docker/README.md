@@ -3,15 +3,15 @@
 A multi-stage, GPU-capable Docker image that ships StreamLib as a
 **self-contained, headless** runtime service: real NVIDIA Vulkan with no
 display server, userspace audio with no hardware, and an **image-local static
-registry tree pre-filled to match the source checkout** so the runtime can
-resolve and build new packages against the registry-by-version model entirely
-offline. There is no registry daemon — the tree is plain files, served for
+package-source tree pre-filled to match the source checkout** so the runtime can
+resolve and build new packages against the package-source-by-version model entirely
+offline. There is no daemon — the tree is plain files, served for
 cargo/npm by a dumb `python3 -m http.server` mount and read for pypi/`.slpkg`
 straight off `file://`.
 
 This replaces the earlier `.deb` plan — the image *is* the distribution unit,
-and the same registry-only resolution model that runs locally
-([`docs/architecture/static-registry.md`](../docs/architecture/static-registry.md))
+and the same package-source resolution model that runs locally
+([`docs/architecture/package-source.md`](../docs/architecture/package-source.md))
 runs inside the container.
 
 ## The setup splits across three layers — only one is the Dockerfile
@@ -22,7 +22,7 @@ access live on the host and in the run config.
 | Layer | What | Where |
 |---|---|---|
 | **1. Host** | NVIDIA driver, `nvidia-container-toolkit` wired into Docker, optional `v4l2loopback` virtual camera nodes | [`scripts/docker/host-prereqs.sh`](../scripts/docker/host-prereqs.sh) |
-| **2. Image** | Vulkan/GLVND + V4L2 + userspace audio + build toolchain + the static registry tree + the runtime | [`Dockerfile`](../Dockerfile) |
+| **2. Image** | Vulkan/GLVND + V4L2 + userspace audio + build toolchain + the static package-source tree + the runtime | [`Dockerfile`](../Dockerfile) |
 | **3. Run** | `--gpus all`, camera `--device`, RT opt-in | [`docker-compose.yml`](../docker-compose.yml) / `docker run` |
 
 ## Quick start
@@ -39,7 +39,7 @@ docker run --rm --gpus all -e NVIDIA_DRIVER_CAPABILITIES=all -p 9000:9000 stream
 ```
 
 The runtime's HTTP/WebSocket control plane is then on `localhost:9000`. The
-static registry mount the entrypoint serves for cargo/npm is localhost-internal
+static package-source mount the entrypoint serves for cargo/npm is localhost-internal
 (`127.0.0.1:8799` inside the container) and not exposed.
 
 ## What's inside
@@ -52,9 +52,9 @@ static registry mount the entrypoint serves for cargo/npm is localhost-internal
 - **Audio — userspace, no hardware.** cpal → ALSA → PipeWire via `pipewire-alsa`;
   a declarative virtual null sink ([`docker/pipewire/10-virtual.conf`](pipewire/10-virtual.conf))
   comes up in the entrypoint. No `/dev/snd`.
-- **Registry — image-local static tree, no daemon.** Stage 1 runs
-  `cargo xtask static-registry emit --cargo-closure` to write a plain on-disk
-  tree at `/opt/streamlib/registry`: a cargo sparse closure (the vendored
+- **Package source — image-local static tree, no daemon.** Stage 1 runs
+  `cargo xtask static-package-source emit --cargo-closure` to write a plain on-disk
+  tree at `/opt/streamlib/package-source`: a cargo sparse closure (the vendored
   `tatolab-vulkanalia*` crates included), a pypi-simple tree, an npm packument
   set, the `.slpkg` generic store,
   the catalog, and the release manifest (written last, the atomicity flip). The
@@ -95,5 +95,5 @@ static registry mount the entrypoint serves for cargo/npm is localhost-internal
   595.71.05, NVIDIA Container Toolkit 1.19.x. `nvidia/vulkan` is abandoned — do
   not use it; the CUDA runtime base + GLVND libs is the headless-Vulkan recipe.
 - systemd-in-Docker is avoided; [`docker/entrypoint.sh`](entrypoint.sh) is the
-  supervisor (registry mount + audio backgrounded with readiness polling,
+  supervisor (package-source mount + audio backgrounded with readiness polling,
   runtime exec'd as PID 1).
