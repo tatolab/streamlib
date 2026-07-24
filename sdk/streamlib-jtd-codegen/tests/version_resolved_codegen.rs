@@ -10,8 +10,7 @@
 //! `streamlib-engine` codegen resolves `@tatolab/escalate` from the package source and
 //! builds." The consumer manifest declares the dep as a bare semver range
 //! with **no `patch:` override** — exactly the published shape after the
-//! cargo-publish path-strip. Before #1116 the resolver returned
-//! `RegistryNotImplemented` here; now it lists → selects-highest-in-range →
+//! cargo-publish path-strip. The resolver lists → selects-highest-in-range →
 //! fetches + extracts the schema package's `.slpkg`, and codegen emits the
 //! imported type under the dep's owning-package context.
 //!

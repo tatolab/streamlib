@@ -184,7 +184,7 @@ fn run_module_load(
     // wrote `.streamlib/link.json`). A locked run IGNORES links by contract —
     // it is reproducible / offline — via `discover_active_link_for_load`. A
     // corrupt marker fails the load loudly rather than silently mixing checkout
-    // + registry resolution.
+    // + by-version resolution.
     let link = match source::discover_active_link_for_load(locked.is_some()) {
         Ok(link) => link,
         Err(e) => {
@@ -915,7 +915,7 @@ impl Runner {
             return Ok(None);
         };
         let report = AppModulesDir::at(&app_root)
-            .acquire_from_registry(&pkg_ref, &range, &config)
+            .acquire_from_package_source(&pkg_ref, &range, &config)
             .map_err(|e| crate::core::error::Error::AcquireOnReferenceFailed {
                 package: pkg_ref.clone(),
                 detail: e.to_string(),

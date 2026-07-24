@@ -8,7 +8,7 @@
 //! one package at a time, then reads it all back through `CatalogClient`.
 //!
 //! It exercises exactly the pack functions `streamlib pkg publish` calls after
-//! `upload_slpkg`, so a registry populated purely by `pkg publish` is proven
+//! `upload_slpkg`, so a package source populated purely by `pkg publish` is proven
 //! catalog-identical to one built by the whole-tree emit — the property the
 //! `streamlib add` discovery summary depends on universally.
 
@@ -178,7 +178,7 @@ fn publish_package(tree_root: &Path, pkg_dir: &Path, siblings: &SiblingVersions)
 fn pkg_publish_emits_fetchable_catalog_and_republish_does_not_duplicate() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("packages");
-    let tree = tmp.path().join("registry");
+    let tree = tmp.path().join("package-source");
     let (core, camera) = author_core_and_camera(&src);
 
     // Resolution universe = every local package (what the CLI derives from the
@@ -274,7 +274,7 @@ fn pkg_publish_emits_fetchable_catalog_and_republish_does_not_duplicate() {
 fn republish_with_fewer_processors_drops_the_stale_aggregate_line() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("packages");
-    let tree = tmp.path().join("registry");
+    let tree = tmp.path().join("package-source");
     let (core, camera) = author_core_and_camera(&src);
     let siblings = build_sibling_versions(&[core.clone(), camera.clone()]).unwrap();
 
@@ -303,7 +303,7 @@ fn republish_with_fewer_processors_drops_the_stale_aggregate_line() {
 fn prerelease_publish_keys_catalog_by_full_but_jtd_by_release_core() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("packages");
-    let tree = tmp.path().join("registry");
+    let tree = tmp.path().join("package-source");
 
     let widget = src.join("widget");
     write(

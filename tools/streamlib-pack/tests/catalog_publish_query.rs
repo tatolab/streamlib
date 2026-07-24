@@ -99,11 +99,11 @@ processors:
 
 /// Emit a static tree the way `emit_slpkg_and_manifest` does — upload each
 /// `.slpkg` into the store, write each package's catalog + JTD, then the
-/// registry-wide aggregate — but hermetically (no cargo/uv/deno).
+/// tree-wide aggregate — but hermetically (no cargo/uv/deno).
 fn emit_catalog_tree(root: &Path, pkg_dirs: &[PathBuf]) {
     let slpkg = root.join("slpkg");
     std::fs::create_dir_all(&slpkg).unwrap();
-    // Registry client rooted at the tree root; it writes under `slpkg/`.
+    // Package source client rooted at the tree root; it writes under `slpkg/`.
     let cfg = PackageSource {
         base_url: format!("file://{}", root.display()),
     };
@@ -134,13 +134,13 @@ fn emit_catalog_tree(root: &Path, pkg_dirs: &[PathBuf]) {
 fn reconstruct_wiring_graph_from_catalog_without_touching_slpkg() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("packages");
-    let tree = tmp.path().join("registry");
+    let tree = tmp.path().join("package-source");
     let (core, camera) = author_two_packages(&src);
     emit_catalog_tree(&tree, &[core, camera]);
 
     let client = CatalogClient::new(format!("file://{}", tree.display()), None);
 
-    // 1. The registry-wide aggregate carries one line per processor across
+    // 1. The tree-wide aggregate carries one line per processor across
     //    both packages — the whole node palette in one fetch.
     let index = client.fetch_processor_index().unwrap();
     let names: Vec<(String, String)> = index
@@ -227,7 +227,7 @@ fn reconstruct_wiring_graph_from_catalog_without_touching_slpkg() {
 fn prerelease_publisher_jtd_resolves_by_release_core_ident() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("packages");
-    let tree = tmp.path().join("registry");
+    let tree = tmp.path().join("package-source");
 
     let widget = src.join("widget");
     write(

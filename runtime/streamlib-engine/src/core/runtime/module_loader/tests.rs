@@ -372,7 +372,7 @@ dependencies:
 
 #[test]
 #[serial]
-fn path_strategy_resolves_registry_dep_via_consumer_patch() {
+fn path_strategy_resolves_version_dep_via_consumer_patch() {
     let runtime = Runner::new().unwrap();
     runtime.set_build_orchestrator(LoadAsIsOrchestrator);
     let tmp = tempfile::tempdir().unwrap();
@@ -414,7 +414,7 @@ patch:
                 build: BuildPolicy::NeverBuild,
             },
         )
-        .expect("consumer-scoped patch must resolve the registry dep to ../b/");
+        .expect("consumer-scoped patch must resolve the version dep to ../b/");
 }
 
 #[test]
@@ -581,7 +581,7 @@ impl Drop for AppModulesRootOverrideGuard {
 }
 
 /// Clears a set of env vars on construction and restores them on drop, so a
-/// test can assert behavior under "no ambient registry config" deterministically
+/// test can assert behavior under "no ambient package source config" deterministically
 /// regardless of the developer/CI shell. `#[serial]` makes the env exclusive.
 struct EnvVarsCleared(Vec<(&'static str, Option<std::ffi::OsString>)>);
 impl EnvVarsCleared {
@@ -742,11 +742,11 @@ fn url_strategy_rejects_checksum_mismatch() {
 
 #[test]
 #[serial]
-fn path_package_registry_dep_routes_to_registry_not_installed_cache() {
-    // Registry-only model: a package's streamlib.yaml dependency resolves from
-    // the static registry (Strategy::ByVersion), NOT the installed-package cache.
-    // The installed-cache-as-dep fallback an earlier model used is gone — proven
-    // by routing: with no registry configured, the dep errors
+fn path_package_version_dep_routes_to_by_version_not_installed_cache() {
+    // By-version model: a package's streamlib.yaml dependency resolves by version
+    // from the package source (Strategy::ByVersion), NOT the installed-package
+    // cache. The installed-cache-as-dep fallback an earlier model used is gone —
+    // proven by routing: with no package source configured, the dep errors
     // PackageSourceNotConfigured even though a satisfying installed-cache entry exists.
     let sandbox = tempfile::tempdir().unwrap();
     let prev_home = std::env::var_os("STREAMLIB_HOME");
@@ -757,9 +757,9 @@ fn path_package_registry_dep_routes_to_registry_not_installed_cache() {
     // Pin the app-modules root to the sandbox so the hand-staged slot lands
     // under it (not the crate working tree), keeping `cargo test` clean.
     let _modules_root = AppModulesRootOverrideGuard::install(sandbox.path());
-    // No ambient registry config, so the routing is observable regardless of
+    // No ambient package source config, so the routing is observable regardless of
     // the developer / CI shell.
-    let _no_registry = EnvVarsCleared::new(&["STREAMLIB_PACKAGE_SOURCE", "STREAMLIB_REGISTRY_TOKEN"]);
+    let _no_package_source = EnvVarsCleared::new(&["STREAMLIB_PACKAGE_SOURCE", "STREAMLIB_PACKAGE_SOURCE_TOKEN"]);
 
     // A co-located streamlib_modules slot for @tatolab/b that WOULD satisfy
     // `^0.1.0` — resolved through the seam so it lands at the real layout.
@@ -772,7 +772,7 @@ fn path_package_registry_dep_routes_to_registry_not_installed_cache() {
     .unwrap();
 
     // ...is ignored: the consumer's dep routes to Strategy::ByVersion, which
-    // fails because no registry is configured.
+    // fails because no package source is configured.
     let consumer = tempfile::tempdir().unwrap();
     std::fs::write(
         consumer.path().join("streamlib.yaml"),
@@ -799,18 +799,18 @@ dependencies:
                 build: BuildPolicy::NeverBuild,
             },
         )
-        .expect_err("a registry dep must route to the registry, not the installed cache");
+        .expect_err("a version dep must route by version, not the installed cache");
 
     assert!(
         matches!(err, AddModuleError::PackageSourceNotConfigured { ref package, .. } if package.name.as_str() == "b"),
-        "expected PackageSourceNotConfigured(@tatolab/b) — deps resolve from the registry, \
+        "expected PackageSourceNotConfigured(@tatolab/b) — deps resolve by version from the package source, \
          not the installed cache; got: {err:?}",
     );
 }
 
 #[test]
 #[serial]
-fn path_strategy_unresolvable_registry_dep_errors_actionably() {
+fn path_strategy_unresolvable_version_dep_errors_actionably() {
     let runtime = Runner::new().unwrap();
     let tmp = tempfile::tempdir().unwrap();
 
@@ -840,7 +840,7 @@ dependencies:
                 build: BuildPolicy::NeverBuild,
             },
         )
-        .expect_err("unresolvable registry dep must error");
+        .expect_err("unresolvable version dep must error");
     let msg = format!("{}", err);
     assert!(
         msg.contains("@tatolab/missing"),
@@ -3621,7 +3621,7 @@ processors:
     // materializes every package into the app's streamlib_modules/ slots, and
     // writes the application lockfile; a locked run consumes that lockfile
     // strictly from those slots with NO live re-resolution — so it works offline
-    // even against a poisoned / unreachable registry.
+    // even against a poisoned / unreachable package source.
     // =====================================================================
 
     use std::io::Write as _;
@@ -3679,10 +3679,10 @@ processors:
         fn emit(&self, _event: BuildEvent) {}
     }
 
-    /// Write a schemas-only `.slpkg` into a `file://` registry mirror at
+    /// Write a schemas-only `.slpkg` into a `file://` package source mirror at
     /// `<mirror>/slpkg/<name>/<version>/<name>.slpkg` (the base URL is the
-    /// tree root; the registry client prepends the `slpkg/` subtree). `dep`
-    /// optionally adds a registry-flavored dependency edge
+    /// tree root; the package source client prepends the `slpkg/` subtree). `dep`
+    /// optionally adds a version-range dependency edge
     /// (`@tatolab/<dep>: "^<range>"`).
     fn write_mirror_slpkg(
         mirror: &std::path::Path,
@@ -3715,18 +3715,18 @@ processors:
         zw.finish().unwrap();
     }
 
-    /// THE key test: install from a `file://` registry, then run **strictly
-    /// from the lockfile** against a POISONED (unreachable) registry. The
+    /// THE key test: install from a `file://` package source, then run **strictly
+    /// from the lockfile** against a POISONED (unreachable) package source. The
     /// locked run must load the full graph offline — including a
-    /// registry-flavored transitive dep edge, which the locked walker forces
-    /// to the pinned cache slot instead of a live registry fetch.
+    /// version-range transitive dep edge, which the locked walker forces
+    /// to the pinned cache slot instead of a live package-source fetch.
     ///
     /// Mentally-revert: drop the `locked` forcing in the recursive walker and
-    /// `app-lib`'s `@tatolab/lockrun-core` registry edge would resolve live,
-    /// hit the poisoned registry, and fail — the run would NOT be offline.
+    /// `app-lib`'s `@tatolab/lockrun-core` version edge would resolve live,
+    /// hit the poisoned package source, and fail — the run would NOT be offline.
     #[test]
     #[serial]
-    fn install_then_locked_run_is_offline_against_poisoned_registry() {
+    fn install_then_locked_run_is_offline_against_poisoned_package_source() {
         let sandbox = tempfile::tempdir().unwrap();
         let prev_home = std::env::var_os("STREAMLIB_HOME");
         unsafe {
@@ -3735,7 +3735,7 @@ processors:
         let _restore = StreamlibHomeRestore(prev_home);
         let _clear = EnvVarsCleared::new(&["STREAMLIB_PACKAGE_SOURCE"]);
 
-        // Two-level registry tree: lockrun-lib depends on lockrun-core.
+        // Two-level package source tree: lockrun-lib depends on lockrun-core.
         let mirror = tempfile::tempdir().unwrap();
         write_mirror_slpkg(
             mirror.path(),
@@ -3752,7 +3752,7 @@ processors:
             Some(("lockrun-core", "0.1.0")),
         );
 
-        // Root project declares a registry dep on lockrun-lib.
+        // Root project declares a version dep on lockrun-lib.
         let project = tempfile::tempdir().unwrap();
         std::fs::write(
             project.path().join("streamlib.yaml"),
@@ -3760,7 +3760,7 @@ processors:
         )
         .unwrap();
 
-        // ---- install (registry reachable) ----
+        // ---- install (package source reachable) ----
         unsafe {
             std::env::set_var(
                 "STREAMLIB_PACKAGE_SOURCE",
@@ -3788,8 +3788,8 @@ processors:
         );
         assert!(report.lockfile_path.ends_with("streamlib-app.lock"));
 
-        // ---- poison the registry ----
-        // Any live registry touch now fails (connection refused).
+        // ---- poison the package source ----
+        // Any live package-source touch now fails (connection refused).
         unsafe {
             std::env::set_var("STREAMLIB_PACKAGE_SOURCE", "http://127.0.0.1:1");
         }
@@ -3806,7 +3806,7 @@ processors:
         let runtime = Runner::new().unwrap();
         runtime
             .add_modules_from_lockfile_blocking(&report.lockfile_path)
-            .expect("locked run must load the full graph offline against a poisoned registry");
+            .expect("locked run must load the full graph offline against a poisoned package source");
 
         assert!(
             crate::core::embedded_schemas::get_embedded_schema_definition(
@@ -3822,13 +3822,13 @@ processors:
             .is_some(),
             "transitive core schema must register from the locked cache. (The \
              offline/transitive-forcing guarantee itself is proven by the \
-             .expect() above not failing against the poisoned registry — this \
+             .expect() above not failing against the poisoned package source — this \
              assert only confirms the dep's registration side effect.)"
         );
     }
 
     /// `install` is byte-deterministic: identical inputs → identical lockfile
-    /// bytes. Uses a path dep (hermetic, no registry) so the run is fast and
+    /// bytes. Uses a path dep (hermetic, no package source) so the run is fast and
     /// the only variable is the resolver output.
     #[test]
     #[serial]
@@ -4193,13 +4193,13 @@ packages:
         );
     }
 
-    /// Registry mutated after install, registry REACHABLE at run time: the
+    /// Package source mutated after install, package source REACHABLE at run time: the
     /// locked run must still load the pinned version — proving the walker's
     /// pin-forcing is version-selection-ignoring independent of
-    /// connectivity (the poisoned-registry test proves the offline half).
+    /// connectivity (the poisoned-package-source test proves the offline half).
     #[test]
     #[serial]
-    fn locked_run_ignores_newer_version_on_reachable_registry() {
+    fn locked_run_ignores_newer_version_on_reachable_package_source() {
         let sandbox = tempfile::tempdir().unwrap();
         let prev_home = std::env::var_os("STREAMLIB_HOME");
         unsafe {
@@ -4239,8 +4239,8 @@ packages:
         )
         .expect("install must pin 0.1.0");
 
-        // Mutate the registry AFTER install: publish a newer in-range
-        // version. The registry stays reachable for the run.
+        // Mutate the package source AFTER install: publish a newer in-range
+        // version. The package source stays reachable for the run.
         write_mirror_slpkg(
             mirror.path(),
             "mutate-pkg",
@@ -4252,7 +4252,7 @@ packages:
         let runtime = Runner::new().unwrap();
         runtime
             .add_modules_from_lockfile_blocking(&report.lockfile_path)
-            .expect("locked run must succeed against the mutated (reachable) registry");
+            .expect("locked run must succeed against the mutated (reachable) package source");
 
         // The committed resolution is the PINNED 0.1.0, not the newer 0.2.0
         // a live range resolve would have selected.
@@ -4267,7 +4267,7 @@ packages:
         assert_eq!(
             record.version.to_string(),
             "0.1.0",
-            "locked run must load the pinned version, ignoring the newer registry version"
+            "locked run must load the pinned version, ignoring the newer package-source version"
         );
     }
 }

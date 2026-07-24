@@ -174,7 +174,7 @@ pub enum AddModuleError {
     /// [`Strategy::ByVersion`]: super::Strategy::ByVersion
     /// [`SemVerRange`]: streamlib_idents::SemVerRange
     #[error("resolving '{package}' by version from the package source failed: {detail}")]
-    RegistryResolutionFailed {
+    PackageSourceResolutionFailed {
         package: streamlib_idents::PackageRef,
         detail: String,
     },

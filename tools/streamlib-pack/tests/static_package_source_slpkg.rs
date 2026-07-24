@@ -14,7 +14,7 @@ use streamlib_idents::{
     ReleaseManifestMember, SemVer, SemVerRange, crates_missing_from_release,
 };
 
-/// A `file://` registry config rooted at the tree root (the dir holding
+/// A `file://` package source config rooted at the tree root (the dir holding
 /// `slpkg/`) — the client prepends `slpkg/` itself.
 fn file_config(tree_root: &std::path::Path) -> PackageSource {
     PackageSource {
@@ -210,7 +210,7 @@ fn emitted_tree_truncation_is_rejected_by_consumer_checks() {
     )
     .unwrap();
 
-    let out = root.path().join("registry");
+    let out = root.path().join("package-source");
     emit_static_registry(&EmitOptions {
         workspace_root: ws.clone(),
         out: out.clone(),

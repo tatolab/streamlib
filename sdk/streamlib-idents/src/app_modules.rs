@@ -28,8 +28,8 @@ pub const APP_MODULES_STAGING_PREFIX: &str = ".staging-";
 const FOLDER_COPY_EXCLUDED_DIR_NAMES: &[&str] = &[".git", "target"];
 
 /// A byte source `streamlib add` accepts: a local folder, a local archive
-/// file, or a URL. Never a registry coordinate — the primitive is "here are
-/// the bytes", not "resolve this against a registry".
+/// file, or a URL. Never a version coordinate — the primitive is "here are
+/// the bytes", not "resolve this against a package source".
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AddPackageSource {
     /// A directory containing `streamlib.yaml` plus package contents.
@@ -44,7 +44,7 @@ pub enum AddPackageSource {
 impl AddPackageSource {
     /// Classify a CLI-style spec string into a source flavor. On-disk paths
     /// win; URL schemes are matched next; `@`-prefixed non-path specs get the
-    /// registry-coordinate guidance error.
+    /// version-coordinate guidance error.
     pub fn detect(spec: &str) -> Result<Self, AppModulesError> {
         if let Some((scheme, _rest)) = spec.split_once("://") {
             return match scheme {
@@ -71,7 +71,7 @@ impl AddPackageSource {
             });
         }
         if spec.starts_with('@') {
-            return Err(AppModulesError::RegistryCoordinateNotASource {
+            return Err(AppModulesError::VersionCoordinateNotASource {
                 spec: spec.to_string(),
             });
         }
@@ -260,12 +260,12 @@ pub enum AppModulesError {
 
     /// An `@org/name`-shaped spec was passed where a byte source is required.
     #[error(
-        "'{spec}' looks like a registry coordinate, not a byte source. `streamlib add` \
+        "'{spec}' looks like a version coordinate, not a byte source. `streamlib add` \
          takes a folder, an archive (.slpkg / .zip / .tar.gz), or a URL — obtain the \
-         package's bytes (from its publisher, or a registry tree's slpkg/ store) and \
+         package's bytes (from its publisher, or a package source's slpkg/ store) and \
          add those"
     )]
-    RegistryCoordinateNotASource { spec: String },
+    VersionCoordinateNotASource { spec: String },
 
     /// The spec's flavor is recognized but not supported (e.g. an unknown URL
     /// scheme).
@@ -430,7 +430,7 @@ pub enum AppModulesError {
     },
 
     /// A lockfile entry records a source kind `install_from_lockfile` cannot
-    /// reproduce (a `registry:` / `git:` coordinate). The per-app modules
+    /// reproduce (a `by-version:` / `git:` coordinate). The per-app modules
     /// lockfile is only written with reproducible byte sources by
     /// `streamlib add`/`streamlib link`.
     #[error(
@@ -445,10 +445,11 @@ pub enum AppModulesError {
     #[error("reproducing '{package}' failed: {detail}")]
     InstallReproduceFailed { package: PackageRef, detail: String },
 
-    /// Resolving a `range → concrete version` against the registry (listing
-    /// versions or selecting one) failed while acquiring a package on reference.
-    #[error("acquiring '{package}' from the registry failed: {detail}")]
-    AcquireRegistryFailed { package: PackageRef, detail: String },
+    /// Resolving a `range → concrete version` against the package source
+    /// (listing versions or selecting one) failed while acquiring a package on
+    /// reference.
+    #[error("acquiring '{package}' by version from the package source failed: {detail}")]
+    AcquirePackageSourceFailed { package: PackageRef, detail: String },
 }
 
 /// A per-app `streamlib_modules/` folder plus its `streamlib.lock`, anchored
@@ -515,7 +516,7 @@ impl AppModulesDir {
     /// Materialize one package source into `streamlib_modules/@org/name/` and
     /// record it in the modules lockfile. Identity is read from the package's
     /// own manifest; re-adding an already-present package replaces it cleanly.
-    /// Never builds; never resolves against a registry.
+    /// Never builds; never resolves against a package source.
     #[tracing::instrument(skip(self, options), fields(app_root = %self.app_root.display()))]
     pub fn add_package(
         &self,
@@ -1027,20 +1028,20 @@ impl AppModulesDir {
         })
     }
 
-    /// Acquire `pkg_ref` from the static registry on reference: resolve `range`
-    /// to the highest concrete version the registry holds, then materialize its
+    /// Acquire `pkg_ref` by version from the package source on reference: resolve
+    /// `range` to the highest concrete version the package source holds, then materialize its
     /// `.slpkg` via the [`add_package`](Self::add_package) byte-source flow and
     /// record it in `streamlib.lock`. The install-shaped half of the
     /// two-resolver split (`range → concrete`, WRITES the lock) — never the
     /// locked-run resolver.
     #[tracing::instrument(skip(self, config), fields(app_root = %self.app_root.display(), package = %pkg_ref, %range))]
-    pub fn acquire_from_registry(
+    pub fn acquire_from_package_source(
         &self,
         pkg_ref: &PackageRef,
         range: &SemVerRange,
         config: &PackageSource,
     ) -> Result<AddPackageReport, AppModulesError> {
-        let acquire_err = |detail: String| AppModulesError::AcquireRegistryFailed {
+        let acquire_err = |detail: String| AppModulesError::AcquirePackageSourceFailed {
             package: pkg_ref.clone(),
             detail,
         };
@@ -1055,7 +1056,7 @@ impl AppModulesDir {
             package = %pkg_ref,
             %version,
             %url,
-            "acquire_from_registry: resolved range to a concrete version; materializing"
+            "acquire_from_package_source: resolved range to a concrete version; materializing"
         );
         // Route through the byte-source materialize + lock flow. A `file://` or
         // `http(s)://` download URL is fetched, hashed, extracted, atomically
@@ -1856,11 +1857,11 @@ mod tests {
         ));
         assert!(matches!(
             AddPackageSource::detect("@tatolab/camera"),
-            Err(AppModulesError::RegistryCoordinateNotASource { .. })
+            Err(AppModulesError::VersionCoordinateNotASource { .. })
         ));
         assert!(matches!(
             AddPackageSource::detect("@tatolab/camera@^2.0"),
-            Err(AppModulesError::RegistryCoordinateNotASource { .. })
+            Err(AppModulesError::VersionCoordinateNotASource { .. })
         ));
         assert!(matches!(
             AddPackageSource::detect("./does-not-exist"),
@@ -1871,7 +1872,7 @@ mod tests {
     #[test]
     fn detect_prefers_an_on_disk_path_over_the_at_prefix() {
         // A literal directory whose name starts with `@` is a folder source,
-        // not a registry coordinate.
+        // not a version coordinate.
         let dir = tempfile::tempdir().unwrap();
         let at_dir = dir.path().join("@weird");
         std::fs::create_dir_all(&at_dir).unwrap();
@@ -3469,12 +3470,12 @@ mod tests {
     }
 
     /// Acquire-on-reference's install-shaped half: a `range → concrete`
-    /// resolution against a `file://` registry that materializes the highest
+    /// resolution against a `file://` package source that materializes the highest
     /// matching version into `streamlib_modules/` and WRITES the lock — the
-    /// exact byte-source add flow. Mentally revert `acquire_from_registry` to a
+    /// exact byte-source add flow. Mentally revert `acquire_from_package_source` to a
     /// no-op and both the materialized slot and the lock entry vanish.
     #[test]
-    fn acquire_from_registry_resolves_range_materializes_and_locks() {
+    fn acquire_from_package_source_resolves_range_materializes_and_locks() {
         let tree = tempfile::tempdir().unwrap();
         let config = PackageSource::for_local_tree(tree.path()).unwrap();
         let client = PackageSourceClient::new(&config);
@@ -3490,7 +3491,7 @@ mod tests {
         let app = AppModulesDir::at(app_root.path());
         // A caret range resolves to the highest matching concrete version.
         let report = app
-            .acquire_from_registry(&pr, &SemVerRange::Caret(SemVer::new(1, 0, 0)), &config)
+            .acquire_from_package_source(&pr, &SemVerRange::Caret(SemVer::new(1, 0, 0)), &config)
             .unwrap();
         assert_eq!(report.version, SemVer::new(1, 2, 0));
         assert!(
@@ -3499,7 +3500,7 @@ mod tests {
         );
 
         // The lock records the acquired package at the resolved version via the
-        // registry download URL — indistinguishable from a hand `streamlib add`.
+        // package-source download URL — indistinguishable from a hand `streamlib add`.
         let lock = app.read_lockfile().unwrap();
         let entry = lock
             .packages
@@ -3508,7 +3509,7 @@ mod tests {
         assert_eq!(entry.version, SemVer::new(1, 2, 0));
         assert!(
             matches!(entry.source, LockfileSource::Url { .. }),
-            "acquired via a registry download URL, got {:?}",
+            "acquired via a package-source download URL, got {:?}",
             entry.source
         );
     }
@@ -3516,7 +3517,7 @@ mod tests {
     /// A range no published version satisfies is a typed acquire failure — not
     /// a silent no-op that would leave the load stuck.
     #[test]
-    fn acquire_from_registry_errors_when_no_version_matches() {
+    fn acquire_from_package_source_errors_when_no_version_matches() {
         let tree = tempfile::tempdir().unwrap();
         let config = PackageSource::for_local_tree(tree.path()).unwrap();
         let client = PackageSourceClient::new(&config);
@@ -3528,11 +3529,11 @@ mod tests {
         let app_root = tempfile::tempdir().unwrap();
         let app = AppModulesDir::at(app_root.path());
         let err = app
-            .acquire_from_registry(&pr, &SemVerRange::Caret(SemVer::new(2, 0, 0)), &config)
+            .acquire_from_package_source(&pr, &SemVerRange::Caret(SemVer::new(2, 0, 0)), &config)
             .expect_err("no 2.x version is published");
         assert!(
-            matches!(err, AppModulesError::AcquireRegistryFailed { .. }),
-            "expected AcquireRegistryFailed, got {err:?}"
+            matches!(err, AppModulesError::AcquirePackageSourceFailed { .. }),
+            "expected AcquirePackageSourceFailed, got {err:?}"
         );
         // Nothing materialized, nothing locked.
         assert!(!app.package_dir(&pr).exists());

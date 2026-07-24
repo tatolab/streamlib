@@ -70,7 +70,7 @@ fn run_for_rust_crate_inner() -> Result<()> {
     }
 
     // Re-run codegen when the resolution-driving environment changes: toggling
-    // an active `streamlib link` (STREAMLIB_LINK_CHECKOUT) or the registry
+    // an active `streamlib link` (STREAMLIB_LINK_CHECKOUT) or the package source
     // (STREAMLIB_PACKAGE_SOURCE) must re-resolve schema deps rather than reuse a
     // resolution cargo cached under the prior environment.
     println!(
@@ -94,13 +94,13 @@ fn run_for_rust_crate_inner() -> Result<()> {
         println!("cargo:rerun-if-changed={}", marker.display());
     }
 
-    // `from_env_or_marker` reads STREAMLIB_PACKAGE_SOURCE so a registry-cached
-    // crate resolves its schema deps (e.g. `@tatolab/escalate`) from the
-    // configured static registry, and resolves the active `streamlib link`
+    // `from_env_or_marker` reads STREAMLIB_PACKAGE_SOURCE so a package resolves
+    // its schema deps (e.g. `@tatolab/escalate`) by version from the configured
+    // package source, and resolves the active `streamlib link`
     // checkout MARKER-FIRST — walking up from `CARGO_MANIFEST_DIR` for
     // `.streamlib/link.json` — with STREAMLIB_LINK_CHECKOUT as an explicit
     // override. So a directly-`cargo build`-ed linked app resolves a dep present
-    // in the checkout's `packages/` tree from the checkout (the zero-registry
+    // in the checkout's `packages/` tree from the checkout (the link
     // dev loop) with NO env exported; the orchestrator still sets the env
     // (checkout, or empty to suppress) for a relocated build so it stays
     // authoritative. The env / marker read lives here at the build-script

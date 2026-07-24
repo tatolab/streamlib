@@ -256,7 +256,7 @@ impl CatalogClient {
             match std::fs::read(&path) {
                 Ok(b) => Ok(Some(b)),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                Err(e) => Err(ResolverError::RegistryFetchFailed {
+                Err(e) => Err(ResolverError::PackageSourceFetchFailed {
                     name: rel.to_string(),
                     detail: format!("reading {} : {e}", path.display()),
                 }),
@@ -264,7 +264,7 @@ impl CatalogClient {
         } else {
             let url = format!("{}/{}", self.base_url, rel);
             crate::package_source::http_get_optional(&url, self.token.as_deref()).map_err(|detail| {
-                ResolverError::RegistryFetchFailed {
+                ResolverError::PackageSourceFetchFailed {
                     name: rel.to_string(),
                     detail: format!("fetching {url}: {detail}"),
                 }
@@ -299,7 +299,7 @@ impl CatalogClient {
             return Ok(None);
         };
         let catalog =
-            serde_json::from_slice(&body).map_err(|e| ResolverError::RegistryFetchFailed {
+            serde_json::from_slice(&body).map_err(|e| ResolverError::PackageSourceFetchFailed {
                 name: rel,
                 detail: format!("parsing package catalog JSON: {e}"),
             })?;
@@ -324,7 +324,7 @@ impl CatalogClient {
             return Ok(None);
         };
         let value =
-            serde_json::from_slice(&body).map_err(|e| ResolverError::RegistryFetchFailed {
+            serde_json::from_slice(&body).map_err(|e| ResolverError::PackageSourceFetchFailed {
                 name: rel,
                 detail: format!("parsing schema JTD JSON: {e}"),
             })?;

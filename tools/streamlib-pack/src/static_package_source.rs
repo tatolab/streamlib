@@ -1,13 +1,13 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Static-file `.slpkg` registry tree emission — the daemon-free read side.
+//! Static-file `.slpkg` package source tree emission — the daemon-free read side.
 //!
 //! An emit renders the workspace's `packages/*` into a plain on-disk tree — a
 //! `.slpkg` generic store, a per-package + aggregate catalog, and a release
 //! manifest — that is tokenless to read over `file://` (the existing
 //! [`streamlib_idents::PackageSourceClient`] transport) and browsable as a plain
-//! HTTP directory index. No registry daemon, no database, no token is required
+//! HTTP directory index. No package source daemon, no database, no token is required
 //! to serve it.
 //!
 //! ## Atomicity
@@ -193,7 +193,7 @@ fn target_version(base: &str, dev: Option<u32>) -> String {
     }
 }
 
-/// Emit a complete `.slpkg` registry tree (generic store + catalog + release
+/// Emit a complete `.slpkg` package source tree (generic store + catalog + release
 /// manifest) for the current workspace's `packages/*` into
 /// [`EmitOptions::out`], via a staging dir that is flipped in atomically once
 /// the [`ReleaseManifest`] lands (see [`publish_staged_tree`]). The whole tree
@@ -206,7 +206,7 @@ pub fn emit_static_registry(opts: &EmitOptions) -> Result<()> {
     build_and_flip(&opts.out, |staging| {
         emit_slpkg_and_manifest(opts, staging, &target, &org)
     })?;
-    tracing::info!(out = %opts.out.display(), release = %target, "static registry emitted");
+    tracing::info!(out = %opts.out.display(), release = %target, "static package source emitted");
     Ok(())
 }
 
@@ -267,14 +267,14 @@ fn emit_slpkg_and_manifest(
 ) -> Result<()> {
     let slpkg_dir = staging.join("slpkg");
     std::fs::create_dir_all(&slpkg_dir)?;
-    // The registry client is rooted at the tree root and writes under `slpkg/`.
+    // The package source client is rooted at the tree root and writes under `slpkg/`.
     let config = PackageSource {
         base_url: format!("file://{}", staging.display()),
     };
 
     let packages_dir = opts.workspace_root.join("packages");
     let mut package_members: Vec<ReleaseManifestMember> = Vec::new();
-    // Registry-wide processor index accumulated across every package — the
+    // Tree-wide processor index accumulated across every package — the
     // node-palette aggregate, written LAST (after the release manifest).
     let mut catalog_index: Vec<CatalogIndexLine> = Vec::new();
     if packages_dir.is_dir() {
@@ -333,7 +333,7 @@ fn emit_slpkg_and_manifest(
             // Publish-time catalog: per-package `<name>.catalog.json` + the
             // JTDs this package owns, written into the same version dir as the
             // `.slpkg`. Accumulate the per-processor index lines for the
-            // registry-wide aggregate.
+            // tree-wide aggregate.
             let artifacts = build_package_catalog(pkg_dir, &siblings)
                 .with_context(|| format!("building catalog for {pkg_ref}"))?;
             write_package_catalog(&slpkg_dir, &artifacts)
@@ -356,7 +356,7 @@ fn emit_slpkg_and_manifest(
         .upload_release_manifest(org, &manifest)
         .map_err(|e| anyhow::anyhow!("upload release manifest: {e}"))?;
 
-    // Registry-wide catalog aggregate, written AFTER the per-package catalog
+    // Tree-wide catalog aggregate, written AFTER the per-package catalog
     // files and the release manifest, at a STAGING-relative path so it rides
     // the same atomic flip (`build_and_flip`) — a `file://` reader never
     // observes the aggregate without the release it describes. Ordering it
@@ -427,7 +427,7 @@ pub fn write_package_catalog(
 /// appended, and the file is rewritten. Dropping-then-appending makes a
 /// republish of the same `(package, version)` replace its lines rather than
 /// duplicate them, and drops the stale line of a processor removed on a
-/// republish. `tree_root` is the registry tree root (the directory holding
+/// republish. `tree_root` is the package source tree root (the directory holding
 /// `slpkg/` and `catalog/`).
 pub fn merge_catalog_index_lines(
     tree_root: &Path,

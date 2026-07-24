@@ -144,13 +144,13 @@ pub enum ResolverError {
     PackageSourceNotConfigured { name: String, env: String },
 
     #[error("version dependency `{name}` fetch from the package source failed: {detail}")]
-    RegistryFetchFailed { name: String, detail: String },
+    PackageSourceFetchFailed { name: String, detail: String },
 
     #[error(
         "version dependency `{name}` has no version satisfying range `{range}` \
          in the package source (available: {available})"
     )]
-    RegistryNoMatchingVersion {
+    PackageSourceNoMatchingVersion {
         name: String,
         range: String,
         available: String,

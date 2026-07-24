@@ -4,8 +4,8 @@
 //! Consumer-side release-completeness pre-check.
 //!
 //! Before a package's Rust build resolves its tatolab-registry dependencies via
-//! cargo, this checks the registry's **release manifests** against the
-//! package's pins. A partial / mid-publish registry — the historical `0.4.36`
+//! cargo, this checks the package source's **release manifests** against the
+//! package's pins. A partial / mid-publish package source — the historical `0.4.36`
 //! `streamlib-plugin-sdk` + `vulkan-jpeg` foot-gun — fails fast here with a
 //! typed [`BuildError::IncompleteRelease`] naming the exact missing artifacts,
 //! instead of surfacing much later as a cryptic
@@ -24,10 +24,10 @@
 //! actionable early failure for a provably-partial release. It is a no-op
 //! (build proceeds) when:
 //!
-//! - no registry is configured (in-tree / dev builds resolve deps by `path`);
+//! - no package source is configured (in-tree / dev builds resolve deps by `path`);
 //! - the package declares no tatolab-registry pins;
 //! - no release manifest covers a pin's range (a pre-atomic-release
-//!   registry — logged, then proceed); or
+//!   package source — logged, then proceed); or
 //! - the manifest fetch / listing hits a transient transport error (the real
 //!   cargo resolve remains the hard gate — a network blip must not
 //!   manufacture a build failure).
@@ -65,7 +65,7 @@ fn cargo_req_to_range(req: &str) -> Option<SemVerRange> {
 }
 
 /// Fail fast with [`BuildError::IncompleteRelease`] when the configured
-/// registry's release manifests cannot satisfy the package's direct
+/// package source's release manifests cannot satisfy the package's direct
 /// tatolab-registry `pins`. See the module docs for the resolution model and
 /// the no-op cases.
 pub(crate) fn assert_release_complete(
@@ -75,7 +75,7 @@ pub(crate) fn assert_release_complete(
     if pins.is_empty() {
         return Ok(());
     }
-    // No registry configured ⇒ deps resolve by path (dev / in-tree); nothing
+    // No package source configured ⇒ deps resolve by path (dev / in-tree); nothing
     // to validate against.
     let Some(config) = PackageSource::from_env() else {
         return Ok(());
@@ -141,8 +141,8 @@ pub(crate) fn assert_release_complete(
                 tracing::warn!(
                     package = %package_label,
                     version = %release_version,
-                    "registry has no release manifest for {release_version} — pre-atomic-release \
-                     registry; proceeding without completeness check (a partial release will \
+                    "package source has no release manifest for {release_version} — pre-atomic-release \
+                     package source; proceeding without completeness check (a partial release will \
                      surface as a cargo resolve error)"
                 );
             }
@@ -170,7 +170,7 @@ pub(crate) fn assert_release_complete(
         package: package_label.to_string(),
         release_version: incomplete_versions.join(", "),
         missing: missing_all.join(", "),
-        hint: "the registry has a partial or inconsistent release — re-run the release publish \
+        hint: "the package source has a partial or inconsistent release — re-run the release publish \
                (cargo xtask static-registry emit) so the full closure lands, or pin a version \
                whose release manifest lists every dependency"
             .to_string(),
@@ -193,10 +193,10 @@ mod tests {
         }
     }
 
-    /// Point the registry env at `dir` for the duration of `f`, restoring the
+    /// Point the package source env at `dir` for the duration of `f`, restoring the
     /// prior values after. SAFETY: callers are `#[serial]`, so no other
     /// thread races these process-global env writes.
-    fn with_file_registry<T>(dir: &std::path::Path, f: impl FnOnce() -> T) -> T {
+    fn with_file_package_source<T>(dir: &std::path::Path, f: impl FnOnce() -> T) -> T {
         let prev_url = std::env::var("STREAMLIB_PACKAGE_SOURCE").ok();
         unsafe {
             std::env::set_var(
@@ -245,7 +245,7 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn no_registry_configured_is_a_noop() {
+    fn no_package_source_configured_is_a_noop() {
         // Clear the env entirely; the check must pass vacuously (dev / path).
         // SAFETY: `#[serial]` — no other thread races these env writes.
         let prev = std::env::var("STREAMLIB_PACKAGE_SOURCE").ok();
@@ -265,7 +265,7 @@ mod tests {
     #[serial_test::serial]
     fn floor_pin_resolves_against_newest_satisfying_release() {
         // The production steady state: consumer pins floor `0.5.0` (bare =
-        // caret) while the registry's release is `0.5.1`. The check must key
+        // caret) while the package source's release is `0.5.1`. The check must key
         // on the NEWEST satisfying release, not the pin's floor — mentally
         // revert to exact-floor keying and the fetch at 0.5.0 finds nothing,
         // the partial 0.5.1 release sails through, and this test fails.
@@ -280,7 +280,7 @@ mod tests {
             pin("streamlib-plugin-sdk", "0.5.0"),
             pin("streamlib-macros", "0.5.0"),
         ];
-        let err = with_file_registry(tmp.path(), || {
+        let err = with_file_package_source(tmp.path(), || {
             assert_release_complete("pkg", &pins).unwrap_err()
         });
         match err {
@@ -311,7 +311,7 @@ mod tests {
             ],
         );
         publish_manifest(tmp.path(), &complete);
-        let out = with_file_registry(tmp.path(), || assert_release_complete("pkg", &pins));
+        let out = with_file_package_source(tmp.path(), || assert_release_complete("pkg", &pins));
         assert!(out.is_ok(), "complete newest release must pass: {out:?}");
     }
 
@@ -337,7 +337,7 @@ mod tests {
         // plugin-sdk pinned exactly at 0.4.36 — absent from the 0.4.36
         // release even though the newest release carries it.
         let pins = vec![pin("streamlib-plugin-sdk", "=0.4.36")];
-        let err = with_file_registry(tmp.path(), || {
+        let err = with_file_package_source(tmp.path(), || {
             assert_release_complete("streamlib-jpeg", &pins).unwrap_err()
         });
         match err {
@@ -358,9 +358,9 @@ mod tests {
 
     #[test]
     #[serial_test::serial]
-    fn unreachable_registry_degrades_to_proceed() {
+    fn unreachable_package_source_degrades_to_proceed() {
         // The module-doc promise: a network blip must not manufacture a
-        // build failure. Point the registry at a connection-refused endpoint
+        // build failure. Point the package source at a connection-refused endpoint
         // — both the release listing and the fallback manifest fetch error,
         // and the check must degrade to Ok (cargo remains the hard gate).
         // Mentally revert the Err arms to hard failures and this fails.
@@ -431,7 +431,7 @@ mod tests {
             pin("streamlib-plugin-sdk", "0.5.1-dev.3"),
             pin("streamlib-macros", "0.5.1-dev.3"),
         ];
-        let err = with_file_registry(tmp.path(), || {
+        let err = with_file_package_source(tmp.path(), || {
             assert_release_complete("pkg", &pins).unwrap_err()
         });
         match err {
@@ -457,19 +457,19 @@ mod tests {
             ],
         );
         publish_manifest(tmp.path(), &complete);
-        let out = with_file_registry(tmp.path(), || assert_release_complete("pkg", &pins));
+        let out = with_file_package_source(tmp.path(), || assert_release_complete("pkg", &pins));
         assert!(out.is_ok(), "complete dev release must pass: {out:?}");
     }
 
     #[test]
     #[serial_test::serial]
     fn absent_manifest_proceeds_back_compat() {
-        // No release manifest anywhere ⇒ pre-atomic-release registry ⇒ warn +
+        // No release manifest anywhere ⇒ pre-atomic-release package source ⇒ warn +
         // proceed (Ok). Mentally revert the Ok(None) arm to an error and this
-        // would wrongly block every pre-atomic-release registry.
+        // would wrongly block every pre-atomic-release package source.
         let tmp = tempfile::tempdir().unwrap();
         let pins = vec![pin("streamlib-plugin-sdk", "0.5.1")];
-        let out = with_file_registry(tmp.path(), || assert_release_complete("pkg", &pins));
+        let out = with_file_package_source(tmp.path(), || assert_release_complete("pkg", &pins));
         assert!(
             out.is_ok(),
             "absent manifest must proceed (back-compat): {out:?}"

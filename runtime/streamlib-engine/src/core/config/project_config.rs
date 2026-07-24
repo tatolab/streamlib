@@ -98,7 +98,7 @@ impl ProjectConfig {
     /// schema dep present in `<checkout>/packages/<name>` from the checkout —
     /// the load-time mirror of the build-time redirect, so a linked package
     /// loaded from its staged cache dir with `STREAMLIB_PACKAGE_SOURCE` unset
-    /// still resolves `@tatolab/core` (the zero-registry dev loop). `None`
+    /// still resolves `@tatolab/core` (the link dev loop). `None`
     /// (every other caller, and every locked run) is byte-identical to before.
     /// The module loader threads its already-discovered, `is_locked`-gated
     /// checkout here.
@@ -617,12 +617,12 @@ processors:
     /// after, so a stray `STREAMLIB_PACKAGE_SOURCE` / `STREAMLIB_LINK_CHECKOUT` in
     /// the shell can't make the load-time link tests non-deterministic.
     struct CleanResolutionEnv {
-        prev_registry: Option<std::ffi::OsString>,
+        prev_package_source: Option<std::ffi::OsString>,
         prev_link: Option<std::ffi::OsString>,
     }
     impl CleanResolutionEnv {
         fn new() -> Self {
-            let prev_registry = std::env::var_os("STREAMLIB_PACKAGE_SOURCE");
+            let prev_package_source = std::env::var_os("STREAMLIB_PACKAGE_SOURCE");
             let prev_link = std::env::var_os("STREAMLIB_LINK_CHECKOUT");
             // SAFETY: the tests using this guard are `#[serial]`, so no other
             // thread races the process-global environment for its lifetime.
@@ -631,7 +631,7 @@ processors:
                 std::env::remove_var("STREAMLIB_LINK_CHECKOUT");
             }
             Self {
-                prev_registry,
+                prev_package_source,
                 prev_link,
             }
         }
@@ -639,7 +639,7 @@ processors:
     impl Drop for CleanResolutionEnv {
         fn drop(&mut self) {
             unsafe {
-                match self.prev_registry.take() {
+                match self.prev_package_source.take() {
                     Some(v) => std::env::set_var("STREAMLIB_PACKAGE_SOURCE", v),
                     None => std::env::remove_var("STREAMLIB_PACKAGE_SOURCE"),
                 }
@@ -700,14 +700,14 @@ processors:
 
     /// Load-time dev loop: `load_with_link` with an active checkout resolves a
     /// bare-name schema dep from the checkout's `packages/core` with ZERO
-    /// registry configured — the load-time half of the zero-registry loop. The
+    /// package source configured — the load-time half of the link loop. The
     /// `Named` port is rewritten to a `Specific` ident owned by `@tatolab/core`.
     /// Mentally revert the `link_checkout` threading in `resolve_bare_schema_refs`
     /// (or pass `None`, as the sibling test does) and this fails
     /// `PackageSourceNotConfigured` — locking that the checkout is what resolved it.
     #[test]
     #[serial_test::serial]
-    fn load_with_link_resolves_bare_schema_from_checkout_zero_registry() {
+    fn load_with_link_resolves_bare_schema_from_checkout_without_package_source() {
         use streamlib_processor_schema::PortSchemaSpec;
         let _env = CleanResolutionEnv::new();
         let tmp = TempDir::new().unwrap();
@@ -718,7 +718,7 @@ processors:
         write_checkout_core(&checkout);
 
         let config = ProjectConfig::load_with_link(&consumer, Some(checkout.as_path())).expect(
-            "linked load must resolve the bare-name schema from the checkout, zero registry",
+            "linked load must resolve the bare-name schema from the checkout, no package source",
         );
         let port = &config.processors[0].inputs[0];
         match &port.schema {
@@ -729,13 +729,13 @@ processors:
         }
     }
 
-    /// Load-time distribution guardrail: with NO link (`None`) and no registry,
+    /// Load-time distribution guardrail: with NO link (`None`) and no package source,
     /// the same manifest fails `PackageSourceNotConfigured` — the checkout on disk is
     /// ignored without a link, so the no-link path is byte-identical to before.
     /// This is also the mental-revert of the positive test above.
     #[test]
     #[serial_test::serial]
-    fn load_without_link_ignores_checkout_and_needs_registry() {
+    fn load_without_link_ignores_checkout_and_needs_package_source() {
         let _env = CleanResolutionEnv::new();
         let tmp = TempDir::new().unwrap();
         let consumer = tmp.path().join("consumer");

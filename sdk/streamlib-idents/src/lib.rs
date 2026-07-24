@@ -50,8 +50,8 @@ pub use manifest::{
     VersionDependency,
 };
 pub use package_source::{
-    DEFAULT_PACKAGE_SOURCE, LINK_CHECKOUT_ENV, PACKAGE_SOURCE_ENV, PackageSource,
-    PackageSourceClient, RELEASE_MANIFEST_CHANNEL, RELEASE_MANIFEST_FILE, select_version,
+    LINK_CHECKOUT_ENV, PACKAGE_SOURCE_ENV, PackageSource, PackageSourceClient,
+    RELEASE_MANIFEST_CHANNEL, RELEASE_MANIFEST_FILE, select_version,
 };
 pub use release::{
     RELEASE_MANIFEST_FORMAT, ReleaseManifest, ReleaseManifestMember, crates_missing_from_release,

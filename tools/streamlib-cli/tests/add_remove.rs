@@ -158,7 +158,7 @@ fn add_folder_with_expect_sha256_warns_on_stderr_but_succeeds() {
 }
 
 #[test]
-fn add_registry_coordinate_gets_guidance_error() {
+fn add_version_coordinate_gets_guidance_error() {
     let app_root = tempfile::tempdir().unwrap();
     let out = run(&[
         "add",
@@ -166,10 +166,10 @@ fn add_registry_coordinate_gets_guidance_error() {
         "--dir",
         app_root.path().to_str().unwrap(),
     ]);
-    assert!(!out.status.success(), "a registry coordinate must be rejected");
+    assert!(!out.status.success(), "a version coordinate must be rejected");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains("registry coordinate"),
+        stderr.contains("version coordinate"),
         "guidance missing: {stderr}"
     );
     // Nothing materialized.

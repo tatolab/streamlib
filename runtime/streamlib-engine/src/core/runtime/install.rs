@@ -67,7 +67,7 @@ pub struct InstallReport {
 #[derive(Debug, thiserror::Error)]
 pub enum InstallError {
     /// The `streamlib.yaml` graph failed to resolve (missing dep, version
-    /// conflict, registry error, unreadable manifest, …).
+    /// conflict, package-source error, unreadable manifest, …).
     #[error("resolving the package graph at {} failed: {source}", root_dir.display())]
     Resolve {
         root_dir: PathBuf,
@@ -99,13 +99,13 @@ pub enum InstallError {
 /// This is the programmatic `streamlib install`. It:
 ///
 /// 1. Resolves `root_dir`'s `streamlib.yaml` range→concrete over the full
-///    transitive tree (network at install time is expected — registry
+///    transitive tree (network at install time is expected — package source
 ///    listing / download / git fetch).
 /// 2. Materializes every resolved package into the app's co-located
 ///    `streamlib_modules/@org/name` slots via `orchestrator` (building cdylibs
 ///    / provisioning venvs / **pre-building the subprocess native hosts** so a
 ///    later polyglot run is offline). The orchestrator's own release-completeness pre-check fires
-///    here, so a partial registry release fails install before any lockfile
+///    here, so a partial package-source release fails install before any lockfile
 ///    is written — the lockfile always pins a completeness-checked set.
 /// 3. Writes the application lockfile pinning the exact resolved set.
 pub fn install(
@@ -240,7 +240,7 @@ fn package_ref_of(pkg: &ResolvedPackage) -> Option<(PackageRef, SemVer)> {
 /// Map a resolver source kind to the orchestrator's build-time provenance: a
 /// `path:` dep or the root manifest is the user's own editable tree (cargo deps
 /// may resolve outside it, `target/` is the user's), while a git-rev / `.slpkg`
-/// / registry source is a self-contained managed extract.
+/// / by-version source is a self-contained managed extract.
 fn provenance_of(source: &streamlib_idents::ResolvedSource) -> PackageSourceProvenance {
     use streamlib_idents::ResolvedSource;
     match source {

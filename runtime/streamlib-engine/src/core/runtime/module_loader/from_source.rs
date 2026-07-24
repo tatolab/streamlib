@@ -413,7 +413,7 @@ fn stage_submitted_source(
 /// A minimal `pyproject.toml` for a live-submitted Python session package: it
 /// declares the `streamlib` SDK dependency so the orchestrator's venv tail
 /// resolves it (from the linked checkout under an active `streamlib link`, or
-/// from the registry by version otherwise) — without it the venv is empty and
+/// by version from the package source otherwise) — without it the venv is empty and
 /// the `import streamlib` probe hard-fails.
 fn session_pyproject_toml(name: &str) -> String {
     format!(

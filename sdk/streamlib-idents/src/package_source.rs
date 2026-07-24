@@ -68,15 +68,6 @@ pub const PACKAGE_SOURCE_ENV: &str = "STREAMLIB_PACKAGE_SOURCE";
 /// [`ResolverOptions::from_env`]: crate::ResolverOptions::from_env
 pub const LINK_CHECKOUT_ENV: &str = "STREAMLIB_LINK_CHECKOUT";
 
-/// Suggested tree-root URL for the first-party static `.slpkg` package source —
-/// a sensible default value a consumer can write into config when no source is
-/// named. It is a *suggestion*, not a lock-in, and is NOT eagerly assumed by
-/// [`PackageSource::from_env`]: an unset env means "no package source
-/// configured" so a dev / path-only build never tries to reach the network.
-/// Point [`PACKAGE_SOURCE_ENV`] at any tree root, local (`file://`) or remote,
-/// to resolve from there instead.
-pub const DEFAULT_PACKAGE_SOURCE: &str = "https://registry.tatolab.com";
-
 /// A resolved package source: the tree-root location a consumer resolves
 /// versioned `.slpkg`s from.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -90,8 +81,8 @@ impl PackageSource {
     /// Build from [`PACKAGE_SOURCE_ENV`], returning `None` when it is unset — so
     /// a dev / path-only build with no package source configured resolves
     /// without touching the network (a version dep then fails loud with
-    /// `PackageSourceNotConfigured`). The first-party [`DEFAULT_PACKAGE_SOURCE`]
-    /// is a suggested config value, not an eager fallback here.
+    /// `PackageSourceNotConfigured`). There is no eager default: an unset env is
+    /// "no package source", never a silent fallback to a first-party location.
     pub fn from_env() -> Option<Self> {
         let base_url = std::env::var(PACKAGE_SOURCE_ENV)
             .ok()
@@ -104,11 +95,11 @@ impl PackageSource {
     /// `file://<canonical-abs-dir>` form a `file://` consumer / publisher uses.
     /// `dir` is canonicalized so the derived channel URLs are absolute and
     /// relocation-stable; a non-existent path is a
-    /// [`ResolverError::RegistryFetchFailed`].
+    /// [`ResolverError::PackageSourceFetchFailed`].
     pub fn for_local_tree(dir: &Path) -> ResolverResult<Self> {
         let canonical = dir
             .canonicalize()
-            .map_err(|e| ResolverError::RegistryFetchFailed {
+            .map_err(|e| ResolverError::PackageSourceFetchFailed {
                 name: "<local tree>".to_string(),
                 detail: format!("canonicalize package source tree dir {} : {e}", dir.display()),
             })?;
@@ -188,12 +179,12 @@ impl<'a> PackageSourceClient<'a> {
         let url = self.download_url(pkg_ref, version);
         let bytes = if self.is_file_scheme() {
             let path = self.download_path(pkg_ref, version);
-            std::fs::read(&path).map_err(|e| ResolverError::RegistryFetchFailed {
+            std::fs::read(&path).map_err(|e| ResolverError::PackageSourceFetchFailed {
                 name: pkg_ref.to_string(),
                 detail: format!("reading {} : {e}", path.display()),
             })?
         } else {
-            http_get_bytes(&url).map_err(|detail| ResolverError::RegistryFetchFailed {
+            http_get_bytes(&url).map_err(|detail| ResolverError::PackageSourceFetchFailed {
                 name: pkg_ref.to_string(),
                 detail,
             })?
@@ -215,7 +206,7 @@ impl<'a> PackageSourceClient<'a> {
     ) -> ResolverResult<String> {
         self.ensure_file_scheme("publishing a package")?;
         let url = self.download_url(pkg_ref, version);
-        let upload_err = |detail: String| ResolverError::RegistryFetchFailed {
+        let upload_err = |detail: String| ResolverError::PackageSourceFetchFailed {
             name: pkg_ref.to_string(),
             detail,
         };
@@ -243,7 +234,7 @@ impl<'a> PackageSourceClient<'a> {
         pkg_ref: &PackageRef,
         just_published: SemVer,
     ) -> ResolverResult<()> {
-        let upload_err = |detail: String| ResolverError::RegistryFetchFailed {
+        let upload_err = |detail: String| ResolverError::PackageSourceFetchFailed {
             name: pkg_ref.to_string(),
             detail,
         };
@@ -313,7 +304,7 @@ impl<'a> PackageSourceClient<'a> {
         manifest: &ReleaseManifest,
     ) -> ResolverResult<String> {
         self.ensure_file_scheme("publishing a release manifest")?;
-        let upload_err = |detail: String| ResolverError::RegistryFetchFailed {
+        let upload_err = |detail: String| ResolverError::PackageSourceFetchFailed {
             name: format!("{}/{}", RELEASE_MANIFEST_CHANNEL, manifest.release_version),
             detail,
         };
@@ -348,7 +339,7 @@ impl<'a> PackageSourceClient<'a> {
         _org: &str,
         release_version: &str,
     ) -> ResolverResult<Option<ReleaseManifest>> {
-        let fetch_err = |detail: String| ResolverError::RegistryFetchFailed {
+        let fetch_err = |detail: String| ResolverError::PackageSourceFetchFailed {
             name: format!("{}/{}", RELEASE_MANIFEST_CHANNEL, release_version),
             detail,
         };
@@ -417,7 +408,7 @@ impl<'a> PackageSourceClient<'a> {
     /// List versions by reading the cargo-sparse-shaped version index
     /// (`slpkg/<name>/index.json`) over HTTP. A `404` (no index published yet)
     /// yields an empty list — parity with `file://`'s missing-directory case —
-    /// so `select_version` reports `RegistryNoMatchingVersion` rather than a
+    /// so `select_version` reports `PackageSourceNoMatchingVersion` rather than a
     /// transport error.
     fn list_versions_http(&self, pkg_ref: &PackageRef) -> ResolverResult<Vec<SemVer>> {
         let url = self.index_url(pkg_ref);
@@ -425,7 +416,7 @@ impl<'a> PackageSourceClient<'a> {
             Ok(Some(body)) => body,
             Ok(None) => return Ok(Vec::new()),
             Err(detail) => {
-                return Err(ResolverError::RegistryFetchFailed {
+                return Err(ResolverError::PackageSourceFetchFailed {
                     name: pkg_ref.to_string(),
                     detail: format!("listing versions: {detail}"),
                 });
@@ -443,12 +434,12 @@ impl<'a> PackageSourceClient<'a> {
             return Ok(Vec::new());
         }
         let mut versions = Vec::new();
-        let entries = std::fs::read_dir(&dir).map_err(|e| ResolverError::RegistryFetchFailed {
+        let entries = std::fs::read_dir(&dir).map_err(|e| ResolverError::PackageSourceFetchFailed {
             name: pkg_ref.to_string(),
             detail: format!("reading {} : {e}", dir.display()),
         })?;
         for entry in entries {
-            let entry = entry.map_err(|e| ResolverError::RegistryFetchFailed {
+            let entry = entry.map_err(|e| ResolverError::PackageSourceFetchFailed {
                 name: pkg_ref.to_string(),
                 detail: format!("reading {} : {e}", dir.display()),
             })?;
@@ -472,7 +463,7 @@ impl<'a> PackageSourceClient<'a> {
         if self.is_file_scheme() {
             Ok(())
         } else {
-            Err(ResolverError::RegistryFetchFailed {
+            Err(ResolverError::PackageSourceFetchFailed {
                 name: self.config.base_url.clone(),
                 detail: format!(
                     "{action} requires a file:// package source tree (a static HTTP mount is \
@@ -498,7 +489,7 @@ pub fn select_version(
         .ok_or_else(|| {
             let mut sorted: Vec<String> = available.iter().map(|v| v.to_string()).collect();
             sorted.sort();
-            ResolverError::RegistryNoMatchingVersion {
+            ResolverError::PackageSourceNoMatchingVersion {
                 name: pkg_ref.to_string(),
                 range: range.to_string(),
                 available: sorted.join(", "),
@@ -596,7 +587,7 @@ pub(crate) fn cache_slpkg_bytes(
     bytes: &[u8],
     cache_dir: &Path,
 ) -> ResolverResult<PathBuf> {
-    let dir = cache_dir.join("registry");
+    let dir = cache_dir.join("package-source");
     std::fs::create_dir_all(&dir).map_err(|e| ResolverError::Io {
         path: dir.clone(),
         source: e,
@@ -711,14 +702,14 @@ mod tests {
         let range = SemVerRange::from_str("^1.0.0").unwrap();
         let err = select_version(&pr, &range, &avail).unwrap_err();
         match err {
-            ResolverError::RegistryNoMatchingVersion {
+            ResolverError::PackageSourceNoMatchingVersion {
                 range, available, ..
             } => {
                 assert_eq!(range, "^1.0.0");
                 assert!(available.contains("2.0.0"));
                 assert!(available.contains("3.1.0"));
             }
-            other => panic!("expected RegistryNoMatchingVersion, got {other:?}"),
+            other => panic!("expected PackageSourceNoMatchingVersion, got {other:?}"),
         }
     }
 
@@ -909,7 +900,7 @@ mod tests {
             .upload_slpkg(&pkg_ref("tatolab", "camera"), SemVer::new(1, 0, 0), b"x")
             .unwrap_err();
         assert!(
-            matches!(err, ResolverError::RegistryFetchFailed { .. }),
+            matches!(err, ResolverError::PackageSourceFetchFailed { .. }),
             "expected a refusal, got {err:?}"
         );
     }

@@ -316,8 +316,8 @@ fn line_body(line: &str) -> &str {
 
 /// Parse an authoring-mode spec into a canonical [`PackageRef`] and its
 /// version. Accepts `@org/name@<version>`; the version is required in
-/// authoring mode (the caret range is anchored on it — there is no registry
-/// lookup here). Returns a CLI-friendly error otherwise.
+/// authoring mode (the caret range is anchored on it — there is no package
+/// source lookup here). Returns a CLI-friendly error otherwise.
 fn parse_authoring_spec(spec: &str) -> Result<(PackageRef, String)> {
     let inner = spec.strip_prefix('@').ok_or_else(|| {
         anyhow::anyhow!("expected `@org/name@<version>` (e.g. `@tatolab/core@1.0.0`); got `{spec}`")
@@ -443,13 +443,13 @@ mod tests {
     }
 
     #[test]
-    fn detect_routes_registry_coordinate_to_guidance_error() {
-        // The old registry-coordinate arm is gone; an `@org/name` spec gets
+    fn detect_routes_version_coordinate_to_guidance_error() {
+        // The old version-coordinate arm is gone; an `@org/name` spec gets
         // the typed guidance error from the source detector.
         let err = AddPackageSource::detect("@tatolab/camera").expect_err("must be rejected");
         let message = err.to_string();
         assert!(
-            message.contains("registry coordinate"),
+            message.contains("version coordinate"),
             "guidance missing: {message}"
         );
     }

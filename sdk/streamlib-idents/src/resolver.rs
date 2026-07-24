@@ -1285,7 +1285,7 @@ dependencies:
         assert!(res.packages.contains_key("@tatolab/b"));
     }
 
-    /// #1505 winner-selection: two requirers of the same registry dependency
+    /// #1505 winner-selection: two requirers of the same version dependency
     /// declare disjoint semver ranges. The first-walked requirer (`@tatolab/a`,
     /// `^1.0.0`) resolves the shared dep to the installed `1.2.0`; the second
     /// (`@tatolab/b`, `^3.0.0`) can't be satisfied by that concrete version.
@@ -1362,12 +1362,12 @@ dependencies:
         );
     }
 
-    /// #1505 first-resolution gate leniency: a dep is DECLARED by a Registry
+    /// #1505 first-resolution gate leniency: a dep is DECLARED by a version range
     /// range but a dev `patch:` redirects it to a local checkout whose version
     /// is out of that range (the same shape a `streamlib link` produces). The
     /// resolve MUST NOT error — a version mismatch never blocks a load; the
     /// override wins and only warns. Regression lock: re-broadening
-    /// `check_resolved_satisfies_spec` to error for a non-`Registry` source
+    /// `check_resolved_satisfies_spec` to error for a non-`ByVersion` source
     /// makes `resolve_with` return `Err` here and the `unwrap()` panics.
     #[test]
     fn patch_override_out_of_range_warns_not_conflict() {
@@ -1405,14 +1405,14 @@ patch:
         );
     }
 
-    /// The registry-scoping half of the same gate: a GENUINE `Registry`-source
+    /// The package-source-scoping half of the same gate: a GENUINE `ByVersion`-source
     /// concrete that somehow falls out of the declared range is still a hard
     /// `VersionRangeUnsatisfied` (defense-in-depth against a store
     /// mis-selection), where `select_version` normally guarantees an in-range
     /// pick. Pairs with `patch_override_out_of_range_warns_not_conflict` to pin
     /// both arms of the source scoping.
     #[test]
-    fn registry_source_out_of_range_still_errors() {
+    fn package_source_out_of_range_still_errors() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().join("core");
         write_streamlib_yaml(
@@ -1439,13 +1439,13 @@ patch:
             .unwrap_err();
         assert!(
             matches!(err, ResolverError::VersionRangeUnsatisfied { .. }),
-            "a registry-source out-of-range concrete must stay hard, got {err:?}"
+            "a by-version-source out-of-range concrete must stay hard, got {err:?}"
         );
     }
 
     /// A dep first resolved via a path/git spec carries a manifest whose
     /// `package` block can legitimately be `None` (that flavor skips the
-    /// package-id check). Re-referencing it through a Registry range must
+    /// package-id check). Re-referencing it through a version range must
     /// reconcile leniently — the whole point of #1505 is that a version
     /// mismatch never halts a load, so a missing package block on the installed
     /// winner must be an early return, not a panic. Regression lock: restoring
@@ -1487,10 +1487,9 @@ dependencies:
     }
 
     #[test]
-    fn registry_dependency_without_config_errors() {
-        // A bare registry range with `registry: None` fails loud with
-        // PackageSourceNotConfigured — the actionable successor to the old
-        // RegistryNotImplemented. `resolve_with` is pure (it never reads the
+    fn version_dependency_without_config_errors() {
+        // A bare version range with `package_source: None` fails loud with
+        // PackageSourceNotConfigured. `resolve_with` is pure (it never reads the
         // process env), so this is deterministic regardless of any ambient
         // STREAMLIB_PACKAGE_SOURCE in the shell.
         let tmp = tempfile::tempdir().unwrap();
@@ -1514,15 +1513,15 @@ dependencies:
         );
     }
 
-    /// End-to-end registry resolution over the hermetic `file://` mirror:
+    /// End-to-end by-version resolution over the hermetic `file://` mirror:
     /// build a real schema `.slpkg`, lay it out in a versioned mirror dir,
-    /// declare a bare semver-range registry dep (NO path patch), and assert
+    /// declare a bare semver-range version dep (NO path patch), and assert
     /// the resolver lists → selects-highest-in-range → fetches → extracts →
     /// loads it. This is exactly the path `build.rs` codegen drives for a
-    /// registry-cached crate. Mirrors the broken case the issue fixes: with
-    /// the patch stripped, the bare range MUST resolve from the registry.
+    /// package-source-cached crate. Mirrors the broken case the issue fixes: with
+    /// the patch stripped, the bare range MUST resolve from the package source.
     #[test]
-    fn registry_dependency_resolves_from_file_mirror() {
+    fn version_dependency_resolves_from_file_mirror() {
         use std::io::Write;
         let tmp = tempfile::tempdir().unwrap();
         let mirror = tmp.path().join("mirror");
@@ -1586,7 +1585,7 @@ dependencies:
         );
         assert_eq!(escalate.schema_files.len(), 1);
 
-        // Lockfile records the registry source + concrete version.
+        // Lockfile records the by-version source + concrete version.
         let lock = res.to_lockfile();
         let entry = lock.packages.get("@tatolab/escalate").unwrap();
         assert_eq!(entry.version.to_string(), "1.2.0");
@@ -1618,15 +1617,15 @@ dependencies:
     }
 
     /// Distribution loop: a dev path patch whose target is absent (the shape
-    /// `streamlib-engine`'s manifest ships — a bare registry range in
+    /// `streamlib-engine`'s manifest ships — a bare version range in
     /// `dependencies:` overridden by a monorepo-relative `patch: { path }`
     /// that doesn't exist for a standalone consumer) falls back to resolving
-    /// the declared version from the registry rather than failing with
+    /// the declared version from the package source rather than failing with
     /// `PathDependencyNotFound`. This is the regression lock for the fix:
     /// reverting the fallback makes the patched Path spec authoritative and
     /// the resolve panics on the missing path.
     #[test]
-    fn dev_path_patch_absent_falls_back_to_registry() {
+    fn dev_path_patch_absent_falls_back_to_package_source() {
         let tmp = tempfile::tempdir().unwrap();
         let mirror = tmp.path().join("mirror");
         write_escalate_slpkg(&mirror, "1.0.0");
@@ -1653,7 +1652,7 @@ patch:
         };
         let res = resolve_with(&root, &opts).unwrap();
         let escalate = res.packages.get("@tatolab/escalate").unwrap();
-        // Resolved from the registry (patch path was absent), highest-in-range.
+        // Resolved from the package source (patch path was absent), highest-in-range.
         assert!(matches!(escalate.source, ResolvedSource::ByVersion { .. }));
         assert_eq!(
             escalate
@@ -1668,14 +1667,14 @@ patch:
     }
 
     /// Dev loop: when the path patch's target DOES exist (the monorepo
-    /// checkout), the patch still wins over the registry — byte-identical to
+    /// checkout), the patch still wins over the package source — byte-identical to
     /// pre-fix behavior. A different local version proves the local path, not
-    /// the registry copy, was resolved.
+    /// the package source copy, was resolved.
     #[test]
-    fn dev_path_patch_present_wins_over_registry() {
+    fn dev_path_patch_present_wins_over_package_source() {
         let tmp = tempfile::tempdir().unwrap();
         let mirror = tmp.path().join("mirror");
-        // Registry holds 1.2.0; the local dev checkout is a different version
+        // The package source holds 1.2.0; the local dev checkout is a different version
         // so the source of truth is unambiguous.
         write_escalate_slpkg(&mirror, "1.2.0");
 
@@ -1706,7 +1705,7 @@ patch:
         };
         let res = resolve_with(&root, &opts).unwrap();
         let escalate = res.packages.get("@tatolab/escalate").unwrap();
-        // Local path patch won; the registry's 1.2.0 was NOT consulted.
+        // Local path patch won; the package source's 1.2.0 was NOT consulted.
         assert!(matches!(escalate.source, ResolvedSource::Path { .. }));
         assert_eq!(
             escalate
@@ -1721,7 +1720,7 @@ patch:
     }
 
     #[test]
-    fn registry_dependency_no_matching_version_errors() {
+    fn version_dependency_no_matching_version_errors() {
         use std::io::Write;
         let tmp = tempfile::tempdir().unwrap();
         let mirror = tmp.path().join("mirror");
@@ -1752,8 +1751,8 @@ dependencies:
         };
         let err = resolve_with(&root, &opts).unwrap_err();
         assert!(
-            matches!(err, ResolverError::RegistryNoMatchingVersion { .. }),
-            "expected RegistryNoMatchingVersion, got {err:?}"
+            matches!(err, ResolverError::PackageSourceNoMatchingVersion { .. }),
+            "expected PackageSourceNoMatchingVersion, got {err:?}"
         );
     }
 
@@ -2026,7 +2025,7 @@ schemas: {}
     //
     // The schema-dep mirror of the module loader's `streamlib link` redirect:
     // when a link is active, a dep present in the checkout's `packages/<name>`
-    // tree resolves from the checkout (dev loop, zero-registry); absent-from-
+    // tree resolves from the checkout (dev loop, no package source); absent-from-
     // checkout and no-link resolve by version from the store (distribution).
     // =====================================================================
 
@@ -2058,7 +2057,7 @@ schemas: {}
         );
     }
 
-    fn registry_opts(
+    fn package_source_opts(
         cache: &Path,
         mirror: &Path,
         link_checkout: Option<PathBuf>,
@@ -2074,15 +2073,15 @@ schemas: {}
 
     /// Dev loop, link active: a schema dep present in the linked checkout's
     /// `packages/<name>` resolves FROM the checkout, overriding the declared
-    /// version range — even though the registry holds a *different* version.
-    /// This is the zero-registry dev loop for schema deps. Mentally revert the
+    /// version range — even though the package source holds a *different* version.
+    /// This is the link dev loop for schema deps. Mentally revert the
     /// link-aware short-circuit in `resolve_one` and the resolve falls back to
-    /// the registry (1.2.0, `Registry` source), failing both assertions.
+    /// the package source (1.2.0, `ByVersion` source), failing both assertions.
     #[test]
     fn link_active_resolves_schema_dep_from_checkout() {
         let tmp = tempfile::tempdir().unwrap();
         let mirror = tmp.path().join("mirror");
-        // Registry holds a DIFFERENT version so the source-of-truth is unambiguous.
+        // The package source holds a DIFFERENT version so the source-of-truth is unambiguous.
         write_pkg_slpkg(&mirror, "core", "1.2.0");
         // The linked checkout carries @tatolab/core at 1.0.0.
         let checkout = tmp.path().join("checkout");
@@ -2091,7 +2090,7 @@ schemas: {}
         let root = tmp.path().join("project");
         write_streamlib_yaml(&root, "dependencies:\n  \"@tatolab/core\": \"^1.0.0\"\n");
 
-        let opts = registry_opts(&tmp.path().join("cache"), &mirror, Some(checkout.clone()));
+        let opts = package_source_opts(&tmp.path().join("cache"), &mirror, Some(checkout.clone()));
         let res = resolve_with(&root, &opts).unwrap();
         let core = res.packages.get("@tatolab/core").unwrap();
         assert!(
@@ -2102,7 +2101,7 @@ schemas: {}
         assert_eq!(
             core.manifest.package.as_ref().unwrap().version.to_string(),
             "1.0.0",
-            "must be the checkout's version, not the registry's 1.2.0"
+            "must be the checkout's version, not the package source's 1.2.0"
         );
         assert!(
             core.root_dir.starts_with(&checkout),
@@ -2127,7 +2126,7 @@ schemas: {}
         let root = tmp.path().join("project");
         write_streamlib_yaml(&root, "dependencies:\n  \"@tatolab/core\": \"^1.0.0\"\n");
 
-        let opts = registry_opts(&tmp.path().join("cache"), &mirror, None);
+        let opts = package_source_opts(&tmp.path().join("cache"), &mirror, None);
         let res = resolve_with(&root, &opts).unwrap();
         let core = res.packages.get("@tatolab/core").unwrap();
         assert!(
@@ -2138,7 +2137,7 @@ schemas: {}
         assert_eq!(
             core.manifest.package.as_ref().unwrap().version.to_string(),
             "1.2.0",
-            "must be the registry's version — the on-disk checkout is ignored with no link"
+            "must be the package source's version — the on-disk checkout is ignored with no link"
         );
     }
 
@@ -2158,7 +2157,7 @@ schemas: {}
         let root = tmp.path().join("project");
         write_streamlib_yaml(&root, "dependencies:\n  \"@tatolab/core\": \"^1.0.0\"\n");
 
-        let opts = registry_opts(&tmp.path().join("cache"), &mirror, Some(checkout));
+        let opts = package_source_opts(&tmp.path().join("cache"), &mirror, Some(checkout));
         let res = resolve_with(&root, &opts).unwrap();
         let core = res.packages.get("@tatolab/core").unwrap();
         assert!(
@@ -2188,7 +2187,7 @@ schemas: {}
         let root = tmp.path().join("project");
         write_streamlib_yaml(&root, "dependencies:\n  \"@tatolab/core\": \"^1.0.0\"\n");
 
-        let opts = registry_opts(&tmp.path().join("cache"), &mirror, Some(checkout.clone()));
+        let opts = package_source_opts(&tmp.path().join("cache"), &mirror, Some(checkout.clone()));
         let res = resolve_with(&root, &opts).unwrap();
         let core = res.packages.get("@tatolab/core").unwrap();
         assert!(
@@ -2213,7 +2212,7 @@ schemas: {}
     fn link_checkout_threads_through_transitive_deps() {
         let tmp = tempfile::tempdir().unwrap();
         let mirror = tmp.path().join("mirror");
-        // Registry holds different versions of both, so the source is unambiguous.
+        // The package source holds different versions of both, so the source is unambiguous.
         write_pkg_slpkg(&mirror, "core", "1.2.0");
         write_pkg_slpkg(&mirror, "h264", "0.9.0");
 
@@ -2235,7 +2234,7 @@ dependencies:
         let root = tmp.path().join("project");
         write_streamlib_yaml(&root, "dependencies:\n  \"@tatolab/h264\": \"^0.4.0\"\n");
 
-        let opts = registry_opts(&tmp.path().join("cache"), &mirror, Some(checkout.clone()));
+        let opts = package_source_opts(&tmp.path().join("cache"), &mirror, Some(checkout.clone()));
         let res = resolve_with(&root, &opts).unwrap();
 
         let h264 = res.packages.get("@tatolab/h264").unwrap();
@@ -2453,7 +2452,7 @@ dependencies:
     /// with NO env exported — the full direct-`cargo build` path the fix
     /// delivers (mirrors the codegen boundary `build.rs` drives). Mentally-revert
     /// marker discovery (`link_checkout_from_marker` returns `None`) and the dep
-    /// falls through to the by-version path with no registry configured, so the
+    /// falls through to the by-version path with no package source configured, so the
     /// resolve errors and `.expect` panics — the redirect is locked.
     #[test]
     #[serial_test::serial]
@@ -2468,22 +2467,22 @@ dependencies:
         let crate_dir = app_root.join("crates").join("app-lib");
         write_streamlib_yaml(&crate_dir, "dependencies:\n  \"@tatolab/core\": \"^1.0.0\"\n");
 
-        // Clear the registry env too so the mentally-revert is deterministic:
+        // Clear the package source env too so the mentally-revert is deterministic:
         // with marker discovery reverted, the bare `^1.0.0` dep would fall
-        // through to by-version resolution and — with no registry — fail
+        // through to by-version resolution and — with no package source — fail
         // `PackageSourceNotConfigured`, so `.expect` panics. Without this, a stray
         // `STREAMLIB_PACKAGE_SOURCE` in the shell could send the reverted path to a
         // live fetch instead. The positive assertion (Path from the checkout)
-        // holds regardless, since the link short-circuit precedes the registry.
+        // holds regardless, since the link short-circuit precedes the package-source resolution.
         // SAFETY: `#[serial]` + `with_link_checkout_env` serialize env mutation.
-        let prev_registry = std::env::var_os(crate::PACKAGE_SOURCE_ENV);
+        let prev_package_source = std::env::var_os(crate::PACKAGE_SOURCE_ENV);
         unsafe { std::env::remove_var(crate::PACKAGE_SOURCE_ENV) };
         let res = with_link_checkout_env(None, || {
             let opts = ResolverOptions::from_env_or_marker(&crate_dir);
             resolve_with(&crate_dir, &opts)
         });
         unsafe {
-            if let Some(v) = prev_registry {
+            if let Some(v) = prev_package_source {
                 std::env::set_var(crate::PACKAGE_SOURCE_ENV, v);
             }
         }

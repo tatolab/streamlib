@@ -394,13 +394,13 @@ pub(super) fn resolve_strategy_to_source(
             })?;
             let client = PackageSourceClient::new(&config);
             let available = client.list_versions(pkg_ref).map_err(|e| {
-                AddModuleError::RegistryResolutionFailed {
+                AddModuleError::PackageSourceResolutionFailed {
                     package: pkg_ref.clone(),
                     detail: format!("listing versions: {e}"),
                 }
             })?;
             let selected = streamlib_idents::select_version(pkg_ref, version_req, &available)
-                .map_err(|e| AddModuleError::RegistryResolutionFailed {
+                .map_err(|e| AddModuleError::PackageSourceResolutionFailed {
                     package: pkg_ref.clone(),
                     detail: e.to_string(),
                 })?;
@@ -432,7 +432,7 @@ pub(super) fn resolve_strategy_to_source(
                 slot
             } else {
                 let (bytes, url) = client.download_slpkg(pkg_ref, selected).map_err(|e| {
-                    AddModuleError::RegistryResolutionFailed {
+                    AddModuleError::PackageSourceResolutionFailed {
                         package: pkg_ref.clone(),
                         detail: format!("downloading {selected}: {e}"),
                     }
@@ -818,14 +818,14 @@ fn persist_package_source_slpkg(
 ) -> std::result::Result<PathBuf, AddModuleError> {
     let cache_dir = crate::core::streamlib_home::get_streamlib_data_dir()
         .join("resolver-cache")
-        .join("registry");
+        .join("package-source");
     let safe: String = url
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { '_' })
         .collect();
     let target = cache_dir.join(format!("{safe}.slpkg"));
 
-    let persist_err = |detail: String| AddModuleError::RegistryResolutionFailed {
+    let persist_err = |detail: String| AddModuleError::PackageSourceResolutionFailed {
         package: pkg_ref.clone(),
         detail,
     };
@@ -1629,12 +1629,12 @@ mod tests {
 
     /// CRUX (issue #1246): an active link redirects a `Strategy::ByVersion` load
     /// of a checkout-present package to the checkout, OVERRIDING the explicit
-    /// registry strategy (npm-link semantics — a linked name takes precedence).
+    /// by-version strategy (npm-link semantics — a linked name takes precedence).
     /// Mentally revert the link short-circuit at the top of
-    /// `resolve_strategy_to_source` and this resolves from the registry instead
+    /// `resolve_strategy_to_source` and this resolves by version from the package source instead
     /// (PackageSourceNotConfigured), failing the assertion.
     #[test]
-    fn active_link_overrides_registry_strategy_for_checkout_present_package() {
+    fn active_link_overrides_by_version_strategy_for_checkout_present_package() {
         let checkout = fake_checkout_with_package("foo", "foo");
         let consumer = tempfile::tempdir().unwrap();
         let link = active_link_for(consumer.path(), checkout.path());
@@ -1652,7 +1652,7 @@ mod tests {
     }
 
     /// A package ABSENT from the checkout falls through to its declared strategy
-    /// even under an active link — registry strategies stay available. Using
+    /// even under an active link — by-version strategies stay available. Using
     /// `Strategy::Path` to a nonexistent dir gives an env-independent signal
     /// that the strategy dispatch (not the link branch) ran.
     #[test]
@@ -1728,7 +1728,7 @@ mod tests {
     }
 
     /// A corrupt link marker is a loud typed error at discovery, never a silent
-    /// skip that would leave resolution in a mixed checkout/registry state.
+    /// skip that would leave resolution in a mixed checkout/package-source state.
     #[test]
     fn corrupt_link_marker_is_a_loud_error() {
         let consumer = tempfile::tempdir().unwrap();
@@ -1984,17 +1984,17 @@ mod tests {
     }
 
     // =====================================================================
-    // #1518 — registry reuse is gated on the materialized manifest version, so
+    // #1518 — package-source reuse is gated on the materialized manifest version, so
     // a slot left by a divergent version is re-downloaded, never loaded as the
     // wrong version.
     // =====================================================================
 
-    /// Registry reuse is refused when the materialized slot pins a different
+    /// Package-source reuse is refused when the materialized slot pins a different
     /// version than the one selected — the wrong-version slot is rebuilt.
     /// Mentally revert to a `slot.is_dir()`-only gate and this returns `true`,
     /// loading `0.1.0`'s bytes as if they were `0.2.0`.
     #[test]
-    fn registry_reuse_refuses_wrong_version_slot() {
+    fn package_source_reuse_refuses_wrong_version_slot() {
         let dir = tempfile::tempdir().unwrap();
         manifest(dir.path(), RUST_YAML); // pins 0.1.0
         let selected = streamlib_idents::SemVer::new(0, 2, 0);
@@ -2005,10 +2005,10 @@ mod tests {
         ));
     }
 
-    /// Registry reuse is taken when the materialized slot pins exactly the
+    /// Package-source reuse is taken when the materialized slot pins exactly the
     /// selected version under `IfStale`.
     #[test]
-    fn registry_reuse_accepts_matching_version_slot() {
+    fn package_source_reuse_accepts_matching_version_slot() {
         let dir = tempfile::tempdir().unwrap();
         manifest(dir.path(), RUST_YAML); // pins 0.1.0
         let selected = streamlib_idents::SemVer::new(0, 1, 0);
@@ -2022,7 +2022,7 @@ mod tests {
     /// A slot with no readable manifest is refused (re-downloaded), never
     /// reused as the selected version.
     #[test]
-    fn registry_reuse_refuses_slot_without_manifest() {
+    fn package_source_reuse_refuses_slot_without_manifest() {
         let dir = tempfile::tempdir().unwrap();
         let selected = streamlib_idents::SemVer::new(0, 1, 0);
         assert!(!package_source_slot_holds_selected_version(
@@ -2035,7 +2035,7 @@ mod tests {
     /// Only `IfStale` reuses a materialized slot; the other policies always
     /// fall through to the re-download/extract branch even on a version match.
     #[test]
-    fn registry_reuse_only_under_if_stale_policy() {
+    fn package_source_reuse_only_under_if_stale_policy() {
         let dir = tempfile::tempdir().unwrap();
         manifest(dir.path(), RUST_YAML); // pins 0.1.0
         let selected = streamlib_idents::SemVer::new(0, 1, 0);
@@ -2052,7 +2052,7 @@ mod tests {
     // override) builds IN-TREE beside its source: the injected staging
     // destination IS the source dir, so the orchestrator's in-place promote
     // lands only the regenerated outputs and never copies the tree into a
-    // co-located `streamlib_modules/@org/name` slot. Installed / registry /
+    // co-located `streamlib_modules/@org/name` slot. Installed / by-version /
     // `.slpkg` arms keep their co-located slot; a locked run (NeverBuild)
     // never gets here.
     // =====================================================================

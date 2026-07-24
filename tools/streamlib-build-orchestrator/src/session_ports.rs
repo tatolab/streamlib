@@ -869,14 +869,14 @@ mod tests {
     }
 
     /// Clear the resolution env so the load resolves the synthesized dep from
-    /// the checkout only (zero registry). Restores prior values on drop.
+    /// the checkout only (no package source). Restores prior values on drop.
     struct CleanResolutionEnv {
-        prev_registry: Option<String>,
+        prev_package_source: Option<String>,
         prev_link: Option<String>,
     }
     impl CleanResolutionEnv {
         fn new() -> Self {
-            let prev_registry = std::env::var("STREAMLIB_PACKAGE_SOURCE").ok();
+            let prev_package_source = std::env::var("STREAMLIB_PACKAGE_SOURCE").ok();
             let prev_link = std::env::var("STREAMLIB_LINK_CHECKOUT").ok();
             // SAFETY: `#[serial]` serializes the process-global env mutation.
             unsafe {
@@ -884,7 +884,7 @@ mod tests {
                 std::env::remove_var("STREAMLIB_LINK_CHECKOUT");
             }
             Self {
-                prev_registry,
+                prev_package_source,
                 prev_link,
             }
         }
@@ -892,7 +892,7 @@ mod tests {
     impl Drop for CleanResolutionEnv {
         fn drop(&mut self) {
             unsafe {
-                match self.prev_registry.take() {
+                match self.prev_package_source.take() {
                     Some(v) => std::env::set_var("STREAMLIB_PACKAGE_SOURCE", v),
                     None => std::env::remove_var("STREAMLIB_PACKAGE_SOURCE"),
                 }
@@ -931,7 +931,7 @@ mod tests {
         );
 
         // The engine resolver rebinds the bare `Named` port to `Specific`,
-        // resolving `@tatolab/core` from the checkout with zero registry.
+        // resolving `@tatolab/core` from the checkout with no package source.
         let checkout = tempfile::tempdir().unwrap();
         write_checkout_core(checkout.path());
         let config = ProjectConfig::load_with_link(staged.path(), Some(checkout.path()))
