@@ -161,7 +161,7 @@ any link marker exists up-tree (`ensure_no_active_link_for_pack` →
 `PackRefusedWhileLinked`), and the build orchestrator re-injects the checkout
 overrides when it materializes a linked package — the consumer's `[patch]`
 cargo config into the cdylib build and the uv-source override
-(`apply_link_override`) into the venv — so a cargo-patched-but-venv-from-registry
+(`apply_link_override`) into the venv — so a cargo-patched-but-venv-from-package-source
 mixed state can't occur.
 
 **What link deliberately does not solve.** Developing against one *specific
@@ -458,7 +458,7 @@ Stated honestly; verify against current code before relying on any.
   offline locked run is not separately gated, so "an installed polyglot app
   runs fully offline at process spawn" is, to the best of our current
   knowledge, unverified.
-- **Deploy lockfiles don't pin checkouts.** Link-mode registry-dep
+- **Deploy lockfiles don't pin checkouts.** Link-mode by-version-dep
   redirection lives at the toolchain layer. A lockfile produced from a linked
   or path-declared tree records `path:` sources (a working-tree path), not an
   immutable content-pinned slot — so an app lockfile captured over a link is
