@@ -16,7 +16,7 @@ Use `work-on-ticket` when the owner is present and wants to drive a specific iss
 Pull the issue body from GitHub and read it against current code — the body is the goal, not a spec, and its file paths / claims may have gone stale. Confirm what's still true before locking a plan.
 
 ### 2. Classify (same router as the loop)
-Classify the work exactly as `milestone-loop` step 3 does: **work shape** (`design-first` — required for engine-zone features / `implement` / `bug-reproduce-first` / `research`), **zones touched**, **rig needs**, **risk**. Pick the build lead by zone (abi → plugin-abi-expert, python/deno → polyglot-ipc-expert, packages/registry → package-registry-expert, vulkan/rhi/video → gpu-vulkan-expert, camera/v4l2 → linux-media-expert, else generic).
+Classify the work exactly as `milestone-loop` step 3 does: **work shape** (`design-first` — required for engine-zone features / `implement` / `bug-reproduce-first` / `research`), **zones touched**, **rig needs**, **risk**. Pick the build lead by zone (abi → plugin-abi-expert, python/deno → polyglot-ipc-expert, packages/package-source → package-source-expert, vulkan/rhi/video → gpu-vulkan-expert, camera/v4l2 → linux-media-expert, else generic).
 
 ### 3. Announce the plan-of-record
 State the fresh plan — what you'll change, the test shape, the scenario for live verification if any — and where it supersedes the issue body. This is the moment to catch a wrong assumption before work starts.

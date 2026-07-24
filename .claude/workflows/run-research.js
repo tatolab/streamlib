@@ -24,7 +24,7 @@ function expertsForZones(zoneList) {
   const experts = [];
   if (has('abi', 'plugin')) experts.push('plugin-abi-expert');
   if (has('python', 'deno', 'polyglot', 'ipc', 'escalate', 'iceoryx')) experts.push('polyglot-ipc-expert');
-  if (has('package', 'registry', 'schema', 'slpkg', 'module-loader')) experts.push('package-registry-expert');
+  if (has('package', 'package-source', 'registry', 'schema', 'slpkg', 'module-loader')) experts.push('package-source-expert');
   if (has('vulkan', 'rhi', 'video', 'gpu', 'codec', 'kernel', 'texture')) experts.push('gpu-vulkan-expert');
   if (has('camera', 'v4l2', 'media', 'audio', 'display', 'modifier')) experts.push('linux-media-expert');
   return experts;

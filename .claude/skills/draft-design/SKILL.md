@@ -13,7 +13,7 @@ Engine-zone features (RHI, IPC wire, processor model, public ABI, escalate ops, 
 Read the issue (or the intent, if there's no issue yet — see step 4). State in one line what shape is being decided and which zones it touches. That zone read picks the experts.
 
 ### 2. Recon current code — in parallel, read-only
-Spawn the domain experts whose zones the design touches (gpu-vulkan-expert, linux-media-expert, plugin-abi-expert, polyglot-ipc-expert, package-registry-expert) **in parallel**, read-only, each on a specific recon question: what core system already covers this concern, what would have to change, what the contract invariants and known failure modes are. The experts re-derive from the tree and cite `file:line` — the brief stands on evidence, not memory. This is the `draft-design.js` Recon phase when run under the loop; invoked directly, spawn the experts yourself.
+Spawn the domain experts whose zones the design touches (gpu-vulkan-expert, linux-media-expert, plugin-abi-expert, polyglot-ipc-expert, package-source-expert) **in parallel**, read-only, each on a specific recon question: what core system already covers this concern, what would have to change, what the contract invariants and known failure modes are. The experts re-derive from the tree and cite `file:line` — the brief stands on evidence, not memory. This is the `draft-design.js` Recon phase when run under the loop; invoked directly, spawn the experts yourself.
 
 The engine-model rule is the spine of the recon: **prove no existing core system already covers the concern before proposing a new abstraction.** A brief that adds a parallel shape where the RHI / GpuContext / pubsub / processor model already solves it is the default-wrong answer.
 
