@@ -44,7 +44,8 @@ cargo run -- --output-dir=/tmp/skia-canvas-py
 
 1. **SDK** — `streamlib link --engine <checkout>` points the Rust and Python
    streamlib SDK surfaces at the in-repo checkout (crates.io patch + uv source).
-   There is no hosted registry; the linked checkout is the SDK source.
+   The linked checkout is the SDK package source; there is no central
+   package registry.
 2. **Packages** — `streamlib link` symlinks `@tatolab/debug-utilities` and this
    example's `./python` package into `./streamlib_modules/`.
 

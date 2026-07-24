@@ -12,8 +12,8 @@ compile-time typed-struct API. The real pipeline lives in git history;
 
 App code never loads modules. The whole pipeline is `add_processor` + `connect`
 + `start`, referencing each processor with the **version-free**
-`processor_type_ref!("org", "package", "Type")` macro — no `add_module`, no
-registry, and no version anywhere in `src/main.rs`. Each referenced processor's
+`processor_type_ref!("org", "package", "Type")` macro — no `add_module` and
+no version anywhere in `src/main.rs`. Each referenced processor's
 package lives in this app's **`streamlib_modules/`** folder (the streamlib
 equivalent of `node_modules/`), populated by `./setup.sh`, and the runtime
 lazily loads it on first reference.
@@ -27,8 +27,8 @@ cargo run         # prints the deferral message and exits
 
 `./setup.sh` runs `streamlib link --engine <checkout>` so the app's
 `streamlib` dependency resolves against the in-repo SDK (a transient
-`[patch.crates-io]`; there is no hosted registry — the linked checkout is the
-SDK source). The `streamlib`
+`[patch.crates-io]`; the linked checkout is the SDK package source — there is
+no central package registry). The `streamlib`
 CLI must be on your `PATH` (build it with `cargo build -p streamlib-cli` from
 the checkout); `setup.sh` falls back to the checkout's built binary otherwise.
 

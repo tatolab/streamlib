@@ -71,8 +71,8 @@ cargo run
 
 1. **SDK** — `streamlib link --engine <checkout>` points this app's
    `streamlib` dependency at the in-repo SDK (a transient
-   `[patch.crates-io]`). There is no hosted registry; the linked checkout is
-   the SDK source.
+   `[patch.crates-io]`). The linked checkout is the SDK package source; there
+   is no central package registry.
 2. **Packages** — `streamlib link` symlinks `@tatolab/camera` and
    `@tatolab/display` from the in-repo `packages/` into `./streamlib_modules/`.
    Edits in those packages are live on the next run. The inline `HelloForward`

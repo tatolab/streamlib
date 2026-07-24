@@ -10,7 +10,8 @@ build = "build.rs"
 
 # The `streamlib*` SDK crates resolve by version. `./setup.sh` runs
 # `streamlib link --engine <checkout>` to point them at the in-repo SDK
-# checkout (no hosted registry; the linked checkout is the source).
+# checkout (the linked checkout is the package source; there is no central
+# package registry).
 [dependencies]
 streamlib = { version = "0.7.45" }
 streamlib-adapter-abi = { version = "0.7.45" }

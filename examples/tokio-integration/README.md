@@ -17,8 +17,8 @@ cargo run
 
 `./setup.sh` runs `streamlib link --engine <checkout>` so the app's
 `streamlib` dependency resolves against the in-repo SDK (a transient
-`[patch.crates-io]`; there is no hosted registry — the linked checkout is the
-SDK source). Because this
+`[patch.crates-io]`; the linked checkout is the SDK package source — there is
+no central package registry). Because this
 demo loads no processor packages, that is the only setup step. The `streamlib`
 CLI must be on your `PATH` (build it with `cargo build -p streamlib-cli` from
 the checkout); `setup.sh` falls back to the checkout's built binary otherwise.

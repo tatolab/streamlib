@@ -16,7 +16,7 @@ let camera = runtime.add_processor(ProcessorSpec::new(
 ```
 
 - `processor_type_ref!("org", "package", "Type")` is a **version-free**
-  reference. There is no `add_module`, no registry, and no version anywhere in
+  reference. There is no `add_module` and no version anywhere in
   `src/main.rs`.
 - Each referenced processor's package lives in this app's **`streamlib_modules/`**
   folder (the streamlib equivalent of `node_modules/`). On the first reference,
@@ -40,8 +40,8 @@ cargo run
    `streamlib` dependency (and the `streamlib-jtd-codegen` build-dep) at
    the in-repo SDK (a transient `[patch.crates-io]`), and publishes
    `STREAMLIB_LINK_CHECKOUT` to this dir's cargo `[env]` so `build.rs` codegen
-   resolves schema deps from the checkout. There is no hosted registry; the
-   linked checkout is the SDK source.
+   resolves schema deps from the checkout. The linked checkout is the SDK
+   package source; there is no central package registry.
 2. **Packages** — `streamlib link` symlinks `@tatolab/audio`, `@tatolab/camera`,
    `@tatolab/h264`, `@tatolab/opus`, and `@tatolab/webrtc` from the in-repo
    `packages/` into `./streamlib_modules/`. Edits in those packages are live on
