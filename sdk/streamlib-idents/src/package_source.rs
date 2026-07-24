@@ -27,7 +27,7 @@
 //! ways.
 //!
 //! The `base_url` points at the **tree root** (the directory holding `slpkg/`,
-//! `cargo/`, `pypi/`, `npm/`, `catalog/`) — the single package source location a
+//! `pypi/`, `catalog/`) — the single package source location a
 //! consumer configures. `file://<root>` is the hermetic local-mirror / test /
 //! offline transport; `http(s)://…` is a static HTTP mount. Publishing is
 //! `file://`-only (an emit writes the tree; a static HTTP mount is read-only).
@@ -110,7 +110,7 @@ impl PackageSource {
 
     /// The on-disk tree root when [`base_url`](Self::base_url) is a `file://`
     /// URL, else `None` (an `http(s)://` mount has no local root). Consumers
-    /// locate the per-ecosystem subtrees (`cargo/`, `npm/`, `pypi/`) under it.
+    /// locate the per-ecosystem subtree (`pypi/`) and the `.slpkg` store under it.
     pub fn local_tree_root(&self) -> Option<PathBuf> {
         self.base_url.strip_prefix("file://").map(PathBuf::from)
     }
@@ -120,23 +120,6 @@ impl PackageSource {
     /// both work: uv consumes a PEP-503 `simple/` tree over either transport.
     pub fn pypi_simple_index_url(&self) -> String {
         format!("{}/pypi/simple", self.base_url)
-    }
-
-    /// The npm registry URL derived from the single package source location — the
-    /// value an `.npmrc` `@tatolab:registry=` scope points at. npm/Deno have no
-    /// `file://` registry story, so a `file://` tree must first be served over a
-    /// static HTTP mount before this is reachable; the string is derived
-    /// uniformly here regardless.
-    pub fn npm_registry_url(&self) -> String {
-        format!("{}/npm/", self.base_url)
-    }
-
-    /// The cargo **sparse** index URL derived from the single package source location
-    /// (`sparse+<base>/cargo/`). Valid as a `[source]`-replacement target only
-    /// for an `http(s)://` mount — cargo's sparse protocol is HTTP-only, so a
-    /// `file://` tree is instead consumed via a `local-registry` reshape.
-    pub fn cargo_sparse_index_url(&self) -> String {
-        format!("sparse+{}/cargo/", self.base_url)
     }
 }
 
@@ -715,8 +698,8 @@ mod tests {
 
     #[test]
     fn ecosystem_urls_derive_from_the_single_base() {
-        // Every channel derives from the one base URL — the "single package
-        // source location, toolchain-derived" contract.
+        // The pypi index + local tree root derive from the one base URL — the
+        // "single package source location, toolchain-derived" contract.
         let http = PackageSource {
             base_url: "https://registry.tatolab.com".into(),
         };
@@ -724,18 +707,12 @@ mod tests {
             http.pypi_simple_index_url(),
             "https://registry.tatolab.com/pypi/simple"
         );
-        assert_eq!(http.npm_registry_url(), "https://registry.tatolab.com/npm/");
-        assert_eq!(
-            http.cargo_sparse_index_url(),
-            "sparse+https://registry.tatolab.com/cargo/"
-        );
         assert!(http.local_tree_root().is_none());
 
         let file = PackageSource {
             base_url: "file:///srv/tree".into(),
         };
         assert_eq!(file.pypi_simple_index_url(), "file:///srv/tree/pypi/simple");
-        assert_eq!(file.npm_registry_url(), "file:///srv/tree/npm/");
         assert_eq!(file.local_tree_root(), Some(PathBuf::from("/srv/tree")));
     }
 
@@ -966,13 +943,7 @@ mod tests {
                 .is_none()
         );
 
-        let mut manifest = ReleaseManifest::new(
-            "0.5.1",
-            vec![
-                ReleaseManifestMember::new("streamlib-plugin-sdk", "0.5.1"),
-                ReleaseManifestMember::new("vulkan-jpeg", "0.5.1"),
-            ],
-        );
+        let mut manifest = ReleaseManifest::new("0.5.1");
         manifest.python = Some("0.5.1".to_string());
         manifest.packages = vec![ReleaseManifestMember::new("@tatolab/jpeg", "1.0.7")];
 

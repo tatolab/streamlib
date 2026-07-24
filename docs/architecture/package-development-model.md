@@ -288,14 +288,13 @@ its presence is the release's completion marker (`upload_release_manifest`
 is the atomicity flip the publisher runs after every crate / SDK / package
 has landed).
 
-**Consumers detect a partial release.** `assert_release_complete`
-([`tools/streamlib-build-orchestrator/src/release_check.rs`](../../tools/streamlib-build-orchestrator/src/release_check.rs))
-picks the newest release manifest satisfying each pin's range and runs
-`crates_missing_from_release`; any gap raises `IncompleteRelease { package,
-release_version, missing, hint }` — an actionable, up-front error instead of
-a cryptic "failed to select a version for `streamlib-plugin-sdk`" deep in
-cargo / `streamlib-macros` version unification (the symptom this replaces).
-The check rides *inside* materialize, so install fails before cargo runs.
+**Consumers detect a partial release.** The manifest's `packages` list is the
+completion signal: a consumer that finds `manifest.json` knows every `.slpkg`
+it lists is published. A member the manifest still claims but whose `.slpkg`
+was never written (or was truncated) fails loudly at download rather than
+half-resolving — there is no separate crate-closure completeness pre-check
+(a package carries no cargo-registry pins; its engine / SDK crate deps resolve
+to the local checkout via `streamlib link`).
 
 **One backend, one read shape.** Package distribution is a plain static file
 tree — the `.slpkg` generic store + catalog — behind one tokenless read shape,
@@ -483,7 +482,7 @@ Stated honestly; verify against current code before relying on any.
   (`rewrite_cargo_package_version`), `xtask/src/check_package_version_drift.rs`.
 - **Atomic release**: `tools/streamlib-pack/src/lib.rs`
   (`compute_release_closure`), `sdk/streamlib-idents/src/release.rs`,
-  `tools/streamlib-build-orchestrator/src/release_check.rs`.
+  `tools/streamlib-pack/src/static_package_source.rs` (`emit_static_package_source`).
 - **Install / run**: `runtime/streamlib-engine/src/core/runtime/install.rs`,
   `runtime/streamlib-engine/src/core/runtime/module_loader/locked.rs`,
   `sdk/streamlib-idents/src/lockfile.rs`,

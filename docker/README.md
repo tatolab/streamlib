@@ -53,22 +53,17 @@ static package-source mount the entrypoint serves for cargo/npm is localhost-int
   a declarative virtual null sink ([`docker/pipewire/10-virtual.conf`](pipewire/10-virtual.conf))
   comes up in the entrypoint. No `/dev/snd`.
 - **Package source — image-local static tree, no daemon.** Stage 1 runs
-  `cargo xtask static-package-source emit --cargo-closure` to write a plain on-disk
-  tree at `/opt/streamlib/package-source`: a cargo sparse closure (the vendored
-  `tatolab-vulkanalia*` crates included), a pypi-simple tree, an npm packument
-  set, the `.slpkg` generic store,
-  the catalog, and the release manifest (written last, the atomicity flip). The
-  entrypoint serves it for cargo + npm on `127.0.0.1:8799` (sparse + npm are
-  HTTP-only by spec) via `python3 -m http.server`; pypi + `.slpkg` read the same
-  tree over `file://` with no server. A `[source]` replacement in
-  `$CARGO_HOME/config.toml` redirects the canonical `registry.tatolab.com` index
-  to that mount so `runtime.add_module` of a package — and any in-tree lib it
-  cargo-depends on — resolves in-container while keeping the canonical id in
-  every `Cargo.lock`.
+  `cargo xtask static-package-source emit` to write a plain on-disk tree at
+  `/opt/streamlib/package-source`: the `.slpkg` generic store, the catalog, and
+  the release manifest (written last, the atomicity flip). The entrypoint serves
+  the tree for the Deno SDK npm face on `127.0.0.1:8799` (npm is HTTP-only by
+  spec) via `python3 -m http.server`; pypi + `.slpkg` read the same tree over
+  `file://` with no server. There is no cargo registry — a package's engine /
+  SDK crate deps resolve to the local checkout via `streamlib link`
+  (`[patch.crates-io]` path overrides).
 - **Boot — builds the core module on first start.** The runtime compiles
   `api-server` from source on first boot against the image-local tree
-  (build-capable image, warm cargo cache → tens of seconds); a build-time
-  resolution preflight fails the image build fast if a dependency can't resolve.
+  (build-capable image, warm cargo cache → tens of seconds).
   The toolchain stays for runtime module builds.
 
 ## Build args
@@ -77,9 +72,6 @@ static package-source mount the entrypoint serves for cargo/npm is localhost-int
 |---|---|---|
 | `CUDA_BASE` | `nvidia/cuda:13.2.1-runtime-ubuntu24.04` | final base image |
 | `RUST_CHANNEL` | `stable` | rustup toolchain for the builder |
-| `SKIP_PYTHON_SDK` | `0` | skip the pypi (python SDK) tree during iteration (`--no-pypi`) |
-| `SKIP_DENO_SDK` | `0` | skip the npm (deno SDK) tree during iteration (`--no-npm`) |
-| `SKIP_PACKAGES` | `0` | skip the `.slpkg` store + release manifest during iteration (`--no-slpkg`) |
 
 ## Run config
 

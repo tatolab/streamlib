@@ -4,9 +4,10 @@
 # Brings up the in-container support processes, then exec's the runtime as PID 1
 # so container-stop signals reach it directly:
 #   1. A dumb static HTTP mount (`python3 -m http.server`) over the image-local
-#      package-source tree, so runtime `add_module` module builds resolve cargo
-#      (sparse is HTTP-only by spec) and deno npm deps offline. pypi + `.slpkg`
-#      read the same tree over `file://` and need no server. No daemon.
+#      package-source tree, so runtime `add_module` module builds resolve deno
+#      npm deps offline (npm is HTTP-only by spec). pypi + `.slpkg` read the same
+#      tree over `file://` and need no server. No daemon, no cargo registry —
+#      package crate deps resolve via `streamlib link` [patch.crates-io].
 #   2. The userspace audio stack (dbus session bus -> PipeWire -> WirePlumber)
 #      with a declarative virtual null sink — no /dev/snd, no display server.
 #   3. `exec streamlib-runtime --host 0.0.0.0` (overridable via the image CMD).
@@ -30,17 +31,17 @@ warn() { printf '[entrypoint] WARN: %s\n' "$*" >&2; }
 mkdir -p "$XDG_RUNTIME_DIR" && chmod 700 "$XDG_RUNTIME_DIR"
 
 # ---------------------------------------------------------------------------
-# 1. Static package-source HTTP mount (cargo + npm — sparse + npm are HTTP-only). The
-#    cargo [source] replacement in $CARGO_HOME/config.toml and /root/.npmrc both
-#    point at http://127.0.0.1:$PACKAGE_SOURCE_PORT; pypi + `.slpkg` resolve the same
-#    tree over `file://` with no server. Dumb static file server, no daemon.
+# 1. Static package-source HTTP mount (npm — npm is HTTP-only by spec). The Deno
+#    SDK npm face in /root/.npmrc points at http://127.0.0.1:$PACKAGE_SOURCE_PORT;
+#    pypi + `.slpkg` resolve the same tree over `file://` with no server. Dumb
+#    static file server, no daemon, no cargo registry.
 # ---------------------------------------------------------------------------
 if [ -d "$PACKAGE_SOURCE_DIR" ] && command -v python3 >/dev/null 2>&1; then
   log "serving image-local static package source ($PACKAGE_SOURCE_DIR) on 127.0.0.1:$PACKAGE_SOURCE_PORT"
   python3 -m http.server "$PACKAGE_SOURCE_PORT" --bind 127.0.0.1 --directory "$PACKAGE_SOURCE_DIR" \
     >/var/log/streamlib-package-source-httpd.log 2>&1 &
   for i in $(seq 1 30); do
-    curl -fsS "http://127.0.0.1:${PACKAGE_SOURCE_PORT}/cargo/config.json" >/dev/null 2>&1 && { log "package-source mount ready"; break; }
+    curl -fsS "http://127.0.0.1:${PACKAGE_SOURCE_PORT}/" >/dev/null 2>&1 && { log "package-source mount ready"; break; }
     [ "$i" = 30 ] && warn "package-source mount not ready in 30s (core boot still works; add_module of new packages may not)"
     sleep 1
   done

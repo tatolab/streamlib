@@ -40,9 +40,7 @@
 //! [`BuildPolicy`]: streamlib_engine::core::runtime::BuildPolicy
 
 mod deno_codegen;
-mod native_host;
 mod python_venv;
-mod release_check;
 mod session_ports;
 
 #[cfg(test)]
@@ -215,36 +213,11 @@ impl PolyglotBuildOrchestrator {
 
         let has_rust = build::has_rust_runtime_processors(&config);
 
-        // Ensure the subprocess native FFI host(s) this package needs are built
-        // + cached in the streamlib home, independent of the package slot. A
-        // reused venv/slot can still be missing the host — they're independent
-        // handoffs, the gap that left a package-source consumer with a dead relative
-        // path — so this runs before the staleness skip. It is itself
-        // IfStale-cached per host triple + version (a cheap existence check
-        // once present) and a no-op when the `STREAMLIB_*_NATIVE_LIB` env
-        // override points at a prebuilt host.
-        let host_version = env!("CARGO_PKG_VERSION");
-        let ensure_host = |rt: native_host::NativeRuntime| {
-            // Best-effort pre-build: if it can't (no package source configured,
-            // network down), don't fail materialize — the spawn-time resolver
-            // is the real gate and also covers the env override and the
-            // monorepo `target/` (in-tree dev / tests). Only a pipeline that
-            // actually spawns the runtime needs the host, and it gets an
-            // actionable error there if it's truly absent.
-            if let Err(e) = native_host::ensure_native_host(rt, host_version, self.profile) {
-                tracing::warn!(
-                    error = %e,
-                    "could not pre-build the subprocess native host; it must be resolvable \
-                     at spawn time (STREAMLIB_*_NATIVE_LIB, the home cache, or the monorepo target/)"
-                );
-            }
-        };
-        if build::has_python_runtime_processors(&config) {
-            ensure_host(native_host::NativeRuntime::Python);
-        }
-        if build::has_typescript_runtime_processors(&config) {
-            ensure_host(native_host::NativeRuntime::Deno);
-        }
+        // The subprocess native FFI host (`streamlib-python-native` /
+        // `streamlib-deno-native`) is resolved lazily at spawn time by the
+        // engine's `native_lib_resolver`: the `STREAMLIB_*_NATIVE_LIB` env
+        // override, then the monorepo `target/{debug,release}` (in-tree dev /
+        // link / tests). The orchestrator does not pre-build it.
 
         // Source-input fingerprint — drives IfStale reuse and is recorded in
         // the sidecar regardless.
@@ -308,19 +281,6 @@ impl PolyglotBuildOrchestrator {
                     rebuilt: false,
                 });
             }
-        }
-
-        // ---- Consumer-side release-completeness pre-check ----
-        // A Rust package resolves its tatolab-registry deps via cargo below. If
-        // the configured package source holds a partial/mid-publish release of the
-        // pinned version, fail fast here naming the missing artifacts instead
-        // of surfacing it as a cryptic cargo `failed to select a version …`
-        // deep in the build. No-op for dev/path builds (no package source) and
-        // pre-atomic-release registries (no manifest) — see `release_check`.
-        if has_rust {
-            let pins = build::read_tatolab_registry_pins(pkg_dir)
-                .map_err(|e| other(&pkg_label, format!("reading tatolab-registry pins: {e}")))?;
-            release_check::assert_release_complete(&pkg_label, &pins)?;
         }
 
         // ---- Assemble + stage to the package cache ----
@@ -2213,172 +2173,4 @@ mod tests {
         }
     }
 
-    /// Point the package source env at a `file://` scratch dir for the duration of
-    /// `f`, restoring prior values after, and shielding the native-host env
-    /// override. SAFETY: callers are `#[serial]` — no other thread races the
-    /// process-global env.
-    fn with_scratch_package_source<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
-        let prev_url = std::env::var("STREAMLIB_PACKAGE_SOURCE").ok();
-        let prev_py_lib = std::env::var("STREAMLIB_PYTHON_NATIVE_LIB").ok();
-        unsafe {
-            std::env::set_var(
-                "STREAMLIB_PACKAGE_SOURCE",
-                format!("file://{}", dir.display()),
-            );
-            std::env::remove_var("STREAMLIB_PYTHON_NATIVE_LIB");
-        }
-        let out = f();
-        unsafe {
-            match prev_url {
-                Some(v) => std::env::set_var("STREAMLIB_PACKAGE_SOURCE", v),
-                None => std::env::remove_var("STREAMLIB_PACKAGE_SOURCE"),
-            }
-            if let Some(v) = prev_py_lib {
-                std::env::set_var("STREAMLIB_PYTHON_NATIVE_LIB", v);
-            }
-        }
-        out
-    }
-
-    /// Publish a PARTIAL release manifest (macros only — plugin-sdk absent)
-    /// at `version` into the scratch `file://` package source dir.
-    fn publish_partial_manifest(dir: &Path, version: &str) {
-        let cfg = streamlib_idents::PackageSource {
-            base_url: format!("file://{}", dir.display()),
-        };
-        let manifest = streamlib_idents::ReleaseManifest::new(
-            version,
-            vec![streamlib_idents::ReleaseManifestMember::new(
-                "streamlib-macros",
-                version,
-            )],
-        );
-        streamlib_idents::PackageSourceClient::new(&cfg)
-            .upload_release_manifest("tatolab", &manifest)
-            .unwrap();
-    }
-
-    /// Rust-runtime source package whose Cargo.toml pins streamlib-plugin-sdk
-    /// from the tatolab registry — the shape every published Rust package has.
-    fn rust_source_pkg(dir: &Path) {
-        std::fs::write(
-            dir.join("streamlib.yaml"),
-            r#"package:
-  org: tatolab
-  name: rust-source
-  version: 0.1.0
-processors:
-  - name: RustProc
-    description: "rust processor fixture (never built - pre-check fires first)"
-    runtime: rust
-    execution: manual
-    inputs:
-      - name: in0
-        schema: any
-    outputs:
-      - name: out0
-        schema: any
-"#,
-        )
-        .unwrap();
-        std::fs::write(
-            dir.join("Cargo.toml"),
-            r#"[package]
-name = "rust-source"
-version = "0.1.0"
-edition = "2024"
-
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-streamlib-plugin-sdk = {version = "0.5.0", registry = "tatolab"}
-"#,
-        )
-        .unwrap();
-    }
-
-    #[test]
-    #[serial]
-    fn materialize_fails_fast_on_incomplete_release_before_cargo() {
-        // WIRING lock for the package path: `materialize` on a Rust package
-        // whose package-source release is partial must surface IncompleteRelease
-        // BEFORE any cargo build runs. Mentally delete the
-        // `assert_release_complete` call in `materialize_package_dir` and
-        // this test fails (materialize would proceed into assemble/cargo and
-        // die on the unresolvable fixture crate instead).
-        let _home = HomeGuard::new();
-        let src = tempfile::tempdir().unwrap();
-        rust_source_pkg(src.path());
-        let package_source = tempfile::tempdir().unwrap();
-        // Partial release ABOVE the pin's floor — production keying.
-        publish_partial_manifest(package_source.path(), "0.5.1");
-
-        let orch = PolyglotBuildOrchestrator::default();
-        let req = BuildRequest {
-            package: pkg_ref("tatolab", "rust-source"),
-            source: BuildSource::PackageDir(src.path().to_path_buf()),
-            source_provenance: PackageSourceProvenance::ImmutableManagedExtract,
-            policy: BuildPolicy::IfStale,
-            host_triple: build::host_target_triple().to_string(),
-            staging_destination_slot_dir: detached_slot("rust-source-0.1.0"),
-        };
-        let err = with_scratch_package_source(package_source.path(), || {
-            orch.materialize(&req, &NoopSink)
-                .expect_err("partial release must fail the materialize pre-check")
-        });
-        match err {
-            BuildError::IncompleteRelease {
-                missing,
-                release_version,
-                ..
-            } => {
-                assert_eq!(release_version, "0.5.1");
-                assert!(
-                    missing.contains("streamlib-plugin-sdk"),
-                    "must name the missing crate; got: {missing}"
-                );
-            }
-            other => panic!("expected IncompleteRelease from materialize, got {other:?}"),
-        }
-    }
-
-    #[test]
-    #[serial]
-    fn native_host_build_fails_fast_on_incomplete_release() {
-        // WIRING lock for the native-host path: `ensure_native_host` against
-        // a package source whose release manifest omits the host crate must surface
-        // IncompleteRelease before attempting the crate download. Mentally
-        // delete the `assert_release_complete` call in `ensure_native_host`
-        // and this fails differently (a download error against the file://
-        // URL) — the match arm below pins the typed error.
-        let _home = HomeGuard::new();
-        let package_source = tempfile::tempdir().unwrap();
-        // Partial release at the exact requested host version, missing
-        // streamlib-python-native.
-        publish_partial_manifest(package_source.path(), "0.5.1");
-
-        let err = with_scratch_package_source(package_source.path(), || {
-            native_host::ensure_native_host(
-                native_host::NativeRuntime::Python,
-                "0.5.1",
-                build::CargoProfile::Dev,
-            )
-            .expect_err("partial release must fail the native-host pre-check")
-        });
-        match err {
-            BuildError::IncompleteRelease {
-                missing,
-                release_version,
-                ..
-            } => {
-                assert_eq!(release_version, "0.5.1");
-                assert!(
-                    missing.contains("streamlib-python-native"),
-                    "must name the missing host crate; got: {missing}"
-                );
-            }
-            other => panic!("expected IncompleteRelease from ensure_native_host, got {other:?}"),
-        }
-    }
 }
