@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.8.0](https://github.com/tatolab/streamlib/compare/v0.7.45...v0.8.0) (2026-07-24)
+
+
+### ⚠ BREAKING CHANGES
+
+* **build:** remove the dead tatolab cargo sparse-registry + repair the docker build ([#1583](https://github.com/tatolab/streamlib/issues/1583))
+* **infra:** rename static-registry xtask command + docker/CI vars to package-source ([#1580](https://github.com/tatolab/streamlib/issues/1580))
+* **idents:** rename package "registry" surface to "package source" (Strategy::ByVersion) ([#1578](https://github.com/tatolab/streamlib/issues/1578))
+
+### Bug Fixes
+
+* **cli:** quiet the happy-path 'no registry configured' WARN during streamlib link/add ([#1577](https://github.com/tatolab/streamlib/issues/1577)) ([95b29b8](https://github.com/tatolab/streamlib/commit/95b29b82c16ce258cbcf08c79df35737f4eff919)), closes [#1343](https://github.com/tatolab/streamlib/issues/1343)
+* **screen-capture:** drop stale processors: from streamlib.yaml ([#1584](https://github.com/tatolab/streamlib/issues/1584)) ([35bd0de](https://github.com/tatolab/streamlib/commit/35bd0dede84d5dfdf45d8d0801c65d28e8bfe76a))
+
+
+### Code Refactoring
+
+* **build:** remove the dead tatolab cargo sparse-registry + repair the docker build ([#1583](https://github.com/tatolab/streamlib/issues/1583)) ([216e0bc](https://github.com/tatolab/streamlib/commit/216e0bce31736ab7a14bdb2a38ab4f95c3799465)), closes [#1570](https://github.com/tatolab/streamlib/issues/1570)
+* **idents:** rename package "registry" surface to "package source" (Strategy::ByVersion) ([#1578](https://github.com/tatolab/streamlib/issues/1578)) ([ab5ecc4](https://github.com/tatolab/streamlib/commit/ab5ecc445b332e2ec5eb7fd6df1c14167da83e45))
+* **infra:** rename static-registry xtask command + docker/CI vars to package-source ([#1580](https://github.com/tatolab/streamlib/issues/1580)) ([f016303](https://github.com/tatolab/streamlib/commit/f0163030a0f4ed1a90c018da17702205edfe88e6))
+
 ## [0.7.45](https://github.com/tatolab/streamlib/compare/v0.7.44...v0.7.45) (2026-07-23)
 
 
