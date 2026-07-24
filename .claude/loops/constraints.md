@@ -8,13 +8,13 @@ Read this at the start of every loop run. These are hard rules, not guidance.
 - One in-flight ticket per physical rig resource (one GPU, one `/dev/videoN` at a time). The loop
   serializes rig work; it never launches two attempts that would contend for the same device.
 
-- **Existing branches are touched via `fix-ticket.js`, not the main context.** Verify-finding
-  fixes, owner-directed refinements, and conflicting-PR rebases run through
-  `.claude/workflows/fix-ticket.js` (in the existing branch's worktree), never a hand-rolled
-  `fix-<issue>.js` script and never a main-context edit. This is a **strict ban with no
-  trivial-fix exemption** (N5, decided): the worktree already exists and the fix workflow takes
-  its path, so routing a two-line change costs almost nothing, and every carve-out for "trivial"
-  edits has to be adjudicated by the very run that wants the exemption.
+- **Existing branches are touched by the workflow, not the main context.** Verify-finding fixes
+  run as the fix round inside `.claude/workflows/worktree-work.js`; a conflicting-PR rebase runs
+  the same workflow with `mode: 'rebase'`. Never a hand-rolled `fix-<issue>.js` script and never a
+  main-context edit. This is a **strict ban with no trivial-fix exemption** (N5, decided): the
+  worktree already exists and the workflow takes its path, so routing a two-line change costs
+  almost nothing, and every carve-out for "trivial" edits has to be adjudicated by the very run
+  that wants the exemption.
 
 ## Attempts and escalation
 - An **attempt** is a fresh implement launch — a new worktree, starting from Rederive. The attempt
@@ -22,9 +22,9 @@ Read this at the start of every loop run. These are hard rules, not guidance.
   was tried, what failed) as a question on the issue and move the ticket to "Waiting on the owner."
   Do not start a fourth attempt.
 - **Verify-finding fix rounds are bounded separately.** Applying verify findings to an existing
-  branch (via `fix-ticket.js mode: 'fix'`) is not a fresh attempt; bound it at **≤ 2 fix rounds per
-  verify verdict**, then escalate. Owner-directed corrections and CI-red fixes never count toward
-  either cap.
+  branch is not a fresh attempt; it is bounded at **≤ 2 fix rounds per verify verdict**, then
+  escalate. That bound is enforced by the `while` loop in `worktree-work.js`, not by recall.
+  Owner-directed corrections and CI-red fixes never count toward either cap.
 
 ## Turn boundaries
 - A turn may only end at a **coherent boundary**: a state write plus its run-log line, or work

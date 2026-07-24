@@ -46,13 +46,27 @@ match() { printf '%s' "$norm" | grep -Eq "$1"; }
 
 # gh pr merge — gated on an owner-controlled authorization toggle, default OFF.
 # The guardrail stays safe-by-default: the agent may merge only when the owner has
-# opted in via the gitignored authorization file (single source of truth at the
-# project root, read regardless of worktree). Owner toggles it from any terminal:
+# opted in via the gitignored authorization file. Owner toggles it from any terminal:
 #   echo on  > .claude/merge-authorization.local   # grant merge to the agent
 #   echo off > .claude/merge-authorization.local   # revoke (or: rm the file)
 # First line must trim to exactly "on" (case-insensitive) to authorize.
+#
+# The toggle lives in the PRIMARY checkout only: it is gitignored, and `git
+# worktree add` checks out tracked files exclusively, so no worktree ever has a
+# copy. Resolve via --git-common-dir (the primary .git from anywhere) rather than
+# CLAUDE_PROJECT_DIR or --show-toplevel, either of which resolves to the worktree
+# when the call originates inside one — leaving auth empty and silently denying a
+# merge the owner had in fact granted.
 if match 'gh[[:space:]]+pr[[:space:]]+merge'; then
-  auth_file="${CLAUDE_PROJECT_DIR:-.}/.claude/merge-authorization.local"
+  # --path-format=absolute (git 2.31+) is required: the bare form is relative to
+  # CWD ("../.git" from a subdirectory), which dirname would resolve wrongly.
+  common_dir="$(git -C "$target_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
+  if [ -n "$common_dir" ]; then
+    primary_root="$(dirname "$common_dir")"
+  else
+    primary_root="${CLAUDE_PROJECT_DIR:-.}"
+  fi
+  auth_file="$primary_root/.claude/merge-authorization.local"
   auth="$(head -n1 "$auth_file" 2>/dev/null | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
   if [ "$auth" != "on" ]; then
     deny "merge authorization is OFF — owner enables with: echo on > .claude/merge-authorization.local (off/rm to revoke) (gh pr merge)"

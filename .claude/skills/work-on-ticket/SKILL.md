@@ -24,7 +24,7 @@ State the fresh plan — what you'll change, the test shape, the scenario for li
 ### 4. Run the matching workflow
 Launch the same script the loop would:
 - `design-first` → `.claude/workflows/draft-design.js`
-- `implement` / `bug-reproduce-first` → `.claude/workflows/implement-ticket.js`
+- `implement` / `bug-reproduce-first` → `.claude/workflows/worktree-work.js`
 - `research` → `.claude/workflows/run-research.js`
 
 Work in a fresh worktree per attempt; checkpoint at logical boundaries (commits are contractual, not optional). Honor the attempt cap of 3.
@@ -35,7 +35,7 @@ Whenever the work hits a decision only the owner can make — an ambiguous requi
 Everything else that isn't owner-only — a fact you can derive, a check you can run — you resolve yourself; don't turn a derivable question into an interruption.
 
 ### 6. Verify and open a draft PR
-After a green self-review, run `.claude/workflows/verify-change.js` on the branch. A `PASS` opens a **draft** PR (never a merge — merging stays the owner's call). A `FIX` bounces once within the attempt cap. A `DISCUSS` surfaces the disagreement to the owner inline rather than parking it.
+Verification is a stage inside `worktree-work.js`, not a separate launch. A `PASS` opens a PR ready for review (never a merge — merging stays the owner's call). A `FIX` runs a bounded fix round in the same worktree. A `DISCUSS` comes back as an owner item, which you surface inline here rather than parking.
 
 If the change needs live rig verification (GPU / camera / display), you cannot run it from a sandboxed session — hand off via `/verify-live`: emit the exact command block for the owner's terminal, and audit the output they report back.
 

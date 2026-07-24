@@ -25,7 +25,7 @@ const zones = Array.isArray(input.zones) ? input.zones : [];
 
 // Map the issue's zones to the domain experts to consult. Returns the expert
 // agentType names; empty means "generic reasoning only".
-// KEEP-IN-SYNC(zone-router): implement-ticket.js, verify-change.js, draft-design.js, run-research.js, fix-ticket.js
+// KEEP-IN-SYNC(zone-router): worktree-work.js, draft-design.js, run-research.js
 function expertsForZones(zoneList) {
   const z = zoneList.map((s) => String(s).toLowerCase());
   const has = (...keys) => keys.some((k) => z.some((zone) => zone.includes(k)));
@@ -61,7 +61,7 @@ const briefSchema = {
   required: ['decisions_for_owner', 'diagram_included', 'risk_class'],
 };
 
-// K3: degrade-not-crash — see implement-ticket.js. On a null/failed structured
+// K3: degrade-not-crash — see worktree-work.js. On a null/failed structured
 // result, retry ONCE schema-free and parse; then continue degraded, not dead.
 async function resilientAgent(prompt, opts) {
   const options = opts || {};

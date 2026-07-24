@@ -17,7 +17,7 @@ const input = typeof args === 'string' ? JSON.parse(args) : args || {};
 const issue = input.issue;
 const zones = Array.isArray(input.zones) ? input.zones : [];
 
-// KEEP-IN-SYNC(zone-router): implement-ticket.js, verify-change.js, draft-design.js, run-research.js, fix-ticket.js
+// KEEP-IN-SYNC(zone-router): worktree-work.js, draft-design.js, run-research.js
 function expertsForZones(zoneList) {
   const z = zoneList.map((s) => String(s).toLowerCase());
   const has = (...keys) => keys.some((k) => z.some((zone) => zone.includes(k)));
@@ -30,7 +30,7 @@ function expertsForZones(zoneList) {
   return experts;
 }
 
-// K3: degrade-not-crash — see implement-ticket.js. On a null/failed structured
+// K3: degrade-not-crash — see worktree-work.js. On a null/failed structured
 // result, retry ONCE schema-free and parse; then continue degraded, not dead.
 async function resilientAgent(prompt, opts) {
   const options = opts || {};
