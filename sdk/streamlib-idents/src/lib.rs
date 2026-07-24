@@ -53,9 +53,7 @@ pub use package_source::{
     LINK_CHECKOUT_ENV, PACKAGE_SOURCE_ENV, PackageSource, PackageSourceClient,
     RELEASE_MANIFEST_CHANNEL, RELEASE_MANIFEST_FILE, select_version,
 };
-pub use release::{
-    RELEASE_MANIFEST_FORMAT, ReleaseManifest, ReleaseManifestMember, crates_missing_from_release,
-};
+pub use release::{RELEASE_MANIFEST_FORMAT, ReleaseManifest, ReleaseManifestMember};
 pub use resolver::{
     ResolvedPackage, ResolvedPackages, ResolvedSource, ResolverOptions,
     content_hash_for_package_dir, resolve, resolve_bare_schema_name, resolve_with,

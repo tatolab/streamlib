@@ -345,10 +345,10 @@ fn emit_slpkg_and_manifest(
     }
 
     // The release manifest lists exactly the `.slpkg` packages this emit
-    // published. The SDK crate chain is NOT published by this emit — the custom
-    // cargo registry was removed; SDK / library crates ship from public
-    // registries as a separate, gated release step — so `crates` is empty.
-    let mut manifest = ReleaseManifest::new(target.to_string(), Vec::new());
+    // published. Engine / SDK library crates are NOT distributed by this emit —
+    // packages resolve their crate deps via `streamlib link` ([patch.crates-io]
+    // path overrides), not a cargo registry.
+    let mut manifest = ReleaseManifest::new(target.to_string());
     manifest.packages = package_members;
 
     // Written LAST — the completion marker.

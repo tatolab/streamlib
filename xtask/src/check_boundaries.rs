@@ -1968,7 +1968,7 @@ version = "0.9.0"
 edition = "2021"
 
 [dependencies]
-vulkanalia = { package = "tatolab-vulkanalia", version = "0.35", path = "../tatolab-vulkanalia", registry = "tatolab", default-features = false }
+vulkanalia = { package = "tatolab-vulkanalia", version = "0.35", path = "../tatolab-vulkanalia", default-features = false }
 "#,
         );
         write_fixture(
@@ -2009,7 +2009,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-vulkanalia = { package = "tatolab-vulkanalia", version = "0.35", path = "../tatolab-vulkanalia", registry = "tatolab" }
+vulkanalia = { package = "tatolab-vulkanalia", version = "0.35", path = "../tatolab-vulkanalia" }
 "#,
         );
         let report = scan_all(dir.path()).unwrap();
