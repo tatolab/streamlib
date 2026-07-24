@@ -1,5 +1,22 @@
 {
   "permissions": {
+    "allow": [
+      "Bash(gh api *)",
+      "Bash(gh pr *)",
+      "Bash(git fetch *)",
+      "Bash(git worktree add *)",
+      "Bash(git worktree list)",
+      "Bash(grep -c \"^{\\\\\"ts\\\\\":\\\\\"$\\(date -u +%F\\)\" .claude/loops/state/milestone-loop.run-log.jsonl)",
+      "Read(//proc/**)",
+      "Read(//dev/**)",
+      "Bash(nvidia-smi)",
+      "Bash(nvidia-ctk --version)",
+      "Bash(lscpu)",
+      "Bash(lspci -nnk)",
+      "Bash(flatpak list *)",
+      "Bash(docker --version)",
+      "Bash(docker info *)"
+    ],
     "deny": [
       "Edit(vendor/tatolab-vulkanalia*/**)",
       "Edit(LICENSE)",
