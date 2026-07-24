@@ -238,10 +238,12 @@ dependencies:
 
 Three dependency source flavors are supported:
 
-- **Registry** (string form `"^1.0.0"` or `{ version: "^1.0.0" }`).
-  Resolved against a registry; the v1 design assumes a Cloudflare R2
-  / GitHub Releases-backed registry, but the resolver is source-
-  agnostic.
+- **By version** (string form `"^1.0.0"` or `{ version: "^1.0.0" }`).
+  Resolved by `@org/name` + version range against the configured
+  package source — any location serving versioned `.slpkg` files
+  (`file://` tree, HTTP mount, later a mesh peer or offline cache),
+  read like another filesystem (see `package-source.md`). There is no
+  central registry.
 - **Path** (`{ path: ../foo }`). Local-filesystem dependency, used
   inside the streamlib monorepo for pre-publish work.
 - **Git** (`{ git: <url>, rev: <commit-sha> }`). Pinned-commit-only;
@@ -279,8 +281,8 @@ packages:
   "@tatolab/core":
     version: 1.0.0
     source:
-      kind: registry
-      url: https://packages.streamlib.dev
+      kind: by-version
+      url: file:///path/to/package-source
     content_hash: "sha256:0123456789abcdef…"
   "@tatolab/h264":
     version: 0.4.2
@@ -302,7 +304,7 @@ packages:
 | `version` | Lockfile schema version. Currently `1`. Future format-incompatible bumps are explicit. |
 | `packages` | `BTreeMap` keyed by `"@org/name"` — sorted iteration is what makes the lockfile diff-stable. |
 | `version` (entry) | The concrete resolved SemVer (not a range). |
-| `source` | Discriminated union: `registry` / `path` / `git` (`tag = kind`, snake-case). |
+| `source` | Discriminated union: `by-version` / `path` / `git` (`tag = kind`, snake-case). |
 | `content_hash` | Namespace-prefixed (`sha256:…`) so future hash-algorithm migrations don't break parsing. |
 
 The content hash is computed over the resolved package's contents
@@ -456,7 +458,7 @@ own the processor's Rust module):
 - **`streamlib::sdk::processor_type_ref!("org", "package", "Type")`**
   — the default reference form for the no-load-call world. Validates
   `(org, package, type)` at compile time and expands to a **version-free**
-  `ProcessorTypeReference::ResolveToInstalled` value with **no registry
+  `ProcessorTypeReference::ResolveToInstalled` value with **no package-source
   lookup at the call site**. Passed to `ProcessorSpec::new`, it reaches
   `add_processor`'s lazy hook and resolves to the single installed
   provider — loading its package from `streamlib_modules/` on first

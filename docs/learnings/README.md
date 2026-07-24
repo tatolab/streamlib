@@ -82,11 +82,11 @@ Avoid the two failure modes:
   release/acquire (with `VK_EXT_external_memory_acquire_unmodified` chained
   for content preservation), bridging `UNDEFINED → target` as the fallback
   when extensions are missing
-<!-- polyglot-venv-registry-env learning removed 2026-07-12 — the
-     hosted-daemon backend it described (and its registry-token / daemon-URL
+<!-- polyglot-venv-package-source-env learning removed 2026-07-12 — the
+     hosted-daemon backend it described (and its auth-token / daemon-URL
      env surface) was dropped when the static file tree became the only
-     registry (see docs/architecture/static-registry.md). The venv build now
-     derives `UV_INDEX` from the tree-root `STREAMLIB_REGISTRY_URL`; the
+     package source (see docs/architecture/package-source.md). The venv build now
+     derives `UV_INDEX` from the tree-root `STREAMLIB_PACKAGE_SOURCE`; the
      tokenless read shape means there is no token env var to forget. -->
 - [@docs/learnings/sandboxing-demo-content-pending-engine-feature.md](sandboxing-demo-content-pending-engine-feature.md) —
   Recipe for relocating app-specific hot-path content out of the engine

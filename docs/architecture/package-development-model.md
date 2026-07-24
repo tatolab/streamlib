@@ -15,14 +15,14 @@ operation: **install**.
   streamlib surface at one local checkout, so edits resolve to working-tree
   source with no publish. Instant edit→run; deliberately all-local.
 - **The distribution loop** — `streamlib pkg publish` releases a package
-  by version into a registry; a consumer resolves it back by version.
+  by version into a package source; a consumer resolves it back by version.
   Releases are atomic and a consumer can detect a partial one.
 
 The two loops never blur: a link override is refused entry into any
 published artifact, and a locked run does zero live re-resolution. Both
 loops feed the same install seam — installing over a linked / path-declared
 tree records `path:` sources in the lockfile, while installing from a
-registry records content-pinned slots. The version model in the middle makes
+package source records content-pinned slots. The version model in the middle makes
 both consistent — one version axis per package, one version per package in a
 running process.
 
@@ -82,7 +82,7 @@ checkout never mixes published versions.
 *Link-aware module resolution (npm-link semantics).* With an active engine
 link, the module loader resolves any `@org/name` present in the linked
 checkout's `packages/` tree **from the checkout, regardless of the caller's
-[`Strategy`]** — including an explicit `add_module(ident, registry())`. A linked
+[`Strategy`]** — including an explicit `add_module(ident, by_version())`. A linked
 name takes precedence: this matters for the power-caller path that still passes
 an explicit `Strategy` to `add_module`, because overriding only the *default*
 strategy would miss it, so editing a linked package and re-running would not
@@ -91,7 +91,7 @@ references processors version-free with `processor_type_ref!` and the runtime
 lazily discovers the provider from `streamlib_modules/`; see the install seam
 below. The explicit-`Strategy` path is a power-caller escape hatch.) A package
 **not** in the checkout is untouched — it resolves from its declared strategy —
-so registry strategies stay available for everything the checkout doesn't
+so by-version strategies stay available for everything the checkout doesn't
 provide. Discovery is from the process working directory (the run dir, where
 the marker sits); a corrupt marker is a loud `AddModuleError::LinkStateCorrupt`,
 never a silent skip. A **locked run** (`add_modules_from_lockfile`) ignores
@@ -161,7 +161,7 @@ any link marker exists up-tree (`ensure_no_active_link_for_pack` →
 `PackRefusedWhileLinked`), and the build orchestrator re-injects the checkout
 overrides when it materializes a linked package — the consumer's `[patch]`
 cargo config into the cdylib build and the uv-source override
-(`apply_link_override`) into the venv — so a cargo-patched-but-venv-from-registry
+(`apply_link_override`) into the venv — so a cargo-patched-but-venv-from-package-source
 mixed state can't occur.
 
 **What link deliberately does not solve.** Developing against one *specific
@@ -265,7 +265,7 @@ locked run bypasses `patch:` entirely and resolves from the lockfile.
 
 A package release is cut with `streamlib pkg publish` (one package to the
 `.slpkg` generic store) or, for the whole `packages/*` surface, `cargo xtask
-static-registry emit`; everything below is what those commands do under the
+static-package-source emit`; everything below is what those commands do under the
 hood. SDK / library-crate publishing to the real public registries is a
 separate, gated release step — the custom cargo registry that used to serve
 the SDK by version was removed; internal cross-crate deps resolve by `path`.
@@ -300,11 +300,11 @@ The check rides *inside* materialize, so install fails before cargo runs.
 **One backend, one read shape.** Package distribution is a plain static file
 tree — the `.slpkg` generic store + catalog — behind one tokenless read shape,
 served over `file://` or a dumb HTTP mount. It is documented in
-[`static-registry.md`](static-registry.md), including its catalog surface (a
+[`package-source.md`](package-source.md), including its catalog surface (a
 queryable processor / port / schema index a visual editor browses without
 downloading packages). CI resolves against the static file tree; to reproduce
-a CI resolve locally, serve an emitted tree per [`static-registry.md` §
-Consuming a tree](static-registry.md#consuming-a-tree).
+a CI resolve locally, serve an emitted tree per [`package-source.md` §
+Consuming a tree](package-source.md#consuming-a-tree).
 
 The atomic staged swap closes the mid-publish window: every `.slpkg` and the
 release manifest land in one whole-tree `renameat2(RENAME_EXCHANGE)` staged
@@ -354,7 +354,7 @@ vendored folder copied into the image directly).
 (range→concrete) over a project's `streamlib.yaml`, materializes each resolved
 package through the orchestrator, and writes `streamlib-app.lock`
 (`APP_LOCKFILE_NAME`). The release-completeness check *rides* materialize — a
-partial registry release fails install before any lockfile is written. Network
+partial package-source release fails install before any lockfile is written. Network
 at install time is expected. A locked run (`add_modules_from_lockfile`, below)
 then loads the pinned set offline. This is the whole-`streamlib.yaml`-tree seam,
 distinct from the per-app `streamlib_modules/` reproduction above and consuming
@@ -369,7 +369,7 @@ ONE valid streamlib package **byte source** — a folder, an archive (`.slpkg`
 HTTP(S) URL — into the app's own `streamlib_modules/@org/name/` folder and
 records identity, source, and content hash in the app's committed
 `streamlib.lock` (`MODULES_LOCKFILE_NAME`). The primitive is "here are the
-bytes", never "resolve this against a registry": a registry-coordinate spec
+bytes", never "resolve this against a package source": a package-source coordinate spec
 (`@org/name`) is refused with a typed guidance error, and the package's
 `@org/name@version` identity always comes from its own manifest. Add never
 builds. The flow is stage (`.staging-*` sibling inside the modules folder —
@@ -397,7 +397,7 @@ instead records a caret dependency (`^<version>`) into that package's own
 `dependencies:` table — the schema-tier `cargo add` — preserving every other
 manifest field and the leading `# yaml-language-server` comment header. The
 `AppModulesDir` primitive itself is unchanged: it is the consumer flow and still
-refuses a registry-coordinate byte source.
+refuses a package-source coordinate byte source.
 
 At load time, `Strategy::InstalledCache` (the bare `Runner::add_module`
 default) resolves `<cwd>/streamlib_modules/@org/name` — the co-located slot IS
@@ -417,8 +417,8 @@ are the per-app `streamlib_modules/` operations.
 `Runner::add_modules_from_lockfile` builds a `LockedResolution` from the
 lockfile and forces every dependency edge through it: each edge becomes a
 `Strategy::Path { build: NeverBuild }` at `SemVerRange::Exact(pin.version)`.
-Five network / build touchpoints are unreachable in locked mode — **registry
-list, registry download, git fetch, `.slpkg` re-fetch, and build** — the run
+Five network / build touchpoints are unreachable in locked mode — **package-source
+list, package-source download, git fetch, `.slpkg` re-fetch, and build** — the run
 loads strictly from the pre-materialized cache and is offline by
 construction; a dep absent from the lockfile is a hard `LockfileMiss`, never
 a live fetch. At load, a **content-hash integrity gate** re-hashes each
@@ -428,7 +428,7 @@ tampered / republished-in-place hole. Slot paths are re-derived by the shared
 `installed_package_slot_dir` helper
 ([`runtime/streamlib-engine/src/core/streamlib_home.rs`](../../runtime/streamlib-engine/src/core/streamlib_home.rs)) —
 the single co-located, version-free `<app-root>/streamlib_modules/@org/name`
-convention also used by `.slpkg` extraction, registry resolution, and
+convention also used by `.slpkg` extraction, by-version resolution, and
 orchestrator staging.
 
 **Three lockfiles, three lifecycles.** All serialize the same `Lockfile` wire
@@ -458,7 +458,7 @@ Stated honestly; verify against current code before relying on any.
   offline locked run is not separately gated, so "an installed polyglot app
   runs fully offline at process spawn" is, to the best of our current
   knowledge, unverified.
-- **Deploy lockfiles don't pin checkouts.** Link-mode registry-dep
+- **Deploy lockfiles don't pin checkouts.** Link-mode by-version-dep
   redirection lives at the toolchain layer. A lockfile produced from a linked
   or path-declared tree records `path:` sources (a working-tree path), not an
   immutable content-pinned slot — so an app lockfile captured over a link is
@@ -500,8 +500,8 @@ Stated honestly; verify against current code before relying on any.
   `tools/streamlib-cli/src/commands/add.rs` (CLI wrapper + manifest-derived
   processor summary).
 - **Related docs**: [`runtime-module-materialization.md`](runtime-module-materialization.md)
-  (the one materialize path), [`static-registry.md`](static-registry.md)
-  (the static registry backend, by-version resolution + catalog),
+  (the one materialize path), [`package-source.md`](package-source.md)
+  (the package source backend, by-version resolution + catalog),
   [`schema-identity-and-packaging.md`](schema-identity-and-packaging.md)
   (schema-ident grammar + packaging),
   [`package-staging-layout.md`](package-staging-layout.md) (what a staged /

@@ -140,7 +140,7 @@ A `.slpkg` is a box that can hold **source and/or a prebuilt cdylib**, like
 a pip package shipping both a wheel and an sdist. `assemble_artifact`
 bundles, for a Rust package, *both* the crate source (`Cargo.toml` + `src/`
 …) and the prebuilt cdylib for the packing host's triple. On load, the
-`.slpkg` / `Url` / `Registry` resolver (`source_for_resolved_dir`) decides
+`.slpkg` / `Url` / `ByVersion` resolver (`source_for_resolved_dir`) decides
 (the co-located `InstalledCache` slot is load-only — it never runs this
 build fallback; an unbuilt slot is a typed `InstalledPackageNotBuilt`):
 
@@ -335,7 +335,7 @@ On a miss against the installed set, a fleet may opt into
 **acquire-on-reference** — off by default (`AcquireOnReferencePolicy::Off`),
 set via `Runner::set_acquire_on_reference_policy` or the
 `STREAMLIB_ACQUIRE_ON_REFERENCE` env var (`off` / `on` / `prompt`). When on, the
-runtime resolves the reference's range → concrete against the static registry,
+runtime resolves the reference's range → concrete against the package source,
 materializes that version's `.slpkg` into `streamlib_modules/`, records it in
 `streamlib.lock` (the install-shaped resolver — the byte-source add flow), then
 loads it from the now-populated installed cache. `prompt` gates each
