@@ -13,7 +13,7 @@
 //! an actionable "incomplete release" error up front instead of a cryptic
 //! cargo/`streamlib-macros` version-unification failure deep in the build.
 //!
-//! The manifest is transport-agnostic: [`crate::RegistryClient`] writes/reads
+//! The manifest is transport-agnostic: [`crate::PackageSourceClient`] writes/reads
 //! it over `http(s)://` (static generic store) and `file://` (hermetic
 //! local mirror) identically.
 
@@ -42,8 +42,8 @@ pub const RELEASE_MANIFEST_FORMAT: u32 = 1;
 
 /// The complete set of artifacts that constitute release version `V`.
 ///
-/// Serialized to `streamlib-release/<V>/manifest.json` in the generic
-/// registry and written **last** in the publish sequence — its presence
+/// Serialized to `streamlib-release/<V>/manifest.json` in the generic store of the
+/// package source, written **last** in the publish sequence — its presence
 /// means the release is complete by protocol.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ReleaseManifest {
@@ -51,7 +51,7 @@ pub struct ReleaseManifest {
     pub manifest_format: u32,
     /// The release version `V` (the workspace `[workspace.package].version`,
     /// with a `-dev.N` suffix for a dev publish). The manifest lives under
-    /// this exact string in the registry.
+    /// this exact string in the package source.
     pub release_version: String,
     /// The engine crate closure — every `streamlib*` / `vulkan-jpeg` library
     /// crate published for this release (the `compute_release_closure`
@@ -110,7 +110,7 @@ impl ReleaseManifest {
 /// return the `name@range` of each pin the release `manifest` does **not**
 /// satisfy — no crate member with that name whose version matches the range.
 /// An empty result means every pin is covered by the release; a
-/// partial/mid-publish registry yields the missing names so the caller can
+/// partial/mid-publish package source yields the missing names so the caller can
 /// name the gap.
 ///
 /// The pins are the consumer's *direct* tatolab-registry cargo dep reqs
@@ -216,7 +216,7 @@ mod tests {
     fn manifest_read_ignores_unknown_fields() {
         // Forward-compat: an older reader must tolerate a newer manifest that
         // grew a field. Reverting `#[serde(default)]` / unknown-field
-        // tolerance would break older consumers against a newer registry.
+        // tolerance would break older consumers against a newer package source.
         let json = r#"{
             "manifest_format": 1,
             "release_version": "0.5.1",

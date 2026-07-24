@@ -40,7 +40,13 @@ pub struct LockfileEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum LockfileSource {
-    Registry {
+    /// Resolved by version from a package source (a static `.slpkg` tree
+    /// reached over `file://` or an HTTP mount). `url` is the concrete
+    /// `.slpkg` location the selected version was fetched from. The wire tag
+    /// is `by-version` — there is no central registry, only a package source
+    /// location.
+    #[serde(rename = "by-version")]
+    ByVersion {
         url: String,
     },
     Path {
@@ -258,7 +264,7 @@ packages:
   "@tatolab/core":
     version: 1.0.0
     source:
-      kind: registry
+      kind: by-version
       url: https://packages.streamlib.dev
     content_hash: "sha256:0123456789abcdef"
   "@tatolab/h264":
@@ -277,7 +283,7 @@ packages:
   "@tatolab/camera":
     version: 0.4.33-dev.2
     source:
-      kind: registry
+      kind: by-version
       url: https://packages.streamlib.dev
     content_hash: "sha256:5555666677778888"
   "@tatolab/net":
@@ -301,7 +307,7 @@ packages:
 
         let core = lock.packages.get("@tatolab/core").unwrap();
         assert_eq!(core.version, SemVer::new(1, 0, 0));
-        assert!(matches!(core.source, LockfileSource::Registry { .. }));
+        assert!(matches!(core.source, LockfileSource::ByVersion { .. }));
 
         let h264 = lock.packages.get("@tatolab/h264").unwrap();
         assert!(matches!(h264.source, LockfileSource::Path { .. }));
@@ -512,7 +518,7 @@ packages:
             "@tatolab/core".into(),
             LockfileEntry {
                 version: SemVer::new(1, 0, 0),
-                source: LockfileSource::Registry {
+                source: LockfileSource::ByVersion {
                     url: "file:///m".into(),
                 },
                 content_hash: "sha256:abc".into(),

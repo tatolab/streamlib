@@ -18,7 +18,7 @@ mod ident;
 pub mod link_marker;
 mod lockfile;
 mod manifest;
-mod registry;
+mod package_source;
 mod release;
 mod resolver;
 mod semver;
@@ -46,12 +46,12 @@ pub use lockfile::{
     write_lockfile, write_modules_lockfile,
 };
 pub use manifest::{
-    DependencySpec, GitDependency, Manifest, PackageMetadata, PathDependency, RegistryDependency,
-    SchemaEntry,
+    DependencySpec, GitDependency, Manifest, PackageMetadata, PathDependency, SchemaEntry,
+    VersionDependency,
 };
-pub use registry::{
-    DEFAULT_REGISTRY_URL, LINK_CHECKOUT_ENV, REGISTRY_URL_ENV, RELEASE_MANIFEST_CHANNEL,
-    RELEASE_MANIFEST_FILE, RegistryClient, RegistryConfig, select_version,
+pub use package_source::{
+    LINK_CHECKOUT_ENV, PACKAGE_SOURCE_ENV, PackageSource, PackageSourceClient,
+    RELEASE_MANIFEST_CHANNEL, RELEASE_MANIFEST_FILE, select_version,
 };
 pub use release::{
     RELEASE_MANIFEST_FORMAT, ReleaseManifest, ReleaseManifestMember, crates_missing_from_release,

@@ -96,7 +96,7 @@ pub enum PackageSourceProvenance {
     /// [`Strategy::Path`]: super::Strategy::Path
     MutableUserCheckout,
     /// The package dir is an orchestrator-managed extract: a `.slpkg`, a
-    /// registry download, an installed-cache entry, or a git-rev-pinned
+    /// by-version download, an installed-cache entry, or a git-rev-pinned
     /// checkout. Self-contained, so the package-local fingerprint fully gates
     /// reuse and `target/` is disposable build scratch.
     ImmutableManagedExtract,
@@ -204,15 +204,15 @@ pub enum BuildError {
         detail: String,
     },
 
-    /// The registry holds an **incomplete / inconsistent release** of the
+    /// The package source holds an **incomplete / inconsistent release** of the
     /// pinned version: the package depends on crates that the release
     /// manifest for `release_version` does not list as published. Surfaced
-    /// *before* cargo runs, so a half-published registry fails fast with the
+    /// *before* cargo runs, so a half-published package source fails fast with the
     /// exact missing artifacts named — instead of a cryptic
     /// `failed to select a version for …` deep in cargo / `streamlib-macros`
     /// version unification.
     #[error(
-        "incomplete release of {release_version}: the registry is missing \
+        "incomplete release of {release_version}: the package source is missing \
          {missing} (required by '{package}'). {hint}"
     )]
     IncompleteRelease {

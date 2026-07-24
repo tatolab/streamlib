@@ -15,7 +15,7 @@
 
 use std::path::PathBuf;
 
-use streamlib_idents::{RegistryClient, RegistryConfig};
+use streamlib_idents::{PackageSourceClient, PackageSource};
 
 use super::build_orchestrator::{
     BuildPolicy, BuildRequest, BuildSource, PackageSourceProvenance,
@@ -24,10 +24,10 @@ use super::errors::AddModuleError;
 use super::processor_registration::host_target_triple;
 use super::slpkg::extract_slpkg_to_cache;
 
-/// Semver requirement carried by [`Strategy::Registry`]. Re-exported from
+/// Semver requirement carried by [`Strategy::ByVersion`]. Re-exported from
 /// `streamlib-idents` so callers can name it next to [`Strategy`] without a
-/// separate dependency — it's the same range type a `streamlib.yaml`
-/// `Registry` dependency declares.
+/// separate dependency — it's the same range type a `streamlib.yaml` version
+/// dependency declares.
 pub use streamlib_idents::SemVerRange;
 
 /// How [`Runner::add_module_with`] should source a module — the in-code
@@ -51,8 +51,8 @@ pub enum Strategy {
     /// polyglot provisioning) is a typed
     /// [`AddModuleError::InstalledPackageNotBuilt`] carrying a `streamlib install`
     /// fix-it, never a runtime cold-build. The default for bare top-level
-    /// [`Runner::add_module`] loads (transitive registry-flavored deps map to
-    /// [`Strategy::Registry`] instead).
+    /// [`Runner::add_module`] loads (transitive version-range deps map to
+    /// [`Strategy::ByVersion`] instead).
     /// Precedence: active `streamlib link` > the co-located slot.
     ///
     /// [`Runner::add_module`]: super::super::Runner::add_module
@@ -98,27 +98,26 @@ pub enum Strategy {
         checksum: Option<ArtifactChecksum>,
     },
 
-    /// Resolve from the configured the static registry **generic** registry by semver
-    /// requirement — the cross-repo consumer path. Lists the package's
-    /// published versions from its anonymous, cargo-sparse-shaped version
-    /// index (`/api/packages/{org}/generic/{name}/index/index.json`),
-    /// selects the highest satisfying `version_req` (cargo/npm semantics),
-    /// downloads that version's `.slpkg`, then resolves it exactly like
-    /// [`Strategy::Url`]: prefer a matching prebuilt, else build the bundled
-    /// source per `build`.
+    /// Resolve by version from the configured package source's **generic**
+    /// `.slpkg` store by semver requirement — the cross-repo consumer path.
+    /// Lists the package's published versions from its anonymous,
+    /// cargo-sparse-shaped version index (`slpkg/{name}/index.json`), selects
+    /// the highest satisfying `version_req` (cargo/npm semantics), downloads
+    /// that version's `.slpkg`, then resolves it exactly like [`Strategy::Url`]:
+    /// prefer a matching prebuilt, else build the bundled source per `build`.
     ///
-    /// The registry endpoint comes from the environment
-    /// (`STREAMLIB_REGISTRY_URL`, the tree root) — the same config the engine's
-    /// schema codegen reads, via [`RegistryConfig::from_env`]. The read path
-    /// (list + download) is anonymous and tokenless; publishing is
-    /// `file://`-only (an emit writes the tree). The package
-    /// org + name come from the requested module ident. Absent registry
-    /// config fails loud with [`AddModuleError::RegistryNotConfigured`]
-    /// rather than silently falling back to a local source.
+    /// The package source location comes from the environment
+    /// (`STREAMLIB_PACKAGE_SOURCE`, the tree root) — the same config the
+    /// engine's schema codegen reads, via [`PackageSource::from_env`]. The read
+    /// path (list + download) is anonymous and tokenless; publishing is
+    /// `file://`-only (an emit writes the tree). The package org + name come
+    /// from the requested module ident. Absent package-source config fails loud
+    /// with [`AddModuleError::PackageSourceNotConfigured`] rather than silently
+    /// falling back to a local source.
     ///
-    /// [`RegistryConfig::from_env`]: streamlib_idents::RegistryConfig::from_env
-    Registry {
-        /// Semver requirement matched against the registry's published
+    /// [`PackageSource::from_env`]: streamlib_idents::PackageSource::from_env
+    ByVersion {
+        /// Semver requirement matched against the package source's published
         /// versions. [`SemVerRange::Any`] (`*`) accepts the latest.
         version_req: SemVerRange,
         /// Build fallback when the resolved `.slpkg` carries no prebuilt
@@ -152,10 +151,11 @@ pub(super) enum ResolvedSource {
 /// checkout's `packages/` tree.
 ///
 /// npm-link semantics: a package present in the checkout takes precedence over
-/// whatever [`Strategy`] the caller declared (registry / path / url / …), so
+/// whatever [`Strategy`] the caller declared (by-version / path / url / …), so
 /// editing a linked package and re-running picks up the edit even for the
-/// dominant `add_module(ident, registry())` app shape. A package NOT in the
-/// checkout is unaffected and resolves from its declared strategy.
+/// dominant `add_module(ident, Strategy::ByVersion { .. })` app shape. A
+/// package NOT in the checkout is unaffected and resolves from its declared
+/// strategy.
 #[derive(Debug, Clone)]
 pub(super) struct ActiveLinkedCheckout {
     /// Canonicalized path of the linked streamlib checkout.
@@ -304,8 +304,9 @@ pub(super) fn resolve_strategy_to_source(
     // Link-aware short-circuit (npm-link semantics): an active link redirects
     // resolution of ANY package present in the linked checkout, overriding the
     // caller's strategy. This is what makes `streamlib link` → edit → re-run
-    // reflect a checkout edit for the dominant `add_module(ident, registry())`
-    // app shape. IfStale rebuilds on edit via the build tool's own fingerprint.
+    // reflect a checkout edit for the dominant
+    // `add_module(ident, Strategy::ByVersion { .. })` app shape. IfStale
+    // rebuilds on edit via the build tool's own fingerprint.
     if let Some(link) = link {
         if let Some(pkg_dir) = link.checkout_package_dir(pkg_ref)? {
             tracing::info!(
@@ -378,28 +379,28 @@ pub(super) fn resolve_strategy_to_source(
             })?;
             source_for_fetched_slpkg(pkg_ref, extracted, *build)
         }
-        Strategy::Registry { version_req, build } => {
+        Strategy::ByVersion { version_req, build } => {
             // Same resolve shape as `Strategy::Url`, except the download URL
-            // is derived from the registry's published versions instead of
-            // being supplied by the caller. The `streamlib-idents` registry
+            // is derived from the package source's published versions instead of
+            // being supplied by the caller. The `streamlib-idents` package-source
             // client is reused verbatim — list + semver-select + token-aware
             // download — so engine schema codegen and runtime module loading
             // share one resolver rather than maintaining parallel ones.
-            let config = RegistryConfig::from_env().ok_or_else(|| {
-                AddModuleError::RegistryNotConfigured {
+            let config = PackageSource::from_env().ok_or_else(|| {
+                AddModuleError::PackageSourceNotConfigured {
                     package: pkg_ref.clone(),
-                    env: streamlib_idents::REGISTRY_URL_ENV.to_string(),
+                    env: streamlib_idents::PACKAGE_SOURCE_ENV.to_string(),
                 }
             })?;
-            let client = RegistryClient::new(&config);
+            let client = PackageSourceClient::new(&config);
             let available = client.list_versions(pkg_ref).map_err(|e| {
-                AddModuleError::RegistryResolutionFailed {
+                AddModuleError::PackageSourceResolutionFailed {
                     package: pkg_ref.clone(),
                     detail: format!("listing versions: {e}"),
                 }
             })?;
             let selected = streamlib_idents::select_version(pkg_ref, version_req, &available)
-                .map_err(|e| AddModuleError::RegistryResolutionFailed {
+                .map_err(|e| AddModuleError::PackageSourceResolutionFailed {
                     package: pkg_ref.clone(),
                     detail: e.to_string(),
                 })?;
@@ -408,8 +409,8 @@ pub(super) fn resolve_strategy_to_source(
             // `extract_slpkg_to_cache` rm -rf's the cache slot on every call,
             // which wipes any cdylib a prior run built into `lib/<triple>/` (and
             // any provisioned `.venv`) — so without this check `IfStale` rebuilt
-            // on every run even when the registry had not changed. Registry
-            // versions are immutable (a content change ships a new version);
+            // on every run even when the package source had not changed. Package
+            // source versions are immutable (a content change ships a new version);
             // `streamlib pkg clean` clears the cache to force a re-fetch when a
             // version is republished in place during development.
             //
@@ -421,17 +422,17 @@ pub(super) fn resolve_strategy_to_source(
                 app_modules_root().as_deref(),
                 pkg_ref,
             );
-            let extracted = if registry_slot_holds_selected_version(*build, &slot, selected) {
+            let extracted = if package_source_slot_holds_selected_version(*build, &slot, selected) {
                 tracing::debug!(
                     package = %pkg_ref,
                     version = %selected,
                     slot = %slot.display(),
-                    "registry slot already materialized for selected version — reusing (no re-download/extract)"
+                    "package-source slot already materialized for selected version — reusing (no re-download/extract)"
                 );
                 slot
             } else {
                 let (bytes, url) = client.download_slpkg(pkg_ref, selected).map_err(|e| {
-                    AddModuleError::RegistryResolutionFailed {
+                    AddModuleError::PackageSourceResolutionFailed {
                         package: pkg_ref.clone(),
                         detail: format!("downloading {selected}: {e}"),
                     }
@@ -440,9 +441,9 @@ pub(super) fn resolve_strategy_to_source(
                     package = %pkg_ref,
                     version = %selected,
                     %url,
-                    "resolved module from static generic store"
+                    "fetched module .slpkg from the package source"
                 );
-                let archive = persist_registry_slpkg(pkg_ref, &url, &bytes)?;
+                let archive = persist_package_source_slpkg(pkg_ref, &url, &bytes)?;
                 extract_slpkg_to_cache(&archive, app_modules_root().as_deref()).map_err(|e| {
                     AddModuleError::SlpkgExtractionFailed {
                         archive: archive.clone(),
@@ -477,7 +478,7 @@ fn resolve_installed_cache_strategy(
         source = %modules_package_dir.display(),
         "resolving module from the app's streamlib_modules folder"
     );
-    // Load-only, UNLIKE `.slpkg` / `Url` / `Registry` (which build the bundled
+    // Load-only, UNLIKE `.slpkg` / `Url` / `ByVersion` (which build the bundled
     // source on the host via `source_for_resolved_dir`). An installed slot must
     // already carry its host-matched prebuilt (Rust) and its provisioning
     // (Python `.venv` / Deno `_generated_/`) — building it here would be a silent
@@ -636,7 +637,7 @@ fn source_for_fetched_slpkg(
             // Python/Deno box (no `.venv` / no `_generated_/`) that would
             // otherwise load as-is and die at subprocess spawn with
             // `.venv/bin/python: No such file or directory`. Both are LIVE
-            // AlwaysBuild paths — `streamlib add` and `Strategy::Registry`
+            // AlwaysBuild paths — `streamlib add` and `Strategy::ByVersion`
             // resolve with AlwaysBuild through here.
             if has_buildable_rust_source(&dir) || needs_polyglot_provisioning(&dir) {
                 let staging_destination_slot_dir = staging_slot_for_dir(pkg_ref);
@@ -803,29 +804,28 @@ fn fetch_remote_slpkg(
     Ok(target)
 }
 
-/// Persist already-downloaded registry `.slpkg` bytes into the resolver
+/// Persist already-downloaded package-source `.slpkg` bytes into the resolver
 /// cache so [`extract_slpkg_to_cache`] can read them. Keyed by the canonical
 /// download URL (which embeds the package name + concrete version), with an
 /// atomic temp-then-rename publish so an interrupted write never leaves a
 /// half-file a later run treats as complete. This is the
 /// [`fetch_remote_slpkg`] write path minus the download — the bytes are
-/// already in hand from [`RegistryClient::download_slpkg`], which (unlike the
-/// `Strategy::Url` fetch) carries the registry auth token.
-fn persist_registry_slpkg(
+/// already in hand from [`PackageSourceClient::download_slpkg`].
+fn persist_package_source_slpkg(
     pkg_ref: &streamlib_idents::PackageRef,
     url: &str,
     bytes: &[u8],
 ) -> std::result::Result<PathBuf, AddModuleError> {
     let cache_dir = crate::core::streamlib_home::get_streamlib_data_dir()
         .join("resolver-cache")
-        .join("registry");
+        .join("package-source");
     let safe: String = url
         .chars()
         .map(|c| if c.is_alphanumeric() { c } else { '_' })
         .collect();
     let target = cache_dir.join(format!("{safe}.slpkg"));
 
-    let persist_err = |detail: String| AddModuleError::RegistryResolutionFailed {
+    let persist_err = |detail: String| AddModuleError::PackageSourceResolutionFailed {
         package: pkg_ref.clone(),
         detail,
     };
@@ -958,7 +958,7 @@ pub(super) fn read_version_from_manifest_dir(
     })
 }
 
-/// Whether an already-materialized registry `slot` (a
+/// Whether an already-materialized package-source `slot` (a
 /// `<app-root>/streamlib_modules/@org/name` dir) can be reused for `selected`
 /// without a re-download/extract. Reuse only when the policy allows stale reuse
 /// AND the slot's `streamlib.yaml` reads AND pins exactly `selected` — a slot
@@ -966,7 +966,7 @@ pub(super) fn read_version_from_manifest_dir(
 /// re-downloaded rather than loaded as the wrong version. A materialized slot
 /// refused here is logged: a silent self-heal would hide cache corruption or a
 /// republished-in-place version from the operator.
-fn registry_slot_holds_selected_version(
+fn package_source_slot_holds_selected_version(
     build: BuildPolicy,
     slot: &std::path::Path,
     selected: streamlib_idents::SemVer,
@@ -981,7 +981,7 @@ fn registry_slot_holds_selected_version(
                 slot = %slot.display(),
                 %materialized,
                 %selected,
-                "registry slot holds a different version than selected — refusing reuse, re-downloading"
+                "package-source slot holds a different version than selected — refusing reuse, re-downloading"
             );
             false
         }
@@ -990,7 +990,7 @@ fn registry_slot_holds_selected_version(
                 slot = %slot.display(),
                 %selected,
                 %detail,
-                "registry slot manifest is unreadable — refusing reuse, re-downloading"
+                "package-source slot manifest is unreadable — refusing reuse, re-downloading"
             );
             false
         }
@@ -1073,7 +1073,7 @@ mod tests {
     // resolve_installed_cache_strategy — the installed slot is LOAD-ONLY:
     // it prefers the on-box-built artifact and NEVER cold-builds. An unbuilt
     // slot is the typed `InstalledPackageNotBuilt` fix-it, never `NeedsBuild`
-    // (unlike `.slpkg` / `Url` / `Registry`, which build the bundled source).
+    // (unlike `.slpkg` / `Url` / `ByVersion`, which build the bundled source).
     // =====================================================================
 
     /// Stage a `<app_root>/streamlib_modules/@tatolab/<name>` slot carrying
@@ -1258,7 +1258,7 @@ mod tests {
         assert!(matches!(resolved, ResolvedSource::Ready(_)));
     }
 
-    /// COMPLETENESS (bug-reproduce, LIVE `Strategy::Url` / `Strategy::Registry`
+    /// COMPLETENESS (bug-reproduce, LIVE `Strategy::Url` / `Strategy::ByVersion`
     /// + `streamlib add` path): `AlwaysBuild` on an UNPROVISIONED Python box
     /// (a `pyproject.toml` present but no `.venv`) must route through
     /// `materialize`, NOT load as-is — the same `.venv/bin/python: No such file
@@ -1627,20 +1627,20 @@ mod tests {
         }
     }
 
-    /// CRUX (issue #1246): an active link redirects a `Strategy::Registry` load
+    /// CRUX (issue #1246): an active link redirects a `Strategy::ByVersion` load
     /// of a checkout-present package to the checkout, OVERRIDING the explicit
-    /// registry strategy (npm-link semantics — a linked name takes precedence).
+    /// by-version strategy (npm-link semantics — a linked name takes precedence).
     /// Mentally revert the link short-circuit at the top of
-    /// `resolve_strategy_to_source` and this resolves from the registry instead
-    /// (RegistryNotConfigured), failing the assertion.
+    /// `resolve_strategy_to_source` and this resolves by version from the package source instead
+    /// (PackageSourceNotConfigured), failing the assertion.
     #[test]
-    fn active_link_overrides_registry_strategy_for_checkout_present_package() {
+    fn active_link_overrides_by_version_strategy_for_checkout_present_package() {
         let checkout = fake_checkout_with_package("foo", "foo");
         let consumer = tempfile::tempdir().unwrap();
         let link = active_link_for(consumer.path(), checkout.path());
 
         let resolved = resolve_strategy_to_source(
-            &Strategy::Registry {
+            &Strategy::ByVersion {
                 version_req: SemVerRange::Any,
                 build: BuildPolicy::IfStale,
             },
@@ -1652,7 +1652,7 @@ mod tests {
     }
 
     /// A package ABSENT from the checkout falls through to its declared strategy
-    /// even under an active link — registry strategies stay available. Using
+    /// even under an active link — by-version strategies stay available. Using
     /// `Strategy::Path` to a nonexistent dir gives an env-independent signal
     /// that the strategy dispatch (not the link branch) ran.
     #[test]
@@ -1713,7 +1713,7 @@ mod tests {
         let link = active_link_for(consumer.path(), checkout.path());
 
         let resolved = resolve_strategy_to_source(
-            &Strategy::Registry {
+            &Strategy::ByVersion {
                 version_req: SemVerRange::Any,
                 build: BuildPolicy::IfStale,
             },
@@ -1728,7 +1728,7 @@ mod tests {
     }
 
     /// A corrupt link marker is a loud typed error at discovery, never a silent
-    /// skip that would leave resolution in a mixed checkout/registry state.
+    /// skip that would leave resolution in a mixed checkout/package-source state.
     #[test]
     fn corrupt_link_marker_is_a_loud_error() {
         let consumer = tempfile::tempdir().unwrap();
@@ -1903,7 +1903,7 @@ mod tests {
     /// resolves to the typed `InstalledPackageNotBuilt` fix-it, NOT `NeedsBuild`.
     /// The installed-slot loader never cold-builds on the app's critical path
     /// (that is `streamlib install`'s job, #1502/#1507); unlike a `.slpkg` /
-    /// `Url` / `Registry` resolve, it does not fall through to
+    /// `Url` / `ByVersion` resolve, it does not fall through to
     /// `source_for_resolved_dir`. Mentally revert the load-only guard in
     /// `resolve_installed_cache_strategy` and this resolves to `NeedsBuild` (a
     /// silent runtime cold-build), failing the match.
@@ -1984,35 +1984,35 @@ mod tests {
     }
 
     // =====================================================================
-    // #1518 — registry reuse is gated on the materialized manifest version, so
+    // #1518 — package-source reuse is gated on the materialized manifest version, so
     // a slot left by a divergent version is re-downloaded, never loaded as the
     // wrong version.
     // =====================================================================
 
-    /// Registry reuse is refused when the materialized slot pins a different
+    /// Package-source reuse is refused when the materialized slot pins a different
     /// version than the one selected — the wrong-version slot is rebuilt.
     /// Mentally revert to a `slot.is_dir()`-only gate and this returns `true`,
     /// loading `0.1.0`'s bytes as if they were `0.2.0`.
     #[test]
-    fn registry_reuse_refuses_wrong_version_slot() {
+    fn package_source_reuse_refuses_wrong_version_slot() {
         let dir = tempfile::tempdir().unwrap();
         manifest(dir.path(), RUST_YAML); // pins 0.1.0
         let selected = streamlib_idents::SemVer::new(0, 2, 0);
-        assert!(!registry_slot_holds_selected_version(
+        assert!(!package_source_slot_holds_selected_version(
             BuildPolicy::IfStale,
             dir.path(),
             selected
         ));
     }
 
-    /// Registry reuse is taken when the materialized slot pins exactly the
+    /// Package-source reuse is taken when the materialized slot pins exactly the
     /// selected version under `IfStale`.
     #[test]
-    fn registry_reuse_accepts_matching_version_slot() {
+    fn package_source_reuse_accepts_matching_version_slot() {
         let dir = tempfile::tempdir().unwrap();
         manifest(dir.path(), RUST_YAML); // pins 0.1.0
         let selected = streamlib_idents::SemVer::new(0, 1, 0);
-        assert!(registry_slot_holds_selected_version(
+        assert!(package_source_slot_holds_selected_version(
             BuildPolicy::IfStale,
             dir.path(),
             selected
@@ -2022,10 +2022,10 @@ mod tests {
     /// A slot with no readable manifest is refused (re-downloaded), never
     /// reused as the selected version.
     #[test]
-    fn registry_reuse_refuses_slot_without_manifest() {
+    fn package_source_reuse_refuses_slot_without_manifest() {
         let dir = tempfile::tempdir().unwrap();
         let selected = streamlib_idents::SemVer::new(0, 1, 0);
-        assert!(!registry_slot_holds_selected_version(
+        assert!(!package_source_slot_holds_selected_version(
             BuildPolicy::IfStale,
             dir.path(),
             selected
@@ -2035,13 +2035,13 @@ mod tests {
     /// Only `IfStale` reuses a materialized slot; the other policies always
     /// fall through to the re-download/extract branch even on a version match.
     #[test]
-    fn registry_reuse_only_under_if_stale_policy() {
+    fn package_source_reuse_only_under_if_stale_policy() {
         let dir = tempfile::tempdir().unwrap();
         manifest(dir.path(), RUST_YAML); // pins 0.1.0
         let selected = streamlib_idents::SemVer::new(0, 1, 0);
         for policy in [BuildPolicy::NeverBuild, BuildPolicy::AlwaysBuild] {
             assert!(
-                !registry_slot_holds_selected_version(policy, dir.path(), selected),
+                !package_source_slot_holds_selected_version(policy, dir.path(), selected),
                 "{policy:?} must not reuse the materialized slot"
             );
         }
@@ -2052,7 +2052,7 @@ mod tests {
     // override) builds IN-TREE beside its source: the injected staging
     // destination IS the source dir, so the orchestrator's in-place promote
     // lands only the regenerated outputs and never copies the tree into a
-    // co-located `streamlib_modules/@org/name` slot. Installed / registry /
+    // co-located `streamlib_modules/@org/name` slot. Installed / by-version /
     // `.slpkg` arms keep their co-located slot; a locked run (NeverBuild)
     // never gets here.
     // =====================================================================
@@ -2133,7 +2133,7 @@ mod tests {
         let link = active_link_for(consumer.path(), checkout.path());
 
         let resolved = resolve_strategy_to_source(
-            &Strategy::Registry {
+            &Strategy::ByVersion {
                 version_req: SemVerRange::Any,
                 build: BuildPolicy::IfStale,
             },

@@ -94,12 +94,12 @@ pub enum LinkError {
     LinkVerificationFailed { detail: String },
 
     /// A pre-existing consumer `Cargo.lock` pins the streamlib crates to
-    /// registry versions — cargo honors an existing lockfile over a newly-added
+    /// published versions — cargo honors an existing lockfile over a newly-added
     /// `[patch]`, so the link's patch is silently ignored — and the transparent
     /// re-lock could not run. The link is left applied (the patch IS on disk) so
     /// the named command finishes it directly.
     #[error(
-        "the consumer's Cargo.lock (`{lockfile}`) pins {crates} to registry versions, which \
+        "the consumer's Cargo.lock (`{lockfile}`) pins {crates} to published versions, which \
          defeats the link's `[patch]` — cargo honors an existing lockfile over a newly-added \
          `[patch]`. The link is applied but unverified because the automatic re-lock could not \
          run ({detail}). Finish it by re-locking the streamlib crate set:\n\n    {command}\n\n\
@@ -222,7 +222,7 @@ pub fn link(consumer_root: &Path, checkout: &Path, skip_verify: bool) -> Result<
 
     // Post-link verification: prove the [patch] actually took effect in the
     // consumer's cargo resolution. Two ways it can fail to redirect:
-    //   1. A pre-existing `Cargo.lock` pins the streamlib crates to registry
+    //   1. A pre-existing `Cargo.lock` pins the streamlib crates to published
     //      versions — cargo honors an existing lock over a newly-added [patch],
     //      so the patch is silently ignored. The fix is a re-lock, not a
     //      version-requirement change. `link` owns that step transparently.
@@ -527,7 +527,7 @@ fn derive_linkable_crates(checkout: &Path) -> Result<BTreeMap<String, PathBuf>, 
         .collect())
 }
 
-/// One streamlib crate that resolves from the registry instead of the checkout
+/// One streamlib crate that resolves by version instead of the checkout
 /// — i.e. failed to redirect through the link's `[patch]`.
 #[derive(Debug, Clone)]
 struct UnpatchedCrate {
@@ -537,7 +537,7 @@ struct UnpatchedCrate {
 
 /// Verify the consumer's cargo resolution honors the link: every resolved
 /// `streamlib*` / `vulkan-jpeg` package must be a path source under the
-/// checkout. Returns the crates that still resolve from the registry (empty ⇒
+/// checkout. Returns the crates that still resolve by version (empty ⇒
 /// fully patched); `Err(detail)` when cargo can't resolve the graph at all.
 /// `Ok(vec![])` (vacuously) when the consumer has no `Cargo.toml`.
 fn verify_cargo_patch_resolution(
@@ -649,7 +649,7 @@ fn verify_and_remedy_patch_resolution(
         // consumer's requirements, so cargo ignored the [patch].
         return Ok(VerifyOutcome::RollBack {
             detail: format!(
-                "these streamlib crates resolve from the registry, not the checkout — the \
+                "these streamlib crates resolve by version, not the checkout — the \
                  checkout's versions don't satisfy the consumer's version requirements: {}",
                 render_unpatched(&unpatched)
             ),
@@ -684,7 +684,7 @@ fn verify_and_remedy_patch_resolution(
         Ok(still) => Ok(VerifyOutcome::RollBack {
             detail: format!(
                 "after re-locking the consumer's Cargo.lock, these streamlib crates still \
-                 resolve from the registry — the checkout's versions don't satisfy the \
+                 resolve by version — the checkout's versions don't satisfy the \
                  consumer's version requirements: {}",
                 render_unpatched(&still)
             ),

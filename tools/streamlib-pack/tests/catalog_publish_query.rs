@@ -11,10 +11,10 @@ use std::path::{Path, PathBuf};
 
 use streamlib_idents::{
     CATALOG_INDEX_PATH, CatalogClient, CatalogRuntime, CatalogSchemaRef, Org, Package, PackageRef,
-    RegistryClient, RegistryConfig, SemVer, render_catalog_index_ndjson,
+    PackageSourceClient, PackageSource, SemVer, render_catalog_index_ndjson,
 };
 use streamlib_pack::catalog::{build_package_catalog, build_sibling_versions};
-use streamlib_pack::static_registry::{build_and_flip, write_package_catalog};
+use streamlib_pack::static_package_source::{build_and_flip, write_package_catalog};
 
 fn write(dir: &Path, rel: &str, body: &str) {
     let path = dir.join(rel);
@@ -99,12 +99,12 @@ processors:
 
 /// Emit a static tree the way `emit_slpkg_and_manifest` does — upload each
 /// `.slpkg` into the store, write each package's catalog + JTD, then the
-/// registry-wide aggregate — but hermetically (no cargo/uv/deno).
+/// tree-wide aggregate — but hermetically (no cargo/uv/deno).
 fn emit_catalog_tree(root: &Path, pkg_dirs: &[PathBuf]) {
     let slpkg = root.join("slpkg");
     std::fs::create_dir_all(&slpkg).unwrap();
-    // Registry client rooted at the tree root; it writes under `slpkg/`.
-    let cfg = RegistryConfig {
+    // Package source client rooted at the tree root; it writes under `slpkg/`.
+    let cfg = PackageSource {
         base_url: format!("file://{}", root.display()),
     };
     let siblings = build_sibling_versions(pkg_dirs).unwrap();
@@ -113,7 +113,7 @@ fn emit_catalog_tree(root: &Path, pkg_dirs: &[PathBuf]) {
     for dir in pkg_dirs {
         let arts = build_package_catalog(dir, &siblings).unwrap();
         // Upload a DUMMY `.slpkg` — the query path must never read it.
-        RegistryClient::new(&cfg)
+        PackageSourceClient::new(&cfg)
             .upload_slpkg(
                 &arts.catalog.package,
                 arts.catalog.version,
@@ -134,13 +134,13 @@ fn emit_catalog_tree(root: &Path, pkg_dirs: &[PathBuf]) {
 fn reconstruct_wiring_graph_from_catalog_without_touching_slpkg() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("packages");
-    let tree = tmp.path().join("registry");
+    let tree = tmp.path().join("package-source");
     let (core, camera) = author_two_packages(&src);
     emit_catalog_tree(&tree, &[core, camera]);
 
     let client = CatalogClient::new(format!("file://{}", tree.display()), None);
 
-    // 1. The registry-wide aggregate carries one line per processor across
+    // 1. The tree-wide aggregate carries one line per processor across
     //    both packages — the whole node palette in one fetch.
     let index = client.fetch_processor_index().unwrap();
     let names: Vec<(String, String)> = index
@@ -227,7 +227,7 @@ fn reconstruct_wiring_graph_from_catalog_without_touching_slpkg() {
 fn prerelease_publisher_jtd_resolves_by_release_core_ident() {
     let tmp = tempfile::tempdir().unwrap();
     let src = tmp.path().join("packages");
-    let tree = tmp.path().join("registry");
+    let tree = tmp.path().join("package-source");
 
     let widget = src.join("widget");
     write(

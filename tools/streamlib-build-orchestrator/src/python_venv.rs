@@ -36,15 +36,15 @@ use streamlib_engine::core::runtime::BuildError;
 /// `link_python_sdk`, when `Some`, is the linked checkout's Python SDK path
 /// (resolved once by the orchestrator from the active `streamlib link`); the
 /// staged pyproject's `streamlib` dependency is redirected at it so the venv
-/// resolves the SDK from the checkout instead of the registry — the cargo
-/// `[patch]` mirror on the Python side. `None` ⇒ registry resolution.
+/// resolves the SDK from the checkout instead of the package source — the cargo
+/// `[patch]` mirror on the Python side. `None` ⇒ by-version resolution from the package source.
 ///
 /// `link_checkout` is that same active-link checkout root, threaded to the
 /// in-venv `_generated_` codegen so the SDK's schema deps resolve from the
 /// checkout under a link. It is the orchestrator's authoritative link state,
 /// NOT re-derived from the marker — a relocated venv codegen must not walk up
 /// out of the staged cache into a stray marker (see
-/// [`streamlib_jtd_codegen::generate`]). `None` ⇒ registry resolution.
+/// [`streamlib_jtd_codegen::generate`]). `None` ⇒ by-version resolution from the package source.
 ///
 /// No-op (returns `Ok(())`) when the staged package has no Python runtime.
 #[tracing::instrument(skip(temp_dir, link_python_sdk, link_checkout), fields(temp_dir = %temp_dir.display(), package = %package_label))]
@@ -171,7 +171,7 @@ pub(crate) fn staged_package_has_python(temp_dir: &Path) -> bool {
 /// `streamlib` package directory through the venv interpreter, then run
 /// codegen against the SDK's shipped `streamlib.yaml`. Skips when
 /// `_generated_` is already populated. Fails loud when `streamlib` isn't
-/// importable in the venv: the SDK is resolved from a registry by version
+/// importable in the venv: the SDK is resolved from a package source by version
 /// (not injected), so a Python package MUST declare `streamlib` as a
 /// dependency.
 fn ensure_streamlib_generated_in_venv(
@@ -197,7 +197,7 @@ fn ensure_streamlib_generated_in_venv(
             format!(
                 "streamlib is not installed in the processor venv. A Python package \
                  must declare `streamlib` as a dependency — it is resolved from the \
-                 registry by version, not injected. Add `streamlib` to the package's \
+                 by version from the package source, not injected. Add `streamlib` to the package's \
                  pyproject.toml. ({})",
                 String::from_utf8_lossy(&probe.stderr).trim()
             ),
@@ -311,8 +311,8 @@ fn run_uv(args: &[&str], uv_cache_dir: &Path) -> Result<std::process::Output, St
     let mut cmd = Command::new("uv");
     cmd.args(args)
         .env("UV_CACHE_DIR", uv_cache_dir.to_str().unwrap_or(""));
-    // Resolve `streamlib` (and any other registry deps) from the SAME single
-    // registry location cargo / `.slpkg` use, deriving `UV_INDEX` from it
+    // Resolve `streamlib` (and any other by-version deps) from the SAME single
+    // package source location cargo / `.slpkg` use, deriving `UV_INDEX` from it
     // rather than depending on an ambiently-set one. A link-mode build resolves
     // `streamlib` from its injected `[tool.uv.sources]` path override, which
     // wins over the index regardless of what is set here.
@@ -328,11 +328,11 @@ fn run_uv(args: &[&str], uv_cache_dir: &Path) -> Result<std::process::Output, St
 }
 
 /// The `UV_INDEX` pypi simple-index URL derived from the single configured
-/// registry location (`STREAMLIB_REGISTRY_URL`), or `None` when no registry is
+/// package source location (`STREAMLIB_PACKAGE_SOURCE`), or `None` when no package source is
 /// configured — a link-mode / path-only build resolves `streamlib` from a
 /// `[tool.uv.sources]` override instead of an index.
 fn derive_uv_index() -> Option<String> {
-    streamlib_idents::RegistryConfig::from_env().map(|c| c.pypi_simple_index_url())
+    streamlib_idents::PackageSource::from_env().map(|c| c.pypi_simple_index_url())
 }
 
 fn path_to_str(path: &Path, package_label: &str) -> Result<String, BuildError> {
@@ -445,16 +445,16 @@ packages = ["python"]
 
     #[test]
     #[serial_test::serial]
-    fn uv_index_derived_from_configured_registry_else_none() {
+    fn uv_index_derived_from_configured_package_source_else_none() {
         // The orchestrator derives `UV_INDEX` from the single configured
-        // registry location so the venv build no longer depends on an
+        // package source location so the venv build no longer depends on an
         // ambiently-set one. SAFETY: `#[serial]` — no other thread races these
         // process-global env writes.
-        let prev = std::env::var("STREAMLIB_REGISTRY_URL").ok();
+        let prev = std::env::var("STREAMLIB_PACKAGE_SOURCE").ok();
 
         // A local `file://` tree derives its pypi simple-index sub-URL.
         unsafe {
-            std::env::set_var("STREAMLIB_REGISTRY_URL", "file:///tmp/streamlib-tree");
+            std::env::set_var("STREAMLIB_PACKAGE_SOURCE", "file:///tmp/streamlib-tree");
         }
         assert_eq!(
             derive_uv_index().as_deref(),
@@ -463,7 +463,7 @@ packages = ["python"]
 
         // An HTTP mount derives the same simple-index shape.
         unsafe {
-            std::env::set_var("STREAMLIB_REGISTRY_URL", "http://127.0.0.1:8799");
+            std::env::set_var("STREAMLIB_PACKAGE_SOURCE", "http://127.0.0.1:8799");
         }
         assert_eq!(
             derive_uv_index().as_deref(),
@@ -474,14 +474,14 @@ packages = ["python"]
         // reverting the `from_env` gate to a hardcoded fallback would return
         // Some here and reintroduce the ambient dependence this removes.
         unsafe {
-            std::env::remove_var("STREAMLIB_REGISTRY_URL");
+            std::env::remove_var("STREAMLIB_PACKAGE_SOURCE");
         }
         assert_eq!(derive_uv_index(), None);
 
         unsafe {
             match prev {
-                Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
-                None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
+                Some(v) => std::env::set_var("STREAMLIB_PACKAGE_SOURCE", v),
+                None => std::env::remove_var("STREAMLIB_PACKAGE_SOURCE"),
             }
         }
     }
@@ -598,7 +598,7 @@ packages = ["python"]
         // Given the linked checkout's Python SDK path (resolved by the
         // orchestrator), the staged pyproject's streamlib dep is redirected at
         // it via `[tool.uv.sources]`. Reverting the rewrite would leave the dep
-        // resolving from the registry.
+        // resolving from the package source.
         let sdk = Path::new("/opt/streamlib-checkout/sdk/streamlib-python");
 
         let staged = tempfile::tempdir().unwrap();

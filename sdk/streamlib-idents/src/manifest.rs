@@ -21,7 +21,7 @@ use crate::semver::{SemVer, SemVerRange};
 ///
 /// Each manifest is **standalone**: it carries its own dep declarations
 /// (`dependencies:`) and optional dev-time overrides (`patch:`) without
-/// reaching into a tree-level shared registry. The streamlib model
+/// reaching into a tree-level shared dependency table. The streamlib model
 /// matches `wrangler.toml` / `Cargo.toml` per-package shape — there is
 /// no workspace walk-up; what you see in the yaml is what the runtime
 /// resolves against.
@@ -52,7 +52,7 @@ pub struct Manifest {
     /// A path patch is a dev-loop-only affordance: at resolve time the
     /// resolver uses it only when its target exists on disk (the monorepo
     /// dev loop) and otherwise falls back to resolving the declared
-    /// `dependencies:` version from the registry, so a path patch that
+    /// `dependencies:` version from the package source, so a path patch that
     /// ships in a published artifact never breaks a standalone consumer
     /// (the two-loops distribution model).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -304,7 +304,8 @@ pub struct PackageMetadata {
 
 /// Dependency declaration. Three sources:
 ///
-/// - String form `^1.2.3` → registry dependency with a semver range
+/// - String form `^1.2.3` → version dependency with a semver range, resolved
+///   by version from a package source
 /// - `{ path: ../foo }` → path dependency
 /// - `{ git: ..., rev: ... }` → git dependency
 ///
@@ -314,7 +315,7 @@ pub struct PackageMetadata {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(untagged)]
 pub enum DependencySpec {
-    Registry(RegistryDependency),
+    Version(VersionDependency),
     Path(PathDependency),
     Git(GitDependency),
 }
@@ -326,10 +327,10 @@ impl DependencySpec {
     /// its schema/port references; a declared dependency that resolves to none
     /// of them is otherwise reported as prunable. `runtime: true` marks the
     /// dependency as intentionally schema-unreferenced so the reconciler keeps
-    /// it. Registry-string shorthand (`^1.2.3`) is never a runtime dependency.
+    /// it. A bare version-range string (`^1.2.3`) is never a runtime dependency.
     pub fn is_runtime(&self) -> bool {
         match self {
-            Self::Registry(r) => r.runtime,
+            Self::Version(r) => r.runtime,
             Self::Path(p) => p.runtime,
             Self::Git(g) => g.runtime,
         }
@@ -344,7 +345,7 @@ fn is_false(flag: &bool) -> bool {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct RegistryDependency {
+pub struct VersionDependency {
     pub version: SemVerRange,
     /// Runtime-only dependency marker — see [`DependencySpec::is_runtime`].
     #[serde(default, skip_serializing_if = "is_false")]
@@ -382,19 +383,19 @@ impl JsonSchema for DependencySpec {
     }
     fn json_schema(generator: &mut SchemaGenerator) -> Schema {
         let semver_range = generator.subschema_for::<SemVerRange>();
-        let registry = generator.subschema_for::<RegistryDependency>();
+        let version = generator.subschema_for::<VersionDependency>();
         let path = generator.subschema_for::<PathDependency>();
         let git = generator.subschema_for::<GitDependency>();
         Schema::Object(SchemaObject {
             metadata: Some(Box::new(schemars::schema::Metadata {
                 description: Some(
-                    "Dependency declaration: a bare semver-range string (registry shorthand), or one of the structured `{ version }` / `{ path }` / `{ git, rev }` maps."
+                    "Dependency declaration: a bare semver-range string (resolved by version from a package source), or one of the structured `{ version }` / `{ path }` / `{ git, rev }` maps."
                         .into(),
                 ),
                 ..Default::default()
             })),
             subschemas: Some(Box::new(SubschemaValidation {
-                one_of: Some(vec![semver_range, registry, path, git]),
+                one_of: Some(vec![semver_range, version, path, git]),
                 ..Default::default()
             })),
             ..Default::default()
@@ -402,8 +403,9 @@ impl JsonSchema for DependencySpec {
     }
 }
 
-// Custom Deserialize: a bare string `^1.2.3` is sugar for a Registry
-// dependency. A map is one of the structured variants.
+// Custom Deserialize: a bare string `^1.2.3` is sugar for a version
+// dependency (resolved by version from a package source). A map is one of
+// the structured variants.
 impl<'de> Deserialize<'de> for DependencySpec {
     fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
         #[derive(Deserialize)]
@@ -416,18 +418,18 @@ impl<'de> Deserialize<'de> for DependencySpec {
         #[derive(Deserialize)]
         #[serde(untagged, deny_unknown_fields)]
         enum StructuredRepr {
-            Registry(RegistryDependency),
+            Version(VersionDependency),
             Path(PathDependency),
             Git(GitDependency),
         }
 
         let repr = Repr::deserialize(d)?;
         Ok(match repr {
-            Repr::Range(v) => Self::Registry(RegistryDependency {
+            Repr::Range(v) => Self::Version(VersionDependency {
                 version: v,
                 runtime: false,
             }),
-            Repr::Map(StructuredRepr::Registry(r)) => Self::Registry(r),
+            Repr::Map(StructuredRepr::Version(r)) => Self::Version(r),
             Repr::Map(StructuredRepr::Path(p)) => Self::Path(p),
             Repr::Map(StructuredRepr::Git(g)) => Self::Git(g),
         })
@@ -574,8 +576,8 @@ dependencies:
         assert!(out.contains("0.4.33-dev.2"), "serialized: {out}");
         // A prerelease range dep round-trips too.
         match m.dependencies.get(&pkg_ref("tatolab", "core")).unwrap() {
-            DependencySpec::Registry(r) => assert_eq!(r.version.to_string(), ">=1.0.0-rc.1"),
-            other => panic!("expected Registry, got {:?}", other),
+            DependencySpec::Version(r) => assert_eq!(r.version.to_string(), ">=1.0.0-rc.1"),
+            other => panic!("expected Version, got {:?}", other),
         }
     }
 
@@ -600,8 +602,8 @@ dependencies:
         // would force a string parser at the lookup site, which is the
         // structured-everywhere anti-pattern.
         match m.dependencies.get(&pkg_ref("tatolab", "core")).unwrap() {
-            DependencySpec::Registry(r) => assert_eq!(r.version.to_string(), "^1.0.0"),
-            other => panic!("expected Registry, got {:?}", other),
+            DependencySpec::Version(r) => assert_eq!(r.version.to_string(), "^1.0.0"),
+            other => panic!("expected Version, got {:?}", other),
         }
 
         match m.dependencies.get(&pkg_ref("tatolab", "h264")).unwrap() {

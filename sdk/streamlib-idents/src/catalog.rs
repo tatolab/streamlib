@@ -7,14 +7,14 @@
 //!
 //! The catalog is a deterministic function of a package's `streamlib.yaml`
 //! (built at publish time by `streamlib-pack`) written into the static
-//! registry tree alongside the artifacts:
+//! package source tree alongside the artifacts:
 //!
 //! - Per-package `slpkg/<name>/<version>/<name>.catalog.json` — the
 //!   [`PackageCatalog`] for one published package.
 //! - Per-schema `slpkg/<name>/<version>/schemas/<Type>.jtd.json` — the JSON
 //!   Type Definition for each schema the package OWNS (deduped by ownership;
 //!   a package emits only the schemas it declares locally).
-//! - Registry-wide `catalog/index.ndjson` — one [`CatalogIndexLine`] per
+//! - Tree-wide `catalog/index.ndjson` — one [`CatalogIndexLine`] per
 //!   processor across every published package (the node-palette aggregate).
 //!
 //! Port and config schema references are RESOLVED to release-core
@@ -31,7 +31,7 @@ use crate::error::{ResolverError, ResolverResult};
 use crate::ident::{PackageRef, SchemaIdent, TypeName};
 use crate::semver::SemVer;
 
-/// Tree-relative path of the registry-wide processor index (NDJSON).
+/// Tree-relative path of the tree-wide processor index (NDJSON).
 pub const CATALOG_INDEX_PATH: &str = "catalog/index.ndjson";
 
 /// The per-package catalog filename for a package named `pkg_name`
@@ -49,7 +49,7 @@ pub fn schema_jtd_file_name(type_name: &TypeName) -> String {
 
 /// Processor runtime language recorded in the catalog. A lean mirror of the
 /// authored `runtime` field, decoupled from the engine / processor-schema
-/// types so the catalog stays engine-free and registry-local.
+/// types so the catalog stays engine-free and package-source-local.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum CatalogRuntime {
@@ -174,7 +174,7 @@ pub struct PackageCatalog {
     pub processors: Vec<CatalogProcessor>,
 }
 
-/// One line of the registry-wide `catalog/index.ndjson` — a self-contained
+/// One line of the tree-wide `catalog/index.ndjson` — a self-contained
 /// per-processor record. The full node-palette / wiring graph is
 /// reconstructable from the aggregate alone, without fetching any
 /// per-package catalog or `.slpkg`.
@@ -194,7 +194,7 @@ pub struct CatalogIndexLine {
 
 /// Render index lines as NDJSON (one JSON object per line, trailing newline) —
 /// the byte shape written to `catalog/index.ndjson`. Mirrors the version-index
-/// NDJSON pattern in the registry client.
+/// NDJSON pattern in the package source client.
 pub fn render_catalog_index_ndjson(lines: &[CatalogIndexLine]) -> String {
     let mut out = String::new();
     for line in lines {
@@ -216,7 +216,7 @@ pub fn parse_catalog_index_ndjson(body: &[u8]) -> Vec<CatalogIndexLine> {
         .collect()
 }
 
-/// Tokenless read client over a static registry tree's catalog surface.
+/// Tokenless read client over a package source tree's catalog surface.
 ///
 /// Points at the tree ROOT (the directory that holds `slpkg/`, `cargo/`,
 /// `catalog/`, …) — `file://<root>` for a local / CI tree or `http(s)://…`
@@ -256,15 +256,15 @@ impl CatalogClient {
             match std::fs::read(&path) {
                 Ok(b) => Ok(Some(b)),
                 Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-                Err(e) => Err(ResolverError::RegistryFetchFailed {
+                Err(e) => Err(ResolverError::PackageSourceFetchFailed {
                     name: rel.to_string(),
                     detail: format!("reading {} : {e}", path.display()),
                 }),
             }
         } else {
             let url = format!("{}/{}", self.base_url, rel);
-            crate::registry::http_get_optional(&url, self.token.as_deref()).map_err(|detail| {
-                ResolverError::RegistryFetchFailed {
+            crate::package_source::http_get_optional(&url, self.token.as_deref()).map_err(|detail| {
+                ResolverError::PackageSourceFetchFailed {
                     name: rel.to_string(),
                     detail: format!("fetching {url}: {detail}"),
                 }
@@ -272,7 +272,7 @@ impl CatalogClient {
         }
     }
 
-    /// Fetch the registry-wide processor index (`catalog/index.ndjson`). An
+    /// Fetch the tree-wide processor index (`catalog/index.ndjson`). An
     /// absent index yields an empty list — parity with the version index's
     /// missing-file case.
     pub fn fetch_processor_index(&self) -> ResolverResult<Vec<CatalogIndexLine>> {
@@ -299,7 +299,7 @@ impl CatalogClient {
             return Ok(None);
         };
         let catalog =
-            serde_json::from_slice(&body).map_err(|e| ResolverError::RegistryFetchFailed {
+            serde_json::from_slice(&body).map_err(|e| ResolverError::PackageSourceFetchFailed {
                 name: rel,
                 detail: format!("parsing package catalog JSON: {e}"),
             })?;
@@ -324,7 +324,7 @@ impl CatalogClient {
             return Ok(None);
         };
         let value =
-            serde_json::from_slice(&body).map_err(|e| ResolverError::RegistryFetchFailed {
+            serde_json::from_slice(&body).map_err(|e| ResolverError::PackageSourceFetchFailed {
                 name: rel,
                 detail: format!("parsing schema JTD JSON: {e}"),
             })?;

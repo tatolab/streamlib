@@ -47,7 +47,7 @@ pub use streamlib_cargo_build::CargoProfile;
 
 pub mod catalog;
 pub mod dependency_reconcile;
-pub mod static_registry;
+pub mod static_package_source;
 
 // The `streamlib link` marker schema + discovery moved to `streamlib-idents`
 // (its natural home alongside the manifest/lockfile types) so the engine module
@@ -472,11 +472,11 @@ pub fn assemble_artifact(
 /// - `cargo_config_files` — extra cargo `--config <file>` TOML files (the
 ///   consumer's `streamlib link`-emitted `.cargo/config.toml`) so a staged
 ///   package cdylib resolves its `streamlib*` **crate** deps from the linked
-///   checkout (the `[patch."<index>"]` block) instead of the registry.
+///   checkout (the `[patch."<index>"]` block) instead of the package source.
 /// - `link_checkout` — the linked checkout path, threaded to the package's
 ///   `build.rs` via [`streamlib_idents::LINK_CHECKOUT_ENV`] so its **schema**
 ///   deps resolve from `<checkout>/packages/<name>` too — completing the
-///   zero-registry dev loop (host + plugin + schemas from one source tree).
+///   link dev loop (host + plugin + schemas from one source tree).
 ///
 /// Empty slice + `None` ⇒ identical to [`assemble_artifact`].
 pub fn assemble_artifact_with_cargo_config(
@@ -511,7 +511,7 @@ pub fn assemble_artifact_with_cargo_config(
     }
 
     // Distribution artifacts are standalone: a published `.slpkg` resolves
-    // every dependency from the registry, never a path. Refuse to ship one
+    // every dependency by version from the package source, never a path. Refuse to ship one
     // that still carries a path-flavored Cargo dep or a streamlib.yaml path
     // `patch:` (dev-only monorepo affordances). The orchestrator's
     // `StagedDir` materialization is exempt — it builds in place under the
@@ -527,7 +527,7 @@ pub fn assemble_artifact_with_cargo_config(
         // processors registered live at runtime; it is deliberately NOT
         // publishable. Refuse to build a distribution `.slpkg` that squats it
         // so a session-local name can never masquerade as an installable
-        // package on the registry. `StagedDir` stays exempt (dev-resolution).
+        // package in the package source. `StagedDir` stays exempt (dev-resolution).
         if package.org.is_reserved_for_session() {
             anyhow::bail!(
                 "streamlib.yaml at {} declares the reserved `@{}/…` org, which is \
@@ -606,8 +606,8 @@ pub fn assemble_artifact_with_cargo_config(
     // A source-only `.slpkg` (the distribution artifact `streamlib pkg build`
     // / `publish` ships) carries NO prebuilt cdylib and NO local compilation —
     // the consumer builds it from the bundled source on their own host
-    // (`streamlib add` / `Strategy::Registry`, AlwaysBuild), resolving every dep
-    // from the registry. Only the runtime orchestrator's `StagedDir` target
+    // (`streamlib add` / `Strategy::ByVersion`, AlwaysBuild), resolving every dep
+    // by version from the package source. Only the runtime orchestrator's `StagedDir` target
     // compiles the cdylib here, because that materialization IS the host build.
     if has_rust && matches!(target, AssembleTarget::StagedDir(_)) {
         let host_triple = streamlib_cargo_build::host_target_triple();
@@ -727,7 +727,7 @@ pub fn assemble_artifact_with_cargo_config(
     // Derive the crate version from the `.slpkg` semver. A Rust package's
     // `Cargo.toml` `[package].version` is stamped to match
     // `streamlib.yaml`'s `package.version` so a stale in-tree crate version
-    // can never reach the registry via the artifact. `None` when there's
+    // can never reach the package source via the artifact. `None` when there's
     // nothing to stamp (no `Cargo.toml`, no `[package].version`).
     let stamped_cargo_toml = if has_rust {
         stamped_cargo_toml_bytes(pkg_dir, &pkg_version)?
@@ -871,11 +871,11 @@ fn enforce_declared_dependencies_match_code(
     Ok(())
 }
 
-/// Enforce the standalone, registry-only contract for a published `.slpkg`:
+/// Enforce the standalone, package-source-only contract for a published `.slpkg`:
 /// fail if the package carries anything path-flavored — a `path = …` Cargo
 /// dependency or a streamlib.yaml `patch:` entry. Both are dev-only monorepo
 /// affordances; a distributed source package must resolve every artifact from
-/// the registry, so a stray path would ship and break the consumer's off-tree
+/// the package source, so a stray path would ship and break the consumer's off-tree
 /// build. Called only for the `Slpkg` target (`pkg build` / `pkg publish`).
 fn ensure_no_path_artifacts(pkg_dir: &Path) -> Result<()> {
     // Both halves flow through the SAME helpers the whole-tree emit's skip
@@ -886,8 +886,8 @@ fn ensure_no_path_artifacts(pkg_dir: &Path) -> Result<()> {
     if !patch_offenders.is_empty() {
         anyhow::bail!(
             "{} carries path `patch:` override(s) for [{}] — a published package \
-             must be standalone (registry-only). Remove the `patch:` block; each \
-             dependency resolves from the registry by the version in `dependencies:`.",
+             must be standalone (package-source-only). Remove the `patch:` block; each \
+             dependency resolves by version from the package source per the version in `dependencies:`.",
             pkg_dir.join(Manifest::FILE_NAME).display(),
             patch_offenders.join(", "),
         );
@@ -897,9 +897,9 @@ fn ensure_no_path_artifacts(pkg_dir: &Path) -> Result<()> {
     if !cargo_offenders.is_empty() {
         anyhow::bail!(
             "{} declares path dependenc(ies) [{}] — a published package must be \
-             standalone (registry-only). Replace each with \
+             standalone (package-source-only). Replace each with \
              `{{ version = \"…\", registry = \"tatolab\" }}` so the crate resolves \
-             from the registry.",
+             by version from the package source.",
             pkg_dir.join("Cargo.toml").display(),
             cargo_offenders.join(", "),
         );
@@ -909,7 +909,7 @@ fn ensure_no_path_artifacts(pkg_dir: &Path) -> Result<()> {
 
 /// Names of dependency-table `path` deps in `<pkg_dir>/Cargo.toml` — the same
 /// scan [`ensure_no_path_artifacts`] rejects on. Empty when the Cargo.toml is
-/// absent or carries only registry-resolved deps. Reads + parses the Cargo.toml
+/// absent or carries only version-resolved deps. Reads + parses the Cargo.toml
 /// then defers to [`cargo_path_dep_names`], so a `[[bin]].path` / `[lib].path`
 /// TARGET path never counts — only dependency tables are scanned.
 fn cargo_path_dep_offenders(pkg_dir: &Path) -> Result<Vec<String>> {
@@ -987,11 +987,11 @@ fn cargo_path_dep_names(doc: &toml::Value) -> Vec<String> {
 ///
 /// `Cargo.lock` is stripped too: a streamlib package is a cdylib *library*,
 /// and a library's lockfile is neither published nor honored by a downstream
-/// build. Shipping it is actively harmful in the registry model — the lock
+/// build. Shipping it is actively harmful in the package-source model — the lock
 /// pins transitive deps (incl. the streamlib SDK) by exact version+checksum,
 /// so an in-place republish of any pinned version makes the lock's checksum
 /// stale and `cargo build` aborts with "checksum changed between lock files".
-/// The consumer re-resolves from the registry by the manifest's version reqs;
+/// The consumer re-resolves by version from the package source per the manifest's version reqs;
 /// the lock is pure byproduct (already gitignored).
 pub fn is_non_source_artifact(name: &std::ffi::OsStr) -> bool {
     match name.to_str() {
@@ -1102,7 +1102,7 @@ fn cargo_build_streaming(
     // Thread the active `streamlib link` checkout to the package's `build.rs`
     // schema-dep codegen, which reads it via `ResolverOptions::from_env_or_marker`
     // and resolves a dep present in `<checkout>/packages/<name>` from the
-    // checkout — the schema-dep half of the zero-registry dev loop, mirroring the
+    // checkout — the schema-dep half of the link dev loop, mirroring the
     // cargo `[patch]` above for the crate half. `build.rs` runs as a child of
     // this `cargo build`, so an env var set here reaches it.
     //
@@ -1257,7 +1257,7 @@ fn manifest_bytes_for(pkg_dir: &Path, policy: PathDepPolicy) -> Result<Vec<u8>> 
 /// The predicate the whole-tree static-registry emit skips on and the CLI
 /// `.slpkg` gate rejects on share this one definition — the skip is the same
 /// condition, sound by construction rather than a proxy. Filters exactly
-/// [`DependencySpec::Path`], so git/registry `patch:` overrides never count.
+/// [`DependencySpec::Path`], so git/version-range `patch:` overrides never count.
 pub(crate) fn path_patch_offenders(pkg_dir: &Path) -> Result<Vec<String>> {
     let manifest_path = pkg_dir.join(Manifest::FILE_NAME);
     if !manifest_path.exists() {
@@ -1307,14 +1307,14 @@ fn reject_path_patches(pkg_dir: &Path) -> Result<()> {
     }
     anyhow::bail!(
         "{} carries path-flavor `patch:` entries which are dev-time overrides and not \
-         publishable: {}. Remove them — or convert to a git/registry override — before packing.",
+         publishable: {}. Remove them — or convert to a git/version-range override — before packing.",
         pkg_dir.join(Manifest::FILE_NAME).display(),
         offenders.join(", "),
     );
 }
 
 /// Strip dev-time path-flavor `patch:` entries from a `streamlib.yaml`
-/// body, returning the rewritten YAML. `dependencies:`, git/registry
+/// body, returning the rewritten YAML. `dependencies:`, git/version-range
 /// `patch:` overrides, and every other manifest field pass through
 /// unchanged.
 ///
@@ -1324,7 +1324,7 @@ fn reject_path_patches(pkg_dir: &Path) -> Result<()> {
 /// `cargo publish` must *strip* it: the path patch is a legitimate dev
 /// affordance inside the monorepo (it redirects a dep to local source for
 /// instant edits), but the published manifest must be path-free so a
-/// registry-cached consumer resolves the dep from the registry instead of a
+/// package-source consumer resolves the dep by version from the package source instead of a
 /// dangling `../../packages/...` path. The schema-tier analog of cargo
 /// stripping `path` from a `[dependencies]` path dep on publish.
 ///
@@ -1357,7 +1357,7 @@ pub fn strip_path_patches_in_dir(dir: &Path) -> Result<()> {
 }
 
 /// Serialize `streamlib.yaml` with every relative `path:` dep/patch
-/// rewritten to absolute, anchored at `pkg_dir`. Registry / git entries
+/// rewritten to absolute, anchored at `pkg_dir`. By-version / git entries
 /// pass through unchanged.
 fn rewrite_manifest_path_deps_absolute(pkg_dir: &Path) -> Result<Vec<u8>> {
     let yaml =
@@ -2037,7 +2037,7 @@ mod tests {
         // StagedDir (orchestrator dev-resolution build) stays exempt. Mentally
         // revert the `is_reserved_for_session()` bail and the Slpkg arm below
         // assembles instead of erroring, letting a session name squat the
-        // registry.
+        // package source.
         let dir = tempdir().unwrap();
         std::fs::create_dir(dir.path().join("schemas")).unwrap();
         std::fs::write(
@@ -2228,7 +2228,7 @@ mod tests {
     #[test]
     fn slpkg_rejects_path_cargo_dependency() {
         // The no-path gate: a published package must be standalone
-        // (registry-only). A `path = …` Cargo dep is refused so a
+        // (package-source-only). A `path = …` Cargo dep is refused so a
         // non-standalone package can never ship. Revert the gate and a
         // dangling `../foo` path would break the consumer's off-tree build.
         let dir = tempdir().unwrap();
@@ -2693,7 +2693,7 @@ mod tests {
 
     #[test]
     fn strip_path_patches_removes_path_patch_keeps_dependencies() {
-        // Engine-shaped manifest: a registry dep + a dev path patch. The
+        // Engine-shaped manifest: a version dep + a dev path patch. The
         // strip must drop the patch entry but leave the dependency range,
         // schemas, package block, and everything else intact.
         let yaml = "package:\n  org: tatolab\n  name: engine\n  version: 0.4.30\ndependencies:\n  \"@tatolab/escalate\": \"^1.0.0\"\npatch:\n  \"@tatolab/escalate\":\n    path: ../../packages/escalate\nschemas:\n  EscalateRequest:\n    package: \"@tatolab/escalate\"\n";

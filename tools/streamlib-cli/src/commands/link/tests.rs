@@ -571,7 +571,7 @@ fn failed_refresh_derivation_preserves_the_active_link() {
 #[test]
 fn derive_linkable_crates_selects_the_streamlib_sdk_closure() {
     // Runs `cargo metadata --no-deps` against the real workspace this test was
-    // built in — offline, no registry required.
+    // built in — offline, no package source required.
     let checkout = workspace_checkout();
     let crates = match derive_linkable_crates(&checkout) {
         Ok(c) => c,
@@ -633,7 +633,7 @@ fn real_link_offline_e2e_link_refresh_unlink_roundtrip() {
     match link(&consumer, &checkout, false) {
         Ok(()) => {}
         // Environment-dependent skips: no cargo, or a cold cargo cache that
-        // can't resolve offline AND no registry online.
+        // can't resolve offline AND no package source online.
         Err(LinkError::CrateSetDerivation { detail, .. })
             if detail.contains("failed to run cargo") =>
         {
@@ -691,7 +691,7 @@ fn relocked_cargo_lock_is_recorded_and_restored_byte_clean_across_cycles() {
     let consumer = tmp.path().canonicalize().unwrap();
     write_full_consumer(&consumer);
     let lockfile = consumer.join("Cargo.lock");
-    let original_lock = b"# registry-born lock\nversion = 4\n".to_vec();
+    let original_lock = b"# published-version-born lock\nversion = 4\n".to_vec();
     std::fs::write(&lockfile, &original_lock).unwrap();
 
     let cargo = consumer.join(".cargo").join("config.toml");
@@ -858,7 +858,7 @@ fn stale_lock_relock_failed_error_names_lockfile_and_command() {
 #[test]
 fn link_verification_failed_message_is_actionable_and_not_the_old_misdiagnosis() {
     let err = LinkError::LinkVerificationFailed {
-        detail: "these streamlib crates resolve from the registry, not the checkout — the \
+        detail: "these streamlib crates resolve by version, not the checkout — the \
                  checkout's versions don't satisfy the consumer's version requirements: \
                  streamlib@0.6.0"
             .to_string(),

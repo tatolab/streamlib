@@ -29,7 +29,7 @@ use streamlib::sdk::runtime::{
     AddPackageOptions, AddPackageReport, AddPackageSource, AppModulesDir, BuildPolicy,
     LinkPackageReport,
 };
-use streamlib_idents::{DependencySpec, Manifest, PackageRef, RegistryDependency, SemVerRange};
+use streamlib_idents::{DependencySpec, Manifest, PackageRef, VersionDependency, SemVerRange};
 use streamlib_processor_schema::StreamlibYaml;
 
 use super::build_on_place::{
@@ -207,7 +207,7 @@ fn record_dependency_range(manifest_path: &Path, spec: &str) -> Result<()> {
         .dependencies
         .insert(
             pkg_ref.clone(),
-            DependencySpec::Registry(RegistryDependency {
+            DependencySpec::Version(VersionDependency {
                 version: range.clone(),
                 runtime: false,
             }),
@@ -316,8 +316,8 @@ fn line_body(line: &str) -> &str {
 
 /// Parse an authoring-mode spec into a canonical [`PackageRef`] and its
 /// version. Accepts `@org/name@<version>`; the version is required in
-/// authoring mode (the caret range is anchored on it — there is no registry
-/// lookup here). Returns a CLI-friendly error otherwise.
+/// authoring mode (the caret range is anchored on it — there is no package
+/// source lookup here). Returns a CLI-friendly error otherwise.
 fn parse_authoring_spec(spec: &str) -> Result<(PackageRef, String)> {
     let inner = spec.strip_prefix('@').ok_or_else(|| {
         anyhow::anyhow!("expected `@org/name@<version>` (e.g. `@tatolab/core@1.0.0`); got `{spec}`")
@@ -443,13 +443,13 @@ mod tests {
     }
 
     #[test]
-    fn detect_routes_registry_coordinate_to_guidance_error() {
-        // The old registry-coordinate arm is gone; an `@org/name` spec gets
+    fn detect_routes_version_coordinate_to_guidance_error() {
+        // The old version-coordinate arm is gone; an `@org/name` spec gets
         // the typed guidance error from the source detector.
         let err = AddPackageSource::detect("@tatolab/camera").expect_err("must be rejected");
         let message = err.to_string();
         assert!(
-            message.contains("registry coordinate"),
+            message.contains("version coordinate"),
             "guidance missing: {message}"
         );
     }
@@ -554,11 +554,11 @@ mod tests {
         let reparsed: StreamlibYaml = serde_yaml::from_str(&written).unwrap();
         let core = parse_canonical_package_ref("@tatolab/core").unwrap();
         match reparsed.dependencies.get(&core).unwrap() {
-            DependencySpec::Registry(r) => {
+            DependencySpec::Version(r) => {
                 assert_eq!(r.version, SemVerRange::from_str("^1.4.0").unwrap());
                 assert!(!r.runtime);
             }
-            other => panic!("expected registry dep, got {other:?}"),
+            other => panic!("expected version dep, got {other:?}"),
         }
         // Runtime fields (processors) survive the round-trip.
         assert_eq!(reparsed.processors.len(), 1);
@@ -627,10 +627,10 @@ processors:
         let reparsed: StreamlibYaml = serde_yaml::from_str(&written).unwrap();
         let core = parse_canonical_package_ref("@tatolab/core").unwrap();
         match reparsed.dependencies.get(&core).unwrap() {
-            DependencySpec::Registry(r) => {
+            DependencySpec::Version(r) => {
                 assert_eq!(r.version, SemVerRange::from_str("^1.4.0").unwrap());
             }
-            other => panic!("expected registry dep, got {other:?}"),
+            other => panic!("expected version dep, got {other:?}"),
         }
 
         // Nothing but the `dependencies:` block was added: deleting that block

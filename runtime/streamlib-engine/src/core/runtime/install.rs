@@ -22,7 +22,7 @@
 use std::path::{Path, PathBuf};
 
 use streamlib_idents::{
-    PackageRef, RegistryConfig, ResolvedPackage, ResolverOptions, SemVer, resolve_with,
+    PackageRef, PackageSource, ResolvedPackage, ResolverOptions, SemVer, resolve_with,
 };
 
 use super::module_loader::host_target_triple;
@@ -32,20 +32,20 @@ use super::{
 };
 
 /// Knobs for [`install`]. Defaults are the ordinary "install this app"
-/// posture — write the lockfile next to the manifest, resolve the registry
-/// from the environment, materialize with [`BuildPolicy::IfStale`].
+/// posture — write the lockfile next to the manifest, resolve the package
+/// source from the environment, materialize with [`BuildPolicy::IfStale`].
 #[derive(Debug, Clone, Default)]
 pub struct InstallOptions {
     /// Where to write the application lockfile. `None` ⇒
     /// `<root_dir>/streamlib-app.lock`.
     pub lockfile_path: Option<PathBuf>,
-    /// Resolver cache dir for registry `.slpkg` extraction + git checkouts.
+    /// Resolver cache dir for by-version `.slpkg` extraction + git checkouts.
     /// `None` ⇒ `$HOME/.streamlib/resolver-cache/`.
     pub resolver_cache_dir: Option<PathBuf>,
-    /// Registry config for resolving registry-flavored deps. `None` ⇒ read
-    /// from the environment ([`RegistryConfig::from_env`]); still `None`
-    /// after that means "no registry" and a registry dep fails loud.
-    pub registry: Option<RegistryConfig>,
+    /// Package source for resolving version-range deps. `None` ⇒ read from the
+    /// environment ([`PackageSource::from_env`]); still `None` after that means
+    /// "no package source configured" and a version dep fails loud.
+    pub package_source: Option<PackageSource>,
     /// Build policy for each package's materialize. Defaults to
     /// [`BuildPolicy::IfStale`] — build when the tool's fingerprint says so,
     /// reuse an up-to-date cache slot otherwise. Native hosts + the
@@ -67,7 +67,7 @@ pub struct InstallReport {
 #[derive(Debug, thiserror::Error)]
 pub enum InstallError {
     /// The `streamlib.yaml` graph failed to resolve (missing dep, version
-    /// conflict, registry error, unreadable manifest, …).
+    /// conflict, package-source error, unreadable manifest, …).
     #[error("resolving the package graph at {} failed: {source}", root_dir.display())]
     Resolve {
         root_dir: PathBuf,
@@ -99,13 +99,13 @@ pub enum InstallError {
 /// This is the programmatic `streamlib install`. It:
 ///
 /// 1. Resolves `root_dir`'s `streamlib.yaml` range→concrete over the full
-///    transitive tree (network at install time is expected — registry
+///    transitive tree (network at install time is expected — package source
 ///    listing / download / git fetch).
 /// 2. Materializes every resolved package into the app's co-located
 ///    `streamlib_modules/@org/name` slots via `orchestrator` (building cdylibs
 ///    / provisioning venvs / **pre-building the subprocess native hosts** so a
 ///    later polyglot run is offline). The orchestrator's own release-completeness pre-check fires
-///    here, so a partial registry release fails install before any lockfile
+///    here, so a partial package-source release fails install before any lockfile
 ///    is written — the lockfile always pins a completeness-checked set.
 /// 3. Writes the application lockfile pinning the exact resolved set.
 pub fn install(
@@ -114,10 +114,10 @@ pub fn install(
     sink: &dyn BuildEventSink,
     options: &InstallOptions,
 ) -> std::result::Result<InstallReport, InstallError> {
-    let registry = options.registry.clone().or_else(RegistryConfig::from_env);
+    let package_source = options.package_source.clone().or_else(PackageSource::from_env);
     let resolver_options = ResolverOptions {
         cache_dir: options.resolver_cache_dir.clone(),
-        registry,
+        package_source,
         // Install is the reproducible distribution seam: it resolves range →
         // concrete and pins a lockfile, so it is deliberately NOT link-aware — a
         // dev-loop `streamlib link` override must never leak into a lockfile.
@@ -240,7 +240,7 @@ fn package_ref_of(pkg: &ResolvedPackage) -> Option<(PackageRef, SemVer)> {
 /// Map a resolver source kind to the orchestrator's build-time provenance: a
 /// `path:` dep or the root manifest is the user's own editable tree (cargo deps
 /// may resolve outside it, `target/` is the user's), while a git-rev / `.slpkg`
-/// / registry source is a self-contained managed extract.
+/// / by-version source is a self-contained managed extract.
 fn provenance_of(source: &streamlib_idents::ResolvedSource) -> PackageSourceProvenance {
     use streamlib_idents::ResolvedSource;
     match source {
@@ -249,7 +249,7 @@ fn provenance_of(source: &streamlib_idents::ResolvedSource) -> PackageSourceProv
         }
         ResolvedSource::Git { .. }
         | ResolvedSource::Slpkg { .. }
-        | ResolvedSource::Registry { .. } => PackageSourceProvenance::ImmutableManagedExtract,
+        | ResolvedSource::ByVersion { .. } => PackageSourceProvenance::ImmutableManagedExtract,
     }
 }
 

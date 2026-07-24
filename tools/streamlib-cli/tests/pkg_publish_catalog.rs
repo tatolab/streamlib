@@ -1,12 +1,12 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! End-to-end `streamlib pkg publish` against a scratch `file://` registry
+//! End-to-end `streamlib pkg publish` against a scratch `file://` package source
 //! tree, driving the real `streamlib` binary. Proves the publish path emits the
 //! catalog artifacts (per-package `<name>.catalog.json`, owned schema JTD at the
 //! release-core path, and the tree-wide aggregate) alongside the `.slpkg` — so a
-//! registry populated purely by `pkg publish` is catalog-fetchable, not degraded
-//! to "no metadata."
+//! package source populated purely by `pkg publish` is catalog-fetchable, not
+//! degraded to "no metadata."
 //!
 //! This is the CLI-wiring counterpart to `streamlib-pack`'s
 //! `catalog_pkg_publish.rs` (which drives the pack functions directly): here the
@@ -48,11 +48,11 @@ fn pkg_publish_writes_fetchable_catalog_and_owned_jtd() {
     let pkg_dir = workspace.path().join("packages").join("foo");
     write_foo_package(&pkg_dir);
 
-    let registry = format!("file://{}", tree.path().display());
+    let package_source = format!("file://{}", tree.path().display());
     let out = Command::new(BIN)
         .args(["pkg", "publish"])
         .current_dir(&pkg_dir)
-        .env("STREAMLIB_REGISTRY_URL", &registry)
+        .env("STREAMLIB_PACKAGE_SOURCE", &package_source)
         .output()
         .expect("spawn streamlib binary");
     let stdout = String::from_utf8_lossy(&out.stdout);
@@ -81,7 +81,7 @@ fn pkg_publish_writes_fetchable_catalog_and_owned_jtd() {
 
     // The catalog is fetchable by a client (NOT None — the degraded state this
     // feature closes). foo is schema-only, so it contributes zero processors.
-    let client = CatalogClient::new(&registry, None);
+    let client = CatalogClient::new(&package_source, None);
     let catalog = client
         .fetch_package_catalog(
             &streamlib_idents::PackageRef::new(
@@ -146,11 +146,11 @@ processors:
     )
     .unwrap();
 
-    let registry = format!("file://{}", tree.path().display());
+    let package_source = format!("file://{}", tree.path().display());
     let out = Command::new(BIN)
         .args(["pkg", "publish"])
         .current_dir(&pkg_dir)
-        .env("STREAMLIB_REGISTRY_URL", &registry)
+        .env("STREAMLIB_PACKAGE_SOURCE", &package_source)
         .output()
         .expect("spawn streamlib binary");
     assert!(

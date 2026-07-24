@@ -6,7 +6,7 @@
 //! Turns a package's `streamlib.yaml` into the resolved
 //! [`PackageCatalog`] + per-processor [`CatalogIndexLine`]s + the JSON Type
 //! Definitions for the schemas it OWNS, ready for
-//! [`crate::static_registry`] to write into the registry tree.
+//! [`crate::static_package_source`] to write into the package source tree.
 //!
 //! Bare port / config schema references (`schema: VideoFrame`) are resolved
 //! to release-core [`SchemaIdent`]s against the manifest's `schemas:` map:
@@ -64,7 +64,7 @@ pub struct SchemaJtdFile {
 pub struct PackageCatalogArtifacts {
     /// The per-package `<name>.catalog.json` payload.
     pub catalog: PackageCatalog,
-    /// One line per processor for the registry-wide `catalog/index.ndjson`.
+    /// One line per processor for the tree-wide `catalog/index.ndjson`.
     pub index_lines: Vec<CatalogIndexLine>,
     /// The JTD files this package owns (deduped by ownership).
     pub schema_jtd: Vec<SchemaJtdFile>,
@@ -317,7 +317,7 @@ fn runtime_of(language: &ProcessorLanguage) -> CatalogRuntime {
 /// Resolve a bare PascalCase `type_name` referenced by `processor_name` in
 /// `owner` to a fully-qualified [`SchemaIdent`], walking `schemas:` maps the
 /// same way [`streamlib_idents::resolve_bare_schema_name`] does — but sourced
-/// from the in-flight release's sibling versions rather than a live registry.
+/// from the in-flight release's sibling versions rather than a live package source.
 fn resolve_named(
     type_name: &TypeName,
     processor_name: &str,

@@ -57,13 +57,13 @@
   "additionalProperties": false,
   "definitions": {
     "DependencySpec": {
-      "description": "Dependency declaration: a bare semver-range string (registry shorthand), or one of the structured `{ version }` / `{ path }` / `{ git, rev }` maps.",
+      "description": "Dependency declaration: a bare semver-range string (resolved by version from a package source), or one of the structured `{ version }` / `{ path }` / `{ git, rev }` maps.",
       "oneOf": [
         {
           "$ref": "#/definitions/SemVerRange"
         },
         {
-          "$ref": "#/definitions/RegistryDependency"
+          "$ref": "#/definitions/VersionDependency"
         },
         {
           "$ref": "#/definitions/PathDependency"
@@ -411,22 +411,6 @@
       },
       "additionalProperties": false
     },
-    "RegistryDependency": {
-      "type": "object",
-      "required": [
-        "version"
-      ],
-      "properties": {
-        "runtime": {
-          "description": "Runtime-only dependency marker — see [`DependencySpec::is_runtime`].",
-          "type": "boolean"
-        },
-        "version": {
-          "$ref": "#/definitions/SemVerRange"
-        }
-      },
-      "additionalProperties": false
-    },
     "RuntimeConfig": {
       "description": "Runtime configuration: either a bare language string (`rust`, `python`, `typescript`) or a `{ language, options, env }` object.",
       "oneOf": [
@@ -564,6 +548,22 @@
       "description": "Type segment of a schema identifier (PascalCase, the `Type` part of `@org/package/Type@version`).",
       "type": "string",
       "pattern": "^[A-Z][A-Za-z0-9]*$"
+    },
+    "VersionDependency": {
+      "type": "object",
+      "required": [
+        "version"
+      ],
+      "properties": {
+        "runtime": {
+          "description": "Runtime-only dependency marker — see [`DependencySpec::is_runtime`].",
+          "type": "boolean"
+        },
+        "version": {
+          "$ref": "#/definitions/SemVerRange"
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

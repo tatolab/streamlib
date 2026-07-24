@@ -122,8 +122,8 @@ pub fn generate(opts: GenerateOptions) -> Result<()> {
     } = opts;
 
     if let Some(project_dir) = project_dir {
-        // `from_env` picks up the static registry config (STREAMLIB_REGISTRY_URL)
-        // so a registry-cached crate resolves registry schema deps. The active
+        // `from_env` picks up the configured package source (STREAMLIB_PACKAGE_SOURCE)
+        // so a package resolves its schema deps by version. The active
         // `streamlib link` checkout is supplied EXPLICITLY by the caller
         // (`link_checkout`), NOT re-derived from the marker here: the user-facing
         // `streamlib generate` CLI passes the marker-discovered checkout

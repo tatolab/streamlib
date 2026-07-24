@@ -109,7 +109,7 @@ pub fn reconcile_package_dependencies(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use streamlib_idents::{DependencySpec, RegistryDependency, SemVerRange};
+    use streamlib_idents::{DependencySpec, VersionDependency, SemVerRange};
 
     fn manifest_from_yaml(yaml: &str) -> Manifest {
         serde_yaml::from_str(yaml).expect("manifest parses")
@@ -178,7 +178,7 @@ mod tests {
         assert!(spec.is_runtime());
         assert_eq!(
             spec,
-            DependencySpec::Registry(RegistryDependency {
+            DependencySpec::Version(VersionDependency {
                 version: SemVerRange::from_str("^1.0.0").unwrap(),
                 runtime: true,
             })

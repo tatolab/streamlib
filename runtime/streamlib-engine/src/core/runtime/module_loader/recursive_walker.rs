@@ -557,7 +557,7 @@ fn add_module_recursive_body(
     // Read the manifest; authoritative source of identity for the
     // package at the resolved location. Thread the active link so the
     // manifest's bare-name schema-dep resolution resolves a dep present in the
-    // checkout from the checkout (the load-time half of the zero-registry dev
+    // checkout from the checkout (the load-time half of the link dev
     // loop). `link` is `None` on locked runs / no active link → unchanged.
     let config =
         ProjectConfig::load_with_link(&manifest_dir, walk_context.link.map(|l| l.checkout()))
@@ -711,7 +711,7 @@ fn add_module_recursive_body(
     // Locked mode forces every dep edge to its lockfile pin (the pinned
     // installed-cache slot, loaded as-is with `NeverBuild`) instead of
     // deriving a live source strategy — so a locked run never touches the
-    // registry / git / a `.slpkg` re-fetch / a build. A dep the lockfile
+    // package source / git / a `.slpkg` re-fetch / a build. A dep the lockfile
     // doesn't pin is a stale-lockfile hard error, not a silent live
     // resolve.
     for (dep_ref, spec) in &config.dependencies {
@@ -733,7 +733,7 @@ fn add_module_recursive_body(
 
     // Now stage this package's own processors. Thread the active link so a
     // config schema dep present in the checkout resolves from the checkout too
-    // (load-time zero-registry dev loop); `None` off a link → unchanged.
+    // (load-time link dev loop); `None` off a link → unchanged.
     register_manifest_processors(
         walk_context.iceoryx2_node,
         &manifest_dir,
@@ -758,7 +758,7 @@ fn add_module_recursive_body(
 /// patch wins when present; otherwise the dep declaration's source
 /// variant decides. Path / git source deps are dev-shaped and default to
 /// [`BuildPolicy::IfStale`] (rebuild-on-change via the build tool);
-/// registry deps resolve from the static registry by version.
+/// version-range deps resolve by version from the configured package source.
 ///
 /// [`ModuleIdent`]: streamlib_idents::ModuleIdent
 fn derive_dep_strategy_and_ident(
@@ -772,11 +772,11 @@ fn derive_dep_strategy_and_ident(
 ) -> Result<(streamlib_idents::ModuleIdent, Strategy)> {
     use streamlib_idents::{DependencySpec, ModuleIdent, SemVerRange};
 
-    // Registry deps carry a range that constrains resolution even when
+    // Version-range deps carry a range that constrains resolution even when
     // patched. Path / git deps don't — the source's manifest version
     // becomes authoritative (range = any).
     let declared_range = match spec {
-        DependencySpec::Registry(r) => r.version.clone(),
+        DependencySpec::Version(r) => r.version.clone(),
         DependencySpec::Path(_) | DependencySpec::Git(_) => SemVerRange::Any,
     };
 
@@ -813,20 +813,20 @@ fn derive_dep_strategy_and_ident(
             rev: g.rev.clone(),
             build: BuildPolicy::IfStale,
         },
-        DependencySpec::Registry(r) => {
+        DependencySpec::Version(r) => {
             if is_patch {
                 return Err(Error::Configuration(format!(
-                    "patch entry for '{dep_ref}' is registry-flavored — a patch \
+                    "patch entry for '{dep_ref}' is a version range — a patch \
                      must redirect a dependency to a `path:` or `git:` source, \
-                     not another registry range.",
+                     not another version range.",
                 )));
             }
-            // A registry-version dependency resolves from the configured the static registry
-            // generic registry by version: pull the `.slpkg` and build it from
+            // A version-range dependency resolves by version from the configured
+            // package source's generic store: pull the `.slpkg` and build it from
             // source on the host (IfStale prefers a matching prebuilt). The
-            // registry endpoint comes from the environment
-            // (STREAMLIB_REGISTRY_URL / STREAMLIB_REGISTRY_URL).
-            Strategy::Registry {
+            // package source location comes from the environment
+            // (STREAMLIB_PACKAGE_SOURCE).
+            Strategy::ByVersion {
                 version_req: r.version.clone(),
                 build: BuildPolicy::IfStale,
             }

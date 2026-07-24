@@ -10,14 +10,14 @@
 //! `<out>/slpkg/streamlib-release/<V>/manifest.json`).
 
 use streamlib_idents::{
-    Org, Package, PackageRef, RegistryClient, RegistryConfig, ReleaseManifest,
+    Org, Package, PackageRef, PackageSourceClient, PackageSource, ReleaseManifest,
     ReleaseManifestMember, SemVer, SemVerRange, crates_missing_from_release,
 };
 
-/// A `file://` registry config rooted at the tree root (the dir holding
+/// A `file://` package source config rooted at the tree root (the dir holding
 /// `slpkg/`) — the client prepends `slpkg/` itself.
-fn file_config(tree_root: &std::path::Path) -> RegistryConfig {
-    RegistryConfig {
+fn file_config(tree_root: &std::path::Path) -> PackageSource {
+    PackageSource {
         base_url: format!("file://{}", tree_root.display()),
     }
 }
@@ -34,7 +34,7 @@ fn req(name: &str, range: &str) -> (String, SemVerRange) {
 /// lists the crate closure and both packages. Returns the slpkg dir.
 fn emit_complete_tree(root: &std::path::Path) -> std::path::PathBuf {
     let cfg = file_config(root);
-    let client = RegistryClient::new(&cfg);
+    let client = PackageSourceClient::new(&cfg);
 
     client
         .upload_slpkg(
@@ -75,7 +75,7 @@ fn complete_tree_resolves_offline_and_completeness_passes() {
     let root = tempfile::tempdir().unwrap();
     let tree = emit_complete_tree(root.path());
     let cfg = file_config(&tree);
-    let client = RegistryClient::new(&cfg);
+    let client = PackageSourceClient::new(&cfg);
 
     // The consumer lists releases + fetches the manifest with NO daemon, NO token.
     assert_eq!(
@@ -113,7 +113,7 @@ fn truncated_release_manifest_is_rejected_by_completeness_check() {
     let root = tempfile::tempdir().unwrap();
     let tree = emit_complete_tree(root.path());
     let cfg = file_config(&tree);
-    let client = RegistryClient::new(&cfg);
+    let client = PackageSourceClient::new(&cfg);
 
     // Simulate a partial release: overwrite the manifest with one that OMITS
     // `vulkan-jpeg` (the historical closure foot-gun). This is what a
@@ -146,7 +146,7 @@ fn removed_slpkg_from_tree_is_rejected_at_download() {
     let root = tempfile::tempdir().unwrap();
     let tree = emit_complete_tree(root.path());
     let cfg = file_config(&tree);
-    let client = RegistryClient::new(&cfg);
+    let client = PackageSourceClient::new(&cfg);
 
     // Truncate the TREE: remove display's .slpkg after the manifest claimed it.
     std::fs::remove_dir_all(tree.join("slpkg").join("display")).unwrap();
@@ -176,7 +176,7 @@ fn removed_slpkg_from_tree_is_rejected_at_download() {
 /// tree and assert the consumer-side checks reject it.
 #[test]
 fn emitted_tree_truncation_is_rejected_by_consumer_checks() {
-    use streamlib_pack::static_registry::{EmitOptions, emit_static_registry};
+    use streamlib_pack::static_package_source::{EmitOptions, emit_static_registry};
 
     // Minimal fake workspace: empty cargo workspace + one schemas-only
     // package (no cargo build at assemble time).
@@ -210,7 +210,7 @@ fn emitted_tree_truncation_is_rejected_by_consumer_checks() {
     )
     .unwrap();
 
-    let out = root.path().join("registry");
+    let out = root.path().join("package-source");
     emit_static_registry(&EmitOptions {
         workspace_root: ws.clone(),
         out: out.clone(),
@@ -220,7 +220,7 @@ fn emitted_tree_truncation_is_rejected_by_consumer_checks() {
 
     // The REAL emitted manifest is fetchable + lists the package.
     let cfg = file_config(&out);
-    let client = RegistryClient::new(&cfg);
+    let client = PackageSourceClient::new(&cfg);
     assert_eq!(
         client.list_release_versions("tatolab").unwrap(),
         vec![SemVer::new(0, 9, 0)]

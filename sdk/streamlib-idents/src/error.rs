@@ -136,20 +136,21 @@ pub enum ResolverError {
     SlpkgExtractFailed { path: PathBuf, message: String },
 
     #[error(
-        "registry dependency `{name}` cannot be resolved: no registry is configured. \
-         Set `{env}` to the registry tree-root URL (`file://<root>` or `http(s)://…`), \
-         or add a `patch:` override."
+        "version dependency `{name}` cannot be resolved: no package source is configured. \
+         Run `streamlib link` to resolve it from a local checkout, or set `{env}` to a \
+         package source root (`file://<root>` or `http(s)://…`, e.g. \
+         file:///path/to/slpkg-tree). A `patch:` override also resolves it from a local path."
     )]
-    RegistryNotConfigured { name: String, env: String },
+    PackageSourceNotConfigured { name: String, env: String },
 
-    #[error("registry dependency `{name}` fetch failed: {detail}")]
-    RegistryFetchFailed { name: String, detail: String },
+    #[error("version dependency `{name}` fetch from the package source failed: {detail}")]
+    PackageSourceFetchFailed { name: String, detail: String },
 
     #[error(
-        "registry dependency `{name}` has no version satisfying range `{range}` \
-         (available: {available})"
+        "version dependency `{name}` has no version satisfying range `{range}` \
+         in the package source (available: {available})"
     )]
-    RegistryNoMatchingVersion {
+    PackageSourceNoMatchingVersion {
         name: String,
         range: String,
         available: String,

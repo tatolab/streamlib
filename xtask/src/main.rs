@@ -302,7 +302,7 @@ fn main() -> Result<()> {
             tracing::info!(dir = %dir.display(), "stripped path-flavor patch entries from streamlib.yaml");
         }
         Commands::StaticRegistry(StaticRegistryAction::Emit { out, dev }) => {
-            use streamlib_pack::static_registry::{EmitOptions, emit_static_registry};
+            use streamlib_pack::static_package_source::{EmitOptions, emit_static_registry};
             emit_static_registry(&EmitOptions {
                 workspace_root: workspace_root()?,
                 out,

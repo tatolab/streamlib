@@ -218,14 +218,14 @@ impl PolyglotBuildOrchestrator {
         // Ensure the subprocess native FFI host(s) this package needs are built
         // + cached in the streamlib home, independent of the package slot. A
         // reused venv/slot can still be missing the host — they're independent
-        // handoffs, the gap that left a registry consumer with a dead relative
+        // handoffs, the gap that left a package-source consumer with a dead relative
         // path — so this runs before the staleness skip. It is itself
         // IfStale-cached per host triple + version (a cheap existence check
         // once present) and a no-op when the `STREAMLIB_*_NATIVE_LIB` env
         // override points at a prebuilt host.
         let host_version = env!("CARGO_PKG_VERSION");
         let ensure_host = |rt: native_host::NativeRuntime| {
-            // Best-effort pre-build: if it can't (no registry configured,
+            // Best-effort pre-build: if it can't (no package source configured,
             // network down), don't fail materialize — the spawn-time resolver
             // is the real gate and also covers the env override and the
             // monorepo `target/` (in-tree dev / tests). Only a pipeline that
@@ -312,10 +312,10 @@ impl PolyglotBuildOrchestrator {
 
         // ---- Consumer-side release-completeness pre-check ----
         // A Rust package resolves its tatolab-registry deps via cargo below. If
-        // the configured registry holds a partial/mid-publish release of the
+        // the configured package source holds a partial/mid-publish release of the
         // pinned version, fail fast here naming the missing artifacts instead
         // of surfacing it as a cryptic cargo `failed to select a version …`
-        // deep in the build. No-op for dev/path builds (no registry) and
+        // deep in the build. No-op for dev/path builds (no package source) and
         // pre-atomic-release registries (no manifest) — see `release_check`.
         if has_rust {
             let pins = build::read_tatolab_registry_pins(pkg_dir)
@@ -445,7 +445,7 @@ impl PolyglotBuildOrchestrator {
         // Land the staged temp dir into the destination. Two shapes:
         //
         // - Detached destination (source root_dir ≠ the co-located slot — a
-        //   git-rev or registry checkout materialized into a distinct
+        //   git-rev or by-version checkout materialized into a distinct
         //   `streamlib_modules` slot): whole-dir atomic swap into the slot. The
         //   sidecar completion marker is written into the temp dir LAST, just
         //   before the swap, so a slot lacking it (an aborted build) is treated
@@ -867,20 +867,20 @@ fn prune_build_scratch(pkg_dir: &Path) {
 
 /// An active `streamlib link` resolved for a staged package build: the
 /// checkout-derived toolchain overrides that redirect the build at the linked
-/// checkout instead of the registry.
+/// checkout instead of the package source.
 #[derive(Debug)]
 struct ActiveBuildLink {
     /// The canonicalized linked checkout root. Threaded to the staged package's
     /// `cargo build` via [`streamlib_idents::LINK_CHECKOUT_ENV`] so the
     /// package's `build.rs` schema-dep codegen resolves a dep present in
     /// `<checkout>/packages/<name>` from the checkout — the schema half of the
-    /// zero-registry dev loop, mirroring the cargo `[patch]` (crate half) below.
+    /// link dev loop, mirroring the cargo `[patch]` (crate half) below.
     checkout: PathBuf,
     /// The consumer's `streamlib link`-emitted `.cargo/config.toml`, when
     /// present — carries the `[patch."<index>"]` block redirecting every
     /// `streamlib*` crate at the checkout. `None` when the consumer has no
     /// cargo config (a Python/Deno-only consumer); the Rust build then falls
-    /// back to registry resolution.
+    /// back to by-version resolution.
     consumer_cargo_config: Option<PathBuf>,
     /// The linked checkout's Python SDK path (uv editable source target).
     python_sdk_path: PathBuf,
@@ -894,7 +894,7 @@ struct ActiveBuildLink {
 /// working directory (the consumer's run dir, where `streamlib link` wrote
 /// `.streamlib/link.json`). `Ok(None)` when no link is active; a corrupt marker
 /// is a loud error — silently ignoring it would produce a mixed build (some
-/// crates from the checkout, some from the registry), the exact failure mode
+/// crates from the checkout, some by version from the package source), the exact failure mode
 /// link mode exists to prevent.
 fn discover_active_build_link(pkg_label: &str) -> Result<Option<ActiveBuildLink>, BuildError> {
     let cwd = std::env::current_dir().map_err(|e| {
@@ -995,7 +995,7 @@ mod tests {
         assert!(rust_reuse_permitted(false, false, false, false));
         assert!(rust_reuse_permitted(false, true, true, true));
         // Rust, immutable source, no link, cdylib staged: the zero-cargo second
-        // load for an installed / registry / `.slpkg` / git-rev package.
+        // load for an installed / by-version / `.slpkg` / git-rev package.
         assert!(rust_reuse_permitted(true, false, false, true));
         // Rust, MUTABLE user checkout, no link, cdylib staged: must rebuild —
         // its `path:` / workspace deps resolve outside the package dir, so the
@@ -2027,8 +2027,8 @@ mod tests {
     ///
     /// Setup: a stray `.streamlib/link.json` marker sits UP-TREE of
     /// `project_dir`, pointing at a checkout that provides `@tatolab/core`; no
-    /// registry is configured. Case A (`link_checkout = None`, the distribution /
-    /// non-linked build) must NOT redirect — with no registry the bare range is
+    /// package source is configured. Case A (`link_checkout = None`, the distribution /
+    /// non-linked build) must NOT redirect — with no package source the bare range is
     /// unresolvable, so `generate` errors. Mentally-revert the explicit-link
     /// threading (fall back to `from_env_or_marker(&project_dir)` inside
     /// `generate`) and Case A resolves `@tatolab/core` from the marker's checkout
@@ -2071,13 +2071,13 @@ mod tests {
 
         let out = tempfile::tempdir().unwrap();
 
-        // Control the env: no registry (so a non-link resolve of the bare range
+        // Control the env: no package source (so a non-link resolve of the bare range
         // fails loud) and no ambient link env. SAFETY: `#[serial]` serializes the
         // env-mutating tests.
-        let prev_registry = std::env::var_os("STREAMLIB_REGISTRY_URL");
+        let prev_package_source = std::env::var_os("STREAMLIB_PACKAGE_SOURCE");
         let prev_link = std::env::var_os(streamlib_idents::LINK_CHECKOUT_ENV);
         unsafe {
-            std::env::remove_var("STREAMLIB_REGISTRY_URL");
+            std::env::remove_var("STREAMLIB_PACKAGE_SOURCE");
             std::env::remove_var(streamlib_idents::LINK_CHECKOUT_ENV);
         }
 
@@ -2106,9 +2106,9 @@ mod tests {
         });
 
         unsafe {
-            match prev_registry {
-                Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
-                None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
+            match prev_package_source {
+                Some(v) => std::env::set_var("STREAMLIB_PACKAGE_SOURCE", v),
+                None => std::env::remove_var("STREAMLIB_PACKAGE_SOURCE"),
             }
             match prev_link {
                 Some(v) => std::env::set_var(streamlib_idents::LINK_CHECKOUT_ENV, v),
@@ -2119,7 +2119,7 @@ mod tests {
         assert!(
             no_link.is_err(),
             "link_checkout=None must NOT resolve @tatolab/core from a stray up-tree \
-             marker (no registry ⇒ unresolvable). Reverting to marker discovery makes \
+             marker (no package source ⇒ unresolvable). Reverting to marker discovery makes \
              this Ok and reintroduces the distribution→dev-checkout redirect."
         );
         assert!(
@@ -2213,16 +2213,16 @@ mod tests {
         }
     }
 
-    /// Point the registry env at a `file://` scratch dir for the duration of
+    /// Point the package source env at a `file://` scratch dir for the duration of
     /// `f`, restoring prior values after, and shielding the native-host env
     /// override. SAFETY: callers are `#[serial]` — no other thread races the
     /// process-global env.
-    fn with_scratch_registry<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
-        let prev_url = std::env::var("STREAMLIB_REGISTRY_URL").ok();
+    fn with_scratch_package_source<T>(dir: &Path, f: impl FnOnce() -> T) -> T {
+        let prev_url = std::env::var("STREAMLIB_PACKAGE_SOURCE").ok();
         let prev_py_lib = std::env::var("STREAMLIB_PYTHON_NATIVE_LIB").ok();
         unsafe {
             std::env::set_var(
-                "STREAMLIB_REGISTRY_URL",
+                "STREAMLIB_PACKAGE_SOURCE",
                 format!("file://{}", dir.display()),
             );
             std::env::remove_var("STREAMLIB_PYTHON_NATIVE_LIB");
@@ -2230,8 +2230,8 @@ mod tests {
         let out = f();
         unsafe {
             match prev_url {
-                Some(v) => std::env::set_var("STREAMLIB_REGISTRY_URL", v),
-                None => std::env::remove_var("STREAMLIB_REGISTRY_URL"),
+                Some(v) => std::env::set_var("STREAMLIB_PACKAGE_SOURCE", v),
+                None => std::env::remove_var("STREAMLIB_PACKAGE_SOURCE"),
             }
             if let Some(v) = prev_py_lib {
                 std::env::set_var("STREAMLIB_PYTHON_NATIVE_LIB", v);
@@ -2241,9 +2241,9 @@ mod tests {
     }
 
     /// Publish a PARTIAL release manifest (macros only — plugin-sdk absent)
-    /// at `version` into the scratch `file://` registry dir.
+    /// at `version` into the scratch `file://` package source dir.
     fn publish_partial_manifest(dir: &Path, version: &str) {
-        let cfg = streamlib_idents::RegistryConfig {
+        let cfg = streamlib_idents::PackageSource {
             base_url: format!("file://{}", dir.display()),
         };
         let manifest = streamlib_idents::ReleaseManifest::new(
@@ -2253,7 +2253,7 @@ mod tests {
                 version,
             )],
         );
-        streamlib_idents::RegistryClient::new(&cfg)
+        streamlib_idents::PackageSourceClient::new(&cfg)
             .upload_release_manifest("tatolab", &manifest)
             .unwrap();
     }
@@ -2302,7 +2302,7 @@ streamlib-plugin-sdk = {version = "0.5.0", registry = "tatolab"}
     #[serial]
     fn materialize_fails_fast_on_incomplete_release_before_cargo() {
         // WIRING lock for the package path: `materialize` on a Rust package
-        // whose registry release is partial must surface IncompleteRelease
+        // whose package-source release is partial must surface IncompleteRelease
         // BEFORE any cargo build runs. Mentally delete the
         // `assert_release_complete` call in `materialize_package_dir` and
         // this test fails (materialize would proceed into assemble/cargo and
@@ -2310,9 +2310,9 @@ streamlib-plugin-sdk = {version = "0.5.0", registry = "tatolab"}
         let _home = HomeGuard::new();
         let src = tempfile::tempdir().unwrap();
         rust_source_pkg(src.path());
-        let registry = tempfile::tempdir().unwrap();
+        let package_source = tempfile::tempdir().unwrap();
         // Partial release ABOVE the pin's floor — production keying.
-        publish_partial_manifest(registry.path(), "0.5.1");
+        publish_partial_manifest(package_source.path(), "0.5.1");
 
         let orch = PolyglotBuildOrchestrator::default();
         let req = BuildRequest {
@@ -2323,7 +2323,7 @@ streamlib-plugin-sdk = {version = "0.5.0", registry = "tatolab"}
             host_triple: build::host_target_triple().to_string(),
             staging_destination_slot_dir: detached_slot("rust-source-0.1.0"),
         };
-        let err = with_scratch_registry(registry.path(), || {
+        let err = with_scratch_package_source(package_source.path(), || {
             orch.materialize(&req, &NoopSink)
                 .expect_err("partial release must fail the materialize pre-check")
         });
@@ -2347,18 +2347,18 @@ streamlib-plugin-sdk = {version = "0.5.0", registry = "tatolab"}
     #[serial]
     fn native_host_build_fails_fast_on_incomplete_release() {
         // WIRING lock for the native-host path: `ensure_native_host` against
-        // a registry whose release manifest omits the host crate must surface
+        // a package source whose release manifest omits the host crate must surface
         // IncompleteRelease before attempting the crate download. Mentally
         // delete the `assert_release_complete` call in `ensure_native_host`
         // and this fails differently (a download error against the file://
         // URL) — the match arm below pins the typed error.
         let _home = HomeGuard::new();
-        let registry = tempfile::tempdir().unwrap();
+        let package_source = tempfile::tempdir().unwrap();
         // Partial release at the exact requested host version, missing
         // streamlib-python-native.
-        publish_partial_manifest(registry.path(), "0.5.1");
+        publish_partial_manifest(package_source.path(), "0.5.1");
 
-        let err = with_scratch_registry(registry.path(), || {
+        let err = with_scratch_package_source(package_source.path(), || {
             native_host::ensure_native_host(
                 native_host::NativeRuntime::Python,
                 "0.5.1",

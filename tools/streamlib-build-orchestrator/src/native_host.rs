@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Builds the subprocess native FFI host cdylibs (`streamlib-python-native` /
-//! `streamlib-deno-native`) from the static registry cargo subtree source into the
+//! `streamlib-deno-native`) from the package source's cargo subtree into the
 //! streamlib home cache.
 //!
 //! The host is the engine's own subprocess interpreter shim — engine-scoped,
@@ -35,7 +35,7 @@ pub(crate) enum NativeRuntime {
 }
 
 impl NativeRuntime {
-    /// Cargo crate name in the registry.
+    /// Cargo crate name in the package source's cargo subtree.
     fn crate_name(self) -> &'static str {
         match self {
             NativeRuntime::Python => "streamlib-python-native",
@@ -71,7 +71,7 @@ fn lib_filename(stem: &str, ext: &str) -> String {
 
 /// Ensure the native host cdylib for `runtime` is built and cached at
 /// `<home>/.streamlib/cache/native/<triple>/lib<stem>.<ext>`, fetching the
-/// crate source from the static registry cargo subtree and building it from source.
+/// crate source from the package source's cargo subtree and building it from source.
 ///
 /// No-ops when the runtime's `STREAMLIB_*_NATIVE_LIB` env override points at an
 /// existing file (the resolver's tier 1 — nothing to build), and reuses the
@@ -112,10 +112,10 @@ pub(crate) fn ensure_native_host(
     }
 
     // Consumer-side release-completeness pre-check: the native host crate is
-    // itself a member of the engine release closure. If the registry holds a
-    // partial release of `version`, fail fast naming the gap instead of a
+    // itself a member of the engine release closure. If the package source holds
+    // a partial release of `version`, fail fast naming the gap instead of a
     // cryptic cargo resolve error inside the standalone build below. No-op
-    // for pre-atomic-release registries (no manifest) — see `release_check`.
+    // for pre-atomic-release package sources (no manifest) — see `release_check`.
     crate::release_check::assert_release_complete(
         runtime.crate_name(),
         &[streamlib_cargo_build::TatolabRegistryPin {
@@ -129,21 +129,21 @@ pub(crate) fn ensure_native_host(
         crate_name = runtime.crate_name(),
         %version,
         profile = profile.label(),
-        "building subprocess native host from registry source (first use / version change)"
+        "building subprocess native host from the package source's cargo subtree (first use / version change)"
     );
 
-    // 1. Fetch the `.crate` source from the static registry tree's cargo
+    // 1. Fetch the `.crate` source from the package source tree's cargo
     //    subtree (`cargo/crates/<name>/<name>-<version>.crate`), tokenless.
-    //    `STREAMLIB_REGISTRY_URL` is the tree root — `file://<root>` reads the
+    //    `STREAMLIB_PACKAGE_SOURCE` is the tree root — `file://<root>` reads the
     //    file directly, `http(s)://…` GETs it off the static mount.
-    let registry_url = std::env::var("STREAMLIB_REGISTRY_URL")
+    let package_source_url = std::env::var("STREAMLIB_PACKAGE_SOURCE")
         .ok()
         .map(|s| s.trim_end_matches('/').to_string())
         .filter(|s| !s.is_empty())
         .ok_or_else(|| {
             other(
                 runtime.crate_name(),
-                "STREAMLIB_REGISTRY_URL must be set to the registry tree root to fetch the \
+                "STREAMLIB_PACKAGE_SOURCE must be set to the package source root to fetch the \
                  native host source"
                     .to_string(),
             )
@@ -152,7 +152,7 @@ pub(crate) fn ensure_native_host(
         "cargo/crates/{name}/{name}-{version}.crate",
         name = runtime.crate_name(),
     );
-    let crate_bytes = if let Some(root) = registry_url.strip_prefix("file://") {
+    let crate_bytes = if let Some(root) = package_source_url.strip_prefix("file://") {
         let path = Path::new(root).join(&crate_file);
         std::fs::read(&path).map_err(|e| {
             build_failed(
@@ -161,7 +161,7 @@ pub(crate) fn ensure_native_host(
             )
         })?
     } else {
-        let url = format!("{registry_url}/{crate_file}");
+        let url = format!("{package_source_url}/{crate_file}");
         http_get_bytes(&url).map_err(|e| {
             build_failed(
                 runtime.crate_name(),
@@ -240,7 +240,7 @@ pub(crate) fn ensure_native_host(
     Ok(dest)
 }
 
-/// GET the bytes at `url` (no auth — reads from the static registry are
+/// GET the bytes at `url` (no auth — reads from the package source are
 /// anonymous).
 fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
     let resp = ureq::get(url).call().map_err(|e| e.to_string())?;

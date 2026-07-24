@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Policy-gated **acquire-on-reference**: on an installed-set load miss,
-//! optionally fetch the providing package from the static registry and record
+//! optionally fetch the providing package by version from the package source and record
 //! it in `streamlib.lock` — completing the load without an explicit
 //! `streamlib add`. Off by default (a normal run never reaches the network);
 //! the [`AcquireOnReferencePolicy`] knob opts a fleet in.
@@ -16,7 +16,7 @@ use streamlib_idents::{PackageRef, SemVerRange};
 /// ([`set_acquire_on_reference_policy`]) takes precedence.
 pub(crate) const ACQUIRE_ON_REFERENCE_ENV: &str = "STREAMLIB_ACQUIRE_ON_REFERENCE";
 
-/// Whether — and how — the runtime may acquire a package from the registry on
+/// Whether — and how — the runtime may acquire a package by version from the package source on
 /// a load miss. Off by default: the load gate is installed-set-only unless a
 /// fleet explicitly opts in.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

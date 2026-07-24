@@ -13,7 +13,7 @@
 use std::path::Path;
 
 use streamlib_idents::{CatalogClient, Org, Package, PackageRef, SemVer};
-use streamlib_pack::static_registry::{EmitOptions, emit_static_registry};
+use streamlib_pack::static_package_source::{EmitOptions, emit_static_registry};
 
 fn write(dir: &Path, rel: &str, body: &str) {
     let path = dir.join(rel);
