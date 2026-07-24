@@ -47,5 +47,6 @@ Token guidance above is about spawn discipline, not a downgrade — never trade 
 budget.
 
 ## Kill switch
-Stop the `/loop` and clear the `/goal`, set `paused: true` in the loop's state file, or let the
-budget cap here halt new work. Any one of the three stops the loop.
+`CronDelete` the driver's job (`CronList` finds it), set `"paused": true` in the loop's state file,
+or let the budget cap here halt new work. Deleting the job is the only one that stops the firing
+itself — `paused` makes each firing a near-free no-op, and the cap stops new code but not the pass.

@@ -125,7 +125,7 @@ if (!state.focused_milestone) {
   return {
     outcome: 'blocked',
     dispatched: [],
-    owner_items: [{ kind: 'owner-question', reason: 'No focused milestone is set. Run /focus-milestone to pick one.' }],
+    owner_items: [{ kind: 'owner-question', reason: 'No focused milestone is set. Run /work-on-milestone to pick one and start the driver.' }],
   };
 }
 

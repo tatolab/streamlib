@@ -44,33 +44,19 @@ deny() {
 
 match() { printf '%s' "$norm" | grep -Eq "$1"; }
 
-# gh pr merge — gated on an owner-controlled authorization toggle, default OFF.
-# The guardrail stays safe-by-default: the agent may merge only when the owner has
-# opted in via the gitignored authorization file. Owner toggles it from any terminal:
-#   echo on  > .claude/merge-authorization.local   # grant merge to the agent
-#   echo off > .claude/merge-authorization.local   # revoke (or: rm the file)
-# First line must trim to exactly "on" (case-insensitive) to authorize.
+# gh pr merge — ESCALATED to the owner, never hard-denied and never file-gated.
+# Merging is always the owner's call, so the decision has to reach them wherever
+# they are. A gitignored on-disk toggle could not: it is unreachable from remote
+# control, and (being gitignored) absent from every worktree, so a merge the owner
+# had granted was silently denied from any worktree.
 #
-# The toggle lives in the PRIMARY checkout only: it is gitignored, and `git
-# worktree add` checks out tracked files exclusively, so no worktree ever has a
-# copy. Resolve via --git-common-dir (the primary .git from anywhere) rather than
-# CLAUDE_PROJECT_DIR or --show-toplevel, either of which resolves to the worktree
-# when the call originates inside one — leaving auth empty and silently denying a
-# merge the owner had in fact granted.
+# Same contract as rig-brake.sh: exit 0 + JSON permissionDecision "ask" surfaces
+# the normal permission prompt, which IS reachable remotely. It never exits 2 —
+# that would be the final say, which this hook deliberately does not take.
 if match 'gh[[:space:]]+pr[[:space:]]+merge'; then
-  # --path-format=absolute (git 2.31+) is required: the bare form is relative to
-  # CWD ("../.git" from a subdirectory), which dirname would resolve wrongly.
-  common_dir="$(git -C "$target_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-  if [ -n "$common_dir" ]; then
-    primary_root="$(dirname "$common_dir")"
-  else
-    primary_root="${CLAUDE_PROJECT_DIR:-.}"
-  fi
-  auth_file="$primary_root/.claude/merge-authorization.local"
-  auth="$(head -n1 "$auth_file" 2>/dev/null | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
-  if [ "$auth" != "on" ]; then
-    deny "merge authorization is OFF — owner enables with: echo on > .claude/merge-authorization.local (off/rm to revoke) (gh pr merge)"
-  fi
+  jq -n --arg r 'Merging a PR is always the owner'"'"'s call — approve only if you intend this merge to land now. Decline to leave the PR open for review.' \
+    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: $r}}'
+  exit 0
 fi
 
 # git push targeting origin main (force or not): 'origin main', 'origin +main',

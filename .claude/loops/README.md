@@ -30,22 +30,28 @@ primary checkout (`git rev-parse --git-common-dir`).
 
 ## milestone-loop
 
-Invocation (paste-ready): /loop 30m /goal all issues in the focused milestone are
-      merged, or waiting on the owner or on blockers — each turn: run one
-      milestone-loop reconciler pass; obey .claude/loops/constraints.md; max 8 turns/firing
+Invocation: **`/work-on-milestone <milestone>`**. That skill resolves the milestone, records it as
+`focused_milestone`, sets the completion `/goal`, and registers the recurring firing itself — there
+is no `/loop` line to hand-type and no separate focus step.
 
-Sprint mode: the same `/goal` without the wrapper, when the owner is present.
-
-Turn procedure: the `milestone-loop` skill (one reconciler pass per turn).
+Turn procedure: the `milestone-loop` skill (one reconciler pass per firing), which launches
+`.claude/workflows/milestone-loop.js`.
 
 Knobs: heartbeat 30m · max_parallel 2 · attempts_per_ticket 3 · propose_only false · live_verify auto
 
-Kill switch: stop the `/loop` + `/goal` clear, `"paused": true` in the state file, or the budget cap.
+Kill switch: `CronDelete` the driver's job (`/work-on-milestone` reports its id; `CronList` finds
+it), `"paused": true` in the state file, or the budget cap.
 
-**Trigger durability.** `/loop` is **session-scoped** — it lives inside one interactive session and
-stops when that session ends. There is no autonomous heartbeat today; a durable one would be a
-`CronCreate` registration, which this repo does not yet have. Do not read the 30m heartbeat as
-something that fires unattended.
+**Trigger durability — read this before relying on the heartbeat.** The schedule is
+**session-scoped**, whether registered by `/loop` or by `CronCreate`. Cron jobs live only in the
+current Claude session: nothing is written to disk, the `durable` flag has no effect, recurring jobs
+auto-expire after 7 days, and a job fires only while the REPL is idle. Closing the session stops the
+loop; re-run `/work-on-milestone` to restart it.
+
+There is no unattended heartbeat, and there cannot be one while the loop needs the local rig and
+worktrees — durable cloud scheduling runs somewhere without a GPU, a camera, or this checkout. What
+`CronCreate` buys over a hand-typed `/loop` is that a skill can register it, and that a firing can
+delete its own job once the goal is met.
 
 `live_verify: auto` (default) runs `/verify-live` in-loop for rig-touching tickets when the preflight
 capability probe reports the rig available (parks for the human otherwise); `off` disables in-loop
@@ -111,10 +117,11 @@ events into `state/<loop>.run-log-YYYY-MM.jsonl` and start fresh.
 
 ## Registering a new loop
 
-A new loop is three things landing together in one operating-model PR: its own state file under
+A new loop is four things landing together in one operating-model PR: its own state file under
 `state/` (its `paused` flag and ticket map), its own entry in this registry (invocation, turn
-procedure, knobs, kill switch), and its own line in [`budget.md`](budget.md) (daily caps, on-exceed
-procedure). A loop with no budget line does not run.
+procedure, knobs, kill switch), its own line in [`budget.md`](budget.md) (daily caps, on-exceed
+procedure), and a driver skill that registers its firing and can stop it. A loop with no budget line
+does not run, and a loop whose only start path is a hand-typed invocation will not get run.
 
 ## Multi-loop priority
 

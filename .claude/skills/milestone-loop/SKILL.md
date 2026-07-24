@@ -1,6 +1,6 @@
 ---
 name: milestone-loop
-description: Run one reconciler pass of the standing milestone-loop — the turn procedure the `/loop 30m /goal …` firing invokes. Use when a loop firing (or a sprint-mode `/goal` with the owner present) needs to move the focused milestone one bounded step toward "merged, or waiting on the owner or on blockers." Checks the kill switch, probes rig capability, launches the milestone-loop workflow, and surfaces anything needing the owner.
+description: Run one reconciler pass of the standing milestone-loop — the turn procedure each `/work-on-milestone` firing invokes. Use when a loop firing (or the owner directly) needs to move the focused milestone one bounded step toward "merged, or waiting on the owner or on blockers." Checks the kill switch, probes rig capability, launches the milestone-loop workflow, and surfaces anything needing the owner. To START the loop on a milestone rather than run a single pass, use work-on-milestone.
 ---
 
 # milestone-loop — the reconciler pass
@@ -47,7 +47,7 @@ Workflow({ scriptPath: ".claude/workflows/milestone-loop.js",
 
 Knobs (`heartbeat`, `max_parallel`, `attempts_per_ticket`, `propose_only`, `live_verify`) come from `.claude/loops/README.md`.
 
-Run this in the **primary checkout, never a worktree**. A session started in a worktree has no `.claude/loops/state/`, no `settings.local.json`, and no `merge-authorization.local` — `git worktree add` checks out tracked files only. The loop would start with no state, write a fresh one, and split-brain against the primary. Git permits a worktree inside a worktree, so this fails silently rather than erroring.
+Run this in the **primary checkout, never a worktree**. A session started in a worktree has no `.claude/loops/state/` and no `settings.local.json` — `git worktree add` checks out tracked files only. The loop would start with no state, write a fresh one, and split-brain against the primary. Git permits a worktree inside a worktree, so this fails silently rather than erroring.
 
 ## 4. Surface what needs the owner
 
