@@ -1,15 +1,16 @@
-# Static-file `.slpkg` registry
+# Static-file `.slpkg` package source
 
 > **Living document.** Validate, update, critique freely per
 > [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation).
 
-A registry's read side is just static files. StreamLib emits a plain on-disk
-tree — a `.slpkg` generic store, a per-package + aggregate catalog, and a
-release manifest — that is **tokenless to read** over `file://` and
-**browsable as a plain HTTP directory index**. The same tree serves
-identically whether it is a CI fixture, a local publish-and-read folder, or a
-cloud object store. No registry daemon, no database, no token is required to
-*serve* it.
+A package source is any location serving versioned `.slpkg` files, read like
+another filesystem — there is no central hosted service. Its read side is just
+static files: StreamLib emits a plain on-disk tree — a `.slpkg` generic store, a
+per-package + aggregate catalog, and a release manifest — that is **tokenless to
+read** over `file://` and **browsable as a plain HTTP directory index**. The
+same tree serves identically whether it is a CI fixture, a local
+publish-and-read folder, or a cloud object store. No package-source daemon, no
+database, no token is required to *serve* it.
 
 > Sections on the **cargo sparse index + `.crate` tarballs**, the
 > **pypi-simple sdist tree**, and the **npm packument + `.tgz`** were removed
@@ -26,7 +27,7 @@ cloud object store. No registry daemon, no database, no token is required to
 ## Read transport
 
 The `.slpkg` generic store is served over `file://` — the existing
-`streamlib-idents` registry client (`RegistryClient`) reads the generic store
+`streamlib-idents` package-source client (`PackageSourceClient`) reads the generic store
 over `file://` natively, and a dumb static HTTP mount
 (`python3 -m http.server`, `nginx autoindex`, an object-store/CDN origin)
 serves the identical tree over `http(s)://` for a remote consumer. StreamLib
@@ -37,7 +38,7 @@ does **not** ship a server binary.
 ```
 <root>/
   slpkg/
-    <pkg>/<version>/<pkg>.slpkg          # generic store (RegistryClient file:// layout)
+    <pkg>/<version>/<pkg>.slpkg          # generic store (PackageSourceClient file:// layout)
     <pkg>/<version>/<pkg>.catalog.json   # per-package catalog — keyed by FULL version
     <pkg>/<core>/schemas/<Type>.jtd.json # per-schema JTD — keyed by RELEASE-CORE version
     streamlib-release/<V>/manifest.json  # the release manifest — completion marker
@@ -50,11 +51,11 @@ same bytes serve from any mount point or `file://` root.
 
 ## Atomic release — the staged swap
 
-A `file://` consumer must never observe a half-written tree. `emit_static_registry`
+A `file://` consumer must never observe a half-written tree. `emit_static_package_source`
 builds the whole tree into a **staging sibling** of the served path and writes
 the [`ReleaseManifest`](../../sdk/streamlib-idents/src/release.rs) LAST, then
 flips staging into the served path in a single operation
-(`static_registry::publish_staged_tree`): a plain atomic `rename` when the
+(`static_package_source::publish_staged_tree`): a plain atomic `rename` when the
 served path is absent, and a gapless `renameat2(RENAME_EXCHANGE)` swap when
 replacing an existing tree (Linux). During the (long) staging build the served
 tree is a separate directory and is never touched, so a concurrent reader always
@@ -75,7 +76,7 @@ processor / port / schema metadata a visual graph editor (or any tool
 building a node palette) browses without downloading every `.slpkg`. The
 protocol surface — types plus the read client — lives in `streamlib-idents`
 ([`catalog.rs`](../../sdk/streamlib-idents/src/catalog.rs)), the crate that
-owns the registry protocol; assembly lives in `streamlib-pack`
+owns the package-source protocol; assembly lives in `streamlib-pack`
 ([`catalog.rs`](../../tools/streamlib-pack/src/catalog.rs),
 `build_package_catalog`).
 
@@ -98,7 +99,7 @@ single-version snapshot of the source tree, while incremental publishing
 accumulates a line per processor per **published** version — consistent with
 the versioned `slpkg/` store, which keeps every published version fetchable.
 
-- **Whole-tree `static-registry emit`** builds the catalog for every
+- **Whole-tree `static-package-source emit`** builds the catalog for every
   `packages/*` dir and writes the aggregate **whole** (accumulate all lines,
   write `catalog/index.ndjson` once) during the atomic staged flip.
 - **`streamlib pkg build` / `pkg publish`** (a single package) writes that
@@ -134,7 +135,7 @@ schema ident to look them up by.
 ### Query surface
 
 `CatalogClient::new(base_url, token)` exposes exactly three fetches (each
-tolerates an absent tree as "empty / none", so a pre-catalog registry
+tolerates an absent tree as "empty / none", so a pre-catalog package source
 degrades cleanly):
 
 - `fetch_processor_index() -> Vec<CatalogIndexLine>` — the whole palette.
@@ -198,7 +199,7 @@ republish is implied by a bump.
 ## Emitting a tree
 
 ```
-cargo xtask static-registry emit --out <dir> [--dev N]
+cargo xtask static-package-source emit --out <dir> [--dev N]
 ```
 
 Assembles every distributable `packages/*` into the `.slpkg` generic store,
@@ -212,24 +213,24 @@ A consumer points the `.slpkg` generic-store client at the tree root over
 
 ```bash
 # .slpkg generic store + in-process schema codegen (file://, tree root)
-export STREAMLIB_REGISTRY_URL="file://<dir>"
+export STREAMLIB_PACKAGE_SOURCE="file://<dir>"
 ```
 
-The runtime module loader's `Strategy::Registry` resolves a package by
-`@org/name` + version range from this store (`RegistryClient::list_versions`
+The runtime module loader's `Strategy::ByVersion` resolves a package by
+`@org/name` + version range from this store (`PackageSourceClient::list_versions`
 → `select_version` → `download_slpkg`), and `Strategy::Url` fetches a single
 `.slpkg` by URL. Both extract the `.slpkg` into the shared package cache and
 build it on the host; neither touches a cargo registry.
 
 ## Reference
 
-- **Renderers + atomic swap**: `tools/streamlib-pack/src/static_registry.rs`.
+- **Renderers + atomic swap**: `tools/streamlib-pack/src/static_package_source.rs`.
 - **Catalog**: `sdk/streamlib-idents/src/catalog.rs` (protocol surface +
   `CatalogClient`), `tools/streamlib-pack/src/catalog.rs` (assembly).
-- **Generator CLI**: `cargo xtask static-registry emit`.
-- **`.slpkg` `file://` transport**: `sdk/streamlib-idents/src/registry.rs`.
+- **Generator CLI**: `cargo xtask static-package-source emit`.
+- **`.slpkg` `file://` transport**: `sdk/streamlib-idents/src/package_source.rs`.
 - **CI**: `.github/workflows/check-pack-load.yml` (`cargo test -p
   streamlib-pack` renderers/atomic-swap/completeness + the file-based
   pack → load smoke).
-- **The two loops** this registry serves:
+- **The two loops** this package source serves:
   [`package-development-model.md`](package-development-model.md).

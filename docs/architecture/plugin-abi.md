@@ -58,11 +58,11 @@ plugin sees. The capability *split* still holds for these plugins
 (FullAccess is reachable only inside `escalate(|full| …)`); what differs
 is that the engine is present in the address space, not absent.
 
-## Host-side and in-repo packages — workspace members, not registry plugins
+## Host-side and in-repo packages — workspace members, not package-source plugins
 
-Most `packages/*` crates are standalone, registry-distributed plugins. Three
+Most `packages/*` crates are standalone, package-source-distributed plugins. Three
 are workspace-member exceptions carved out of that rule — none is shipped
-through the registry, so each path-deps the zone crates and carries
+as a package, so each path-deps the zone crates and carries
 `publish = false` (which also keeps it out of the release closure). They fall
 into two classes.
 

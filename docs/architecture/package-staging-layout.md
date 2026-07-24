@@ -101,7 +101,7 @@ second rename.
   `.pyc`.
 - `provision_deno_typescript` — run JTD codegen
   (`RuntimeTarget::Typescript`) into the staged package's `_generated_/`,
-  resolving schema deps (e.g. `@tatolab/core`) from the registry via the
+  resolving schema deps (e.g. `@tatolab/core`) from the package source via the
   env-aware resolver. It **always** materializes `_generated_/` for a
   Deno package (even with no external schema deps) so the directory's
   presence is a reliable "codegen tail ran" marker.
@@ -161,7 +161,7 @@ staged-layout, and that is achieved by mirroring, not by moving.
   (`--config <pkg>/deno.json`) in
   `runtime/streamlib-engine/src/core/compiler/compiler_ops/spawn_deno_subprocess_op.rs`.
 - **Related**:
-  - [`static-registry.md`](static-registry.md) —
+  - [`package-source.md`](package-source.md) —
     how a package resolves and publishes by version (the *what travels
     where* of distribution; this doc is the *how it's laid out* of
     staging).
