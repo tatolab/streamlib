@@ -149,9 +149,9 @@ const rederive =
       `note that cross-compile verification (cargo check --target aarch64-apple-darwin, on Linux) is required and set ` +
       `macos_cross_compile_required. ` +
       `If the zones include package/registry work: crate deps in packages declare version = "0.6.0" but resolve to the ` +
-      `local checkout via \`streamlib link --engine\` / [patch.crates-io] — there is NO crates registry and NO publish ` +
-      `step. Treat any "blocked on republish" conclusion as a misdiagnosis to re-verify against ` +
-      `docs/architecture/static-registry.md. ` +
+      `local checkout via \`streamlib link --engine\` / [patch.crates-io] — resolve by version from a package source or ` +
+      `\`streamlib link\` a checkout; there is no central package registry and no publish step. Treat any "blocked on ` +
+      `republish" conclusion as a misdiagnosis to re-verify against docs/architecture/package-source.md. ` +
       `Post the plan-of-record as an issue comment via gh. Do NOT start implementing yet.`,
     leadOpts({ phase: 'Rederive', label: `rederive:${lead || 'generic'}`, schema: rederiveSchema }),
   )) || {};
