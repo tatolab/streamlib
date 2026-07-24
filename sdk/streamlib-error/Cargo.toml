@@ -17,10 +17,10 @@ path = "src/lib.rs"
 [dependencies]
 thiserror.workspace = true
 anyhow.workspace = true
-streamlib-processor-schema = { path = "../streamlib-processor-schema", version = "0.7.45" }
+streamlib-processor-schema = { path = "../streamlib-processor-schema", version = "0.8.0" }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.7.45" }
+streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.8.0" }
 
 [lints]
 workspace = true
