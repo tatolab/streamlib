@@ -369,8 +369,7 @@ fn print_link_report(report: &LinkPackageReport) {
 /// Print the processors the added package contributes, read from its own
 /// materialized `streamlib.yaml` (no network, no catalog).
 fn print_processor_summary(package_dir: &Path) {
-    use streamlib::engine_internal::core::ProjectConfig;
-    let config = match ProjectConfig::load(package_dir) {
+    let config = match load_summary_config(package_dir) {
         Ok(config) => config,
         Err(e) => {
             // The manifest already validated during the add; a read failure
@@ -414,6 +413,32 @@ fn print_processor_summary(package_dir: &Path) {
             println!("    Config: {} ({})", config_ref.name, config_ref.schema);
         }
     }
+}
+
+/// Load the just-placed package's config for the summary, resolving its
+/// bare-name schema deps through the active `streamlib link` checkout the
+/// build/run path resolves through — so a linked, zero-package-source dev loop
+/// prints a full summary instead of warning that no package source is
+/// configured. A corrupt marker degrades to a no-link resolve (the summary is
+/// cosmetic and runs only after the add/link already succeeded).
+fn load_summary_config(
+    package_dir: &Path,
+) -> streamlib::engine_internal::core::Result<streamlib::engine_internal::core::ProjectConfig> {
+    use streamlib::engine_internal::core::ProjectConfig;
+
+    let link_checkout = match streamlib_idents::link_marker::find_and_load_active_link(package_dir) {
+        Ok(active) => active.map(|(_marker, manifest)| manifest.checkout),
+        Err(e) => {
+            tracing::debug!(
+                dir = %package_dir.display(),
+                error = %e,
+                "add: link marker unreadable while preparing the processor summary; \
+                 resolving without a link"
+            );
+            None
+        }
+    };
+    ProjectConfig::load_with_link(package_dir, link_checkout.as_deref())
 }
 
 /// Convert a canonical-form string (`@org/name`) into a typed [`PackageRef`]
@@ -654,6 +679,158 @@ processors:
             kept.join("\n"),
             original.trim_end_matches('\n'),
             "content outside the dependencies block changed:\n{written}"
+        );
+    }
+
+    /// Removes the resolution-driving env for a test's duration and restores it
+    /// after, so a stray `STREAMLIB_PACKAGE_SOURCE` / `STREAMLIB_LINK_CHECKOUT`
+    /// in the shell can't make the summary-read link test non-deterministic.
+    struct CleanResolutionEnv {
+        prev_package_source: Option<std::ffi::OsString>,
+        prev_link: Option<std::ffi::OsString>,
+    }
+    impl CleanResolutionEnv {
+        fn new() -> Self {
+            let prev_package_source = std::env::var_os("STREAMLIB_PACKAGE_SOURCE");
+            let prev_link = std::env::var_os("STREAMLIB_LINK_CHECKOUT");
+            // SAFETY: the test using this guard is `#[serial]`, so no other
+            // thread races the process-global environment for its lifetime.
+            unsafe {
+                std::env::remove_var("STREAMLIB_PACKAGE_SOURCE");
+                std::env::remove_var("STREAMLIB_LINK_CHECKOUT");
+            }
+            Self {
+                prev_package_source,
+                prev_link,
+            }
+        }
+    }
+    impl Drop for CleanResolutionEnv {
+        fn drop(&mut self) {
+            unsafe {
+                match self.prev_package_source.take() {
+                    Some(v) => std::env::set_var("STREAMLIB_PACKAGE_SOURCE", v),
+                    None => std::env::remove_var("STREAMLIB_PACKAGE_SOURCE"),
+                }
+                match self.prev_link.take() {
+                    Some(v) => std::env::set_var("STREAMLIB_LINK_CHECKOUT", v),
+                    None => std::env::remove_var("STREAMLIB_LINK_CHECKOUT"),
+                }
+            }
+        }
+    }
+
+    /// A materialized package whose port imports a bare `VideoFrame` from
+    /// `@tatolab/core` (a bare version dep, no package source, NO patch) — the
+    /// shape that forces the summary read to walk the dep graph to resolve the
+    /// schema.
+    fn write_named_port_consumer(package_dir: &Path) {
+        std::fs::write(
+            package_dir.join("streamlib.yaml"),
+            r#"
+package:
+  org: tatolab
+  name: consumer
+  version: 1.0.0
+dependencies:
+  "@tatolab/core":
+    version: ^1.0.0
+schemas:
+  VideoFrame:
+    package: "@tatolab/core"
+processors:
+  - name: Consumer
+    description: d
+    runtime: rust
+    execution: manual
+    inputs:
+      - name: in0
+        schema: VideoFrame
+    outputs: []
+"#,
+        )
+        .unwrap();
+    }
+
+    /// A linked checkout carrying `packages/core` with the `VideoFrame` schema —
+    /// the tree the active link redirects schema resolution at.
+    fn write_checkout_core(checkout: &Path) {
+        let core = checkout.join("packages").join("core");
+        std::fs::create_dir_all(core.join("schemas")).unwrap();
+        std::fs::write(
+            core.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: core\n  version: 1.0.0\nschemas:\n  VideoFrame:\n    file: schemas/video_frame.yaml\n",
+        )
+        .unwrap();
+        std::fs::write(
+            core.join("schemas/video_frame.yaml"),
+            "metadata:\n  type: VideoFrame\nproperties: {}\n",
+        )
+        .unwrap();
+    }
+
+    /// Write an active `streamlib link` marker at `app_root` pointing at
+    /// `checkout` — the same `.streamlib/link.json` the build/run path discovers.
+    fn write_active_link_marker(app_root: &Path, checkout: &Path) {
+        use streamlib_idents::link_marker::{
+            LINK_MANIFEST_FILE, LINK_STATE_DIR, LinkManifest, LinkTransactionState,
+        };
+        let state_dir = app_root.join(LINK_STATE_DIR);
+        std::fs::create_dir_all(&state_dir).unwrap();
+        let manifest = LinkManifest {
+            checkout: checkout.to_path_buf(),
+            python_sdk_path: checkout.join("sdk/streamlib-python"),
+            deno_sdk_entrypoint_path: checkout.join("sdk/streamlib-deno/mod.ts"),
+            linked_at: "2026-01-01T00:00:00Z".to_string(),
+            linked_crate_count: 0,
+            state: LinkTransactionState::Active,
+            files: Vec::new(),
+        };
+        std::fs::write(
+            state_dir.join(LINK_MANIFEST_FILE),
+            serde_json::to_string_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+    }
+
+    /// Regression for #1343: a `streamlib add`/`link` summary read against a
+    /// package with an external schema dep, under an active link and ZERO
+    /// package source, must resolve through the link's checkout and succeed — no
+    /// `no package source is configured` WARN (the warn in
+    /// `print_processor_summary` fires iff `load_summary_config` returns `Err`).
+    #[test]
+    #[serial_test::serial]
+    fn summary_read_resolves_schema_dep_through_active_link_no_package_source() {
+        let _env = CleanResolutionEnv::new();
+        let tmp = tempfile::tempdir().unwrap();
+        let app = tmp.path().join("app");
+        let package_dir = app
+            .join("streamlib_modules")
+            .join("@tatolab")
+            .join("consumer");
+        std::fs::create_dir_all(&package_dir).unwrap();
+        write_named_port_consumer(&package_dir);
+        let checkout = tmp.path().join("checkout");
+        write_checkout_core(&checkout);
+        write_active_link_marker(&app, &checkout);
+
+        // Happy path: the marker is discoverable above the materialized package
+        // dir, so the summary read resolves the bare-name schema dep from the
+        // linked checkout — success, no spurious WARN.
+        load_summary_config(&package_dir).expect(
+            "summary read must resolve the schema dep through the active link, zero package source",
+        );
+
+        // Mental revert: the un-link-aware load the summary used before the fix
+        // (`ProjectConfig::load` == `load_with_link(_, None)`) can't see the
+        // checkout and fails `PackageSourceNotConfigured` — the exact WARN the
+        // fix removes. This is what proves the marker is what resolved it.
+        let err = streamlib::engine_internal::core::ProjectConfig::load(&package_dir)
+            .expect_err("without link-awareness the summary read must fail with no package source");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("no package source is configured") || msg.contains("cannot be resolved"),
+            "expected a package-source-not-configured failure, got: {msg}"
         );
     }
 }
