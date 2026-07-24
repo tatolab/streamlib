@@ -22,7 +22,7 @@ publish = false
 # `streamlib link --engine <checkout>` to point this dep at the in-repo SDK
 # checkout (the static file tree / linked checkout is the package source; there
 # is no central package registry). Reverse with `streamlib unlink --engine`.
-streamlib = { version = "0.7.45" }
+streamlib = { version = "0.8.0" }
 serde_json = "1"
 
 [workspace]
