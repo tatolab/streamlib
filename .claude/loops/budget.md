@@ -14,12 +14,16 @@ never a wall-clock local date. Today's spend is measured by one mechanical meter
 run-log:
 
 ```
-grep -c "^{\"ts\":\"$(date -u +%F)" loops/run-log.md
+grep -c "^{\"ts\":\"$(date -u +%F)" .claude/loops/state/milestone-loop.run-log.jsonl
 ```
 
 That counts the run-log lines stamped with today's UTC date. It cannot be conflated with the
 cumulative turn counter, and it rolls over correctly at UTC midnight. Never eyeball a long run-log to
 estimate the day's count — that is what produced the miscount this meter replaces.
+
+The run-log is plain JSON-lines with no markdown wrapper, so the meter cannot match a documented
+example inside a code fence. A workflow script cannot compute the date itself (`Date.now()` throws
+there); the main context passes `today` in as an argument.
 
 ## Exemptions
 - **Owner-directed corrections** (work the owner explicitly asked for in a comment) and **red-CI
@@ -27,11 +31,13 @@ estimate the day's count — that is what produced the miscount this meter repla
   they are not "new work," they unblock. The exempt turns are still logged; they just do not throttle.
 
 ## On exceed
-When a loop reaches a daily cap (or the 80% propose-only threshold in `loops/constraints.md`):
+When a loop reaches a daily cap (or the 80% propose-only threshold in
+`.claude/loops/constraints.md`):
 
 1. **Pause** — stop landing new code for the rest of the day (propose-only: planning, drafting,
    and posting questions are still allowed).
-2. **Append a run-log event** to `loops/run-log.md` recording the cap hit (`"outcome":"budget-cap"`).
+2. **Append a run-log event** to `.claude/loops/state/<loop>.run-log.jsonl` recording the cap hit
+   (`"outcome":"budget-cap"`).
 3. **Post an owner comment** on the active milestone (or the ticket in flight) so the owner sees the
    loop capped and can raise the cap or let it resume tomorrow.
 

@@ -8,16 +8,13 @@ Read this at the start of every loop run. These are hard rules, not guidance.
 - One in-flight ticket per physical rig resource (one GPU, one `/dev/videoN` at a time). The loop
   serializes rig work; it never launches two attempts that would contend for the same device.
 
-<!-- OWNER: N5 — main-context hand-edit exemption vs strict ban. This section says every
-code-changing attempt runs in its own worktree, but the loop hand-edited PR branches from the main
-context several times this session (trivial doc/comment/CI fixes) because delegating a 2-line fix
-used to cost a whole hand-rolled script. Pick one: (a) codify a bounded trivial-fix exemption
-(≤ ~5 lines, comments/docs only, gates re-run in the branch worktree, logged), or (b) a strict ban
-— route every code change through fix-ticket.js. fix-ticket.js now makes the ban cheap. -->
 - **Existing branches are touched via `fix-ticket.js`, not the main context.** Verify-finding
   fixes, owner-directed refinements, and conflicting-PR rebases run through
   `.claude/workflows/fix-ticket.js` (in the existing branch's worktree), never a hand-rolled
-  `fix-<issue>.js` script and never a main-context edit. (Pending the N5 decision above.)
+  `fix-<issue>.js` script and never a main-context edit. This is a **strict ban with no
+  trivial-fix exemption** (N5, decided): the worktree already exists and the fix workflow takes
+  its path, so routing a two-line change costs almost nothing, and every carve-out for "trivial"
+  edits has to be adjudicated by the very run that wants the exemption.
 
 ## Attempts and escalation
 - An **attempt** is a fresh implement launch — a new worktree, starting from Rederive. The attempt
@@ -30,8 +27,8 @@ used to cost a whole hand-rolled script. Pick one: (a) codify a bounded trivial-
   either cap.
 
 ## Turn boundaries
-- A turn may only end at a **coherent boundary**: a checkpoint commit plus a state-file note, or
-  work cleanly handed off (a background task, an opened PR, or a posted question). Never end mid-edit.
+- A turn may only end at a **coherent boundary**: a state write plus its run-log line, or work
+  cleanly handed off (a background task, an opened PR, or a posted question). Never end mid-edit.
 - Headless runs (no human present) never end the **final** turn with un-checkpointed background
   work — either the work is committed / handed off, or the turn keeps going until it is.
 
@@ -47,8 +44,8 @@ used to cost a whole hand-rolled script. Pick one: (a) codify a bounded trivial-
 ## Parked questions
 - "The owner" throughout these files is the repository owner's GitHub login — the human who merges
   PRs and answers parked questions. It is recorded as `owner_login` in
-  `loops/milestone-loop-state.md` (operator-set — never derived from `gh repo view`, which returns
-  the org).
+  `.claude/loops/state/milestone-loop.json` (operator-set — never derived from `gh repo view`,
+  which returns the org).
 - The loop's own `gh` identity shares the owner login, so `author.login` equality **cannot** tell an
   owner answer from the loop's own comment. Detection runs off a **comment-id ledger** instead: the
   loop records the id of every comment it posts on a ticket. A question parked on an issue is cleared
@@ -57,7 +54,15 @@ used to cost a whole hand-rolled script. Pick one: (a) codify a bounded trivial-
 
 ## Budget
 - If the day's budget is **≥80% spent**, the loop goes **propose-only** for the rest of the day —
-  it may plan, draft, and post, but lands no new code. See `loops/budget.md`.
+  it may plan, draft, and post, but lands no new code. See `.claude/loops/budget.md`.
+
+## State
+- The loop's runtime state (`.claude/loops/state/`) is **gitignored and never committed**. It is
+  machine-local and rewritten every pass; `branch-shield.sh` refuses commits on `main`, so a
+  tracked state file could never be persisted by the loop that owns it.
+- Runtime state is **absent from every worktree** (`git worktree add` checks out tracked files
+  only). Resolve the primary checkout with `git rev-parse --git-common-dir`, never
+  `--show-toplevel`, which returns the worktree when called from inside one.
 
 ## Model tiers
 - Implementation and reasoning spawns run `opus`; mechanical / prescribed-steps spawns run
