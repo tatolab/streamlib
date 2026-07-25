@@ -69,6 +69,13 @@ examples/camera-python-display/assets/*
 # Claude Code — ephemeral only
 .claude/worktrees/
 .claude/scheduled_tasks.lock
+
+# Loop runtime state — the reconciler's own memory (picture of in-flight tickets,
+# comment-id ledger, delta-probe cache) plus its append-only run-log. Machine-local
+# and rewritten every pass; `branch-shield.sh` refuses commits on main, so this must
+# never be tracked. Loop POLICY (constraints, budget, registry) stays tracked in
+# .claude/loops/. Shape documented by .claude/loops/state.example.json.
+.claude/loops/state/
 *.log
 .rustup/
 

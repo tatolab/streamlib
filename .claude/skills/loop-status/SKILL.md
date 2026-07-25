@@ -8,9 +8,9 @@ description: Render the milestone-loop's current picture into one status board �
 Read-only. Merge three sources into one board and print it; change nothing.
 
 ## Sources
-- `loops/milestone-loop-state.md` — the loop's four sections and the focused milestone (state header).
-- `loops/run-log.md` — the JSON-lines turn history (trends, recent outcomes, token spend).
-- `loops/budget.md` — the daily caps, to compute how much budget is left.
+- `.claude/loops/state/milestone-loop.json` — `focused_milestone`, and the `tickets` map the four board sections are **derived** from. Nothing stores those sections; group `tickets` by `stage` to build them (`implement`/`verify`/`fixing`/`reverify` → Acting on; `parked` → Waiting on the owner; `claimed` with an open blocker → Watch). If the file is absent, report that the loop has never run and stop.
+- `.claude/loops/state/milestone-loop.run-log.jsonl` — the JSON-lines turn history (trends, recent outcomes, token spend). Read the tail; never the whole file.
+- `.claude/loops/budget.md` — the daily caps, to compute how much budget is left.
 - Live `gh` — reconcile the state file's ticket refs against GitHub so the board reflects reality, not a stale cache (a merged PR or closed issue that the state file still lists is a ghost; show it as resolved, don't perpetuate it).
 
 ## Board layout

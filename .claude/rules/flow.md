@@ -3,16 +3,15 @@ paths:
   - ".claude/**"
   - ".github/ISSUE_TEMPLATE/**"
   - ".github/workflows/**"
-  - "LOOP.md"
-  - "loops/**"
 ---
 
 # Flow (operating model)
 
 - **Operating-model changes are their own PR, with rationale.** Anything under `.claude/` (rules,
-  agents, skills, hooks, settings), `LOOP.md`, `loops/`, or the issue templates changes in a
-  dedicated PR that explains why — never mixed into feature work. A run never edits the loop
-  definitions, agents, rules, or constraints it is itself using.
+  agents, skills, hooks, settings, the loop registry and its policy) or the issue templates
+  changes in a dedicated PR that explains why — never mixed into feature work. A run never edits
+  the loop definitions, agents, rules, or constraints it is itself using. The loop's runtime state
+  under `.claude/loops/state/` is gitignored and is not an operating-model change.
 - **A new agent definition PR must state three things:** the non-derivable knowledge the agent
   captures, why the existing agents don't already cover it, and its model tier.
 - **Model tiers:** implementation and reasoning agents run `opus`; mechanical / prescribed-steps
