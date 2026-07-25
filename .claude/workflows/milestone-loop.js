@@ -125,14 +125,16 @@ if (!state.focused_milestone) {
   return {
     outcome: 'blocked',
     dispatched: [],
-    owner_items: [{ kind: 'owner-question', reason: 'No focused milestone is set. Run /focus-milestone to pick one.' }],
+    owner_items: [{ kind: 'owner-question', reason: 'No focused milestone is set. Run /work-on-milestone to pick one and start the driver.' }],
   };
 }
 
 if (state.capped === true) {
   log(`milestone-loop: daily cap hit (${state.turns_today}/${state.daily_cap}) — recording and yielding`);
   await agent(
-    `Append exactly one JSON-lines event to ${RUNLOG_PATH} with ts of now in ISO-8601 UTC (date ${today}), ` +
+    `Append exactly one JSON-lines event to ${RUNLOG_PATH}. Get \`ts\` by running ` +
+      `\`date -u +%Y-%m-%dT%H:%M:%SZ\` and using its output VERBATIM — never compose it from a passed-in date and ` +
+      `never from local wall-clock time. `+
       `loop "milestone-loop", empty items/actions, and "outcome":"budget-cap". Create the file if absent.`,
     { phase: 'Record', label: 'record-cap', model: 'sonnet' },
   );
@@ -142,7 +144,9 @@ if (state.capped === true) {
 if (state.no_delta === true) {
   log('milestone-loop: no delta since last pass — idle');
   await agent(
-    `Append exactly one JSON-lines event to ${RUNLOG_PATH} with ts of now in ISO-8601 UTC (date ${today}), ` +
+    `Append exactly one JSON-lines event to ${RUNLOG_PATH}. Get \`ts\` by running ` +
+      `\`date -u +%Y-%m-%dT%H:%M:%SZ\` and using its output VERBATIM — never compose it from a passed-in date and ` +
+      `never from local wall-clock time. `+
       `loop "milestone-loop", empty items/actions, and "outcome":"idle". Create the file if absent.`,
     { phase: 'Record', label: 'record-idle', model: 'sonnet' },
   );
@@ -305,8 +309,10 @@ await agent(
     `PRs that merged. Do NOT store Acting on / Waiting / Watch prose sections — those are derived from \`stage\` by ` +
     `loop-status. Persist the delta_probe cache. Preserve \`paused\`, \`owner_login\`, \`focused_milestone\`, and every ` +
     `capabilities key listed in capabilities.owner_overrides exactly as they are.\n` +
-    `2. Append EXACTLY ONE JSON-lines event to ${RUNLOG_PATH} (create it if absent) with: ts (now, ISO-8601 UTC, date ` +
-    `${today}), loop "milestone-loop", turn (previous max + 1, or 1), items (the ticket refs touched), actions (terse ` +
+    `2. Append EXACTLY ONE JSON-lines event to ${RUNLOG_PATH} (create it if absent) with: ts — obtained by running ` +
+    `\`date -u +%Y-%m-%dT%H:%M:%SZ\` and used VERBATIM, never composed from a passed-in date and never from local ` +
+    `wall-clock time (a pass that crosses UTC midnight would otherwise stamp the wrong day and the budget meter ` +
+    `would stop seeing its own lines) — loop "milestone-loop", turn (previous max + 1, or 1), items (the ticket refs touched), actions (terse ` +
     `phrases), attempts, verdicts, escalations, est_tokens (your best estimate), and outcome — "progressed" if anything ` +
     `advanced, else "blocked".\n` +
     `The state directory is gitignored: write in place and never commit it.\n\n` +

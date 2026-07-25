@@ -37,8 +37,9 @@ from code at need — do not create summary docs of what code already shows.
 - Tests are always in scope and never need approval. Code drives tests, never the reverse.
 
 ## How work happens
-Loops drive the work (see `.claude/loops/`). The standing form is
-`/loop 30m /goal <milestone condition> — each turn: one milestone-loop reconciler pass`.
+Loops drive the work (see `.claude/loops/`). Start one with `/work-on-milestone <milestone>`:
+it sets the focus and the goal, then registers the recurring reconciler until the milestone is
+merged, parked, or blocked. The schedule is session-scoped — closing the session stops it.
 A router classifies each work item fresh every pass and launches the matching workflow;
 labels are display output only — nothing reads them as control. Loop policy (registry,
 constraints, budget) is tracked in `.claude/loops/`; the loop's runtime state is gitignored

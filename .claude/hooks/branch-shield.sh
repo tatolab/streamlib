@@ -37,65 +37,59 @@ esac
 target_dir="${gitc_path:-${cd_path:-${cwd:-.}}}"
 norm="$(printf '%s' "$stripped" | sed -E 's/git[[:space:]]+-C[[:space:]]+[^[:space:]]+[[:space:]]+/git /g')"
 
-deny() {
-  echo "branch-shield: refused — $1" >&2
-  exit 2
+# This hook ESCALATES; it never decides. Every rule below matches something the
+# agent must not do on its own initiative — but each is also something the owner
+# may legitimately want, and only they can tell which case this is. A hard deny
+# (exit 2) takes the final say, which leaves an owner driving remotely with no way
+# to approve a legitimate exception. So every rule asks.
+#
+# This is not a weakening. `permissionDecision: "ask"` surfaces the normal
+# permission prompt on EVERY match, and an unattended firing has nobody to answer
+# it — so autonomous runs are still stopped cold. The escalation only opens a door
+# the owner is already standing at. Same contract as rig-brake.sh.
+#
+# The corollary is that these prompts must stay RARE. A rule that fires in normal
+# operation trains the owner to approve reflexively, which is worse than no rule
+# at all — so each pattern below is narrow on purpose, and a false positive is a
+# bug to fix rather than noise to live with.
+ask() {
+  jq -n --arg r "$1" \
+    '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: $r}}'
+  exit 0
 }
 
 match() { printf '%s' "$norm" | grep -Eq "$1"; }
 
-# gh pr merge — gated on an owner-controlled authorization toggle, default OFF.
-# The guardrail stays safe-by-default: the agent may merge only when the owner has
-# opted in via the gitignored authorization file. Owner toggles it from any terminal:
-#   echo on  > .claude/merge-authorization.local   # grant merge to the agent
-#   echo off > .claude/merge-authorization.local   # revoke (or: rm the file)
-# First line must trim to exactly "on" (case-insensitive) to authorize.
-#
-# The toggle lives in the PRIMARY checkout only: it is gitignored, and `git
-# worktree add` checks out tracked files exclusively, so no worktree ever has a
-# copy. Resolve via --git-common-dir (the primary .git from anywhere) rather than
-# CLAUDE_PROJECT_DIR or --show-toplevel, either of which resolves to the worktree
-# when the call originates inside one — leaving auth empty and silently denying a
-# merge the owner had in fact granted.
+# gh pr merge. Never file-gated: the old gitignored authorization toggle was
+# unreachable from remote control and, being gitignored, absent from every
+# worktree — so a merge the owner had granted was silently denied from all of them.
 if match 'gh[[:space:]]+pr[[:space:]]+merge'; then
-  # --path-format=absolute (git 2.31+) is required: the bare form is relative to
-  # CWD ("../.git" from a subdirectory), which dirname would resolve wrongly.
-  common_dir="$(git -C "$target_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null || true)"
-  if [ -n "$common_dir" ]; then
-    primary_root="$(dirname "$common_dir")"
-  else
-    primary_root="${CLAUDE_PROJECT_DIR:-.}"
-  fi
-  auth_file="$primary_root/.claude/merge-authorization.local"
-  auth="$(head -n1 "$auth_file" 2>/dev/null | tr -d '[:space:]' | tr '[:upper:]' '[:lower:]')"
-  if [ "$auth" != "on" ]; then
-    deny "merge authorization is OFF — owner enables with: echo on > .claude/merge-authorization.local (off/rm to revoke) (gh pr merge)"
-  fi
+  ask "Merging a PR is always the owner's call. Approve only if you intend this merge to land now; decline to leave the PR open for review."
 fi
 
 # git push targeting origin main (force or not): 'origin main', 'origin +main',
 # 'origin HEAD:main', or any '<refspec>:main'. Boundary excludes 'main-feature'.
 if match 'git[[:space:]]+push' \
    && match '(origin[[:space:]]+\+?(HEAD:)?main|:main)([^[:alnum:]._/-]|$)'; then
-  deny "pushing to origin main is never allowed"
+  ask "This pushes directly to origin/main, bypassing the PR flow the repo squash-merges through. The agent has no legitimate reason to do this — approve only if you are deliberately pushing to main yourself."
 fi
 
 # git commit while the target repo's current branch is main or master.
 if match 'git[[:space:]]+commit'; then
   branch="$(git -C "$target_dir" branch --show-current 2>/dev/null || true)"
   if [ "$branch" = "main" ] || [ "$branch" = "master" ]; then
-    deny "committing directly on '$branch' — branch first"
+    ask "This commits directly on '$branch' rather than a branch. Note that the loop's runtime state under .claude/loops/state/ is gitignored precisely because this is refused — approving a commit that tracks loop state would undo that. Branch first unless you mean this."
   fi
 fi
 
 # git branch -D main
 if match 'git[[:space:]]+branch[[:space:]]+-D[[:space:]]+main([^[:alnum:]._/-]|$)'; then
-  deny "deleting the main branch is never allowed"
+  ask "This force-deletes the local main branch. Approve only if you are deliberately recreating it."
 fi
 
 # git reset --hard origin/<ref>
 if match 'git[[:space:]]+reset[[:space:]]+--hard[[:space:]]+origin/'; then
-  deny "hard-resetting to a remote ref discards local work"
+  ask "This hard-resets to a remote ref and DISCARDS any local work in this tree, including uncommitted changes. Approve only if you know this tree has nothing you need."
 fi
 
 exit 0

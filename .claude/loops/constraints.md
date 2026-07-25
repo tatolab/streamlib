@@ -2,6 +2,25 @@
 
 Read this at the start of every loop run. These are hard rules, not guidance.
 
+## The owner can always approve an exception
+
+Every restriction here, and every hook that enforces one, binds the **agent's own
+initiative** — not the owner. When the owner is present and explicitly approves a specific
+exception, take it and record what was approved in the run-log `actions` for that turn.
+
+This is why **no hook hard-denies**. `rig-brake.sh` and every rule in `branch-shield.sh` emit
+`permissionDecision: "ask"`, which surfaces the normal permission prompt and is reachable from
+remote control. An unattended firing has nobody to answer that prompt, so autonomous runs are still
+stopped by it — the escalation only opens a door the owner is standing at.
+
+The corollary is that these prompts must stay **rare**. A rule that fires during normal operation
+trains the owner to approve reflexively, which is worse than no rule at all. Every gate pattern is
+narrow on purpose; a false positive is a bug to fix, not noise to live with. If a gate starts firing
+routinely, tighten the pattern rather than learning to click through it.
+
+An approval covers the one action approved, not the class. "Yes, merge #1606" is not standing
+authorization to merge; the next merge asks again.
+
 ## Isolation
 - Every code-changing attempt runs in its **own git worktree** — one worktree per attempt. Sweep
   (remove) the worktree on reject or escalate; never leave orphan worktrees behind.
