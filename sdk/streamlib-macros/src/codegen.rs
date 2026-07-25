@@ -161,6 +161,38 @@ pub fn generate_from_processor_schema(
 struct CustomField {
     name: Ident,
     ty: syn::Type,
+    /// Authored attributes re-emitted onto the generated `Processor` struct
+    /// field, filtered by [`is_forwarded_onto_generated_field_definition`].
+    attributes_for_generated_field_definition: Vec<syn::Attribute>,
+    /// Authored attributes re-emitted onto the `from_config` struct-literal
+    /// initializer, filtered by
+    /// [`is_forwarded_onto_from_config_initializer`]. Narrower than the field
+    /// definition's set — the two must stay in lockstep on presence.
+    attributes_for_from_config_initializer: Vec<syn::Attribute>,
+}
+
+/// Authoring contract for `#[processor]` struct fields: `cfg` is the
+/// load-bearing forward — dropping it makes a platform-conditional field
+/// unconditional and its platform-specific type fails to resolve off that
+/// platform. `doc` and the lint controls ride along so an author's `///` and
+/// `#[allow(dead_code)]` survive expansion.
+fn is_forwarded_onto_generated_field_definition(attribute: &syn::Attribute) -> bool {
+    let path = attribute.path();
+    path.is_ident("cfg")
+        || path.is_ident("doc")
+        || path.is_ident("allow")
+        || path.is_ident("warn")
+        || path.is_ident("deny")
+        || path.is_ident("forbid")
+        || path.is_ident("expect")
+}
+
+/// `cfg` is the only attribute a struct-expression field takes cleanly — a
+/// `doc` there is an `unused_doc_comments` warning and the gates deny warnings.
+/// `cfg_attr` is forwarded to neither site: an expansion that changes presence
+/// would desync the field definition from this initializer.
+fn is_forwarded_onto_from_config_initializer(attribute: &syn::Attribute) -> bool {
+    attribute.path().is_ident("cfg")
 }
 
 /// Extract custom fields from the user's struct definition.
@@ -169,9 +201,24 @@ fn extract_custom_fields(item: &ItemStruct) -> Vec<CustomField> {
         syn::Fields::Named(fields) => fields
             .named
             .iter()
-            .map(|f| CustomField {
-                name: f.ident.clone().expect("Named field must have ident"),
-                ty: f.ty.clone(),
+            .map(|authored_field| CustomField {
+                name: authored_field
+                    .ident
+                    .clone()
+                    .expect("Named field must have ident"),
+                ty: authored_field.ty.clone(),
+                attributes_for_generated_field_definition: authored_field
+                    .attrs
+                    .iter()
+                    .filter(|attribute| is_forwarded_onto_generated_field_definition(attribute))
+                    .cloned()
+                    .collect(),
+                attributes_for_from_config_initializer: authored_field
+                    .attrs
+                    .iter()
+                    .filter(|attribute| is_forwarded_onto_from_config_initializer(attribute))
+                    .cloned()
+                    .collect(),
             })
             .collect(),
         syn::Fields::Unit => Vec::new(),
@@ -210,10 +257,11 @@ fn generate_processor_struct_from_schema(
     // Generate custom fields from the user's struct definition
     let custom_field_defs: Vec<TokenStream> = custom_fields
         .iter()
-        .map(|f| {
-            let name = &f.name;
-            let ty = &f.ty;
-            quote! { pub #name: #ty, }
+        .map(|custom_field| {
+            let attributes = &custom_field.attributes_for_generated_field_definition;
+            let name = &custom_field.name;
+            let ty = &custom_field.ty;
+            quote! { #(#attributes)* pub #name: #ty, }
         })
         .collect();
 
@@ -551,9 +599,10 @@ fn generate_from_config_from_schema(
     // Initialize custom fields with Default::default()
     let custom_field_inits: Vec<TokenStream> = custom_fields
         .iter()
-        .map(|f| {
-            let name = &f.name;
-            quote! { #name: ::std::default::Default::default(), }
+        .map(|custom_field| {
+            let attributes = &custom_field.attributes_for_from_config_initializer;
+            let name = &custom_field.name;
+            quote! { #(#attributes)* #name: ::std::default::Default::default(), }
         })
         .collect();
 
@@ -897,5 +946,77 @@ mod processor_struct_emit_tests {
              `linux_only_backend_state` initializer — got: {}",
             rendered
         );
+    }
+
+    fn annotated_field_struct() -> ItemStruct {
+        syn::parse_quote! {
+            struct AnnotatedFieldProbe {
+                /// Authored doc on a processor field.
+                #[allow(dead_code)]
+                #[cfg_attr(target_os = "linux", allow(unused))]
+                #[serde(skip)]
+                annotated_backend_state: Option<u32>,
+            }
+        }
+    }
+
+    /// The field-definition site forwards `doc` and the lint controls so an
+    /// author's `///` and `#[allow(dead_code)]` survive expansion; `cfg_attr`
+    /// and unknown attributes stay dropped.
+    #[test]
+    fn processor_struct_forwards_doc_and_lint_attributes_but_not_cfg_attr() {
+        let custom_fields = extract_custom_fields(&annotated_field_struct());
+        let rendered = render_without_whitespace(generate_processor_struct_from_schema(
+            &minimal_schema(),
+            &None,
+            &custom_fields,
+        ));
+        assert!(
+            rendered.contains("Authoreddoconaprocessorfield."),
+            "generated Processor struct must carry the authored doc — got: {}",
+            rendered
+        );
+        assert!(
+            rendered.contains("#[allow(dead_code)]"),
+            "generated Processor struct must carry the authored lint control — got: {}",
+            rendered
+        );
+        assert!(
+            !rendered.contains("cfg_attr"),
+            "`cfg_attr` must not be forwarded — its expansion could change \
+             field presence and desync the two emission sites — got: {}",
+            rendered
+        );
+        assert!(
+            !rendered.contains("serde"),
+            "unknown attributes stay dropped — got: {}",
+            rendered
+        );
+    }
+
+    /// The `from_config` struct-literal site takes `cfg` only — a `doc` on a
+    /// struct-expression field is an `unused_doc_comments` warning and the
+    /// gates deny warnings.
+    #[test]
+    fn from_config_initializer_forwards_cfg_only() {
+        let custom_fields = extract_custom_fields(&annotated_field_struct());
+        let rendered = render_without_whitespace(generate_from_config_from_schema(
+            &minimal_schema(),
+            &None,
+            &custom_fields,
+        ));
+        assert!(
+            rendered.contains("annotated_backend_state:"),
+            "from_config must still initialize the field — got: {}",
+            rendered
+        );
+        for dropped in ["doc", "allow", "cfg_attr", "serde"] {
+            assert!(
+                !rendered.contains(dropped),
+                "from_config initializer must forward `cfg` only, found `{}` — got: {}",
+                dropped,
+                rendered
+            );
+        }
     }
 }

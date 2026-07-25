@@ -53,6 +53,11 @@ use syn::{
 /// `@app/local/<StructName>` identity so a bare crate compiles with no
 /// `streamlib.yaml`.
 ///
+/// Authoring contract for struct fields: `#[cfg]`, `///` docs, and the lint
+/// controls (`allow` / `warn` / `deny` / `forbid` / `expect`) are forwarded onto
+/// the generated field; `#[cfg]` alone is also forwarded onto its `from_config`
+/// initializer. Every other field attribute — including `cfg_attr` — is dropped.
+///
 /// The macro emits the processor's type, port markers, descriptor, and
 /// `schema_ident()` accessor — but does NOT register the processor in
 /// the global `PROCESSOR_REGISTRY`. Callers register processors through
