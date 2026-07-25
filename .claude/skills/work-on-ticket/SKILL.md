@@ -1,43 +1,58 @@
 ---
 name: work-on-ticket
-description: Take one ticket end-to-end in the current session with the owner present — the interactive counterpart to the standing loop. Use when they say "work on issue N", "let's do this ticket", "pick up X and I'll answer questions as you go", or want to drive a single issue to a draft PR now. Same router, same workflow scripts, same verifier as the loop — but questions come inline instead of parking.
+description: Take one ticket end-to-end in the current session with the owner present — the interactive counterpart to the standing loop. Use when they say "work on issue N", "let's do this ticket", "pick up X and I'll answer questions as you go", or want to drive a single issue to a PR now. Same workflow, same composed stages, same verifier as the loop — but questions come inline instead of parking.
 ---
 
 # work-on-ticket — the interactive one
 
-This is the debug interface for the loop: the same machinery a `milestone-loop` turn runs, driven on a single ticket with the owner in the room. The one difference is where questions go — **inline, not parked**.
+The debug interface for the loop: the same machinery a `milestone-loop` turn runs, driven on a single ticket with the owner in the room. The one difference is where questions go — **inline, not parked**.
 
 ## When to use vs the loop
-Use `work-on-ticket` when the owner is present and wants to drive a specific issue now and answer questions in real time. Use `milestone-loop` for the standing autonomous pass. The routing, the workflow scripts, and the verifier are identical — so a ticket taken here lands the same shape of work (branch, worktree-per-attempt, draft PR, verifier gate) that the loop would have produced.
+
+Use `work-on-ticket` when the owner is present and wants to drive a specific issue now and answer questions in real time. Use `milestone-loop` for the standing pass. The workflow, the stage composition, and the verifier are identical — so a ticket taken here lands the same shape of work the loop would have produced.
 
 ## Procedure
 
-### 1. Read the ticket fresh
-Pull the issue body from GitHub and read it against current code — the body is the goal, not a spec, and its file paths / claims may have gone stale. Confirm what's still true before locking a plan.
+### 1. Classify the ticket
 
-### 2. Classify (same router as the loop)
-Classify the work exactly as `milestone-loop` step 3 does: **work shape** (`design-first` — required for engine-zone features / `implement` / `bug-reproduce-first` / `research`), **zones touched**, **rig needs**, **risk**. Pick the build lead by zone (abi → plugin-abi-expert, python/deno → polyglot-ipc-expert, packages/package-source → package-source-expert, vulkan/rhi/video → gpu-vulkan-expert, camera/v4l2 → linux-media-expert, else generic).
+Read the issue fresh from GitHub against current code — the body is the goal, not a spec, and its file paths and claims may have gone stale. Determine the same four things the loop's classifier does:
 
-### 3. Announce the plan-of-record
+- **shape** — `design-first` (required for engine-zone features per `.claude/rules/engine-doctrine.md`) / `implement` / `bug-reproduce-first` / `research`
+- **zones** — the code areas touched
+- **rig_needs** — gpu / camera / display / audio, or none
+- **lead** — the domain expert for those zones, or null for generic
+
+Labels are display output; never read one as control input.
+
+### 2. Announce the plan-of-record
+
 State the fresh plan — what you'll change, the test shape, the scenario for live verification if any — and where it supersedes the issue body. This is the moment to catch a wrong assumption before work starts.
 
-### 4. Run the matching workflow
-Launch the same script the loop would:
-- `design-first` → `.claude/workflows/draft-design.js`
-- `implement` / `bug-reproduce-first` → `.claude/workflows/worktree-work.js`
-- `research` → `.claude/workflows/run-research.js`
+### 3. Launch the workflow
 
-Work in a fresh worktree per attempt; checkpoint at logical boundaries (commits are contractual, not optional). Honor the attempt cap of 3.
+Compute `today` (`date -u +%F`) and the absolute repo root, then launch the same script the loop dispatches to:
 
-### 5. Questions go inline — this is the whole difference
-Whenever the work hits a decision only the owner can make — an ambiguous requirement, a scope call, a design fork, a milestone question — **ask them directly with `AskUserQuestion`**, right then. Do NOT park a `gate` label and a question comment the way the loop does; they're here, so get the answer and keep going. Reserve GitHub-comment parking for the autonomous loop.
+```
+Workflow({ scriptPath: ".claude/workflows/worktree-work.js",
+           args: { issue, slug, zones, shape, lead, rig_needs, live_verify, repo_root, today } })
+```
 
-Everything else that isn't owner-only — a fact you can derive, a check you can run — you resolve yourself; don't turn a derivable question into an interruption.
+`design-first` routes to `draft-design.js` and `research` to `run-research.js` instead.
 
-### 6. Verify and open a draft PR
-Verification is a stage inside `worktree-work.js`, not a separate launch. A `PASS` opens a PR ready for review (never a merge — merging stays the owner's call). A `FIX` runs a bounded fix round in the same worktree. A `DISCUSS` comes back as an owner item, which you surface inline here rather than parking.
+The workflow composes its own stage list from `shape` and `zones`, creates the worktree and branch, gates, verifies, applies bounded fix rounds, and opens the PR ready for review on a `PASS`. Do not hand-roll any of those steps here, and never edit the branch from this context — the constraint against main-context edits is not relaxed just because the owner is watching.
 
-If the change needs live rig verification (GPU / camera / display), you cannot run it from a sandboxed session — hand off via `/verify-live`: emit the exact command block for the owner's terminal, and audit the output they report back.
+Honor the attempt cap of 3.
 
-### 7. Report
-Close with what landed: the branch, the draft PR, the verifier verdict, any follow-ups surfaced (don't auto-file them — surface and let the owner decide), and whatever still needs a live run.
+### 4. Questions go inline — this is the whole difference
+
+The workflow returns `owner_items` for anything only the owner can decide. Surface each one with **`AskUserQuestion`**, right then. Do NOT park a `gate` label and a question comment the way the loop does — they're here, so get the answer and keep going.
+
+Everything that isn't owner-only — a fact you can derive, a check you can run — you resolve yourself; don't turn a derivable question into an interruption.
+
+### 5. Live verification
+
+If the ticket's `rig_needs` are non-empty, the workflow runs the Evidence stage itself when `live_verify` is `available`. When it isn't, hand off via `/verify-live`: emit the exact command block for the owner's terminal and audit the output they report back.
+
+### 6. Report
+
+Close with what landed: the branch, the PR, the verifier verdict, the stages the workflow actually composed and ran, any follow-ups surfaced (don't auto-file them — surface and let the owner decide), and whatever still needs a live run.
