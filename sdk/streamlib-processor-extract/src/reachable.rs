@@ -18,6 +18,8 @@
 //! way `rustc` does (honoring `#[path = "..."]`), evaluates the `#[cfg(...)]`
 //! predicate on every `mod` and every `#[processor(...)]`-bearing struct against
 //! a [`ModuleReachabilityTarget`], and collects only the processors that survive.
+//! A module file's own inner `#![cfg(...)]` gates it the same way, pruning the
+//! whole subtree it declares.
 //!
 //! The parked-directory convention needs no special case: a parked module is
 //! declared `#[cfg(any())]` (an always-false predicate), so cfg evaluation skips
@@ -112,7 +114,8 @@ impl ModuleReachabilityTarget {
 /// Starts at the crate root (`src/lib.rs`, else `src/main.rs`, else both when a
 /// crate carries a lib and a bin), follows every reachable `mod` the way
 /// `rustc` resolves module files, and evaluates `#[cfg(...)]` on each `mod` and
-/// each `#[processor(...)]`-bearing struct against `target`. A `#[processor]`
+/// each `#[processor(...)]`-bearing struct against `target`, plus the inner
+/// `#![cfg(...)]` a module file declares on itself. A `#[processor]`
 /// under a cfg-excluded module — a cross-platform arm, a disabled feature, or a
 /// `#[cfg(any())]` parked directory — is never collected. The result is
 /// deterministic (source order within a file, module-declaration order across
@@ -187,6 +190,16 @@ impl ReachableModuleWalker<'_> {
             path: file.to_path_buf(),
             source: e,
         })?;
+
+        // A file-level inner `#![cfg(...)]` gates the module the file *is*, so a
+        // false predicate strips the file and everything it declares — including
+        // its `mod` children. `syn` keeps these on `File::attrs`; an inline
+        // `mod foo { #![cfg] }` instead folds them into `ItemMod::attrs`, which
+        // `walk_item` gates.
+        if !self.cfg_reachable(&parsed.attrs) {
+            tracing::trace!(file = %file.display(), "module file excluded by file-level cfg");
+            return Ok(());
+        }
 
         let rel = file
             .strip_prefix(self.crate_root)
