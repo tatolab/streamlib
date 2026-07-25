@@ -829,7 +829,7 @@ fn generate_iceoryx2_accessors_from_schema(schema: &ProcessorSchema) -> TokenStr
 #[cfg(test)]
 mod processor_struct_emit_tests {
     use super::*;
-    use streamlib_processor_schema::ProcessorSchema;
+    use streamlib_processor_schema::{PortSchemaSpec, ProcessorPortSchema, ProcessorSchema};
 
     fn minimal_schema() -> ProcessorSchema {
         ProcessorSchema {
@@ -902,6 +902,79 @@ mod processor_struct_emit_tests {
                 platform_agnostic_state: u64,
             }
         }
+    }
+
+    fn schema_declaring_iceoryx2_input_and_output_ports() -> ProcessorSchema {
+        let port = |name: &str| ProcessorPortSchema {
+            name: name.to_string(),
+            schema: PortSchemaSpec::Any,
+            description: None,
+            delivery_profile: None,
+        };
+        ProcessorSchema {
+            inputs: vec![port("video_in")],
+            outputs: vec![port("video_out")],
+            ..minimal_schema()
+        }
+    }
+
+    fn struct_with_every_custom_field_compiled_out() -> ItemStruct {
+        syn::parse_quote! {
+            struct EveryCustomFieldCompiledOutProbe {
+                #[cfg(any())]
+                never_compiled_backend_state: Option<u32>,
+                #[cfg(any())]
+                never_compiled_frame_counter: u64,
+            }
+        }
+    }
+
+    /// The `inputs` / `outputs` fields are the `#[repr(C)]` `(handle, vtable)`
+    /// PluginAbiObjects the host patches through
+    /// `ProcessorVTable::set_iceoryx2_resources`, so their presence is a plugin
+    /// ABI contract, not an authoring convenience: they are emitted from the
+    /// port schema ahead of the custom fields and no authored field attribute
+    /// may ever reach them. Compiling out every authored field is the
+    /// adversarial case — if the #1588 attribute filter ever widened to the
+    /// whole field list, these assertions are what catches it.
+    #[test]
+    fn plugin_abi_object_port_fields_stay_unconditional_when_every_custom_field_is_compiled_out() {
+        let schema = schema_declaring_iceoryx2_input_and_output_ports();
+        let custom_fields = extract_custom_fields(&struct_with_every_custom_field_compiled_out());
+
+        let struct_rendered = render_without_whitespace(generate_processor_struct_from_schema(
+            &schema,
+            &None,
+            &custom_fields,
+        ));
+        assert!(
+            struct_rendered.contains(
+                "pubstructProcessor{pubinputs:__streamlib_sdk::iceoryx2::InputMailboxes,\
+                 puboutputs:__streamlib_sdk::iceoryx2::OutputWriter,"
+            ),
+            "the PluginAbiObject port fields must open the generated struct with \
+             nothing interposed — got: {}",
+            struct_rendered
+        );
+        assert!(
+            struct_rendered.contains("#[cfg(any())]pubnever_compiled_backend_state"),
+            "the probe must actually exercise the attribute filter — got: {}",
+            struct_rendered
+        );
+
+        let from_config_rendered = render_without_whitespace(generate_from_config_from_schema(
+            &schema,
+            &None,
+            &custom_fields,
+        ));
+        assert!(
+            from_config_rendered.contains(
+                "Ok(Self{inputs:__streamlib_sdk::iceoryx2::InputMailboxes::empty(),\
+                 outputs:__streamlib_sdk::iceoryx2::OutputWriter::empty(),"
+            ),
+            "the PluginAbiObject port initializers must stay unconditional — got: {}",
+            from_config_rendered
+        );
     }
 
     /// Locks #1588: a `#[cfg]` authored on a processor struct field must be
