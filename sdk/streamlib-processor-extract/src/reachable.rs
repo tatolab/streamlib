@@ -512,6 +512,109 @@ mod tests {
         );
     }
 
+    /// A file-level inner `#![cfg(...)]` gates the whole file the same way an
+    /// outer `#[cfg]` on the `mod` declaration does. The declaring `mod` is
+    /// unconditional, so only `syn::File::attrs` carries the gate.
+    #[test]
+    fn file_level_inner_cfg_excludes_the_whole_file() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(root, "src/lib.rs", "pub mod linux_only;\n");
+        write(
+            root,
+            "src/linux_only.rs",
+            r#"#![cfg(target_os = "linux")]
+
+            #[processor("@tatolab/demo/LinuxOnly", execution = reactive)]
+            pub struct LinuxOnly;"#,
+        );
+
+        assert!(
+            extract_reachable_rust_processors(root, &macos())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// The including half of the file-level gate: the same file under a target
+    /// that satisfies its `#![cfg]` still contributes its processor.
+    #[test]
+    fn file_level_inner_cfg_includes_when_target_matches() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(root, "src/lib.rs", "pub mod linux_only;\n");
+        write(
+            root,
+            "src/linux_only.rs",
+            r#"#![cfg(target_os = "linux")]
+
+            #[processor("@tatolab/demo/LinuxOnly", execution = reactive)]
+            pub struct LinuxOnly;"#,
+        );
+
+        assert_eq!(
+            names(extract_reachable_rust_processors(root, &linux()).unwrap()),
+            vec!["LinuxOnly"]
+        );
+    }
+
+    /// File-level gates run through the same combinator evaluator as item-level
+    /// ones: `all(...)` and `not(...)` resolve against the target.
+    #[test]
+    fn file_level_inner_cfg_evaluates_combinators() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "src/lib.rs",
+            "pub mod unix_not_linux;\npub mod unix_and_linux;\n",
+        );
+        write(
+            root,
+            "src/unix_not_linux.rs",
+            r#"#![cfg(all(unix, not(target_os = "linux")))]
+
+            #[processor("@tatolab/demo/UnixNotLinux", execution = reactive)]
+            pub struct UnixNotLinux;"#,
+        );
+        write(
+            root,
+            "src/unix_and_linux.rs",
+            r#"#![cfg(all(unix, target_os = "linux"))]
+
+            #[processor("@tatolab/demo/UnixAndLinux", execution = reactive)]
+            pub struct UnixAndLinux;"#,
+        );
+
+        assert_eq!(
+            names(extract_reachable_rust_processors(root, &linux()).unwrap()),
+            vec!["UnixAndLinux"]
+        );
+    }
+
+    /// The evaluator fails closed at file level too: a predicate it cannot prove
+    /// means "not reachable", never "reachable".
+    #[test]
+    fn file_level_inner_cfg_fails_closed_on_unparseable_predicate() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(root, "src/lib.rs", "pub mod bogus;\n");
+        write(
+            root,
+            "src/bogus.rs",
+            r#"#![cfg(target_os = 42)]
+
+            #[processor("@tatolab/demo/Bogus", execution = reactive)]
+            pub struct Bogus;"#,
+        );
+
+        assert!(
+            extract_reachable_rust_processors(root, &linux())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
     /// A module never `mod`-declared from the crate root is unreachable — a
     /// stray `.rs` under `src/` (scratch file, unwired arm) is not compiled and
     /// must not contribute a processor. The raw whole-tree scan would collect it.
