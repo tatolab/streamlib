@@ -9,7 +9,15 @@
 # or from a periodic sweep (it only removes merged-PR worktrees; it is idempotent).
 set -uo pipefail
 
-ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || exit 0
+# --show-toplevel returns the WORKTREE when called from inside one, which would
+# point WT_DIR at a nested path that never holds the loop's worktrees. The common
+# dir is the primary checkout's .git from anywhere, so its parent is the primary
+# root whether this runs from the main checkout, a worktree, or the merge hook.
+# --path-format=absolute (git 2.31+) is required: the bare form is relative to
+# CWD ("../.git" from a subdirectory), which dirname would resolve wrongly.
+COMMON_DIR="$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null)"
+[ -n "$COMMON_DIR" ] || exit 0
+ROOT="$(dirname "$COMMON_DIR")"
 WT_DIR="$ROOT/.claude/worktrees"
 [ -d "$WT_DIR" ] || exit 0
 command -v gh >/dev/null 2>&1 || exit 0
