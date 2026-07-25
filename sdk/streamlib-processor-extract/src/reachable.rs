@@ -558,8 +558,44 @@ mod tests {
         );
     }
 
+    /// A file-level gate prunes the whole subtree, not just the gated file's own
+    /// items: an excluded file's `mod child;` is never followed, so a processor
+    /// living one level down is not collected either. An implementation that
+    /// filtered items instead of returning early would still descend and collect
+    /// `DeepChild`.
+    #[test]
+    fn file_level_inner_cfg_prunes_the_child_module_subtree() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(root, "src/lib.rs", "pub mod gated;\n");
+        write(
+            root,
+            "src/gated.rs",
+            r#"#![cfg(target_os = "linux")]
+
+            pub mod child;"#,
+        );
+        write(
+            root,
+            "src/gated/child.rs",
+            r#"#[processor("@tatolab/demo/DeepChild", execution = reactive)]
+            pub struct DeepChild;"#,
+        );
+
+        assert!(
+            extract_reachable_rust_processors(root, &macos())
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            names(extract_reachable_rust_processors(root, &linux()).unwrap()),
+            vec!["DeepChild"]
+        );
+    }
+
     /// File-level gates run through the same combinator evaluator as item-level
-    /// ones: `all(...)` and `not(...)` resolve against the target.
+    /// ones: `all(...)`, `not(...)`, and `any(...)` resolve against the target,
+    /// mirroring [`cfg_combinators_evaluate`].
     #[test]
     fn file_level_inner_cfg_evaluates_combinators() {
         let tmp = tempdir();
@@ -567,7 +603,7 @@ mod tests {
         write(
             root,
             "src/lib.rs",
-            "pub mod unix_not_linux;\npub mod unix_and_linux;\n",
+            "pub mod unix_not_linux;\npub mod unix_and_linux;\npub mod any_exotic;\n",
         );
         write(
             root,
@@ -585,10 +621,73 @@ mod tests {
             #[processor("@tatolab/demo/UnixAndLinux", execution = reactive)]
             pub struct UnixAndLinux;"#,
         );
+        write(
+            root,
+            "src/any_exotic.rs",
+            r#"#![cfg(any(target_os = "windows", target_os = "redox"))]
+
+            #[processor("@tatolab/demo/AnyExotic", execution = reactive)]
+            pub struct AnyExotic;"#,
+        );
 
         assert_eq!(
             names(extract_reachable_rust_processors(root, &linux()).unwrap()),
             vec!["UnixAndLinux"]
+        );
+    }
+
+    /// The crate root is a module file like any other: a false `#![cfg]` on
+    /// `lib.rs` strips the whole crate, which is what `rustc` does (the
+    /// `#![cfg(any())]` parse-only idiom).
+    #[test]
+    fn file_level_inner_cfg_on_the_crate_root_strips_the_crate() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "src/lib.rs",
+            r#"#![cfg(target_os = "windows")]
+
+            #[processor("@tatolab/demo/NeverBuilt", execution = reactive)]
+            pub struct NeverBuilt;"#,
+        );
+
+        assert!(
+            extract_reachable_rust_processors(root, &linux())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// An inner `#![cfg]` inside an *inline* `mod foo { ... }` is folded into
+    /// `ItemMod::attrs` by `syn`, so the `mod` arm of the walk already gates it.
+    /// This pins that half against a regression while the file-level half is
+    /// fixed.
+    #[test]
+    fn inline_mod_inner_cfg_is_honored() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "src/lib.rs",
+            r#"
+            pub mod inline_linux {
+                #![cfg(target_os = "linux")]
+
+                #[processor("@tatolab/demo/InlineLinux", execution = reactive)]
+                pub struct InlineLinux;
+            }
+            "#,
+        );
+
+        assert!(
+            extract_reachable_rust_processors(root, &macos())
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            names(extract_reachable_rust_processors(root, &linux()).unwrap()),
+            vec!["InlineLinux"]
         );
     }
 
