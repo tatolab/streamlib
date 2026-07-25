@@ -704,20 +704,46 @@ mod tests {
         );
     }
 
-    /// The evaluator fails closed at file level too: a predicate it cannot prove
-    /// means "not reachable", never "reachable".
+    /// The evaluator fails closed at file level too: a predicate whose tokens
+    /// are not a `Meta` at all means "not reachable", never "reachable". `syn`
+    /// parses an attribute body as an unvalidated token stream, so this file
+    /// reaches `eval_cfg_attr` and only fails at `parse_args`.
     #[test]
-    fn file_level_inner_cfg_fails_closed_on_unparseable_predicate() {
+    fn file_level_inner_cfg_fails_closed_on_an_unparseable_predicate() {
         let tmp = tempdir();
         let root = tmp.path();
-        write(root, "src/lib.rs", "pub mod bogus;\n");
+        write(root, "src/lib.rs", "pub mod unparseable;\n");
         write(
             root,
-            "src/bogus.rs",
+            "src/unparseable.rs",
+            r#"#![cfg(target_os =)]
+
+            #[processor("@tatolab/demo/Unparseable", execution = reactive)]
+            pub struct Unparseable;"#,
+        );
+
+        assert!(
+            extract_reachable_rust_processors(root, &linux())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// The other fail-closed path: `target_os = 42` *is* a well-formed `Meta`,
+    /// so `parse_args` succeeds and the atom lookup — not the parser — is what
+    /// must refuse it, because a cfg value is always a string literal.
+    #[test]
+    fn file_level_inner_cfg_fails_closed_on_a_non_string_predicate_value() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(root, "src/lib.rs", "pub mod non_string_value;\n");
+        write(
+            root,
+            "src/non_string_value.rs",
             r#"#![cfg(target_os = 42)]
 
-            #[processor("@tatolab/demo/Bogus", execution = reactive)]
-            pub struct Bogus;"#,
+            #[processor("@tatolab/demo/NonStringValue", execution = reactive)]
+            pub struct NonStringValue;"#,
         );
 
         assert!(
