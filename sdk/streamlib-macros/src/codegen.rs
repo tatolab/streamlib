@@ -834,4 +834,68 @@ mod processor_struct_emit_tests {
             rendered
         );
     }
+
+    /// `TokenStream::to_string` spacing is not part of any contract, so
+    /// assertions compare against a whitespace-free rendering.
+    fn render_without_whitespace(tokens: TokenStream) -> String {
+        tokens
+            .to_string()
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect()
+    }
+
+    fn platform_conditional_field_struct() -> ItemStruct {
+        syn::parse_quote! {
+            struct PlatformConditionalFieldProbe {
+                #[cfg(target_os = "linux")]
+                linux_only_backend_state: Option<u32>,
+                platform_agnostic_state: u64,
+            }
+        }
+    }
+
+    /// Locks #1588: a `#[cfg]` authored on a processor struct field must be
+    /// re-emitted on the generated `Processor` field, or the field becomes
+    /// unconditional and its platform-specific type fails to resolve off that
+    /// platform.
+    #[test]
+    fn processor_struct_preserves_cfg_attribute_on_custom_field() {
+        let custom_fields = extract_custom_fields(&platform_conditional_field_struct());
+        let rendered = render_without_whitespace(generate_processor_struct_from_schema(
+            &minimal_schema(),
+            &None,
+            &custom_fields,
+        ));
+        assert!(
+            rendered.contains(r#"#[cfg(target_os="linux")]publinux_only_backend_state"#),
+            "generated Processor struct must carry the authored `#[cfg]` on \
+             `linux_only_backend_state` — got: {}",
+            rendered
+        );
+        assert!(
+            !rendered.contains(r#"#[cfg(target_os="linux")]pubplatform_agnostic_state"#),
+            "the `#[cfg]` must not leak onto the unconditional field — got: {}",
+            rendered
+        );
+    }
+
+    /// Locks #1588: the `from_config` struct-literal initializer must carry the
+    /// same `#[cfg]` as the field it initializes — an unconditional initializer
+    /// for a conditional field does not compile.
+    #[test]
+    fn from_config_initializer_preserves_cfg_attribute_on_custom_field() {
+        let custom_fields = extract_custom_fields(&platform_conditional_field_struct());
+        let rendered = render_without_whitespace(generate_from_config_from_schema(
+            &minimal_schema(),
+            &None,
+            &custom_fields,
+        ));
+        assert!(
+            rendered.contains(r#"#[cfg(target_os="linux")]linux_only_backend_state:"#),
+            "from_config must carry the authored `#[cfg]` on the \
+             `linux_only_backend_state` initializer — got: {}",
+            rendered
+        );
+    }
 }
