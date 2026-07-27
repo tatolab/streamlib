@@ -201,10 +201,11 @@ fn is_forwarded_onto_from_config_initializer(attribute: &syn::Attribute) -> bool
 }
 
 /// `cfg_attr` on a processor struct field is refused rather than dropped: it can
-/// expand to a presence-changing `cfg`, and the two emission sites are filtered
-/// independently, so an expansion that gates the field definition without gating
-/// the `from_config` initializer desyncs them into an error far from its cause.
-/// Silently discarding it is the same failure class as #1588.
+/// expand to a presence-changing `cfg`, and the field definition accepts a strict
+/// superset of what the `from_config` initializer accepts, so an expansion
+/// admitted at the definition site alone gates the field without gating its
+/// initializer — an error far from its cause. Silently discarding it is the same
+/// failure class as #1588.
 fn refused_field_attribute_diagnostics(item: &ItemStruct) -> TokenStream {
     let syn::Fields::Named(fields) = &item.fields else {
         return quote! {};
