@@ -16,7 +16,9 @@ use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
 
-use crate::archive::{extract_archive_bytes_to_dir, locate_package_root_in_extracted_dir};
+use crate::archive::{
+    ArchiveError, extract_archive_bytes_to_dir, locate_package_root_in_extracted_dir,
+};
 use crate::error::{ResolverError, ResolverResult};
 use crate::git::fetch_git;
 use crate::ident::{PackageRef, TypeName};
@@ -944,42 +946,99 @@ fn default_cache_dir() -> ResolverResult<PathBuf> {
 /// Materialize a package archive into the content-addressed resolver cache and
 /// return its package root. Any container the shared reader sniffs is accepted;
 /// the archive's extension is never consulted.
+///
+/// Stage-then-promote: the extraction lands in a `<hash>.staging-<pid>-<seq>`
+/// sibling and is renamed onto `<hash>` only once it holds a locatable package
+/// root. The shared slot is therefore never cleared under a concurrent reader,
+/// and the presence of `<hash>` means "complete" by construction rather than
+/// "a `streamlib.yaml` happened to survive whatever killed the last run".
 fn extract_package_archive_to_resolver_cache(
     archive: &Path,
     cache_dir: &Path,
 ) -> ResolverResult<PathBuf> {
+    let extract_failed = |message: String| ResolverError::PackageArchiveExtractFailed {
+        path: archive.to_path_buf(),
+        message,
+    };
+    let extract_err = |e: ArchiveError| extract_failed(e.to_string());
+
     let archive_bytes =
-        std::fs::read(archive).map_err(|e| ResolverError::PackageArchiveExtractFailed {
-            path: archive.to_path_buf(),
-            message: format!("read failed: {e}"),
-        })?;
+        std::fs::read(archive).map_err(|e| extract_failed(format!("read failed: {e}")))?;
     let archive_hash = crate::lockfile::hash_content(&archive_bytes);
     let safe_hash = archive_hash.replace(':', "_");
-    let target = cache_dir.join("slpkg").join(safe_hash);
+    let package_archive_cache_dir = cache_dir.join("slpkg");
+    let target = package_archive_cache_dir.join(&safe_hash);
     let source_label = archive.display().to_string();
 
-    // Content-addressed cache hit, checked BEFORE extraction: the shared
-    // extractor clears its destination, so a hit that fell through would
-    // destroy and rebuild an already-correct slot on every resolve.
-    if target.is_dir()
-        && let Ok(cached_package_root) =
-            locate_package_root_in_extracted_dir(&target, &source_label)
-    {
-        return Ok(cached_package_root);
+    if target.is_dir() {
+        return locate_package_root_in_extracted_dir(&target, &source_label).map_err(extract_err);
     }
 
-    extract_archive_bytes_to_dir(&archive_bytes, &target, &source_label).map_err(|e| {
-        ResolverError::PackageArchiveExtractFailed {
-            path: archive.to_path_buf(),
-            message: e.to_string(),
+    let staging = ResolverCachePackageStagingDir::create(&package_archive_cache_dir, &safe_hash)
+        .map_err(|e| extract_failed(format!("staging the extraction: {e}")))?;
+    extract_archive_bytes_to_dir(&archive_bytes, staging.path(), &source_label)
+        .map_err(extract_err)?;
+    // Locate BEFORE promoting: a container with no package root must never
+    // occupy `<hash>`, or every later resolve of those bytes would take the
+    // slot as a valid cache hit.
+    locate_package_root_in_extracted_dir(staging.path(), &source_label).map_err(extract_err)?;
+    staging
+        .promote_onto(&target)
+        .map_err(|e| extract_failed(format!("promoting the extraction: {e}")))?;
+
+    locate_package_root_in_extracted_dir(&target, &source_label).map_err(extract_err)
+}
+
+/// A `<hash>.staging-<pid>-<seq>` sibling of a content-addressed resolver-cache
+/// slot, removed on drop unless it was promoted away. Extraction lands here so
+/// the shared `<hash>` slot is only ever created whole, by rename.
+#[must_use = "the staging directory is removed when this guard drops"]
+struct ResolverCachePackageStagingDir {
+    path: PathBuf,
+    promoted: bool,
+}
+
+impl ResolverCachePackageStagingDir {
+    fn create(package_archive_cache_dir: &Path, slot_name: &str) -> std::io::Result<Self> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static STAGE_SEQ: AtomicU64 = AtomicU64::new(0);
+        std::fs::create_dir_all(package_archive_cache_dir)?;
+        let path = package_archive_cache_dir.join(format!(
+            "{slot_name}.staging-{}-{}",
+            std::process::id(),
+            STAGE_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        Ok(Self {
+            path,
+            promoted: false,
+        })
+    }
+
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Rename the staged tree onto `target`. A rename that loses the race to
+    /// another process is success, not failure: both trees came from the same
+    /// archive bytes, so whichever landed is the right contents.
+    fn promote_onto(mut self, target: &Path) -> std::io::Result<()> {
+        match std::fs::rename(&self.path, target) {
+            Ok(()) => {
+                self.promoted = true;
+                Ok(())
+            }
+            Err(_) if target.is_dir() => Ok(()),
+            Err(e) => Err(e),
         }
-    })?;
-    locate_package_root_in_extracted_dir(&target, &source_label).map_err(|e| {
-        ResolverError::PackageArchiveExtractFailed {
-            path: archive.to_path_buf(),
-            message: e.to_string(),
+    }
+}
+
+impl Drop for ResolverCachePackageStagingDir {
+    fn drop(&mut self) {
+        if !self.promoted && self.path.exists() {
+            let _ = std::fs::remove_dir_all(&self.path);
         }
-    })
+    }
 }
 
 #[cfg(test)]
@@ -1881,9 +1940,38 @@ dependencies:
         }
     }
 
+    /// Every filesystem entry under `dir`, recursively, never following a
+    /// symlink out of the tree — so a minted symlink shows up as an entry
+    /// rather than as whatever it points at.
+    fn walk_entries_without_following_symlinks(dir: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        let mut pending = vec![dir.to_path_buf()];
+        while let Some(next) = pending.pop() {
+            let Ok(read_dir) = std::fs::read_dir(&next) else {
+                continue;
+            };
+            for entry in read_dir.flatten() {
+                let path = entry.path();
+                if std::fs::symlink_metadata(&path)
+                    .map(|m| m.file_type().is_dir())
+                    .unwrap_or(false)
+                {
+                    pending.push(path.clone());
+                }
+                found.push(path);
+            }
+        }
+        found
+    }
+
     /// The resolver's extraction inherits the shared reader's traversal and
     /// symlink-escape refusals — a hostile `path:` archive can neither write
-    /// outside the resolver cache nor mint a host-path symlink inside it.
+    /// outside the extraction directory nor mint a host-path symlink inside
+    /// it. Asserted by walking the whole leg workspace (the traversal entry's
+    /// real target is `cache/slpkg/escape.txt`, a sibling of the extraction
+    /// dir, not a sibling of the leg root), and by requiring the
+    /// content-addressed cache to carry neither a `<hash>` slot nor staging
+    /// residue afterward.
     #[test]
     fn path_dependency_archive_rejects_traversal_and_symlink_escape() {
         use std::io::Write;
@@ -1942,11 +2030,84 @@ dependencies:
                 matches!(err, ResolverError::PackageArchiveExtractFailed { .. }),
                 "{label}: expected PackageArchiveExtractFailed, got {err:?}"
             );
+
+            let landed = walk_entries_without_following_symlinks(&leg_dir);
             assert!(
-                !leg_dir.join("escape.txt").exists(),
-                "{label}: nothing may land outside the extraction dir"
+                !landed
+                    .iter()
+                    .any(|p| p.file_name() == Some(OsStr::new("escape.txt"))),
+                "{label}: a traversal entry landed on disk: {landed:?}"
+            );
+            assert!(
+                !landed.iter().any(|p| std::fs::symlink_metadata(p)
+                    .map(|m| m.file_type().is_symlink())
+                    .unwrap_or(false)),
+                "{label}: a host-path symlink was minted under the cache: {landed:?}"
+            );
+            let package_archive_cache_dir = cache_dir.join("slpkg");
+            let cache_entries = std::fs::read_dir(&package_archive_cache_dir)
+                .map(|d| d.count())
+                .unwrap_or(0);
+            assert_eq!(
+                cache_entries, 0,
+                "{label}: a refused archive may leave neither a cache slot nor staging residue"
             );
         }
+    }
+
+    /// The content-addressed cache slot is created whole or not at all: an
+    /// archive that extracts but carries no package root leaves `slpkg/`
+    /// completely empty, so no later resolve of those bytes can mistake a
+    /// half-written tree for a cache hit. Mentally revert the stage-then-
+    /// promote and the extraction lands directly on `<hash>`, which survives
+    /// the failure and is returned as complete on the next resolve.
+    #[test]
+    fn package_archive_cache_slot_is_never_created_from_a_rootless_archive() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let archives = tmp.path().join("archives");
+        std::fs::create_dir_all(&archives).unwrap();
+
+        let rootless = archives.join("rootless.zip");
+        {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&rootless).unwrap());
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file("some/nested/notes.txt", opts).unwrap();
+            zip.write_all(b"no manifest anywhere").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let root = tmp.path().join("project");
+        write_streamlib_yaml(
+            &root,
+            &format!(
+                "dependencies:\n  \"@tatolab/core\":\n    path: {}\n",
+                rootless.to_string_lossy()
+            ),
+        );
+        let cache_dir = tmp.path().join("cache");
+        let err = resolve_with(
+            &root,
+            &ResolverOptions {
+                cache_dir: Some(cache_dir.clone()),
+                package_source: None,
+                link_checkout: None,
+            },
+        )
+        .expect_err("an archive with no package root must be refused");
+        assert!(
+            matches!(err, ResolverError::PackageArchiveExtractFailed { .. }),
+            "expected PackageArchiveExtractFailed, got {err:?}"
+        );
+
+        let package_archive_cache_dir = cache_dir.join("slpkg");
+        let surviving: Vec<PathBuf> = std::fs::read_dir(&package_archive_cache_dir)
+            .map(|d| d.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default();
+        assert!(
+            surviving.is_empty(),
+            "no cache slot and no staging residue may survive: {surviving:?}"
+        );
     }
 
     #[test]

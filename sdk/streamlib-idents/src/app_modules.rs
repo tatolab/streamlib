@@ -2240,9 +2240,14 @@ mod tests {
     /// Container equivalence at the install boundary: ONE fixture delivered
     /// four ways — a directory, a flat zip, a zip nested under a single
     /// top-level dir, and a tar.gz — must materialize one identical
-    /// `content_hash_for_package_dir`. Mentally revert the shared
-    /// sniff-then-extract reader (or the nested-dir tolerance) and the nested
-    /// leg either fails outright or hashes a `my-package/`-shifted tree.
+    /// `content_hash_for_package_dir`.
+    ///
+    /// Characterization coverage, not a regression pin for the reader
+    /// consolidation: the add path already sniffed containers and already
+    /// tolerated a single nested top-level dir before every consumer was routed
+    /// through the shared reader. What this pins is that the consolidation left
+    /// the add path's behavior unchanged, and that the four deliveries stay
+    /// interchangeable as the shared reader evolves.
     #[test]
     fn one_fixture_delivered_four_ways_materializes_one_content_hash() {
         let staging = tempfile::tempdir().unwrap();
