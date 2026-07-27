@@ -1185,8 +1185,12 @@ pub mod runtime_facing {
 mod runtime_shutdown_control_topic_tests {
     use super::host_pubsub_publish;
     use crate::core::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
+    use crate::core::runtime::{
+        clear_runtime_shutdown_request_latch, is_runtime_shutdown_requested,
+    };
     use crate::iceoryx2::Iceoryx2Node;
     use parking_lot::Mutex;
+    use serial_test::serial;
     use std::sync::Arc;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
@@ -1214,7 +1218,13 @@ mod runtime_shutdown_control_topic_tests {
     /// receives the shutdown. That is what makes this test genuinely
     /// exercise the mapping rather than the transport.
     #[test]
+    #[serial]
     fn host_pubsub_publish_maps_control_topic_to_runtime_shutdown() {
+        // The reserved arm latches the process-global shutdown-request latch,
+        // so this test is `#[serial]` with the other latch tests and leaves it
+        // cleared for the next one.
+        clear_runtime_shutdown_request_latch();
+
         // The host-side publish lands on the process-global PUBSUB, so
         // this test drives the global bus (the pubsub integration tests
         // use ad-hoc local buses; the control mapping is wired to the
@@ -1270,8 +1280,90 @@ mod runtime_shutdown_control_topic_tests {
             Some(Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown)),
             "the control topic must map to a RuntimeShutdown event on RUNTIME_GLOBAL",
         );
+        // The event is only half the mapping: a loop owner that missed the
+        // pubsub delivery still observes the request through the latch.
+        assert!(
+            is_runtime_shutdown_requested(),
+            "the control topic must also latch the request for the loop owner",
+        );
 
         drop(listener);
+        clear_runtime_shutdown_request_latch();
+    }
+
+    /// The reserved arm decodes the reason with
+    /// `rmp_serde::from_slice(..).unwrap_or_default()` — a payload it cannot
+    /// decode costs the reason attribution, never the shutdown. That is the
+    /// load-bearing half: a host built against a plugin that encoded the reason
+    /// differently must still stop. Mental-revert: turning the decode into an
+    /// early return on error drops the request silently — no error, no panic,
+    /// the runtime just never stops — and this test fails.
+    ///
+    /// Hermetic: the latch is set before the publish, so no iceoryx2 bus and no
+    /// subscriber are needed to observe the request.
+    #[test]
+    #[serial]
+    fn host_pubsub_publish_still_requests_shutdown_on_an_undecodable_reason() {
+        clear_runtime_shutdown_request_latch();
+
+        let topic = streamlib_plugin_abi::PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST;
+        // Not a msgpack string: `0xc1` is msgpack's never-used byte, so
+        // `from_slice::<String>` is guaranteed to fail.
+        let undecodable_reason_bytes: [u8; 3] = [0xc1, 0xc1, 0xc1];
+        assert!(
+            rmp_serde::from_slice::<String>(&undecodable_reason_bytes).is_err(),
+            "the fixture must actually fail to decode, or this test is vacuous",
+        );
+
+        // SAFETY: `host` is unused by `host_pubsub_publish`; the topic and
+        // payload slices outlive the call.
+        unsafe {
+            host_pubsub_publish(
+                std::ptr::null(),
+                topic.as_ptr(),
+                topic.len(),
+                undecodable_reason_bytes.as_ptr(),
+                undecodable_reason_bytes.len(),
+            );
+        }
+
+        assert!(
+            is_runtime_shutdown_requested(),
+            "an undecodable reason must still request shutdown (empty attribution)",
+        );
+
+        clear_runtime_shutdown_request_latch();
+    }
+
+    /// An empty payload is what a plugin built before the reason field existed
+    /// sends. Same contract as an undecodable one: the shutdown still lands.
+    #[test]
+    #[serial]
+    fn host_pubsub_publish_still_requests_shutdown_on_an_empty_payload() {
+        clear_runtime_shutdown_request_latch();
+
+        let topic = streamlib_plugin_abi::PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST;
+
+        // SAFETY: `host` is unused by `host_pubsub_publish`; a dangling-but-
+        // aligned pointer with length 0 is the shape `[].as_ptr()` produces and
+        // is sound for `from_raw_parts`.
+        unsafe {
+            let empty: [u8; 0] = [];
+            host_pubsub_publish(
+                std::ptr::null(),
+                topic.as_ptr(),
+                topic.len(),
+                empty.as_ptr(),
+                0,
+            );
+        }
+
+        assert!(
+            is_runtime_shutdown_requested(),
+            "an empty reason payload must still request shutdown",
+        );
+
+        clear_runtime_shutdown_request_latch();
     }
 
     /// A `control:`-prefixed topic with NO registered host handler must be
