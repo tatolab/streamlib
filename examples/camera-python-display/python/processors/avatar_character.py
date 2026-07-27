@@ -42,6 +42,12 @@ from streamlib import RuntimeContextFullAccess, RuntimeContextLimitedAccess
 
 logger = logging.getLogger(__name__)
 
+# The package root — `processors/`'s parent, where the renderer helper modules,
+# `models/`, and the manifest live. The renderers are NOT processor modules, so
+# they stay out of `processors/` (importing them pulls moderngl / pyrr, which
+# extraction must not require).
+PACKAGE_ROOT_DIR = Path(__file__).resolve().parent.parent
+
 # Lazy globals — populated by the platform-specific lazy-import helpers.
 moderngl = None
 np = None
@@ -72,9 +78,8 @@ def _lazy_import_common():
         moderngl = _moderngl
         np = _np
 
-        _module_dir = Path(__file__).parent
-        if str(_module_dir) not in sys.path:
-            sys.path.insert(0, str(_module_dir))
+        if str(PACKAGE_ROOT_DIR) not in sys.path:
+            sys.path.insert(0, str(PACKAGE_ROOT_DIR))
 
 
 def _lazy_import_macos_renderer():
@@ -134,14 +139,14 @@ def _lazy_import_linux():
 
 
 # Pose-model + assets configuration.
-MODEL_DIR = Path(__file__).parent / "models"
+MODEL_DIR = PACKAGE_ROOT_DIR / "models"
 POSE_MODEL_PATH = MODEL_DIR / "pose_landmarker_lite.task"
 POSE_MODEL_URL = (
     "https://storage.googleapis.com/mediapipe-models/pose_landmarker/"
     "pose_landmarker_lite/float16/1/pose_landmarker_lite.task"
 )
 
-ASSETS_DIR = Path(__file__).parent.parent / "assets"
+ASSETS_DIR = PACKAGE_ROOT_DIR.parent / "assets"
 BACKGROUND_PATH = ASSETS_DIR / "alley.jpg"
 CHARACTER_PATH = ASSETS_DIR / "character" / "character.glb"
 

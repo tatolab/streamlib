@@ -14,4 +14,4 @@ processors:
     execution:
       type: continuous
       interval_ms: 16
-    entrypoint: "continuous_processor:PolyglotContinuousProcessor"
+    entrypoint: "processors.continuous_processor:PolyglotContinuousProcessor"

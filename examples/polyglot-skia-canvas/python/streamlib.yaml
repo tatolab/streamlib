@@ -25,7 +25,7 @@ processors:
     description: "Acquires a host-pre-registered render-target DMA-BUF surface as a skia.Surface, draws a known shape, releases"
     runtime: python
     execution: reactive
-    entrypoint: "skia_canvas:SkiaCanvasProcessor"
+    entrypoint: "processors.skia_canvas:SkiaCanvasProcessor"
     inputs:
       - name: video_in
         schema: VideoFrame

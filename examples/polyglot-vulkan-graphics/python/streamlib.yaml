@@ -25,7 +25,7 @@ processors:
     description: "Acquires a host-pre-registered render-target DMA-BUF surface as a VkImage, draws a triangle via the host's VulkanGraphicsKernel, releases"
     runtime: python
     execution: reactive
-    entrypoint: "vulkan_graphics:VulkanGraphicsProcessor"
+    entrypoint: "processors.vulkan_graphics:VulkanGraphicsProcessor"
     inputs:
       - name: video_in
         schema: VideoFrame

@@ -25,7 +25,7 @@ processors:
     description: "Acquires a host-pre-registered render-target DMA-BUF surface as a VkImage, dispatches a Mandelbrot compute shader, releases"
     runtime: python
     execution: reactive
-    entrypoint: "vulkan_compute:VulkanComputeProcessor"
+    entrypoint: "processors.vulkan_compute:VulkanComputeProcessor"
     inputs:
       - name: video_in
         schema: VideoFrame

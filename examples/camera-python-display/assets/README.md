@@ -6,7 +6,7 @@
 > 3D mesh, no Mixamo skeleton, no asset gating.
 
 This directory holds optional assets the **macOS** path uses for its
-GLB-skinned 3D character (`python/avatar_character.py` macOS branch +
+GLB-skinned 3D character (`python/processors/avatar_character.py` macOS branch +
 `python/character_renderer_3d.py`). When either file is missing the macOS
 renderer falls back to a background-only or solid-clear frame, so the
 pipeline still validates without them — but the avatar character won't

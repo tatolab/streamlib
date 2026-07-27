@@ -25,7 +25,7 @@ processors:
     description: "Builds a single-triangle BLAS + identity TLAS via escalate IPC, registers an RT kernel, and dispatches one trace into a host-pre-registered storage image"
     runtime: deno
     execution: reactive
-    entrypoint: "vulkan_ray_tracing.ts:default"
+    entrypoint: "processors/vulkan_ray_tracing.ts:default"
     inputs:
       - name: video_in
         schema: VideoFrame

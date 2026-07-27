@@ -25,7 +25,7 @@ processors:
     description: "Acquires a host-pre-registered cpu-readback surface, applies a separable Gaussian blur, releases"
     runtime: deno
     execution: reactive
-    entrypoint: "cpu_readback_blur.ts:default"
+    entrypoint: "processors/cpu_readback_blur.ts:default"
     inputs:
       - name: video_in
         schema: VideoFrame

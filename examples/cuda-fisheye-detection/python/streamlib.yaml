@@ -23,7 +23,7 @@ processors:
     description: "Acquires the host-pre-registered OPAQUE_FD VkImage as a cudaTextureObject_t, runs a cupy.RawKernel undistortion + YOLOv8n detection, writes annotated PNG"
     runtime: python
     execution: reactive
-    entrypoint: "cuda_fisheye.processor:CudaFisheyeUndistortionProcessor"
+    entrypoint: "processors.cuda_fisheye.processor:CudaFisheyeUndistortionProcessor"
     inputs:
       - name: video_in
         schema: VideoFrame

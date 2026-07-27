@@ -25,7 +25,7 @@ processors:
     description: "Acquires a host-pre-registered render-target DMA-BUF surface as a GL_TEXTURE_2D, renders a Mandelbrot fragment shader, releases"
     runtime: python
     execution: reactive
-    entrypoint: "opengl_fragment_shader:OpenGlFragmentShaderProcessor"
+    entrypoint: "processors.opengl_fragment_shader:OpenGlFragmentShaderProcessor"
     inputs:
       - name: video_in
         schema: VideoFrame

@@ -24,7 +24,7 @@ processors:
     description: "Grayscale processor — TypeScript/Deno"
     runtime: deno
     execution: reactive
-    entrypoint: "grayscale_processor.ts:default"
+    entrypoint: "processors/grayscale_processor.ts:default"
     inputs:
       - name: video_in
         schema: VideoFrame
@@ -36,7 +36,7 @@ processors:
     description: "Halftone dot pattern via TypeGPU/WebGPU compute shader"
     runtime: deno
     execution: reactive
-    entrypoint: "halftone_processor.ts:default"
+    entrypoint: "processors/halftone_processor.ts:default"
     inputs:
       - name: video_in
         schema: VideoFrame

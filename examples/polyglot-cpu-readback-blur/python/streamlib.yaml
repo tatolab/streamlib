@@ -25,7 +25,7 @@ processors:
     description: "Acquires a host-pre-registered cpu-readback surface, applies a Gaussian blur, releases"
     runtime: python
     execution: reactive
-    entrypoint: "cpu_readback_blur:CpuReadbackBlurProcessor"
+    entrypoint: "processors.cpu_readback_blur:CpuReadbackBlurProcessor"
     inputs:
       - name: video_in
         schema: VideoFrame

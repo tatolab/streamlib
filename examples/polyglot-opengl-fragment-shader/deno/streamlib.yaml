@@ -25,7 +25,7 @@ processors:
     description: "Acquires a host-pre-registered render-target DMA-BUF surface as a GL_TEXTURE_2D, renders a plasma-effect fragment shader, releases"
     runtime: deno
     execution: reactive
-    entrypoint: "opengl_fragment_shader.ts:default"
+    entrypoint: "processors/opengl_fragment_shader.ts:default"
     inputs:
       - name: video_in
         schema: VideoFrame

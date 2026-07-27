@@ -14,7 +14,7 @@ import {
   type RuntimeContextFullAccess,
   type RuntimeContextLimitedAccess,
 } from "streamlib";
-import type { VideoFrame } from "./_generated_/tatolab__core/video_frame.ts";
+import type { VideoFrame } from "../_generated_/tatolab__core/video_frame.ts";
 
 @processor("@tatolab/camera-deno-subprocess/GrayscaleProcessor", {
   execution: "reactive",

@@ -25,7 +25,7 @@ processors:
     description: "Resolves an upstream surface_id to a DMA-BUF, locks/reads it, and forwards the frame downstream"
     runtime: deno
     execution: reactive
-    entrypoint: "dma_buf_consumer.ts:default"
+    entrypoint: "processors/dma_buf_consumer.ts:default"
     inputs:
       - name: video_in
         schema: VideoFrame
