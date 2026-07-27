@@ -84,7 +84,7 @@ const ALLOWLIST: &[(&str, &str)] = &[
     // ships the pattern the lint exists to ban, with the runtime
     // panic as the safety net if it's ever loaded.
     (
-        "packages/test-fixtures/src/concurrent_escalate_test_processor.rs",
+        "packages/test-fixtures/processors/concurrent_escalate_test_processor.rs",
         "intentional pattern that #1075's wrap deadlocks; \
          integration test #[ignore]d, restructure deferred",
     ),
@@ -172,7 +172,21 @@ pub fn run(workspace_root: &Path) -> Result<()> {
 }
 
 pub fn scan_workspace(workspace_root: &Path) -> Result<Vec<Violation>> {
+    let (violations, files_scanned) = scan_workspace_counted(workspace_root)?;
+    anyhow::ensure!(
+        files_scanned > 0,
+        "check-no-escalate-in-lifecycle scanned 0 files under {TARGET_DIRS:?} — \
+         the scan roots moved out from under the gate, which would let a \
+         lifecycle body re-enter the escalate gate unnoticed"
+    );
+    Ok(violations)
+}
+
+/// [`scan_workspace`] plus the number of files it parsed, so the non-zero
+/// assertion above is testable.
+pub fn scan_workspace_counted(workspace_root: &Path) -> Result<(Vec<Violation>, usize)> {
     let mut all = Vec::new();
+    let mut files_scanned = 0usize;
     for dir in TARGET_DIRS {
         let target = workspace_root.join(dir);
         if !target.is_dir() {
@@ -210,6 +224,7 @@ pub fn scan_workspace(workspace_root: &Path) -> Result<Vec<Violation>> {
                 // best-effort; the runtime panic is the backstop.
                 Err(_) => continue,
             };
+            files_scanned += 1;
             let mut visitor = FileVisitor {
                 file_path: relpath,
                 violations: &mut all,
@@ -217,7 +232,7 @@ pub fn scan_workspace(workspace_root: &Path) -> Result<Vec<Violation>> {
             visitor.visit_file(&file);
         }
     }
-    Ok(all)
+    Ok((all, files_scanned))
 }
 
 /// `true` when any argument's type contains a path segment whose

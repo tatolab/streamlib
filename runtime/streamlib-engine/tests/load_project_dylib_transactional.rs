@@ -23,6 +23,9 @@ use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib_engine::core::graph::ProcessorNode;
 use streamlib_engine::core::runtime::host_target_triple;
 
+#[path = "common/folder_backed_package_build.rs"]
+mod folder_backed_package_build;
+
 fn copy_dir_contents(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).unwrap();
     for entry in std::fs::read_dir(src).unwrap() {
@@ -69,14 +72,7 @@ fn failing_dlopen_load_leaves_zero_residue_and_reload_succeeds() {
 
     // Build test-fixtures so the cdylib carries `STREAMLIB_PLUGIN`.
     // Idempotent: cargo's incremental machinery skips on a warm tree.
-    let status = std::process::Command::new(env!("CARGO"))
-        .args(["build", "-p", "streamlib-test-fixtures"])
-        .status()
-        .expect("invoking cargo build");
-    assert!(
-        status.success(),
-        "cargo build -p streamlib-test-fixtures must succeed"
-    );
+    folder_backed_package_build::build_folder_backed_package("streamlib-test-fixtures");
 
     let dylib_ext = if cfg!(target_os = "macos") {
         "dylib"

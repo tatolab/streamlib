@@ -88,6 +88,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-pack-load-
 
+      # A folder-backed package commits no crate root: its `[lib] path` points
+      # at `_generated_/lib.rs`, which cargo resolves at target resolution —
+      # before any build script — so it cannot be a `build.rs` step. Off the
+      # monorepo the build orchestrator writes it; in-tree this is the
+      # generation site.
+      - name: Generate folder-backed crate roots
+        run: cargo run --locked -p xtask -- generate-crate-roots
+
       # `.slpkg` store + catalog renderers, atomic staged-swap, and the
       # completeness negative gate (folded in from the retired
       # static package-source workflow).

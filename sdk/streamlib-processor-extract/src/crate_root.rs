@@ -268,12 +268,17 @@ fn render_plugin_export_envelope(processors: &[ExtractedProcessor]) -> Option<St
     // surviving entry, and an all-stripped invocation is a compile error. An
     // unconditional entry makes the gate unnecessary.
     if entries.iter().all(|(predicate, _)| predicate.is_some()) {
-        let disjunction = entries
-            .iter()
-            .filter_map(|(predicate, _)| predicate.clone())
-            .collect::<Vec<_>>()
-            .join(", ");
-        out.push_str(&format!("#[cfg(any({disjunction}))]\n"));
+        let mut distinct: Vec<String> = Vec::new();
+        for predicate in entries.iter().filter_map(|(predicate, _)| predicate.clone()) {
+            if !distinct.contains(&predicate) {
+                distinct.push(predicate);
+            }
+        }
+        let gate = match distinct.as_slice() {
+            [single] => single.clone(),
+            many => format!("any({})", many.join(", ")),
+        };
+        out.push_str(&format!("#[cfg({gate})]\n"));
     }
     out.push_str("streamlib_plugin_abi::export_plugin!(\n");
     for (predicate, type_path) in &entries {
@@ -415,8 +420,10 @@ mod tests {
     }
 
     /// Every entry conditional ⇒ the whole invocation is gated on the
-    /// disjunction, so a target compiling none of them emits no declaration
-    /// rather than an unanchored one (which `export_plugin!` refuses).
+    /// disjunction of the DISTINCT entry predicates, so a target compiling none
+    /// of them emits no declaration rather than an unanchored one (which
+    /// `export_plugin!` refuses). One distinct predicate folds to itself rather
+    /// than a one-armed `any(...)`.
     #[test]
     fn an_all_conditional_package_gates_the_whole_invocation() {
         let tmp = tempdir();
@@ -432,7 +439,7 @@ mod tests {
         let generated = generate_rust_crate_root_source(&request(root, true, false)).unwrap();
         assert!(
             generated.source.contains(
-                "#[cfg(any(any(target_os = \"macos\", target_os = \"ios\")))]\n\
+                "#[cfg(any(target_os = \"macos\", target_os = \"ios\"))]\n\
                  streamlib_plugin_abi::export_plugin!("
             ),
             "{}",

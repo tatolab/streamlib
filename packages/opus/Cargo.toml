@@ -10,6 +10,11 @@ repository = "https://github.com/tato123/streamlib"
 license = "BUSL-1.1"
 
 [lib]
+# The crate root is generated from `processors/` before every cargo
+# invocation (`cargo xtask generate-crate-roots` in-tree; the build
+# orchestrator's pre-cargo staging step everywhere else). It is a build
+# artifact — gitignored, and excluded from the packed `.slpkg`.
+path = "_generated_/lib.rs"
 name = "streamlib_opus"
 crate-type = ["rlib", "cdylib"]
 

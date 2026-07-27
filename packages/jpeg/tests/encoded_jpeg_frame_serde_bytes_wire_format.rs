@@ -7,7 +7,7 @@
 //! (0xdc) so a `complex_pattern` JPEG at quality 95 fits inside iceoryx2's
 //! 64 KiB per-slot default.
 
-use streamlib_jpeg::EncodedJpegFrame;
+use streamlib_jpeg::_generated_::EncodedJpegFrame;
 
 const MSGPACK_BIN_8: u8 = 0xc4;
 const MSGPACK_ARRAY_16: u8 = 0xdc;

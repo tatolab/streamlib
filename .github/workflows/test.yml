@@ -66,6 +66,14 @@ jobs:
       # follow-up, pending a fix to a parallel-run test flake — attribute_macro_test
       # is named explicitly because it is the compile-level half of those emission
       # locks and cannot live in the proc-macro crate's own lib tests.
+      # A folder-backed package commits no crate root: its `[lib] path` points
+      # at `_generated_/lib.rs`, which cargo resolves at target resolution —
+      # before any build script — so it cannot be a `build.rs` step. Off the
+      # monorepo the build orchestrator writes it; in-tree this is the
+      # generation site.
+      - name: Generate folder-backed crate roots
+        run: cargo run --locked -p xtask -- generate-crate-roots
+
       - name: Run unit tests
         run: |
           cargo test --locked -p streamlib -p streamlib-macros -p streamlib-plugin-abi -p streamlib-plugin-sdk -p streamlib-processor-extract --lib

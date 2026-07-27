@@ -8,14 +8,15 @@
 //!
 //! 1. **Bare-string `ProcessorSpec::new`** (#707): catches
 //!    `ProcessorSpec::new("PascalCase", ...)` re-introductions.
-//! 2. **Hand-rolled `SchemaIdent` literal in `examples/*/src/`** (#719):
+//! 2. **Hand-rolled `SchemaIdent` literal in an example crate's Rust
+//!    source** (#719):
 //!    polyglot Rust example crates use the
 //!    `streamlib::sdk::schema_ident_any_version!` macro by default
 //!    (3-arg, runtime resolution against the registry — the common
 //!    case), or the strict-pin `streamlib::sdk::schema_ident!` form
 //!    (4-arg, compile-time-validated `SemVer`). This pass flags
 //!    `SchemaIdent::new(Org::new("..."), ...)` literals in
-//!    `examples/*/src/*.rs` to keep the pattern from coming back.
+//!    example Rust sources to keep the pattern from coming back.
 //!
 //! Both passes are deliberately tight — they catch the *exact* shape
 //! they're responsible for. Macro-generated code, `<Module>::schema_ident()`
@@ -65,20 +66,19 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     anyhow::bail!("check-processor-spec-new failed");
 }
 
-/// True for paths under `<workspace_root>/examples/<crate>/.../src/`.
+/// True for an example crate's Rust source file.
 /// The hand-rolled-literal pass is scoped to example main.rs / linux.rs
 /// files — codegen.rs in `streamlib-macros` legitimately emits the
 /// literal as a token stream, and integration tests in `libs/*/tests/`
 /// build expected values to assert against. Both must stay outside the
-/// lint's reach. Accepts the flat shape (`examples/<crate>/src/`) as
-/// well as the sibling-sub-package shapes that some examples carry
-/// (e.g. `examples/<crate>/plugin/src/` for cdylib plugin packages,
-/// `examples/<crate>/effects/src/` for carved-out Rust effects
-/// packages). Any `examples/.../src/<file>.rs` is in scope.
+/// lint's reach. Accepts the flat shape (`examples/<crate>/src/`), the
+/// sibling-sub-package shapes some examples carry
+/// (`examples/<crate>/plugin/`, `examples/<crate>/effects/`), and the
+/// folder-backed `processors/` root those plugin crates author under.
 fn is_example_src_file(path: &Path) -> bool {
     let mut components = path.components();
     let mut saw_examples = false;
-    let mut saw_src_after_examples = false;
+    let mut saw_source_root_after_examples = false;
     while let Some(c) = components.next() {
         let s = c.as_os_str();
         if !saw_examples {
@@ -87,15 +87,34 @@ fn is_example_src_file(path: &Path) -> bool {
             }
             continue;
         }
-        if s == "src" {
-            saw_src_after_examples = true;
+        if CRATE_SOURCE_ROOT_DIR_NAMES.iter().any(|root| s == *root) {
+            saw_source_root_after_examples = true;
         }
     }
-    saw_examples && saw_src_after_examples
+    saw_examples && saw_source_root_after_examples
 }
 
+/// Rust source roots a crate may hold: the classic `src/` and the
+/// folder-backed `processors/` a generated crate root declares its module arms
+/// out of. An example plugin crate uses the latter.
+const CRATE_SOURCE_ROOT_DIR_NAMES: &[&str] = &["src", "processors"];
+
 pub fn lint_workspace(workspace_root: &Path) -> Result<Vec<LintViolation>> {
+    let (violations, files_scanned) = lint_workspace_counted(workspace_root)?;
+    anyhow::ensure!(
+        files_scanned > 0,
+        "check-processor-spec-new scanned 0 files under {SCAN_DIR_PARENTS:?} — \
+         the scan roots moved out from under the gate, which would let a \
+         bare-string ProcessorSpec::new back in unnoticed"
+    );
+    Ok(violations)
+}
+
+/// [`lint_workspace`] plus the number of files it read, so the non-zero
+/// assertion above is testable.
+pub fn lint_workspace_counted(workspace_root: &Path) -> Result<(Vec<LintViolation>, usize)> {
     let mut violations = Vec::new();
+    let mut files_scanned = 0usize;
     for parent in SCAN_DIR_PARENTS {
         let parent_path = workspace_root.join(parent);
         if !parent_path.exists() {
@@ -107,10 +126,11 @@ pub fn lint_workspace(workspace_root: &Path) -> Result<Vec<LintViolation>> {
             if !is_rust_source(path) {
                 continue;
             }
+            files_scanned += 1;
             scan_file(path, &mut violations)?;
         }
     }
-    Ok(violations)
+    Ok((violations, files_scanned))
 }
 
 fn is_rust_source(path: &Path) -> bool {

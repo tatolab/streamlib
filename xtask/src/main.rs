@@ -25,6 +25,7 @@ pub mod check_package_version_drift;
 pub mod check_processor_spec_new;
 pub mod check_schema_versions;
 pub mod check_vendored_vulkanalia;
+pub mod generate_crate_roots;
 pub mod install_packages;
 pub mod lint_logging;
 pub mod manifest_schema;
@@ -67,6 +68,14 @@ enum Commands {
         #[arg(long, group = "input")]
         schema_dir: Option<PathBuf>,
     },
+
+    /// Write every in-tree folder-backed package's generated Rust crate root
+    /// (`_generated_/lib.rs`) from its `processors/` directory.
+    ///
+    /// Cargo resolves `[lib] path` at target resolution, before any build
+    /// script runs, so this cannot live in a `build.rs`. Run it before any
+    /// in-tree `cargo build` / `cargo test` that touches a package crate.
+    GenerateCrateRoots,
 
     /// Ban ad-hoc logging in polyglot SDK library code (Python + TypeScript).
     /// Paired with the workspace clippy.toml `disallowed-macros` rule for Rust.
@@ -277,6 +286,7 @@ fn main() -> Result<()> {
                 link_checkout,
             })?
         }
+        Commands::GenerateCrateRoots => generate_crate_roots::run(&workspace_root()?)?,
         Commands::LintLogging => lint_logging::run(&workspace_root()?)?,
         Commands::CheckBoundaries => check_boundaries::run(&workspace_root()?)?,
         Commands::CheckSchemaVersions => check_schema_versions::run(&workspace_root()?)?,

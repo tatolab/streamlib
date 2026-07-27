@@ -211,51 +211,82 @@ pub fn scan_workspace(workspace_root: &Path) -> Result<Vec<Violation>> {
     Ok(all)
 }
 
+/// Rust source roots a crate may hold: the classic `src/` and the
+/// folder-backed `processors/` a package's generated crate root declares
+/// its module arms out of. A crate has one or the other, never both today,
+/// but scanning both keeps the gate root-agnostic.
+const CRATE_SOURCE_ROOT_DIR_NAMES: &[&str] = &["src", "processors"];
+
 /// Scan every workspace crate whose Cargo.toml declares
 /// `crate-type` containing `"cdylib"`. For each such crate, walk
-/// every `.rs` file under `src/` and flag dispatch-path uses of
+/// every `.rs` file under its source roots and flag dispatch-path uses of
 /// [`BANNED_DISPATCH_IDENTS`]. `#[cfg(test)]` items and modules are
 /// skipped (those run host-side via `cargo test --lib`, where the
 /// `host_callbacks()` guard returns `None` and the panic never
 /// fires).
+///
+/// This is the gate that stops package GPU code naming the host device or a
+/// raw RHI constructor, so it fails loudly rather than passing vacuously when
+/// it finds nothing to scan — a gate that scanned an empty directory is
+/// indistinguishable from a clean one.
 pub fn scan_cdylib_dispatch_paths(workspace_root: &Path) -> Result<Vec<DispatchViolation>> {
+    let (violations, files_scanned) = scan_cdylib_dispatch_paths_counted(workspace_root)?;
+    anyhow::ensure!(
+        files_scanned > 0,
+        "check-cdylib-reach scanned 0 files across every workspace cdylib crate \
+         under {:?} — the scan roots moved out from under the gate, which would \
+         let a package reach for the host device unnoticed",
+        CRATE_SOURCE_ROOT_DIR_NAMES
+    );
+    Ok(violations)
+}
+
+/// [`scan_cdylib_dispatch_paths`] plus the number of files it read, so the
+/// non-zero assertion above is testable.
+pub fn scan_cdylib_dispatch_paths_counted(
+    workspace_root: &Path,
+) -> Result<(Vec<DispatchViolation>, usize)> {
     let mut all = Vec::new();
+    let mut files_scanned = 0usize;
     for (crate_dir, crate_name) in discover_cdylib_crates(workspace_root)? {
-        let src_dir = crate_dir.join("src");
-        if !src_dir.exists() {
-            continue;
-        }
-        for entry in WalkDir::new(&src_dir).into_iter().filter_map(|e| e.ok()) {
-            let abs = entry.path();
-            if !entry.file_type().is_file() {
+        for root_name in CRATE_SOURCE_ROOT_DIR_NAMES {
+            let source_root = crate_dir.join(root_name);
+            if !source_root.exists() {
                 continue;
             }
-            if abs.extension().map(|e| e != "rs").unwrap_or(true) {
-                continue;
+            for entry in WalkDir::new(&source_root).into_iter().filter_map(|e| e.ok()) {
+                let abs = entry.path();
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+                if abs.extension().map(|e| e != "rs").unwrap_or(true) {
+                    continue;
+                }
+                let relpath = abs
+                    .strip_prefix(workspace_root)
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|_| abs.to_path_buf());
+                let src = fs::read_to_string(abs)
+                    .with_context(|| format!("reading {}", abs.display()))?;
+                // Files that fail to parse (proc-macro-heavy generated
+                // code, partial includes) are skipped — the lint can't
+                // reason about them and false-negatives there are
+                // strictly safer than false-positives on shape-mismatches.
+                let Ok(file) = syn::parse_file(&src) else {
+                    continue;
+                };
+                files_scanned += 1;
+                let mut visitor = DispatchFileVisitor {
+                    file_path: relpath,
+                    crate_name: crate_name.clone(),
+                    current_method: None,
+                    violations: &mut all,
+                };
+                visitor.visit_file(&file);
             }
-            let relpath = abs
-                .strip_prefix(workspace_root)
-                .map(|p| p.to_path_buf())
-                .unwrap_or_else(|_| abs.to_path_buf());
-            let src =
-                fs::read_to_string(abs).with_context(|| format!("reading {}", abs.display()))?;
-            // Files that fail to parse (proc-macro-heavy generated
-            // code, partial includes) are skipped — the lint can't
-            // reason about them and false-negatives there are
-            // strictly safer than false-positives on shape-mismatches.
-            let Ok(file) = syn::parse_file(&src) else {
-                continue;
-            };
-            let mut visitor = DispatchFileVisitor {
-                file_path: relpath,
-                crate_name: crate_name.clone(),
-                current_method: None,
-                violations: &mut all,
-            };
-            visitor.visit_file(&file);
         }
     }
-    Ok(all)
+    Ok((all, files_scanned))
 }
 
 /// True iff any attribute on `attrs` is `#[cfg(test)]` (or

@@ -26,6 +26,9 @@ use streamlib::sdk::{RunnerAutoBuild, processor_type_ref};
 use streamlib_engine::core::graph::ProcessorNode;
 use streamlib_engine::core::runtime::{host_target_triple, loaded_plugin_library_count};
 
+#[path = "common/folder_backed_package_build.rs"]
+mod folder_backed_package_build;
+
 fn copy_dir_contents(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).unwrap();
     for entry in std::fs::read_dir(src).unwrap() {
@@ -61,14 +64,7 @@ fn stage_app_modules(app_root: &Path) {
 
     // Build test-fixtures so the cdylib carries `STREAMLIB_PLUGIN`. Idempotent
     // — cargo's incremental machinery skips on a warm tree.
-    let status = std::process::Command::new(env!("CARGO"))
-        .args(["build", "-p", "streamlib-test-fixtures"])
-        .status()
-        .expect("invoking cargo build");
-    assert!(
-        status.success(),
-        "cargo build -p streamlib-test-fixtures must succeed"
-    );
+    folder_backed_package_build::build_folder_backed_package("streamlib-test-fixtures");
 
     let dylib_ext = if cfg!(target_os = "macos") {
         "dylib"

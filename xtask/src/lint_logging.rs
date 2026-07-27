@@ -93,6 +93,14 @@ pub fn run(project_root: &Path) -> Result<()> {
         );
     }
     if report.violations.is_empty() {
+        // A lint that scanned nothing passes for the wrong reason — the scan
+        // roots moving out from under it looks identical to a clean tree.
+        anyhow::ensure!(
+            report.files_scanned > 0,
+            "lint-logging scanned 0 files — the Rust ({:?}) or polyglot scan roots \
+             moved out from under the gate",
+            CRATE_SOURCE_ROOT_DIR_NAMES
+        );
         println!(
             "lint-logging: {} file(s) scanned across Rust + polyglot SDKs, no violations",
             report.files_scanned,
@@ -250,39 +258,46 @@ pub fn scan_rust(
     files_scanned: &mut usize,
 ) -> Result<()> {
     for crate_root in discover_lint_opted_in_crates(project_root)? {
-        let src = crate_root.join("src");
-        if !src.exists() {
-            continue;
-        }
         let excluded = collect_cfg_excluded_mod_paths(&crate_root);
-        for entry in WalkDir::new(&src).into_iter().filter_map(|e| e.ok()) {
-            let path = entry.path();
-            if !entry.file_type().is_file() {
+        for root_name in CRATE_SOURCE_ROOT_DIR_NAMES {
+            let source_root = crate_root.join(root_name);
+            if !source_root.exists() {
                 continue;
             }
-            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
-                continue;
+            for entry in WalkDir::new(&source_root).into_iter().filter_map(|e| e.ok()) {
+                let path = entry.path();
+                if !entry.file_type().is_file() {
+                    continue;
+                }
+                if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                    continue;
+                }
+                if excluded.iter().any(|p| path.starts_with(p)) {
+                    continue;
+                }
+                if path.components().any(|c| {
+                    c.as_os_str()
+                        .to_str()
+                        .is_some_and(is_parked_pending_segment)
+                }) {
+                    // Parked implementation dirs (`_apple_impl_pending_`,
+                    // `_nvjpeg_impl_pending_`, ...) hold code that is NOT
+                    // declared in any mod graph and never compiles — lint it
+                    // when it is activated, not while parked.
+                    continue;
+                }
+                *files_scanned += 1;
+                scan_rust_file(path, violations)?;
             }
-            if excluded.iter().any(|p| path.starts_with(p)) {
-                continue;
-            }
-            if path.components().any(|c| {
-                c.as_os_str()
-                    .to_str()
-                    .is_some_and(is_parked_pending_segment)
-            }) {
-                // Parked implementation dirs (`_apple_impl_pending_`,
-                // `_nvjpeg_impl_pending_`, ...) hold code that is NOT
-                // declared in any mod graph and never compiles — lint it
-                // when it is activated, not while parked.
-                continue;
-            }
-            *files_scanned += 1;
-            scan_rust_file(path, violations)?;
         }
     }
     Ok(())
 }
+
+/// Rust source roots a crate may hold: the classic `src/` and the
+/// folder-backed `processors/` a generated crate root declares its module arms
+/// out of.
+const CRATE_SOURCE_ROOT_DIR_NAMES: &[&str] = &["src", "processors"];
 
 /// Whether a path segment names a parked implementation dir per the
 /// `_<name>_pending_` convention (`_apple_impl_pending_`,
@@ -291,16 +306,36 @@ fn is_parked_pending_segment(segment: &str) -> bool {
     segment.starts_with('_') && segment.ends_with("pending_")
 }
 
-/// Starting at the crate's `src/lib.rs`, walk out-of-line `mod foo;`
+/// Starting at the crate's module roots, walk out-of-line `mod foo;`
 /// declarations. Any mod whose `#[cfg(...)]` attribute evaluates to false on
 /// `ubuntu-latest` contributes its source path (file and/or directory) to the
 /// exclusion set; other mods are recursed into so deeper cfg-gated mods are
 /// caught too.
+///
+/// A crate that commits `src/lib.rs` is walked from there. A folder-backed
+/// crate commits no crate root at all — its module arms are the top-level
+/// entries under `processors/`, each declaring its own gate as a file-level
+/// `#![cfg(...)]` — so each arm is a walk root.
 fn collect_cfg_excluded_mod_paths(crate_root: &Path) -> Vec<PathBuf> {
     let mut excluded = Vec::new();
     let lib_rs = crate_root.join("src/lib.rs");
     if lib_rs.exists() {
         walk_mods_for_exclusions(&lib_rs, &mut excluded);
+    }
+    let processor_source_dir = crate_root.join("processors");
+    if let Ok(entries) = fs::read_dir(&processor_source_dir) {
+        for entry in entries.filter_map(|e| e.ok()) {
+            let path = entry.path();
+            let arm_file = if path.is_dir() {
+                path.join("mod.rs")
+            } else {
+                path.clone()
+            };
+            if !arm_file.is_file() || arm_file.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            walk_mods_for_exclusions(&arm_file, &mut excluded);
+        }
     }
     excluded
 }
@@ -312,6 +347,17 @@ fn walk_mods_for_exclusions(file_path: &Path, excluded: &mut Vec<PathBuf>) {
     let Ok(file) = syn::parse_file(&content) else {
         return;
     };
+    // A file-level `#![cfg(...)]` gates the module the file IS, so a predicate
+    // false on the runner strips the file and everything it declares.
+    if file.attrs.iter().any(is_cfg_excluded_on_linux) {
+        let stem = file_path
+            .file_stem()
+            .and_then(|n| n.to_str())
+            .unwrap_or_default()
+            .to_string();
+        push_mod_exclusion(file_path, &stem, excluded);
+        return;
+    }
     for item in &file.items {
         if let syn::Item::Mod(m) = item {
             // Only out-of-line mods (`mod foo;`); inline `mod foo { ... }` is

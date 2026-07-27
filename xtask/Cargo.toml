@@ -20,6 +20,10 @@ streamlib-processor-schema = { path = "../sdk/streamlib-processor-schema" }
 # Cargo.toml version rewrite).
 streamlib-pack = { path = "../tools/streamlib-pack" }
 
+# Folder-backed crate-root generation — `generate-crate-roots` is a thin
+# wrapper around the one generator the build orchestrator also drives.
+streamlib-processor-extract = { path = "../sdk/streamlib-processor-extract" }
+
 # SemVer parsing for check-package-version-drift — the manifest version is
 # validated through the same SemVer type the pack stamp derives from.
 streamlib-idents = { path = "../sdk/streamlib-idents" }

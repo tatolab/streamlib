@@ -7,7 +7,7 @@
 
 use streamlib::sdk::processors::GeneratedProcessor;
 use streamlib_test_fixtures::_generated_::TestConfiguredProcessorConfig;
-use streamlib_test_fixtures::ConfiguredProcessor;
+use streamlib_test_fixtures::test_configured_processor::ConfiguredProcessor;
 
 #[test]
 fn test_config_field_access() {
