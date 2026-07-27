@@ -862,9 +862,9 @@ function parseEntrypoint(entrypoint: string): [string, string] {
  *
  * Staged and dev-tree packages share one layout: a package is a faithful
  * mirror of the authored source tree (`streamlib pack` relocates nothing),
- * so the entrypoint `.ts` sits at the package root beside `streamlib.yaml`
- * — the same place the `@processor` decorator looks for the sibling
- * manifest. Resolve the module there.
+ * so the entrypoint's module path is authored relative to the package root
+ * (`processors/blur.ts`, the root the extractor discovers under). Resolve it
+ * against the project dir verbatim.
  */
 function resolveDenoModulePath(
   projectPath: string,
