@@ -163,6 +163,15 @@ pub mod sdk {
         pub use streamlib_engine::core::descriptors::PortSchemaSpec;
     }
 
+    // ---- Runtime-control requests ----
+    /// `request_runtime_shutdown` — ask whoever owns the run loop to stop the
+    /// runtime. Path-identical to `streamlib_plugin_sdk::sdk::runtime_control`,
+    /// so a facade-built package and an engine-free package author the same
+    /// call.
+    pub mod runtime_control {
+        pub use streamlib_engine::core::runtime::request_runtime_shutdown;
+    }
+
     // ---- Cross-cutting modules from engine top-level ----
 
     /// `iceoryx2` Rust wrapper module — required by macro-emitted paths.
