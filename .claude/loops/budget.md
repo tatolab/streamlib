@@ -4,7 +4,7 @@ Daily caps per loop. When a cap trips, the loop stops landing new work and recor
 
 | Loop | Max main-turns / day | Max subagent spawns / turn | Token guidance |
 |---|---|---|---|
-| milestone-loop | 40 | 12 | Keep a single turn's spawns lean — one research/impl agent per open ticket in the pass, not one per file. Budget roughly one deep reasoning agent (opus) per acting-on ticket; prefer reusing an agent's context via follow-up over re-spawning fresh. |
+| milestone-loop | 40 | 90 (runaway backstop) | Spawn count is structural, not discretionary: `max_parallel` tickets, each running its stage list plus up to `MAX_FIX_ROUNDS` review-and-respond cycles with the lenses that gated. Do not spend up to the backstop — it exists to catch a loop that has lost control, not to authorize fan-out. Within a ticket, keep it to one agent per concern rather than one per file, and prefer following up an existing agent over re-spawning fresh. |
 
 <!-- OWNER: cap value / exemption breadth / extension protocol -->
 

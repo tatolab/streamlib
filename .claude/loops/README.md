@@ -37,7 +37,11 @@ is no `/loop` line to hand-type and no separate focus step.
 Turn procedure: the `milestone-loop` skill (one reconciler pass per firing), which launches
 `.claude/workflows/milestone-loop.js`.
 
-Knobs: heartbeat 30m · max_parallel 2 · attempts_per_ticket 3 · propose_only false · live_verify auto
+Knobs: heartbeat 30m · max_parallel 6 · attempts_per_ticket 3 · propose_only false · live_verify auto
+
+`max_parallel` bounds tickets in flight per pass, not agents. Rig work is still serialized
+independently — one GPU and one `/dev/videoN` at a time — so raising it widens throughput on the
+many tickets that never touch hardware without loosening the device rule in `constraints.md`.
 
 Kill switch: `CronDelete` the driver's job (`/work-on-milestone` reports its id; `CronList` finds
 it), `"paused": true` in the state file, or the budget cap.

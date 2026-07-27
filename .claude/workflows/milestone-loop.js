@@ -24,7 +24,7 @@ export const meta = {
 const input = typeof args === 'string' ? JSON.parse(args) : args || {};
 const today = input.today;
 const repoRoot = input.repo_root || '.';
-const maxParallel = input.max_parallel || 2;
+const maxParallel = input.max_parallel || 6;
 const attemptCap = input.attempts_per_ticket || 3;
 const liveVerify = input.live_verify || 'unknown';
 const proposeOnlyForced = input.propose_only === true;
