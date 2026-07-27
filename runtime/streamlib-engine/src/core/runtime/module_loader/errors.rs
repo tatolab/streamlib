@@ -273,19 +273,92 @@ pub enum AddModuleError {
         module: streamlib_idents::ModuleIdent,
     },
 
-    /// Strategy was [`Strategy::PackageArchive`] (or a [`Strategy::Url`] /
-    /// [`Strategy::ByVersion`] fetch of one) and the extraction step failed
-    /// (I/O, unrecognized or malformed container, no package root in the
-    /// extracted tree, etc.).
+    /// The package archive named by [`Strategy::PackageArchive`] (or fetched
+    /// for a [`Strategy::Url`] / [`Strategy::ByVersion`] load) is not on disk.
     ///
     /// [`Strategy::PackageArchive`]: super::Strategy::PackageArchive
     /// [`Strategy::Url`]: super::Strategy::Url
     /// [`Strategy::ByVersion`]: super::Strategy::ByVersion
+    #[error("Package archive not found at {}", archive.display())]
+    PackageArchiveNotFound { archive: std::path::PathBuf },
+
+    /// The package archive is on disk but its bytes could not be read
+    /// (permissions, a mid-read I/O failure).
+    #[error("Failed to read package archive at {}: {detail}", archive.display())]
+    PackageArchiveReadFailed {
+        archive: std::path::PathBuf,
+        detail: String,
+    },
+
+    /// The package archive's leading bytes match no container this build can
+    /// unpack.
+    #[error(
+        "Package archive at {} is not a recognized container: {detail} \
+         (expected a zip-shaped .slpkg/.zip or a gzip-compressed .tar.gz)",
+        archive.display()
+    )]
+    PackageArchiveContainerUnrecognized {
+        archive: std::path::PathBuf,
+        detail: String,
+    },
+
+    /// The container was recognized but unpacking it failed (malformed
+    /// container, a path-traversal or escaping-symlink entry, a write failure
+    /// into the staging directory).
     #[error(
         "Failed to extract package archive at {}: {detail}",
         archive.display()
     )]
     PackageArchiveExtractionFailed {
+        archive: std::path::PathBuf,
+        detail: String,
+    },
+
+    /// The archive unpacked, but the extracted tree is not a streamlib package
+    /// — no `streamlib.yaml` at the package root (nor under a single nested
+    /// top-level directory), or one that fails to parse.
+    #[error(
+        "Package archive at {} does not contain a valid streamlib package: {detail}",
+        archive.display()
+    )]
+    PackageArchiveContentsNotAValidPackage {
+        archive: std::path::PathBuf,
+        detail: String,
+    },
+
+    /// The archive carries a `streamlib.yaml` with no `package:` identity
+    /// block, so the loader cannot derive the `@org/name` slot to materialize
+    /// into.
+    #[error(
+        "Package archive at {} has no `package:` block in its streamlib.yaml — a package \
+         materialized into streamlib_modules/ must declare its own @org/name@version identity",
+        archive.display()
+    )]
+    PackageArchiveMissingPackageIdentity { archive: std::path::PathBuf },
+
+    /// The extracted package was valid but swapping it into its
+    /// `streamlib_modules/@org/name` slot failed. The prior slot contents are
+    /// restored — a failed promote never leaves the slot empty.
+    #[error(
+        "Failed to publish package archive at {} into its installed slot {}: {detail}",
+        archive.display(),
+        slot.display()
+    )]
+    PackageArchiveInstalledSlotPromoteFailed {
+        archive: std::path::PathBuf,
+        slot: std::path::PathBuf,
+        detail: String,
+    },
+
+    /// The package-archive add pipeline failed in a stage this loader does not
+    /// name individually (filesystem failures under `streamlib_modules/`, and
+    /// any failure mode the shared add pipeline gains later). The prefix stays
+    /// stage-neutral so it can never misattribute the failure.
+    #[error(
+        "Failed to materialize package archive at {} into its installed slot: {detail}",
+        archive.display()
+    )]
+    PackageArchiveMaterializationFailed {
         archive: std::path::PathBuf,
         detail: String,
     },
