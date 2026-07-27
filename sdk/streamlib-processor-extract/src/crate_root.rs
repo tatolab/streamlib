@@ -70,13 +70,12 @@ impl<'request> RustCrateRootGenerationRequest<'request> {
         package_dir: &'request Path,
     ) -> Result<Self, RustCrateRootGenerationError> {
         let cargo_toml_path = package_dir.join("Cargo.toml");
-        let manifest_body =
-            std::fs::read_to_string(&cargo_toml_path).map_err(|source| {
-                RustCrateRootGenerationError::ReadCargoManifest {
-                    path: cargo_toml_path.clone(),
-                    source,
-                }
-            })?;
+        let manifest_body = std::fs::read_to_string(&cargo_toml_path).map_err(|source| {
+            RustCrateRootGenerationError::ReadCargoManifest {
+                path: cargo_toml_path.clone(),
+                source,
+            }
+        })?;
         let manifest: toml::Value = manifest_body.parse().map_err(|source| {
             RustCrateRootGenerationError::ParseCargoManifest {
                 path: cargo_toml_path.clone(),
@@ -269,7 +268,10 @@ fn render_plugin_export_envelope(processors: &[ExtractedProcessor]) -> Option<St
     // unconditional entry makes the gate unnecessary.
     if entries.iter().all(|(predicate, _)| predicate.is_some()) {
         let mut distinct: Vec<String> = Vec::new();
-        for predicate in entries.iter().filter_map(|(predicate, _)| predicate.clone()) {
+        for predicate in entries
+            .iter()
+            .filter_map(|(predicate, _)| predicate.clone())
+        {
             if !distinct.contains(&predicate) {
                 distinct.push(predicate);
             }
@@ -327,7 +329,11 @@ mod tests {
         std::fs::write(path, body).unwrap();
     }
 
-    fn request<'a>(package_dir: &'a Path, cdylib: bool, jtd: bool) -> RustCrateRootGenerationRequest<'a> {
+    fn request<'a>(
+        package_dir: &'a Path,
+        cdylib: bool,
+        jtd: bool,
+    ) -> RustCrateRootGenerationRequest<'a> {
         RustCrateRootGenerationRequest {
             package_dir,
             emits_jtd_generated_module: jtd,
@@ -403,7 +409,9 @@ mod tests {
             generated.source
         );
         assert!(
-            generated.source.contains("    crate::blur::BlurProcessor::Processor,\n"),
+            generated
+                .source
+                .contains("    crate::blur::BlurProcessor::Processor,\n"),
             "{}",
             generated.source
         );
@@ -415,7 +423,11 @@ mod tests {
             generated.source
         );
         // One entry is unconditional, so the invocation itself needs no gate.
-        assert!(!generated.source.contains("#[cfg(any(target_os"), "{}", generated.source);
+        assert!(
+            !generated.source.contains("#[cfg(any(target_os"),
+            "{}",
+            generated.source
+        );
         assert_eq!(generated.exported_processor_entry_count, 2);
     }
 
@@ -462,7 +474,11 @@ mod tests {
         );
 
         let generated = generate_rust_crate_root_source(&request(root, true, false)).unwrap();
-        assert!(!generated.source.contains("export_plugin!"), "{}", generated.source);
+        assert!(
+            !generated.source.contains("export_plugin!"),
+            "{}",
+            generated.source
+        );
         assert_eq!(generated.exported_processor_entry_count, 0);
         // The arm is still declared — parked source must still be a module the
         // crate names, so unparking is a cfg edit and nothing else.

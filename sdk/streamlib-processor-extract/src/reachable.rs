@@ -444,8 +444,7 @@ impl ReachableModuleWalker<'_> {
                     return Ok(());
                 };
                 if let Some(attr) = processor_attr(&item_struct.attrs) {
-                    let mut extracted =
-                        parse_processor_attr(attr, &item_struct.ident, rel_path)?;
+                    let mut extracted = parse_processor_attr(attr, &item_struct.ident, rel_path)?;
                     extracted
                         .module_path_segments
                         .clone_from(&self.module_path_segments);
@@ -656,9 +655,7 @@ fn cfg_predicate_is_statically_unsatisfiable(meta: &Meta) -> bool {
         return false;
     };
     match combinator.as_str() {
-        "any" => inner
-            .iter()
-            .all(cfg_predicate_is_statically_unsatisfiable),
+        "any" => inner.iter().all(cfg_predicate_is_statically_unsatisfiable),
         "all" => inner.iter().any(cfg_predicate_is_statically_unsatisfiable),
         _ => false,
     }
@@ -1187,7 +1184,11 @@ mod tests {
             "processors/arm/mod.rs",
             "#[path = \"platform/linux/mod.rs\"]\npub mod linux;\n",
         );
-        write(root, "processors/arm/platform/linux/mod.rs", "pub mod helper;\n");
+        write(
+            root,
+            "processors/arm/platform/linux/mod.rs",
+            "pub mod helper;\n",
+        );
         write(
             root,
             "processors/arm/platform/linux/helper.rs",
@@ -1351,7 +1352,11 @@ mod tests {
         let tmp = tempdir();
         let root = tmp.path();
         write(root, "processors/blur.rs", "");
-        write(root, "processors/linux/mod.rs", "#![cfg(target_os = \"linux\")]\n");
+        write(
+            root,
+            "processors/linux/mod.rs",
+            "#![cfg(target_os = \"linux\")]\n",
+        );
         write(root, "processors/vision/detector.py", "");
         write(root, "processors/effect.ts", "");
 

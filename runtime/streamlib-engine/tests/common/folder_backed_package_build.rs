@@ -49,9 +49,7 @@ pub fn build_folder_backed_package(cargo_package_name: &str) {
 
 /// Every workspace directory whose `Cargo.toml` points `[lib] path` at the
 /// generated crate root.
-fn folder_backed_package_dirs(
-    workspace_root: &Path,
-) -> std::io::Result<Vec<std::path::PathBuf>> {
+fn folder_backed_package_dirs(workspace_root: &Path) -> std::io::Result<Vec<std::path::PathBuf>> {
     let expected = format!(
         "{}/{}",
         streamlib_processor_extract::crate_root::GENERATED_CRATE_ROOT_DIR_NAME,

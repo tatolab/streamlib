@@ -86,9 +86,7 @@ pub fn discover_folder_backed_package_dirs(workspace_root: &Path) -> Result<Vec<
             .and_then(|lib| lib.get("path"))
             .and_then(|path| path.as_str())
             .is_some_and(|path| path == generated_lib_path);
-        if declares_generated_root
-            && let Some(dir) = manifest_path.parent()
-        {
+        if declares_generated_root && let Some(dir) = manifest_path.parent() {
             out.push(dir.to_path_buf());
         }
     }

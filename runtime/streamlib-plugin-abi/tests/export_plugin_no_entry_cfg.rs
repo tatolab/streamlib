@@ -21,11 +21,7 @@ declare_stub_processor_type!(
 );
 declare_stub_processor_type!(ThirdStubProcessor, 0x3333_3333_3333_3333, "identity-third");
 
-streamlib_plugin_abi::export_plugin!(
-    FirstStubProcessor,
-    SecondStubProcessor,
-    ThirdStubProcessor,
-);
+streamlib_plugin_abi::export_plugin!(FirstStubProcessor, SecondStubProcessor, ThirdStubProcessor,);
 
 #[test]
 fn declaration_carries_the_pinned_wire_envelope() {
