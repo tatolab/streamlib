@@ -740,6 +740,159 @@ fn url_strategy_rejects_checksum_mismatch() {
     );
 }
 
+/// Package-archive bytes for a schemas-only `@tatolab/<name>` package, in
+/// either container, optionally nested under a single top-level directory (the
+/// `tar czf pkg.tar.gz my-package/` shape a hand-rolled archive carries).
+fn schemas_only_package_archive_bytes(
+    name: &str,
+    type_name: &str,
+    kind: streamlib_idents::archive::ArchiveKind,
+    nested_under: Option<&str>,
+) -> Vec<u8> {
+    use std::io::Write;
+    let stem = type_name.to_ascii_lowercase();
+    let prefix = nested_under.map(|d| format!("{d}/")).unwrap_or_default();
+    let entries: [(String, String); 2] = [
+        (
+            format!("{prefix}streamlib.yaml"),
+            format!(
+                "package:\n  org: tatolab\n  name: {name}\n  version: \"0.1.0\"\n\
+                 schemas:\n  {type_name}:\n    file: schemas/{stem}.yaml\n"
+            ),
+        ),
+        (
+            format!("{prefix}schemas/{stem}.yaml"),
+            format!("metadata:\n  type: {type_name}\n  expected_payload_bytes: 4096\n"),
+        ),
+    ];
+
+    match kind {
+        streamlib_idents::archive::ArchiveKind::Zip => {
+            let mut buf = Vec::new();
+            {
+                let mut zw = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+                let opts: zip::write::FileOptions<()> = zip::write::FileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored);
+                for (path, body) in &entries {
+                    zw.start_file(path, opts).unwrap();
+                    zw.write_all(body.as_bytes()).unwrap();
+                }
+                zw.finish().unwrap();
+            }
+            buf
+        }
+        streamlib_idents::archive::ArchiveKind::TarGz => {
+            let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+            let mut builder = tar::Builder::new(encoder);
+            for (path, body) in &entries {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(body.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                builder
+                    .append_data(&mut header, path, body.as_bytes())
+                    .unwrap();
+            }
+            builder.into_inner().unwrap().finish().unwrap()
+        }
+    }
+}
+
+/// Container equivalence at the runtime module loader: ONE fixture delivered
+/// four ways — flat zip, nested zip, flat tar.gz, nested tar.gz — half through
+/// [`Strategy::PackageArchive`] and half through [`Strategy::Url`], must
+/// materialize one identical installed-slot content hash. Mentally revert the
+/// loader onto a zip-only, archive-index manifest read and the two tar.gz legs
+/// fail outright while the nested zip leg lands a `my-package/`-shifted slot
+/// whose hash diverges.
+#[test]
+#[serial]
+fn every_container_shape_materializes_one_identical_installed_slot() {
+    use streamlib_idents::archive::ArchiveKind;
+
+    let sandbox = tempfile::tempdir().unwrap();
+    let prev_home = std::env::var_os("STREAMLIB_HOME");
+    unsafe {
+        std::env::set_var("STREAMLIB_HOME", sandbox.path());
+    }
+    let _restore = StreamlibHomeRestore(prev_home);
+
+    let package_name = "container-parity";
+    let type_name = "ContainerParitySchema";
+    let src = tempfile::tempdir().unwrap();
+
+    let deliveries: [(&str, ArchiveKind, Option<&str>, bool); 4] = [
+        ("flat zip", ArchiveKind::Zip, None, false),
+        ("nested zip", ArchiveKind::Zip, Some("my-package"), false),
+        ("flat tar.gz", ArchiveKind::TarGz, None, true),
+        ("nested tar.gz", ArchiveKind::TarGz, Some("my-package"), true),
+    ];
+
+    let mut slot_hashes: Vec<(&str, String)> = Vec::new();
+    for (label, kind, nested_under, via_url) in deliveries {
+        // A fresh app-modules root per delivery, so each leg materializes its
+        // slot from scratch rather than reusing the previous leg's.
+        let app_root = tempfile::tempdir().unwrap();
+        let _modules_root = AppModulesRootOverrideGuard::install(app_root.path());
+
+        let archive =
+            src.path()
+                .join(format!("{}.archive", label.replace(['.', ' '], "-")));
+        std::fs::write(
+            &archive,
+            schemas_only_package_archive_bytes(package_name, type_name, kind, nested_under),
+        )
+        .unwrap();
+
+        let strategy = if via_url {
+            Strategy::Url {
+                url: format!("file://{}", archive.display()),
+                build: BuildPolicy::NeverBuild,
+                checksum: None,
+            }
+        } else {
+            Strategy::PackageArchive {
+                path: archive.clone(),
+            }
+        };
+
+        let runtime = Runner::new().unwrap();
+        runtime
+            .add_module_with_blocking(
+                streamlib_idents::ModuleIdent::any(
+                    streamlib_idents::Org::new("tatolab").unwrap(),
+                    streamlib_idents::Package::new(package_name).unwrap(),
+                ),
+                strategy,
+            )
+            .unwrap_or_else(|e| panic!("{label} delivery must load: {e}"));
+
+        let slot = installed_package_slot_for_test("tatolab", package_name);
+        assert!(
+            slot.join("streamlib.yaml").is_file(),
+            "{label}: the manifest must land at the slot root, not under a nested dir"
+        );
+        let hash = streamlib_idents::content_hash_for_package_dir(&slot)
+            .unwrap_or_else(|e| panic!("{label}: hashing the slot must succeed: {e}"));
+        slot_hashes.push((label, hash));
+    }
+
+    let (first_label, first_hash) = &slot_hashes[0];
+    for (label, hash) in &slot_hashes[1..] {
+        assert_eq!(
+            hash, first_hash,
+            "{label} must materialize the same slot contents as {first_label}"
+        );
+    }
+    assert!(
+        crate::core::embedded_schemas::get_embedded_schema_definition(&format!(
+            "@tatolab/{package_name}/{type_name}"
+        ))
+        .is_some(),
+        "the fixture's schema must register from every container shape"
+    );
+}
+
 #[test]
 #[serial]
 fn path_package_version_dep_routes_to_by_version_not_installed_cache() {

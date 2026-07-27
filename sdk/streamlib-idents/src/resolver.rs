@@ -1770,6 +1770,185 @@ dependencies:
         assert_eq!(core.schema_files.len(), 1);
     }
 
+    /// A minimal `@tatolab/core` package's two entries, optionally nested
+    /// under a single top-level directory.
+    fn core_package_entries(nested_under: Option<&str>) -> [(String, &'static [u8]); 2] {
+        let prefix = nested_under.map(|d| format!("{d}/")).unwrap_or_default();
+        [
+            (
+                format!("{prefix}{}", Manifest::FILE_NAME),
+                b"package:\n  org: tatolab\n  name: core\n  version: 1.0.0\n".as_slice(),
+            ),
+            (
+                format!("{prefix}schemas/VideoFrame.yaml"),
+                b"metadata:\n  name: VideoFrame\nproperties: {}\n".as_slice(),
+            ),
+        ]
+    }
+
+    fn write_core_zip(path: &Path, nested_under: Option<&str>) {
+        use std::io::Write;
+        let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
+        let opts = zip::write::SimpleFileOptions::default();
+        for (name, body) in core_package_entries(nested_under) {
+            zip.start_file(name, opts).unwrap();
+            zip.write_all(body).unwrap();
+        }
+        zip.finish().unwrap();
+    }
+
+    fn write_core_tar_gz(path: &Path, nested_under: Option<&str>) {
+        let encoder = flate2::write::GzEncoder::new(
+            std::fs::File::create(path).unwrap(),
+            flate2::Compression::default(),
+        );
+        let mut builder = tar::Builder::new(encoder);
+        for (name, body) in core_package_entries(nested_under) {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(body.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            builder.append_data(&mut header, name, body).unwrap();
+        }
+        builder.into_inner().unwrap().finish().unwrap();
+    }
+
+    fn resolve_core_path_dependency(tmp: &Path, archive_path: &Path) -> ResolvedPackages {
+        let root = tmp.join("project");
+        write_streamlib_yaml(
+            &root,
+            &format!(
+                "dependencies:\n  \"@tatolab/core\":\n    path: {}\n",
+                archive_path.to_string_lossy()
+            ),
+        );
+        resolve_with(
+            &root,
+            &ResolverOptions {
+                cache_dir: Some(tmp.join("cache")),
+                package_source: None,
+                link_checkout: None,
+            },
+        )
+        .unwrap_or_else(|e| panic!("resolving {} must succeed: {e}", archive_path.display()))
+    }
+
+    /// A `path:` dep may name any container the shared reader sniffs — a
+    /// `.zip` and a `.tar.gz` resolve exactly like a `.slpkg`, flat or nested.
+    /// Mentally revert the is-file classification back to the `.slpkg`
+    /// extension test and every leg here reports `PathDependencyNotDirectory`.
+    #[test]
+    fn path_dependency_resolves_zip_and_tar_gz_containers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let archives = tmp.path().join("archives");
+        std::fs::create_dir_all(&archives).unwrap();
+
+        let flat_zip = archives.join("core.zip");
+        write_core_zip(&flat_zip, None);
+        let nested_zip = archives.join("core-nested.zip");
+        write_core_zip(&nested_zip, Some("core-1.0.0"));
+        let flat_tar_gz = archives.join("core.tar.gz");
+        write_core_tar_gz(&flat_tar_gz, None);
+        let nested_tar_gz = archives.join("core-nested.tar.gz");
+        write_core_tar_gz(&nested_tar_gz, Some("core-1.0.0"));
+
+        for (index, archive) in [flat_zip, nested_zip, flat_tar_gz, nested_tar_gz]
+            .iter()
+            .enumerate()
+        {
+            // A per-leg workspace keeps each `project/` manifest independent.
+            let leg_dir = tmp.path().join(format!("leg-{index}"));
+            std::fs::create_dir_all(&leg_dir).unwrap();
+            let resolved = resolve_core_path_dependency(&leg_dir, archive);
+            let core = resolved.packages.get("@tatolab/core").unwrap();
+            assert!(
+                matches!(core.source, ResolvedSource::PackageArchive { .. }),
+                "{}: expected a PackageArchive source, got {:?}",
+                archive.display(),
+                core.source
+            );
+            assert_eq!(
+                core.schema_files.len(),
+                1,
+                "{}: the located package root must carry its schema",
+                archive.display()
+            );
+            assert!(
+                core.root_dir.join(Manifest::FILE_NAME).is_file(),
+                "{}: the resolved root must be the located package root",
+                archive.display()
+            );
+        }
+    }
+
+    /// The resolver's extraction inherits the shared reader's traversal and
+    /// symlink-escape refusals — a hostile `path:` archive can neither write
+    /// outside the resolver cache nor mint a host-path symlink inside it.
+    #[test]
+    fn path_dependency_archive_rejects_traversal_and_symlink_escape() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let archives = tmp.path().join("archives");
+        std::fs::create_dir_all(&archives).unwrap();
+
+        let traversal = archives.join("traversal.zip");
+        {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&traversal).unwrap());
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file(Manifest::FILE_NAME, opts).unwrap();
+            zip.write_all(b"package:\n  org: tatolab\n  name: core\n  version: 1.0.0\n")
+                .unwrap();
+            zip.start_file("../escape.txt", opts).unwrap();
+            zip.write_all(b"evil").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let symlink_escape = archives.join("symlink-escape.zip");
+        {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&symlink_escape).unwrap());
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file(Manifest::FILE_NAME, opts).unwrap();
+            zip.write_all(b"package:\n  org: tatolab\n  name: core\n  version: 1.0.0\n")
+                .unwrap();
+            zip.add_symlink("passwd", "/etc/passwd", opts).unwrap();
+            zip.finish().unwrap();
+        }
+
+        for (label, archive) in [
+            ("path traversal", traversal),
+            ("symlink escape", symlink_escape),
+        ] {
+            let leg_dir = tmp.path().join(label.replace(' ', "-"));
+            std::fs::create_dir_all(&leg_dir).unwrap();
+            let root = leg_dir.join("project");
+            write_streamlib_yaml(
+                &root,
+                &format!(
+                    "dependencies:\n  \"@tatolab/core\":\n    path: {}\n",
+                    archive.to_string_lossy()
+                ),
+            );
+            let cache_dir = leg_dir.join("cache");
+            let err = resolve_with(
+                &root,
+                &ResolverOptions {
+                    cache_dir: Some(cache_dir.clone()),
+                    package_source: None,
+                    link_checkout: None,
+                },
+            )
+            .expect_err(&format!("{label} must be refused"));
+            assert!(
+                matches!(err, ResolverError::PackageArchiveExtractFailed { .. }),
+                "{label}: expected PackageArchiveExtractFailed, got {err:?}"
+            );
+            assert!(
+                !leg_dir.join("escape.txt").exists(),
+                "{label}: nothing may land outside the extraction dir"
+            );
+        }
+    }
+
     #[test]
     fn lockfile_built_from_resolved_packages() {
         let tmp = tempfile::tempdir().unwrap();

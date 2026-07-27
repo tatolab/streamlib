@@ -1740,16 +1740,32 @@ mod tests {
 
     /// Zip-shaped `.slpkg` bytes for a minimal package.
     fn slpkg_bytes(org: &str, name: &str, version: &str) -> Vec<u8> {
+        zip_package_bytes(org, name, version, None)
+    }
+
+    /// Zip bytes for a minimal package, optionally nested under a single
+    /// top-level directory (the `zip -r pkg.zip my-package/` shape).
+    fn zip_package_bytes(
+        org: &str,
+        name: &str,
+        version: &str,
+        nested_under: Option<&str>,
+    ) -> Vec<u8> {
+        let prefix = nested_under.map(|d| format!("{d}/")).unwrap_or_default();
         let mut cursor = std::io::Cursor::new(Vec::new());
         {
             let mut writer = zip::ZipWriter::new(&mut cursor);
             let opts = zip::write::FileOptions::<()>::default()
                 .compression_method(zip::CompressionMethod::Stored);
-            writer.start_file("streamlib.yaml", opts).unwrap();
+            writer
+                .start_file(format!("{prefix}streamlib.yaml"), opts)
+                .unwrap();
             writer
                 .write_all(manifest_yaml(org, name, version).as_bytes())
                 .unwrap();
-            writer.start_file("schemas/foo_frame.yaml", opts).unwrap();
+            writer
+                .start_file(format!("{prefix}schemas/foo_frame.yaml"), opts)
+                .unwrap();
             writer.write_all(SCHEMA_YAML.as_bytes()).unwrap();
             writer.finish().unwrap();
         }
@@ -2102,6 +2118,86 @@ mod tests {
             &["@tatolab/camera", "@tatolab/mic"],
             Some(&std::fs::read(app.lockfile_path()).unwrap()),
         );
+    }
+
+    /// Container equivalence at the install boundary: ONE fixture delivered
+    /// four ways — a directory, a flat zip, a zip nested under a single
+    /// top-level dir, and a tar.gz — must materialize one identical
+    /// `content_hash_for_package_dir`. Mentally revert the shared
+    /// sniff-then-extract reader (or the nested-dir tolerance) and the nested
+    /// leg either fails outright or hashes a `my-package/`-shifted tree.
+    #[test]
+    fn one_fixture_delivered_four_ways_materializes_one_content_hash() {
+        let staging = tempfile::tempdir().unwrap();
+
+        let folder_source = staging.path().join("camera-src");
+        write_package_folder(&folder_source, "tatolab", "camera", "2.0.0");
+
+        let flat_zip = staging.path().join("flat.zip");
+        std::fs::write(
+            &flat_zip,
+            zip_package_bytes("tatolab", "camera", "2.0.0", None),
+        )
+        .unwrap();
+
+        let nested_zip = staging.path().join("nested.zip");
+        std::fs::write(
+            &nested_zip,
+            zip_package_bytes("tatolab", "camera", "2.0.0", Some("my-package")),
+        )
+        .unwrap();
+
+        let tar_gz = staging.path().join("camera.tar.gz");
+        std::fs::write(
+            &tar_gz,
+            tar_gz_package_bytes("tatolab", "camera", "2.0.0", None),
+        )
+        .unwrap();
+
+        let deliveries: [(&str, AddPackageSource); 4] = [
+            (
+                "directory",
+                AddPackageSource::Folder {
+                    path: folder_source,
+                },
+            ),
+            ("flat zip", AddPackageSource::Archive { path: flat_zip }),
+            ("nested zip", AddPackageSource::Archive { path: nested_zip }),
+            ("tar.gz", AddPackageSource::Archive { path: tar_gz }),
+        ];
+
+        let mut hashes: Vec<(&str, String)> = Vec::new();
+        for (label, source) in deliveries {
+            // A fresh app root per delivery — each add is independent.
+            let app_root = tempfile::tempdir().unwrap();
+            let app = AppModulesDir::at(app_root.path());
+            let report = app
+                .add_package(&source, &AddPackageOptions::default())
+                .unwrap_or_else(|e| panic!("{label} delivery must add: {e}"));
+            assert_eq!(report.package, pkg_ref("tatolab", "camera"), "{label}");
+            assert!(
+                report.package_dir.join("streamlib.yaml").is_file(),
+                "{label}: the manifest must land at the slot root"
+            );
+            assert!(
+                report.package_dir.join("schemas/foo_frame.yaml").is_file(),
+                "{label}: owned schemas must land under the slot root"
+            );
+            assert_eq!(
+                report.content_hash,
+                content_hash_for_package_dir(&report.package_dir).unwrap(),
+                "{label}: reported hash must equal the materialized dir's re-hash"
+            );
+            hashes.push((label, report.content_hash));
+        }
+
+        let (first_label, first_hash) = &hashes[0];
+        for (label, hash) in &hashes[1..] {
+            assert_eq!(
+                hash, first_hash,
+                "{label} must materialize the same contents as {first_label}"
+            );
+        }
     }
 
     #[test]
