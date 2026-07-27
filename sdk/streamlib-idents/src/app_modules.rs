@@ -1440,25 +1440,28 @@ fn locate_staged_package_root(
 }
 
 /// Outcome of [`promote_staged_package_root`].
-struct PromotedSlot {
+pub struct PromotedPackageSlot {
     /// Whether previous contents occupied the slot and were displaced.
-    replaced: bool,
+    pub replaced: bool,
     /// The `.staging-replaced-*` backup of the displaced prior slot, present
     /// only when `retain_replaced_backup` was requested AND a prior slot was
     /// displaced. The caller owns finalizing it (discard or restore).
-    retained_backup: Option<PathBuf>,
+    pub retained_backup: Option<PathBuf>,
 }
 
 /// Swap `staged_package_root` into `package_dir`, displacing any previous
-/// contents restorably. When `retain_replaced_backup` is set and a prior slot
-/// was displaced, its backup is kept (not deleted on success) and returned so
-/// the caller can restore it after a failed post-promote step.
-fn promote_staged_package_root(
+/// contents restorably — the one promote every materializer goes through, so
+/// a failed swap never leaves the slot empty and a slot occupied by a
+/// `streamlib link` symlink is unlinked rather than followed. When
+/// `retain_replaced_backup` is set and a prior slot was displaced, its backup
+/// is kept (not deleted on success) and returned so the caller can restore it
+/// after a failed post-promote step.
+pub fn promote_staged_package_root(
     staged_package_root: &Path,
     package_dir: &Path,
     modules_dir: &Path,
     retain_replaced_backup: bool,
-) -> Result<PromotedSlot, AppModulesError> {
+) -> Result<PromotedPackageSlot, AppModulesError> {
     let promote_err = |detail: String| AppModulesError::StagePromoteFailed {
         package_dir: package_dir.to_path_buf(),
         detail,
@@ -1492,7 +1495,7 @@ fn promote_staged_package_root(
 
     match std::fs::rename(staged_package_root, package_dir) {
         Ok(()) => match displaced {
-            Some(backup) if retain_replaced_backup => Ok(PromotedSlot {
+            Some(backup) if retain_replaced_backup => Ok(PromotedPackageSlot {
                 replaced: true,
                 retained_backup: Some(backup),
             }),
@@ -1500,12 +1503,12 @@ fn promote_staged_package_root(
                 // The displaced previous slot may be a symlink (a prior link
                 // being replaced); unlink it rather than recursing into it.
                 let _ = remove_dir_entry_all(&backup);
-                Ok(PromotedSlot {
+                Ok(PromotedPackageSlot {
                     replaced: true,
                     retained_backup: None,
                 })
             }
-            None => Ok(PromotedSlot {
+            None => Ok(PromotedPackageSlot {
                 replaced: false,
                 retained_backup: None,
             }),

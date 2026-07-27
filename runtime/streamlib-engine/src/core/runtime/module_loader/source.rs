@@ -407,10 +407,11 @@ pub(super) fn resolve_strategy_to_source(
                 })?;
             // IfStale fast path: a `.slpkg` already materialized for this exact
             // version is reused instead of re-downloaded and re-extracted.
-            // `extract_package_archive_to_installed_slot` rm -rf's the cache slot on every call,
-            // which wipes any cdylib a prior run built into `lib/<triple>/` (and
-            // any provisioned `.venv`) — so without this check `IfStale` rebuilt
-            // on every run even when the package source had not changed. Package
+            // `extract_package_archive_to_installed_slot` replaces the slot
+            // wholesale on every call, which wipes any cdylib a prior run built
+            // into `lib/<triple>/` (and any provisioned `.venv`) — so without
+            // this check `IfStale` rebuilt on every run even when the package
+            // source had not changed. Package
             // source versions are immutable (a content change ships a new version);
             // `streamlib pkg clean` clears the cache to force a re-fetch when a
             // version is republished in place during development.

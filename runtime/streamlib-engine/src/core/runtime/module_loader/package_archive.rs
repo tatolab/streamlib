@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 
 use streamlib_idents::PackageRef;
-use streamlib_idents::app_modules::AppModulesStagingDir;
+use streamlib_idents::app_modules::{AppModulesStagingDir, promote_staged_package_root};
 use streamlib_idents::archive::{
     extract_archive_bytes_to_dir, locate_package_root_in_extracted_dir,
 };
@@ -66,77 +66,21 @@ pub fn extract_package_archive_to_installed_slot(
 
     let pkg_ref = PackageRef::new(package.org.clone(), package.name.clone());
     let slot_dir = installed_package_slot_dir(app_modules_root, &pkg_ref);
-    publish_staged_package_root_into_slot(&staged_package_root, &slot_dir)?;
+    let promoted =
+        promote_staged_package_root(&staged_package_root, &slot_dir, &modules_dir, false).map_err(
+            |e| {
+                Error::Configuration(format!(
+                    "Failed to publish {} into {}: {e}",
+                    package_archive_path.display(),
+                    slot_dir.display()
+                ))
+            },
+        )?;
     tracing::info!(
+        replaced = promoted.replaced,
         package = %pkg_ref,
         slot = %slot_dir.display(),
         "materialized package archive into its installed slot"
     );
     Ok(slot_dir)
-}
-
-/// Move `staged_package_root` onto `slot_dir`, replacing whatever occupied the
-/// slot. Staging and slot share the modules dir's filesystem, so the rename is
-/// atomic; a cross-device rename (a staging dir on another mount) falls back to
-/// a recursive copy rather than failing the load.
-fn publish_staged_package_root_into_slot(
-    staged_package_root: &Path,
-    slot_dir: &Path,
-) -> Result<()> {
-    if let Some(slot_parent) = slot_dir.parent() {
-        std::fs::create_dir_all(slot_parent).map_err(|e| {
-            Error::Configuration(format!("Failed to create {}: {}", slot_parent.display(), e))
-        })?;
-    }
-    remove_slot_entry(slot_dir)?;
-    match std::fs::rename(staged_package_root, slot_dir) {
-        Ok(()) => Ok(()),
-        Err(rename_error) => {
-            copy_dir_recursive(staged_package_root, slot_dir).map_err(|copy_error| {
-                Error::Configuration(format!(
-                    "Failed to publish {} into {}: rename failed ({rename_error}), \
-                     copy fallback failed ({copy_error})",
-                    staged_package_root.display(),
-                    slot_dir.display()
-                ))
-            })
-        }
-    }
-}
-
-/// Clear a slot entry: a symlink (an active `streamlib link`) is unlinked
-/// without being followed into the linked checkout, a directory is removed
-/// recursively, an absent path is a no-op.
-fn remove_slot_entry(slot_dir: &Path) -> Result<()> {
-    let removal = match std::fs::symlink_metadata(slot_dir) {
-        Ok(meta) if meta.file_type().is_dir() => std::fs::remove_dir_all(slot_dir),
-        Ok(_) => std::fs::remove_file(slot_dir),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => Err(e),
-    };
-    removal.map_err(|e| {
-        Error::Configuration(format!(
-            "Failed to clear the installed slot {}: {}",
-            slot_dir.display(),
-            e
-        ))
-    })
-}
-
-/// Recursive directory copy used only as the cross-device fallback for the
-/// staging-to-slot promote. Symlinks are copied by target (the extractor has
-/// already refused any target that escapes the package root).
-fn copy_dir_recursive(source_dir: &Path, dest_dir: &Path) -> std::io::Result<()> {
-    std::fs::create_dir_all(dest_dir)?;
-    for entry in std::fs::read_dir(source_dir)? {
-        let entry = entry?;
-        let source_path = entry.path();
-        let dest_path = dest_dir.join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir_recursive(&source_path, &dest_path)?;
-        } else {
-            std::fs::copy(&source_path, &dest_path)?;
-        }
-    }
-    Ok(())
 }
