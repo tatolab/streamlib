@@ -488,8 +488,10 @@ enum PkgCommands {
     /// reads are tokenless. Publishing many packages is a script over this
     /// single-package command.
     Publish,
-    /// Remove THIS package's build/pack artifacts (run inside the package):
-    /// any `*.slpkg`, the prebuilt `lib/` dir, and generated `_generated_/` trees.
+    /// Remove THIS package's build artifacts (run inside the package): the
+    /// prebuilt `lib/` dir and generated `_generated_/` trees. Also sweeps any
+    /// hand-made `*.slpkg` left in the package dir — `publish` packs to a
+    /// tempfile, so nothing streamlib runs writes one here any more.
     Clean,
     /// Reclaim on-the-box build scratch across every materialized package slot,
     /// keeping the loadable artifact. Reclaims each slot's `target/` plus

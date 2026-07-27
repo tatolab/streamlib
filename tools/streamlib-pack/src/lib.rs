@@ -443,6 +443,22 @@ pub struct AssembleOptions {
     pub ignore_in_tree_prebuilt_cdylib: bool,
 }
 
+impl AssembleOptions {
+    /// The options `streamlib pkg publish` assembles a source-only
+    /// [`AssembleTarget::Slpkg`] with. The single definition of the shape
+    /// published archives actually carry, so the pack -> load foundation gate
+    /// exercises the same producer real publishes run rather than a hand-copied
+    /// literal that can silently drift from it.
+    pub fn source_only_publish() -> Self {
+        Self {
+            no_build: false,
+            profile: CargoProfile::Release,
+            path_deps: PathDepPolicy::RejectPathPatches,
+            ignore_in_tree_prebuilt_cdylib: false,
+        }
+    }
+}
+
 /// Summary of what [`assemble_artifact`] produced.
 #[derive(Debug, Clone)]
 pub struct AssembleOutcome {

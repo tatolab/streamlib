@@ -32,8 +32,9 @@ deployment chooses to wire (or not).
    ▼
 ┌──────────────────────── streamlib-engine (RESOLUTION + LOAD) ─────────────────────────┐
 │  Pure filesystem / cache / git — NEVER cargo/pip/deno.                                 │
-│    Strategy { InstalledCache | Path{path,build} | Slpkg{path}                          │
-│               | Git{url,rev,build} | Url{url,build,checksum} }                          │
+│    Strategy { InstalledCache | Path{path,build} | PackageArchive{path}                 │
+│               | Git{url,rev,build} | Url{url,build,checksum}                            │
+│               | ByVersion{version_req,build} }                                          │
 │    resolve → ResolvedSource::Ready(dir)            (no build needed)                    │
 │            → ResolvedSource::NeedsBuild(BuildRequest)  (build required)                 │
 │    recursive transitive-dep walk (cycle-detected), identity + semver validation,       │
@@ -125,9 +126,10 @@ comes from:
 |---|---|---|
 | `InstalledCache` | `<app-root>/streamlib_modules/@org/name` (co-located, version-free) | never — load-only (unbuilt slot ⇒ typed `InstalledPackageNotBuilt`) |
 | `Path { path, build }` | a directory with `streamlib.yaml` | per `build` |
-| `Slpkg { path }` | a `.slpkg` archive (engine extracts) | only if Rust source + no matching prebuilt |
+| `PackageArchive { path }` | a package archive (`.slpkg` / `.zip` / `.tar.gz`, container sniffed from magic bytes; engine extracts) | only if Rust source + no matching prebuilt |
 | `Git { url, rev, build }` | a git checkout (engine fetches) | per `build` |
-| `Url { url, build, checksum }` | a remote `.slpkg` (engine fetches `file://`/`http(s)://`, optional checksum pin) | prefer-prebuilt, else per `build` |
+| `Url { url, build, checksum }` | a remote package archive (engine fetches `file://`/`http(s)://`, optional checksum pin) | prefer-prebuilt, else per `build` |
+| `ByVersion { version_req, build }` | the configured package source's `slpkg/{name}/index.json` version index, highest satisfying `version_req` | prefer-prebuilt, else per `build` |
 
 `add_module(ident)` is the conservative default — `Strategy::InstalledCache`.
 Anything rebuildable-from-source via `Path`/`Git` is requested
@@ -516,7 +518,7 @@ Engine ↔ plugin stay in lock-step on two complementary layers:
 |---|---|
 | Local dev edit→run | runner wires `PolyglotBuildOrchestrator`; `Strategy::Path { build: IfStale }` rebuilds changed packages (incl. transitive) via cargo's fingerprint |
 | AI agent / CLI / daemon authoring a package at runtime | same: write source → `add_module_with(Path/Git, IfStale)` → orchestrator builds → load. This is production, not a dev convenience |
-| Frozen container, prebuilt `.slpkg` for its triple | no orchestrator wired (`--no-default-features`); `Slpkg`/`InstalledCache` finds the matching prebuilt cdylib and loads it; provably compiler-free |
+| Frozen container, prebuilt `.slpkg` for its triple | no orchestrator wired (`--no-default-features`); `PackageArchive`/`InstalledCache` finds the matching prebuilt cdylib and loads it; provably compiler-free |
 | `.slpkg` from another platform (or source-only) on a fresh triple | extract → no matching prebuilt → orchestrator `cargo build`s the bundled source for this host → load. One artifact, every platform |
 | "point at this GitHub repo for @org/pkg" | `Strategy::Git { url, rev, build }` — engine fetches the checkout, orchestrator builds it |
 | "install this `.slpkg` from a URL" | `Strategy::Url { url, build, checksum }` — engine fetches the archive (`file://`/`http(s)://`) into the resolver cache, verifies the optional checksum, extracts, then resolves prefer-prebuilt-else-build like a local `.slpkg`. Re-fetch of the same URL skips the download |

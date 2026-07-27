@@ -15,9 +15,7 @@ use streamlib::sdk::runtime::{AppModulesDir, parse_lockfile_package_key};
 use streamlib_idents::{PackageSourceClient, PackageSource};
 use streamlib_pack::catalog::{build_package_catalog, build_sibling_versions};
 use streamlib_pack::static_package_source::{merge_catalog_index_lines, write_package_catalog};
-use streamlib_pack::{
-    AssembleOptions, AssembleTarget, CargoProfile, PathDepPolicy, assemble_artifact,
-};
+use streamlib_pack::{AssembleOptions, AssembleTarget, assemble_artifact};
 
 /// Publish THIS package (the current working directory) into the package
 /// source (a static `.slpkg` tree) generic store. Always repacks a fresh
@@ -153,10 +151,11 @@ fn file_tree_root(base_url: &str) -> Result<std::path::PathBuf> {
         })
 }
 
-/// Remove THIS package's build/pack artifacts from the current working
-/// directory: any `*.slpkg`, the prebuilt `lib/` dir, and the generated
-/// `_generated_/` wire-vocabulary trees (root + `python/`). All are
-/// regenerated on the next build/pack.
+/// Remove THIS package's build artifacts from the current working directory:
+/// the prebuilt `lib/` dir and the generated `_generated_/` wire-vocabulary
+/// trees (root + `python/`), all regenerated on the next build. The `*.slpkg`
+/// sweep is retained for hand-made archives only — `publish` packs to a
+/// tempfile and no streamlib verb writes an archive into the package dir.
 pub fn clean() -> Result<()> {
     let dir = std::env::current_dir().context("resolve current working directory")?;
     let mut removed: Vec<String> = Vec::new();
@@ -359,12 +358,7 @@ fn assemble_source_slpkg(
     assemble_artifact(
         package_dir,
         &AssembleTarget::Slpkg(output_path.to_path_buf()),
-        &AssembleOptions {
-            no_build: false,
-            profile: CargoProfile::Release,
-            path_deps: PathDepPolicy::RejectPathPatches,
-            ignore_in_tree_prebuilt_cdylib: false,
-        },
+        &AssembleOptions::source_only_publish(),
         &(),
     )
     .map_err(|e| anyhow::anyhow!("pack failed: {}", e))

@@ -78,18 +78,17 @@ fn workspace_root() -> PathBuf {
 }
 
 /// Assemble `pkg_dir` into a source-only `.slpkg` at `archive_path` — the same
-/// `AssembleTarget::Slpkg` path `streamlib pkg publish` repacks through, called
-/// in-process so the gate does not depend on a CLI verb.
+/// `AssembleTarget::Slpkg` path AND the same [`AssembleOptions`] `streamlib pkg
+/// publish` repacks through, called in-process so the gate does not depend on a
+/// CLI verb. Both sides read the options off `source_only_publish()`, so the
+/// gate cannot pass against a shape real publishes have drifted away from.
+///
+/// [`AssembleOptions`]: streamlib_pack::AssembleOptions
 fn assemble_source_only_package_archive(pkg_dir: &Path, archive_path: &Path) {
     streamlib_pack::assemble_artifact(
         pkg_dir,
         &streamlib_pack::AssembleTarget::Slpkg(archive_path.to_path_buf()),
-        &streamlib_pack::AssembleOptions {
-            no_build: false,
-            profile: streamlib_pack::CargoProfile::Release,
-            path_deps: streamlib_pack::PathDepPolicy::RejectPathPatches,
-            ignore_in_tree_prebuilt_cdylib: false,
-        },
+        &streamlib_pack::AssembleOptions::source_only_publish(),
         &(),
     )
     .unwrap_or_else(|e| {
