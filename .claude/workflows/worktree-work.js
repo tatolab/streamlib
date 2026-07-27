@@ -24,7 +24,7 @@ export const meta = {
     { title: 'SelfReview', detail: 'The lead reviews its own diff and re-emits the shape-module report.' },
     { title: 'Evidence', detail: 'Rig-touching tickets only: run the live pipeline and capture evidence.' },
     { title: 'Verify', detail: 'change-verifier plus path-routed read-only domain lenses, then adjudicate.' },
-    { title: 'Fix', detail: 'Apply verify findings in the same worktree, bounded at two rounds.' },
+    { title: 'Fix', detail: 'Respond to the reviewers in the same worktree, bounded at six rounds.' },
   ],
 };
 
@@ -39,7 +39,11 @@ const mode = input.mode === 'rebase' ? 'rebase' : 'work';
 const slug = input.slug || `${issue}-ticket`;
 const branchName = input.branch || `feat/${issue}-${slug}`;
 
-const MAX_FIX_ROUNDS = 2;
+// The team self-reviews until the branch is ready for a human, and nits force rounds
+// too, so the bound has to be generous enough that escalation means "genuinely stuck"
+// rather than "ran out of turns". Escalating a branch whose findings were merely
+// unfinished spends the owner's attention on work the team could have completed.
+const MAX_FIX_ROUNDS = 6;
 
 function has(zoneList, ...keys) {
   const z = (zoneList || []).map((s) => String(s).toLowerCase());

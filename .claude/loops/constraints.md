@@ -40,10 +40,15 @@ authorization to merge; the next merge asks again.
   cap is **3 per ticket**. After the third failed attempt, escalate: post the attempt history (what
   was tried, what failed) as a question on the issue and move the ticket to "Waiting on the owner."
   Do not start a fourth attempt.
-- **Verify-finding fix rounds are bounded separately.** Applying verify findings to an existing
-  branch is not a fresh attempt; it is bounded at **≤ 2 fix rounds per verify verdict**, then
+- **Verify-finding fix rounds are bounded separately.** Responding to a review on an existing
+  branch is not a fresh attempt; it is bounded at **≤ 6 fix rounds per verify verdict**, then
   escalate. That bound is enforced by the `while` loop in `worktree-work.js`, not by recall.
   Owner-directed corrections and CI-red fixes never count toward either cap.
+  The bound is deliberately generous: the reviewers and the implementer self-review until the
+  branch is ready for a human, and every actionable finding forces a round, nits included. An
+  escalation must mean the team is genuinely stuck — not that it ran out of turns — because
+  escalating merely-unfinished work spends the owner's attention on what the team could have
+  finished itself.
 
 ## Turn boundaries
 - A turn may only end at a **coherent boundary**: a state write plus its run-log line, or work
