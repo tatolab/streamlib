@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 #[cfg(all(unix, not(target_os = "macos")))]
-use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent};
+use crate::core::runtime::request_runtime_shutdown;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 static SIGNAL_HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
@@ -145,15 +145,14 @@ fn install_unix_signal_handlers() -> std::io::Result<()> {
                     Ok(n) => {
                         if n > 0 {
                             let signal = buf[0];
-                            tracing::info!(
-                                "Signal handler: Received signal {}, publishing shutdown event",
-                                signal
-                            );
-
-                            // Publish shutdown event directly to pubsub
-                            let shutdown_event =
-                                Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown);
-                            PUBSUB.publish(&shutdown_event.topic(), &shutdown_event);
+                            if let Err(error) =
+                                request_runtime_shutdown(&format!("posix signal {signal}"))
+                            {
+                                tracing::error!(
+                                    %error,
+                                    "Signal handler: runtime-shutdown request failed"
+                                );
+                            }
                         }
                     }
                     Err(e) => {

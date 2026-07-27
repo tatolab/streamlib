@@ -311,6 +311,23 @@ pub trait RuntimeOperations: Send + Sync {
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()>;
 
     // =========================================================================
+    // Lifecycle
+    // =========================================================================
+
+    /// Ask whoever owns the run loop to shut the runtime down, with a
+    /// human-readable `reason` logged for attribution.
+    ///
+    /// A *request*, not a teardown: the loop owner
+    /// ([`Runner::wait_for_signal_with`](crate::core::runtime::Runner::wait_for_signal_with))
+    /// observes it and runs the normal stop sequence, so the harness stays in
+    /// control. Idempotent — requesting twice is not an error.
+    ///
+    /// Sync with no `*_async` twin, and the one sync method on this trait that
+    /// is safe from inside a tokio task: it is fire-and-forget with no
+    /// completion payload, so it never `block_on`s.
+    fn request_runtime_shutdown(&self, reason: &str) -> Result<()>;
+
+    // =========================================================================
     // Introspection
     // =========================================================================
 

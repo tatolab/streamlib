@@ -362,6 +362,15 @@ impl RuntimeOperations for RuntimeOpsShim {
     fn to_json(&self) -> Result<serde_json::Value> {
         block_on_current_runtime(self.to_json_async())
     }
+
+    fn request_runtime_shutdown(&self, reason: &str) -> Result<()> {
+        // No `RuntimeOpsVTable` slot: the request already has a wire form —
+        // the reserved plugin-ABI control topic the funnel's cdylib arm
+        // publishes — so spending a vtable slot (and the layout-fingerprint
+        // break that invalidates every already-built cdylib) would buy
+        // nothing. Same slot-free treatment as `tap_async`.
+        crate::core::runtime::request_runtime_shutdown(reason)
+    }
 }
 
 /// Sync convenience wrapper that drives the async submit on a tokio

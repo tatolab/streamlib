@@ -720,7 +720,13 @@ unsafe extern "C" fn host_pubsub_publish(
             // Match them before the general `Event` decode below.
             if topic == streamlib_plugin_abi::PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST {
                 let reason: String = rmp_serde::from_slice(event_bytes).unwrap_or_default();
-                crate::core::runtime::request_runtime_shutdown_from_plugin_abi_boundary(&reason);
+                if let Err(error) = crate::core::runtime::request_runtime_shutdown(&reason) {
+                    tracing::warn!(
+                        target: "streamlib::plugin",
+                        %error,
+                        "host_pubsub_publish: runtime-shutdown request from a cdylib failed"
+                    );
+                }
                 return;
             }
 
