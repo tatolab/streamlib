@@ -58,8 +58,9 @@ use syn::{
 /// generated field; `#[cfg]` alone is also forwarded onto its `from_config`
 /// initializer. `#[expect]` is not forwarded — the generated field is `pub`
 /// where the authored one was private, so a `dead_code` expectation would land
-/// unfulfilled and warn. Every other field attribute — including `cfg_attr` —
-/// is dropped.
+/// unfulfilled and warn. `#[cfg_attr]` on a field is a compile error, because a
+/// `cfg_attr` expanding to a `cfg` would gate one of the two emission sites and
+/// not the other. Every other field attribute is dropped.
 ///
 /// The macro emits the processor's type, port markers, descriptor, and
 /// `schema_ident()` accessor — but does NOT register the processor in

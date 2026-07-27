@@ -10,8 +10,9 @@
 //! - Processor trait implementation
 
 use proc_macro2::{Ident, Span, TokenStream};
-use quote::quote;
+use quote::{quote, quote_spanned};
 use streamlib_processor_schema::{PortSchemaSpec, ProcessorSchema, SchemaIdent};
+use syn::spanned::Spanned;
 use syn::{ItemStruct, Path};
 
 /// Emit a `SchemaIdent` literal expression. Inputs are pre-validated by the
@@ -85,6 +86,7 @@ pub fn generate_from_processor_schema(
 
     // Extract custom fields from the user's struct
     let custom_fields = extract_custom_fields(item);
+    let refused_field_attribute_diagnostics = refused_field_attribute_diagnostics(item);
 
     let processor_struct =
         generate_processor_struct_from_schema(schema, &config_field_name, &custom_fields);
@@ -131,6 +133,8 @@ pub fn generate_from_processor_schema(
             // below resolve without any `streamlib` aliasing in the consumer.
             #[allow(unused_imports)]
             use #sdk_root as __streamlib_sdk;
+
+            #refused_field_attribute_diagnostics
 
             /// Configuration type for this processor.
             pub type Config = #config_type;
@@ -191,10 +195,41 @@ fn is_forwarded_onto_generated_field_definition(attribute: &syn::Attribute) -> b
 
 /// `cfg` is the only attribute a struct-expression field takes cleanly — a
 /// `doc` there is an `unused_doc_comments` warning and the gates deny warnings.
-/// `cfg_attr` is forwarded to neither site: an expansion that changes presence
-/// would desync the field definition from this initializer.
 fn is_forwarded_onto_from_config_initializer(attribute: &syn::Attribute) -> bool {
     attribute.path().is_ident("cfg")
+}
+
+/// `cfg_attr` on a processor struct field is refused rather than dropped: it can
+/// expand to a presence-changing `cfg`, and the two emission sites are filtered
+/// independently, so an expansion that gates the field definition without gating
+/// the `from_config` initializer desyncs them into an error far from its cause.
+/// Silently discarding it is the same failure class as #1588.
+fn refused_field_attribute_diagnostics(item: &ItemStruct) -> TokenStream {
+    let syn::Fields::Named(fields) = &item.fields else {
+        return quote! {};
+    };
+
+    let diagnostics: Vec<TokenStream> = fields
+        .named
+        .iter()
+        .filter_map(|authored_field| {
+            let field_name = authored_field.ident.as_ref()?;
+            let refused = authored_field
+                .attrs
+                .iter()
+                .find(|attribute| attribute.path().is_ident("cfg_attr"))?;
+            let message = format!(
+                "`#[cfg_attr(...)]` is not supported on `#[processor]` struct fields (field \
+                 `{field_name}`): a `cfg_attr` that expands to a `cfg` would change the field's \
+                 presence on the generated `Processor` struct without changing it on the \
+                 `from_config` initializer, and the two would no longer agree. Author the \
+                 `#[cfg(...)]` directly on the field instead."
+            );
+            Some(quote_spanned! { refused.span() => compile_error!(#message); })
+        })
+        .collect();
+
+    quote! { #(#diagnostics)* }
 }
 
 /// Extract custom fields from the user's struct definition.
@@ -1111,6 +1146,121 @@ mod processor_struct_emit_tests {
             "the probe must still exercise a forwarded lint control, or this \
              test passes vacuously; forwarded attributes were: {:?}",
             forwarded_attribute_paths
+        );
+    }
+
+    /// Every `compile_error!` message in a generated token stream, so a
+    /// diagnostic test asserts on the text the author will actually read.
+    fn compile_error_messages(tokens: TokenStream) -> Vec<String> {
+        use proc_macro2::TokenTree;
+
+        let mut messages = Vec::new();
+        let mut previous_ident_was_compile_error = false;
+        for tree in tokens {
+            match tree {
+                TokenTree::Ident(ident) => {
+                    previous_ident_was_compile_error = ident == "compile_error";
+                }
+                TokenTree::Group(group) => {
+                    if previous_ident_was_compile_error {
+                        if let Ok(message) = syn::parse2::<syn::LitStr>(group.stream()) {
+                            messages.push(message.value());
+                        }
+                    }
+                    previous_ident_was_compile_error = false;
+                    messages.extend(compile_error_messages(group.stream()));
+                }
+                TokenTree::Punct(_) => {}
+                TokenTree::Literal(_) => previous_ident_was_compile_error = false,
+            }
+        }
+        messages
+    }
+
+    fn probe_schema_ident() -> SchemaIdent {
+        use streamlib_processor_schema::{Org, Package, SemVer, TypeName};
+        SchemaIdent::new(
+            Org::new("tatolab").expect("valid org"),
+            Package::new("streamlib-macros").expect("valid package"),
+            TypeName::new("FieldAttributeProbe").expect("valid type name"),
+            SemVer::new(0, 0, 0),
+        )
+    }
+
+    fn expand_probe_processor(item: &ItemStruct) -> TokenStream {
+        generate_from_processor_schema(
+            item,
+            &minimal_schema(),
+            &probe_schema_ident(),
+            None,
+            None,
+            None,
+            quote! { streamlib },
+        )
+    }
+
+    fn struct_with_cfg_attr_on_a_field() -> ItemStruct {
+        syn::parse_quote! {
+            struct CfgAttrFieldProbe {
+                #[cfg_attr(target_os = "linux", allow(unused))]
+                cfg_attr_annotated_backend_state: Option<u32>,
+                unannotated_frame_counter: u64,
+            }
+        }
+    }
+
+    fn struct_with_dropped_derive_helper_attributes_on_a_field() -> ItemStruct {
+        syn::parse_quote! {
+            struct DeriveHelperAnnotatedFieldProbe {
+                /// Authored doc on a processor field.
+                #[allow(dead_code)]
+                #[serde(skip)]
+                #[schemars(skip)]
+                derive_helper_annotated_backend_state: Option<u32>,
+            }
+        }
+    }
+
+    /// A `cfg_attr` on a processor field is refused loudly instead of dropped
+    /// silently — silently dropping a presence-changing attribute is the same
+    /// failure class as #1588 itself.
+    #[test]
+    fn cfg_attr_on_a_processor_field_emits_a_compile_error_naming_the_field() {
+        let messages = compile_error_messages(expand_probe_processor(
+            &struct_with_cfg_attr_on_a_field(),
+        ));
+        assert_eq!(
+            messages.len(),
+            1,
+            "exactly one field carries `cfg_attr`, so exactly one diagnostic is \
+             expected — got: {:?}",
+            messages
+        );
+        assert!(
+            messages[0].contains("cfg_attr_annotated_backend_state"),
+            "the diagnostic must name the offending field so the author can find \
+             it — got: {}",
+            messages[0]
+        );
+        assert!(
+            messages[0].contains("cfg_attr"),
+            "the diagnostic must name the unsupported attribute — got: {}",
+            messages[0]
+        );
+    }
+
+    /// The refusal is scoped to `cfg_attr`. Derive-helper attributes are dropped
+    /// by design — erroring on those would break every processor carrying one.
+    #[test]
+    fn a_dropped_derive_helper_attribute_on_a_processor_field_stays_silent() {
+        let messages = compile_error_messages(expand_probe_processor(
+            &struct_with_dropped_derive_helper_attributes_on_a_field(),
+        ));
+        assert!(
+            messages.is_empty(),
+            "only `cfg_attr` is refused; a dropped derive-helper attribute must \
+             not raise a diagnostic — got: {:?}",
+            messages
         );
     }
 
