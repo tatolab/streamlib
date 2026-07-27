@@ -10,7 +10,7 @@
 //! surfaces a `#[processor(...)]` that never compiles on any target. Before
 //! extraction can replace the hand-authored `processors:` as the authoritative
 //! truth-source — and before a drift check between the two can be a hard
-//! `pkg build` error without false positives on cfg-gated packages — the scan
+//! `pkg publish` error without false positives on cfg-gated packages — the scan
 //! must resolve to the set of modules the build **target** actually compiles.
 //!
 //! [`extract_reachable_rust_processors`] does that: it walks the module tree
@@ -61,7 +61,7 @@ impl ModuleReachabilityTarget {
     /// The cfg atoms for the **host** the extractor is running on, derived from
     /// [`std::env::consts`]: `target_os`, `target_arch`, `target_family`, and
     /// the `unix` / `windows` family flag. This is the target `streamlib
-    /// pkg build` extracts for — the package is built for the invoking host's
+    /// pkg publish` extracts for — the package is built for the invoking host's
     /// triple, so the reachable processor set is the set that host compiles.
     ///
     /// Cargo features are NOT inferred here (the extractor cannot know which

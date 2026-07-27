@@ -69,7 +69,7 @@ pub struct ProjectConfig {
     /// no workspace walk-up. When the runtime iterates a dep declared in
     /// [`Self::dependencies`], it consults this table before falling
     /// through to the dep's declared source resolution. Path-flavor entries are
-    /// dev-time overrides only; `streamlib pack` rejects them.
+    /// dev-time overrides only; `streamlib pkg publish` rejects them.
     #[serde(default)]
     pub patch: BTreeMap<PackageRef, DependencySpec>,
 }

@@ -10,7 +10,7 @@
 //! streamlib.extract_processors <dir>` / `deno run --allow-read
 //! extract_processors.ts <dir>`), which emit the manifest processor list as JSON
 //! on stdout. This module unifies all three into one derivation and one **drift
-//! gate**: `streamlib pkg build` derives the processor set from code and refuses
+//! gate**: `streamlib pkg publish` derives the processor set from code and refuses
 //! to build a package whose committed `processors:` disagrees with it.
 //!
 //! ## The comparison surface
@@ -521,7 +521,7 @@ pub struct DerivedProcessorSet {
 ///
 /// A Python/Deno extractor that cannot **run** — the runtime is absent, its
 /// import failed, or (Deno) it is unconfigured — is a [`SkippedLanguage`], not a
-/// hard error: extraction-is-import needs the runtime present, and a `pkg build`
+/// hard error: extraction-is-import needs the runtime present, and a `pkg publish`
 /// that merely bundles a Python/Deno package as source on a host without that
 /// runtime must still work. A malformed *output* from an extractor that DID run
 /// is a hard [`DeriveError`] (the extractor ran and produced garbage — a real
@@ -592,7 +592,7 @@ pub fn filter_committed_to_languages<'committed>(
 }
 
 /// A committed `processors:` section that disagrees with what the code derives.
-/// Carries the specific disagreement so the `pkg build` error is actionable.
+/// Carries the specific disagreement so the `pkg publish` error is actionable.
 #[derive(Debug)]
 pub struct ManifestDriftReport {
     pub package_dir: PathBuf,
@@ -633,7 +633,7 @@ impl std::fmt::Display for ManifestDriftReport {
             f,
             "fix-it: the `processors:` section is derived from code — update it to match the \
              declarations above (or remove the section entirely; it is regenerated at build), \
-             then re-run `streamlib pkg build`"
+             then re-run `streamlib pkg publish`"
         )
     }
 }
@@ -1023,7 +1023,7 @@ processors:
 
         // Committed manifest lists only Alpha — Beta was added in code and never
         // written to `processors:`. Mentally revert the drift check to `Ok(())`
-        // and `pkg build` would ship a manifest missing Beta.
+        // and `pkg publish` would ship a manifest missing Beta.
         let committed = parse_committed(
             r#"
 processors:

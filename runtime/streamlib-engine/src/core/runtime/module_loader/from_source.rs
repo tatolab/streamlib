@@ -16,7 +16,7 @@
 //!
 //! Live submit covers the subprocess languages (Python / TypeScript): they run
 //! from source with no host compile. Rust-from-source at runtime is a full
-//! cargo build — the `streamlib pkg build` flow, not a live graph mutation —
+//! cargo build — the package-authoring flow, not a live graph mutation —
 //! and is refused here with a typed error.
 //!
 //! [`Runner::register_processor_from_source`]: super::super::Runner::register_processor_from_source
@@ -598,7 +598,7 @@ mod tests {
 
     #[test]
     fn rust_source_is_refused_for_live_submit() {
-        // Rust-from-source is a full cargo build (the `streamlib pkg build`
+        // Rust-from-source is a full cargo build (the package-authoring
         // flow), never a live graph mutation. Revert the Rust arm and this
         // would attempt to stage a cargo project the live path can't build.
         let request = SubmittedProcessorSource {

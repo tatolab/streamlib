@@ -4,7 +4,7 @@
 //! Test-only host for `@tatolab/core` schema codegen. The wire
 //! vocabulary itself ships via `streamlib.yaml` + `schemas/`; this
 //! Rust crate exists solely to make codegen output available to
-//! integration tests under `tests/`. `streamlib pack` ignores it.
+//! integration tests under `tests/`. The package assembler ignores it.
 
 #[allow(non_snake_case, unused_imports, clippy::all)]
 pub mod _generated_ {

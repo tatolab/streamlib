@@ -259,7 +259,7 @@ class TestProcessorExtraction:
         assert extract_processors_from_dir(tmp_path) == []
 
     def test_cli_emits_manifest_json(self, tmp_path: Path) -> None:
-        # The path `pkg build` drives: a fresh subprocess printing JSON.
+        # The path `pkg publish` drives: a fresh subprocess printing JSON.
         _fixture_package(tmp_path)
         result = subprocess.run(
             [sys.executable, "-m", "streamlib.extract_processors", str(tmp_path)],

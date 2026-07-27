@@ -303,7 +303,7 @@ fn emit_slpkg_and_manifest(
             // inside `assemble_slpkg_bytes` for the `Slpkg` target). The
             // whole-tree emit skips it — with a warning naming every offender —
             // rather than hard-failing the whole release; the single-package
-            // `streamlib pkg build/publish` still hard-fails so an author sees
+            // `streamlib pkg publish` still hard-fails so an author sees
             // the error. Skipping here means no upload, no release-manifest
             // membership, and no catalog entry.
             match decide_package_emit(pkg_dir)? {

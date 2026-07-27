@@ -18,7 +18,7 @@
 //! The distributable set is not a re-derived YAML list: it is driven from the
 //! single [`streamlib_pack::non_distributable_path_offenders`] predicate — the
 //! exact one the whole-tree static package-source emit skips on and the single-package
-//! `streamlib pkg build` hard-fails on — so the CI skip set equals the emit skip
+//! `streamlib pkg publish` hard-fails on — so the CI skip set equals the emit skip
 //! set by construction. A package carrying a `streamlib.yaml` path-`patch:`
 //! block or a `Cargo.toml` dependency-table `path` dep (e.g. `api-server`,
 //! `clap`, the test fixtures) is skipped exactly as the emit skips it. A TARGET

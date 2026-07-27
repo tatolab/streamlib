@@ -1,11 +1,12 @@
 name: Check Pack → Load
 
 # Foundation gate for the file-based package distribution model:
-# `streamlib pkg build` produces a `.slpkg`, `Runner::add_module_with`
+# `streamlib-pack` produces a `.slpkg`, `Runner::add_module_with`
 # consumes it from a file, and the package's schemas (schemas-only
 # package) land in the runtime registries. Any mismatch between the
-# pack producer side (`tools/streamlib-cli/src/commands/pkg.rs`) and the
-# load consumer side (`Strategy::Slpkg` / `extract_slpkg_to_cache` in
+# pack producer side (`tools/streamlib-pack/src/lib.rs`) and the load
+# consumer side (`Strategy::PackageArchive` /
+# `extract_package_archive_to_installed_slot` in
 # `runtime/streamlib-engine/src/core/runtime/`) surfaces here before the
 # broader example sweep / container smoke test would amplify it.
 #
@@ -14,9 +15,9 @@ name: Check Pack → Load
 #     staged-swap + completeness negative gate (`cargo test -p
 #     streamlib-pack`).
 #   - One schemas-only package (`@tatolab/core`): pack-then-add-from-file
-#     exercises the no-cdylib branch — `pkg build` emits no `lib/`
-#     entries, the loader walks the `schemas:` map and registers each
-#     canonical schema. Pure file-based; no by-version SDK resolution.
+#     exercises the no-cdylib branch — the source-only assemble emits no
+#     `lib/` entries, the loader walks the `schemas:` map and registers
+#     each canonical schema. Pure file-based; no by-version SDK resolution.
 #   - Negative paths: missing slpkg, foreign-triple-only slpkg.
 #
 # The Rust-impl leg (`@tatolab/jpeg`, which cargo-builds a cdylib
@@ -46,10 +47,10 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install system dependencies
-        # The pack-then-load test builds `streamlib-cli` (depends on
-        # the full SDK) and `streamlib-engine`. Both inherit the
-        # engine's Linux dep set; minimal subset covers them without
-        # dragging in the GPU/codec backends.
+        # The pack-then-load test builds `streamlib-pack` and
+        # `streamlib-engine`. Both inherit the engine's Linux dep set;
+        # minimal subset covers them without dragging in the GPU/codec
+        # backends.
         run: |
           sudo apt-get update
           sudo apt-get install -y \

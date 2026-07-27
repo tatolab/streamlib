@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-pack"
-description = "Package-artifact assembly shared between `streamlib pack` (CLI) and `streamlib-build-orchestrator` (runtime). One routine assembles a complete package artifact per language (Rust cdylib via cargo, Python as full source, Deno bundle, schemas) and emits it either as a compressed .slpkg or as an extracted staged directory."
+description = "Package-artifact assembly shared between `streamlib pkg publish` (CLI) and `streamlib-build-orchestrator` (runtime). One routine assembles a complete package artifact per language (Rust cdylib via cargo, Python as full source, Deno bundle, schemas) and emits it either as a compressed .slpkg or as an extracted staged directory."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

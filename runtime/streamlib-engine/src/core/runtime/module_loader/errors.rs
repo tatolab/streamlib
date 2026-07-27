@@ -497,14 +497,14 @@ pub enum AddModuleError {
     /// [`Runner::register_processor_from_source`] was handed a `language` that
     /// live source submit does not support. Only the subprocess languages
     /// (Python / TypeScript) run from source with no host compile; Rust from
-    /// source is a full cargo build (the `streamlib pkg build` flow), never a
+    /// source is a full cargo build (the package-authoring flow), never a
     /// live graph mutation.
     ///
     /// [`Runner::register_processor_from_source`]: super::super::Runner::register_processor_from_source
     #[error(
         "register_processor_from_source: language '{language}' is not supported \
          for live source submit — only Python and TypeScript run from source. \
-         Build a Rust processor with `streamlib pkg build` and load the package."
+         Build a Rust processor as a package and load it with `streamlib add`."
     )]
     SourceLanguageUnsupportedForLiveSubmit { language: String },
 

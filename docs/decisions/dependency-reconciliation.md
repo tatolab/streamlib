@@ -1,15 +1,19 @@
-# Dependency reconciliation at package build
+# Dependency reconciliation at package publish
 
 ## Trigger
 
 Reach for this when touching how a package's declared `dependencies:` relates to
 what its code references — deriving the dependency set, deciding what an
-undeclared or unreferenced dependency does at `pkg build`, or wondering why the
+undeclared or unreferenced dependency does at `pkg publish`, or wondering why the
 reconciler reads the manifest rather than re-scanning code.
 
 ## Decision
 
-`pkg build` reconciles the hand-declared `dependencies:` against the dependency
+> ~~The reconciler runs at `pkg build`.~~ — Superseded 2026-07-27 by the
+> removal of the `pkg build` verb (`tools/streamlib-cli/src/main.rs`). The
+> reconciler is unchanged; `pkg publish` is now its only CLI entry point.
+
+`pkg publish` reconciles the hand-declared `dependencies:` against the dependency
 set *derived* from the package's references, for the distributable `.slpkg`
 target only (`streamlib_pack::dependency_reconcile`):
 

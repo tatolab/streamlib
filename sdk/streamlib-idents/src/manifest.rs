@@ -51,7 +51,7 @@ pub struct Manifest {
     /// dep declared in [`Self::dependencies`], it consults this table
     /// before falling through to the dep's declared source resolution.
     ///
-    /// Path-flavor entries are dev-time overrides only — `streamlib pack`
+    /// Path-flavor entries are dev-time overrides only — `streamlib pkg publish`
     /// rejects yamls whose `patch:` table contains any `path:` entries
     /// (mirrors `npm publish` / `cargo publish` rejecting path deps).
     /// A path patch is a dev-loop-only affordance: at resolve time the

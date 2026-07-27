@@ -11,7 +11,7 @@ package:
 dependencies:
   "@tatolab/core": "^1.0.0"
 
-# Dev-time path override; `streamlib pack` rejects this.
+# Dev-time path override; `streamlib pkg publish` rejects this.
 patch:
   "@tatolab/core":
     path: ../core

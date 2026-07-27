@@ -23,7 +23,7 @@ package:
 dependencies:
   "@tatolab/escalate": "^1.0.0"
 
-# Dev-time path override; `streamlib pack` rejects this.
+# Dev-time path override; `streamlib pkg publish` rejects this.
 patch:
   "@tatolab/escalate":
     path: ../../packages/escalate

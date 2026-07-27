@@ -9,8 +9,8 @@ members = [
     "runtime/streamlib-engine",    # Engine internals (RHI, IPC, surface-share, runtime executor) — private dep of the SDK
     "runtime/streamlib-surface-client", # Wire-format helpers for the per-runtime surface-sharing socket (Linux)
     "tools/streamlib-cli",       # Command-line interface for StreamLib runtime
-    "tools/streamlib-cargo-build", # Cargo-build orchestration helpers shared between `streamlib pack` and `streamlib-build-orchestrator`
-    "tools/streamlib-pack",      # Package-artifact assembly shared between `streamlib pack` (CLI) and `streamlib-build-orchestrator` (runtime) — emits a .slpkg or an extracted staged dir
+    "tools/streamlib-cargo-build", # Cargo-build orchestration helpers shared between `streamlib pkg publish` and `streamlib-build-orchestrator`
+    "tools/streamlib-pack",      # Package-artifact assembly shared between `streamlib pkg publish` (CLI) and `streamlib-build-orchestrator` (runtime) — emits a .slpkg or an extracted staged dir
     "tools/streamlib-build-orchestrator", # Default polyglot BuildOrchestrator impl — runtime materialization of source packages (depends on engine for the trait + cargo-build for the helpers)
     "runtime/streamlib-runtime",   # Standalone runtime binary (spawned by CLI)
     "sdk/streamlib-processor-schema", # Processor schema types + YAML parser shared between streamlib runtime and streamlib-macros

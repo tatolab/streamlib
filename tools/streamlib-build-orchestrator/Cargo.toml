@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-build-orchestrator"
-description = "Default polyglot BuildOrchestrator impl — runtime materialization of source packages into the streamlib package cache. Assembles the same complete artifact `streamlib pack` produces (via streamlib-pack) and stages it as an extracted directory, identical to extracting a .slpkg / installing from GitHub. Depends on streamlib-engine for the BuildOrchestrator trait."
+description = "Default polyglot BuildOrchestrator impl — runtime materialization of source packages into the streamlib package cache. Assembles the same complete artifact `streamlib pkg publish` produces (via streamlib-pack) and stages it as an extracted directory, identical to extracting a .slpkg / installing from GitHub. Depends on streamlib-engine for the BuildOrchestrator trait."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

@@ -302,7 +302,7 @@ enum Commands {
     /// - In a **package-authoring dir** (a `streamlib.yaml` with a `package:`
     ///   block), `streamlib add @org/name@<version>` records a caret
     ///   dependency (`^<version>`) into that package's own `dependencies:` —
-    ///   the schema-tier `cargo add`. `pkg build` reconciles it against code.
+    ///   the schema-tier `cargo add`. `pkg publish` reconciles it against code.
     /// - In a **consumer / app dir**, takes a byte source — a package folder,
     ///   an archive (`.slpkg` / `.zip` / `.tar.gz`), or a `file://` / HTTP(S)
     ///   URL — materializes it into `streamlib_modules/@org/name/` beside the

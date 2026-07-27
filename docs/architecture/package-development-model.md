@@ -156,7 +156,7 @@ RemoveCreated}`; a file the user modified while linked refuses with
 land in *config* files — never a lockfile. The only lockfile `link` may write
 is the consumer's own `Cargo.lock`, transparently re-locked to make the
 `[patch]` take effect (above) and restored byte-identically by `unlink`.
-Neither escapes the dev tree: `streamlib pkg build` / `publish` refuse while
+Neither escapes the dev tree: `streamlib pkg publish` refuses while
 any link marker exists up-tree (`ensure_no_active_link_for_pack` →
 `PackRefusedWhileLinked`), and the build orchestrator re-injects the checkout
 overrides when it materializes a linked package — the consumer's `[patch]`

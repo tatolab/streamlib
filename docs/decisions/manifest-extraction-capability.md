@@ -63,11 +63,17 @@ schema-ident string for determinism regardless of import order.
 The import-runs-code property is the cost of the inversion: a processor module
 whose third-party imports are unavailable cannot be enumerated, whereas the
 Rust AST scan is inert. Extraction therefore assumes the package's dependencies
-are installed — true at `pkg build` time, unlike the Rust `src/` walk.
+are installed — true at `pkg publish` time, unlike the Rust `src/` walk.
 
-## The pkg-build drift gate
+## The publish-time drift gate
 
-`streamlib pkg build` (and `pkg publish`) derives the processor set from code —
+> ~~The gate is named the "pkg-build" gate and fires from `streamlib pkg build`
+> as well as `pkg publish`.~~ — Superseded 2026-07-27 by the removal of the
+> `pkg build` verb (`tools/streamlib-cli/src/main.rs`). Distribution is
+> by-version through `pkg publish`; the gate itself is unchanged, it now has
+> exactly one CLI entry point.
+
+`streamlib pkg publish` derives the processor set from code —
 Rust in-process, Python/Deno via the subprocess extractors — and refuses to
 build a distributable `.slpkg` whose committed `processors:` section disagrees.
 The comparison is a **language-uniform identity surface**: processor `Type`
@@ -86,7 +92,7 @@ auto-overwritten, it is validated against code.
 Rust drift is always enforced (the `syn` scan is always runnable in-process). A
 Python/Deno extractor that cannot **run** — the runtime is absent, its import
 failed, or (Deno) it is unconfigured — is a logged skip, not a build break:
-extraction-is-import needs the runtime present, and a `pkg build` that merely
+extraction-is-import needs the runtime present, and a `pkg publish` that merely
 bundles a Python/Deno package as source on a host without that runtime must
 still work. A skipped language's committed processors are excluded from the
 comparison rather than falsely flagged. A malformed *output* from an extractor
@@ -134,5 +140,5 @@ artifact and does not re-run it.
   rule `rustc` applies — one rule, not a hard-coded directory name. This
   reachability resolution is the precursor that makes extraction sound enough to
   replace the hand-authored `processors:` as the authoritative truth-source, and
-  a drift check between the two a hard `pkg build` error without false positives
+  a drift check between the two a hard `pkg publish` error without false positives
   on cfg-gated packages.

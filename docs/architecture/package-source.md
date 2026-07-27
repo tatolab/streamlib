@@ -102,7 +102,7 @@ the versioned `slpkg/` store, which keeps every published version fetchable.
 - **Whole-tree `static-package-source emit`** builds the catalog for every
   `packages/*` dir and writes the aggregate **whole** (accumulate all lines,
   write `catalog/index.ndjson` once) during the atomic staged flip.
-- **`streamlib pkg build` / `pkg publish`** (a single package) writes that
+- **`streamlib pkg publish`** (a single package) writes that
   package's `<name>.catalog.json` + owned JTDs beside the `.slpkg` it just
   uploaded, then **read-merge-writes** the aggregate
   (`merge_catalog_index_lines`): read the existing `catalog/index.ndjson`
@@ -180,7 +180,7 @@ the catalog rather than failing the whole emit. The skip predicate
 rejects for the `Slpkg` target, so the skip set equals the rejection set: a
 package the emit would hard-fail on is always skipped instead. TARGET paths
 (`[[bin]].path` / `[lib].path`) are not dependency paths and never count. The
-single-package `streamlib pkg build` / `pkg publish` still hard-fails on the
+single-package `streamlib pkg publish` still hard-fails on the
 same condition so an author sees the error.
 
 ## ABI-version bump

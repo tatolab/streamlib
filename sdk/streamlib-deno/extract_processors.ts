@@ -13,7 +13,7 @@
  * decorators, which register into `_processor_registry.ts`; the registered set
  * is then emitted.
  *
- * Once the pkg-build truth-flip lands, `streamlib pkg build` will invoke this in
+ * Once the truth-flip lands, `streamlib pkg publish` will invoke this in
  * a fresh subprocess (`deno run --allow-read <this> <package_dir>`), read the
  * JSON on stdout, and write the manifest `processors:` section — the same shape
  * the Rust extractor feeds the catalog. Running in a fresh process guarantees an
@@ -208,7 +208,7 @@ export async function extractProcessorsFromDir(
   return procs;
 }
 
-/** Render extracted processors as the JSON `pkg build` consumes on stdout. */
+/** Render extracted processors as the JSON `pkg publish` consumes on stdout. */
 export function toManifestJson(procs: readonly RegisteredProcessor[]): string {
   const payload = procs.map((entry) => ({
     name: entry.shortName,

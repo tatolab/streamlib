@@ -8,7 +8,7 @@
 //! - **Package-authoring dir** (a `streamlib.yaml` with a `package:` block):
 //!   `streamlib add @org/name@<version>` records a caret dependency
 //!   (`^<version>`) into that package's own `dependencies:` — the schema-tier
-//!   analog of `cargo add`. `pkg build` then reconciles the declared set
+//!   analog of `cargo add`. `pkg publish` then reconciles the declared set
 //!   against what the code references.
 //! - **Consumer / app dir** (no `package:` block): `add` takes any valid
 //!   streamlib package byte source — a folder, an archive (`.slpkg` / `.zip`
