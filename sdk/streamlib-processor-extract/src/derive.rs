@@ -73,8 +73,8 @@ impl PackageLanguage {
 /// Detect which languages a package hosts processors in, from files on disk.
 ///
 /// - **Rust** — a `Cargo.toml` beside a `src/lib.rs` or `src/main.rs` crate root.
-/// - **Python** — a `pyproject.toml` (the Python extractor scans the top-level
-///   `*.py` beside it).
+/// - **Python** — a `pyproject.toml` (the Python extractor scans the `*.py`
+///   under the `processors/` beside it).
 /// - **Deno** — a `deno.json`.
 ///
 /// A package may host more than one (a polyglot package), or none (a schema-only

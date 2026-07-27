@@ -48,6 +48,11 @@ use crate::core::error::{Error, Result};
 /// build orchestrator's venv / Deno provisioning has a project to work from.
 /// A single `match request.language` yields one of these; Rust returns the
 /// unsupported-language refusal instead.
+///
+/// The staged source nests under `<language>/processors/` because the SDK
+/// extractors discover processor modules only under a `processors/` directory;
+/// staged anywhere else, the orchestrator's port derivation enumerates nothing
+/// and the submitted processor loads with placeholder ports.
 struct LiveSubmitLanguage {
     runtime_key: &'static str,
     source_rel: fn(module_stem: &str) -> String,
@@ -319,16 +324,16 @@ fn live_submit_language(
     match language {
         ProcessorLanguage::Python => Ok(LiveSubmitLanguage {
             runtime_key: "python",
-            source_rel: |stem| format!("python/{stem}.py"),
-            entrypoint: |stem, type_name| format!("{stem}:{type_name}"),
+            source_rel: |stem| format!("python/processors/{stem}.py"),
+            entrypoint: |stem, type_name| format!("processors.{stem}:{type_name}"),
             dep_artifacts: |name, _version| {
                 vec![("pyproject.toml".to_string(), session_pyproject_toml(name))]
             },
         }),
         ProcessorLanguage::TypeScript => Ok(LiveSubmitLanguage {
             runtime_key: "deno",
-            source_rel: |stem| format!("deno/{stem}.ts"),
-            entrypoint: |stem, type_name| format!("{stem}.ts:{type_name}"),
+            source_rel: |stem| format!("deno/processors/{stem}.ts"),
+            entrypoint: |stem, type_name| format!("processors/{stem}.ts:{type_name}"),
             dep_artifacts: |_name, _version| {
                 vec![("deno.json".to_string(), session_deno_json())]
             },
@@ -616,8 +621,24 @@ mod tests {
         assert_eq!(package.name.as_str(), "widget");
 
         assert!(
-            staged.dir.join("python").join("widget.py").is_file(),
-            "source must be staged at the entrypoint module path"
+            staged
+                .dir
+                .join("python")
+                .join("processors")
+                .join("widget.py")
+                .is_file(),
+            "source must be staged under `processors/` at the entrypoint module path — \
+             the only root the Python extractor scans"
+        );
+
+        // The generated entrypoint must name the module at the staged path,
+        // relative to the language dir the extractor is pointed at. Drift
+        // between the two loads a processor whose module can't be imported.
+        let manifest_body = std::fs::read_to_string(&manifest_path).unwrap();
+        assert!(
+            manifest_body.contains("entrypoint: \"processors.widget:Widget\""),
+            "the generated entrypoint must be the dotted module path under \
+             `processors/`, got: {manifest_body}"
         );
 
         // The Python dependency-resolution artifact must be staged beside the
@@ -642,10 +663,10 @@ mod tests {
 
     #[test]
     fn stages_typescript_source_with_a_deno_json_import_map() {
-        // The TypeScript live-submit path must stage the source under `deno/`
-        // plus a `deno.json` import map so the Deno subprocess resolves the
-        // `streamlib` SDK specifier. Mentally-revert the `dep_artifacts`
-        // staging and the deno.json is absent.
+        // The TypeScript live-submit path must stage the source under
+        // `deno/processors/` plus a `deno.json` import map so the Deno
+        // subprocess resolves the `streamlib` SDK specifier. Mentally-revert
+        // the `dep_artifacts` staging and the deno.json is absent.
         let request = SubmittedProcessorSource {
             source_text: "export class Widget {}\n".to_string(),
             language: ProcessorLanguage::TypeScript,
@@ -654,8 +675,22 @@ mod tests {
         };
         let staged = stage_submitted_source(&request).expect("typescript stages");
         assert!(
-            staged.dir.join("deno").join("ts_widget.ts").is_file(),
-            "source must be staged at the entrypoint module path"
+            staged
+                .dir
+                .join("deno")
+                .join("processors")
+                .join("ts_widget.ts")
+                .is_file(),
+            "source must be staged under `processors/` at the entrypoint module path — \
+             the only root the Deno extractor scans"
+        );
+        let manifest_body =
+            std::fs::read_to_string(staged.dir.join(streamlib_idents::Manifest::FILE_NAME))
+                .unwrap();
+        assert!(
+            manifest_body.contains("entrypoint: \"processors/ts_widget.ts:Widget\""),
+            "the generated entrypoint must be the module path under `processors/`, \
+             got: {manifest_body}"
         );
         let deno_json = staged.dir.join("deno.json");
         assert!(
