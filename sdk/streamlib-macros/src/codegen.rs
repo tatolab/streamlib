@@ -169,26 +169,33 @@ struct CustomField {
     attributes_authored_on_processor_struct_field: Vec<syn::Attribute>,
 }
 
-/// Authoring contract for `#[processor]` struct fields: `cfg` is the
-/// load-bearing forward — dropping it makes a platform-conditional field
-/// unconditional and its platform-specific type fails to resolve off that
-/// platform. `doc` and the `allow` / `warn` / `deny` / `forbid` controls ride
-/// along so an author's `///` and `#[allow(dead_code)]` survive expansion.
-/// `expect` is excluded: the generated field is `pub` where the authored one
-/// was private, so a `dead_code` expectation the author wrote to silence a
-/// warning becomes an `unfulfilled_lint_expectation` warning instead.
+/// Authoring contract for `#[processor]` struct fields. Everything
+/// [`is_forwarded_onto_from_config_initializer`] takes is admitted here first,
+/// because an initializer gating a field the definition did not gate the same
+/// way initializes a field that isn't there. `doc` and the `allow` / `warn` /
+/// `deny` / `forbid` controls are the extras layered on top of that set, so an
+/// author's `///` and `#[allow(dead_code)]` survive expansion. `expect` is
+/// excluded from both: the generated field is `pub` where the authored one was
+/// private, so a `dead_code` expectation the author wrote to silence a warning
+/// becomes an `unfulfilled_lint_expectation` warning instead.
 fn is_forwarded_onto_generated_field_definition(attribute: &syn::Attribute) -> bool {
+    if is_forwarded_onto_from_config_initializer(attribute) {
+        return true;
+    }
+
     let path = attribute.path();
-    path.is_ident("cfg")
-        || path.is_ident("doc")
+    path.is_ident("doc")
         || path.is_ident("allow")
         || path.is_ident("warn")
         || path.is_ident("deny")
         || path.is_ident("forbid")
 }
 
-/// `cfg` is the only attribute a struct-expression field takes cleanly — a
-/// `doc` there is an `unused_doc_comments` warning and the gates deny warnings.
+/// `cfg` is the load-bearing forward — dropping it makes a platform-conditional
+/// field unconditional and its platform-specific type fails to resolve off that
+/// platform — and it is the only attribute a struct-expression field takes
+/// cleanly: a `doc` there is an `unused_doc_comments` warning and the gates deny
+/// warnings.
 fn is_forwarded_onto_from_config_initializer(attribute: &syn::Attribute) -> bool {
     attribute.path().is_ident("cfg")
 }
