@@ -503,6 +503,18 @@ associated consts the `#[processor]` macro emits against the detected
 SDK crate — the facade `streamlib` or the engine-free
 `streamlib-plugin-sdk`, resolved identically.
 
+Each `export_plugin!` entry may carry its own `#[cfg(...)]`, so one
+invocation describes every target the package builds for. The
+declaration is anchored by the FIRST entry that survives cfg-stripping
+(two `#[allow(unreachable_code)] const fn`s whose bodies are one
+cfg-gated `return` per entry) — every entry resolves the two consts
+against the same SDK crate, so the choice of anchor is free rather than
+semantic. An invocation whose entries are all stripped is a const-eval
+compile error, never a silently unregistered plugin; a crate-root
+generator emitting per-target arms gates the whole invocation on the
+disjunction of its entry predicates so a package with no processor on
+this target simply emits no declaration.
+
 The host's `validate_plugin_declaration` runs two checks in a
 load-bearing order, before `register` is invoked:
 
