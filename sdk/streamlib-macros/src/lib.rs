@@ -53,6 +53,15 @@ use syn::{
 /// `@app/local/<StructName>` identity so a bare crate compiles with no
 /// `streamlib.yaml`.
 ///
+/// Authoring contract for struct fields: `#[cfg]`, `///` docs, and the lint
+/// controls (`allow` / `warn` / `deny` / `forbid`) are forwarded onto the
+/// generated field; `#[cfg]` alone is also forwarded onto its `from_config`
+/// initializer. `#[expect]` is not forwarded — the generated field is `pub`
+/// where the authored one was private, so a `dead_code` expectation would land
+/// unfulfilled and warn. `#[cfg_attr]` on a field is a compile error, because a
+/// `cfg_attr` expanding to a `cfg` would gate one of the two emission sites and
+/// not the other. Every other field attribute is dropped.
+///
 /// The macro emits the processor's type, port markers, descriptor, and
 /// `schema_ident()` accessor — but does NOT register the processor in
 /// the global `PROCESSOR_REGISTRY`. Callers register processors through

@@ -61,7 +61,12 @@ jobs:
       # twin-drift and tier-1 wire-format locks — the guards against silent ABI
       # layout drift (which corrupts the driver only in a separately-built .slpkg).
       # These crates are pure-repr / engine-free, so they add no flaky or GPU tests.
+      # streamlib-macros carries the `#[processor]` field-attribute emission locks.
       # streamlib-engine's lib tests (host-body tier-1 + engine twin) are a tracked
-      # follow-up, pending a fix to a parallel-run test flake.
+      # follow-up, pending a fix to a parallel-run test flake — attribute_macro_test
+      # is named explicitly because it is the compile-level half of those emission
+      # locks and cannot live in the proc-macro crate's own lib tests.
       - name: Run unit tests
-        run: cargo test --locked -p streamlib -p streamlib-plugin-abi -p streamlib-plugin-sdk -p streamlib-processor-extract --lib
+        run: |
+          cargo test --locked -p streamlib -p streamlib-macros -p streamlib-plugin-abi -p streamlib-plugin-sdk -p streamlib-processor-extract --lib
+          cargo test --locked -p streamlib-engine --test attribute_macro_test

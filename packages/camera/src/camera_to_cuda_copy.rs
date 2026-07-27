@@ -56,17 +56,8 @@ const DEFAULT_SURFACE_WIDTH: u32 = 1920;
 #[cfg(target_os = "linux")]
 const DEFAULT_SURFACE_HEIGHT: u32 = 1080;
 
-// Per-platform backend stash. The proc-macro strips `#[cfg]` from
-// individual struct fields, so we collapse the platform-conditional
-// type into a single alias and instantiate against the right impl
-// at setup time.
 #[cfg(target_os = "linux")]
-type GpuBackendStash = Option<LinuxState>;
-#[cfg(not(target_os = "linux"))]
-type GpuBackendStash = ();
-
-#[cfg(target_os = "linux")]
-struct LinuxState {
+struct LinuxCudaCopyGpuResources {
     /// Cuda OPAQUE_FD DEVICE_LOCAL `VkBuffer` the per-frame copy fills.
     storage_buffer: StorageBuffer,
     /// The same allocation viewed as a `PixelBuffer` for the surface-store
@@ -119,7 +110,8 @@ struct LinuxState {
     output("video_out", "@tatolab/core/VideoFrame", description = "Camera frame forwarded verbatim; cuda surface side-effect happens during process()"),
 )]
 pub struct CameraToCudaCopyProcessor {
-    backend: GpuBackendStash,
+    #[cfg(target_os = "linux")]
+    linux_cuda_copy_gpu_resources: Option<LinuxCudaCopyGpuResources>,
     frame_count: AtomicU64,
 }
 
@@ -214,7 +206,7 @@ impl CameraToCudaCopyProcessor::Processor {
 
         let copy_recorder = full.create_command_recorder("camera_to_cuda_copy")?;
 
-        self.backend = Some(LinuxState {
+        self.linux_cuda_copy_gpu_resources = Some(LinuxCudaCopyGpuResources {
             storage_buffer,
             pixel_buffer,
             produce_done,
@@ -245,36 +237,46 @@ impl CameraToCudaCopyProcessor::Processor {
 
     #[cfg(target_os = "linux")]
     fn process_frame_inner(&mut self, frame: &VideoFrame) -> Result<()> {
-        let backend = self.backend.as_mut().ok_or_else(|| {
-            Error::Configuration("CameraToCudaCopy: backend not initialized".into())
-        })?;
+        let linux_cuda_copy_gpu_resources =
+            self.linux_cuda_copy_gpu_resources.as_mut().ok_or_else(|| {
+                Error::Configuration(
+                    "CameraToCudaCopy: GPU resources not initialized (setup() did not run)".into(),
+                )
+            })?;
 
         // Resolve the camera ring texture. The camera processor produces
         // RGBA8 ring textures registered under fresh UUIDs and rotates through
         // them; `frame.surface_id` carries the current ring slot's UUID.
-        let texture = backend.gpu_ctx.resolve_texture_by_surface_id(
-            &frame.surface_id,
-            frame.texture_layout,
-            frame.width,
-            frame.height,
-        )?;
+        let texture = linux_cuda_copy_gpu_resources
+            .gpu_ctx
+            .resolve_texture_by_surface_id(
+                &frame.surface_id,
+                frame.texture_layout,
+                frame.width,
+                frame.height,
+            )?;
 
         let cam_w = texture.width();
         let cam_h = texture.height();
-        if cam_w != backend.width || cam_h != backend.height {
+        if cam_w != linux_cuda_copy_gpu_resources.width
+            || cam_h != linux_cuda_copy_gpu_resources.height
+        {
             return Err(Error::Configuration(format!(
                 "CameraToCudaCopy: camera resolution {cam_w}x{cam_h} differs from \
                  cuda surface {}x{}; GPU-side resize is not implemented in this processor \
                  (the cuda buffer is a flat VkBuffer, not a VkImage, so vkCmdBlitImage \
                  cannot target it). Configure the camera at the same resolution.",
-                backend.width, backend.height
+                linux_cuda_copy_gpu_resources.width, linux_cuda_copy_gpu_resources.height
             )));
         }
 
-        backend.produce_signal_value += 1;
-        let signal_value = backend.produce_signal_value;
-        let region = ImageCopyRegion::tightly_packed(backend.width, backend.height);
-        let recorder = &mut backend.copy_recorder;
+        linux_cuda_copy_gpu_resources.produce_signal_value += 1;
+        let signal_value = linux_cuda_copy_gpu_resources.produce_signal_value;
+        let region = ImageCopyRegion::tightly_packed(
+            linux_cuda_copy_gpu_resources.width,
+            linux_cuda_copy_gpu_resources.height,
+        );
+        let recorder = &mut linux_cuda_copy_gpu_resources.copy_recorder;
 
         // The camera leaves ring textures in SHADER_READ_ONLY_OPTIMAL — its
         // registered per-surface invariant (the camera's own post-copy barrier
@@ -297,7 +299,7 @@ impl CameraToCudaCopyProcessor::Processor {
         recorder.record_copy_image_to_buffer(
             &texture,
             VulkanLayout::TRANSFER_SRC_OPTIMAL,
-            &backend.storage_buffer,
+            &linux_cuda_copy_gpu_resources.storage_buffer,
             region,
         )?;
         recorder.record_image_barrier(
@@ -314,7 +316,8 @@ impl CameraToCudaCopyProcessor::Processor {
         // No `consume_done` wait on the write path: the camera drops ticks when
         // the consumer skips a frame, and a GPU-wait on a stale consume edge
         // would deadlock the producer against a consumer that never read.
-        recorder.submit_signaling_timeline(&backend.produce_done, signal_value)?;
+        recorder
+            .submit_signaling_timeline(&linux_cuda_copy_gpu_resources.produce_done, signal_value)?;
         Ok(())
     }
 

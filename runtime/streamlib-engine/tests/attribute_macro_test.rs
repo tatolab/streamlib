@@ -167,6 +167,94 @@ fn test_bare_processor_synthesizes_app_local_identity() {
     );
 }
 
+/// A field type that only exists on Linux, so the processor below can gate a
+/// field on the real `target_os` rather than only on always-true / always-false
+/// predicates.
+#[cfg(target_os = "linux")]
+#[derive(Default)]
+pub struct CfgGatedFieldLinuxOnlyState {
+    pub linux_only_marker: u32,
+}
+
+/// The non-Linux half of the same pair.
+#[cfg(not(target_os = "linux"))]
+#[derive(Default)]
+pub struct CfgGatedFieldNonLinuxOnlyState {
+    pub non_linux_only_marker: u32,
+}
+
+/// A field type compiled on every target, gated by an always-true `cfg`.
+#[derive(Default)]
+pub struct CfgGatedFieldAlwaysCompiledState {
+    pub always_compiled_marker: u32,
+}
+
+// #1588: a `#[cfg]` authored on a processor struct field must be re-emitted at
+// BOTH generated sites — the `Processor` field definition and its `from_config`
+// struct-literal initializer. This is a compile-level proof: `any()` is false on
+// every target, so `never_compiled_state`'s deliberately-undeclared type only
+// resolves if the macro stripped that field from both sites; `all()` is true on
+// every target, so `always_compiled_state` only compiles if the surviving arm
+// still gets its initializer. The `target_os` pair exercises the real-world
+// shape on top of the target-independent halves.
+#[streamlib::sdk::processor(
+    "@tatolab/streamlib-engine/CfgGatedFieldProcessor",
+    execution = manual,
+    input("video_in", any),
+    output("video_out", any),
+)]
+pub struct CfgGatedFieldProcessor {
+    #[cfg(any())]
+    never_compiled_state: ThisTypeIsDeliberatelyUndeclared,
+    // The forwarded `allow` is load-bearing twice over: it silences
+    // `non_minimal_cfg` on the deliberately-degenerate always-true predicate,
+    // and it only reaches the generated field at all if the macro forwards lint
+    // controls — so this line also exercises that half of the filter in-tree.
+    #[allow(clippy::non_minimal_cfg)]
+    #[cfg(all())]
+    always_compiled_state: CfgGatedFieldAlwaysCompiledState,
+    #[cfg(target_os = "linux")]
+    linux_only_state: CfgGatedFieldLinuxOnlyState,
+    #[cfg(not(target_os = "linux"))]
+    non_linux_only_state: CfgGatedFieldNonLinuxOnlyState,
+}
+
+impl streamlib_engine::ManualProcessor for CfgGatedFieldProcessor::Processor {
+    fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+
+    fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+
+    fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[test]
+fn cfg_gated_processor_field_survives_onto_both_generated_sites() {
+    let processor = CfgGatedFieldProcessor::Processor::from_config(EmptyConfig).unwrap();
+    assert_eq!(processor.always_compiled_state.always_compiled_marker, 0);
+    #[cfg(target_os = "linux")]
+    assert_eq!(processor.linux_only_state.linux_only_marker, 0);
+    #[cfg(not(target_os = "linux"))]
+    assert_eq!(processor.non_linux_only_state.non_linux_only_marker, 0);
+}
+
+#[test]
+fn cfg_gated_processor_still_declares_its_port_fields_unconditionally() {
+    // The `inputs` / `outputs` PluginAbiObject fields are emitted ahead of the
+    // custom fields and are patched by name in `set_iceoryx2_resources` — the
+    // field-attribute filter must never reach them. Naming both fields here is
+    // the compile-level half; `is_configured()` is false until the host wires
+    // them after `from_config` returns.
+    let processor = CfgGatedFieldProcessor::Processor::from_config(EmptyConfig).unwrap();
+    assert!(!processor.inputs.is_configured());
+    assert!(!processor.outputs.is_configured());
+}
+
 #[test]
 fn test_processor_schema_ident_renders_canonical_joined_form() {
     // The structured SchemaIdent's Display impl produces the canonical
