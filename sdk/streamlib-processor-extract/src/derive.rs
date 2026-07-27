@@ -72,8 +72,9 @@ impl PackageLanguage {
 
 /// Detect which languages a package hosts processors in, from files on disk.
 ///
-/// - **Rust** — a `Cargo.toml` beside a `src/lib.rs` or `src/main.rs` crate
-///   root (the Rust scan parses the `*.rs` under that `src/` directory).
+/// - **Rust** — a `Cargo.toml` (the Rust scan parses the `*.rs` under the
+///   `processors/` directory beside it). The crate root is generated from that
+///   directory rather than committed, so its presence says nothing.
 /// - **Python** — a `pyproject.toml` (the Python extractor imports the `*.py`
 ///   under the `processors/` directory beside it).
 /// - **Deno** — a `deno.json` (the Deno extractor imports the `*.ts` under the
@@ -83,9 +84,7 @@ impl PackageLanguage {
 /// package like `@tatolab/core`).
 pub fn detect_package_languages(package_dir: &Path) -> BTreeSet<PackageLanguage> {
     let mut out = BTreeSet::new();
-    let has_crate_root =
-        package_dir.join("src/lib.rs").is_file() || package_dir.join("src/main.rs").is_file();
-    if package_dir.join("Cargo.toml").is_file() && has_crate_root {
+    if package_dir.join("Cargo.toml").is_file() {
         out.insert(PackageLanguage::Rust);
     }
     if package_dir.join("pyproject.toml").is_file() {
@@ -809,7 +808,7 @@ mod tests {
         let tmp = tempdir();
         let root = tmp.path();
         write(root, "Cargo.toml", "[package]\nname='x'\n");
-        write(root, "src/lib.rs", "");
+        write(root, "processors/marker.rs", "");
         write(root, "pyproject.toml", "");
         write(root, "deno.json", "{}");
         let langs = detect_package_languages(root);
@@ -818,11 +817,25 @@ mod tests {
         assert!(langs.contains(&PackageLanguage::TypeScript));
     }
 
+    /// Rust is detected by `Cargo.toml` alone, symmetric with
+    /// `pyproject.toml` / `deno.json`. A folder-backed package commits no crate
+    /// root — it is generated — so keying detection on `src/lib.rs` would make
+    /// every swept package silently non-Rust.
     #[test]
-    fn cargo_without_crate_root_is_not_rust() {
+    fn cargo_toml_alone_detects_rust() {
         let tmp = tempdir();
         let root = tmp.path();
         write(root, "Cargo.toml", "[package]\nname='x'\n");
+        assert!(detect_package_languages(root).contains(&PackageLanguage::Rust));
+    }
+
+    /// A package with no `Cargo.toml` is not Rust, however many `.rs` files sit
+    /// under `processors/`.
+    #[test]
+    fn processor_sources_without_a_cargo_toml_are_not_rust() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(root, "processors/arm.rs", "pub struct NotACrate;\n");
         assert!(!detect_package_languages(root).contains(&PackageLanguage::Rust));
     }
 
@@ -946,7 +959,7 @@ mod tests {
         write(root, "Cargo.toml", "[package]\nname='cam'\n");
         write(
             root,
-            "src/lib.rs",
+            "processors/arm.rs",
             r#"#[processor("@tatolab/camera/Camera", execution = manual,
                 output("video", "@tatolab/core/VideoFrame"))]
             pub struct Camera;"#,
@@ -1005,7 +1018,7 @@ processors:
         write(root, "Cargo.toml", "[package]\nname='x'\n");
         write(
             root,
-            "src/lib.rs",
+            "processors/arm.rs",
             r#"
             #[processor("@tatolab/demo/Alpha", execution = reactive)]
             pub struct Alpha;
@@ -1048,7 +1061,7 @@ processors:
         write(root, "Cargo.toml", "[package]\nname='x'\n");
         write(
             root,
-            "src/lib.rs",
+            "processors/arm.rs",
             r#"#[processor("@tatolab/demo/Alpha", execution = reactive)]
             pub struct Alpha;"#,
         );
@@ -1083,7 +1096,7 @@ processors:
         write(root, "Cargo.toml", "[package]\nname='x'\n");
         write(
             root,
-            "src/lib.rs",
+            "processors/arm.rs",
             r#"#[processor("@tatolab/demo/Alpha", execution = manual)]
             pub struct Alpha;"#,
         );
@@ -1116,7 +1129,7 @@ processors:
         write(root, "Cargo.toml", "[package]\nname='x'\n");
         write(
             root,
-            "src/lib.rs",
+            "processors/arm.rs",
             r#"#[processor("@tatolab/demo/Alpha", execution = reactive,
                 output("a", "@tatolab/core/VideoFrame"),
                 output("b", "@tatolab/core/VideoFrame"))]

@@ -7,9 +7,16 @@
 //! source of truth for a processor's identity, execution mode, and ports.
 //! This crate is the inverse of the old flow: instead of the macro reading a
 //! hand-authored `processors:` list, a `syn`-based source scan *derives* that
-//! list from the `#[processor(...)]` usage in a crate's `src/`, so
-//! `streamlib pkg publish` (and any future live-submit path) obtains the
+//! list from the `#[processor(...)]` usage under a package's `processors/`
+//! directory — the same discovery root the Python and Deno extractors walk —
+//! so `streamlib pkg publish` (and any future live-submit path) obtains the
 //! processor manifest from code rather than trusting a committed enumeration.
+//!
+//! The same scan drives [`crate_root`], which writes the Rust crate root the
+//! package's `[lib] path` points at: one `#[path]`-attributed `pub mod` per
+//! `processors/` arm plus, for a cdylib, the `export_plugin!` envelope. One
+//! scan, two consumers — a hand-written `mod` list can no longer disagree with
+//! what the manifest says ships.
 //!
 //! The scan runs over a crate's source **without compiling it into the host**:
 //! `syn::parse_file` builds each module's AST, the walk finds every struct
@@ -20,14 +27,20 @@
 //! here rather than the proc-macro crate, and the identity/version model the
 //! scan produces.
 
+pub mod crate_root;
 pub mod derive;
 pub mod grammar;
 pub mod reachable;
 
 use std::path::{Path, PathBuf};
 
+use streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME as PROCESSOR_SOURCE_DIR_NAME;
 use streamlib_processor_schema::ProcessorSchema;
 
+pub use crate_root::{
+    GeneratedCrateRootSource, RustCrateRootGenerationRequest, generate_rust_crate_root_source,
+    write_generated_rust_crate_root,
+};
 pub use derive::{
     DeriveError, DerivedProcessorSet, ExtractedManifestPort, ExtractedManifestProcessor,
     ManifestDriftReport, PackageLanguage, PortSchemaSurface, PortSurface, ProcessorSurface,
@@ -36,7 +49,10 @@ pub use derive::{
     filter_committed_to_languages, parse_subprocess_manifest_json_full,
 };
 pub use grammar::{ParsedPort, ParsedProcessorAttr};
-pub use reachable::{ModuleReachabilityTarget, extract_reachable_rust_processors};
+pub use reachable::{
+    ModuleReachabilityTarget, ProcessorSourceModuleArm, enumerate_processor_source_module_arms,
+    extract_processors_across_every_build_target, extract_reachable_rust_processors,
+};
 
 /// One processor derived from a `#[processor(...)]` attribute in source.
 ///
@@ -57,9 +73,21 @@ pub struct ExtractedProcessor {
     pub config_field_name: String,
     /// The Rust struct the attribute was written on (the `Type` segment source).
     pub struct_name: String,
-    /// The source file, relative to the scanned crate root, the attribute was
-    /// found in.
+    /// The source file, relative to the scanned package directory, the
+    /// attribute was found in.
     pub source_file: PathBuf,
+    /// The module path from the crate root to the declaring module, one
+    /// segment per `mod` — `["linux", "camera"]` for a struct in
+    /// `processors/linux/camera.rs`. Empty for the raw whole-tree scan, which
+    /// resolves no module graph. The `#[processor]` macro turns the struct into
+    /// a module of the same name holding a `Processor` type, so the generated
+    /// `export_plugin!` entry is `<segments>::<struct_name>::Processor`.
+    pub module_path_segments: Vec<String>,
+    /// The `#[cfg(...)]` predicates in force at the struct, outermost first,
+    /// as written in source. Populated only by
+    /// [`extract_processors_across_every_build_target`]; a target-resolved scan
+    /// has already pruned by them and leaves this empty.
+    pub cfg_predicates: Vec<String>,
 }
 
 /// Why source-scan extraction failed. Every variant carries the offending path
@@ -67,9 +95,11 @@ pub struct ExtractedProcessor {
 /// drops a `#[processor(...)]` it could not parse.
 #[derive(Debug, thiserror::Error)]
 pub enum ExtractError {
-    /// The crate root has no `src/` directory to scan.
-    #[error("no `src/` directory under crate root {root} — nothing to scan for processors")]
-    NoSrcDir { root: PathBuf },
+    /// The package has no `processors/` directory to scan.
+    #[error(
+        "no `processors/` directory under package {root} — nothing to scan for processors"
+    )]
+    NoProcessorSourceDir { root: PathBuf },
 
     /// A source file could not be read off disk.
     #[error("read {path}: {source}")]
@@ -115,29 +145,33 @@ pub enum ExtractError {
     },
 }
 
-/// Derive the `processors:` manifest section from a Rust crate's source.
+/// Derive the `processors:` manifest section from a Rust package's source.
 ///
-/// Scans every `.rs` file under `<crate_root>/src` for structs carrying a
-/// `#[processor(...)]` attribute and parses each through the shared [`grammar`].
-/// The returned list is deterministic: files are walked in sorted path order and
-/// attributes in source order within a file. An empty result is valid — a crate
-/// may legitimately declare no processors (a schema-only package).
-#[tracing::instrument(skip_all, fields(crate_root = %crate_root.display()))]
-pub fn extract_rust_processors(crate_root: &Path) -> Result<Vec<ExtractedProcessor>, ExtractError> {
-    let src_dir = crate_root.join("src");
-    if !src_dir.is_dir() {
-        return Err(ExtractError::NoSrcDir {
-            root: crate_root.to_path_buf(),
+/// Scans every `.rs` file under `<package_dir>/processors` for structs carrying
+/// a `#[processor(...)]` attribute and parses each through the shared
+/// [`grammar`]. The returned list is deterministic: files are walked in sorted
+/// path order and attributes in source order within a file.
+///
+/// This raw walk resolves no module graph, so it over-collects — two platform
+/// arms declaring the same processor both surface, as does a parked arm that
+/// compiles on no target. [`extract_reachable_rust_processors`] is the
+/// module-graph-resolved counterpart every consuming path uses.
+#[tracing::instrument(skip_all, fields(package_dir = %package_dir.display()))]
+pub fn extract_rust_processors(package_dir: &Path) -> Result<Vec<ExtractedProcessor>, ExtractError> {
+    let processor_source_dir = package_dir.join(PROCESSOR_SOURCE_DIR_NAME);
+    if !processor_source_dir.is_dir() {
+        return Err(ExtractError::NoProcessorSourceDir {
+            root: package_dir.to_path_buf(),
         });
     }
 
     let mut rs_files = Vec::new();
-    collect_rs_files(&src_dir, &mut rs_files)?;
+    collect_rs_files(&processor_source_dir, &mut rs_files)?;
     rs_files.sort();
 
     let mut out = Vec::new();
     for path in &rs_files {
-        extract_from_file(path, crate_root, &mut out)?;
+        extract_from_file(path, package_dir, &mut out)?;
     }
     tracing::debug!(processors = out.len(), files = rs_files.len(), "extracted");
     Ok(out)
@@ -172,7 +206,7 @@ fn collect_rs_files(dir: &Path, out: &mut Vec<PathBuf>) -> Result<(), ExtractErr
 /// `out`, in source order.
 fn extract_from_file(
     path: &Path,
-    crate_root: &Path,
+    package_dir: &Path,
     out: &mut Vec<ExtractedProcessor>,
 ) -> Result<(), ExtractError> {
     let body = std::fs::read_to_string(path).map_err(|e| ExtractError::Io {
@@ -184,7 +218,7 @@ fn extract_from_file(
         source: e,
     })?;
 
-    let rel = path.strip_prefix(crate_root).unwrap_or(path).to_path_buf();
+    let rel = path.strip_prefix(package_dir).unwrap_or(path).to_path_buf();
     for item in &file.items {
         walk_item(item, &rel, out)?;
     }
@@ -257,6 +291,8 @@ pub(crate) fn parse_processor_attr(
         config_field_name: parsed.config_field_name.clone(),
         struct_name: struct_ident.to_string(),
         source_file: rel_path.to_path_buf(),
+        module_path_segments: Vec::new(),
+        cfg_predicates: Vec::new(),
     })
 }
 
@@ -279,9 +315,8 @@ mod tests {
         // struct with no attribute (must be ignored).
         write(
             root,
-            "src/lib.rs",
+            "processors/blur.rs",
             r#"
-            pub mod camera;
             #[streamlib::sdk::processor(
                 "@tatolab/demo/Blur",
                 execution = reactive,
@@ -295,7 +330,7 @@ mod tests {
         );
         write(
             root,
-            "src/camera.rs",
+            "processors/camera.rs",
             r#"
             #[processor(
                 "@tatolab/demo/Camera",
@@ -327,7 +362,7 @@ mod tests {
             PortSchemaSpec::Specific(_)
         ));
         assert_eq!(blur.schema.outputs[0].name, "frames_out");
-        assert_eq!(blur.source_file, PathBuf::from("src/lib.rs"));
+        assert_eq!(blur.source_file, PathBuf::from("processors/blur.rs"));
 
         let camera = procs.iter().find(|p| p.schema.name == "Camera").unwrap();
         assert_eq!(camera.schema.execution, ProcessorSchemaExecution::Manual);
@@ -364,7 +399,7 @@ mod tests {
         let root = tmp.path();
         write(
             root,
-            "src/lib.rs",
+            "processors/blur.rs",
             &format!("#[processor({attr})]\npub struct Blur;\n"),
         );
         let procs = extract_rust_processors(root).unwrap();
@@ -394,7 +429,7 @@ mod tests {
         let root = tmp.path();
         write(
             root,
-            "src/main.rs",
+            "processors/my_local_thing.rs",
             r#"
             #[processor(execution = reactive)]
             struct MyLocalThing;
@@ -410,7 +445,7 @@ mod tests {
     fn schema_only_crate_yields_no_processors() {
         let tmp = tempdir();
         let root = tmp.path();
-        write(root, "src/lib.rs", "pub struct JustAType { pub x: u32 }\n");
+        write(root, "processors/types.rs", "pub struct JustAType { pub x: u32 }\n");
         let procs = extract_rust_processors(root).unwrap();
         assert!(procs.is_empty());
     }
@@ -421,7 +456,7 @@ mod tests {
         let root = tmp.path();
         write(
             root,
-            "src/lib.rs",
+            "processors/broken.rs",
             r#"
             #[processor("@tatolab/demo/Broken")]
             pub struct Broken;
@@ -435,7 +470,7 @@ mod tests {
                 message,
             } => {
                 assert_eq!(struct_name, "Broken");
-                assert_eq!(path, PathBuf::from("src/lib.rs"));
+                assert_eq!(path, PathBuf::from("processors/broken.rs"));
                 assert!(message.contains("missing required `execution`"), "got: {message}");
             }
             other => panic!("expected Grammar error, got {other:?}"),
@@ -446,16 +481,39 @@ mod tests {
     fn unparseable_rust_is_a_syntax_error_not_a_skip() {
         let tmp = tempdir();
         let root = tmp.path();
-        write(root, "src/lib.rs", "fn broken( {\n");
+        write(root, "processors/broken.rs", "fn broken( {\n");
         let err = extract_rust_processors(root).unwrap_err();
         assert!(matches!(err, ExtractError::Syntax { .. }));
     }
 
     #[test]
-    fn missing_src_dir_is_a_typed_error() {
+    fn missing_processors_dir_is_a_typed_error() {
         let tmp = tempdir();
         let err = extract_rust_processors(tmp.path()).unwrap_err();
-        assert!(matches!(err, ExtractError::NoSrcDir { .. }));
+        assert!(matches!(err, ExtractError::NoProcessorSourceDir { .. }));
+    }
+
+    /// A crate root left under `src/` is not a discovery root: only
+    /// `processors/` is scanned, so a stale `src/lib.rs` contributes nothing.
+    #[test]
+    fn a_stale_src_crate_root_is_not_scanned() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "src/lib.rs",
+            r#"#[processor("@tatolab/demo/Stale", execution = reactive)]
+            pub struct Stale;"#,
+        );
+        write(
+            root,
+            "processors/live.rs",
+            r#"#[processor("@tatolab/demo/Live", execution = reactive)]
+            pub struct Live;"#,
+        );
+        let procs = extract_rust_processors(root).unwrap();
+        let names: Vec<&str> = procs.iter().map(|p| p.schema.name.as_str()).collect();
+        assert_eq!(names, vec!["Live"]);
     }
 
     /// Minimal tempdir without pulling the `tempfile` crate into this lean
