@@ -33,10 +33,10 @@ def _write(dir_path: Path, rel: str, body: str) -> None:
 def _fixture_package(root: Path) -> None:
     # Three processors across three modules under `processors/` (one nested, to
     # pin the recursive walk); a nested port declaration on one; a module that
-    # declares no processor; a `test_`-prefixed module and a top-level module
-    # beside the manifest, both of which declare a processor that must NOT be
-    # discovered. No streamlib.yaml is needed — identity is declared in code,
-    # version-free.
+    # declares no processor; and four modules declaring a processor that must
+    # NOT be discovered — a `test_`-prefixed module, a `_test`-suffixed module,
+    # a module under `processors/tests/`, and a module beside the manifest. No
+    # streamlib.yaml is needed — identity is declared in code, version-free.
     _write(
         root,
         "processors/blur.py",
@@ -96,6 +96,28 @@ def _fixture_package(root: Path) -> None:
     )
     _write(
         root,
+        "processors/helper_test.py",
+        """
+        from streamlib import processor
+
+        @processor("@tatolab/demo-pack/SuffixTestOnly", execution="manual")
+        class SuffixTestOnly:
+            pass
+        """,
+    )
+    _write(
+        root,
+        "processors/tests/fixtures.py",
+        """
+        from streamlib import processor
+
+        @processor("@tatolab/demo-pack/InTestsDir", execution="manual")
+        class InTestsDir:
+            pass
+        """,
+    )
+    _write(
+        root,
         "top_level.py",
         """
         from streamlib import processor
@@ -113,9 +135,9 @@ class TestProcessorExtraction:
 
         procs = extract_processors_from_dir(tmp_path)
         names = [p.short_name for p in procs]
-        # Deterministic: sorted by joined schema-ident string. `TopLevel` sits
-        # beside the manifest and `TestOnly` in a `test_`-prefixed module —
-        # neither is a processor module, so neither is discovered.
+        # Deterministic: sorted by joined schema-ident string. Test scaffolding
+        # (`test_helper.py`, `helper_test.py`, `tests/fixtures.py`) and a module
+        # beside the manifest are not processor modules, so none is discovered.
         assert names == ["Blur", "Camera", "Deep"]
 
         blur = next(p for p in procs if p.short_name == "Blur")
@@ -198,6 +220,35 @@ class TestProcessorExtraction:
         assert [p.short_name for p in extract_processors_from_dir(second_root)] == [
             "Other"
         ]
+
+    def test_emitted_order_is_codepoint(self, tmp_path: Path) -> None:
+        # Codepoint order, the ordering the Deno and Rust extractors also emit:
+        # `L` (0x4C) sorts before `l` (0x6C), so `BLUR2` precedes `Blur`. A
+        # locale-collated sort would swap them.
+        _write(
+            tmp_path,
+            "processors/blur.py",
+            """
+            from streamlib import processor
+
+            @processor("@tatolab/demo-pack/Blur", execution="manual")
+            class Blur:
+                pass
+            """,
+        )
+        _write(
+            tmp_path,
+            "processors/blur2.py",
+            """
+            from streamlib import processor
+
+            @processor("@tatolab/demo-pack/BLUR2", execution="manual")
+            class BLUR2:
+                pass
+            """,
+        )
+        procs = extract_processors_from_dir(tmp_path)
+        assert [p.short_name for p in procs] == ["BLUR2", "Blur"]
 
     def test_package_without_a_processors_dir_yields_no_processors(
         self, tmp_path: Path

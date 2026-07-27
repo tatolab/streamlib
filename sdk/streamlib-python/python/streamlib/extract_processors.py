@@ -20,22 +20,33 @@ Running in a fresh process guarantees an empty registry to start; the
 in-process [`extract_processors_from_dir`][] entrypoint clears the registry
 itself so it is safe to call repeatedly.
 
-Discovery matches the Rust scan's `collect_rs_files` + sort against the Rust
-`src/` root: every `*.py` under `<package_dir>/processors/`, walked
-recursively and imported in sorted path order. A `*.py` beside the
-`streamlib.yaml` is NOT a processor module — `processors/` is the one place
-discovery looks — and a package with no `processors/` directory yields no
-processors (a schema-only package is legitimate). Test scaffolding
-(`test_*.py`, `*_test.py`, `conftest.py`) and `__init__.py` are skipped.
+`processors/` is the discovery root, the polyglot analogue of the Rust
+extractor's `src/`: every `*.py` under `<package_dir>/processors/`, walked
+recursively. A `*.py` beside the `streamlib.yaml` is NOT a processor module,
+and a package with no `processors/` directory yields no processors (a
+schema-only package is legitimate). Test scaffolding is skipped —
+`test_*.py`, `*_test.py`, `conftest.py`, and any `tests/` or `__tests__/`
+directory, the same skip set the Deno extractor applies.
 
 Each module is imported under its dotted path relative to `package_dir`
 (`processors/blur.py` → `processors.blur`, `processors/vision/blur.py` →
 `processors.vision.blur`), which is exactly the module half of the
 `entrypoint:` a built manifest carries. `processors/` needs no `__init__.py`:
-PEP 420 makes it a namespace package. Modules are deduplicated through
-`sys.modules`, so a processor imported transitively by an earlier module
-registers exactly once. The emitted list is sorted by joined schema-ident
-string so output is deterministic regardless of import order.
+PEP 420 makes it a namespace package. An `__init__.py` is never imported
+directly, so a `@processor` declared in one is discovered only incidentally
+(when a sibling module's import executes it as an ancestor package) — declare
+processors in a module, never in an `__init__.py`.
+
+The root governs DISCOVERY, not registration: a `@processor` in a module
+outside `processors/` still registers if a discovered module imports it, and
+the per-call isolation guarantee covers only the enumerated modules and their
+ancestor packages. Modules are deduplicated through `sys.modules`, so a
+processor imported transitively by an earlier module registers exactly once.
+
+Modules are imported in sorted path-segment order (matching the Deno
+extractor's ordering, so both runtimes evaluate a nested tree in the same
+sequence); the emitted list is then sorted by joined schema-ident codepoint
+order, so output is deterministic regardless of import order.
 """
 
 from __future__ import annotations
@@ -62,11 +73,21 @@ class ProcessorExtractionError(RuntimeError):
 PROCESSOR_SOURCE_DIR_NAME = "processors"
 
 
+#: Directory names under `processors/` that hold test scaffolding, never
+#: processor modules. Mirrors the Deno extractor's directory skip set.
+TEST_SCAFFOLDING_DIR_NAMES = ("tests", "__tests__")
+
+
 def _is_extractable_processor_module_file(file_name: str) -> bool:
     """Whether a `*.py` under `processors/` is a module extraction should import."""
     if file_name in ("__init__.py", "conftest.py"):
         return False
     return not (file_name.startswith("test_") or file_name.endswith("_test.py"))
+
+
+def _is_under_test_scaffolding_dir(relative_path: Path) -> bool:
+    """Whether a `processors/`-relative path sits under a test-scaffolding dir."""
+    return any(part in TEST_SCAFFOLDING_DIR_NAMES for part in relative_path.parts[:-1])
 
 
 def _module_names_including_ancestor_packages(module_names: List[str]) -> List[str]:
@@ -114,9 +135,14 @@ def extract_processors_from_dir(package_dir: Path) -> List[RegisteredProcessor]:
         return []
 
     py_files = sorted(
-        p
-        for p in processor_source_dir.rglob("*.py")
-        if p.is_file() and _is_extractable_processor_module_file(p.name)
+        (
+            p
+            for p in processor_source_dir.rglob("*.py")
+            if p.is_file()
+            and _is_extractable_processor_module_file(p.name)
+            and not _is_under_test_scaffolding_dir(p.relative_to(processor_source_dir))
+        ),
+        key=lambda p: p.relative_to(package_dir).parts,
     )
     # The dotted path relative to the package root is both the import name
     # (`package_dir` is on `sys.path`) and the module half of the manifest

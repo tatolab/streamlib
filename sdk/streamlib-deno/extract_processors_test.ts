@@ -45,9 +45,11 @@ async function writeFixtureModule(
 
 // Three processors across three modules under `processors/` (one nested, to pin
 // the recursive walk); a nested port declaration on one; a module that declares
-// no processor; a `_test.ts` module and a module beside the manifest, both of
-// which declare a processor that must NOT be discovered. No streamlib.yaml is
-// needed — identity is declared in code, version-free.
+// no processor; and four modules that declare a processor which must NOT be
+// discovered — a `_test.ts` module, a `.test.ts` module (`deno test` collects
+// both), a module under `processors/__tests__/`, and a module beside the
+// manifest. No streamlib.yaml is needed — identity is declared in code,
+// version-free.
 async function makeFixturePackage(): Promise<string> {
   const dir = await Deno.makeTempDir({ prefix: "streamlib-extract-" });
   await writeFixtureModule(
@@ -91,6 +93,20 @@ async function makeFixturePackage(): Promise<string> {
   );
   await writeFixtureModule(
     dir,
+    "processors/blur.test.ts",
+    moduleHeader() +
+      `@processor("@tatolab/demo-pack/DotTestOnly", { execution: "manual" })\n` +
+      `export default class DotTestOnly {}\n`,
+  );
+  await writeFixtureModule(
+    dir,
+    "processors/__tests__/fixtures.ts",
+    moduleHeader() +
+      `@processor("@tatolab/demo-pack/InTestsDir", { execution: "manual" })\n` +
+      `export default class InTestsDir {}\n`,
+  );
+  await writeFixtureModule(
+    dir,
     "top_level.ts",
     moduleHeader() +
       `@processor("@tatolab/demo-pack/TopLevel", { execution: "manual" })\n` +
@@ -104,9 +120,9 @@ Deno.test("golden extraction over a fixture package", async () => {
   try {
     const procs = await extractProcessorsFromDir(dir);
     const names = procs.map((p) => p.shortName);
-    // Deterministic: sorted by joined schema-ident string. `TopLevel` sits
-    // beside the manifest and `TestOnly` in a `_test.ts` module — neither is a
-    // processor module, so neither is discovered.
+    // Deterministic: sorted by joined schema-ident string. Test scaffolding
+    // (`helper_test.ts`, `blur.test.ts`, `__tests__/fixtures.ts`) and a module
+    // beside the manifest are not processor modules, so none is discovered.
     assertEquals(names, ["Blur", "Camera", "Deep"]);
 
     const blur = procs.find((p) => p.shortName === "Blur")!;
@@ -198,6 +214,34 @@ Deno.test("repeated calls over the same dir are isolated", async () => {
     );
     assertEquals(first, ["Blur", "Camera", "Deep"]);
     assertEquals(second, first);
+  } finally {
+    await Deno.remove(dir, { recursive: true });
+  }
+});
+
+Deno.test("emitted order is codepoint, not host locale collation", async () => {
+  // `String.localeCompare` is case-insensitive at the ICU primary level and
+  // machine-dependent: it orders `Blur` before `BLUR2`, while codepoint order
+  // (Python's and Rust's) puts `BLUR2` first because `L` (0x4C) < `l` (0x6C).
+  // Pins the emitted list to codepoint order so the three extractors agree.
+  const dir = await Deno.makeTempDir({ prefix: "streamlib-extract-" });
+  try {
+    await writeFixtureModule(
+      dir,
+      "processors/blur.ts",
+      moduleHeader() +
+        `@processor("@tatolab/demo-pack/Blur", { execution: "manual" })\n` +
+        `export default class Blur {}\n`,
+    );
+    await writeFixtureModule(
+      dir,
+      "processors/blur2.ts",
+      moduleHeader() +
+        `@processor("@tatolab/demo-pack/BLUR2", { execution: "manual" })\n` +
+        `export default class BLUR2 {}\n`,
+    );
+    const names = (await extractProcessorsFromDir(dir)).map((p) => p.shortName);
+    assertEquals(names, ["BLUR2", "Blur"]);
   } finally {
     await Deno.remove(dir, { recursive: true });
   }
