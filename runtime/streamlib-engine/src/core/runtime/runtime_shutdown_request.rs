@@ -45,7 +45,25 @@ static RUNTIME_SHUTDOWN_REQUEST_LATCH: AtomicBool = AtomicBool::new(false);
 /// encode of `reason`.
 #[tracing::instrument]
 pub fn request_runtime_shutdown(reason: &str) -> Result<()> {
-    if let Some(callbacks) = crate::core::plugin::host_services::host_callbacks() {
+    request_runtime_shutdown_with_installed_host_callbacks(
+        crate::core::plugin::host_services::host_callbacks(),
+        reason,
+    )
+}
+
+/// The funnel's two arms, with the "am I running inside a plugin cdylib?"
+/// answer passed in rather than read from the process-global set-once table,
+/// so the arm selection itself is testable without installing host services.
+///
+/// `Some` means this engine copy is the one statically linked into a facade
+/// plugin cdylib: it must publish across the plugin ABI and latch NOTHING,
+/// because the latch it can reach is the plugin image's copy, which the host's
+/// run loop never reads.
+fn request_runtime_shutdown_with_installed_host_callbacks(
+    installed_host_callbacks: Option<&HostCallbacks>,
+    reason: &str,
+) -> Result<()> {
+    if let Some(callbacks) = installed_host_callbacks {
         return publish_runtime_shutdown_request_through_host_callbacks(callbacks, reason);
     }
 
@@ -338,8 +356,13 @@ mod tests {
     /// A facade cdylib statically links the engine, so this latch exists twice
     /// (host image + plugin image). Latching in the plugin's copy would be
     /// invisible to the host's run loop: nothing stops, no error, no panic.
-    /// The cdylib arm must publish ONLY. Mental-revert: latching before the
-    /// cdylib short-circuit fails this.
+    /// The cdylib arm must publish ONLY.
+    ///
+    /// This drives the funnel's arm SELECTION, not the publish helper, because
+    /// the ordering between the latch store and the cdylib short-circuit is
+    /// the thing that breaks. Mental-revert: hoisting
+    /// `RUNTIME_SHUTDOWN_REQUEST_LATCH.store(true, ..)` above the `if let Some`
+    /// fails this.
     #[test]
     #[serial]
     fn cdylib_arm_does_not_set_the_engine_local_latch() {
@@ -347,13 +370,43 @@ mod tests {
             let sink: RefCell<Vec<CapturedRuntimeShutdownPublish>> = RefCell::new(Vec::new());
             let callbacks = host_callbacks_with_capture(&sink);
 
-            publish_runtime_shutdown_request_through_host_callbacks(&callbacks, "from a cdylib")
-                .expect("the publish helper must succeed");
+            request_runtime_shutdown_with_installed_host_callbacks(
+                Some(&callbacks),
+                "from a cdylib",
+            )
+            .expect("the cdylib arm must succeed");
 
             assert_eq!(sink.borrow().len(), 1, "the request must reach the host");
             assert!(
                 !is_runtime_shutdown_requested(),
                 "the cdylib arm must NOT latch in the plugin image's copy of the engine",
+            );
+        });
+    }
+
+    /// The mirror of the arm-selection lock: with no host callbacks installed
+    /// this engine copy IS the host, so it must latch and must NOT publish
+    /// across the plugin ABI. Mental-revert: dropping the `if let Some` guard
+    /// so both arms publish fails this.
+    #[test]
+    #[serial]
+    fn host_arm_latches_without_publishing_across_the_plugin_abi() {
+        with_cleared_latch(|| {
+            let sink: RefCell<Vec<CapturedRuntimeShutdownPublish>> = RefCell::new(Vec::new());
+            // Built and dropped unused on purpose: the host arm must not reach
+            // any host callback at all.
+            let _callbacks = host_callbacks_with_capture(&sink);
+
+            request_runtime_shutdown_with_installed_host_callbacks(None, "from the host")
+                .expect("the host arm never fails");
+
+            assert!(
+                is_runtime_shutdown_requested(),
+                "the host arm must latch for the run loop to observe",
+            );
+            assert!(
+                sink.borrow().is_empty(),
+                "the host arm must not publish the plugin-ABI control topic to itself",
             );
         });
     }

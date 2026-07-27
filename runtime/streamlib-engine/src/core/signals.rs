@@ -9,9 +9,10 @@ static SIGNAL_HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 /// Install native signal handlers for shutdown signals
 ///
-/// Captures SIGTERM and SIGINT (Ctrl+C) and publishes RuntimeEvent::RuntimeShutdown
-/// to the global EVENT_BUS. This function spawns a background thread to handle
-/// signals without blocking the signal handler.
+/// Captures SIGTERM and SIGINT (Ctrl+C) and funnels them into
+/// [`request_runtime_shutdown`](crate::core::runtime::request_runtime_shutdown)
+/// like every other shutdown boundary. This function spawns a background thread
+/// to handle signals without blocking the signal handler.
 ///
 /// # Platform Support
 /// - Unix/Linux: Uses libc signal handling via signal-hook
