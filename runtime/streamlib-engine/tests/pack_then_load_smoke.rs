@@ -65,6 +65,8 @@ use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::runtime::{Runner, Strategy};
 use streamlib_engine::core::runtime::host_target_triple;
 use streamlib_engine::schemas::current_schema_definition;
+use streamlib_idents::archive::ArchiveKind;
+use streamlib_idents::archive::package_archive_fixtures::package_archive_bytes;
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -269,17 +271,18 @@ processors:
     };
     let dylib_entry = format!("lib/{}/libforeign_stub.so", foreign_triple);
 
-    let file = std::fs::File::create(&slpkg).unwrap();
-    let mut zip = zip::ZipWriter::new(file);
-    let opts = zip::write::FileOptions::<()>::default()
-        .compression_method(zip::CompressionMethod::Deflated);
-
-    use std::io::Write as _;
-    zip.start_file("streamlib.yaml", opts).unwrap();
-    zip.write_all(manifest.as_bytes()).unwrap();
-    zip.start_file(&dylib_entry, opts).unwrap();
-    zip.write_all(b"not-a-real-dylib").unwrap();
-    zip.finish().unwrap();
+    std::fs::write(
+        &slpkg,
+        package_archive_bytes(
+            &[
+                ("streamlib.yaml".to_string(), manifest.as_bytes().to_vec()),
+                (dylib_entry, b"not-a-real-dylib".to_vec()),
+            ],
+            ArchiveKind::Zip,
+            None,
+        ),
+    )
+    .unwrap();
 
     let runtime = Runner::new().unwrap();
     let err = runtime

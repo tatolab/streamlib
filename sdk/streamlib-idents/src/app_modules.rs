@@ -1831,8 +1831,9 @@ fn map_stage_error_to_install(package: &PackageRef, err: AppModulesError) -> App
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::archive::ArchiveKind;
+    use crate::archive::package_archive_fixtures::package_archive_bytes;
     use crate::ident::{Org, Package};
-    use std::io::Write;
 
     fn pkg_ref(org: &str, name: &str) -> PackageRef {
         PackageRef::new(Org::new(org).unwrap(), Package::new(name).unwrap())
@@ -1860,6 +1861,20 @@ mod tests {
         zip_package_bytes(org, name, version, None)
     }
 
+    /// The two entries of the minimal `@org/name` fixture package.
+    fn foo_package_entries(org: &str, name: &str, version: &str) -> [(String, Vec<u8>); 2] {
+        [
+            (
+                Manifest::FILE_NAME.to_string(),
+                manifest_yaml(org, name, version).into_bytes(),
+            ),
+            (
+                "schemas/foo_frame.yaml".to_string(),
+                SCHEMA_YAML.as_bytes().to_vec(),
+            ),
+        ]
+    }
+
     /// Zip bytes for a minimal package, optionally nested under a single
     /// top-level directory (the `zip -r pkg.zip my-package/` shape).
     fn zip_package_bytes(
@@ -1868,47 +1883,26 @@ mod tests {
         version: &str,
         nested_under: Option<&str>,
     ) -> Vec<u8> {
-        let prefix = nested_under.map(|d| format!("{d}/")).unwrap_or_default();
-        let mut cursor = std::io::Cursor::new(Vec::new());
-        {
-            let mut writer = zip::ZipWriter::new(&mut cursor);
-            let opts = zip::write::FileOptions::<()>::default()
-                .compression_method(zip::CompressionMethod::Stored);
-            writer
-                .start_file(format!("{prefix}streamlib.yaml"), opts)
-                .unwrap();
-            writer
-                .write_all(manifest_yaml(org, name, version).as_bytes())
-                .unwrap();
-            writer
-                .start_file(format!("{prefix}schemas/foo_frame.yaml"), opts)
-                .unwrap();
-            writer.write_all(SCHEMA_YAML.as_bytes()).unwrap();
-            writer.finish().unwrap();
-        }
-        cursor.into_inner()
+        package_archive_bytes(
+            &foo_package_entries(org, name, version),
+            ArchiveKind::Zip,
+            nested_under,
+        )
     }
 
     /// `.tar.gz` bytes for a minimal package, optionally nested under a
     /// single top-level directory (the `tar czf pkg.tar.gz my-package/` shape).
-    fn tar_gz_package_bytes(org: &str, name: &str, version: &str, nested_under: Option<&str>) -> Vec<u8> {
-        let prefix = nested_under.map(|d| format!("{d}/")).unwrap_or_default();
-        let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        let mut builder = tar::Builder::new(encoder);
-        for (path, body) in [
-            (
-                format!("{prefix}streamlib.yaml"),
-                manifest_yaml(org, name, version),
-            ),
-            (format!("{prefix}schemas/foo_frame.yaml"), SCHEMA_YAML.to_string()),
-        ] {
-            let mut header = tar::Header::new_gnu();
-            header.set_size(body.len() as u64);
-            header.set_mode(0o644);
-            header.set_cksum();
-            builder.append_data(&mut header, path, body.as_bytes()).unwrap();
-        }
-        builder.into_inner().unwrap().finish().unwrap()
+    fn tar_gz_package_bytes(
+        org: &str,
+        name: &str,
+        version: &str,
+        nested_under: Option<&str>,
+    ) -> Vec<u8> {
+        package_archive_bytes(
+            &foo_package_entries(org, name, version),
+            ArchiveKind::TarGz,
+            nested_under,
+        )
     }
 
     /// Assert the app root carries NO partial state: no package dirs beyond
@@ -2673,15 +2667,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let archive = dir.path().join("junk.slpkg");
         // A valid zip that simply has no streamlib.yaml.
-        let mut cursor = std::io::Cursor::new(Vec::new());
-        {
-            let mut writer = zip::ZipWriter::new(&mut cursor);
-            let opts = zip::write::FileOptions::<()>::default();
-            writer.start_file("readme.txt", opts).unwrap();
-            writer.write_all(b"not a package").unwrap();
-            writer.finish().unwrap();
-        }
-        std::fs::write(&archive, cursor.into_inner()).unwrap();
+        std::fs::write(
+            &archive,
+            package_archive_bytes(
+                &[("readme.txt".to_string(), b"not a package".to_vec())],
+                ArchiveKind::Zip,
+                None,
+            ),
+        )
+        .unwrap();
 
         let app_root = tempfile::tempdir().unwrap();
         let app = AppModulesDir::at(app_root.path());
@@ -2743,15 +2737,15 @@ mod tests {
     fn add_zip_with_path_traversal_is_extract_failed_with_no_residue() {
         let dir = tempfile::tempdir().unwrap();
         let archive = dir.path().join("evil.slpkg");
-        let mut cursor = std::io::Cursor::new(Vec::new());
-        {
-            let mut writer = zip::ZipWriter::new(&mut cursor);
-            let opts = zip::write::FileOptions::<()>::default();
-            writer.start_file("../escape.txt", opts).unwrap();
-            writer.write_all(b"evil").unwrap();
-            writer.finish().unwrap();
-        }
-        std::fs::write(&archive, cursor.into_inner()).unwrap();
+        std::fs::write(
+            &archive,
+            package_archive_bytes(
+                &[("../escape.txt".to_string(), b"evil".to_vec())],
+                ArchiveKind::Zip,
+                None,
+            ),
+        )
+        .unwrap();
 
         let app_root = tempfile::tempdir().unwrap();
         let app = AppModulesDir::at(app_root.path());

@@ -187,11 +187,9 @@ hound = "3.5"  # WAV file writing for examples
 serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interference
 tempfile = "3.14"  # Temporary directories for config tests
 streamlib-pack = { path = "../../tools/streamlib-pack" }  # Source-only `.slpkg` assembly for the pack -> load gate
-# Package-archive fixture authoring for the module-loader tests: the engine
-# itself reads containers only through `streamlib-idents::archive`.
-zip = "2.2"
-flate2 = "1.1"
-tar = "0.4"
+# Package-archive fixture authoring lives in the crate that owns the reader —
+# the engine neither reads nor writes containers except through it.
+streamlib-idents = { path = "../../sdk/streamlib-idents", version = "0.8.3", features = ["archive-test-fixtures"] }
 criterion = { version = "0.5", features = ["html_reports"] }  # Benches for logging hot path (#447)
 png = "0.17"  # PNG decoding for shader-output fixture comparisons
 

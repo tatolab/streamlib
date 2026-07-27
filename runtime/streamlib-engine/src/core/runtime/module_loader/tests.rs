@@ -10,6 +10,7 @@
 use super::processor_registration::{host_target_triple, list_available_triples};
 use super::*;
 use serial_test::serial;
+use streamlib_idents::archive::package_archive_fixtures::package_archive_bytes;
 
 /// Resolve the co-located `streamlib_modules/@org/name` slot through the
 /// production [`installed_package_slot_dir`] seam, so a fixture writes to (and
@@ -618,25 +619,12 @@ impl Drop for EnvVarsCleared {
 /// plus one schema file) at `out`, returning the SHA-256 hex of the
 /// archive bytes for an integrity-pin assertion.
 fn write_schemas_only_slpkg(out: &std::path::Path, name: &str, type_name: &str) -> String {
-    use std::io::Write;
-    let stem = type_name.to_ascii_lowercase();
-    let manifest = format!(
-        "package:\n  org: tatolab\n  name: {name}\n  version: \"0.1.0\"\n\
-         schemas:\n  {type_name}:\n    file: schemas/{stem}.yaml\n"
+    let buf = schemas_only_package_archive_bytes(
+        name,
+        type_name,
+        streamlib_idents::archive::ArchiveKind::Zip,
+        None,
     );
-    let schema = format!("metadata:\n  type: {type_name}\n  expected_payload_bytes: 4096\n");
-
-    let mut buf = Vec::new();
-    {
-        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-        let opts: zip::write::FileOptions<()> =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        zw.start_file("streamlib.yaml", opts).unwrap();
-        zw.write_all(manifest.as_bytes()).unwrap();
-        zw.start_file(format!("schemas/{stem}.yaml"), opts).unwrap();
-        zw.write_all(schema.as_bytes()).unwrap();
-        zw.finish().unwrap();
-    }
     std::fs::write(out, &buf).unwrap();
 
     use sha2::{Digest, Sha256};
@@ -749,53 +737,48 @@ fn schemas_only_package_archive_bytes(
     kind: streamlib_idents::archive::ArchiveKind,
     nested_under: Option<&str>,
 ) -> Vec<u8> {
-    use std::io::Write;
-    let stem = type_name.to_ascii_lowercase();
-    let prefix = nested_under.map(|d| format!("{d}/")).unwrap_or_default();
-    let entries: [(String, String); 2] = [
-        (
-            format!("{prefix}streamlib.yaml"),
-            format!(
-                "package:\n  org: tatolab\n  name: {name}\n  version: \"0.1.0\"\n\
-                 schemas:\n  {type_name}:\n    file: schemas/{stem}.yaml\n"
-            ),
-        ),
-        (
-            format!("{prefix}schemas/{stem}.yaml"),
-            format!("metadata:\n  type: {type_name}\n  expected_payload_bytes: 4096\n"),
-        ),
-    ];
+    package_archive_bytes(
+        &schemas_only_package_entries(name, type_name, None),
+        kind,
+        nested_under,
+    )
+}
 
-    match kind {
-        streamlib_idents::archive::ArchiveKind::Zip => {
-            let mut buf = Vec::new();
-            {
-                let mut zw = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-                let opts: zip::write::FileOptions<()> = zip::write::FileOptions::default()
-                    .compression_method(zip::CompressionMethod::Stored);
-                for (path, body) in &entries {
-                    zw.start_file(path, opts).unwrap();
-                    zw.write_all(body.as_bytes()).unwrap();
-                }
-                zw.finish().unwrap();
-            }
-            buf
-        }
-        streamlib_idents::archive::ArchiveKind::TarGz => {
-            let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-            let mut builder = tar::Builder::new(encoder);
-            for (path, body) in &entries {
-                let mut header = tar::Header::new_gnu();
-                header.set_size(body.len() as u64);
-                header.set_mode(0o644);
-                header.set_cksum();
-                builder
-                    .append_data(&mut header, path, body.as_bytes())
-                    .unwrap();
-            }
-            builder.into_inner().unwrap().finish().unwrap()
-        }
+/// The two entries of a schemas-only `@tatolab/<name>` package, optionally
+/// carrying one version-range dependency edge (`@tatolab/<dep>: "^<range>"`).
+fn schemas_only_package_entries(
+    name: &str,
+    type_name: &str,
+    dep: Option<(&str, &str)>,
+) -> [(String, Vec<u8>); 2] {
+    schemas_only_package_entries_at_version(name, "0.1.0", type_name, dep)
+}
+
+/// [`schemas_only_package_entries`] at an explicit package version.
+fn schemas_only_package_entries_at_version(
+    name: &str,
+    version: &str,
+    type_name: &str,
+    dep: Option<(&str, &str)>,
+) -> [(String, Vec<u8>); 2] {
+    let stem = type_name.to_ascii_lowercase();
+    let mut manifest = format!(
+        "package:\n  org: tatolab\n  name: {name}\n  version: \"{version}\"\n\
+         schemas:\n  {type_name}:\n    file: schemas/{stem}.yaml\n"
+    );
+    if let Some((dep_name, dep_range)) = dep {
+        manifest.push_str(&format!(
+            "dependencies:\n  \"@tatolab/{dep_name}\": \"^{dep_range}\"\n"
+        ));
     }
+    [
+        ("streamlib.yaml".to_string(), manifest.into_bytes()),
+        (
+            format!("schemas/{stem}.yaml"),
+            format!("metadata:\n  type: {type_name}\n  expected_payload_bytes: 4096\n")
+                .into_bytes(),
+        ),
+    ]
 }
 
 /// Container equivalence at the runtime module loader: ONE fixture delivered
@@ -3943,25 +3926,15 @@ processors:
         let dir = mirror.join("slpkg").join(name).join(version);
         std::fs::create_dir_all(&dir).unwrap();
         let archive = dir.join(format!("{name}.slpkg"));
-        let stem = type_name.to_ascii_lowercase();
-        let mut manifest = format!(
-            "package:\n  org: tatolab\n  name: {name}\n  version: \"{version}\"\n\
-             schemas:\n  {type_name}:\n    file: schemas/{stem}.yaml\n"
-        );
-        if let Some((dep_name, dep_range)) = dep {
-            manifest.push_str(&format!(
-                "dependencies:\n  \"@tatolab/{dep_name}\": \"^{dep_range}\"\n"
-            ));
-        }
-        let schema = format!("metadata:\n  type: {type_name}\n  expected_payload_bytes: 4096\n");
-        let mut zw = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
-        let opts: zip::write::FileOptions<()> =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        zw.start_file("streamlib.yaml", opts).unwrap();
-        zw.write_all(manifest.as_bytes()).unwrap();
-        zw.start_file(format!("schemas/{stem}.yaml"), opts).unwrap();
-        zw.write_all(schema.as_bytes()).unwrap();
-        zw.finish().unwrap();
+        std::fs::write(
+            &archive,
+            package_archive_bytes(
+                &schemas_only_package_entries_at_version(name, version, type_name, dep),
+                streamlib_idents::archive::ArchiveKind::Zip,
+                None,
+            ),
+        )
+        .unwrap();
     }
 
     /// THE key test: install from a `file://` package source, then run **strictly

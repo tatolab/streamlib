@@ -1044,6 +1044,8 @@ impl Drop for ResolverCachePackageStagingDir {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::archive::ArchiveKind;
+    use crate::archive::package_archive_fixtures::package_archive_bytes;
 
     fn write_yaml(dir: &Path, name: &str, body: &str) {
         std::fs::write(dir.join(name), body).unwrap();
@@ -1829,47 +1831,26 @@ dependencies:
         assert_eq!(core.schema_files.len(), 1);
     }
 
-    /// A minimal `@tatolab/core` package's two entries, optionally nested
-    /// under a single top-level directory.
-    fn core_package_entries(nested_under: Option<&str>) -> [(String, &'static [u8]); 2] {
-        let prefix = nested_under.map(|d| format!("{d}/")).unwrap_or_default();
+    /// A minimal `@tatolab/core` package's two entries.
+    fn core_package_entries() -> [(String, Vec<u8>); 2] {
         [
             (
-                format!("{prefix}{}", Manifest::FILE_NAME),
-                b"package:\n  org: tatolab\n  name: core\n  version: 1.0.0\n".as_slice(),
+                Manifest::FILE_NAME.to_string(),
+                b"package:\n  org: tatolab\n  name: core\n  version: 1.0.0\n".to_vec(),
             ),
             (
-                format!("{prefix}schemas/VideoFrame.yaml"),
-                b"metadata:\n  name: VideoFrame\nproperties: {}\n".as_slice(),
+                "schemas/VideoFrame.yaml".to_string(),
+                b"metadata:\n  name: VideoFrame\nproperties: {}\n".to_vec(),
             ),
         ]
     }
 
-    fn write_core_zip(path: &Path, nested_under: Option<&str>) {
-        use std::io::Write;
-        let mut zip = zip::ZipWriter::new(std::fs::File::create(path).unwrap());
-        let opts = zip::write::SimpleFileOptions::default();
-        for (name, body) in core_package_entries(nested_under) {
-            zip.start_file(name, opts).unwrap();
-            zip.write_all(body).unwrap();
-        }
-        zip.finish().unwrap();
-    }
-
-    fn write_core_tar_gz(path: &Path, nested_under: Option<&str>) {
-        let encoder = flate2::write::GzEncoder::new(
-            std::fs::File::create(path).unwrap(),
-            flate2::Compression::default(),
-        );
-        let mut builder = tar::Builder::new(encoder);
-        for (name, body) in core_package_entries(nested_under) {
-            let mut header = tar::Header::new_gnu();
-            header.set_size(body.len() as u64);
-            header.set_mode(0o644);
-            header.set_cksum();
-            builder.append_data(&mut header, name, body).unwrap();
-        }
-        builder.into_inner().unwrap().finish().unwrap();
+    fn write_core_archive(path: &Path, kind: ArchiveKind, nested_under: Option<&str>) {
+        std::fs::write(
+            path,
+            package_archive_bytes(&core_package_entries(), kind, nested_under),
+        )
+        .unwrap();
     }
 
     fn resolve_core_path_dependency(tmp: &Path, archive_path: &Path) -> ResolvedPackages {
@@ -1903,13 +1884,13 @@ dependencies:
         std::fs::create_dir_all(&archives).unwrap();
 
         let flat_zip = archives.join("core.zip");
-        write_core_zip(&flat_zip, None);
+        write_core_archive(&flat_zip, ArchiveKind::Zip, None);
         let nested_zip = archives.join("core-nested.zip");
-        write_core_zip(&nested_zip, Some("core-1.0.0"));
+        write_core_archive(&nested_zip, ArchiveKind::Zip, Some("core-1.0.0"));
         let flat_tar_gz = archives.join("core.tar.gz");
-        write_core_tar_gz(&flat_tar_gz, None);
+        write_core_archive(&flat_tar_gz, ArchiveKind::TarGz, None);
         let nested_tar_gz = archives.join("core-nested.tar.gz");
-        write_core_tar_gz(&nested_tar_gz, Some("core-1.0.0"));
+        write_core_archive(&nested_tar_gz, ArchiveKind::TarGz, Some("core-1.0.0"));
 
         for (index, archive) in [flat_zip, nested_zip, flat_tar_gz, nested_tar_gz]
             .iter()

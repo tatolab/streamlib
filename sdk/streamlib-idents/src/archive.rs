@@ -400,6 +400,60 @@ fn symlink_target_escapes_root(entry_name: &str, target: &str) -> bool {
     false
 }
 
+/// Package-archive authoring for test suites, in the crate that owns the
+/// reader — so no consumer of [`extract_archive_bytes_to_dir`] re-derives the
+/// zip / tar.gz incantations (and the dev-dependencies behind them) just to
+/// exercise it. Enable with the `archive-test-fixtures` feature.
+#[cfg(any(test, feature = "archive-test-fixtures"))]
+pub mod package_archive_fixtures {
+    use super::ArchiveKind;
+
+    /// In-memory archive bytes carrying `entries` (each a
+    /// `(package-relative path, contents)` pair) in `kind`'s container.
+    /// `nested_under` puts every entry under one top-level directory — the
+    /// `tar czf pkg.tar.gz my-package/` shape a hand-rolled archive carries,
+    /// which the package-root locator must see through.
+    pub fn package_archive_bytes(
+        entries: &[(String, Vec<u8>)],
+        kind: ArchiveKind,
+        nested_under: Option<&str>,
+    ) -> Vec<u8> {
+        use std::io::Write;
+        let prefix = nested_under.map(|d| format!("{d}/")).unwrap_or_default();
+        match kind {
+            ArchiveKind::Zip => {
+                let mut buf = Vec::new();
+                {
+                    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+                    let options = zip::write::FileOptions::<()>::default()
+                        .compression_method(zip::CompressionMethod::Stored);
+                    for (path, body) in entries {
+                        writer.start_file(format!("{prefix}{path}"), options).unwrap();
+                        writer.write_all(body).unwrap();
+                    }
+                    writer.finish().unwrap();
+                }
+                buf
+            }
+            ArchiveKind::TarGz => {
+                let encoder =
+                    flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+                let mut builder = tar::Builder::new(encoder);
+                for (path, body) in entries {
+                    let mut header = tar::Header::new_gnu();
+                    header.set_size(body.len() as u64);
+                    header.set_mode(0o644);
+                    header.set_cksum();
+                    builder
+                        .append_data(&mut header, format!("{prefix}{path}"), body.as_slice())
+                        .unwrap();
+                }
+                builder.into_inner().unwrap().finish().unwrap()
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
