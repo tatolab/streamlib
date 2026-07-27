@@ -53,6 +53,27 @@ pub(crate) struct IdResponse {
     pub id: String,
 }
 
+/// Body of `POST /api/runtime/shutdown`: ask the runtime to stop.
+#[derive(Deserialize, utoipa::ToSchema)]
+pub(crate) struct RuntimeShutdownRequest {
+    /// Human-readable attribution logged with the request. Omit for
+    /// unspecified.
+    #[serde(default)]
+    pub reason: Option<String>,
+}
+
+/// Body returned alongside `202 Accepted` by `POST /api/runtime/shutdown`. The
+/// request was handed to the runtime's shutdown funnel; the response does NOT
+/// wait for teardown (the control plane is itself torn down by the shutdown it
+/// just requested, so awaiting it would deadlock the reply).
+#[derive(Serialize, utoipa::ToSchema)]
+pub(crate) struct RuntimeShutdownAcceptedResponse {
+    /// Typed discriminator: always `"RuntimeShutdownRequested"`.
+    pub status: &'static str,
+    /// The attribution recorded with the request (empty when unspecified).
+    pub reason: String,
+}
+
 #[derive(Serialize, utoipa::ToSchema)]
 pub(crate) struct ErrorResponse {
     /// Error message
@@ -301,6 +322,7 @@ pub(crate) struct RegisterProcessorSourceResponse {
         (name = "processors", description = "Processor lifecycle management"),
         (name = "connections", description = "Connection management between processors"),
         (name = "registry", description = "Processor and schema registry"),
+        (name = "runtime", description = "Runtime lifecycle control"),
         (name = "schemas", description = "Schema definitions"),
         (name = "events", description = "Real-time event streaming via WebSocket")
     )

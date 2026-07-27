@@ -359,6 +359,17 @@ fn tool_definitions() -> Vec<Value> {
                 "additionalProperties": false
             },
         }),
+        json!({
+            "name": "shutdown",
+            "description": "Ask the runtime to shut down. This is a request observed by whoever owns the run loop, which then runs a normal teardown — not an immediate kill. Idempotent: requesting twice is not an error. Returns as soon as the request is accepted; teardown is not awaited.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "reason": { "type": "string", "description": "Human-readable attribution logged with the request. Omit for unspecified." }
+                },
+                "additionalProperties": false
+            },
+        }),
     ]
 }
 
@@ -392,6 +403,7 @@ async fn tools_call(
         "connect" => call_connect(runtime, arguments).await,
         "tap" => call_tap(runtime, arguments).await,
         "logs" => call_logs(runtime, arguments).await,
+        "shutdown" => call_shutdown(runtime, arguments),
         other => tool_error(format!("unknown tool: {other}")),
     };
     Ok(result)
@@ -555,6 +567,27 @@ async fn call_logs(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Va
     }))
 }
 
+/// Sync, unlike every other tool call: `request_runtime_shutdown` is
+/// fire-and-forget with no completion payload, so there is nothing to await
+/// and nothing to block on.
+fn call_shutdown(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
+    #[derive(Deserialize)]
+    struct ShutdownArgs {
+        #[serde(default)]
+        reason: Option<String>,
+    }
+    let ShutdownArgs { reason } = match serde_json::from_value(arguments) {
+        Ok(args) => args,
+        Err(e) => return tool_error(format!("shutdown arguments: {e}")),
+    };
+    let reason = reason.unwrap_or_default();
+
+    match runtime.request_runtime_shutdown(&reason) {
+        Ok(()) => tool_ok(json!({ "status": "RuntimeShutdownRequested", "reason": reason })),
+        Err(e) => tool_error(format!("shutdown request failed: {e}")),
+    }
+}
+
 // ============================================================================
 // Result shaping
 // ============================================================================
@@ -703,6 +736,7 @@ mod tests {
         recorded_removed_processors: Arc<Mutex<Vec<String>>>,
         recorded_connections: RecordedConnections,
         recorded_replaced_modules: Arc<Mutex<Vec<String>>>,
+        recorded_shutdown_reasons: Arc<Mutex<Vec<String>>>,
     }
 
     impl RecordingStubRuntime {
@@ -714,6 +748,7 @@ mod tests {
                 recorded_removed_processors: Arc::new(Mutex::new(Vec::new())),
                 recorded_connections: Arc::new(Mutex::new(Vec::new())),
                 recorded_replaced_modules: Arc::new(Mutex::new(Vec::new())),
+                recorded_shutdown_reasons: Arc::new(Mutex::new(Vec::new())),
             }
         }
 
@@ -859,6 +894,12 @@ mod tests {
         fn disconnect(&self, _link_id: &LinkUniqueId) -> Result<()> {
             Ok(())
         }
+        fn request_runtime_shutdown(&self, reason: &str) -> Result<()> {
+            self.recorded_shutdown_reasons
+                .lock()
+                .push(reason.to_string());
+            Ok(())
+        }
         fn to_json(&self) -> Result<Value> {
             Ok(json!({}))
         }
@@ -949,6 +990,7 @@ mod tests {
             "connect",
             "tap",
             "logs",
+            "shutdown",
         ] {
             assert!(
                 names.contains(&expected),
@@ -1261,6 +1303,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tools_call_shutdown_reaches_the_runtime() {
+        let runtime = Arc::new(RecordingStubRuntime::new());
+        let recorded_shutdowns = runtime.recorded_shutdown_reasons.clone();
+
+        let (status, body) = mcp_call(
+            runtime,
+            json!({
+                "jsonrpc": "2.0", "id": 16, "method": "tools/call",
+                "params": { "name": "shutdown", "arguments": { "reason": "agent asked" } }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result"]["isError"], false, "body={body}");
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        let outcome: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(outcome["status"], "RuntimeShutdownRequested");
+        assert_eq!(outcome["reason"], "agent asked");
+        assert_eq!(
+            *recorded_shutdowns.lock(),
+            vec!["agent asked".to_string()],
+            "the tool must reach `request_runtime_shutdown` with the caller's reason"
+        );
+    }
+
+    /// A malformed `shutdown` argument is an in-band tool error (`isError`),
+    /// never a JSON-RPC error and never a silent shutdown — the agent has to
+    /// see why its call did nothing.
+    #[tokio::test]
+    async fn tools_call_shutdown_with_malformed_arguments_is_an_in_band_tool_error() {
+        let runtime = Arc::new(RecordingStubRuntime::new());
+        let recorded_shutdowns = runtime.recorded_shutdown_reasons.clone();
+
+        let (status, body) = mcp_call(
+            runtime,
+            json!({
+                "jsonrpc": "2.0", "id": 17, "method": "tools/call",
+                "params": { "name": "shutdown", "arguments": { "reason": 42 } }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.get("error").is_none(), "not a JSON-RPC error: {body}");
+        assert_eq!(body["result"]["isError"], true, "body={body}");
+        assert!(
+            body["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("shutdown arguments"),
+            "the tool error must name the offending argument set: {body}"
+        );
+        assert!(
+            recorded_shutdowns.lock().is_empty(),
+            "a malformed call must not reach the runtime"
+        );
+    }
+
+    #[tokio::test]
     async fn tools_call_replace_processor_reaches_the_runtime() {
         let runtime = Arc::new(RecordingStubRuntime::new());
         let recorded_replaced = runtime.recorded_replaced_modules.clone();
@@ -1395,6 +1497,7 @@ mod tests {
             "connect",
             "tap",
             "logs",
+            "shutdown",
         ] {
             assert!(
                 names.contains(&expected),
