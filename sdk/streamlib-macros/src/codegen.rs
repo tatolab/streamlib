@@ -165,45 +165,47 @@ pub fn generate_from_processor_schema(
 struct CustomField {
     name: Ident,
     ty: syn::Type,
-    /// Authored attributes re-emitted onto the generated `Processor` struct
-    /// field, filtered by [`is_forwarded_onto_generated_field_definition`].
-    attributes_for_generated_field_definition: Vec<syn::Attribute>,
-    /// Authored attributes re-emitted onto the `from_config` struct-literal
-    /// initializer, filtered by
-    /// [`is_forwarded_onto_from_config_initializer`]. Narrower than the field
-    /// definition's set — the two must stay in lockstep on presence.
-    attributes_for_from_config_initializer: Vec<syn::Attribute>,
+    /// The field's authored attributes verbatim; each emission site filters.
+    attributes_authored_on_processor_struct_field: Vec<syn::Attribute>,
 }
 
-/// Authoring contract for `#[processor]` struct fields: `cfg` is the
-/// load-bearing forward — dropping it makes a platform-conditional field
-/// unconditional and its platform-specific type fails to resolve off that
-/// platform. `doc` and the `allow` / `warn` / `deny` / `forbid` controls ride
-/// along so an author's `///` and `#[allow(dead_code)]` survive expansion.
-/// `expect` is excluded: the generated field is `pub` where the authored one
-/// was private, so a `dead_code` expectation the author wrote to silence a
-/// warning becomes an `unfulfilled_lint_expectation` warning instead.
+/// Authoring contract for `#[processor]` struct fields. Everything
+/// [`is_forwarded_onto_from_config_initializer`] takes is admitted here first,
+/// because an initializer gating a field the definition did not gate the same
+/// way initializes a field that isn't there. `doc` and the `allow` / `warn` /
+/// `deny` / `forbid` controls are the extras layered on top of that set, so an
+/// author's `///` and `#[allow(dead_code)]` survive expansion. `expect` is
+/// excluded from both: the generated field is `pub` where the authored one was
+/// private, so a `dead_code` expectation the author wrote to silence a warning
+/// becomes an `unfulfilled_lint_expectation` warning instead.
 fn is_forwarded_onto_generated_field_definition(attribute: &syn::Attribute) -> bool {
+    if is_forwarded_onto_from_config_initializer(attribute) {
+        return true;
+    }
+
     let path = attribute.path();
-    path.is_ident("cfg")
-        || path.is_ident("doc")
+    path.is_ident("doc")
         || path.is_ident("allow")
         || path.is_ident("warn")
         || path.is_ident("deny")
         || path.is_ident("forbid")
 }
 
-/// `cfg` is the only attribute a struct-expression field takes cleanly — a
-/// `doc` there is an `unused_doc_comments` warning and the gates deny warnings.
+/// `cfg` is the load-bearing forward — dropping it makes a platform-conditional
+/// field unconditional and its platform-specific type fails to resolve off that
+/// platform — and it is the only attribute a struct-expression field takes
+/// cleanly: a `doc` there is an `unused_doc_comments` warning and the gates deny
+/// warnings.
 fn is_forwarded_onto_from_config_initializer(attribute: &syn::Attribute) -> bool {
     attribute.path().is_ident("cfg")
 }
 
 /// `cfg_attr` on a processor struct field is refused rather than dropped: it can
-/// expand to a presence-changing `cfg`, and the two emission sites are filtered
-/// independently, so an expansion that gates the field definition without gating
-/// the `from_config` initializer desyncs them into an error far from its cause.
-/// Silently discarding it is the same failure class as #1588.
+/// expand to a presence-changing `cfg`, and the field definition accepts a strict
+/// superset of what the `from_config` initializer accepts, so an expansion
+/// admitted at the definition site alone gates the field without gating its
+/// initializer — an error far from its cause. Silently discarding it is the same
+/// failure class as #1588.
 fn refused_field_attribute_diagnostics(item: &ItemStruct) -> TokenStream {
     let syn::Fields::Named(fields) = &item.fields else {
         return quote! {};
@@ -244,18 +246,7 @@ fn extract_custom_fields(item: &ItemStruct) -> Vec<CustomField> {
                     .clone()
                     .expect("Named field must have ident"),
                 ty: authored_field.ty.clone(),
-                attributes_for_generated_field_definition: authored_field
-                    .attrs
-                    .iter()
-                    .filter(|attribute| is_forwarded_onto_generated_field_definition(attribute))
-                    .cloned()
-                    .collect(),
-                attributes_for_from_config_initializer: authored_field
-                    .attrs
-                    .iter()
-                    .filter(|attribute| is_forwarded_onto_from_config_initializer(attribute))
-                    .cloned()
-                    .collect(),
+                attributes_authored_on_processor_struct_field: authored_field.attrs.clone(),
             })
             .collect(),
         syn::Fields::Unit => Vec::new(),
@@ -295,7 +286,10 @@ fn generate_processor_struct_from_schema(
     let custom_field_defs: Vec<TokenStream> = custom_fields
         .iter()
         .map(|custom_field| {
-            let attributes = &custom_field.attributes_for_generated_field_definition;
+            let attributes = custom_field
+                .attributes_authored_on_processor_struct_field
+                .iter()
+                .filter(|attribute| is_forwarded_onto_generated_field_definition(attribute));
             let name = &custom_field.name;
             let ty = &custom_field.ty;
             quote! { #(#attributes)* pub #name: #ty, }
@@ -637,7 +631,10 @@ fn generate_from_config_from_schema(
     let custom_field_inits: Vec<TokenStream> = custom_fields
         .iter()
         .map(|custom_field| {
-            let attributes = &custom_field.attributes_for_from_config_initializer;
+            let attributes = custom_field
+                .attributes_authored_on_processor_struct_field
+                .iter()
+                .filter(|attribute| is_forwarded_onto_from_config_initializer(attribute));
             let name = &custom_field.name;
             quote! { #(#attributes)* #name: ::std::default::Default::default(), }
         })
@@ -931,29 +928,42 @@ mod processor_struct_emit_tests {
             .collect()
     }
 
+    fn attribute_path_ident(attribute: &syn::Attribute) -> String {
+        let path = attribute.path();
+        path.get_ident()
+            .map(Ident::to_string)
+            .unwrap_or_else(|| render_token_stream_without_whitespace(quote! { #path }))
+    }
+
     /// The path ident of each attribute, in authored order.
     fn attribute_path_idents(attributes: &[syn::Attribute]) -> Vec<String> {
-        attributes
+        attributes.iter().map(attribute_path_ident).collect()
+    }
+
+    fn attributes_authored_across_probe_custom_fields(
+        custom_fields: &[CustomField],
+    ) -> Vec<&syn::Attribute> {
+        custom_fields
             .iter()
-            .map(|attribute| {
-                let path = attribute.path();
-                path.get_ident()
-                    .map(Ident::to_string)
-                    .unwrap_or_else(|| render_token_stream_without_whitespace(quote! { #path }))
+            .flat_map(|custom_field| {
+                custom_field
+                    .attributes_authored_on_processor_struct_field
+                    .iter()
             })
             .collect()
     }
 
-    /// The attribute path idents the filter kept for one emission site — the
+    /// The attribute path idents one emission site's filter keeps — the
     /// decision the filter actually makes, read without going through a
     /// rendering.
     fn forwarded_attribute_path_idents(
         custom_fields: &[CustomField],
-        attributes_for_site: impl Fn(&CustomField) -> &Vec<syn::Attribute>,
+        is_forwarded_onto_emission_site: impl Fn(&syn::Attribute) -> bool,
     ) -> Vec<String> {
-        custom_fields
-            .iter()
-            .flat_map(|custom_field| attribute_path_idents(attributes_for_site(custom_field)))
+        attributes_authored_across_probe_custom_fields(custom_fields)
+            .into_iter()
+            .filter(|attribute| is_forwarded_onto_emission_site(attribute))
+            .map(attribute_path_ident)
             .collect()
     }
 
@@ -1261,9 +1271,10 @@ mod processor_struct_emit_tests {
     #[test]
     fn processor_struct_does_not_forward_expect_onto_the_generated_pub_field() {
         let custom_fields = extract_custom_fields(&annotated_field_struct());
-        let forwarded_attribute_paths = forwarded_attribute_path_idents(&custom_fields, |field| {
-            &field.attributes_for_generated_field_definition
-        });
+        let forwarded_attribute_paths = forwarded_attribute_path_idents(
+            &custom_fields,
+            is_forwarded_onto_generated_field_definition,
+        );
         assert!(
             !forwarded_attribute_paths.contains(&"expect".to_string()),
             "`expect` must not reach the generated `pub` field — it would land \
@@ -1399,6 +1410,7 @@ mod processor_struct_emit_tests {
                 #[allow(dead_code)]
                 #[expect(unused_parens)]
                 #[cfg(target_os = "linux")]
+                #[cfg_attr(target_os = "linux", allow(unused))]
                 #[serde(skip)]
                 cfg_and_lint_annotated_backend_state: Option<u32>,
             }
@@ -1430,7 +1442,43 @@ mod processor_struct_emit_tests {
             attribute_path_idents(&initializer.attrs),
             vec!["cfg".to_string()],
             "the `from_config` initializer must carry the authored `#[cfg]` and nothing else — \
-             the probe also authors `doc`, `allow`, `expect`, and a derive helper"
+             the probe also authors `doc`, `allow`, `expect`, `cfg_attr`, and a derive helper"
         );
+    }
+
+    /// The initializer's accepted set must stay a subset of the field
+    /// definition's: a presence-changing attribute on the initializer for a
+    /// field the definition did not gate the same way initializes a field that
+    /// isn't there. [`is_forwarded_onto_generated_field_definition`] holds the
+    /// nesting by construction, so this is the regression pin that catches an
+    /// edit splitting the two sites back into independent lists.
+    #[test]
+    fn every_attribute_the_from_config_initializer_takes_also_reaches_the_field_definition() {
+        let custom_fields =
+            extract_custom_fields(&struct_with_a_cfg_alongside_every_other_forwardable_attribute());
+        let authored = attributes_authored_across_probe_custom_fields(&custom_fields);
+        assert!(
+            authored
+                .iter()
+                .any(|attribute| is_forwarded_onto_from_config_initializer(attribute)),
+            "the probe must author at least one initializer-forwarded attribute, or this \
+             test passes vacuously — it authors: {:?}",
+            authored
+                .iter()
+                .copied()
+                .map(attribute_path_ident)
+                .collect::<Vec<String>>()
+        );
+        for attribute in authored {
+            if is_forwarded_onto_from_config_initializer(attribute) {
+                assert!(
+                    is_forwarded_onto_generated_field_definition(attribute),
+                    "`{}` reaches the `from_config` initializer but not the generated \
+                     field definition — the initializer would gate a field the definition \
+                     does not declare the same way",
+                    attribute_path_ident(attribute)
+                );
+            }
+        }
     }
 }
