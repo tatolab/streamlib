@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.1](https://github.com/tatolab/streamlib/compare/v0.8.0...v0.8.1) (2026-07-27)
+
+
+### Bug Fixes
+
+* **extract:** evaluate file-level #![cfg] in reachable.rs walk_file ([#1614](https://github.com/tatolab/streamlib/issues/1614)) ([fd3bc6c](https://github.com/tatolab/streamlib/commit/fd3bc6c75c165723250fa9f9f1b2dedf9136a5a6))
+
 ## [0.8.0](https://github.com/tatolab/streamlib/compare/v0.7.45...v0.8.0) (2026-07-24)
 
 
