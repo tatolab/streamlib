@@ -9,7 +9,7 @@
  * `streamlib.extract_processors`: derive a package's `processors:` manifest
  * section from code rather than a hand-authored list. Where the Rust
  * capability parses source without running it, here extraction *is* import —
- * every top-level module is dynamic-imported, which runs the `@processor`
+ * every processor module is dynamic-imported, which runs the `@processor`
  * decorators, which register into `_processor_registry.ts`; the registered set
  * is then emitted.
  *
@@ -22,10 +22,16 @@
  * so repeated calls (including over the same dir) stay isolated despite Deno
  * caching dynamic imports by URL.
  *
- * Discovery matches the Rust scan's `collect_rs_files` + sort: every top-level
- * `*.ts` beside the `streamlib.yaml`, imported in sorted filename order (test
- * files are skipped). The emitted list is sorted by joined schema-ident string
- * so output is deterministic regardless of import order.
+ * Discovery matches the Rust scan's `collect_rs_files` + sort against the Rust
+ * `src/` root: every `*.ts` under `<packageDir>/processors/`, walked
+ * recursively and imported in sorted relative-path order (`*_test.ts` and
+ * `*.d.ts` are skipped). A `*.ts` beside the `streamlib.yaml` is NOT a
+ * processor module — `processors/` is the one place discovery looks — and a
+ * package with no `processors/` directory yields no processors (a schema-only
+ * package is legitimate). The relative path is exactly the module half of the
+ * `entrypoint:` a built manifest carries (`processors/blur.ts:default`). The
+ * emitted list is sorted by joined schema-ident string so output is
+ * deterministic regardless of import order.
  *
  * @module
  */
@@ -49,12 +55,50 @@ export class ProcessorExtractionError extends Error {
 let extractionGeneration = 0;
 
 /**
- * Import every top-level module under `packageDir` and enumerate processors.
+ * The one directory, relative to the package root, processor modules are
+ * discovered under. Mirrors the Rust extractor's `src/` root.
+ */
+const PROCESSOR_SOURCE_DIR_NAME = "processors";
+
+/**
+ * Collect every extractable `*.ts` under `dir`, as paths relative to the
+ * `processors/` root, recursing into subdirectories.
+ */
+function collectProcessorModuleRelativePaths(
+  dir: string,
+  relativePathPrefix: string,
+  out: string[],
+): void {
+  for (const entry of Deno.readDirSync(dir)) {
+    const relativePath = relativePathPrefix === ""
+      ? entry.name
+      : `${relativePathPrefix}/${entry.name}`;
+    if (entry.isDirectory) {
+      collectProcessorModuleRelativePaths(
+        join(dir, entry.name),
+        relativePath,
+        out,
+      );
+      continue;
+    }
+    if (!entry.isFile) continue;
+    if (!entry.name.endsWith(".ts")) continue;
+    if (entry.name.endsWith("_test.ts") || entry.name.endsWith(".d.ts")) {
+      continue;
+    }
+    out.push(relativePath);
+  }
+}
+
+/**
+ * Import every module under `<packageDir>/processors/` and enumerate processors.
  *
  * Returns the processors registered by `@processor` during import, sorted by
  * joined schema-ident string. The registry is cleared first and every module is
  * re-evaluated under a per-call generation token, so repeated calls in one
- * process — including repeated calls over the same directory — are isolated.
+ * process — including repeated calls over the same directory — are isolated. A
+ * package with no `processors/` directory yields `[]` — a schema-only package
+ * declares no processors.
  *
  * Throws {@linkcode ProcessorExtractionError} if `packageDir` is not a
  * directory.
@@ -76,26 +120,36 @@ export async function extractProcessorsFromDir(
     );
   }
 
-  const tsFiles: string[] = [];
-  for (const entry of Deno.readDirSync(packageDir)) {
-    if (!entry.isFile) continue;
-    const name = entry.name;
-    if (!name.endsWith(".ts")) continue;
-    if (name.endsWith("_test.ts") || name.endsWith(".d.ts")) continue;
-    tsFiles.push(name);
-  }
-  tsFiles.sort();
-
   clearRegisteredProcessors();
+
+  const processorSourceDir = join(packageDir, PROCESSOR_SOURCE_DIR_NAME);
+  let processorSourceDirIsPresent: boolean;
+  try {
+    processorSourceDirIsPresent = Deno.statSync(processorSourceDir).isDirectory;
+  } catch {
+    processorSourceDirIsPresent = false;
+  }
+  if (!processorSourceDirIsPresent) return [];
+
+  const moduleRelativePaths: string[] = [];
+  collectProcessorModuleRelativePaths(
+    processorSourceDir,
+    "",
+    moduleRelativePaths,
+  );
+  moduleRelativePaths.sort();
+
   // Deno caches dynamic imports by URL, so a second call over the same dir
   // would re-import nothing and re-run no `@processor` decorators. Append a
   // per-call generation token to the module URL so each extraction forces a
-  // fresh evaluation of the top-level module and re-registers its processors.
+  // fresh evaluation of the processor module and re-registers its processors.
   // Sibling relative imports (the SDK, the shared registry) drop the query and
   // resolve to their canonical URLs, so the registry stays a single instance.
   const generation = ++extractionGeneration;
-  for (const name of tsFiles) {
-    const href = toFileUrl(join(packageDir, name)).href;
+  for (const relativePath of moduleRelativePaths) {
+    const href = toFileUrl(
+      join(processorSourceDir, ...relativePath.split("/")),
+    ).href;
     await import(`${href}?streamlib_extract=${generation}`);
   }
 

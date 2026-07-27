@@ -7,7 +7,7 @@
 The Python analogue of Rust's `streamlib_processor_extract`: derive a
 package's `processors:` manifest section from code rather than a hand-authored
 list. Where the Rust capability parses source without running it, here
-extraction *is* import — every top-level module is imported, which runs the
+extraction *is* import — every processor module is imported, which runs the
 `@processor` decorators, which register into
 [`_processor_registry`][streamlib._processor_registry]; the registered set is
 then emitted.
@@ -20,12 +20,22 @@ Running in a fresh process guarantees an empty registry to start; the
 in-process [`extract_processors_from_dir`][] entrypoint clears the registry
 itself so it is safe to call repeatedly.
 
-Discovery matches the Rust scan's `collect_rs_files` + sort: every top-level
-`*.py` beside the `streamlib.yaml`, imported in sorted filename order. Modules
-are deduplicated through `sys.modules`, so a processor imported transitively
-by an earlier module registers exactly once. The emitted list is sorted by
-joined schema-ident string so output is deterministic regardless of import
-order.
+Discovery matches the Rust scan's `collect_rs_files` + sort against the Rust
+`src/` root: every `*.py` under `<package_dir>/processors/`, walked
+recursively and imported in sorted path order. A `*.py` beside the
+`streamlib.yaml` is NOT a processor module — `processors/` is the one place
+discovery looks — and a package with no `processors/` directory yields no
+processors (a schema-only package is legitimate). Test scaffolding
+(`test_*.py`, `*_test.py`, `conftest.py`) and `__init__.py` are skipped.
+
+Each module is imported under its dotted path relative to `package_dir`
+(`processors/blur.py` → `processors.blur`, `processors/vision/blur.py` →
+`processors.vision.blur`), which is exactly the module half of the
+`entrypoint:` a built manifest carries. `processors/` needs no `__init__.py`:
+PEP 420 makes it a namespace package. Modules are deduplicated through
+`sys.modules`, so a processor imported transitively by an earlier module
+registers exactly once. The emitted list is sorted by joined schema-ident
+string so output is deterministic regardless of import order.
 """
 
 from __future__ import annotations
@@ -47,13 +57,42 @@ class ProcessorExtractionError(RuntimeError):
     """Raised when a package directory cannot be scanned for processors."""
 
 
+#: The one directory, relative to the package root, processor modules are
+#: discovered under. Mirrors the Rust extractor's `src/` root.
+PROCESSOR_SOURCE_DIR_NAME = "processors"
+
+
+def _is_extractable_processor_module_file(file_name: str) -> bool:
+    """Whether a `*.py` under `processors/` is a module extraction should import."""
+    if file_name in ("__init__.py", "conftest.py"):
+        return False
+    return not (file_name.startswith("test_") or file_name.endswith("_test.py"))
+
+
+def _module_names_including_ancestor_packages(module_names: List[str]) -> List[str]:
+    """Every dotted module name plus each of its ancestor package names.
+
+    Importing `processors.vision.blur` also materialises the `processors` and
+    `processors.vision` namespace packages in `sys.modules`; extraction must
+    stash and restore those too, or a second extraction over a *different*
+    package directory would resolve against the first one's namespace path.
+    """
+    names = set(module_names)
+    for module_name in module_names:
+        segments = module_name.split(".")
+        for depth in range(1, len(segments)):
+            names.add(".".join(segments[:depth]))
+    return sorted(names)
+
+
 def extract_processors_from_dir(package_dir: Path) -> List[RegisteredProcessor]:
-    """Import every top-level module under `package_dir` and enumerate processors.
+    """Import every module under `<package_dir>/processors/` and enumerate processors.
 
     Returns the processors registered by `@processor` during import, sorted by
     joined schema-ident string. The registry is cleared first, so repeated
     calls in one process are isolated. `sys.modules` and `sys.path` are
-    restored on exit.
+    restored on exit. A package with no `processors/` directory yields `[]` —
+    a schema-only package declares no processors.
 
     Raises:
         ProcessorExtractionError: if `package_dir` is not a directory.
@@ -64,21 +103,31 @@ def extract_processors_from_dir(package_dir: Path) -> List[RegisteredProcessor]:
             f"not a directory: {package_dir} — nothing to scan for processors"
         )
 
+    clear_registered_processors()
+
+    processor_source_dir = package_dir / PROCESSOR_SOURCE_DIR_NAME
+    if not processor_source_dir.is_dir():
+        return []
+
     py_files = sorted(
         p
-        for p in package_dir.glob("*.py")
-        if p.is_file() and p.name != "__init__.py"
+        for p in processor_source_dir.rglob("*.py")
+        if p.is_file() and _is_extractable_processor_module_file(p.name)
     )
-    module_names = [p.stem for p in py_files]
-
-    clear_registered_processors()
+    # The dotted path relative to the package root is both the import name
+    # (`package_dir` is on `sys.path`) and the module half of the manifest
+    # `entrypoint:` — full-relative naming keeps nested modules collision-free.
+    module_names = [
+        ".".join(p.relative_to(package_dir).with_suffix("").parts) for p in py_files
+    ]
 
     # Force a fresh import of every target module: stash any pre-existing
     # `sys.modules` entry so a transitive import inside the loop can't collide
     # with (or be shadowed by) a stale module of the same name, then restore
     # on exit. Deduplication is left to the import machinery — a module
     # imported transitively by an earlier file is cached and not re-run.
-    stashed = {name: sys.modules.pop(name, None) for name in module_names}
+    stash_names = _module_names_including_ancestor_packages(module_names)
+    stashed = {name: sys.modules.pop(name, None) for name in stash_names}
     sys.path.insert(0, str(package_dir))
     try:
         for name in module_names:
@@ -86,7 +135,7 @@ def extract_processors_from_dir(package_dir: Path) -> List[RegisteredProcessor]:
         procs = list(registered_processors())
     finally:
         sys.path.remove(str(package_dir))
-        for name in module_names:
+        for name in stash_names:
             sys.modules.pop(name, None)
         for name, prev in stashed.items():
             if prev is not None:
