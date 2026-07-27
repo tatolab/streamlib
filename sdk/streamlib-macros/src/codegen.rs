@@ -939,8 +939,9 @@ mod processor_struct_emit_tests {
         attributes.iter().map(attribute_path_ident).collect()
     }
 
-    /// Every attribute authored across the probe's fields, in authored order.
-    fn authored_attributes(custom_fields: &[CustomField]) -> Vec<&syn::Attribute> {
+    fn attributes_authored_across_probe_custom_fields(
+        custom_fields: &[CustomField],
+    ) -> Vec<&syn::Attribute> {
         custom_fields
             .iter()
             .flat_map(|custom_field| {
@@ -956,11 +957,11 @@ mod processor_struct_emit_tests {
     /// rendering.
     fn forwarded_attribute_path_idents(
         custom_fields: &[CustomField],
-        is_forwarded_onto_site: impl Fn(&syn::Attribute) -> bool,
+        is_forwarded_onto_emission_site: impl Fn(&syn::Attribute) -> bool,
     ) -> Vec<String> {
-        authored_attributes(custom_fields)
+        attributes_authored_across_probe_custom_fields(custom_fields)
             .into_iter()
-            .filter(|attribute| is_forwarded_onto_site(attribute))
+            .filter(|attribute| is_forwarded_onto_emission_site(attribute))
             .map(attribute_path_ident)
             .collect()
     }
@@ -1408,6 +1409,7 @@ mod processor_struct_emit_tests {
                 #[allow(dead_code)]
                 #[expect(unused_parens)]
                 #[cfg(target_os = "linux")]
+                #[cfg_attr(target_os = "linux", allow(unused))]
                 #[serde(skip)]
                 cfg_and_lint_annotated_backend_state: Option<u32>,
             }
@@ -1439,21 +1441,21 @@ mod processor_struct_emit_tests {
             attribute_path_idents(&initializer.attrs),
             vec!["cfg".to_string()],
             "the `from_config` initializer must carry the authored `#[cfg]` and nothing else — \
-             the probe also authors `doc`, `allow`, `expect`, and a derive helper"
+             the probe also authors `doc`, `allow`, `expect`, `cfg_attr`, and a derive helper"
         );
     }
 
-    /// The two emission sites filter the authored list independently, so
-    /// nothing structural stops the initializer from taking an attribute the
-    /// field definition drops. That combination is uncompilable output: a
-    /// presence-changing attribute on the initializer for a field the
-    /// definition did not gate the same way initializes a field that isn't
-    /// there. The initializer's accepted set must stay a subset.
+    /// The initializer's accepted set must stay a subset of the field
+    /// definition's: a presence-changing attribute on the initializer for a
+    /// field the definition did not gate the same way initializes a field that
+    /// isn't there. [`is_forwarded_onto_generated_field_definition`] holds the
+    /// nesting by construction, so this is the regression pin that catches an
+    /// edit splitting the two sites back into independent lists.
     #[test]
     fn every_attribute_the_from_config_initializer_takes_also_reaches_the_field_definition() {
         let custom_fields =
             extract_custom_fields(&struct_with_a_cfg_alongside_every_other_forwardable_attribute());
-        let authored = authored_attributes(&custom_fields);
+        let authored = attributes_authored_across_probe_custom_fields(&custom_fields);
         assert!(
             authored
                 .iter()
