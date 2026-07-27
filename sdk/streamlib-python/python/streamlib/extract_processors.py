@@ -72,10 +72,14 @@ def _is_extractable_processor_module_file(file_name: str) -> bool:
 def _module_names_including_ancestor_packages(module_names: List[str]) -> List[str]:
     """Every dotted module name plus each of its ancestor package names.
 
-    Importing `processors.vision.blur` also materialises the `processors` and
-    `processors.vision` namespace packages in `sys.modules`; extraction must
-    stash and restore those too, or a second extraction over a *different*
-    package directory would resolve against the first one's namespace path.
+    Importing `processors.vision.blur` also materialises `processors` and
+    `processors.vision` in `sys.modules`; extraction must stash and restore
+    those too. A PEP 420 namespace package would recover on its own — its
+    `__path__` recomputes when `sys.path` changes — but a package that ships
+    `processors/__init__.py` is a *regular* package whose `__path__` is a
+    static list pinned at the first package directory, so a second extraction
+    over a different directory would resolve `processors.*` against the first
+    one's tree and raise `ModuleNotFoundError`.
     """
     names = set(module_names)
     for module_name in module_names:

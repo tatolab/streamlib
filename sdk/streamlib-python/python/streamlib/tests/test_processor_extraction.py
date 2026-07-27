@@ -166,12 +166,19 @@ class TestProcessorExtraction:
     def test_repeated_calls_over_distinct_packages_are_isolated(
         self, tmp_path: Path
     ) -> None:
-        # The `processors` namespace package materialised by the first
-        # extraction must not shadow the second package's modules — the
-        # stash/restore covers ancestor package names, not just leaf modules.
+        # The `processors` package materialised by the first extraction must
+        # not shadow the second package's modules — the stash/restore covers
+        # ancestor package names, not just leaf modules. Both fixtures ship a
+        # `processors/__init__.py` on purpose: that makes `processors` a
+        # *regular* package with a static `__path__` pinned at the first root.
+        # A PEP 420 namespace package recovers on its own (its `__path__`
+        # recomputes when `sys.path` changes), so without the `__init__.py`
+        # this test passes even with the ancestor stash reverted.
         first_root = tmp_path / "first"
         second_root = tmp_path / "second"
         _fixture_package(first_root)
+        _write(first_root, "processors/__init__.py", "")
+        _write(second_root, "processors/__init__.py", "")
         _write(
             second_root,
             "processors/other.py",

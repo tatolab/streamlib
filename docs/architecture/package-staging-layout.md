@@ -52,12 +52,21 @@ file at its authored relative path:
 | **Deno** | full tree: every `.ts` + `deno.json` + `.npmrc` + assets | package-local `_generated_/` wire vocab (orchestrator) |
 | **Rust** | full crate source: `Cargo.toml` + `src/` + data / assets | prebuilt cdylib at `lib/<triple>/` (one per packing host) |
 
-The entrypoint declared in `streamlib.yaml` (`module.py:default`,
-`module.ts:default`) names a file **at the package root**, beside
-`streamlib.yaml` — never under a language subdir. The pack assembler
-validates the entrypoint exists, but the file itself travels through
-`collect_source_tree` like any other source file; the emitter dedups the
-overlap.
+The entrypoint declared in `streamlib.yaml` (`processors.module:Type`,
+`processors/module.ts:default`) is a path **relative to the package root** —
+never under a language subdir. The pack assembler neither validates nor
+resolves it (`tools/streamlib-pack/src/lib.rs`, `assemble_artifact`):
+entrypoint resolution is the runtime's job, and the file travels through
+`collect_source_tree` like any other source file.
+
+> ~~The entrypoint names a file at the package root, beside `streamlib.yaml`;
+> the pack assembler validates the entrypoint exists.~~ — Superseded
+> 2026-07-27: processor modules are authored under `<package_root>/processors/`
+> (the polyglot analogue of a Rust crate's `src/`), which is the only root the
+> Python / Deno extractors discover under, so the entrypoint names
+> `processors/…`, not a root-level file. The validation half was already
+> wrong — `assemble_artifact` deliberately does not stat the entrypoint,
+> because a Python object reference is a dotted module path, not a file path.
 
 ### Build outputs are additive, never relocations
 
