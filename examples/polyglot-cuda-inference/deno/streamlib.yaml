@@ -25,7 +25,7 @@ processors:
     description: "Acquires a host-pre-registered cuda OPAQUE_FD surface, validates the DLPack capsule shape, logs VALIDATION_PASSED / VALIDATION_FAILED to stderr"
     runtime: deno
     execution: reactive
-    entrypoint: "cuda_inference.ts:default"
+    entrypoint: "processors/cuda_inference.ts:default"
     inputs:
       - name: video_in
         schema: VideoFrame

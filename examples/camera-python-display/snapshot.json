@@ -12,7 +12,7 @@
       "config": {
         "project_path": "examples/camera-python-display/python",
         "class_name": "AvatarCharacter",
-        "entry_point": "avatar_character.py"
+        "entry_point": "processors/avatar_character.py"
       }
     },
     {
@@ -26,7 +26,7 @@
       "config": {
         "project_path": "examples/camera-python-display/python",
         "class_name": "CyberpunkLowerThird",
-        "entry_point": "cyberpunk_lower_third.py"
+        "entry_point": "processors/cyberpunk_lower_third.py"
       }
     },
     {
@@ -35,7 +35,7 @@
       "config": {
         "project_path": "examples/camera-python-display/python",
         "class_name": "CyberpunkWatermark",
-        "entry_point": "cyberpunk_watermark.py"
+        "entry_point": "processors/cyberpunk_watermark.py"
       }
     },
     {
@@ -49,7 +49,7 @@
       "config": {
         "project_path": "examples/camera-python-display/python",
         "class_name": "CyberpunkGlitch",
-        "entry_point": "cyberpunk_glitch.py"
+        "entry_point": "processors/cyberpunk_glitch.py"
       }
     },
     {

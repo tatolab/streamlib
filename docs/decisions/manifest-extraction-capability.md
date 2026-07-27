@@ -40,11 +40,19 @@ Rust source without running it; Python and Deno have no comparable
 parse-without-run path for decorator semantics, so **extraction is import**:
 applying `@processor(...)` at import time registers the processor's structured
 identity into a process-global registry (`_processor_registry`), and the
-per-language extractor imports every top-level module beside the
-`streamlib.yaml` and enumerates what registered. Only the package identity
-(`package: { org, name, version }`) is still read from `streamlib.yaml`; the
-decorator no longer validates its short name against a hand-authored
-`processors:` list — the decorator *is* that list.
+per-language extractor imports every processor module and enumerates what
+registered. Only the package identity (`package: { org, name, version }`) is
+still read from `streamlib.yaml`; the decorator no longer validates its short
+name against a hand-authored `processors:` list — the decorator *is* that list.
+
+> ~~The per-language extractor imports every top-level module beside the
+> `streamlib.yaml`.~~ — Superseded 2026-07-27 by
+> `sdk/streamlib-python/python/streamlib/extract_processors.py` and
+> `sdk/streamlib-deno/extract_processors.ts`: discovery is a recursive walk of
+> `<package_dir>/processors/`, the polyglot analogue of the Rust scan's `src/`
+> root. A module authored beside the `streamlib.yaml` is not a processor
+> module, and a package with no `processors/` directory extracts to the empty
+> set.
 
 The extractors run in a fresh subprocess (`python -m
 streamlib.extract_processors <dir>` / `deno run --allow-read

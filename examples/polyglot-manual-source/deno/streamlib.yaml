@@ -25,7 +25,7 @@ processors:
     description: "Manual source: spawns a worker Promise in start() that publishes Videoframes on the frame_out port at MonotonicTimer cadence. Reference example for the start()-must-return-promptly contract and #604's worker-task iceoryx2 publish path."
     runtime: deno
     execution: manual
-    entrypoint: "manual_source.ts:default"
+    entrypoint: "processors/manual_source.ts:default"
     outputs:
       - name: frame_out
         schema: VideoFrame

@@ -29,8 +29,10 @@ the artifact:
   > in code; a bare module with no `streamlib.yaml` is a working local
   > processor. The mirror invariant still matters for *authored assets a
   > package ships and reads at runtime* (below), not for manifest lookup.
-- A Deno processor's `./_generated_/<org>__<pkg>/<type>.ts` import (only
-  when the consumer opts into `streamlib generate` typed views).
+- A Deno processor's `../_generated_/<org>__<pkg>/<type>.ts` import — the
+  codegen tail writes `_generated_/` at the package root and the processor
+  module sits under `processors/` (only when the consumer opts into
+  `streamlib generate` typed views).
 - Any asset a package ships and reads at runtime (`./shaders/x.wgsl`,
   `./models/y.bin`, embedded video/html/data) — at its authored path.
 
@@ -52,12 +54,42 @@ file at its authored relative path:
 | **Deno** | full tree: every `.ts` + `deno.json` + `.npmrc` + assets | package-local `_generated_/` wire vocab (orchestrator) |
 | **Rust** | full crate source: `Cargo.toml` + `src/` + data / assets | prebuilt cdylib at `lib/<triple>/` (one per packing host) |
 
-The entrypoint declared in `streamlib.yaml` (`module.py:default`,
-`module.ts:default`) names a file **at the package root**, beside
-`streamlib.yaml` — never under a language subdir. The pack assembler
-validates the entrypoint exists, but the file itself travels through
-`collect_source_tree` like any other source file; the emitter dedups the
-overlap.
+Processor modules are authored under `<package_root>/processors/` — the
+polyglot analogue of a Rust crate's `src/`, and the only root the Python and
+Deno extractors discover under. The entrypoint declared in `streamlib.yaml`
+(`processors.module:Type`, `processors/module.ts:default`) is **relative to
+the directory holding that `streamlib.yaml`**: the Python subprocess runner
+puts that directory on `sys.path` and imports the dotted module name, the Deno
+runner joins the module path onto it. Whatever prefix reaches the module from
+the manifest's own directory is the prefix the entrypoint carries. The pack
+assembler neither validates nor resolves it
+(`tools/streamlib-pack/src/lib.rs`, `assemble_artifact`): entrypoint
+resolution is the runtime's job, and the file travels through
+`collect_source_tree` like any other source file.
+
+> ~~The entrypoint names a file at the package root, beside `streamlib.yaml`;
+> the pack assembler validates the entrypoint exists.~~ — Superseded
+> 2026-07-27 by the `processors/` discovery root in
+> `sdk/streamlib-python/python/streamlib/extract_processors.py` and
+> `sdk/streamlib-deno/extract_processors.ts`: the entrypoint names
+> `processors/…`, not a root-level file. The validation half was already
+> wrong — `assemble_artifact` deliberately does not stat the entrypoint,
+> because a Python object reference is a dotted module path, not a file path.
+
+### Generated session packages
+
+A live-submitted `@session/<name>` package
+(`register_processor_from_source`) has no authored tree to mirror — the engine
+generates the whole package from submitted source text. It writes
+`streamlib.yaml` at the package root, the source at
+`<runtime_key>/processors/<module>`, and the language's
+dependency-resolution artifact (`pyproject.toml` / `deno.json`) at the root,
+because the build orchestrator's port-derivation tail points each language's
+extractor at `<staged>/<runtime_key>`. The entrypoint therefore carries the
+language dir — `python.processors.widget:Widget`,
+`deno/processors/widget.ts:Widget` — which is exactly the "relative to the
+manifest's own directory" rule above. `python/` and `python/processors/` carry
+no `__init__.py`; PEP 420 makes the dotted path importable.
 
 ### Build outputs are additive, never relocations
 
@@ -133,6 +165,11 @@ the symptom pointed at the decorator rather than at the relocation that
 actually caused it. The fix was not to teach the decorator to climb
 directories; it was to stop relocating, so the authored layout and the
 staged layout agree by construction.
+
+The generated session package above is not an exception to this rule: there is
+no authored tree, so nothing is relocated. The layout it *generates* is
+declared by the entrypoint it generates with it, which is what the relocation
+bug got wrong.
 
 > ~~The historical trigger for this rule was `@processor` reporting
 > `streamlib.yaml not found` after a relocation.~~ — Corrected 2026-07-19:

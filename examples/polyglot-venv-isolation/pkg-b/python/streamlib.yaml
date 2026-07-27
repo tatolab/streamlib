@@ -12,4 +12,4 @@ processors:
     execution:
       type: continuous
       interval_ms: 16
-    entrypoint: "numpy_version_reporter:NumpyVersionReporter"
+    entrypoint: "processors.numpy_version_reporter:NumpyVersionReporter"

@@ -25,7 +25,7 @@ processors:
     description: "Manual source: spawns a worker thread in start() that publishes Videoframes on the frame_out port at MonotonicTimer cadence. Reference example for the start()-must-return-promptly contract and #604's worker-thread iceoryx2 publish path."
     runtime: python
     execution: manual
-    entrypoint: "manual_source:PolyglotManualSource"
+    entrypoint: "processors.manual_source:PolyglotManualSource"
     outputs:
       - name: frame_out
         schema: VideoFrame

@@ -25,7 +25,7 @@ processors:
     description: "Acquires a host-pre-registered cuda OPAQUE_FD surface, uploads a test image, runs YOLOv8n via torch.from_dlpack, writes annotated PNG"
     runtime: python
     execution: reactive
-    entrypoint: "cuda_inference:CudaInferenceProcessor"
+    entrypoint: "processors.cuda_inference:CudaInferenceProcessor"
     inputs:
       - name: video_in
         schema: VideoFrame

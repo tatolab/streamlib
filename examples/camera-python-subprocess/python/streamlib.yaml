@@ -24,7 +24,7 @@ processors:
     description: "Grayscale processor — converts video frames to grayscale via Python subprocess"
     runtime: python
     execution: reactive
-    entrypoint: "grayscale_processor:GrayscaleProcessor"
+    entrypoint: "processors.grayscale_processor:GrayscaleProcessor"
     inputs:
       - name: video_in
         schema: VideoFrame

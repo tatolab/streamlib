@@ -46,8 +46,8 @@ pub use lockfile::{
     write_lockfile, write_modules_lockfile,
 };
 pub use manifest::{
-    DependencySpec, GitDependency, Manifest, PackageMetadata, PathDependency, SchemaEntry,
-    VersionDependency,
+    DependencySpec, GitDependency, Manifest, PACKAGE_PROCESSOR_SOURCE_DIR_NAME, PackageMetadata,
+    PathDependency, SchemaEntry, VersionDependency,
 };
 pub use package_source::{
     LINK_CHECKOUT_ENV, PACKAGE_SOURCE_ENV, PackageSource, PackageSourceClient,

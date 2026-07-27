@@ -24,7 +24,7 @@ processors:
     description: "MediaPipe pose detection + stylized 3D character as PiP overlay"
     runtime: python
     execution: reactive
-    entrypoint: "avatar_character:AvatarCharacter"
+    entrypoint: "processors.avatar_character:AvatarCharacter"
     inputs:
       - name: video_in
         schema: VideoFrame
@@ -38,7 +38,7 @@ processors:
     execution:
       type: continuous
       interval_ms: 16
-    entrypoint: "cyberpunk_lower_third:CyberpunkLowerThird"
+    entrypoint: "processors.cyberpunk_lower_third:CyberpunkLowerThird"
     outputs:
       - name: video_out
         schema: VideoFrame
@@ -49,7 +49,7 @@ processors:
     execution:
       type: continuous
       interval_ms: 16
-    entrypoint: "cyberpunk_watermark:CyberpunkWatermark"
+    entrypoint: "processors.cyberpunk_watermark:CyberpunkWatermark"
     outputs:
       - name: video_out
         schema: VideoFrame
@@ -58,7 +58,7 @@ processors:
     description: "Glitch post-processing — RGB separation, scanlines, slice displacement"
     runtime: python
     execution: reactive
-    entrypoint: "cyberpunk_glitch:CyberpunkGlitch"
+    entrypoint: "processors.cyberpunk_glitch:CyberpunkGlitch"
     inputs:
       - name: video_in
         schema: VideoFrame
@@ -70,7 +70,7 @@ processors:
     description: "Cyberpunk overlay with Skia GPU rendering — reference @processor adopter"
     runtime: python
     execution: reactive
-    entrypoint: "cyberpunk_processor:CyberpunkProcessor"
+    entrypoint: "processors.cyberpunk_processor:CyberpunkProcessor"
     inputs:
       - name: video_in
         schema: VideoFrame

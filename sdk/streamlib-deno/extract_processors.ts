@@ -9,7 +9,7 @@
  * `streamlib.extract_processors`: derive a package's `processors:` manifest
  * section from code rather than a hand-authored list. Where the Rust
  * capability parses source without running it, here extraction *is* import —
- * every top-level module is dynamic-imported, which runs the `@processor`
+ * every processor module is dynamic-imported, which runs the `@processor`
  * decorators, which register into `_processor_registry.ts`; the registered set
  * is then emitted.
  *
@@ -22,10 +22,28 @@
  * so repeated calls (including over the same dir) stay isolated despite Deno
  * caching dynamic imports by URL.
  *
- * Discovery matches the Rust scan's `collect_rs_files` + sort: every top-level
- * `*.ts` beside the `streamlib.yaml`, imported in sorted filename order (test
- * files are skipped). The emitted list is sorted by joined schema-ident string
- * so output is deterministic regardless of import order.
+ * `processors/` is the discovery root, the polyglot analogue of the Rust
+ * extractor's `src/`: every `*.ts` under `<packageDir>/processors/`, walked
+ * recursively. A `*.ts` beside the `streamlib.yaml` is NOT a processor module,
+ * and a package with no `processors/` directory yields no processors (a
+ * schema-only package is legitimate). Test scaffolding is skipped — `*_test.ts`
+ * and `*.test.ts` (both of `deno test`'s own conventions), `*.d.ts`, and any
+ * `tests/` or `__tests__/` directory, the same skip set the Python extractor
+ * applies. Each collected path is relative to the PACKAGE ROOT, so it is
+ * exactly the module half of the `entrypoint:` a built manifest carries
+ * (`processors/blur.ts:default`).
+ *
+ * The root governs DISCOVERY, not registration: a `@processor` declared in a
+ * module outside `processors/` still registers if a discovered module imports
+ * it, and the per-call isolation guarantee below covers only the modules under
+ * `processors/` — a transitively-imported module stays in Deno's module cache
+ * and its decorators do not re-run on a second call.
+ *
+ * Modules are imported in sorted path-segment order (matching Python's
+ * `Path.parts` ordering, so both runtimes evaluate a nested tree in the same
+ * sequence); the emitted list is then sorted by joined schema-ident codepoint
+ * order, so output is deterministic regardless of import order and identical
+ * across host locales.
  *
  * @module
  */
@@ -49,12 +67,83 @@ export class ProcessorExtractionError extends Error {
 let extractionGeneration = 0;
 
 /**
- * Import every top-level module under `packageDir` and enumerate processors.
+ * The one directory, relative to the package root, processor modules are
+ * discovered under. Mirrors the Rust extractor's `src/` root.
+ */
+const PROCESSOR_SOURCE_DIR_NAME = "processors";
+
+/**
+ * Directory names under `processors/` that hold test scaffolding, never
+ * processor modules. Mirrors the Python extractor's directory skip set.
+ */
+const TEST_SCAFFOLDING_DIR_NAMES = ["tests", "__tests__"];
+
+/**
+ * Whether a `*.ts` under `processors/` is a module extraction should import.
+ *
+ * `deno test` collects BOTH `*_test.ts` and `*.test.ts`; a module matching
+ * either is test scaffolding, and importing it would register its fixture
+ * processors into the emitted manifest.
+ */
+function isExtractableProcessorModuleFile(fileName: string): boolean {
+  if (!fileName.endsWith(".ts")) return false;
+  if (fileName.endsWith(".d.ts")) return false;
+  return !fileName.endsWith("_test.ts") && !fileName.endsWith(".test.ts");
+}
+
+/**
+ * Collect every extractable `*.ts` under `dir`, as paths relative to the
+ * PACKAGE ROOT (`processors/blur.ts`), recursing into subdirectories.
+ */
+function collectProcessorModuleRelativePaths(
+  dir: string,
+  relativePathPrefix: string,
+  out: string[],
+): void {
+  for (const entry of Deno.readDirSync(dir)) {
+    const relativePath = `${relativePathPrefix}/${entry.name}`;
+    if (entry.isDirectory) {
+      if (TEST_SCAFFOLDING_DIR_NAMES.includes(entry.name)) continue;
+      collectProcessorModuleRelativePaths(
+        join(dir, entry.name),
+        relativePath,
+        out,
+      );
+      continue;
+    }
+    if (!entry.isFile) continue;
+    if (!isExtractableProcessorModuleFile(entry.name)) continue;
+    out.push(relativePath);
+  }
+}
+
+/**
+ * Order two package-root-relative module paths by path segment, the ordering
+ * Python's `Path.parts` sort produces — so a nested processor tree is imported
+ * in the same sequence under both runtimes. Raw string order would not:
+ * `.` (0x2E) sorts before `/` (0x2F), putting `nested.ts` ahead of
+ * `nested/deep.ts` while Python puts the directory first.
+ */
+function compareProcessorModuleRelativePaths(left: string, right: string): number {
+  const leftSegments = left.split("/");
+  const rightSegments = right.split("/");
+  const sharedDepth = Math.min(leftSegments.length, rightSegments.length);
+  for (let depth = 0; depth < sharedDepth; depth++) {
+    if (leftSegments[depth] === rightSegments[depth]) continue;
+    return leftSegments[depth] < rightSegments[depth] ? -1 : 1;
+  }
+  return leftSegments.length - rightSegments.length;
+}
+
+/**
+ * Import every module under `<packageDir>/processors/` and enumerate processors.
  *
  * Returns the processors registered by `@processor` during import, sorted by
  * joined schema-ident string. The registry is cleared first and every module is
  * re-evaluated under a per-call generation token, so repeated calls in one
- * process — including repeated calls over the same directory — are isolated.
+ * process — including repeated calls over the same directory — are isolated. A
+ * package with no `processors/` directory yields `[]` — a schema-only package
+ * declares no processors.
  *
  * Throws {@linkcode ProcessorExtractionError} if `packageDir` is not a
  * directory.
@@ -76,33 +165,46 @@ export async function extractProcessorsFromDir(
     );
   }
 
-  const tsFiles: string[] = [];
-  for (const entry of Deno.readDirSync(packageDir)) {
-    if (!entry.isFile) continue;
-    const name = entry.name;
-    if (!name.endsWith(".ts")) continue;
-    if (name.endsWith("_test.ts") || name.endsWith(".d.ts")) continue;
-    tsFiles.push(name);
-  }
-  tsFiles.sort();
-
   clearRegisteredProcessors();
+
+  const processorSourceDir = join(packageDir, PROCESSOR_SOURCE_DIR_NAME);
+  let processorSourceDirIsPresent: boolean;
+  try {
+    processorSourceDirIsPresent = Deno.statSync(processorSourceDir).isDirectory;
+  } catch {
+    processorSourceDirIsPresent = false;
+  }
+  if (!processorSourceDirIsPresent) return [];
+
+  const moduleRelativePaths: string[] = [];
+  collectProcessorModuleRelativePaths(
+    processorSourceDir,
+    PROCESSOR_SOURCE_DIR_NAME,
+    moduleRelativePaths,
+  );
+  moduleRelativePaths.sort(compareProcessorModuleRelativePaths);
+
   // Deno caches dynamic imports by URL, so a second call over the same dir
   // would re-import nothing and re-run no `@processor` decorators. Append a
   // per-call generation token to the module URL so each extraction forces a
-  // fresh evaluation of the top-level module and re-registers its processors.
+  // fresh evaluation of the processor module and re-registers its processors.
   // Sibling relative imports (the SDK, the shared registry) drop the query and
   // resolve to their canonical URLs, so the registry stays a single instance.
   const generation = ++extractionGeneration;
-  for (const name of tsFiles) {
-    const href = toFileUrl(join(packageDir, name)).href;
+  for (const relativePath of moduleRelativePaths) {
+    const href = toFileUrl(join(packageDir, ...relativePath.split("/"))).href;
     await import(`${href}?streamlib_extract=${generation}`);
   }
 
+  // Codepoint order, matching the Python and Rust extractors.
+  // `String.localeCompare` would order by the host's ICU collation — a
+  // machine-dependent, case-insensitive-at-the-primary-level result.
   const procs = getRegisteredProcessors().slice();
-  procs.sort((a, b) =>
-    String(a.schemaIdent).localeCompare(String(b.schemaIdent))
-  );
+  procs.sort((a, b) => {
+    const left = String(a.schemaIdent);
+    const right = String(b.schemaIdent);
+    return left < right ? -1 : left > right ? 1 : 0;
+  });
   return procs;
 }
 
