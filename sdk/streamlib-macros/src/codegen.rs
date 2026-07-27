@@ -923,7 +923,7 @@ mod processor_struct_emit_tests {
 
     /// `TokenStream::to_string` spacing is not part of any contract, so
     /// assertions compare against a whitespace-free rendering.
-    fn render_without_whitespace(tokens: TokenStream) -> String {
+    fn render_token_stream_without_whitespace(tokens: TokenStream) -> String {
         tokens
             .to_string()
             .chars()
@@ -931,23 +931,114 @@ mod processor_struct_emit_tests {
             .collect()
     }
 
-    /// The attribute path idents the filter kept for one emission site, in
-    /// authored order — the decision the filter actually makes, read without
-    /// going through a rendering.
+    /// The path ident of each attribute, in authored order.
+    fn attribute_path_idents(attributes: &[syn::Attribute]) -> Vec<String> {
+        attributes
+            .iter()
+            .map(|attribute| {
+                let path = attribute.path();
+                path.get_ident()
+                    .map(Ident::to_string)
+                    .unwrap_or_else(|| render_token_stream_without_whitespace(quote! { #path }))
+            })
+            .collect()
+    }
+
+    /// The attribute path idents the filter kept for one emission site — the
+    /// decision the filter actually makes, read without going through a
+    /// rendering.
     fn forwarded_attribute_path_idents(
         custom_fields: &[CustomField],
         attributes_for_site: impl Fn(&CustomField) -> &Vec<syn::Attribute>,
     ) -> Vec<String> {
         custom_fields
             .iter()
-            .flat_map(|custom_field| attributes_for_site(custom_field).iter())
-            .map(|attribute| {
-                let path = attribute.path();
-                path.get_ident()
-                    .map(Ident::to_string)
-                    .unwrap_or_else(|| render_without_whitespace(quote! { #path }))
+            .flat_map(|custom_field| attribute_path_idents(attributes_for_site(custom_field)))
+            .collect()
+    }
+
+    fn parse_generated_processor_struct(tokens: TokenStream) -> ItemStruct {
+        syn::parse2(tokens).expect("the struct emitter must emit a parseable `struct Processor`")
+    }
+
+    fn declared_field_names(generated_struct: &ItemStruct) -> Vec<String> {
+        match &generated_struct.fields {
+            syn::Fields::Named(fields) => fields
+                .named
+                .iter()
+                .filter_map(|field| field.ident.as_ref().map(Ident::to_string))
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    fn declared_field<'a>(
+        generated_struct: &'a ItemStruct,
+        field_name: &str,
+    ) -> Option<&'a syn::Field> {
+        match &generated_struct.fields {
+            syn::Fields::Named(fields) => fields.named.iter().find(|field| {
+                field
+                    .ident
+                    .as_ref()
+                    .is_some_and(|ident| ident == field_name)
+            }),
+            _ => None,
+        }
+    }
+
+    fn type_path_last_segment(ty: &syn::Type) -> Option<String> {
+        match ty {
+            syn::Type::Path(type_path) => type_path
+                .path
+                .segments
+                .last()
+                .map(|segment| segment.ident.to_string()),
+            _ => None,
+        }
+    }
+
+    /// The `Self { .. }` literal the emitted `from_config` returns, so field
+    /// assertions read the struct expression rather than its rendering.
+    fn parse_generated_from_config_struct_expression(tokens: TokenStream) -> syn::ExprStruct {
+        let from_config: syn::ImplItemFn =
+            syn::parse2(tokens).expect("the from_config emitter must emit a parseable method");
+        let tail = from_config
+            .block
+            .stmts
+            .last()
+            .expect("from_config must have a body");
+        let syn::Stmt::Expr(syn::Expr::Call(ok_call), _) = tail else {
+            panic!("from_config must end in an `Ok(..)` tail expression — got: {tail:?}");
+        };
+        match ok_call.args.first() {
+            Some(syn::Expr::Struct(struct_expression)) => struct_expression.clone(),
+            other => panic!("from_config must wrap a `Self {{ .. }}` literal — got: {other:?}"),
+        }
+    }
+
+    fn initialized_field_names(struct_expression: &syn::ExprStruct) -> Vec<String> {
+        struct_expression
+            .fields
+            .iter()
+            .filter_map(|field_value| match &field_value.member {
+                syn::Member::Named(ident) => Some(ident.to_string()),
+                syn::Member::Unnamed(_) => None,
             })
             .collect()
+    }
+
+    fn initialized_field<'a>(
+        struct_expression: &'a syn::ExprStruct,
+        field_name: &str,
+    ) -> Option<&'a syn::FieldValue> {
+        struct_expression
+            .fields
+            .iter()
+            .find(|field_value| match &field_value.member {
+                syn::Member::Named(ident) => ident == field_name,
+                syn::Member::Unnamed(_) => false,
+            })
     }
 
     fn platform_conditional_field_struct() -> ItemStruct {
@@ -988,49 +1079,91 @@ mod processor_struct_emit_tests {
     /// The `inputs` / `outputs` fields are the `#[repr(C)]` `(handle, vtable)`
     /// PluginAbiObjects the host patches through
     /// `ProcessorVTable::set_iceoryx2_resources`, so their presence is a plugin
-    /// ABI contract, not an authoring convenience: they are emitted from the
-    /// port schema ahead of the custom fields and no authored field attribute
-    /// may ever reach them. Compiling out every authored field is the
-    /// adversarial case — if the #1588 attribute filter ever widened to the
-    /// whole field list, these assertions are what catches it.
+    /// ABI contract, not an authoring convenience: no authored field attribute
+    /// may ever reach them, at either emission site. Compiling out every
+    /// authored field is the adversarial case — if the #1588 attribute filter
+    /// ever widened to the whole field list, these assertions are what catches
+    /// it. Declaration order is deliberately not asserted: `Processor` is not
+    /// `#[repr(C)]`, so its field order is not a contract.
     #[test]
     fn plugin_abi_object_port_fields_stay_unconditional_when_every_custom_field_is_compiled_out() {
         let schema = schema_declaring_iceoryx2_input_and_output_ports();
         let custom_fields = extract_custom_fields(&struct_with_every_custom_field_compiled_out());
 
-        let struct_rendered = render_without_whitespace(generate_processor_struct_from_schema(
-            &schema,
-            &None,
-            &custom_fields,
-        ));
-        assert!(
-            struct_rendered.contains(
-                "pubstructProcessor{pubinputs:__streamlib_sdk::iceoryx2::InputMailboxes,\
-                 puboutputs:__streamlib_sdk::iceoryx2::OutputWriter,"
-            ),
-            "the PluginAbiObject port fields must open the generated struct with \
-             nothing interposed — got: {}",
-            struct_rendered
+        let generated_struct = parse_generated_processor_struct(
+            generate_processor_struct_from_schema(&schema, &None, &custom_fields),
         );
-        assert!(
-            struct_rendered.contains("#[cfg(any())]pubnever_compiled_backend_state"),
-            "the probe must actually exercise the attribute filter — got: {}",
-            struct_rendered
+        for (port_field_name, port_field_type) in
+            [("inputs", "InputMailboxes"), ("outputs", "OutputWriter")]
+        {
+            let port_field =
+                declared_field(&generated_struct, port_field_name).unwrap_or_else(|| {
+                    panic!(
+                        "the generated Processor struct must declare the `{}` PluginAbiObject port \
+                     field — it declares {:?}",
+                        port_field_name,
+                        declared_field_names(&generated_struct)
+                    )
+                });
+            assert!(
+                port_field.attrs.is_empty(),
+                "the `{}` port field must be unconditional — no authored field attribute may \
+                 reach it, but it carries {:?}",
+                port_field_name,
+                attribute_path_idents(&port_field.attrs)
+            );
+            assert!(
+                matches!(port_field.vis, syn::Visibility::Public(_)),
+                "the `{}` port field must stay `pub` — the host patches it after `from_config` \
+                 returns",
+                port_field_name
+            );
+            assert_eq!(
+                type_path_last_segment(&port_field.ty).as_deref(),
+                Some(port_field_type),
+                "the `{}` port field must keep its PluginAbiObject type",
+                port_field_name
+            );
+        }
+
+        let compiled_out_field = declared_field(&generated_struct, "never_compiled_backend_state")
+            .unwrap_or_else(|| {
+                panic!(
+                    "the probe's compiled-out field must still be emitted so this test exercises \
+                     the attribute filter — the struct declares {:?}",
+                    declared_field_names(&generated_struct)
+                )
+            });
+        assert_eq!(
+            attribute_path_idents(&compiled_out_field.attrs),
+            vec!["cfg".to_string()],
+            "the probe must actually exercise the attribute filter — its compiled-out field has \
+             to carry the authored `#[cfg]`"
         );
 
-        let from_config_rendered = render_without_whitespace(generate_from_config_from_schema(
-            &schema,
-            &None,
-            &custom_fields,
-        ));
-        assert!(
-            from_config_rendered.contains(
-                "Ok(Self{inputs:__streamlib_sdk::iceoryx2::InputMailboxes::empty(),\
-                 outputs:__streamlib_sdk::iceoryx2::OutputWriter::empty(),"
-            ),
-            "the PluginAbiObject port initializers must stay unconditional — got: {}",
-            from_config_rendered
+        let from_config_struct_expression = parse_generated_from_config_struct_expression(
+            generate_from_config_from_schema(&schema, &None, &custom_fields),
         );
+        for port_field_name in ["inputs", "outputs"] {
+            let port_initializer =
+                initialized_field(&from_config_struct_expression, port_field_name).unwrap_or_else(
+                    || {
+                        panic!(
+                            "`from_config` must initialize the `{}` PluginAbiObject port field — \
+                             it initializes {:?}",
+                            port_field_name,
+                            initialized_field_names(&from_config_struct_expression)
+                        )
+                    },
+                );
+            assert!(
+                port_initializer.attrs.is_empty(),
+                "the `{}` port initializer must stay unconditional — no authored field attribute \
+                 may reach it, but it carries {:?}",
+                port_field_name,
+                attribute_path_idents(&port_initializer.attrs)
+            );
+        }
     }
 
     /// Locks #1588: a `#[cfg]` authored on a processor struct field must be
@@ -1040,11 +1173,9 @@ mod processor_struct_emit_tests {
     #[test]
     fn processor_struct_preserves_cfg_attribute_on_custom_field() {
         let custom_fields = extract_custom_fields(&platform_conditional_field_struct());
-        let rendered = render_without_whitespace(generate_processor_struct_from_schema(
-            &minimal_schema(),
-            &None,
-            &custom_fields,
-        ));
+        let rendered = render_token_stream_without_whitespace(
+            generate_processor_struct_from_schema(&minimal_schema(), &None, &custom_fields),
+        );
         assert!(
             rendered.contains(r#"#[cfg(target_os="linux")]publinux_only_backend_state"#),
             "generated Processor struct must carry the authored `#[cfg]` on \
@@ -1064,7 +1195,7 @@ mod processor_struct_emit_tests {
     #[test]
     fn from_config_initializer_preserves_cfg_attribute_on_custom_field() {
         let custom_fields = extract_custom_fields(&platform_conditional_field_struct());
-        let rendered = render_without_whitespace(generate_from_config_from_schema(
+        let rendered = render_token_stream_without_whitespace(generate_from_config_from_schema(
             &minimal_schema(),
             &None,
             &custom_fields,
@@ -1096,11 +1227,9 @@ mod processor_struct_emit_tests {
     #[test]
     fn processor_struct_forwards_doc_and_lint_attributes_but_not_cfg_attr() {
         let custom_fields = extract_custom_fields(&annotated_field_struct());
-        let rendered = render_without_whitespace(generate_processor_struct_from_schema(
-            &minimal_schema(),
-            &None,
-            &custom_fields,
-        ));
+        let rendered = render_token_stream_without_whitespace(
+            generate_processor_struct_from_schema(&minimal_schema(), &None, &custom_fields),
+        );
         assert!(
             rendered.contains("Authoreddoconaprocessorfield."),
             "generated Processor struct must carry the authored doc — got: {}",
@@ -1162,10 +1291,10 @@ mod processor_struct_emit_tests {
                     previous_ident_was_compile_error = ident == "compile_error";
                 }
                 TokenTree::Group(group) => {
-                    if previous_ident_was_compile_error {
-                        if let Ok(message) = syn::parse2::<syn::LitStr>(group.stream()) {
-                            messages.push(message.value());
-                        }
+                    if previous_ident_was_compile_error
+                        && let Ok(message) = syn::parse2::<syn::LitStr>(group.stream())
+                    {
+                        messages.push(message.value());
                     }
                     previous_ident_was_compile_error = false;
                     messages.extend(compile_error_messages(group.stream()));
@@ -1226,9 +1355,8 @@ mod processor_struct_emit_tests {
     /// failure class as #1588 itself.
     #[test]
     fn cfg_attr_on_a_processor_field_emits_a_compile_error_naming_the_field() {
-        let messages = compile_error_messages(expand_probe_processor(
-            &struct_with_cfg_attr_on_a_field(),
-        ));
+        let messages =
+            compile_error_messages(expand_probe_processor(&struct_with_cfg_attr_on_a_field()));
         assert_eq!(
             messages.len(),
             1,
@@ -1264,29 +1392,45 @@ mod processor_struct_emit_tests {
         );
     }
 
-    /// The `from_config` struct-literal site takes `cfg` only — a `doc` on a
-    /// struct-expression field is an `unused_doc_comments` warning and the
-    /// gates deny warnings.
+    fn struct_with_a_cfg_alongside_every_other_forwardable_attribute() -> ItemStruct {
+        syn::parse_quote! {
+            struct CfgAlongsideEveryOtherAttributeProbe {
+                /// Authored doc on a processor field.
+                #[allow(dead_code)]
+                #[expect(unused_parens)]
+                #[cfg(target_os = "linux")]
+                #[serde(skip)]
+                cfg_and_lint_annotated_backend_state: Option<u32>,
+            }
+        }
+    }
+
+    /// The `from_config` struct-literal site takes `cfg` and nothing else — a
+    /// `doc` on a struct-expression field is an `unused_doc_comments` warning
+    /// and the gates deny warnings.
     #[test]
     fn from_config_initializer_forwards_cfg_only() {
-        let custom_fields = extract_custom_fields(&annotated_field_struct());
-        let rendered = render_without_whitespace(generate_from_config_from_schema(
-            &minimal_schema(),
-            &None,
-            &custom_fields,
-        ));
-        assert!(
-            rendered.contains("annotated_backend_state:"),
-            "from_config must still initialize the field — got: {}",
-            rendered
+        let custom_fields =
+            extract_custom_fields(&struct_with_a_cfg_alongside_every_other_forwardable_attribute());
+        let from_config_struct_expression = parse_generated_from_config_struct_expression(
+            generate_from_config_from_schema(&minimal_schema(), &None, &custom_fields),
         );
-        for dropped in ["doc", "allow", "expect", "cfg_attr", "serde"] {
-            assert!(
-                !rendered.contains(dropped),
-                "from_config initializer must forward `cfg` only, found `{}` — got: {}",
-                dropped,
-                rendered
-            );
-        }
+
+        let initializer = initialized_field(
+            &from_config_struct_expression,
+            "cfg_and_lint_annotated_backend_state",
+        )
+        .unwrap_or_else(|| {
+            panic!(
+                "`from_config` must still initialize the authored field — it initializes {:?}",
+                initialized_field_names(&from_config_struct_expression)
+            )
+        });
+        assert_eq!(
+            attribute_path_idents(&initializer.attrs),
+            vec!["cfg".to_string()],
+            "the `from_config` initializer must carry the authored `#[cfg]` and nothing else — \
+             the probe also authors `doc`, `allow`, `expect`, and a derive helper"
+        );
     }
 }
