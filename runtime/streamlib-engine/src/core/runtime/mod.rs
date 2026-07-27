@@ -13,12 +13,6 @@ mod status;
 mod tap;
 
 pub use install::{InstallError, InstallOptions, InstallReport, install};
-pub use streamlib_idents::app_modules::{
-    APP_MODULES_DIR_NAME, ActiveLinkSlotPolicy, AddPackageOptions, AddPackageReport,
-    AddPackageSource, AppModulesDir, AppModulesError, InstallFromLockfileReport,
-    InstalledFromLockKind, InstalledFromLockPackage, LinkPackageReport, LockfileRecordingPolicy,
-    RemovePackageReport, ReplacedSlotBackup, UnlinkPackageReport, parse_lockfile_package_key,
-};
 pub use module_loader::{
     AcquireConfirmationHandler, AcquireOnReferencePolicy, AddModuleError, AddedModule,
     ArtifactChecksum, BuildError, BuildEvent, BuildEventSink, BuildOrchestrator, BuildPolicy,
@@ -36,9 +30,15 @@ pub use operations::{
     SchemaValidationPosture, SubmittedProcessorSource,
 };
 pub use runtime::Runner;
-pub use tap::TapSubscription;
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
+pub use streamlib_idents::app_modules::{
+    APP_MODULES_DIR_NAME, ActiveLinkSlotPolicy, AddPackageOptions, AddPackageReport,
+    AddPackageSource, AppModulesDir, AppModulesError, InstallFromLockfileReport,
+    InstalledFromLockKind, InstalledFromLockPackage, LinkPackageReport, LockfileRecordingPolicy,
+    RemovePackageReport, ReplacedSlotBackup, UnlinkPackageReport, parse_lockfile_package_key,
+};
+pub use tap::TapSubscription;
 
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent};
 
