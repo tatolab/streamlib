@@ -478,18 +478,6 @@ enum SchemasCommands {
 
 #[derive(Subcommand)]
 enum PkgCommands {
-    /// Build THIS package into a source-only `.slpkg` (run inside the package).
-    ///
-    /// Bundles source only — no compilation, no prebuilt cdylib, nothing
-    /// path-related. The consumer builds it from source on their host
-    /// (`streamlib add` / runtime by-version resolution), pulling every dep by
-    /// version from the package source. The artifact is for hand-off (email it,
-    /// hand it to a runtime); `publish` repacks independently.
-    Build {
-        /// Output file path (default: {name}-{version}.slpkg in the package dir)
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-    },
     /// Publish THIS package to the package source (run inside the package).
     ///
     /// Always repacks a fresh source-only `.slpkg` (never trusts an existing
@@ -512,11 +500,6 @@ enum PkgCommands {
         /// App root whose `streamlib_modules/` is reclaimed (default: CWD).
         #[arg(long)]
         dir: Option<PathBuf>,
-    },
-    /// Inspect a .slpkg package (show manifest without installing)
-    Inspect {
-        /// Path to .slpkg file
-        path: PathBuf,
     },
     /// List installed packages (the app's `streamlib_modules/` folder)
     List {
@@ -696,11 +679,9 @@ async fn async_main(cli: Cli) -> Result<()> {
             }
         }
         Some(Commands::Pkg { action }) => match action {
-            PkgCommands::Build { output } => commands::pkg::build(output.as_deref())?,
             PkgCommands::Publish => commands::pkg::publish()?,
             PkgCommands::Clean => commands::pkg::clean()?,
             PkgCommands::CacheGc { dir } => commands::pkg::cache_gc(dir.as_deref())?,
-            PkgCommands::Inspect { path } => commands::pkg::inspect(&path)?,
             PkgCommands::List { dir } => commands::pkg::list(dir.as_deref())?,
         },
         Some(Commands::Link {

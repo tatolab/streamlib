@@ -80,9 +80,6 @@ chrono = "0.4"
 # Home directory detection
 dirs = "6.0"
 
-# ZIP archive creation
-zip = "2.2"
-
 # Temporary directory for `uv build --wheel` output staging inside `streamlib pack`
 tempfile = "3.14"
 
