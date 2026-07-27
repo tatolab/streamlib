@@ -1435,4 +1435,40 @@ mod processor_struct_emit_tests {
              the probe also authors `doc`, `allow`, `expect`, and a derive helper"
         );
     }
+
+    /// The two emission sites filter the authored list independently, so
+    /// nothing structural stops the initializer from taking an attribute the
+    /// field definition drops. That combination is uncompilable output: a
+    /// presence-changing attribute on the initializer for a field the
+    /// definition did not gate the same way initializes a field that isn't
+    /// there. The initializer's accepted set must stay a subset.
+    #[test]
+    fn every_attribute_the_from_config_initializer_takes_also_reaches_the_field_definition() {
+        let custom_fields =
+            extract_custom_fields(&struct_with_a_cfg_alongside_every_other_forwardable_attribute());
+        let authored = authored_attributes(&custom_fields);
+        assert!(
+            authored
+                .iter()
+                .any(|attribute| is_forwarded_onto_from_config_initializer(attribute)),
+            "the probe must author at least one initializer-forwarded attribute, or this \
+             test passes vacuously — it authors: {:?}",
+            authored
+                .iter()
+                .copied()
+                .map(attribute_path_ident)
+                .collect::<Vec<String>>()
+        );
+        for attribute in authored {
+            if is_forwarded_onto_from_config_initializer(attribute) {
+                assert!(
+                    is_forwarded_onto_generated_field_definition(attribute),
+                    "`{}` reaches the `from_config` initializer but not the generated \
+                     field definition — the initializer would gate a field the definition \
+                     does not declare the same way",
+                    attribute_path_ident(attribute)
+                );
+            }
+        }
+    }
 }
