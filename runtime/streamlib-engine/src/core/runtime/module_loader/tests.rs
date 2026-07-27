@@ -825,7 +825,12 @@ fn every_container_shape_materializes_one_identical_installed_slot() {
         ("flat zip", ArchiveKind::Zip, None, false),
         ("nested zip", ArchiveKind::Zip, Some("my-package"), false),
         ("flat tar.gz", ArchiveKind::TarGz, None, true),
-        ("nested tar.gz", ArchiveKind::TarGz, Some("my-package"), true),
+        (
+            "nested tar.gz",
+            ArchiveKind::TarGz,
+            Some("my-package"),
+            true,
+        ),
     ];
 
     let mut slot_hashes: Vec<(&str, String)> = Vec::new();
@@ -835,9 +840,9 @@ fn every_container_shape_materializes_one_identical_installed_slot() {
         let app_root = tempfile::tempdir().unwrap();
         let _modules_root = AppModulesRootOverrideGuard::install(app_root.path());
 
-        let archive =
-            src.path()
-                .join(format!("{}.archive", label.replace(['.', ' '], "-")));
+        let archive = src
+            .path()
+            .join(format!("{}.archive", label.replace(['.', ' '], "-")));
         std::fs::write(
             &archive,
             schemas_only_package_archive_bytes(package_name, type_name, kind, nested_under),
