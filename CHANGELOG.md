@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/tatolab/streamlib/compare/v0.8.1...v0.8.2) (2026-07-27)
+
+
+### Bug Fixes
+
+* **macros:** preserve #[cfg] on processor struct fields ([#1615](https://github.com/tatolab/streamlib/issues/1615)) ([f5687f5](https://github.com/tatolab/streamlib/commit/f5687f5e3cd2cb0ae817bcb0af84f40bc8cced04))
+
 ## [0.8.1](https://github.com/tatolab/streamlib/compare/v0.8.0...v0.8.1) (2026-07-27)
 
 
