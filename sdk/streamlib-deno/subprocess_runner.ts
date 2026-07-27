@@ -437,11 +437,7 @@ async function main(): Promise<void> {
             }
           }
 
-          // Parse entrypoint: "module.ts:export_name"
           const [modulePath, exportName] = parseEntrypoint(entrypoint);
-          // Resolve against the project path. The staged package mirrors
-          // the authored layout, so the module sits at the project root
-          // beside `streamlib.yaml`.
           const fullModulePath = projectPath
             ? resolveDenoModulePath(projectPath, modulePath)
             : modulePath;

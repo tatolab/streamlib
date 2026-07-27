@@ -72,10 +72,12 @@ impl PackageLanguage {
 
 /// Detect which languages a package hosts processors in, from files on disk.
 ///
-/// - **Rust** — a `Cargo.toml` beside a `src/lib.rs` or `src/main.rs` crate root.
-/// - **Python** — a `pyproject.toml` (the Python extractor scans the `*.py`
-///   under the `processors/` beside it).
-/// - **Deno** — a `deno.json`.
+/// - **Rust** — a `Cargo.toml` beside a `src/lib.rs` or `src/main.rs` crate
+///   root (the Rust scan parses the `*.rs` under that `src/` directory).
+/// - **Python** — a `pyproject.toml` (the Python extractor imports the `*.py`
+///   under the `processors/` directory beside it).
+/// - **Deno** — a `deno.json` (the Deno extractor imports the `*.ts` under the
+///   `processors/` directory beside it).
 ///
 /// A package may host more than one (a polyglot package), or none (a schema-only
 /// package like `@tatolab/core`).
