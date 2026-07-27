@@ -165,14 +165,8 @@ pub fn generate_from_processor_schema(
 struct CustomField {
     name: Ident,
     ty: syn::Type,
-    /// Authored attributes re-emitted onto the generated `Processor` struct
-    /// field, filtered by [`is_forwarded_onto_generated_field_definition`].
-    attributes_for_generated_field_definition: Vec<syn::Attribute>,
-    /// Authored attributes re-emitted onto the `from_config` struct-literal
-    /// initializer, filtered by
-    /// [`is_forwarded_onto_from_config_initializer`]. Narrower than the field
-    /// definition's set — the two must stay in lockstep on presence.
-    attributes_for_from_config_initializer: Vec<syn::Attribute>,
+    /// The field's authored attributes verbatim; each emission site filters.
+    attributes_authored_on_processor_struct_field: Vec<syn::Attribute>,
 }
 
 /// Authoring contract for `#[processor]` struct fields: `cfg` is the
@@ -244,18 +238,7 @@ fn extract_custom_fields(item: &ItemStruct) -> Vec<CustomField> {
                     .clone()
                     .expect("Named field must have ident"),
                 ty: authored_field.ty.clone(),
-                attributes_for_generated_field_definition: authored_field
-                    .attrs
-                    .iter()
-                    .filter(|attribute| is_forwarded_onto_generated_field_definition(attribute))
-                    .cloned()
-                    .collect(),
-                attributes_for_from_config_initializer: authored_field
-                    .attrs
-                    .iter()
-                    .filter(|attribute| is_forwarded_onto_from_config_initializer(attribute))
-                    .cloned()
-                    .collect(),
+                attributes_authored_on_processor_struct_field: authored_field.attrs.clone(),
             })
             .collect(),
         syn::Fields::Unit => Vec::new(),
@@ -295,7 +278,10 @@ fn generate_processor_struct_from_schema(
     let custom_field_defs: Vec<TokenStream> = custom_fields
         .iter()
         .map(|custom_field| {
-            let attributes = &custom_field.attributes_for_generated_field_definition;
+            let attributes = custom_field
+                .attributes_authored_on_processor_struct_field
+                .iter()
+                .filter(|attribute| is_forwarded_onto_generated_field_definition(attribute));
             let name = &custom_field.name;
             let ty = &custom_field.ty;
             quote! { #(#attributes)* pub #name: #ty, }
@@ -637,7 +623,10 @@ fn generate_from_config_from_schema(
     let custom_field_inits: Vec<TokenStream> = custom_fields
         .iter()
         .map(|custom_field| {
-            let attributes = &custom_field.attributes_for_from_config_initializer;
+            let attributes = custom_field
+                .attributes_authored_on_processor_struct_field
+                .iter()
+                .filter(|attribute| is_forwarded_onto_from_config_initializer(attribute));
             let name = &custom_field.name;
             quote! { #(#attributes)* #name: ::std::default::Default::default(), }
         })
@@ -931,29 +920,41 @@ mod processor_struct_emit_tests {
             .collect()
     }
 
+    fn attribute_path_ident(attribute: &syn::Attribute) -> String {
+        let path = attribute.path();
+        path.get_ident()
+            .map(Ident::to_string)
+            .unwrap_or_else(|| render_token_stream_without_whitespace(quote! { #path }))
+    }
+
     /// The path ident of each attribute, in authored order.
     fn attribute_path_idents(attributes: &[syn::Attribute]) -> Vec<String> {
-        attributes
+        attributes.iter().map(attribute_path_ident).collect()
+    }
+
+    /// Every attribute authored across the probe's fields, in authored order.
+    fn authored_attributes(custom_fields: &[CustomField]) -> Vec<&syn::Attribute> {
+        custom_fields
             .iter()
-            .map(|attribute| {
-                let path = attribute.path();
-                path.get_ident()
-                    .map(Ident::to_string)
-                    .unwrap_or_else(|| render_token_stream_without_whitespace(quote! { #path }))
+            .flat_map(|custom_field| {
+                custom_field
+                    .attributes_authored_on_processor_struct_field
+                    .iter()
             })
             .collect()
     }
 
-    /// The attribute path idents the filter kept for one emission site — the
+    /// The attribute path idents one emission site's filter keeps — the
     /// decision the filter actually makes, read without going through a
     /// rendering.
     fn forwarded_attribute_path_idents(
         custom_fields: &[CustomField],
-        attributes_for_site: impl Fn(&CustomField) -> &Vec<syn::Attribute>,
+        is_forwarded_onto_site: impl Fn(&syn::Attribute) -> bool,
     ) -> Vec<String> {
-        custom_fields
-            .iter()
-            .flat_map(|custom_field| attribute_path_idents(attributes_for_site(custom_field)))
+        authored_attributes(custom_fields)
+            .into_iter()
+            .filter(|attribute| is_forwarded_onto_site(attribute))
+            .map(attribute_path_ident)
             .collect()
     }
 
@@ -1261,9 +1262,10 @@ mod processor_struct_emit_tests {
     #[test]
     fn processor_struct_does_not_forward_expect_onto_the_generated_pub_field() {
         let custom_fields = extract_custom_fields(&annotated_field_struct());
-        let forwarded_attribute_paths = forwarded_attribute_path_idents(&custom_fields, |field| {
-            &field.attributes_for_generated_field_definition
-        });
+        let forwarded_attribute_paths = forwarded_attribute_path_idents(
+            &custom_fields,
+            is_forwarded_onto_generated_field_definition,
+        );
         assert!(
             !forwarded_attribute_paths.contains(&"expect".to_string()),
             "`expect` must not reach the generated `pub` field — it would land \
