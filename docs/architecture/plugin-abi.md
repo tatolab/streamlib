@@ -87,6 +87,8 @@ never `init()`ed, so `subscribe` buffers into `pending_subscriptions`
 forever. The api-server's WebSocket handler subscribes to every topic — in
 process on the host's initialized bus that stream is live; as a plugin it
 would be dead. That is why the control plane is host-side by construction.
+The one-way bridge is also what makes the reserved `control:` topics
+(below) the plugin's channel for host-interpreted requests.
 
 **In-repo test infrastructure (`packages/test-fixtures`,
 `packages/test-fixtures-abi-mismatch`).** These two are workspace members for a
@@ -436,6 +438,46 @@ asserts the borrow's POD getters return the real values.
   layout-changing edit that forgot to bump the matching version
   constant still changes it — catching a same-constant /
   different-layout republish that a version-only check would miss.
+- `PUBSUB_CONTROL_TOPIC_*` — the reserved `control:` topic strings (see
+  below). Their *values* are wire contract, not their layout, so they
+  are locked by constant-value tests rather than folded into the
+  fingerprint: a rename is a break both sides must agree on, and
+  folding it would gratuitously invalidate every already-built plugin
+  whose layout is fine.
+
+### Reserved `control:` PUBSUB topics
+
+The `control:` topic prefix is reserved for host-interpreted control
+requests, and is the wire form for plugin→host asks that need no
+return value. A plugin publishes through `HostServices::pubsub_publish`
+like any other topic; the host matches the reserved topics **before**
+its general `Event` decode, maps each onto an internal action, and
+never re-publishes the bytes to subscribers. Three consequences the
+prefix buys, all host-defended in `host_pubsub_publish`:
+
+- The payload of a reserved topic is the **per-topic shape defined next
+  to its constant**, not an `Event` msgpack.
+- A `control:`-prefixed topic that matches no handler is warn-dropped,
+  never routed into the `Event` decode — so a plugin built against a
+  newer host cannot have its control request silently re-published as a
+  `Custom` event, and cannot hijack the reserved namespace.
+- Subscribers never see a `control:` topic.
+
+`PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST`
+(`"control:runtime-shutdown-request"`) is the reserved topic in the
+current set: its payload is a bare msgpack UTF-8 string, the
+human-readable reason logged for shutdown attribution (empty =
+unspecified). The host maps it onto a runtime-shutdown *request* the
+run-loop owner observes — the request is idempotent and
+fire-and-forget, and the reason is decoded leniently so a plugin that
+encodes it differently loses the attribution, never the shutdown.
+
+A control topic is the right wire form when the ask is fire-and-forget
+with no completion payload; a vtable slot is the right form when the
+caller needs a return value or a typed error. Preferring the reserved
+topic where it already carries the request avoids a
+fingerprint-changing vtable growth that would invalidate every
+already-built plugin for no new capability.
 
 ### Load handshake
 
@@ -512,6 +554,8 @@ re-installing over a retained image is safe.
   buffers, decoded into Rust types on the receiving side
   (`ProcessorDescriptor`, `ProcessorSpec`, `ExecutionConfig`,
   `Event`).
+- Reserved `control:` topic strings plus their per-topic msgpack
+  payload, through `pubsub_publish`.
 
 ### What does NOT cross the wire
 
