@@ -54,9 +54,12 @@ use syn::{
 /// `streamlib.yaml`.
 ///
 /// Authoring contract for struct fields: `#[cfg]`, `///` docs, and the lint
-/// controls (`allow` / `warn` / `deny` / `forbid` / `expect`) are forwarded onto
-/// the generated field; `#[cfg]` alone is also forwarded onto its `from_config`
-/// initializer. Every other field attribute — including `cfg_attr` — is dropped.
+/// controls (`allow` / `warn` / `deny` / `forbid`) are forwarded onto the
+/// generated field; `#[cfg]` alone is also forwarded onto its `from_config`
+/// initializer. `#[expect]` is not forwarded — the generated field is `pub`
+/// where the authored one was private, so a `dead_code` expectation would land
+/// unfulfilled and warn. Every other field attribute — including `cfg_attr` —
+/// is dropped.
 ///
 /// The macro emits the processor's type, port markers, descriptor, and
 /// `schema_ident()` accessor — but does NOT register the processor in

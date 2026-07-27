@@ -174,8 +174,11 @@ struct CustomField {
 /// Authoring contract for `#[processor]` struct fields: `cfg` is the
 /// load-bearing forward — dropping it makes a platform-conditional field
 /// unconditional and its platform-specific type fails to resolve off that
-/// platform. `doc` and the lint controls ride along so an author's `///` and
-/// `#[allow(dead_code)]` survive expansion.
+/// platform. `doc` and the `allow` / `warn` / `deny` / `forbid` controls ride
+/// along so an author's `///` and `#[allow(dead_code)]` survive expansion.
+/// `expect` is excluded: the generated field is `pub` where the authored one
+/// was private, so a `dead_code` expectation the author wrote to silence a
+/// warning becomes an `unfulfilled_lint_expectation` warning instead.
 fn is_forwarded_onto_generated_field_definition(attribute: &syn::Attribute) -> bool {
     let path = attribute.path();
     path.is_ident("cfg")
@@ -184,7 +187,6 @@ fn is_forwarded_onto_generated_field_definition(attribute: &syn::Attribute) -> b
         || path.is_ident("warn")
         || path.is_ident("deny")
         || path.is_ident("forbid")
-        || path.is_ident("expect")
 }
 
 /// `cfg` is the only attribute a struct-expression field takes cleanly — a
@@ -894,6 +896,25 @@ mod processor_struct_emit_tests {
             .collect()
     }
 
+    /// The attribute path idents the filter kept for one emission site, in
+    /// authored order — the decision the filter actually makes, read without
+    /// going through a rendering.
+    fn forwarded_attribute_path_idents(
+        custom_fields: &[CustomField],
+        attributes_for_site: impl Fn(&CustomField) -> &Vec<syn::Attribute>,
+    ) -> Vec<String> {
+        custom_fields
+            .iter()
+            .flat_map(|custom_field| attributes_for_site(custom_field).iter())
+            .map(|attribute| {
+                let path = attribute.path();
+                path.get_ident()
+                    .map(Ident::to_string)
+                    .unwrap_or_else(|| render_without_whitespace(quote! { #path }))
+            })
+            .collect()
+    }
+
     fn platform_conditional_field_struct() -> ItemStruct {
         syn::parse_quote! {
             struct PlatformConditionalFieldProbe {
@@ -1026,6 +1047,7 @@ mod processor_struct_emit_tests {
             struct AnnotatedFieldProbe {
                 /// Authored doc on a processor field.
                 #[allow(dead_code)]
+                #[expect(unused_parens)]
                 #[cfg_attr(target_os = "linux", allow(unused))]
                 #[serde(skip)]
                 annotated_backend_state: Option<u32>,
@@ -1067,6 +1089,31 @@ mod processor_struct_emit_tests {
         );
     }
 
+    /// `expect` is the one lint control that must NOT ride along. The macro
+    /// re-emits the authored field as `pub`, which changes which lints can fire
+    /// on it at all, so a forwarded `#[expect(...)]` the author wrote to silence
+    /// a warning lands unfulfilled and warns `unfulfilled_lint_expectation`
+    /// instead — the inverse of the silencing they asked for.
+    #[test]
+    fn processor_struct_does_not_forward_expect_onto_the_generated_pub_field() {
+        let custom_fields = extract_custom_fields(&annotated_field_struct());
+        let forwarded_attribute_paths = forwarded_attribute_path_idents(&custom_fields, |field| {
+            &field.attributes_for_generated_field_definition
+        });
+        assert!(
+            !forwarded_attribute_paths.contains(&"expect".to_string()),
+            "`expect` must not reach the generated `pub` field — it would land \
+             unfulfilled and warn; forwarded attributes were: {:?}",
+            forwarded_attribute_paths
+        );
+        assert!(
+            forwarded_attribute_paths.contains(&"allow".to_string()),
+            "the probe must still exercise a forwarded lint control, or this \
+             test passes vacuously; forwarded attributes were: {:?}",
+            forwarded_attribute_paths
+        );
+    }
+
     /// The `from_config` struct-literal site takes `cfg` only — a `doc` on a
     /// struct-expression field is an `unused_doc_comments` warning and the
     /// gates deny warnings.
@@ -1083,7 +1130,7 @@ mod processor_struct_emit_tests {
             "from_config must still initialize the field — got: {}",
             rendered
         );
-        for dropped in ["doc", "allow", "cfg_attr", "serde"] {
+        for dropped in ["doc", "allow", "expect", "cfg_attr", "serde"] {
             assert!(
                 !rendered.contains(dropped),
                 "from_config initializer must forward `cfg` only, found `{}` — got: {}",
