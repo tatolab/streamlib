@@ -187,7 +187,8 @@ const severityTaxonomy =
   `blocker (the change is wrong / a gate is red — forces a FIX); ` +
   `should-fix (a real defect — forces a FIX exactly like a blocker; it is a change request to the implementer, NOT something ` +
   `that ships as a note on the PR body); ` +
-  `low (a nit — naming, a doc line); ` +
+  `low (a nit — naming, a doc line; still handed to the implementer to clean up before a human reads the PR, because ` +
+  `self-review exists so a human never spends attention on a nit); ` +
   `owner-question (RESERVED for a call only the repo owner can make — scope, product direction, or a merge decision — this is the ONLY finding severity that parks the PR for the owner); ` +
   `info (an observation, no action). ` +
   `Do NOT mark rig-gated deferrals, doc nits, or "confirm you meant X" as owner-question.`;
@@ -436,7 +437,15 @@ async function runEvidence() {
   return e;
 }
 
-async function runVerify(isFixRound, gatingLenses = new Set()) {
+async function runVerify(isFixRound, gatingLenses = new Set(), implementerResponse = null) {
+  // What the implementer said they fixed and what they declined, so a re-checking
+  // reviewer adjudicates a stated position instead of re-deriving it from the diff.
+  const responseBlock = implementerResponse
+    ? `\n\nThe implementer's response to the review (JSON): ${JSON.stringify(implementerResponse)}\n` +
+      `Adjudicate it: confirm each claimed fix actually holds, and for each DECLINED item decide whether the reason is ` +
+      `sound. Accept a sound decline and drop the finding. Re-raise it at the same severity if the reason is not sound ` +
+      `or the fix is cosmetic.`
+    : ``;
   phase('Verify');
   const guard =
     (await agent(
@@ -471,8 +480,9 @@ async function runVerify(isFixRound, gatingLenses = new Set()) {
         ? ` This is a fix-round DELTA re-verify: the branch already cleared a full verify and has since had verify ` +
           `findings applied. Concentrate on the fix delta and confirm the applied findings are correctly resolved and ` +
           `introduced no regression. Still run the FULL gate battery yourself (a fix can break an untouched file); the ` +
-          `domain-lens fan-out is intentionally skipped this round, so you are the sole reviewer.`
-        : ``),
+          `domain-lens fan-out is limited to the lenses that gated, so cover everything else yourself.`
+        : ``) +
+      responseBlock,
     { agentType: 'change-verifier', phase: 'Verify', label: 'change-verifier', schema: verdictSchema },
   );
   const stageA =
@@ -498,7 +508,8 @@ async function runVerify(isFixRound, gatingLenses = new Set()) {
             `the substance is NOT resolved — say so and keep the severity. Trust no claim; read the current code. `
           : ``) +
         `Do NOT edit. Find domain-specific correctness / invariant violations the mechanical gates cannot catch; cite ` +
-        `file:line. Emit the verdict JSON shape. ${severityTaxonomy}`,
+        `file:line. Emit the verdict JSON shape. ${severityTaxonomy}` +
+        responseBlock,
       { agentType: expert, phase: 'Verify', label: `lens:${expert}`, schema: verdictSchema },
     ).then((r) => (r ? Object.assign({ __lens: `lens:${expert}` }, r) : r)),
   );
@@ -516,7 +527,8 @@ async function runVerify(isFixRound, gatingLenses = new Set()) {
             ? ` This is a re-check: you raised gating findings on this branch and fixes have since been applied. Verify ` +
               `each of YOUR findings is genuinely resolved rather than papered over — a cosmetic edit that leaves the ` +
               `substance intact is NOT resolved, so keep its severity and say why. Trust no claim; read the current code.`
-            : ``),
+            : ``) +
+          responseBlock,
         { agentType: 'rust-craftsmanship-reviewer', phase: 'Verify', label: 'lens:rust-craftsmanship', schema: verdictSchema },
       ).then((r) => (r ? Object.assign({ __lens: 'lens:rust-craftsmanship' }, r) : r)),
     );
@@ -548,8 +560,15 @@ async function runVerify(isFixRound, gatingLenses = new Set()) {
   // `should-fix` is a reviewer change request, so it gates the PR the same way a
   // blocker does. Only nits and observations survive as PR-body notes — a severity
   // that asserts "should be fixed" must never be satisfied by writing it down.
+  // Everything actionable goes back to the implementer, nits included. The reviewers
+  // and the implementer are one team self-reviewing until the branch is ready for a
+  // human; a severity threshold that quietly routes findings to the PR body instead
+  // spends the reviewer's work on the reader rather than on the code. `info` is the
+  // only severity that does not force a round — the taxonomy defines it as no-action —
+  // but it still travels in the review the implementer reads.
   const hasShouldFix = findings.some((f) => f.severity === 'should-fix');
-  const reviewItems = findings.filter((f) => f.severity === 'low' || f.severity === 'info');
+  const hasLow = findings.some((f) => f.severity === 'low');
+  const reviewItems = findings.filter((f) => f.severity === 'info');
 
   // Which lenses actually gated, so the next fix round re-runs exactly those. A lens
   // that cleared the branch has nothing to re-check; one that gated must confirm its
@@ -563,8 +582,14 @@ async function runVerify(isFixRound, gatingLenses = new Set()) {
     if (gated) gatingLensLabels.push(r.__lens);
   }
 
-  const report = { findings, pr_number: null, review_items: reviewItems, gating_lenses: gatingLensLabels };
-  if (hasBlocker || hasReject || hasShouldFix) return Object.assign({ verdict: 'FIX' }, report);
+  // The implementer reads the reviews themselves, not a severity-filtered digest —
+  // `coverage_notes` carries the reasoning that makes a finding actionable.
+  const reviews = all
+    .filter(Boolean)
+    .map((r) => ({ lens: r.__lens || r.lens || 'change-verifier', verdict: r.verdict, coverage_notes: r.coverage_notes || '', findings: r.findings || [] }));
+
+  const report = { findings, reviews, pr_number: null, review_items: reviewItems, gating_lenses: gatingLensLabels };
+  if (hasBlocker || hasReject || hasShouldFix || hasLow) return Object.assign({ verdict: 'FIX' }, report);
   if (hasEscalate || hasOwnerQuestion) return Object.assign({ verdict: 'DISCUSS' }, report);
   return Object.assign({ verdict: 'PASS' }, report);
 }
@@ -577,10 +602,11 @@ async function runOpenPr(reviewItems) {
         `to merge, so it must not sit in draft. NEVER merge, though — merging is the owner's call. Title the PR as a ` +
         `conventional commit (\`type(scope): summary\`); the repo squash-merges and release-please parses the title, so ` +
         `a mistitled PR silently skips the version bump. Fill the body with the ticket link, the change summary, the ` +
-        `test evidence, any E2E report, and — only if the list is non-empty — a "Nits and observations" section listing ` +
-        `these verbatim: ${JSON.stringify(reviewItems)}. That list carries ONLY \`low\` and \`info\` findings; every ` +
-        `blocker and should-fix was already resolved by a fix round, so the body must not present unfixed defects as ` +
-        `owner homework. Write that body to a file and pass \`gh pr create --body-file <path>\`. NEVER ` +
+        `test evidence, and any E2E report. The team already self-reviewed this branch to completion, so the body must ` +
+        `NOT carry unresolved defects for the owner to triage — every actionable finding was either fixed or declined ` +
+        `with a reason a reviewer accepted. Add a "Review notes" section ONLY if this list is non-empty, listing these ` +
+        `\`info\`-severity observations verbatim: ${JSON.stringify(reviewItems)}. ` +
+        `Write that body to a file and pass \`gh pr create --body-file <path>\`. NEVER ` +
         `pass \`--body "@<path>"\`: gh does NOT expand \`@file\` for \`--body\` (that is a curl / \`gh api\` idiom), so ` +
         `it would be posted as literal text. Return the PR number.`,
       { phase: 'Verify', label: 'open-pr', model: 'sonnet', schema: { type: 'object', properties: { pr_number: { type: 'number' } }, required: ['pr_number'] } },
@@ -588,17 +614,24 @@ async function runOpenPr(reviewItems) {
   return opened.pr_number || null;
 }
 
-async function runFix(findings, round) {
+async function runFix(reviews, round) {
   phase('Fix');
   return await resilientAgent(
-    `Apply the enumerated verify findings to branch \`${ctx.branch}\` (issue #${issue}), fix round ${round} of ` +
-      `${MAX_FIX_ROUNDS}. ` +
+    `Your teammates have code-reviewed your branch \`${ctx.branch}\` (issue #${issue}). This is round ${round} of ` +
+      `${MAX_FIX_ROUNDS} of the team's self-review before any human reads this PR. ` +
       inWorktree() +
-      `Apply ONLY the findings listed below (no scope creep, no unrelated auto-fixes); hold the engine doctrine and the ` +
-      `licensing/logging conventions. Make checkpoint commits at logical boundaries. Then PUSH with a normal ` +
+      `Read each reviewer's FULL analysis below — the coverage notes carry the reasoning, not just the finding list. ` +
+      `Respond to EVERY item, nits included: either fix it, or decline it with a concrete reason a reviewer would accept. ` +
+      `A human's attention is the scarce resource here — anything the team can settle among itself should never reach ` +
+      `them. Declining is legitimate when a reviewer is factually wrong or the change would be out of scope; "it's minor" ` +
+      `is not a reason.\n\n` +
+      `Stay inside the ticket: no scope creep, no unrelated auto-fixes. Hold the engine doctrine and the licensing / ` +
+      `logging / naming conventions. Make checkpoint commits at logical boundaries, then PUSH with a normal ` +
       `fast-forward push (\`git push origin ${ctx.branch}\`) — this is a fix on top of the existing branch, NOT a ` +
-      `rebase, so do NOT force-push. List which findings you addressed in \`applied\` and any you could not in ` +
-      `\`unresolved\`.\n\nFindings to apply (JSON): ${JSON.stringify(findings)}`,
+      `rebase, so do NOT force-push.\n\n` +
+      `Report every item you addressed in \`applied\`, and every item you declined in \`unresolved\` WITH its reason — ` +
+      `the reviewers who raised them re-check your work next round and will re-raise anything papered over.\n\n` +
+      `Reviews (JSON): ${JSON.stringify(reviews)}`,
     leadOpts({
       phase: 'Fix',
       label: `fix:${lead || 'generic'}`,
@@ -699,7 +732,7 @@ let fixRounds = 0;
 while (verifyReport && verifyReport.verdict === 'FIX' && fixRounds < MAX_FIX_ROUNDS) {
   fixRounds += 1;
   log(`#${issue}: verify FIX — applying findings, round ${fixRounds}/${MAX_FIX_ROUNDS}`);
-  const fixed = await runFix(verifyReport.findings || [], fixRounds);
+  const fixed = await runFix(verifyReport.reviews || [], fixRounds);
   if (!fixed || fixed.degraded) {
     return {
       outcome: 'fix-failed',
@@ -711,7 +744,7 @@ while (verifyReport && verifyReport.verdict === 'FIX' && fixRounds < MAX_FIX_ROU
       owner_items: [{ kind: 'escalation', issue, reason: `fix round ${fixRounds} produced no usable result` }],
     };
   }
-  verifyReport = await runVerify(true, new Set(verifyReport.gating_lenses || []));
+  verifyReport = await runVerify(true, new Set(verifyReport.gating_lenses || []), fixed);
 }
 
 const verdict = (verifyReport && verifyReport.verdict) || 'ERROR';
