@@ -18,6 +18,8 @@
 //! way `rustc` does (honoring `#[path = "..."]`), evaluates the `#[cfg(...)]`
 //! predicate on every `mod` and every `#[processor(...)]`-bearing struct against
 //! a [`ModuleReachabilityTarget`], and collects only the processors that survive.
+//! A module file's own inner `#![cfg(...)]` gates it the same way, pruning the
+//! whole subtree it declares.
 //!
 //! The parked-directory convention needs no special case: a parked module is
 //! declared `#[cfg(any())]` (an always-false predicate), so cfg evaluation skips
@@ -112,7 +114,8 @@ impl ModuleReachabilityTarget {
 /// Starts at the crate root (`src/lib.rs`, else `src/main.rs`, else both when a
 /// crate carries a lib and a bin), follows every reachable `mod` the way
 /// `rustc` resolves module files, and evaluates `#[cfg(...)]` on each `mod` and
-/// each `#[processor(...)]`-bearing struct against `target`. A `#[processor]`
+/// each `#[processor(...)]`-bearing struct against `target`, plus the inner
+/// `#![cfg(...)]` a module file declares on itself. A `#[processor]`
 /// under a cfg-excluded module — a cross-platform arm, a disabled feature, or a
 /// `#[cfg(any())]` parked directory — is never collected. The result is
 /// deterministic (source order within a file, module-declaration order across
@@ -187,6 +190,16 @@ impl ReachableModuleWalker<'_> {
             path: file.to_path_buf(),
             source: e,
         })?;
+
+        // A file-level inner `#![cfg(...)]` gates the module the file *is*, so a
+        // false predicate strips the file and everything it declares — including
+        // its `mod` children. `syn` keeps these on `File::attrs`; an inline
+        // `mod foo { #![cfg] }` instead folds them into `ItemMod::attrs`, which
+        // `walk_item` gates.
+        if !self.cfg_reachable(&parsed.attrs) {
+            tracing::trace!(file = %file.display(), "module file excluded by file-level cfg");
+            return Ok(());
+        }
 
         let rel = file
             .strip_prefix(self.crate_root)
@@ -509,6 +522,234 @@ mod tests {
         assert_eq!(
             names(extract_reachable_rust_processors(root, &linux()).unwrap()),
             vec!["OnlyLinux"]
+        );
+    }
+
+    /// A file-level inner `#![cfg(...)]` gates the whole file the same way an
+    /// outer `#[cfg]` on the `mod` declaration does. The declaring `mod` is
+    /// unconditional, so only `syn::File::attrs` carries the gate.
+    #[test]
+    fn file_level_inner_cfg_excludes_the_whole_file() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(root, "src/lib.rs", "pub mod linux_only;\n");
+        write(
+            root,
+            "src/linux_only.rs",
+            r#"#![cfg(target_os = "linux")]
+
+            #[processor("@tatolab/demo/LinuxOnly", execution = reactive)]
+            pub struct LinuxOnly;"#,
+        );
+
+        assert!(
+            extract_reachable_rust_processors(root, &macos())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// The including half of the file-level gate: the same file under a target
+    /// that satisfies its `#![cfg]` still contributes its processor.
+    #[test]
+    fn file_level_inner_cfg_includes_when_target_matches() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(root, "src/lib.rs", "pub mod linux_only;\n");
+        write(
+            root,
+            "src/linux_only.rs",
+            r#"#![cfg(target_os = "linux")]
+
+            #[processor("@tatolab/demo/LinuxOnly", execution = reactive)]
+            pub struct LinuxOnly;"#,
+        );
+
+        assert_eq!(
+            names(extract_reachable_rust_processors(root, &linux()).unwrap()),
+            vec!["LinuxOnly"]
+        );
+    }
+
+    /// A file-level gate prunes the whole subtree, not just the gated file's own
+    /// items: an excluded file's `mod child;` is never followed, so a processor
+    /// living one level down is not collected either. An implementation that
+    /// filtered items instead of returning early would still descend and collect
+    /// `DeepChild`.
+    #[test]
+    fn file_level_inner_cfg_prunes_the_child_module_subtree() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(root, "src/lib.rs", "pub mod gated;\n");
+        write(
+            root,
+            "src/gated.rs",
+            r#"#![cfg(target_os = "linux")]
+
+            pub mod child;"#,
+        );
+        write(
+            root,
+            "src/gated/child.rs",
+            r#"#[processor("@tatolab/demo/DeepChild", execution = reactive)]
+            pub struct DeepChild;"#,
+        );
+
+        assert!(
+            extract_reachable_rust_processors(root, &macos())
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            names(extract_reachable_rust_processors(root, &linux()).unwrap()),
+            vec!["DeepChild"]
+        );
+    }
+
+    /// File-level gates run through the same combinator evaluator as item-level
+    /// ones: `all(...)`, `not(...)`, and `any(...)` resolve against the target,
+    /// mirroring [`cfg_combinators_evaluate`].
+    #[test]
+    fn file_level_inner_cfg_evaluates_combinators() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "src/lib.rs",
+            "pub mod unix_not_linux;\npub mod unix_and_linux;\npub mod any_exotic;\n",
+        );
+        write(
+            root,
+            "src/unix_not_linux.rs",
+            r#"#![cfg(all(unix, not(target_os = "linux")))]
+
+            #[processor("@tatolab/demo/UnixNotLinux", execution = reactive)]
+            pub struct UnixNotLinux;"#,
+        );
+        write(
+            root,
+            "src/unix_and_linux.rs",
+            r#"#![cfg(all(unix, target_os = "linux"))]
+
+            #[processor("@tatolab/demo/UnixAndLinux", execution = reactive)]
+            pub struct UnixAndLinux;"#,
+        );
+        write(
+            root,
+            "src/any_exotic.rs",
+            r#"#![cfg(any(target_os = "windows", target_os = "redox"))]
+
+            #[processor("@tatolab/demo/AnyExotic", execution = reactive)]
+            pub struct AnyExotic;"#,
+        );
+
+        assert_eq!(
+            names(extract_reachable_rust_processors(root, &linux()).unwrap()),
+            vec!["UnixAndLinux"]
+        );
+    }
+
+    /// The crate root is a module file like any other: a false `#![cfg]` on
+    /// `lib.rs` strips the whole crate, which is what `rustc` does (the
+    /// `#![cfg(any())]` parse-only idiom).
+    #[test]
+    fn file_level_inner_cfg_on_the_crate_root_strips_the_crate() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "src/lib.rs",
+            r#"#![cfg(target_os = "windows")]
+
+            #[processor("@tatolab/demo/NeverBuilt", execution = reactive)]
+            pub struct NeverBuilt;"#,
+        );
+
+        assert!(
+            extract_reachable_rust_processors(root, &linux())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// An inner `#![cfg]` inside an *inline* `mod foo { ... }` is folded into
+    /// `ItemMod::attrs` by `syn`, so the `mod` arm of the walk already gates it.
+    /// This pins that half against a regression while the file-level half is
+    /// fixed.
+    #[test]
+    fn inline_mod_inner_cfg_is_honored() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "src/lib.rs",
+            r#"
+            pub mod inline_linux {
+                #![cfg(target_os = "linux")]
+
+                #[processor("@tatolab/demo/InlineLinux", execution = reactive)]
+                pub struct InlineLinux;
+            }
+            "#,
+        );
+
+        assert!(
+            extract_reachable_rust_processors(root, &macos())
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            names(extract_reachable_rust_processors(root, &linux()).unwrap()),
+            vec!["InlineLinux"]
+        );
+    }
+
+    /// The evaluator fails closed at file level too: a predicate whose tokens
+    /// are not a `Meta` at all means "not reachable", never "reachable". `syn`
+    /// parses an attribute body as an unvalidated token stream, so this file
+    /// reaches `eval_cfg_attr` and only fails at `parse_args`.
+    #[test]
+    fn file_level_inner_cfg_fails_closed_on_an_unparseable_predicate() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(root, "src/lib.rs", "pub mod unparseable;\n");
+        write(
+            root,
+            "src/unparseable.rs",
+            r#"#![cfg(target_os =)]
+
+            #[processor("@tatolab/demo/Unparseable", execution = reactive)]
+            pub struct Unparseable;"#,
+        );
+
+        assert!(
+            extract_reachable_rust_processors(root, &linux())
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    /// The other fail-closed path: `target_os = 42` *is* a well-formed `Meta`,
+    /// so `parse_args` succeeds and the atom lookup — not the parser — is what
+    /// must refuse it, because a cfg value is always a string literal.
+    #[test]
+    fn file_level_inner_cfg_fails_closed_on_a_non_string_predicate_value() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(root, "src/lib.rs", "pub mod non_string_value;\n");
+        write(
+            root,
+            "src/non_string_value.rs",
+            r#"#![cfg(target_os = 42)]
+
+            #[processor("@tatolab/demo/NonStringValue", execution = reactive)]
+            pub struct NonStringValue;"#,
+        );
+
+        assert!(
+            extract_reachable_rust_processors(root, &linux())
+                .unwrap()
+                .is_empty()
         );
     }
 
