@@ -436,7 +436,7 @@ async function runEvidence() {
   return e;
 }
 
-async function runVerify(isFixRound) {
+async function runVerify(isFixRound, gatingLenses = new Set()) {
   phase('Verify');
   const guard =
     (await agent(
@@ -481,18 +481,28 @@ async function runVerify(isFixRound) {
       : { verdict: 'REJECT', findings: [{ severity: 'blocker', claim: 'change-verifier produced no usable result', evidence: 'agent returned null or degraded past its schema', suggested_next_step: 're-run the verifier' }] };
   log(`change-verifier verdict=${stageA.verdict} findings=${(stageA.findings || []).length}`);
 
-  const experts = isFixRound ? [] : expertsForZones(zones);
+  // On a fix round only the lenses that actually raised a gating finding re-run. A
+  // generic verifier cannot judge whether a domain or craftsmanship finding was truly
+  // resolved — the lens that raised it has to say so, or "fixed" means "the implementer
+  // said so". Lenses that cleared the branch stay skipped; re-running them would just
+  // re-review an unchanged diff.
+  const experts = isFixRound ? expertsForZones(zones).filter((e) => gatingLenses.has(`lens:${e}`)) : expertsForZones(zones);
   const lensThunks = experts.map((expert) => () =>
     resilientAgent(
       `Read-only lens over the diff on issue #${issue}'s branch \`${ctx.branch}\`, from your domain's angle ` +
         `(zones: ${zones.join(', ')}). ` +
         inWorktree() +
+        (isFixRound
+          ? `You raised gating findings on this branch and they have since had fixes applied. Re-check YOUR findings ` +
+            `specifically: is each one genuinely resolved, or was it papered over? A cosmetic edit that does not address ` +
+            `the substance is NOT resolved — say so and keep the severity. Trust no claim; read the current code. `
+          : ``) +
         `Do NOT edit. Find domain-specific correctness / invariant violations the mechanical gates cannot catch; cite ` +
         `file:line. Emit the verdict JSON shape. ${severityTaxonomy}`,
       { agentType: expert, phase: 'Verify', label: `lens:${expert}`, schema: verdictSchema },
-    ),
+    ).then((r) => (r ? Object.assign({ __lens: `lens:${expert}` }, r) : r)),
   );
-  if (guard.touches_rust && !isFixRound) {
+  if (guard.touches_rust && (!isFixRound || gatingLenses.has('lens:rust-craftsmanship'))) {
     lensThunks.push(() =>
       resilientAgent(
         `Read-only senior-Rust craftsmanship review of the added/changed Rust on issue #${issue}'s branch ` +
@@ -501,9 +511,14 @@ async function runVerify(isFixRound) {
           `Grade duplication (DRY), code smell, idiomatic Rust, ownership/allocation ergonomics, and API/type shape — the ` +
           `clean-code qualities the mechanical gates and the correctness verifier do not judge. Do NOT edit. Cite ` +
           `file:line and name the concrete fix. Emit the verdict JSON (lens "rust-craftsmanship"); put an overall grade ` +
-          `in coverage_notes. ${severityTaxonomy}`,
+          `in coverage_notes. ${severityTaxonomy}` +
+          (isFixRound
+            ? ` This is a re-check: you raised gating findings on this branch and fixes have since been applied. Verify ` +
+              `each of YOUR findings is genuinely resolved rather than papered over — a cosmetic edit that leaves the ` +
+              `substance intact is NOT resolved, so keep its severity and say why. Trust no claim; read the current code.`
+            : ``),
         { agentType: 'rust-craftsmanship-reviewer', phase: 'Verify', label: 'lens:rust-craftsmanship', schema: verdictSchema },
-      ),
+      ).then((r) => (r ? Object.assign({ __lens: 'lens:rust-craftsmanship' }, r) : r)),
     );
   }
   if (ctx.claims_e2e) {
@@ -536,9 +551,22 @@ async function runVerify(isFixRound) {
   const hasShouldFix = findings.some((f) => f.severity === 'should-fix');
   const reviewItems = findings.filter((f) => f.severity === 'low' || f.severity === 'info');
 
-  if (hasBlocker || hasReject || hasShouldFix) return { verdict: 'FIX', findings, pr_number: null, review_items: reviewItems };
-  if (hasEscalate || hasOwnerQuestion) return { verdict: 'DISCUSS', findings, pr_number: null, review_items: reviewItems };
-  return { verdict: 'PASS', findings, pr_number: null, review_items: reviewItems };
+  // Which lenses actually gated, so the next fix round re-runs exactly those. A lens
+  // that cleared the branch has nothing to re-check; one that gated must confirm its
+  // own finding was resolved rather than leaving that to a generic verifier.
+  const gatingLensLabels = [];
+  for (const r of all) {
+    if (!r || !r.__lens) continue;
+    const gated =
+      r.verdict === 'REJECT' ||
+      ((r.findings || []).some((f) => f.severity === 'blocker' || f.severity === 'should-fix'));
+    if (gated) gatingLensLabels.push(r.__lens);
+  }
+
+  const report = { findings, pr_number: null, review_items: reviewItems, gating_lenses: gatingLensLabels };
+  if (hasBlocker || hasReject || hasShouldFix) return Object.assign({ verdict: 'FIX' }, report);
+  if (hasEscalate || hasOwnerQuestion) return Object.assign({ verdict: 'DISCUSS' }, report);
+  return Object.assign({ verdict: 'PASS' }, report);
 }
 
 async function runOpenPr(reviewItems) {
@@ -683,7 +711,7 @@ while (verifyReport && verifyReport.verdict === 'FIX' && fixRounds < MAX_FIX_ROU
       owner_items: [{ kind: 'escalation', issue, reason: `fix round ${fixRounds} produced no usable result` }],
     };
   }
-  verifyReport = await runVerify(true);
+  verifyReport = await runVerify(true, new Set(verifyReport.gating_lenses || []));
 }
 
 const verdict = (verifyReport && verifyReport.verdict) || 'ERROR';
