@@ -3,7 +3,9 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::archive::{ArchiveKind, extract_tar_gz_bytes_to_dir, extract_zip_bytes_to_dir, sniff_archive_kind};
+use crate::archive::{
+    ArchiveError, extract_archive_bytes_to_dir, locate_package_root_in_extracted_dir,
+};
 use crate::ident::PackageRef;
 use crate::lockfile::{
     Lockfile, LockfileEntry, LockfileSource, MODULES_LOCKFILE_NAME, read_lockfile,
@@ -532,7 +534,7 @@ impl AppModulesDir {
 
         // Stage: materialize the source's bytes into a `.staging-*` sibling of
         // the final slot (same filesystem ⇒ the promote is an atomic rename).
-        let staging = StagingDir::create(&modules_dir)?;
+        let staging = AppModulesStagingDir::create(&modules_dir)?;
         let (lock_source, source_label) = stage_source_contents(source, options, staging.path())?;
 
         // Validate: identity from the staged package's OWN manifest.
@@ -1139,7 +1141,7 @@ impl AppModulesDir {
 
 /// Best-effort sweep of orphaned `.staging-*` entries in `modules_dir` —
 /// residue from an add/remove that was `SIGKILL`ed mid-promote (a clean
-/// error path removes its own staging via [`StagingDir`]'s `Drop`). Only
+/// error path removes its own staging via [`AppModulesStagingDir`]'s `Drop`). Only
 /// entries whose embedded pid is NOT the current process are removed, so a
 /// concurrent same-process add's in-flight staging dir is never deleted;
 /// cross-process concurrent adds to one app root are unsupported
@@ -1186,14 +1188,19 @@ fn sweep_orphan_staging_entries(modules_dir: &Path) {
     }
 }
 
-/// A `.staging-*` directory removed on drop (best-effort) unless already
-/// promoted away.
-struct StagingDir {
+/// A `.staging-*` directory inside an app's `streamlib_modules/`, removed on
+/// drop (best-effort) unless already promoted away. The one staging primitive
+/// for materializing package contents beside their final slot: same
+/// filesystem, so the promote is an atomic rename, and the
+/// [`APP_MODULES_STAGING_PREFIX`]`<pid>-<seq>` naming is what the orphan sweep
+/// recognizes as reclaimable residue from a killed process.
+pub struct AppModulesStagingDir {
     path: PathBuf,
 }
 
-impl StagingDir {
-    fn create(modules_dir: &Path) -> Result<Self, AppModulesError> {
+impl AppModulesStagingDir {
+    /// Create a fresh staging directory inside `modules_dir`.
+    pub fn create(modules_dir: &Path) -> Result<Self, AppModulesError> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static STAGE_SEQ: AtomicU64 = AtomicU64::new(0);
         let path = modules_dir.join(format!(
@@ -1208,12 +1215,13 @@ impl StagingDir {
         Ok(Self { path })
     }
 
-    fn path(&self) -> &Path {
+    /// The staging directory's path.
+    pub fn path(&self) -> &Path {
         &self.path
     }
 }
 
-impl Drop for StagingDir {
+impl Drop for AppModulesStagingDir {
     fn drop(&mut self) {
         if self.path.exists() {
             let _ = std::fs::remove_dir_all(&self.path);
@@ -1372,60 +1380,62 @@ fn verify_and_hash_archive_bytes(
     Ok(actual)
 }
 
-/// Sniff the archive container from magic bytes and extract into `dest_dir`.
+/// Extract archive `bytes` into `dest_dir` through the one container-agnostic
+/// reader, mapping its failures onto the add-path taxonomy.
 fn extract_archive_bytes(
     bytes: &[u8],
     dest_dir: &Path,
     source_label: &str,
 ) -> Result<(), AppModulesError> {
-    let kind =
-        sniff_archive_kind(bytes).ok_or_else(|| AppModulesError::UnsupportedArchive {
+    extract_archive_bytes_to_dir(bytes, dest_dir, source_label).map_err(|e| match e {
+        ArchiveError::UnrecognizedContainer {
+            source_label,
+            detail,
+        } => AppModulesError::UnsupportedArchive {
+            source_label,
+            detail,
+        },
+        other => AppModulesError::ExtractFailed {
             source_label: source_label.to_string(),
-            detail: "unrecognized magic bytes".to_string(),
-        })?;
-    let result = match kind {
-        ArchiveKind::Zip => extract_zip_bytes_to_dir(bytes, dest_dir, source_label),
-        ArchiveKind::TarGz => extract_tar_gz_bytes_to_dir(bytes, dest_dir, source_label),
-    };
-    result.map_err(|e| AppModulesError::ExtractFailed {
-        source_label: source_label.to_string(),
-        detail: e.to_string(),
+            detail: other.to_string(),
+        },
     })
 }
 
-/// Find the staged package root: the staging dir itself when it carries
-/// `streamlib.yaml`, else — for archive-shaped sources whose contents nest
-/// under a single top-level directory (`tar czf pkg.tar.gz my-package/`) —
-/// that single directory. Anything else is not a valid package.
+/// Find the staged package root. Archive-shaped sources go through the shared
+/// package-root locator (which tolerates contents nested under a single
+/// top-level directory); a folder source is taken literally, since a folder
+/// the caller named IS the package root.
 fn locate_staged_package_root(
     staging_dir: &Path,
     source: &AddPackageSource,
     source_label: &str,
 ) -> Result<PathBuf, AppModulesError> {
-    if staging_dir.join(Manifest::FILE_NAME).is_file() {
-        return Ok(staging_dir.to_path_buf());
+    if matches!(source, AddPackageSource::Folder { .. }) {
+        return if staging_dir.join(Manifest::FILE_NAME).is_file() {
+            Ok(staging_dir.to_path_buf())
+        } else {
+            Err(AppModulesError::InvalidPackage {
+                source_label: source_label.to_string(),
+                detail: format!("no {} at the package root", Manifest::FILE_NAME),
+            })
+        };
     }
-    // Single-top-level-dir tolerance applies to archives only; a folder
-    // source is taken literally.
-    if !matches!(source, AddPackageSource::Folder { .. }) {
-        let entries: Vec<PathBuf> = std::fs::read_dir(staging_dir)
-            .map_err(|e| AppModulesError::Io {
-                path: staging_dir.to_path_buf(),
-                detail: format!("listing staged contents: {e}"),
-            })?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .collect();
-        if let [single] = entries.as_slice()
-            && single.is_dir()
-            && single.join(Manifest::FILE_NAME).is_file()
-        {
-            return Ok(single.clone());
-        }
-    }
-    Err(AppModulesError::InvalidPackage {
-        source_label: source_label.to_string(),
-        detail: format!("no {} at the package root", Manifest::FILE_NAME),
+    locate_package_root_in_extracted_dir(staging_dir, source_label).map_err(|e| match e {
+        ArchiveError::ExtractedContentsListingFailed {
+            extracted_dir,
+            detail,
+        } => AppModulesError::Io {
+            path: extracted_dir,
+            detail: format!("listing staged contents: {detail}"),
+        },
+        other => AppModulesError::InvalidPackage {
+            source_label: source_label.to_string(),
+            detail: match other {
+                ArchiveError::PackageRootNotLocated { detail, .. } => detail,
+                other => other.to_string(),
+            },
+        },
     })
 }
 
@@ -1629,7 +1639,7 @@ fn reproduce_materialized_from_lock(
     modules_dir: &Path,
     package_dir: &Path,
 ) -> Result<(InstalledFromLockKind, bool), AppModulesError> {
-    let staging = StagingDir::create(modules_dir)?;
+    let staging = AppModulesStagingDir::create(modules_dir)?;
     let options = AddPackageOptions {
         expected_archive_sha256,
         ..Default::default()
@@ -1641,7 +1651,7 @@ fn reproduce_materialized_from_lock(
 
     // Verify the reproduced contents against the pinned content hash BEFORE
     // promoting, so a mismatch leaves no partial slot (the staging dir is swept
-    // by `StagingDir`'s Drop on the early return).
+    // by `AppModulesStagingDir`'s Drop on the early return).
     let actual = content_hash_for_package_dir(&staged_root).map_err(|e| {
         AppModulesError::InstallReproduceFailed {
             package: package.clone(),

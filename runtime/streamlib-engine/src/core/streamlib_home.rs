@@ -169,11 +169,26 @@ pub fn installed_package_slot_dir(
     explicit_app_modules_root: Option<&Path>,
     pkg_ref: &PackageRef,
 ) -> PathBuf {
-    let app_root = explicit_app_modules_root
+    AppModulesDir::at(resolved_app_modules_root(explicit_app_modules_root)).package_dir(pkg_ref)
+}
+
+/// The `streamlib_modules/` directory every installed slot lives under,
+/// resolved by the same chain as [`installed_package_slot_dir`]. Callers that
+/// must stage package contents beside a slot whose `@org/name` is not known yet
+/// (an archive's identity is only readable after extraction) derive the staging
+/// parent from here, so staging and slot share a filesystem and the promote is
+/// an atomic rename.
+pub fn installed_packages_modules_dir(explicit_app_modules_root: Option<&Path>) -> PathBuf {
+    AppModulesDir::at(resolved_app_modules_root(explicit_app_modules_root)).modules_dir()
+}
+
+/// The app root the installed-slot convention resolves against: the explicit
+/// pin, else [`app_modules_root`], else the process working directory.
+fn resolved_app_modules_root(explicit_app_modules_root: Option<&Path>) -> PathBuf {
+    explicit_app_modules_root
         .map(Path::to_path_buf)
         .or_else(app_modules_root)
-        .unwrap_or_else(|| PathBuf::from("."));
-    AppModulesDir::at(app_root).package_dir(pkg_ref)
+        .unwrap_or_else(|| PathBuf::from("."))
 }
 
 /// Get the path to a runtime's directory.

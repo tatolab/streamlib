@@ -14,9 +14,9 @@
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::ffi::OsStr;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use crate::archive::{extract_archive_bytes_to_dir, locate_package_root_in_extracted_dir};
 use crate::error::{ResolverError, ResolverResult};
 use crate::git::fetch_git;
 use crate::ident::{PackageRef, TypeName};
@@ -93,8 +93,10 @@ pub enum ResolvedSource {
     Path { relative: PathBuf },
     /// Resolved from a git pinned commit.
     Git { url: String, rev: String },
-    /// Resolved from a `.slpkg` archive (path to the archive is stored).
-    Slpkg { archive: PathBuf },
+    /// Resolved from a package archive (path to the archive is stored). The
+    /// container is whatever the shared reader sniffs — `.slpkg`, `.zip`, or
+    /// `.tar.gz`.
+    PackageArchive { archive: PathBuf },
     /// Resolved by version from a package source (the static `.slpkg` tree's
     /// generic store): the URL the concrete `.slpkg` was fetched from.
     /// Constructed by `resolve_version_dependency` and recorded in the
@@ -113,7 +115,7 @@ impl ResolvedSource {
                 url: url.clone(),
                 rev: rev.clone(),
             },
-            Self::Slpkg { archive } => LockfileSource::Path {
+            Self::PackageArchive { archive } => LockfileSource::Path {
                 path: archive.clone(),
             },
             Self::ByVersion { url } => LockfileSource::ByVersion { url: url.clone() },
@@ -562,7 +564,7 @@ fn resolve_version_dependency(
     let selected = select_version(dep_ref, &reg.version, &available)?;
     let (bytes, url) = client.download_slpkg(dep_ref, selected)?;
     let archive = cache_slpkg_bytes(dep_ref, &bytes, cache_dir)?;
-    let extracted = extract_slpkg(&archive, cache_dir)?;
+    let extracted = extract_package_archive_to_resolver_cache(&archive, cache_dir)?;
     let manifest = Manifest::load(&extracted)?;
     build_resolved_package(manifest, extracted, ResolvedSource::ByVersion { url })
 }
@@ -595,11 +597,17 @@ fn resolve_path_dependency(
             path: abs,
         });
     }
-    // `.slpkg` archive (path-flavored): extract first.
-    if abs.extension().and_then(|s| s.to_str()) == Some("slpkg") {
-        let extracted = extract_slpkg(&abs, cache_dir)?;
+    // Same is-dir / is-file classification `AddPackageSource::detect` applies:
+    // a directory is a package checkout, any file is a package archive whose
+    // container is sniffed from magic bytes. The extension is never consulted.
+    if abs.is_file() {
+        let extracted = extract_package_archive_to_resolver_cache(&abs, cache_dir)?;
         let manifest = Manifest::load(&extracted)?;
-        return build_resolved_package(manifest, extracted, ResolvedSource::Slpkg { archive: abs });
+        return build_resolved_package(
+            manifest,
+            extracted,
+            ResolvedSource::PackageArchive { archive: abs },
+        );
     }
     if !abs.is_dir() {
         return Err(ResolverError::PathDependencyNotDirectory {
@@ -862,7 +870,7 @@ fn check_resolved_satisfies_spec(
     // in-range pick from the store, so a mismatch on a `ByVersion` source is a
     // package-source mis-selection and stays an error as defense-in-depth. A
     // link/patch override (resolve_one's short-circuit to a linked checkout, or
-    // a dev `patch:` redirect) legitimately produces a Path/Git/Slpkg concrete
+    // a dev `patch:` redirect) legitimately produces a Path/Git/PackageArchive concrete
     // whose version diverges from the declared range — its "link resolution
     // overrides the declared spec" contract. Per #1505 a version mismatch never
     // blocks a load, so that case warns and keeps the override (mirroring
@@ -933,78 +941,45 @@ fn default_cache_dir() -> ResolverResult<PathBuf> {
     Ok(home.join(".streamlib").join("resolver-cache"))
 }
 
-fn extract_slpkg(archive: &Path, cache_dir: &Path) -> ResolverResult<PathBuf> {
-    let archive_bytes = std::fs::read(archive).map_err(|e| ResolverError::SlpkgExtractFailed {
-        path: archive.to_path_buf(),
-        message: format!("read failed: {e}"),
-    })?;
+/// Materialize a package archive into the content-addressed resolver cache and
+/// return its package root. Any container the shared reader sniffs is accepted;
+/// the archive's extension is never consulted.
+fn extract_package_archive_to_resolver_cache(
+    archive: &Path,
+    cache_dir: &Path,
+) -> ResolverResult<PathBuf> {
+    let archive_bytes =
+        std::fs::read(archive).map_err(|e| ResolverError::PackageArchiveExtractFailed {
+            path: archive.to_path_buf(),
+            message: format!("read failed: {e}"),
+        })?;
     let archive_hash = crate::lockfile::hash_content(&archive_bytes);
     let safe_hash = archive_hash.replace(':', "_");
     let target = cache_dir.join("slpkg").join(safe_hash);
+    let source_label = archive.display().to_string();
 
-    let manifest_path = target.join(Manifest::FILE_NAME);
-    if manifest_path.exists() {
-        return Ok(target);
+    // Content-addressed cache hit, checked BEFORE extraction: the shared
+    // extractor clears its destination, so a hit that fell through would
+    // destroy and rebuild an already-correct slot on every resolve.
+    if target.is_dir()
+        && let Ok(cached_package_root) =
+            locate_package_root_in_extracted_dir(&target, &source_label)
+    {
+        return Ok(cached_package_root);
     }
 
-    std::fs::create_dir_all(&target).map_err(|e| ResolverError::Io {
-        path: target.clone(),
-        source: e,
+    extract_archive_bytes_to_dir(&archive_bytes, &target, &source_label).map_err(|e| {
+        ResolverError::PackageArchiveExtractFailed {
+            path: archive.to_path_buf(),
+            message: e.to_string(),
+        }
     })?;
-
-    let cursor = std::io::Cursor::new(&archive_bytes);
-    let mut zip = zip::ZipArchive::new(cursor).map_err(|e| ResolverError::SlpkgExtractFailed {
-        path: archive.to_path_buf(),
-        message: format!("not a valid zip: {e}"),
-    })?;
-
-    for i in 0..zip.len() {
-        let mut entry = zip
-            .by_index(i)
-            .map_err(|e| ResolverError::SlpkgExtractFailed {
-                path: archive.to_path_buf(),
-                message: format!("entry {i} read failed: {e}"),
-            })?;
-        let entry_name = entry.name().to_string();
-        // Reject path traversal.
-        if entry_name.contains("..") || entry_name.starts_with('/') {
-            return Err(ResolverError::SlpkgExtractFailed {
-                path: archive.to_path_buf(),
-                message: format!("rejected unsafe entry path: {entry_name}"),
-            });
+    locate_package_root_in_extracted_dir(&target, &source_label).map_err(|e| {
+        ResolverError::PackageArchiveExtractFailed {
+            path: archive.to_path_buf(),
+            message: e.to_string(),
         }
-        let out_path = target.join(&entry_name);
-        if entry.is_dir() {
-            std::fs::create_dir_all(&out_path).map_err(|e| ResolverError::Io {
-                path: out_path,
-                source: e,
-            })?;
-            continue;
-        }
-        if let Some(parent) = out_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| ResolverError::Io {
-                path: parent.to_path_buf(),
-                source: e,
-            })?;
-        }
-        let mut out = std::fs::File::create(&out_path).map_err(|e| ResolverError::Io {
-            path: out_path.clone(),
-            source: e,
-        })?;
-        let mut buf = Vec::new();
-        entry
-            .read_to_end(&mut buf)
-            .map_err(|e| ResolverError::SlpkgExtractFailed {
-                path: archive.to_path_buf(),
-                message: format!("read entry {entry_name} failed: {e}"),
-            })?;
-        std::io::Write::write_all(&mut out, &buf).map_err(|e| ResolverError::Io {
-            path: out_path,
-            source: e,
-        })?;
-    }
-
-    Ok(target)
+    })
 }
 
 #[cfg(test)]
@@ -1791,7 +1766,7 @@ dependencies:
         };
         let res = resolve_with(&root, &opts).unwrap();
         let core = res.packages.get("@tatolab/core").unwrap();
-        assert!(matches!(core.source, ResolvedSource::Slpkg { .. }));
+        assert!(matches!(core.source, ResolvedSource::PackageArchive { .. }));
         assert_eq!(core.schema_files.len(), 1);
     }
 

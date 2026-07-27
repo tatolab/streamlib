@@ -132,8 +132,8 @@ pub enum ResolverError {
         message: String,
     },
 
-    #[error("`.slpkg` archive `{path}` failed to extract: {message}")]
-    SlpkgExtractFailed { path: PathBuf, message: String },
+    #[error("package archive `{path}` failed to extract: {message}")]
+    PackageArchiveExtractFailed { path: PathBuf, message: String },
 
     #[error(
         "version dependency `{name}` cannot be resolved: no package source is configured. \

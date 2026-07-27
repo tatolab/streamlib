@@ -61,6 +61,28 @@ pub enum ArchiveError {
     /// Clearing or creating the destination directory failed.
     #[error("preparing extraction directory {}: {detail}", dest_dir.display())]
     DestinationPreparationFailed { dest_dir: PathBuf, detail: String },
+
+    /// The leading bytes match no container format this build can extract.
+    #[error("unsupported archive container in '{source_label}': {detail}")]
+    UnrecognizedContainer {
+        source_label: String,
+        detail: String,
+    },
+
+    /// Enumerating the extracted directory's top level failed.
+    #[error("listing extracted contents of {}: {detail}", extracted_dir.display())]
+    ExtractedContentsListingFailed {
+        extracted_dir: PathBuf,
+        detail: String,
+    },
+
+    /// Neither the extracted directory nor a single nested top-level directory
+    /// carries a `streamlib.yaml`.
+    #[error("'{source_label}' is not a valid streamlib package: {detail}")]
+    PackageRootNotLocated {
+        source_label: String,
+        detail: String,
+    },
 }
 
 /// Detect the archive container format from leading magic bytes. Magic is
@@ -74,6 +96,67 @@ pub fn sniff_archive_kind(bytes: &[u8]) -> Option<ArchiveKind> {
     }
     None
 }
+
+/// Extract in-memory archive `bytes` into `dest_dir` (cleared first,
+/// always-overwrite), dispatching on the container sniffed from magic bytes.
+/// The one container-agnostic reader every `.slpkg` consumer goes through —
+/// install, runtime module load, and dependency resolution all land here, so a
+/// zip and a tar.gz of the same tree materialize identically. `source_label`
+/// names the archive in `tracing` / error text only.
+#[tracing::instrument(skip(bytes), fields(dest = %dest_dir.display()))]
+pub fn extract_archive_bytes_to_dir(
+    bytes: &[u8],
+    dest_dir: &Path,
+    source_label: &str,
+) -> Result<(), ArchiveError> {
+    let kind = sniff_archive_kind(bytes).ok_or_else(|| ArchiveError::UnrecognizedContainer {
+        source_label: source_label.to_string(),
+        detail: "unrecognized magic bytes".to_string(),
+    })?;
+    match kind {
+        ArchiveKind::Zip => extract_zip_bytes_to_dir(bytes, dest_dir, source_label),
+        ArchiveKind::TarGz => extract_tar_gz_bytes_to_dir(bytes, dest_dir, source_label),
+    }
+}
+
+/// Locate the package root inside an already-extracted `extracted_dir`: the
+/// directory itself when it carries `streamlib.yaml`, else the single
+/// top-level directory that does. The nested shape is what `tar czf
+/// pkg.tar.gz my-package/` (and a zip built the same way) produces, so every
+/// archive consumer must tolerate it identically. Anything else is not a
+/// package.
+#[tracing::instrument(fields(dir = %extracted_dir.display()))]
+pub fn locate_package_root_in_extracted_dir(
+    extracted_dir: &Path,
+    source_label: &str,
+) -> Result<PathBuf, ArchiveError> {
+    if extracted_dir.join(PACKAGE_MANIFEST_FILE_NAME).is_file() {
+        return Ok(extracted_dir.to_path_buf());
+    }
+    let top_level_entries: Vec<PathBuf> = std::fs::read_dir(extracted_dir)
+        .map_err(|e| ArchiveError::ExtractedContentsListingFailed {
+            extracted_dir: extracted_dir.to_path_buf(),
+            detail: e.to_string(),
+        })?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .collect();
+    if let [single_top_level_dir] = top_level_entries.as_slice()
+        && single_top_level_dir.is_dir()
+        && single_top_level_dir
+            .join(PACKAGE_MANIFEST_FILE_NAME)
+            .is_file()
+    {
+        return Ok(single_top_level_dir.clone());
+    }
+    Err(ArchiveError::PackageRootNotLocated {
+        source_label: source_label.to_string(),
+        detail: format!("no {PACKAGE_MANIFEST_FILE_NAME} at the package root"),
+    })
+}
+
+/// The package manifest file name the package-root locator probes for.
+const PACKAGE_MANIFEST_FILE_NAME: &str = crate::manifest::Manifest::FILE_NAME;
 
 /// Clear `dest_dir` if present and recreate it empty.
 fn prepare_destination_dir(dest_dir: &Path) -> Result<(), ArchiveError> {

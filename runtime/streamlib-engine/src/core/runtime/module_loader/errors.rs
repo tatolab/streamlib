@@ -273,15 +273,19 @@ pub enum AddModuleError {
         module: streamlib_idents::ModuleIdent,
     },
 
-    /// Strategy was [`Strategy::Slpkg`] and the extraction step failed
-    /// (I/O, malformed ZIP, missing embedded manifest, etc.).
+    /// Strategy was [`Strategy::PackageArchive`] (or a [`Strategy::Url`] /
+    /// [`Strategy::ByVersion`] fetch of one) and the extraction step failed
+    /// (I/O, unrecognized or malformed container, no package root in the
+    /// extracted tree, etc.).
     ///
-    /// [`Strategy::Slpkg`]: super::Strategy::Slpkg
+    /// [`Strategy::PackageArchive`]: super::Strategy::PackageArchive
+    /// [`Strategy::Url`]: super::Strategy::Url
+    /// [`Strategy::ByVersion`]: super::Strategy::ByVersion
     #[error(
-        "Failed to extract .slpkg archive at {}: {detail}",
+        "Failed to extract package archive at {}: {detail}",
         archive.display()
     )]
-    SlpkgExtractionFailed {
+    PackageArchiveExtractionFailed {
         archive: std::path::PathBuf,
         detail: String,
     },
