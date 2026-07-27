@@ -95,10 +95,10 @@ enum Commands {
     /// MCP over stdio — zero-config; the host gets an operable runtime, torn
     /// down when it closes stdin. `--attach <url>` instead bridges stdio to a
     /// running runtime's `POST {url}/mcp` to operate an existing live pipeline.
-    /// Exposes the same 7 tools as `POST /mcp`: graph / submit_processor /
-    /// replace_processor / remove_processor / connect / tap / logs. Auth is off
-    /// by construction on the in-process path; `--attach` forwards a token from
-    /// `STREAMLIB_MCP_TOKEN` when set.
+    /// Exposes the same 8 tools as `POST /mcp`: graph / submit_processor /
+    /// replace_processor / remove_processor / connect / tap / logs / shutdown.
+    /// Auth is off by construction on the in-process path; `--attach` forwards
+    /// a token from `STREAMLIB_MCP_TOKEN` when set.
     Mcp {
         /// Bridge stdio to this running runtime's `POST {url}/mcp` instead of
         /// hosting an in-process runtime.
@@ -258,6 +258,25 @@ enum Commands {
         /// Number of bags to collect before returning.
         #[arg(long, value_name = "COUNT")]
         count: Option<usize>,
+    },
+
+    /// Ask a running node to shut down.
+    ///
+    /// A request the node's run loop observes and answers with a normal
+    /// teardown — not a kill. Returns as soon as the node accepts it;
+    /// teardown is not awaited. Requesting twice is not an error.
+    Shutdown {
+        /// Control-plane base URL of the target node (its `POST /mcp` host).
+        #[arg(long, value_name = "URL")]
+        url: Option<String>,
+
+        /// Registered runtime_id to target instead of `--url`.
+        #[arg(long, value_name = "RUNTIME_ID", conflicts_with = "url")]
+        node: Option<String>,
+
+        /// Human-readable attribution the node logs with the request.
+        #[arg(long, value_name = "TEXT")]
+        reason: Option<String>,
     },
 
     /// Setup commands
@@ -636,6 +655,10 @@ async fn async_main(cli: Cli) -> Result<()> {
         }) => {
             let url = commands::control::resolve_control_url(url, node)?;
             commands::control::tap(&url, &channel, count)?
+        }
+        Some(Commands::Shutdown { url, node, reason }) => {
+            let url = commands::control::resolve_control_url(url, node)?;
+            commands::control::shutdown(&url, reason.as_deref())?
         }
         Some(Commands::Setup { action }) => match action {
             SetupCommands::Shell { shell } => commands::setup::shell(shell.as_deref())?,
