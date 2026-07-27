@@ -1888,14 +1888,14 @@ mod tests {
     /// `manifest_processors` is spliced verbatim as the `processors:` YAML so a
     /// test can make it agree with — or drift from — the code.
     fn write_rust_processor_pkg(dir: &Path, manifest_processors: &str) {
-        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("processors")).unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),
             "[package]\nname = \"cam\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
         )
         .unwrap();
         std::fs::write(
-            dir.join("src/lib.rs"),
+            dir.join("processors/camera.rs"),
             r#"#[processor("@tatolab/camera/Camera", execution = manual, output("video", "@tatolab/core/VideoFrame"))]
             pub struct Camera;
             "#,
@@ -2157,9 +2157,9 @@ mod tests {
         )
         .unwrap();
         std::fs::write(dir.path().join("Cargo.toml"), b"[package]\nname='rp'\n").unwrap();
-        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::create_dir(dir.path().join("processors")).unwrap();
         std::fs::write(
-            dir.path().join("src/lib.rs"),
+            dir.path().join("processors/p.rs"),
             b"#[processor(\"@tatolab/rp/P\", execution = manual)]\npub struct P;\n",
         )
         .unwrap();
@@ -2184,7 +2184,7 @@ mod tests {
             "crate manifest must ship"
         );
         assert!(
-            entries.contains(&"src/lib.rs".to_string()),
+            entries.contains(&"processors/p.rs".to_string()),
             "crate source must ship"
         );
         // The prebuilt cdylib does NOT — source-only.
@@ -2218,9 +2218,9 @@ mod tests {
                 "[package]\nname = \"rp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
             )
             .unwrap();
-            std::fs::create_dir_all(dir.join("src")).unwrap();
+            std::fs::create_dir_all(dir.join("processors")).unwrap();
             std::fs::write(
-                dir.join("src/lib.rs"),
+                dir.join("processors/camera.rs"),
                 b"#[processor(\"@tatolab/rp/P\", execution = manual)]\npub struct P;\n",
             )
             .unwrap();
@@ -2412,8 +2412,8 @@ mod tests {
             b"[package]\nname=\"p\"\nversion=\"0.1.0\"\n",
         )
         .unwrap();
-        std::fs::create_dir(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/lib.rs"), b"// src").unwrap();
+        std::fs::create_dir(dir.path().join("processors")).unwrap();
+        std::fs::write(dir.path().join("processors/p.rs"), b"// src").unwrap();
         std::fs::write(dir.path().join("Cargo.lock"), b"# stale lock\n").unwrap();
 
         let mut files = Vec::new();
@@ -2424,8 +2424,8 @@ mod tests {
             "manifest must ship: {names:?}"
         );
         assert!(
-            names.iter().any(|n| n.contains("lib.rs")),
-            "src must ship: {names:?}"
+            names.iter().any(|n| n.contains("processors/p.rs")),
+            "the authored processor tree must ship: {names:?}"
         );
         assert!(
             !names.iter().any(|n| n.contains("Cargo.lock")),
@@ -3007,9 +3007,9 @@ mod tests {
             "[package]\nname = \"rp\"\nversion = \"0.4.30\"\nedition = \"2024\"\n",
         )
         .unwrap();
-        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::create_dir(dir.path().join("processors")).unwrap();
         std::fs::write(
-            dir.path().join("src/lib.rs"),
+            dir.path().join("processors/p.rs"),
             b"#[processor(\"@tatolab/rp/P\", execution = manual)]\npub struct P;\n",
         )
         .unwrap();
@@ -3057,8 +3057,8 @@ mod tests {
             "[package]\nname = \"rp\"\nversion = \"0.4.30\"\nedition = \"2024\"\n",
         )
         .unwrap();
-        std::fs::create_dir(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/lib.rs"), b"// crate source").unwrap();
+        std::fs::create_dir(dir.path().join("processors")).unwrap();
+        std::fs::write(dir.path().join("processors/p.rs"), b"// crate source").unwrap();
         let triple_dir = dir.path().join("lib").join(host_target_triple());
         std::fs::create_dir_all(&triple_dir).unwrap();
         std::fs::write(
@@ -3125,8 +3125,8 @@ mod tests {
         )
         .unwrap();
         std::fs::write(dir.path().join("Cargo.toml"), ":::: not toml ::::\n").unwrap();
-        std::fs::create_dir(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/lib.rs"), b"// crate source").unwrap();
+        std::fs::create_dir(dir.path().join("processors")).unwrap();
+        std::fs::write(dir.path().join("processors/p.rs"), b"// crate source").unwrap();
         let triple_dir = dir.path().join("lib").join(host_target_triple());
         std::fs::create_dir_all(&triple_dir).unwrap();
         std::fs::write(
@@ -3173,8 +3173,8 @@ mod tests {
             "[package]\nname = \"rp\"\nversion.workspace = true\nedition = \"2024\"\n",
         )
         .unwrap();
-        std::fs::create_dir(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/lib.rs"), b"// crate source").unwrap();
+        std::fs::create_dir(dir.path().join("processors")).unwrap();
+        std::fs::write(dir.path().join("processors/p.rs"), b"// crate source").unwrap();
         let triple_dir = dir.path().join("lib").join(host_target_triple());
         std::fs::create_dir_all(&triple_dir).unwrap();
         std::fs::write(

@@ -19,8 +19,8 @@ fn compile_shaders() {
     use std::process::Command;
 
     let shaders: &[(&str, &str, &str)] = &[
-        ("src/shaders/display_blit.vert", "display_blit.vert.spv", "vertex"),
-        ("src/shaders/display_blit.frag", "display_blit.frag.spv", "fragment"),
+        ("shaders/display_blit.vert", "display_blit.vert.spv", "vertex"),
+        ("shaders/display_blit.frag", "display_blit.frag.spv", "fragment"),
     ];
 
     let out_dir = std::env::var("OUT_DIR").expect("OUT_DIR not set");

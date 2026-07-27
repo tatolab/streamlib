@@ -79,7 +79,7 @@ use streamlib_consumer_rhi::VulkanLayout;
 /// Cuda surface id the host-side `CameraToCudaCopy` processor
 /// registers under and the Python `AvatarCharacter` consumes via
 /// its config. The single source of truth is
-/// `packages/camera/src/camera_to_cuda_copy.rs::CUDA_CAMERA_SURFACE_ID`
+/// `packages/camera/processors/camera_to_cuda_copy.rs::CUDA_CAMERA_SURFACE_ID`
 /// — the example doesn't Cargo-dep `@tatolab/camera`, so the value
 /// is duplicated here as a literal. If `@tatolab/camera`'s constant
 /// changes, the package's bump becomes visible to this consumer
