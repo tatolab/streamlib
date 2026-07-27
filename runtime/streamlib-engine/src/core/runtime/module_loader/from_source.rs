@@ -42,21 +42,28 @@ use super::source::Strategy;
 use crate::core::error::{Error, Result};
 
 /// The per-language staging profile for a live source submit: the manifest
-/// runtime key, the staged source file's relative path (given the module
-/// stem), the subprocess entrypoint (given stem + type name), and the
-/// subprocess dependency-resolution artifacts staged beside the source so the
-/// build orchestrator's venv / Deno provisioning has a project to work from.
-/// A single `match request.language` yields one of these; Rust returns the
-/// unsupported-language refusal instead.
+/// runtime key (which doubles as the staged language dir), the source file
+/// extension, the subprocess entrypoint derived from the staged source's
+/// package-root-relative path, and the subprocess dependency-resolution
+/// artifacts staged beside the source so the build orchestrator's venv / Deno
+/// provisioning has a project to work from. A single `match request.language`
+/// yields one of these; Rust returns the unsupported-language refusal instead.
 ///
-/// The staged source nests under `<language>/processors/` because the SDK
-/// extractors discover processor modules only under a `processors/` directory;
-/// staged anywhere else, the orchestrator's port derivation enumerates nothing
-/// and the submitted processor loads with placeholder ports.
+/// The staged source nests under `<runtime_key>/processors/` for two reasons
+/// that both have to hold at once: the orchestrator's port-derivation tail
+/// points each language's extractor at `<staged>/<runtime_key>`, and the SDK
+/// extractors discover processor modules only under a `processors/` directory
+/// beneath the root they are pointed at. The manifest stays at the staged
+/// ROOT, and the subprocess runners resolve an entrypoint against the manifest
+/// dir — so the entrypoint carries the language dir. `stage_submitted_source`
+/// derives it from the one staged path so the two can't drift.
 struct LiveSubmitLanguage {
     runtime_key: &'static str,
-    source_rel: fn(module_stem: &str) -> String,
-    entrypoint: fn(module_stem: &str, type_name: &str) -> String,
+    source_file_extension: &'static str,
+    /// The `<module>:<Type>` entrypoint for a source staged at
+    /// `source_rel` (package-root-relative): a dotted module path for Python,
+    /// the module path verbatim for TypeScript.
+    entrypoint_from_source_rel: fn(source_rel: &str, type_name: &str) -> String,
     /// `(relative_path, contents)` for the dependency-resolution artifacts a
     /// build of this language needs — a `pyproject.toml` declaring the
     /// `streamlib` SDK dep (Python), a `deno.json` import map (TypeScript).
@@ -324,16 +331,27 @@ fn live_submit_language(
     match language {
         ProcessorLanguage::Python => Ok(LiveSubmitLanguage {
             runtime_key: "python",
-            source_rel: |stem| format!("python/processors/{stem}.py"),
-            entrypoint: |stem, type_name| format!("processors.{stem}:{type_name}"),
+            source_file_extension: "py",
+            // `python/` and `python/processors/` carry no `__init__.py`; PEP
+            // 420 makes both namespace packages, so the dotted path imports
+            // with the manifest dir on `sys.path`.
+            entrypoint_from_source_rel: |source_rel, type_name| {
+                let module = source_rel
+                    .strip_suffix(".py")
+                    .unwrap_or(source_rel)
+                    .replace('/', ".");
+                format!("{module}:{type_name}")
+            },
             dep_artifacts: |name, _version| {
                 vec![("pyproject.toml".to_string(), session_pyproject_toml(name))]
             },
         }),
         ProcessorLanguage::TypeScript => Ok(LiveSubmitLanguage {
             runtime_key: "deno",
-            source_rel: |stem| format!("deno/processors/{stem}.ts"),
-            entrypoint: |stem, type_name| format!("processors/{stem}.ts:{type_name}"),
+            source_file_extension: "ts",
+            entrypoint_from_source_rel: |source_rel, type_name| {
+                format!("{source_rel}:{type_name}")
+            },
             dep_artifacts: |_name, _version| {
                 vec![("deno.json".to_string(), session_deno_json())]
             },
@@ -377,8 +395,14 @@ fn stage_submitted_source(
     std::fs::create_dir_all(&dir)
         .map_err(|e| stage_err(format!("creating staging dir {}: {e}", dir.display())))?;
 
-    let source_rel = (lang.source_rel)(&module_stem);
-    let entrypoint = (lang.entrypoint)(&module_stem, &type_name);
+    let source_rel = format!(
+        "{}/{}/{}.{}",
+        lang.runtime_key,
+        streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME,
+        module_stem,
+        lang.source_file_extension
+    );
+    let entrypoint = (lang.entrypoint_from_source_rel)(&source_rel, &type_name);
 
     let source_path = dir.join(&source_rel);
     if let Some(parent) = source_path.parent() {
@@ -627,18 +651,34 @@ mod tests {
                 .join("processors")
                 .join("widget.py")
                 .is_file(),
-            "source must be staged under `processors/` at the entrypoint module path — \
-             the only root the Python extractor scans"
+            "source must be staged under `<language>/processors/` — the root the \
+             orchestrator points the Python extractor at, and the only dir under it \
+             the extractor scans"
         );
 
-        // The generated entrypoint must name the module at the staged path,
-        // relative to the language dir the extractor is pointed at. Drift
-        // between the two loads a processor whose module can't be imported.
-        let manifest_body = std::fs::read_to_string(&manifest_path).unwrap();
+        let config =
+            crate::core::config::ProjectConfig::load(&staged.dir).expect("manifest parses");
+        let entrypoint = config.processors[0]
+            .entrypoint
+            .as_deref()
+            .expect("session manifest declares an entrypoint");
+        assert_eq!(entrypoint, "python.processors.widget:Widget");
+
+        // The runner imports the entrypoint's module with the MANIFEST dir on
+        // `sys.path` (`subprocess_runner.py` inserts `project_path`, which
+        // `recursive_walker` sets to the manifest dir). Resolve it the way the
+        // runner does and stat the result: this is the leg a
+        // staged-path-vs-entrypoint agreement check can't see.
+        let (module, type_name) = entrypoint
+            .split_once(':')
+            .expect("entrypoint is module:Type");
+        assert_eq!(type_name, "Widget");
         assert!(
-            manifest_body.contains("entrypoint: \"processors.widget:Widget\""),
-            "the generated entrypoint must be the dotted module path under \
-             `processors/`, got: {manifest_body}"
+            staged
+                .dir
+                .join(format!("{}.py", module.replace('.', "/")))
+                .is_file(),
+            "the entrypoint must resolve to the staged module from the manifest dir"
         );
 
         // The Python dependency-resolution artifact must be staged beside the
@@ -681,16 +721,29 @@ mod tests {
                 .join("processors")
                 .join("ts_widget.ts")
                 .is_file(),
-            "source must be staged under `processors/` at the entrypoint module path — \
-             the only root the Deno extractor scans"
+            "source must be staged under `<language>/processors/` — the root the \
+             orchestrator points the Deno extractor at, and the only dir under it \
+             the extractor scans"
         );
-        let manifest_body =
-            std::fs::read_to_string(staged.dir.join(streamlib_idents::Manifest::FILE_NAME))
-                .unwrap();
+
+        let config =
+            crate::core::config::ProjectConfig::load(&staged.dir).expect("manifest parses");
+        let entrypoint = config.processors[0]
+            .entrypoint
+            .as_deref()
+            .expect("session manifest declares an entrypoint");
+        assert_eq!(entrypoint, "deno/processors/ts_widget.ts:Widget");
+
+        // `resolveDenoModulePath` joins the module half onto the project path,
+        // which the spawn op sets to the manifest dir. Resolve it the same way
+        // and stat the result.
+        let (module, type_name) = entrypoint
+            .split_once(':')
+            .expect("entrypoint is module:Type");
+        assert_eq!(type_name, "Widget");
         assert!(
-            manifest_body.contains("entrypoint: \"processors/ts_widget.ts:Widget\""),
-            "the generated entrypoint must be the module path under `processors/`, \
-             got: {manifest_body}"
+            staged.dir.join(module).is_file(),
+            "the entrypoint must resolve to the staged module from the manifest dir"
         );
         let deno_json = staged.dir.join("deno.json");
         assert!(

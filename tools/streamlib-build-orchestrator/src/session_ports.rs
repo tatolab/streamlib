@@ -64,8 +64,8 @@ fn rewrite_staged_manifest_ports(
 ) -> Result<(), BuildError> {
     let mut extracted: Vec<ExtractedManifestProcessor> = Vec::new();
 
-    // Python source is staged under `python/` (beside the pyproject); the
-    // extractor scans the `*.py` under `python/processors/`.
+    // Python source is staged under `python/`; the extractor scans the `*.py`
+    // under that dir's `processors/`.
     let python_dir = staged_dir.join("python");
     if python_dir.is_dir() {
         extracted.extend(run_language_extractor(
@@ -77,7 +77,7 @@ fn rewrite_staged_manifest_ports(
     }
 
     // Deno source is staged under `deno/`; the extractor scans the `*.ts`
-    // under `deno/processors/`.
+    // under that dir's `processors/`.
     let deno_dir = staged_dir.join("deno");
     if deno_dir.is_dir() {
         extracted.extend(run_language_extractor(
@@ -583,7 +583,9 @@ mod tests {
     /// Stage a placeholder `@session/<name>` package: a Python source subdir and
     /// the portless manifest `stage_submitted_source` writes.
     fn stage_placeholder_python(dir: &Path, type_name: &str) {
-        let processors_dir = dir.join("python").join("processors");
+        let processors_dir = dir
+            .join("python")
+            .join(streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME);
         std::fs::create_dir_all(&processors_dir).unwrap();
         std::fs::write(processors_dir.join("widget.py"), "class Widget: pass\n").unwrap();
         std::fs::write(
@@ -591,7 +593,7 @@ mod tests {
             format!(
                 "package:\n  org: session\n  name: widget\n  version: \"0.0.1\"\n\
                  processors:\n  - name: {type_name}\n    description: live-submitted session processor\n    \
-                 runtime: python\n    execution: manual\n    entrypoint: \"processors.widget:{type_name}\"\n    \
+                 runtime: python\n    execution: manual\n    entrypoint: \"python.processors.widget:{type_name}\"\n    \
                  inputs: []\n    outputs: []\n"
             ),
         )
@@ -684,7 +686,10 @@ mod tests {
         // now falls through to the npm-published extractor — see
         // `deno_extractor_source_prefers_override_then_link_then_npm`.)
         let dir = tempfile::tempdir().unwrap();
-        let deno_processors_dir = dir.path().join("deno").join("processors");
+        let deno_processors_dir = dir
+            .path()
+            .join("deno")
+            .join(streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME);
         std::fs::create_dir_all(&deno_processors_dir).unwrap();
         std::fs::write(
             deno_processors_dir.join("widget.ts"),
@@ -695,7 +700,7 @@ mod tests {
             dir.path().join("streamlib.yaml"),
             "package:\n  org: session\n  name: widget\n  version: \"0.0.1\"\n\
              processors:\n  - name: Widget\n    description: d\n    runtime: deno\n    \
-             execution: manual\n    entrypoint: \"processors/widget.ts:Widget\"\n    inputs: []\n    outputs: []\n",
+             execution: manual\n    entrypoint: \"deno/processors/widget.ts:Widget\"\n    inputs: []\n    outputs: []\n",
         )
         .unwrap();
         let extractor = FakeExtractor {
