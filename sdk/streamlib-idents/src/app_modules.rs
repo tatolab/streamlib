@@ -83,6 +83,37 @@ impl AddPackageSource {
     }
 }
 
+/// Whether [`AppModulesDir::add_package`] records what it materialized in the
+/// app's `streamlib.lock`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LockfileRecordingPolicy {
+    /// Write the materialized package's entry into `<app-root>/streamlib.lock`
+    /// — the operator-facing `streamlib add` / `streamlib install` contract.
+    #[default]
+    RecordInAppLockfile,
+    /// Materialize the slot without touching the lockfile. The runtime module
+    /// loader's policy: the strategy the app declared is that run's record of
+    /// where the package came from, and a load must never rewrite the app's
+    /// committed lockfile behind the operator's back.
+    SkipLockfileRecording,
+}
+
+/// Whether [`AppModulesDir::add_package`] may displace a slot that currently
+/// holds an active `streamlib link` symlink instead of materialized contents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ActiveLinkSlotPolicy {
+    /// Unlink the `streamlib link` and materialize over it — an explicit
+    /// operator `streamlib add` outranks a link.
+    #[default]
+    ReplaceActiveLinkInSlot,
+    /// Refuse with [`AppModulesError::SlotOccupiedByActiveLink`], leaving the
+    /// link intact. The runtime module loader's policy: a link is a dev-loop
+    /// override a *run* must not silently delete, and a loader that writes no
+    /// lockfile would leave `streamlib.lock` claiming
+    /// [`LockfileSource::Link`] for a slot that is now a materialized copy.
+    RefuseWhenSlotIsActiveLink,
+}
+
 /// Knobs for [`AppModulesDir::add_package`].
 #[derive(Debug, Clone, Default)]
 pub struct AddPackageOptions {
@@ -91,6 +122,10 @@ pub struct AddPackageOptions {
     /// and nothing is materialized. Ignored for folder sources (no archive
     /// bytes exist).
     pub expected_archive_sha256: Option<String>,
+    /// Whether the add is recorded in the app's `streamlib.lock`.
+    pub lockfile_recording_policy: LockfileRecordingPolicy,
+    /// What the add does when the target slot is an active `streamlib link`.
+    pub active_link_slot_policy: ActiveLinkSlotPolicy,
     /// When `true` and the add replaces an already-present slot, the displaced
     /// prior slot (contents + its lockfile entry) is retained as a restorable
     /// [`ReplacedSlotBackup`] in the report rather than discarded, so a caller
@@ -111,8 +146,9 @@ pub struct AddPackageReport {
     pub version: SemVer,
     /// Where the package contents now live (`streamlib_modules/@org/name/`).
     pub package_dir: PathBuf,
-    /// The modules lockfile that was updated.
-    pub lockfile_path: PathBuf,
+    /// The modules lockfile that was updated; `None` when the add ran under
+    /// [`LockfileRecordingPolicy::SkipLockfileRecording`].
+    pub lockfile_path: Option<PathBuf>,
     /// Content hash recorded in the lockfile entry.
     pub content_hash: String,
     /// The source recorded in the lockfile entry.
@@ -313,6 +349,20 @@ pub enum AppModulesError {
     StagePromoteFailed {
         package_dir: PathBuf,
         detail: String,
+    },
+
+    /// The target slot holds an active `streamlib link` and the caller asked
+    /// for [`ActiveLinkSlotPolicy::RefuseWhenSlotIsActiveLink`].
+    #[error(
+        "{} is an active `streamlib link` to {} — refusing to replace it with materialized \
+         contents; run `streamlib unlink {package}` first if the link should give way",
+        package_dir.display(),
+        link_target.display()
+    )]
+    SlotOccupiedByActiveLink {
+        package: PackageRef,
+        package_dir: PathBuf,
+        link_target: PathBuf,
     },
 
     /// Creating the symlink for a `streamlib link` into `streamlib_modules/`
@@ -518,7 +568,11 @@ impl AppModulesDir {
     /// Materialize one package source into `streamlib_modules/@org/name/` and
     /// record it in the modules lockfile. Identity is read from the package's
     /// own manifest; re-adding an already-present package replaces it cleanly.
-    /// Never builds; never resolves against a package source.
+    /// Never builds; never resolves against a package source. The one
+    /// sweep → stage → extract → identity → promote pipeline every
+    /// materializer runs; [`AddPackageOptions`] carries the per-caller policy
+    /// (lockfile recording, active-link slots) so the runtime module loader
+    /// shares this pipeline rather than re-implementing it.
     #[tracing::instrument(skip(self, options), fields(app_root = %self.app_root.display()))]
     pub fn add_package(
         &self,
@@ -561,17 +615,28 @@ impl AppModulesDir {
             }
         })?;
 
+        let package_dir = self.package_dir(&package);
+        if options.active_link_slot_policy == ActiveLinkSlotPolicy::RefuseWhenSlotIsActiveLink
+            && let Ok(slot_meta) = std::fs::symlink_metadata(&package_dir)
+            && slot_meta.file_type().is_symlink()
+        {
+            return Err(AppModulesError::SlotOccupiedByActiveLink {
+                package,
+                link_target: std::fs::read_link(&package_dir).unwrap_or_else(|_| PathBuf::new()),
+                package_dir,
+            });
+        }
+
         // Promote: swap the staged root into `streamlib_modules/@org/name`,
         // keeping the displaced previous contents restorable until the new
         // contents are in place. When retention is requested, the displaced
         // prior slot survives the promote so a failed post-add step can restore
         // it (compile-on-add), instead of being discarded on success.
-        let package_dir = self.package_dir(&package);
         let promoted = promote_staged_package_root(
             &staged_package_root,
             &package_dir,
             &modules_dir,
-            options.retain_replaced_slot_backup,
+            ReplacedSlotBackupRetention::from_retain_flag(options.retain_replaced_slot_backup),
         )?;
         let replaced_existing = promoted.replaced;
         drop(staging); // best-effort cleanup of the (now-emptied) staging shell
@@ -579,23 +644,29 @@ impl AppModulesDir {
         // Lock: read-modify-write the modules lockfile, atomically. Capture the
         // prior entry before overwriting it, so a retained backup can rewrite it
         // on restore.
-        let lockfile_path = self.lockfile_path();
-        let mut lockfile = self.read_lockfile()?;
-        let prior_lockfile_entry = lockfile.packages.get(&package.to_string()).cloned();
-        lockfile.packages.insert(
-            package.to_string(),
-            LockfileEntry {
-                version,
-                source: lock_source.clone(),
-                content_hash: content_hash.clone(),
-            },
-        );
-        write_modules_lockfile(&lockfile_path, &lockfile).map_err(|e| {
-            AppModulesError::LockfileWriteFailed {
-                lockfile_path: lockfile_path.clone(),
-                detail: e.to_string(),
+        let (lockfile_path, prior_lockfile_entry) = match options.lockfile_recording_policy {
+            LockfileRecordingPolicy::SkipLockfileRecording => (None, None),
+            LockfileRecordingPolicy::RecordInAppLockfile => {
+                let lockfile_path = self.lockfile_path();
+                let mut lockfile = self.read_lockfile()?;
+                let prior_lockfile_entry = lockfile.packages.get(&package.to_string()).cloned();
+                lockfile.packages.insert(
+                    package.to_string(),
+                    LockfileEntry {
+                        version,
+                        source: lock_source.clone(),
+                        content_hash: content_hash.clone(),
+                    },
+                );
+                write_modules_lockfile(&lockfile_path, &lockfile).map_err(|e| {
+                    AppModulesError::LockfileWriteFailed {
+                        lockfile_path: lockfile_path.clone(),
+                        detail: e.to_string(),
+                    }
+                })?;
+                (Some(lockfile_path), prior_lockfile_entry)
             }
-        })?;
+        };
 
         let replaced_slot_backup = match (promoted.retained_backup, prior_lockfile_entry) {
             (Some(backup_dir), Some(prior_lockfile_entry)) => Some(ReplacedSlotBackup {
@@ -828,7 +899,12 @@ impl AppModulesDir {
         let staging = StagingSymlink::create(&modules_dir, &canonical)?;
         let package_dir = self.package_dir(&package);
         let replaced_existing =
-            promote_staged_package_root(staging.path(), &package_dir, &modules_dir, false)?.replaced;
+            promote_staged_package_root(
+                staging.path(),
+                &package_dir,
+                &modules_dir,
+                ReplacedSlotBackupRetention::DiscardOnPromote,
+            )?.replaced;
         drop(staging); // the symlink was renamed into place; nothing to clean
 
         let lock_source = LockfileSource::Link {
@@ -1091,7 +1167,12 @@ impl AppModulesDir {
                 }
                 let staging = StagingSymlink::create(modules_dir, path)?;
                 let replaced =
-                    promote_staged_package_root(staging.path(), &package_dir, modules_dir, false)
+                    promote_staged_package_root(
+                        staging.path(),
+                        &package_dir,
+                        modules_dir,
+                        ReplacedSlotBackupRetention::DiscardOnPromote,
+                    )
                         .map_err(|e| map_stage_error_to_install(package, e))?
                         .replaced;
                 drop(staging);
@@ -1194,13 +1275,15 @@ fn sweep_orphan_staging_entries(modules_dir: &Path) {
 /// filesystem, so the promote is an atomic rename, and the
 /// [`APP_MODULES_STAGING_PREFIX`]`<pid>-<seq>` naming is what the orphan sweep
 /// recognizes as reclaimable residue from a killed process.
-pub struct AppModulesStagingDir {
+#[must_use = "the staging directory is removed when this guard drops"]
+struct AppModulesStagingDir {
     path: PathBuf,
 }
 
 impl AppModulesStagingDir {
     /// Create a fresh staging directory inside `modules_dir`.
-    pub fn create(modules_dir: &Path) -> Result<Self, AppModulesError> {
+    #[tracing::instrument]
+    fn create(modules_dir: &Path) -> Result<Self, AppModulesError> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static STAGE_SEQ: AtomicU64 = AtomicU64::new(0);
         let path = modules_dir.join(format!(
@@ -1216,7 +1299,7 @@ impl AppModulesStagingDir {
     }
 
     /// The staging directory's path.
-    pub fn path(&self) -> &Path {
+    fn path(&self) -> &Path {
         &self.path
     }
 }
@@ -1429,18 +1512,40 @@ fn locate_staged_package_root(
             path: extracted_dir,
             detail: format!("listing staged contents: {detail}"),
         },
+        ArchiveError::PackageRootNotLocated { detail, .. } => AppModulesError::InvalidPackage {
+            source_label: source_label.to_string(),
+            detail,
+        },
         other => AppModulesError::InvalidPackage {
             source_label: source_label.to_string(),
-            detail: match other {
-                ArchiveError::PackageRootNotLocated { detail, .. } => detail,
-                other => other.to_string(),
-            },
+            detail: other.to_string(),
         },
     })
 }
 
+/// What [`promote_staged_package_root`] does with the displaced prior slot once
+/// the new contents are in place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplacedSlotBackupRetention {
+    /// Keep the `.staging-replaced-*` backup and hand it back, so a caller
+    /// whose post-promote step fails can restore the prior working version.
+    RetainForCallerRestore,
+    /// Delete the displaced backup as soon as the promote succeeds.
+    DiscardOnPromote,
+}
+
+impl ReplacedSlotBackupRetention {
+    fn from_retain_flag(retain: bool) -> Self {
+        if retain {
+            Self::RetainForCallerRestore
+        } else {
+            Self::DiscardOnPromote
+        }
+    }
+}
+
 /// Outcome of [`promote_staged_package_root`].
-pub struct PromotedPackageSlot {
+struct PromotedPackageSlot {
     /// Whether previous contents occupied the slot and were displaced.
     pub replaced: bool,
     /// The `.staging-replaced-*` backup of the displaced prior slot, present
@@ -1452,15 +1557,15 @@ pub struct PromotedPackageSlot {
 /// Swap `staged_package_root` into `package_dir`, displacing any previous
 /// contents restorably — the one promote every materializer goes through, so
 /// a failed swap never leaves the slot empty and a slot occupied by a
-/// `streamlib link` symlink is unlinked rather than followed. When
-/// `retain_replaced_backup` is set and a prior slot was displaced, its backup
-/// is kept (not deleted on success) and returned so the caller can restore it
-/// after a failed post-promote step.
-pub fn promote_staged_package_root(
+/// `streamlib link` symlink is unlinked rather than followed. Callers that must
+/// refuse a linked slot outright screen it before promoting (see
+/// [`ActiveLinkSlotPolicy`]).
+#[tracing::instrument(fields(slot = %package_dir.display()))]
+fn promote_staged_package_root(
     staged_package_root: &Path,
     package_dir: &Path,
     modules_dir: &Path,
-    retain_replaced_backup: bool,
+    backup_retention: ReplacedSlotBackupRetention,
 ) -> Result<PromotedPackageSlot, AppModulesError> {
     let promote_err = |detail: String| AppModulesError::StagePromoteFailed {
         package_dir: package_dir.to_path_buf(),
@@ -1495,10 +1600,14 @@ pub fn promote_staged_package_root(
 
     match std::fs::rename(staged_package_root, package_dir) {
         Ok(()) => match displaced {
-            Some(backup) if retain_replaced_backup => Ok(PromotedPackageSlot {
-                replaced: true,
-                retained_backup: Some(backup),
-            }),
+            Some(backup)
+                if backup_retention == ReplacedSlotBackupRetention::RetainForCallerRestore =>
+            {
+                Ok(PromotedPackageSlot {
+                    replaced: true,
+                    retained_backup: Some(backup),
+                })
+            }
             Some(backup) => {
                 // The displaced previous slot may be a symlink (a prior link
                 // being replaced); unlink it rather than recursing into it.
@@ -1669,7 +1778,12 @@ fn reproduce_materialized_from_lock(
         });
     }
 
-    let replaced = promote_staged_package_root(&staged_root, package_dir, modules_dir, false)
+    let replaced = promote_staged_package_root(
+        &staged_root,
+        package_dir,
+        modules_dir,
+        ReplacedSlotBackupRetention::DiscardOnPromote,
+    )
         .map_err(|e| map_stage_error_to_install(package, e))?
         .replaced;
     drop(staging);
@@ -2267,6 +2381,164 @@ mod tests {
         assert_eq!(report.package, pkg_ref("tatolab", "camera"));
         assert!(report.package_dir.join("streamlib.yaml").is_file());
         server.join().unwrap();
+    }
+
+    // =====================================================================
+    // Per-caller add policies (lockfile recording, active-link slots)
+    // =====================================================================
+
+    /// The runtime module loader adds under `SkipLockfileRecording`: the slot
+    /// is materialized exactly as the CLI would materialize it, but the app's
+    /// committed `streamlib.lock` is left byte-untouched by a run.
+    #[test]
+    fn skip_lockfile_recording_materializes_the_slot_and_writes_no_lockfile() {
+        let src = tempfile::tempdir().unwrap();
+        write_package_folder(src.path(), "tatolab", "camera", "2.0.0");
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let report = app
+            .add_package(
+                &AddPackageSource::Folder {
+                    path: src.path().to_path_buf(),
+                },
+                &AddPackageOptions {
+                    lockfile_recording_policy: LockfileRecordingPolicy::SkipLockfileRecording,
+                    ..Default::default()
+                },
+            )
+            .expect("a lockfile-free add must still materialize the slot");
+
+        assert!(report.package_dir.join("streamlib.yaml").is_file());
+        assert!(report.lockfile_path.is_none(), "no lockfile may be reported");
+        assert!(
+            !app.lockfile_path().exists(),
+            "a run must not create the app's streamlib.lock"
+        );
+        assert_no_partial_state(&app, &["@tatolab/camera"], None);
+    }
+
+    /// A `SkipLockfileRecording` add over an app that already has a lockfile
+    /// leaves those bytes exactly as they were.
+    #[test]
+    fn skip_lockfile_recording_leaves_an_existing_lockfile_byte_identical() {
+        let src = tempfile::tempdir().unwrap();
+        write_package_folder(src.path(), "tatolab", "camera", "2.0.0");
+        let source = AddPackageSource::Folder {
+            path: src.path().to_path_buf(),
+        };
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        app.add_package(&source, &AddPackageOptions::default())
+            .unwrap();
+        let lock_before = std::fs::read(app.lockfile_path()).unwrap();
+
+        std::fs::write(
+            src.path().join("streamlib.yaml"),
+            manifest_yaml("tatolab", "camera", "3.0.0"),
+        )
+        .unwrap();
+        app.add_package(
+            &source,
+            &AddPackageOptions {
+                lockfile_recording_policy: LockfileRecordingPolicy::SkipLockfileRecording,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read(app.lockfile_path()).unwrap(),
+            lock_before,
+            "a skip-recording add must not rewrite the lockfile it found"
+        );
+    }
+
+    /// `RefuseWhenSlotIsActiveLink` is the runtime loader's guard: a slot
+    /// holding a live `streamlib link` symlink is refused with the link named,
+    /// and the symlink survives intact. Mentally revert the guard and the
+    /// promote unlinks the link, leaving `streamlib.lock` claiming a
+    /// `LockfileSource::Link` for a slot that is now a materialized copy.
+    #[test]
+    fn refuse_when_slot_is_active_link_leaves_the_link_and_its_lock_entry_intact() {
+        let checkout = tempfile::tempdir().unwrap();
+        write_package_folder(checkout.path(), "tatolab", "camera", "2.0.0");
+        let archive_src = tempfile::tempdir().unwrap();
+        write_package_folder(archive_src.path(), "tatolab", "camera", "9.9.9");
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let link = app.link_package(checkout.path()).unwrap();
+        let lock_before = std::fs::read(app.lockfile_path()).unwrap();
+
+        let err = app
+            .add_package(
+                &AddPackageSource::Folder {
+                    path: archive_src.path().to_path_buf(),
+                },
+                &AddPackageOptions {
+                    active_link_slot_policy: ActiveLinkSlotPolicy::RefuseWhenSlotIsActiveLink,
+                    ..Default::default()
+                },
+            )
+            .expect_err("an add over a linked slot must be refused under this policy");
+
+        let AppModulesError::SlotOccupiedByActiveLink {
+            package,
+            link_target,
+            ..
+        } = &err
+        else {
+            panic!("expected SlotOccupiedByActiveLink, got {err:?}");
+        };
+        assert_eq!(package, &pkg_ref("tatolab", "camera"));
+        assert_eq!(link_target, &link.link_target);
+
+        assert!(
+            std::fs::symlink_metadata(&link.package_dir)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the link must survive the refused add"
+        );
+        assert_eq!(
+            std::fs::read(app.lockfile_path()).unwrap(),
+            lock_before,
+            "a refused add must not touch the lockfile"
+        );
+        assert_no_partial_state(&app, &["@tatolab/camera"], Some(&lock_before));
+    }
+
+    /// The CLI's default policy is the opposite: an explicit `streamlib add`
+    /// outranks a link and replaces it.
+    #[test]
+    fn replace_active_link_in_slot_is_the_default_for_an_operator_add() {
+        let checkout = tempfile::tempdir().unwrap();
+        write_package_folder(checkout.path(), "tatolab", "camera", "2.0.0");
+        let added = tempfile::tempdir().unwrap();
+        write_package_folder(added.path(), "tatolab", "camera", "9.9.9");
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        app.link_package(checkout.path()).unwrap();
+
+        let report = app
+            .add_package(
+                &AddPackageSource::Folder {
+                    path: added.path().to_path_buf(),
+                },
+                &AddPackageOptions::default(),
+            )
+            .expect("the default policy must replace a linked slot");
+        assert!(report.replaced_existing);
+        assert!(
+            !std::fs::symlink_metadata(&report.package_dir)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the slot must now hold materialized contents"
+        );
     }
 
     // =====================================================================

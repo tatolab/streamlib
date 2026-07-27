@@ -290,6 +290,24 @@ pub enum AddModuleError {
         detail: String,
     },
 
+    /// A package-archive load targeted an installed slot that holds an active
+    /// `streamlib link`. The load is refused rather than unlinking the
+    /// checkout: a run must not silently delete a dev-loop link, and the loader
+    /// writes no lockfile, so replacing it would leave the app's
+    /// `streamlib.lock` claiming a link that no longer exists.
+    #[error(
+        "Refusing to load {} over {}, which is an active `streamlib link` to {} — \
+         run `streamlib unlink` first, or drop the package-archive strategy for this run",
+        archive.display(),
+        slot.display(),
+        link_target.display()
+    )]
+    InstalledSlotOccupiedByActiveLink {
+        archive: std::path::PathBuf,
+        slot: std::path::PathBuf,
+        link_target: std::path::PathBuf,
+    },
+
     /// Strategy resolver failed while reading the manifest at the
     /// resolved directory (parse error, missing `[package]` block).
     /// Distinct from [`Self::ManifestLoadFailed`] because the caller

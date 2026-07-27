@@ -3,14 +3,13 @@
 
 use std::path::{Path, PathBuf};
 
-use streamlib_idents::PackageRef;
-use streamlib_idents::app_modules::{AppModulesStagingDir, promote_staged_package_root};
-use streamlib_idents::archive::{
-    extract_archive_bytes_to_dir, locate_package_root_in_extracted_dir,
+use streamlib_idents::app_modules::{
+    ActiveLinkSlotPolicy, AddPackageOptions, AddPackageSource, AppModulesError,
+    LockfileRecordingPolicy,
 };
 
-use crate::core::streamlib_home::{installed_package_slot_dir, installed_packages_modules_dir};
-use crate::core::{Error, Result};
+use super::errors::AddModuleError;
+use crate::core::streamlib_home::resolved_app_modules_dir;
 
 /// Materialize a package archive into the co-located
 /// `streamlib_modules/@org/name` slot derived from the package's own
@@ -20,67 +19,50 @@ use crate::core::{Error, Result};
 /// hand-rolled `tar czf pkg.tar.gz my-package/` loads exactly like a published
 /// `.slpkg`.
 ///
-/// Identity is read from the extracted tree, never from the archive index: an
-/// archive index lookup would miss a nested `my-package/streamlib.yaml`.
-/// `app_modules_root` pins the app whose `streamlib_modules/` owns the slot.
-/// Always overwrites the slot on load.
+/// Runs the one shared add pipeline ([`AppModulesDir::add_package`]) under the
+/// runtime's two policy deviations from `streamlib add`: the app's
+/// `streamlib.lock` is never rewritten by a run, and a slot holding an active
+/// `streamlib link` is refused instead of unlinked. `app_modules_root` pins the
+/// app whose `streamlib_modules/` owns the slot.
+///
+/// [`AppModulesDir::add_package`]: streamlib_idents::app_modules::AppModulesDir::add_package
 #[tracing::instrument(skip(app_modules_root), fields(archive = %package_archive_path.display()))]
 pub fn extract_package_archive_to_installed_slot(
     package_archive_path: &Path,
     app_modules_root: Option<&Path>,
-) -> Result<PathBuf> {
-    use crate::core::config::ProjectConfig;
-
-    let archive_bytes = std::fs::read(package_archive_path).map_err(|e| {
-        Error::Configuration(format!(
-            "Failed to read {}: {}",
-            package_archive_path.display(),
-            e
-        ))
-    })?;
-
-    let modules_dir = installed_packages_modules_dir(app_modules_root);
-    std::fs::create_dir_all(&modules_dir).map_err(|e| {
-        Error::Configuration(format!("Failed to create {}: {}", modules_dir.display(), e))
-    })?;
-    let staging = AppModulesStagingDir::create(&modules_dir).map_err(|e| {
-        Error::Configuration(format!("Failed to stage package archive extraction: {e}"))
-    })?;
-
-    let source_label = package_archive_path.display().to_string();
-    extract_archive_bytes_to_dir(&archive_bytes, staging.path(), &source_label)
-        .map_err(|e| Error::Configuration(format!("Failed to extract package archive: {e}")))?;
-    let staged_package_root =
-        locate_package_root_in_extracted_dir(staging.path(), &source_label)
-            .map_err(|e| Error::Configuration(format!("Failed to extract package archive: {e}")))?;
-
-    let manifest_path = staged_package_root.join(ProjectConfig::FILE_NAME);
-    let manifest_yaml = std::fs::read_to_string(&manifest_path).map_err(|e| {
-        Error::Configuration(format!("Failed to read {}: {}", manifest_path.display(), e))
-    })?;
-    let config: ProjectConfig = serde_yaml::from_str(&manifest_yaml)
-        .map_err(|e| Error::Configuration(format!("Failed to parse manifest: {}", e)))?;
-    let package = config.package.as_ref().ok_or_else(|| {
-        Error::Configuration("streamlib.yaml missing [package] section".to_string())
-    })?;
-
-    let pkg_ref = PackageRef::new(package.org.clone(), package.name.clone());
-    let slot_dir = installed_package_slot_dir(app_modules_root, &pkg_ref);
-    let promoted =
-        promote_staged_package_root(&staged_package_root, &slot_dir, &modules_dir, false).map_err(
-            |e| {
-                Error::Configuration(format!(
-                    "Failed to publish {} into {}: {e}",
-                    package_archive_path.display(),
-                    slot_dir.display()
-                ))
+) -> std::result::Result<PathBuf, AddModuleError> {
+    let report = resolved_app_modules_dir(app_modules_root)
+        .add_package(
+            &AddPackageSource::Archive {
+                path: package_archive_path.to_path_buf(),
             },
-        )?;
+            &AddPackageOptions {
+                lockfile_recording_policy: LockfileRecordingPolicy::SkipLockfileRecording,
+                active_link_slot_policy: ActiveLinkSlotPolicy::RefuseWhenSlotIsActiveLink,
+                ..Default::default()
+            },
+        )
+        .map_err(|e| match e {
+            AppModulesError::SlotOccupiedByActiveLink {
+                package_dir,
+                link_target,
+                ..
+            } => AddModuleError::InstalledSlotOccupiedByActiveLink {
+                archive: package_archive_path.to_path_buf(),
+                slot: package_dir,
+                link_target,
+            },
+            other => AddModuleError::PackageArchiveExtractionFailed {
+                archive: package_archive_path.to_path_buf(),
+                detail: other.to_string(),
+            },
+        })?;
+
     tracing::info!(
-        replaced = promoted.replaced,
-        package = %pkg_ref,
-        slot = %slot_dir.display(),
+        replaced = report.replaced_existing,
+        package = %report.package,
+        slot = %report.package_dir.display(),
         "materialized package archive into its installed slot"
     );
-    Ok(slot_dir)
+    Ok(report.package_dir)
 }

@@ -75,8 +75,9 @@ pub enum Strategy {
         build: BuildPolicy,
     },
 
-    /// A remote `.slpkg` fetched over the wire (`file://`, `http://`, or
-    /// `https://`). The engine resolver fetches the archive into its cache
+    /// A remote package archive — `.slpkg`, `.zip`, or `.tar.gz`, container
+    /// sniffed from magic bytes — fetched over the wire (`file://`, `http://`,
+    /// or `https://`). The engine resolver fetches the archive into its cache
     /// as network-only I/O (no build), optionally verifies it against
     /// `checksum`, then resolves it exactly like [`Strategy::PackageArchive`]:
     /// prefer a matching prebuilt cdylib, else build the bundled source
@@ -330,13 +331,9 @@ pub(super) fn resolve_strategy_to_source(
         }
         Strategy::PackageArchive { path } => {
             let extracted =
-                extract_package_archive_to_installed_slot(path, app_modules_root().as_deref())
-                    .map_err(|e| AddModuleError::PackageArchiveExtractionFailed {
-                        archive: path.clone(),
-                        detail: e.to_string(),
-                    })?;
-            // A `.slpkg` may carry source and/or a prebuilt cdylib. Prefer
-            // a prebuilt matching this host; otherwise build the bundled
+                extract_package_archive_to_installed_slot(path, app_modules_root().as_deref())?;
+            // A package archive may carry source and/or a prebuilt cdylib.
+            // Prefer a prebuilt matching this host; otherwise build the bundled
             // source on the host (pip wheel-vs-sdist for Rust).
             source_for_resolved_dir(pkg_ref, extracted)
         }
@@ -367,17 +364,13 @@ pub(super) fn resolve_strategy_to_source(
         } => {
             // Network-only fetch in the resolver (the same shape as
             // `fetch_git_checkout` for `Strategy::Git`): download the
-            // `.slpkg` into the resolver cache, verify integrity, then
+            // archive into the resolver cache, verify integrity, then
             // route it through the SAME extract + prefer-prebuilt-else-
-            // build path a local `.slpkg` takes. No build happens here —
+            // build path a local archive takes. No build happens here —
             // any build is deferred to the injected orchestrator.
             let slpkg = fetch_remote_slpkg(pkg_ref, url, checksum.as_ref())?;
             let extracted =
-                extract_package_archive_to_installed_slot(&slpkg, app_modules_root().as_deref())
-                    .map_err(|e| AddModuleError::PackageArchiveExtractionFailed {
-                        archive: slpkg.clone(),
-                        detail: e.to_string(),
-                    })?;
+                extract_package_archive_to_installed_slot(&slpkg, app_modules_root().as_deref())?;
             source_for_fetched_slpkg(pkg_ref, extracted, *build)
         }
         Strategy::ByVersion { version_req, build } => {
@@ -405,16 +398,16 @@ pub(super) fn resolve_strategy_to_source(
                     package: pkg_ref.clone(),
                     detail: e.to_string(),
                 })?;
-            // IfStale fast path: a `.slpkg` already materialized for this exact
+            // IfStale fast path: an archive already materialized for this exact
             // version is reused instead of re-downloaded and re-extracted.
             // `extract_package_archive_to_installed_slot` replaces the slot
             // wholesale on every call, which wipes any cdylib a prior run built
             // into `lib/<triple>/` (and any provisioned `.venv`) — so without
             // this check `IfStale` rebuilt on every run even when the package
-            // source had not changed. Package
-            // source versions are immutable (a content change ships a new version);
-            // `streamlib pkg clean` clears the cache to force a re-fetch when a
-            // version is republished in place during development.
+            // source had not changed. Package-source versions are immutable (a
+            // content change ships a new version); `streamlib pkg clean` clears
+            // the cache to force a re-fetch when a version is republished in
+            // place during development.
             //
             // Reuse is gated on the materialized manifest's version equalling
             // the selected version, not on the slot merely existing: a slot
@@ -446,11 +439,7 @@ pub(super) fn resolve_strategy_to_source(
                     "fetched module .slpkg from the package source"
                 );
                 let archive = persist_package_source_slpkg(pkg_ref, &url, &bytes)?;
-                extract_package_archive_to_installed_slot(&archive, app_modules_root().as_deref())
-                    .map_err(|e| AddModuleError::PackageArchiveExtractionFailed {
-                    archive: archive.clone(),
-                    detail: e.to_string(),
-                })?
+                extract_package_archive_to_installed_slot(&archive, app_modules_root().as_deref())?
             };
             source_for_fetched_slpkg(pkg_ref, extracted, *build)
         }

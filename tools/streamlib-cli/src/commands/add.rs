@@ -92,6 +92,7 @@ pub fn add(
         // compile failure can restore the previously-working version rather
         // than leaving the operator with nothing.
         retain_replaced_slot_backup: !no_build,
+        ..Default::default()
     };
     let report = app
         .add_package(&source, &options)
@@ -345,7 +346,9 @@ fn print_add_report(report: &AddPackageReport) {
     };
     println!("{verb} {} v{}", report.package, report.version);
     println!("  Folder: {}", report.package_dir.display());
-    println!("  Lock:   {}", report.lockfile_path.display());
+    if let Some(lockfile_path) = &report.lockfile_path {
+        println!("  Lock:   {}", lockfile_path.display());
+    }
 
     print_processor_summary(&report.package_dir);
 }

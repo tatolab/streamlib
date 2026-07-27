@@ -898,6 +898,97 @@ fn every_container_shape_materializes_one_identical_installed_slot() {
     );
 }
 
+/// A `streamlib link`ed slot outranks a package-archive load: the load is
+/// refused with the link named, the symlink survives, and the app's
+/// `streamlib.lock` keeps its truthful `LockfileSource::Link` entry. A run must
+/// never silently unlink a dev-loop checkout — the loader writes no lockfile,
+/// so a replace would leave the lock claiming a link that no longer exists.
+#[test]
+#[serial]
+fn package_archive_load_over_a_linked_slot_is_refused_and_the_link_survives() {
+    use streamlib_idents::app_modules::AppModulesDir;
+
+    let sandbox = tempfile::tempdir().unwrap();
+    let prev_home = std::env::var_os("STREAMLIB_HOME");
+    unsafe {
+        std::env::set_var("STREAMLIB_HOME", sandbox.path());
+    }
+    let _restore = StreamlibHomeRestore(prev_home);
+
+    let app_root = tempfile::tempdir().unwrap();
+    let _modules_root = AppModulesRootOverrideGuard::install(app_root.path());
+
+    let package_name = "linked-slot-guard";
+    let type_name = "LinkedSlotGuardSchema";
+
+    // A live `streamlib link` checkout occupying the slot.
+    let checkout = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(checkout.path().join("schemas")).unwrap();
+    std::fs::write(
+        checkout.path().join("streamlib.yaml"),
+        format!(
+            "package:\n  org: tatolab\n  name: {package_name}\n  version: \"0.1.0\"\n\
+             schemas:\n  {type_name}:\n    file: schemas/linked.yaml\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        checkout.path().join("schemas/linked.yaml"),
+        format!("metadata:\n  type: {type_name}\n  expected_payload_bytes: 4096\n"),
+    )
+    .unwrap();
+    let app = AppModulesDir::at(app_root.path());
+    let link = app.link_package(checkout.path()).unwrap();
+    let lock_before = std::fs::read(app.lockfile_path()).unwrap();
+
+    let src = tempfile::tempdir().unwrap();
+    let archive = src.path().join("linked-slot-guard.slpkg");
+    std::fs::write(
+        &archive,
+        schemas_only_package_archive_bytes(
+            package_name,
+            type_name,
+            streamlib_idents::archive::ArchiveKind::Zip,
+            None,
+        ),
+    )
+    .unwrap();
+
+    let runtime = Runner::new().unwrap();
+    let err = runtime
+        .add_module_with_blocking(
+            streamlib_idents::ModuleIdent::any(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new(package_name).unwrap(),
+            ),
+            Strategy::PackageArchive {
+                path: archive.clone(),
+            },
+        )
+        .expect_err("a package-archive load over a linked slot must be refused");
+    assert!(
+        matches!(
+            &err,
+            AddModuleError::InstalledSlotOccupiedByActiveLink { link_target, .. }
+                if link_target == &link.link_target
+        ),
+        "expected InstalledSlotOccupiedByActiveLink naming the checkout, got {err:?}"
+    );
+
+    assert!(
+        std::fs::symlink_metadata(&link.package_dir)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the `streamlib link` symlink must survive the refused load"
+    );
+    assert_eq!(
+        std::fs::read(app.lockfile_path()).unwrap(),
+        lock_before,
+        "the refused load must leave streamlib.lock byte-identical"
+    );
+}
+
 #[test]
 #[serial]
 fn path_package_version_dep_routes_to_by_version_not_installed_cache() {

@@ -3,6 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::manifest::Manifest;
+
 /// Archive container format detected from leading magic bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchiveKind {
@@ -130,7 +132,7 @@ pub fn locate_package_root_in_extracted_dir(
     extracted_dir: &Path,
     source_label: &str,
 ) -> Result<PathBuf, ArchiveError> {
-    if extracted_dir.join(PACKAGE_MANIFEST_FILE_NAME).is_file() {
+    if extracted_dir.join(Manifest::FILE_NAME).is_file() {
         return Ok(extracted_dir.to_path_buf());
     }
     let top_level_entries: Vec<PathBuf> = std::fs::read_dir(extracted_dir)
@@ -143,20 +145,15 @@ pub fn locate_package_root_in_extracted_dir(
         .collect();
     if let [single_top_level_dir] = top_level_entries.as_slice()
         && single_top_level_dir.is_dir()
-        && single_top_level_dir
-            .join(PACKAGE_MANIFEST_FILE_NAME)
-            .is_file()
+        && single_top_level_dir.join(Manifest::FILE_NAME).is_file()
     {
         return Ok(single_top_level_dir.clone());
     }
     Err(ArchiveError::PackageRootNotLocated {
         source_label: source_label.to_string(),
-        detail: format!("no {PACKAGE_MANIFEST_FILE_NAME} at the package root"),
+        detail: format!("no {} at the package root", Manifest::FILE_NAME),
     })
 }
-
-/// The package manifest file name the package-root locator probes for.
-const PACKAGE_MANIFEST_FILE_NAME: &str = crate::manifest::Manifest::FILE_NAME;
 
 /// Clear `dest_dir` if present and recreate it empty.
 fn prepare_destination_dir(dest_dir: &Path) -> Result<(), ArchiveError> {
