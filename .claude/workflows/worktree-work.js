@@ -185,7 +185,8 @@ const verdictSchema = {
 const severityTaxonomy =
   `Severity taxonomy (use EXACTLY one of these per finding): ` +
   `blocker (the change is wrong / a gate is red — forces a FIX); ` +
-  `should-fix (a real defect the owner would want fixed, but it can ship as a documented review item on the PR body); ` +
+  `should-fix (a real defect — forces a FIX exactly like a blocker; it is a change request to the implementer, NOT something ` +
+  `that ships as a note on the PR body); ` +
   `low (a nit — naming, a doc line); ` +
   `owner-question (RESERVED for a call only the repo owner can make — scope, product direction, or a merge decision — this is the ONLY finding severity that parks the PR for the owner); ` +
   `info (an observation, no action). ` +
@@ -529,9 +530,13 @@ async function runVerify(isFixRound) {
   const hasReject = all.some((r) => r && r.verdict === 'REJECT');
   const hasEscalate = all.some((r) => r && r.verdict === 'ESCALATE');
   const hasOwnerQuestion = findings.some((f) => f.severity === 'owner-question');
-  const reviewItems = findings.filter((f) => f.severity === 'should-fix' || f.severity === 'low' || f.severity === 'info');
+  // `should-fix` is a reviewer change request, so it gates the PR the same way a
+  // blocker does. Only nits and observations survive as PR-body notes — a severity
+  // that asserts "should be fixed" must never be satisfied by writing it down.
+  const hasShouldFix = findings.some((f) => f.severity === 'should-fix');
+  const reviewItems = findings.filter((f) => f.severity === 'low' || f.severity === 'info');
 
-  if (hasBlocker || hasReject) return { verdict: 'FIX', findings, pr_number: null, review_items: reviewItems };
+  if (hasBlocker || hasReject || hasShouldFix) return { verdict: 'FIX', findings, pr_number: null, review_items: reviewItems };
   if (hasEscalate || hasOwnerQuestion) return { verdict: 'DISCUSS', findings, pr_number: null, review_items: reviewItems };
   return { verdict: 'PASS', findings, pr_number: null, review_items: reviewItems };
 }
@@ -544,8 +549,10 @@ async function runOpenPr(reviewItems) {
         `to merge, so it must not sit in draft. NEVER merge, though — merging is the owner's call. Title the PR as a ` +
         `conventional commit (\`type(scope): summary\`); the repo squash-merges and release-please parses the title, so ` +
         `a mistitled PR silently skips the version bump. Fill the body with the ticket link, the change summary, the ` +
-        `test evidence, any E2E report, and a "Review items (non-blocking)" section listing these findings verbatim: ` +
-        `${JSON.stringify(reviewItems)}. Write that body to a file and pass \`gh pr create --body-file <path>\`. NEVER ` +
+        `test evidence, any E2E report, and — only if the list is non-empty — a "Nits and observations" section listing ` +
+        `these verbatim: ${JSON.stringify(reviewItems)}. That list carries ONLY \`low\` and \`info\` findings; every ` +
+        `blocker and should-fix was already resolved by a fix round, so the body must not present unfixed defects as ` +
+        `owner homework. Write that body to a file and pass \`gh pr create --body-file <path>\`. NEVER ` +
         `pass \`--body "@<path>"\`: gh does NOT expand \`@file\` for \`--body\` (that is a curl / \`gh api\` idiom), so ` +
         `it would be posted as literal text. Return the PR number.`,
       { phase: 'Verify', label: 'open-pr', model: 'sonnet', schema: { type: 'object', properties: { pr_number: { type: 'number' } }, required: ['pr_number'] } },

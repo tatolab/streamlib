@@ -3,6 +3,7 @@
   "paused": false,
   "owner_login": "tato123",
   "focused_milestone": null,
+  "pass_in_flight": null,
   "capabilities": {
     "live_verify": "unknown",
     "camera": "unknown",

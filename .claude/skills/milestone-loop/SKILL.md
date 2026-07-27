@@ -38,6 +38,8 @@ The `live_verify: off` knob in `.claude/loops/README.md` short-circuits all of t
 
 Compute `today` (`date -u +%F`) and the absolute repo root (`git rev-parse --path-format=absolute --git-common-dir`, then its parent — never `--show-toplevel`, which returns the worktree when called from inside one).
 
+**First, reap a pass that died.** A workflow that dies mid-flight cannot report itself: no completion notification fires, no run-log line is written, and the firing is indistinguishable from one that never happened. Read `pass_in_flight` from the state file. If it is set, the previous pass never reached its Record phase — append one run-log line with `"outcome":"pass-died"` naming the launch timestamp it carried, clear any ticket entry that records a stage but has no branch, worktree, or PR (so the ticket is retried rather than stranded), and tell the owner. Then set `pass_in_flight` to this launch's UTC timestamp before launching. The workflow's Record phase clears it.
+
 Launch in the **background**:
 
 ```
