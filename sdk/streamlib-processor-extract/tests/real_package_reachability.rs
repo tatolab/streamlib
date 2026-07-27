@@ -138,6 +138,29 @@ fn audio_platform_arms_resolve_to_one_arm_per_target() {
     assert_eq!(linux.iter().filter(|n| *n == "AudioOutput").count(), 1);
 }
 
+/// `@tatolab/clap` is Apple-only: every arm carries the same
+/// `any(target_os = "macos", target_os = "ios")` file-level gate, so the
+/// generated crate root gates the whole `export_plugin!` on that disjunction
+/// and a Linux build emits no declaration — unchanged from the hand-written
+/// `#[cfg(any(macos, ios))] export_plugin!(...)` it replaces.
+#[test]
+fn an_apple_only_package_declares_its_processor_only_on_apple_targets() {
+    let dir = package_dir("clap");
+    for os in ["macos", "ios"] {
+        assert_eq!(
+            reachable_names(&dir, os),
+            vec!["ClapEffect".to_string()],
+            "clap must declare its processor on {os}"
+        );
+    }
+    for os in ["linux", "windows"] {
+        assert!(
+            reachable_names(&dir, os).is_empty(),
+            "clap must declare no processor on {os}"
+        );
+    }
+}
+
 /// `@tatolab/screen-capture`'s only processor is parked, so it declares none on
 /// any target — which is why its generated crate root emits no `export_plugin!`
 /// and its cdylib carries no `STREAMLIB_PLUGIN` symbol, unchanged from before

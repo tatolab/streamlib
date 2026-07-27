@@ -52,11 +52,10 @@ file at its authored relative path:
 |---|---|---|
 | **Python** | full tree: every `.py` + `pyproject.toml` + data / assets / models | a provisioned `.venv/` (orchestrator), SDK wire vocab in `streamlib/_generated_` inside that venv |
 | **Deno** | full tree: every `.ts` + `deno.json` + `.npmrc` + assets | package-local `_generated_/` wire vocab (orchestrator) |
-| **Rust** | full crate source: `Cargo.toml` + `src/` + data / assets | prebuilt cdylib at `lib/<triple>/` (one per packing host) |
+| **Rust** | full crate source: `Cargo.toml` + `processors/` + `schemas/` + data / assets | prebuilt cdylib at `lib/<triple>/` (one per packing host), generated crate root at `_generated_/lib.rs` |
 
-Processor modules are authored under `<package_root>/processors/` — the
-polyglot analogue of a Rust crate's `src/`, and the only root the Python and
-Deno extractors discover under. The entrypoint declared in `streamlib.yaml`
+Processor modules are authored under `<package_root>/processors/` — the one
+discovery root all three extractors walk, Rust included. The entrypoint declared in `streamlib.yaml`
 (`processors.module:Type`, `processors/module.ts:default`) is **relative to
 the directory holding that `streamlib.yaml`**: the Python subprocess runner
 puts that directory on `sys.path` and imports the dotted module name, the Deno
@@ -66,6 +65,25 @@ assembler neither validates nor resolves it
 (`tools/streamlib-pack/src/lib.rs`, `assemble_artifact`): entrypoint
 resolution is the runtime's job, and the file travels through
 `collect_source_tree` like any other source file.
+
+A Rust package commits **no crate root**. Its `Cargo.toml` points
+`[lib] path` at `_generated_/lib.rs`, which
+`streamlib_processor_extract::crate_root` writes as the mechanical projection
+of `processors/`: one `#[path = "../processors/…"]`-attributed `pub mod` per
+top-level arm with the author's `#![cfg]` mirrored verbatim, the JTD
+`_generated_` preamble, and — only for a `cdylib` crate-type — one
+`export_plugin!` with per-entry `#[cfg]`. Cargo resolves `[lib] path` at
+target resolution, **before any build script runs**, so generation cannot be a
+`build.rs` step: `streamlib-pack`'s cargo branch writes it just before invoking
+cargo (covering `add` / `install` / runtime materialize / link-edit-rebuild),
+and `cargo xtask generate-crate-roots` is the monorepo's generation site. The
+file is a build artifact — gitignored, and excluded from the shipped `.slpkg`
+by `is_non_source_artifact` — so the consumer regenerates it from the bundled
+`processors/` tree on their own host.
+
+> ~~The Rust mirror is `Cargo.toml` + `src/`.~~ — Superseded 2026-07-27 by
+> folder-backed processor discovery (#1589): a Rust package authors under
+> `processors/` like every other language and commits no `src/`.
 
 > ~~The entrypoint names a file at the package root, beside `streamlib.yaml`;
 > the pack assembler validates the entrypoint exists.~~ — Superseded

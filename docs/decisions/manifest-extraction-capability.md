@@ -12,8 +12,8 @@ free attribute grammar with the release-core versions the catalog carries.
 The `#[processor(...)]` attribute is the single source of truth for a
 processor's identity, execution mode, and ports. The `processors:` manifest
 section is therefore *derived* from the attribute usage in code, by a
-source-scan that reads a crate's `src/` **without compiling it into the host**
-and produces the manifest-shaped processor list.
+source-scan that reads a package's `processors/` directory **without compiling
+it into the host** and produces the manifest-shaped processor list.
 
 The attribute is parsed by exactly one parser,
 `streamlib_processor_extract::grammar`. Both readers of code-as-truth call it:
@@ -49,10 +49,12 @@ name against a hand-authored `processors:` list — the decorator *is* that list
 > `streamlib.yaml`.~~ — Superseded 2026-07-27 by
 > `sdk/streamlib-python/python/streamlib/extract_processors.py` and
 > `sdk/streamlib-deno/extract_processors.ts`: discovery is a recursive walk of
-> `<package_dir>/processors/`, the polyglot analogue of the Rust scan's `src/`
-> root. A module authored beside the `streamlib.yaml` is not a processor
-> module, and a package with no `processors/` directory extracts to the empty
-> set.
+> `<package_dir>/processors/`. A module authored beside the `streamlib.yaml` is
+> not a processor module, and a package with no `processors/` directory
+> extracts to the empty set. Superseded again 2026-07-27 by #1589 in the other
+> direction: the RUST scan moved to the same root, so `processors/` is now the
+> one discovery root for all three languages rather than the polyglot analogue
+> of a Rust-only `src/`.
 
 The extractors run in a fresh subprocess (`python -m
 streamlib.extract_processors <dir>` / `deno run --allow-read
@@ -63,7 +65,7 @@ schema-ident string for determinism regardless of import order.
 The import-runs-code property is the cost of the inversion: a processor module
 whose third-party imports are unavailable cannot be enumerated, whereas the
 Rust AST scan is inert. Extraction therefore assumes the package's dependencies
-are installed — true at `pkg publish` time, unlike the Rust `src/` walk.
+are installed — true at `pkg publish` time, unlike the Rust AST walk.
 
 ## The publish-time drift gate
 
@@ -125,18 +127,21 @@ artifact and does not re-run it.
   identically after the move (its unit + integration tests are unchanged).
 - The scan is a lean text-in / manifest-out transform reusable by any build or
   submit path.
-- `extract_rust_processors` is the RAW scan: it visits every `.rs` under `src/`,
-  including platform arms a given host does not compile (`linux/` vs `apple/`)
-  and parked directories (`_apple_impl_pending_/`), so two platform arms that
-  both declare the same processor both surface. `extract_reachable_rust_processors`
+- `extract_rust_processors` is the RAW scan: it visits every `.rs` under
+  `processors/`, including platform arms a given host does not compile
+  (`linux/` vs `apple/`) and parked directories (`_apple_impl_pending_/`), so
+  two platform arms that both declare the same processor both surface.
+  `extract_reachable_rust_processors`
   resolves that raw scan to the set the build **target** actually compiles: it
-  walks the module tree from the crate root (`lib.rs` / `main.rs`), follows each
+  enumerates the top-level arms under `processors/` the way the generated crate
+  root declares them (a directory backed by `mod.rs` keeps directory ownership,
+  a flat `.rs` is a flat arm), follows each
   `mod` the way `rustc` resolves module files (honoring `#[path]`), and evaluates
   the `#[cfg(...)]` predicate on every `mod` and every `#[processor(...)]`-bearing
   struct against a `ModuleReachabilityTarget` (the target's cfg atoms:
   `target_os` / `target_arch` / `target_family` / features / family flags). The
-  parked-directory convention is not special-cased: a parked module is declared
-  `#[cfg(any())]`, an always-false predicate, so it is skipped by the same cfg
+  parked-directory convention is not special-cased: a parked module declares
+  `#![cfg(any())]`, an always-false predicate, so it is skipped by the same cfg
   rule `rustc` applies — one rule, not a hard-coded directory name. This
   reachability resolution is the precursor that makes extraction sound enough to
   replace the hand-authored `processors:` as the authoritative truth-source, and
