@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.3](https://github.com/tatolab/streamlib/compare/v0.8.2...v0.8.3) (2026-07-27)
+
+
+### Features
+
+* **sdk:** point Python and Deno processor extractors at processors/ ([#1620](https://github.com/tatolab/streamlib/issues/1620)) ([10e3ad6](https://github.com/tatolab/streamlib/commit/10e3ad6c455eaff7e5cffac66fd10dcd3c57705d))
+
 ## [0.8.2](https://github.com/tatolab/streamlib/compare/v0.8.1...v0.8.2) (2026-07-27)
 
 
