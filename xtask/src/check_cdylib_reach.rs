@@ -96,19 +96,28 @@ pub struct DispatchViolation {
     pub line: usize,
 }
 
+/// What one cdylib dispatch-path scan found, and every file it read to find
+/// it. The paths, not just a count: `run` refuses a scan that read nothing, and
+/// the gate's own test asserts both source roots were reached.
+#[derive(Debug)]
+pub struct CdylibDispatchScanReport {
+    pub violations: Vec<DispatchViolation>,
+    pub scanned_file_paths: Vec<PathBuf>,
+}
+
 pub fn run(workspace_root: &Path) -> Result<()> {
     let engine_violations = scan_workspace(workspace_root)?;
-    let (dispatch_violations, scanned_file_paths) = scan_cdylib_dispatch_paths(workspace_root)?;
+    let dispatch_report = scan_cdylib_dispatch_paths(workspace_root)?;
     crate::ensure_source_walking_gate_read_source(
         "check-cdylib-reach",
         &format!(
             "every workspace cdylib crate's {:?}",
             crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES
         ),
-        scanned_file_paths.len(),
+        dispatch_report.scanned_file_paths.len(),
         "a package reach for the host device",
     )?;
-    let total = engine_violations.len() + dispatch_violations.len();
+    let total = engine_violations.len() + dispatch_report.violations.len();
 
     if total == 0 {
         println!(
@@ -151,7 +160,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
         );
     }
 
-    if !dispatch_violations.is_empty() {
+    if !dispatch_report.violations.is_empty() {
         if !engine_violations.is_empty() {
             eprintln!();
         }
@@ -159,9 +168,9 @@ pub fn run(workspace_root: &Path) -> Result<()> {
             "✗ check-cdylib-reach: {} cdylib-side violation(s) — non-test \
              dispatch path in a cdylib crate reached for a host-only / \
              panic-guarded identifier:",
-            dispatch_violations.len()
+            dispatch_report.violations.len()
         );
-        for v in &dispatch_violations {
+        for v in &dispatch_report.violations {
             let method = v.method.as_deref().unwrap_or("<module scope>");
             eprintln!(
                 "  {}:{}: crate {} :: fn {} references `{}`",
@@ -180,11 +189,25 @@ pub fn run(workspace_root: &Path) -> Result<()> {
              `host_callbacks().is_some()` guard (see\n  \
              `docs/architecture/cdylib-reachability.md`).\n  \
              Options:\n    \
-               1. For raw `VkImage` / `VkImageView` access from a `Texture`, \
-                  use `HostTextureExt::host_vulkan_texture_arc()` (the v10 \
-                  FullAccess vtable slot — already in use by \
-                  `packages/camera/processors/camera_to_cuda_copy.rs`).\n    \
-               2. If the call genuinely belongs in a host-only path (a \
+               1. No raw `VkImage` / `VkImageView` — nor any raw host handle — \
+                  crosses the plugin ABI: the raw-`Arc` transit slots were \
+                  deleted, so a plugin cannot name the transited types at all. \
+                  Do the work host-side through a FullAccess vtable slot that \
+                  takes the `Texture` PluginAbiObject and returns a \
+                  PluginAbiObject or POD out-params \
+                  (`create_texture_readback`, \
+                  `copy_texture_to_storage_buffer_and_signal`, \
+                  `create_command_recorder`, `acquire_output_texture`, \
+                  `upload_pixel_buffer_as_texture` — re-derive the current slot \
+                  list from \
+                  `runtime/streamlib-plugin-abi/src/vtables/gpu_context_full.rs`). \
+                  `packages/camera/processors/camera_to_cuda_copy.rs` builds its \
+                  whole zero-copy path this way.\n    \
+               2. If the slot you need does not exist, add one end-to-end: wire \
+                  shape, host impl, cdylib dispatch, tier-1 wire-format tests, \
+                  and the `GPU_CONTEXT_FULL_ACCESS_VTABLE_LAYOUT_VERSION` bump \
+                  with its layout regression test.\n    \
+               3. If the call genuinely belongs in a host-only path (a \
                   `#[test]` or `#[cfg(test)]` helper), move it under \
                   `#[cfg(test)]` / `mod tests` so the lint skips it."
         );
@@ -232,9 +255,7 @@ pub fn scan_workspace(workspace_root: &Path) -> Result<Vec<Violation>> {
 /// raw RHI constructor. It returns every file path it read alongside the
 /// violations so [`run`] can refuse a vacuous pass — a gate that scanned an
 /// empty directory is indistinguishable from a clean one.
-pub fn scan_cdylib_dispatch_paths(
-    workspace_root: &Path,
-) -> Result<(Vec<DispatchViolation>, Vec<PathBuf>)> {
+pub fn scan_cdylib_dispatch_paths(workspace_root: &Path) -> Result<CdylibDispatchScanReport> {
     let mut all = Vec::new();
     let mut scanned_file_paths = Vec::new();
     for (crate_dir, crate_name) in discover_cdylib_crates(workspace_root)? {
@@ -278,7 +299,10 @@ pub fn scan_cdylib_dispatch_paths(
             }
         }
     }
-    Ok((all, scanned_file_paths))
+    Ok(CdylibDispatchScanReport {
+        violations: all,
+        scanned_file_paths,
+    })
 }
 
 /// True iff any attribute on `attrs` is `#[cfg(test)]` (or
@@ -1000,11 +1024,11 @@ mod tests {
             .parent()
             .expect("xtask has no parent")
             .to_path_buf();
-        let (_, scanned_file_paths) = scan_cdylib_dispatch_paths(&workspace).expect("scan");
+        let report = scan_cdylib_dispatch_paths(&workspace).expect("scan");
 
         for root_name in crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES {
             assert!(
-                scanned_file_paths.iter().any(|scanned| scanned
+                report.scanned_file_paths.iter().any(|scanned| scanned
                     .components()
                     .any(|component| component.as_os_str() == *root_name)),
                 "no workspace cdylib file was scanned under a `{root_name}/` root — \

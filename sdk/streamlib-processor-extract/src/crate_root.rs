@@ -86,7 +86,27 @@ impl<'request> RustCrateRootGenerationRequest<'request> {
     pub fn for_package_dir(
         package_dir: &'request Path,
     ) -> Result<Self, RustCrateRootGenerationError> {
+        Ok(Self::from_manifest(
+            package_dir,
+            &read_package_cargo_manifest(package_dir)?,
+        ))
+    }
+
+    /// The same derivation, but `None` for a package that commits its own crate
+    /// root — one manifest read answering both "does it opt in?" and "what does
+    /// it emit?", so a generation site does not read and parse the same
+    /// `Cargo.toml` twice per build.
+    pub fn for_package_dir_if_generation_is_declared(
+        package_dir: &'request Path,
+    ) -> Result<Option<Self>, RustCrateRootGenerationError> {
         let manifest = read_package_cargo_manifest(package_dir)?;
+        if !declares_generated_crate_root(&manifest) {
+            return Ok(None);
+        }
+        Ok(Some(Self::from_manifest(package_dir, &manifest)))
+    }
+
+    fn from_manifest(package_dir: &'request Path, manifest: &toml::Value) -> Self {
         let emits_plugin_export_envelope = manifest
             .get("lib")
             .and_then(|lib| lib.get("crate-type"))
@@ -97,12 +117,12 @@ impl<'request> RustCrateRootGenerationRequest<'request> {
             .and_then(|deps| deps.get(JTD_CODEGEN_BUILD_DEPENDENCY_NAME))
             .is_some();
 
-        Ok(Self {
+        Self {
             package_dir,
             emits_jtd_generated_module: declares_jtd_codegen_build_dependency
                 && package_dir.join("build.rs").is_file(),
             emits_plugin_export_envelope,
-        })
+        }
     }
 }
 
@@ -178,6 +198,16 @@ pub enum RustCrateRootGenerationError {
         #[source]
         source: std::io::Error,
     },
+
+    /// A generation sweep discovered no folder-backed package. Refused rather
+    /// than reported as success: a sweep that generates nothing leaves every
+    /// package's crate root stale, and cargo then fails far away at target
+    /// resolution with a missing `[lib] path`.
+    #[error(
+        "no folder-backed package found under {search_root} — a generation sweep that \
+         generates nothing would let every package's crate root go stale unnoticed"
+    )]
+    NoFolderBackedPackageFound { search_root: PathBuf },
 }
 
 /// The literal `[lib] path` value a folder-backed package's `Cargo.toml`
@@ -193,14 +223,6 @@ pub fn generated_crate_root_lib_path_value() -> String {
 /// a `processors/` directory": a package that opts in but whose `processors/`
 /// went missing then fails loudly at generation instead of silently producing
 /// an empty crate, and a crate that commits its own root is never overwritten.
-pub fn package_declares_generated_crate_root(
-    package_dir: &Path,
-) -> Result<bool, RustCrateRootGenerationError> {
-    Ok(declares_generated_crate_root(&read_package_cargo_manifest(
-        package_dir,
-    )?))
-}
-
 fn declares_generated_crate_root(manifest: &toml::Value) -> bool {
     manifest
         .get("lib")
@@ -372,6 +394,33 @@ pub fn write_generated_rust_crate_root(
 
 static GENERATED_CRATE_ROOT_TEMP_FILE_COUNTER: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(0);
+
+/// Write every folder-backed package's crate root at or under `search_root`,
+/// returning the written paths in discovery order.
+///
+/// The one generation sweep both in-tree sites share — `cargo xtask
+/// generate-crate-roots` and the engine integration tests that shell out to
+/// `cargo build -p <package>`. Off the monorepo the pre-cargo staging step
+/// generates one package at a time and never reaches this. Two sweeps spelled
+/// separately would let a step added to the contract land in only one of them.
+#[tracing::instrument(skip_all, fields(search_root = %search_root.display()))]
+pub fn write_generated_rust_crate_roots_under(
+    search_root: &Path,
+) -> Result<Vec<PathBuf>, RustCrateRootGenerationError> {
+    let package_dirs = discover_package_dirs_declaring_a_generated_crate_root(search_root)?;
+    if package_dirs.is_empty() {
+        return Err(RustCrateRootGenerationError::NoFolderBackedPackageFound {
+            search_root: search_root.to_path_buf(),
+        });
+    }
+
+    let mut written = Vec::with_capacity(package_dirs.len());
+    for package_dir in &package_dirs {
+        let request = RustCrateRootGenerationRequest::for_package_dir(package_dir)?;
+        written.push(write_generated_rust_crate_root(&request)?);
+    }
+    Ok(written)
+}
 
 /// One `#[path]`-attributed `pub mod` declaration, carrying the arm's own
 /// file-level `#![cfg]` mirrored verbatim.
@@ -760,14 +809,26 @@ mod tests {
     }
 
     /// A changed root is renamed into place, so a concurrent cargo resolving
-    /// `[lib] path` never reads a truncated file. The temp file is left behind
-    /// by no successful write.
+    /// `[lib] path` never reads a truncated file. The discriminator is a reader
+    /// opened BEFORE the rewrite: a same-directory rename leaves that reader on
+    /// the old inode holding the whole previous root, while an in-place
+    /// truncating write would change the bytes under it. Reverting the temp
+    /// file + rename to a plain `std::fs::write` turns both assertions red —
+    /// asserting only "no temp file survives" would not, since a plain write
+    /// never creates one. Unix-gated because same-directory rename atomicity is
+    /// the POSIX guarantee this depends on; Linux and Apple are the targets.
     #[test]
+    #[cfg(unix)]
     fn a_changed_crate_root_is_renamed_into_place_and_leaves_no_temp_file() {
+        use std::io::Read as _;
+        use std::os::unix::fs::MetadataExt as _;
+
         let tmp = tempdir();
         let root = tmp.path();
         write(root, "processors/first.rs", "pub struct NotAProcessor;\n");
         let path = write_generated_rust_crate_root(&request(root, false, false)).unwrap();
+        let inode_before_the_rewrite = std::fs::metadata(&path).unwrap().ino();
+        let mut reader_opened_before_the_rewrite = std::fs::File::open(&path).unwrap();
 
         write(root, "processors/second.rs", "pub struct AlsoNot;\n");
         write_generated_rust_crate_root(&request(root, false, false)).unwrap();
@@ -775,6 +836,23 @@ mod tests {
             std::fs::read_to_string(&path)
                 .unwrap()
                 .contains("pub mod second;")
+        );
+
+        let mut root_as_seen_by_the_earlier_reader = String::new();
+        reader_opened_before_the_rewrite
+            .read_to_string(&mut root_as_seen_by_the_earlier_reader)
+            .unwrap();
+        assert!(
+            root_as_seen_by_the_earlier_reader.contains("pub mod first;")
+                && !root_as_seen_by_the_earlier_reader.contains("pub mod second;"),
+            "a reader that opened the previous root must keep reading it whole; \
+             an in-place write would rewrite the file under it: \
+             {root_as_seen_by_the_earlier_reader}"
+        );
+        assert_ne!(
+            inode_before_the_rewrite,
+            std::fs::metadata(&path).unwrap().ino(),
+            "the published root must be a new inode renamed over the old one"
         );
 
         let leftovers: Vec<_> = std::fs::read_dir(path.parent().unwrap())
@@ -844,7 +922,13 @@ mod tests {
                 generated_crate_root_lib_path_value()
             ),
         );
-        assert!(package_declares_generated_crate_root(opted_in.path()).unwrap());
+        assert!(
+            RustCrateRootGenerationRequest::for_package_dir_if_generation_is_declared(
+                opted_in.path()
+            )
+            .unwrap()
+            .is_some()
+        );
 
         let hand_rooted = tempdir();
         write(
@@ -852,7 +936,13 @@ mod tests {
             "Cargo.toml",
             "[package]\nname = \"h\"\nversion = \"0.1.0\"\n\n[lib]\npath = \"src/lib.rs\"\n",
         );
-        assert!(!package_declares_generated_crate_root(hand_rooted.path()).unwrap());
+        assert!(
+            RustCrateRootGenerationRequest::for_package_dir_if_generation_is_declared(
+                hand_rooted.path()
+            )
+            .unwrap()
+            .is_none()
+        );
 
         let no_lib_section = tempdir();
         write(
@@ -860,7 +950,13 @@ mod tests {
             "Cargo.toml",
             "[package]\nname = \"n\"\nversion = \"0.1.0\"\n",
         );
-        assert!(!package_declares_generated_crate_root(no_lib_section.path()).unwrap());
+        assert!(
+            RustCrateRootGenerationRequest::for_package_dir_if_generation_is_declared(
+                no_lib_section.path()
+            )
+            .unwrap()
+            .is_none()
+        );
     }
 
     /// One discovery walk backs both generation sites (the xtask verb and the
@@ -899,5 +995,55 @@ mod tests {
             ],
             "discovery must reach nested crates and skip `target/` + dot-dirs"
         );
+    }
+
+    /// The sweep both in-tree generation sites call: it writes every discovered
+    /// package's root and refuses a search root that discovers none, so a
+    /// generation pass can never report success having generated nothing.
+    #[test]
+    fn the_generation_sweep_writes_every_discovered_package_and_refuses_an_empty_search_root() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        let opted_in = &format!(
+            "[package]\nname = \"p\"\nversion = \"0.1.0\"\n\n[lib]\npath = \"{}\"\n",
+            generated_crate_root_lib_path_value()
+        );
+        write(root, "packages/camera/Cargo.toml", opted_in);
+        write(
+            root,
+            "packages/camera/processors/blur.rs",
+            "pub struct B;\n",
+        );
+        write(root, "examples/demo/plugin/Cargo.toml", opted_in);
+        write(
+            root,
+            "examples/demo/plugin/processors/sink.rs",
+            "pub struct S;\n",
+        );
+
+        let written = write_generated_rust_crate_roots_under(root).unwrap();
+        assert_eq!(
+            written,
+            vec![
+                root.join("examples")
+                    .join("demo")
+                    .join("plugin")
+                    .join(generated_crate_root_lib_path_value()),
+                root.join("packages")
+                    .join("camera")
+                    .join(generated_crate_root_lib_path_value()),
+            ]
+        );
+        assert!(
+            std::fs::read_to_string(&written[1])
+                .unwrap()
+                .contains("pub mod blur;")
+        );
+
+        let no_packages = tempdir();
+        assert!(matches!(
+            write_generated_rust_crate_roots_under(no_packages.path()),
+            Err(RustCrateRootGenerationError::NoFolderBackedPackageFound { .. })
+        ));
     }
 }

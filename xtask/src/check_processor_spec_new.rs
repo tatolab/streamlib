@@ -43,16 +43,24 @@ pub struct LintViolation {
     pub snippet: String,
 }
 
+/// What one scan of the workspace found, and how much source it read to find
+/// it. `run` refuses a report whose `files_scanned` is zero.
+#[derive(Debug)]
+pub struct ProcessorSpecNewScanReport {
+    pub violations: Vec<LintViolation>,
+    pub files_scanned: usize,
+}
+
 pub fn run(workspace_root: &Path) -> Result<()> {
-    let (violations, files_scanned) = lint_workspace(workspace_root)?;
+    let report = lint_workspace(workspace_root)?;
     crate::ensure_source_walking_gate_read_source(
         "check-processor-spec-new",
         &format!("{SCAN_DIR_PARENTS:?}"),
-        files_scanned,
+        report.files_scanned,
         "a bare-string ProcessorSpec::new back in",
     )?;
 
-    if violations.is_empty() {
+    if report.violations.is_empty() {
         println!(
             "✓ check-processor-spec-new: no bare-string ProcessorSpec::new sites and no hand-rolled SchemaIdent literals in examples/"
         );
@@ -61,9 +69,9 @@ pub fn run(workspace_root: &Path) -> Result<()> {
 
     eprintln!(
         "✗ check-processor-spec-new: {} violation(s):",
-        violations.len()
+        report.violations.len()
     );
-    for v in &violations {
+    for v in &report.violations {
         eprintln!("  {}:{}: {}", v.file.display(), v.line, v.snippet.trim());
     }
     eprintln!(
@@ -106,7 +114,7 @@ fn is_example_src_file(path: &Path) -> bool {
 /// Every bare-string `ProcessorSpec::new` / hand-rolled `SchemaIdent` site,
 /// plus how many files were read to find them — [`run`] refuses a scan that
 /// read nothing.
-pub fn lint_workspace(workspace_root: &Path) -> Result<(Vec<LintViolation>, usize)> {
+pub fn lint_workspace(workspace_root: &Path) -> Result<ProcessorSpecNewScanReport> {
     let mut violations = Vec::new();
     let mut files_scanned = 0usize;
     for parent in SCAN_DIR_PARENTS {
@@ -124,7 +132,10 @@ pub fn lint_workspace(workspace_root: &Path) -> Result<(Vec<LintViolation>, usiz
             scan_file(path, &mut violations)?;
         }
     }
-    Ok((violations, files_scanned))
+    Ok(ProcessorSpecNewScanReport {
+        violations,
+        files_scanned,
+    })
 }
 
 fn is_rust_source(path: &Path) -> bool {
@@ -397,11 +408,11 @@ mod tests {
         // this must pass — every live `ProcessorSpec::new(` call site
         // takes a structured ident, not a bare PascalCase string.
         let workspace = workspace_root().expect("workspace root");
-        let (violations, _) = lint_workspace(&workspace).unwrap();
+        let report = lint_workspace(&workspace).unwrap();
         assert!(
-            violations.is_empty(),
+            report.violations.is_empty(),
             "workspace has bare-string ProcessorSpec::new sites: {:#?}",
-            violations
+            report.violations
         );
     }
 
@@ -423,9 +434,9 @@ mod tests {
     let s = ProcessorSpec::new(SchemaIdent::new(...), config);
 }"#,
         );
-        let (violations, _) = lint_workspace(dir.path()).unwrap();
-        assert_eq!(violations.len(), 1);
-        assert_eq!(violations[0].file, bad);
+        let report = lint_workspace(dir.path()).unwrap();
+        assert_eq!(report.violations.len(), 1);
+        assert_eq!(report.violations[0].file, bad);
     }
 
     fn workspace_root() -> Result<PathBuf> {

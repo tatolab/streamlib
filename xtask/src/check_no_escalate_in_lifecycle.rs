@@ -123,15 +123,23 @@ pub struct Violation {
     pub line: usize,
 }
 
+/// What one scan of the workspace found, and how much source it read to find
+/// it. `run` refuses a report whose `files_scanned` is zero.
+#[derive(Debug)]
+pub struct EscalateInLifecycleScanReport {
+    pub violations: Vec<Violation>,
+    pub files_scanned: usize,
+}
+
 pub fn run(workspace_root: &Path) -> Result<()> {
-    let (violations, files_scanned) = scan_workspace(workspace_root)?;
+    let report = scan_workspace(workspace_root)?;
     crate::ensure_source_walking_gate_read_source(
         "check-no-escalate-in-lifecycle",
         &format!("{TARGET_DIRS:?}"),
-        files_scanned,
+        report.files_scanned,
         "a lifecycle body re-enter the escalate gate",
     )?;
-    if violations.is_empty() {
+    if report.violations.is_empty() {
         println!(
             "✓ check-no-escalate-in-lifecycle: no `.escalate(...)` calls inside \
              FullAccess lifecycle bodies (setup / teardown / start / stop and \
@@ -146,9 +154,9 @@ pub fn run(workspace_root: &Path) -> Result<()> {
          `&RuntimeContextFullAccess` (setup / teardown / helper). \
          The lifecycle dispatch already holds the escalate gate; \
          re-entering panics at runtime.",
-        violations.len()
+        report.violations.len()
     );
-    for v in &violations {
+    for v in &report.violations {
         eprintln!(
             "  {}:{}: fn {} reaches `.escalate(...)` — see \
              docs/architecture/cdylib-reachability.md anti-pattern #1",
@@ -179,7 +187,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
 
 /// Every lifecycle-body escalate violation, plus how many files were parsed to
 /// find them — [`run`] refuses a scan that read nothing.
-pub fn scan_workspace(workspace_root: &Path) -> Result<(Vec<Violation>, usize)> {
+pub fn scan_workspace(workspace_root: &Path) -> Result<EscalateInLifecycleScanReport> {
     let mut all = Vec::new();
     let mut files_scanned = 0usize;
     for dir in TARGET_DIRS {
@@ -227,7 +235,10 @@ pub fn scan_workspace(workspace_root: &Path) -> Result<(Vec<Violation>, usize)> 
             visitor.visit_file(&file);
         }
     }
-    Ok((all, files_scanned))
+    Ok(EscalateInLifecycleScanReport {
+        violations: all,
+        files_scanned,
+    })
 }
 
 /// `true` when any argument's type contains a path segment whose

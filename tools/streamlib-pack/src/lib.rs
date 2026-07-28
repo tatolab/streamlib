@@ -1110,17 +1110,14 @@ fn apply_link_checkout_env(command: &mut Command, link_checkout: Option<&Path>) 
 /// location) is left alone — generation is opt-in per package, keyed on the
 /// manifest, so a hand-rooted crate is never overwritten.
 fn generate_folder_backed_crate_root(pkg_dir: &Path) -> Result<()> {
-    let declares_generated_crate_root =
-        streamlib_processor_extract::crate_root::package_declares_generated_crate_root(pkg_dir)
-            .with_context(|| format!("reading Cargo manifest at {}", pkg_dir.display()))?;
-    if !declares_generated_crate_root {
-        return Ok(());
-    }
     let request =
-        streamlib_processor_extract::crate_root::RustCrateRootGenerationRequest::for_package_dir(
+        streamlib_processor_extract::crate_root::RustCrateRootGenerationRequest::for_package_dir_if_generation_is_declared(
             pkg_dir,
         )
         .with_context(|| format!("reading Cargo manifest at {}", pkg_dir.display()))?;
+    let Some(request) = request else {
+        return Ok(());
+    };
     streamlib_processor_extract::crate_root::write_generated_rust_crate_root(&request)
         .with_context(|| format!("generating crate root for {}", pkg_dir.display()))?;
     Ok(())

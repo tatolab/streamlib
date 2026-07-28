@@ -159,7 +159,7 @@ impl ProcessorSourceModuleArm {
     /// The generated declaration always carries `#[path]`, and `rustc` gives a
     /// `#[path]` module the directory holding its file — so a `mod.rs` arm owns
     /// its directory and a flat arm's children are its file's SIBLINGS.
-    fn child_module_search_dir(&self) -> PathBuf {
+    fn top_level_arm_child_module_search_dir(&self) -> PathBuf {
         self.module_file
             .parent()
             .unwrap_or_else(|| Path::new(""))
@@ -195,6 +195,7 @@ pub fn enumerate_processor_source_module_arms(
         source: e,
     })?;
 
+    let arm_path_prefix = crate::crate_root::generated_crate_root_arm_path_prefix();
     let mut arms = Vec::new();
     for entry in entries {
         let entry = entry.map_err(|e| ExtractError::Io {
@@ -207,7 +208,6 @@ pub fn enumerate_processor_source_module_arms(
             source: e,
         })?;
 
-        let arm_path_prefix = crate::crate_root::generated_crate_root_arm_path_prefix();
         let (module_name, module_file, relative_module_path) = if file_type.is_dir() {
             let mod_rs = path.join("mod.rs");
             if !mod_rs.is_file() {
@@ -417,8 +417,8 @@ fn walk_processor_source_arms(
 
     for arm in &arms {
         walker.module_path_segments.push(arm.module_name.clone());
-        let child_module_search_dir = arm.child_module_search_dir();
-        walker.walk_file(&arm.module_file, &child_module_search_dir)?;
+        let arm_child_module_search_dir = arm.top_level_arm_child_module_search_dir();
+        walker.walk_file(&arm.module_file, &arm_child_module_search_dir)?;
         walker.module_path_segments.pop();
     }
 
@@ -576,8 +576,10 @@ impl ReachableModuleWalker<'_> {
                                 resolved: resolved.module_file,
                             });
                         }
-                        let child_mod_dir =
-                            child_module_search_dir(&resolved, &item_mod.ident.to_string());
+                        let child_mod_dir = resolved_child_module_search_dir(
+                            &resolved,
+                            &item_mod.ident.to_string(),
+                        );
                         self.walk_file(&resolved.module_file, &child_mod_dir)?;
                     }
                 }
@@ -779,7 +781,7 @@ fn literal_str(expr: &syn::Expr) -> Option<String> {
 ///   its own directory;
 /// - resolved by the standard search — `.../foo/mod.rs` keeps `.../foo`, and
 ///   `.../foo.rs` introduces the `.../foo` directory component.
-fn child_module_search_dir(resolved: &ResolvedChildModule, mod_name: &str) -> PathBuf {
+fn resolved_child_module_search_dir(resolved: &ResolvedChildModule, mod_name: &str) -> PathBuf {
     let parent = resolved
         .module_file
         .parent()
@@ -1349,7 +1351,7 @@ mod tests {
 
     /// `#[path]` to a NON-`mod.rs` file makes that module's children SIBLINGS of
     /// the file — `rustc` introduces no directory component for a `#[path]`
-    /// module. Mentally revert `child_module_search_dir` to always appending the
+    /// module. Mentally revert `resolved_child_module_search_dir` to always appending the
     /// module name and this looks for `blur/helper.rs`, which does not exist.
     #[test]
     fn path_attribute_to_a_flat_file_makes_children_siblings() {

@@ -13,10 +13,7 @@
 
 use std::path::Path;
 
-use streamlib_processor_extract::crate_root::{
-    RustCrateRootGenerationRequest, discover_package_dirs_declaring_a_generated_crate_root,
-    write_generated_rust_crate_root,
-};
+use streamlib_processor_extract::crate_root::write_generated_rust_crate_roots_under;
 
 /// Write every in-tree folder-backed package's crate root, then
 /// `cargo build -p <cargo_package_name>`. Panics with the cargo failure, which
@@ -30,21 +27,14 @@ pub fn build_folder_backed_package(cargo_package_name: &str) {
         .parent()
         .unwrap();
 
-    let package_dirs = discover_package_dirs_declaring_a_generated_crate_root(workspace_root)
-        .expect("discovering folder-backed packages");
-    assert!(
-        !package_dirs.is_empty(),
-        "no folder-backed package found under {} — generating nothing would let \
-         `cargo build -p {cargo_package_name}` fail at target resolution with a \
-         missing `[lib] path`",
-        workspace_root.display()
-    );
-    for package_dir in package_dirs {
-        let request = RustCrateRootGenerationRequest::for_package_dir(&package_dir)
-            .unwrap_or_else(|e| panic!("reading {}: {e}", package_dir.display()));
-        write_generated_rust_crate_root(&request)
-            .unwrap_or_else(|e| panic!("generating crate root for {}: {e}", package_dir.display()));
-    }
+    write_generated_rust_crate_roots_under(workspace_root).unwrap_or_else(|e| {
+        panic!(
+            "generating folder-backed crate roots under {}: {e} — \
+             `cargo build -p {cargo_package_name}` would then fail at target \
+             resolution with a missing `[lib] path`",
+            workspace_root.display()
+        )
+    });
 
     let status = std::process::Command::new(env!("CARGO"))
         .args(["build", "-p", cargo_package_name])
