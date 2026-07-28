@@ -37,23 +37,25 @@ from code at need — do not create summary docs of what code already shows.
 - Tests are always in scope and never need approval. Code drives tests, never the reverse.
 
 ## How work happens
-Loops drive the work (see `.claude/loops/`). Start one with `/work-on-milestone <milestone>`:
-it sets the focus and the goal, then registers the recurring reconciler until the milestone is
-merged, parked, or blocked. The schedule is session-scoped — closing the session stops it.
-A router classifies each work item fresh every pass and launches the matching workflow;
-labels are display output only — nothing reads them as control. Loop policy (registry,
-constraints, budget) is tracked in `.claude/loops/`; the loop's runtime state is gitignored
-under `.claude/loops/state/`; work artifacts live on GitHub (issues, comments, branches, PRs).
-Anything needing the owner parks as a question on the issue; they answer in a comment.
-Merging PRs and milestone scoping are always the owner's calls. "The owner" is the
-repository owner's GitHub login — the human who merges PRs and answers parked questions.
+One ticket at a time, with the owner present. `amos` tracks the dependency graph: `amos focus`
+scopes to a milestone, `amos next` reports what is ready to start, `amos blocked` shows what is
+gated and by what. Pick a ticket, agree the plan, then one branch per issue and a PR when the
+gates are green.
+
+Read every issue fresh against current code — the body is the goal, not a spec, and its file
+paths and claims may have gone stale since it was filed. Labels are display output only; nothing
+reads a label as control flow.
+
+Work artifacts live on GitHub (issues, comments, branches, PRs). Anything needing the owner is
+asked directly in session. Merging PRs and milestone scoping are always the owner's calls.
+"The owner" is the repository owner's GitHub login — the human who merges PRs.
 
 ## Environment
-- A plain `Bash` call cannot observe GPU/IPC runtime (exit 144). Live verification is LOOP-run via
-  `/verify-live` — the Bash `dangerouslyDisableSandbox` bypass unlocks the rig, so the loop builds
-  in the sandbox, runs the built binary with the bypass, captures the window, and audits it itself
-  whenever the milestone-loop preflight capability probe confirms the rig; it is human-run (parked)
-  only when the rig is unavailable. Read-only device probes (`v4l2-ctl` query verbs) are fine.
-- One camera consumer per /dev/videoN; single GPU — rig work is serialized by the loop.
+- A plain `Bash` call cannot observe GPU/IPC runtime (exit 144). Live verification runs via
+  `/verify-live` — the Bash `dangerouslyDisableSandbox` bypass unlocks the rig, so the build
+  happens in the sandbox, the built binary runs with the bypass, the window is captured, and the
+  result is audited in place. Falls back to the owner-terminal handshake when the rig is
+  unavailable. Read-only device probes (`v4l2-ctl` query verbs) are fine.
+- One camera consumer per /dev/videoN; single GPU — never run two rig tasks at once.
 - Host-specific facts (device indices, driver, cameras) live in `docs/rig-profile.local.md`
   (gitignored, per machine); a runtime probe always beats the file.

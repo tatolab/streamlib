@@ -8,16 +8,15 @@ paths:
 # Flow (operating model)
 
 - **Operating-model changes are their own PR, with rationale.** Anything under `.claude/` (rules,
-  agents, skills, hooks, settings, the loop registry and its policy) or the issue templates
-  changes in a dedicated PR that explains why — never mixed into feature work. A run never edits
-  the loop definitions, agents, rules, or constraints it is itself using. The loop's runtime state
-  under `.claude/loops/state/` is gitignored and is not an operating-model change.
+  agents, skills, hooks, settings) or the issue templates changes in a dedicated PR that explains
+  why — never mixed into feature work. A session never edits the agents, rules, or skills it is
+  itself using.
 - **A new agent definition PR must state three things:** the non-derivable knowledge the agent
   captures, why the existing agents don't already cover it, and its model tier.
 - **Model tiers:** implementation and reasoning agents run `opus`; mechanical / prescribed-steps
   agents run `sonnet`; nothing pins `fable`.
-- Labels are display output only — nothing reads a label as control flow. The router classifies
-  each work item fresh from its content every pass.
+- Labels are display output only — nothing reads a label as control flow. Every work item is
+  classified fresh from its content and from current code, never from its labels.
 - PR titles are conventional-commit typed (`type(scope): summary`). The repo squash-merges, so the
   title becomes the commit release-please parses — a mistitled PR silently skips the version bump
   (CI gate: `.github/workflows/pr-title.yml`).
