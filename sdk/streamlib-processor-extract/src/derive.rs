@@ -682,10 +682,14 @@ pub fn check_processor_manifest_drift(
                 if code_surface != committed_surface {
                     differing.push(describe_processor_surface_difference(
                         name,
-                        COMMITTED_MANIFEST_SURFACE_LABEL,
-                        committed_surface,
-                        DERIVED_FROM_CODE_SURFACE_LABEL,
-                        code_surface,
+                        ProcessorSurfaceWithDiagnosticLabel {
+                            diagnostic_label: COMMITTED_MANIFEST_SURFACE_LABEL,
+                            processor_surface: committed_surface,
+                        },
+                        ProcessorSurfaceWithDiagnosticLabel {
+                            diagnostic_label: DERIVED_FROM_CODE_SURFACE_LABEL,
+                            processor_surface: code_surface,
+                        },
                     ));
                 }
             }
@@ -717,8 +721,18 @@ const COMMITTED_MANIFEST_SURFACE_LABEL: &str = "`processors:`";
 /// How the code-derived side of a comparison is named in a difference line.
 const DERIVED_FROM_CODE_SURFACE_LABEL: &str = "code";
 
+/// One side of a two-sided surface comparison, bound to the label the
+/// diagnostic names it by — a label cannot travel with the other side's
+/// surface.
+pub(crate) struct ProcessorSurfaceWithDiagnosticLabel<'comparison> {
+    /// How this side is named in a difference line.
+    pub diagnostic_label: &'comparison str,
+    /// The surface this side declares.
+    pub processor_surface: &'comparison ProcessorSurface,
+}
+
 /// One-line description of how two identity surfaces of the same-named
-/// processor differ, each side named by `left_label` / `right_label`.
+/// processor differ, each side named by its own label.
 ///
 /// Two-sided rather than manifest-vs-code because the same disagreement is
 /// meaningful between two `processors/` arms declaring one processor id, where
@@ -726,12 +740,12 @@ const DERIVED_FROM_CODE_SURFACE_LABEL: &str = "code";
 /// [`describe_divergent_processor_declarations`].
 pub(crate) fn describe_processor_surface_difference(
     processor_type_name: &str,
-    left_label: &str,
-    left: &ProcessorSurface,
-    right_label: &str,
-    right: &ProcessorSurface,
+    left: ProcessorSurfaceWithDiagnosticLabel<'_>,
+    right: ProcessorSurfaceWithDiagnosticLabel<'_>,
 ) -> String {
     let name = processor_type_name;
+    let (left_label, left) = (left.diagnostic_label, left.processor_surface);
+    let (right_label, right) = (right.diagnostic_label, right.processor_surface);
     if left.execution != right.execution {
         return format!(
             "`{name}` execution differs: {left_label} declares {:?}, {right_label} declares {:?}",
@@ -812,10 +826,14 @@ pub(crate) fn describe_divergent_processor_declarations(
     if first_surface != second_surface {
         return Some(describe_processor_surface_difference(
             name,
-            &first_label,
-            &first_surface,
-            &second_label,
-            &second_surface,
+            ProcessorSurfaceWithDiagnosticLabel {
+                diagnostic_label: &first_label,
+                processor_surface: &first_surface,
+            },
+            ProcessorSurfaceWithDiagnosticLabel {
+                diagnostic_label: &second_label,
+                processor_surface: &second_surface,
+            },
         ));
     }
 
@@ -832,19 +850,37 @@ pub(crate) fn describe_divergent_processor_declarations(
     // entry verbatim, so the two projections are compared whole. Serialized
     // rather than field-by-field so a field added to `ProcessorSchema` is
     // covered without an edit here.
-    let first_projection = serde_json::to_value(&first.schema).ok()?;
-    let second_projection = serde_json::to_value(&second.schema).ok()?;
+    //
+    // `None` is read by the caller as "these two arms agree" and passes a build
+    // gate, so no branch below may return it without having compared: a
+    // projection that will not serialize is reported as a difference, not as
+    // agreement.
+    let (Ok(first_projection), Ok(second_projection)) = (
+        serde_json::to_value(&first.schema),
+        serde_json::to_value(&second.schema),
+    ) else {
+        return Some(format!(
+            "`{name}` manifest entries could not be compared: {first_label} and {second_label} \
+             derive `processors:` entries that do not serialize"
+        ));
+    };
     if first_projection == second_projection {
         return None;
     }
-    let differing_fields = differing_manifest_projection_field_names(
-        first_projection.as_object()?,
-        second_projection.as_object()?,
-    );
-    Some(format!(
-        "`{name}` manifest entries differ in {}: {first_label} and {second_label} derive \
-         different `processors:` entries",
+    let differing_fields = match (first_projection.as_object(), second_projection.as_object()) {
+        (Some(first_fields), Some(second_fields)) => {
+            differing_manifest_projection_field_names(first_fields, second_fields)
+        }
+        _ => Vec::new(),
+    };
+    let differing_fields = if differing_fields.is_empty() {
+        "an unnamed field".to_string()
+    } else {
         differing_fields.join(", ")
+    };
+    Some(format!(
+        "`{name}` manifest entries differ in {differing_fields}: {first_label} and \
+         {second_label} derive different `processors:` entries"
     ))
 }
 
@@ -1399,10 +1435,14 @@ processors:
 
         let message = describe_processor_surface_difference(
             "Mixer",
-            COMMITTED_MANIFEST_SURFACE_LABEL,
-            &manifest,
-            DERIVED_FROM_CODE_SURFACE_LABEL,
-            &code,
+            ProcessorSurfaceWithDiagnosticLabel {
+                diagnostic_label: COMMITTED_MANIFEST_SURFACE_LABEL,
+                processor_surface: &manifest,
+            },
+            ProcessorSurfaceWithDiagnosticLabel {
+                diagnostic_label: DERIVED_FROM_CODE_SURFACE_LABEL,
+                processor_surface: &code,
+            },
         );
         assert!(message.contains("input port `frame`"), "{message}");
         assert!(
@@ -1425,10 +1465,14 @@ processors:
         };
         let message = describe_processor_surface_difference(
             "AudioCapture",
-            "processors/linux/audio_capture.rs",
-            &surface(ProcessorSchemaExecution::Manual),
-            "processors/apple/audio_capture.rs",
-            &surface(ProcessorSchemaExecution::Reactive),
+            ProcessorSurfaceWithDiagnosticLabel {
+                diagnostic_label: "processors/linux/audio_capture.rs",
+                processor_surface: &surface(ProcessorSchemaExecution::Manual),
+            },
+            ProcessorSurfaceWithDiagnosticLabel {
+                diagnostic_label: "processors/apple/audio_capture.rs",
+                processor_surface: &surface(ProcessorSchemaExecution::Reactive),
+            },
         );
         assert!(
             message.contains("processors/linux/audio_capture.rs declares Manual"),
