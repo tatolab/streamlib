@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.2](https://github.com/tatolab/streamlib/compare/v0.9.1...v0.9.2) (2026-07-28)
+
+
+### Features
+
+* **engine:** shutdown-request primitive so a harness can own the run loop ([#1629](https://github.com/tatolab/streamlib/issues/1629)) ([65ebed5](https://github.com/tatolab/streamlib/commit/65ebed544ec2d88aec5f2cebaf1ec612a8d506ab))
+
 ## [0.9.1](https://github.com/tatolab/streamlib/compare/v0.9.0...v0.9.1) (2026-07-28)
 
 
