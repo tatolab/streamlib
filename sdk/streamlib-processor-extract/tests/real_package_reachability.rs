@@ -160,8 +160,9 @@ fn audio_declares_its_platform_free_arms_on_windows() {
     );
 }
 
-/// `@tatolab/audio` is the live two-arm case: `processors/linux/` and
-/// `processors/apple/` each declare `AudioCapture` and `AudioOutput`, kept
+/// `@tatolab/audio` is the live two-arm case: `audio_capture_linux.rs` and
+/// `audio_capture_apple.rs` each declare `AudioCapture` (and the two
+/// `audio_output_*` siblings `AudioOutput`) under mutually-exclusive gates, kept
 /// identical today by copy-paste discipline alone. The scan's divergence check
 /// is what turns that discipline into a build gate — the two arms derive one
 /// availability entry per processor, which they can only do by agreeing on the
@@ -174,8 +175,8 @@ fn the_audio_platform_arms_agree_well_enough_to_fold_into_one_processor() {
     assert_eq!(
         capture.declaring_arm_source_files,
         vec![
-            PathBuf::from("processors/apple/audio_capture.rs"),
-            PathBuf::from("processors/linux/audio_capture.rs"),
+            PathBuf::from("processors/audio_capture_apple.rs"),
+            PathBuf::from("processors/audio_capture_linux.rs"),
         ],
         "both platform arms must declare `AudioCapture`"
     );
@@ -231,7 +232,7 @@ fn the_unconditional_camera_arm_is_available_on_every_build_target() {
     assert_eq!(
         available_build_target_operating_systems(&camera),
         vec!["linux"],
-        "`Camera`'s only live arm is `processors/linux/`: {:?}",
+        "`Camera`'s only live arm is `processors/camera_linux.rs`: {:?}",
         camera.availability_cfg_predicate
     );
 }

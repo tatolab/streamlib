@@ -2854,14 +2854,14 @@ mod tests {
         let root = tmp.path();
         write(
             root,
-            "processors/linux/mod.rs",
+            "processors/audio_capture_linux.rs",
             r#"#![cfg(target_os = "linux")]
             #[processor("@tatolab/demo/AudioCapture", execution = manual, output("audio", "@tatolab/core/AudioFrame"))]
             pub struct LinuxAudioCapture;"#,
         );
         write(
             root,
-            "processors/apple/mod.rs",
+            "processors/audio_capture_apple.rs",
             r#"#![cfg(any(target_os = "macos", target_os = "ios"))]
             #[processor("@tatolab/demo/AudioCapture", execution = manual, output("audio", "@tatolab/core/AudioFrame"))]
             pub struct AppleAudioCapture;"#,
@@ -2881,14 +2881,14 @@ mod tests {
         let root = tmp.path();
         write(
             root,
-            "processors/linux/mod.rs",
+            "processors/audio_capture_linux.rs",
             r#"#![cfg(target_os = "linux")]
             #[processor("@tatolab/demo/AudioCapture", execution = manual, output("audio", "@tatolab/core/AudioFrame"))]
             pub struct LinuxAudioCapture;"#,
         );
         write(
             root,
-            "processors/apple/mod.rs",
+            "processors/audio_capture_apple.rs",
             r#"#![cfg(any(target_os = "macos", target_os = "ios"))]
             #[processor("@tatolab/demo/AudioCapture", execution = manual, output("audio", "@tatolab/core/AudioFrame"))]
             pub struct AppleAudioCapture;"#,
@@ -2901,8 +2901,8 @@ mod tests {
         assert_eq!(
             availability.declaring_arm_source_files,
             vec![
-                PathBuf::from("processors/apple/mod.rs"),
-                PathBuf::from("processors/linux/mod.rs"),
+                PathBuf::from("processors/audio_capture_apple.rs"),
+                PathBuf::from("processors/audio_capture_linux.rs"),
             ]
         );
         for os in ["linux", "macos", "ios"] {
@@ -2974,14 +2974,14 @@ mod tests {
         let root = tmp.path();
         write(
             root,
-            "processors/linux/mod.rs",
+            "processors/audio_capture_linux.rs",
             r#"#![cfg(target_os = "linux")]
             #[processor("@tatolab/demo/AudioCapture", execution = manual, output("audio", "@tatolab/core/AudioFrame"))]
             pub struct LinuxAudioCapture;"#,
         );
         write(
             root,
-            "processors/apple/mod.rs",
+            "processors/audio_capture_apple.rs",
             r#"#![cfg(any(target_os = "macos", target_os = "ios"))]
             #[processor("@tatolab/demo/AudioCapture", execution = manual, output("audio", "@tatolab/core/VideoFrame"))]
             pub struct AppleAudioCapture;"#,
@@ -3001,8 +3001,8 @@ mod tests {
         assert!(difference.contains("AudioFrame"), "{difference}");
         assert!(difference.contains("VideoFrame"), "{difference}");
         assert!(
-            difference.contains("processors/apple/mod.rs")
-                && difference.contains("processors/linux/mod.rs"),
+            difference.contains("processors/audio_capture_apple.rs")
+                && difference.contains("processors/audio_capture_linux.rs"),
             "{difference}"
         );
     }
@@ -3014,14 +3014,14 @@ mod tests {
         let root = tmp.path();
         write(
             root,
-            "processors/linux/mod.rs",
+            "processors/audio_capture_linux.rs",
             r#"#![cfg(target_os = "linux")]
             #[processor("@tatolab/demo/AudioCapture", execution = manual)]
             pub struct LinuxAudioCapture;"#,
         );
         write(
             root,
-            "processors/apple/mod.rs",
+            "processors/audio_capture_apple.rs",
             r#"#![cfg(any(target_os = "macos", target_os = "ios"))]
             #[processor("@tatolab/demo/AudioCapture", execution = reactive)]
             pub struct AppleAudioCapture;"#,
@@ -3046,14 +3046,14 @@ mod tests {
         let root = tmp.path();
         write(
             root,
-            "processors/linux/mod.rs",
+            "processors/audio_capture_linux.rs",
             r#"#![cfg(target_os = "linux")]
             #[processor("@tatolab/demo/AudioCapture", execution = manual)]
             pub struct LinuxAudioCapture;"#,
         );
         write(
             root,
-            "processors/apple/mod.rs",
+            "processors/audio_capture_apple.rs",
             r#"#![cfg(any(target_os = "macos", target_os = "ios"))]
             #[processor("@tatolab/other/AudioCapture", execution = manual)]
             pub struct AppleAudioCapture;"#,
@@ -3081,14 +3081,14 @@ mod tests {
         let root = tmp.path();
         write(
             root,
-            "processors/linux/mod.rs",
+            "processors/audio_capture_linux.rs",
             r#"#![cfg(target_os = "linux")]
             #[processor("@tatolab/demo/AudioCapture", description = "ALSA capture", execution = manual)]
             pub struct LinuxAudioCapture;"#,
         );
         write(
             root,
-            "processors/apple/mod.rs",
+            "processors/audio_capture_apple.rs",
             r#"#![cfg(any(target_os = "macos", target_os = "ios"))]
             #[processor("@tatolab/demo/AudioCapture", description = "CoreAudio capture", execution = manual)]
             pub struct AppleAudioCapture;"#,

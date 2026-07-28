@@ -1466,20 +1466,20 @@ processors:
         let message = describe_processor_surface_difference(
             "AudioCapture",
             ProcessorSurfaceWithDiagnosticLabel {
-                diagnostic_label: "processors/linux/audio_capture.rs",
+                diagnostic_label: "processors/audio_capture_linux.rs",
                 processor_surface: &surface(ProcessorSchemaExecution::Manual),
             },
             ProcessorSurfaceWithDiagnosticLabel {
-                diagnostic_label: "processors/apple/audio_capture.rs",
+                diagnostic_label: "processors/audio_capture_apple.rs",
                 processor_surface: &surface(ProcessorSchemaExecution::Reactive),
             },
         );
         assert!(
-            message.contains("processors/linux/audio_capture.rs declares Manual"),
+            message.contains("processors/audio_capture_linux.rs declares Manual"),
             "{message}"
         );
         assert!(
-            message.contains("processors/apple/audio_capture.rs declares Reactive"),
+            message.contains("processors/audio_capture_apple.rs declares Reactive"),
             "{message}"
         );
     }
