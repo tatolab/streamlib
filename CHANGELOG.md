@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.3](https://github.com/tatolab/streamlib/compare/v0.9.2...v0.9.3) (2026-07-28)
+
+
+### Bug Fixes
+
+* **engine:** shutdown-request primitive review fixes ([#1599](https://github.com/tatolab/streamlib/issues/1599) round 1) ([#1637](https://github.com/tatolab/streamlib/issues/1637)) ([c6963f0](https://github.com/tatolab/streamlib/commit/c6963f0268fa61718eca66a97a3550ad13ea1df1))
+
 ## [0.9.2](https://github.com/tatolab/streamlib/compare/v0.9.1...v0.9.2) (2026-07-28)
 
 
