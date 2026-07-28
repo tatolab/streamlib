@@ -23,7 +23,7 @@ use serial_test::serial;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorInstance, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
-use streamlib::sdk::{RunnerAutoBuild, schema_ident};
+use streamlib::sdk::{RunnerAutoBuild, processor_type_ref};
 use streamlib_engine::core::graph::ProcessorNode;
 use streamlib_engine::core::runtime::{host_target_triple, loaded_plugin_library_count};
 
@@ -76,13 +76,17 @@ fn write_manifest_package(
         dir.join("streamlib.yaml"),
         format!(
             "package:\n  org: {pkg_org}\n  name: {pkg_name}\n  version: 1.0.0\nprocessors:\n  \
-             - name: {proc}\n    version: 1.0.0\n    description: d\n    runtime: rust\n    \
+             - name: {proc}\n    description: d\n    runtime: rust\n    \
              execution: manual\n    inputs: []\n    outputs: []\n"
         ),
     )
     .unwrap();
     if with_cargo {
-        std::fs::write(dir.join("Cargo.toml"), b"[package]\nname='x'\nversion='0.0.0'\n").unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            b"[package]\nname='x'\nversion='0.0.0'\n",
+        )
+        .unwrap();
     }
 }
 
@@ -162,7 +166,8 @@ fn add_processor_lazily_loads_plugin_from_streamlib_modules_with_no_load_call() 
     Runner::set_app_modules_dir(app.path());
     let runtime = Runner::with_auto_build().unwrap();
 
-    let fixtures_ident = || schema_ident!("tatolab", "test-fixtures", "TestConfiguredProcessor", "1.0.0");
+    let fixtures_ident =
+        || processor_type_ref!("tatolab", "test-fixtures", "TestConfiguredProcessor");
 
     // (1) First reference lazily discovers + loads the providing package.
     let libraries_before = loaded_plugin_library_count();
@@ -200,7 +205,7 @@ fn add_processor_lazily_loads_plugin_from_streamlib_modules_with_no_load_call() 
     // (3) Referencing an ABSENT package returns a typed error, and the runtime
     // keeps operating.
     let absent = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "definitely-not-installed", "Ghost", "1.0.0"),
+        processor_type_ref!("tatolab", "definitely-not-installed", "Ghost"),
         serde_json::json!({}),
     ));
     assert!(
@@ -242,7 +247,15 @@ fn add_processor_returns_ambiguous_error_for_duplicate_providers() {
     // end-to-end (through the lazy hook into add_processor_impl), and the
     // runtime must keep operating afterward.
     let app = tempfile::tempdir().unwrap();
-    write_manifest_package(app.path(), "@tatolab", "dup", "tatolab", "dup", "Thing", false);
+    write_manifest_package(
+        app.path(),
+        "@tatolab",
+        "dup",
+        "tatolab",
+        "dup",
+        "Thing",
+        false,
+    );
     write_manifest_package(
         app.path(),
         "@tatolab",
@@ -258,7 +271,7 @@ fn add_processor_returns_ambiguous_error_for_duplicate_providers() {
     let runtime = Runner::new().unwrap();
 
     let result = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "dup", "Thing", "1.0.0"),
+        processor_type_ref!("tatolab", "dup", "Thing"),
         serde_json::json!({}),
     ));
     assert!(
@@ -269,7 +282,7 @@ fn add_processor_returns_ambiguous_error_for_duplicate_providers() {
     // Runtime keeps operating: a subsequent reference to an absent package
     // returns a typed error rather than wedging.
     let after = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "not-there", "Nope", "1.0.0"),
+        processor_type_ref!("tatolab", "not-there", "Nope"),
         serde_json::json!({}),
     ));
     assert!(matches!(after, Err(Error::UnknownProcessorType { .. })));
@@ -298,7 +311,7 @@ fn add_processor_returns_lazy_load_failed_for_unbuildable_package() {
     let runtime = Runner::new().unwrap(); // no orchestrator wired
 
     let result = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "broken", "BrokenProcessor", "1.0.0"),
+        processor_type_ref!("tatolab", "broken", "BrokenProcessor"),
         serde_json::json!({}),
     ));
     assert!(
@@ -309,7 +322,7 @@ fn add_processor_returns_lazy_load_failed_for_unbuildable_package() {
     // The failed lazy load left zero partial state and the runtime keeps
     // operating.
     let after = runtime.add_processor(ProcessorSpec::new(
-        schema_ident!("tatolab", "still-absent", "Nope", "1.0.0"),
+        processor_type_ref!("tatolab", "still-absent", "Nope"),
         serde_json::json!({}),
     ));
     assert!(matches!(after, Err(Error::UnknownProcessorType { .. })));

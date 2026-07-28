@@ -481,8 +481,8 @@ fn parse_port_schema(content: ParseStream<'_>) -> syn::Result<PortSchemaSpec> {
 /// the runtime binds version-blind, and versions are derived at package-build
 /// time — never hand-authored. A trailing `@<version>` is rejected. The
 /// synthesized `SchemaIdent` carries the `0.0.0` version-free sentinel — the
-/// same placeholder `ProcessorTypeReference::ResolveToInstalled` renders and
-/// the runtime schema registry (which stores/looks up unversioned) ignores.
+/// same placeholder `ProcessorTypeReference` renders for diagnostics and the
+/// runtime schema registry (which stores/looks up unversioned) ignores.
 pub fn parse_schema_ident_str(raw: &str, span: proc_macro2::Span) -> syn::Result<SchemaIdent> {
     let err = |msg: String| syn::Error::new(span, msg);
 

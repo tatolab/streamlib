@@ -829,22 +829,16 @@ impl Runner {
         &self,
         processor_type: &crate::core::processors::ProcessorTypeReference,
     ) -> std::result::Result<Option<AddedModule>, crate::core::error::Error> {
-        use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorTypeReference};
-        // Fast path: already registered? A version-pinned reference checks the
-        // exact ident (unchanged #1325 behavior); a version-free reference
-        // checks the installed `(org, package, type)` tuple.
-        let already_registered = match processor_type {
-            ProcessorTypeReference::VersionPinned(ident) => {
-                PROCESSOR_REGISTRY.port_info(ident).is_some()
-            }
-            ProcessorTypeReference::ResolveToInstalled {
-                org,
-                package,
-                r#type,
-            } => PROCESSOR_REGISTRY
-                .resolve_installed_processor_type(org, package, r#type)
-                .is_some(),
-        };
+        use crate::core::processors::PROCESSOR_REGISTRY;
+        // Fast path: already registered? Checked against the installed
+        // `(org, package, type)` tuple.
+        let already_registered = PROCESSOR_REGISTRY
+            .resolve_installed_processor_type(
+                processor_type.org(),
+                processor_type.package(),
+                processor_type.r#type(),
+            )
+            .is_some();
         if already_registered {
             return Ok(None);
         }
@@ -891,13 +885,11 @@ impl Runner {
             processor_type.org().clone(),
             processor_type.package().clone(),
         );
-        // The range comes from the reference itself, not any app manifest: a
-        // version-pinned ref acquires that exact version; a version-free ref
-        // takes the highest release the package source holds.
-        let range = match processor_type.as_version_pinned() {
-            Some(ident) => streamlib_idents::SemVerRange::Exact(ident.version),
-            None => streamlib_idents::SemVerRange::Any,
-        };
+        // A reference names no version, so acquisition takes the highest
+        // release the package source holds; the lockfile records what was
+        // selected. A constraint belongs to resolution, never to the site that
+        // names the processor.
+        let range = streamlib_idents::SemVerRange::Any;
         if !acquire::acquisition_permitted(&pkg_ref, &range) {
             return Ok(None);
         }
@@ -1101,11 +1093,11 @@ mod lazy_load_error_tests {
     /// the `0.0.0` version-free placeholder.
     #[test]
     fn lazy_module_load_failed_projects_version_free_reference() {
-        let type_ref = crate::core::processors::ProcessorTypeReference::ResolveToInstalled {
-            org: streamlib_idents::Org::new("tatolab").unwrap(),
-            package: streamlib_idents::Package::new("camera").unwrap(),
-            r#type: streamlib_idents::TypeName::new("Camera").unwrap(),
-        };
+        let type_ref = crate::core::processors::ProcessorTypeReference::new(
+            streamlib_idents::Org::new("tatolab").unwrap(),
+            streamlib_idents::Package::new("camera").unwrap(),
+            streamlib_idents::TypeName::new("Camera").unwrap(),
+        );
         let underlying = AddModuleError::ModuleNotFound {
             package: streamlib_idents::PackageRef::new(
                 streamlib_idents::Org::new("tatolab").unwrap(),

@@ -17,11 +17,11 @@
 //!   convention). Returns `Result<SchemaIdent, Error>` —
 //!   `Error::UnknownProcessorType` when nothing matches.
 //! - `streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")` —
-//!   strict version-pinning form. Same four fields as the long
-//!   [`SchemaIdent::new`] constructor, validated at compile time,
-//!   expands to the long form verbatim. Reach for this when you have a
-//!   reason to refuse newer-but-compatible registered versions; the
-//!   `_any_version` form is the right default for everything else.
+//!   the same four fields as the long [`SchemaIdent::new`] constructor,
+//!   validated at compile time and expanding to it verbatim. For the
+//!   *resolved* identities that carry a version (lockfile entries, registry
+//!   keys); naming a processor from code goes through `processor_type_ref!`,
+//!   which carries no version at all.
 
 mod codegen;
 mod config_descriptor;
@@ -263,8 +263,8 @@ fn expand_schema_ident_any_version(
 /// processor-type reference for the lazy-discovery world (app code that never
 /// calls `add_module`).
 ///
-/// Expands to a `ProcessorTypeReference::ResolveToInstalled` value with no
-/// version and **no registry lookup at the call site**, so the reference
+/// Expands to a `ProcessorTypeReference` value, which carries no version and
+/// does **no registry lookup at the call site**, so the reference
 /// reaches `add_processor`'s lazy hook and resolves to the single installed
 /// provider — loading its package from `streamlib_modules/` on first
 /// reference. This is the canonical form for referencing a processor by
@@ -316,11 +316,11 @@ fn expand_processor_type_ref(
     })?;
 
     Ok(quote! {
-        ::streamlib::sdk::processors::ProcessorTypeReference::ResolveToInstalled {
-            org: ::streamlib::sdk::descriptors::Org::new(#org_str).expect("validated by macro"),
-            package: ::streamlib::sdk::descriptors::Package::new(#package_str).expect("validated by macro"),
-            r#type: ::streamlib::sdk::descriptors::TypeName::new(#type_str).expect("validated by macro"),
-        }
+        ::streamlib::sdk::processors::ProcessorTypeReference::new(
+            ::streamlib::sdk::descriptors::Org::new(#org_str).expect("validated by macro"),
+            ::streamlib::sdk::descriptors::Package::new(#package_str).expect("validated by macro"),
+            ::streamlib::sdk::descriptors::TypeName::new(#type_str).expect("validated by macro"),
+        )
     })
 }
 

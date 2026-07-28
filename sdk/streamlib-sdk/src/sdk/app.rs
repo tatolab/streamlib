@@ -80,11 +80,11 @@ impl App {
                 std::any::type_name::<P>()
             ))
         })?;
-        let reference = ProcessorTypeReference::ResolveToInstalled {
-            org: loaded.ident.org,
-            package: loaded.ident.name,
-            r#type: descriptor.name.r#type,
-        };
+        let reference = ProcessorTypeReference::new(
+            loaded.ident.org,
+            loaded.ident.name,
+            descriptor.name.r#type,
+        );
         self.runner
             .add_processor(ProcessorSpec::new(reference, config))
     }

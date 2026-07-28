@@ -86,8 +86,7 @@ pub(super) fn resolve_providing_module(
             // well-formed install (a fully-qualified type embeds its package,
             // and `streamlib add` writes one slot per @org/name), so this is a
             // duplicate/malformed folder the caller must resolve by hand.
-            let mut packages: Vec<PackageRef> =
-                matches.iter().map(|m| m.package.clone()).collect();
+            let mut packages: Vec<PackageRef> = matches.iter().map(|m| m.package.clone()).collect();
             packages.sort_by_key(|p| p.to_string());
             tracing::warn!(
                 processor_type = %processor_type,
@@ -145,7 +144,7 @@ fn scan_for_providers(
             if !seen_dirs.insert(package_dir.clone()) {
                 continue;
             }
-            if let Some(package) = package_declares_processor(&package_dir, processor_type) {
+            if let Some(package) = package_declares_processor(&package_dir, processor_type)? {
                 matches.push(ProviderMatch {
                     package,
                     package_dir,
@@ -162,38 +161,42 @@ fn scan_for_providers(
 /// name equals the referenced type name. Returns the owning [`PackageRef`] on
 /// a match; a missing / unreadable / malformed manifest is treated as "no
 /// match" (this folder just isn't the provider).
+/// Whether the package installed at `package_dir` declares `processor_type`.
+///
+/// An unparseable manifest is an error, not a skip: an installed package whose
+/// manifest cannot be read is indistinguishable from an absent one to every
+/// caller downstream, so the reference surfaces as "unknown processor type" and
+/// the actual cause — a malformed install — never reaches the operator.
 fn package_declares_processor(
     package_dir: &Path,
     processor_type: &SchemaIdent,
-) -> Option<PackageRef> {
+) -> Result<Option<PackageRef>> {
     let manifest_path = package_dir.join(streamlib_idents::Manifest::FILE_NAME);
-    let content = std::fs::read_to_string(&manifest_path).ok()?;
-    let config: ProjectConfigMinimal = match serde_yaml::from_str(&content) {
-        Ok(config) => config,
-        Err(e) => {
-            tracing::warn!(
-                manifest = %manifest_path.display(),
-                error = %e,
-                "skipping unparseable streamlib.yaml during lazy discovery"
-            );
-            return None;
-        }
+    let Ok(content) = std::fs::read_to_string(&manifest_path) else {
+        return Ok(None);
     };
-    let package = config.package.as_ref()?;
+    let config: ProjectConfigMinimal = serde_yaml::from_str(&content).map_err(|e| {
+        Error::Configuration(format!(
+            "the package installed at {} has an unreadable {}: {e}. Lazy discovery cannot tell \
+             which processors it provides, so a reference to one would surface as an unknown \
+             processor type.",
+            package_dir.display(),
+            streamlib_idents::Manifest::FILE_NAME,
+        ))
+    })?;
+    let Some(package) = config.package.as_ref() else {
+        return Ok(None);
+    };
     if package.org.as_str() != processor_type.org.as_str()
         || package.name.as_str() != processor_type.package.as_str()
     {
-        return None;
+        return Ok(None);
     }
     let declares_type = config
         .processors
         .iter()
         .any(|processor| processor.name == processor_type.r#type.as_str());
-    if declares_type {
-        Some(PackageRef::new(package.org.clone(), package.name.clone()))
-    } else {
-        None
-    }
+    Ok(declares_type.then(|| PackageRef::new(package.org.clone(), package.name.clone())))
 }
 
 /// Directory entries readers of `streamlib_modules/` must skip: dot-prefixed
@@ -270,7 +273,10 @@ mod tests {
         // Package present, but no folder declares `Ghost`.
         let resolved =
             resolve_providing_module(root.path(), &ident("tatolab", "camera", "Ghost")).unwrap();
-        assert!(resolved.is_none(), "an undeclared type must resolve to None");
+        assert!(
+            resolved.is_none(),
+            "an undeclared type must resolve to None"
+        );
 
         // Package absent entirely.
         let resolved =
@@ -294,7 +300,14 @@ mod tests {
         // declared identity). Discovery must refuse rather than pick one.
         let root = tempfile::tempdir().unwrap();
         write_package(root.path(), "tatolab", "dup", &["Thing"]);
-        write_package_at(root.path(), "@tatolab", "dup-alias", "tatolab", "dup", &["Thing"]);
+        write_package_at(
+            root.path(),
+            "@tatolab",
+            "dup-alias",
+            "tatolab",
+            "dup",
+            &["Thing"],
+        );
 
         let err = resolve_providing_module(root.path(), &ident("tatolab", "dup", "Thing"))
             .expect_err("two folders declaring the same type must be ambiguous");
@@ -346,6 +359,9 @@ mod tests {
             streamlib_idents::SemVer::new(9, 9, 9),
         );
         let resolved = resolve_providing_module(root.path(), &referenced).unwrap();
-        assert!(resolved.is_some(), "version at reference site must not gate discovery");
+        assert!(
+            resolved.is_some(),
+            "version at reference site must not gate discovery"
+        );
     }
 }

@@ -118,37 +118,38 @@ mod tests {
         assert_eq!(spec.display_name.as_deref(), Some("Camera A"));
     }
 
-    /// A `SchemaIdent` still constructs a spec (via `From<SchemaIdent>`),
-    /// landing as a version-pinned reference — the #1325 call-site shape is
-    /// unchanged.
+    /// A `SchemaIdent` still constructs a spec (via `From<SchemaIdent>`), and
+    /// its version is dropped on the way in: a resolved identity narrows to a
+    /// reference, and a reference names no version.
     #[test]
-    fn schema_ident_builds_version_pinned_spec() {
+    fn schema_ident_narrows_to_a_version_free_reference() {
         let spec = ProcessorSpec::new(
             ident("tatolab", "core", "VideoFrame", SemVer::new(1, 0, 0)),
             serde_json::Value::Null,
         );
-        assert!(matches!(
-            spec.name,
-            ProcessorTypeReference::VersionPinned(_)
-        ));
+        assert_eq!(spec.name.org().as_str(), "tatolab");
+        assert_eq!(spec.name.package().as_str(), "core");
+        assert_eq!(spec.name.r#type().as_str(), "VideoFrame");
+        let value = serde_json::to_value(&spec).unwrap();
+        assert!(
+            value["name"].get("version").is_none(),
+            "a spec built from a pinned ident must still put no version on the wire"
+        );
     }
 
-    /// A version-free reference builds a spec that carries no version at the
-    /// reference site — the shape that reaches the lazy hook.
+    /// A reference builds a spec that carries no version at the reference site
+    /// — the shape that reaches the lazy hook.
     #[test]
-    fn version_free_reference_builds_resolve_to_installed_spec() {
+    fn a_reference_builds_a_spec_with_no_version_at_the_reference_site() {
         let spec = ProcessorSpec::new(
-            ProcessorTypeReference::ResolveToInstalled {
-                org: Org::new("tatolab").unwrap(),
-                package: Package::new("camera").unwrap(),
-                r#type: TypeName::new("Camera").unwrap(),
-            },
+            ProcessorTypeReference::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("camera").unwrap(),
+                TypeName::new("Camera").unwrap(),
+            ),
             serde_json::json!({"fps": 30}),
         );
-        assert!(matches!(
-            spec.name,
-            ProcessorTypeReference::ResolveToInstalled { .. }
-        ));
+        assert_eq!(spec.name.r#type().as_str(), "Camera");
         // The wire carries the three-key form, no version key.
         let value = serde_json::to_value(&spec).unwrap();
         assert!(value["name"].get("version").is_none());
@@ -160,11 +161,11 @@ mod tests {
     #[test]
     fn version_free_spec_msgpack_round_trip() {
         let spec = ProcessorSpec::new(
-            ProcessorTypeReference::ResolveToInstalled {
-                org: Org::new("tatolab").unwrap(),
-                package: Package::new("camera").unwrap(),
-                r#type: TypeName::new("Camera").unwrap(),
-            },
+            ProcessorTypeReference::new(
+                Org::new("tatolab").unwrap(),
+                Package::new("camera").unwrap(),
+                TypeName::new("Camera").unwrap(),
+            ),
             serde_json::json!({"width": 1920}),
         );
         let bytes = rmp_serde::to_vec_named(&spec).expect("encode");
