@@ -55,7 +55,8 @@ file at its authored relative path:
 | **Rust** | full crate source: `Cargo.toml` + `processors/` + `schemas/` + data / assets | prebuilt cdylib at `lib/<triple>/` (one per packing host), generated crate root at `_generated_/lib.rs` |
 
 Processor modules are authored under `<package_root>/processors/` — the one
-discovery root all three extractors walk, Rust included. The entrypoint declared in `streamlib.yaml`
+discovery root all three extractors walk, Rust included. The entrypoint
+declared in `streamlib.yaml`
 (`processors.module:Type`, `processors/module.ts:default`) is **relative to
 the directory holding that `streamlib.yaml`**: the Python subprocess runner
 puts that directory on `sys.path` and imports the dotted module name, the Deno
@@ -82,7 +83,7 @@ by `is_non_source_artifact` — so the consumer regenerates it from the bundled
 `processors/` tree on their own host.
 
 > ~~The Rust mirror is `Cargo.toml` + `src/`.~~ — Superseded 2026-07-27 by
-> folder-backed processor discovery (#1589): a Rust package authors under
+> folder-backed processor discovery: a Rust package authors under
 > `processors/` like every other language and commits no `src/`.
 
 > ~~The entrypoint names a file at the package root, beside `streamlib.yaml`;
