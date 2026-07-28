@@ -220,9 +220,13 @@ pub fn generated_crate_root_lib_path_value() -> String {
 /// crate root.
 ///
 /// Generation is opt-in per package, keyed on the manifest rather than on "has
-/// a `processors/` directory": a package that opts in but whose `processors/`
-/// went missing then fails loudly at generation instead of silently producing
-/// an empty crate, and a crate that commits its own root is never overwritten.
+/// a `processors/` directory": a crate that commits its own root is never
+/// overwritten, and a schema-only Rust package — no `processors/` at all —
+/// still gets its JTD preamble. Nothing on the generation path notices that an
+/// opted-in package's `processors/` went missing; it writes an arm-free root.
+/// The seam that refuses that is `streamlib-pack`'s publish-time
+/// `enforce_processor_manifest_matches_code`, which re-derives the processor
+/// set from code and rejects a `.slpkg` whose committed `processors:` disagrees.
 fn declares_generated_crate_root(manifest: &toml::Value) -> bool {
     manifest
         .get("lib")
@@ -692,6 +696,32 @@ mod tests {
             generated
                 .source
                 .contains("#[path = \"../processors/_apple_impl_pending_/mod.rs\"]"),
+            "{}",
+            generated.source
+        );
+    }
+
+    /// A package with no `processors/` directory at all — a schema-only Rust
+    /// package — generates an arm-free root rather than failing: generation is
+    /// keyed on the manifest opt-in, and nothing on this path re-derives whether
+    /// the package ought to have had processors. An opted-in package whose
+    /// `processors/` went missing is caught one seam later, by
+    /// `streamlib-pack`'s publish-time processor-manifest drift gate.
+    #[test]
+    fn a_package_with_no_processor_source_dir_generates_an_arm_free_root() {
+        let tmp = tempdir();
+        let root = tmp.path();
+
+        let generated = generate_rust_crate_root_source(&request(root, true, true)).unwrap();
+        assert_eq!(generated.module_arm_count, 0);
+        assert_eq!(generated.exported_processor_entry_count, 0);
+        assert!(
+            !generated.source.contains("export_plugin!"),
+            "{}",
+            generated.source
+        );
+        assert!(
+            generated.source.contains("pub mod _generated_ {"),
             "{}",
             generated.source
         );
