@@ -122,6 +122,14 @@ artifact and does not re-run it.
 - **Extraction only inside `streamlib-pack`.** Pack is the natural consumer,
   but the grammar must also be shared with the proc-macro, and a future
   live-submit path needs the extractor without the whole pack crate.
+- **`cfg-expr` / `target-lexicon` for the overlap search.** They ship the target
+  coherence rules as data rather than the hand-written model below. Neither is
+  in the tree today, so adopting one is a new-dependency decision for a
+  build-seam crate that currently pulls only `syn` / `quote` / `toml` — and
+  the model needs one more thing than either provides: an explicit "this fact is
+  unknown, leave the pair unproven" answer, which is what keeps the refusal
+  sound. Worth revisiting if the coherence rules grow past the target-atom
+  cluster the model relates today.
 
 ## Consequences
 
@@ -133,12 +141,11 @@ artifact and does not re-run it.
   `processors/`, including platform arms a given host does not compile
   (`camera_linux.rs` vs `camera_apple.rs`) and parked directories
   (`_apple_impl_pending_/`), so two platform arms that both declare the same
-  processor both surface.
-  `extract_reachable_rust_processors`
-  resolves that raw scan to the set the build **target** actually compiles: it
-  enumerates the top-level arms under `processors/` the way the generated crate
-  root declares them (a directory backed by `mod.rs` keeps directory ownership,
-  a flat `.rs` is a flat arm), follows each
+  processor both surface. `extract_reachable_rust_processors` resolves that raw
+  scan to the set the build **target** actually compiles: it enumerates the
+  top-level arms under `processors/` the way the generated crate root declares
+  them (a directory backed by `mod.rs` keeps directory ownership, a flat `.rs`
+  is a flat arm), follows each
   `mod` the way `rustc` resolves module files (honoring `#[path]`), and evaluates
   the `#[cfg(...)]` predicate on every `mod` and every `#[processor(...)]`-bearing
   struct against a `ModuleReachabilityTarget` (the target's cfg atoms:
@@ -150,3 +157,111 @@ artifact and does not re-run it.
   replace the hand-authored `processors:` as the authoritative truth-source, and
   a drift check between the two a hard `pkg publish` error without false positives
   on cfg-gated packages.
+
+## Grouping by processor id: what is refused, what is data
+
+Once two files under one `processors/` tree can declare the same processor id
+under different `#[cfg]`, three things become possible. Two are refused at the
+scan; the third is the datum the scan now produces.
+
+**Overlap is refused, with a witness.** Two arms some build target compiles
+both of derive one `processors:` entry between them: the section keeps only the
+`Type` segment, so the entry that ships is whichever arm the walk reached
+first, and the drift check — keyed by that same name — collapses the pair
+before it compares. The failure is silent at both seams. It is refused at the
+scan instead, proven two independent ways. The target-resolved walk needs no
+reasoning: it resolved one concrete target and collected the name twice. The
+across-every-target walk brute-forces satisfiability of the two arms' conjoined
+predicates over only the atoms those predicates themselves mention, and refuses
+**only on a satisfying assignment it can print**. That search carries a
+deliberate domain model of how `rustc` sets these atoms: `target_*` keys are
+modelled single-valued except `feature` / `target_feature` /
+`target_has_atomic`; the `unix` / `windows` families are mutually exclusive,
+spelled interchangeably as a bare flag or a `target_family` value, with
+`windows` holding exactly one `target_os`; and a known `target_os` fixes the
+families its target defines, both ways. Without the first rule, `target_os =
+"linux"` against `any(target_os = "macos", target_os = "ios")` reads
+satisfiable and every platform-split package fails its own build. Without the
+last, `target_os = "ios"` against `not(unix)` reads satisfiable and a platform
+split with a non-unix fallback arm fails the same way.
+
+**The model relates one cluster of target atoms, and prunes rather than
+guesses outside it.** The cluster is `target_os`, `target_family` and the bare
+`unix` / `windows` flags. `rustc` fixes every other target atom against those
+and against one another too — no target is both `target_env = "msvc"` and
+`target_os = "linux"`, none is both `target_arch = "wasm32"` and `target_env =
+"msvc"`, no `target_vendor = "apple"` target is `not(unix)` — and the model
+holds none of those facts, so an assignment that DEFINES an atom from outside
+the cluster (a key it pins a value for, or a bare `target_*` flag it sets)
+while a second target atom is decided is dropped instead of printed as a
+proof. A cluster atom counts as decided wherever the predicates mention it,
+whether the assignment names a value for it or leaves it at "some value the
+predicates never name": that unnamed slot is exactly what makes a NEGATED
+`target_os` / `target_family` value true, so `target_env = "msvc"` against
+`not(target_os = "windows")` is dropped for the same reason as `target_env =
+"msvc"` against `target_os = "linux"`. Inside the cluster the same discipline
+applies to what the rules cannot decide: a `target_os` outside the OS → family
+table decides nothing about families, and a `target_family` outside `unix` /
+`windows` defines neither flag, which deliberately drops `wasi` (genuinely
+both `wasm` and `unix`, the multi-valued case single-valued modelling gives
+up). Every rule and every gap therefore prunes, so the error direction is
+toward missing an overlap rather than inventing one. Two assumptions stay
+unchecked, and both are about one atom rather than about how two atoms relate:
+that a value a predicate names is a value some target defines, and that an
+atom a predicate names is one some target leaves undefined. The cost of a
+missed detection is bounded by the concrete-target net: the host that actually
+compiles both arms still fails.
+
+**Divergence is refused over the whole derived projection, not just ports.** The
+`processors:` section is derived from whichever arm the publishing host
+compiles, so a difference in ANY field the manifest entry carries — the full
+`@org/package/Type` identity, execution, ports, scheduling, description, the
+config binding — makes the shipped manifest host-dependent. That is a wider
+surface than the language-uniform drift surface above, deliberately: drift
+compares a *hand-authored* manifest against *code*, where the excluded fields
+are authored rather than derived, while divergence compares two pieces of code
+that must derive the same entry. Port and execution differences are named by
+the same comparator the drift report uses, generalized from "manifest vs code"
+to a labelled two-sided comparison — one diagnostic with two callers, not two
+copies. Grouping is by `Type` name rather than the full identity because that
+is the only segment the derived entry keeps: the attribute's `@org/package` is
+dropped, and at load the runtime composes each processor's structured ident
+from the package's own org / name plus the short name. Two arms sharing a
+`Type` fold into one manifest entry and one composed ident whatever
+`@org/package` their attributes named, so they surface here as a divergence
+rather than passing as two unrelated processors.
+
+**A gap is not an error — it is availability.** A package that declares a
+processor on some targets and on none of the others is ordinary. Which targets
+those are is carried as a per-processor `#[cfg(...)]` **predicate** — the
+disjunction over each declaring arm's conjoined predicates, `None` meaning
+unconditional — never as an enumerated target set. There is no closed target
+universe (an arm may gate on `redox`, `android`, a cargo feature, a custom cfg),
+so a fixed list would go stale and misreport; the enumerated answer is derived
+on demand for whatever targets a caller cares about, through the one cfg
+evaluator rather than a second implementation of cfg semantics. The crate-root
+generator's `export_plugin!` outer gate is that same disjunction: "the target
+compiles at least one of this package's processors".
+
+Availability is scan output, consumed in-process. It is deliberately NOT added
+to `streamlib.yaml`'s `processors:` section: that section's comparison surface
+is language-uniform by design, and Python and Deno have no cfg to project.
+
+A `#[cfg(feature = "…")]`-gated processor is the one case the target-resolved
+walk cannot decide correctly on its own — the scan target derives os / arch /
+family from the running host and cannot know which features a downstream build
+enables, so the processor evaluates false and leaves the derived set. It bites
+one seam later as a confusing drift error ("listed in `processors:` but no
+longer declared in code"), so the walk warns at the prune site with the file,
+the predicate and the undefined feature rather than leaving the absence
+unexplained. The warning is raised only where a `#[processor(...)]` really left
+the set — the prune site re-walks what it pruned with cfg resolution off and
+stays silent for a feature-gated helper module, whose absence explains nothing.
+
+Both refusals reach a package through crate-root generation, so they gate every
+build and every `pkg publish` of a package that DECLARES a generated crate root.
+A package that commits its own crate root (the one in-tree host rlib) is scanned
+across targets only by the extractor's own tests: cross-target divergence there
+would surface on a host that compiles both arms rather than at generation. That
+exposure follows from generation being opt-in, and is accepted rather than
+worked around with a second discovery path.

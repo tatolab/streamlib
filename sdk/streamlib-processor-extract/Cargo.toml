@@ -28,6 +28,9 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 serde_yaml = { workspace = true }
+# The scan's prune diagnostics are asserted on, not just logged — a captured
+# subscriber is what makes a `tracing::warn!` a testable contract.
+tracing-subscriber = { workspace = true }
 
 [lints]
 workspace = true
