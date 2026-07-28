@@ -59,6 +59,8 @@ const reconcileSchema = {
           blocked_by_open: { type: 'boolean' },
           claimed: { type: 'boolean' },
           owner_gated: { type: 'boolean' },
+          stack_base: { type: ['string', 'null'] },
+          stack_depth: { type: 'number' },
         },
         required: ['issue'],
       },
@@ -105,10 +107,19 @@ const state =
       `claimed, and not gated on an unanswered owner question. Read each issue FRESH — labels are display ` +
       `output, never control input. Give each a short kebab-case \`slug\` for its branch name and its current \`attempt\` ` +
       `count from the state file (0 if new).\n` +
+      `   A blocked issue is NOT necessarily unstartable. Merging is the owner's call, so waiting for a blocker to close ` +
+      `stalls the whole chain overnight. For each issue whose only open blockers ALL have an open PR, set ` +
+      `\`stack_base\` to the head branch of the blocker whose own stack is deepest (its PR base chain is longest), and ` +
+      `\`stack_depth\` to that chain's length counting from main. The ticket then builds on that branch instead of main. ` +
+      `Set \`stack_base\` to null when any open blocker has NO open PR — there is nothing to build on, and that issue ` +
+      `stays blocked. \`blocked_by_open\` still reports the raw graph; it is stack_base that decides startability.\n` +
       `   \`claimed\` is decided ONLY by structural evidence of live work: an open PR for the issue, a branch on origin ` +
       `matching its slug, or an existing worktree. Prose NEVER decides it — an issue comment saying work is queued, ` +
       `planned, or in flight is stale the moment it is written, and treating it as state strands the ticket forever. ` +
       `When the ledger records a stage but no branch, worktree, or PR exists, the ticket is NOT claimed.\n` +
+      `   For each conflicting PR also report its \`base_branch\` (the PR's current base). A stack layer whose base ` +
+      `MERGED is conflicting precisely because the repo squash-merges — it still carries the parent's pre-squash ` +
+      `commits — so the rebase needs to know what it was stacked on.\n` +
       `6. Detect owner answers: for each ticket with a parked question, a question is cleared by any comment that ` +
       `postdates it whose id is NOT in that ticket's recorded \`comment_ids\` ledger. The loop shares the owner's login, ` +
       `so never use author.login for this. Return the cleared issue numbers in owner_answers.\n` +
@@ -159,7 +170,17 @@ if (state.no_delta === true) {
 }
 
 const proposeOnly = proposeOnlyForced || state.propose_only === true;
-const candidates = (state.candidates || []).filter((c) => c && c.issue && !c.blocked_by_open && !c.claimed && !c.owner_gated);
+// A blocked ticket is startable when every one of its open blockers already has an
+// open PR: it stacks on the deepest of them instead of waiting. Merging is the owner's
+// call, so gating on a blocker being CLOSED stalls the whole chain until they wake up
+// — which on a deep, narrow graph means one ticket a day.
+const candidates = (state.candidates || []).filter(
+  (c) => c && c.issue && !c.claimed && !c.owner_gated && (!c.blocked_by_open || c.stack_base),
+);
+const stackDepthOf = (c) => (c.stack_base ? c.stack_depth || 1 : 0);
+// Shallowest first: a layer must exist before anything can stack on top of it, and a
+// shallower PR reaches the owner sooner, which collapses the stack from the bottom.
+candidates.sort((a, b) => stackDepthOf(a) - stackDepthOf(b));
 log(`reconciled: milestone=${state.focused_milestone} candidates=${candidates.length} propose_only=${proposeOnly}`);
 
 phase('Classify');
@@ -183,7 +204,10 @@ const classified =
               `- slug: a short kebab-case branch slug.\n` +
               `Do not start any work.`,
             { phase: 'Classify', label: `classify:${c.issue}`, model: 'sonnet', schema: classifySchema },
-          ),
+          // The classifier judges shape and zones; it has no say in where the branch
+          // is rooted, so the reconciler's stack decision is reattached here rather
+          // than round-tripped through an agent that could drop or invent it.
+          ).then((r) => (r ? Object.assign({}, r, { stack_base: c.stack_base || null, stack_depth: c.stack_depth || 0 }) : r)),
         ),
       )).filter(Boolean)
     : [];
@@ -192,7 +216,7 @@ const classified =
 function planBatch(items) {
   const batch = [];
   const deferred = [];
-  const takenHotFiles = new Set();
+  const takenHotFiles = new Map();
   let rigTaken = false;
   let worktreesTaken = 0;
 
@@ -217,13 +241,21 @@ function planBatch(items) {
       deferred.push({ issue: t.issue, why: 'another rig ticket is already in this batch' });
       continue;
     }
+    // Collision detection is per base branch. Two branches off the SAME base that
+    // rewrite one file conflict at merge; a stacked branch cannot conflict with its
+    // own ancestor, because the ancestor's commits are already in its base. Checking
+    // stacked layers against a single global set would defer every one of them —
+    // touching the parent's files is what a stack layer is for.
+    const base = t.stack_base || 'main';
     const hot = t.hot_files || [];
-    const collision = hot.find((f) => takenHotFiles.has(f));
+    const takenForBase = takenHotFiles.get(base) || new Set();
+    const collision = hot.find((f) => takenForBase.has(f));
     if (collision) {
-      deferred.push({ issue: t.issue, why: `predicted hot-file collision on ${collision}` });
+      deferred.push({ issue: t.issue, why: `predicted hot-file collision on ${collision} with another branch off ${base}` });
       continue;
     }
-    for (const f of hot) takenHotFiles.add(f);
+    for (const f of hot) takenForBase.add(f);
+    takenHotFiles.set(base, takenForBase);
     if (needsRig) rigTaken = true;
     if (cutsWorktree) worktreesTaken += 1;
     batch.push(t);
@@ -270,6 +302,7 @@ const dispatchOutcomes = proposeOnly
             shape: t.shape,
             lead: t.lead,
             rig_needs: t.rig_needs,
+            base_branch: t.stack_base || 'main',
             live_verify: liveVerify,
             repo_root: repoRoot,
             today,
@@ -296,7 +329,7 @@ const rebased = (state.conflicting_prs || []).length > 0
       (state.conflicting_prs || []).map((p) => () =>
         workflow(
           { scriptPath: '.claude/workflows/worktree-work.js' },
-          { issue: p.issue, branch: p.branch, mode: 'rebase', zones: p.zones || [], repo_root: repoRoot, today },
+          { issue: p.issue, branch: p.branch, mode: 'rebase', zones: p.zones || [], base_branch: p.base_branch || 'main', repo_root: repoRoot, today },
         ).then((r) => Object.assign({ issue: p.issue }, r || {})),
       ),
     )).filter(Boolean)

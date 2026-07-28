@@ -12,7 +12,7 @@ export const meta = {
   description:
     "One ticket from a fresh worktree to an opened PR. Composes its stage list from the ticket's shape and zones, walks it, then verifies with bounded fix rounds.",
   phases: [
-    { title: 'Claim', detail: 'Create the worktree and canonical branch from a fresh origin/main, and post the claim comment.' },
+    { title: 'Claim', detail: 'Create the worktree and canonical branch from a fresh base ref, and post the claim comment.' },
     { title: 'Rederive', detail: 'Verify the issue-body claims against current code and post the plan-of-record.' },
     { title: 'FailingTest', detail: 'bug-reproduce-first only: commit a failing test that reproduces the bug.' },
     { title: 'Implement', detail: 'The zone-matched build lead implements in the worktree with checkpoint commits.' },
@@ -38,6 +38,14 @@ const liveVerify = input.live_verify || 'unavailable';
 const mode = input.mode === 'rebase' ? 'rebase' : 'work';
 const slug = input.slug || `${issue}-ticket`;
 const branchName = input.branch || `feat/${issue}-${slug}`;
+// A ticket whose blockers are merged builds on main; one whose blockers are still
+// open PRs stacks on the topmost of them, so the chain progresses without waiting
+// for the owner to merge. Every diff in this file is taken against baseRef, never
+// origin/main: on a stacked branch the parent's commits are already in the diff vs
+// main, so reviewing against main would re-review the whole stack every layer.
+const baseBranch = input.base_branch || 'main';
+const baseRef = baseBranch === 'main' ? 'origin/main' : `origin/${baseBranch}`;
+const isStacked = baseBranch !== 'main';
 
 // The team self-reviews until the branch is ready for a human, and nits force rounds
 // too, so the bound has to be generous enough that escalation means "genuinely stuck"
@@ -273,8 +281,8 @@ async function runClaim() {
         `1. Post an owner-visible comment on issue #${issue}: "▶ claimed — <one sentence: what and why>". Use ` +
         `\`gh api\` so you get the comment id back, and return it as claim_comment_id.\n` +
         `2. Run: git -C ${repoRoot} fetch origin\n` +
-        `3. Run: git -C ${repoRoot} worktree add ${path} -b ${branchName} origin/main\n` +
-        `   This creates the branch AND the worktree from a fresh origin/main in one step, so the base cannot be stale. ` +
+        `3. Run: git -C ${repoRoot} worktree add ${path} -b ${branchName} ${baseRef}\n` +
+        `   This creates the branch AND the worktree from a fresh ${baseRef} in one step, so the base cannot be stale. ` +
         `If the branch already exists, add the worktree against it instead of creating it.\n` +
         `Return the absolute worktree_path, the branch name, and created: true once the worktree exists.`,
       { phase: 'Claim', label: `claim:${issue}`, model: 'sonnet', schema: claimSchema },
@@ -332,7 +340,7 @@ async function runImplement() {
         `Hold the engine doctrine: extend the existing core system, never spin up a parallel abstraction; production-grade ` +
         `error taxonomy + tracing on engine work; new .rs files carry the BUSL header; tracing not println!/eprintln!. ` +
         `Emit the shape-module report as your structured output — including \`worktree_path\` (${ctx.worktree_path}), the ` +
-        `\`branch\`, your checkpoint commit shas in \`commits\`, and the output of \`git diff origin/main --stat\` in ` +
+        `\`branch\`, your checkpoint commit shas in \`commits\`, and the output of \`git diff ${baseRef} --stat\` in ` +
         `\`diff_stat\`.\n\nPlan-of-record: ${ctx.plan_of_record || '(none posted)'}`,
       leadOpts({ phase: 'Implement', label: `implement:${lead || 'generic'}`, schema: implementSchema }),
     )) || {};
@@ -383,7 +391,7 @@ async function runGates() {
     (await agent(
       `Run the local gate battery for issue #${issue}'s branch (${ctx.branch}) in the change worktree at ` +
         `${ctx.worktree_path || '(MISSING — the claim stage returned no worktree_path)'}. FIRST cd into that worktree. ` +
-        `HARD GUARD: if the worktree path is missing/empty OR \`git -C '${ctx.worktree_path}' diff origin/main --stat\` is ` +
+        `HARD GUARD: if the worktree path is missing/empty OR \`git -C '${ctx.worktree_path}' diff ${baseRef} --stat\` is ` +
         `EMPTY, FAIL immediately and report a no-diff failure — do NOT run the gates against an empty or wrong tree (a ` +
         `fabricated no-diff "success" must not pass to self-review). Otherwise derive the gates from ` +
         `.github/workflows/*.yml and the xtask lint suite at run time and return the pass/fail table. Do not edit anything.`,
@@ -455,7 +463,7 @@ async function runVerify(isFixRound, gatingLenses = new Set(), implementerRespon
     (await agent(
       `Pre-flight ground-truth check for verifying issue #${issue} on branch \`${ctx.branch}\` — read-only, do NOT edit. ` +
         `Confirm all three: (1) issue #${issue} is OPEN; (2) the branch \`${ctx.branch}\` exists on origin; ` +
-        `(3) \`git -C ${ctx.worktree_path} diff origin/main --stat\` is NON-EMPTY. Return { ok: true } only if all three ` +
+        `(3) \`git -C ${ctx.worktree_path} diff ${baseRef} --stat\` is NON-EMPTY. Return { ok: true } only if all three ` +
         `hold; otherwise { ok: false, reason: "<which check failed>" }. Also set touches_rust: true if the diff lists any ` +
         `path ending in \`.rs\`, else false.`,
       {
@@ -602,8 +610,15 @@ async function runOpenPr(reviewItems) {
   const opened =
     (await resilientAgent(
       `All lenses cleared the branch \`${ctx.branch}\` on issue #${issue}. Open a pull request READY FOR REVIEW via gh ` +
-        `(gh pr create --head ${ctx.branch}) — NOT a draft. A PASS means the branch is verified and ready for the owner ` +
-        `to merge, so it must not sit in draft. NEVER merge, though — merging is the owner's call. Title the PR as a ` +
+        `(gh pr create --head ${ctx.branch} --base ${baseBranch}) — NOT a draft. A PASS means the branch is verified ` +
+        `and ready for the owner to merge, so it must not sit in draft. NEVER merge, though — merging is the owner's ` +
+        `call. ` +
+        (isStacked
+          ? `THIS IS A STACKED PR: its base is \`${baseBranch}\`, not main, so GitHub shows only this layer's diff — ` +
+            `do not retarget it at main, which would show the whole stack. Open the body with a one-line stack note ` +
+            `naming the base branch and the issue it belongs to, so a reviewer knows what must merge first. `
+          : ``) +
+        `Title the PR as a ` +
         `conventional commit (\`type(scope): summary\`); the repo squash-merges and release-please parses the title, so ` +
         `a mistitled PR silently skips the version bump. Fill the body with the ticket link, the change summary, the ` +
         `test evidence, and any E2E report. The team already self-reviewed this branch to completion, so the body must ` +
@@ -654,19 +669,26 @@ async function runFix(reviews, round) {
 }
 
 // Rebase mode short-circuits composition entirely: a conflicting PR needs its
-// branch replayed onto origin/main, not a fresh build.
+// branch replayed onto its base, not a fresh build. A stacked branch rebases
+// onto its parent, never onto main, or it would swallow the parent's commits.
 if (mode === 'rebase') {
   phase('Fix');
   const rebased =
     (await resilientAgent(
-      `Rebase branch \`${ctx.branch}\` (issue #${issue}) onto origin/main and resolve. ` +
+      `Rebase branch \`${ctx.branch}\` (issue #${issue}) and resolve.\n` +
+      `FIRST resolve what to rebase ONTO. This branch's recorded base is \`${baseBranch}\`. Check whether that branch ` +
+      `still exists on origin (\`git ls-remote --heads origin ${baseBranch}\`). If it is GONE, its PR merged: the repo ` +
+      `squash-merges, so this branch still carries the parent's now-squashed commits and must be rebased onto ` +
+      `\`origin/main\` — then retarget its PR base to main with \`gh pr edit <n> --base main\`. If the base branch still ` +
+      `exists, rebase onto \`${baseRef}\` and leave the PR base alone. Never rebase a live stack layer onto main; that ` +
+      `would swallow its parent's commits into this PR's diff.\n` +
         (ctx.worktree_path
           ? inWorktree()
           : `Check the branch out in a git worktree under ${repoRoot}/.claude/worktrees/ if one is not already live. `) +
         `Do NOT create a fresh feature branch and do NOT restart from Rederive. Run \`git fetch origin\`; rebase onto ` +
-        `origin/main; resolve every conflict preserving the branch's intent; commit as needed; then force-push with ` +
+        `${baseRef}; resolve every conflict preserving the branch's intent; commit as needed; then force-push with ` +
         `lease (\`git push --force-with-lease\`). Return the absolute worktree_path, branch, resulting commits, and ` +
-        `\`git diff origin/main --stat\` in diff_stat.`,
+        `\`git diff ${baseRef} --stat\` in diff_stat.`,
       leadOpts({ phase: 'Fix', label: `rebase:${lead || 'generic'}`, schema: implementSchema }),
     )) || {};
   return {
