@@ -25,7 +25,9 @@ use streamlib_processor_extract::crate_root::{
     generate_rust_crate_root_source,
 };
 use streamlib_processor_extract::{
-    ModuleReachabilityTarget, extract_reachable_rust_processors, extract_rust_processors,
+    ModuleReachabilityTarget, ProcessorAvailabilityAcrossBuildTargets,
+    extract_processors_across_every_build_target, extract_reachable_rust_processors,
+    extract_rust_processors,
 };
 
 fn workspace_root() -> PathBuf {
@@ -67,6 +69,36 @@ fn sorted_names(procs: Vec<streamlib_processor_extract::ExtractedProcessor>) -> 
 
 fn reachable_names(dir: &Path, os: &str) -> Vec<String> {
     sorted_names(extract_reachable_rust_processors(dir, &target_for(os)).unwrap())
+}
+
+/// The availability entry a package's across-every-target scan resolves for one
+/// processor `Type`.
+fn availability_of(
+    dir: &Path,
+    processor_type_name: &str,
+) -> ProcessorAvailabilityAcrossBuildTargets {
+    extract_processors_across_every_build_target(dir)
+        .unwrap_or_else(|e| panic!("scanning {}: {e}", dir.display()))
+        .availability_of_processor_type_name(processor_type_name)
+        .unwrap_or_else(|| {
+            panic!(
+                "{} must declare `{processor_type_name}` on some target",
+                dir.display()
+            )
+        })
+        .clone()
+}
+
+/// The build targets, out of the ones the in-tree packages actually split on,
+/// a processor is available for.
+fn available_build_target_operating_systems(
+    availability: &ProcessorAvailabilityAcrossBuildTargets,
+) -> Vec<String> {
+    ["linux", "macos", "ios", "windows"]
+        .into_iter()
+        .filter(|os| availability.is_available_on_build_target(&target_for(os)))
+        .map(str::to_string)
+        .collect()
 }
 
 #[test]
@@ -128,19 +160,71 @@ fn audio_declares_its_platform_free_arms_on_windows() {
     );
 }
 
-/// The Linux and Apple audio arms both declare `AudioCapture` / `AudioOutput`;
-/// only the target's arm may surface.
+/// `@tatolab/audio` is the live two-arm case: `processors/linux/` and
+/// `processors/apple/` each declare `AudioCapture` and `AudioOutput`, kept
+/// identical today by copy-paste discipline alone. The scan's divergence check
+/// is what turns that discipline into a build gate — the two arms derive one
+/// availability entry per processor, which they can only do by agreeing on the
+/// whole manifest projection. Mentally change one arm's port name and this
+/// scan fails instead of silently shipping a host-dependent `processors:`.
 #[test]
-fn audio_platform_arms_resolve_to_one_arm_per_target() {
+fn the_audio_platform_arms_agree_well_enough_to_fold_into_one_processor() {
+    let dir = package_dir("audio");
+    let capture = availability_of(&dir, "AudioCapture");
     assert_eq!(
-        reachable_names(&package_dir("audio"), "linux"),
-        reachable_names(&package_dir("audio"), "macos"),
-        "both platform arms must declare the same processor identities — a \
-         divergence here means one arm silently ships a different set"
+        capture.declaring_arm_source_files,
+        vec![
+            PathBuf::from("processors/apple/audio_capture.rs"),
+            PathBuf::from("processors/linux/audio_capture.rs"),
+        ],
+        "both platform arms must declare `AudioCapture`"
     );
-    let linux = reachable_names(&package_dir("audio"), "linux");
-    assert_eq!(linux.iter().filter(|n| *n == "AudioCapture").count(), 1);
-    assert_eq!(linux.iter().filter(|n| *n == "AudioOutput").count(), 1);
+    assert_eq!(
+        available_build_target_operating_systems(&capture),
+        vec!["linux", "macos", "ios"],
+        "availability is the disjunction of the two arms' gates: {:?}",
+        capture.availability_cfg_predicate
+    );
+    assert_eq!(
+        capture.processor_schema_ident.to_string(),
+        "@tatolab/audio/AudioCapture@0.0.0"
+    );
+
+    // Only the target's own arm resolves, so no target registers it twice.
+    for os in ["linux", "macos"] {
+        let names = reachable_names(&dir, os);
+        assert_eq!(names.iter().filter(|n| *n == "AudioCapture").count(), 1);
+        assert_eq!(names.iter().filter(|n| *n == "AudioOutput").count(), 1);
+    }
+}
+
+/// `@tatolab/camera`'s `CameraToCudaCopy` carries no `#[cfg]` at all — only its
+/// fields and internals are gated — so it is available on every target and
+/// fails in `setup()` off Linux. That is the datum that supersedes the
+/// "Linux-only" prose the description string used to carry, and it is what
+/// `camera_keeps_its_unconditional_arm_on_apple_targets` observes from the
+/// other side.
+#[test]
+fn the_unconditional_camera_arm_is_available_on_every_build_target() {
+    let availability = availability_of(&package_dir("camera"), "CameraToCudaCopy");
+    assert!(
+        availability.availability_cfg_predicate.is_none(),
+        "an unconditional processor carries no availability predicate, got {:?}",
+        availability.availability_cfg_predicate
+    );
+    assert_eq!(
+        available_build_target_operating_systems(&availability),
+        vec!["linux", "macos", "ios", "windows"]
+    );
+
+    // Its Linux-gated sibling is the contrast: a real per-target availability.
+    let camera = availability_of(&package_dir("camera"), "Camera");
+    assert_eq!(
+        available_build_target_operating_systems(&camera),
+        vec!["linux"],
+        "`Camera`'s only live arm is `processors/linux/`: {:?}",
+        camera.availability_cfg_predicate
+    );
 }
 
 /// `@tatolab/clap` is Apple-only: every arm carries the same
@@ -276,6 +360,68 @@ fn the_generated_register_list_equals_the_reachable_set_on_every_target() {
                 reachable,
                 "{} on {os}: the generated `export_plugin!` register list and the \
                  reachability-resolved manifest set must be the same set",
+                package.display()
+            );
+        }
+    }
+}
+
+/// Every in-tree folder-backed package must pass the id-grouping checks — the
+/// regression net that says the overlap and divergence rules do not
+/// false-positive on real source.
+///
+/// The two checks fire from different seams and neither subsumes the other:
+/// `extract_processors_across_every_build_target` proves overlap out of the
+/// arms' own predicates and compares their whole manifest projections, while
+/// `extract_reachable_rust_processors` resolves one concrete target and refuses
+/// a `Type` it collected twice there. A package is only clean when both agree,
+/// on every target it might be built for.
+#[test]
+fn every_in_tree_package_passes_the_processor_id_grouping_checks() {
+    let packages = discover_package_dirs_declaring_a_generated_crate_root(&workspace_root())
+        .expect("discovering folder-backed packages");
+    assert!(
+        packages.len() >= 15,
+        "expected the in-tree folder-backed packages; found {packages:?}"
+    );
+
+    for package in &packages {
+        let set = extract_processors_across_every_build_target(package)
+            .unwrap_or_else(|e| panic!("{}: {e}", package.display()));
+
+        // Every declaration folds into exactly one availability entry, and no
+        // two entries share a `Type` — the registry's collision key.
+        let distinct_type_names: BTreeSet<&str> = set
+            .processor_declarations
+            .iter()
+            .map(|declaration| declaration.schema.name.as_str())
+            .collect();
+        assert_eq!(
+            set.processor_availability.len(),
+            distinct_type_names.len(),
+            "{}: one availability entry per distinct processor `Type`",
+            package.display()
+        );
+
+        for os in ["linux", "macos", "ios", "windows"] {
+            let target = target_for(os);
+            let reachable: Vec<String> =
+                sorted_names(extract_reachable_rust_processors(package, &target).unwrap());
+            let available: Vec<String> = {
+                let mut names: Vec<String> = set
+                    .processor_availability
+                    .iter()
+                    .filter(|entry| entry.is_available_on_build_target(&target))
+                    .map(|entry| entry.processor_type_name.clone())
+                    .collect();
+                names.sort();
+                names
+            };
+            assert_eq!(
+                reachable,
+                available,
+                "{} on {os}: the availability predicates and the target-resolved \
+                 scan must name the same processors",
                 package.display()
             );
         }

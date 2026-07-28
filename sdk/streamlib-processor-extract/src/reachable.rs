@@ -630,7 +630,10 @@ fn refuse_overlapping_processor_declarations(
 ) -> Result<(), ExtractError> {
     for (index, first) in declaring_arms.iter().enumerate() {
         for second in &declaring_arms[index + 1..] {
-            let Some(witness) = find_build_target_compiling_both_declarations(first, second) else {
+            let Some(witness) = find_build_target_satisfying_both_cfg_predicate_sets(
+                &first.cfg_predicates,
+                &second.cfg_predicates,
+            ) else {
                 continue;
             };
             return Err(ExtractError::OverlappingProcessorDeclarations {
@@ -1157,21 +1160,22 @@ const SET_VALUED_CFG_KEYS: [&str; 3] = ["feature", "target_feature", "target_has
 /// refusal) rather than searched to a stall.
 const MAX_CANDIDATE_BUILD_TARGET_ASSIGNMENTS: usize = 4096;
 
-/// A build target that compiles BOTH declarations, or `None` when none was
-/// found.
+/// A build target on which every predicate in BOTH sets holds, or `None` when
+/// none was found.
 ///
-/// Exhaustive over the atoms the two declarations' own predicates mention, so a
-/// `Some` is a proof carrying its own witness — the polarity that matters,
-/// because the caller refuses the build on it. A `None` is "not proven", not
+/// Exhaustive over the atoms the two sets themselves mention — a predicate's
+/// truth depends only on the atoms it names — so a `Some` is a proof carrying
+/// its own witness. That polarity is the whole point: the caller refuses a
+/// build on it, so it must never be a hunch. A `None` is "not proven", NOT
 /// "proven disjoint": an unparseable predicate, a search past the ceiling, and
 /// a genuinely disjoint pair all land there, and the concrete-target duplicate
-/// check remains the backstop.
-fn find_build_target_compiling_both_declarations(
-    first: &ExtractedProcessor,
-    second: &ExtractedProcessor,
+/// check stays the backstop for the first two.
+fn find_build_target_satisfying_both_cfg_predicate_sets(
+    first_predicate_sources: &[String],
+    second_predicate_sources: &[String],
 ) -> Option<ModuleReachabilityTarget> {
-    let first_predicates = parse_cfg_predicate_sources(&first.cfg_predicates)?;
-    let second_predicates = parse_cfg_predicate_sources(&second.cfg_predicates)?;
+    let first_predicates = parse_cfg_predicate_sources(first_predicate_sources)?;
+    let second_predicates = parse_cfg_predicate_sources(second_predicate_sources)?;
 
     let mut atoms = CfgPredicateAtomUniverse::default();
     for predicate in first_predicates.iter().chain(&second_predicates) {
@@ -1471,6 +1475,18 @@ mod tests {
             .with_key_value("target_os", "macos")
             .with_key_value("target_family", "unix")
             .with_flag("unix")
+    }
+
+    fn build_target_for_os(os: &str) -> ModuleReachabilityTarget {
+        let family = if os == "windows" { "windows" } else { "unix" };
+        ModuleReachabilityTarget::new()
+            .with_key_value("target_os", os)
+            .with_key_value("target_family", family)
+            .with_flag(family)
+    }
+
+    fn predicates(sources: &[&str]) -> Vec<String> {
+        sources.iter().map(|s| (*s).to_string()).collect()
     }
 
     fn names(mut procs: Vec<ExtractedProcessor>) -> Vec<String> {
@@ -2196,5 +2212,477 @@ mod tests {
                 ),
             ]
         );
+    }
+
+    /// The two arms of a real platform-split package (`@tatolab/audio`) —
+    /// `target_os = "linux"` against `any(target_os = "macos", target_os =
+    /// "ios")`. Modelling `target_os` as SINGLE-VALUED is what makes them
+    /// provably disjoint; with the atoms independent this reads satisfiable and
+    /// the overlap check would refuse a correct package on every build.
+    #[test]
+    fn platform_split_arms_have_no_satisfying_build_target() {
+        assert!(
+            find_build_target_satisfying_both_cfg_predicate_sets(
+                &predicates(&[r#"target_os = "linux""#]),
+                &predicates(&[r#"any(target_os = "macos", target_os = "ios")"#]),
+            )
+            .is_none()
+        );
+    }
+
+    /// A family flag against a `target_os` value inside that family is
+    /// satisfiable, and the witness names the assignment that proves it.
+    #[test]
+    fn a_family_flag_and_an_os_inside_it_have_a_satisfying_build_target() {
+        let witness = find_build_target_satisfying_both_cfg_predicate_sets(
+            &predicates(&["unix"]),
+            &predicates(&[r#"target_os = "linux""#]),
+        )
+        .expect("unix and target_os = \"linux\" are satisfied together");
+        let atoms = witness.describe_defined_cfg_atoms();
+        assert!(atoms.contains(r#"target_os = "linux""#), "{atoms}");
+        assert!(atoms.contains("unix"), "{atoms}");
+    }
+
+    /// The coherence rules are facts about how `rustc` sets these atoms, so
+    /// they only ever remove a candidate that would have proven a FALSE overlap:
+    /// `unix` and `windows` are never both set, and the windows family holds
+    /// exactly one `target_os`. Mentally drop
+    /// `candidate_build_target_is_coherent` and each of these reads satisfiable.
+    #[test]
+    fn incoherent_build_targets_are_not_offered_as_witnesses() {
+        assert!(
+            find_build_target_satisfying_both_cfg_predicate_sets(
+                &predicates(&["unix"]),
+                &predicates(&["windows"]),
+            )
+            .is_none(),
+            "no target is in both families"
+        );
+        assert!(
+            find_build_target_satisfying_both_cfg_predicate_sets(
+                &predicates(&["windows"]),
+                &predicates(&[r#"target_os = "linux""#]),
+            )
+            .is_none(),
+            "the windows family holds only `target_os = \"windows\"`"
+        );
+        assert!(
+            find_build_target_satisfying_both_cfg_predicate_sets(
+                &predicates(&["unix"]),
+                &predicates(&[r#"target_family = "windows""#]),
+            )
+            .is_none(),
+            "`target_family` and the family flag are the same fact"
+        );
+    }
+
+    /// Cargo features are a SET, not a single value: a target enables many at
+    /// once, so two feature-gated arms really can both compile.
+    #[test]
+    fn two_feature_gated_arms_are_satisfiable_together() {
+        assert!(
+            find_build_target_satisfying_both_cfg_predicate_sets(
+                &predicates(&[r#"feature = "cuda""#]),
+                &predicates(&[r#"feature = "vulkan""#]),
+            )
+            .is_some()
+        );
+    }
+
+    /// Two arms with no `#[cfg]` at all are satisfied by every target, which is
+    /// the degenerate overlap: the empty predicate set holds vacuously.
+    #[test]
+    fn two_unconditional_arms_are_satisfiable_together() {
+        assert!(
+            find_build_target_satisfying_both_cfg_predicate_sets(&[], &[]).is_some(),
+            "an unconditional arm compiles everywhere, so two of them always collide"
+        );
+    }
+
+    /// Two arms one build target compiles both of are refused, naming both
+    /// source files and a target that exhibits the overlap. Mentally revert the
+    /// refusal and the package builds with two `export_plugin!` entries under
+    /// one name, of which the registry keeps whichever it sees first.
+    #[test]
+    fn overlapping_arms_are_refused_with_a_witness_build_target() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "processors/unix_arm.rs",
+            r#"#![cfg(unix)]
+            #[processor("@tatolab/demo/Capture", execution = manual, output("v", "@tatolab/core/VideoFrame"))]
+            pub struct UnixCapture;"#,
+        );
+        write(
+            root,
+            "processors/linux_arm.rs",
+            r#"#![cfg(target_os = "linux")]
+            #[processor("@tatolab/demo/Capture", execution = manual, output("v", "@tatolab/core/VideoFrame"))]
+            pub struct LinuxCapture;"#,
+        );
+
+        let error = extract_processors_across_every_build_target(root).unwrap_err();
+        let ExtractError::OverlappingProcessorDeclarations {
+            processor_type_name,
+            first_declared_in,
+            second_declared_in,
+            witness_build_target_atoms,
+        } = &error
+        else {
+            panic!("expected OverlappingProcessorDeclarations, got {error:?}");
+        };
+        assert_eq!(processor_type_name, "Capture");
+        let declared_in = [
+            first_declared_in.to_string_lossy().to_string(),
+            second_declared_in.to_string_lossy().to_string(),
+        ];
+        assert!(
+            declared_in.contains(&"processors/unix_arm.rs".to_string())
+                && declared_in.contains(&"processors/linux_arm.rs".to_string()),
+            "{declared_in:?}"
+        );
+        assert!(
+            witness_build_target_atoms.contains(r#"target_os = "linux""#),
+            "{witness_build_target_atoms}"
+        );
+        assert!(error.to_string().contains("declared twice"), "{error}");
+    }
+
+    /// The assertion that protects `@tatolab/audio`: two arms gated on disjoint
+    /// platform predicates are NOT an overlap, so the check refuses only on a
+    /// proven collision rather than on any two arms sharing a name.
+    #[test]
+    fn disjoint_platform_arms_declaring_one_processor_are_accepted() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "processors/linux/mod.rs",
+            r#"#![cfg(target_os = "linux")]
+            #[processor("@tatolab/demo/AudioCapture", execution = manual, output("audio", "@tatolab/core/AudioFrame"))]
+            pub struct LinuxAudioCapture;"#,
+        );
+        write(
+            root,
+            "processors/apple/mod.rs",
+            r#"#![cfg(any(target_os = "macos", target_os = "ios"))]
+            #[processor("@tatolab/demo/AudioCapture", execution = manual, output("audio", "@tatolab/core/AudioFrame"))]
+            pub struct AppleAudioCapture;"#,
+        );
+
+        let set = extract_processors_across_every_build_target(root).unwrap();
+        assert_eq!(set.processor_declarations.len(), 2);
+        assert_eq!(set.processor_availability.len(), 1);
+    }
+
+    /// Availability is the disjunction over the declaring arms, answered
+    /// through the one cfg evaluator — the datum that replaces "which targets
+    /// is this on?" being prose in a description string.
+    #[test]
+    fn a_two_arm_processors_availability_covers_both_arms_targets() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "processors/linux/mod.rs",
+            r#"#![cfg(target_os = "linux")]
+            #[processor("@tatolab/demo/AudioCapture", execution = manual, output("audio", "@tatolab/core/AudioFrame"))]
+            pub struct LinuxAudioCapture;"#,
+        );
+        write(
+            root,
+            "processors/apple/mod.rs",
+            r#"#![cfg(any(target_os = "macos", target_os = "ios"))]
+            #[processor("@tatolab/demo/AudioCapture", execution = manual, output("audio", "@tatolab/core/AudioFrame"))]
+            pub struct AppleAudioCapture;"#,
+        );
+
+        let set = extract_processors_across_every_build_target(root).unwrap();
+        let availability = set
+            .availability_of_processor_type_name("AudioCapture")
+            .expect("the two arms fold to one availability entry");
+        assert_eq!(
+            availability.processor_schema_ident.to_string(),
+            "@tatolab/demo/AudioCapture@0.0.0"
+        );
+        assert_eq!(
+            availability.declaring_arm_source_files,
+            vec![
+                PathBuf::from("processors/apple/mod.rs"),
+                PathBuf::from("processors/linux/mod.rs"),
+            ]
+        );
+        for os in ["linux", "macos", "ios"] {
+            assert!(
+                availability.is_available_on_build_target(&build_target_for_os(os)),
+                "AudioCapture must be available on {os}: {:?}",
+                availability.availability_cfg_predicate
+            );
+        }
+        assert!(
+            !availability.is_available_on_build_target(&build_target_for_os("windows")),
+            "neither arm compiles on windows"
+        );
+    }
+
+    /// An unconditional arm makes the processor unconditional: no predicate at
+    /// all, available everywhere. An `any(...)` naming the other arms would
+    /// understate where it exists.
+    #[test]
+    fn an_unconditional_arm_yields_unconditional_availability() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "processors/always.rs",
+            r#"#[processor("@tatolab/demo/Always", execution = reactive)]
+            pub struct Always;"#,
+        );
+        let set = extract_processors_across_every_build_target(root).unwrap();
+        let availability = set
+            .availability_of_processor_type_name("Always")
+            .expect("the unconditional arm has an availability entry");
+        assert!(availability.availability_cfg_predicate.is_none());
+        for os in ["linux", "macos", "ios", "windows"] {
+            assert!(availability.is_available_on_build_target(&build_target_for_os(os)));
+        }
+    }
+
+    /// A GAP is not an error: a package that declares a processor on some
+    /// targets and none on others is legitimate (`@tatolab/clap` is Apple-only,
+    /// `@tatolab/frame-tap` Linux-only). Availability reports the gap; nothing
+    /// refuses it.
+    #[test]
+    fn a_processor_available_on_no_common_target_is_not_an_error() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "processors/apple_only.rs",
+            r#"#![cfg(any(target_os = "macos", target_os = "ios"))]
+            #[processor("@tatolab/demo/AppleOnly", execution = reactive)]
+            pub struct AppleOnly;"#,
+        );
+        let set = extract_processors_across_every_build_target(root).unwrap();
+        let availability = set
+            .availability_of_processor_type_name("AppleOnly")
+            .unwrap();
+        assert!(!availability.is_available_on_build_target(&build_target_for_os("linux")));
+        assert!(availability.is_available_on_build_target(&build_target_for_os("macos")));
+    }
+
+    /// Two disjoint arms declaring one processor with different PORTS are
+    /// refused: the derived `processors:` section would carry whichever port
+    /// set the publishing host happened to compile. The diagnostic names the
+    /// port and both schema types, not just "they differ".
+    #[test]
+    fn arms_declaring_one_processor_with_different_ports_are_refused() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "processors/linux/mod.rs",
+            r#"#![cfg(target_os = "linux")]
+            #[processor("@tatolab/demo/AudioCapture", execution = manual, output("audio", "@tatolab/core/AudioFrame"))]
+            pub struct LinuxAudioCapture;"#,
+        );
+        write(
+            root,
+            "processors/apple/mod.rs",
+            r#"#![cfg(any(target_os = "macos", target_os = "ios"))]
+            #[processor("@tatolab/demo/AudioCapture", execution = manual, output("audio", "@tatolab/core/VideoFrame"))]
+            pub struct AppleAudioCapture;"#,
+        );
+
+        let error = extract_processors_across_every_build_target(root).unwrap_err();
+        let ExtractError::DivergentProcessorDeclarations {
+            processor_type_name,
+            difference,
+            ..
+        } = &error
+        else {
+            panic!("expected DivergentProcessorDeclarations, got {error:?}");
+        };
+        assert_eq!(processor_type_name, "AudioCapture");
+        assert!(difference.contains("output port `audio`"), "{difference}");
+        assert!(difference.contains("AudioFrame"), "{difference}");
+        assert!(difference.contains("VideoFrame"), "{difference}");
+        assert!(
+            difference.contains("processors/apple/mod.rs")
+                && difference.contains("processors/linux/mod.rs"),
+            "{difference}"
+        );
+    }
+
+    /// The same refusal for a differing execution mode.
+    #[test]
+    fn arms_declaring_one_processor_with_different_execution_are_refused() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "processors/linux/mod.rs",
+            r#"#![cfg(target_os = "linux")]
+            #[processor("@tatolab/demo/AudioCapture", execution = manual)]
+            pub struct LinuxAudioCapture;"#,
+        );
+        write(
+            root,
+            "processors/apple/mod.rs",
+            r#"#![cfg(any(target_os = "macos", target_os = "ios"))]
+            #[processor("@tatolab/demo/AudioCapture", execution = reactive)]
+            pub struct AppleAudioCapture;"#,
+        );
+
+        let error = extract_processors_across_every_build_target(root).unwrap_err();
+        let ExtractError::DivergentProcessorDeclarations { difference, .. } = &error else {
+            panic!("expected DivergentProcessorDeclarations, got {error:?}");
+        };
+        assert!(difference.contains("execution differs"), "{difference}");
+    }
+
+    /// Two arms sharing a `Type` under DIFFERENT `@org/package` are a
+    /// divergence, not two unrelated processors: the plugin registry keys
+    /// registration on the `Type` name alone, so they collide there. Mentally
+    /// drop the `SchemaIdent` off `ExtractedProcessor` and this passes silently.
+    #[test]
+    fn arms_sharing_a_type_under_different_packages_are_refused() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "processors/linux/mod.rs",
+            r#"#![cfg(target_os = "linux")]
+            #[processor("@tatolab/demo/AudioCapture", execution = manual)]
+            pub struct LinuxAudioCapture;"#,
+        );
+        write(
+            root,
+            "processors/apple/mod.rs",
+            r#"#![cfg(any(target_os = "macos", target_os = "ios"))]
+            #[processor("@tatolab/other/AudioCapture", execution = manual)]
+            pub struct AppleAudioCapture;"#,
+        );
+
+        let error = extract_processors_across_every_build_target(root).unwrap_err();
+        let ExtractError::DivergentProcessorDeclarations { difference, .. } = &error else {
+            panic!("expected DivergentProcessorDeclarations, got {error:?}");
+        };
+        assert!(difference.contains("identity differs"), "{difference}");
+        assert!(
+            difference.contains("@tatolab/demo/AudioCapture")
+                && difference.contains("@tatolab/other/AudioCapture"),
+            "{difference}"
+        );
+    }
+
+    /// The drift surface excludes `description`, but the derived manifest entry
+    /// carries it — so two arms whose descriptions disagree still ship a
+    /// host-dependent `processors:`. The whole-projection comparison is what
+    /// catches it; the lossy identity surface alone would not.
+    #[test]
+    fn arms_declaring_one_processor_with_different_descriptions_are_refused() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "processors/linux/mod.rs",
+            r#"#![cfg(target_os = "linux")]
+            #[processor("@tatolab/demo/AudioCapture", description = "ALSA capture", execution = manual)]
+            pub struct LinuxAudioCapture;"#,
+        );
+        write(
+            root,
+            "processors/apple/mod.rs",
+            r#"#![cfg(any(target_os = "macos", target_os = "ios"))]
+            #[processor("@tatolab/demo/AudioCapture", description = "CoreAudio capture", execution = manual)]
+            pub struct AppleAudioCapture;"#,
+        );
+
+        let error = extract_processors_across_every_build_target(root).unwrap_err();
+        let ExtractError::DivergentProcessorDeclarations { difference, .. } = &error else {
+            panic!("expected DivergentProcessorDeclarations, got {error:?}");
+        };
+        assert!(difference.contains("`description`"), "{difference}");
+    }
+
+    /// The reasoning-free net: a target-resolved scan that collects one `Type`
+    /// twice has PROVEN the overlap by compiling both, with no satisfiability
+    /// argument at all. This is what still fires when a predicate pair the atom
+    /// model cannot decide is compiled by a real host.
+    #[test]
+    fn one_build_target_collecting_a_processor_twice_is_refused() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "processors/unix_arm.rs",
+            r#"#![cfg(unix)]
+            #[processor("@tatolab/demo/Capture", execution = manual)]
+            pub struct UnixCapture;"#,
+        );
+        write(
+            root,
+            "processors/linux_arm.rs",
+            r#"#![cfg(target_os = "linux")]
+            #[processor("@tatolab/demo/Capture", execution = manual)]
+            pub struct LinuxCapture;"#,
+        );
+
+        let error = extract_reachable_rust_processors(root, &linux()).unwrap_err();
+        let ExtractError::OverlappingProcessorDeclarations {
+            processor_type_name,
+            witness_build_target_atoms,
+            ..
+        } = &error
+        else {
+            panic!("expected OverlappingProcessorDeclarations, got {error:?}");
+        };
+        assert_eq!(processor_type_name, "Capture");
+        assert!(
+            witness_build_target_atoms.contains(r#"target_os = "linux""#),
+            "{witness_build_target_atoms}"
+        );
+
+        // The same package on macOS compiles only the `unix` arm — one
+        // declaration, no refusal. The overlap is a property of the target, and
+        // the message names the target it was proven on.
+        assert_eq!(
+            names(extract_reachable_rust_processors(root, &macos()).unwrap()),
+            vec!["Capture"]
+        );
+    }
+
+    /// A feature-gated scope the scan target cannot satisfy is named rather
+    /// than silently dropped: `for_host()` infers no cargo features, so the
+    /// processor leaves the derived set and the publish-time drift gate reports
+    /// the committed entry as "no longer declared in code". The atoms the
+    /// warning names come from here.
+    #[test]
+    fn undefined_feature_atoms_in_a_pruning_predicate_are_named() {
+        let collect = |source: &str, target: &ModuleReachabilityTarget| {
+            let meta = syn::parse_str::<Meta>(source).unwrap();
+            let mut out = BTreeSet::new();
+            collect_undefined_feature_atoms(&meta, target, &mut out);
+            out.into_iter().collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            collect(r#"all(unix, feature = "cuda")"#, &linux()),
+            vec!["cuda".to_string()]
+        );
+        assert_eq!(
+            collect(r#"any(feature = "cuda", feature = "vulkan")"#, &linux()),
+            vec!["cuda".to_string(), "vulkan".to_string()]
+        );
+        // A feature the target DOES define is not the reason the scope pruned.
+        assert!(collect(r#"feature = "cuda""#, &linux().with_feature("cuda")).is_empty());
+        // Nothing feature-shaped pruned a platform-only predicate.
+        assert!(collect(r#"target_os = "windows""#, &linux()).is_empty());
+        // `not(feature = "x")` is satisfied BY absence, so a scope it prunes
+        // was pruned by the feature being PRESENT — not the confusing case.
+        assert!(collect(r#"not(feature = "cuda")"#, &linux()).is_empty());
     }
 }
