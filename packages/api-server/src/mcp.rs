@@ -40,7 +40,7 @@ use streamlib::sdk::runtime::{RuntimeOperations, SubmittedProcessorSource};
 
 use crate::ops::{ReplaceSourceError, SubmitSourceError, SubmittedSourceOutcome};
 use crate::state::{
-    AppState, CreateConnectionRequest, ReplaceProcessorSourceRequest,
+    AppState, CreateConnectionRequest, ReplaceProcessorSourceRequest, RuntimeShutdownRequest,
     SubmittedProcessorSourceRequest,
 };
 
@@ -193,13 +193,20 @@ pub(crate) fn jsonrpc_parse_error(message: &str) -> Value {
 /// shared [`dispatch_jsonrpc`] against `runtime`, and each response written as a
 /// single newline-terminated JSON line to `writer`; a notification produces no
 /// output line, and an unparseable line answers with a [`jsonrpc_parse_error`].
-/// Returns on reader EOF (the host closed the pipe), so the caller can tear its
-/// runtime down. Generic over the byte transport — this crate never touches the
-/// process's own stdio; the CLI passes `tokio::io::stdin`/`stdout`.
+/// Generic over the byte transport — this crate never touches the process's own
+/// stdio; the CLI passes `tokio::io::stdin`/`stdout`.
+///
+/// Returns on reader EOF (the host closed the pipe) or as soon as
+/// `stop_serving_when_shutdown_observed` resolves, whichever comes first, so the
+/// caller can tear its runtime down. That future is how the caller — the process
+/// that owns the run loop — reports an observed runtime-shutdown request; the
+/// `shutdown` tool is advertised on this transport, so a caller that passes a
+/// never-resolving future keeps serving after answering it.
 pub async fn serve_stdio_jsonrpc<R, W>(
     runtime: Arc<dyn RuntimeOperations>,
     reader: R,
     mut writer: W,
+    stop_serving_when_shutdown_observed: impl std::future::Future<Output = ()>,
 ) -> std::io::Result<()>
 where
     R: tokio::io::AsyncBufRead + Unpin,
@@ -208,7 +215,17 @@ where
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
     let mut lines = reader.lines();
-    while let Some(line) = lines.next_line().await? {
+    let mut stop_serving = std::pin::pin!(stop_serving_when_shutdown_observed);
+    loop {
+        // `Lines::next_line` is cancel-safe — a partially-read line stays in the
+        // reader's own buffer — so losing this select arm never drops input.
+        let line = tokio::select! {
+            line = lines.next_line() => match line? {
+                Some(line) => line,
+                None => break,
+            },
+            () = &mut stop_serving => break,
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -359,6 +376,17 @@ fn tool_definitions() -> Vec<Value> {
                 "additionalProperties": false
             },
         }),
+        json!({
+            "name": "shutdown",
+            "description": "Ask the runtime to shut down. This is a request observed by whoever owns the run loop, which then runs a normal teardown — not an immediate kill. Idempotent: requesting twice is not an error. Returns as soon as the request is accepted; teardown is not awaited.",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "reason": { "type": "string", "description": "Human-readable attribution logged with the request. Omit for unspecified." }
+                },
+                "additionalProperties": false
+            },
+        }),
     ]
 }
 
@@ -392,6 +420,7 @@ async fn tools_call(
         "connect" => call_connect(runtime, arguments).await,
         "tap" => call_tap(runtime, arguments).await,
         "logs" => call_logs(runtime, arguments).await,
+        "shutdown" => call_shutdown(runtime, arguments),
         other => tool_error(format!("unknown tool: {other}")),
     };
     Ok(result)
@@ -555,6 +584,25 @@ async fn call_logs(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Va
     }))
 }
 
+/// Sync, unlike every other tool call: `request_runtime_shutdown` is
+/// fire-and-forget with no completion payload, so there is nothing to await
+/// and nothing to block on.
+fn call_shutdown(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
+    let request: RuntimeShutdownRequest = match serde_json::from_value(arguments) {
+        Ok(request) => request,
+        Err(e) => return tool_error(format!("shutdown arguments: {e}")),
+    };
+    let reason = request.reason.unwrap_or_default();
+
+    match runtime.request_runtime_shutdown(&reason) {
+        Ok(()) => tool_ok(json!({
+            "status": crate::state::RUNTIME_SHUTDOWN_REQUESTED_STATUS,
+            "reason": reason,
+        })),
+        Err(e) => tool_error(format!("shutdown request failed: {e}")),
+    }
+}
+
 // ============================================================================
 // Result shaping
 // ============================================================================
@@ -703,6 +751,10 @@ mod tests {
         recorded_removed_processors: Arc<Mutex<Vec<String>>>,
         recorded_connections: RecordedConnections,
         recorded_replaced_modules: Arc<Mutex<Vec<String>>>,
+        recorded_shutdown_reasons: Arc<Mutex<Vec<String>>>,
+        /// Stands in for the host's observation of the shutdown request: the
+        /// real loop owner polls the engine's latch, this fires on the call.
+        shutdown_observed_notifier: Arc<tokio::sync::Notify>,
     }
 
     impl RecordingStubRuntime {
@@ -714,6 +766,8 @@ mod tests {
                 recorded_removed_processors: Arc::new(Mutex::new(Vec::new())),
                 recorded_connections: Arc::new(Mutex::new(Vec::new())),
                 recorded_replaced_modules: Arc::new(Mutex::new(Vec::new())),
+                recorded_shutdown_reasons: Arc::new(Mutex::new(Vec::new())),
+                shutdown_observed_notifier: Arc::new(tokio::sync::Notify::new()),
             }
         }
 
@@ -859,6 +913,13 @@ mod tests {
         fn disconnect(&self, _link_id: &LinkUniqueId) -> Result<()> {
             Ok(())
         }
+        fn request_runtime_shutdown(&self, reason: &str) -> Result<()> {
+            self.recorded_shutdown_reasons
+                .lock()
+                .push(reason.to_string());
+            self.shutdown_observed_notifier.notify_one();
+            Ok(())
+        }
         fn to_json(&self) -> Result<Value> {
             Ok(json!({}))
         }
@@ -949,6 +1010,7 @@ mod tests {
             "connect",
             "tap",
             "logs",
+            "shutdown",
         ] {
             assert!(
                 names.contains(&expected),
@@ -1261,6 +1323,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn tools_call_shutdown_reaches_the_runtime() {
+        let runtime = Arc::new(RecordingStubRuntime::new());
+        let recorded_shutdowns = runtime.recorded_shutdown_reasons.clone();
+
+        let (status, body) = mcp_call(
+            runtime,
+            json!({
+                "jsonrpc": "2.0", "id": 16, "method": "tools/call",
+                "params": { "name": "shutdown", "arguments": { "reason": "agent asked" } }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["result"]["isError"], false, "body={body}");
+        let text = body["result"]["content"][0]["text"].as_str().unwrap();
+        let outcome: Value = serde_json::from_str(text).unwrap();
+        assert_eq!(outcome["status"], "RuntimeShutdownRequested");
+        assert_eq!(outcome["reason"], "agent asked");
+        assert_eq!(
+            *recorded_shutdowns.lock(),
+            vec!["agent asked".to_string()],
+            "the tool must reach `request_runtime_shutdown` with the caller's reason"
+        );
+    }
+
+    /// A malformed `shutdown` argument is an in-band tool error (`isError`),
+    /// never a JSON-RPC error and never a silent shutdown — the agent has to
+    /// see why its call did nothing.
+    #[tokio::test]
+    async fn tools_call_shutdown_with_malformed_arguments_is_an_in_band_tool_error() {
+        let runtime = Arc::new(RecordingStubRuntime::new());
+        let recorded_shutdowns = runtime.recorded_shutdown_reasons.clone();
+
+        let (status, body) = mcp_call(
+            runtime,
+            json!({
+                "jsonrpc": "2.0", "id": 17, "method": "tools/call",
+                "params": { "name": "shutdown", "arguments": { "reason": 42 } }
+            }),
+        )
+        .await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert!(body.get("error").is_none(), "not a JSON-RPC error: {body}");
+        assert_eq!(body["result"]["isError"], true, "body={body}");
+        assert!(
+            body["result"]["content"][0]["text"]
+                .as_str()
+                .unwrap_or_default()
+                .contains("shutdown arguments"),
+            "the tool error must name the offending argument set: {body}"
+        );
+        assert!(
+            recorded_shutdowns.lock().is_empty(),
+            "a malformed call must not reach the runtime"
+        );
+    }
+
+    #[tokio::test]
     async fn tools_call_replace_processor_reaches_the_runtime() {
         let runtime = Arc::new(RecordingStubRuntime::new());
         let recorded_replaced = runtime.recorded_replaced_modules.clone();
@@ -1312,9 +1434,14 @@ mod tests {
         let (server_writer, client_reader) = tokio::io::duplex(64 * 1024);
 
         let server = tokio::spawn(async move {
-            serve_stdio_jsonrpc(runtime, BufReader::new(server_reader), server_writer)
-                .await
-                .expect("stdio server loop");
+            serve_stdio_jsonrpc(
+                runtime,
+                BufReader::new(server_reader),
+                server_writer,
+                std::future::pending(),
+            )
+            .await
+            .expect("stdio server loop");
         });
 
         let mut request_bytes = Vec::new();
@@ -1395,6 +1522,7 @@ mod tests {
             "connect",
             "tap",
             "logs",
+            "shutdown",
         ] {
             assert!(
                 names.contains(&expected),
@@ -1418,6 +1546,57 @@ mod tests {
         );
     }
 
+    /// The `shutdown` tool is advertised on this transport, so the serve loop
+    /// must end on the caller's shutdown observation and not only on stdin EOF
+    /// — otherwise the tool answers `RuntimeShutdownRequested` and the process
+    /// keeps serving with nothing torn down. The caller's observation stands in
+    /// for the CLI's poll of the engine's shutdown-request latch.
+    /// Mental-revert: passing `std::future::pending()` here hangs this test.
+    #[tokio::test]
+    async fn stdio_serve_loop_ends_on_an_observed_shutdown_request_without_eof() {
+        use tokio::io::{AsyncWriteExt, BufReader};
+
+        let runtime = Arc::new(RecordingStubRuntime::new());
+        let recorded_shutdowns = runtime.recorded_shutdown_reasons.clone();
+        let shutdown_observed = runtime.shutdown_observed_notifier.clone();
+        let runtime: Arc<dyn RuntimeOperations> = runtime;
+
+        let (mut client_writer, server_reader) = tokio::io::duplex(64 * 1024);
+        let (server_writer, _client_reader) = tokio::io::duplex(64 * 1024);
+        let server = tokio::spawn(async move {
+            serve_stdio_jsonrpc(
+                runtime,
+                BufReader::new(server_reader),
+                server_writer,
+                async move { shutdown_observed.notified().await },
+            )
+            .await
+            .expect("stdio server loop");
+        });
+
+        let request = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": "shutdown", "arguments": { "reason": "agent asked" } }
+        });
+        client_writer
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .expect("write shutdown call");
+
+        // The request writer stays open for the whole wait: only the observed
+        // shutdown can end the loop here.
+        tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .expect("the serve loop must end on an observed shutdown request, without EOF")
+            .expect("stdio server task");
+        assert_eq!(
+            *recorded_shutdowns.lock(),
+            vec!["agent asked".to_string()],
+            "the tool must have reached the runtime before the loop ended"
+        );
+        drop(client_writer);
+    }
+
     #[tokio::test]
     async fn stdio_server_answers_a_malformed_line_with_a_parse_error() {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -1426,9 +1605,14 @@ mod tests {
         let (mut client_writer, server_reader) = tokio::io::duplex(4096);
         let (server_writer, client_reader) = tokio::io::duplex(4096);
         let server = tokio::spawn(async move {
-            serve_stdio_jsonrpc(runtime, BufReader::new(server_reader), server_writer)
-                .await
-                .expect("stdio server loop");
+            serve_stdio_jsonrpc(
+                runtime,
+                BufReader::new(server_reader),
+                server_writer,
+                std::future::pending(),
+            )
+            .await
+            .expect("stdio server loop");
         });
 
         client_writer

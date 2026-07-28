@@ -49,6 +49,7 @@ pub fn request_runtime_shutdown(reason: &str) -> Result<()> {
 /// driven by a hermetic test against a capturing `pubsub_publish`, without
 /// installing the process-global host-services table (which is a set-once
 /// `OnceLock` shared with the no-host negative test in this module).
+// twin-guard(runtime-shutdown-publish): BEGIN
 fn publish_runtime_shutdown_request(callbacks: &HostCallbacks, reason: &str) -> Result<()> {
     let reason_msgpack = rmp_serde::to_vec(reason)
         .map_err(|e| Error::Runtime(format!("failed to encode shutdown reason: {e}")))?;
@@ -69,6 +70,7 @@ fn publish_runtime_shutdown_request(callbacks: &HostCallbacks, reason: &str) -> 
 
     Ok(())
 }
+// twin-guard(runtime-shutdown-publish): END
 
 #[cfg(test)]
 mod tests {

@@ -10,7 +10,9 @@
 //!
 //! - **Default (in-process):** build a fresh live [`Runner`] and serve its MCP
 //!   over the process's stdio; the host gets an operable runtime with no setup.
-//!   Torn down when the host closes stdin (EOF).
+//!   Torn down when the host closes stdin (EOF) or when a runtime-shutdown
+//!   request is latched — this command owns the run loop for that runtime, so
+//!   it observes the request the `shutdown` tool makes.
 //! - **`--attach <url>`:** forward each stdio JSON-RPC line to a running
 //!   runtime's `POST /mcp`, to operate an existing live pipeline; no local
 //!   Runner is built.
@@ -34,10 +36,11 @@ pub async fn run(attach: Option<String>) -> Result<()> {
     }
 }
 
-/// Build a live in-process runtime and serve MCP over stdio against it. The
-/// runtime is started before the loop and stopped on stdin EOF (the host
-/// closing the pipe). Needs the runtime rig (GPU/iceoryx2) — an MCP host spawns
-/// this in the user's environment, so it has the rig.
+/// Build a live in-process runtime and serve MCP over stdio against it. This is
+/// the run-loop owner for that runtime: it starts it, serves until stdin EOF or
+/// a latched shutdown request, and stops it. Needs the runtime rig
+/// (GPU/iceoryx2) — an MCP host spawns this in the user's environment, so it has
+/// the rig.
 async fn serve_in_process() -> Result<()> {
     let runner = Runner::with_auto_build()?;
     runner.start()?;
@@ -47,16 +50,26 @@ async fn serve_in_process() -> Result<()> {
         runtime,
         tokio::io::BufReader::new(tokio::io::stdin()),
         tokio::io::stdout(),
+        wait_until_runtime_shutdown_requested(),
     )
     .await;
 
     // Tear the runtime down regardless of how the loop ended, then surface any
     // transport error.
     if let Err(stop_error) = runner.stop() {
-        tracing::warn!("runtime stop after MCP stdio EOF failed: {stop_error}");
+        tracing::warn!("runtime stop after the MCP stdio loop ended failed: {stop_error}");
     }
     served?;
     Ok(())
+}
+
+/// Resolve once a runtime-shutdown request is latched. Polled at the same 100 ms
+/// granularity as `Runner::wait_for_signal_with`, and reads the host binary's
+/// latch — this process is the host that funnelled the request.
+async fn wait_until_runtime_shutdown_requested() {
+    while !streamlib::sdk::runtime::is_runtime_shutdown_requested() {
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
 }
 
 /// Bridge stdio ↔ a running runtime's `POST /mcp`: each inbound JSON-RPC line is
@@ -105,11 +118,12 @@ fn bridge_stdio_to_remote(
 
 #[cfg(test)]
 mod tests {
-    //! Hermetic tests for the `--attach` stdio→HTTP bridge: a local TCP server
-    //! stands in for a running runtime's `POST /mcp`, so the forward loop,
-    //! notification handling, bearer forwarding, and error surfacing are
-    //! exercised without a live runtime. The bridge reads an in-memory pipe
-    //! (not the process stdio) via the [`bridge_stdio_to_remote`] seam.
+    //! Hermetic tests for the `--attach` stdio→HTTP bridge and the in-process
+    //! mode's shutdown observation. A local TCP server stands in for a running
+    //! runtime's `POST /mcp`, so the forward loop, notification handling, bearer
+    //! forwarding, and error surfacing are exercised without a live runtime. The
+    //! bridge reads an in-memory pipe (not the process stdio) via the
+    //! [`bridge_stdio_to_remote`] seam.
 
     use std::io::{BufRead, BufReader, Read, Write};
     use std::net::{TcpListener, TcpStream};
@@ -248,6 +262,36 @@ mod tests {
             Some("Bearer secret-token"),
             "STREAMLIB_MCP_TOKEN must ride as an authorization: Bearer header"
         );
+    }
+
+    /// What makes `serve_in_process` a run-loop owner: the future it hands the
+    /// stdio serve loop pends until a request is latched, then resolves — so a
+    /// `shutdown` tool call ends the loop and the existing `runner.stop()` tail
+    /// runs. The engine's latch is process-global and taking it is harness-owned
+    /// (`Runner::start`), so this test leaves it set; nothing else in this
+    /// binary observes it.
+    #[tokio::test]
+    #[serial_test::serial]
+    async fn the_in_process_loop_owner_waits_for_a_latched_shutdown_request() {
+        let pending = tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            wait_until_runtime_shutdown_requested(),
+        )
+        .await;
+        assert!(
+            pending.is_err(),
+            "with no request latched the serve loop must keep serving"
+        );
+
+        streamlib::sdk::runtime_control::request_runtime_shutdown("cli unit test")
+            .expect("the host arm never fails");
+
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            wait_until_runtime_shutdown_requested(),
+        )
+        .await
+        .expect("a latched request must end the wait");
     }
 
     #[test]

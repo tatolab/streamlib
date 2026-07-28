@@ -1,14 +1,15 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `streamlib graph | submit | replace | remove | connect | tap | logs` — thin
-//! JSON-RPC control clients over a running node's `POST {url}/mcp`.
+//! `streamlib graph | submit | replace | remove | connect | tap | logs |
+//! shutdown` — thin JSON-RPC control clients over a running node's
+//! `POST {url}/mcp`.
 //!
-//! Each verb marshals its args into a `tools/call` for one of the 7 api-server
+//! Each verb marshals its args into a `tools/call` for one of the 8 api-server
 //! MCP tools ([`streamlib_api_server`]'s `tool_definitions`) and POSTs it over
 //! the same `ureq` seam the `mcp --attach` bridge uses ([`post_mcp_request`],
 //! shared with [`super::mcp`]). There is no local runtime and no fourth
-//! dispatch: the tool set is exactly those 7, and the arg shapes mirror each
+//! dispatch: the tool set is exactly those 8, and the arg shapes mirror each
 //! tool's `inputSchema` 1:1.
 //!
 //! The optional `STREAMLIB_MCP_TOKEN` rides as an `authorization: Bearer`
@@ -270,6 +271,24 @@ pub fn logs(url: &str, count: Option<usize>) -> Result<()> {
     let mut arguments = Map::new();
     insert_optional_count(&mut arguments, count);
     call_tool_to_stdout(url, "logs", Value::Object(arguments))
+}
+
+/// Ask a running node to shut down (`shutdown`). Returns as soon as the node
+/// accepts the request — teardown is not awaited, so the node's control plane
+/// may already be gone by the time the verb prints.
+pub fn shutdown(url: &str, reason: Option<&str>) -> Result<()> {
+    call_tool_to_stdout(url, "shutdown", shutdown_arguments(reason))
+}
+
+/// The `shutdown` tool's `arguments` object for an optional `--reason`. An
+/// absent reason omits the key entirely rather than sending an explicit
+/// `null`, which the tool's `inputSchema` (`reason` is a `string`) rejects.
+fn shutdown_arguments(reason: Option<&str>) -> Value {
+    let mut arguments = Map::new();
+    if let Some(reason) = reason {
+        arguments.insert("reason".into(), Value::String(reason.to_string()));
+    }
+    Value::Object(arguments)
 }
 
 /// Insert the optional `requested_name` / `processor_type_name` pair the
@@ -655,6 +674,70 @@ mod tests {
         assert_eq!(args["connect"][0]["role"], "output");
         assert_eq!(args["connect"][0]["peer_processor"], "sink");
         assert_eq!(args["connect"][0]["peer_port"], "in");
+    }
+
+    /// The `shutdown` verb must marshal into the `shutdown` tool with the
+    /// caller's `--reason` in the arguments — a verb that named a different
+    /// tool, or dropped the reason, would still print a result and exit 0.
+    #[test]
+    fn shutdown_marshals_the_reason_into_a_shutdown_tools_call() {
+        let (url, recorded, server) = spawn_mock_mcp_server(vec![tool_ok_reply(
+            1,
+            json!({ "status": "RuntimeShutdownRequested", "reason": "cli asked" }),
+        )]);
+
+        let mut output = Vec::new();
+        call_tool(
+            &url,
+            None,
+            "shutdown",
+            shutdown_arguments(Some("cli asked")),
+            &mut output,
+        )
+        .expect("shutdown call");
+        server.join().unwrap();
+
+        let recorded = recorded.lock().unwrap();
+        let request: Value = serde_json::from_str(&recorded[0].body).unwrap();
+        assert_eq!(request["method"], "tools/call");
+        assert_eq!(request["params"]["name"], "shutdown");
+        assert_eq!(request["params"]["arguments"]["reason"], "cli asked");
+
+        let printed = String::from_utf8(output).unwrap();
+        assert!(
+            printed.contains("RuntimeShutdownRequested"),
+            "the accepted-request result must be printed; got: {printed}"
+        );
+    }
+
+    /// Without `--reason`, the verb sends no `reason` key at all — the tool's
+    /// `inputSchema` declares it optional and the server records "unspecified";
+    /// sending an explicit `null` would fail the schema's type check.
+    #[test]
+    fn shutdown_without_a_reason_sends_no_reason_key() {
+        let (url, recorded, server) = spawn_mock_mcp_server(vec![tool_ok_reply(
+            1,
+            json!({ "status": "RuntimeShutdownRequested", "reason": "" }),
+        )]);
+
+        let mut output = Vec::new();
+        call_tool(
+            &url,
+            None,
+            "shutdown",
+            shutdown_arguments(None),
+            &mut output,
+        )
+        .expect("shutdown call");
+        server.join().unwrap();
+
+        let recorded = recorded.lock().unwrap();
+        let request: Value = serde_json::from_str(&recorded[0].body).unwrap();
+        assert_eq!(
+            request["params"]["arguments"],
+            json!({}),
+            "an absent --reason must marshal to empty arguments, not an explicit null"
+        );
     }
 
     #[test]

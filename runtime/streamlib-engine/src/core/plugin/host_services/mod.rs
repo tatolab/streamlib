@@ -327,6 +327,161 @@ pub struct HostCallbacks {
 unsafe impl Send for HostCallbacks {}
 unsafe impl Sync for HostCallbacks {}
 
+impl From<&HostServices> for HostCallbacks {
+    /// Cache the host's table field-by-field. The one place the two structs are
+    /// mapped onto each other — a new [`HostServices`] slot is carried here or
+    /// it never reaches cdylib code.
+    fn from(services: &HostServices) -> Self {
+        Self {
+            host: services.host,
+            tracing_register_callsite: services.tracing_register_callsite,
+            tracing_enabled: services.tracing_enabled,
+            tracing_emit: services.tracing_emit,
+            pubsub_publish: services.pubsub_publish,
+            schema_register: services.schema_register,
+            schema_lookup: services.schema_lookup,
+            iceoryx_log_emit: services.iceoryx_log_emit,
+            processor_register: services.processor_register,
+            runtime_context_vtable: services.runtime_context_vtable,
+            audio_clock_vtable: services.audio_clock_vtable,
+            runtime_ops_vtable: services.runtime_ops_vtable,
+            gpu_context_limited_access_vtable: services.gpu_context_limited_access_vtable,
+            surface_store_vtable: services.surface_store_vtable,
+            gpu_context_full_access_vtable: services.gpu_context_full_access_vtable,
+            texture_ring_methods_vtable: services.texture_ring_methods_vtable,
+            vulkan_compute_kernel_methods_vtable: services.vulkan_compute_kernel_methods_vtable,
+            vulkan_graphics_kernel_methods_vtable: services.vulkan_graphics_kernel_methods_vtable,
+            vulkan_ray_tracing_kernel_methods_vtable: services
+                .vulkan_ray_tracing_kernel_methods_vtable,
+            vulkan_acceleration_structure_methods_vtable: services
+                .vulkan_acceleration_structure_methods_vtable,
+            rhi_color_converter_methods_vtable: services.rhi_color_converter_methods_vtable,
+            rhi_command_recorder_methods_vtable: services.rhi_command_recorder_methods_vtable,
+            output_writer_vtable: services.output_writer_vtable,
+            input_mailboxes_vtable: services.input_mailboxes_vtable,
+            present_target_methods_vtable: services.present_target_methods_vtable,
+            video_encoder_session_methods_vtable: services.video_encoder_session_methods_vtable,
+            video_decoder_session_methods_vtable: services.video_decoder_session_methods_vtable,
+            host_timeline_semaphore_methods_vtable: services.host_timeline_semaphore_methods_vtable,
+            vulkan_texture_readback_methods_vtable: services.vulkan_texture_readback_methods_vtable,
+        }
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod host_services_test_support {
+    //! One `HostServices` stand-in for the in-crate tests that need a callback
+    //! table without a live host.
+
+    use super::*;
+    use streamlib_plugin_abi::HOST_SERVICES_LAYOUT_VERSION;
+
+    // Never invoked: they exist only to fill the `#[repr(C)]` struct's non-null
+    // fn-pointer fields.
+    unsafe extern "C" fn unused_tracing_register_callsite(
+        _: HostHandle,
+        _: *const u8,
+        _: usize,
+        _: HostLogLevel,
+    ) -> HostInterest {
+        HostInterest::Never
+    }
+    unsafe extern "C" fn unused_tracing_enabled(
+        _: HostHandle,
+        _: *const u8,
+        _: usize,
+        _: HostLogLevel,
+    ) -> bool {
+        false
+    }
+    unsafe extern "C" fn unused_tracing_emit(
+        _: HostHandle,
+        _: *const u8,
+        _: usize,
+        _: HostLogLevel,
+        _: *const u8,
+        _: usize,
+        _: *const u8,
+        _: usize,
+    ) {
+    }
+    unsafe extern "C" fn unused_schema_register(
+        _: HostHandle,
+        _: *const u8,
+        _: usize,
+        _: *const u8,
+        _: usize,
+    ) {
+    }
+    unsafe extern "C" fn unused_schema_lookup(
+        _: HostHandle,
+        _: *const u8,
+        _: usize,
+        _: extern "C" fn(*mut c_void, *const u8, usize),
+        _: *mut c_void,
+    ) {
+    }
+    unsafe extern "C" fn unused_iceoryx_log_emit(
+        _: HostHandle,
+        _: HostLogLevel,
+        _: *const u8,
+        _: usize,
+        _: *const u8,
+        _: usize,
+    ) {
+    }
+    unsafe extern "C" fn unused_processor_register(
+        _: HostHandle,
+        _: *const u8,
+        _: usize,
+        _: *const ProcessorVTable,
+    ) -> i32 {
+        0
+    }
+
+    /// A version-matching [`HostServices`] whose `host` + `pubsub_publish` are
+    /// the caller's, every other callback an unused stub, and every inner
+    /// vtable null.
+    pub(crate) fn host_services_with_capturing_pubsub_publish(
+        host: HostHandle,
+        pubsub_publish: unsafe extern "C" fn(HostHandle, *const u8, usize, *const u8, usize),
+    ) -> HostServices {
+        HostServices {
+            abi_layout_version: HOST_SERVICES_LAYOUT_VERSION,
+            _reserved_padding: 0,
+            host,
+            tracing_register_callsite: unused_tracing_register_callsite,
+            tracing_enabled: unused_tracing_enabled,
+            tracing_emit: unused_tracing_emit,
+            pubsub_publish,
+            schema_register: unused_schema_register,
+            schema_lookup: unused_schema_lookup,
+            iceoryx_log_emit: unused_iceoryx_log_emit,
+            processor_register: unused_processor_register,
+            runtime_context_vtable: core::ptr::null(),
+            audio_clock_vtable: core::ptr::null(),
+            runtime_ops_vtable: core::ptr::null(),
+            gpu_context_limited_access_vtable: core::ptr::null(),
+            surface_store_vtable: core::ptr::null(),
+            gpu_context_full_access_vtable: core::ptr::null(),
+            texture_ring_methods_vtable: core::ptr::null(),
+            vulkan_compute_kernel_methods_vtable: core::ptr::null(),
+            vulkan_graphics_kernel_methods_vtable: core::ptr::null(),
+            vulkan_ray_tracing_kernel_methods_vtable: core::ptr::null(),
+            vulkan_acceleration_structure_methods_vtable: core::ptr::null(),
+            rhi_color_converter_methods_vtable: core::ptr::null(),
+            rhi_command_recorder_methods_vtable: core::ptr::null(),
+            output_writer_vtable: core::ptr::null(),
+            input_mailboxes_vtable: core::ptr::null(),
+            present_target_methods_vtable: core::ptr::null(),
+            video_encoder_session_methods_vtable: core::ptr::null(),
+            video_decoder_session_methods_vtable: core::ptr::null(),
+            host_timeline_semaphore_methods_vtable: core::ptr::null(),
+            vulkan_texture_readback_methods_vtable: core::ptr::null(),
+        }
+    }
+}
+
 /// Per-plugin cache of the host's callback table. `OnceLock` semantics:
 /// the cdylib's `install_host_services` writes once at register
 /// time; subsequent reads from `PUBSUB.publish`, `register_schema`,
@@ -400,38 +555,7 @@ pub unsafe fn install_host_services(host_services_ptr: *const c_void) -> Option<
         return None;
     }
 
-    let callbacks = HostCallbacks {
-        host: services.host,
-        tracing_register_callsite: services.tracing_register_callsite,
-        tracing_enabled: services.tracing_enabled,
-        tracing_emit: services.tracing_emit,
-        pubsub_publish: services.pubsub_publish,
-        schema_register: services.schema_register,
-        schema_lookup: services.schema_lookup,
-        iceoryx_log_emit: services.iceoryx_log_emit,
-        processor_register: services.processor_register,
-        runtime_context_vtable: services.runtime_context_vtable,
-        audio_clock_vtable: services.audio_clock_vtable,
-        runtime_ops_vtable: services.runtime_ops_vtable,
-        gpu_context_limited_access_vtable: services.gpu_context_limited_access_vtable,
-        surface_store_vtable: services.surface_store_vtable,
-        gpu_context_full_access_vtable: services.gpu_context_full_access_vtable,
-        texture_ring_methods_vtable: services.texture_ring_methods_vtable,
-        vulkan_compute_kernel_methods_vtable: services.vulkan_compute_kernel_methods_vtable,
-        vulkan_graphics_kernel_methods_vtable: services.vulkan_graphics_kernel_methods_vtable,
-        vulkan_ray_tracing_kernel_methods_vtable: services.vulkan_ray_tracing_kernel_methods_vtable,
-        vulkan_acceleration_structure_methods_vtable: services
-            .vulkan_acceleration_structure_methods_vtable,
-        rhi_color_converter_methods_vtable: services.rhi_color_converter_methods_vtable,
-        rhi_command_recorder_methods_vtable: services.rhi_command_recorder_methods_vtable,
-        output_writer_vtable: services.output_writer_vtable,
-        input_mailboxes_vtable: services.input_mailboxes_vtable,
-        present_target_methods_vtable: services.present_target_methods_vtable,
-        video_encoder_session_methods_vtable: services.video_encoder_session_methods_vtable,
-        video_decoder_session_methods_vtable: services.video_decoder_session_methods_vtable,
-        host_timeline_semaphore_methods_vtable: services.host_timeline_semaphore_methods_vtable,
-        vulkan_texture_readback_methods_vtable: services.vulkan_texture_readback_methods_vtable,
-    };
+    let callbacks = HostCallbacks::from(services);
 
     // Cache the callbacks BEFORE installing tracing — the
     // `ForwardingSubscriber` reads `HOST_CALLBACKS` on every emit.
@@ -720,7 +844,13 @@ unsafe extern "C" fn host_pubsub_publish(
             // Match them before the general `Event` decode below.
             if topic == streamlib_plugin_abi::PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST {
                 let reason: String = rmp_serde::from_slice(event_bytes).unwrap_or_default();
-                crate::core::runtime::request_runtime_shutdown_from_plugin_abi_boundary(&reason);
+                if let Err(error) = crate::core::runtime::request_runtime_shutdown(&reason) {
+                    tracing::warn!(
+                        target: "streamlib::plugin",
+                        %error,
+                        "host_pubsub_publish: runtime-shutdown request from a cdylib failed"
+                    );
+                }
                 return;
             }
 
@@ -1179,8 +1309,10 @@ pub mod runtime_facing {
 mod runtime_shutdown_control_topic_tests {
     use super::host_pubsub_publish;
     use crate::core::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
+    use crate::core::runtime::{is_runtime_shutdown_requested, take_runtime_shutdown_request_latch};
     use crate::iceoryx2::Iceoryx2Node;
     use parking_lot::Mutex;
+    use serial_test::serial;
     use std::sync::Arc;
     use std::sync::mpsc;
     use std::time::{Duration, Instant};
@@ -1208,7 +1340,13 @@ mod runtime_shutdown_control_topic_tests {
     /// receives the shutdown. That is what makes this test genuinely
     /// exercise the mapping rather than the transport.
     #[test]
+    #[serial]
     fn host_pubsub_publish_maps_control_topic_to_runtime_shutdown() {
+        // The reserved arm latches the process-global shutdown-request latch,
+        // so this test is `#[serial]` with the other latch tests and leaves it
+        // cleared for the next one.
+        take_runtime_shutdown_request_latch();
+
         // The host-side publish lands on the process-global PUBSUB, so
         // this test drives the global bus (the pubsub integration tests
         // use ad-hoc local buses; the control mapping is wired to the
@@ -1264,8 +1402,90 @@ mod runtime_shutdown_control_topic_tests {
             Some(Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown)),
             "the control topic must map to a RuntimeShutdown event on RUNTIME_GLOBAL",
         );
+        // The event is only half the mapping: a loop owner that missed the
+        // pubsub delivery still observes the request through the latch.
+        assert!(
+            is_runtime_shutdown_requested(),
+            "the control topic must also latch the request for the loop owner",
+        );
 
         drop(listener);
+        take_runtime_shutdown_request_latch();
+    }
+
+    /// The reserved arm decodes the reason with
+    /// `rmp_serde::from_slice(..).unwrap_or_default()` — a payload it cannot
+    /// decode costs the reason attribution, never the shutdown. That is the
+    /// load-bearing half: a host built against a plugin that encoded the reason
+    /// differently must still stop. Mental-revert: turning the decode into an
+    /// early return on error drops the request silently — no error, no panic,
+    /// the runtime just never stops — and this test fails.
+    ///
+    /// Hermetic: the latch is set before the publish, so no iceoryx2 bus and no
+    /// subscriber are needed to observe the request.
+    #[test]
+    #[serial]
+    fn host_pubsub_publish_still_requests_shutdown_on_an_undecodable_reason() {
+        take_runtime_shutdown_request_latch();
+
+        let topic = streamlib_plugin_abi::PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST;
+        // Not a msgpack string: `0xc1` is msgpack's never-used byte, so
+        // `from_slice::<String>` is guaranteed to fail.
+        let undecodable_reason_bytes: [u8; 3] = [0xc1, 0xc1, 0xc1];
+        assert!(
+            rmp_serde::from_slice::<String>(&undecodable_reason_bytes).is_err(),
+            "the fixture must actually fail to decode, or this test is vacuous",
+        );
+
+        // SAFETY: `host` is unused by `host_pubsub_publish`; the topic and
+        // payload slices outlive the call.
+        unsafe {
+            host_pubsub_publish(
+                std::ptr::null(),
+                topic.as_ptr(),
+                topic.len(),
+                undecodable_reason_bytes.as_ptr(),
+                undecodable_reason_bytes.len(),
+            );
+        }
+
+        assert!(
+            is_runtime_shutdown_requested(),
+            "an undecodable reason must still request shutdown (empty attribution)",
+        );
+
+        take_runtime_shutdown_request_latch();
+    }
+
+    /// An empty payload is what a plugin built before the reason field existed
+    /// sends. Same contract as an undecodable one: the shutdown still lands.
+    #[test]
+    #[serial]
+    fn host_pubsub_publish_still_requests_shutdown_on_an_empty_payload() {
+        take_runtime_shutdown_request_latch();
+
+        let topic = streamlib_plugin_abi::PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST;
+
+        // SAFETY: `host` is unused by `host_pubsub_publish`; a dangling-but-
+        // aligned pointer with length 0 is the shape `[].as_ptr()` produces and
+        // is sound for `from_raw_parts`.
+        unsafe {
+            let empty: [u8; 0] = [];
+            host_pubsub_publish(
+                std::ptr::null(),
+                topic.as_ptr(),
+                topic.len(),
+                empty.as_ptr(),
+                0,
+            );
+        }
+
+        assert!(
+            is_runtime_shutdown_requested(),
+            "an empty reason payload must still request shutdown",
+        );
+
+        take_runtime_shutdown_request_latch();
     }
 
     /// A `control:`-prefixed topic with NO registered host handler must be

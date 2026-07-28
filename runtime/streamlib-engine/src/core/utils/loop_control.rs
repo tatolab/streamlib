@@ -56,9 +56,12 @@ where
 
     // Main loop
     loop {
-        // Check shutdown flag (non-blocking, ~2ns)
-        if shutdown_flag.load(Ordering::Relaxed) {
-            tracing::info!("Shutdown event received, exiting loop");
+        // The latch is polled as well as the event because a request latched
+        // before the subscribe above leaves no event to receive.
+        if shutdown_flag.load(Ordering::Relaxed)
+            || crate::core::runtime::is_runtime_shutdown_requested()
+        {
+            tracing::info!("Shutdown observed, exiting loop");
             return Ok(());
         }
 
@@ -81,7 +84,32 @@ mod tests {
     use crate::core::pubsub::PUBSUB;
     use serial_test::serial;
 
+    /// A request latched before the loop subscribes leaves no event to receive,
+    /// so the loop must read the latch too. Mental-revert: dropping the
+    /// `is_runtime_shutdown_requested()` term hangs this test.
     #[test]
+    #[serial]
+    fn latched_shutdown_request_exits_the_loop_without_an_event() {
+        crate::core::runtime::take_runtime_shutdown_request_latch();
+        crate::core::runtime::request_runtime_shutdown("unit test")
+            .expect("the host arm never fails");
+
+        let mut iterations = 0;
+        let result = shutdown_aware_loop(|| {
+            iterations += 1;
+            Ok::<LoopControl, ()>(LoopControl::Continue)
+        });
+        crate::core::runtime::take_runtime_shutdown_request_latch();
+
+        assert!(result.is_ok());
+        assert_eq!(
+            iterations, 0,
+            "the latch is checked before the first user callback"
+        );
+    }
+
+    #[test]
+    #[serial]
     fn test_loop_control_break() {
         let mut count = 0;
 
@@ -159,6 +187,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn test_error_propagation() {
         let result = shutdown_aware_loop(|| Err::<LoopControl, &str>("test error"));
 

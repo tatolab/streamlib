@@ -8,6 +8,7 @@ mod operations;
 mod operations_runtime;
 #[allow(clippy::module_inception)]
 mod runtime;
+mod runtime_shutdown_request;
 mod runtime_unique_id;
 mod status;
 mod tap;
@@ -30,6 +31,10 @@ pub use operations::{
     SchemaValidationPosture, SubmittedProcessorSource,
 };
 pub use runtime::Runner;
+pub use runtime_shutdown_request::{is_runtime_shutdown_requested, request_runtime_shutdown};
+// Clearing the latch cancels a pending shutdown request; only the harness that
+// owns the run loop may do that, so it never reaches the SDK surface.
+pub(crate) use runtime_shutdown_request::take_runtime_shutdown_request_latch;
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
 pub use streamlib_idents::app_modules::{
@@ -39,24 +44,3 @@ pub use streamlib_idents::app_modules::{
     RemovePackageReport, ReplacedSlotBackup, UnlinkPackageReport, parse_lockfile_package_key,
 };
 pub use tap::TapSubscription;
-
-use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent};
-
-/// Map a cross-plugin-ABI shutdown request onto the engine's internal
-/// runtime-shutdown event. This is the single mapping point every
-/// engine-free boundary funnels through — today the plugin-ABI
-/// `pubsub_publish` control topic
-/// ([`streamlib_plugin_abi::PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST`]),
-/// tomorrow a subprocess escalate op or an api-server endpoint — so the
-/// engine owns the `Event` encoding in exactly one place rather than
-/// letting each boundary freeze it into its own wire form. The request
-/// is idempotent (the shutdown listeners are flag-setting) and
-/// fire-and-forget, matching every other `RuntimeShutdown` publisher
-/// including the engine's own signal handler. `reason` is logged at
-/// `info` so operators can attribute who stopped the runtime.
-#[tracing::instrument]
-pub fn request_runtime_shutdown_from_plugin_abi_boundary(reason: &str) {
-    tracing::info!(reason, "runtime shutdown requested across the plugin ABI");
-    let shutdown_event = Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown);
-    PUBSUB.publish(&shutdown_event.topic(), &shutdown_event);
-}

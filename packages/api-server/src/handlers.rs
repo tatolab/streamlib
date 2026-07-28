@@ -37,7 +37,8 @@ use crate::auth::{ApiServerBearerToken, ForbiddenResponse, UnauthorizedResponse}
 use crate::state::{
     ApiDoc, AppState, CreateConnectionRequest, CreateProcessorRequest, ErrorResponse, IdResponse,
     ProcessorNotFoundResponse, ProcessorPortNotFoundResponse, RegisterProcessorSourceResponse,
-    ReplaceProcessorSourceRequest, SubmittedProcessorSourceRequest, UnknownProcessorTypeResponse,
+    ReplaceProcessorSourceRequest, RuntimeShutdownAcceptedResponse, RuntimeShutdownRequest,
+    SubmittedProcessorSourceRequest, UnknownProcessorTypeResponse,
 };
 
 /// The relative WebSocket URL carrying this runtime's live event stream — the
@@ -53,12 +54,15 @@ const RUNTIME_EVENTS_URL: &str = "/ws/events";
 ///
 /// The mutating routes (`POST /api/processor`, `POST /api/processor/source`,
 /// `POST /api/processor/source/replace`, `DELETE /api/processors/{id}`, `POST
-/// /api/connections`, `DELETE /api/connections/{id}`) sit behind the
-/// bearer-token auth middleware only when `auth_token` is `Some` (auth opted
-/// in); with `None` — the zero-ceremony default — they are open like every
-/// other route. The two source-submit routes are RCE-capable (they execute
-/// submitted source), so they join this gated group. The GET routes, health
-/// check, WebSocket event stream, and OpenAPI spec are always open.
+/// /api/connections`, `DELETE /api/connections/{id}`, `POST
+/// /api/runtime/shutdown`) sit behind the bearer-token auth middleware only
+/// when `auth_token` is `Some` (auth opted in); with `None` — the
+/// zero-ceremony default — they are open like every other route. The two
+/// source-submit routes are RCE-capable (they execute submitted source), so
+/// they join this gated group; so does the shutdown request, which stops a
+/// node no more destructively than deleting all of its processors. The GET
+/// routes, health check, WebSocket event stream, and OpenAPI spec are always
+/// open.
 /// `route_layer` binds the auth layer to exactly the routes already on the
 /// protected sub-router, so a later `merge` leaves the open routes ungated.
 pub(crate) fn build_router(
@@ -82,7 +86,8 @@ pub(crate) fn build_router(
         .routes(routes!(replace_processor_source))
         .routes(routes!(delete_processor))
         .routes(routes!(create_connection))
-        .routes(routes!(delete_connection));
+        .routes(routes!(delete_connection))
+        .routes(routes!(request_runtime_shutdown));
     if let Some(auth_token) = auth_token {
         protected = protected.route_layer(axum::middleware::from_fn_with_state(
             auth_token,
@@ -506,6 +511,47 @@ pub(crate) async fn delete_connection(
 }
 
 #[utoipa::path(
+    post,
+    path = "/api/runtime/shutdown",
+    tag = "runtime",
+    request_body = RuntimeShutdownRequest,
+    responses(
+        (status = 202, description = "Shutdown request accepted and handed to the runtime; teardown proceeds asynchronously and is NOT awaited by this response", body = RuntimeShutdownAcceptedResponse),
+        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
+        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
+        (status = 500, description = "The request could not be handed to the runtime", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn request_runtime_shutdown(
+    State(state): State<AppState>,
+    Json(body): Json<RuntimeShutdownRequest>,
+) -> axum::response::Response {
+    let reason = body.reason.unwrap_or_default();
+
+    // Never await teardown: this control plane is torn down BY the shutdown it
+    // just requested (`ApiServerProcessor::stop` fires the graceful-shutdown
+    // signal for this very server), so a handler that waited would be racing
+    // its own socket. Hand the request to the runtime and answer 202.
+    match state.runtime.request_runtime_shutdown(&reason) {
+        Ok(()) => (
+            StatusCode::ACCEPTED,
+            Json(RuntimeShutdownAcceptedResponse {
+                status: crate::state::RUNTIME_SHUTDOWN_REQUESTED_STATUS,
+                reason,
+            }),
+        )
+            .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ErrorResponse {
+                error: error.to_string(),
+            }),
+        )
+            .into_response(),
+    }
+}
+
+#[utoipa::path(
     get,
     path = "/api/registry",
     tag = "registry",
@@ -837,7 +883,14 @@ mod router_auth_gate_tests {
     /// success codes, so the enabled-mode tests go red on that regression. With
     /// auth off (the default), the same handlers must be reachable with no
     /// token at all.
-    struct AlwaysOkStubRuntime;
+    ///
+    /// `recorded_shutdown_reasons` records every `request_runtime_shutdown`
+    /// the stub receives, so a route test can prove the request reached the
+    /// runtime handle rather than merely producing a 202.
+    #[derive(Default)]
+    struct AlwaysOkStubRuntime {
+        recorded_shutdown_reasons: Arc<Mutex<Vec<String>>>,
+    }
 
     impl RuntimeOperations for AlwaysOkStubRuntime {
         fn add_processor_async(
@@ -894,6 +947,12 @@ mod router_auth_gate_tests {
             Ok(LinkUniqueId::new())
         }
         fn disconnect(&self, _link_id: &LinkUniqueId) -> Result<()> {
+            Ok(())
+        }
+        fn request_runtime_shutdown(&self, reason: &str) -> Result<()> {
+            self.recorded_shutdown_reasons
+                .lock()
+                .push(reason.to_string());
             Ok(())
         }
         fn to_json(&self) -> Result<serde_json::Value> {
@@ -982,6 +1041,9 @@ mod router_auth_gate_tests {
         fn disconnect(&self, _link_id: &LinkUniqueId) -> Result<()> {
             Ok(())
         }
+        fn request_runtime_shutdown(&self, _reason: &str) -> Result<()> {
+            Ok(())
+        }
         fn to_json(&self) -> Result<serde_json::Value> {
             Ok(serde_json::json!({}))
         }
@@ -1027,7 +1089,7 @@ mod router_auth_gate_tests {
     /// gated behind [`TEST_TOKEN`].
     fn auth_enabled_router() -> Router {
         build_router(
-            Arc::new(AlwaysOkStubRuntime),
+            Arc::new(AlwaysOkStubRuntime::default()),
             Some(ApiServerBearerToken::from_secret(TEST_TOKEN)),
             #[cfg(feature = "moq")]
             "test-runtime-id".to_string(),
@@ -1038,7 +1100,7 @@ mod router_auth_gate_tests {
     /// mutating ones, is open with no token.
     fn auth_disabled_router() -> Router {
         build_router(
-            Arc::new(AlwaysOkStubRuntime),
+            Arc::new(AlwaysOkStubRuntime::default()),
             None,
             #[cfg(feature = "moq")]
             "test-runtime-id".to_string(),
@@ -1103,6 +1165,10 @@ mod router_auth_gate_tests {
         )
     }
 
+    fn runtime_shutdown_body() -> Body {
+        Body::from(serde_json::json!({ "reason": "operator asked" }).to_string())
+    }
+
     fn bearer(token: &str) -> String {
         format!("Bearer {token}")
     }
@@ -1151,6 +1217,12 @@ mod router_auth_gate_tests {
                 .method("DELETE")
                 .uri("/api/connections/some-id")
                 .body(Body::empty())
+                .unwrap(),
+            Request::builder()
+                .method("POST")
+                .uri("/api/runtime/shutdown")
+                .header(CONTENT_TYPE, "application/json")
+                .body(runtime_shutdown_body())
                 .unwrap(),
         ];
         for request in unauthenticated {
@@ -1463,6 +1535,100 @@ mod router_auth_gate_tests {
                 "DELETE {uri} must be open with auth off (no token)"
             );
         }
+    }
+
+    /// The shutdown request must reach the runtime handle — a 202 alone would
+    /// also be produced by a handler that dropped the request on the floor —
+    /// and it must answer 202 (accepted), never 200, because teardown is not
+    /// awaited.
+    #[tokio::test]
+    async fn runtime_shutdown_with_token_is_202_and_reaches_the_runtime() {
+        let runtime = Arc::new(AlwaysOkStubRuntime::default());
+        let recorded = runtime.recorded_shutdown_reasons.clone();
+        let router = build_router(
+            runtime,
+            Some(ApiServerBearerToken::from_secret(TEST_TOKEN)),
+            #[cfg(feature = "moq")]
+            "test-runtime-id".to_string(),
+        );
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/runtime/shutdown")
+            .header(AUTHORIZATION, bearer(TEST_TOKEN))
+            .header(CONTENT_TYPE, "application/json")
+            .body(runtime_shutdown_body())
+            .unwrap();
+
+        let response = router.oneshot(request).await.unwrap();
+        assert_eq!(response.status(), StatusCode::ACCEPTED);
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let body: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["status"], "RuntimeShutdownRequested");
+        assert_eq!(body["reason"], "operator asked");
+        assert_eq!(
+            *recorded.lock(),
+            vec!["operator asked".to_string()],
+            "the route must hand the reason to the runtime's shutdown funnel"
+        );
+    }
+
+    /// A wrong token is a 403 (present but invalid), distinct from the 401 a
+    /// missing token earns — the same gate the other mutating routes carry.
+    #[tokio::test]
+    async fn runtime_shutdown_with_a_wrong_token_is_403() {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/runtime/shutdown")
+            .header(AUTHORIZATION, bearer("not-the-secret"))
+            .header(CONTENT_TYPE, "application/json")
+            .body(runtime_shutdown_body())
+            .unwrap();
+        assert_eq!(status_of(request).await, StatusCode::FORBIDDEN);
+    }
+
+    /// The zero-ceremony default: auth off leaves the shutdown route open, the
+    /// same posture every other mutating route has.
+    #[tokio::test]
+    async fn runtime_shutdown_is_open_with_auth_off() {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/runtime/shutdown")
+            .header(CONTENT_TYPE, "application/json")
+            .body(runtime_shutdown_body())
+            .unwrap();
+        assert_eq!(
+            status_on(auth_disabled_router(), request).await,
+            StatusCode::ACCEPTED,
+            "POST /api/runtime/shutdown must be open with auth off (no token)"
+        );
+    }
+
+    /// An omitted `reason` is unspecified, not a 400 — the request is the
+    /// point, the attribution is a courtesy.
+    #[tokio::test]
+    async fn runtime_shutdown_without_a_reason_is_accepted_as_unspecified() {
+        let runtime = Arc::new(AlwaysOkStubRuntime::default());
+        let recorded = runtime.recorded_shutdown_reasons.clone();
+        let router = build_router(
+            runtime,
+            None,
+            #[cfg(feature = "moq")]
+            "test-runtime-id".to_string(),
+        );
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/runtime/shutdown")
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+
+        assert_eq!(
+            router.oneshot(request).await.unwrap().status(),
+            StatusCode::ACCEPTED
+        );
+        assert_eq!(*recorded.lock(), vec![String::new()]);
     }
 
     fn tap_ws_request() -> Request<Body> {
