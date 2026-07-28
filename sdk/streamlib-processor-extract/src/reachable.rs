@@ -430,8 +430,9 @@ pub struct ProcessorAvailabilityAcrossBuildTargets {
     /// The `Type` segment — the name the plugin registry keys registration on,
     /// and therefore the name two arms collide under.
     pub processor_type_name: String,
-    /// The full `@org/package/Type@version` identity every declaring arm agrees
-    /// on (a disagreement here is refused as divergence, never merged).
+    /// The version-free `@org/package/Type` identity every declaring arm agrees
+    /// on, carrying the grammar's `0.0.0` sentinel rather than a real version
+    /// (a disagreement here is refused as divergence, never merged).
     pub processor_schema_ident: SchemaIdent,
     /// The disjunction over each declaring arm's conjoined `#[cfg(...)]`
     /// predicates, as source text. `None` is unconditional: some arm is gated
@@ -534,7 +535,7 @@ pub fn extract_processors_across_every_build_target(
 ///
 /// No satisfiability argument is needed here: the walk already resolved a
 /// concrete target and it compiled both arms. This is the reasoning-free net
-/// behind [`find_build_target_compiling_both_declarations`] — an exotic
+/// behind [`find_build_target_satisfying_both_cfg_predicate_sets`] — an exotic
 /// predicate pair the atom model calls disjoint still fails loudly on the host
 /// that actually compiles both.
 fn refuse_processors_declared_twice_for_one_build_target(

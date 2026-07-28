@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Camera → CUDA host-pipeline copy processor (Linux only).
+//! Camera → CUDA host-pipeline copy processor.
 //!
 //! Drops the CPU staging hop for any consumer that wants the camera
 //! frame as a GPU-resident CUDA tensor (e.g. PyTorch / JAX inference,
@@ -22,9 +22,10 @@
 //! the lifecycle binding to a single processor instance is what
 //! guarantees the cuda surface never outlives its producer.
 //!
-//! Linux-only. CUDA is Linux-only on the in-tree adapter set;
-//! macOS / iOS builds compile a no-op stub that returns a
-//! configuration error from `setup()`.
+//! Declared on every build target — the struct carries no `#[cfg]`,
+//! only its fields and internals do. CUDA is Linux-only on the
+//! in-tree adapter set, so macOS / iOS builds compile a no-op stub
+//! that returns a configuration error from `setup()`.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
