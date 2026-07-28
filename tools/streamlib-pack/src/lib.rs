@@ -23,7 +23,7 @@
 //! - **always** — `streamlib.yaml` + `schemas/`.
 //!
 //! The same assembly emits to either of two [`AssembleTarget`]s: a
-//! compressed `.slpkg` (what `streamlib pack` ships) or an extracted
+//! compressed `.slpkg` (what `streamlib pkg publish` ships) or an extracted
 //! staged directory (what `streamlib-build-orchestrator` materializes
 //! into the package cache at runtime). Both shapes are byte-identical
 //! per file — a runtime-built staged dir is exactly what extracting the
@@ -396,7 +396,7 @@ impl PackEventSink for () {}
 #[derive(Debug, Clone)]
 pub enum AssembleTarget {
     /// Write a compressed `.slpkg` zip at this path (the distribution
-    /// artifact `streamlib pack` ships).
+    /// artifact `streamlib pkg publish` ships).
     Slpkg(PathBuf),
     /// Materialize the extracted package layout into this directory (the
     /// shape an extracted `.slpkg` / a GitHub install lands in). The
@@ -411,7 +411,7 @@ pub enum AssembleTarget {
 pub enum PathDepPolicy {
     /// Reject path-flavor `patch:` entries (publishing semantics — paths
     /// are relative to the dev's source tree and don't generalize to a
-    /// distributed `.slpkg`). Used by `streamlib pack`.
+    /// distributed `.slpkg`). Used by `streamlib pkg publish`.
     RejectPathPatches,
     /// Rewrite relative `path:` deps/patches to absolute, anchored at the
     /// original source dir. Used when staging into the cache: the package
@@ -426,7 +426,7 @@ pub enum PathDepPolicy {
 pub struct AssembleOptions {
     /// Skip auto-build: require `lib/<triple>/` (Rust) and
     /// `python/wheels/` (Python) to be pre-populated. Mirrors
-    /// `streamlib pack --no-build`.
+    /// an explicit no-build assemble.
     pub no_build: bool,
     /// Cargo profile for the Rust cdylib build.
     pub profile: CargoProfile,
@@ -441,6 +441,22 @@ pub struct AssembleOptions {
     /// reuse a stale artifact. An immutable managed extract under `IfStale`
     /// leaves this `false` so a matching prebuilt still loads compiler-free.
     pub ignore_in_tree_prebuilt_cdylib: bool,
+}
+
+impl AssembleOptions {
+    /// The options `streamlib pkg publish` assembles a source-only
+    /// [`AssembleTarget::Slpkg`] with. The single definition of the shape
+    /// published archives actually carry, so the pack -> load foundation gate
+    /// exercises the same producer real publishes run rather than a hand-copied
+    /// literal that can silently drift from it.
+    pub fn source_only_publish() -> Self {
+        Self {
+            no_build: false,
+            profile: CargoProfile::Release,
+            path_deps: PathDepPolicy::RejectPathPatches,
+            ignore_in_tree_prebuilt_cdylib: false,
+        }
+    }
 }
 
 /// Summary of what [`assemble_artifact`] produced.
@@ -603,7 +619,7 @@ pub fn assemble_artifact_with_cargo_config(
         .processors
         .iter()
         .any(|p| matches!(p.runtime.language, ProcessorLanguage::Rust));
-    // A source-only `.slpkg` (the distribution artifact `streamlib pkg build`
+    // A source-only `.slpkg` (the distribution artifact `streamlib pkg publish`
     // / `publish` ships) carries NO prebuilt cdylib and NO local compilation —
     // the consumer builds it from the bundled source on their own host
     // (`streamlib add` / `Strategy::ByVersion`, AlwaysBuild), resolving every dep
@@ -790,7 +806,7 @@ fn dylib_filename(path: &Path) -> Result<String> {
 /// committed `processors:` section disagrees. The Rust half is a `syn` source
 /// scan (in-process, no compile); the Python / Deno halves shell out to the
 /// SDK's import-and-enumerate extractor CLIs. Reachability is resolved for the
-/// **host** target — the triple `pkg build` produces a cdylib for — so a
+/// **host** target — the triple `pkg publish` produces a cdylib for — so a
 /// cross-platform arm the host doesn't compile never counts as drift.
 ///
 /// A schema-only package (no Rust crate root, no `pyproject.toml`, no
@@ -876,7 +892,7 @@ fn enforce_declared_dependencies_match_code(
 /// dependency or a streamlib.yaml `patch:` entry. Both are dev-only monorepo
 /// affordances; a distributed source package must resolve every artifact from
 /// the package source, so a stray path would ship and break the consumer's off-tree
-/// build. Called only for the `Slpkg` target (`pkg build` / `pkg publish`).
+/// build. Called only for the `Slpkg` target (`pkg publish`).
 fn ensure_no_path_artifacts(pkg_dir: &Path) -> Result<()> {
     // Both halves flow through the SAME helpers the whole-tree emit's skip
     // predicate ([`non_distributable_path_offenders`]) is built from, so the
@@ -1319,7 +1335,7 @@ fn reject_path_patches(pkg_dir: &Path) -> Result<()> {
 /// unchanged.
 ///
 /// This is the publish-side counterpart to
-/// [`PathDepPolicy::RejectPathPatches`]. Where `streamlib pack` *rejects* a
+/// [`PathDepPolicy::RejectPathPatches`]. Where `streamlib pkg publish` *rejects* a
 /// path patch (a distributed source `.slpkg` must not carry a dev override),
 /// `cargo publish` must *strip* it: the path patch is a legitimate dev
 /// affordance inside the monorepo (it redirects a dep to local source for

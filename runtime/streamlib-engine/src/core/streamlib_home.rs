@@ -169,11 +169,21 @@ pub fn installed_package_slot_dir(
     explicit_app_modules_root: Option<&Path>,
     pkg_ref: &PackageRef,
 ) -> PathBuf {
-    let app_root = explicit_app_modules_root
-        .map(Path::to_path_buf)
-        .or_else(app_modules_root)
-        .unwrap_or_else(|| PathBuf::from("."));
-    AppModulesDir::at(app_root).package_dir(pkg_ref)
+    resolved_app_modules_dir(explicit_app_modules_root).package_dir(pkg_ref)
+}
+
+/// The app's `streamlib_modules/` handle the installed-slot convention resolves
+/// against. Every derived path — the staging parent and the final
+/// `@org/name` slot alike — comes off ONE instance, so the same-filesystem
+/// invariant the staging promote's atomic rename depends on holds by
+/// construction instead of by two lookups agreeing.
+pub fn resolved_app_modules_dir(explicit_app_modules_root: Option<&Path>) -> AppModulesDir {
+    AppModulesDir::at(
+        explicit_app_modules_root
+            .map(Path::to_path_buf)
+            .or_else(app_modules_root)
+            .unwrap_or_else(|| PathBuf::from(".")),
+    )
 }
 
 /// Get the path to a runtime's directory.

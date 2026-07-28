@@ -10,6 +10,7 @@
 use super::processor_registration::{host_target_triple, list_available_triples};
 use super::*;
 use serial_test::serial;
+use streamlib_idents::archive::package_archive_fixtures::package_archive_bytes;
 
 /// Resolve the co-located `streamlib_modules/@org/name` slot through the
 /// production [`installed_package_slot_dir`] seam, so a fixture writes to (and
@@ -618,25 +619,12 @@ impl Drop for EnvVarsCleared {
 /// plus one schema file) at `out`, returning the SHA-256 hex of the
 /// archive bytes for an integrity-pin assertion.
 fn write_schemas_only_slpkg(out: &std::path::Path, name: &str, type_name: &str) -> String {
-    use std::io::Write;
-    let stem = type_name.to_ascii_lowercase();
-    let manifest = format!(
-        "package:\n  org: tatolab\n  name: {name}\n  version: \"0.1.0\"\n\
-         schemas:\n  {type_name}:\n    file: schemas/{stem}.yaml\n"
+    let buf = schemas_only_package_archive_bytes(
+        name,
+        type_name,
+        streamlib_idents::archive::ArchiveKind::Zip,
+        None,
     );
-    let schema = format!("metadata:\n  type: {type_name}\n  expected_payload_bytes: 4096\n");
-
-    let mut buf = Vec::new();
-    {
-        let mut zw = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
-        let opts: zip::write::FileOptions<()> =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        zw.start_file("streamlib.yaml", opts).unwrap();
-        zw.write_all(manifest.as_bytes()).unwrap();
-        zw.start_file(format!("schemas/{stem}.yaml"), opts).unwrap();
-        zw.write_all(schema.as_bytes()).unwrap();
-        zw.finish().unwrap();
-    }
     std::fs::write(out, &buf).unwrap();
 
     use sha2::{Digest, Sha256};
@@ -737,6 +725,250 @@ fn url_strategy_rejects_checksum_mismatch() {
         )
         .is_none(),
         "no schema may register when the integrity check fails"
+    );
+}
+
+/// Package-archive bytes for a schemas-only `@tatolab/<name>` package, in
+/// either container, optionally nested under a single top-level directory (the
+/// `tar czf pkg.tar.gz my-package/` shape a hand-rolled archive carries).
+fn schemas_only_package_archive_bytes(
+    name: &str,
+    type_name: &str,
+    kind: streamlib_idents::archive::ArchiveKind,
+    nested_under: Option<&str>,
+) -> Vec<u8> {
+    package_archive_bytes(
+        &schemas_only_package_entries(name, type_name, None),
+        kind,
+        nested_under,
+    )
+}
+
+/// The two entries of a schemas-only `@tatolab/<name>` package, optionally
+/// carrying one version-range dependency edge (`@tatolab/<dep>: "^<range>"`).
+fn schemas_only_package_entries(
+    name: &str,
+    type_name: &str,
+    dep: Option<(&str, &str)>,
+) -> [(String, Vec<u8>); 2] {
+    schemas_only_package_entries_at_version(name, "0.1.0", type_name, dep)
+}
+
+/// [`schemas_only_package_entries`] at an explicit package version.
+fn schemas_only_package_entries_at_version(
+    name: &str,
+    version: &str,
+    type_name: &str,
+    dep: Option<(&str, &str)>,
+) -> [(String, Vec<u8>); 2] {
+    let stem = type_name.to_ascii_lowercase();
+    let mut manifest = format!(
+        "package:\n  org: tatolab\n  name: {name}\n  version: \"{version}\"\n\
+         schemas:\n  {type_name}:\n    file: schemas/{stem}.yaml\n"
+    );
+    if let Some((dep_name, dep_range)) = dep {
+        manifest.push_str(&format!(
+            "dependencies:\n  \"@tatolab/{dep_name}\": \"^{dep_range}\"\n"
+        ));
+    }
+    [
+        ("streamlib.yaml".to_string(), manifest.into_bytes()),
+        (
+            format!("schemas/{stem}.yaml"),
+            format!("metadata:\n  type: {type_name}\n  expected_payload_bytes: 4096\n")
+                .into_bytes(),
+        ),
+    ]
+}
+
+/// Container equivalence at the runtime module loader: ONE fixture delivered
+/// four ways — flat zip, nested zip, flat tar.gz, nested tar.gz — half through
+/// [`Strategy::PackageArchive`] and half through [`Strategy::Url`], must
+/// materialize one identical installed-slot content hash. Mentally revert the
+/// loader onto a zip-only, archive-index manifest read and the two tar.gz legs
+/// fail outright while the nested zip leg lands a `my-package/`-shifted slot
+/// whose hash diverges.
+#[test]
+#[serial]
+fn every_container_shape_materializes_one_identical_installed_slot() {
+    use streamlib_idents::archive::ArchiveKind;
+
+    let sandbox = tempfile::tempdir().unwrap();
+    let prev_home = std::env::var_os("STREAMLIB_HOME");
+    unsafe {
+        std::env::set_var("STREAMLIB_HOME", sandbox.path());
+    }
+    let _restore = StreamlibHomeRestore(prev_home);
+
+    let package_name = "container-parity";
+    let type_name = "ContainerParitySchema";
+    let src = tempfile::tempdir().unwrap();
+
+    let deliveries: [(&str, ArchiveKind, Option<&str>, bool); 4] = [
+        ("flat zip", ArchiveKind::Zip, None, false),
+        ("nested zip", ArchiveKind::Zip, Some("my-package"), false),
+        ("flat tar.gz", ArchiveKind::TarGz, None, true),
+        (
+            "nested tar.gz",
+            ArchiveKind::TarGz,
+            Some("my-package"),
+            true,
+        ),
+    ];
+
+    let mut slot_hashes: Vec<(&str, String)> = Vec::new();
+    for (label, kind, nested_under, via_url) in deliveries {
+        // A fresh app-modules root per delivery, so each leg materializes its
+        // slot from scratch rather than reusing the previous leg's.
+        let app_root = tempfile::tempdir().unwrap();
+        let _modules_root = AppModulesRootOverrideGuard::install(app_root.path());
+
+        let archive = src
+            .path()
+            .join(format!("{}.archive", label.replace(['.', ' '], "-")));
+        std::fs::write(
+            &archive,
+            schemas_only_package_archive_bytes(package_name, type_name, kind, nested_under),
+        )
+        .unwrap();
+
+        let strategy = if via_url {
+            Strategy::Url {
+                url: format!("file://{}", archive.display()),
+                build: BuildPolicy::NeverBuild,
+                checksum: None,
+            }
+        } else {
+            Strategy::PackageArchive {
+                path: archive.clone(),
+            }
+        };
+
+        let runtime = Runner::new().unwrap();
+        runtime
+            .add_module_with_blocking(
+                streamlib_idents::ModuleIdent::any(
+                    streamlib_idents::Org::new("tatolab").unwrap(),
+                    streamlib_idents::Package::new(package_name).unwrap(),
+                ),
+                strategy,
+            )
+            .unwrap_or_else(|e| panic!("{label} delivery must load: {e}"));
+
+        let slot = installed_package_slot_for_test("tatolab", package_name);
+        assert!(
+            slot.join("streamlib.yaml").is_file(),
+            "{label}: the manifest must land at the slot root, not under a nested dir"
+        );
+        let hash = streamlib_idents::content_hash_for_package_dir(&slot)
+            .unwrap_or_else(|e| panic!("{label}: hashing the slot must succeed: {e}"));
+        slot_hashes.push((label, hash));
+    }
+
+    let (first_label, first_hash) = &slot_hashes[0];
+    for (label, hash) in &slot_hashes[1..] {
+        assert_eq!(
+            hash, first_hash,
+            "{label} must materialize the same slot contents as {first_label}"
+        );
+    }
+    assert!(
+        crate::core::embedded_schemas::get_embedded_schema_definition(&format!(
+            "@tatolab/{package_name}/{type_name}"
+        ))
+        .is_some(),
+        "the fixture's schema must register from every container shape"
+    );
+}
+
+/// A `streamlib link`ed slot outranks a package-archive load: the load is
+/// refused with the link named, the symlink survives, and the app's
+/// `streamlib.lock` keeps its truthful `LockfileSource::Link` entry. A run must
+/// never silently unlink a dev-loop checkout — the loader writes no lockfile,
+/// so a replace would leave the lock claiming a link that no longer exists.
+#[test]
+#[serial]
+fn package_archive_load_over_a_linked_slot_is_refused_and_the_link_survives() {
+    use streamlib_idents::app_modules::AppModulesDir;
+
+    let sandbox = tempfile::tempdir().unwrap();
+    let prev_home = std::env::var_os("STREAMLIB_HOME");
+    unsafe {
+        std::env::set_var("STREAMLIB_HOME", sandbox.path());
+    }
+    let _restore = StreamlibHomeRestore(prev_home);
+
+    let app_root = tempfile::tempdir().unwrap();
+    let _modules_root = AppModulesRootOverrideGuard::install(app_root.path());
+
+    let package_name = "linked-slot-guard";
+    let type_name = "LinkedSlotGuardSchema";
+
+    // A live `streamlib link` checkout occupying the slot.
+    let checkout = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(checkout.path().join("schemas")).unwrap();
+    std::fs::write(
+        checkout.path().join("streamlib.yaml"),
+        format!(
+            "package:\n  org: tatolab\n  name: {package_name}\n  version: \"0.1.0\"\n\
+             schemas:\n  {type_name}:\n    file: schemas/linked.yaml\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        checkout.path().join("schemas/linked.yaml"),
+        format!("metadata:\n  type: {type_name}\n  expected_payload_bytes: 4096\n"),
+    )
+    .unwrap();
+    let app = AppModulesDir::at(app_root.path());
+    let link = app.link_package(checkout.path()).unwrap();
+    let lock_before = std::fs::read(app.lockfile_path()).unwrap();
+
+    let src = tempfile::tempdir().unwrap();
+    let archive = src.path().join("linked-slot-guard.slpkg");
+    std::fs::write(
+        &archive,
+        schemas_only_package_archive_bytes(
+            package_name,
+            type_name,
+            streamlib_idents::archive::ArchiveKind::Zip,
+            None,
+        ),
+    )
+    .unwrap();
+
+    let runtime = Runner::new().unwrap();
+    let err = runtime
+        .add_module_with_blocking(
+            streamlib_idents::ModuleIdent::any(
+                streamlib_idents::Org::new("tatolab").unwrap(),
+                streamlib_idents::Package::new(package_name).unwrap(),
+            ),
+            Strategy::PackageArchive {
+                path: archive.clone(),
+            },
+        )
+        .expect_err("a package-archive load over a linked slot must be refused");
+    assert!(
+        matches!(
+            &err,
+            AddModuleError::InstalledSlotOccupiedByActiveLink { link_target, .. }
+                if link_target == &link.link_target
+        ),
+        "expected InstalledSlotOccupiedByActiveLink naming the checkout, got {err:?}"
+    );
+
+    assert!(
+        std::fs::symlink_metadata(&link.package_dir)
+            .unwrap()
+            .file_type()
+            .is_symlink(),
+        "the `streamlib link` symlink must survive the refused load"
+    );
+    assert_eq!(
+        std::fs::read(app.lockfile_path()).unwrap(),
+        lock_before,
+        "the refused load must leave streamlib.lock byte-identical"
     );
 }
 
@@ -3694,25 +3926,15 @@ processors:
         let dir = mirror.join("slpkg").join(name).join(version);
         std::fs::create_dir_all(&dir).unwrap();
         let archive = dir.join(format!("{name}.slpkg"));
-        let stem = type_name.to_ascii_lowercase();
-        let mut manifest = format!(
-            "package:\n  org: tatolab\n  name: {name}\n  version: \"{version}\"\n\
-             schemas:\n  {type_name}:\n    file: schemas/{stem}.yaml\n"
-        );
-        if let Some((dep_name, dep_range)) = dep {
-            manifest.push_str(&format!(
-                "dependencies:\n  \"@tatolab/{dep_name}\": \"^{dep_range}\"\n"
-            ));
-        }
-        let schema = format!("metadata:\n  type: {type_name}\n  expected_payload_bytes: 4096\n");
-        let mut zw = zip::ZipWriter::new(std::fs::File::create(&archive).unwrap());
-        let opts: zip::write::FileOptions<()> =
-            zip::write::FileOptions::default().compression_method(zip::CompressionMethod::Stored);
-        zw.start_file("streamlib.yaml", opts).unwrap();
-        zw.write_all(manifest.as_bytes()).unwrap();
-        zw.start_file(format!("schemas/{stem}.yaml"), opts).unwrap();
-        zw.write_all(schema.as_bytes()).unwrap();
-        zw.finish().unwrap();
+        std::fs::write(
+            &archive,
+            package_archive_bytes(
+                &schemas_only_package_entries_at_version(name, version, type_name, dep),
+                streamlib_idents::archive::ArchiveKind::Zip,
+                None,
+            ),
+        )
+        .unwrap();
     }
 
     /// THE key test: install from a `file://` package source, then run **strictly

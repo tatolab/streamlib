@@ -302,7 +302,7 @@ enum Commands {
     /// - In a **package-authoring dir** (a `streamlib.yaml` with a `package:`
     ///   block), `streamlib add @org/name@<version>` records a caret
     ///   dependency (`^<version>`) into that package's own `dependencies:` —
-    ///   the schema-tier `cargo add`. `pkg build` reconciles it against code.
+    ///   the schema-tier `cargo add`. `pkg publish` reconciles it against code.
     /// - In a **consumer / app dir**, takes a byte source — a package folder,
     ///   an archive (`.slpkg` / `.zip` / `.tar.gz`), or a `file://` / HTTP(S)
     ///   URL — materializes it into `streamlib_modules/@org/name/` beside the
@@ -478,18 +478,6 @@ enum SchemasCommands {
 
 #[derive(Subcommand)]
 enum PkgCommands {
-    /// Build THIS package into a source-only `.slpkg` (run inside the package).
-    ///
-    /// Bundles source only — no compilation, no prebuilt cdylib, nothing
-    /// path-related. The consumer builds it from source on their host
-    /// (`streamlib add` / runtime by-version resolution), pulling every dep by
-    /// version from the package source. The artifact is for hand-off (email it,
-    /// hand it to a runtime); `publish` repacks independently.
-    Build {
-        /// Output file path (default: {name}-{version}.slpkg in the package dir)
-        #[arg(short, long)]
-        output: Option<PathBuf>,
-    },
     /// Publish THIS package to the package source (run inside the package).
     ///
     /// Always repacks a fresh source-only `.slpkg` (never trusts an existing
@@ -500,8 +488,10 @@ enum PkgCommands {
     /// reads are tokenless. Publishing many packages is a script over this
     /// single-package command.
     Publish,
-    /// Remove THIS package's build/pack artifacts (run inside the package):
-    /// any `*.slpkg`, the prebuilt `lib/` dir, and generated `_generated_/` trees.
+    /// Remove THIS package's build artifacts (run inside the package): the
+    /// prebuilt `lib/` dir and generated `_generated_/` trees. Also sweeps any
+    /// hand-made `*.slpkg` left in the package dir — `publish` packs to a
+    /// tempfile, so nothing streamlib runs writes one here any more.
     Clean,
     /// Reclaim on-the-box build scratch across every materialized package slot,
     /// keeping the loadable artifact. Reclaims each slot's `target/` plus
@@ -512,11 +502,6 @@ enum PkgCommands {
         /// App root whose `streamlib_modules/` is reclaimed (default: CWD).
         #[arg(long)]
         dir: Option<PathBuf>,
-    },
-    /// Inspect a .slpkg package (show manifest without installing)
-    Inspect {
-        /// Path to .slpkg file
-        path: PathBuf,
     },
     /// List installed packages (the app's `streamlib_modules/` folder)
     List {
@@ -696,11 +681,9 @@ async fn async_main(cli: Cli) -> Result<()> {
             }
         }
         Some(Commands::Pkg { action }) => match action {
-            PkgCommands::Build { output } => commands::pkg::build(output.as_deref())?,
             PkgCommands::Publish => commands::pkg::publish()?,
             PkgCommands::Clean => commands::pkg::clean()?,
             PkgCommands::CacheGc { dir } => commands::pkg::cache_gc(dir.as_deref())?,
-            PkgCommands::Inspect { path } => commands::pkg::inspect(&path)?,
             PkgCommands::List { dir } => commands::pkg::list(dir.as_deref())?,
         },
         Some(Commands::Link {

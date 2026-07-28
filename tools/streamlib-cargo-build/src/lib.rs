@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Cargo-build orchestration helpers used by `streamlib pack` and
+//! Cargo-build orchestration helpers used by `streamlib pkg publish` and
 //! `streamlib-build-orchestrator`.
 //!
 //! The two callers need the same battle-tested cdylib-discovery /
@@ -96,7 +96,7 @@ pub fn read_cargo_package_name(package_dir: &Path) -> Result<String> {
 
 /// Cargo build profile selector for [`run_cargo_build`].
 ///
-/// `Release` is the production-distribution shape (`streamlib pack`
+/// `Release` is the production-distribution shape (`streamlib pkg publish`
 /// uses it). `Dev` skips optimization for a faster inner loop
 /// (`streamlib-build-orchestrator` defaults to it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -204,7 +204,7 @@ pub fn run_cargo_build(
 }
 
 /// Back-compat wrapper for [`run_cargo_build`] with [`CargoProfile::Release`].
-/// `streamlib pack` retains this entry point so the release-default shape
+/// The package assembler retains this entry point so the release-default shape
 /// for distribution artifacts is preserved.
 pub fn run_cargo_build_release(
     package_dir: &Path,

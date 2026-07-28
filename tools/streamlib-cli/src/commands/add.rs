@@ -8,7 +8,7 @@
 //! - **Package-authoring dir** (a `streamlib.yaml` with a `package:` block):
 //!   `streamlib add @org/name@<version>` records a caret dependency
 //!   (`^<version>`) into that package's own `dependencies:` — the schema-tier
-//!   analog of `cargo add`. `pkg build` then reconciles the declared set
+//!   analog of `cargo add`. `pkg publish` then reconciles the declared set
 //!   against what the code references.
 //! - **Consumer / app dir** (no `package:` block): `add` takes any valid
 //!   streamlib package byte source — a folder, an archive (`.slpkg` / `.zip`
@@ -92,6 +92,7 @@ pub fn add(
         // compile failure can restore the previously-working version rather
         // than leaving the operator with nothing.
         retain_replaced_slot_backup: !no_build,
+        ..Default::default()
     };
     let report = app
         .add_package(&source, &options)
@@ -345,7 +346,9 @@ fn print_add_report(report: &AddPackageReport) {
     };
     println!("{verb} {} v{}", report.package, report.version);
     println!("  Folder: {}", report.package_dir.display());
-    println!("  Lock:   {}", report.lockfile_path.display());
+    if let Some(lockfile_path) = &report.lockfile_path {
+        println!("  Lock:   {}", lockfile_path.display());
+    }
 
     print_processor_summary(&report.package_dir);
 }

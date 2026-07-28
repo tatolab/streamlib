@@ -170,7 +170,7 @@ Deno.test("a module beside the manifest is not discovered", async () => {
   }
 });
 
-Deno.test("extractor emits manifest JSON pkg build consumes", async () => {
+Deno.test("extractor emits manifest JSON pkg publish consumes", async () => {
   const dir = await makeFixturePackage();
   try {
     const procs = await extractProcessorsFromDir(dir);

@@ -46,7 +46,7 @@ pub struct StreamlibYaml {
 
     /// Per-consumer resolution overrides. Mirrors Cargo's
     /// `[patch.crates-io]` shape but lives in the consumer's own yaml —
-    /// no workspace walk-up. `streamlib pack` rejects yamls whose
+    /// no workspace walk-up. `streamlib pkg publish` rejects yamls whose
     /// `patch:` block contains any `path:` entries (path overrides
     /// are dev-time only, not publishable).
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

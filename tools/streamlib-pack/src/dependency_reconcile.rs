@@ -11,7 +11,7 @@
 //! `dependencies:` table:
 //!
 //! - **Undeclared** — a referenced package that is not declared. This is a hard
-//!   error at `pkg build`: the manifest lies about what the package needs. The
+//!   error at `pkg publish`: the manifest lies about what the package needs. The
 //!   fix is to declare it (`streamlib add @org/name@<version>`).
 //! - **Pruned** — a declared package referenced by none of the code, and not
 //!   marked `runtime: true`. Reported as prunable (dead-weight dependency).

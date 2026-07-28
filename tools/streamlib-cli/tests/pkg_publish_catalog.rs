@@ -163,3 +163,26 @@ processors:
         "no .slpkg / catalog should be written on a fail-fast catalog error"
     );
 }
+
+/// The `pkg` surface no longer carries `build` / `inspect`: distribution is
+/// by-version through `pkg publish`, and a package archive is inspected by
+/// adding it. Clap must reject both as unknown subcommands rather than
+/// silently accepting a stale invocation.
+#[test]
+fn pkg_build_and_inspect_verbs_are_gone() {
+    for removed_verb in ["build", "inspect"] {
+        let out = Command::new(BIN)
+            .args(["pkg", removed_verb])
+            .output()
+            .expect("spawn streamlib binary");
+        assert!(
+            !out.status.success(),
+            "`streamlib pkg {removed_verb}` must not be a recognized verb"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("unrecognized subcommand") || stderr.contains("invalid value"),
+            "`streamlib pkg {removed_verb}` must fail as an unknown subcommand, got: {stderr}"
+        );
+    }
+}

@@ -10,6 +10,12 @@ authors.workspace = true
 license-file.workspace = true
 repository.workspace = true
 
+[features]
+# Package-archive authoring helpers (`archive::package_archive_fixtures`) for
+# downstream test suites, so no consumer of the reader re-implements zip /
+# tar.gz fixture construction or pulls its own container dev-dependencies.
+archive-test-fixtures = []
+
 [dependencies]
 serde = { workspace = true }
 serde_yaml = { workspace = true }

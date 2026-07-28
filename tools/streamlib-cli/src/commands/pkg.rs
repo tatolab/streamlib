@@ -6,41 +6,16 @@
 //! Single-package adoption (installing a published package, removing one) lives
 //! in the top-level `streamlib add` / `streamlib remove` verbs
 //! ([`super::add`]); `pkg` here is scoped to authoring artifacts of THIS
-//! package — build, publish, clean, inspect — plus `list`.
+//! package — publish, clean — plus `list`.
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use streamlib::engine_internal::core::ProjectConfig;
 use streamlib::sdk::runtime::{AppModulesDir, parse_lockfile_package_key};
 use streamlib_idents::{PackageSourceClient, PackageSource};
 use streamlib_pack::catalog::{build_package_catalog, build_sibling_versions};
 use streamlib_pack::static_package_source::{merge_catalog_index_lines, write_package_catalog};
-use streamlib_pack::{
-    AssembleOptions, AssembleTarget, CargoProfile, PathDepPolicy, assemble_artifact,
-};
-
-/// Build THIS package (the current working directory) into a source-only
-/// `.slpkg`. Pure source bundling — no compilation, no prebuilt cdylib,
-/// nothing path-related (the assembler refuses a path dep / path patch). The
-/// artifact is a hand-off bundle; the consumer builds it from source.
-pub fn build(output: Option<&Path>) -> Result<()> {
-    let package_dir = std::env::current_dir().context("resolve current working directory")?;
-    // Early friendly check; the load-bearing guard runs again inside
-    // `assemble_artifact`'s Slpkg branch (streamlib-pack owns the seam).
-    streamlib_idents::link_marker::ensure_no_active_link_for_pack(&package_dir)?;
-    let output_path = resolve_slpkg_output(&package_dir, output)?;
-    let outcome = assemble_source_slpkg(&package_dir, &output_path)?;
-    println!("Built source-only package: {}", output_path.display());
-    println!("  {} v{}", outcome.package_name, outcome.package_version);
-    if outcome.schemas > 0 {
-        println!("  Schemas: {}", outcome.schemas);
-    }
-    if outcome.processors > 0 {
-        println!("  Processors: {}", outcome.processors);
-    }
-    Ok(())
-}
+use streamlib_pack::{AssembleOptions, AssembleTarget, assemble_artifact};
 
 /// Publish THIS package (the current working directory) into the package
 /// source (a static `.slpkg` tree) generic store. Always repacks a fresh
@@ -176,10 +151,11 @@ fn file_tree_root(base_url: &str) -> Result<std::path::PathBuf> {
         })
 }
 
-/// Remove THIS package's build/pack artifacts from the current working
-/// directory: any `*.slpkg`, the prebuilt `lib/` dir, and the generated
-/// `_generated_/` wire-vocabulary trees (root + `python/`). All are
-/// regenerated on the next build/pack.
+/// Remove THIS package's build artifacts from the current working directory:
+/// the prebuilt `lib/` dir and the generated `_generated_/` wire-vocabulary
+/// trees (root + `python/`), all regenerated on the next build. The `*.slpkg`
+/// sweep is retained for hand-made archives only — `publish` packs to a
+/// tempfile and no streamlib verb writes an archive into the package dir.
 pub fn clean() -> Result<()> {
     let dir = std::env::current_dir().context("resolve current working directory")?;
     let mut removed: Vec<String> = Vec::new();
@@ -372,28 +348,6 @@ fn pid_is_alive(pid: u32) -> bool {
     }
 }
 
-/// Resolve the default `.slpkg` output path (`{name}-{version}.slpkg` in the
-/// package dir) when `--output` isn't given.
-fn resolve_slpkg_output(package_dir: &Path, output: Option<&Path>) -> Result<std::path::PathBuf> {
-    match output {
-        Some(p) => Ok(p.to_path_buf()),
-        None => {
-            let config = streamlib_cargo_build::read_minimal_project_config(package_dir)
-                .context("Failed to read streamlib.yaml")?
-                .ok_or_else(|| anyhow::anyhow!("no streamlib.yaml at {}", package_dir.display()))?;
-            let package = config
-                .package
-                .as_ref()
-                .ok_or_else(|| anyhow::anyhow!("streamlib.yaml missing [package] section"))?;
-            Ok(package_dir.join(format!(
-                "{}-{}.slpkg",
-                package.name.as_str(),
-                package.version
-            )))
-        }
-    }
-}
-
 /// Assemble a source-only `.slpkg` at `output_path`. The `Slpkg` target makes
 /// `assemble_artifact` ship source only (no cdylib build) and enforce the
 /// no-path contract; `no_build` / `profile` are inert on this path.
@@ -404,92 +358,10 @@ fn assemble_source_slpkg(
     assemble_artifact(
         package_dir,
         &AssembleTarget::Slpkg(output_path.to_path_buf()),
-        &AssembleOptions {
-            no_build: false,
-            profile: CargoProfile::Release,
-            path_deps: PathDepPolicy::RejectPathPatches,
-            ignore_in_tree_prebuilt_cdylib: false,
-        },
+        &AssembleOptions::source_only_publish(),
         &(),
     )
     .map_err(|e| anyhow::anyhow!("pack failed: {}", e))
-}
-
-/// Inspect a .slpkg package without installing it.
-pub fn inspect(path: &std::path::Path) -> Result<()> {
-    if !path.exists() {
-        anyhow::bail!("File not found: {}", path.display());
-    }
-
-    let file =
-        std::fs::File::open(path).with_context(|| format!("Failed to open {}", path.display()))?;
-    let mut archive = zip::ZipArchive::new(file)
-        .with_context(|| format!("Failed to read ZIP archive: {}", path.display()))?;
-
-    // Find and read streamlib.yaml from the archive
-    let yaml_content = {
-        let mut entry = archive
-            .by_name("streamlib.yaml")
-            .with_context(|| "Package missing streamlib.yaml")?;
-        let mut buf = String::new();
-        std::io::Read::read_to_string(&mut entry, &mut buf)?;
-        buf
-    };
-
-    let config: ProjectConfig =
-        serde_yaml::from_str(&yaml_content).with_context(|| "Failed to parse streamlib.yaml")?;
-
-    let package = config
-        .package
-        .as_ref()
-        .ok_or_else(|| anyhow::anyhow!("Package missing [package] section"))?;
-
-    println!("Package: {} v{}", package.name, package.version);
-    if let Some(desc) = &package.description {
-        println!("Description: {}", desc);
-    }
-    if let Some(sv) = &package.streamlib_version {
-        println!("Requires: streamlib {}", sv);
-    }
-
-    if !config.processors.is_empty() {
-        println!();
-        println!("Processors ({}):", config.processors.len());
-        for proc in &config.processors {
-            println!("  {}", proc.name);
-            if let Some(desc) = &proc.description {
-                println!("    {}", desc);
-            }
-            println!("    Runtime:   {:?}", proc.runtime.language);
-            println!("    Execution: {:?}", proc.execution);
-            if !proc.inputs.is_empty() {
-                println!("    Inputs:");
-                for input in &proc.inputs {
-                    println!("      - {} ({})", input.name, input.schema);
-                }
-            }
-            if !proc.outputs.is_empty() {
-                println!("    Outputs:");
-                for output in &proc.outputs {
-                    println!("      - {} ({})", output.name, output.schema);
-                }
-            }
-            if let Some(config_ref) = &proc.config {
-                println!("    Config:    {} ({})", config_ref.name, config_ref.schema);
-            }
-        }
-    }
-
-    // List files in archive
-    println!();
-    println!("Files ({}):", archive.len());
-    for i in 0..archive.len() {
-        if let Ok(entry) = archive.by_index(i) {
-            println!("  {}", entry.name());
-        }
-    }
-
-    Ok(())
 }
 
 /// List the app's installed packages, read from its `streamlib.lock` — the

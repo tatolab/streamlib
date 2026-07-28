@@ -34,7 +34,7 @@ pub struct Org(String);
 /// path) lives under `@session/…` so it never collides with an installed
 /// `@org/…` package on the registry key. This org is **constructible** —
 /// [`validate_org`] accepts it, so runtime `@session/…` idents can be built —
-/// but it is **not publishable**: `streamlib pkg build` / `pkg publish` reject
+/// but it is **not publishable**: `streamlib pkg publish` rejects
 /// a package that declares it (see [`Org::is_reserved_for_session`]). The two
 /// facts are deliberately separate seams: grammar admits it; the publish
 /// boundary refuses it.
@@ -53,9 +53,9 @@ impl Org {
 
     /// Whether this org is the [`SESSION_ORG`] reserved for in-app /
     /// session-local processors — constructible for runtime idents, but
-    /// rejected at the publish boundary. Callers on the `pkg build` /
-    /// `pkg publish` path use this to refuse a distribution artifact that
-    /// would squat the reserved namespace.
+    /// rejected at the publish boundary. Callers on the `pkg publish` path
+    /// use this to refuse a distribution artifact that would squat the
+    /// reserved namespace.
     pub fn is_reserved_for_session(&self) -> bool {
         self.0 == SESSION_ORG
     }
@@ -782,7 +782,7 @@ version: 0.4.33-dev.2
     fn session_org_stays_constructible_via_grammar() {
         // The reserved `session` org MUST keep passing `validate_org` /
         // `Org::new` — runtime `@session/…` idents are built from it. The
-        // publish rejection lives at the `pkg build` boundary, never in the
+        // publish rejection lives at the `pkg publish` boundary, never in the
         // grammar. Revert the "keep accepting" contract (reject `session` in
         // `validate_org`) and this fails, catching the wrong-seam mistake.
         assert!(validate_org(SESSION_ORG).is_ok());

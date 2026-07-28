@@ -8,7 +8,7 @@
 //! This crate is the inverse of the old flow: instead of the macro reading a
 //! hand-authored `processors:` list, a `syn`-based source scan *derives* that
 //! list from the `#[processor(...)]` usage in a crate's `src/`, so
-//! `streamlib pkg build` (and any future live-submit path) obtains the
+//! `streamlib pkg publish` (and any future live-submit path) obtains the
 //! processor manifest from code rather than trusting a committed enumeration.
 //!
 //! The scan runs over a crate's source **without compiling it into the host**:

@@ -102,7 +102,6 @@ anymap2 = "0.13"  # TypeMap for embedded component storage on graph weights
 cuid2 = "0.1"  # Collision-resistant unique identifiers for processor/link IDs
 uuid = { version = "1.11", features = ["v4"] }  # UUID generation for PixelBufferPoolId
 dirs = "6.0"   # Cross-platform home directory resolution
-zip = "2.2"    # ZIP archive extraction for .slpkg packages
 libloading = "0.8"  # Dynamic library loading for Rust dylib plugins
 sha2.workspace = true  # SHA-256 hashing for venv cache keys + .slpkg integrity
 ureq.workspace = true  # Blocking HTTP fetch for remote `.slpkg` (Strategy::Url)
@@ -187,6 +186,10 @@ tokio = { workspace = true, features = ["full"] }
 hound = "3.5"  # WAV file writing for examples
 serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interference
 tempfile = "3.14"  # Temporary directories for config tests
+streamlib-pack = { path = "../../tools/streamlib-pack" }  # Source-only `.slpkg` assembly for the pack -> load gate
+# Package-archive fixture authoring lives in the crate that owns the reader —
+# the engine neither reads nor writes containers except through it.
+streamlib-idents = { path = "../../sdk/streamlib-idents", version = "0.8.3", features = ["archive-test-fixtures"] }
 criterion = { version = "0.5", features = ["html_reports"] }  # Benches for logging hot path (#447)
 png = "0.17"  # PNG decoding for shader-output fixture comparisons
 

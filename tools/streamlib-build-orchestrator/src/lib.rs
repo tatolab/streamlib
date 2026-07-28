@@ -13,7 +13,7 @@
 //! There is ONE materialization path, identical to installing a package
 //! from a `.slpkg` or a GitHub repo: assemble the *complete* artifact
 //! (via [`streamlib_pack::assemble_artifact`] — the same routine
-//! `streamlib pack` uses: Rust cdylib via cargo + crate source, Python as
+//! `streamlib pkg publish` uses: Rust cdylib via cargo + crate source, Python as
 //! full source, Deno bundle, schemas) and stage it as an extracted
 //! directory at the destination the engine hands over on the
 //! [`BuildRequest`] (`staging_destination_slot_dir`). The orchestrator holds
@@ -392,7 +392,7 @@ impl PolyglotBuildOrchestrator {
         // the language's import-and-enumerate extractor and splice them into the
         // staged manifest before the atomic rename carries it into the cache.
         // Gated on the reserved session org so a normal package (whose committed
-        // `processors:` is the source of truth, drift-checked at `pkg build`) is
+        // `processors:` is the source of truth, drift-checked at `pkg publish`) is
         // never rewritten here.
         if package.org.is_reserved_for_session() {
             session_ports::splice_session_manifest_ports(&temp_dir, active_link.as_ref(), &pkg_label)

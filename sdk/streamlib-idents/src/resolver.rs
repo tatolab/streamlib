@@ -14,9 +14,11 @@
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::ffi::OsStr;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
+use crate::archive::{
+    ArchiveError, extract_archive_bytes_to_dir, locate_package_root_in_extracted_dir,
+};
 use crate::error::{ResolverError, ResolverResult};
 use crate::git::fetch_git;
 use crate::ident::{PackageRef, TypeName};
@@ -93,8 +95,10 @@ pub enum ResolvedSource {
     Path { relative: PathBuf },
     /// Resolved from a git pinned commit.
     Git { url: String, rev: String },
-    /// Resolved from a `.slpkg` archive (path to the archive is stored).
-    Slpkg { archive: PathBuf },
+    /// Resolved from a package archive (path to the archive is stored). The
+    /// container is whatever the shared reader sniffs — `.slpkg`, `.zip`, or
+    /// `.tar.gz`.
+    PackageArchive { archive: PathBuf },
     /// Resolved by version from a package source (the static `.slpkg` tree's
     /// generic store): the URL the concrete `.slpkg` was fetched from.
     /// Constructed by `resolve_version_dependency` and recorded in the
@@ -113,7 +117,7 @@ impl ResolvedSource {
                 url: url.clone(),
                 rev: rev.clone(),
             },
-            Self::Slpkg { archive } => LockfileSource::Path {
+            Self::PackageArchive { archive } => LockfileSource::Path {
                 path: archive.clone(),
             },
             Self::ByVersion { url } => LockfileSource::ByVersion { url: url.clone() },
@@ -562,7 +566,7 @@ fn resolve_version_dependency(
     let selected = select_version(dep_ref, &reg.version, &available)?;
     let (bytes, url) = client.download_slpkg(dep_ref, selected)?;
     let archive = cache_slpkg_bytes(dep_ref, &bytes, cache_dir)?;
-    let extracted = extract_slpkg(&archive, cache_dir)?;
+    let extracted = extract_package_archive_to_resolver_cache(&archive, cache_dir)?;
     let manifest = Manifest::load(&extracted)?;
     build_resolved_package(manifest, extracted, ResolvedSource::ByVersion { url })
 }
@@ -595,11 +599,17 @@ fn resolve_path_dependency(
             path: abs,
         });
     }
-    // `.slpkg` archive (path-flavored): extract first.
-    if abs.extension().and_then(|s| s.to_str()) == Some("slpkg") {
-        let extracted = extract_slpkg(&abs, cache_dir)?;
+    // Same is-dir / is-file classification `AddPackageSource::detect` applies:
+    // a directory is a package checkout, any file is a package archive whose
+    // container is sniffed from magic bytes. The extension is never consulted.
+    if abs.is_file() {
+        let extracted = extract_package_archive_to_resolver_cache(&abs, cache_dir)?;
         let manifest = Manifest::load(&extracted)?;
-        return build_resolved_package(manifest, extracted, ResolvedSource::Slpkg { archive: abs });
+        return build_resolved_package(
+            manifest,
+            extracted,
+            ResolvedSource::PackageArchive { archive: abs },
+        );
     }
     if !abs.is_dir() {
         return Err(ResolverError::PathDependencyNotDirectory {
@@ -862,7 +872,7 @@ fn check_resolved_satisfies_spec(
     // in-range pick from the store, so a mismatch on a `ByVersion` source is a
     // package-source mis-selection and stays an error as defense-in-depth. A
     // link/patch override (resolve_one's short-circuit to a linked checkout, or
-    // a dev `patch:` redirect) legitimately produces a Path/Git/Slpkg concrete
+    // a dev `patch:` redirect) legitimately produces a Path/Git/PackageArchive concrete
     // whose version diverges from the declared range — its "link resolution
     // overrides the declared spec" contract. Per #1505 a version mismatch never
     // blocks a load, so that case warns and keeps the override (mirroring
@@ -933,83 +943,109 @@ fn default_cache_dir() -> ResolverResult<PathBuf> {
     Ok(home.join(".streamlib").join("resolver-cache"))
 }
 
-fn extract_slpkg(archive: &Path, cache_dir: &Path) -> ResolverResult<PathBuf> {
-    let archive_bytes = std::fs::read(archive).map_err(|e| ResolverError::SlpkgExtractFailed {
+/// Materialize a package archive into the content-addressed resolver cache and
+/// return its package root. Any container the shared reader sniffs is accepted;
+/// the archive's extension is never consulted.
+///
+/// Stage-then-promote: the extraction lands in a `<hash>.staging-<pid>-<seq>`
+/// sibling and is renamed onto `<hash>` only once it holds a locatable package
+/// root. The shared slot is therefore never cleared under a concurrent reader,
+/// and the presence of `<hash>` means "complete" by construction rather than
+/// "a `streamlib.yaml` happened to survive whatever killed the last run".
+fn extract_package_archive_to_resolver_cache(
+    archive: &Path,
+    cache_dir: &Path,
+) -> ResolverResult<PathBuf> {
+    let extract_failed = |message: String| ResolverError::PackageArchiveExtractFailed {
         path: archive.to_path_buf(),
-        message: format!("read failed: {e}"),
-    })?;
+        message,
+    };
+    let extract_err = |e: ArchiveError| extract_failed(e.to_string());
+
+    let archive_bytes =
+        std::fs::read(archive).map_err(|e| extract_failed(format!("read failed: {e}")))?;
     let archive_hash = crate::lockfile::hash_content(&archive_bytes);
     let safe_hash = archive_hash.replace(':', "_");
-    let target = cache_dir.join("slpkg").join(safe_hash);
+    let package_archive_cache_dir = cache_dir.join("slpkg");
+    let target = package_archive_cache_dir.join(&safe_hash);
+    let source_label = archive.display().to_string();
 
-    let manifest_path = target.join(Manifest::FILE_NAME);
-    if manifest_path.exists() {
-        return Ok(target);
+    if target.is_dir() {
+        return locate_package_root_in_extracted_dir(&target, &source_label).map_err(extract_err);
     }
 
-    std::fs::create_dir_all(&target).map_err(|e| ResolverError::Io {
-        path: target.clone(),
-        source: e,
-    })?;
+    let staging = ResolverCachePackageStagingDir::create(&package_archive_cache_dir, &safe_hash)
+        .map_err(|e| extract_failed(format!("staging the extraction: {e}")))?;
+    extract_archive_bytes_to_dir(&archive_bytes, staging.path(), &source_label)
+        .map_err(extract_err)?;
+    // Locate BEFORE promoting: a container with no package root must never
+    // occupy `<hash>`, or every later resolve of those bytes would take the
+    // slot as a valid cache hit.
+    locate_package_root_in_extracted_dir(staging.path(), &source_label).map_err(extract_err)?;
+    staging
+        .promote_onto(&target)
+        .map_err(|e| extract_failed(format!("promoting the extraction: {e}")))?;
 
-    let cursor = std::io::Cursor::new(&archive_bytes);
-    let mut zip = zip::ZipArchive::new(cursor).map_err(|e| ResolverError::SlpkgExtractFailed {
-        path: archive.to_path_buf(),
-        message: format!("not a valid zip: {e}"),
-    })?;
+    locate_package_root_in_extracted_dir(&target, &source_label).map_err(extract_err)
+}
 
-    for i in 0..zip.len() {
-        let mut entry = zip
-            .by_index(i)
-            .map_err(|e| ResolverError::SlpkgExtractFailed {
-                path: archive.to_path_buf(),
-                message: format!("entry {i} read failed: {e}"),
-            })?;
-        let entry_name = entry.name().to_string();
-        // Reject path traversal.
-        if entry_name.contains("..") || entry_name.starts_with('/') {
-            return Err(ResolverError::SlpkgExtractFailed {
-                path: archive.to_path_buf(),
-                message: format!("rejected unsafe entry path: {entry_name}"),
-            });
-        }
-        let out_path = target.join(&entry_name);
-        if entry.is_dir() {
-            std::fs::create_dir_all(&out_path).map_err(|e| ResolverError::Io {
-                path: out_path,
-                source: e,
-            })?;
-            continue;
-        }
-        if let Some(parent) = out_path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| ResolverError::Io {
-                path: parent.to_path_buf(),
-                source: e,
-            })?;
-        }
-        let mut out = std::fs::File::create(&out_path).map_err(|e| ResolverError::Io {
-            path: out_path.clone(),
-            source: e,
-        })?;
-        let mut buf = Vec::new();
-        entry
-            .read_to_end(&mut buf)
-            .map_err(|e| ResolverError::SlpkgExtractFailed {
-                path: archive.to_path_buf(),
-                message: format!("read entry {entry_name} failed: {e}"),
-            })?;
-        std::io::Write::write_all(&mut out, &buf).map_err(|e| ResolverError::Io {
-            path: out_path,
-            source: e,
-        })?;
+/// A `<hash>.staging-<pid>-<seq>` sibling of a content-addressed resolver-cache
+/// slot, removed on drop unless it was promoted away. Extraction lands here so
+/// the shared `<hash>` slot is only ever created whole, by rename.
+#[must_use = "the staging directory is removed when this guard drops"]
+struct ResolverCachePackageStagingDir {
+    path: PathBuf,
+    promoted: bool,
+}
+
+impl ResolverCachePackageStagingDir {
+    fn create(package_archive_cache_dir: &Path, slot_name: &str) -> std::io::Result<Self> {
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static STAGE_SEQ: AtomicU64 = AtomicU64::new(0);
+        std::fs::create_dir_all(package_archive_cache_dir)?;
+        let path = package_archive_cache_dir.join(format!(
+            "{slot_name}.staging-{}-{}",
+            std::process::id(),
+            STAGE_SEQ.fetch_add(1, Ordering::Relaxed)
+        ));
+        Ok(Self {
+            path,
+            promoted: false,
+        })
     }
 
-    Ok(target)
+    fn path(&self) -> &Path {
+        &self.path
+    }
+
+    /// Rename the staged tree onto `target`. A rename that loses the race to
+    /// another process is success, not failure: both trees came from the same
+    /// archive bytes, so whichever landed is the right contents.
+    fn promote_onto(mut self, target: &Path) -> std::io::Result<()> {
+        match std::fs::rename(&self.path, target) {
+            Ok(()) => {
+                self.promoted = true;
+                Ok(())
+            }
+            Err(_) if target.is_dir() => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+impl Drop for ResolverCachePackageStagingDir {
+    fn drop(&mut self) {
+        if !self.promoted && self.path.exists() {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::archive::ArchiveKind;
+    use crate::archive::package_archive_fixtures::package_archive_bytes;
 
     fn write_yaml(dir: &Path, name: &str, body: &str) {
         std::fs::write(dir.join(name), body).unwrap();
@@ -1791,8 +1827,268 @@ dependencies:
         };
         let res = resolve_with(&root, &opts).unwrap();
         let core = res.packages.get("@tatolab/core").unwrap();
-        assert!(matches!(core.source, ResolvedSource::Slpkg { .. }));
+        assert!(matches!(core.source, ResolvedSource::PackageArchive { .. }));
         assert_eq!(core.schema_files.len(), 1);
+    }
+
+    /// A minimal `@tatolab/core` package's two entries.
+    fn core_package_entries() -> [(String, Vec<u8>); 2] {
+        [
+            (
+                Manifest::FILE_NAME.to_string(),
+                b"package:\n  org: tatolab\n  name: core\n  version: 1.0.0\n".to_vec(),
+            ),
+            (
+                "schemas/VideoFrame.yaml".to_string(),
+                b"metadata:\n  name: VideoFrame\nproperties: {}\n".to_vec(),
+            ),
+        ]
+    }
+
+    fn write_core_archive(path: &Path, kind: ArchiveKind, nested_under: Option<&str>) {
+        std::fs::write(
+            path,
+            package_archive_bytes(&core_package_entries(), kind, nested_under),
+        )
+        .unwrap();
+    }
+
+    fn resolve_core_path_dependency(tmp: &Path, archive_path: &Path) -> ResolvedPackages {
+        let root = tmp.join("project");
+        write_streamlib_yaml(
+            &root,
+            &format!(
+                "dependencies:\n  \"@tatolab/core\":\n    path: {}\n",
+                archive_path.to_string_lossy()
+            ),
+        );
+        resolve_with(
+            &root,
+            &ResolverOptions {
+                cache_dir: Some(tmp.join("cache")),
+                package_source: None,
+                link_checkout: None,
+            },
+        )
+        .unwrap_or_else(|e| panic!("resolving {} must succeed: {e}", archive_path.display()))
+    }
+
+    /// A `path:` dep may name any container the shared reader sniffs — a
+    /// `.zip` and a `.tar.gz` resolve exactly like a `.slpkg`, flat or nested.
+    /// Mentally revert the is-file classification back to the `.slpkg`
+    /// extension test and every leg here reports `PathDependencyNotDirectory`.
+    #[test]
+    fn path_dependency_resolves_zip_and_tar_gz_containers() {
+        let tmp = tempfile::tempdir().unwrap();
+        let archives = tmp.path().join("archives");
+        std::fs::create_dir_all(&archives).unwrap();
+
+        let flat_zip = archives.join("core.zip");
+        write_core_archive(&flat_zip, ArchiveKind::Zip, None);
+        let nested_zip = archives.join("core-nested.zip");
+        write_core_archive(&nested_zip, ArchiveKind::Zip, Some("core-1.0.0"));
+        let flat_tar_gz = archives.join("core.tar.gz");
+        write_core_archive(&flat_tar_gz, ArchiveKind::TarGz, None);
+        let nested_tar_gz = archives.join("core-nested.tar.gz");
+        write_core_archive(&nested_tar_gz, ArchiveKind::TarGz, Some("core-1.0.0"));
+
+        for (index, archive) in [flat_zip, nested_zip, flat_tar_gz, nested_tar_gz]
+            .iter()
+            .enumerate()
+        {
+            // A per-leg workspace keeps each `project/` manifest independent.
+            let leg_dir = tmp.path().join(format!("leg-{index}"));
+            std::fs::create_dir_all(&leg_dir).unwrap();
+            let resolved = resolve_core_path_dependency(&leg_dir, archive);
+            let core = resolved.packages.get("@tatolab/core").unwrap();
+            assert!(
+                matches!(core.source, ResolvedSource::PackageArchive { .. }),
+                "{}: expected a PackageArchive source, got {:?}",
+                archive.display(),
+                core.source
+            );
+            assert_eq!(
+                core.schema_files.len(),
+                1,
+                "{}: the located package root must carry its schema",
+                archive.display()
+            );
+            assert!(
+                core.root_dir.join(Manifest::FILE_NAME).is_file(),
+                "{}: the resolved root must be the located package root",
+                archive.display()
+            );
+        }
+    }
+
+    /// Every filesystem entry under `dir`, recursively, never following a
+    /// symlink out of the tree — so a minted symlink shows up as an entry
+    /// rather than as whatever it points at.
+    fn walk_entries_without_following_symlinks(dir: &Path) -> Vec<PathBuf> {
+        let mut found = Vec::new();
+        let mut pending = vec![dir.to_path_buf()];
+        while let Some(next) = pending.pop() {
+            let Ok(read_dir) = std::fs::read_dir(&next) else {
+                continue;
+            };
+            for entry in read_dir.flatten() {
+                let path = entry.path();
+                if std::fs::symlink_metadata(&path)
+                    .map(|m| m.file_type().is_dir())
+                    .unwrap_or(false)
+                {
+                    pending.push(path.clone());
+                }
+                found.push(path);
+            }
+        }
+        found
+    }
+
+    /// The resolver's extraction inherits the shared reader's traversal and
+    /// symlink-escape refusals — a hostile `path:` archive can neither write
+    /// outside the extraction directory nor mint a host-path symlink inside
+    /// it. Asserted by walking the whole leg workspace (the traversal entry's
+    /// real target is `cache/slpkg/escape.txt`, a sibling of the extraction
+    /// dir, not a sibling of the leg root), and by requiring the
+    /// content-addressed cache to carry neither a `<hash>` slot nor staging
+    /// residue afterward.
+    #[test]
+    fn path_dependency_archive_rejects_traversal_and_symlink_escape() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let archives = tmp.path().join("archives");
+        std::fs::create_dir_all(&archives).unwrap();
+
+        let traversal = archives.join("traversal.zip");
+        {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&traversal).unwrap());
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file(Manifest::FILE_NAME, opts).unwrap();
+            zip.write_all(b"package:\n  org: tatolab\n  name: core\n  version: 1.0.0\n")
+                .unwrap();
+            zip.start_file("../escape.txt", opts).unwrap();
+            zip.write_all(b"evil").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let symlink_escape = archives.join("symlink-escape.zip");
+        {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&symlink_escape).unwrap());
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file(Manifest::FILE_NAME, opts).unwrap();
+            zip.write_all(b"package:\n  org: tatolab\n  name: core\n  version: 1.0.0\n")
+                .unwrap();
+            zip.add_symlink("passwd", "/etc/passwd", opts).unwrap();
+            zip.finish().unwrap();
+        }
+
+        for (label, archive) in [
+            ("path traversal", traversal),
+            ("symlink escape", symlink_escape),
+        ] {
+            let leg_dir = tmp.path().join(label.replace(' ', "-"));
+            std::fs::create_dir_all(&leg_dir).unwrap();
+            let root = leg_dir.join("project");
+            write_streamlib_yaml(
+                &root,
+                &format!(
+                    "dependencies:\n  \"@tatolab/core\":\n    path: {}\n",
+                    archive.to_string_lossy()
+                ),
+            );
+            let cache_dir = leg_dir.join("cache");
+            let err = resolve_with(
+                &root,
+                &ResolverOptions {
+                    cache_dir: Some(cache_dir.clone()),
+                    package_source: None,
+                    link_checkout: None,
+                },
+            )
+            .expect_err(&format!("{label} must be refused"));
+            assert!(
+                matches!(err, ResolverError::PackageArchiveExtractFailed { .. }),
+                "{label}: expected PackageArchiveExtractFailed, got {err:?}"
+            );
+
+            let landed = walk_entries_without_following_symlinks(&leg_dir);
+            assert!(
+                !landed
+                    .iter()
+                    .any(|p| p.file_name() == Some(OsStr::new("escape.txt"))),
+                "{label}: a traversal entry landed on disk: {landed:?}"
+            );
+            assert!(
+                !landed.iter().any(|p| std::fs::symlink_metadata(p)
+                    .map(|m| m.file_type().is_symlink())
+                    .unwrap_or(false)),
+                "{label}: a host-path symlink was minted under the cache: {landed:?}"
+            );
+            let package_archive_cache_dir = cache_dir.join("slpkg");
+            let cache_entries = std::fs::read_dir(&package_archive_cache_dir)
+                .map(|d| d.count())
+                .unwrap_or(0);
+            assert_eq!(
+                cache_entries, 0,
+                "{label}: a refused archive may leave neither a cache slot nor staging residue"
+            );
+        }
+    }
+
+    /// The content-addressed cache slot is created whole or not at all: an
+    /// archive that extracts but carries no package root leaves `slpkg/`
+    /// completely empty, so no later resolve of those bytes can mistake a
+    /// half-written tree for a cache hit. Mentally revert the stage-then-
+    /// promote and the extraction lands directly on `<hash>`, which survives
+    /// the failure and is returned as complete on the next resolve.
+    #[test]
+    fn package_archive_cache_slot_is_never_created_from_a_rootless_archive() {
+        use std::io::Write;
+        let tmp = tempfile::tempdir().unwrap();
+        let archives = tmp.path().join("archives");
+        std::fs::create_dir_all(&archives).unwrap();
+
+        let rootless = archives.join("rootless.zip");
+        {
+            let mut zip = zip::ZipWriter::new(std::fs::File::create(&rootless).unwrap());
+            let opts = zip::write::SimpleFileOptions::default();
+            zip.start_file("some/nested/notes.txt", opts).unwrap();
+            zip.write_all(b"no manifest anywhere").unwrap();
+            zip.finish().unwrap();
+        }
+
+        let root = tmp.path().join("project");
+        write_streamlib_yaml(
+            &root,
+            &format!(
+                "dependencies:\n  \"@tatolab/core\":\n    path: {}\n",
+                rootless.to_string_lossy()
+            ),
+        );
+        let cache_dir = tmp.path().join("cache");
+        let err = resolve_with(
+            &root,
+            &ResolverOptions {
+                cache_dir: Some(cache_dir.clone()),
+                package_source: None,
+                link_checkout: None,
+            },
+        )
+        .expect_err("an archive with no package root must be refused");
+        assert!(
+            matches!(err, ResolverError::PackageArchiveExtractFailed { .. }),
+            "expected PackageArchiveExtractFailed, got {err:?}"
+        );
+
+        let package_archive_cache_dir = cache_dir.join("slpkg");
+        let surviving: Vec<PathBuf> = std::fs::read_dir(&package_archive_cache_dir)
+            .map(|d| d.flatten().map(|e| e.path()).collect())
+            .unwrap_or_default();
+        assert!(
+            surviving.is_empty(),
+            "no cache slot and no staging residue may survive: {surviving:?}"
+        );
     }
 
     #[test]

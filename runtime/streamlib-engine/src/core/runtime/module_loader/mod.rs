@@ -45,7 +45,7 @@
 //! - [`from_source`] — [`Runner::register_processor_from_source`]: stage
 //!   live-submitted source text into a `@session/<name>@0.0.N` package and
 //!   load it through the [`Strategy::Path`] build/commit seam.
-//! - [`slpkg`] — `.slpkg` archive extraction.
+//! - [`package_archive`] — package-archive extraction into an installed slot.
 //!
 //! [`Runner::remove_module`]: super::Runner::remove_module
 //! [`Runner::add_module`]: super::Runner::add_module
@@ -72,11 +72,11 @@ mod from_source;
 mod lazy_discovery;
 mod ledger;
 mod locked;
+mod package_archive;
 mod processor_registration;
 mod recursive_walker;
 mod schema_registration;
 mod session;
-mod slpkg;
 mod source;
 mod staging;
 
@@ -94,9 +94,9 @@ pub use build_orchestrator::{
 };
 pub use errors::{AddModuleError, RemoveModuleError};
 pub(crate) use locked::LockedResolution;
+pub use package_archive::extract_package_archive_to_installed_slot;
 pub use processor_registration::host_target_triple;
 pub(crate) use recursive_walker::ResolutionMemo;
-pub use slpkg::extract_slpkg_to_cache;
 pub use source::{ArtifactChecksum, SemVerRange, Strategy};
 pub use staging::loaded_plugin_library_count;
 pub(crate) use staging::{

@@ -239,8 +239,8 @@ fn package_ref_of(pkg: &ResolvedPackage) -> Option<(PackageRef, SemVer)> {
 
 /// Map a resolver source kind to the orchestrator's build-time provenance: a
 /// `path:` dep or the root manifest is the user's own editable tree (cargo deps
-/// may resolve outside it, `target/` is the user's), while a git-rev / `.slpkg`
-/// / by-version source is a self-contained managed extract.
+/// may resolve outside it, `target/` is the user's), while a git-rev /
+/// package-archive / by-version source is a self-contained managed extract.
 fn provenance_of(source: &streamlib_idents::ResolvedSource) -> PackageSourceProvenance {
     use streamlib_idents::ResolvedSource;
     match source {
@@ -248,7 +248,7 @@ fn provenance_of(source: &streamlib_idents::ResolvedSource) -> PackageSourceProv
             PackageSourceProvenance::MutableUserCheckout
         }
         ResolvedSource::Git { .. }
-        | ResolvedSource::Slpkg { .. }
+        | ResolvedSource::PackageArchive { .. }
         | ResolvedSource::ByVersion { .. } => PackageSourceProvenance::ImmutableManagedExtract,
     }
 }

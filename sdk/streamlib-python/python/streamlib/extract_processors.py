@@ -12,7 +12,7 @@ extraction *is* import — every processor module is imported, which runs the
 [`_processor_registry`][streamlib._processor_registry]; the registered set is
 then emitted.
 
-Once the pkg-build truth-flip lands, `streamlib pkg build` will invoke this
+Once the truth-flip lands, `streamlib pkg publish` will invoke this
 in a fresh subprocess (`python -m streamlib.extract_processors
 <package_dir>`), read the JSON on stdout, and write the manifest
 `processors:` section — the same shape the Rust extractor feeds the catalog.
@@ -176,7 +176,7 @@ def extract_processors_from_dir(package_dir: Path) -> List[RegisteredProcessor]:
 
 
 def _to_manifest_json(procs: List[RegisteredProcessor]) -> str:
-    """Render extracted processors as the JSON `pkg build` consumes on stdout."""
+    """Render extracted processors as the JSON `pkg publish` consumes on stdout."""
     payload = [
         {
             "name": entry.short_name,

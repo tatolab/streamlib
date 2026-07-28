@@ -21,8 +21,8 @@ use super::build_orchestrator::{
     BuildPolicy, BuildRequest, BuildSource, PackageSourceProvenance,
 };
 use super::errors::AddModuleError;
+use super::package_archive::extract_package_archive_to_installed_slot;
 use super::processor_registration::host_target_triple;
-use super::slpkg::extract_slpkg_to_cache;
 
 /// Semver requirement carried by [`Strategy::ByVersion`]. Re-exported from
 /// `streamlib-idents` so callers can name it next to [`Strategy`] without a
@@ -62,9 +62,10 @@ pub enum Strategy {
     /// `build` governs whether the orchestrator (re)builds before load.
     Path { path: PathBuf, build: BuildPolicy },
 
-    /// A `.slpkg` archive. Extracted to the cache, then loaded as-is —
-    /// pre-built, never rebuilt.
-    Slpkg { path: PathBuf },
+    /// A local package archive — `.slpkg`, `.zip`, or `.tar.gz`; the container
+    /// is sniffed from magic bytes, never the extension. Extracted into the
+    /// package's installed slot, then loaded as-is — pre-built, never rebuilt.
+    PackageArchive { path: PathBuf },
 
     /// A git checkout (fetched into the resolver cache), then built per
     /// `build`.
@@ -74,10 +75,11 @@ pub enum Strategy {
         build: BuildPolicy,
     },
 
-    /// A remote `.slpkg` fetched over the wire (`file://`, `http://`, or
-    /// `https://`). The engine resolver fetches the archive into its cache
+    /// A remote package archive — `.slpkg`, `.zip`, or `.tar.gz`, container
+    /// sniffed from magic bytes — fetched over the wire (`file://`, `http://`,
+    /// or `https://`). The engine resolver fetches the archive into its cache
     /// as network-only I/O (no build), optionally verifies it against
-    /// `checksum`, then resolves it exactly like [`Strategy::Slpkg`]:
+    /// `checksum`, then resolves it exactly like [`Strategy::PackageArchive`]:
     /// prefer a matching prebuilt cdylib, else build the bundled source
     /// per `build`. A cached prior fetch of the same URL skips the
     /// download.
@@ -86,7 +88,7 @@ pub enum Strategy {
         /// Governs the build fallback when the fetched box has no matching
         /// prebuilt for this host: [`BuildPolicy::IfStale`] is the
         /// prefer-prebuilt-else-build default (identical to
-        /// [`Strategy::Slpkg`]); [`BuildPolicy::NeverBuild`] loads the
+        /// [`Strategy::PackageArchive`]); [`BuildPolicy::NeverBuild`] loads the
         /// staged artifact as-is (a source-only box then fails loud at
         /// dlopen); [`BuildPolicy::AlwaysBuild`] rebuilds the bundled
         /// source even when a prebuilt is present.
@@ -327,15 +329,11 @@ pub(super) fn resolve_strategy_to_source(
         Strategy::InstalledCache => {
             resolve_installed_cache_strategy(pkg_ref, app_modules_root().as_deref())
         }
-        Strategy::Slpkg { path } => {
-            let extracted = extract_slpkg_to_cache(path, app_modules_root().as_deref()).map_err(|e| {
-                AddModuleError::SlpkgExtractionFailed {
-                    archive: path.clone(),
-                    detail: e.to_string(),
-                }
-            })?;
-            // A `.slpkg` may carry source and/or a prebuilt cdylib. Prefer
-            // a prebuilt matching this host; otherwise build the bundled
+        Strategy::PackageArchive { path } => {
+            let extracted =
+                extract_package_archive_to_installed_slot(path, app_modules_root().as_deref())?;
+            // A package archive may carry source and/or a prebuilt cdylib.
+            // Prefer a prebuilt matching this host; otherwise build the bundled
             // source on the host (pip wheel-vs-sdist for Rust).
             source_for_resolved_dir(pkg_ref, extracted)
         }
@@ -366,17 +364,13 @@ pub(super) fn resolve_strategy_to_source(
         } => {
             // Network-only fetch in the resolver (the same shape as
             // `fetch_git_checkout` for `Strategy::Git`): download the
-            // `.slpkg` into the resolver cache, verify integrity, then
+            // archive into the resolver cache, verify integrity, then
             // route it through the SAME extract + prefer-prebuilt-else-
-            // build path a local `.slpkg` takes. No build happens here —
+            // build path a local archive takes. No build happens here —
             // any build is deferred to the injected orchestrator.
             let slpkg = fetch_remote_slpkg(pkg_ref, url, checksum.as_ref())?;
-            let extracted = extract_slpkg_to_cache(&slpkg, app_modules_root().as_deref()).map_err(|e| {
-                AddModuleError::SlpkgExtractionFailed {
-                    archive: slpkg.clone(),
-                    detail: e.to_string(),
-                }
-            })?;
+            let extracted =
+                extract_package_archive_to_installed_slot(&slpkg, app_modules_root().as_deref())?;
             source_for_fetched_slpkg(pkg_ref, extracted, *build)
         }
         Strategy::ByVersion { version_req, build } => {
@@ -404,15 +398,16 @@ pub(super) fn resolve_strategy_to_source(
                     package: pkg_ref.clone(),
                     detail: e.to_string(),
                 })?;
-            // IfStale fast path: a `.slpkg` already materialized for this exact
+            // IfStale fast path: an archive already materialized for this exact
             // version is reused instead of re-downloaded and re-extracted.
-            // `extract_slpkg_to_cache` rm -rf's the cache slot on every call,
-            // which wipes any cdylib a prior run built into `lib/<triple>/` (and
-            // any provisioned `.venv`) — so without this check `IfStale` rebuilt
-            // on every run even when the package source had not changed. Package
-            // source versions are immutable (a content change ships a new version);
-            // `streamlib pkg clean` clears the cache to force a re-fetch when a
-            // version is republished in place during development.
+            // `extract_package_archive_to_installed_slot` replaces the slot
+            // wholesale on every call, which wipes any cdylib a prior run built
+            // into `lib/<triple>/` (and any provisioned `.venv`) — so without
+            // this check `IfStale` rebuilt on every run even when the package
+            // source had not changed. Package-source versions are immutable (a
+            // content change ships a new version); `streamlib pkg clean` clears
+            // the cache to force a re-fetch when a version is republished in
+            // place during development.
             //
             // Reuse is gated on the materialized manifest's version equalling
             // the selected version, not on the slot merely existing: a slot
@@ -444,12 +439,7 @@ pub(super) fn resolve_strategy_to_source(
                     "fetched module .slpkg from the package source"
                 );
                 let archive = persist_package_source_slpkg(pkg_ref, &url, &bytes)?;
-                extract_slpkg_to_cache(&archive, app_modules_root().as_deref()).map_err(|e| {
-                    AddModuleError::SlpkgExtractionFailed {
-                        archive: archive.clone(),
-                        detail: e.to_string(),
-                    }
-                })?
+                extract_package_archive_to_installed_slot(&archive, app_modules_root().as_deref())?
             };
             source_for_fetched_slpkg(pkg_ref, extracted, *build)
         }
@@ -616,7 +606,7 @@ fn source_for_resolved_dir(
 /// - [`BuildPolicy::NeverBuild`] — load the staged dir as-is. A matching
 ///   prebuilt loads compiler-free; a source-only box fails loud at dlopen.
 /// - [`BuildPolicy::IfStale`] — prefer a matching prebuilt, else build the
-///   bundled source. Identical to how a local [`Strategy::Slpkg`] resolves.
+///   bundled source. Identical to how a local [`Strategy::PackageArchive`] resolves.
 /// - [`BuildPolicy::AlwaysBuild`] — rebuild the bundled source even when a
 ///   prebuilt is present. A box with no Rust source is not automatically a
 ///   no-op: an unprovisioned Python/Deno box still routes through
@@ -805,7 +795,7 @@ fn fetch_remote_slpkg(
 }
 
 /// Persist already-downloaded package-source `.slpkg` bytes into the resolver
-/// cache so [`extract_slpkg_to_cache`] can read them. Keyed by the canonical
+/// cache so [`extract_package_archive_to_installed_slot`] can read them. Keyed by the canonical
 /// download URL (which embeds the package name + concrete version), with an
 /// atomic temp-then-rename publish so an interrupted write never leaves a
 /// half-file a later run treats as complete. This is the
@@ -1192,7 +1182,7 @@ mod tests {
         assert!(matches!(resolved, ResolvedSource::Ready(_)));
     }
 
-    /// `IfStale` mirrors `Strategy::Slpkg`: a source-only Rust box builds.
+    /// `IfStale` mirrors `Strategy::PackageArchive`: a source-only Rust box builds.
     #[test]
     fn fetched_slpkg_if_stale_builds_source_only_box() {
         let dir = tempfile::tempdir().unwrap();

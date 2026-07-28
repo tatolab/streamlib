@@ -857,7 +857,7 @@ function parseEntrypoint(entrypoint: string): [string, string] {
  * Resolve a Deno processor module path against the project directory.
  *
  * Staged and dev-tree packages share one layout: a package is a faithful
- * mirror of the authored source tree (`streamlib pack` relocates nothing),
+ * mirror of the authored source tree (the package assembler relocates nothing),
  * so the entrypoint's module path is authored relative to the package root
  * (`processors/blur.ts`, the root the extractor discovers under). Resolve it
  * against the project dir verbatim.

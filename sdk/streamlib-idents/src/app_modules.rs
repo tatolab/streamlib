@@ -3,7 +3,9 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::archive::{ArchiveKind, extract_tar_gz_bytes_to_dir, extract_zip_bytes_to_dir, sniff_archive_kind};
+use crate::archive::{
+    ArchiveError, extract_archive_bytes_to_dir, locate_package_root_in_extracted_dir,
+};
 use crate::ident::PackageRef;
 use crate::lockfile::{
     Lockfile, LockfileEntry, LockfileSource, MODULES_LOCKFILE_NAME, read_lockfile,
@@ -81,6 +83,37 @@ impl AddPackageSource {
     }
 }
 
+/// Whether [`AppModulesDir::add_package`] records what it materialized in the
+/// app's `streamlib.lock`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum LockfileRecordingPolicy {
+    /// Write the materialized package's entry into `<app-root>/streamlib.lock`
+    /// — the operator-facing `streamlib add` / `streamlib install` contract.
+    #[default]
+    RecordInAppLockfile,
+    /// Materialize the slot without touching the lockfile. The runtime module
+    /// loader's policy: the strategy the app declared is that run's record of
+    /// where the package came from, and a load must never rewrite the app's
+    /// committed lockfile behind the operator's back.
+    SkipLockfileRecording,
+}
+
+/// Whether [`AppModulesDir::add_package`] may displace a slot that currently
+/// holds an active `streamlib link` symlink instead of materialized contents.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ActiveLinkSlotPolicy {
+    /// Unlink the `streamlib link` and materialize over it — an explicit
+    /// operator `streamlib add` outranks a link.
+    #[default]
+    ReplaceActiveLinkInSlot,
+    /// Refuse with [`AppModulesError::SlotOccupiedByActiveLink`], leaving the
+    /// link intact. The runtime module loader's policy: a link is a dev-loop
+    /// override a *run* must not silently delete, and a loader that writes no
+    /// lockfile would leave `streamlib.lock` claiming
+    /// [`LockfileSource::Link`] for a slot that is now a materialized copy.
+    RefuseWhenSlotIsActiveLink,
+}
+
 /// Knobs for [`AppModulesDir::add_package`].
 #[derive(Debug, Clone, Default)]
 pub struct AddPackageOptions {
@@ -89,6 +122,10 @@ pub struct AddPackageOptions {
     /// and nothing is materialized. Ignored for folder sources (no archive
     /// bytes exist).
     pub expected_archive_sha256: Option<String>,
+    /// Whether the add is recorded in the app's `streamlib.lock`.
+    pub lockfile_recording_policy: LockfileRecordingPolicy,
+    /// What the add does when the target slot is an active `streamlib link`.
+    pub active_link_slot_policy: ActiveLinkSlotPolicy,
     /// When `true` and the add replaces an already-present slot, the displaced
     /// prior slot (contents + its lockfile entry) is retained as a restorable
     /// [`ReplacedSlotBackup`] in the report rather than discarded, so a caller
@@ -109,8 +146,9 @@ pub struct AddPackageReport {
     pub version: SemVer,
     /// Where the package contents now live (`streamlib_modules/@org/name/`).
     pub package_dir: PathBuf,
-    /// The modules lockfile that was updated.
-    pub lockfile_path: PathBuf,
+    /// The modules lockfile that was updated; `None` when the add ran under
+    /// [`LockfileRecordingPolicy::SkipLockfileRecording`].
+    pub lockfile_path: Option<PathBuf>,
     /// Content hash recorded in the lockfile entry.
     pub content_hash: String,
     /// The source recorded in the lockfile entry.
@@ -311,6 +349,20 @@ pub enum AppModulesError {
     StagePromoteFailed {
         package_dir: PathBuf,
         detail: String,
+    },
+
+    /// The target slot holds an active `streamlib link` and the caller asked
+    /// for [`ActiveLinkSlotPolicy::RefuseWhenSlotIsActiveLink`].
+    #[error(
+        "{} is an active `streamlib link` to {} — refusing to replace it with materialized \
+         contents; run `streamlib unlink {package}` first if the link should give way",
+        package_dir.display(),
+        link_target.display()
+    )]
+    SlotOccupiedByActiveLink {
+        package: PackageRef,
+        package_dir: PathBuf,
+        link_target: PathBuf,
     },
 
     /// Creating the symlink for a `streamlib link` into `streamlib_modules/`
@@ -516,7 +568,11 @@ impl AppModulesDir {
     /// Materialize one package source into `streamlib_modules/@org/name/` and
     /// record it in the modules lockfile. Identity is read from the package's
     /// own manifest; re-adding an already-present package replaces it cleanly.
-    /// Never builds; never resolves against a package source.
+    /// Never builds; never resolves against a package source. The one
+    /// sweep → stage → extract → identity → promote pipeline every
+    /// materializer runs; [`AddPackageOptions`] carries the per-caller policy
+    /// (lockfile recording, active-link slots) so the runtime module loader
+    /// shares this pipeline rather than re-implementing it.
     #[tracing::instrument(skip(self, options), fields(app_root = %self.app_root.display()))]
     pub fn add_package(
         &self,
@@ -532,7 +588,7 @@ impl AppModulesDir {
 
         // Stage: materialize the source's bytes into a `.staging-*` sibling of
         // the final slot (same filesystem ⇒ the promote is an atomic rename).
-        let staging = StagingDir::create(&modules_dir)?;
+        let staging = AppModulesStagingDir::create(&modules_dir)?;
         let (lock_source, source_label) = stage_source_contents(source, options, staging.path())?;
 
         // Validate: identity from the staged package's OWN manifest.
@@ -559,17 +615,28 @@ impl AppModulesDir {
             }
         })?;
 
+        let package_dir = self.package_dir(&package);
+        if options.active_link_slot_policy == ActiveLinkSlotPolicy::RefuseWhenSlotIsActiveLink
+            && let Ok(slot_meta) = std::fs::symlink_metadata(&package_dir)
+            && slot_meta.file_type().is_symlink()
+        {
+            return Err(AppModulesError::SlotOccupiedByActiveLink {
+                package,
+                link_target: std::fs::read_link(&package_dir).unwrap_or_else(|_| PathBuf::new()),
+                package_dir,
+            });
+        }
+
         // Promote: swap the staged root into `streamlib_modules/@org/name`,
         // keeping the displaced previous contents restorable until the new
         // contents are in place. When retention is requested, the displaced
         // prior slot survives the promote so a failed post-add step can restore
         // it (compile-on-add), instead of being discarded on success.
-        let package_dir = self.package_dir(&package);
         let promoted = promote_staged_package_root(
             &staged_package_root,
             &package_dir,
             &modules_dir,
-            options.retain_replaced_slot_backup,
+            ReplacedSlotBackupRetention::from_retain_flag(options.retain_replaced_slot_backup),
         )?;
         let replaced_existing = promoted.replaced;
         drop(staging); // best-effort cleanup of the (now-emptied) staging shell
@@ -577,23 +644,29 @@ impl AppModulesDir {
         // Lock: read-modify-write the modules lockfile, atomically. Capture the
         // prior entry before overwriting it, so a retained backup can rewrite it
         // on restore.
-        let lockfile_path = self.lockfile_path();
-        let mut lockfile = self.read_lockfile()?;
-        let prior_lockfile_entry = lockfile.packages.get(&package.to_string()).cloned();
-        lockfile.packages.insert(
-            package.to_string(),
-            LockfileEntry {
-                version,
-                source: lock_source.clone(),
-                content_hash: content_hash.clone(),
-            },
-        );
-        write_modules_lockfile(&lockfile_path, &lockfile).map_err(|e| {
-            AppModulesError::LockfileWriteFailed {
-                lockfile_path: lockfile_path.clone(),
-                detail: e.to_string(),
+        let (lockfile_path, prior_lockfile_entry) = match options.lockfile_recording_policy {
+            LockfileRecordingPolicy::SkipLockfileRecording => (None, None),
+            LockfileRecordingPolicy::RecordInAppLockfile => {
+                let lockfile_path = self.lockfile_path();
+                let mut lockfile = self.read_lockfile()?;
+                let prior_lockfile_entry = lockfile.packages.get(&package.to_string()).cloned();
+                lockfile.packages.insert(
+                    package.to_string(),
+                    LockfileEntry {
+                        version,
+                        source: lock_source.clone(),
+                        content_hash: content_hash.clone(),
+                    },
+                );
+                write_modules_lockfile(&lockfile_path, &lockfile).map_err(|e| {
+                    AppModulesError::LockfileWriteFailed {
+                        lockfile_path: lockfile_path.clone(),
+                        detail: e.to_string(),
+                    }
+                })?;
+                (Some(lockfile_path), prior_lockfile_entry)
             }
-        })?;
+        };
 
         let replaced_slot_backup = match (promoted.retained_backup, prior_lockfile_entry) {
             (Some(backup_dir), Some(prior_lockfile_entry)) => Some(ReplacedSlotBackup {
@@ -826,7 +899,12 @@ impl AppModulesDir {
         let staging = StagingSymlink::create(&modules_dir, &canonical)?;
         let package_dir = self.package_dir(&package);
         let replaced_existing =
-            promote_staged_package_root(staging.path(), &package_dir, &modules_dir, false)?.replaced;
+            promote_staged_package_root(
+                staging.path(),
+                &package_dir,
+                &modules_dir,
+                ReplacedSlotBackupRetention::DiscardOnPromote,
+            )?.replaced;
         drop(staging); // the symlink was renamed into place; nothing to clean
 
         let lock_source = LockfileSource::Link {
@@ -1089,7 +1167,12 @@ impl AppModulesDir {
                 }
                 let staging = StagingSymlink::create(modules_dir, path)?;
                 let replaced =
-                    promote_staged_package_root(staging.path(), &package_dir, modules_dir, false)
+                    promote_staged_package_root(
+                        staging.path(),
+                        &package_dir,
+                        modules_dir,
+                        ReplacedSlotBackupRetention::DiscardOnPromote,
+                    )
                         .map_err(|e| map_stage_error_to_install(package, e))?
                         .replaced;
                 drop(staging);
@@ -1139,7 +1222,7 @@ impl AppModulesDir {
 
 /// Best-effort sweep of orphaned `.staging-*` entries in `modules_dir` —
 /// residue from an add/remove that was `SIGKILL`ed mid-promote (a clean
-/// error path removes its own staging via [`StagingDir`]'s `Drop`). Only
+/// error path removes its own staging via [`AppModulesStagingDir`]'s `Drop`). Only
 /// entries whose embedded pid is NOT the current process are removed, so a
 /// concurrent same-process add's in-flight staging dir is never deleted;
 /// cross-process concurrent adds to one app root are unsupported
@@ -1186,13 +1269,20 @@ fn sweep_orphan_staging_entries(modules_dir: &Path) {
     }
 }
 
-/// A `.staging-*` directory removed on drop (best-effort) unless already
-/// promoted away.
-struct StagingDir {
+/// A `.staging-*` directory inside an app's `streamlib_modules/`, removed on
+/// drop (best-effort) unless already promoted away. The one staging primitive
+/// for materializing package contents beside their final slot: same
+/// filesystem, so the promote is an atomic rename, and the
+/// [`APP_MODULES_STAGING_PREFIX`]`<pid>-<seq>` naming is what the orphan sweep
+/// recognizes as reclaimable residue from a killed process.
+#[must_use = "the staging directory is removed when this guard drops"]
+struct AppModulesStagingDir {
     path: PathBuf,
 }
 
-impl StagingDir {
+impl AppModulesStagingDir {
+    /// Create a fresh staging directory inside `modules_dir`.
+    #[tracing::instrument]
     fn create(modules_dir: &Path) -> Result<Self, AppModulesError> {
         use std::sync::atomic::{AtomicU64, Ordering};
         static STAGE_SEQ: AtomicU64 = AtomicU64::new(0);
@@ -1208,12 +1298,13 @@ impl StagingDir {
         Ok(Self { path })
     }
 
+    /// The staging directory's path.
     fn path(&self) -> &Path {
         &self.path
     }
 }
 
-impl Drop for StagingDir {
+impl Drop for AppModulesStagingDir {
     fn drop(&mut self) {
         if self.path.exists() {
             let _ = std::fs::remove_dir_all(&self.path);
@@ -1372,83 +1463,110 @@ fn verify_and_hash_archive_bytes(
     Ok(actual)
 }
 
-/// Sniff the archive container from magic bytes and extract into `dest_dir`.
+/// Extract archive `bytes` into `dest_dir` through the one container-agnostic
+/// reader, mapping its failures onto the add-path taxonomy.
 fn extract_archive_bytes(
     bytes: &[u8],
     dest_dir: &Path,
     source_label: &str,
 ) -> Result<(), AppModulesError> {
-    let kind =
-        sniff_archive_kind(bytes).ok_or_else(|| AppModulesError::UnsupportedArchive {
+    extract_archive_bytes_to_dir(bytes, dest_dir, source_label).map_err(|e| match e {
+        ArchiveError::UnrecognizedContainer {
+            source_label,
+            detail,
+        } => AppModulesError::UnsupportedArchive {
+            source_label,
+            detail,
+        },
+        other => AppModulesError::ExtractFailed {
             source_label: source_label.to_string(),
-            detail: "unrecognized magic bytes".to_string(),
-        })?;
-    let result = match kind {
-        ArchiveKind::Zip => extract_zip_bytes_to_dir(bytes, dest_dir, source_label),
-        ArchiveKind::TarGz => extract_tar_gz_bytes_to_dir(bytes, dest_dir, source_label),
-    };
-    result.map_err(|e| AppModulesError::ExtractFailed {
-        source_label: source_label.to_string(),
-        detail: e.to_string(),
+            detail: other.to_string(),
+        },
     })
 }
 
-/// Find the staged package root: the staging dir itself when it carries
-/// `streamlib.yaml`, else — for archive-shaped sources whose contents nest
-/// under a single top-level directory (`tar czf pkg.tar.gz my-package/`) —
-/// that single directory. Anything else is not a valid package.
+/// Find the staged package root. Archive-shaped sources go through the shared
+/// package-root locator (which tolerates contents nested under a single
+/// top-level directory); a folder source is taken literally, since a folder
+/// the caller named IS the package root.
 fn locate_staged_package_root(
     staging_dir: &Path,
     source: &AddPackageSource,
     source_label: &str,
 ) -> Result<PathBuf, AppModulesError> {
-    if staging_dir.join(Manifest::FILE_NAME).is_file() {
-        return Ok(staging_dir.to_path_buf());
+    if matches!(source, AddPackageSource::Folder { .. }) {
+        return if staging_dir.join(Manifest::FILE_NAME).is_file() {
+            Ok(staging_dir.to_path_buf())
+        } else {
+            Err(AppModulesError::InvalidPackage {
+                source_label: source_label.to_string(),
+                detail: format!("no {} at the package root", Manifest::FILE_NAME),
+            })
+        };
     }
-    // Single-top-level-dir tolerance applies to archives only; a folder
-    // source is taken literally.
-    if !matches!(source, AddPackageSource::Folder { .. }) {
-        let entries: Vec<PathBuf> = std::fs::read_dir(staging_dir)
-            .map_err(|e| AppModulesError::Io {
-                path: staging_dir.to_path_buf(),
-                detail: format!("listing staged contents: {e}"),
-            })?
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .collect();
-        if let [single] = entries.as_slice()
-            && single.is_dir()
-            && single.join(Manifest::FILE_NAME).is_file()
-        {
-            return Ok(single.clone());
-        }
-    }
-    Err(AppModulesError::InvalidPackage {
-        source_label: source_label.to_string(),
-        detail: format!("no {} at the package root", Manifest::FILE_NAME),
+    locate_package_root_in_extracted_dir(staging_dir, source_label).map_err(|e| match e {
+        ArchiveError::ExtractedContentsListingFailed {
+            extracted_dir,
+            detail,
+        } => AppModulesError::Io {
+            path: extracted_dir,
+            detail: format!("listing staged contents: {detail}"),
+        },
+        ArchiveError::PackageRootNotLocated { detail, .. } => AppModulesError::InvalidPackage {
+            source_label: source_label.to_string(),
+            detail,
+        },
+        other => AppModulesError::InvalidPackage {
+            source_label: source_label.to_string(),
+            detail: other.to_string(),
+        },
     })
 }
 
+/// What [`promote_staged_package_root`] does with the displaced prior slot once
+/// the new contents are in place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReplacedSlotBackupRetention {
+    /// Keep the `.staging-replaced-*` backup and hand it back, so a caller
+    /// whose post-promote step fails can restore the prior working version.
+    RetainForCallerRestore,
+    /// Delete the displaced backup as soon as the promote succeeds.
+    DiscardOnPromote,
+}
+
+impl ReplacedSlotBackupRetention {
+    fn from_retain_flag(retain: bool) -> Self {
+        if retain {
+            Self::RetainForCallerRestore
+        } else {
+            Self::DiscardOnPromote
+        }
+    }
+}
+
 /// Outcome of [`promote_staged_package_root`].
-struct PromotedSlot {
+struct PromotedPackageSlot {
     /// Whether previous contents occupied the slot and were displaced.
-    replaced: bool,
+    pub replaced: bool,
     /// The `.staging-replaced-*` backup of the displaced prior slot, present
     /// only when `retain_replaced_backup` was requested AND a prior slot was
     /// displaced. The caller owns finalizing it (discard or restore).
-    retained_backup: Option<PathBuf>,
+    pub retained_backup: Option<PathBuf>,
 }
 
 /// Swap `staged_package_root` into `package_dir`, displacing any previous
-/// contents restorably. When `retain_replaced_backup` is set and a prior slot
-/// was displaced, its backup is kept (not deleted on success) and returned so
-/// the caller can restore it after a failed post-promote step.
+/// contents restorably — the one promote every materializer goes through, so
+/// a failed swap never leaves the slot empty and a slot occupied by a
+/// `streamlib link` symlink is unlinked rather than followed. Callers that must
+/// refuse a linked slot outright screen it before promoting (see
+/// [`ActiveLinkSlotPolicy`]).
+#[tracing::instrument(fields(slot = %package_dir.display()))]
 fn promote_staged_package_root(
     staged_package_root: &Path,
     package_dir: &Path,
     modules_dir: &Path,
-    retain_replaced_backup: bool,
-) -> Result<PromotedSlot, AppModulesError> {
+    backup_retention: ReplacedSlotBackupRetention,
+) -> Result<PromotedPackageSlot, AppModulesError> {
     let promote_err = |detail: String| AppModulesError::StagePromoteFailed {
         package_dir: package_dir.to_path_buf(),
         detail,
@@ -1482,20 +1600,24 @@ fn promote_staged_package_root(
 
     match std::fs::rename(staged_package_root, package_dir) {
         Ok(()) => match displaced {
-            Some(backup) if retain_replaced_backup => Ok(PromotedSlot {
-                replaced: true,
-                retained_backup: Some(backup),
-            }),
+            Some(backup)
+                if backup_retention == ReplacedSlotBackupRetention::RetainForCallerRestore =>
+            {
+                Ok(PromotedPackageSlot {
+                    replaced: true,
+                    retained_backup: Some(backup),
+                })
+            }
             Some(backup) => {
                 // The displaced previous slot may be a symlink (a prior link
                 // being replaced); unlink it rather than recursing into it.
                 let _ = remove_dir_entry_all(&backup);
-                Ok(PromotedSlot {
+                Ok(PromotedPackageSlot {
                     replaced: true,
                     retained_backup: None,
                 })
             }
-            None => Ok(PromotedSlot {
+            None => Ok(PromotedPackageSlot {
                 replaced: false,
                 retained_backup: None,
             }),
@@ -1629,7 +1751,7 @@ fn reproduce_materialized_from_lock(
     modules_dir: &Path,
     package_dir: &Path,
 ) -> Result<(InstalledFromLockKind, bool), AppModulesError> {
-    let staging = StagingDir::create(modules_dir)?;
+    let staging = AppModulesStagingDir::create(modules_dir)?;
     let options = AddPackageOptions {
         expected_archive_sha256,
         ..Default::default()
@@ -1641,7 +1763,7 @@ fn reproduce_materialized_from_lock(
 
     // Verify the reproduced contents against the pinned content hash BEFORE
     // promoting, so a mismatch leaves no partial slot (the staging dir is swept
-    // by `StagingDir`'s Drop on the early return).
+    // by `AppModulesStagingDir`'s Drop on the early return).
     let actual = content_hash_for_package_dir(&staged_root).map_err(|e| {
         AppModulesError::InstallReproduceFailed {
             package: package.clone(),
@@ -1656,7 +1778,12 @@ fn reproduce_materialized_from_lock(
         });
     }
 
-    let replaced = promote_staged_package_root(&staged_root, package_dir, modules_dir, false)
+    let replaced = promote_staged_package_root(
+        &staged_root,
+        package_dir,
+        modules_dir,
+        ReplacedSlotBackupRetention::DiscardOnPromote,
+    )
         .map_err(|e| map_stage_error_to_install(package, e))?
         .replaced;
     drop(staging);
@@ -1704,8 +1831,9 @@ fn map_stage_error_to_install(package: &PackageRef, err: AppModulesError) -> App
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::archive::ArchiveKind;
+    use crate::archive::package_archive_fixtures::package_archive_bytes;
     use crate::ident::{Org, Package};
-    use std::io::Write;
 
     fn pkg_ref(org: &str, name: &str) -> PackageRef {
         PackageRef::new(Org::new(org).unwrap(), Package::new(name).unwrap())
@@ -1730,42 +1858,51 @@ mod tests {
 
     /// Zip-shaped `.slpkg` bytes for a minimal package.
     fn slpkg_bytes(org: &str, name: &str, version: &str) -> Vec<u8> {
-        let mut cursor = std::io::Cursor::new(Vec::new());
-        {
-            let mut writer = zip::ZipWriter::new(&mut cursor);
-            let opts = zip::write::FileOptions::<()>::default()
-                .compression_method(zip::CompressionMethod::Stored);
-            writer.start_file("streamlib.yaml", opts).unwrap();
-            writer
-                .write_all(manifest_yaml(org, name, version).as_bytes())
-                .unwrap();
-            writer.start_file("schemas/foo_frame.yaml", opts).unwrap();
-            writer.write_all(SCHEMA_YAML.as_bytes()).unwrap();
-            writer.finish().unwrap();
-        }
-        cursor.into_inner()
+        zip_package_bytes(org, name, version, None)
+    }
+
+    /// The two entries of the minimal `@org/name` fixture package.
+    fn foo_package_entries(org: &str, name: &str, version: &str) -> [(String, Vec<u8>); 2] {
+        [
+            (
+                Manifest::FILE_NAME.to_string(),
+                manifest_yaml(org, name, version).into_bytes(),
+            ),
+            (
+                "schemas/foo_frame.yaml".to_string(),
+                SCHEMA_YAML.as_bytes().to_vec(),
+            ),
+        ]
+    }
+
+    /// Zip bytes for a minimal package, optionally nested under a single
+    /// top-level directory (the `zip -r pkg.zip my-package/` shape).
+    fn zip_package_bytes(
+        org: &str,
+        name: &str,
+        version: &str,
+        nested_under: Option<&str>,
+    ) -> Vec<u8> {
+        package_archive_bytes(
+            &foo_package_entries(org, name, version),
+            ArchiveKind::Zip,
+            nested_under,
+        )
     }
 
     /// `.tar.gz` bytes for a minimal package, optionally nested under a
     /// single top-level directory (the `tar czf pkg.tar.gz my-package/` shape).
-    fn tar_gz_package_bytes(org: &str, name: &str, version: &str, nested_under: Option<&str>) -> Vec<u8> {
-        let prefix = nested_under.map(|d| format!("{d}/")).unwrap_or_default();
-        let encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
-        let mut builder = tar::Builder::new(encoder);
-        for (path, body) in [
-            (
-                format!("{prefix}streamlib.yaml"),
-                manifest_yaml(org, name, version),
-            ),
-            (format!("{prefix}schemas/foo_frame.yaml"), SCHEMA_YAML.to_string()),
-        ] {
-            let mut header = tar::Header::new_gnu();
-            header.set_size(body.len() as u64);
-            header.set_mode(0o644);
-            header.set_cksum();
-            builder.append_data(&mut header, path, body.as_bytes()).unwrap();
-        }
-        builder.into_inner().unwrap().finish().unwrap()
+    fn tar_gz_package_bytes(
+        org: &str,
+        name: &str,
+        version: &str,
+        nested_under: Option<&str>,
+    ) -> Vec<u8> {
+        package_archive_bytes(
+            &foo_package_entries(org, name, version),
+            ArchiveKind::TarGz,
+            nested_under,
+        )
     }
 
     /// Assert the app root carries NO partial state: no package dirs beyond
@@ -2094,6 +2231,91 @@ mod tests {
         );
     }
 
+    /// Container equivalence at the install boundary: ONE fixture delivered
+    /// four ways — a directory, a flat zip, a zip nested under a single
+    /// top-level dir, and a tar.gz — must materialize one identical
+    /// `content_hash_for_package_dir`.
+    ///
+    /// Characterization coverage, not a regression pin for the reader
+    /// consolidation: the add path already sniffed containers and already
+    /// tolerated a single nested top-level dir before every consumer was routed
+    /// through the shared reader. What this pins is that the consolidation left
+    /// the add path's behavior unchanged, and that the four deliveries stay
+    /// interchangeable as the shared reader evolves.
+    #[test]
+    fn one_fixture_delivered_four_ways_materializes_one_content_hash() {
+        let staging = tempfile::tempdir().unwrap();
+
+        let folder_source = staging.path().join("camera-src");
+        write_package_folder(&folder_source, "tatolab", "camera", "2.0.0");
+
+        let flat_zip = staging.path().join("flat.zip");
+        std::fs::write(
+            &flat_zip,
+            zip_package_bytes("tatolab", "camera", "2.0.0", None),
+        )
+        .unwrap();
+
+        let nested_zip = staging.path().join("nested.zip");
+        std::fs::write(
+            &nested_zip,
+            zip_package_bytes("tatolab", "camera", "2.0.0", Some("my-package")),
+        )
+        .unwrap();
+
+        let tar_gz = staging.path().join("camera.tar.gz");
+        std::fs::write(
+            &tar_gz,
+            tar_gz_package_bytes("tatolab", "camera", "2.0.0", None),
+        )
+        .unwrap();
+
+        let deliveries: [(&str, AddPackageSource); 4] = [
+            (
+                "directory",
+                AddPackageSource::Folder {
+                    path: folder_source,
+                },
+            ),
+            ("flat zip", AddPackageSource::Archive { path: flat_zip }),
+            ("nested zip", AddPackageSource::Archive { path: nested_zip }),
+            ("tar.gz", AddPackageSource::Archive { path: tar_gz }),
+        ];
+
+        let mut hashes: Vec<(&str, String)> = Vec::new();
+        for (label, source) in deliveries {
+            // A fresh app root per delivery — each add is independent.
+            let app_root = tempfile::tempdir().unwrap();
+            let app = AppModulesDir::at(app_root.path());
+            let report = app
+                .add_package(&source, &AddPackageOptions::default())
+                .unwrap_or_else(|e| panic!("{label} delivery must add: {e}"));
+            assert_eq!(report.package, pkg_ref("tatolab", "camera"), "{label}");
+            assert!(
+                report.package_dir.join("streamlib.yaml").is_file(),
+                "{label}: the manifest must land at the slot root"
+            );
+            assert!(
+                report.package_dir.join("schemas/foo_frame.yaml").is_file(),
+                "{label}: owned schemas must land under the slot root"
+            );
+            assert_eq!(
+                report.content_hash,
+                content_hash_for_package_dir(&report.package_dir).unwrap(),
+                "{label}: reported hash must equal the materialized dir's re-hash"
+            );
+            hashes.push((label, report.content_hash));
+        }
+
+        let (first_label, first_hash) = &hashes[0];
+        for (label, hash) in &hashes[1..] {
+            assert_eq!(
+                hash, first_hash,
+                "{label} must materialize the same contents as {first_label}"
+            );
+        }
+    }
+
     #[test]
     fn file_url_add_materializes_and_locks_url_source() {
         let dir = tempfile::tempdir().unwrap();
@@ -2158,6 +2380,164 @@ mod tests {
         assert_eq!(report.package, pkg_ref("tatolab", "camera"));
         assert!(report.package_dir.join("streamlib.yaml").is_file());
         server.join().unwrap();
+    }
+
+    // =====================================================================
+    // Per-caller add policies (lockfile recording, active-link slots)
+    // =====================================================================
+
+    /// The runtime module loader adds under `SkipLockfileRecording`: the slot
+    /// is materialized exactly as the CLI would materialize it, but the app's
+    /// committed `streamlib.lock` is left byte-untouched by a run.
+    #[test]
+    fn skip_lockfile_recording_materializes_the_slot_and_writes_no_lockfile() {
+        let src = tempfile::tempdir().unwrap();
+        write_package_folder(src.path(), "tatolab", "camera", "2.0.0");
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let report = app
+            .add_package(
+                &AddPackageSource::Folder {
+                    path: src.path().to_path_buf(),
+                },
+                &AddPackageOptions {
+                    lockfile_recording_policy: LockfileRecordingPolicy::SkipLockfileRecording,
+                    ..Default::default()
+                },
+            )
+            .expect("a lockfile-free add must still materialize the slot");
+
+        assert!(report.package_dir.join("streamlib.yaml").is_file());
+        assert!(report.lockfile_path.is_none(), "no lockfile may be reported");
+        assert!(
+            !app.lockfile_path().exists(),
+            "a run must not create the app's streamlib.lock"
+        );
+        assert_no_partial_state(&app, &["@tatolab/camera"], None);
+    }
+
+    /// A `SkipLockfileRecording` add over an app that already has a lockfile
+    /// leaves those bytes exactly as they were.
+    #[test]
+    fn skip_lockfile_recording_leaves_an_existing_lockfile_byte_identical() {
+        let src = tempfile::tempdir().unwrap();
+        write_package_folder(src.path(), "tatolab", "camera", "2.0.0");
+        let source = AddPackageSource::Folder {
+            path: src.path().to_path_buf(),
+        };
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        app.add_package(&source, &AddPackageOptions::default())
+            .unwrap();
+        let lock_before = std::fs::read(app.lockfile_path()).unwrap();
+
+        std::fs::write(
+            src.path().join("streamlib.yaml"),
+            manifest_yaml("tatolab", "camera", "3.0.0"),
+        )
+        .unwrap();
+        app.add_package(
+            &source,
+            &AddPackageOptions {
+                lockfile_recording_policy: LockfileRecordingPolicy::SkipLockfileRecording,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(
+            std::fs::read(app.lockfile_path()).unwrap(),
+            lock_before,
+            "a skip-recording add must not rewrite the lockfile it found"
+        );
+    }
+
+    /// `RefuseWhenSlotIsActiveLink` is the runtime loader's guard: a slot
+    /// holding a live `streamlib link` symlink is refused with the link named,
+    /// and the symlink survives intact. Mentally revert the guard and the
+    /// promote unlinks the link, leaving `streamlib.lock` claiming a
+    /// `LockfileSource::Link` for a slot that is now a materialized copy.
+    #[test]
+    fn refuse_when_slot_is_active_link_leaves_the_link_and_its_lock_entry_intact() {
+        let checkout = tempfile::tempdir().unwrap();
+        write_package_folder(checkout.path(), "tatolab", "camera", "2.0.0");
+        let archive_src = tempfile::tempdir().unwrap();
+        write_package_folder(archive_src.path(), "tatolab", "camera", "9.9.9");
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let link = app.link_package(checkout.path()).unwrap();
+        let lock_before = std::fs::read(app.lockfile_path()).unwrap();
+
+        let err = app
+            .add_package(
+                &AddPackageSource::Folder {
+                    path: archive_src.path().to_path_buf(),
+                },
+                &AddPackageOptions {
+                    active_link_slot_policy: ActiveLinkSlotPolicy::RefuseWhenSlotIsActiveLink,
+                    ..Default::default()
+                },
+            )
+            .expect_err("an add over a linked slot must be refused under this policy");
+
+        let AppModulesError::SlotOccupiedByActiveLink {
+            package,
+            link_target,
+            ..
+        } = &err
+        else {
+            panic!("expected SlotOccupiedByActiveLink, got {err:?}");
+        };
+        assert_eq!(package, &pkg_ref("tatolab", "camera"));
+        assert_eq!(link_target, &link.link_target);
+
+        assert!(
+            std::fs::symlink_metadata(&link.package_dir)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the link must survive the refused add"
+        );
+        assert_eq!(
+            std::fs::read(app.lockfile_path()).unwrap(),
+            lock_before,
+            "a refused add must not touch the lockfile"
+        );
+        assert_no_partial_state(&app, &["@tatolab/camera"], Some(&lock_before));
+    }
+
+    /// The CLI's default policy is the opposite: an explicit `streamlib add`
+    /// outranks a link and replaces it.
+    #[test]
+    fn replace_active_link_in_slot_is_the_default_for_an_operator_add() {
+        let checkout = tempfile::tempdir().unwrap();
+        write_package_folder(checkout.path(), "tatolab", "camera", "2.0.0");
+        let added = tempfile::tempdir().unwrap();
+        write_package_folder(added.path(), "tatolab", "camera", "9.9.9");
+
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        app.link_package(checkout.path()).unwrap();
+
+        let report = app
+            .add_package(
+                &AddPackageSource::Folder {
+                    path: added.path().to_path_buf(),
+                },
+                &AddPackageOptions::default(),
+            )
+            .expect("the default policy must replace a linked slot");
+        assert!(report.replaced_existing);
+        assert!(
+            !std::fs::symlink_metadata(&report.package_dir)
+                .unwrap()
+                .file_type()
+                .is_symlink(),
+            "the slot must now hold materialized contents"
+        );
     }
 
     // =====================================================================
@@ -2287,15 +2667,15 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let archive = dir.path().join("junk.slpkg");
         // A valid zip that simply has no streamlib.yaml.
-        let mut cursor = std::io::Cursor::new(Vec::new());
-        {
-            let mut writer = zip::ZipWriter::new(&mut cursor);
-            let opts = zip::write::FileOptions::<()>::default();
-            writer.start_file("readme.txt", opts).unwrap();
-            writer.write_all(b"not a package").unwrap();
-            writer.finish().unwrap();
-        }
-        std::fs::write(&archive, cursor.into_inner()).unwrap();
+        std::fs::write(
+            &archive,
+            package_archive_bytes(
+                &[("readme.txt".to_string(), b"not a package".to_vec())],
+                ArchiveKind::Zip,
+                None,
+            ),
+        )
+        .unwrap();
 
         let app_root = tempfile::tempdir().unwrap();
         let app = AppModulesDir::at(app_root.path());
@@ -2357,15 +2737,15 @@ mod tests {
     fn add_zip_with_path_traversal_is_extract_failed_with_no_residue() {
         let dir = tempfile::tempdir().unwrap();
         let archive = dir.path().join("evil.slpkg");
-        let mut cursor = std::io::Cursor::new(Vec::new());
-        {
-            let mut writer = zip::ZipWriter::new(&mut cursor);
-            let opts = zip::write::FileOptions::<()>::default();
-            writer.start_file("../escape.txt", opts).unwrap();
-            writer.write_all(b"evil").unwrap();
-            writer.finish().unwrap();
-        }
-        std::fs::write(&archive, cursor.into_inner()).unwrap();
+        std::fs::write(
+            &archive,
+            package_archive_bytes(
+                &[("../escape.txt".to_string(), b"evil".to_vec())],
+                ArchiveKind::Zip,
+                None,
+            ),
+        )
+        .unwrap();
 
         let app_root = tempfile::tempdir().unwrap();
         let app = AppModulesDir::at(app_root.path());

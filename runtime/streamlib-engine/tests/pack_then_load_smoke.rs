@@ -1,8 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! End-to-end gate for the `streamlib pkg build` →
-//! `Runner::add_module_with(_, Strategy::Slpkg)`
+//! End-to-end gate for the pack →
+//! `Runner::add_module_with(_, Strategy::PackageArchive)`
 //! chain: pack a real workspace package into a source-only `.slpkg`
 //! (the distribution shape — no prebuilt cdylib), hand the bundle
 //! back to a fresh `Runner`, and assert the loaded artifacts
@@ -24,7 +24,7 @@
 //! - Drop the `JpegDecoder` processor from `streamlib-jpeg`'s
 //!   `export_plugin!` arg list: dlopen still succeeds (the
 //!   `STREAMLIB_PLUGIN` symbol is still exported), so
-//!   `add_module_with(SlpkgArchive)` returns `Ok` — but the listed-name
+//!   `add_module_with(PackageArchive)` returns `Ok` — but the listed-name
 //!   assertion that `JpegDecoder` appears in `PROCESSOR_REGISTRY` fails.
 //!   (Dropping the whole `export_plugin!` macro is caught earlier — by
 //!   the `STREAMLIB_PLUGIN missing` error path inside the module loader.)
@@ -38,13 +38,14 @@
 //!   instead of the triple-naming `Configuration` error it asserts
 //!   against.
 //!
-//! Cache scope: the `SlpkgArchive` strategy extracts every slpkg into
+//! Cache scope: the `PackageArchive` strategy extracts every archive into
 //! the co-located `<app-root>/streamlib_modules/@org/name` slot the
 //! `installed_package_slot_dir` seam derives (app root =
 //! `STREAMLIB_MODULES_DIR` / runtime override / process cwd, version-free).
 //! This test therefore writes to the jpeg / core slots under whichever app
 //! root is active on the host running the test. The extract is idempotent
-//! (`extract_slpkg_to_cache` clears the dir before re-extracting) and the
+//! (`extract_package_archive_to_installed_slot` replaces the slot wholesale)
+//! and the
 //! package names match the real workspace packages, so a fresh extract
 //! reproduces the same contents — accepted as low-risk. CI runners are
 //! fresh per job; on developer machines the slots are rebuilt every time
@@ -56,7 +57,6 @@
 //! load round-trip.
 
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use serial_test::serial;
 use streamlib::sdk::RunnerAutoBuild as _;
@@ -65,6 +65,8 @@ use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::runtime::{Runner, Strategy};
 use streamlib_engine::core::runtime::host_target_triple;
 use streamlib_engine::schemas::current_schema_definition;
+use streamlib_idents::archive::ArchiveKind;
+use streamlib_idents::archive::package_archive_fixtures::package_archive_bytes;
 
 fn workspace_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -75,50 +77,30 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn build_streamlib_cli() -> PathBuf {
-    let status = Command::new(env!("CARGO"))
-        .args(["build", "--bin", "streamlib", "-p", "streamlib-cli"])
-        .status()
-        .expect("invoking cargo build for streamlib-cli");
+/// Assemble `pkg_dir` into a source-only `.slpkg` at `archive_path` — the same
+/// `AssembleTarget::Slpkg` path AND the same [`AssembleOptions`] `streamlib pkg
+/// publish` repacks through, called in-process so the gate does not depend on a
+/// CLI verb. Both sides read the options off `source_only_publish()`, so the
+/// gate cannot pass against a shape real publishes have drifted away from.
+///
+/// [`AssembleOptions`]: streamlib_pack::AssembleOptions
+fn assemble_source_only_package_archive(pkg_dir: &Path, archive_path: &Path) {
+    streamlib_pack::assemble_artifact(
+        pkg_dir,
+        &streamlib_pack::AssembleTarget::Slpkg(archive_path.to_path_buf()),
+        &streamlib_pack::AssembleOptions::source_only_publish(),
+        &(),
+    )
+    .unwrap_or_else(|e| {
+        panic!(
+            "assembling a source-only .slpkg from {} must succeed: {e}",
+            pkg_dir.display()
+        )
+    });
     assert!(
-        status.success(),
-        "cargo build --bin streamlib -p streamlib-cli must succeed"
-    );
-
-    let bin = workspace_root()
-        .join("target")
-        .join("debug")
-        .join(if cfg!(windows) {
-            "streamlib.exe"
-        } else {
-            "streamlib"
-        });
-    assert!(
-        bin.exists(),
-        "streamlib binary expected at {} after build",
-        bin.display()
-    );
-    bin
-}
-
-/// Run `streamlib pkg build --output <slpkg>` inside `pkg_dir` — the
-/// current CLI pack verb (source-only `.slpkg`, run inside the package).
-fn pkg_build_slpkg(cli: &Path, pkg_dir: &Path, slpkg: &Path) {
-    let status = Command::new(cli)
-        .args(["pkg", "build", "--output"])
-        .arg(slpkg)
-        .current_dir(pkg_dir)
-        .status()
-        .expect("invoking `streamlib pkg build`");
-    assert!(
-        status.success(),
-        "`streamlib pkg build` in {} must succeed",
-        pkg_dir.display()
-    );
-    assert!(
-        slpkg.exists(),
-        "pkg build must have written {}",
-        slpkg.display()
+        archive_path.exists(),
+        "the assembler must have written {}",
+        archive_path.display()
     );
 }
 
@@ -132,7 +114,7 @@ fn pkg_build_slpkg(cli: &Path, pkg_dir: &Path, slpkg: &Path) {
             which build the fixture in-workspace and exercise the full \
             STREAMLIB_PLUGIN → setup/process/teardown roundtrip."]
 fn pack_then_load_rust_package_registers_processors() {
-    // Rust-impl gate: `pkg build` packs `@tatolab/jpeg` — the remaining
+    // Rust-impl gate: the assembler packs `@tatolab/jpeg` — the remaining
     // engine-free Rust package after `@tatolab/network` / `@tatolab/mavlink`
     // / `@tatolab/vadr-vision` were evicted to tatolab/streamlib-packages —
     // into a source-only `.slpkg` straight from its package dir. packages/*
@@ -147,15 +129,13 @@ fn pack_then_load_rust_package_registers_processors() {
     // registry gone and SDK publishing deferred, the out-of-tree build
     // has no by-version SDK source. Re-enable when #1323 (real-registry
     // publish) or #1338 (`streamlib link --engine` rework) lands.
-    let cli = build_streamlib_cli();
-
     let tmp = tempfile::tempdir().unwrap();
     // Pin the app-modules root to the tempdir so the extracted slot lands under
     // it (not the crate working tree), keeping `cargo test` clean.
     Runner::set_app_modules_dir(tmp.path());
     let pkg_src = workspace_root().join("packages").join("jpeg");
     let slpkg = tmp.path().join("jpeg.slpkg");
-    pkg_build_slpkg(&cli, &pkg_src, &slpkg);
+    assemble_source_only_package_archive(&pkg_src, &slpkg);
 
     // A source-only Rust slpkg builds at load — the Runner needs the
     // polyglot build orchestrator wired (`Runner::new()` is
@@ -165,11 +145,11 @@ fn pack_then_load_rust_package_registers_processors() {
     runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "jpeg"),
-            Strategy::Slpkg {
+            Strategy::PackageArchive {
                 path: slpkg.clone(),
             },
         )
-        .expect("add_module_with SlpkgArchive against a freshly-packed Rust slpkg must succeed");
+        .expect("add_module_with PackageArchive against a freshly-packed Rust slpkg must succeed");
 
     let registered: Vec<String> = PROCESSOR_REGISTRY
         .list_registered()
@@ -192,25 +172,23 @@ fn pack_then_load_schemas_only_package_registers_schemas() {
     // schema registry after `Runner::add_module_with`. Exercises the
     // no-cdylib branch of pack (no `lib/` in the archive, no dlopen
     // at load time) plus the `schemas:` walk inside `add_module_with`.
-    let cli = build_streamlib_cli();
-
     let tmp = tempfile::tempdir().unwrap();
     // Pin the app-modules root to the tempdir so the extracted slot lands under
     // it (not the crate working tree), keeping `cargo test` clean.
     Runner::set_app_modules_dir(tmp.path());
     let pkg_src = workspace_root().join("packages").join("core");
     let slpkg = tmp.path().join("core.slpkg");
-    pkg_build_slpkg(&cli, &pkg_src, &slpkg);
+    assemble_source_only_package_archive(&pkg_src, &slpkg);
 
     let runtime = Runner::new().unwrap();
     runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "core"),
-            Strategy::Slpkg {
+            Strategy::PackageArchive {
                 path: slpkg.clone(),
             },
         )
-        .expect("add_module_with SlpkgArchive against a schemas-only slpkg must succeed");
+        .expect("add_module_with PackageArchive against a schemas-only slpkg must succeed");
 
     assert!(
         current_schema_definition("@tatolab/core/VideoFrame").is_some(),
@@ -238,11 +216,11 @@ fn add_module_with_slpkg_archive_missing_file_errors_cleanly() {
             // before the ident is checked against the (non-existent)
             // archive's manifest.
             module_ident_any_version!("tatolab", "core"),
-            Strategy::Slpkg {
+            Strategy::PackageArchive {
                 path: missing.clone(),
             },
         )
-        .expect_err("add_module_with SlpkgArchive against a missing .slpkg must error");
+        .expect_err("add_module_with PackageArchive against a missing .slpkg must error");
     let msg = format!("{err}");
     assert!(
         msg.contains("missing.slpkg") || msg.to_lowercase().contains("no such file"),
@@ -292,27 +270,30 @@ processors:
     };
     let dylib_entry = format!("lib/{}/libforeign_stub.so", foreign_triple);
 
-    let file = std::fs::File::create(&slpkg).unwrap();
-    let mut zip = zip::ZipWriter::new(file);
-    let opts = zip::write::FileOptions::<()>::default()
-        .compression_method(zip::CompressionMethod::Deflated);
-
-    use std::io::Write as _;
-    zip.start_file("streamlib.yaml", opts).unwrap();
-    zip.write_all(manifest.as_bytes()).unwrap();
-    zip.start_file(&dylib_entry, opts).unwrap();
-    zip.write_all(b"not-a-real-dylib").unwrap();
-    zip.finish().unwrap();
+    std::fs::write(
+        &slpkg,
+        package_archive_bytes(
+            &[
+                ("streamlib.yaml".to_string(), manifest.as_bytes().to_vec()),
+                (dylib_entry, b"not-a-real-dylib".to_vec()),
+            ],
+            ArchiveKind::Zip,
+            None,
+        ),
+    )
+    .unwrap();
 
     let runtime = Runner::new().unwrap();
     let err = runtime
         .add_module_with_blocking(
             module_ident_any_version!("tatolab", "foreign-triple-fixture"),
-            Strategy::Slpkg {
+            Strategy::PackageArchive {
                 path: slpkg.clone(),
             },
         )
-        .expect_err("add_module_with SlpkgArchive against a foreign-triple-only slpkg must error");
+        .expect_err(
+            "add_module_with PackageArchive against a foreign-triple-only slpkg must error",
+        );
     let msg = format!("{err}");
     let host = host_target_triple();
     assert!(

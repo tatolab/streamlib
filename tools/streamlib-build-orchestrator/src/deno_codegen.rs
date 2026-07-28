@@ -6,7 +6,7 @@
 //! A Deno package's processors import their wire types from a package-local
 //! `_generated_/` (e.g. `./_generated_/tatolab__core/video_frame.ts`),
 //! materialized by `streamlib generate --runtime typescript`. That directory
-//! is a per-consumer build artifact — `streamlib pack` excludes it from the
+//! is a per-consumer build artifact — the package assembler excludes it from the
 //! shipped source (exactly as it excludes Python's `_generated_`) — so the
 //! orchestrator must regenerate it into the staged package after assembly.
 //!

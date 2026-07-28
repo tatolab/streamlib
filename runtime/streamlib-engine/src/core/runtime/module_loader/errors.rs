@@ -273,17 +273,112 @@ pub enum AddModuleError {
         module: streamlib_idents::ModuleIdent,
     },
 
-    /// Strategy was [`Strategy::Slpkg`] and the extraction step failed
-    /// (I/O, malformed ZIP, missing embedded manifest, etc.).
+    /// The package archive named by [`Strategy::PackageArchive`] (or fetched
+    /// for a [`Strategy::Url`] / [`Strategy::ByVersion`] load) is not on disk.
     ///
-    /// [`Strategy::Slpkg`]: super::Strategy::Slpkg
-    #[error(
-        "Failed to extract .slpkg archive at {}: {detail}",
-        archive.display()
-    )]
-    SlpkgExtractionFailed {
+    /// [`Strategy::PackageArchive`]: super::Strategy::PackageArchive
+    /// [`Strategy::Url`]: super::Strategy::Url
+    /// [`Strategy::ByVersion`]: super::Strategy::ByVersion
+    #[error("Package archive not found at {}", archive.display())]
+    PackageArchiveNotFound { archive: std::path::PathBuf },
+
+    /// The package archive is on disk but its bytes could not be read
+    /// (permissions, a mid-read I/O failure).
+    #[error("Failed to read package archive at {}: {detail}", archive.display())]
+    PackageArchiveReadFailed {
         archive: std::path::PathBuf,
         detail: String,
+    },
+
+    /// The package archive's leading bytes match no container this build can
+    /// unpack.
+    #[error(
+        "Package archive at {} is not a recognized container: {detail} \
+         (expected a zip-shaped .slpkg/.zip or a gzip-compressed .tar.gz)",
+        archive.display()
+    )]
+    PackageArchiveContainerUnrecognized {
+        archive: std::path::PathBuf,
+        detail: String,
+    },
+
+    /// The container was recognized but unpacking it failed (malformed
+    /// container, a path-traversal or escaping-symlink entry, a write failure
+    /// into the staging directory).
+    #[error(
+        "Failed to extract package archive at {}: {detail}",
+        archive.display()
+    )]
+    PackageArchiveExtractionFailed {
+        archive: std::path::PathBuf,
+        detail: String,
+    },
+
+    /// The archive unpacked, but the extracted tree is not a streamlib package
+    /// — no `streamlib.yaml` at the package root (nor under a single nested
+    /// top-level directory), or one that fails to parse.
+    #[error(
+        "Package archive at {} does not contain a valid streamlib package: {detail}",
+        archive.display()
+    )]
+    PackageArchiveContentsNotAValidPackage {
+        archive: std::path::PathBuf,
+        detail: String,
+    },
+
+    /// The archive carries a `streamlib.yaml` with no `package:` identity
+    /// block, so the loader cannot derive the `@org/name` slot to materialize
+    /// into.
+    #[error(
+        "Package archive at {} has no `package:` block in its streamlib.yaml — a package \
+         materialized into streamlib_modules/ must declare its own @org/name@version identity",
+        archive.display()
+    )]
+    PackageArchiveMissingPackageIdentity { archive: std::path::PathBuf },
+
+    /// The extracted package was valid but swapping it into its
+    /// `streamlib_modules/@org/name` slot failed. The prior slot contents are
+    /// restored — a failed promote never leaves the slot empty.
+    #[error(
+        "Failed to publish package archive at {} into its installed slot {}: {detail}",
+        archive.display(),
+        slot.display()
+    )]
+    PackageArchiveInstalledSlotPromoteFailed {
+        archive: std::path::PathBuf,
+        slot: std::path::PathBuf,
+        detail: String,
+    },
+
+    /// The package-archive add pipeline failed in a stage this loader does not
+    /// name individually (filesystem failures under `streamlib_modules/`, and
+    /// any failure mode the shared add pipeline gains later). The prefix stays
+    /// stage-neutral so it can never misattribute the failure.
+    #[error(
+        "Failed to materialize package archive at {} into its installed slot: {detail}",
+        archive.display()
+    )]
+    PackageArchiveMaterializationFailed {
+        archive: std::path::PathBuf,
+        detail: String,
+    },
+
+    /// A package-archive load targeted an installed slot that holds an active
+    /// `streamlib link`. The load is refused rather than unlinking the
+    /// checkout: a run must not silently delete a dev-loop link, and the loader
+    /// writes no lockfile, so replacing it would leave the app's
+    /// `streamlib.lock` claiming a link that no longer exists.
+    #[error(
+        "Refusing to load {} over {}, which is an active `streamlib link` to {} — \
+         run `streamlib unlink` first, or drop the package-archive strategy for this run",
+        archive.display(),
+        slot.display(),
+        link_target.display()
+    )]
+    InstalledSlotOccupiedByActiveLink {
+        archive: std::path::PathBuf,
+        slot: std::path::PathBuf,
+        link_target: std::path::PathBuf,
     },
 
     /// Strategy resolver failed while reading the manifest at the
@@ -493,14 +588,14 @@ pub enum AddModuleError {
     /// [`Runner::register_processor_from_source`] was handed a `language` that
     /// live source submit does not support. Only the subprocess languages
     /// (Python / TypeScript) run from source with no host compile; Rust from
-    /// source is a full cargo build (the `streamlib pkg build` flow), never a
+    /// source is a full cargo build (the package-authoring flow), never a
     /// live graph mutation.
     ///
     /// [`Runner::register_processor_from_source`]: super::super::Runner::register_processor_from_source
     #[error(
         "register_processor_from_source: language '{language}' is not supported \
          for live source submit — only Python and TypeScript run from source. \
-         Build a Rust processor with `streamlib pkg build` and load the package."
+         Build a Rust processor as a package and load it with `streamlib add`."
     )]
     SourceLanguageUnsupportedForLiveSubmit { language: String },
 

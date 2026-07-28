@@ -5075,7 +5075,6 @@ dependencies = [
  "toml_edit 0.22.27",
  "tracing",
  "ureq",
- "zip",
 ]
 
 [[package]]
@@ -5172,6 +5171,7 @@ dependencies = [
  "streamlib-ipc-types",
  "streamlib-jtd-codegen",
  "streamlib-macros",
+ "streamlib-pack",
  "streamlib-plugin-abi",
  "streamlib-processor-schema",
  "streamlib-surface-client",
@@ -5189,7 +5189,6 @@ dependencies = [
  "uuid",
  "winit",
  "zbus",
- "zip",
 ]
 
 [[package]]

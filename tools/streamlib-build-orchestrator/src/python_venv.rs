@@ -157,7 +157,7 @@ pub fn provision_python_venv(
 
 /// Whether the staged package directory carries a Python runtime. Detected
 /// from the staged tree itself: a `python/` source directory (the layout
-/// `streamlib pack` / `assemble_artifact` stages Python source into) or a
+/// `assemble_artifact` stages Python source into) or a
 /// `pyproject.toml` at the package root.
 pub(crate) fn staged_package_has_python(temp_dir: &Path) -> bool {
     temp_dir.join("python").is_dir() || temp_dir.join("pyproject.toml").is_file()

@@ -3,6 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
+use crate::manifest::Manifest;
+
 /// Archive container format detected from leading magic bytes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArchiveKind {
@@ -61,6 +63,28 @@ pub enum ArchiveError {
     /// Clearing or creating the destination directory failed.
     #[error("preparing extraction directory {}: {detail}", dest_dir.display())]
     DestinationPreparationFailed { dest_dir: PathBuf, detail: String },
+
+    /// The leading bytes match no container format this build can extract.
+    #[error("unsupported archive container in '{source_label}': {detail}")]
+    UnrecognizedContainer {
+        source_label: String,
+        detail: String,
+    },
+
+    /// Enumerating the extracted directory's top level failed.
+    #[error("listing extracted contents of {}: {detail}", extracted_dir.display())]
+    ExtractedContentsListingFailed {
+        extracted_dir: PathBuf,
+        detail: String,
+    },
+
+    /// Neither the extracted directory nor a single nested top-level directory
+    /// carries a `streamlib.yaml`.
+    #[error("'{source_label}' is not a valid streamlib package: {detail}")]
+    PackageRootNotLocated {
+        source_label: String,
+        detail: String,
+    },
 }
 
 /// Detect the archive container format from leading magic bytes. Magic is
@@ -73,6 +97,62 @@ pub fn sniff_archive_kind(bytes: &[u8]) -> Option<ArchiveKind> {
         return Some(ArchiveKind::TarGz);
     }
     None
+}
+
+/// Extract in-memory archive `bytes` into `dest_dir` (cleared first,
+/// always-overwrite), dispatching on the container sniffed from magic bytes.
+/// The one container-agnostic reader every `.slpkg` consumer goes through —
+/// install, runtime module load, and dependency resolution all land here, so a
+/// zip and a tar.gz of the same tree materialize identically. `source_label`
+/// names the archive in `tracing` / error text only.
+#[tracing::instrument(skip(bytes), fields(dest = %dest_dir.display()))]
+pub fn extract_archive_bytes_to_dir(
+    bytes: &[u8],
+    dest_dir: &Path,
+    source_label: &str,
+) -> Result<(), ArchiveError> {
+    let kind = sniff_archive_kind(bytes).ok_or_else(|| ArchiveError::UnrecognizedContainer {
+        source_label: source_label.to_string(),
+        detail: "unrecognized magic bytes".to_string(),
+    })?;
+    match kind {
+        ArchiveKind::Zip => extract_zip_bytes_to_dir(bytes, dest_dir, source_label),
+        ArchiveKind::TarGz => extract_tar_gz_bytes_to_dir(bytes, dest_dir, source_label),
+    }
+}
+
+/// Locate the package root inside an already-extracted `extracted_dir`: the
+/// directory itself when it carries `streamlib.yaml`, else the single
+/// top-level directory that does. The nested shape is what `tar czf
+/// pkg.tar.gz my-package/` (and a zip built the same way) produces, so every
+/// archive consumer must tolerate it identically. Anything else is not a
+/// package.
+#[tracing::instrument(fields(dir = %extracted_dir.display()))]
+pub fn locate_package_root_in_extracted_dir(
+    extracted_dir: &Path,
+    source_label: &str,
+) -> Result<PathBuf, ArchiveError> {
+    if extracted_dir.join(Manifest::FILE_NAME).is_file() {
+        return Ok(extracted_dir.to_path_buf());
+    }
+    let top_level_entries: Vec<PathBuf> = std::fs::read_dir(extracted_dir)
+        .map_err(|e| ArchiveError::ExtractedContentsListingFailed {
+            extracted_dir: extracted_dir.to_path_buf(),
+            detail: e.to_string(),
+        })?
+        .filter_map(|entry| entry.ok())
+        .map(|entry| entry.path())
+        .collect();
+    if let [single_top_level_dir] = top_level_entries.as_slice()
+        && single_top_level_dir.is_dir()
+        && single_top_level_dir.join(Manifest::FILE_NAME).is_file()
+    {
+        return Ok(single_top_level_dir.clone());
+    }
+    Err(ArchiveError::PackageRootNotLocated {
+        source_label: source_label.to_string(),
+        detail: format!("no {} at the package root", Manifest::FILE_NAME),
+    })
 }
 
 /// Clear `dest_dir` if present and recreate it empty.
@@ -318,6 +398,60 @@ fn symlink_target_escapes_root(entry_name: &str, target: &str) -> bool {
         }
     }
     false
+}
+
+/// Package-archive authoring for test suites, in the crate that owns the
+/// reader — so no consumer of [`extract_archive_bytes_to_dir`] re-derives the
+/// zip / tar.gz incantations (and the dev-dependencies behind them) just to
+/// exercise it. Enable with the `archive-test-fixtures` feature.
+#[cfg(any(test, feature = "archive-test-fixtures"))]
+pub mod package_archive_fixtures {
+    use super::ArchiveKind;
+
+    /// In-memory archive bytes carrying `entries` (each a
+    /// `(package-relative path, contents)` pair) in `kind`'s container.
+    /// `nested_under` puts every entry under one top-level directory — the
+    /// `tar czf pkg.tar.gz my-package/` shape a hand-rolled archive carries,
+    /// which the package-root locator must see through.
+    pub fn package_archive_bytes(
+        entries: &[(String, Vec<u8>)],
+        kind: ArchiveKind,
+        nested_under: Option<&str>,
+    ) -> Vec<u8> {
+        use std::io::Write;
+        let prefix = nested_under.map(|d| format!("{d}/")).unwrap_or_default();
+        match kind {
+            ArchiveKind::Zip => {
+                let mut buf = Vec::new();
+                {
+                    let mut writer = zip::ZipWriter::new(std::io::Cursor::new(&mut buf));
+                    let options = zip::write::FileOptions::<()>::default()
+                        .compression_method(zip::CompressionMethod::Stored);
+                    for (path, body) in entries {
+                        writer.start_file(format!("{prefix}{path}"), options).unwrap();
+                        writer.write_all(body).unwrap();
+                    }
+                    writer.finish().unwrap();
+                }
+                buf
+            }
+            ArchiveKind::TarGz => {
+                let encoder =
+                    flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+                let mut builder = tar::Builder::new(encoder);
+                for (path, body) in entries {
+                    let mut header = tar::Header::new_gnu();
+                    header.set_size(body.len() as u64);
+                    header.set_mode(0o644);
+                    header.set_cksum();
+                    builder
+                        .append_data(&mut header, format!("{prefix}{path}"), body.as_slice())
+                        .unwrap();
+                }
+                builder.into_inner().unwrap().finish().unwrap()
+            }
+        }
+    }
 }
 
 #[cfg(test)]

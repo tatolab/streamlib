@@ -7,7 +7,7 @@
 //! A package's version lives in `streamlib.yaml` (`package.version`) — the
 //! single source of truth. Its `Cargo.toml` `[package].version` (the crate
 //! version the registry resolves) must equal it, so a stale in-tree crate
-//! version can never reach the registry. `streamlib pack` stamps the artifact
+//! version can never reach the registry. The package assembler stamps the artifact
 //! copy at pack time; this lint keeps the *in-tree* `Cargo.toml` honest so the
 //! bump workflow is "edit streamlib.yaml, run `--fix`" — never hand-edit
 //! `Cargo.toml`.
