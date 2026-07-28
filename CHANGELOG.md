@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/tatolab/streamlib/compare/v0.9.0...v0.9.1) (2026-07-28)
+
+
+### Features
+
+* **op-model:** stack a ticket on its blocker's open PR instead of waiting for a merge ([#1631](https://github.com/tatolab/streamlib/issues/1631)) ([4b86395](https://github.com/tatolab/streamlib/commit/4b863956b96ab9b528d731ed395f53cf47d158c2))
+
 ## [0.9.0](https://github.com/tatolab/streamlib/compare/v0.8.4...v0.9.0) (2026-07-28)
 
 
