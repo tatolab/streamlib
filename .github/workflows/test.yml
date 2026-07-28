@@ -78,3 +78,20 @@ jobs:
         run: |
           cargo test --locked -p streamlib -p streamlib-macros -p streamlib-plugin-abi -p streamlib-plugin-sdk -p streamlib-processor-extract --lib
           cargo test --locked -p streamlib-engine --test attribute_macro_test
+
+      # `--lib` above reaches neither of the two places the plugin declaration's
+      # anchor is actually witnessed. The `export_plugin_*` binaries each hold a
+      # whole cdylib-shaped `export_plugin!` invocation (a macro invocation
+      # cannot live in a `#[cfg(test)]` mod and still emit `#[no_mangle]
+      # STREAMLIB_PLUGIN`), and they read the emitted declaration's
+      # `abi_layout_fingerprint` / `build_identity` back — the load handshake's
+      # plugin-side source. `real_package_reachability` resolves the
+      # `processors/` scan against real in-tree packages, so a package that
+      # moves its sources out of the scanned root fails here rather than by
+      # deriving the empty processor set. The compile-fail doctests are the only
+      # witnesses that an unanchored declaration stays a hard error; a doctest
+      # that starts compiling is invisible to every other target.
+      - name: Run plugin-ABI and processor-extract integration tests
+        run: |
+          cargo test --locked -p streamlib-plugin-abi -p streamlib-processor-extract --tests
+          cargo test --locked -p streamlib-plugin-abi -p streamlib-processor-extract --doc
