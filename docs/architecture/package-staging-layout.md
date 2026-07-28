@@ -52,7 +52,7 @@ file at its authored relative path:
 |---|---|---|
 | **Python** | full tree: every `.py` + `pyproject.toml` + data / assets / models | a provisioned `.venv/` (orchestrator), SDK wire vocab in `streamlib/_generated_` inside that venv |
 | **Deno** | full tree: every `.ts` + `deno.json` + `.npmrc` + assets | package-local `_generated_/` wire vocab (orchestrator) |
-| **Rust** | full crate source: `Cargo.toml` + `processors/` + `schemas/` + data / assets | prebuilt cdylib at `lib/<triple>/` (one per packing host), generated crate root at `_generated_/lib.rs` |
+| **Rust** | full crate source: `Cargo.toml` + `processors/` + `schemas/` + data / assets | prebuilt cdylib at `lib/<triple>/` (one per packing host), generated crate root at `_generated_rust_crate_root_/lib.rs` |
 
 Processor modules are authored under `<package_root>/processors/` — the one
 discovery root all three extractors walk, Rust included. The entrypoint
@@ -67,8 +67,9 @@ assembler neither validates nor resolves it
 resolution is the runtime's job, and the file travels through
 `collect_source_tree` like any other source file.
 
-A Rust package commits **no crate root**. Its `Cargo.toml` points
-`[lib] path` at `_generated_/lib.rs`, which
+A distributable Rust package — one that ships a `cdylib` through the registry —
+commits **no crate root**. Its `Cargo.toml` points
+`[lib] path` at `_generated_rust_crate_root_/lib.rs`, which
 `streamlib_processor_extract::crate_root` writes as the mechanical projection
 of `processors/`: one `#[path = "../processors/…"]`-attributed `pub mod` per
 top-level arm with the author's `#![cfg]` mirrored verbatim, the JTD
@@ -81,6 +82,15 @@ and `cargo xtask generate-crate-roots` is the monorepo's generation site. The
 file is a build artifact — gitignored, and excluded from the shipped `.slpkg`
 by `is_non_source_artifact` — so the consumer regenerates it from the bundled
 `processors/` tree on their own host.
+
+Generation is opt-in per package, keyed on that declared `[lib] path`
+(`package_declares_generated_crate_root`), so a host **rlib** package that is
+statically linked rather than distributed — `packages/api-server`, whose crate
+is also a `[[bin]]` host with a `src/` tree — keeps its committed `src/lib.rs`
+crate root. It still authors its processor under `processors/`, reached from
+that root by a `#[path]` declaration: `processors/` is the one discovery root
+for every language and every crate-type, and only the crate root's *authorship*
+varies.
 
 > ~~The Rust mirror is `Cargo.toml` + `src/`.~~ — Superseded 2026-07-27 by
 > folder-backed processor discovery: a Rust package authors under

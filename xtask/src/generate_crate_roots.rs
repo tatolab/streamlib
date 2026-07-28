@@ -4,7 +4,7 @@
 //! Write the generated Rust crate root for every in-tree folder-backed package.
 //!
 //! A folder-backed package commits no crate root: its `[lib] path` points at
-//! `_generated_/lib.rs`, which is the mechanical projection of `processors/`.
+//! `_generated_rust_crate_root_/lib.rs`, which is the mechanical projection of `processors/`.
 //! Off the monorepo, the build orchestrator's pre-cargo staging step writes it.
 //! In-tree there is no orchestrator in the loop — `cargo test --workspace`, the
 //! engine integration tests' `cargo build -p` shell-outs, and a bare

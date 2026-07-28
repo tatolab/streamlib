@@ -79,7 +79,7 @@ enum Commands {
     },
 
     /// Write every in-tree folder-backed package's generated Rust crate root
-    /// (`_generated_/lib.rs`) from its `processors/` directory.
+    /// (`_generated_rust_crate_root_/lib.rs`) from its `processors/` directory.
     ///
     /// Cargo resolves `[lib] path` at target resolution, before any build
     /// script runs, so this cannot live in a `build.rs`. Run it before any

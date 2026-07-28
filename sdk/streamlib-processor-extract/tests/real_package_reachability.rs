@@ -17,8 +17,13 @@
 //! the layout it couples to is absent goes green the instant the source moves,
 //! which is exactly when it should be loudest.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use streamlib_processor_extract::crate_root::{
+    RustCrateRootGenerationRequest, discover_package_dirs_declaring_a_generated_crate_root,
+    generate_rust_crate_root_source,
+};
 use streamlib_processor_extract::{
     ModuleReachabilityTarget, extract_reachable_rust_processors, extract_rust_processors,
 };
@@ -173,4 +178,125 @@ fn a_fully_parked_package_declares_no_processor_on_any_target() {
             "screen-capture must declare no processor on {os}"
         );
     }
+}
+
+/// `packages/api-server` is the one in-tree Rust package that is a statically
+/// linked host rlib rather than a distributable cdylib, so it keeps a committed
+/// `src/lib.rs` crate root. It still authors its processor under `processors/`
+/// — `processors/` is the one discovery root for every crate-type — so its
+/// committed `processors:` stays backed by code rather than deriving empty.
+#[test]
+fn the_host_rlib_package_still_derives_its_processor_from_the_shared_root() {
+    let dir = package_dir("api-server");
+    assert!(
+        !RustCrateRootGenerationRequest::for_package_dir(&dir)
+            .unwrap()
+            .emits_plugin_export_envelope,
+        "api-server is a host rlib — if it ever ships a cdylib it must move to the \
+         generated crate root like every other distributable package"
+    );
+    for os in ["linux", "macos"] {
+        assert_eq!(
+            reachable_names(&dir, os),
+            vec!["ApiServer".to_string()],
+            "api-server must derive its committed `ApiServer` processor on {os}"
+        );
+    }
+}
+
+/// The generated register list and the derived `processors:` manifest come out
+/// of two different walks — `extract_processors_across_every_build_target` plus
+/// verbatim cfg mirroring for the crate root, `extract_reachable_rust_processors`
+/// for the manifest. This is the invariant the whole change rests on: for a
+/// given target, the `export_plugin!` entries that survive cfg-stripping are
+/// exactly the processors the manifest walk resolves. Nothing else in-tree
+/// stops the two from disagreeing.
+#[test]
+fn the_generated_register_list_equals_the_reachable_set_on_every_target() {
+    let packages = discover_package_dirs_declaring_a_generated_crate_root(&workspace_root())
+        .expect("discovering folder-backed packages");
+    assert!(
+        packages.len() >= 15,
+        "expected the in-tree folder-backed packages; found {packages:?}"
+    );
+
+    for package in &packages {
+        let request = RustCrateRootGenerationRequest::for_package_dir(package).unwrap();
+        if !request.emits_plugin_export_envelope {
+            continue;
+        }
+        let generated = generate_rust_crate_root_source(&request).unwrap();
+        for os in ["linux", "macos", "ios", "windows"] {
+            let target = target_for(os);
+            let registered = registered_export_entries(&generated.source, &target);
+            let reachable: BTreeSet<String> = extract_reachable_rust_processors(package, &target)
+                .unwrap()
+                .into_iter()
+                .map(|p| {
+                    let mut segments = p.module_path_segments;
+                    segments.push(p.struct_name);
+                    segments.push("Processor".to_string());
+                    format!("crate::{}", segments.join("::"))
+                })
+                .collect();
+            assert_eq!(
+                registered,
+                reachable,
+                "{} on {os}: the generated `export_plugin!` register list and the \
+                 reachability-resolved manifest set must be the same set",
+                package.display()
+            );
+        }
+    }
+}
+
+/// The `crate::…::Processor` paths a generated crate root's `export_plugin!`
+/// registers on `target`, honoring both the invocation's outer `#[cfg]` and each
+/// entry's own. Parses the generator's rendered text rather than its inputs —
+/// the point is to compare what actually reaches `rustc`.
+fn registered_export_entries(
+    generated_source: &str,
+    target: &ModuleReachabilityTarget,
+) -> BTreeSet<String> {
+    let mut entries = BTreeSet::new();
+    let lines: Vec<&str> = generated_source.lines().collect();
+    let Some(invocation) = lines
+        .iter()
+        .position(|line| line.starts_with("streamlib_plugin_abi::export_plugin!("))
+    else {
+        return entries;
+    };
+    if let Some(outer_gate) = invocation
+        .checked_sub(1)
+        .and_then(|i| cfg_predicate_of(lines[i]))
+        && !target.cfg_predicate_source_holds(&outer_gate)
+    {
+        return entries;
+    }
+
+    let mut pending_entry_gate: Option<String> = None;
+    for line in &lines[invocation + 1..] {
+        if line.starts_with(");") {
+            break;
+        }
+        match cfg_predicate_of(line.trim()) {
+            Some(predicate) => pending_entry_gate = Some(predicate),
+            None => {
+                let type_path = line.trim().trim_end_matches(',').to_string();
+                let gated_out = pending_entry_gate
+                    .take()
+                    .is_some_and(|predicate| !target.cfg_predicate_source_holds(&predicate));
+                if !gated_out {
+                    entries.insert(type_path);
+                }
+            }
+        }
+    }
+    entries
+}
+
+/// The predicate inside a rendered `#[cfg(<predicate>)]` line, if the line is one.
+fn cfg_predicate_of(line: &str) -> Option<String> {
+    let inner = line.trim().strip_prefix("#[cfg(")?.strip_suffix(")]")?;
+    Some(inner.to_string())
 }

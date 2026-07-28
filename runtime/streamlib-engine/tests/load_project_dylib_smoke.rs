@@ -6,7 +6,7 @@
 //! tempdir, route it through `add_module_with(..., ManifestDirectory)`,
 //! and assert `TestConfiguredProcessor` registered via the
 //! `STREAMLIB_PLUGIN` callback. Mentally revert the `export_plugin!`
-//! invocation in `packages/test-fixtures/_generated_/lib.rs` and this test
+//! invocation in `packages/test-fixtures/_generated_rust_crate_root_/lib.rs` and this test
 //! fails — the dlopen path validates the processor was registered by
 //! the dylib and surfaces a `Configuration` error when it wasn't.
 

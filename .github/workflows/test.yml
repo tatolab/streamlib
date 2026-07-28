@@ -67,7 +67,7 @@ jobs:
       # is named explicitly because it is the compile-level half of those emission
       # locks and cannot live in the proc-macro crate's own lib tests.
       # A folder-backed package commits no crate root: its `[lib] path` points
-      # at `_generated_/lib.rs`, which cargo resolves at target resolution —
+      # at `_generated_rust_crate_root_/lib.rs`, which cargo resolves at target resolution —
       # before any build script — so it cannot be a `build.rs` step. Off the
       # monorepo the build orchestrator writes it; in-tree this is the
       # generation site.

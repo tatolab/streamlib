@@ -31,6 +31,8 @@ pub mod crate_root;
 pub mod derive;
 pub mod grammar;
 pub mod reachable;
+#[cfg(test)]
+pub(crate) mod scan_fixture_tempdir;
 
 use std::path::{Path, PathBuf};
 
@@ -96,9 +98,7 @@ pub struct ExtractedProcessor {
 #[derive(Debug, thiserror::Error)]
 pub enum ExtractError {
     /// The package has no `processors/` directory to scan.
-    #[error(
-        "no `processors/` directory under package {root} — nothing to scan for processors"
-    )]
+    #[error("no `processors/` directory under package {root} — nothing to scan for processors")]
     NoProcessorSourceDir { root: PathBuf },
 
     /// A source file could not be read off disk.
@@ -143,6 +143,40 @@ pub enum ExtractError {
         declared_in: PathBuf,
         candidates: String,
     },
+
+    /// A `#[processor(...)]` sits behind a `mod` with no visibility modifier, so
+    /// the generated crate root cannot name it. Refused at the scan rather than
+    /// emitted, so the diagnostic points at the author's source instead of at a
+    /// privacy error inside a generated file they are told not to edit. A
+    /// `pub(crate)` / `pub(super)` module is left alone — it is reachable from
+    /// the crate root in the shapes a `processors/` tree produces.
+    #[error(
+        "processor `{struct_name}` in {declared_in} is behind private `mod {private_module}` — \
+         a `mod` on the path from a `processors/` arm down to a processor must be `pub`, \
+         or the generated `export_plugin!` entry names a path the crate root cannot see"
+    )]
+    ProcessorBehindPrivateModule {
+        struct_name: String,
+        private_module: String,
+        declared_in: PathBuf,
+    },
+
+    /// A top-level `processors/` arm declared an out-of-line `mod` that resolved
+    /// to another top-level arm's own file. The generated crate root declares
+    /// that file as an arm too, so it would be two modules and only one of the
+    /// two paths reaches the `export_plugin!` entry — decided by arm sort order.
+    /// Refused rather than resolved silently.
+    #[error(
+        "`mod {module}` declared in {declared_in} resolves to {resolved}, which the \
+         generated crate root already declares as a top-level `processors/` arm — \
+         the file would be reachable as two distinct modules; move the shared code \
+         under a directory arm (`processors/<arm>/mod.rs` + siblings) instead"
+    )]
+    ProcessorSourceArmDeclaredAsChildModule {
+        module: String,
+        declared_in: PathBuf,
+        resolved: PathBuf,
+    },
 }
 
 /// Derive the `processors:` manifest section from a Rust package's source.
@@ -157,7 +191,9 @@ pub enum ExtractError {
 /// compiles on no target. [`extract_reachable_rust_processors`] is the
 /// module-graph-resolved counterpart every consuming path uses.
 #[tracing::instrument(skip_all, fields(package_dir = %package_dir.display()))]
-pub fn extract_rust_processors(package_dir: &Path) -> Result<Vec<ExtractedProcessor>, ExtractError> {
+pub fn extract_rust_processors(
+    package_dir: &Path,
+) -> Result<Vec<ExtractedProcessor>, ExtractError> {
     let processor_source_dir = package_dir.join(PROCESSOR_SOURCE_DIR_NAME);
     if !processor_source_dir.is_dir() {
         return Err(ExtractError::NoProcessorSourceDir {
@@ -235,8 +271,11 @@ fn walk_item(
     match item {
         syn::Item::Struct(item_struct) => {
             if let Some(attr) = processor_attr(&item_struct.attrs) {
-                let extracted = parse_processor_attr(attr, &item_struct.ident, rel_path)?;
-                out.push(extracted);
+                out.push(parse_processor_attr(
+                    attr,
+                    &item_struct.ident,
+                    ProcessorDeclarationSite::unresolved_in_file(rel_path),
+                )?);
             }
         }
         syn::Item::Mod(item_mod) => {
@@ -263,12 +302,35 @@ pub(crate) fn processor_attr(attrs: &[syn::Attribute]) -> Option<&syn::Attribute
     })
 }
 
+/// Where a `#[processor(...)]` was found, so every [`ExtractedProcessor`] is
+/// built complete at its one construction site. The raw whole-tree scan
+/// resolves no module graph and passes empty slices.
+pub(crate) struct ProcessorDeclarationSite<'site> {
+    /// The declaring file, relative to the scanned package directory.
+    pub source_file: &'site Path,
+    /// `mod` segments from the crate root down to the declaring module.
+    pub module_path_segments: &'site [String],
+    /// `#[cfg(...)]` predicates in force at the struct, outermost first.
+    pub cfg_predicates: &'site [String],
+}
+
+impl<'site> ProcessorDeclarationSite<'site> {
+    /// The raw whole-tree scan's site: a file path and no resolved module graph.
+    pub(crate) fn unresolved_in_file(source_file: &'site Path) -> Self {
+        Self {
+            source_file,
+            module_path_segments: &[],
+            cfg_predicates: &[],
+        }
+    }
+}
+
 /// Parse a single `#[processor(...)]` attribute through the shared grammar and
 /// build the manifest-shaped [`ExtractedProcessor`].
 pub(crate) fn parse_processor_attr(
     attr: &syn::Attribute,
     struct_ident: &syn::Ident,
-    rel_path: &Path,
+    site: ProcessorDeclarationSite<'_>,
 ) -> Result<ExtractedProcessor, ExtractError> {
     // A `#[processor]` with no argument list (`Meta::Path`) synthesizes an
     // app-local identity from the struct name — parse an empty token stream so
@@ -280,7 +342,7 @@ pub(crate) fn parse_processor_attr(
     };
 
     let parsed = grammar::parse2(tokens, struct_ident).map_err(|e| ExtractError::Grammar {
-        path: rel_path.to_path_buf(),
+        path: site.source_file.to_path_buf(),
         struct_name: struct_ident.to_string(),
         message: e.to_string(),
     })?;
@@ -290,22 +352,23 @@ pub(crate) fn parse_processor_attr(
         config_schema_id: parsed.config_schema_id.clone(),
         config_field_name: parsed.config_field_name.clone(),
         struct_name: struct_ident.to_string(),
-        source_file: rel_path.to_path_buf(),
-        module_path_segments: Vec::new(),
-        cfg_predicates: Vec::new(),
+        source_file: site.source_file.to_path_buf(),
+        module_path_segments: site.module_path_segments.to_vec(),
+        cfg_predicates: site.cfg_predicates.to_vec(),
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use streamlib_processor_schema::{PortSchemaSpec, ProcessorSchemaExecution};
+    use crate::scan_fixture_tempdir::{
+        ScanFixtureTempDir, scan_fixture_tempdir_named, write_scan_fixture_file as write,
+    };
 
-    fn write(dir: &Path, rel: &str, body: &str) {
-        let path = dir.join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, body).unwrap();
+    fn tempdir() -> ScanFixtureTempDir {
+        scan_fixture_tempdir_named("slextract")
     }
+    use streamlib_processor_schema::{PortSchemaSpec, ProcessorSchemaExecution};
 
     #[test]
     fn golden_extraction_over_a_fixture_crate() {
@@ -356,7 +419,10 @@ mod tests {
         assert_eq!(blur.schema.execution, ProcessorSchemaExecution::Reactive);
         assert_eq!(blur.schema.inputs.len(), 1);
         assert_eq!(blur.schema.inputs[0].name, "frames_in");
-        assert_eq!(blur.schema.inputs[0].delivery_profile.as_deref(), Some("latest"));
+        assert_eq!(
+            blur.schema.inputs[0].delivery_profile.as_deref(),
+            Some("latest")
+        );
         assert!(matches!(
             blur.schema.inputs[0].schema,
             PortSchemaSpec::Specific(_)
@@ -445,7 +511,11 @@ mod tests {
     fn schema_only_crate_yields_no_processors() {
         let tmp = tempdir();
         let root = tmp.path();
-        write(root, "processors/types.rs", "pub struct JustAType { pub x: u32 }\n");
+        write(
+            root,
+            "processors/types.rs",
+            "pub struct JustAType { pub x: u32 }\n",
+        );
         let procs = extract_rust_processors(root).unwrap();
         assert!(procs.is_empty());
     }
@@ -471,7 +541,10 @@ mod tests {
             } => {
                 assert_eq!(struct_name, "Broken");
                 assert_eq!(path, PathBuf::from("processors/broken.rs"));
-                assert!(message.contains("missing required `execution`"), "got: {message}");
+                assert!(
+                    message.contains("missing required `execution`"),
+                    "got: {message}"
+                );
             }
             other => panic!("expected Grammar error, got {other:?}"),
         }
@@ -514,28 +587,5 @@ mod tests {
         let procs = extract_rust_processors(root).unwrap();
         let names: Vec<&str> = procs.iter().map(|p| p.schema.name.as_str()).collect();
         assert_eq!(names, vec!["Live"]);
-    }
-
-    /// Minimal tempdir without pulling the `tempfile` crate into this lean
-    /// dependency set: a unique dir under the OS temp root, removed on drop.
-    struct TmpDir(PathBuf);
-    impl TmpDir {
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-    impl Drop for TmpDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-    fn tempdir() -> TmpDir {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let pid = std::process::id();
-        let dir = std::env::temp_dir().join(format!("slextract-{pid}-{n}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        TmpDir(dir)
     }
 }

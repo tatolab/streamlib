@@ -22,10 +22,11 @@
 //!   unconditional entry means no outer gate at all.
 //!
 //! The file is a build artifact: it lands under the package's gitignored
-//! `_generated_/` directory, which `streamlib-pack` already excludes from a
-//! shipped `.slpkg`, so the consumer regenerates it from the bundled
+//! [`GENERATED_CRATE_ROOT_DIR_NAME`] directory, which `streamlib-pack` excludes
+//! from a shipped `.slpkg`, so the consumer regenerates it from the bundled
 //! `processors/` tree on their own host.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 
 use streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME as PROCESSOR_SOURCE_DIR_NAME;
@@ -38,12 +39,24 @@ use crate::{ExtractError, ExtractedProcessor};
 
 /// Directory the generated crate root is written into, relative to the package
 /// directory. Gitignored and excluded from a packed `.slpkg`.
-pub const GENERATED_CRATE_ROOT_DIR_NAME: &str = "_generated_";
+///
+/// Deliberately NOT the polyglot `_generated_/` unit: that directory's bare
+/// presence is the "this package's Deno wire vocabulary has been provisioned"
+/// oracle, and the build orchestrator promotes it as one atomically-swapped
+/// unit. A Rust crate root sharing it would both satisfy that oracle for a
+/// package whose Deno codegen never ran, and be deleted by the next Deno
+/// promote. This directory is a single path component — the arm `#[path]`
+/// prefix ([`generated_crate_root_arm_path_prefix`]) climbs exactly one level.
+pub const GENERATED_CRATE_ROOT_DIR_NAME: &str = "_generated_rust_crate_root_";
 
 /// File name of the generated crate root inside
 /// [`GENERATED_CRATE_ROOT_DIR_NAME`]. A package's `Cargo.toml` points
-/// `[lib] path` at `_generated_/lib.rs`.
+/// `[lib] path` at [`generated_crate_root_lib_path_value`].
 pub const GENERATED_CRATE_ROOT_FILE_NAME: &str = "lib.rs";
+
+/// The build-dependency whose `build.rs` entrypoint writes the JTD shim the
+/// generated crate root `include!`s.
+const JTD_CODEGEN_BUILD_DEPENDENCY_NAME: &str = "streamlib-jtd-codegen";
 
 /// What to generate for one package.
 #[derive(Debug, Clone)]
@@ -52,8 +65,11 @@ pub struct RustCrateRootGenerationRequest<'request> {
     /// and `processors/`.
     pub package_dir: &'request Path,
     /// Emit the `_generated_` JTD module (`include!` of the build script's
-    /// `$OUT_DIR/_generated_shim.rs`). True for any package whose `build.rs`
-    /// runs the JTD codegen.
+    /// `$OUT_DIR/_generated_shim.rs`). Keyed on the two things that together
+    /// make that file exist — a `build.rs` and a `streamlib-jtd-codegen`
+    /// build-dependency — never on a `build.rs` alone, which a package may own
+    /// for shader or `cc` compilation and which would then leave the generated
+    /// root `include!`ing a file nothing writes.
     pub emits_jtd_generated_module: bool,
     /// Emit the `export_plugin!` envelope. Keyed on the crate declaring a
     /// `cdylib` crate-type, never on "the package has processors" — a host
@@ -64,36 +80,49 @@ pub struct RustCrateRootGenerationRequest<'request> {
 
 impl<'request> RustCrateRootGenerationRequest<'request> {
     /// Derive both emission decisions from the package directory: the JTD
-    /// preamble from the presence of a `build.rs`, the plugin envelope from the
-    /// `Cargo.toml`'s `[lib] crate-type` containing `cdylib`.
+    /// preamble from a `build.rs` plus the JTD codegen build-dependency, the
+    /// plugin envelope from the `Cargo.toml`'s `[lib] crate-type` containing
+    /// `cdylib`.
     pub fn for_package_dir(
         package_dir: &'request Path,
     ) -> Result<Self, RustCrateRootGenerationError> {
-        let cargo_toml_path = package_dir.join("Cargo.toml");
-        let manifest_body = std::fs::read_to_string(&cargo_toml_path).map_err(|source| {
-            RustCrateRootGenerationError::ReadCargoManifest {
-                path: cargo_toml_path.clone(),
-                source,
-            }
-        })?;
-        let manifest: toml::Value = manifest_body.parse().map_err(|source| {
-            RustCrateRootGenerationError::ParseCargoManifest {
-                path: cargo_toml_path.clone(),
-                source,
-            }
-        })?;
+        let manifest = read_package_cargo_manifest(package_dir)?;
         let emits_plugin_export_envelope = manifest
             .get("lib")
             .and_then(|lib| lib.get("crate-type"))
             .and_then(|crate_type| crate_type.as_array())
             .is_some_and(|kinds| kinds.iter().any(|kind| kind.as_str() == Some("cdylib")));
+        let declares_jtd_codegen_build_dependency = manifest
+            .get("build-dependencies")
+            .and_then(|deps| deps.get(JTD_CODEGEN_BUILD_DEPENDENCY_NAME))
+            .is_some();
 
         Ok(Self {
             package_dir,
-            emits_jtd_generated_module: package_dir.join("build.rs").is_file(),
+            emits_jtd_generated_module: declares_jtd_codegen_build_dependency
+                && package_dir.join("build.rs").is_file(),
             emits_plugin_export_envelope,
         })
     }
+}
+
+/// Read and parse a package's `Cargo.toml`.
+fn read_package_cargo_manifest(
+    package_dir: &Path,
+) -> Result<toml::Value, RustCrateRootGenerationError> {
+    let cargo_toml_path = package_dir.join("Cargo.toml");
+    let manifest_body = std::fs::read_to_string(&cargo_toml_path).map_err(|source| {
+        RustCrateRootGenerationError::ReadCargoManifest {
+            path: cargo_toml_path.clone(),
+            source,
+        }
+    })?;
+    manifest_body
+        .parse()
+        .map_err(|source| RustCrateRootGenerationError::ParseCargoManifest {
+            path: cargo_toml_path,
+            source,
+        })
 }
 
 /// The generated crate root plus what went into it, so a caller can log or
@@ -167,20 +196,9 @@ pub fn generated_crate_root_lib_path_value() -> String {
 pub fn package_declares_generated_crate_root(
     package_dir: &Path,
 ) -> Result<bool, RustCrateRootGenerationError> {
-    let cargo_toml_path = package_dir.join("Cargo.toml");
-    let manifest_body = std::fs::read_to_string(&cargo_toml_path).map_err(|source| {
-        RustCrateRootGenerationError::ReadCargoManifest {
-            path: cargo_toml_path.clone(),
-            source,
-        }
-    })?;
-    let manifest: toml::Value = manifest_body.parse().map_err(|source| {
-        RustCrateRootGenerationError::ParseCargoManifest {
-            path: cargo_toml_path,
-            source,
-        }
-    })?;
-    Ok(declares_generated_crate_root(&manifest))
+    Ok(declares_generated_crate_root(&read_package_cargo_manifest(
+        package_dir,
+    )?))
 }
 
 fn declares_generated_crate_root(manifest: &toml::Value) -> bool {
@@ -214,10 +232,10 @@ fn collect_package_dirs_declaring_a_generated_crate_root(
     dir: &Path,
     out: &mut Vec<PathBuf>,
 ) -> Result<(), RustCrateRootGenerationError> {
-    let manifest_path = dir.join("Cargo.toml");
-    if manifest_path.is_file()
-        && let Ok(body) = std::fs::read_to_string(&manifest_path)
-        && let Ok(manifest) = body.parse::<toml::Value>()
+    // Matched rather than `?`-propagated: a directory with no manifest, or a
+    // fixture holding a deliberately malformed one, is skipped rather than
+    // failing discovery for the whole tree.
+    if let Ok(manifest) = read_package_cargo_manifest(dir)
         && declares_generated_crate_root(&manifest)
     {
         out.push(dir.to_path_buf());
@@ -304,11 +322,14 @@ pub fn generate_rust_crate_root_source(
     })
 }
 
-/// Generate and write `<package_dir>/_generated_/lib.rs`, returning its path.
+/// Generate and write the package's generated crate root, returning its path.
 ///
-/// The write is unconditional but content-compared first: rewriting identical
-/// bytes would bump the file's mtime and force cargo to rebuild the crate on
-/// every invocation.
+/// Content-compared first: rewriting identical bytes would bump the file's
+/// mtime and force cargo to rebuild the crate on every invocation. A changed
+/// root is written to a sibling temp file and renamed into place — the
+/// orchestrator materializes packages concurrently and the engine's integration
+/// tests regenerate every in-tree root from parallel test binaries, so a reader
+/// (cargo, resolving `[lib] path`) must never observe a half-written root.
 #[tracing::instrument(skip_all, fields(package_dir = %request.package_dir.display()))]
 pub fn write_generated_rust_crate_root(
     request: &RustCrateRootGenerationRequest<'_>,
@@ -325,7 +346,22 @@ pub fn write_generated_rust_crate_root(
     if std::fs::read_to_string(&path).is_ok_and(|existing| existing == generated.source) {
         return Ok(path);
     }
-    std::fs::write(&path, &generated.source).map_err(|source| {
+
+    let temp_path = dir.join(format!(
+        ".{GENERATED_CRATE_ROOT_FILE_NAME}.{}.{}.partial",
+        std::process::id(),
+        GENERATED_CRATE_ROOT_TEMP_FILE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    ));
+    std::fs::write(&temp_path, &generated.source).map_err(|source| {
+        RustCrateRootGenerationError::WriteCrateRoot {
+            path: temp_path.clone(),
+            source,
+        }
+    })?;
+    // Same-directory rename is atomic on POSIX: a concurrent reader sees either
+    // the previous root or the complete new one, never a truncated file.
+    std::fs::rename(&temp_path, &path).map_err(|source| {
+        let _ = std::fs::remove_file(&temp_path);
         RustCrateRootGenerationError::WriteCrateRoot {
             path: path.clone(),
             source,
@@ -334,17 +370,21 @@ pub fn write_generated_rust_crate_root(
     Ok(path)
 }
 
+static GENERATED_CRATE_ROOT_TEMP_FILE_COUNTER: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
 /// One `#[path]`-attributed `pub mod` declaration, carrying the arm's own
 /// file-level `#![cfg]` mirrored verbatim.
 fn render_module_arm_declaration(arm: &ProcessorSourceModuleArm) -> String {
     let mut out = String::new();
     for predicate in &arm.file_level_cfg_predicates {
-        out.push_str(&format!("#[cfg({predicate})]\n"));
+        let _ = writeln!(out, "#[cfg({predicate})]");
     }
-    out.push_str(&format!(
-        "#[path = \"{}\"]\npub mod {};\n",
+    let _ = writeln!(
+        out,
+        "#[path = \"{}\"]\npub mod {};",
         arm.crate_root_relative_module_path, arm.module_name
-    ));
+    );
     out
 }
 
@@ -373,27 +413,27 @@ fn render_plugin_export_envelope(processors: &[ExtractedProcessor]) -> Option<St
     // surviving entry, and an all-stripped invocation is a compile error. An
     // unconditional entry makes the gate unnecessary.
     if entries.iter().all(|(predicate, _)| predicate.is_some()) {
-        let mut distinct: Vec<String> = Vec::new();
+        let mut distinct: Vec<&str> = Vec::new();
         for predicate in entries
             .iter()
-            .filter_map(|(predicate, _)| predicate.clone())
+            .filter_map(|(predicate, _)| predicate.as_deref())
         {
             if !distinct.contains(&predicate) {
                 distinct.push(predicate);
             }
         }
         let gate = match distinct.as_slice() {
-            [single] => single.clone(),
+            [single] => (*single).to_string(),
             many => format!("any({})", many.join(", ")),
         };
-        out.push_str(&format!("#[cfg({gate})]\n"));
+        let _ = writeln!(out, "#[cfg({gate})]");
     }
     out.push_str("streamlib_plugin_abi::export_plugin!(\n");
     for (predicate, type_path) in &entries {
         if let Some(predicate) = predicate {
-            out.push_str(&format!("    #[cfg({predicate})]\n"));
+            let _ = writeln!(out, "    #[cfg({predicate})]");
         }
-        out.push_str(&format!("    {type_path},\n"));
+        let _ = writeln!(out, "    {type_path},");
     }
     out.push_str(");\n");
     Some(out)
@@ -419,20 +459,31 @@ fn processor_export_type_path(processor: &ExtractedProcessor) -> String {
     format!("crate::{}", segments.join("::"))
 }
 
-/// The `#[path]` prefix every arm declaration uses, exposed so a consumer can
-/// assert the generated root reaches out of `_generated_/` into `processors/`.
+/// The `#[path]` prefix every generated arm declaration carries — the single
+/// owner of the climb out of [`GENERATED_CRATE_ROOT_DIR_NAME`] into
+/// `processors/`, so the `..` depth is stated once beside the directory name it
+/// is a function of.
 pub fn generated_crate_root_arm_path_prefix() -> String {
+    debug_assert_eq!(
+        Path::new(GENERATED_CRATE_ROOT_DIR_NAME)
+            .components()
+            .count(),
+        1,
+        "the generated crate root dir must be one path component — the arm \
+         `#[path]` prefix climbs exactly one level"
+    );
     format!("../{PROCESSOR_SOURCE_DIR_NAME}/")
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scan_fixture_tempdir::{
+        ScanFixtureTempDir, scan_fixture_tempdir_named, write_scan_fixture_file as write,
+    };
 
-    fn write(dir: &Path, rel: &str, body: &str) {
-        let path = dir.join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, body).unwrap();
+    fn tempdir() -> ScanFixtureTempDir {
+        scan_fixture_tempdir_named("slcrateroot")
     }
 
     fn request<'a>(
@@ -677,7 +728,7 @@ mod tests {
         write(root, "processors/blur.rs", "pub struct NotAProcessor;\n");
 
         let path = write_generated_rust_crate_root(&request(root, false, false)).unwrap();
-        assert_eq!(path, root.join("_generated_").join("lib.rs"));
+        assert_eq!(path, root.join(generated_crate_root_lib_path_value()));
         let first = std::fs::metadata(&path).unwrap().modified().unwrap();
         let again = write_generated_rust_crate_root(&request(root, false, false)).unwrap();
         assert_eq!(
@@ -690,6 +741,51 @@ mod tests {
         assert!(generated_crate_root_arm_path_prefix().starts_with("../"));
     }
 
+    /// The generated root must never share the polyglot `_generated_/` unit: its
+    /// bare presence is the Deno "wire vocabulary provisioned" oracle, and the
+    /// build orchestrator atomically swaps that whole directory on a Deno
+    /// promote.
+    #[test]
+    fn the_generated_crate_root_does_not_land_in_the_polyglot_generated_dir() {
+        assert_ne!(GENERATED_CRATE_ROOT_DIR_NAME, "_generated_");
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(root, "processors/blur.rs", "pub struct NotAProcessor;\n");
+        write_generated_rust_crate_root(&request(root, false, false)).unwrap();
+        assert!(
+            !root.join("_generated_").exists(),
+            "generating a Rust crate root must not create the Deno provisioning \
+             oracle's directory"
+        );
+    }
+
+    /// A changed root is renamed into place, so a concurrent cargo resolving
+    /// `[lib] path` never reads a truncated file. The temp file is left behind
+    /// by no successful write.
+    #[test]
+    fn a_changed_crate_root_is_renamed_into_place_and_leaves_no_temp_file() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(root, "processors/first.rs", "pub struct NotAProcessor;\n");
+        let path = write_generated_rust_crate_root(&request(root, false, false)).unwrap();
+
+        write(root, "processors/second.rs", "pub struct AlsoNot;\n");
+        write_generated_rust_crate_root(&request(root, false, false)).unwrap();
+        assert!(
+            std::fs::read_to_string(&path)
+                .unwrap()
+                .contains("pub mod second;")
+        );
+
+        let leftovers: Vec<_> = std::fs::read_dir(path.parent().unwrap())
+            .unwrap()
+            .filter_map(|entry| entry.ok())
+            .map(|entry| entry.file_name().to_string_lossy().to_string())
+            .filter(|name| name != GENERATED_CRATE_ROOT_FILE_NAME)
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
+    }
+
     #[test]
     fn the_envelope_decision_is_read_off_the_cargo_manifest_crate_type() {
         let tmp = tempdir();
@@ -697,7 +793,8 @@ mod tests {
         write(
             root,
             "Cargo.toml",
-            "[package]\nname = \"p\"\nversion = \"0.1.0\"\n\n[lib]\ncrate-type = [\"rlib\", \"cdylib\"]\n",
+            "[package]\nname = \"p\"\nversion = \"0.1.0\"\n\n[lib]\ncrate-type = [\"rlib\", \"cdylib\"]\n\n\
+             [build-dependencies]\nstreamlib-jtd-codegen = { path = \"../../sdk/streamlib-jtd-codegen\" }\n",
         );
         write(root, "build.rs", "fn main() {}\n");
         let derived = RustCrateRootGenerationRequest::for_package_dir(root).unwrap();
@@ -715,6 +812,25 @@ mod tests {
         assert!(!derived.emits_jtd_generated_module);
     }
 
+    /// The JTD preamble `include!`s a file only the JTD codegen build script
+    /// writes, so a package owning a `build.rs` for anything else (shader
+    /// compilation, `cc`) must get no preamble — otherwise its generated root
+    /// `include!`s a path nothing produces.
+    #[test]
+    fn a_build_script_that_is_not_the_jtd_codegen_emits_no_preamble() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "Cargo.toml",
+            "[package]\nname = \"shaders\"\nversion = \"0.1.0\"\n\n\
+             [build-dependencies]\ncc = \"1\"\n",
+        );
+        write(root, "build.rs", "fn main() {}\n");
+        let derived = RustCrateRootGenerationRequest::for_package_dir(root).unwrap();
+        assert!(!derived.emits_jtd_generated_module);
+    }
+
     /// Generation is opt-in per package, keyed on the declared `[lib] path`, so
     /// a crate that commits its own root is never overwritten.
     #[test]
@@ -723,7 +839,10 @@ mod tests {
         write(
             opted_in.path(),
             "Cargo.toml",
-            "[package]\nname = \"p\"\nversion = \"0.1.0\"\n\n[lib]\npath = \"_generated_/lib.rs\"\n",
+            &format!(
+                "[package]\nname = \"p\"\nversion = \"0.1.0\"\n\n[lib]\npath = \"{}\"\n",
+                generated_crate_root_lib_path_value()
+            ),
         );
         assert!(package_declares_generated_crate_root(opted_in.path()).unwrap());
 
@@ -752,7 +871,10 @@ mod tests {
     fn discovery_finds_nested_opted_in_crates_and_skips_artifact_dirs() {
         let tmp = tempdir();
         let root = tmp.path();
-        let opted_in = "[package]\nname = \"p\"\nversion = \"0.1.0\"\n\n[lib]\npath = \"_generated_/lib.rs\"\n";
+        let opted_in = &format!(
+            "[package]\nname = \"p\"\nversion = \"0.1.0\"\n\n[lib]\npath = \"{}\"\n",
+            generated_crate_root_lib_path_value()
+        );
         write(root, "packages/camera/Cargo.toml", opted_in);
         write(root, "examples/demo/plugin/Cargo.toml", opted_in);
         write(
@@ -777,27 +899,5 @@ mod tests {
             ],
             "discovery must reach nested crates and skip `target/` + dot-dirs"
         );
-    }
-
-    /// Minimal tempdir (no `tempfile` dep in this lean crate).
-    struct TmpDir(PathBuf);
-    impl TmpDir {
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-    impl Drop for TmpDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-    fn tempdir() -> TmpDir {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let pid = std::process::id();
-        let dir = std::env::temp_dir().join(format!("slcrateroot-{pid}-{n}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        TmpDir(dir)
     }
 }

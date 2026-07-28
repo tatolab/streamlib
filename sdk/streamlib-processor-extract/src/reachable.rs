@@ -42,7 +42,10 @@ use syn::{Meta, Token};
 
 use streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME as PROCESSOR_SOURCE_DIR_NAME;
 
-use crate::{ExtractError, ExtractedProcessor, parse_processor_attr, processor_attr};
+use crate::{
+    ExtractError, ExtractedProcessor, ProcessorDeclarationSite, parse_processor_attr,
+    processor_attr,
+};
 
 /// The `#[cfg(...)]` evaluation environment a module-reachability walk resolves
 /// against — the set of cfg atoms the build **target** defines.
@@ -116,6 +119,19 @@ impl ModuleReachabilityTarget {
     fn has_flag(&self, name: &str) -> bool {
         self.flags.contains(name)
     }
+
+    /// Whether a `#[cfg(...)]` predicate, given as the source text the generated
+    /// crate root mirrors, holds for this target. An unparseable predicate is
+    /// `false`, matching how the walk treats one it cannot prove true.
+    ///
+    /// This is how a consumer re-evaluates a predicate the generator emitted
+    /// without re-implementing cfg semantics beside the one evaluator.
+    pub fn cfg_predicate_source_holds(&self, predicate_source: &str) -> bool {
+        match syn::parse_str::<Meta>(predicate_source) {
+            Ok(meta) => eval_cfg_meta(&meta, self),
+            Err(_) => false,
+        }
+    }
 }
 
 /// One top-level module arm under a package's `processors/` directory — the
@@ -157,7 +173,10 @@ impl ProcessorSourceModuleArm {
 /// directory arm. A directory without a `mod.rs` and a file with any other
 /// extension are skipped rather than refused: `processors/` is the shared
 /// discovery root for every language, so a Rust package in a polyglot package
-/// legitimately sits beside `.py` / `.ts` modules and their directories.
+/// legitimately sits beside `.py` / `.ts` modules and their directories. A
+/// skipped directory that holds Rust source anyway is logged at `warn` — a
+/// nested Rust processor that vanishes from the register list is otherwise
+/// indistinguishable from one that was never written.
 ///
 /// A missing `processors/` yields an empty list — a schema-only Rust package is
 /// first-class. Arms are returned sorted by module name so generation and
@@ -188,9 +207,11 @@ pub fn enumerate_processor_source_module_arms(
             source: e,
         })?;
 
+        let arm_path_prefix = crate::crate_root::generated_crate_root_arm_path_prefix();
         let (module_name, module_file, relative_module_path) = if file_type.is_dir() {
             let mod_rs = path.join("mod.rs");
             if !mod_rs.is_file() {
+                warn_if_skipped_subdirectory_holds_rust_source(&path);
                 continue;
             }
             let Some(name) = path.file_name().and_then(|n| n.to_str()) else {
@@ -199,7 +220,7 @@ pub fn enumerate_processor_source_module_arms(
             (
                 name.to_string(),
                 mod_rs,
-                format!("../{PROCESSOR_SOURCE_DIR_NAME}/{name}/mod.rs"),
+                format!("{arm_path_prefix}{name}/mod.rs"),
             )
         } else {
             if path.extension().and_then(|e| e.to_str()) != Some("rs") {
@@ -211,7 +232,7 @@ pub fn enumerate_processor_source_module_arms(
             (
                 stem.to_string(),
                 path.clone(),
-                format!("../{PROCESSOR_SOURCE_DIR_NAME}/{stem}.rs"),
+                format!("{arm_path_prefix}{stem}.rs"),
             )
         };
 
@@ -227,6 +248,33 @@ pub fn enumerate_processor_source_module_arms(
     arms.sort_by(|a, b| a.module_name.cmp(&b.module_name));
     tracing::debug!(arms = arms.len(), "enumerated processor source arms");
     Ok(arms)
+}
+
+/// A `processors/` subdirectory with no `mod.rs` is not an arm. When it holds
+/// `.rs` source anyway, say so — the author gets a reason instead of an
+/// unexplained absence from the generated register list.
+fn warn_if_skipped_subdirectory_holds_rust_source(dir: &Path) {
+    if directory_holds_rust_source(dir) {
+        tracing::warn!(
+            dir = %dir.display(),
+            "`processors/` subdirectory holds Rust source but declares no `mod.rs` — \
+             it is not a module arm, so no processor under it is discovered; add a \
+             `mod.rs` naming its children"
+        );
+    }
+}
+
+fn directory_holds_rust_source(dir: &Path) -> bool {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return false;
+    };
+    entries.filter_map(|entry| entry.ok()).any(|entry| {
+        let path = entry.path();
+        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+            return directory_holds_rust_source(&path);
+        }
+        path.extension().and_then(|ext| ext.to_str()) == Some("rs")
+    })
 }
 
 /// The file-level inner `#![cfg(...)]` predicates a module file declares on
@@ -271,17 +319,29 @@ fn render_cfg_predicate(meta: &Meta) -> String {
             name_value.path.to_token_stream(),
             name_value.value.to_token_stream()
         ),
-        Meta::List(list) => {
-            let combinator = list.path.to_token_stream().to_string();
-            match list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated) {
-                Ok(inner) => {
-                    let rendered: Vec<String> = inner.iter().map(render_cfg_predicate).collect();
-                    format!("{combinator}({})", rendered.join(", "))
-                }
-                Err(_) => format!("{combinator}({})", list.tokens.to_token_stream()),
+        Meta::List(list) => match parse_cfg_combinator(list) {
+            Some((combinator, inner)) => {
+                let rendered: Vec<String> = inner.iter().map(render_cfg_predicate).collect();
+                format!("{combinator}({})", rendered.join(", "))
             }
-        }
+            None => format!(
+                "{}({})",
+                list.path.to_token_stream(),
+                list.tokens.to_token_stream()
+            ),
+        },
     }
+}
+
+/// Decode a `all(..)` / `any(..)` / `not(..)` cfg combinator into its name and
+/// operands. The one place the predicate grammar's list form is parsed, so a
+/// new form lands in one decoder rather than three.
+fn parse_cfg_combinator(list: &syn::MetaList) -> Option<(String, Punctuated<Meta, Token![,]>)> {
+    let combinator = list.path.get_ident()?.to_string();
+    let operands = list
+        .parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
+        .ok()?;
+    Some((combinator, operands))
 }
 
 /// How a module walk treats the `#[cfg(...)]` predicates it meets.
@@ -347,9 +407,11 @@ fn walk_processor_source_arms(
     let mut walker = ReachableModuleWalker {
         package_dir,
         cfg_resolution,
+        top_level_arm_module_files: arms.iter().map(|arm| arm.module_file.clone()).collect(),
         visited: BTreeSet::new(),
         active_cfg_predicates: Vec::new(),
         module_path_segments: Vec::new(),
+        enclosing_private_module_name: None,
         out: Vec::new(),
     };
 
@@ -369,12 +431,18 @@ fn walk_processor_source_arms(
 struct ReachableModuleWalker<'walk> {
     package_dir: &'walk Path,
     cfg_resolution: ModuleWalkCfgResolution<'walk>,
+    /// Every top-level arm's own module file, so a child `mod` resolving onto
+    /// one is refused instead of silently deciding the module path by arm order.
+    top_level_arm_module_files: BTreeSet<PathBuf>,
     visited: BTreeSet<PathBuf>,
     /// `#[cfg]` predicates passed through to reach the current item, outermost
     /// first. Only recorded under [`ModuleWalkCfgResolution::AcrossEveryBuildTarget`].
     active_cfg_predicates: Vec<String>,
     /// `mod` segments from the crate root to the current module.
     module_path_segments: Vec<String>,
+    /// The outermost `mod` on the current descent that carries no visibility
+    /// modifier, if any — everything under it is unnameable from the crate root.
+    enclosing_private_module_name: Option<String>,
     out: Vec<ExtractedProcessor>,
 }
 
@@ -444,14 +512,22 @@ impl ReachableModuleWalker<'_> {
                     return Ok(());
                 };
                 if let Some(attr) = processor_attr(&item_struct.attrs) {
-                    let mut extracted = parse_processor_attr(attr, &item_struct.ident, rel_path)?;
-                    extracted
-                        .module_path_segments
-                        .clone_from(&self.module_path_segments);
-                    extracted
-                        .cfg_predicates
-                        .clone_from(&self.active_cfg_predicates);
-                    self.out.push(extracted);
+                    if let Some(private_module) = &self.enclosing_private_module_name {
+                        return Err(ExtractError::ProcessorBehindPrivateModule {
+                            struct_name: item_struct.ident.to_string(),
+                            private_module: private_module.clone(),
+                            declared_in: declaring_file.to_path_buf(),
+                        });
+                    }
+                    self.out.push(parse_processor_attr(
+                        attr,
+                        &item_struct.ident,
+                        ProcessorDeclarationSite {
+                            source_file: rel_path,
+                            module_path_segments: &self.module_path_segments,
+                            cfg_predicates: &self.active_cfg_predicates,
+                        },
+                    )?);
                 }
                 self.leave_cfg_scope(pushed_predicate_count);
             }
@@ -460,6 +536,11 @@ impl ReachableModuleWalker<'_> {
                     return Ok(());
                 };
                 self.module_path_segments.push(item_mod.ident.to_string());
+                let opened_private_module = self.enclosing_private_module_name.is_none()
+                    && matches!(item_mod.vis, syn::Visibility::Inherited);
+                if opened_private_module {
+                    self.enclosing_private_module_name = Some(item_mod.ident.to_string());
+                }
                 match &item_mod.content {
                     // Inline `mod foo { ... }` introduces a `foo` directory
                     // component for its children's file resolution — including
@@ -485,12 +566,25 @@ impl ReachableModuleWalker<'_> {
                             mod_dir,
                             path_attribute_base_dir,
                         )?;
+                        if self
+                            .top_level_arm_module_files
+                            .contains(&resolved.module_file)
+                        {
+                            return Err(ExtractError::ProcessorSourceArmDeclaredAsChildModule {
+                                module: item_mod.ident.to_string(),
+                                declared_in: declaring_file.to_path_buf(),
+                                resolved: resolved.module_file,
+                            });
+                        }
                         let child_mod_dir =
                             child_module_search_dir(&resolved, &item_mod.ident.to_string());
                         self.walk_file(&resolved.module_file, &child_mod_dir)?;
                     }
                 }
                 self.module_path_segments.pop();
+                if opened_private_module {
+                    self.enclosing_private_module_name = None;
+                }
                 self.leave_cfg_scope(pushed_predicate_count);
             }
             _ => {}
@@ -561,14 +655,14 @@ impl ReachableModuleWalker<'_> {
                 .all(|attr| eval_cfg_attr(attr, target))
                 .then_some(0),
             ModuleWalkCfgResolution::AcrossEveryBuildTarget => {
-                let cfg_attrs: Vec<&syn::Attribute> = attrs
+                let any_predicate_is_unsatisfiable = attrs
                     .iter()
                     .filter(|attr| attr.path().is_ident("cfg"))
-                    .collect();
-                if cfg_attrs.iter().any(|attr| {
-                    attr.parse_args::<Meta>()
-                        .is_ok_and(|meta| cfg_predicate_is_statically_unsatisfiable(&meta))
-                }) {
+                    .any(|attr| {
+                        attr.parse_args::<Meta>()
+                            .is_ok_and(|meta| cfg_predicate_is_statically_unsatisfiable(&meta))
+                    });
+                if any_predicate_is_unsatisfiable {
                     return None;
                 }
                 let predicates = cfg_predicate_sources(attrs);
@@ -620,12 +714,7 @@ fn eval_cfg_meta(meta: &Meta, target: &ModuleReachabilityTarget) -> bool {
             }
         }
         Meta::List(list) => {
-            let combinator = match list.path.get_ident() {
-                Some(ident) => ident.to_string(),
-                None => return false,
-            };
-            let Ok(inner) = list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated)
-            else {
+            let Some((combinator, inner)) = parse_cfg_combinator(list) else {
                 return false;
             };
             match combinator.as_str() {
@@ -648,10 +737,7 @@ fn cfg_predicate_is_statically_unsatisfiable(meta: &Meta) -> bool {
     let Meta::List(list) = meta else {
         return false;
     };
-    let Some(combinator) = list.path.get_ident().map(|i| i.to_string()) else {
-        return false;
-    };
-    let Ok(inner) = list.parse_args_with(Punctuated::<Meta, Token![,]>::parse_terminated) else {
+    let Some((combinator, inner)) = parse_cfg_combinator(list) else {
         return false;
     };
     match combinator.as_str() {
@@ -710,11 +796,12 @@ fn child_module_search_dir(resolved: &ResolvedChildModule, mod_name: &str) -> Pa
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scan_fixture_tempdir::{
+        ScanFixtureTempDir, scan_fixture_tempdir_named, write_scan_fixture_file as write,
+    };
 
-    fn write(dir: &Path, rel: &str, body: &str) {
-        let path = dir.join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, body).unwrap();
+    fn tempdir() -> ScanFixtureTempDir {
+        scan_fixture_tempdir_named("slreach")
     }
 
     fn linux() -> ModuleReachabilityTarget {
@@ -1090,6 +1177,65 @@ mod tests {
         );
     }
 
+    /// A `#[processor]` behind a plain `mod` cannot be named from the crate
+    /// root, so the generated `export_plugin!` entry would be a privacy error
+    /// inside generated source. Refused at the scan, pointing at the author's
+    /// file.
+    #[test]
+    fn a_processor_behind_a_private_module_is_refused() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(root, "processors/arm/mod.rs", "mod helper;\n");
+        write(
+            root,
+            "processors/arm/helper.rs",
+            r#"#[processor("@tatolab/demo/Hidden", execution = reactive)]
+            pub struct Hidden;"#,
+        );
+        let error = extract_reachable_rust_processors(root, &linux()).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                ExtractError::ProcessorBehindPrivateModule { private_module, struct_name, .. }
+                    if private_module == "helper" && struct_name == "Hidden"
+            ),
+            "{error}"
+        );
+
+        // `pub mod helper;` is the fix, and it resolves.
+        write(root, "processors/arm/mod.rs", "pub mod helper;\n");
+        assert_eq!(
+            names(extract_reachable_rust_processors(root, &linux()).unwrap()),
+            vec!["Hidden"]
+        );
+    }
+
+    /// A flat arm declaring an out-of-line `mod` resolves it to a SIBLING under
+    /// `processors/`, which the generated crate root already declares as its own
+    /// arm — the file would be two modules and only one path reaches the
+    /// register list, decided by arm sort order. Refused rather than resolved.
+    #[test]
+    fn an_arm_reached_as_another_arms_child_module_is_refused() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(root, "processors/a.rs", "pub mod b;\n");
+        write(
+            root,
+            "processors/b.rs",
+            r#"#[processor("@tatolab/demo/Shared", execution = reactive)]
+            pub struct Shared;"#,
+        );
+        let error = extract_reachable_rust_processors(root, &linux()).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                ExtractError::ProcessorSourceArmDeclaredAsChildModule { module, .. }
+                    if module == "b"
+            ),
+            "{error}"
+        );
+    }
+
     /// `not(...)`, `all(...)`, and `any(...)` combinators evaluate against the
     /// target.
     #[test]
@@ -1386,27 +1532,5 @@ mod tests {
                 ),
             ]
         );
-    }
-
-    /// Minimal tempdir (no `tempfile` dep in this lean crate).
-    struct TmpDir(PathBuf);
-    impl TmpDir {
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-    impl Drop for TmpDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-    fn tempdir() -> TmpDir {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let pid = std::process::id();
-        let dir = std::env::temp_dir().join(format!("slreach-{pid}-{n}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        TmpDir(dir)
     }
 }

@@ -105,6 +105,12 @@ TASK-*.md
 # See docs/architecture/schema-identity-and-packaging.md.
 _generated_/
 
+# Generated Rust crate root — the mechanical projection of a folder-backed
+# package's processors/ directory, rewritten before every cargo invocation.
+# Kept out of _generated_/ so it is not mistaken for the Deno wire vocabulary,
+# whose directory presence is a provisioning oracle.
+_generated_rust_crate_root_/
+
 # Local-only operator override files (scripts + runbooks): machine-specific
 # values, private deployment targets, secrets. Convention is <name>.local.<ext>
 # sitting next to a committed generic <name>.<ext>. Never part of a PR.
