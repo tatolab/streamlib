@@ -140,8 +140,11 @@ loaded.
 
 A `.slpkg` is a box that can hold **source and/or a prebuilt cdylib**, like
 a pip package shipping both a wheel and an sdist. `assemble_artifact`
-bundles, for a Rust package, *both* the crate source (`Cargo.toml` + `src/`
-…) and the prebuilt cdylib for the packing host's triple. On load, the
+bundles, for a Rust package, *both* the crate source (`Cargo.toml` +
+`processors/` …) and the prebuilt cdylib for the packing host's triple. The
+generated crate root the `[lib] path` points at is *not* bundled — it is a
+build artifact, rewritten at the pre-cargo seam on the consuming host. On load,
+the
 `.slpkg` / `Url` / `ByVersion` resolver (`source_for_resolved_dir`) decides
 (the co-located `InstalledCache` slot is load-only — it never runs this
 build fallback; an unbuilt slot is a typed `InstalledPackageNotBuilt`):

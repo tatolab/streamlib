@@ -54,7 +54,8 @@ v4l = "0.14"
 libc = {version = "0.2.177"}
 
 # NOTE: the Apple (AVFoundation) camera arm is parked under
-# `src/_apple_impl_pending_/` (never compiled — see `src/lib.rs`); its
+# `processors/_apple_impl_pending_/` (never compiled — a file-level
+# `#![cfg(any())]` on its `mod.rs` gates the whole directory); its
 # objc2 / dispatch2 interop deps are removed until the plugin SDK ships an
 # engine-free Apple RHI surface and the arm is unparked.
 

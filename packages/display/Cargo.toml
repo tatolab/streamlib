@@ -54,9 +54,10 @@ winit = "0.30"
 raw-window-handle = "0.6"
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-# Apple module is ported into this package but DISABLED in `lib.rs` —
+# Apple module is ported into this package but parked under
+# `processors/_apple_impl_pending_/` behind a file-level `#![cfg(any())]` —
 # the Metal-side rewrite onto a Metal-equivalent present target is
-# tracked as a separate follow-up. Listed here so the apple/ source
+# tracked as a separate follow-up. Listed here so the parked source
 # tree is greppable / discoverable; nothing depends on these symbols
 # being reachable yet.
 
