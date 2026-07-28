@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.4](https://github.com/tatolab/streamlib/compare/v0.9.3...v0.9.4) (2026-07-28)
+
+
+### Features
+
+* **extract:** root Rust processor discovery at processors/ and generate the crate root ([#1640](https://github.com/tatolab/streamlib/issues/1640)) ([6037b20](https://github.com/tatolab/streamlib/commit/6037b20373fa977d0f848e81db44ae53e5f59f94))
+
 ## [0.9.3](https://github.com/tatolab/streamlib/compare/v0.9.2...v0.9.3) (2026-07-28)
 
 
