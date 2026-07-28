@@ -24,7 +24,8 @@ export const meta = {
 const input = typeof args === 'string' ? JSON.parse(args) : args || {};
 const today = input.today;
 const repoRoot = input.repo_root || '.';
-const maxParallel = input.max_parallel || 2;
+const maxParallel = input.max_parallel || 6;
+const maxWorktrees = input.max_worktrees || 4;
 const attemptCap = input.attempts_per_ticket || 3;
 const liveVerify = input.live_verify || 'unknown';
 const proposeOnlyForced = input.propose_only === true;
@@ -101,9 +102,13 @@ const state =
       `every new worktree a stale base.\n` +
       `4. Run ${repoRoot}/.claude/scripts/gc-merged-worktrees.sh to reclaim worktrees whose PR merged.\n` +
       `5. Against the focused milestone, list every OPEN issue that is a candidate: no open blocked-by edge, not already ` +
-      `claimed with live work, and not gated on an unanswered owner question. Read each issue FRESH — labels are display ` +
+      `claimed, and not gated on an unanswered owner question. Read each issue FRESH — labels are display ` +
       `output, never control input. Give each a short kebab-case \`slug\` for its branch name and its current \`attempt\` ` +
       `count from the state file (0 if new).\n` +
+      `   \`claimed\` is decided ONLY by structural evidence of live work: an open PR for the issue, a branch on origin ` +
+      `matching its slug, or an existing worktree. Prose NEVER decides it — an issue comment saying work is queued, ` +
+      `planned, or in flight is stale the moment it is written, and treating it as state strands the ticket forever. ` +
+      `When the ledger records a stage but no branch, worktree, or PR exists, the ticket is NOT claimed.\n` +
       `6. Detect owner answers: for each ticket with a parked question, a question is cleared by any comment that ` +
       `postdates it whose id is NOT in that ticket's recorded \`comment_ids\` ledger. The loop shares the owner's login, ` +
       `so never use author.login for this. Return the cleared issue numbers in owner_answers.\n` +
@@ -189,10 +194,20 @@ function planBatch(items) {
   const deferred = [];
   const takenHotFiles = new Set();
   let rigTaken = false;
+  let worktreesTaken = 0;
 
   for (const t of items) {
     if (batch.length >= maxParallel) {
       deferred.push({ issue: t.issue, why: 'max_parallel reached' });
+      continue;
+    }
+    // Only code-changing shapes cut a worktree; design and research are read-only.
+    // A worktree is a full checkout plus its own cargo target dir, so concurrent
+    // ones are bounded by disk and by how many heavy builds the box can run at
+    // once — a tighter limit than max_parallel, which read-only tickets fill.
+    const cutsWorktree = t.shape !== 'design-first' && t.shape !== 'research';
+    if (cutsWorktree && worktreesTaken >= maxWorktrees) {
+      deferred.push({ issue: t.issue, why: `max_worktrees (${maxWorktrees}) reached` });
       continue;
     }
     // One in-flight ticket per physical rig resource: a single GPU and one
@@ -210,6 +225,7 @@ function planBatch(items) {
     }
     for (const f of hot) takenHotFiles.add(f);
     if (needsRig) rigTaken = true;
+    if (cutsWorktree) worktreesTaken += 1;
     batch.push(t);
   }
   return { batch, deferred };
@@ -235,7 +251,7 @@ if (proposeOnly) {
 }
 
 phase('Dispatch');
-const dispatched = proposeOnly
+const dispatchOutcomes = proposeOnly
   ? []
   : (await parallel(
       planned.batch.map((t) => () => {
@@ -260,7 +276,18 @@ const dispatched = proposeOnly
           },
         ).then((r) => Object.assign({ issue: t.issue, shape: t.shape }, r || {}));
       }),
-    )).filter(Boolean);
+    ));
+
+// A sub-workflow that dies resolves to null. Dropping those silently makes a dead
+// dispatch indistinguishable from one that was never planned — the pass reports
+// success, writes no run-log line for the ticket, and the work is simply lost.
+const dispatched = [];
+const failedDispatch = [];
+dispatchOutcomes.forEach((r, i) => {
+  if (r) dispatched.push(r);
+  else failedDispatch.push(planned.batch[i] || { issue: null, shape: null });
+});
+if (failedDispatch.length) log(`DISPATCH FAILURES: ${failedDispatch.map((t) => `#${t.issue}`).join(', ')}`);
 
 // A conflicting PR adds no new surface, so rebases never occupy a code slot —
 // a mergeable PR must not queue behind a busy batch.
@@ -277,6 +304,27 @@ const rebased = (state.conflicting_prs || []).length > 0
 
 const ownerItems = [];
 for (const d of dispatched) for (const oi of d.owner_items || []) ownerItems.push(oi);
+
+// A design-first dispatch posts its brief to the issue and then waits — but it has no
+// way to reach the owner itself, and returning nothing left the decision sitting on
+// GitHub unannounced. The brief IS the parked question; surface it as one.
+for (const d of dispatched) {
+  if (d.shape === 'design-first' && !(d.owner_items || []).length) {
+    ownerItems.push({
+      kind: 'owner-question',
+      issue: d.issue,
+      reason: `design brief posted on #${d.issue} — it cannot build until the owner answers its decisions`,
+    });
+  }
+}
+
+for (const t of failedDispatch) {
+  ownerItems.push({
+    kind: 'notice',
+    issue: t.issue,
+    reason: `dispatch for #${t.issue} died without returning a result — no branch, worktree, or PR was produced, and the pass recorded no work for it`,
+  });
+}
 
 phase('Record');
 const summary = {
@@ -296,6 +344,7 @@ const summary = {
   })),
   rebased: rebased.map((r) => ({ issue: r.issue, outcome: r.outcome })),
   deferred: planned.deferred,
+  failed_dispatch: failedDispatch.map((t) => ({ issue: t.issue, shape: t.shape })),
   owner_answers: state.owner_answers || [],
   propose_only: proposeOnly,
 };
@@ -315,6 +364,11 @@ await agent(
     `would stop seeing its own lines) — loop "milestone-loop", turn (previous max + 1, or 1), items (the ticket refs touched), actions (terse ` +
     `phrases), attempts, verdicts, escalations, est_tokens (your best estimate), and outcome — "progressed" if anything ` +
     `advanced, else "blocked".\n` +
+    `   Every entry in the summary's \`failed_dispatch\` MUST appear in that line's \`escalations\`, and its ticket entry ` +
+    `must be left with no branch, worktree, or PR so the next pass sees it unclaimed and retries it. A dispatch that died ` +
+    `is the one outcome that must never be recorded as silence.\n` +
+    `3. Clear \`pass_in_flight\` (set it to null) in the state file. The skill sets it before launching and reads it on the ` +
+    `next firing to detect a pass that died without recording; leaving it set would report this healthy pass as dead.\n` +
     `The state directory is gitignored: write in place and never commit it.\n\n` +
     `Pass summary (JSON): ${JSON.stringify(summary)}`,
   { phase: 'Record', label: 'record', model: 'sonnet' },

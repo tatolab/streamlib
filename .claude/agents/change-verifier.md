@@ -34,7 +34,7 @@ Emit **exactly** this JSON object and nothing else — no prose before or after:
 ```
 
 - `verdict` — `APPROVE` only when no blocker survives; `REJECT` when any blocker stands; `ESCALATE` when a decision only the repo owner can make blocks the call (scope change, milestone question, an ambiguous intent).
-- `findings[].severity` — `blocker` (must fix before merge), `should-fix` (real but non-blocking), `question` (needs an answer to classify).
+- `findings[].severity` — `blocker` (must fix before merge), `should-fix` (a real defect; it is a change request and gates the PR exactly like a blocker — never something that ships as a note), `question` (needs an answer to classify).
 - `findings[].claim` — the assertion being tested; `evidence` — what you observed (command output, `file:line`, diff excerpt); `suggested_next_step` — the concrete next action.
 - `lens` — the one-phrase angle you reviewed from.
 - `coverage_notes` — what you did NOT cover and why (e.g. "GPU runtime correctness deferred to gpu-vulkan lens; no rig here").
