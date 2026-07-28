@@ -28,42 +28,22 @@
 //! `DynGeneratedProcessor` surface — constructor + lifecycle plus
 //! iceoryx2 wiring, execution-config, and config-json IO.
 //!
-//! # Example plugin
+//! # How a package reaches [`export_plugin`]
 //!
-//! ```ignore
-//! use streamlib::prelude::*;
-//! use streamlib_plugin_abi::export_plugin;
+//! A distributable Rust package authors each processor as a `#[processor]`
+//! struct under `processors/` and commits **no crate root**: its `Cargo.toml`
+//! points `[lib] path` at `_generated_rust_crate_root_/lib.rs` alongside a
+//! `cdylib` crate-type, and `streamlib_processor_extract::crate_root` writes
+//! that root before every cargo invocation as the mechanical projection of
+//! `processors/` — one `#[path]`-attributed module arm per top-level entry
+//! plus one [`export_plugin`] naming every processor the package declares on
+//! any target, each entry carrying the author's `#[cfg]` verbatim. Nobody
+//! hand-writes the invocation, and no `lib.rs` exists to hand-write it in.
+//! See `docs/architecture/package-staging-layout.md`.
 //!
-//! // The `#[processor(...)]` attribute is the single source of truth for
-//! // identity, execution mode, and ports — nothing is read from a file.
-//! #[streamlib::sdk::processor(
-//!     "@org/pkg/MyProcessor",
-//!     execution = continuous,
-//!     input("video_in", "@tatolab/core/VideoFrame", description = "Video input"),
-//!     output("video_out", "@tatolab/core/VideoFrame"),
-//! )]
-//! pub struct MyProcessor;
-//!
-//! impl ContinuousProcessor for MyProcessor::Processor {
-//!     fn process(&mut self) -> Result<()> {
-//!         if let Some(frame) = self.inputs.read("video_in") { /* ... */ }
-//!         Ok(())
-//!     }
-//! }
-//!
-//! export_plugin!(MyProcessor::Processor);
-//! ```
-//!
-//! # Plugin Cargo.toml
-//!
-//! ```toml
-//! [lib]
-//! crate-type = ["cdylib"]
-//!
-//! [dependencies]
-//! streamlib = "0.2"
-//! streamlib-plugin-abi = "0.2"
-//! ```
+//! [`export_plugin`] is invoked by hand only where there is no `processors/`
+//! tree to project from — this crate's own load-path test binaries and the
+//! cross-rustc build fixture.
 
 use core::ffi::c_void;
 

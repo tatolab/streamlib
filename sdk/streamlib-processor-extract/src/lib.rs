@@ -147,9 +147,11 @@ pub enum ExtractError {
     /// A `#[processor(...)]` sits behind a `mod` with no visibility modifier, so
     /// the generated crate root cannot name it. Refused at the scan rather than
     /// emitted, so the diagnostic points at the author's source instead of at a
-    /// privacy error inside a generated file they are told not to edit. A
-    /// `pub(crate)` / `pub(super)` module is left alone — it is reachable from
-    /// the crate root in the shapes a `processors/` tree produces.
+    /// privacy error inside a generated file they are told not to edit. Only a
+    /// bare `mod` is refused: a restricted-visibility `mod` still resolves for
+    /// the shapes seen in-tree, and where it would not (a `pub(super) mod` two
+    /// or more levels below an arm) the generated root fails loudly as a
+    /// privacy error rather than dropping the processor silently.
     #[error(
         "processor `{struct_name}` in {declared_in} is behind private `mod {private_module}` — \
          a `mod` on the path from a `processors/` arm down to a processor must be `pub`, \
