@@ -124,11 +124,12 @@ artifact and does not re-run it.
   live-submit path needs the extractor without the whole pack crate.
 - **`cfg-expr` / `target-lexicon` for the overlap search.** They ship the target
   coherence rules as data rather than the hand-written model below. Neither is
-  in the tree today, so adopting one is a new-dependency decision for a build-
-  seam crate that currently pulls only `syn` / `quote` / `toml` — and the model
-  needs one more thing than either provides: an explicit "this fact is unknown,
-  leave the pair unproven" answer, which is what keeps the refusal sound. Worth
-  revisiting if the coherence rules grow past target families.
+  in the tree today, so adopting one is a new-dependency decision for a
+  build-seam crate that currently pulls only `syn` / `quote` / `toml` — and the
+  model needs one more thing than either provides: an explicit "this fact is
+  unknown, leave the pair unproven" answer, which is what keeps the refusal
+  sound. Worth revisiting if the coherence rules grow past the target-atom
+  cluster the model relates today.
 
 ## Consequences
 
@@ -166,34 +167,43 @@ scan; the third is the datum the scan now produces.
 
 **Overlap is refused, with a witness.** Two arms some build target compiles
 both of derive one `processors:` entry between them: the section keeps only the
-`Type` segment, so the entry that ships is whichever arm the walk reached first,
-and the drift check — keyed by that same name — collapses the pair before it
-compares. The failure is silent at both seams. It is refused at the scan instead, proven two
-independent ways. The target-resolved walk needs no reasoning: it resolved one
-concrete target and collected the name twice. The across-every-target walk
-brute-forces satisfiability of the two arms' conjoined predicates over only the
-atoms those predicates themselves mention, and refuses **only on a satisfying
-assignment it can print**. That search carries a deliberate domain model of how
-`rustc` sets these atoms: `target_*` keys are modelled single-valued except
-`feature` / `target_feature` / `target_has_atomic`; the `unix` / `windows`
-families are mutually exclusive, spelled interchangeably as a bare flag or a
-`target_family` value, with `windows` holding exactly one `target_os`; and a
-known `target_os` fixes the families its target defines, both ways. Without the
-first rule, `target_os = "linux"` against `any(target_os = "macos", target_os =
-"ios")` reads satisfiable and every platform-split package fails its own build.
-Without the last, `target_os = "ios"` against `not(unix)` reads satisfiable and
-a platform split with a non-unix fallback arm fails the same way.
+`Type` segment, so the entry that ships is whichever arm the walk reached
+first, and the drift check — keyed by that same name — collapses the pair
+before it compares. The failure is silent at both seams. It is refused at the
+scan instead, proven two independent ways. The target-resolved walk needs no
+reasoning: it resolved one concrete target and collected the name twice. The
+across-every-target walk brute-forces satisfiability of the two arms' conjoined
+predicates over only the atoms those predicates themselves mention, and refuses
+**only on a satisfying assignment it can print**. That search carries a
+deliberate domain model of how `rustc` sets these atoms: `target_*` keys are
+modelled single-valued except `feature` / `target_feature` /
+`target_has_atomic`; the `unix` / `windows` families are mutually exclusive,
+spelled interchangeably as a bare flag or a `target_family` value, with
+`windows` holding exactly one `target_os`; and a known `target_os` fixes the
+families its target defines, both ways. Without the first rule, `target_os =
+"linux"` against `any(target_os = "macos", target_os = "ios")` reads
+satisfiable and every platform-split package fails its own build. Without the
+last, `target_os = "ios"` against `not(unix)` reads satisfiable and a platform
+split with a non-unix fallback arm fails the same way.
 
-**The model's error direction is toward missing an overlap, never inventing
-one.** Every rule and every fact the model lacks PRUNES candidate assignments,
-so a witness is only ever offered when the model can say the assignment is one a
-real target could have. Two facts it deliberately lacks: `target_family` is
-genuinely multi-valued on the wasm-with-libc targets (`wasi` and `emscripten`
-are both `wasm` and `unix`) yet is modelled single-valued, and the `target_os` →
-family table names only single-family OSes. A `target_os` outside that table
-therefore cannot witness anything weighed against a family atom — it is left
-unproven rather than guessed. The cost of a missed detection is bounded by the
-concrete-target net: the host that actually compiles both arms still fails.
+**The model relates one cluster of target atoms, and prunes rather than
+guesses outside it.** The cluster is `target_os`, `target_family` and the bare `unix` /
+`windows` flags. `rustc` fixes every other target key against those and against
+one another too — no target is both `target_env = "msvc"` and `target_os =
+"linux"`, none is both `target_arch = "wasm32"` and `target_env = "msvc"`, no
+`target_vendor = "apple"` target is `not(unix)` — and the model holds none of
+those facts, so an assignment that pins a key from outside the cluster while a
+second target atom is decided is dropped instead of printed as a proof. Inside
+the cluster the same discipline applies to what the rules cannot decide: a
+`target_os` outside the OS → family table decides nothing about families, and
+a `target_family` outside `unix` / `windows` defines neither flag, which
+deliberately drops `wasi` (genuinely both `wasm` and `unix`, the multi-valued
+case single-valued modelling gives up). Every rule and every gap therefore
+prunes, so the error direction is toward missing an overlap rather than
+inventing one — on the single assumption the model cannot check, that a value
+a predicate names is a value some target defines. The cost of a missed
+detection is bounded by the concrete-target net: the host that actually
+compiles both arms still fails.
 
 **Divergence is refused over the whole derived projection, not just ports.** The
 `processors:` section is derived from whichever arm the publishing host
@@ -203,16 +213,16 @@ config binding — makes the shipped manifest host-dependent. That is a wider
 surface than the language-uniform drift surface above, deliberately: drift
 compares a *hand-authored* manifest against *code*, where the excluded fields
 are authored rather than derived, while divergence compares two pieces of code
-that must derive the same entry. Port and execution differences are named by the
-same comparator the drift report uses, generalized from "manifest vs code" to a
-labelled two-sided comparison — one diagnostic with two callers, not two copies.
-Grouping is by `Type` name rather than the full identity because that is the
-only segment the derived entry keeps: the attribute's `@org/package` is dropped,
-and at load the runtime composes each processor's structured ident from the
-package's own org / name plus the short name. Two arms sharing a `Type` fold
-into one manifest entry and one composed ident whatever `@org/package` their
-attributes named, so they surface here as a divergence rather than passing as
-two unrelated processors.
+that must derive the same entry. Port and execution differences are named by
+the same comparator the drift report uses, generalized from "manifest vs code"
+to a labelled two-sided comparison — one diagnostic with two callers, not two
+copies. Grouping is by `Type` name rather than the full identity because that
+is the only segment the derived entry keeps: the attribute's `@org/package` is
+dropped, and at load the runtime composes each processor's structured ident
+from the package's own org / name plus the short name. Two arms sharing a
+`Type` fold into one manifest entry and one composed ident whatever
+`@org/package` their attributes named, so they surface here as a divergence
+rather than passing as two unrelated processors.
 
 **A gap is not an error — it is availability.** A package that declares a
 processor on some targets and on none of the others is ordinary. Which targets

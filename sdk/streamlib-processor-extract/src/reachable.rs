@@ -1278,6 +1278,11 @@ fn target_families_of_known_target_os(target_os: &str) -> Option<&'static [&'sta
         .map(|(_, families)| *families)
 }
 
+/// The `target_*` cfg keys the coherence rules can weigh against each other:
+/// `target_os` fixes a target's families, and `target_family` — spelled as a
+/// value or as the bare `unix` / `windows` flag — is that same fact.
+const TARGET_CFG_KEYS_THE_COHERENCE_RULES_RELATE: [&str; 2] = ["target_os", "target_family"];
+
 /// Ceiling on the assignment search. A processor group's predicates mention a
 /// handful of atoms in practice; a pathological one is left unproven (no
 /// refusal) rather than searched to a stall.
@@ -1291,14 +1296,19 @@ const MAX_CANDIDATE_BUILD_TARGET_ASSIGNMENTS: usize = 4096;
 /// witness. That polarity is the whole point: the caller refuses a build on it,
 /// so the witness must be an assignment some real target could have, which is
 /// what [`CfgPredicateAtomUniverse::candidate_build_target_is_coherent`] is
-/// for. Every rule there, and every fact the model does not know, PRUNES
-/// candidates — so the model's error direction is toward `None`.
+/// for. Every rule there PRUNES candidates, and an assignment pinning target
+/// atoms the rules relate to nothing is pruned rather than guessed at — so the
+/// model's error direction is toward `None`, on the one assumption it cannot
+/// check: that a value a predicate names is a value some target defines — two
+/// arms both gated on a misspelled `target_os = "linxu"` still witness each
+/// other, which is the answer an author wants anyway.
 ///
 /// A `None` is therefore "not proven", NOT "proven disjoint": an unparseable
 /// predicate, a search past the ceiling, a `target_os` outside
-/// [`TARGET_FAMILIES_BY_KNOWN_TARGET_OS`] weighed against a family atom, and a
-/// genuinely disjoint pair all land there. The concrete-target duplicate check
-/// stays the backstop for every one of them.
+/// [`TARGET_FAMILIES_BY_KNOWN_TARGET_OS`] weighed against a family atom, a pair
+/// resting on two target keys the rules cannot relate (`target_env` against
+/// `target_os`), and a genuinely disjoint pair all land there. The
+/// concrete-target duplicate check stays the backstop for every one of them.
 fn find_build_target_satisfying_both_cfg_predicate_sets(
     first_predicate_sources: &[String],
     second_predicate_sources: &[String],
@@ -1453,6 +1463,44 @@ impl CfgPredicateAtomUniverse {
             || self.single_valued_key_values.contains_key("target_family")
     }
 
+    /// Whether a candidate pins a `target_*` key from outside the cluster
+    /// [`TARGET_CFG_KEYS_THE_COHERENCE_RULES_RELATE`] names, while a second
+    /// target atom is decided.
+    ///
+    /// `rustc` fixes the target keys against one another — no target is both
+    /// `target_env = "msvc"` and `target_os = "linux"`, none is both
+    /// `target_arch = "wasm32"` and `target_env = "msvc"`, no `target_vendor =
+    /// "apple"` target is `not(unix)` — and the model holds none of those
+    /// facts. Weighing two of them is therefore a guess, and this search's
+    /// answers are read as proofs, so the candidate is dropped. A mentioned
+    /// bare family flag counts as that second atom whether the candidate
+    /// defines it or not — an assignment decides a flag both ways, unlike a
+    /// single-valued key it can leave at "some value the predicates never
+    /// name".
+    fn candidate_pins_target_cfg_keys_the_rules_cannot_relate(
+        &self,
+        candidate: &ModuleReachabilityTarget,
+    ) -> bool {
+        let mut pinned_relatable_keys: BTreeSet<&str> = BTreeSet::new();
+        let mut pinned_unrelatable_keys: BTreeSet<&str> = BTreeSet::new();
+        for (key, _) in &candidate.key_values {
+            if !key.starts_with("target_") {
+                continue;
+            }
+            if TARGET_CFG_KEYS_THE_COHERENCE_RULES_RELATE.contains(&key.as_str()) {
+                pinned_relatable_keys.insert(key.as_str());
+            } else {
+                pinned_unrelatable_keys.insert(key.as_str());
+            }
+        }
+        if pinned_unrelatable_keys.is_empty() {
+            return false;
+        }
+        pinned_relatable_keys.len() + pinned_unrelatable_keys.len() > 1
+            || self.mentions_flag("unix")
+            || self.mentions_flag("windows")
+    }
+
     /// Whether a candidate assignment describes a build target that could
     /// actually exist. Every rule is a fact about how `rustc` sets these atoms,
     /// so filtering by them only ever removes a target that would have proven a
@@ -1460,8 +1508,11 @@ impl CfgPredicateAtomUniverse {
     ///
     /// - `unix` and `windows` are the two target families a `cfg` names, and no
     ///   target is in both;
-    /// - `target_family = "unix"` / `"windows"` and the bare `unix` / `windows`
-    ///   flag are the same fact spelled two ways;
+    /// - the family flags a target defines are exactly the one its
+    ///   `target_family` names — the same fact spelled two ways, so a
+    ///   `target_family` outside the pair (`wasm`) defines neither flag. That
+    ///   is where modelling `target_family` single-valued costs a witness:
+    ///   `wasi` really is `wasm` AND `unix`, and this drops it;
     /// - the windows family holds exactly one `target_os`, `windows`;
     /// - a `target_os` [`TARGET_FAMILIES_BY_KNOWN_TARGET_OS`] names fixes the
     ///   families the target defines, both ways — `target_os = "ios"` forces
@@ -1470,22 +1521,25 @@ impl CfgPredicateAtomUniverse {
     /// A `target_os` that table does NOT name fixes nothing, so such a
     /// candidate is rejected outright once a family atom is in play: assigning
     /// it either way would be a guess, and this function's answers are read as
-    /// proofs.
+    /// proofs. A candidate pinning target keys the rules relate to nothing is
+    /// dropped for the same reason (see
+    /// [`CfgPredicateAtomUniverse::candidate_pins_target_cfg_keys_the_rules_cannot_relate`]).
     fn candidate_build_target_is_coherent(&self, candidate: &ModuleReachabilityTarget) -> bool {
         if candidate.has_flag("unix") && candidate.has_flag("windows") {
+            return false;
+        }
+        if self.candidate_pins_target_cfg_keys_the_rules_cannot_relate(candidate) {
             return false;
         }
         let candidate_target_os = candidate.single_defined_value_of_cfg_key("target_os");
         let candidate_target_family = candidate.single_defined_value_of_cfg_key("target_family");
 
-        for (family, opposite_family) in [("unix", "windows"), ("windows", "unix")] {
-            if candidate_target_family == Some(family) {
-                if candidate.has_flag(opposite_family) {
-                    return false;
-                }
-                if self.mentions_flag(family) && !candidate.has_flag(family) {
-                    return false;
-                }
+        for family in ["unix", "windows"] {
+            if let Some(candidate_target_family) = candidate_target_family
+                && self.mentions_flag(family)
+                && candidate.has_flag(family) != (candidate_target_family == family)
+            {
+                return false;
             }
             if candidate.has_flag(family)
                 && self.mentions_single_valued_key_value("target_family", family)
@@ -2538,20 +2592,107 @@ mod tests {
             )
             .is_none()
         );
-        // With no family atom in play the same OS proves normally.
+        // With no family atom in play the same OS proves normally: a cargo
+        // feature is free of the target, so the pair really can both compile.
         assert!(
             find_build_target_satisfying_both_cfg_predicate_sets(
                 &predicates(&[r#"target_os = "wasi""#]),
-                &predicates(&[r#"target_pointer_width = "32""#]),
+                &predicates(&[r#"feature = "cuda""#]),
             )
             .is_some()
         );
     }
 
-    /// The shape milestone 39 endorses at its widest: a platform split whose
-    /// third arm is the `not(unix)` fallback. All three are pairwise disjoint on
-    /// every real target, so the scan must ACCEPT them and fold them into one
-    /// availability entry.
+    /// The model reads a single-valued `target_family` as THE family, so a
+    /// value outside `unix` / `windows` defines neither flag. Without that,
+    /// `#![cfg(target_family = "wasm")]` and `#![cfg(windows)]` read satisfiable
+    /// — no rustc target is in both families — and a correct package is refused
+    /// on every build.
+    #[test]
+    fn a_target_family_outside_the_family_flags_defines_neither_flag() {
+        for family_atom in ["windows", "unix"] {
+            assert!(
+                find_build_target_satisfying_both_cfg_predicate_sets(
+                    &predicates(&[r#"target_family = "wasm""#]),
+                    &predicates(&[family_atom]),
+                )
+                .is_none(),
+                "a `wasm` target_family cannot also define `{family_atom}` in this model"
+            );
+        }
+        // The flag a `target_family` DOES name still proves.
+        assert!(
+            find_build_target_satisfying_both_cfg_predicate_sets(
+                &predicates(&[r#"target_family = "unix""#]),
+                &predicates(&["unix"]),
+            )
+            .is_some()
+        );
+    }
+
+    /// `rustc` fixes the target keys against one another and the model holds
+    /// none of those facts, so a pair resting on two of them is left UNPROVEN.
+    /// Without that, `#![cfg(target_env = "msvc")]` and `#![cfg(target_os =
+    /// "linux")]` read satisfiable on a build target no rustc triple has.
+    #[test]
+    fn a_pair_resting_on_unrelatable_target_keys_is_left_unproven() {
+        for (first, second) in [
+            (r#"target_env = "msvc""#, r#"target_os = "linux""#),
+            (r#"target_arch = "wasm32""#, r#"target_os = "linux""#),
+            (r#"target_vendor = "apple""#, "not(unix)"),
+            (r#"target_arch = "wasm32""#, r#"target_env = "msvc""#),
+        ] {
+            assert!(
+                find_build_target_satisfying_both_cfg_predicate_sets(
+                    &predicates(&[first]),
+                    &predicates(&[second]),
+                )
+                .is_none(),
+                "`{first}` and `{second}` name target keys the model cannot relate"
+            );
+        }
+        // One such key on its own pins nothing against anything.
+        assert!(
+            find_build_target_satisfying_both_cfg_predicate_sets(
+                &predicates(&[r#"target_env = "msvc""#]),
+                &predicates(&[r#"not(target_env = "gnu")"#]),
+            )
+            .is_some()
+        );
+    }
+
+    /// The end-to-end shape the two coherence gaps refused: arms gated on
+    /// families no target holds at once are disjoint, so the scan ACCEPTS them.
+    #[test]
+    fn arms_split_across_unrelated_target_keys_are_accepted() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "processors/wasm_arm.rs",
+            r#"#![cfg(target_family = "wasm")]
+            #[processor("@tatolab/demo/Capture", execution = manual)]
+            pub struct WasmCapture;"#,
+        );
+        write(
+            root,
+            "processors/windows_arm.rs",
+            r#"#![cfg(windows)]
+            #[processor("@tatolab/demo/Capture", execution = manual)]
+            pub struct WindowsCapture;"#,
+        );
+
+        let set = extract_processors_across_every_build_target(root)
+            .expect("no target is in both the wasm and windows families");
+        let availability = set
+            .availability_of_processor_type_name("Capture")
+            .expect("the two arms fold to one availability entry");
+        assert!(availability.is_available_on_build_target(&build_target_for_os("windows")));
+    }
+
+    /// A three-arm platform split whose third arm is the `not(unix)` fallback.
+    /// All three are pairwise disjoint on every real target, so the scan must
+    /// ACCEPT them and fold them into one availability entry.
     #[test]
     fn a_platform_split_with_a_non_unix_fallback_arm_is_accepted() {
         let tmp = tempdir();
