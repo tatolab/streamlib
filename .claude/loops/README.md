@@ -43,6 +43,27 @@ Knobs: heartbeat 30m · max_parallel 6 · max_worktrees 4 · attempts_per_ticket
 independently — one GPU and one `/dev/videoN` at a time — so raising it widens throughput on the
 many tickets that never touch hardware without loosening the device rule in `constraints.md`.
 
+## Stacked branches
+
+Merging is the owner's call, and this milestone's dependency graph is deep and narrow, so gating a
+ticket on its blocker being **closed** stalls the whole chain until they wake up. Instead, a ticket
+whose open blockers **all** have an open PR starts anyway, rooted on the deepest of those branches
+rather than on `main`. Each PR targets its parent branch, so a reviewer sees one layer's diff.
+
+- The reconciler sets `stack_base` per candidate; a blocker with no open PR leaves it null and that
+  ticket stays genuinely blocked.
+- Every diff in `worktree-work.js` is taken against `baseRef`, never `origin/main` — on a stacked
+  branch the parent's commits are already in the diff versus main, so reviewing against main would
+  re-review the whole stack at every layer and cascade findings.
+- Hot-file collision detection is **per base branch**. Two branches off the same base that rewrite
+  one file conflict; a layer cannot conflict with its own ancestor, whose commits it already
+  contains.
+- The batch is ordered shallowest-first, so a layer exists before anything stacks on it and the
+  bottom PR reaches the owner soonest — a stack collapses from the bottom.
+- **The repo squash-merges.** When a base PR lands, its branch disappears and the child still
+  carries the parent's pre-squash commits, so the child goes conflicting. The rebase path detects a
+  vanished base, rebases onto `origin/main`, and retargets the PR base to main.
+
 `max_worktrees` bounds only the tickets that cut a worktree — the code-changing shapes. A worktree
 is a full checkout plus its own cargo target dir, so concurrent ones are limited by disk and by how
 many heavy builds the box can run at once, which is a tighter constraint than ticket concurrency.
