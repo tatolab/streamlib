@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.4](https://github.com/tatolab/streamlib/compare/v0.8.3...v0.8.4) (2026-07-28)
+
+
+### Bug Fixes
+
+* **op-model:** make reviewer findings gate the PR, and stop losing dead passes ([#1623](https://github.com/tatolab/streamlib/issues/1623)) ([2b7f3c2](https://github.com/tatolab/streamlib/commit/2b7f3c291234eee7c56e40d4c2772dc2428b7278))
+
 ## [0.8.3](https://github.com/tatolab/streamlib/compare/v0.8.2...v0.8.3) (2026-07-27)
 
 
