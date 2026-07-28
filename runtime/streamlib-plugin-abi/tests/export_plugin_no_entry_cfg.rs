@@ -13,13 +13,9 @@ use std::sync::atomic::Ordering;
 use common::declare_stub_processor_type;
 use streamlib_plugin_abi::{PluginDeclaration, STREAMLIB_ABI_VERSION};
 
-declare_stub_processor_type!(FirstStubProcessor, 0x1111_1111_1111_1111, "identity-first");
-declare_stub_processor_type!(
-    SecondStubProcessor,
-    0x2222_2222_2222_2222,
-    "identity-second"
-);
-declare_stub_processor_type!(ThirdStubProcessor, 0x3333_3333_3333_3333, "identity-third");
+declare_stub_processor_type!(FirstStubProcessor, "identity-first");
+declare_stub_processor_type!(SecondStubProcessor, "identity-second");
+declare_stub_processor_type!(ThirdStubProcessor, "identity-third");
 
 streamlib_plugin_abi::export_plugin!(FirstStubProcessor, SecondStubProcessor, ThirdStubProcessor,);
 
@@ -42,16 +38,14 @@ fn the_first_entry_anchors_the_fingerprint_and_build_identity() {
         STREAMLIB_PLUGIN.build_identity_len,
         FirstStubProcessor::__STREAMLIB_BUILD_IDENTITY.len()
     );
-    // SAFETY: the macro points the pair at a `'static str` owned by the
-    // plugin image, per the `PluginDeclaration` contract.
-    let identity = unsafe {
-        std::str::from_utf8(std::slice::from_raw_parts(
-            STREAMLIB_PLUGIN.build_identity_ptr,
-            STREAMLIB_PLUGIN.build_identity_len,
-        ))
-        .unwrap()
-    };
-    assert_eq!(identity, FirstStubProcessor::__STREAMLIB_BUILD_IDENTITY);
+    assert_eq!(
+        common::declaration_build_identity(&STREAMLIB_PLUGIN),
+        FirstStubProcessor::__STREAMLIB_BUILD_IDENTITY
+    );
+    assert_ne!(
+        common::declaration_build_identity(&STREAMLIB_PLUGIN),
+        SecondStubProcessor::__STREAMLIB_BUILD_IDENTITY
+    );
 }
 
 #[test]

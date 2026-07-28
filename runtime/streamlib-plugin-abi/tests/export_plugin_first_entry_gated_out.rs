@@ -16,21 +16,9 @@ use std::sync::atomic::Ordering;
 use common::declare_stub_processor_type;
 use streamlib_plugin_abi::STREAMLIB_ABI_VERSION;
 
-declare_stub_processor_type!(
-    GatedOutStubProcessor,
-    0x1111_1111_1111_1111,
-    "identity-gated-out"
-);
-declare_stub_processor_type!(
-    SurvivingStubProcessor,
-    0x2222_2222_2222_2222,
-    "identity-surviving"
-);
-declare_stub_processor_type!(
-    TrailingStubProcessor,
-    0x3333_3333_3333_3333,
-    "identity-trailing"
-);
+declare_stub_processor_type!(GatedOutStubProcessor, "identity-gated-out");
+declare_stub_processor_type!(SurvivingStubProcessor, "identity-surviving");
+declare_stub_processor_type!(TrailingStubProcessor, "identity-trailing");
 
 streamlib_plugin_abi::export_plugin!(
     #[cfg(any())]
@@ -47,24 +35,16 @@ fn the_first_surviving_entry_anchors_the_declaration() {
         STREAMLIB_PLUGIN.abi_layout_fingerprint,
         SurvivingStubProcessor::__STREAMLIB_ABI_LAYOUT_FINGERPRINT
     );
-    assert_ne!(
-        STREAMLIB_PLUGIN.abi_layout_fingerprint,
-        GatedOutStubProcessor::__STREAMLIB_ABI_LAYOUT_FINGERPRINT
-    );
     assert_eq!(
         STREAMLIB_PLUGIN.build_identity_len,
         SurvivingStubProcessor::__STREAMLIB_BUILD_IDENTITY.len()
     );
-    // SAFETY: the macro points the pair at a `'static str` owned by the
-    // plugin image, per the `PluginDeclaration` contract.
-    let identity = unsafe {
-        std::str::from_utf8(std::slice::from_raw_parts(
-            STREAMLIB_PLUGIN.build_identity_ptr,
-            STREAMLIB_PLUGIN.build_identity_len,
-        ))
-        .unwrap()
-    };
+    // The build identity is what makes the anchor slide observable: every entry
+    // agrees on the fingerprint by construction (`export_plugin!` const-asserts
+    // it), so only the identity distinguishes which entry anchored.
+    let identity = common::declaration_build_identity(&STREAMLIB_PLUGIN);
     assert_eq!(identity, SurvivingStubProcessor::__STREAMLIB_BUILD_IDENTITY);
+    assert_ne!(identity, GatedOutStubProcessor::__STREAMLIB_BUILD_IDENTITY);
 }
 
 #[test]

@@ -13,21 +13,9 @@ use std::sync::atomic::Ordering;
 use common::declare_stub_processor_type;
 use streamlib_plugin_abi::STREAMLIB_ABI_VERSION;
 
-declare_stub_processor_type!(
-    VacuouslyTrueStubProcessor,
-    0x4444_4444_4444_4444,
-    "identity-vacuously-true"
-);
-declare_stub_processor_type!(
-    NegatedFalseStubProcessor,
-    0x5555_5555_5555_5555,
-    "identity-negated-false"
-);
-declare_stub_processor_type!(
-    AnyFamilyStubProcessor,
-    0x6666_6666_6666_6666,
-    "identity-any-family"
-);
+declare_stub_processor_type!(VacuouslyTrueStubProcessor, "identity-vacuously-true");
+declare_stub_processor_type!(NegatedFalseStubProcessor, "identity-negated-false");
+declare_stub_processor_type!(AnyFamilyStubProcessor, "identity-any-family");
 
 streamlib_plugin_abi::export_plugin!(
     #[cfg(all())]
@@ -44,6 +32,11 @@ fn every_live_entry_registers_and_the_first_anchors() {
     assert_eq!(
         STREAMLIB_PLUGIN.abi_layout_fingerprint,
         VacuouslyTrueStubProcessor::__STREAMLIB_ABI_LAYOUT_FINGERPRINT
+    );
+    assert_eq!(
+        common::declaration_build_identity(&STREAMLIB_PLUGIN),
+        VacuouslyTrueStubProcessor::__STREAMLIB_BUILD_IDENTITY,
+        "the syntactically-first entry anchors when every `#[cfg]` holds"
     );
 
     common::reset_plugin_registration_recorders();

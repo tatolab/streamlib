@@ -509,7 +509,14 @@ declaration is anchored by the FIRST entry that survives cfg-stripping
 (two `#[allow(unreachable_code)] const fn`s whose bodies are one
 cfg-gated `return` per entry) — every entry resolves the two consts
 against the same SDK crate, so the choice of anchor is free rather than
-semantic. An invocation whose entries are all stripped is a const-eval
+semantic. That agreement is *enforced*, not assumed: the macro emits a
+cfg-gated `const _: () = assert!(...)` per entry pinning its
+`__STREAMLIB_ABI_LAYOUT_FINGERPRINT` to the anchor's, so a cdylib mixing
+processors generated against the facade and against the engine-free SDK
+is an E0080 at the invocation rather than a declaration whose fingerprint
+describes only one entry. The build identity carries no twin guard — it
+is an error-path-only diagnostic string, not a matched value. An
+invocation whose entries are all stripped is a const-eval
 compile error, never a silently unregistered plugin; a crate-root
 generator emitting per-target arms gates the whole invocation on the
 disjunction of its entry predicates so a package with no processor on

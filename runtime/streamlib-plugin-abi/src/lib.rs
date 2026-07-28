@@ -933,19 +933,23 @@ unsafe impl Sync for PluginDeclaration {}
 /// resolving those consts to the same value is what makes the anchor a
 /// free choice rather than a semantic one: the `#[processor]` macro
 /// emits both against the one SDK crate the plugin compiled against.
+/// That agreement is enforced, not assumed — a per-entry const assertion
+/// refuses the invocation at compile time if any surviving entry's
+/// `__STREAMLIB_ABI_LAYOUT_FINGERPRINT` differs from the anchor's.
 ///
 /// An invocation whose entries are ALL stripped emits a declaration with
 /// no anchor and is a compile error — never a silently unregistered
 /// plugin. A crate-root generator that mirrors per-target arms gates the
 /// whole invocation on the disjunction of its entry predicates instead.
 ///
-/// # Unanchored-declaration refusal — compile-fail doctest gates
+/// # Bad-declaration refusal — compile-fail doctest gates
 ///
 /// The refusal legs have no runtime surface to assert on, so the
-/// compile-time witnesses live here. If either leg ever started
-/// compiling, the emitted `STREAMLIB_PLUGIN` would carry a zero or
-/// absent `abi_layout_fingerprint` and the host's load handshake would
-/// have nothing to compare — these doctests flip and
+/// compile-time witnesses live here. If any leg ever started compiling,
+/// the emitted `STREAMLIB_PLUGIN` would carry a zero, absent, or
+/// entry-disagreeing `abi_layout_fingerprint` and the host's load
+/// handshake would compare against something that describes only part of
+/// the plugin — these doctests flip and
 /// `cargo test --doc -p streamlib-plugin-abi` surfaces it.
 ///
 /// No entries at all — the zero-entry arm's `compile_error!`:
@@ -969,6 +973,37 @@ unsafe impl Sync for PluginDeclaration {}
 ///     #[cfg(any())]
 ///     EveryEntryStrippedStubProcessor,
 /// );
+/// fn main() {}
+/// ```
+///
+/// Two surviving entries disagreeing on the ABI layout fingerprint —
+/// what a cdylib mixing processors built against the `streamlib` facade
+/// and against the engine-free `streamlib-plugin-sdk` would emit. The
+/// declaration carries exactly ONE fingerprint, so the host's handshake
+/// would bless a layout that describes only the anchor entry. The stubs
+/// carry the full surface `export_plugin!` resolves, so the fingerprint
+/// disagreement is the only error available:
+///
+/// ```compile_fail
+/// macro_rules! declare_fingerprint_stub {
+///     ($stub_type:ident, $abi_layout_fingerprint:expr) => {
+///         pub struct $stub_type;
+///         impl $stub_type {
+///             pub const __STREAMLIB_ABI_LAYOUT_FINGERPRINT: u64 = $abi_layout_fingerprint;
+///             pub const __STREAMLIB_BUILD_IDENTITY: &'static str = "stub";
+///             /// # Safety
+///             /// The pointer is never dereferenced.
+///             pub unsafe fn __streamlib_install_host_services(
+///                 _host_services: *const core::ffi::c_void,
+///             ) -> Option<()> { Some(()) }
+///             pub fn __streamlib_register(_register_helper: &()) {}
+///         }
+///     };
+/// }
+/// declare_fingerprint_stub!(AnchorStubProcessor, 0x1111_1111_1111_1111);
+/// declare_fingerprint_stub!(DisagreeingStubProcessor, 0x2222_2222_2222_2222);
+///
+/// streamlib_plugin_abi::export_plugin!(AnchorStubProcessor, DisagreeingStubProcessor);
 /// fn main() {}
 /// ```
 #[macro_export]
@@ -1050,6 +1085,28 @@ macro_rules! export_plugin {
                  ABI layout fingerprint"
             )
         }
+
+        // The declaration carries exactly ONE `abi_layout_fingerprint`, so
+        // the anchor is only a free choice while every surviving entry
+        // resolves the same value. A cdylib mixing processors generated
+        // against the `streamlib` facade and against the engine-free
+        // `streamlib-plugin-sdk` can express that disagreement, and the host's
+        // load handshake would then bless a layout describing only the anchor
+        // entry — the exact cross-build silent-corruption shape the
+        // fingerprint exists to refuse. Const evaluation makes divergence a
+        // hard compile error at the invocation instead.
+        $(
+            $(#[$entry_attribute])*
+            const _: () = ::core::assert!(
+                <$processor_type>::__STREAMLIB_ABI_LAYOUT_FINGERPRINT
+                    == __streamlib_plugin_anchor_abi_layout_fingerprint(),
+                "`export_plugin!` entries disagree on \
+                 `__STREAMLIB_ABI_LAYOUT_FINGERPRINT` — every processor in one \
+                 cdylib must be generated against the same SDK crate, because \
+                 the emitted `STREAMLIB_PLUGIN` declaration carries exactly one \
+                 fingerprint for the host to match"
+            );
+        )*
 
         /// The build-identity string of the first entry that survives
         /// cfg-stripping, anchored the same way as the fingerprint above.
