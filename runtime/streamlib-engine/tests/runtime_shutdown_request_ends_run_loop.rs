@@ -18,6 +18,9 @@
 //!   processor's `start()` runs on its own thread against the harness reaching
 //!   `PUBSUB.subscribe` — so the latch gets its own deterministic test rather
 //!   than riding on that timing.
+//! - A request issued BEFORE `start()` — where the milestone's `setup(rt)`
+//!   inversion puts a start-script that decides to abort — is honored by the
+//!   run loop rather than silently discarded.
 //!
 //! Starts a real `Runner` (GPU + iceoryx2), so this runs outside the `--lib`
 //! gate, which never builds `tests/` integration binaries.
@@ -61,6 +64,39 @@ impl streamlib_engine::ManualProcessor for ShutdownRequestingTestProcessor::Proc
     }
 }
 
+/// Run `runtime`'s loop under a watchdog and assert it ended on the shutdown
+/// request rather than on the watchdog `Break`, with the normal teardown run.
+/// `what_requested_the_shutdown` names the leg under test in the failure
+/// message.
+fn assert_the_run_loop_ends_before_the_watchdog(
+    runtime: &std::sync::Arc<Runner>,
+    what_requested_the_shutdown: &str,
+) {
+    let started = Instant::now();
+    let watchdog_deadline = started + SHUTDOWN_OBSERVED_WATCHDOG;
+    runtime
+        .wait_for_signal_with(|_| {
+            if Instant::now() >= watchdog_deadline {
+                ControlFlow::Break(())
+            } else {
+                ControlFlow::Continue(())
+            }
+        })
+        .expect("the harness must exit its run loop cleanly");
+    let elapsed = started.elapsed();
+
+    assert!(
+        elapsed < SHUTDOWN_OBSERVED_WATCHDOG,
+        "the run loop must end on {what_requested_the_shutdown}, not on the \
+         watchdog break; ran for {elapsed:?}",
+    );
+    assert_eq!(
+        runtime.status(),
+        RuntimeStatus::Stopped,
+        "the harness must run the normal teardown after observing {what_requested_the_shutdown}",
+    );
+}
+
 #[test]
 #[serial]
 fn a_processor_shutdown_request_ends_the_harness_run_loop() {
@@ -75,29 +111,7 @@ fn a_processor_shutdown_request_ends_the_harness_run_loop() {
         .expect("add the shutdown-requesting processor");
     runtime.start().expect("runtime start");
 
-    let started = Instant::now();
-    let watchdog_deadline = started + SHUTDOWN_OBSERVED_WATCHDOG;
-    runtime
-        .wait_for_signal_with(|_| {
-            if Instant::now() >= watchdog_deadline {
-                ControlFlow::Break(())
-            } else {
-                ControlFlow::Continue(())
-            }
-        })
-        .expect("the harness must exit its run loop cleanly");
-    let elapsed = started.elapsed();
-
-    assert!(
-        elapsed < SHUTDOWN_OBSERVED_WATCHDOG,
-        "the run loop must end on the processor's shutdown request, not on the \
-         watchdog break; ran for {elapsed:?}",
-    );
-    assert_eq!(
-        runtime.status(),
-        RuntimeStatus::Stopped,
-        "the harness must run the normal teardown after observing the request",
-    );
+    assert_the_run_loop_ends_before_the_watchdog(&runtime, "the processor's shutdown request");
 }
 
 /// The latch's whole reason to exist: a request published while nothing is
@@ -105,9 +119,8 @@ fn a_processor_shutdown_request_ends_the_harness_run_loop() {
 /// to receive, so only the latch can end the loop.
 ///
 /// Deterministic where the processor-driven test is not — the request is issued
-/// from the harness thread after `start()` (which clears the latch at entry)
-/// and before `wait_for_signal_with` subscribes, so the event is provably
-/// unobserved.
+/// from the harness thread after `start()` and before `wait_for_signal_with`
+/// subscribes, so the event is provably unobserved.
 ///
 /// Mental revert: drop the `is_runtime_shutdown_requested()` term from the poll
 /// loop's condition and the loop runs to the watchdog `Break` — the
@@ -122,27 +135,28 @@ fn a_request_latched_before_the_run_loop_subscribes_still_ends_it() {
         .request_runtime_shutdown("integration test: requested before the loop subscribed")
         .expect("the host arm never fails");
 
-    let started = Instant::now();
-    let watchdog_deadline = started + SHUTDOWN_OBSERVED_WATCHDOG;
-    runtime
-        .wait_for_signal_with(|_| {
-            if Instant::now() >= watchdog_deadline {
-                ControlFlow::Break(())
-            } else {
-                ControlFlow::Continue(())
-            }
-        })
-        .expect("the harness must exit its run loop cleanly");
-    let elapsed = started.elapsed();
+    assert_the_run_loop_ends_before_the_watchdog(&runtime, "the latched request");
+}
 
-    assert!(
-        elapsed < SHUTDOWN_OBSERVED_WATCHDOG,
-        "the run loop must end on the latched request, not on the watchdog \
-         break; ran for {elapsed:?}",
-    );
-    assert_eq!(
-        runtime.status(),
-        RuntimeStatus::Stopped,
-        "the harness must run the normal teardown after observing the latch",
-    );
+/// A start-script that decides to abort calls `request_runtime_shutdown` from
+/// `setup(rt)`, which runs before the harness calls `start()`. The latch is
+/// first-observer-wins, not per-run, so the request survives to the run loop
+/// instead of being discarded — otherwise the caller gets `Ok(())` and a
+/// runtime that never stops.
+///
+/// Mental revert: reinstate a `take_runtime_shutdown_request_latch()` at the top
+/// of `Runner::start` and the loop runs to the watchdog `Break` — the
+/// elapsed-time assertion then fails.
+#[test]
+#[serial]
+fn a_request_issued_before_start_is_observed_by_the_run_loop() {
+    let runtime = Runner::new().expect("Runner::new");
+
+    runtime
+        .request_runtime_shutdown("integration test: the start-script aborted before start()")
+        .expect("the host arm never fails");
+
+    runtime.start().expect("runtime start");
+
+    assert_the_run_loop_ends_before_the_watchdog(&runtime, "the pre-start request");
 }

@@ -324,11 +324,15 @@ pub trait RuntimeOperations: Send + Sync {
     ///
     /// The effect is process-global (matching the `RuntimeShutdown` event on
     /// `topics::RUNTIME_GLOBAL`): the receiver is not a scoping parameter, and
-    /// with two runtimes alive in one process both loop owners observe it.
+    /// the latch is first-observer-wins — the loop owner that observes the
+    /// request takes it. A request issued while no run loop is running is
+    /// observed by the next one to start, so a start-script that aborts from
+    /// `setup(rt)` still stops the run.
     ///
     /// Fire-and-forget with no completion payload, so unlike every other sync
-    /// method on this trait it never `block_on`s and is safe to call from
-    /// inside a tokio task.
+    /// method on this trait it never `block_on`s and therefore cannot deadlock
+    /// when called from inside a tokio task. It can still block briefly: the
+    /// host arm publishes over iceoryx2.
     fn request_runtime_shutdown(&self, reason: &str) -> Result<()>;
 
     // =========================================================================

@@ -364,9 +364,8 @@ impl RuntimeOperations for RuntimeOpsShim {
     }
 
     fn request_runtime_shutdown(&self, reason: &str) -> Result<()> {
-        // Crosses on the reserved plugin-ABI control topic, not a
-        // `RuntimeOpsVTable` slot: fire-and-forget with no completion payload
-        // (a slot buys a return value or a typed error).
+        // Not a `RuntimeOpsVTable` slot: this one crosses on the reserved
+        // plugin-ABI control topic.
         crate::core::runtime::request_runtime_shutdown(reason)
     }
 }

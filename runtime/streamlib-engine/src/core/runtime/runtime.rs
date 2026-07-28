@@ -435,16 +435,6 @@ impl Runner {
     /// Processors can then call runtime operations directly without indirection.
     #[tracing::instrument(name = "runtime.start", skip_all)]
     pub fn start(self: &Arc<Self>) -> Result<()> {
-        // A shutdown request only means anything to a live run loop; taking the
-        // latch at entry keeps a second in-process run from inheriting the
-        // first run's request.
-        if crate::core::runtime::take_runtime_shutdown_request_latch() {
-            tracing::warn!(
-                "discarded a runtime-shutdown request latched before start(): no run loop owned \
-                 it yet, so nothing observed it"
-            );
-        }
-
         // Hard barrier: refuse to run the graph while any module load is
         // still in flight (its processor types may not be registered
         // yet). Await pending loads — e.g. via `await_modules` — first.
@@ -965,11 +955,15 @@ impl Runner {
                     // shutdown observation rides in on the periodic callback,
                     // which routes through `app.terminate` →
                     // `applicationWillTerminate` → the stop callback above.
-                    if runtime_shutdown_observed(&shutdown_flag_for_callback) {
+                    let control_flow = if runtime_shutdown_observed(&shutdown_flag_for_callback) {
+                        ControlFlow::Break(())
+                    } else {
+                        callback(&runtime_for_callback)
+                    };
+                    if control_flow.is_break() {
                         crate::core::runtime::take_runtime_shutdown_request_latch();
-                        return ControlFlow::Break(());
                     }
-                    callback(&runtime_for_callback)
+                    control_flow
                 },
             );
             // Note: run_macos_event_loop never returns - app terminates after stop callback
@@ -986,7 +980,9 @@ impl Runner {
                 }
 
                 // Small sleep to avoid busy-waiting
-                std::thread::sleep(std::time::Duration::from_millis(100));
+                std::thread::sleep(
+                    crate::core::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL,
+                );
             }
 
             // The request has been observed; leaving it latched would make the

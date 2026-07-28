@@ -186,6 +186,53 @@ pub fn host_callbacks() -> Option<&'static HostCallbacks> {
     HOST_CALLBACKS.get()
 }
 
+/// Cache the host's table field-by-field, after the caller has confirmed
+/// [`HostServices::abi_layout_version`]. Private and named rather than a public
+/// `From` impl so the load handshake's ordering stays structural: reading the
+/// appended tail of a `HostServices` whose version was never checked is not
+/// expressible from outside this module.
+///
+/// One of the two mapping points — the engine carries its twin at
+/// `runtime/streamlib-engine/src/core/plugin/host_services/mod.rs`, held
+/// identical by `twin_drift_guard`. A new [`HostServices`] slot is carried in
+/// BOTH or it reaches only one of the two cdylib flavors.
+// twin-guard(host-callbacks-field-map): BEGIN
+fn host_callbacks_from_validated_host_services(services: &HostServices) -> HostCallbacks {
+    HostCallbacks {
+        host: services.host,
+        tracing_register_callsite: services.tracing_register_callsite,
+        tracing_enabled: services.tracing_enabled,
+        tracing_emit: services.tracing_emit,
+        pubsub_publish: services.pubsub_publish,
+        schema_register: services.schema_register,
+        schema_lookup: services.schema_lookup,
+        iceoryx_log_emit: services.iceoryx_log_emit,
+        processor_register: services.processor_register,
+        runtime_context_vtable: services.runtime_context_vtable,
+        audio_clock_vtable: services.audio_clock_vtable,
+        runtime_ops_vtable: services.runtime_ops_vtable,
+        gpu_context_limited_access_vtable: services.gpu_context_limited_access_vtable,
+        surface_store_vtable: services.surface_store_vtable,
+        gpu_context_full_access_vtable: services.gpu_context_full_access_vtable,
+        texture_ring_methods_vtable: services.texture_ring_methods_vtable,
+        vulkan_compute_kernel_methods_vtable: services.vulkan_compute_kernel_methods_vtable,
+        vulkan_graphics_kernel_methods_vtable: services.vulkan_graphics_kernel_methods_vtable,
+        vulkan_ray_tracing_kernel_methods_vtable: services.vulkan_ray_tracing_kernel_methods_vtable,
+        vulkan_acceleration_structure_methods_vtable: services
+            .vulkan_acceleration_structure_methods_vtable,
+        rhi_color_converter_methods_vtable: services.rhi_color_converter_methods_vtable,
+        rhi_command_recorder_methods_vtable: services.rhi_command_recorder_methods_vtable,
+        output_writer_vtable: services.output_writer_vtable,
+        input_mailboxes_vtable: services.input_mailboxes_vtable,
+        present_target_methods_vtable: services.present_target_methods_vtable,
+        video_encoder_session_methods_vtable: services.video_encoder_session_methods_vtable,
+        video_decoder_session_methods_vtable: services.video_decoder_session_methods_vtable,
+        host_timeline_semaphore_methods_vtable: services.host_timeline_semaphore_methods_vtable,
+        vulkan_texture_readback_methods_vtable: services.vulkan_texture_readback_methods_vtable,
+    }
+}
+// twin-guard(host-callbacks-field-map): END
+
 // =============================================================================
 // install_host_services — cdylib entry point
 // =============================================================================
@@ -237,38 +284,7 @@ pub unsafe fn install_host_services(host_services_ptr: *const c_void) -> Option<
         return None;
     }
 
-    let callbacks = HostCallbacks {
-        host: services.host,
-        tracing_register_callsite: services.tracing_register_callsite,
-        tracing_enabled: services.tracing_enabled,
-        tracing_emit: services.tracing_emit,
-        pubsub_publish: services.pubsub_publish,
-        schema_register: services.schema_register,
-        schema_lookup: services.schema_lookup,
-        iceoryx_log_emit: services.iceoryx_log_emit,
-        processor_register: services.processor_register,
-        runtime_context_vtable: services.runtime_context_vtable,
-        audio_clock_vtable: services.audio_clock_vtable,
-        runtime_ops_vtable: services.runtime_ops_vtable,
-        gpu_context_limited_access_vtable: services.gpu_context_limited_access_vtable,
-        surface_store_vtable: services.surface_store_vtable,
-        gpu_context_full_access_vtable: services.gpu_context_full_access_vtable,
-        texture_ring_methods_vtable: services.texture_ring_methods_vtable,
-        vulkan_compute_kernel_methods_vtable: services.vulkan_compute_kernel_methods_vtable,
-        vulkan_graphics_kernel_methods_vtable: services.vulkan_graphics_kernel_methods_vtable,
-        vulkan_ray_tracing_kernel_methods_vtable: services.vulkan_ray_tracing_kernel_methods_vtable,
-        vulkan_acceleration_structure_methods_vtable: services
-            .vulkan_acceleration_structure_methods_vtable,
-        rhi_color_converter_methods_vtable: services.rhi_color_converter_methods_vtable,
-        rhi_command_recorder_methods_vtable: services.rhi_command_recorder_methods_vtable,
-        output_writer_vtable: services.output_writer_vtable,
-        input_mailboxes_vtable: services.input_mailboxes_vtable,
-        present_target_methods_vtable: services.present_target_methods_vtable,
-        video_encoder_session_methods_vtable: services.video_encoder_session_methods_vtable,
-        video_decoder_session_methods_vtable: services.video_decoder_session_methods_vtable,
-        host_timeline_semaphore_methods_vtable: services.host_timeline_semaphore_methods_vtable,
-        vulkan_texture_readback_methods_vtable: services.vulkan_texture_readback_methods_vtable,
-    };
+    let callbacks = host_callbacks_from_validated_host_services(services);
 
     // Cache the callbacks BEFORE installing tracing — the
     // `ForwardingSubscriber` reads `HOST_CALLBACKS` on every emit.

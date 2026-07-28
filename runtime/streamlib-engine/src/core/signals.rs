@@ -9,10 +9,13 @@ static SIGNAL_HANDLER_INSTALLED: AtomicBool = AtomicBool::new(false);
 
 /// Install native signal handlers for shutdown signals
 ///
-/// Captures SIGTERM and SIGINT (Ctrl+C) and funnels them into
+/// Captures SIGTERM and SIGINT (Ctrl+C). Unix/Linux funnels them into
 /// [`request_runtime_shutdown`](crate::core::runtime::request_runtime_shutdown)
-/// like every other shutdown boundary. This function spawns a background thread
-/// to handle signals without blocking the signal handler.
+/// like every other shutdown boundary; macOS instead routes through
+/// `NSApplication.terminate`, which reaches the same teardown via
+/// `applicationWillTerminate` and never touches the funnel. This function
+/// spawns a background thread to handle signals without blocking the signal
+/// handler.
 ///
 /// # Platform Support
 /// - Unix/Linux: Uses libc signal handling via signal-hook
@@ -116,88 +119,34 @@ fn install_sigterm_handler_macos() -> std::io::Result<()> {
 
 #[cfg(all(unix, not(target_os = "macos")))]
 fn install_unix_signal_handlers() -> std::io::Result<()> {
-    use std::os::unix::net::UnixStream;
+    use signal_hook::consts::signal::{SIGINT, SIGTERM};
+    use signal_hook::iterator::Signals;
 
-    // Create a pipe for async-signal-safe communication
-    let (mut reader, writer) = UnixStream::pair()?;
+    // `Signals` owns the async-signal-safe self-pipe and yields the delivered
+    // signal NUMBER. `low_level::pipe::register` cannot: its handler writes a
+    // fixed `b"X"` wakeup byte, so a reader can never tell SIGINT from SIGTERM
+    // — and the shutdown `reason` this funnels into is operator-facing
+    // attribution.
+    let mut signals = Signals::new([SIGTERM, SIGINT])?;
 
-    // Clone writer so each signal registration owns its own fd.
-    // pipe::register() wraps the raw fd in a WakeFd that closes on drop,
-    // so sharing a single fd between two registrations would double-close.
-    let writer_for_sigterm = writer.try_clone()?;
-
-    // Spawn thread to handle signals from pipe
-    let handler_thread = std::thread::Builder::new()
+    // Detached: it runs for the process lifetime, and there is no shutdown
+    // path that joins it.
+    std::thread::Builder::new()
         .name("signal-handler".to_string())
         .spawn(move || {
-            use std::io::Read;
-            let mut buf = [0u8; 1];
-
             tracing::debug!("Signal handler thread started, waiting for signals");
-
-            loop {
-                tracing::trace!("Signal handler: Waiting to read from pipe");
-                match reader.read(&mut buf) {
-                    Ok(0) => {
-                        // Pipe closed, exit thread
-                        tracing::debug!("Signal handler pipe closed, exiting thread");
-                        break;
-                    }
-                    Ok(n) => {
-                        if n > 0 {
-                            let signal = buf[0];
-                            if let Err(error) =
-                                request_runtime_shutdown(&format!("posix signal {signal}"))
-                            {
-                                tracing::error!(
-                                    %error,
-                                    "Signal handler: runtime-shutdown request failed"
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Signal handler thread error: {}", e);
-                        break;
-                    }
+            for signal in signals.forever() {
+                let signal_name =
+                    signal_hook::low_level::signal_name(signal).unwrap_or("unrecognized signal");
+                if let Err(error) = request_runtime_shutdown(&format!("posix signal {signal_name}"))
+                {
+                    tracing::error!(%error, "Signal handler: runtime-shutdown request failed");
                 }
             }
             tracing::debug!("Signal handler thread exiting");
         })?;
 
-    // Detach the thread so it continues running independently
-    std::mem::forget(handler_thread);
-
-    // Install signal handlers — each takes ownership of its own stream.
-    // into_raw_fd() transfers fd ownership without closing it.
-    install_sigterm_handler(writer_for_sigterm)?;
-    install_sigint_handler(writer)?;
-
     tracing::info!("Native signal handlers installed (SIGTERM, SIGINT)");
-    Ok(())
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
-fn install_sigterm_handler(pipe: std::os::unix::net::UnixStream) -> std::io::Result<()> {
-    use signal_hook::consts::signal::*;
-    use signal_hook::low_level::pipe;
-    use std::os::unix::io::IntoRawFd;
-
-    // IntoRawFd transfers fd ownership to pipe::register without closing it
-    pipe::register(SIGTERM, pipe.into_raw_fd())?;
-
-    Ok(())
-}
-
-#[cfg(all(unix, not(target_os = "macos")))]
-fn install_sigint_handler(pipe: std::os::unix::net::UnixStream) -> std::io::Result<()> {
-    use signal_hook::consts::signal::*;
-    use signal_hook::low_level::pipe;
-    use std::os::unix::io::IntoRawFd;
-
-    // IntoRawFd transfers fd ownership to pipe::register without closing it
-    pipe::register(SIGINT, pipe.into_raw_fd())?;
-
     Ok(())
 }
 

@@ -327,51 +327,63 @@ pub struct HostCallbacks {
 unsafe impl Send for HostCallbacks {}
 unsafe impl Sync for HostCallbacks {}
 
-impl From<&HostServices> for HostCallbacks {
-    /// Cache the host's table field-by-field. The one place the two structs are
-    /// mapped onto each other — a new [`HostServices`] slot is carried here or
-    /// it never reaches cdylib code.
-    fn from(services: &HostServices) -> Self {
-        Self {
-            host: services.host,
-            tracing_register_callsite: services.tracing_register_callsite,
-            tracing_enabled: services.tracing_enabled,
-            tracing_emit: services.tracing_emit,
-            pubsub_publish: services.pubsub_publish,
-            schema_register: services.schema_register,
-            schema_lookup: services.schema_lookup,
-            iceoryx_log_emit: services.iceoryx_log_emit,
-            processor_register: services.processor_register,
-            runtime_context_vtable: services.runtime_context_vtable,
-            audio_clock_vtable: services.audio_clock_vtable,
-            runtime_ops_vtable: services.runtime_ops_vtable,
-            gpu_context_limited_access_vtable: services.gpu_context_limited_access_vtable,
-            surface_store_vtable: services.surface_store_vtable,
-            gpu_context_full_access_vtable: services.gpu_context_full_access_vtable,
-            texture_ring_methods_vtable: services.texture_ring_methods_vtable,
-            vulkan_compute_kernel_methods_vtable: services.vulkan_compute_kernel_methods_vtable,
-            vulkan_graphics_kernel_methods_vtable: services.vulkan_graphics_kernel_methods_vtable,
-            vulkan_ray_tracing_kernel_methods_vtable: services
-                .vulkan_ray_tracing_kernel_methods_vtable,
-            vulkan_acceleration_structure_methods_vtable: services
-                .vulkan_acceleration_structure_methods_vtable,
-            rhi_color_converter_methods_vtable: services.rhi_color_converter_methods_vtable,
-            rhi_command_recorder_methods_vtable: services.rhi_command_recorder_methods_vtable,
-            output_writer_vtable: services.output_writer_vtable,
-            input_mailboxes_vtable: services.input_mailboxes_vtable,
-            present_target_methods_vtable: services.present_target_methods_vtable,
-            video_encoder_session_methods_vtable: services.video_encoder_session_methods_vtable,
-            video_decoder_session_methods_vtable: services.video_decoder_session_methods_vtable,
-            host_timeline_semaphore_methods_vtable: services.host_timeline_semaphore_methods_vtable,
-            vulkan_texture_readback_methods_vtable: services.vulkan_texture_readback_methods_vtable,
-        }
+/// Cache the host's table field-by-field, after the caller has confirmed
+/// [`HostServices::abi_layout_version`]. Private and named rather than a public
+/// `From` impl so the load handshake's ordering stays structural: reading the
+/// appended tail of a `HostServices` whose version was never checked is not
+/// expressible from outside this module.
+///
+/// One of the two mapping points — the engine-free SDK carries its twin at
+/// `sdk/streamlib-plugin-sdk/src/plugin.rs`, held identical by
+/// `twin_drift_guard`. A new [`HostServices`] slot is carried in BOTH or it
+/// reaches only one of the two cdylib flavors.
+// twin-guard(host-callbacks-field-map): BEGIN
+fn host_callbacks_from_validated_host_services(services: &HostServices) -> HostCallbacks {
+    HostCallbacks {
+        host: services.host,
+        tracing_register_callsite: services.tracing_register_callsite,
+        tracing_enabled: services.tracing_enabled,
+        tracing_emit: services.tracing_emit,
+        pubsub_publish: services.pubsub_publish,
+        schema_register: services.schema_register,
+        schema_lookup: services.schema_lookup,
+        iceoryx_log_emit: services.iceoryx_log_emit,
+        processor_register: services.processor_register,
+        runtime_context_vtable: services.runtime_context_vtable,
+        audio_clock_vtable: services.audio_clock_vtable,
+        runtime_ops_vtable: services.runtime_ops_vtable,
+        gpu_context_limited_access_vtable: services.gpu_context_limited_access_vtable,
+        surface_store_vtable: services.surface_store_vtable,
+        gpu_context_full_access_vtable: services.gpu_context_full_access_vtable,
+        texture_ring_methods_vtable: services.texture_ring_methods_vtable,
+        vulkan_compute_kernel_methods_vtable: services.vulkan_compute_kernel_methods_vtable,
+        vulkan_graphics_kernel_methods_vtable: services.vulkan_graphics_kernel_methods_vtable,
+        vulkan_ray_tracing_kernel_methods_vtable: services.vulkan_ray_tracing_kernel_methods_vtable,
+        vulkan_acceleration_structure_methods_vtable: services
+            .vulkan_acceleration_structure_methods_vtable,
+        rhi_color_converter_methods_vtable: services.rhi_color_converter_methods_vtable,
+        rhi_command_recorder_methods_vtable: services.rhi_command_recorder_methods_vtable,
+        output_writer_vtable: services.output_writer_vtable,
+        input_mailboxes_vtable: services.input_mailboxes_vtable,
+        present_target_methods_vtable: services.present_target_methods_vtable,
+        video_encoder_session_methods_vtable: services.video_encoder_session_methods_vtable,
+        video_decoder_session_methods_vtable: services.video_decoder_session_methods_vtable,
+        host_timeline_semaphore_methods_vtable: services.host_timeline_semaphore_methods_vtable,
+        vulkan_texture_readback_methods_vtable: services.vulkan_texture_readback_methods_vtable,
     }
 }
+// twin-guard(host-callbacks-field-map): END
 
 #[cfg(test)]
 pub(crate) mod host_services_test_support {
-    //! One `HostServices` stand-in for the in-crate tests that need a callback
-    //! table without a live host.
+    //! A `HostServices` stand-in for in-crate tests that need a callback table
+    //! without a live host.
+    //!
+    //! Not the crate's only one: `layout_skew_diagnostic.rs` carries its own
+    //! copy on purpose. That file is a logic-identical twin of the engine-free
+    //! SDK's, and its fixture sits INSIDE the guarded region — calling out to a
+    //! shared builder would leave two unguarded builders free to drift while
+    //! the twin guard still saw identical call text.
 
     use super::*;
     use streamlib_plugin_abi::HOST_SERVICES_LAYOUT_VERSION;
@@ -439,10 +451,27 @@ pub(crate) mod host_services_test_support {
         0
     }
 
+    /// A [`HostCallbacks`] whose `host` + `pubsub_publish` are the caller's,
+    /// every other callback an unused stub, and every inner vtable null.
+    ///
+    /// Built through the same version-matching [`HostServices`] +
+    /// [`host_callbacks_from_validated_host_services`] path `install_host_services`
+    /// takes, so a test's callback table can never be a shape the real install
+    /// would not produce.
+    pub(crate) fn host_callbacks_with_capturing_pubsub_publish(
+        host: HostHandle,
+        pubsub_publish: unsafe extern "C" fn(HostHandle, *const u8, usize, *const u8, usize),
+    ) -> HostCallbacks {
+        host_callbacks_from_validated_host_services(&host_services_with_capturing_pubsub_publish(
+            host,
+            pubsub_publish,
+        ))
+    }
+
     /// A version-matching [`HostServices`] whose `host` + `pubsub_publish` are
     /// the caller's, every other callback an unused stub, and every inner
     /// vtable null.
-    pub(crate) fn host_services_with_capturing_pubsub_publish(
+    fn host_services_with_capturing_pubsub_publish(
         host: HostHandle,
         pubsub_publish: unsafe extern "C" fn(HostHandle, *const u8, usize, *const u8, usize),
     ) -> HostServices {
@@ -555,7 +584,7 @@ pub unsafe fn install_host_services(host_services_ptr: *const c_void) -> Option<
         return None;
     }
 
-    let callbacks = HostCallbacks::from(services);
+    let callbacks = host_callbacks_from_validated_host_services(services);
 
     // Cache the callbacks BEFORE installing tracing — the
     // `ForwardingSubscriber` reads `HOST_CALLBACKS` on every emit.
