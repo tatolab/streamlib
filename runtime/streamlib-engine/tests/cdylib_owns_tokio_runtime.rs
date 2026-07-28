@@ -26,9 +26,9 @@ use serde_json::json;
 use serial_test::serial;
 use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::module_ident_any_version;
+use streamlib::sdk::processor_type_ref;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
-use streamlib::sdk::schema_ident;
 use streamlib_engine::core::runtime::host_target_triple;
 
 fn copy_dir_contents(src: &Path, dst: &Path) {
@@ -117,7 +117,7 @@ fn dlopen_processor_owns_tokio_runtime_and_binds_tcp_listener() {
             "add_module_with ManifestDirectory must succeed against a real test-fixtures cdylib",
         );
 
-    let ident = schema_ident!("tatolab", "test-fixtures", "TcpBindTestProcessor", "1.0.0");
+    let ident = processor_type_ref!("tatolab", "test-fixtures", "TcpBindTestProcessor");
 
     runtime
         .add_processor(ProcessorSpec::new(

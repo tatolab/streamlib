@@ -19,7 +19,9 @@ use std::collections::HashMap;
 use streamlib::sdk::App;
 use streamlib::sdk::context::RuntimeContextFullAccess;
 use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::processors::{Config, GeneratedProcessor, ManualProcessor, ProcessorSpec, ProcessorTypeReference};
+use streamlib::sdk::processors::{
+    Config, GeneratedProcessor, ManualProcessor, ProcessorSpec, ProcessorTypeReference,
+};
 use streamlib::sdk::runtime::Runner;
 
 // =============================================================================
@@ -51,7 +53,10 @@ manual_fixture!(EquivAlpha, "@tatolab/app-sugar-test/EquivAlpha");
 manual_fixture!(EquivBeta, "@tatolab/app-sugar-test/EquivBeta");
 manual_fixture!(PassthroughNode, "@tatolab/app-sugar-test/PassthroughNode");
 manual_fixture!(MaterializeNode, "@tatolab/app-sugar-test/MaterializeNode");
-manual_fixture!(IgnoredConnectNode, "@tatolab/app-sugar-test/IgnoredConnectNode");
+manual_fixture!(
+    IgnoredConnectNode,
+    "@tatolab/app-sugar-test/IgnoredConnectNode"
+);
 
 /// Register a `#[processor]` host type live under `@session/<name>` and derive
 /// the version-free reference that resolves it — the same reference shape
@@ -66,11 +71,7 @@ where
         .add_local_blocking::<P>(serde_json::Value::Null)
         .expect("session registration must succeed");
     let descriptor = P::descriptor().expect("fixture exposes a descriptor");
-    ProcessorTypeReference::ResolveToInstalled {
-        org: loaded.ident.org,
-        package: loaded.ident.name,
-        r#type: descriptor.name.r#type,
-    }
+    ProcessorTypeReference::new(loaded.ident.org, loaded.ident.name, descriptor.name.r#type)
 }
 
 /// Replace each captured concrete id with its positional token so two graphs
@@ -97,8 +98,12 @@ fn app_add_matches_runner_add_processor_snapshot() {
 
     // App-built graph.
     let app = App::new().expect("App::new");
-    let app_alpha = app.add(alpha_ref.clone(), config.clone()).expect("app add alpha");
-    let app_beta = app.add(beta_ref.clone(), config.clone()).expect("app add beta");
+    let app_alpha = app
+        .add(alpha_ref.clone(), config.clone())
+        .expect("app add alpha");
+    let app_beta = app
+        .add(beta_ref.clone(), config.clone())
+        .expect("app add beta");
     let app_snapshot = normalize_ids(
         &app.runner().to_json().expect("app graph json"),
         &[app_alpha.to_string(), app_beta.to_string()],
@@ -273,8 +278,12 @@ fn app_connect_between_real_processors_on_valid_ports_returns_ok() {
     let sink_ref = register_ported_type("AppConnectOkSink", "video_in", "_unused_out");
 
     let app = App::new().expect("App::new");
-    let source = app.add(source_ref, serde_json::json!({})).expect("app add source");
-    let sink = app.add(sink_ref, serde_json::json!({})).expect("app add sink");
+    let source = app
+        .add(source_ref, serde_json::json!({}))
+        .expect("app add source");
+    let sink = app
+        .add(sink_ref, serde_json::json!({}))
+        .expect("app add sink");
 
     // The ids `App` handed back are the default uppercase-leading form — the
     // shape that pre-fix produced `InvalidLink` for every real connect.
@@ -324,11 +333,11 @@ fn add_rejects_a_non_serializable_config() {
 
     // The config is encoded before the reference is ever resolved, so any
     // reference works — the serialization error must fire first.
-    let reference = ProcessorTypeReference::ResolveToInstalled {
-        org: Org::new("tatolab").unwrap(),
-        package: Package::new("app-sugar-test").unwrap(),
-        r#type: TypeName::new("Whatever").unwrap(),
-    };
+    let reference = ProcessorTypeReference::new(
+        Org::new("tatolab").unwrap(),
+        Package::new("app-sugar-test").unwrap(),
+        TypeName::new("Whatever").unwrap(),
+    );
 
     let app = App::new().expect("App::new");
     // A compound (tuple) map key cannot become a JSON object key — `to_value`
@@ -360,7 +369,11 @@ fn connect_to_nonexistent_port_surfaces_processor_port_not_found() {
         .expect_err("connecting a nonexistent port must fail");
 
     match error {
-        Error::ProcessorPortNotFound { port_name, direction, .. } => {
+        Error::ProcessorPortNotFound {
+            port_name,
+            direction,
+            ..
+        } => {
             assert_eq!(port_name, "no_such_out");
             assert_eq!(direction, PortDirection::Output);
         }

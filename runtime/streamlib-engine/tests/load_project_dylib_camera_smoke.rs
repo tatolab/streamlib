@@ -92,9 +92,9 @@ use std::time::Duration;
 use serde_json::json;
 use serial_test::serial;
 use streamlib::sdk::module_ident_any_version;
+use streamlib::sdk::processor_type_ref;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
-use streamlib::sdk::schema_ident;
 use streamlib_engine::core::runtime::host_target_triple;
 
 fn copy_dir_contents(src: &Path, dst: &Path) {
@@ -189,7 +189,7 @@ fn dlopen_camera_processor_completes_lifecycle_against_vivid() {
         )
         .expect("add_module_with must succeed against the camera cdylib");
 
-    let ident = schema_ident!("tatolab", "camera", "Camera", "1.0.0");
+    let ident = processor_type_ref!("tatolab", "camera", "Camera");
 
     // vivid is at `/dev/video0` on this host. The streamlib testing
     // doc names `/dev/video2`, but that's a different vivid class

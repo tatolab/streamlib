@@ -216,24 +216,22 @@ pub mod sdk {
     pub use streamlib_engine::schema_ident_any_version;
 
     /// `streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")` —
-    /// strict version-pinning form. Short form of
-    /// [`SchemaIdent::new`](descriptors::SchemaIdent::new). Reach for
-    /// this only when you have a deliberate reason to refuse
-    /// newer-but-compatible registered versions; otherwise prefer
-    /// [`schema_ident_any_version!`].
+    /// compile-time-validated short form of
+    /// [`SchemaIdent::new`](descriptors::SchemaIdent::new), for the *resolved*
+    /// identities that carry a version: lockfile entries, registry keys,
+    /// package resolution. It is not how code references a processor — pass one
+    /// to `ProcessorSpec::new` and the version is dropped. Use
+    /// [`processor_type_ref!`] to name a processor.
     pub use streamlib_engine::schema_ident;
 
-    /// `streamlib::sdk::processor_type_ref!("org", "package", "Type")` — a
-    /// **version-free** processor-type reference for the lazy-discovery world
-    /// (app code that never calls `add_module`). Validates `(org, package,
-    /// type)` at compile time and expands to a
-    /// [`ProcessorTypeReference::ResolveToInstalled`](processors::ProcessorTypeReference)
-    /// with no version and **no registry lookup at the call site**, so the
-    /// reference reaches `add_processor`'s lazy hook and resolves to the
-    /// single installed provider — loading its package from
-    /// `streamlib_modules/` on first reference. This is the canonical form for
-    /// referencing a processor by `@org/package/Type` with no version; prefer
-    /// it over [`schema_ident_any_version!`] when you want lazy loading.
+    /// `streamlib::sdk::processor_type_ref!("org", "package", "Type")` — the
+    /// canonical way to name a processor. Validates `(org, package, type)` at
+    /// compile time and expands to a
+    /// [`ProcessorTypeReference`](processors::ProcessorTypeReference), which
+    /// carries no version and does **no registry lookup at the call site**, so
+    /// the reference reaches `add_processor`'s lazy hook and resolves to the
+    /// installed provider — loading its package from `streamlib_modules/` on
+    /// first reference.
     pub use streamlib_engine::processor_type_ref;
 
     /// `streamlib::sdk::module_ident!("org", "name", "^1.0.0")` —

@@ -1386,8 +1386,8 @@ impl ProcessorInstanceFactory {
     /// The one-installed-version-per-package invariant means at most one
     /// version is registered for a tuple in a process; if more than one
     /// somehow is, the highest `SemVer` wins deterministically. This is the
-    /// terminal resolution for a version-free
-    /// [`ProcessorTypeReference::ResolveToInstalled`](crate::core::processors::ProcessorTypeReference),
+    /// terminal resolution for a
+    /// [`ProcessorTypeReference`](crate::core::processors::ProcessorTypeReference),
     /// distinct from [`Self::resolve_any_version`] (which the version-omitting
     /// call-site macro uses against already-registered types).
     pub fn resolve_installed_processor_type(
@@ -1626,14 +1626,14 @@ mod tests {
             .register_descriptor_only(unit_descriptor(registered.clone()))
             .expect("register the api-server descriptor at the 0.0.0 sentinel");
 
-        // The fix's arm: a version-free `ResolveToInstalled` reference resolves
-        // `(org, package, type)` to the concrete 0.0.0 registration, and that
-        // ident carries a `port_info` entry — so `add_v` resolves the node.
-        let version_free = ProcessorTypeReference::ResolveToInstalled {
-            org: Org::new("tatolab").unwrap(),
-            package: Package::new("api-server").unwrap(),
-            r#type: TypeName::new("ApiServer").unwrap(),
-        };
+        // A reference resolves `(org, package, type)` to the concrete 0.0.0
+        // registration, and that ident carries a `port_info` entry — so `add_v`
+        // resolves the node.
+        let version_free = ProcessorTypeReference::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("api-server").unwrap(),
+            TypeName::new("ApiServer").unwrap(),
+        );
         let resolved = factory.resolve_installed_processor_type(
             version_free.org(),
             version_free.package(),
@@ -1649,12 +1649,13 @@ mod tests {
             "the resolved ident must carry a port_info entry so add_v resolves the node"
         );
 
-        // The reverted-bug arm: the old `schema_ident!(…, \"1.0.0\")` produced a
-        // `VersionPinned(@1.0.0)` reference, which `add_v` resolves version-EXACT
-        // via `port_info`. Against a 0.0.0-only registration that lookup misses —
-        // the node would be added in Error state and the api-server would never
-        // compile (→ /health never served). Mentally reverting main.rs to the
-        // pinned form reproduces exactly this miss.
+        // Why a reference may not carry a version: the registry is version-EXACT,
+        // and a code-declared processor registers under the 0.0.0 version-free
+        // sentinel. A reference pinned at 1.0.0 therefore missed a processor that
+        // was loaded and registered — the api-server booted with its node in
+        // Error state and never served /health. `ProcessorTypeReference` has no
+        // version field now, so that reference cannot be written; this locks the
+        // exactness that made it fatal.
         let one_zero_zero = ident("tatolab", "api-server", "ApiServer", SemVer::new(1, 0, 0));
         assert!(
             factory.port_info(&one_zero_zero).is_none(),
