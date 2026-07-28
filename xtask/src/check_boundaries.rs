@@ -1087,7 +1087,8 @@ fn check_packages_engine_reach(
         }
         // A package's TOP-LEVEL tests/ or benches/ dir is exempt — engine-backed
         // integration tests / benchmarks belong there (check 8 blesses the
-        // dev-dep). `src/` stays strict everywhere, including a `src/tests/`
+        // dev-dep). Every other root a package authors under (`processors/`, or
+        // `src/` for a host package) stays strict, including a nested `tests/`
         // helper dir and `#[cfg(test)]` mods.
         if package_top_level_test_or_bench_dir(rel) {
             continue;
@@ -2634,7 +2635,7 @@ streamlib = { version = "0.6.0" }
         // reach forms pass.
         write_fixture(
             dir.path(),
-            "packages/test-fixtures/src/gpu_fixture.rs",
+            "packages/test-fixtures/processors/gpu_fixture.rs",
             "use streamlib::sdk::engine::host_rhi::VulkanDevice;\nfn f() { let d = full.host_vulkan_device_arc().unwrap(); }\n",
         );
         let report = scan_all(dir.path()).unwrap();

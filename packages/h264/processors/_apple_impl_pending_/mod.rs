@@ -10,11 +10,11 @@
 //! imports and do not compile against the package's public-SDK-only
 //! surface yet — when Apple support is activated for `@tatolab/h264`,
 //! rewire the imports the same way the Linux side already did
-//! (`packages/h264/src/linux/encoder.rs` is the reference).
+//! (`packages/h264/processors/linux/encoder.rs` is the reference).
 //!
-//! The directory is gated behind `#[cfg(any())]` in `lib.rs` so it
-//! never compiles. See `packages/mp4/src/_apple_impl_pending_/` for
-//! the same pattern.
+//! The file-level `#![cfg(any())]` above gates the whole directory so it
+//! never compiles. See `packages/mp4/processors/_apple_impl_pending_/`
+//! for the same pattern.
 
 pub mod core_codec;
 pub mod videotoolbox;

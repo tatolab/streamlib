@@ -373,6 +373,16 @@ mod tests {
         assert!(is_example_src_file(Path::new(
             "/abs/examples/camera-rust-plugin/plugin/src/lib.rs"
         )));
+        // Folder-backed plugin sub-package: the authored root is
+        // examples/<crate>/plugin/processors/, not src/ — narrowing the roots
+        // back to `src` alone takes every swept example crate out of the lint's
+        // reach with no failure anywhere.
+        assert!(is_example_src_file(Path::new(
+            "/abs/examples/camera-rust-plugin/plugin/processors/grayscale_linux.rs"
+        )));
+        assert!(is_example_src_file(Path::new(
+            "/abs/examples/camera-python-display/effects/processors/tone_mapper.rs"
+        )));
         // libs/ tests legitimately build expected SchemaIdent values:
         assert!(!is_example_src_file(Path::new(
             "/abs/runtime/streamlib-engine/tests/schema_ident_macro_test.rs"

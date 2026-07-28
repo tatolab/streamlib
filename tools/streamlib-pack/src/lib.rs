@@ -1099,46 +1099,28 @@ fn apply_link_checkout_env(command: &mut Command, link_checkout: Option<&Path>) 
     };
     command.env(streamlib_idents::LINK_CHECKOUT_ENV, value);
 }
+
 /// Write the folder-backed crate root a package's `[lib] path` points at.
 ///
 /// A package that commits its own crate root (no `[lib] path` at the generated
 /// location) is left alone — generation is opt-in per package, keyed on the
 /// manifest, so a hand-rooted crate is never overwritten.
 fn generate_folder_backed_crate_root(pkg_dir: &Path) -> Result<()> {
+    let declares_generated_crate_root =
+        streamlib_processor_extract::crate_root::package_declares_generated_crate_root(pkg_dir)
+            .with_context(|| format!("reading Cargo manifest at {}", pkg_dir.display()))?;
+    if !declares_generated_crate_root {
+        return Ok(());
+    }
     let request =
         streamlib_processor_extract::crate_root::RustCrateRootGenerationRequest::for_package_dir(
             pkg_dir,
         )
         .with_context(|| format!("reading Cargo manifest at {}", pkg_dir.display()))?;
-    if !package_declares_generated_crate_root(pkg_dir)? {
-        return Ok(());
-    }
     streamlib_processor_extract::crate_root::write_generated_rust_crate_root(&request)
         .with_context(|| format!("generating crate root for {}", pkg_dir.display()))?;
     Ok(())
 }
-
-/// Whether the package's `Cargo.toml` points `[lib] path` at the generated
-/// crate root.
-fn package_declares_generated_crate_root(pkg_dir: &Path) -> Result<bool> {
-    let manifest_path = pkg_dir.join("Cargo.toml");
-    let body = std::fs::read_to_string(&manifest_path)
-        .with_context(|| format!("reading {}", manifest_path.display()))?;
-    let manifest: toml::Value = body
-        .parse()
-        .with_context(|| format!("parsing {}", manifest_path.display()))?;
-    let expected = format!(
-        "{}/{}",
-        streamlib_processor_extract::crate_root::GENERATED_CRATE_ROOT_DIR_NAME,
-        streamlib_processor_extract::crate_root::GENERATED_CRATE_ROOT_FILE_NAME
-    );
-    Ok(manifest
-        .get("lib")
-        .and_then(|lib| lib.get("path"))
-        .and_then(|path| path.as_str())
-        .is_some_and(|path| path == expected))
-}
-
 
 fn cargo_build_streaming(
     pkg_dir: &Path,
