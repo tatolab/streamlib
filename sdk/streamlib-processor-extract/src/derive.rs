@@ -680,7 +680,13 @@ pub fn check_processor_manifest_drift(
             None => only_in_code.push((*name).to_string()),
             Some(committed_surface) => {
                 if code_surface != committed_surface {
-                    differing.push(describe_difference(name, committed_surface, code_surface));
+                    differing.push(describe_processor_surface_difference(
+                        name,
+                        COMMITTED_MANIFEST_SURFACE_LABEL,
+                        committed_surface,
+                        DERIVED_FROM_CODE_SURFACE_LABEL,
+                        code_surface,
+                    ));
                 }
             }
         }
@@ -705,57 +711,169 @@ pub fn check_processor_manifest_drift(
     })
 }
 
-/// One-line description of how two surfaces of the same-named processor differ.
-fn describe_difference(name: &str, manifest: &ProcessorSurface, code: &ProcessorSurface) -> String {
-    if manifest.execution != code.execution {
+/// How the committed `processors:` side of a comparison is named in a
+/// difference line.
+const COMMITTED_MANIFEST_SURFACE_LABEL: &str = "`processors:`";
+/// How the code-derived side of a comparison is named in a difference line.
+const DERIVED_FROM_CODE_SURFACE_LABEL: &str = "code";
+
+/// One-line description of how two identity surfaces of the same-named
+/// processor differ, each side named by `left_label` / `right_label`.
+///
+/// Two-sided rather than manifest-vs-code because the same disagreement is
+/// meaningful between two `processors/` arms declaring one processor id, where
+/// neither side is "the manifest" — see
+/// [`describe_divergent_processor_declarations`].
+pub fn describe_processor_surface_difference(
+    processor_type_name: &str,
+    left_label: &str,
+    left: &ProcessorSurface,
+    right_label: &str,
+    right: &ProcessorSurface,
+) -> String {
+    let name = processor_type_name;
+    if left.execution != right.execution {
         return format!(
-            "`{name}` execution differs: `processors:` says {:?}, code declares {:?}",
-            manifest.execution, code.execution
+            "`{name}` execution differs: {left_label} declares {:?}, {right_label} declares {:?}",
+            left.execution, right.execution
         );
     }
-    let manifest_inputs = port_names(&manifest.inputs);
-    let code_inputs = port_names(&code.inputs);
-    if manifest_inputs != code_inputs {
+    let left_inputs = port_names(&left.inputs);
+    let right_inputs = port_names(&right.inputs);
+    if left_inputs != right_inputs {
         return format!(
-            "`{name}` input ports differ: `processors:` has [{}], code declares [{}]",
-            manifest_inputs.join(", "),
-            code_inputs.join(", ")
+            "`{name}` input ports differ: {left_label} declares [{}], {right_label} declares [{}]",
+            left_inputs.join(", "),
+            right_inputs.join(", ")
         );
     }
-    let manifest_outputs = port_names(&manifest.outputs);
-    let code_outputs = port_names(&code.outputs);
-    if manifest_outputs != code_outputs {
+    let left_outputs = port_names(&left.outputs);
+    let right_outputs = port_names(&right.outputs);
+    if left_outputs != right_outputs {
         return format!(
-            "`{name}` output ports differ: `processors:` has [{}], code declares [{}]",
-            manifest_outputs.join(", "),
-            code_outputs.join(", ")
+            "`{name}` output ports differ: {left_label} declares [{}], {right_label} declares [{}]",
+            left_outputs.join(", "),
+            right_outputs.join(", ")
         );
     }
     // Port names match on both sides, so the surfaces zip by position; the only
     // remaining difference is a port that kept its name but changed schema type.
     // Name the port and both types so the author knows exactly what moved.
-    let differing_port = manifest
+    let differing_port = left
         .inputs
         .iter()
-        .zip(&code.inputs)
-        .map(|(manifest_port, code_port)| ("input", manifest_port, code_port))
+        .zip(&right.inputs)
+        .map(|(left_port, right_port)| ("input", left_port, right_port))
         .chain(
-            manifest
-                .outputs
+            left.outputs
                 .iter()
-                .zip(&code.outputs)
-                .map(|(manifest_port, code_port)| ("output", manifest_port, code_port)),
+                .zip(&right.outputs)
+                .map(|(left_port, right_port)| ("output", left_port, right_port)),
         )
-        .find(|(_, manifest_port, code_port)| manifest_port.schema != code_port.schema);
-    if let Some((direction, manifest_port, code_port)) = differing_port {
+        .find(|(_, left_port, right_port)| left_port.schema != right_port.schema);
+    if let Some((direction, left_port, right_port)) = differing_port {
         return format!(
-            "`{name}` {direction} port `{}` schema type differs: `processors:` says {}, code declares {}",
-            manifest_port.name,
-            describe_port_schema(&manifest_port.schema),
-            describe_port_schema(&code_port.schema),
+            "`{name}` {direction} port `{}` schema type differs: {left_label} declares {}, \
+             {right_label} declares {}",
+            left_port.name,
+            describe_port_schema(&left_port.schema),
+            describe_port_schema(&right_port.schema),
         );
     }
-    format!("`{name}` port schema types differ between `processors:` and code")
+    format!("`{name}` port schema types differ between {left_label} and {right_label}")
+}
+
+/// How two `#[processor(...)]` declarations sharing one `Type` name disagree,
+/// or `None` when they derive byte-identical manifest entries.
+///
+/// The comparison surface is the WHOLE derived projection — the full
+/// `@org/package/Type` identity, the [`ProcessorSchema`] the manifest entry is
+/// built from, and the config binding — not the lossy drift surface. A
+/// `processors:` section is derived from whichever arm the publishing host
+/// compiles, so a difference in any of those fields (not just ports) makes the
+/// shipped manifest host-dependent.
+pub(crate) fn describe_divergent_processor_declarations(
+    first: &ExtractedProcessor,
+    second: &ExtractedProcessor,
+) -> Option<String> {
+    let name = first.schema.name.as_str();
+    let first_label = first.source_file.display().to_string();
+    let second_label = second.source_file.display().to_string();
+
+    if first.schema_ident != second.schema_ident {
+        return Some(format!(
+            "`{name}` identity differs: {first_label} declares `{}`, {second_label} declares `{}`",
+            first.schema_ident, second.schema_ident
+        ));
+    }
+
+    let first_surface = ProcessorSurface::from_extracted(first);
+    let second_surface = ProcessorSurface::from_extracted(second);
+    if first_surface != second_surface {
+        return Some(describe_processor_surface_difference(
+            name,
+            &first_label,
+            &first_surface,
+            &second_label,
+            &second_surface,
+        ));
+    }
+
+    if first.config_schema_id != second.config_schema_id {
+        return Some(format!(
+            "`{name}` config binding differs: {first_label} declares {}, {second_label} declares {}",
+            describe_optional_config_schema_id(first.config_schema_id.as_deref()),
+            describe_optional_config_schema_id(second.config_schema_id.as_deref()),
+        ));
+    }
+
+    // Everything the identity surface deliberately drops — description,
+    // scheduling, `unsafe_send`, state — still lands in the derived manifest
+    // entry verbatim, so the two projections are compared whole. Serialized
+    // rather than field-by-field so a field added to `ProcessorSchema` is
+    // covered without an edit here.
+    let first_projection = serde_json::to_value(&first.schema).ok()?;
+    let second_projection = serde_json::to_value(&second.schema).ok()?;
+    if first_projection == second_projection {
+        return None;
+    }
+    let differing_fields = differing_manifest_projection_field_names(
+        first_projection.as_object()?,
+        second_projection.as_object()?,
+    );
+    Some(format!(
+        "`{name}` manifest entries differ in {}: {first_label} and {second_label} derive \
+         different `processors:` entries",
+        differing_fields.join(", ")
+    ))
+}
+
+/// The `processors:` entry fields two whole-projection JSON objects disagree
+/// on, backtick-quoted and sorted.
+fn differing_manifest_projection_field_names(
+    first: &serde_json::Map<String, serde_json::Value>,
+    second: &serde_json::Map<String, serde_json::Value>,
+) -> Vec<String> {
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    for (field, value) in first {
+        if second.get(field) != Some(value) {
+            names.insert(format!("`{field}`"));
+        }
+    }
+    for field in second.keys() {
+        if !first.contains_key(field) {
+            names.insert(format!("`{field}`"));
+        }
+    }
+    names.into_iter().collect()
+}
+
+/// Render a processor's optional config-schema binding for a difference line.
+fn describe_optional_config_schema_id(config_schema_id: Option<&str>) -> String {
+    match config_schema_id {
+        None => "no config".to_string(),
+        Some(id) => format!("`{id}`"),
+    }
 }
 
 fn port_names(ports: &[PortSurface]) -> Vec<String> {
@@ -1279,9 +1397,46 @@ processors:
             outputs: vec![],
         };
 
-        let message = describe_difference("Mixer", &manifest, &code);
+        let message = describe_processor_surface_difference(
+            "Mixer",
+            COMMITTED_MANIFEST_SURFACE_LABEL,
+            &manifest,
+            DERIVED_FROM_CODE_SURFACE_LABEL,
+            &code,
+        );
         assert!(message.contains("input port `frame`"), "{message}");
-        assert!(message.contains("VideoFrame"), "{message}");
-        assert!(message.contains("AudioFrame"), "{message}");
+        assert!(
+            message.contains("`processors:` declares `VideoFrame`"),
+            "{message}"
+        );
+        assert!(message.contains("code declares `AudioFrame`"), "{message}");
+    }
+
+    /// The same comparator, given two `processors/` arm labels instead of
+    /// manifest-vs-code, names the arms rather than "`processors:`" / "code".
+    /// One diagnostic serves both callers; a second copy would drift.
+    #[test]
+    fn the_surface_comparator_names_whichever_two_sides_it_is_given() {
+        let surface = |execution| ProcessorSurface {
+            name: "AudioCapture".to_string(),
+            execution,
+            inputs: vec![],
+            outputs: vec![],
+        };
+        let message = describe_processor_surface_difference(
+            "AudioCapture",
+            "processors/linux/audio_capture.rs",
+            &surface(ProcessorSchemaExecution::Manual),
+            "processors/apple/audio_capture.rs",
+            &surface(ProcessorSchemaExecution::Reactive),
+        );
+        assert!(
+            message.contains("processors/linux/audio_capture.rs declares Manual"),
+            "{message}"
+        );
+        assert!(
+            message.contains("processors/apple/audio_capture.rs declares Reactive"),
+            "{message}"
+        );
     }
 }

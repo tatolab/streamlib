@@ -32,7 +32,8 @@ use std::path::{Path, PathBuf};
 use streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME as PROCESSOR_SOURCE_DIR_NAME;
 
 use crate::reachable::{
-    ProcessorSourceModuleArm, enumerate_processor_source_module_arms,
+    ProcessorSetAcrossEveryBuildTarget, ProcessorSourceModuleArm, conjoin_cfg_predicates,
+    disjoin_distinct_cfg_predicates, enumerate_processor_source_module_arms,
     extract_processors_across_every_build_target,
 };
 use crate::{ExtractError, ExtractedProcessor};
@@ -302,7 +303,7 @@ pub fn generate_rust_crate_root_source(
     let processors = if request.emits_plugin_export_envelope {
         extract_processors_across_every_build_target(request.package_dir)?
     } else {
-        Vec::new()
+        ProcessorSetAcrossEveryBuildTarget::default()
     };
 
     let mut source = String::new();
@@ -331,7 +332,7 @@ pub fn generate_rust_crate_root_source(
     if request.emits_plugin_export_envelope
         && let Some(envelope) = render_plugin_export_envelope(&processors)
     {
-        exported_processor_entry_count = processors.len();
+        exported_processor_entry_count = processors.processor_declarations.len();
         source.push('\n');
         source.push_str(&envelope);
     }
@@ -445,61 +446,43 @@ fn render_module_arm_declaration(arm: &ProcessorSourceModuleArm) -> String {
 /// processor on any target (a cdylib whose only arm is parked ships no
 /// `STREAMLIB_PLUGIN` symbol, which is what it did before folder-backed
 /// discovery too).
-fn render_plugin_export_envelope(processors: &[ExtractedProcessor]) -> Option<String> {
-    if processors.is_empty() {
+fn render_plugin_export_envelope(
+    processors: &ProcessorSetAcrossEveryBuildTarget,
+) -> Option<String> {
+    if processors.processor_declarations.is_empty() {
         return None;
     }
-
-    let entries: Vec<(Option<String>, String)> = processors
-        .iter()
-        .map(|processor| {
-            (
-                conjoin_cfg_predicates(&processor.cfg_predicates),
-                processor_export_type_path(processor),
-            )
-        })
-        .collect();
 
     let mut out = String::new();
     // The declaration must not be emitted on a target that compiles none of
     // these entries: `export_plugin!` anchors its fingerprint on the first
-    // surviving entry, and an all-stripped invocation is a compile error. An
-    // unconditional entry makes the gate unnecessary.
-    if entries.iter().all(|(predicate, _)| predicate.is_some()) {
-        let mut distinct: Vec<&str> = Vec::new();
-        for predicate in entries
-            .iter()
-            .filter_map(|(predicate, _)| predicate.as_deref())
-        {
-            if !distinct.contains(&predicate) {
-                distinct.push(predicate);
-            }
-        }
-        let gate = match distinct.as_slice() {
-            [single] => (*single).to_string(),
-            many => format!("any({})", many.join(", ")),
-        };
+    // surviving entry, and an all-stripped invocation is a compile error. The
+    // gate is therefore "some processor is available here", which is exactly the
+    // disjunction of the per-processor availability predicates — an
+    // unconditionally-available processor makes it unnecessary.
+    if let Some(gate) = plugin_export_envelope_gate(processors) {
         let _ = writeln!(out, "#[cfg({gate})]");
     }
     out.push_str("streamlib_plugin_abi::export_plugin!(\n");
-    for (predicate, type_path) in &entries {
-        if let Some(predicate) = predicate {
+    for processor in &processors.processor_declarations {
+        if let Some(predicate) = conjoin_cfg_predicates(&processor.cfg_predicates) {
             let _ = writeln!(out, "    #[cfg({predicate})]");
         }
-        let _ = writeln!(out, "    {type_path},");
+        let _ = writeln!(out, "    {},", processor_export_type_path(processor));
     }
     out.push_str(");\n");
     Some(out)
 }
 
-/// Fold the `#[cfg]` predicates in force at a processor into one predicate.
-/// Several nested predicates are ANDed the way `rustc` applies them.
-fn conjoin_cfg_predicates(predicates: &[String]) -> Option<String> {
-    match predicates {
-        [] => None,
-        [single] => Some(single.clone()),
-        many => Some(format!("all({})", many.join(", "))),
-    }
+/// The `#[cfg(...)]` the whole `export_plugin!` invocation carries, or `None`
+/// when at least one processor is available unconditionally.
+fn plugin_export_envelope_gate(processors: &ProcessorSetAcrossEveryBuildTarget) -> Option<String> {
+    let availability_predicates: Option<Vec<&str>> = processors
+        .processor_availability
+        .iter()
+        .map(|entry| entry.availability_cfg_predicate.as_deref())
+        .collect();
+    Some(disjoin_distinct_cfg_predicates(availability_predicates?))
 }
 
 /// The path an `export_plugin!` entry names: the module path from the crate

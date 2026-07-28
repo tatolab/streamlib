@@ -37,7 +37,7 @@ pub(crate) mod scan_fixture_tempdir;
 use std::path::{Path, PathBuf};
 
 use streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME as PROCESSOR_SOURCE_DIR_NAME;
-use streamlib_processor_schema::ProcessorSchema;
+use streamlib_processor_schema::{ProcessorSchema, SchemaIdent};
 
 pub use crate_root::{
     GeneratedCrateRootSource, RustCrateRootGenerationRequest, generate_rust_crate_root_source,
@@ -47,13 +47,16 @@ pub use derive::{
     DeriveError, DerivedProcessorSet, ExtractedManifestPort, ExtractedManifestProcessor,
     ManifestDriftReport, PackageLanguage, PortSchemaSurface, PortSurface, ProcessorSurface,
     SkippedLanguage, SubprocessProcessorExtractor, SystemSubprocessProcessorExtractor,
-    check_processor_manifest_drift, derive_package_processor_surfaces, detect_package_languages,
-    filter_committed_to_languages, parse_subprocess_manifest_json_full,
+    check_processor_manifest_drift, derive_package_processor_surfaces,
+    describe_processor_surface_difference, detect_package_languages, filter_committed_to_languages,
+    parse_subprocess_manifest_json_full,
 };
 pub use grammar::{ParsedPort, ParsedProcessorAttr};
 pub use reachable::{
-    ModuleReachabilityTarget, ProcessorSourceModuleArm, enumerate_processor_source_module_arms,
-    extract_processors_across_every_build_target, extract_reachable_rust_processors,
+    ModuleReachabilityTarget, ProcessorAvailabilityAcrossBuildTargets,
+    ProcessorSetAcrossEveryBuildTarget, ProcessorSourceModuleArm,
+    enumerate_processor_source_module_arms, extract_processors_across_every_build_target,
+    extract_reachable_rust_processors,
 };
 
 /// One processor derived from a `#[processor(...)]` attribute in source.
@@ -68,6 +71,11 @@ pub use reachable::{
 pub struct ExtractedProcessor {
     /// The manifest-shaped processor schema derived from the attribute.
     pub schema: ProcessorSchema,
+    /// The full `@org/package/Type@version` identity the attribute declared.
+    /// [`ProcessorSchema`] keeps only the `Type` segment, so this is the only
+    /// place a scan consumer can tell two same-`Type` processors declared under
+    /// different `@org/package` apart.
+    pub schema_ident: SchemaIdent,
     /// The version-free config-schema identity the attribute declared (or
     /// synthesized from the config type), if the processor binds a config.
     pub config_schema_id: Option<String>,
@@ -178,6 +186,50 @@ pub enum ExtractError {
         module: String,
         declared_in: PathBuf,
         resolved: PathBuf,
+    },
+
+    /// Two `#[processor(...)]` declarations share one `Type` name and a single
+    /// build target compiles both. The plugin registry keys registration on that
+    /// name and skips the second registration at `debug`, so the surviving
+    /// processor is decided by arm order rather than by the author — and the
+    /// publish-time drift check, keyed by the same name, collapses the pair
+    /// before it ever compares. Refused at the scan, with a build target that
+    /// exhibits the overlap.
+    ///
+    /// Proven two ways, never guessed: a target-resolved scan that collects the
+    /// name twice reports the target it resolved against, and the
+    /// across-every-target scan reports a satisfying assignment it searched out
+    /// of the atoms the two arms' own predicates mention.
+    #[error(
+        "processor `{processor_type_name}` is declared twice for one build target \
+         ({witness_build_target_atoms}): {first_declared_in} and {second_declared_in} — \
+         that target compiles both arms and registers only the first; narrow one arm's \
+         `#[cfg(...)]` so the two are disjoint"
+    )]
+    OverlappingProcessorDeclarations {
+        processor_type_name: String,
+        first_declared_in: PathBuf,
+        second_declared_in: PathBuf,
+        /// The cfg atoms of a build target that compiles both declarations.
+        witness_build_target_atoms: String,
+    },
+
+    /// Two `#[processor(...)]` declarations share one `Type` name but derive
+    /// different manifest entries. The `processors:` section is derived from
+    /// whichever arm the publishing host compiles, so any difference at all —
+    /// identity, execution, ports, scheduling, description, config binding —
+    /// makes the shipped manifest depend on the publishing host.
+    #[error(
+        "processor `{processor_type_name}` is declared by two `processors/` arms that \
+         disagree, so the derived `processors:` section would depend on which arm the \
+         publishing host compiles: {difference}"
+    )]
+    DivergentProcessorDeclarations {
+        processor_type_name: String,
+        first_declared_in: PathBuf,
+        second_declared_in: PathBuf,
+        /// The named disagreement, labelled with each arm's source file.
+        difference: String,
     },
 }
 
@@ -351,6 +403,7 @@ pub(crate) fn parse_processor_attr(
 
     Ok(ExtractedProcessor {
         schema: parsed.to_processor_schema(),
+        schema_ident: parsed.ident.clone(),
         config_schema_id: parsed.config_schema_id.clone(),
         config_field_name: parsed.config_field_name.clone(),
         struct_name: struct_ident.to_string(),
