@@ -203,8 +203,9 @@ pub enum ExtractError {
     #[error(
         "processor `{processor_type_name}` is declared twice for one build target \
          ({witness_build_target_atoms}): {first_declared_in} and {second_declared_in} — \
-         that target compiles both arms and registers only the first; narrow one arm's \
-         `#[cfg(...)]` so the two are disjoint"
+         that target compiles both arms and derives one `processors:` entry from \
+         whichever the walk reached first; narrow one arm's `#[cfg(...)]` so the two \
+         are disjoint"
     )]
     OverlappingProcessorDeclarations {
         processor_type_name: String,
