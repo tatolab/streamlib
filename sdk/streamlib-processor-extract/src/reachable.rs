@@ -33,10 +33,11 @@
 //! is what lets the crate-root generator mirror the author's `#[cfg]` onto the
 //! `export_plugin!` entry verbatim rather than re-deriving a platform rule.
 //!
-//! Both walks then group what they collected by processor `Type` name — the key
-//! the plugin registry actually keys registration on — and refuse the two ways
-//! two arms declaring one processor can be wrong: they OVERLAP (some build
-//! target compiles both, so registration order decides which one ships) or they
+//! Both walks then group what they collected by processor `Type` name — the one
+//! segment the derived `processors:` entry keeps, and the segment the runtime
+//! re-composes each processor's ident from — and refuse the two ways two arms
+//! declaring one processor can be wrong: they OVERLAP (some build target
+//! compiles both, so walk order decides whose entry ships) or they
 //! DIVERGE (they derive different manifest entries, so the shipped
 //! `processors:` section depends on which arm the publishing host compiled). A
 //! GAP is not refused: a package legitimately declares a processor on some
@@ -590,10 +591,12 @@ fn resolve_processor_availability_across_build_targets(
 /// Declarations grouped by processor `Type` name, groups in first-declaration
 /// order and arms within a group in walk order.
 ///
-/// `Type` name rather than the full `@org/package/Type`: that is the key the
-/// plugin registry keys registration on, so two arms sharing a `Type` under
-/// different `@org/package` collide there and must be caught here rather than
-/// pass as two unrelated processors.
+/// `Type` name rather than the full `@org/package/Type`: the derived
+/// `processors:` entry keeps only that segment, and at load the runtime
+/// composes each processor's structured ident from the PACKAGE's own org / name
+/// plus it. Two arms sharing a `Type` therefore fold into one manifest entry
+/// and one composed ident whatever `@org/package` their attributes named, so
+/// they must be caught here rather than pass as two unrelated processors.
 fn group_declarations_by_processor_type_name(
     declarations: &[ExtractedProcessor],
 ) -> Vec<(&str, Vec<&ExtractedProcessor>)> {
@@ -2853,9 +2856,11 @@ mod tests {
     }
 
     /// Two arms sharing a `Type` under DIFFERENT `@org/package` are a
-    /// divergence, not two unrelated processors: the plugin registry keys
-    /// registration on the `Type` name alone, so they collide there. Mentally
-    /// drop the `SchemaIdent` off `ExtractedProcessor` and this passes silently.
+    /// divergence, not two unrelated processors: the derived `processors:`
+    /// entry drops the `@org/package` the attribute named, and the runtime
+    /// composes the ident from the package's own — so the two fold into one
+    /// entry either way. Mentally drop the `SchemaIdent` off
+    /// `ExtractedProcessor` and this passes silently.
     #[test]
     fn arms_sharing_a_type_under_different_packages_are_refused() {
         let tmp = tempdir();

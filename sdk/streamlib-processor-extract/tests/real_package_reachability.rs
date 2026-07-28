@@ -399,7 +399,7 @@ fn every_in_tree_package_passes_the_processor_id_grouping_checks() {
             .unwrap_or_else(|e| panic!("{}: {e}", package.display()));
 
         // Every declaration folds into exactly one availability entry, and no
-        // two entries share a `Type` — the registry's collision key.
+        // two entries share a `Type` — the `processors:` collision key.
         let distinct_type_names: BTreeSet<&str> = set
             .processor_declarations
             .iter()

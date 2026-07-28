@@ -189,12 +189,12 @@ pub enum ExtractError {
     },
 
     /// Two `#[processor(...)]` declarations share one `Type` name and a single
-    /// build target compiles both. The plugin registry keys registration on that
-    /// name and skips the second registration at `debug`, so the surviving
-    /// processor is decided by arm order rather than by the author — and the
-    /// publish-time drift check, keyed by the same name, collapses the pair
-    /// before it ever compares. Refused at the scan, with a build target that
-    /// exhibits the overlap.
+    /// build target compiles both. The derived `processors:` section keeps only
+    /// the `Type` segment, so the two collapse into ONE entry whose content is
+    /// decided by walk order rather than by the author — and the publish-time
+    /// drift check, keyed by the same name, collapses the pair before it ever
+    /// compares. Refused at the scan, with a build target that exhibits the
+    /// overlap.
     ///
     /// Proven two ways, never guessed: a target-resolved scan that collects the
     /// name twice reports the target it resolved against, and the

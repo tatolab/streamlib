@@ -158,10 +158,10 @@ under different `#[cfg]`, three things become possible. Two are refused at the
 scan; the third is the datum the scan now produces.
 
 **Overlap is refused, with a witness.** Two arms some build target compiles
-both of would register the same `Type` twice. The plugin registry's duplicate
-branch keeps whichever it saw first and logs at `debug`, and the drift check —
-keyed by the same `Type` name — collapses the pair before it compares, so the
-failure is silent at both seams. It is refused at the scan instead, proven two
+both of derive one `processors:` entry between them: the section keeps only the
+`Type` segment, so the entry that ships is whichever arm the walk reached first,
+and the drift check — keyed by that same name — collapses the pair before it
+compares. The failure is silent at both seams. It is refused at the scan instead, proven two
 independent ways. The target-resolved walk needs no reasoning: it resolved one
 concrete target and collected the name twice. The across-every-target walk
 brute-forces satisfiability of the two arms' conjoined predicates over only the
@@ -199,10 +199,13 @@ are authored rather than derived, while divergence compares two pieces of code
 that must derive the same entry. Port and execution differences are named by the
 same comparator the drift report uses, generalized from "manifest vs code" to a
 labelled two-sided comparison — one diagnostic with two callers, not two copies.
-Grouping is by `Type` name rather than the full identity because that is the key
-the registry keys registration on, so two arms sharing a `Type` under different
-`@org/package` collide there and surface here as a divergence rather than
-passing as two unrelated processors.
+Grouping is by `Type` name rather than the full identity because that is the
+only segment the derived entry keeps: the attribute's `@org/package` is dropped,
+and at load the runtime composes each processor's structured ident from the
+package's own org / name plus the short name. Two arms sharing a `Type` fold
+into one manifest entry and one composed ident whatever `@org/package` their
+attributes named, so they surface here as a divergence rather than passing as
+two unrelated processors.
 
 **A gap is not an error — it is availability.** A package that declares a
 processor on some targets and on none of the others is ordinary. Which targets
