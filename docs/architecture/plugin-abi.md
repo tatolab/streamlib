@@ -506,10 +506,10 @@ SDK crate — the facade `streamlib` or the engine-free
 Each `export_plugin!` entry may carry its own `#[cfg(...)]`, so one
 invocation describes every target the package builds for. The
 declaration is anchored by the FIRST entry that survives cfg-stripping
-(two `#[allow(unreachable_code)] const fn`s whose bodies are one
-cfg-gated `return` per entry) — every entry resolves the two consts
-against the same SDK crate, so the choice of anchor is free rather than
-semantic. That agreement is *enforced*, not assumed: the macro emits a
+(one `#[allow(unreachable_code)] const fn` returning the
+`(abi_layout_fingerprint, build_identity)` pair, its body one cfg-gated
+`return` per entry) — every entry resolves the two consts against the
+same SDK crate, so the choice of anchor is free rather than semantic. That agreement is *enforced*, not assumed: the macro emits a
 cfg-gated `const _: () = assert!(...)` per entry pinning its
 `__STREAMLIB_ABI_LAYOUT_FINGERPRINT` to the anchor's, so a cdylib mixing
 processors generated against the facade and against the engine-free SDK

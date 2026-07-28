@@ -1,8 +1,6 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-#![cfg(test)]
-
 //! Cdylib-safe plugin-load smoke for `@tatolab/debug-utilities`.
 //!
 //! The package is a source-only `.slpkg` built at load time against the
@@ -31,7 +29,7 @@ fn port_names(ports: &[PortDescriptor]) -> Vec<&str> {
 
 #[test]
 fn simple_passthrough_descriptor_loads() {
-    let descriptor = <crate::simple_passthrough::SimplePassthroughProcessor::Processor as GeneratedProcessor>::descriptor()
+    let descriptor = <streamlib_debug_utilities::simple_passthrough::SimplePassthroughProcessor::Processor as GeneratedProcessor>::descriptor()
         .expect("SimplePassthrough must expose a macro-generated descriptor");
 
     assert_eq!(descriptor.name.r#type.as_str(), "SimplePassthrough");
@@ -49,7 +47,7 @@ fn simple_passthrough_descriptor_loads() {
 
 #[test]
 fn live_video_frame_forwarder_descriptor_loads() {
-    let descriptor = <crate::live_video_frame_forwarder::LiveVideoFrameForwarderProcessor::Processor as GeneratedProcessor>::descriptor()
+    let descriptor = <streamlib_debug_utilities::live_video_frame_forwarder::LiveVideoFrameForwarderProcessor::Processor as GeneratedProcessor>::descriptor()
         .expect("LiveVideoFrameForwarder must expose a macro-generated descriptor");
 
     assert_eq!(descriptor.name.r#type.as_str(), "LiveVideoFrameForwarder");
@@ -67,7 +65,7 @@ fn live_video_frame_forwarder_descriptor_loads() {
 
 #[test]
 fn video_frame_counter_descriptor_loads() {
-    let descriptor = <crate::video_frame_counter::VideoFrameCounterProcessor::Processor as GeneratedProcessor>::descriptor()
+    let descriptor = <streamlib_debug_utilities::video_frame_counter::VideoFrameCounterProcessor::Processor as GeneratedProcessor>::descriptor()
         .expect("VideoFrameCounter must expose a macro-generated descriptor");
 
     assert_eq!(descriptor.name.r#type.as_str(), "VideoFrameCounter");
@@ -88,7 +86,7 @@ fn bgra_file_source_descriptor_loads_cdylib_safe() {
     // The regressed processor: this only compiles if `bgra_file_source`
     // stages through the pooled pixel buffer (pool id doubles as
     // `surface_id`) instead of the engine-only `TextureRing` CPU upload.
-    let descriptor = <crate::bgra_file_source::BgraFileSourceProcessor::Processor as GeneratedProcessor>::descriptor()
+    let descriptor = <streamlib_debug_utilities::bgra_file_source::BgraFileSourceProcessor::Processor as GeneratedProcessor>::descriptor()
         .expect("BgraFileSource must expose a macro-generated descriptor");
 
     assert_eq!(descriptor.name.r#type.as_str(), "BgraFileSource");
@@ -106,7 +104,7 @@ fn bgra_file_source_descriptor_loads_cdylib_safe() {
 #[cfg(target_os = "linux")]
 #[test]
 fn jpeg_bytes_source_descriptor_loads() {
-    let descriptor = <crate::jpeg_bytes_source::JpegBytesSourceProcessor::Processor as GeneratedProcessor>::descriptor()
+    let descriptor = <streamlib_debug_utilities::jpeg_bytes_source::JpegBytesSourceProcessor::Processor as GeneratedProcessor>::descriptor()
         .expect("JpegBytesSource must expose a macro-generated descriptor");
 
     assert_eq!(descriptor.name.r#type.as_str(), "JpegBytesSource");

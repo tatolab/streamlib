@@ -925,32 +925,17 @@ unsafe impl Sync for PluginDeclaration {}
 /// `tracing::info!` line, both of which only flow back to the host
 /// once the forwarders are in place.
 ///
-/// Each entry may carry its own outer attributes — in practice one or
-/// more `#[cfg(...)]` — so one invocation describes every target the
-/// package builds for. The entries that survive cfg-stripping are the
-/// ones registered, and the FIRST surviving entry anchors the
-/// declaration's `abi_layout_fingerprint` / build identity. Every entry
-/// resolving those consts to the same value is what makes the anchor a
-/// free choice rather than a semantic one: the `#[processor]` macro
-/// emits both against the one SDK crate the plugin compiled against.
-/// That agreement is enforced, not assumed — a per-entry const assertion
-/// refuses the invocation at compile time if any surviving entry's
-/// `__STREAMLIB_ABI_LAYOUT_FINGERPRINT` differs from the anchor's.
+/// ABI contract for the entry list: each entry may carry its own outer
+/// attributes (in practice `#[cfg(...)]`), the entries surviving
+/// cfg-stripping are the ones registered, and the FIRST survivor anchors
+/// the declaration's single `abi_layout_fingerprint` / build identity.
+/// A per-entry const assertion refuses the invocation when any surviving
+/// entry's `__STREAMLIB_ABI_LAYOUT_FINGERPRINT` differs from the anchor's,
+/// and an all-stripped invocation is a compile error rather than an
+/// unanchored declaration. See `docs/architecture/plugin-abi.md`.
 ///
-/// An invocation whose entries are ALL stripped emits a declaration with
-/// no anchor and is a compile error — never a silently unregistered
-/// plugin. A crate-root generator that mirrors per-target arms gates the
-/// whole invocation on the disjunction of its entry predicates instead.
-///
-/// # Bad-declaration refusal — compile-fail doctest gates
-///
-/// The refusal legs have no runtime surface to assert on, so the
-/// compile-time witnesses live here. If any leg ever started compiling,
-/// the emitted `STREAMLIB_PLUGIN` would carry a zero, absent, or
-/// entry-disagreeing `abi_layout_fingerprint` and the host's load
-/// handshake would compare against something that describes only part of
-/// the plugin — these doctests flip and
-/// `cargo test --doc -p streamlib-plugin-abi` surfaces it.
+/// The refusal legs have no runtime surface, so their compile-time
+/// witnesses live here as doctests.
 ///
 /// No entries at all — the zero-entry arm's `compile_error!`:
 ///
@@ -960,11 +945,8 @@ unsafe impl Sync for PluginDeclaration {}
 /// ```
 ///
 /// Every entry stripped by its own `#[cfg]` — const evaluation of the
-/// anchor fails (E0080, carrying the authored message), and the register
-/// callback's now-unreachable `Option::None` fallback has no type to
-/// infer (E0282). Both are hard errors; `macro_rules!` cannot see
-/// cfg-stripping, so this is the backstop under the crate-root
-/// generator's disjunction gate rather than the primary guard:
+/// anchor fails (E0080) and the register callback's now-unreachable
+/// `Option::None` fallback has no type to infer (E0282):
 ///
 /// ```compile_fail
 /// pub struct EveryEntryStrippedStubProcessor;
@@ -979,10 +961,8 @@ unsafe impl Sync for PluginDeclaration {}
 /// Two surviving entries disagreeing on the ABI layout fingerprint —
 /// what a cdylib mixing processors built against the `streamlib` facade
 /// and against the engine-free `streamlib-plugin-sdk` would emit. The
-/// declaration carries exactly ONE fingerprint, so the host's handshake
-/// would bless a layout that describes only the anchor entry. The stubs
-/// carry the full surface `export_plugin!` resolves, so the fingerprint
-/// disagreement is the only error available:
+/// stubs carry the full surface `export_plugin!` resolves, so the
+/// fingerprint disagreement is the only error available:
 ///
 /// ```compile_fail
 /// macro_rules! declare_fingerprint_stub {
@@ -1068,38 +1048,32 @@ macro_rules! export_plugin {
             });
         }
 
-        /// The `abi_layout_fingerprint` of the first entry that survives
-        /// cfg-stripping. Every entry resolves the const against the same
-        /// SDK crate, so any surviving entry is an equally valid anchor.
+        /// The `(abi_layout_fingerprint, build_identity)` of the first entry
+        /// that survives cfg-stripping — the values the declaration carries
+        /// exactly one of.
         #[allow(unreachable_code)]
-        const fn __streamlib_plugin_anchor_abi_layout_fingerprint() -> u64 {
+        const fn __streamlib_plugin_anchor_identity() -> (u64, &'static str) {
             $(
                 $(#[$entry_attribute])*
                 {
-                    return <$processor_type>::__STREAMLIB_ABI_LAYOUT_FINGERPRINT;
+                    return (
+                        <$processor_type>::__STREAMLIB_ABI_LAYOUT_FINGERPRINT,
+                        <$processor_type>::__STREAMLIB_BUILD_IDENTITY,
+                    );
                 }
             )*
             ::core::panic!(
                 "`export_plugin!` has no entry that survives cfg-stripping on this \
                  target — the emitted `STREAMLIB_PLUGIN` declaration would carry no \
-                 ABI layout fingerprint"
+                 ABI layout fingerprint or build identity"
             )
         }
 
-        // The declaration carries exactly ONE `abi_layout_fingerprint`, so
-        // the anchor is only a free choice while every surviving entry
-        // resolves the same value. A cdylib mixing processors generated
-        // against the `streamlib` facade and against the engine-free
-        // `streamlib-plugin-sdk` can express that disagreement, and the host's
-        // load handshake would then bless a layout describing only the anchor
-        // entry — the exact cross-build silent-corruption shape the
-        // fingerprint exists to refuse. Const evaluation makes divergence a
-        // hard compile error at the invocation instead.
         $(
             $(#[$entry_attribute])*
             const _: () = ::core::assert!(
                 <$processor_type>::__STREAMLIB_ABI_LAYOUT_FINGERPRINT
-                    == __streamlib_plugin_anchor_abi_layout_fingerprint(),
+                    == __streamlib_plugin_anchor_identity().0,
                 "`export_plugin!` entries disagree on \
                  `__STREAMLIB_ABI_LAYOUT_FINGERPRINT` — every processor in one \
                  cdylib must be generated against the same SDK crate, because \
@@ -1108,36 +1082,14 @@ macro_rules! export_plugin {
             );
         )*
 
-        /// The build-identity string of the first entry that survives
-        /// cfg-stripping, anchored the same way as the fingerprint above.
-        #[allow(unreachable_code)]
-        const fn __streamlib_plugin_anchor_build_identity() -> &'static str {
-            $(
-                $(#[$entry_attribute])*
-                {
-                    return <$processor_type>::__STREAMLIB_BUILD_IDENTITY;
-                }
-            )*
-            ::core::panic!(
-                "`export_plugin!` has no entry that survives cfg-stripping on this \
-                 target — the emitted `STREAMLIB_PLUGIN` declaration would carry no \
-                 build identity"
-            )
-        }
-
         #[unsafe(no_mangle)]
         pub static STREAMLIB_PLUGIN: $crate::PluginDeclaration = $crate::PluginDeclaration {
             abi_version: $crate::STREAMLIB_ABI_VERSION,
             _reserved_padding: 0,
             register: __streamlib_plugin_register,
-            // The `#[processor]` macro emits these associated consts
-            // against the plugin's detected SDK crate (the facade
-            // `streamlib` or the engine-free `streamlib-plugin-sdk`); the
-            // envelope names no SDK path itself, matching how `register`
-            // is resolved.
-            abi_layout_fingerprint: __streamlib_plugin_anchor_abi_layout_fingerprint(),
-            build_identity_ptr: __streamlib_plugin_anchor_build_identity().as_ptr(),
-            build_identity_len: __streamlib_plugin_anchor_build_identity().len(),
+            abi_layout_fingerprint: __streamlib_plugin_anchor_identity().0,
+            build_identity_ptr: __streamlib_plugin_anchor_identity().1.as_ptr(),
+            build_identity_len: __streamlib_plugin_anchor_identity().1.len(),
         };
     };
 }
