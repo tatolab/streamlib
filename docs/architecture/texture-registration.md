@@ -485,12 +485,12 @@ When a new field lands on `TextureRegistration`:
   `GpuContext::resolve_texture_registration_by_surface_id` in
   `runtime/streamlib-engine/src/core/context/gpu_context.rs`.
 - **First consumer**: `LinuxDisplayProcessor::render_frame` in
-  `packages/display/processors/linux/display.rs`.
+  `packages/display/processors/display_linux.rs`.
 - **First adapter-output producer**: `register_render_target_surface`
   in `examples/camera-python-display/runner/src/linux.rs`.
 - **First in-tree producer**: `LinuxCameraProcessor` in the
   `streamlib-camera` package —
-  `packages/camera/processors/linux/camera.rs`.
+  `packages/camera/processors/camera_linux.rs`.
 - **Adapter-scope sibling**: `SurfaceState` in
   `adapters/streamlib-adapter-vulkan/src/state.rs` (and the same-shape
   opengl + cuda + cpu-readback adapter state structs). These are at

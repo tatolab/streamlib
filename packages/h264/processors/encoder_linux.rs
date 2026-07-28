@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+#![cfg(target_os = "linux")]
+
 // H.264 Encoder Processor
 //
 // Thin wrapper around the engine-free plugin SDK's hardware
@@ -18,7 +20,7 @@
 
 
 use crate::_generated_::{EncodedVideoFrame, VideoFrame};
-use crate::linux::color_vui_translate::color_info_to_h273_repr;
+use crate::color_vui_translate_linux::color_info_to_h273_repr;
 use streamlib_plugin_sdk::sdk::context::{
     GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };

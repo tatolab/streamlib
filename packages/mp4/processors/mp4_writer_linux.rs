@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+#![cfg(target_os = "linux")]
+
 use crate::_generated_::VideoFrame;
 use streamlib_plugin_sdk::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib_plugin_sdk::sdk::error::{Error, Result};

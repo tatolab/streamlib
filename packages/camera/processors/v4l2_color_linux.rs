@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+#![cfg(target_os = "linux")]
+
 //! V4L2 colorspace → `ColorInfo` translation.
 //!
 //! Mirrors FFmpeg's `libavcodec/v4l2_buffers.c` mapping plus the

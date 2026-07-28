@@ -1,7 +1,9 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-// H.265 Decoder Processor
+#![cfg(target_os = "linux")]
+
+// H.264 Decoder Processor
 //
 // Thin wrapper around the engine-free plugin SDK's hardware
 // `DecoderSession` PluginAbiObject. The session is minted host-side in
@@ -19,7 +21,7 @@
 
 
 use crate::_generated_::{EncodedVideoFrame, VideoFrame};
-use crate::linux::color_vui_translate::decoded_vui_to_color_info;
+use crate::color_vui_translate_linux::decoded_vui_to_color_info;
 use streamlib_plugin_sdk::sdk::context::{
     GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };
@@ -33,15 +35,15 @@ use streamlib_plugin_abi::{VideoCodecRepr, VideoDecoderSessionDescriptorRepr};
 // ============================================================================
 
 #[streamlib_plugin_sdk::sdk::processor(
-    "@tatolab/h265/H265Decoder",
-    description = "Decodes EncodedVideoFrame (H.265) to VideoFrame via Vulkan Video",
+    "@tatolab/h264/H264Decoder",
+    description = "Decodes EncodedVideoFrame (H.264) to VideoFrame via Vulkan Video",
     execution = reactive,
     scheduling = high,
-    config = crate::_generated_::H265DecoderConfig,
-    input("encoded_video_in", "@tatolab/core/EncodedVideoFrame", description = "H.265 encoded video frames to decode"),
+    config = crate::_generated_::H264DecoderConfig,
+    input("encoded_video_in", "@tatolab/core/EncodedVideoFrame", description = "H.264 encoded video frames to decode"),
     output("video_out", "@tatolab/core/VideoFrame", description = "Decoded video frames"),
 )]
-pub struct H265DecoderProcessor {
+pub struct H264DecoderProcessor {
     /// Vulkan Video hardware decoder session (minted in `setup`). `!Clone` —
     /// owns exclusive Vulkan Video session / DPB / command resources.
     session: Option<DecoderSession>,
@@ -53,17 +55,17 @@ pub struct H265DecoderProcessor {
     frames_decoded: u64,
 }
 
-impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for H265DecoderProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for H264DecoderProcessor::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.gpu_context = Some(ctx.gpu_limited_access().clone());
 
-        // Decoder dimensions come from the H.265 SPS — leaving `max_width` /
+        // Decoder dimensions come from the H.264 SPS — leaving `max_width` /
         // `max_height` at zero tells the host to size the DPB and video
         // session from the first parsed SPS rather than pre-allocating for a
         // hard-coded resolution cap. `rgba_output = 1`: drained frames are
         // GPU NV12→RGBA converted host-side.
         let descriptor = VideoDecoderSessionDescriptorRepr {
-            codec: VideoCodecRepr::H265 as u32,
+            codec: VideoCodecRepr::H264 as u32,
             rgba_output: 1,
             ..Default::default()
         };
@@ -73,9 +75,9 @@ impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for H265DecoderPro
         let session = ctx
             .gpu_full_access()
             .create_decoder_session(&descriptor)
-            .map_err(|e| Error::Runtime(format!("Failed to create H.265 decoder session: {e}")))?;
+            .map_err(|e| Error::Runtime(format!("Failed to create H.264 decoder session: {e}")))?;
 
-        tracing::info!("[H265Decoder] Session minted (Vulkan Video hardware)");
+        tracing::info!("[H264Decoder] Session minted (Vulkan Video hardware)");
 
         self.session = Some(session);
         Ok(())
@@ -84,7 +86,7 @@ impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for H265DecoderPro
     fn teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             frames_decoded = self.frames_decoded,
-            "[H265Decoder] Shutting down"
+            "[H264Decoder] Shutting down"
         );
         self.session.take();
         self.gpu_context.take();
@@ -106,11 +108,11 @@ impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for H265DecoderPro
         let session = self
             .session
             .as_mut()
-            .ok_or_else(|| Error::Runtime("H.265 decoder session not initialized".into()))?;
+            .ok_or_else(|| Error::Runtime("H.264 decoder session not initialized".into()))?;
 
         let frame_count = session
             .feed(&encoded.data)
-            .map_err(|e| Error::Runtime(format!("H.265 decode failed: {e}")))?;
+            .map_err(|e| Error::Runtime(format!("H.264 decode failed: {e}")))?;
 
         // Color info: prefer the parsed bitstream VUI (self-describing,
         // survives muxer round-trips that re-encode `EncodedVideoFrame.
@@ -121,7 +123,7 @@ impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for H265DecoderPro
         let parsed_vui = match session.current_color_vui() {
             Ok(vui) => vui,
             Err(e) => {
-                tracing::warn!(error = %e, "[H265Decoder] color VUI query failed; using passthrough");
+                tracing::warn!(error = %e, "[H264Decoder] color VUI query failed; using passthrough");
                 None
             }
         };
@@ -137,7 +139,7 @@ impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for H265DecoderPro
         for index in 0..frame_count {
             let decoded = session
                 .drain_frame(index)
-                .map_err(|e| Error::Runtime(format!("H.265 drain frame failed: {e}")))?;
+                .map_err(|e| Error::Runtime(format!("H.264 drain frame failed: {e}")))?;
             let width = decoded.width;
             let height = decoded.height;
 
@@ -156,7 +158,7 @@ impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for H265DecoderPro
             let dst_ptr = pixel_buffer.plane_base_address(0);
             if dst_ptr.is_null() {
                 return Err(Error::Runtime(
-                    "H.265 decoder: pixel buffer plane base address is null".into(),
+                    "H.264 decoder: pixel buffer plane base address is null".into(),
                 ));
             }
             let copy_len = src.len().min(pixel_buffer.plane_size(0) as usize);
@@ -190,7 +192,7 @@ impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for H265DecoderPro
                 tracing::info!(
                     color_info = ?video_frame.color_info,
                     source = color_info_source,
-                    "[H265Decoder] First frame decoded — surfaced color_info"
+                    "[H264Decoder] First frame decoded — surfaced color_info"
                 );
             }
             // `pixel_buffer` drops here (after the write) — matches the
@@ -198,7 +200,7 @@ impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for H265DecoderPro
         }
 
         if self.frames_decoded % 300 == 0 && self.frames_decoded > 0 {
-            tracing::info!(frames = self.frames_decoded, "[H265Decoder] Decode progress");
+            tracing::info!(frames = self.frames_decoded, "[H264Decoder] Decode progress");
         }
 
         Ok(())

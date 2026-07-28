@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+#![cfg(target_os = "linux")]
+
 //! Linux display processor — winit window + Vulkan presentation via the
 //! engine-free plugin SDK's [`PresentTarget`] PluginAbiObject.
 //!

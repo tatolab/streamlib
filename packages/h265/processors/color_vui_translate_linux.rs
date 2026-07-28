@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+#![cfg(target_os = "linux")]
+
 //! Translation between the engine-free `ColorInfo` domain enums (from
 //! `@tatolab/core`'s JTD codegen) and the codec-native H.273 byte
 //! representation the hardware encode/decode surface exchanges over the

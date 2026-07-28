@@ -83,6 +83,17 @@ file is a build artifact — gitignored, and excluded from the shipped `.slpkg`
 by `is_non_source_artifact` — so the consumer regenerates it from the bundled
 `processors/` tree on their own host.
 
+A processor with per-platform implementations is authored as sibling files
+under `processors/`, one per platform, each declaring the **same** processor id
+behind its own mutually-exclusive file-level `#![cfg]`
+(`processors/audio_capture_linux.rs`, `processors/audio_capture_apple.rs`). The
+id is the unified name, so nothing routes between the arms: the generated root
+declares each arm under the author's own predicate and gives the arm's
+`export_plugin!` entry that same `#[cfg]`, and exactly one arm survives
+cfg-stripping on any target. A nested `processors/<dir>/mod.rs` remains a valid
+arm — the generated root reaches it by `#[path]` like any other — but a
+directory is a module boundary, not a platform mechanism.
+
 Generation is opt-in per package, keyed on that declared `[lib] path`
 (`RustCrateRootGenerationRequest::for_package_dir_if_generation_is_declared`,
 the entry point every generation site calls), so a host **rlib** package that is

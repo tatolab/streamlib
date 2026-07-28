@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+#![cfg(target_os = "linux")]
+
 // JPEG Decoder Processor
 //
 // Thin wrapper around vulkan_jpeg::SimpleJpegDecoder. The primitive owns
@@ -13,7 +15,7 @@
 // is Limited-safe; no escalation on the hot path.
 
 use crate::_generated_::{EncodedJpegFrame, VideoFrame};
-use crate::linux::color_resolved_to_core::resolved_color_info_to_core;
+use crate::color_resolved_to_core_linux::resolved_color_info_to_core;
 use streamlib_plugin_sdk::sdk::context::{
     RuntimeContextFullAccess, RuntimeContextLimitedAccess,
 };

@@ -131,8 +131,9 @@ artifact and does not re-run it.
   submit path.
 - `extract_rust_processors` is the RAW scan: it visits every `.rs` under
   `processors/`, including platform arms a given host does not compile
-  (`linux/` vs `apple/`) and parked directories (`_apple_impl_pending_/`), so
-  two platform arms that both declare the same processor both surface.
+  (`camera_linux.rs` vs `camera_apple.rs`) and parked directories
+  (`_apple_impl_pending_/`), so two platform arms that both declare the same
+  processor both surface.
   `extract_reachable_rust_processors`
   resolves that raw scan to the set the build **target** actually compiles: it
   enumerates the top-level arms under `processors/` the way the generated crate

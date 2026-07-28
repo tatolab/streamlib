@@ -80,7 +80,7 @@ pub struct ExtractedProcessor {
     pub source_file: PathBuf,
     /// The module path from the crate root to the declaring module, one
     /// segment per `mod` — `["linux", "camera"]` for a struct in
-    /// `processors/linux/camera.rs`. Empty for the raw whole-tree scan, which
+    /// `processors/camera_linux.rs`. Empty for the raw whole-tree scan, which
     /// resolves no module graph. The `#[processor]` macro turns the struct into
     /// a module of the same name holding a `Processor` type, so the generated
     /// `export_plugin!` entry is `<segments>::<struct_name>::Processor`.

@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+#![cfg(target_os = "linux")]
+
 //! Translate engine-side [`ResolvedColorInfo`] into the on-wire
 //! [`ColorInfo`] schema produced by `@tatolab/core` JTD codegen.
 //!

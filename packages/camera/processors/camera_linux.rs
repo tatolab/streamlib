@@ -1,6 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+#![cfg(target_os = "linux")]
+
 //! V4L2 camera capture processor.
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -490,7 +492,7 @@ fn capture_thread_loop(
         ) == 0
         {
             let pix = v4l2_fmt.fmt.pix;
-            let color = crate::linux::v4l2_color::v4l2_color_to_color_info(
+            let color = crate::v4l2_color_linux::v4l2_color_to_color_info(
                 pix.colorspace,
                 pix.xfer_func,
                 // ycbcr_enc shares an anonymous union with hsv_enc;

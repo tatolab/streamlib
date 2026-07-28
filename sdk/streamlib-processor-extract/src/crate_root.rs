@@ -563,7 +563,7 @@ mod tests {
         );
         write(
             root,
-            "processors/linux/mod.rs",
+            "processors/capture_backends/mod.rs",
             r#"#![cfg(target_os = "linux")]
             #[processor("@tatolab/demo/Camera", execution = reactive)]
             pub struct CameraProcessor;"#,
@@ -579,7 +579,7 @@ mod tests {
         );
         assert!(
             generated.source.contains(
-                "#[cfg(target_os = \"linux\")]\n#[path = \"../processors/linux/mod.rs\"]\npub mod linux;"
+                "#[cfg(target_os = \"linux\")]\n#[path = \"../processors/capture_backends/mod.rs\"]\npub mod capture_backends;"
             ),
             "{}",
             generated.source
@@ -599,13 +599,13 @@ mod tests {
         );
         write(
             root,
-            "processors/linux/mod.rs",
+            "processors/capture_backends/mod.rs",
             r#"#![cfg(target_os = "linux")]
             pub mod camera;"#,
         );
         write(
             root,
-            "processors/linux/camera.rs",
+            "processors/capture_backends/camera.rs",
             r#"#[processor("@tatolab/demo/Camera", execution = reactive)]
             pub struct CameraProcessor;"#,
         );
@@ -627,7 +627,7 @@ mod tests {
         );
         assert!(
             generated.source.contains(
-                "    #[cfg(target_os = \"linux\")]\n    crate::linux::camera::CameraProcessor::Processor,\n"
+                "    #[cfg(target_os = \"linux\")]\n    crate::capture_backends::camera::CameraProcessor::Processor,\n"
             ),
             "{}",
             generated.source

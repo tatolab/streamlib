@@ -16,7 +16,7 @@
 //! Consumers (the [`BlendingCompositor`], the display, encoders
 //! targeting cross-color-space output) hold an `Arc<RhiToneMapper>`
 //! as a struct field — same shape as `LinuxCameraProcessor` holds
-//! `Arc<RhiColorConverter>` per `packages/camera/processors/linux/camera.rs`.
+//! `Arc<RhiColorConverter>` per `packages/camera/processors/camera_linux.rs`.
 //!
 //! [`BlendingCompositor`]: ../../../examples/camera-python-display/runner/src/blending_compositor.rs
 

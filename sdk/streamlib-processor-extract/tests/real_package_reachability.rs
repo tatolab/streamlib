@@ -4,7 +4,7 @@
 //! Reachability resolution over REAL in-tree packages.
 //!
 //! `@tatolab/camera` is the canonical over-collection case: its Linux arm
-//! (`processors/linux/camera.rs`) and its parked Apple arm
+//! (`processors/camera_linux.rs`) and its parked Apple arm
 //! (`processors/_apple_impl_pending_/camera.rs`) BOTH declare a
 //! `@tatolab/camera/Camera` processor. The parked arm carries a file-level
 //! `#![cfg(any())]`, so it never compiles on any target. This locks that:

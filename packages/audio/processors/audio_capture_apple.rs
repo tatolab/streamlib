@@ -1,18 +1,18 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+#![cfg(any(target_os = "macos", target_os = "ios"))]
+
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
-use cpal::{Device, StreamConfig};
+use cpal::{Device, Stream, StreamConfig};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use std::sync::mpsc;
-use std::thread::JoinHandle;
 use streamlib_plugin_sdk::sdk::error::{Result, Error};
 use streamlib_plugin_sdk::sdk::context::RuntimeContextFullAccess;
 use streamlib_plugin_sdk::sdk::iceoryx2::OutputWriter;
 
 #[derive(Debug, Clone)]
-pub struct LinuxAudioInputDevice {
+pub struct AppleAudioInputDevice {
     pub id: usize,
     pub name: String,
     pub sample_rate: u32,
@@ -28,25 +28,18 @@ pub struct LinuxAudioInputDevice {
     config = crate::_generated_::AudioCaptureConfig,
     output("audio", "@tatolab/core/AudioFrame", description = "Captured mono audio frames in device-native sample rate"),
 )]
-pub struct LinuxAudioCaptureProcessor {
-    device_info: Option<LinuxAudioInputDevice>,
+pub struct AppleAudioCaptureProcessor {
+    device_info: Option<AppleAudioInputDevice>,
+    _device: Option<Device>,
+    _stream: Option<Stream>,
     is_capturing: Arc<AtomicBool>,
     frame_counter: Arc<AtomicU64>,
     stream_setup_done: bool,
-    // A `cpal::Stream` is `!Send` (the ALSA backend's handle must not move
-    // across threads), but the `#[processor]` macro requires the processor to
-    // be `Send` (it runs on the runtime thread pool). The stream is therefore
-    // confined to a dedicated thread that builds it, plays it, and holds it
-    // alive; the processor keeps only `Send` handles. Dropping the sender in
-    // `teardown` wakes the thread, which then drops the stream on its own
-    // thread.
-    capture_thread: Option<JoinHandle<()>>,
-    shutdown_sender: Option<mpsc::Sender<()>>,
 }
 
-impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for LinuxAudioCaptureProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for AppleAudioCaptureProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        tracing::info!("[AudioCapture] setup() called - will set up stream in start()");
+        tracing::info!("[AudioCapture] setup() called - will set up stream in process()");
         self.stream_setup_done = false;
         Ok(())
     }
@@ -65,19 +58,14 @@ impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for LinuxAudioCaptur
 
         self.is_capturing.store(false, Ordering::Relaxed);
 
-        // Dropping the sender unblocks the capture thread's `recv`, which then
-        // drops the `cpal::Stream` on its owning thread and exits.
-        self.shutdown_sender = None;
-        if let Some(handle) = self.capture_thread.take() {
-            let _ = handle.join();
-        }
-        self.stream_setup_done = false;
+        self._stream = None;
+        self._device = None;
         Ok(())
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         if !self.stream_setup_done {
-            tracing::info!("[AudioCapture] start() called - setting up cpal stream");
+            tracing::info!("[AudioCapture] process() called - setting up cpal stream");
             self.setup_stream()?;
             self.stream_setup_done = true;
             tracing::info!(
@@ -90,117 +78,11 @@ impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for LinuxAudioCaptur
     }
 }
 
-impl LinuxAudioCaptureProcessor::Processor {
-    /// Spawn the stream-owning thread and block until it reports whether the
-    /// `cpal` stream built and started. The `cpal::Stream` is `!Send`, so it is
-    /// built and held entirely on that thread; only the device summary crosses
-    /// back here.
+impl AppleAudioCaptureProcessor::Processor {
     fn setup_stream(&mut self) -> Result<()> {
-        let device_id = self.config.device_id.clone();
-        let outputs = self.outputs.clone();
-        let frame_counter = Arc::clone(&self.frame_counter);
-        let is_capturing = Arc::clone(&self.is_capturing);
-
-        let (ready_sender, ready_receiver) = mpsc::channel::<Result<LinuxAudioInputDevice>>();
-        let (shutdown_sender, shutdown_receiver) = mpsc::channel::<()>();
-
-        let handle = std::thread::Builder::new()
-            .name("audio-capture".to_string())
-            .spawn(move || {
-                match build_capture_stream(device_id, outputs, frame_counter, &is_capturing) {
-                    Ok((device_info, stream)) => {
-                        is_capturing.store(true, Ordering::Relaxed);
-                        if ready_sender.send(Ok(device_info)).is_err() {
-                            return;
-                        }
-                        // Hold the stream alive on this thread until teardown
-                        // drops the sender; the `cpal` callback fires on the
-                        // backend's own thread meanwhile.
-                        let _ = shutdown_receiver.recv();
-                        drop(stream);
-                    }
-                    Err(e) => {
-                        let _ = ready_sender.send(Err(e));
-                    }
-                }
-            })
-            .map_err(|e| {
-                Error::Configuration(format!("Failed to spawn audio capture thread: {}", e))
-            })?;
-
-        let device_info = ready_receiver
-            .recv()
-            .map_err(|_| {
-                Error::Configuration(
-                    "Audio capture thread exited before reporting stream setup".into(),
-                )
-            })??;
-
-        self.device_info = Some(device_info);
-        self.capture_thread = Some(handle);
-        self.shutdown_sender = Some(shutdown_sender);
-        Ok(())
-    }
-
-    pub fn list_devices() -> Result<Vec<LinuxAudioInputDevice>> {
-        let host = cpal::default_host();
-        let devices: Result<Vec<LinuxAudioInputDevice>> = host
-            .input_devices()
-            .map_err(|e| {
-                Error::Configuration(format!(
-                    "Failed to enumerate audio input devices: {}",
-                    e
-                ))
-            })?
-            .enumerate()
-            .filter_map(|(id, device)| {
-                let name = device.name().ok()?;
-                let config = device.default_input_config().ok()?;
-                let channels = config.channels();
-
-                if channels != 1 {
-                    return None;
-                }
-
-                let sample_rate = config.sample_rate().0;
-
-                let is_default = if let Some(default_device) = host.default_input_device() {
-                    device.name().ok() == default_device.name().ok()
-                } else {
-                    false
-                };
-
-                Some(Ok(LinuxAudioInputDevice {
-                    id,
-                    name,
-                    sample_rate,
-                    channels: 1,
-                    is_default,
-                }))
-            })
-            .collect();
-
-        devices
-    }
-
-    pub fn current_device(&self) -> Option<&LinuxAudioInputDevice> {
-        self.device_info.as_ref()
-    }
-}
-
-/// Select the input device, build the mono `cpal` input stream, and start it.
-/// Runs entirely on the capture thread because a `cpal::Stream` is `!Send`.
-/// The callback writes device-native mono frames to `outputs` until
-/// `is_capturing` is cleared.
-fn build_capture_stream(
-    device_id: Option<String>,
-    outputs: OutputWriter,
-    frame_counter: Arc<AtomicU64>,
-    is_capturing: &Arc<AtomicBool>,
-) -> Result<(LinuxAudioInputDevice, cpal::Stream)> {
         let host = cpal::default_host();
 
-        let device = if let Some(device_name_str) = &device_id {
+        let device = if let Some(device_name_str) = &self.config.device_id {
             let devices: Vec<Device> = host
                 .input_devices()
                 .map_err(|e| {
@@ -249,26 +131,34 @@ fn build_capture_stream(
             device_channels
         );
 
-        let device_info = LinuxAudioInputDevice {
+        let device_info = AppleAudioInputDevice {
             id: 0,
             name: device_name.clone(),
             sample_rate: device_sample_rate,
             channels: device_channels as u32,
-            is_default: device_id.is_none(),
+            is_default: self.config.device_id.is_none(),
         };
 
-        let outputs_clone: OutputWriter = outputs;
-        let frame_counter_clone = frame_counter;
-        let is_capturing_clone = Arc::clone(is_capturing);
+        if device_channels != 1 {
+            return Err(Error::Configuration(format!(
+                "Audio input device '{}' is not mono (has {} channels). Only mono devices are supported.",
+                device_name, device_channels
+            )));
+        }
+
+        let outputs_clone: OutputWriter = self.outputs.clone();
+        let frame_counter_clone = self.frame_counter.clone();
+        let is_capturing_clone = Arc::clone(&self.is_capturing);
         let sample_rate_clone = device_sample_rate;
 
+        // IMPORTANT: keep buffer_size as Default for input streams on macOS.
         let stream_config = StreamConfig {
-            channels: 1, // Mono only
+            channels: 1,
             sample_rate: cpal::SampleRate(device_sample_rate),
             buffer_size: cpal::BufferSize::Default,
         };
 
-        tracing::info!("[AudioCapture] Building mono input stream with native config (ALSA backend)");
+        tracing::info!("[AudioCapture] Building mono input stream with native config");
 
         let stream = device
             .build_input_stream(
@@ -291,7 +181,8 @@ fn build_capture_stream(
                     };
 
                     if let Err(e) = outputs_clone.write("audio", &ipc_frame) {
-                        tracing::error!(error = %e, "AudioCapture: failed to write frame");
+                        // Cannot use tracing in callback - use eprintln for errors
+                        eprintln!("[AudioCapture] Failed to write frame: {}", e);
                     }
                 },
                 move |err| {
@@ -309,16 +200,67 @@ fn build_capture_stream(
             Error::Configuration(format!("Failed to start audio stream: {}", e))
         })?;
 
+        self.is_capturing.store(true, Ordering::Relaxed);
         tracing::info!(
             "[AudioCapture] Stream active - capturing mono audio at {}Hz",
             device_sample_rate
         );
 
+        self.device_info = Some(device_info);
+        self._device = Some(device);
+        self._stream = Some(stream);
+
         tracing::info!(
             "[AudioCapture] {} Started - outputting device-native mono frames",
             device_name
         );
-        Ok((device_info, stream))
+        Ok(())
+    }
+
+    pub fn list_devices() -> Result<Vec<AppleAudioInputDevice>> {
+        let host = cpal::default_host();
+        let devices: Result<Vec<AppleAudioInputDevice>> = host
+            .input_devices()
+            .map_err(|e| {
+                Error::Configuration(format!(
+                    "Failed to enumerate audio input devices: {}",
+                    e
+                ))
+            })?
+            .enumerate()
+            .filter_map(|(id, device)| {
+                let name = device.name().ok()?;
+                let config = device.default_input_config().ok()?;
+                let channels = config.channels();
+
+                if channels != 1 {
+                    return None;
+                }
+
+                let sample_rate = config.sample_rate().0;
+
+                let is_default = if let Some(default_device) = host.default_input_device() {
+                    device.name().ok() == default_device.name().ok()
+                } else {
+                    false
+                };
+
+                Some(Ok(AppleAudioInputDevice {
+                    id,
+                    name,
+                    sample_rate,
+                    channels: 1,
+                    is_default,
+                }))
+            })
+            .collect();
+
+        devices
+    }
+
+    pub fn current_device(&self) -> Option<&AppleAudioInputDevice> {
+        self.device_info.as_ref()
+    }
 }
 
 #[cfg(test)]
@@ -328,7 +270,7 @@ mod tests {
     #[test]
     #[ignore] // Requires real audio hardware - not available in CI
     fn test_list_devices() {
-        let devices = LinuxAudioCaptureProcessor::Processor::list_devices();
+        let devices = AppleAudioCaptureProcessor::Processor::list_devices();
 
         assert!(devices.is_ok());
 

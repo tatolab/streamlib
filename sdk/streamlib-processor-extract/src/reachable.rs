@@ -4,8 +4,8 @@
 //! Module-reachability resolution for the processor source-scan.
 //!
 //! [`crate::extract_rust_processors`] visits every `.rs` under `processors/`,
-//! including platform arms a given host does not compile (`linux/` vs `apple/`)
-//! and parked directories (`_apple_impl_pending_/`). That raw scan
+//! including platform arms a given host does not compile (`camera_linux.rs` vs
+//! `camera_apple.rs`) and parked directories (`_apple_impl_pending_/`). That raw scan
 //! over-collects: two platform arms declaring the same processor both surface,
 //! and a parked module surfaces a `#[processor(...)]` that never compiles on any
 //! target. Before extraction can replace the hand-authored `processors:` as the
@@ -1502,7 +1502,7 @@ mod tests {
         write(root, "processors/blur.rs", "");
         write(
             root,
-            "processors/linux/mod.rs",
+            "processors/capture_backends/mod.rs",
             "#![cfg(target_os = \"linux\")]\n",
         );
         write(root, "processors/vision/detector.py", "");
@@ -1528,8 +1528,8 @@ mod tests {
                     Vec::new()
                 ),
                 (
-                    "linux".to_string(),
-                    "../processors/linux/mod.rs".to_string(),
+                    "capture_backends".to_string(),
+                    "../processors/capture_backends/mod.rs".to_string(),
                     vec![r#"target_os = "linux""#.to_string()]
                 ),
             ]
