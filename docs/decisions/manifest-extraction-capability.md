@@ -51,10 +51,12 @@ name against a hand-authored `processors:` list — the decorator *is* that list
 > `sdk/streamlib-deno/extract_processors.ts`: discovery is a recursive walk of
 > `<package_dir>/processors/`. A module authored beside the `streamlib.yaml` is
 > not a processor module, and a package with no `processors/` directory
-> extracts to the empty set. Superseded again 2026-07-27 by #1589 in the other
-> direction: the RUST scan moved to the same root, so `processors/` is now the
-> one discovery root for all three languages rather than the polyglot analogue
-> of a Rust-only `src/`.
+> extracts to the empty set. Superseded again 2026-07-27 in the other direction
+> by `streamlib_processor_extract::extract_rust_processors`, which walks the
+> same `<package_dir>/processors/` root and refuses a package without it, plus
+> `streamlib_processor_extract::crate_root`, which projects that root into a
+> generated crate root: `processors/` is now the one discovery root for all
+> three languages rather than the polyglot analogue of a Rust-only `src/`.
 
 The extractors run in a fresh subprocess (`python -m
 streamlib.extract_processors <dir>` / `deno run --allow-read
