@@ -187,22 +187,30 @@ split with a non-unix fallback arm fails the same way.
 
 **The model relates one cluster of target atoms, and prunes rather than
 guesses outside it.** The cluster is `target_os`, `target_family` and the bare
-`unix` / `windows` flags. `rustc` fixes every other target key against those
+`unix` / `windows` flags. `rustc` fixes every other target atom against those
 and against one another too — no target is both `target_env = "msvc"` and
 `target_os = "linux"`, none is both `target_arch = "wasm32"` and `target_env =
 "msvc"`, no `target_vendor = "apple"` target is `not(unix)` — and the model
-holds none of those facts, so an assignment that pins a key from outside the
-cluster while a second target atom is decided is dropped instead of printed as
-a proof. Inside the cluster the same discipline applies to what the rules
-cannot decide: a `target_os` outside the OS → family table decides nothing
-about families, and a `target_family` outside `unix` / `windows` defines
-neither flag, which deliberately drops `wasi` (genuinely both `wasm` and
-`unix`, the multi-valued case single-valued modelling gives up). Every rule
-and every gap therefore prunes, so the error direction is toward missing an
-overlap rather than inventing one — on the single assumption the model cannot
-check, that a value a predicate names is a value some target defines. The cost
-of a missed detection is bounded by the concrete-target net: the host that
-actually compiles both arms still fails.
+holds none of those facts, so an assignment that DEFINES an atom from outside
+the cluster (a key it pins a value for, or a bare `target_*` flag it sets)
+while a second target atom is decided is dropped instead of printed as a
+proof. A cluster atom counts as decided wherever the predicates mention it,
+whether the assignment names a value for it or leaves it at "some value the
+predicates never name": that unnamed slot is exactly what makes a NEGATED
+`target_os` / `target_family` value true, so `target_env = "msvc"` against
+`not(target_os = "windows")` is dropped for the same reason as `target_env =
+"msvc"` against `target_os = "linux"`. Inside the cluster the same discipline
+applies to what the rules cannot decide: a `target_os` outside the OS → family
+table decides nothing about families, and a `target_family` outside `unix` /
+`windows` defines neither flag, which deliberately drops `wasi` (genuinely
+both `wasm` and `unix`, the multi-valued case single-valued modelling gives
+up). Every rule and every gap therefore prunes, so the error direction is
+toward missing an overlap rather than inventing one. Two assumptions stay
+unchecked, and both are about one atom rather than about how two atoms relate:
+that a value a predicate names is a value some target defines, and that an
+atom a predicate names is one some target leaves undefined. The cost of a
+missed detection is bounded by the concrete-target net: the host that actually
+compiles both arms still fails.
 
 **Divergence is refused over the whole derived projection, not just ports.** The
 `processors:` section is derived from whichever arm the publishing host

@@ -1296,17 +1296,22 @@ const MAX_CANDIDATE_BUILD_TARGET_ASSIGNMENTS: usize = 4096;
 /// witness. That polarity is the whole point: the caller refuses a build on it,
 /// so the witness must be an assignment some real target could have, which is
 /// what [`CfgPredicateAtomUniverse::candidate_build_target_is_coherent`] is
-/// for. Every rule there PRUNES candidates, and an assignment pinning target
-/// atoms the rules relate to nothing is pruned rather than guessed at — so the
-/// model's error direction is toward `None`, on the one assumption it cannot
-/// check: that a value a predicate names is a value some target defines — two
-/// arms both gated on a misspelled `target_os = "linxu"` still witness each
-/// other, which is the answer an author wants anyway.
+/// for. Every rule there PRUNES candidates, and an assignment resting on target
+/// atoms the rules relate to nothing is pruned rather than guessed at, so the
+/// model's error direction is toward `None`.
+///
+/// Two assumptions stay unchecked, and both are about a single atom rather than
+/// about how two atoms relate: that a value a predicate names is a value some
+/// target defines, and that an atom a predicate names is one some target leaves
+/// undefined. So two arms both gated on a misspelled `target_os = "linxu"` still
+/// witness each other — which is the answer an author wants anyway — and a
+/// candidate turning an unstable bare flag like `target_thread_local` off is
+/// taken at its word.
 ///
 /// A `None` is therefore "not proven", NOT "proven disjoint": an unparseable
 /// predicate, a search past the ceiling, a `target_os` outside
 /// [`TARGET_FAMILIES_BY_KNOWN_TARGET_OS`] weighed against a family atom, a pair
-/// resting on two target keys the rules cannot relate (`target_env` against
+/// resting on two target atoms the rules cannot relate (`target_env` against
 /// `target_os`), and a genuinely disjoint pair all land there. The
 /// concrete-target duplicate check stays the backstop for every one of them.
 fn find_build_target_satisfying_both_cfg_predicate_sets(
@@ -1454,51 +1459,60 @@ impl CfgPredicateAtomUniverse {
             .is_some_and(|mentioned| mentioned.contains(value))
     }
 
+    /// Whether the predicates mention `unix` or `windows` — the `target_family`
+    /// fact spelled as a bare flag.
+    fn mentions_a_bare_family_flag(&self) -> bool {
+        self.mentions_flag("unix") || self.mentions_flag("windows")
+    }
+
     /// Whether the predicates mention any atom whose truth is decided by the
     /// target's families — the atoms a `target_os` outside
     /// [`TARGET_FAMILIES_BY_KNOWN_TARGET_OS`] cannot decide.
     fn mentions_a_target_family_atom(&self) -> bool {
-        self.mentions_flag("unix")
-            || self.mentions_flag("windows")
+        self.mentions_a_bare_family_flag()
             || self.single_valued_key_values.contains_key("target_family")
     }
 
-    /// Whether a candidate pins a `target_*` key from outside the cluster
+    /// Whether a candidate defines a `target_*` atom from outside the cluster
     /// [`TARGET_CFG_KEYS_THE_COHERENCE_RULES_RELATE`] names, while a second
     /// target atom is decided.
     ///
-    /// `rustc` fixes the target keys against one another — no target is both
+    /// `rustc` fixes the target atoms against one another — no target is both
     /// `target_env = "msvc"` and `target_os = "linux"`, none is both
     /// `target_arch = "wasm32"` and `target_env = "msvc"`, no `target_vendor =
     /// "apple"` target is `not(unix)` — and the model holds none of those
     /// facts. Weighing two of them is therefore a guess, and this search's
-    /// answers are read as proofs, so the candidate is dropped. A mentioned
-    /// bare family flag counts as that second atom whether the candidate
-    /// defines it or not — an assignment decides a flag both ways, unlike a
-    /// single-valued key it can leave at "some value the predicates never
-    /// name".
-    fn candidate_pins_target_cfg_keys_the_rules_cannot_relate(
+    /// answers are read as proofs, so the candidate is dropped.
+    ///
+    /// Only an atom the candidate DEFINES counts on the unrelatable side: a
+    /// candidate that leaves a key at "some value the predicates never name",
+    /// or a flag unset, claims no more than that the atom is absent somewhere,
+    /// which is what every single-valued key in this model already rests on.
+    /// The relatable side is the mirror: `target_os`, `target_family` and the
+    /// family flags count as decided wherever the PREDICATES mention them,
+    /// defined or not, because it is exactly that unnamed-value slot that makes
+    /// a negated `target_os` / `target_family` value true.
+    fn candidate_rests_on_target_cfg_atoms_the_rules_cannot_relate(
         &self,
         candidate: &ModuleReachabilityTarget,
     ) -> bool {
-        let mut pinned_relatable_keys: BTreeSet<&str> = BTreeSet::new();
-        let mut pinned_unrelatable_keys: BTreeSet<&str> = BTreeSet::new();
-        for (key, _) in &candidate.key_values {
-            if !key.starts_with("target_") {
-                continue;
-            }
-            if TARGET_CFG_KEYS_THE_COHERENCE_RULES_RELATE.contains(&key.as_str()) {
-                pinned_relatable_keys.insert(key.as_str());
-            } else {
-                pinned_unrelatable_keys.insert(key.as_str());
-            }
+        let mut decided_target_cfg_atom_names: BTreeSet<&str> = candidate
+            .key_values
+            .iter()
+            .map(|(key, _)| key.as_str())
+            .chain(candidate.flags.iter().map(String::as_str))
+            .filter(|atom| atom.starts_with("target_"))
+            .collect();
+        let defines_an_unrelatable_target_atom = decided_target_cfg_atom_names
+            .iter()
+            .any(|atom| !TARGET_CFG_KEYS_THE_COHERENCE_RULES_RELATE.contains(atom));
+        if self.single_valued_key_values.contains_key("target_os") {
+            decided_target_cfg_atom_names.insert("target_os");
         }
-        if pinned_unrelatable_keys.is_empty() {
-            return false;
+        if self.mentions_a_target_family_atom() {
+            decided_target_cfg_atom_names.insert("target_family");
         }
-        pinned_relatable_keys.len() + pinned_unrelatable_keys.len() > 1
-            || self.mentions_flag("unix")
-            || self.mentions_flag("windows")
+        defines_an_unrelatable_target_atom && decided_target_cfg_atom_names.len() > 1
     }
 
     /// Whether a candidate assignment describes a build target that could
@@ -1521,14 +1535,14 @@ impl CfgPredicateAtomUniverse {
     /// A `target_os` that table does NOT name fixes nothing, so such a
     /// candidate is rejected outright once a family atom is in play: assigning
     /// it either way would be a guess, and this function's answers are read as
-    /// proofs. A candidate pinning target keys the rules relate to nothing is
-    /// dropped for the same reason (see
-    /// [`CfgPredicateAtomUniverse::candidate_pins_target_cfg_keys_the_rules_cannot_relate`]).
+    /// proofs. A candidate resting on target atoms the rules relate to nothing
+    /// is dropped for the same reason (see
+    /// [`CfgPredicateAtomUniverse::candidate_rests_on_target_cfg_atoms_the_rules_cannot_relate`]).
     fn candidate_build_target_is_coherent(&self, candidate: &ModuleReachabilityTarget) -> bool {
         if candidate.has_flag("unix") && candidate.has_flag("windows") {
             return false;
         }
-        if self.candidate_pins_target_cfg_keys_the_rules_cannot_relate(candidate) {
+        if self.candidate_rests_on_target_cfg_atoms_the_rules_cannot_relate(candidate) {
             return false;
         }
         let candidate_target_os = candidate.single_defined_value_of_cfg_key("target_os");
@@ -2630,10 +2644,16 @@ mod tests {
         );
     }
 
-    /// `rustc` fixes the target keys against one another and the model holds
+    /// `rustc` fixes the target atoms against one another and the model holds
     /// none of those facts, so a pair resting on two of them is left UNPROVEN.
     /// Without that, `#![cfg(target_env = "msvc")]` and `#![cfg(target_os =
     /// "linux")]` read satisfiable on a build target no rustc triple has.
+    ///
+    /// A NEGATED `target_os` / `target_family` value is the same fact spelled
+    /// the other way: the candidate satisfies it by leaving the key at "some
+    /// value the predicates never name", so the key decides the pair without
+    /// ever appearing in the witness. A bare `target_*` flag the candidate
+    /// defines counts on the unrelatable side too.
     #[test]
     fn a_pair_resting_on_unrelatable_target_keys_is_left_unproven() {
         for (first, second) in [
@@ -2641,6 +2661,16 @@ mod tests {
             (r#"target_arch = "wasm32""#, r#"target_os = "linux""#),
             (r#"target_vendor = "apple""#, "not(unix)"),
             (r#"target_arch = "wasm32""#, r#"target_env = "msvc""#),
+            (r#"target_env = "msvc""#, r#"not(target_os = "windows")"#),
+            (
+                r#"target_env = "msvc""#,
+                r#"not(target_family = "windows")"#,
+            ),
+            (
+                r#"target_vendor = "apple""#,
+                r#"not(target_family = "unix")"#,
+            ),
+            ("target_thread_local", r#"target_os = "linux""#),
         ] {
             assert!(
                 find_build_target_satisfying_both_cfg_predicate_sets(
@@ -2648,7 +2678,7 @@ mod tests {
                     &predicates(&[second]),
                 )
                 .is_none(),
-                "`{first}` and `{second}` name target keys the model cannot relate"
+                "`{first}` and `{second}` name target atoms the model cannot relate"
             );
         }
         // One such key on its own pins nothing against anything.
@@ -2656,6 +2686,14 @@ mod tests {
             find_build_target_satisfying_both_cfg_predicate_sets(
                 &predicates(&[r#"target_env = "msvc""#]),
                 &predicates(&[r#"not(target_env = "gnu")"#]),
+            )
+            .is_some()
+        );
+        // Nor does one weighed against an atom that is free of the target.
+        assert!(
+            find_build_target_satisfying_both_cfg_predicate_sets(
+                &predicates(&[r#"target_env = "msvc""#]),
+                &predicates(&[r#"feature = "cuda""#]),
             )
             .is_some()
         );
