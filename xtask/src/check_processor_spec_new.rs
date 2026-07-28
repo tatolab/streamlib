@@ -8,14 +8,15 @@
 //!
 //! 1. **Bare-string `ProcessorSpec::new`** (#707): catches
 //!    `ProcessorSpec::new("PascalCase", ...)` re-introductions.
-//! 2. **Hand-rolled `SchemaIdent` literal in `examples/*/src/`** (#719):
+//! 2. **Hand-rolled `SchemaIdent` literal in an example crate's Rust
+//!    source** (#719):
 //!    polyglot Rust example crates use the
 //!    `streamlib::sdk::schema_ident_any_version!` macro by default
 //!    (3-arg, runtime resolution against the registry — the common
 //!    case), or the strict-pin `streamlib::sdk::schema_ident!` form
 //!    (4-arg, compile-time-validated `SemVer`). This pass flags
 //!    `SchemaIdent::new(Org::new("..."), ...)` literals in
-//!    `examples/*/src/*.rs` to keep the pattern from coming back.
+//!    example Rust sources to keep the pattern from coming back.
 //!
 //! Both passes are deliberately tight — they catch the *exact* shape
 //! they're responsible for. Macro-generated code, `<Module>::schema_ident()`
@@ -33,7 +34,9 @@ use walkdir::WalkDir;
 /// the regex itself is lenient enough that we cover examples and
 /// `libs/` together; flat coverage means no consumer can reintroduce the
 /// pattern in a forgotten tree.
-pub const SCAN_DIR_PARENTS: &[&str] = &["runtime", "sdk", "adapters", "tools", "vendor", "examples", "packages"];
+pub const SCAN_DIR_PARENTS: &[&str] = &[
+    "runtime", "sdk", "adapters", "tools", "vendor", "examples", "packages",
+];
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct LintViolation {
@@ -42,10 +45,58 @@ pub struct LintViolation {
     pub snippet: String,
 }
 
-pub fn run(workspace_root: &Path) -> Result<()> {
-    let violations = lint_workspace(workspace_root)?;
+/// What one scan of the workspace found, and how much source each of its two
+/// passes read to find it. `run` refuses a report in which any one scan root
+/// contributed nothing.
+///
+/// Two independent tallies, because the passes cover different sets: the
+/// bare-string pass reads every `.rs` under [`SCAN_DIR_PARENTS`], while the
+/// hand-rolled-`SchemaIdent` pass reads only the example-crate sources under
+/// [`crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES`]. Counting the walk alone lets
+/// the narrower pass silently select nothing.
+#[derive(Debug)]
+pub struct ProcessorSpecNewScanReport {
+    pub violations: Vec<LintViolation>,
+    /// Rust files read under each [`SCAN_DIR_PARENTS`] entry, in that order.
+    pub files_scanned_per_scan_dir_parent: Vec<usize>,
+    /// Example-crate Rust files the hand-rolled-`SchemaIdent` pass selected
+    /// under each [`crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES`] entry, in that
+    /// order.
+    pub example_source_files_scanned_per_source_root: Vec<usize>,
+}
 
-    if violations.is_empty() {
+impl ProcessorSpecNewScanReport {
+    pub fn files_scanned(&self) -> usize {
+        self.files_scanned_per_scan_dir_parent.iter().sum()
+    }
+}
+
+pub fn run(workspace_root: &Path) -> Result<()> {
+    let report = lint_workspace(workspace_root)?;
+    for (parent, files_scanned) in SCAN_DIR_PARENTS
+        .iter()
+        .zip(&report.files_scanned_per_scan_dir_parent)
+    {
+        crate::ensure_source_walking_gate_read_source(
+            "check-processor-spec-new",
+            &format!("the `{parent}/` scan root"),
+            *files_scanned,
+            "a bare-string ProcessorSpec::new back in",
+        )?;
+    }
+    for (root_name, files_scanned) in crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES
+        .iter()
+        .zip(&report.example_source_files_scanned_per_source_root)
+    {
+        crate::ensure_source_walking_gate_read_source(
+            "check-processor-spec-new",
+            &format!("every example crate's `{root_name}/` source root"),
+            *files_scanned,
+            "a hand-rolled SchemaIdent literal back into an example",
+        )?;
+    }
+
+    if report.violations.is_empty() {
         println!(
             "✓ check-processor-spec-new: no bare-string ProcessorSpec::new sites and no hand-rolled SchemaIdent literals in examples/"
         );
@@ -54,9 +105,9 @@ pub fn run(workspace_root: &Path) -> Result<()> {
 
     eprintln!(
         "✗ check-processor-spec-new: {} violation(s):",
-        violations.len()
+        report.violations.len()
     );
-    for v in &violations {
+    for v in &report.violations {
         eprintln!("  {}:{}: {}", v.file.display(), v.line, v.snippet.trim());
     }
     eprintln!(
@@ -65,21 +116,25 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     anyhow::bail!("check-processor-spec-new failed");
 }
 
-/// True for paths under `<workspace_root>/examples/<crate>/.../src/`.
+/// The source root under which an example crate's Rust source file sits, or
+/// `None` for any path outside an example's source tree.
+///
 /// The hand-rolled-literal pass is scoped to example main.rs / linux.rs
 /// files — codegen.rs in `streamlib-macros` legitimately emits the
 /// literal as a token stream, and integration tests in `libs/*/tests/`
 /// build expected values to assert against. Both must stay outside the
-/// lint's reach. Accepts the flat shape (`examples/<crate>/src/`) as
-/// well as the sibling-sub-package shapes that some examples carry
-/// (e.g. `examples/<crate>/plugin/src/` for cdylib plugin packages,
-/// `examples/<crate>/effects/src/` for carved-out Rust effects
-/// packages). Any `examples/.../src/<file>.rs` is in scope.
-fn is_example_src_file(path: &Path) -> bool {
+/// lint's reach. Accepts the flat shape (`examples/<crate>/src/`), the
+/// sibling-sub-package shapes some examples carry
+/// (`examples/<crate>/plugin/`, `examples/<crate>/effects/`), and the
+/// folder-backed `processors/` root those plugin crates author under.
+///
+/// Returns which root matched, not just that one did, so the gate can refuse a
+/// run in which a whole source root selected nothing.
+fn example_source_root_of(path: &Path) -> Option<&'static str> {
     let mut components = path.components();
     let mut saw_examples = false;
-    let mut saw_src_after_examples = false;
-    while let Some(c) = components.next() {
+    let mut matched_source_root = None;
+    for c in components.by_ref() {
         let s = c.as_os_str();
         if !saw_examples {
             if s == "examples" {
@@ -87,16 +142,25 @@ fn is_example_src_file(path: &Path) -> bool {
             }
             continue;
         }
-        if s == "src" {
-            saw_src_after_examples = true;
+        if let Some(root) = crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES
+            .iter()
+            .find(|root| s == **root)
+        {
+            matched_source_root = Some(*root);
         }
     }
-    saw_examples && saw_src_after_examples
+    matched_source_root
 }
 
-pub fn lint_workspace(workspace_root: &Path) -> Result<Vec<LintViolation>> {
+/// Every bare-string `ProcessorSpec::new` / hand-rolled `SchemaIdent` site,
+/// plus how many files were read to find them — [`run`] refuses a scan that
+/// read nothing.
+pub fn lint_workspace(workspace_root: &Path) -> Result<ProcessorSpecNewScanReport> {
     let mut violations = Vec::new();
-    for parent in SCAN_DIR_PARENTS {
+    let mut files_scanned_per_scan_dir_parent = vec![0usize; SCAN_DIR_PARENTS.len()];
+    let mut example_source_files_scanned_per_source_root =
+        vec![0usize; crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES.len()];
+    for (parent_index, parent) in SCAN_DIR_PARENTS.iter().enumerate() {
         let parent_path = workspace_root.join(parent);
         if !parent_path.exists() {
             continue;
@@ -107,10 +171,23 @@ pub fn lint_workspace(workspace_root: &Path) -> Result<Vec<LintViolation>> {
             if !is_rust_source(path) {
                 continue;
             }
-            scan_file(path, &mut violations)?;
+            files_scanned_per_scan_dir_parent[parent_index] += 1;
+            let example_source_root = example_source_root_of(path);
+            if let Some(root_name) = example_source_root
+                && let Some(root_index) = crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES
+                    .iter()
+                    .position(|root| *root == root_name)
+            {
+                example_source_files_scanned_per_source_root[root_index] += 1;
+            }
+            scan_file(path, example_source_root.is_some(), &mut violations)?;
         }
     }
-    Ok(violations)
+    Ok(ProcessorSpecNewScanReport {
+        violations,
+        files_scanned_per_scan_dir_parent,
+        example_source_files_scanned_per_source_root,
+    })
 }
 
 fn is_rust_source(path: &Path) -> bool {
@@ -125,11 +202,10 @@ fn is_rust_source(path: &Path) -> bool {
     !path.components().any(|c| c.as_os_str() == "target")
 }
 
-fn scan_file(path: &Path, violations: &mut Vec<LintViolation>) -> Result<()> {
+fn scan_file(path: &Path, example_src: bool, violations: &mut Vec<LintViolation>) -> Result<()> {
     let content =
         fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
     let lines: Vec<&str> = content.lines().collect();
-    let example_src = is_example_src_file(path);
     for (idx, line) in lines.iter().enumerate() {
         if has_bare_string_processor_spec(line) {
             violations.push(LintViolation {
@@ -340,31 +416,59 @@ mod tests {
     }
 
     #[test]
-    fn is_example_src_correctly_classifies_paths() {
+    fn example_source_root_correctly_classifies_paths() {
         // Flat-shape example: examples/<crate>/src/<file>.rs
-        assert!(is_example_src_file(Path::new(
-            "/abs/examples/foo/src/main.rs"
-        )));
+        assert_eq!(
+            example_source_root_of(Path::new("/abs/examples/foo/src/main.rs")),
+            Some("src")
+        );
         // Sibling effects sub-package: examples/<crate>/effects/src/<file>.rs
-        assert!(is_example_src_file(Path::new(
-            "/abs/examples/camera-python-display/effects/src/linux.rs"
-        )));
+        assert_eq!(
+            example_source_root_of(Path::new(
+                "/abs/examples/camera-python-display/effects/src/linux.rs"
+            )),
+            Some("src")
+        );
         // Sibling plugin sub-package: examples/<crate>/plugin/src/<file>.rs
-        assert!(is_example_src_file(Path::new(
-            "/abs/examples/camera-rust-plugin/plugin/src/lib.rs"
-        )));
+        assert_eq!(
+            example_source_root_of(Path::new(
+                "/abs/examples/camera-rust-plugin/plugin/src/lib.rs"
+            )),
+            Some("src")
+        );
+        // Folder-backed plugin sub-package: the authored root is
+        // examples/<crate>/plugin/processors/, not src/ — narrowing the roots
+        // back to `src` alone takes every swept example crate out of the lint's
+        // reach with no failure anywhere.
+        assert_eq!(
+            example_source_root_of(Path::new(
+                "/abs/examples/camera-rust-plugin/plugin/processors/grayscale_linux.rs"
+            )),
+            Some(streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME)
+        );
+        assert_eq!(
+            example_source_root_of(Path::new(
+                "/abs/examples/camera-python-display/effects/processors/tone_mapper.rs"
+            )),
+            Some(streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME)
+        );
         // libs/ tests legitimately build expected SchemaIdent values:
-        assert!(!is_example_src_file(Path::new(
-            "/abs/runtime/streamlib-engine/tests/schema_ident_macro_test.rs"
-        )));
+        assert_eq!(
+            example_source_root_of(Path::new(
+                "/abs/runtime/streamlib-engine/tests/schema_ident_macro_test.rs"
+            )),
+            None
+        );
         // Macro codegen emits the literal as a token stream:
-        assert!(!is_example_src_file(Path::new(
-            "/abs/sdk/streamlib-macros/src/codegen.rs"
-        )));
+        assert_eq!(
+            example_source_root_of(Path::new("/abs/sdk/streamlib-macros/src/codegen.rs")),
+            None
+        );
         // build.rs / shaders / fixtures sit beside src/, not under it:
-        assert!(!is_example_src_file(Path::new(
-            "/abs/examples/foo/build.rs"
-        )));
+        assert_eq!(
+            example_source_root_of(Path::new("/abs/examples/foo/build.rs")),
+            None
+        );
     }
 
     #[test]
@@ -373,11 +477,11 @@ mod tests {
         // this must pass — every live `ProcessorSpec::new(` call site
         // takes a structured ident, not a bare PascalCase string.
         let workspace = workspace_root().expect("workspace root");
-        let violations = lint_workspace(&workspace).unwrap();
+        let report = lint_workspace(&workspace).unwrap();
         assert!(
-            violations.is_empty(),
+            report.violations.is_empty(),
             "workspace has bare-string ProcessorSpec::new sites: {:#?}",
-            violations
+            report.violations
         );
     }
 
@@ -399,9 +503,86 @@ mod tests {
     let s = ProcessorSpec::new(SchemaIdent::new(...), config);
 }"#,
         );
-        let violations = lint_workspace(dir.path()).unwrap();
-        assert_eq!(violations.len(), 1);
-        assert_eq!(violations[0].file, bad);
+        let report = lint_workspace(dir.path()).unwrap();
+        assert_eq!(report.violations.len(), 1);
+        assert_eq!(report.violations[0].file, bad);
+    }
+
+    // ----- anti-vacuity ------------------------------------------------------
+
+    /// The walk's own file count cannot express the second pass's contract: it
+    /// tallies every `.rs` under the scan parents, while the hand-rolled-
+    /// `SchemaIdent` pass only fires on the example sources a source root
+    /// selects. A tree whose examples hold no recognized source root must be
+    /// refused even though the walk read plenty.
+    #[test]
+    fn a_tree_whose_example_source_roots_select_nothing_is_refused_despite_a_busy_walk() {
+        let dir = TempDir::new().unwrap();
+        for parent in SCAN_DIR_PARENTS {
+            write_fixture(
+                dir.path(),
+                &format!("{parent}/probe/src/lib.rs"),
+                "pub fn f() {}\n",
+            );
+        }
+        // An example crate whose sources sit under no recognized source root:
+        // the hand-rolled-literal pass selects zero files.
+        write_fixture(
+            dir.path(),
+            "examples/foo/renamed_source_root/main.rs",
+            r#"        SchemaIdent::new(Org::new("tatolab").unwrap(), pkg)"#,
+        );
+
+        let report = lint_workspace(dir.path()).unwrap();
+        assert!(
+            report.files_scanned() > 0,
+            "the walk must read source, or this fixture proves nothing"
+        );
+        assert!(
+            report.violations.is_empty(),
+            "the planted literal is out of the pass's reach — that is the defect: {:?}",
+            report.violations
+        );
+
+        let error = run(dir.path()).expect_err(
+            "a run whose example source roots selected nothing must be refused, not reported clean",
+        );
+        assert!(
+            error.to_string().contains("scanned 0 files"),
+            "refusal must name the empty scan, got: {error}"
+        );
+    }
+
+    /// The non-empty assertion alone does not prove each root is reached: the
+    /// `src/`-rooted examples satisfy a workspace-wide total while every
+    /// `processors/`-rooted example crate goes unselected. Pin both roots, and
+    /// every scan parent, against the real workspace.
+    #[test]
+    fn the_scan_reaches_every_scan_parent_and_every_example_source_root() {
+        let workspace = workspace_root().expect("workspace root");
+        let report = lint_workspace(&workspace).expect("scan");
+
+        for (parent, files_scanned) in SCAN_DIR_PARENTS
+            .iter()
+            .zip(&report.files_scanned_per_scan_dir_parent)
+        {
+            assert!(
+                *files_scanned > 0,
+                "no Rust file was scanned under `{parent}/` — the gate is passing \
+                 vacuously for that tree"
+            );
+        }
+        for (root_name, files_scanned) in crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES
+            .iter()
+            .zip(&report.example_source_files_scanned_per_source_root)
+        {
+            assert!(
+                *files_scanned > 0,
+                "no example-crate file was selected under a `{root_name}/` source root — \
+                 the hand-rolled-SchemaIdent pass is passing vacuously for every crate \
+                 rooted there"
+            );
+        }
     }
 
     fn workspace_root() -> Result<PathBuf> {

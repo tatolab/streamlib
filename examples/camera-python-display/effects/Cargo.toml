@@ -18,6 +18,11 @@ license.workspace = true
 publish = false
 
 [lib]
+# The crate root is generated from `processors/` before every cargo
+# invocation (`cargo xtask generate-crate-roots` in-tree; the build
+# orchestrator's pre-cargo staging step everywhere else). It is a build
+# artifact — gitignored, and excluded from the packed `.slpkg`.
+path = "_generated_rust_crate_root_/lib.rs"
 crate-type = ["rlib", "cdylib"]
 
 [build-dependencies]

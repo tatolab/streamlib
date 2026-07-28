@@ -10,6 +10,11 @@ repository = "https://github.com/tato123/streamlib"
 license = "BUSL-1.1"
 
 [lib]
+# The crate root is generated from `processors/` before every cargo
+# invocation (`cargo xtask generate-crate-roots` in-tree; the build
+# orchestrator's pre-cargo staging step everywhere else). It is a build
+# artifact — gitignored, and excluded from the packed `.slpkg`.
+path = "_generated_rust_crate_root_/lib.rs"
 name = "streamlib_screen_capture"
 crate-type = ["rlib", "cdylib"]
 
@@ -38,7 +43,8 @@ serde = {version = "1.0", features = ["derive"]}
 tracing = {version = "0.1.41", features = ["release_max_level_debug"]}
 
 # The Apple ScreenCaptureKit processor lives parked under
-# `src/_apple_impl_pending_/` behind a never-compile `#[cfg(any())]` gate: it
+# `processors/_apple_impl_pending_/` behind a never-compile `#![cfg(any())]`
+# gate on its `mod.rs`: it
 # names an engine-free Apple RHI / surface-pool surface the plugin SDK does not
 # expose yet (`sdk::rhi` is `cfg(linux)`-only). Its Objective-C interop deps
 # (objc2-screen-capture-kit / objc2-core-media / objc2 / objc2-core-video /

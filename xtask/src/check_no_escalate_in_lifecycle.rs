@@ -84,7 +84,7 @@ const ALLOWLIST: &[(&str, &str)] = &[
     // ships the pattern the lint exists to ban, with the runtime
     // panic as the safety net if it's ever loaded.
     (
-        "packages/test-fixtures/src/concurrent_escalate_test_processor.rs",
+        "packages/test-fixtures/processors/concurrent_escalate_test_processor.rs",
         "intentional pattern that #1075's wrap deadlocks; \
          integration test #[ignore]d, restructure deferred",
     ),
@@ -123,9 +123,23 @@ pub struct Violation {
     pub line: usize,
 }
 
+/// What one scan of the workspace found, and how much source it read to find
+/// it. `run` refuses a report whose `files_scanned` is zero.
+#[derive(Debug)]
+pub struct EscalateInLifecycleScanReport {
+    pub violations: Vec<Violation>,
+    pub files_scanned: usize,
+}
+
 pub fn run(workspace_root: &Path) -> Result<()> {
-    let violations = scan_workspace(workspace_root)?;
-    if violations.is_empty() {
+    let report = scan_workspace(workspace_root)?;
+    crate::ensure_source_walking_gate_read_source(
+        "check-no-escalate-in-lifecycle",
+        &format!("{TARGET_DIRS:?}"),
+        report.files_scanned,
+        "a lifecycle body re-enter the escalate gate",
+    )?;
+    if report.violations.is_empty() {
         println!(
             "✓ check-no-escalate-in-lifecycle: no `.escalate(...)` calls inside \
              FullAccess lifecycle bodies (setup / teardown / start / stop and \
@@ -140,9 +154,9 @@ pub fn run(workspace_root: &Path) -> Result<()> {
          `&RuntimeContextFullAccess` (setup / teardown / helper). \
          The lifecycle dispatch already holds the escalate gate; \
          re-entering panics at runtime.",
-        violations.len()
+        report.violations.len()
     );
-    for v in &violations {
+    for v in &report.violations {
         eprintln!(
             "  {}:{}: fn {} reaches `.escalate(...)` — see \
              docs/architecture/cdylib-reachability.md anti-pattern #1",
@@ -171,8 +185,11 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     anyhow::bail!("check-no-escalate-in-lifecycle failed");
 }
 
-pub fn scan_workspace(workspace_root: &Path) -> Result<Vec<Violation>> {
+/// Every lifecycle-body escalate violation, plus how many files were parsed to
+/// find them — [`run`] refuses a scan that read nothing.
+pub fn scan_workspace(workspace_root: &Path) -> Result<EscalateInLifecycleScanReport> {
     let mut all = Vec::new();
+    let mut files_scanned = 0usize;
     for dir in TARGET_DIRS {
         let target = workspace_root.join(dir);
         if !target.is_dir() {
@@ -210,6 +227,7 @@ pub fn scan_workspace(workspace_root: &Path) -> Result<Vec<Violation>> {
                 // best-effort; the runtime panic is the backstop.
                 Err(_) => continue,
             };
+            files_scanned += 1;
             let mut visitor = FileVisitor {
                 file_path: relpath,
                 violations: &mut all,
@@ -217,7 +235,10 @@ pub fn scan_workspace(workspace_root: &Path) -> Result<Vec<Violation>> {
             visitor.visit_file(&file);
         }
     }
-    Ok(all)
+    Ok(EscalateInLifecycleScanReport {
+        violations: all,
+        files_scanned,
+    })
 }
 
 /// `true` when any argument's type contains a path segment whose

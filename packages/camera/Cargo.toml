@@ -10,6 +10,11 @@ repository = "https://github.com/tato123/streamlib"
 license = "BUSL-1.1"
 
 [lib]
+# The crate root is generated from `processors/` before every cargo
+# invocation (`cargo xtask generate-crate-roots` in-tree; the build
+# orchestrator's pre-cargo staging step everywhere else). It is a build
+# artifact — gitignored, and excluded from the packed `.slpkg`.
+path = "_generated_rust_crate_root_/lib.rs"
 name = "streamlib_camera"
 crate-type = ["rlib", "cdylib"]
 
@@ -49,7 +54,8 @@ v4l = "0.14"
 libc = {version = "0.2.177"}
 
 # NOTE: the Apple (AVFoundation) camera arm is parked under
-# `src/_apple_impl_pending_/` (never compiled — see `src/lib.rs`); its
+# `processors/_apple_impl_pending_/` (never compiled — a file-level
+# `#![cfg(any())]` on its `mod.rs` gates the whole directory); its
 # objc2 / dispatch2 interop deps are removed until the plugin SDK ships an
 # engine-free Apple RHI surface and the arm is unparked.
 

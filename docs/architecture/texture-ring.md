@@ -306,9 +306,9 @@ constructed in `setup()`).
     `GpuContextLimitedAccess::copy_pixel_buffer_to_texture` in
     `runtime/streamlib-engine/src/core/context/gpu_context.rs`
 - **First consumers (CPU-upload shape)**:
-  - `packages/h264/src/linux/decoder.rs`
-  - `packages/h265/src/linux/decoder.rs`
-  - `packages/debug-utilities/src/bgra_file_source.rs`
+  - `packages/h264/processors/decoder_linux.rs`
+  - `packages/h265/processors/decoder_linux.rs`
+  - `packages/debug-utilities/processors/bgra_file_source.rs`
 - **Related abstractions**:
   - [`texture-registration.md`](texture-registration.md) —
     per-surface lifecycle record the ring populates at

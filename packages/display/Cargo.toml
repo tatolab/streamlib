@@ -10,6 +10,11 @@ repository = "https://github.com/tato123/streamlib"
 license = "BUSL-1.1"
 
 [lib]
+# The crate root is generated from `processors/` before every cargo
+# invocation (`cargo xtask generate-crate-roots` in-tree; the build
+# orchestrator's pre-cargo staging step everywhere else). It is a build
+# artifact — gitignored, and excluded from the packed `.slpkg`.
+path = "_generated_rust_crate_root_/lib.rs"
 name = "streamlib_display"
 crate-type = ["rlib", "cdylib"]
 
@@ -49,9 +54,10 @@ winit = "0.30"
 raw-window-handle = "0.6"
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
-# Apple module is ported into this package but DISABLED in `lib.rs` —
+# Apple module is ported into this package but parked under
+# `processors/_apple_impl_pending_/` behind a file-level `#![cfg(any())]` —
 # the Metal-side rewrite onto a Metal-equivalent present target is
-# tracked as a separate follow-up. Listed here so the apple/ source
+# tracked as a separate follow-up. Listed here so the parked source
 # tree is greppable / discoverable; nothing depends on these symbols
 # being reachable yet.
 

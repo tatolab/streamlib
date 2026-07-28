@@ -14,8 +14,9 @@ use crate::ident::{Org, Package, PackageRef, TypeName};
 use crate::semver::{SemVer, SemVerRange};
 
 /// Conventional processor-source directory beside a package's
-/// `streamlib.yaml` — the polyglot analogue of a Rust crate's `src/`, and the
-/// one root the Python and Deno processor extractors discover under.
+/// `streamlib.yaml` — the one root every processor extractor discovers under,
+/// Rust included, and the root a Rust package's generated crate root projects
+/// its module arms out of.
 pub const PACKAGE_PROCESSOR_SOURCE_DIR_NAME: &str = "processors";
 
 /// `streamlib.yaml` — single source of truth for a package or project.

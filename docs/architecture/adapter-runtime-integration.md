@@ -374,7 +374,7 @@ the other by Path 1 (in-process, via the registry held in
 that don't match registration](texture-registration.md#anti-patterns).
 
 The reference in-tree producer is `LinuxCameraProcessor` in the
-`streamlib-camera` package — `packages/camera/src/linux/camera.rs`
+`streamlib-camera` package — `packages/camera/processors/camera_linux.rs`
 calls both `store.register_texture(...)` and
 `gpu_context.register_texture_with_layout(...)` (outside the
 `escalate(|full| ...)` closure where the ring textures were

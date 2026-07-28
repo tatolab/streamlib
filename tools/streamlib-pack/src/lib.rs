@@ -669,6 +669,13 @@ pub fn assemble_artifact_with_cargo_config(
                         pkg_dir.display()
                     )
                 })?;
+            // Cargo resolves `[lib] path` at target resolution, before any
+            // build script runs, so a folder-backed package's generated crate
+            // root has to exist before cargo is invoked at all. This is the one
+            // pre-cargo seam every non-monorepo build reaches — `add`,
+            // `install`, the runtime's staged materialization, and the
+            // link-edit-rebuild loop all land here.
+            generate_folder_backed_crate_root(pkg_dir)?;
             sink.started("rust");
             let built = cargo_build_streaming(
                 pkg_dir,
@@ -818,14 +825,17 @@ fn enforce_processor_manifest_matches_code(
 ) -> Result<()> {
     let target = streamlib_processor_extract::ModuleReachabilityTarget::for_host();
     let extractor = streamlib_processor_extract::SystemSubprocessProcessorExtractor;
-    let derived =
-        streamlib_processor_extract::derive_package_processor_surfaces(pkg_dir, &target, &extractor)
-            .map_err(|e| anyhow::anyhow!("deriving the processor set from code: {e}"))?;
+    let derived = streamlib_processor_extract::derive_package_processor_surfaces(
+        pkg_dir, &target, &extractor,
+    )
+    .map_err(|e| anyhow::anyhow!("deriving the processor set from code: {e}"))?;
     // Compare only the languages actually derived. A language whose extractor
     // runtime was unavailable (Python/Deno on a host without it) is skipped, and
     // its committed processors are excluded rather than falsely flagged as drift.
-    let committed_in_scope =
-        streamlib_processor_extract::filter_committed_to_languages(committed, &derived.derived_languages);
+    let committed_in_scope = streamlib_processor_extract::filter_committed_to_languages(
+        committed,
+        &derived.derived_languages,
+    );
     streamlib_processor_extract::check_processor_manifest_drift(
         pkg_dir,
         &committed_in_scope,
@@ -1019,6 +1029,7 @@ pub fn is_non_source_artifact(name: &std::ffi::OsStr) -> bool {
             | "node_modules"
             | "__pycache__"
             | "_generated_"
+            | streamlib_processor_extract::crate_root::GENERATED_CRATE_ROOT_DIR_NAME
             | ".streamlib-build.json"
             | ".venv"
             | "venv"
@@ -1091,6 +1102,25 @@ fn apply_link_checkout_env(command: &mut Command, link_checkout: Option<&Path>) 
         None => std::ffi::OsStr::new(""),
     };
     command.env(streamlib_idents::LINK_CHECKOUT_ENV, value);
+}
+
+/// Write the folder-backed crate root a package's `[lib] path` points at.
+///
+/// A package that commits its own crate root (no `[lib] path` at the generated
+/// location) is left alone — generation is opt-in per package, keyed on the
+/// manifest, so a hand-rooted crate is never overwritten.
+fn generate_folder_backed_crate_root(pkg_dir: &Path) -> Result<()> {
+    let request =
+        streamlib_processor_extract::crate_root::RustCrateRootGenerationRequest::for_package_dir_if_generation_is_declared(
+            pkg_dir,
+        )
+        .with_context(|| format!("reading Cargo manifest at {}", pkg_dir.display()))?;
+    let Some(request) = request else {
+        return Ok(());
+    };
+    streamlib_processor_extract::crate_root::write_generated_rust_crate_root(&request)
+        .with_context(|| format!("generating crate root for {}", pkg_dir.display()))?;
+    Ok(())
 }
 
 fn cargo_build_streaming(
@@ -1513,7 +1543,10 @@ fn emit_staged_dir(
     stamped_cargo_toml: Option<&[u8]>,
 ) -> Result<()> {
     std::fs::create_dir_all(dir).with_context(|| format!("create {}", dir.display()))?;
-    if !is_same_existing_file(&src_pkg_dir.join("streamlib.yaml"), &dir.join("streamlib.yaml")) {
+    if !is_same_existing_file(
+        &src_pkg_dir.join("streamlib.yaml"),
+        &dir.join("streamlib.yaml"),
+    ) {
         std::fs::write(dir.join("streamlib.yaml"), manifest_bytes)
             .context("write streamlib.yaml")?;
     }
@@ -1600,7 +1633,10 @@ mod tests {
         let schema = src.path().join("schemas").join("t.yaml");
         let original_schema = std::fs::read(&schema).unwrap();
         let original_manifest = std::fs::read(src.path().join("streamlib.yaml")).unwrap();
-        assert!(!original_schema.is_empty(), "fixture schema must be non-empty");
+        assert!(
+            !original_schema.is_empty(),
+            "fixture schema must be non-empty"
+        );
 
         assemble_artifact(
             src.path(),
@@ -1841,14 +1877,14 @@ mod tests {
     /// `manifest_processors` is spliced verbatim as the `processors:` YAML so a
     /// test can make it agree with — or drift from — the code.
     fn write_rust_processor_pkg(dir: &Path, manifest_processors: &str) {
-        std::fs::create_dir_all(dir.join("src")).unwrap();
+        std::fs::create_dir_all(dir.join("processors")).unwrap();
         std::fs::write(
             dir.join("Cargo.toml"),
             "[package]\nname = \"cam\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
         )
         .unwrap();
         std::fs::write(
-            dir.join("src/lib.rs"),
+            dir.join("processors/camera.rs"),
             r#"#[processor("@tatolab/camera/Camera", execution = manual, output("video", "@tatolab/core/VideoFrame"))]
             pub struct Camera;
             "#,
@@ -1861,6 +1897,109 @@ mod tests {
             ),
         )
         .unwrap();
+    }
+
+    /// A folder-backed package: `[lib] path` points at the generated crate root
+    /// and the package commits none, so cargo cannot resolve a lib target until
+    /// the pre-cargo generation seam has run.
+    fn write_folder_backed_rust_processor_pkg(dir: &Path) {
+        std::fs::create_dir_all(dir.join("processors")).unwrap();
+        std::fs::write(
+            dir.join("Cargo.toml"),
+            format!(
+                "[package]\nname = \"cam\"\nversion = \"0.1.0\"\nedition = \"2021\"\n\n\
+                 [lib]\npath = \"{}\"\ncrate-type = [\"cdylib\"]\n",
+                streamlib_processor_extract::crate_root::generated_crate_root_lib_path_value()
+            ),
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("processors/camera.rs"),
+            r#"#[processor("@tatolab/camera/Camera", execution = manual, output("video", "@tatolab/core/VideoFrame"))]
+            pub struct Camera;
+            "#,
+        )
+        .unwrap();
+        std::fs::write(
+            dir.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: cam\n  version: 0.1.0\nprocessors:\n- name: Camera\n  runtime: rust\n  execution: manual\n  outputs:\n  - name: video\n    schema: VideoFrame\n",
+        )
+        .unwrap();
+    }
+
+    /// Cargo resolves `[lib] path` at target resolution, before any build script
+    /// runs, so a folder-backed package's crate root must exist before cargo is
+    /// invoked at all. This pins that seam: the fixture's crate cannot COMPILE
+    /// (no SDK dep to resolve `#[processor]` against), but the generated root
+    /// must be on disk afterwards, naming the arm's `export_plugin!` entry. Drop
+    /// the generation call and cargo instead fails at target resolution with a
+    /// missing `lib.rs`, leaving nothing behind.
+    #[test]
+    fn assemble_generates_the_folder_backed_crate_root_before_invoking_cargo() {
+        let dir = tempdir().unwrap();
+        write_folder_backed_rust_processor_pkg(dir.path());
+
+        let staged = tempdir().unwrap();
+        let _ = assemble_artifact(
+            dir.path(),
+            &AssembleTarget::StagedDir(staged.path().join("out")),
+            &slpkg_opts(false),
+            &(),
+        );
+
+        let generated = dir
+            .path()
+            .join(streamlib_processor_extract::crate_root::generated_crate_root_lib_path_value());
+        let source = std::fs::read_to_string(&generated).unwrap_or_else(|e| {
+            panic!(
+                "assemble must write {} before invoking cargo: {e}",
+                generated.display()
+            )
+        });
+        assert!(
+            source.contains("#[path = \"../processors/camera.rs\"]\npub mod camera;"),
+            "{source}"
+        );
+        assert!(
+            source.contains(
+                "streamlib_plugin_abi::export_plugin!(\n    crate::camera::Camera::Processor,\n);"
+            ),
+            "{source}"
+        );
+    }
+
+    /// The other half of the same contract: the generated root is a build
+    /// artifact, so it never travels in the `.slpkg` — the consumer regenerates
+    /// it from the bundled `processors/` tree on their own host.
+    #[test]
+    fn the_generated_crate_root_never_travels_in_the_slpkg() {
+        let dir = tempdir().unwrap();
+        write_folder_backed_rust_processor_pkg(dir.path());
+        let generated = dir
+            .path()
+            .join(streamlib_processor_extract::crate_root::generated_crate_root_lib_path_value());
+        std::fs::create_dir_all(generated.parent().unwrap()).unwrap();
+        std::fs::write(&generated, "pub mod camera;\n").unwrap();
+
+        let out = dir.path().join("o.slpkg");
+        assemble_artifact(
+            dir.path(),
+            &AssembleTarget::Slpkg(out.clone()),
+            &slpkg_opts(true),
+            &(),
+        )
+        .expect("source-only slpkg must assemble");
+
+        let entries = zip_entries(&out);
+        assert!(
+            entries.contains(&"processors/camera.rs".to_string()),
+            "the authored arm must travel, got {entries:?}"
+        );
+        assert!(
+            !entries.iter().any(|entry| entry
+                .contains(streamlib_processor_extract::crate_root::GENERATED_CRATE_ROOT_DIR_NAME)),
+            "the generated crate root must be stripped, got {entries:?}"
+        );
     }
 
     /// A source-only `.slpkg` build assembles when the committed `processors:`
@@ -1907,7 +2046,10 @@ mod tests {
         )
         .unwrap_err();
         let msg = err.to_string();
-        assert!(msg.contains("Camera"), "drift error must name Camera: {msg}");
+        assert!(
+            msg.contains("Camera"),
+            "drift error must name Camera: {msg}"
+        );
         assert!(
             msg.contains("source of truth"),
             "drift error must explain code is truth: {msg}"
@@ -1942,10 +2084,7 @@ mod tests {
     #[test]
     fn slpkg_build_fails_on_undeclared_schema_dependency() {
         let dir = tempdir().unwrap();
-        write_schema_pkg(
-            dir.path(),
-            "  Imported:\n    package: '@other/dep'\n",
-        );
+        write_schema_pkg(dir.path(), "  Imported:\n    package: '@other/dep'\n");
         let out = dir.path().join("o.slpkg");
         let err = assemble_artifact(
             dir.path(),
@@ -2110,9 +2249,9 @@ mod tests {
         )
         .unwrap();
         std::fs::write(dir.path().join("Cargo.toml"), b"[package]\nname='rp'\n").unwrap();
-        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::create_dir(dir.path().join("processors")).unwrap();
         std::fs::write(
-            dir.path().join("src/lib.rs"),
+            dir.path().join("processors/p.rs"),
             b"#[processor(\"@tatolab/rp/P\", execution = manual)]\npub struct P;\n",
         )
         .unwrap();
@@ -2137,7 +2276,7 @@ mod tests {
             "crate manifest must ship"
         );
         assert!(
-            entries.contains(&"src/lib.rs".to_string()),
+            entries.contains(&"processors/p.rs".to_string()),
             "crate source must ship"
         );
         // The prebuilt cdylib does NOT — source-only.
@@ -2171,9 +2310,9 @@ mod tests {
                 "[package]\nname = \"rp\"\nversion = \"0.1.0\"\nedition = \"2021\"\n",
             )
             .unwrap();
-            std::fs::create_dir_all(dir.join("src")).unwrap();
+            std::fs::create_dir_all(dir.join("processors")).unwrap();
             std::fs::write(
-                dir.join("src/lib.rs"),
+                dir.join("processors/camera.rs"),
                 b"#[processor(\"@tatolab/rp/P\", execution = manual)]\npub struct P;\n",
             )
             .unwrap();
@@ -2202,7 +2341,10 @@ mod tests {
             &(),
         )
         .expect("flag off honors the in-tree prebuilt without rebuilding");
-        assert!(!outcome.rebuilt, "flag off reuses the prebuilt — no compile");
+        assert!(
+            !outcome.rebuilt,
+            "flag off reuses the prebuilt — no compile"
+        );
         let staged_dylib = staged_reuse
             .path()
             .join("lib")
@@ -2365,8 +2507,8 @@ mod tests {
             b"[package]\nname=\"p\"\nversion=\"0.1.0\"\n",
         )
         .unwrap();
-        std::fs::create_dir(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/lib.rs"), b"// src").unwrap();
+        std::fs::create_dir(dir.path().join("processors")).unwrap();
+        std::fs::write(dir.path().join("processors/p.rs"), b"// src").unwrap();
         std::fs::write(dir.path().join("Cargo.lock"), b"# stale lock\n").unwrap();
 
         let mut files = Vec::new();
@@ -2377,8 +2519,8 @@ mod tests {
             "manifest must ship: {names:?}"
         );
         assert!(
-            names.iter().any(|n| n.contains("lib.rs")),
-            "src must ship: {names:?}"
+            names.iter().any(|n| n.contains("processors/p.rs")),
+            "the authored processor tree must ship: {names:?}"
         );
         assert!(
             !names.iter().any(|n| n.contains("Cargo.lock")),
@@ -2960,9 +3102,9 @@ mod tests {
             "[package]\nname = \"rp\"\nversion = \"0.4.30\"\nedition = \"2024\"\n",
         )
         .unwrap();
-        std::fs::create_dir(dir.path().join("src")).unwrap();
+        std::fs::create_dir(dir.path().join("processors")).unwrap();
         std::fs::write(
-            dir.path().join("src/lib.rs"),
+            dir.path().join("processors/p.rs"),
             b"#[processor(\"@tatolab/rp/P\", execution = manual)]\npub struct P;\n",
         )
         .unwrap();
@@ -3010,8 +3152,8 @@ mod tests {
             "[package]\nname = \"rp\"\nversion = \"0.4.30\"\nedition = \"2024\"\n",
         )
         .unwrap();
-        std::fs::create_dir(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/lib.rs"), b"// crate source").unwrap();
+        std::fs::create_dir(dir.path().join("processors")).unwrap();
+        std::fs::write(dir.path().join("processors/p.rs"), b"// crate source").unwrap();
         let triple_dir = dir.path().join("lib").join(host_target_triple());
         std::fs::create_dir_all(&triple_dir).unwrap();
         std::fs::write(
@@ -3078,8 +3220,8 @@ mod tests {
         )
         .unwrap();
         std::fs::write(dir.path().join("Cargo.toml"), ":::: not toml ::::\n").unwrap();
-        std::fs::create_dir(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/lib.rs"), b"// crate source").unwrap();
+        std::fs::create_dir(dir.path().join("processors")).unwrap();
+        std::fs::write(dir.path().join("processors/p.rs"), b"// crate source").unwrap();
         let triple_dir = dir.path().join("lib").join(host_target_triple());
         std::fs::create_dir_all(&triple_dir).unwrap();
         std::fs::write(
@@ -3126,8 +3268,8 @@ mod tests {
             "[package]\nname = \"rp\"\nversion.workspace = true\nedition = \"2024\"\n",
         )
         .unwrap();
-        std::fs::create_dir(dir.path().join("src")).unwrap();
-        std::fs::write(dir.path().join("src/lib.rs"), b"// crate source").unwrap();
+        std::fs::create_dir(dir.path().join("processors")).unwrap();
+        std::fs::write(dir.path().join("processors/p.rs"), b"// crate source").unwrap();
         let triple_dir = dir.path().join("lib").join(host_target_triple());
         std::fs::create_dir_all(&triple_dir).unwrap();
         std::fs::write(

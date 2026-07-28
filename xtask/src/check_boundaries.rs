@@ -1023,13 +1023,18 @@ fn check_packages_facade_runtime_dep(
 // ---------------------------------------------------------------------------
 //
 // A separately-built source-only `.slpkg` can have a binary that diverges from
-// the host's even at a matched version. GPU code that grabs the raw transited
-// host device (`host_vulkan_device_arc`) and hand-rolls RHI on it corrupts the
-// driver in that scenario — package GPU code must go through the cdylib-safe
-// FullAccess primitives (see docs/learnings/slpkg-raw-device-rhi-construction.md).
-// The engine-bridge path `streamlib::sdk::engine::*` is the curated surface that
-// exposes those raw handles; reaching it from a package is the same boundary
-// crossing.
+// the host's even at a matched version. GPU code that grabs the raw host device
+// and hand-rolls RHI on it corrupts the driver in that scenario — package GPU
+// code must go through the cdylib-safe FullAccess primitives (see
+// docs/learnings/slpkg-raw-device-rhi-construction.md).
+//
+// No raw host device crosses the plugin ABI: the raw-`Arc` transit slots were
+// deleted, so `host_vulkan_device_arc` survives only as an engine-internal
+// host-mode accessor (runtime/streamlib-engine/src/core/context/gpu_context.rs)
+// that refuses a cdylib handle. A package can name it only by pulling the engine
+// facade in-workspace; `streamlib::sdk::engine::*` is the curated surface that
+// hands out those raw primitives. Both patterns stay policed as a ratchet
+// against reintroducing the transit.
 //
 // Grep-shaped (comment lines skipped): the engine-bridge path substring and the
 // bare `host_vulkan_device_arc` identifier. Seeded to the current reachers (see
@@ -1041,26 +1046,28 @@ fn check_packages_facade_runtime_dep(
 // engine-backed integration test / benchmark legitimately reaches the bridge,
 // and check 8 already blesses the `streamlib` dev-dep those targets link
 // against. Only the cargo target dir directly under the package root is
-// exempt — a `src/tests/` helper dir stays covered. `src/` stays strict
+// exempt — a nested `tests/` helper dir stays covered. Every root a package
+// authors under (`processors/`, or `src/` for a host rlib package) stays strict
 // EVERYWHERE, including `#[cfg(test)]` mods — for a tooling reason, NOT because
 // the reach ships: the pack / load build is `cargo build -p <crate>`, never
 // `--tests` (tools/streamlib-pack/src/lib.rs), so the `test` cfg is OFF and a
 // `#[cfg(test)]` reach is compiled out — it does NOT ship in the cdylib. It
 // stays flagged because this grep is line-based and cannot reliably scope a
 // reach to a `#[cfg(test)]` mod; engine-backed tests belong in the top-level
-// `tests/` target (blessed by check 8). An in-`src` hit is told to move the
-// engine-backed test to `tests/`.
+// `tests/` target (blessed by check 8). A hit under an authored root is told to
+// move the engine-backed test to `tests/`.
 
 const CHECK_PACKAGES_ENGINE_REACH: &str = "packages-no-engine-bridge-reach";
 
-const PACKAGES_ENGINE_REACH_RATIONALE: &str = "packages/* source must not reach the engine bridge (`streamlib::sdk::engine::*`) or grab the raw transited host device via `host_vulkan_device_arc` — a separately-built source-only .slpkg whose GPU code hand-rolls RHI on the host device corrupts the driver (docs/learnings/slpkg-raw-device-rhi-construction.md); package GPU code goes through the cdylib-safe FullAccess primitives";
+const PACKAGES_ENGINE_REACH_RATIONALE: &str = "packages/* source must not reach the engine bridge (`streamlib::sdk::engine::*`) or the engine-internal `host_vulkan_device_arc` accessor — a separately-built source-only .slpkg whose GPU code hand-rolls RHI on the raw host device corrupts the driver (docs/learnings/slpkg-raw-device-rhi-construction.md). The raw-`Arc` transit slots were deleted, so no host device crosses the plugin ABI; this stays policed as a ratchet against reintroducing it. Package GPU code goes through the cdylib-safe FullAccess primitives";
 
 /// Engine-bridge module path — the curated surface that hands packages raw
 /// engine primitives. A substring match is enough; it is unambiguous.
 const ENGINE_BRIDGE_PATH: &str = "streamlib::sdk::engine::";
 
-/// Accessor that returns the raw transited host `VulkanDevice`. Matched as a
-/// bare identifier (word boundaries) so a longer lookalike does not trip it.
+/// Engine-internal accessor that returns the raw host `VulkanDevice`. Matched
+/// as a bare identifier (word boundaries) so a longer lookalike does not trip
+/// it.
 const HOST_DEVICE_ARC_IDENT: &str = "host_vulkan_device_arc";
 
 /// The `packages/*` dirs whose source may reach the engine bridge or the host
@@ -1087,7 +1094,8 @@ fn check_packages_engine_reach(
         }
         // A package's TOP-LEVEL tests/ or benches/ dir is exempt — engine-backed
         // integration tests / benchmarks belong there (check 8 blesses the
-        // dev-dep). `src/` stays strict everywhere, including a `src/tests/`
+        // dev-dep). Every other root a package authors under (`processors/`, or
+        // `src/` for a host package) stays strict, including a nested `tests/`
         // helper dir and `#[cfg(test)]` mods.
         if package_top_level_test_or_bench_dir(rel) {
             continue;
@@ -2634,7 +2642,7 @@ streamlib = { version = "0.6.0" }
         // reach forms pass.
         write_fixture(
             dir.path(),
-            "packages/test-fixtures/src/gpu_fixture.rs",
+            "packages/test-fixtures/processors/gpu_fixture.rs",
             "use streamlib::sdk::engine::host_rhi::VulkanDevice;\nfn f() { let d = full.host_vulkan_device_arc().unwrap(); }\n",
         );
         let report = scan_all(dir.path()).unwrap();

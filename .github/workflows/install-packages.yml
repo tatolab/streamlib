@@ -87,6 +87,14 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-install-packages-
 
+      # A folder-backed package commits no crate root: its `[lib] path` points
+      # at `_generated_rust_crate_root_/lib.rs`, which cargo resolves at target resolution —
+      # before any build script — so it cannot be a `build.rs` step. Off the
+      # monorepo the build orchestrator writes it; in-tree this is the
+      # generation site.
+      - name: Generate folder-backed crate roots
+        run: cargo run --locked -p xtask -- generate-crate-roots
+
       - name: Build the streamlib CLI
         # The driver drives the on-box install path through this exact binary.
         run: cargo build --locked -p streamlib-cli

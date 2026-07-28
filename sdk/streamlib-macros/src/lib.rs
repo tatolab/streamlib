@@ -67,11 +67,13 @@ use syn::{
 /// the global `PROCESSOR_REGISTRY`. Callers register processors through
 /// one of two paths:
 ///
-/// - **Cdylib packages** declare `crate-type = ["rlib", "cdylib"]` and
-///   call `export_plugin!(...)` from `lib.rs`. The runtime `dlopen()`s
-///   the cdylib at `runtime.add_module(...)` time; the plugin ABI's
-///   `STREAMLIB_PLUGIN` callback registers each processor via the host's
-///   `processor_register` callback.
+/// - **Cdylib packages** declare `crate-type = ["rlib", "cdylib"]` and author
+///   the struct under `processors/`; the generated crate root
+///   (`[lib] path = "_generated_rust_crate_root_/lib.rs"`) emits the
+///   `export_plugin!` naming it, so the package hand-writes no registration.
+///   The runtime `dlopen()`s the cdylib at `runtime.add_module(...)` time; the
+///   plugin ABI's `STREAMLIB_PLUGIN` callback registers each processor via the
+///   host's `processor_register` callback.
 /// - **In-process Rust callers** invoke
 ///   `PROCESSOR_REGISTRY.register::<Foo::Processor>()` directly. Tests
 ///   and engine-internal mocks use this path.

@@ -25,9 +25,40 @@ pub mod check_package_version_drift;
 pub mod check_processor_spec_new;
 pub mod check_schema_versions;
 pub mod check_vendored_vulkanalia;
+pub mod generate_crate_roots;
 pub mod install_packages;
 pub mod lint_logging;
 pub mod manifest_schema;
+
+/// Rust source roots a workspace crate may hold: the classic `src/` and the
+/// folder-backed `processors/` a generated crate root declares its module arms
+/// out of. Every source-walking gate shares this list, and it spells the
+/// folder-backed root through [`streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME`]
+/// so renaming that root cannot leave a gate scanning a directory that no
+/// longer exists.
+pub const RUST_CRATE_SOURCE_ROOT_DIR_NAMES: &[&str] =
+    &["src", streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME];
+
+/// Refuse a source-walking gate run that read no source at all.
+///
+/// A gate whose scan roots moved out from under it is indistinguishable from a
+/// clean tree: both report zero violations. `unnoticed_consequence` names what
+/// the gate would then let through, so the failure reads as the gate's own
+/// contract rather than a generic count assertion. One sentence shape for every
+/// gate, so a fifth one cannot invent a weaker phrasing.
+pub fn ensure_source_walking_gate_read_source(
+    gate_name: &str,
+    scan_roots_description: &str,
+    files_scanned: usize,
+    unnoticed_consequence: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        files_scanned > 0,
+        "{gate_name} scanned 0 files under {scan_roots_description} — the scan roots \
+         moved out from under the gate, which would let {unnoticed_consequence} unnoticed"
+    );
+    Ok(())
+}
 
 #[derive(Parser)]
 #[command(name = "xtask")]
@@ -67,6 +98,14 @@ enum Commands {
         #[arg(long, group = "input")]
         schema_dir: Option<PathBuf>,
     },
+
+    /// Write every in-tree folder-backed package's generated Rust crate root
+    /// (`_generated_rust_crate_root_/lib.rs`) from its `processors/` directory.
+    ///
+    /// Cargo resolves `[lib] path` at target resolution, before any build
+    /// script runs, so this cannot live in a `build.rs`. Run it before any
+    /// in-tree `cargo build` / `cargo test` that touches a package crate.
+    GenerateCrateRoots,
 
     /// Ban ad-hoc logging in polyglot SDK library code (Python + TypeScript).
     /// Paired with the workspace clippy.toml `disallowed-macros` rule for Rust.
@@ -277,6 +316,7 @@ fn main() -> Result<()> {
                 link_checkout,
             })?
         }
+        Commands::GenerateCrateRoots => generate_crate_roots::run(&workspace_root()?)?,
         Commands::LintLogging => lint_logging::run(&workspace_root()?)?,
         Commands::CheckBoundaries => check_boundaries::run(&workspace_root()?)?,
         Commands::CheckSchemaVersions => check_schema_versions::run(&workspace_root()?)?,

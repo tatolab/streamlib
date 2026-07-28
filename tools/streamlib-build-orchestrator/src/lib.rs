@@ -689,10 +689,10 @@ fn destination_is_source_dir(destination: &Path, pkg_dir: &Path) -> bool {
 }
 
 /// Append the in-tree build-output ignore lines (host-triple cdylib dir, venv,
-/// generated wire vocabulary, completion marker) to a mutable dev checkout's own
-/// `.gitignore` so they never show as untracked. Idempotent: only absent lines
-/// are appended, so repeated builds and additional host triples accumulate
-/// without duplication.
+/// generated wire vocabulary, generated Rust crate root, completion marker) to a
+/// mutable dev checkout's own `.gitignore` so they never show as untracked.
+/// Idempotent: only absent lines are appended, so repeated builds and additional
+/// host triples accumulate without duplication.
 fn ensure_build_outputs_gitignored(destination: &Path, triple: &str) -> anyhow::Result<()> {
     use anyhow::Context;
     use std::collections::HashSet;
@@ -701,6 +701,10 @@ fn ensure_build_outputs_gitignored(destination: &Path, triple: &str) -> anyhow::
         format!("/lib/{triple}/"),
         "/.venv/".to_string(),
         "/_generated_/".to_string(),
+        format!(
+            "/{}/",
+            streamlib_processor_extract::crate_root::GENERATED_CRATE_ROOT_DIR_NAME
+        ),
         format!("/{SIDECAR_NAME}"),
     ];
     let gitignore = destination.join(".gitignore");
@@ -1374,10 +1378,12 @@ mod tests {
         );
     }
 
-    /// A fresh in-tree destination gets a `.gitignore` covering every promoted
-    /// build-output unit plus the completion marker, so a dev source's build
-    /// outputs never show as untracked git noise. Mentally drop any required
-    /// line and the corresponding `contains` assertion fails.
+    /// A fresh in-tree destination gets a `.gitignore` covering every build
+    /// output that lands beside a package's source — the promoted units, the
+    /// generated Rust crate root the pre-cargo step writes into the source dir,
+    /// and the completion marker — so a dev source's build outputs never show as
+    /// untracked git noise. Mentally drop any required line and the
+    /// corresponding `contains` assertion fails.
     #[test]
     fn ensure_build_outputs_gitignored_writes_all_units() {
         let dest = tempfile::tempdir().unwrap();
@@ -1387,6 +1393,13 @@ mod tests {
         assert!(body.contains(&format!("/lib/{triple}/")), "{body}");
         assert!(body.contains("/.venv/"), "{body}");
         assert!(body.contains("/_generated_/"), "{body}");
+        assert!(
+            body.contains(&format!(
+                "/{}/",
+                streamlib_processor_extract::crate_root::GENERATED_CRATE_ROOT_DIR_NAME
+            )),
+            "{body}"
+        );
         assert!(body.contains(&format!("/{SIDECAR_NAME}")), "{body}");
     }
 

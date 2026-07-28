@@ -72,8 +72,9 @@ impl PackageLanguage {
 
 /// Detect which languages a package hosts processors in, from files on disk.
 ///
-/// - **Rust** — a `Cargo.toml` beside a `src/lib.rs` or `src/main.rs` crate
-///   root (the Rust scan parses the `*.rs` under that `src/` directory).
+/// - **Rust** — a `Cargo.toml` (the Rust scan parses the `*.rs` under the
+///   `processors/` directory beside it). The crate root is generated from that
+///   directory rather than committed, so its presence says nothing.
 /// - **Python** — a `pyproject.toml` (the Python extractor imports the `*.py`
 ///   under the `processors/` directory beside it).
 /// - **Deno** — a `deno.json` (the Deno extractor imports the `*.ts` under the
@@ -83,9 +84,7 @@ impl PackageLanguage {
 /// package like `@tatolab/core`).
 pub fn detect_package_languages(package_dir: &Path) -> BTreeSet<PackageLanguage> {
     let mut out = BTreeSet::new();
-    let has_crate_root =
-        package_dir.join("src/lib.rs").is_file() || package_dir.join("src/main.rs").is_file();
-    if package_dir.join("Cargo.toml").is_file() && has_crate_root {
+    if package_dir.join("Cargo.toml").is_file() {
         out.insert(PackageLanguage::Rust);
     }
     if package_dir.join("pyproject.toml").is_file() {
@@ -362,7 +361,11 @@ impl WireProcessor {
         ProcessorSurface {
             name: self.name,
             execution: self.execution,
-            inputs: self.inputs.into_iter().map(WirePort::into_surface).collect(),
+            inputs: self
+                .inputs
+                .into_iter()
+                .map(WirePort::into_surface)
+                .collect(),
             outputs: self
                 .outputs
                 .into_iter()
@@ -556,9 +559,11 @@ pub fn derive_package_processor_surfaces(
                     .extend(parse_subprocess_manifest_json(language.label(), &json)?);
                 set.derived_languages.insert(language);
             }
-            Err(err @ (DeriveError::SpawnExtractor { .. }
-            | DeriveError::ExtractorFailed { .. }
-            | DeriveError::ExtractorUnconfigured { .. })) => {
+            Err(
+                err @ (DeriveError::SpawnExtractor { .. }
+                | DeriveError::ExtractorFailed { .. }
+                | DeriveError::ExtractorUnconfigured { .. }),
+            ) => {
                 let reason = err.to_string();
                 tracing::warn!(
                     language = language.label(),
@@ -769,11 +774,12 @@ fn describe_port_schema(schema: &PortSchemaSurface) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::scan_fixture_tempdir::{
+        ScanFixtureTempDir, scan_fixture_tempdir_named, write_scan_fixture_file as write,
+    };
 
-    fn write(dir: &Path, rel: &str, body: &str) {
-        let path = dir.join(rel);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, body).unwrap();
+    fn tempdir() -> ScanFixtureTempDir {
+        scan_fixture_tempdir_named("slderive")
     }
 
     /// An extractor that returns canned JSON, so the derivation + drift logic is
@@ -809,7 +815,7 @@ mod tests {
         let tmp = tempdir();
         let root = tmp.path();
         write(root, "Cargo.toml", "[package]\nname='x'\n");
-        write(root, "src/lib.rs", "");
+        write(root, "processors/marker.rs", "");
         write(root, "pyproject.toml", "");
         write(root, "deno.json", "{}");
         let langs = detect_package_languages(root);
@@ -818,11 +824,25 @@ mod tests {
         assert!(langs.contains(&PackageLanguage::TypeScript));
     }
 
+    /// Rust is detected by `Cargo.toml` alone, symmetric with
+    /// `pyproject.toml` / `deno.json`. A folder-backed package commits no crate
+    /// root — it is generated — so keying detection on `src/lib.rs` would make
+    /// every swept package silently non-Rust.
     #[test]
-    fn cargo_without_crate_root_is_not_rust() {
+    fn cargo_toml_alone_detects_rust() {
         let tmp = tempdir();
         let root = tmp.path();
         write(root, "Cargo.toml", "[package]\nname='x'\n");
+        assert!(detect_package_languages(root).contains(&PackageLanguage::Rust));
+    }
+
+    /// A package with no `Cargo.toml` is not Rust, however many `.rs` files sit
+    /// under `processors/`.
+    #[test]
+    fn processor_sources_without_a_cargo_toml_are_not_rust() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(root, "processors/arm.rs", "pub struct NotACrate;\n");
         assert!(!detect_package_languages(root).contains(&PackageLanguage::Rust));
     }
 
@@ -908,9 +928,15 @@ mod tests {
             p.scheduling.map(|s| s.priority),
             Some(streamlib_processor_schema::ThreadPriority::High)
         );
-        assert_eq!(p.description.as_deref(), Some("a live-submitted pass-through"));
+        assert_eq!(
+            p.description.as_deref(),
+            Some("a live-submitted pass-through")
+        );
         assert_eq!(p.inputs.len(), 1);
-        assert!(p.inputs[0].schema.is_none(), "null schema is an any wildcard");
+        assert!(
+            p.inputs[0].schema.is_none(),
+            "null schema is an any wildcard"
+        );
         assert_eq!(p.inputs[0].delivery_profile.as_deref(), Some("latest"));
         assert_eq!(p.inputs[0].description.as_deref(), Some("wildcard input"));
         assert_eq!(p.outputs.len(), 1);
@@ -946,7 +972,7 @@ mod tests {
         write(root, "Cargo.toml", "[package]\nname='cam'\n");
         write(
             root,
-            "src/lib.rs",
+            "processors/arm.rs",
             r#"#[processor("@tatolab/camera/Camera", execution = manual,
                 output("video", "@tatolab/core/VideoFrame"))]
             pub struct Camera;"#,
@@ -1005,7 +1031,7 @@ processors:
         write(root, "Cargo.toml", "[package]\nname='x'\n");
         write(
             root,
-            "src/lib.rs",
+            "processors/arm.rs",
             r#"
             #[processor("@tatolab/demo/Alpha", execution = reactive)]
             pub struct Alpha;
@@ -1048,7 +1074,7 @@ processors:
         write(root, "Cargo.toml", "[package]\nname='x'\n");
         write(
             root,
-            "src/lib.rs",
+            "processors/arm.rs",
             r#"#[processor("@tatolab/demo/Alpha", execution = reactive)]
             pub struct Alpha;"#,
         );
@@ -1083,7 +1109,7 @@ processors:
         write(root, "Cargo.toml", "[package]\nname='x'\n");
         write(
             root,
-            "src/lib.rs",
+            "processors/arm.rs",
             r#"#[processor("@tatolab/demo/Alpha", execution = manual)]
             pub struct Alpha;"#,
         );
@@ -1116,7 +1142,7 @@ processors:
         write(root, "Cargo.toml", "[package]\nname='x'\n");
         write(
             root,
-            "src/lib.rs",
+            "processors/arm.rs",
             r#"#[processor("@tatolab/demo/Alpha", execution = reactive,
                 output("a", "@tatolab/core/VideoFrame"),
                 output("b", "@tatolab/core/VideoFrame"))]
@@ -1237,13 +1263,19 @@ processors:
         let manifest = ProcessorSurface {
             name: "Mixer".to_string(),
             execution: ProcessorSchemaExecution::default(),
-            inputs: vec![port("frame", PortSchemaSurface::Type("VideoFrame".to_string()))],
+            inputs: vec![port(
+                "frame",
+                PortSchemaSurface::Type("VideoFrame".to_string()),
+            )],
             outputs: vec![],
         };
         let code = ProcessorSurface {
             name: "Mixer".to_string(),
             execution: ProcessorSchemaExecution::default(),
-            inputs: vec![port("frame", PortSchemaSurface::Type("AudioFrame".to_string()))],
+            inputs: vec![port(
+                "frame",
+                PortSchemaSurface::Type("AudioFrame".to_string()),
+            )],
             outputs: vec![],
         };
 
@@ -1251,26 +1283,5 @@ processors:
         assert!(message.contains("input port `frame`"), "{message}");
         assert!(message.contains("VideoFrame"), "{message}");
         assert!(message.contains("AudioFrame"), "{message}");
-    }
-
-    struct TmpDir(PathBuf);
-    impl TmpDir {
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-    impl Drop for TmpDir {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
-    fn tempdir() -> TmpDir {
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        let pid = std::process::id();
-        let dir = std::env::temp_dir().join(format!("slderive-{pid}-{n}"));
-        std::fs::create_dir_all(&dir).unwrap();
-        TmpDir(dir)
     }
 }

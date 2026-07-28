@@ -6,7 +6,7 @@
 //! tempdir, route it through `add_module_with(..., ManifestDirectory)`,
 //! and assert `TestConfiguredProcessor` registered via the
 //! `STREAMLIB_PLUGIN` callback. Mentally revert the `export_plugin!`
-//! invocation in `packages/test-fixtures/src/lib.rs` and this test
+//! invocation in `packages/test-fixtures/_generated_rust_crate_root_/lib.rs` and this test
 //! fails — the dlopen path validates the processor was registered by
 //! the dylib and surfaces a `Configuration` error when it wasn't.
 
@@ -18,6 +18,9 @@ use streamlib::sdk::module_ident_any_version;
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib_engine::core::runtime::host_target_triple;
+
+#[path = "common/folder_backed_package_build.rs"]
+mod folder_backed_package_build;
 
 fn copy_dir_contents(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).unwrap();
@@ -45,14 +48,7 @@ fn load_project_real_dylib_registers_processor_via_export_plugin() {
     // the `STREAMLIB_PLUGIN` symbol. Default-off — see the feature note
     // in `packages/test-fixtures/Cargo.toml`. Idempotent: cargo's
     // incremental machinery skips the rebuild on a warm tree.
-    let status = std::process::Command::new(env!("CARGO"))
-        .args(["build", "-p", "streamlib-test-fixtures"])
-        .status()
-        .expect("invoking cargo build");
-    assert!(
-        status.success(),
-        "cargo build -p streamlib-test-fixtures must succeed"
-    );
+    folder_backed_package_build::build_folder_backed_package("streamlib-test-fixtures");
 
     let dylib_ext = if cfg!(target_os = "macos") {
         "dylib"

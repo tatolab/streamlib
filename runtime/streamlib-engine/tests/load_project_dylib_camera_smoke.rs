@@ -97,6 +97,9 @@ use streamlib::sdk::runtime::{BuildPolicy, Runner, Strategy};
 use streamlib::sdk::schema_ident;
 use streamlib_engine::core::runtime::host_target_triple;
 
+#[path = "common/folder_backed_package_build.rs"]
+mod folder_backed_package_build;
+
 fn copy_dir_contents(src: &Path, dst: &Path) {
     std::fs::create_dir_all(dst).unwrap();
     for entry in std::fs::read_dir(src).unwrap() {
@@ -120,14 +123,7 @@ fn dlopen_camera_processor_completes_lifecycle_against_vivid() {
         .unwrap();
     // Build streamlib-camera as a cdylib carrying the
     // `STREAMLIB_PLUGIN` symbol that the runtime dlopens.
-    let status = std::process::Command::new(env!("CARGO"))
-        .args(["build", "-p", "streamlib-camera"])
-        .status()
-        .expect("invoking cargo build for streamlib-camera");
-    assert!(
-        status.success(),
-        "cargo build -p streamlib-camera must succeed"
-    );
+    folder_backed_package_build::build_folder_backed_package("streamlib-camera");
 
     let dylib_ext = if cfg!(target_os = "macos") {
         "dylib"

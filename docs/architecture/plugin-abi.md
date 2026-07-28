@@ -503,6 +503,26 @@ associated consts the `#[processor]` macro emits against the detected
 SDK crate — the facade `streamlib` or the engine-free
 `streamlib-plugin-sdk`, resolved identically.
 
+Each `export_plugin!` entry may carry its own `#[cfg(...)]`, so one
+invocation describes every target the package builds for. The
+declaration is anchored by the FIRST entry that survives cfg-stripping
+(one `#[allow(unreachable_code)] const fn` returning the
+`(abi_layout_fingerprint, build_identity)` pair, its body one cfg-gated
+`return` per entry) — every entry resolves the two consts against the
+same SDK crate, so the choice of anchor is free rather than semantic.
+That agreement is *enforced*, not assumed: the macro emits a
+cfg-gated `const _: () = assert!(...)` per entry pinning its
+`__STREAMLIB_ABI_LAYOUT_FINGERPRINT` to the anchor's, so a cdylib mixing
+processors generated against the facade and against the engine-free SDK
+is an E0080 at the invocation rather than a declaration whose fingerprint
+describes only one entry. The build identity carries no twin guard — it
+is an error-path-only diagnostic string, not a matched value. An
+invocation whose entries are all stripped is a const-eval
+compile error, never a silently unregistered plugin; a crate-root
+generator emitting per-target arms gates the whole invocation on the
+disjunction of its entry predicates so a package with no processor on
+this target simply emits no declaration.
+
 The host's `validate_plugin_declaration` runs two checks in a
 load-bearing order, before `register` is invoked:
 
@@ -589,6 +609,16 @@ The wrapper itself is locked by the
 processor) and for every adapter crate's local `run_host_extern_c`
 copy — each of those carries its own panic-catch path with
 weaker direct test coverage than the engine's central wrapper.
+
+`export_plugin!`'s generated `register` is the plugin-side entry point
+and the one `extern "C"` slot the macro emits; its `catch_unwind`
+covers both the anchor entry's `install_host_services` and the
+per-entry register loop, and a panic in either converts to a silent
+return (the host's post-call "processor not registered" check surfaces
+it). Locked by
+`runtime/streamlib-plugin-abi/tests/export_plugin_entry_panic_containment.rs`,
+which aborts the test binary rather than failing an assert if the net
+is removed.
 
 ## Test discipline
 

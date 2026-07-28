@@ -28,42 +28,22 @@
 //! `DynGeneratedProcessor` surface — constructor + lifecycle plus
 //! iceoryx2 wiring, execution-config, and config-json IO.
 //!
-//! # Example plugin
+//! # How a package reaches [`export_plugin`]
 //!
-//! ```ignore
-//! use streamlib::prelude::*;
-//! use streamlib_plugin_abi::export_plugin;
+//! A distributable Rust package authors each processor as a `#[processor]`
+//! struct under `processors/` and commits **no crate root**: its `Cargo.toml`
+//! points `[lib] path` at `_generated_rust_crate_root_/lib.rs` alongside a
+//! `cdylib` crate-type, and `streamlib_processor_extract::crate_root` writes
+//! that root before every cargo invocation as the mechanical projection of
+//! `processors/` — one `#[path]`-attributed module arm per top-level entry
+//! plus one [`export_plugin`] naming every processor the package declares on
+//! any target, each entry carrying the author's `#[cfg]` verbatim. Nobody
+//! hand-writes the invocation, and no `lib.rs` exists to hand-write it in.
+//! See `docs/architecture/package-staging-layout.md`.
 //!
-//! // The `#[processor(...)]` attribute is the single source of truth for
-//! // identity, execution mode, and ports — nothing is read from a file.
-//! #[streamlib::sdk::processor(
-//!     "@org/pkg/MyProcessor",
-//!     execution = continuous,
-//!     input("video_in", "@tatolab/core/VideoFrame", description = "Video input"),
-//!     output("video_out", "@tatolab/core/VideoFrame"),
-//! )]
-//! pub struct MyProcessor;
-//!
-//! impl ContinuousProcessor for MyProcessor::Processor {
-//!     fn process(&mut self) -> Result<()> {
-//!         if let Some(frame) = self.inputs.read("video_in") { /* ... */ }
-//!         Ok(())
-//!     }
-//! }
-//!
-//! export_plugin!(MyProcessor::Processor);
-//! ```
-//!
-//! # Plugin Cargo.toml
-//!
-//! ```toml
-//! [lib]
-//! crate-type = ["cdylib"]
-//!
-//! [dependencies]
-//! streamlib = "0.2"
-//! streamlib-plugin-abi = "0.2"
-//! ```
+//! [`export_plugin`] is invoked by hand only where there is no `processors/`
+//! tree to project from — this crate's own load-path test binaries and the
+//! cross-rustc build fixture.
 
 use core::ffi::c_void;
 
@@ -925,15 +905,77 @@ unsafe impl Sync for PluginDeclaration {}
 /// `tracing::info!` line, both of which only flow back to the host
 /// once the forwarders are in place.
 ///
-/// # Example
+/// ABI contract for the entry list: each entry may carry its own outer
+/// attributes (in practice `#[cfg(...)]`), the entries surviving
+/// cfg-stripping are the ones registered, and the FIRST survivor anchors
+/// the declaration's single `abi_layout_fingerprint` / build identity.
+/// A per-entry const assertion refuses the invocation when any surviving
+/// entry's `__STREAMLIB_ABI_LAYOUT_FINGERPRINT` differs from the anchor's,
+/// and an all-stripped invocation is a compile error rather than an
+/// unanchored declaration. See `docs/architecture/plugin-abi.md`.
 ///
-/// ```ignore
-/// export_plugin!(MyProcessor::Processor);
-/// export_plugin!(ProcessorA::Processor, ProcessorB::Processor);
+/// The refusal legs have no runtime surface, so their compile-time
+/// witnesses live here as doctests.
+///
+/// No entries at all — the zero-entry arm's `compile_error!`:
+///
+/// ```compile_fail
+/// streamlib_plugin_abi::export_plugin!();
+/// fn main() {}
+/// ```
+///
+/// Every entry stripped by its own `#[cfg]` — const evaluation of the
+/// anchor fails (E0080) and the register callback's now-unreachable
+/// `Option::None` fallback has no type to infer (E0282):
+///
+/// ```compile_fail
+/// pub struct EveryEntryStrippedStubProcessor;
+///
+/// streamlib_plugin_abi::export_plugin!(
+///     #[cfg(any())]
+///     EveryEntryStrippedStubProcessor,
+/// );
+/// fn main() {}
+/// ```
+///
+/// Two surviving entries disagreeing on the ABI layout fingerprint —
+/// what a cdylib mixing processors built against the `streamlib` facade
+/// and against the engine-free `streamlib-plugin-sdk` would emit. The
+/// stubs carry the full surface `export_plugin!` resolves, so the
+/// fingerprint disagreement is the only error available:
+///
+/// ```compile_fail
+/// macro_rules! declare_fingerprint_stub {
+///     ($stub_type:ident, $abi_layout_fingerprint:expr) => {
+///         pub struct $stub_type;
+///         impl $stub_type {
+///             pub const __STREAMLIB_ABI_LAYOUT_FINGERPRINT: u64 = $abi_layout_fingerprint;
+///             pub const __STREAMLIB_BUILD_IDENTITY: &'static str = "stub";
+///             /// # Safety
+///             /// The pointer is never dereferenced.
+///             pub unsafe fn __streamlib_install_host_services(
+///                 _host_services: *const core::ffi::c_void,
+///             ) -> Option<()> { Some(()) }
+///             pub fn __streamlib_register(_register_helper: &()) {}
+///         }
+///     };
+/// }
+/// declare_fingerprint_stub!(AnchorStubProcessor, 0x1111_1111_1111_1111);
+/// declare_fingerprint_stub!(DisagreeingStubProcessor, 0x2222_2222_2222_2222);
+///
+/// streamlib_plugin_abi::export_plugin!(AnchorStubProcessor, DisagreeingStubProcessor);
+/// fn main() {}
 /// ```
 #[macro_export]
 macro_rules! export_plugin {
-    ($first:ty $(, $rest:ty)* $(,)?) => {
+    () => {
+        ::core::compile_error!(
+            "`export_plugin!` requires at least one processor type — a cdylib \
+             with no processors must omit the invocation entirely rather than \
+             emit an unanchored `STREAMLIB_PLUGIN` declaration"
+        );
+    };
+    ( $( $(#[$entry_attribute:meta])* $processor_type:ty ),* $(,)? ) => {
         /// Generated by `streamlib_plugin_abi::export_plugin!`.
         ///
         /// # Safety
@@ -941,7 +983,7 @@ macro_rules! export_plugin {
         /// `host_services` must point at a layout-compatible
         /// [`HostServices`] payload, per the [`PluginRegisterFn`]
         /// contract.
-        #[allow(non_snake_case)]
+        #[allow(non_snake_case, unreachable_code)]
         unsafe extern "C" fn __streamlib_plugin_register(
             host_services: *const ::core::ffi::c_void,
         ) {
@@ -960,35 +1002,74 @@ macro_rules! export_plugin {
                 // against the `streamlib` facade both work unchanged.
                 //
                 // SAFETY: forwarded per the [`PluginRegisterFn`] contract.
-                // install runs once (on the first processor — it is
-                // processor-agnostic); every processor registers via the
-                // returned helper.
-                let helper = unsafe {
-                    <$first>::__streamlib_install_host_services(host_services)
+                // install runs once (on the first entry that survives
+                // cfg-stripping — it is processor-agnostic); every surviving
+                // entry then registers via the returned helper.
+                let install_outcome = 'streamlib_install_host_services: {
+                    $(
+                        $(#[$entry_attribute])*
+                        {
+                            break 'streamlib_install_host_services unsafe {
+                                <$processor_type>::__streamlib_install_host_services(
+                                    host_services,
+                                )
+                            };
+                        }
+                    )*
+                    ::core::option::Option::None
                 };
-                let ::core::option::Option::Some(helper) = helper else {
+                let ::core::option::Option::Some(register_helper) = install_outcome else {
                     return;
                 };
-                <$first>::__streamlib_register(&helper);
                 $(
-                    <$rest>::__streamlib_register(&helper);
+                    $(#[$entry_attribute])*
+                    <$processor_type>::__streamlib_register(&register_helper);
                 )*
             });
         }
+
+        /// The `(abi_layout_fingerprint, build_identity)` of the first entry
+        /// that survives cfg-stripping — the values the declaration carries
+        /// exactly one of.
+        #[allow(unreachable_code)]
+        const fn __streamlib_plugin_anchor_identity() -> (u64, &'static str) {
+            $(
+                $(#[$entry_attribute])*
+                {
+                    return (
+                        <$processor_type>::__STREAMLIB_ABI_LAYOUT_FINGERPRINT,
+                        <$processor_type>::__STREAMLIB_BUILD_IDENTITY,
+                    );
+                }
+            )*
+            ::core::panic!(
+                "`export_plugin!` has no entry that survives cfg-stripping on this \
+                 target — the emitted `STREAMLIB_PLUGIN` declaration would carry no \
+                 ABI layout fingerprint or build identity"
+            )
+        }
+
+        $(
+            $(#[$entry_attribute])*
+            const _: () = ::core::assert!(
+                <$processor_type>::__STREAMLIB_ABI_LAYOUT_FINGERPRINT
+                    == __streamlib_plugin_anchor_identity().0,
+                "`export_plugin!` entries disagree on \
+                 `__STREAMLIB_ABI_LAYOUT_FINGERPRINT` — every processor in one \
+                 cdylib must be generated against the same SDK crate, because \
+                 the emitted `STREAMLIB_PLUGIN` declaration carries exactly one \
+                 fingerprint for the host to match"
+            );
+        )*
 
         #[unsafe(no_mangle)]
         pub static STREAMLIB_PLUGIN: $crate::PluginDeclaration = $crate::PluginDeclaration {
             abi_version: $crate::STREAMLIB_ABI_VERSION,
             _reserved_padding: 0,
             register: __streamlib_plugin_register,
-            // The `#[processor]` macro emits these associated consts
-            // against the plugin's detected SDK crate (the facade
-            // `streamlib` or the engine-free `streamlib-plugin-sdk`); the
-            // envelope names no SDK path itself, matching how `register`
-            // is resolved.
-            abi_layout_fingerprint: <$first>::__STREAMLIB_ABI_LAYOUT_FINGERPRINT,
-            build_identity_ptr: <$first>::__STREAMLIB_BUILD_IDENTITY.as_ptr(),
-            build_identity_len: <$first>::__STREAMLIB_BUILD_IDENTITY.len(),
+            abi_layout_fingerprint: __streamlib_plugin_anchor_identity().0,
+            build_identity_ptr: __streamlib_plugin_anchor_identity().1.as_ptr(),
+            build_identity_len: __streamlib_plugin_anchor_identity().1.len(),
         };
     };
 }
