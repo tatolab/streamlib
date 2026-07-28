@@ -165,9 +165,12 @@ pub mod sdk {
 
     // ---- Runtime-control requests ----
     /// `request_runtime_shutdown` — ask whoever owns the run loop to stop the
-    /// runtime. Path-identical to `streamlib_plugin_sdk::sdk::runtime_control`,
-    /// so a facade-built package and an engine-free package author the same
-    /// call.
+    /// runtime. Call-shape-identical to
+    /// `streamlib_plugin_sdk::sdk::runtime_control`, so a facade-built package
+    /// and an engine-free package author the same call. The failure surface
+    /// differs: this copy has no `PluginHostUnavailable` arm, because a facade
+    /// build cannot distinguish "I am the host" from "I am a cdylib whose
+    /// `install_host_services` never ran" — both read as the host arm.
     pub mod runtime_control {
         pub use streamlib_engine::core::runtime::request_runtime_shutdown;
     }
