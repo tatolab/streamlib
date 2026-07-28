@@ -6,8 +6,10 @@
 //! plugin ABI crate — which by design names no SDK path and cannot depend on
 //! one.
 
+#![allow(dead_code)] // each integration-test binary uses a different subset
+
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 /// How many times a generated register callback called
 /// `__streamlib_install_host_services`. The macro contract is exactly once per
@@ -20,12 +22,40 @@ pub static HOST_SERVICES_INSTALL_ANCHOR_TYPE_NAME: Mutex<Option<&'static str>> =
 /// Processor type names registered through the helper, in call order.
 pub static REGISTERED_PROCESSOR_TYPE_NAMES: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
 
-/// Reset every recorder so one test file can drive the register callback more
-/// than once (the null-host-services leg after the positive leg).
+/// When set, `__streamlib_install_host_services` panics after recording the
+/// attempt instead of returning a helper. Drives the panic-containment leg for
+/// the anchor entry's install.
+pub static PANIC_INSIDE_HOST_SERVICES_INSTALL: AtomicBool = AtomicBool::new(false);
+
+/// When set to a processor type name, that entry's `__streamlib_register`
+/// panics after recording itself. Drives the panic-containment leg for the
+/// per-entry register loop.
+pub static PANIC_INSIDE_REGISTER_FOR_PROCESSOR_TYPE_NAME: Mutex<Option<&'static str>> =
+    Mutex::new(None);
+
+/// Reset every recorder and panic switch so one test file can drive the
+/// register callback more than once (the null-host-services and panic legs
+/// after the positive leg).
 pub fn reset_plugin_registration_recorders() {
     HOST_SERVICES_INSTALL_CALL_COUNT.store(0, Ordering::SeqCst);
     *HOST_SERVICES_INSTALL_ANCHOR_TYPE_NAME.lock().unwrap() = None;
     REGISTERED_PROCESSOR_TYPE_NAMES.lock().unwrap().clear();
+    PANIC_INSIDE_HOST_SERVICES_INSTALL.store(false, Ordering::SeqCst);
+    *PANIC_INSIDE_REGISTER_FOR_PROCESSOR_TYPE_NAME
+        .lock()
+        .unwrap() = None;
+}
+
+/// Run `body` with the default panic hook suppressed, so a leg that
+/// deliberately panics inside the safety net does not write a backtrace to the
+/// test log. `catch_unwind` still runs the hook, so silencing it is the only
+/// way to keep the expected panic quiet.
+pub fn with_the_panic_hook_suppressed<BodyReturn>(body: impl FnOnce() -> BodyReturn) -> BodyReturn {
+    let previous_panic_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {}));
+    let outcome = body();
+    std::panic::set_hook(previous_panic_hook);
+    outcome
 }
 
 /// Stand-in for the SDK's `RegisterHelper` — the opaque token
@@ -92,6 +122,9 @@ pub fn record_host_services_install(
     host_services: *const core::ffi::c_void,
 ) -> Option<StubPluginRegisterHelper> {
     HOST_SERVICES_INSTALL_CALL_COUNT.fetch_add(1, Ordering::SeqCst);
+    if PANIC_INSIDE_HOST_SERVICES_INSTALL.load(Ordering::SeqCst) {
+        panic!("stub install panic from {processor_type_name}");
+    }
     if host_services.is_null() {
         return None;
     }
@@ -119,6 +152,12 @@ pub fn record_processor_registration(
         .lock()
         .unwrap()
         .push(processor_type_name);
+    let panicking_type_name = *PANIC_INSIDE_REGISTER_FOR_PROCESSOR_TYPE_NAME
+        .lock()
+        .unwrap();
+    if panicking_type_name == Some(processor_type_name) {
+        panic!("stub register panic from {processor_type_name}");
+    }
 }
 
 /// Read the declaration's build identity back off the wire.

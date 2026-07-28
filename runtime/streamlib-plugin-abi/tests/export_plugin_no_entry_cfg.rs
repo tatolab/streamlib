@@ -76,8 +76,9 @@ fn register_installs_once_and_registers_every_entry_in_declaration_order() {
         ]
     );
 
-    // Null host services: the install refuses, the callback returns without
-    // registering anything, and nothing unwinds across the `extern "C"` edge.
+    // Null host services: the install refuses and the callback returns without
+    // registering anything. Panic containment across the `extern "C"` edge is
+    // a separate leg — see `export_plugin_entry_panic_containment.rs`.
     common::reset_plugin_registration_recorders();
     // SAFETY: a null pointer is the documented refusal leg — the macro's
     // early return is exactly what this exercises.

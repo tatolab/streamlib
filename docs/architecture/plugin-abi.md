@@ -609,6 +609,16 @@ processor) and for every adapter crate's local `run_host_extern_c`
 copy — each of those carries its own panic-catch path with
 weaker direct test coverage than the engine's central wrapper.
 
+`export_plugin!`'s generated `register` is the plugin-side entry point
+and the one `extern "C"` slot the macro emits; its `catch_unwind`
+covers both the anchor entry's `install_host_services` and the
+per-entry register loop, and a panic in either converts to a silent
+return (the host's post-call "processor not registered" check surfaces
+it). Locked by
+`runtime/streamlib-plugin-abi/tests/export_plugin_entry_panic_containment.rs`,
+which aborts the test binary rather than failing an assert if the net
+is removed.
+
 ## Test discipline
 
 Three categories of tests lock the ABI:

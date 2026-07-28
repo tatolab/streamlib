@@ -85,7 +85,8 @@ jobs:
       # cannot live in a `#[cfg(test)]` mod and still emit `#[no_mangle]
       # STREAMLIB_PLUGIN`), and they read the emitted declaration's
       # `abi_layout_fingerprint` / `build_identity` back — the load handshake's
-      # plugin-side source. `real_package_reachability` resolves the
+      # plugin-side source — plus the panic-containment leg, which aborts the
+      # binary rather than failing an assert. `real_package_reachability` resolves the
       # `processors/` scan against real in-tree packages, so a package that
       # moves its sources out of the scanned root fails here rather than by
       # deriving the empty processor set. The compile-fail doctests are the only
