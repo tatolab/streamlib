@@ -125,8 +125,8 @@ artifact and does not re-run it.
 - **`cfg-expr` / `target-lexicon` for the overlap search.** They ship the target
   coherence rules as data rather than the hand-written model below. Neither is
   in the tree today, so adopting one is a new-dependency decision for a
-  build-seam crate that currently pulls only `syn` / `quote` / `toml` — and the
-  model needs one more thing than either provides: an explicit "this fact is
+  build-seam crate that currently pulls only `syn` / `quote` / `toml` — and
+  the model needs one more thing than either provides: an explicit "this fact is
   unknown, leave the pair unproven" answer, which is what keeps the refusal
   sound. Worth revisiting if the coherence rules grow past the target-atom
   cluster the model relates today.
@@ -141,12 +141,11 @@ artifact and does not re-run it.
   `processors/`, including platform arms a given host does not compile
   (`camera_linux.rs` vs `camera_apple.rs`) and parked directories
   (`_apple_impl_pending_/`), so two platform arms that both declare the same
-  processor both surface.
-  `extract_reachable_rust_processors`
-  resolves that raw scan to the set the build **target** actually compiles: it
-  enumerates the top-level arms under `processors/` the way the generated crate
-  root declares them (a directory backed by `mod.rs` keeps directory ownership,
-  a flat `.rs` is a flat arm), follows each
+  processor both surface. `extract_reachable_rust_processors` resolves that raw
+  scan to the set the build **target** actually compiles: it enumerates the
+  top-level arms under `processors/` the way the generated crate root declares
+  them (a directory backed by `mod.rs` keeps directory ownership, a flat `.rs`
+  is a flat arm), follows each
   `mod` the way `rustc` resolves module files (honoring `#[path]`), and evaluates
   the `#[cfg(...)]` predicate on every `mod` and every `#[processor(...)]`-bearing
   struct against a `ModuleReachabilityTarget` (the target's cfg atoms:
@@ -187,23 +186,23 @@ last, `target_os = "ios"` against `not(unix)` reads satisfiable and a platform
 split with a non-unix fallback arm fails the same way.
 
 **The model relates one cluster of target atoms, and prunes rather than
-guesses outside it.** The cluster is `target_os`, `target_family` and the bare `unix` /
-`windows` flags. `rustc` fixes every other target key against those and against
-one another too — no target is both `target_env = "msvc"` and `target_os =
-"linux"`, none is both `target_arch = "wasm32"` and `target_env = "msvc"`, no
-`target_vendor = "apple"` target is `not(unix)` — and the model holds none of
-those facts, so an assignment that pins a key from outside the cluster while a
-second target atom is decided is dropped instead of printed as a proof. Inside
-the cluster the same discipline applies to what the rules cannot decide: a
-`target_os` outside the OS → family table decides nothing about families, and
-a `target_family` outside `unix` / `windows` defines neither flag, which
-deliberately drops `wasi` (genuinely both `wasm` and `unix`, the multi-valued
-case single-valued modelling gives up). Every rule and every gap therefore
-prunes, so the error direction is toward missing an overlap rather than
-inventing one — on the single assumption the model cannot check, that a value
-a predicate names is a value some target defines. The cost of a missed
-detection is bounded by the concrete-target net: the host that actually
-compiles both arms still fails.
+guesses outside it.** The cluster is `target_os`, `target_family` and the bare
+`unix` / `windows` flags. `rustc` fixes every other target key against those
+and against one another too — no target is both `target_env = "msvc"` and
+`target_os = "linux"`, none is both `target_arch = "wasm32"` and `target_env =
+"msvc"`, no `target_vendor = "apple"` target is `not(unix)` — and the model
+holds none of those facts, so an assignment that pins a key from outside the
+cluster while a second target atom is decided is dropped instead of printed as
+a proof. Inside the cluster the same discipline applies to what the rules
+cannot decide: a `target_os` outside the OS → family table decides nothing
+about families, and a `target_family` outside `unix` / `windows` defines
+neither flag, which deliberately drops `wasi` (genuinely both `wasm` and
+`unix`, the multi-valued case single-valued modelling gives up). Every rule
+and every gap therefore prunes, so the error direction is toward missing an
+overlap rather than inventing one — on the single assumption the model cannot
+check, that a value a predicate names is a value some target defines. The cost
+of a missed detection is bounded by the concrete-target net: the host that
+actually compiles both arms still fails.
 
 **Divergence is refused over the whole derived projection, not just ports.** The
 `processors:` section is derived from whichever arm the publishing host
