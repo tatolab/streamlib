@@ -249,7 +249,10 @@ pub fn scan_cdylib_dispatch_paths_with_scanned_file_paths(
             if !source_root.exists() {
                 continue;
             }
-            for entry in WalkDir::new(&source_root).into_iter().filter_map(|e| e.ok()) {
+            for entry in WalkDir::new(&source_root)
+                .into_iter()
+                .filter_map(|e| e.ok())
+            {
                 let abs = entry.path();
                 if !entry.file_type().is_file() {
                     continue;
