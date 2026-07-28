@@ -48,7 +48,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use quote::ToTokens;
-use streamlib_processor_schema::SchemaIdent;
 use syn::punctuated::Punctuated;
 use syn::{Meta, Token};
 
@@ -428,13 +427,9 @@ impl ProcessorSetAcrossEveryBuildTarget {
 /// than reimplementing cfg semantics beside it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ProcessorAvailabilityAcrossBuildTargets {
-    /// The `Type` segment — the name the plugin registry keys registration on,
-    /// and therefore the name two arms collide under.
+    /// The `Type` segment — the only segment the derived `processors:` entry
+    /// keeps, and therefore the name two arms collide under.
     pub processor_type_name: String,
-    /// The version-free `@org/package/Type` identity every declaring arm agrees
-    /// on, carrying the grammar's `0.0.0` sentinel rather than a real version
-    /// (a disagreement here is refused as divergence, never merged).
-    pub processor_schema_ident: SchemaIdent,
     /// The disjunction over each declaring arm's conjoined `#[cfg(...)]`
     /// predicates, as source text. `None` is unconditional: some arm is gated
     /// by nothing, so the processor exists on every build target.
@@ -543,15 +538,14 @@ fn refuse_processors_declared_twice_for_one_build_target(
     processors: &[ExtractedProcessor],
     target: &ModuleReachabilityTarget,
 ) -> Result<(), ExtractError> {
-    for (index, first) in processors.iter().enumerate() {
-        let Some(second) = processors[index + 1..]
-            .iter()
-            .find(|second| second.schema.name == first.schema.name)
-        else {
+    for (processor_type_name, declaring_arms) in
+        group_declarations_by_processor_type_name(processors)
+    {
+        let [first, second, ..] = declaring_arms.as_slice() else {
             continue;
         };
         return Err(ExtractError::OverlappingProcessorDeclarations {
-            processor_type_name: first.schema.name.clone(),
+            processor_type_name: processor_type_name.to_string(),
             first_declared_in: first.source_file.clone(),
             second_declared_in: second.source_file.clone(),
             witness_build_target_atoms: target.describe_defined_cfg_atoms(),
@@ -577,20 +571,13 @@ fn resolve_processor_availability_across_build_targets(
             .iter()
             .map(|arm| conjoin_cfg_predicates(&arm.cfg_predicates))
             .collect();
-        // One unconditional arm makes the processor unconditional: its
-        // disjunction with anything is `true`, and an `any(...)` naming the
-        // other arms would understate where it exists.
-        let availability_cfg_predicate = arm_predicates
-            .iter()
-            .all(|predicate| predicate.is_some())
-            .then(|| {
-                disjoin_distinct_cfg_predicates(arm_predicates.iter().filter_map(|p| p.as_deref()))
-            });
 
         out.push(ProcessorAvailabilityAcrossBuildTargets {
             processor_type_name: processor_type_name.to_string(),
-            processor_schema_ident: declaring_arms[0].schema_ident.clone(),
-            availability_cfg_predicate,
+            availability_cfg_predicate:
+                disjoin_cfg_predicates_when_every_alternative_is_conditional(
+                    arm_predicates.iter().map(Option::as_deref),
+                ),
             declaring_arm_source_files: declaring_arms
                 .iter()
                 .map(|arm| arm.source_file.clone())
@@ -1197,21 +1184,29 @@ pub(crate) fn conjoin_cfg_predicates(predicates: &[String]) -> Option<String> {
     }
 }
 
-/// Fold alternative `#[cfg(...)]` predicates into their disjunction,
-/// de-duplicated and in first-seen order. A single distinct predicate folds to
-/// itself rather than a one-armed `any(...)`.
-pub(crate) fn disjoin_distinct_cfg_predicates<'predicate>(
-    predicates: impl IntoIterator<Item = &'predicate str>,
-) -> String {
+/// Fold alternative `#[cfg(...)]` predicates into their disjunction, `None`
+/// when the alternatives are unconditional — either because one of them is
+/// (its disjunction with anything holds everywhere, and an `any(...)` naming
+/// the others would understate where it holds) or because there are none to
+/// gate on.
+///
+/// The one owner of the disjunction rule: a processor's availability across its
+/// declaring arms and the crate root's `export_plugin!` gate across the
+/// package's processors are the same fold.
+pub(crate) fn disjoin_cfg_predicates_when_every_alternative_is_conditional<'predicate>(
+    alternatives: impl IntoIterator<Item = Option<&'predicate str>>,
+) -> Option<String> {
+    let conditional_alternatives: Option<Vec<&str>> = alternatives.into_iter().collect();
     let mut distinct: Vec<&str> = Vec::new();
-    for predicate in predicates {
+    for predicate in conditional_alternatives? {
         if !distinct.contains(&predicate) {
             distinct.push(predicate);
         }
     }
     match distinct.as_slice() {
-        [single] => (*single).to_string(),
-        many => format!("any({})", many.join(", ")),
+        [] => None,
+        [single] => Some((*single).to_string()),
+        many => Some(format!("any({})", many.join(", "))),
     }
 }
 
@@ -1511,7 +1506,8 @@ impl CfgPredicateAtomUniverse {
             return !self.mentions_a_target_family_atom();
         };
         for family in ["unix", "windows"] {
-            if self.mentions_flag(family) && candidate.has_flag(family) != families.contains(&family)
+            if self.mentions_flag(family)
+                && candidate.has_flag(family) != families.contains(&family)
             {
                 return false;
             }
@@ -2720,10 +2716,6 @@ mod tests {
         let availability = set
             .availability_of_processor_type_name("AudioCapture")
             .expect("the two arms fold to one availability entry");
-        assert_eq!(
-            availability.processor_schema_ident.to_string(),
-            "@tatolab/demo/AudioCapture@0.0.0"
-        );
         assert_eq!(
             availability.declaring_arm_source_files,
             vec![

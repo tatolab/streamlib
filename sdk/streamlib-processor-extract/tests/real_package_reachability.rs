@@ -185,9 +185,18 @@ fn the_audio_platform_arms_agree_well_enough_to_fold_into_one_processor() {
         "availability is the disjunction of the two arms' gates: {:?}",
         capture.availability_cfg_predicate
     );
+    // Both arms declare the same `@org/package/Type`, which is what the
+    // divergence check enforces before they are allowed to fold into one entry.
+    let declared_idents: BTreeSet<String> = extract_processors_across_every_build_target(&dir)
+        .expect("scanning @tatolab/audio")
+        .processor_declarations
+        .iter()
+        .filter(|declaration| declaration.schema.name == "AudioCapture")
+        .map(|declaration| declaration.schema_ident.to_string())
+        .collect();
     assert_eq!(
-        capture.processor_schema_ident.to_string(),
-        "@tatolab/audio/AudioCapture@0.0.0"
+        declared_idents,
+        BTreeSet::from(["@tatolab/audio/AudioCapture@0.0.0".to_string()])
     );
 
     // Only the target's own arm resolves, so no target registers it twice.

@@ -33,8 +33,8 @@ use streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME as PROCESSOR_SOURCE_DIR_
 
 use crate::reachable::{
     ProcessorSetAcrossEveryBuildTarget, ProcessorSourceModuleArm, conjoin_cfg_predicates,
-    disjoin_distinct_cfg_predicates, enumerate_processor_source_module_arms,
-    extract_processors_across_every_build_target,
+    disjoin_cfg_predicates_when_every_alternative_is_conditional,
+    enumerate_processor_source_module_arms, extract_processors_across_every_build_target,
 };
 use crate::{ExtractError, ExtractedProcessor};
 
@@ -477,12 +477,12 @@ fn render_plugin_export_envelope(
 /// The `#[cfg(...)]` the whole `export_plugin!` invocation carries, or `None`
 /// when at least one processor is available unconditionally.
 fn plugin_export_envelope_gate(processors: &ProcessorSetAcrossEveryBuildTarget) -> Option<String> {
-    let availability_predicates: Option<Vec<&str>> = processors
-        .processor_availability
-        .iter()
-        .map(|entry| entry.availability_cfg_predicate.as_deref())
-        .collect();
-    Some(disjoin_distinct_cfg_predicates(availability_predicates?))
+    disjoin_cfg_predicates_when_every_alternative_is_conditional(
+        processors
+            .processor_availability
+            .iter()
+            .map(|entry| entry.availability_cfg_predicate.as_deref()),
+    )
 }
 
 /// The path an `export_plugin!` entry names: the module path from the crate
