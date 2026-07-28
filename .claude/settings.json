@@ -6,7 +6,6 @@
       "Bash(git fetch *)",
       "Bash(git worktree add *)",
       "Bash(git worktree list)",
-      "Bash(grep -c \"^{\\\\\"ts\\\\\":\\\\\"$\\(date -u +%F\\)\" .claude/loops/state/milestone-loop.run-log.jsonl)",
       "Read(//proc/**)",
       "Read(//dev/**)",
       "Bash(nvidia-smi)",
@@ -34,30 +33,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/branch-shield.sh"
-          }
-        ]
-      },
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
             "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/rig-brake.sh"
           }
         ]
       }
     ],
     "PostToolUse": [
-      {
-        "matcher": "Write|Edit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/rs-sentinels.sh"
-          }
-        ]
-      },
       {
         "matcher": "Bash",
         "hooks": [
