@@ -67,8 +67,8 @@ assembler neither validates nor resolves it
 resolution is the runtime's job, and the file travels through
 `collect_source_tree` like any other source file.
 
-A distributable Rust package — one that ships a `cdylib` through the registry —
-commits **no crate root**. Its `Cargo.toml` points
+A distributable Rust package — one that ships a `cdylib` by version through a
+package source — commits **no crate root**. Its `Cargo.toml` points
 `[lib] path` at `_generated_rust_crate_root_/lib.rs`, which
 `streamlib_processor_extract::crate_root` writes as the mechanical projection
 of `processors/`: one `#[path = "../processors/…"]`-attributed `pub mod` per
@@ -84,7 +84,8 @@ by `is_non_source_artifact` — so the consumer regenerates it from the bundled
 `processors/` tree on their own host.
 
 Generation is opt-in per package, keyed on that declared `[lib] path`
-(`package_declares_generated_crate_root`), so a host **rlib** package that is
+(`RustCrateRootGenerationRequest::for_package_dir_if_generation_is_declared`,
+the entry point every generation site calls), so a host **rlib** package that is
 statically linked rather than distributed — `packages/api-server`, whose crate
 is also a `[[bin]]` host with a `src/` tree — keeps its committed `src/lib.rs`
 crate root. It still authors its processor under `processors/`, reached from
