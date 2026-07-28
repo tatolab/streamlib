@@ -150,3 +150,69 @@ artifact and does not re-run it.
   replace the hand-authored `processors:` as the authoritative truth-source, and
   a drift check between the two a hard `pkg publish` error without false positives
   on cfg-gated packages.
+
+## Grouping by processor id: what is refused, what is data
+
+Once two files under one `processors/` tree can declare the same processor id
+under different `#[cfg]`, three things become possible. Two are refused at the
+scan; the third is the datum the scan now produces.
+
+**Overlap is refused, with a witness.** Two arms some build target compiles
+both of would register the same `Type` twice. The plugin registry's duplicate
+branch keeps whichever it saw first and logs at `debug`, and the drift check —
+keyed by the same `Type` name — collapses the pair before it compares, so the
+failure is silent at both seams. It is refused at the scan instead, proven two
+independent ways. The target-resolved walk needs no reasoning: it resolved one
+concrete target and collected the name twice. The across-every-target walk
+brute-forces satisfiability of the two arms' conjoined predicates over only the
+atoms those predicates themselves mention, and refuses **only on a satisfying
+assignment it can print**. That search carries a deliberate domain model — every
+`target_*` key is single-valued except the genuinely set-valued `feature` /
+`target_feature` / `target_has_atomic`, and the `unix` / `windows` families are
+mutually exclusive with `windows` holding exactly one `target_os`. Without it,
+`target_os = "linux"` against `any(target_os = "macos", target_os = "ios")`
+reads satisfiable and every platform-split package fails its own build. The
+model's rules are facts about how `rustc` sets these atoms, so each one can only
+ever remove a FALSE overlap; the cost of being wrong in the other direction — a
+missed detection — is bounded by the concrete-target net.
+
+**Divergence is refused over the whole derived projection, not just ports.** The
+`processors:` section is derived from whichever arm the publishing host
+compiles, so a difference in ANY field the manifest entry carries — the full
+`@org/package/Type` identity, execution, ports, scheduling, description, the
+config binding — makes the shipped manifest host-dependent. That is a wider
+surface than the language-uniform drift surface above, deliberately: drift
+compares a *hand-authored* manifest against *code*, where the excluded fields
+are authored rather than derived, while divergence compares two pieces of code
+that must derive the same entry. Port and execution differences are named by the
+same comparator the drift report uses, generalized from "manifest vs code" to a
+labelled two-sided comparison — one diagnostic with two callers, not two copies.
+Grouping is by `Type` name rather than the full identity because that is the key
+the registry keys registration on, so two arms sharing a `Type` under different
+`@org/package` collide there and surface here as a divergence rather than
+passing as two unrelated processors.
+
+**A gap is not an error — it is availability.** A package that declares a
+processor on some targets and on none of the others is ordinary. Which targets
+those are is carried as a per-processor `#[cfg(...)]` **predicate** — the
+disjunction over each declaring arm's conjoined predicates, `None` meaning
+unconditional — never as an enumerated target set. There is no closed target
+universe (an arm may gate on `redox`, `android`, a cargo feature, a custom cfg),
+so a fixed list would go stale and misreport; the enumerated answer is derived
+on demand for whatever targets a caller cares about, through the one cfg
+evaluator rather than a second implementation of cfg semantics. The crate-root
+generator's `export_plugin!` outer gate is that same disjunction: "the target
+compiles at least one of this package's processors".
+
+Availability is scan output, consumed in-process. It is deliberately NOT added
+to `streamlib.yaml`'s `processors:` section: that section's comparison surface
+is language-uniform by design, and Python and Deno have no cfg to project.
+
+A `#[cfg(feature = "…")]`-gated processor is the one case the target-resolved
+walk cannot decide correctly on its own — the scan target derives os / arch /
+family from the running host and cannot know which features a downstream build
+enables, so the processor evaluates false and leaves the derived set. It bites
+one seam later as a confusing drift error ("listed in `processors:` but no
+longer declared in code"), so the walk warns at the prune site with the file,
+the predicate and the undefined feature rather than leaving the absence
+unexplained.

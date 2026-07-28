@@ -102,7 +102,7 @@ struct LinuxCudaCopyGpuResources {
 // only path that flows external config through to the processor.)
 #[streamlib_plugin_sdk::sdk::processor(
     "@tatolab/camera/CameraToCudaCopy",
-    description = "Host-pipeline producer: camera VkImage -> cuda OPAQUE_FD VkBuffer with timeline signal for cross-API CUDA interop. Linux-only (CUDA is Linux-only on the in-tree adapter set).",
+    description = "Host-pipeline producer: camera VkImage -> cuda OPAQUE_FD VkBuffer with timeline signal for cross-API CUDA interop. Declared on every target; the CUDA interop path is Linux-only on the in-tree adapter set, so setup() fails elsewhere.",
     execution = reactive,
     scheduling = high,
     config = crate::_generated_::CameraToCudaCopyConfig,
