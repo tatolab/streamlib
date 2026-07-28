@@ -40,7 +40,7 @@ use streamlib::sdk::runtime::{RuntimeOperations, SubmittedProcessorSource};
 
 use crate::ops::{ReplaceSourceError, SubmitSourceError, SubmittedSourceOutcome};
 use crate::state::{
-    AppState, CreateConnectionRequest, ReplaceProcessorSourceRequest,
+    AppState, CreateConnectionRequest, ReplaceProcessorSourceRequest, RuntimeShutdownRequest,
     SubmittedProcessorSourceRequest,
 };
 
@@ -193,13 +193,20 @@ pub(crate) fn jsonrpc_parse_error(message: &str) -> Value {
 /// shared [`dispatch_jsonrpc`] against `runtime`, and each response written as a
 /// single newline-terminated JSON line to `writer`; a notification produces no
 /// output line, and an unparseable line answers with a [`jsonrpc_parse_error`].
-/// Returns on reader EOF (the host closed the pipe), so the caller can tear its
-/// runtime down. Generic over the byte transport — this crate never touches the
-/// process's own stdio; the CLI passes `tokio::io::stdin`/`stdout`.
+/// Generic over the byte transport — this crate never touches the process's own
+/// stdio; the CLI passes `tokio::io::stdin`/`stdout`.
+///
+/// Returns on reader EOF (the host closed the pipe) or as soon as
+/// `stop_serving_when_shutdown_observed` resolves, whichever comes first, so the
+/// caller can tear its runtime down. That future is how the caller — the process
+/// that owns the run loop — reports an observed runtime-shutdown request; the
+/// `shutdown` tool is advertised on this transport, so a caller that passes a
+/// never-resolving future keeps serving after answering it.
 pub async fn serve_stdio_jsonrpc<R, W>(
     runtime: Arc<dyn RuntimeOperations>,
     reader: R,
     mut writer: W,
+    stop_serving_when_shutdown_observed: impl std::future::Future<Output = ()>,
 ) -> std::io::Result<()>
 where
     R: tokio::io::AsyncBufRead + Unpin,
@@ -208,7 +215,17 @@ where
     use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
     let mut lines = reader.lines();
-    while let Some(line) = lines.next_line().await? {
+    let mut stop_serving = std::pin::pin!(stop_serving_when_shutdown_observed);
+    loop {
+        // `Lines::next_line` is cancel-safe — a partially-read line stays in the
+        // reader's own buffer — so losing this select arm never drops input.
+        let line = tokio::select! {
+            line = lines.next_line() => match line? {
+                Some(line) => line,
+                None => break,
+            },
+            () = &mut stop_serving => break,
+        };
         if line.trim().is_empty() {
             continue;
         }
@@ -571,19 +588,17 @@ async fn call_logs(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Va
 /// fire-and-forget with no completion payload, so there is nothing to await
 /// and nothing to block on.
 fn call_shutdown(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
-    #[derive(Deserialize)]
-    struct ShutdownArgs {
-        #[serde(default)]
-        reason: Option<String>,
-    }
-    let ShutdownArgs { reason } = match serde_json::from_value(arguments) {
-        Ok(args) => args,
+    let request: RuntimeShutdownRequest = match serde_json::from_value(arguments) {
+        Ok(request) => request,
         Err(e) => return tool_error(format!("shutdown arguments: {e}")),
     };
-    let reason = reason.unwrap_or_default();
+    let reason = request.reason.unwrap_or_default();
 
     match runtime.request_runtime_shutdown(&reason) {
-        Ok(()) => tool_ok(json!({ "status": "RuntimeShutdownRequested", "reason": reason })),
+        Ok(()) => tool_ok(json!({
+            "status": crate::state::RUNTIME_SHUTDOWN_REQUESTED_STATUS,
+            "reason": reason,
+        })),
         Err(e) => tool_error(format!("shutdown request failed: {e}")),
     }
 }
@@ -737,6 +752,9 @@ mod tests {
         recorded_connections: RecordedConnections,
         recorded_replaced_modules: Arc<Mutex<Vec<String>>>,
         recorded_shutdown_reasons: Arc<Mutex<Vec<String>>>,
+        /// Stands in for the host's observation of the shutdown request: the
+        /// real loop owner polls the engine's latch, this fires on the call.
+        shutdown_observed_notifier: Arc<tokio::sync::Notify>,
     }
 
     impl RecordingStubRuntime {
@@ -749,6 +767,7 @@ mod tests {
                 recorded_connections: Arc::new(Mutex::new(Vec::new())),
                 recorded_replaced_modules: Arc::new(Mutex::new(Vec::new())),
                 recorded_shutdown_reasons: Arc::new(Mutex::new(Vec::new())),
+                shutdown_observed_notifier: Arc::new(tokio::sync::Notify::new()),
             }
         }
 
@@ -898,6 +917,7 @@ mod tests {
             self.recorded_shutdown_reasons
                 .lock()
                 .push(reason.to_string());
+            self.shutdown_observed_notifier.notify_one();
             Ok(())
         }
         fn to_json(&self) -> Result<Value> {
@@ -1414,9 +1434,14 @@ mod tests {
         let (server_writer, client_reader) = tokio::io::duplex(64 * 1024);
 
         let server = tokio::spawn(async move {
-            serve_stdio_jsonrpc(runtime, BufReader::new(server_reader), server_writer)
-                .await
-                .expect("stdio server loop");
+            serve_stdio_jsonrpc(
+                runtime,
+                BufReader::new(server_reader),
+                server_writer,
+                std::future::pending(),
+            )
+            .await
+            .expect("stdio server loop");
         });
 
         let mut request_bytes = Vec::new();
@@ -1521,6 +1546,57 @@ mod tests {
         );
     }
 
+    /// The `shutdown` tool is advertised on this transport, so the serve loop
+    /// must end on the caller's shutdown observation and not only on stdin EOF
+    /// — otherwise the tool answers `RuntimeShutdownRequested` and the process
+    /// keeps serving with nothing torn down. The caller's observation stands in
+    /// for the CLI's poll of the engine's shutdown-request latch.
+    /// Mental-revert: passing `std::future::pending()` here hangs this test.
+    #[tokio::test]
+    async fn stdio_serve_loop_ends_on_an_observed_shutdown_request_without_eof() {
+        use tokio::io::{AsyncWriteExt, BufReader};
+
+        let runtime = Arc::new(RecordingStubRuntime::new());
+        let recorded_shutdowns = runtime.recorded_shutdown_reasons.clone();
+        let shutdown_observed = runtime.shutdown_observed_notifier.clone();
+        let runtime: Arc<dyn RuntimeOperations> = runtime;
+
+        let (mut client_writer, server_reader) = tokio::io::duplex(64 * 1024);
+        let (server_writer, _client_reader) = tokio::io::duplex(64 * 1024);
+        let server = tokio::spawn(async move {
+            serve_stdio_jsonrpc(
+                runtime,
+                BufReader::new(server_reader),
+                server_writer,
+                async move { shutdown_observed.notified().await },
+            )
+            .await
+            .expect("stdio server loop");
+        });
+
+        let request = json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": "shutdown", "arguments": { "reason": "agent asked" } }
+        });
+        client_writer
+            .write_all(format!("{request}\n").as_bytes())
+            .await
+            .expect("write shutdown call");
+
+        // The request writer stays open for the whole wait: only the observed
+        // shutdown can end the loop here.
+        tokio::time::timeout(std::time::Duration::from_secs(5), server)
+            .await
+            .expect("the serve loop must end on an observed shutdown request, without EOF")
+            .expect("stdio server task");
+        assert_eq!(
+            *recorded_shutdowns.lock(),
+            vec!["agent asked".to_string()],
+            "the tool must have reached the runtime before the loop ended"
+        );
+        drop(client_writer);
+    }
+
     #[tokio::test]
     async fn stdio_server_answers_a_malformed_line_with_a_parse_error() {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
@@ -1529,9 +1605,14 @@ mod tests {
         let (mut client_writer, server_reader) = tokio::io::duplex(4096);
         let (server_writer, client_reader) = tokio::io::duplex(4096);
         let server = tokio::spawn(async move {
-            serve_stdio_jsonrpc(runtime, BufReader::new(server_reader), server_writer)
-                .await
-                .expect("stdio server loop");
+            serve_stdio_jsonrpc(
+                runtime,
+                BufReader::new(server_reader),
+                server_writer,
+                std::future::pending(),
+            )
+            .await
+            .expect("stdio server loop");
         });
 
         client_writer

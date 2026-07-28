@@ -62,13 +62,16 @@ pub(crate) struct RuntimeShutdownRequest {
     pub reason: Option<String>,
 }
 
-/// Body returned alongside `202 Accepted` by `POST /api/runtime/shutdown`. The
-/// request was handed to the runtime's shutdown funnel; the response does NOT
-/// wait for teardown (the control plane is itself torn down by the shutdown it
-/// just requested, so awaiting it would deadlock the reply).
+/// Wire-visible status token every surface answers an accepted shutdown request
+/// with — the REST `202` body and the MCP `shutdown` tool result alike.
+pub(crate) const RUNTIME_SHUTDOWN_REQUESTED_STATUS: &str = "RuntimeShutdownRequested";
+
+/// Body returned alongside `202 Accepted` by `POST /api/runtime/shutdown`; the
+/// request was handed to the runtime's shutdown funnel and teardown is not
+/// awaited.
 #[derive(Serialize, utoipa::ToSchema)]
 pub(crate) struct RuntimeShutdownAcceptedResponse {
-    /// Typed discriminator: always `"RuntimeShutdownRequested"`.
+    /// Typed discriminator: always [`RUNTIME_SHUTDOWN_REQUESTED_STATUS`].
     pub status: &'static str,
     /// The attribution recorded with the request (empty when unspecified).
     pub reason: String,

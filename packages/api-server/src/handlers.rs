@@ -536,7 +536,7 @@ pub(crate) async fn request_runtime_shutdown(
         Ok(()) => (
             StatusCode::ACCEPTED,
             Json(RuntimeShutdownAcceptedResponse {
-                status: "RuntimeShutdownRequested",
+                status: crate::state::RUNTIME_SHUTDOWN_REQUESTED_STATUS,
                 reason,
             }),
         )

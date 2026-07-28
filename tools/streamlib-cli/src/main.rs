@@ -93,8 +93,9 @@ enum Commands {
     ///
     /// Default (no `--attach`): host a fresh in-process runtime and serve its
     /// MCP over stdio — zero-config; the host gets an operable runtime, torn
-    /// down when it closes stdin. `--attach <url>` instead bridges stdio to a
-    /// running runtime's `POST {url}/mcp` to operate an existing live pipeline.
+    /// down when it closes stdin or calls the `shutdown` tool. `--attach <url>`
+    /// instead bridges stdio to a running runtime's `POST {url}/mcp` to operate
+    /// an existing live pipeline.
     /// Exposes the same 8 tools as `POST /mcp`: graph / submit_processor /
     /// replace_processor / remove_processor / connect / tap / logs / shutdown.
     /// Auth is off by construction on the in-process path; `--attach` forwards
