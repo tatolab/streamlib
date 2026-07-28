@@ -122,6 +122,13 @@ artifact and does not re-run it.
 - **Extraction only inside `streamlib-pack`.** Pack is the natural consumer,
   but the grammar must also be shared with the proc-macro, and a future
   live-submit path needs the extractor without the whole pack crate.
+- **`cfg-expr` / `target-lexicon` for the overlap search.** They ship the target
+  coherence rules as data rather than the hand-written model below. Neither is
+  in the tree today, so adopting one is a new-dependency decision for a build-
+  seam crate that currently pulls only `syn` / `quote` / `toml` — and the model
+  needs one more thing than either provides: an explicit "this fact is unknown,
+  leave the pair unproven" answer, which is what keeps the refusal sound. Worth
+  revisiting if the coherence rules grow past target families.
 
 ## Consequences
 
@@ -230,4 +237,14 @@ enables, so the processor evaluates false and leaves the derived set. It bites
 one seam later as a confusing drift error ("listed in `processors:` but no
 longer declared in code"), so the walk warns at the prune site with the file,
 the predicate and the undefined feature rather than leaving the absence
-unexplained.
+unexplained. The warning is raised only where a `#[processor(...)]` really left
+the set — the prune site re-walks what it pruned with cfg resolution off and
+stays silent for a feature-gated helper module, whose absence explains nothing.
+
+Both refusals reach a package through crate-root generation, so they gate every
+build and every `pkg publish` of a package that DECLARES a generated crate root.
+A package that commits its own crate root (the one in-tree host rlib) is scanned
+across targets only by the extractor's own tests: cross-target divergence there
+would surface on a host that compiles both arms rather than at generation. That
+exposure follows from generation being opt-in, and is accepted rather than
+worked around with a second discovery path.
