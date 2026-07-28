@@ -152,10 +152,11 @@ fn file_tree_root(base_url: &str) -> Result<std::path::PathBuf> {
 }
 
 /// Remove THIS package's build artifacts from the current working directory:
-/// the prebuilt `lib/` dir and the generated `_generated_/` wire-vocabulary
-/// trees (root + `python/`), all regenerated on the next build. The `*.slpkg`
-/// sweep is retained for hand-made archives only — `publish` packs to a
-/// tempfile and no streamlib verb writes an archive into the package dir.
+/// the prebuilt `lib/` dir, the generated `_generated_/` wire-vocabulary trees
+/// (root + `python/`), and the generated Rust crate root, all regenerated on the
+/// next build. The `*.slpkg` sweep is retained for hand-made archives only —
+/// `publish` packs to a tempfile and no streamlib verb writes an archive into
+/// the package dir.
 pub fn clean() -> Result<()> {
     let dir = std::env::current_dir().context("resolve current working directory")?;
     let mut removed: Vec<String> = Vec::new();
@@ -182,6 +183,7 @@ pub fn clean() -> Result<()> {
     for cand in [
         dir.join("_generated_"),
         dir.join("python").join("_generated_"),
+        dir.join(streamlib_processor_extract::crate_root::GENERATED_CRATE_ROOT_DIR_NAME),
     ] {
         if cand.is_dir() && std::fs::remove_dir_all(&cand).is_ok() {
             let rel = cand.strip_prefix(&dir).unwrap_or(&cand);

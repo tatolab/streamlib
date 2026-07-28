@@ -31,6 +31,10 @@ streamlib-idents = { path = "../../sdk/streamlib-idents", version = "0.9.3" }
 streamlib-cargo-build = { path = "../streamlib-cargo-build", version = "0.9.3" }
 streamlib-pack = { path = "../streamlib-pack", version = "0.9.3" }
 
+# The generated-crate-root directory name, so `streamlib pkg clean` sweeps the
+# same build-output unit the pack strip list and the orchestrator gitignore do.
+streamlib-processor-extract = { path = "../../sdk/streamlib-processor-extract", version = "0.9.0" }
+
 # Host-side control plane: the CLI's `mcp` subcommand hosts the api-server's
 # transport-free MCP dispatch (`serve_stdio_jsonrpc`) over stdio, reusing the
 # one dispatch surface `POST /mcp` uses. Path-only (api-server is `publish =

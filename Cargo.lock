@@ -5067,6 +5067,7 @@ dependencies = [
  "streamlib-idents",
  "streamlib-jtd-codegen",
  "streamlib-pack",
+ "streamlib-processor-extract",
  "streamlib-processor-schema",
  "tempfile",
  "thiserror 2.0.18",
