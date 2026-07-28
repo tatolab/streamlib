@@ -99,7 +99,7 @@ pub fn run(project_root: &Path) -> Result<()> {
             report.files_scanned > 0,
             "lint-logging scanned 0 files — the Rust ({:?}) or polyglot scan roots \
              moved out from under the gate",
-            CRATE_SOURCE_ROOT_DIR_NAMES
+            crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES
         );
         println!(
             "lint-logging: {} file(s) scanned across Rust + polyglot SDKs, no violations",
@@ -259,7 +259,7 @@ pub fn scan_rust(
 ) -> Result<()> {
     for crate_root in discover_lint_opted_in_crates(project_root)? {
         let excluded = collect_cfg_excluded_mod_paths(&crate_root);
-        for root_name in CRATE_SOURCE_ROOT_DIR_NAMES {
+        for root_name in crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES {
             let source_root = crate_root.join(root_name);
             if !source_root.exists() {
                 continue;
@@ -293,11 +293,6 @@ pub fn scan_rust(
     }
     Ok(())
 }
-
-/// Rust source roots a crate may hold: the classic `src/` and the
-/// folder-backed `processors/` a generated crate root declares its module arms
-/// out of.
-const CRATE_SOURCE_ROOT_DIR_NAMES: &[&str] = &["src", "processors"];
 
 /// Whether a path segment names a parked implementation dir per the
 /// `_<name>_pending_` convention (`_apple_impl_pending_`,

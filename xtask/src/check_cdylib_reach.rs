@@ -211,12 +211,6 @@ pub fn scan_workspace(workspace_root: &Path) -> Result<Vec<Violation>> {
     Ok(all)
 }
 
-/// Rust source roots a crate may hold: the classic `src/` and the
-/// folder-backed `processors/` a package's generated crate root declares
-/// its module arms out of. A crate has one or the other, never both today,
-/// but scanning both keeps the gate root-agnostic.
-const CRATE_SOURCE_ROOT_DIR_NAMES: &[&str] = &["src", "processors"];
-
 /// Scan every workspace crate whose Cargo.toml declares
 /// `crate-type` containing `"cdylib"`. For each such crate, walk
 /// every `.rs` file under its source roots and flag dispatch-path uses of
@@ -230,26 +224,27 @@ const CRATE_SOURCE_ROOT_DIR_NAMES: &[&str] = &["src", "processors"];
 /// it finds nothing to scan — a gate that scanned an empty directory is
 /// indistinguishable from a clean one.
 pub fn scan_cdylib_dispatch_paths(workspace_root: &Path) -> Result<Vec<DispatchViolation>> {
-    let (violations, files_scanned) = scan_cdylib_dispatch_paths_counted(workspace_root)?;
+    let (violations, scanned_file_paths) =
+        scan_cdylib_dispatch_paths_with_scanned_file_paths(workspace_root)?;
     anyhow::ensure!(
-        files_scanned > 0,
+        !scanned_file_paths.is_empty(),
         "check-cdylib-reach scanned 0 files across every workspace cdylib crate \
          under {:?} — the scan roots moved out from under the gate, which would \
          let a package reach for the host device unnoticed",
-        CRATE_SOURCE_ROOT_DIR_NAMES
+        crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES
     );
     Ok(violations)
 }
 
-/// [`scan_cdylib_dispatch_paths`] plus the number of files it read, so the
-/// non-zero assertion above is testable.
-pub fn scan_cdylib_dispatch_paths_counted(
+/// [`scan_cdylib_dispatch_paths`] plus every file path it read, so both the
+/// non-empty assertion above and the roots it actually reached are testable.
+pub fn scan_cdylib_dispatch_paths_with_scanned_file_paths(
     workspace_root: &Path,
-) -> Result<(Vec<DispatchViolation>, usize)> {
+) -> Result<(Vec<DispatchViolation>, Vec<PathBuf>)> {
     let mut all = Vec::new();
-    let mut files_scanned = 0usize;
+    let mut scanned_file_paths = Vec::new();
     for (crate_dir, crate_name) in discover_cdylib_crates(workspace_root)? {
-        for root_name in CRATE_SOURCE_ROOT_DIR_NAMES {
+        for root_name in crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES {
             let source_root = crate_dir.join(root_name);
             if !source_root.exists() {
                 continue;
@@ -275,7 +270,7 @@ pub fn scan_cdylib_dispatch_paths_counted(
                 let Ok(file) = syn::parse_file(&src) else {
                     continue;
                 };
-                files_scanned += 1;
+                scanned_file_paths.push(relpath.clone());
                 let mut visitor = DispatchFileVisitor {
                     file_path: relpath,
                     crate_name: crate_name.clone(),
@@ -286,7 +281,7 @@ pub fn scan_cdylib_dispatch_paths_counted(
             }
         }
     }
-    Ok((all, files_scanned))
+    Ok((all, scanned_file_paths))
 }
 
 /// True iff any attribute on `attrs` is `#[cfg(test)]` (or
@@ -996,5 +991,29 @@ mod tests {
     fn has_cfg_test_ignores_non_cfg_attrs() {
         let attrs: syn::ItemFn = syn::parse_str("#[allow(dead_code)] fn x() {}").expect("parse");
         assert!(!has_cfg_test(&attrs.attrs));
+    }
+
+    /// The non-empty assertion alone does not prove the folder-backed root is
+    /// reached: one `src/`-bearing cdylib fixture satisfies it while every
+    /// `processors/`-rooted package goes unscanned. Pin both roots against the
+    /// real workspace so a package's GPU code can never fall outside the gate.
+    #[test]
+    fn the_dispatch_scan_reaches_both_the_src_and_the_folder_backed_root() {
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask has no parent")
+            .to_path_buf();
+        let (_, scanned_file_paths) =
+            scan_cdylib_dispatch_paths_with_scanned_file_paths(&workspace).expect("scan");
+
+        for root_name in crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES {
+            assert!(
+                scanned_file_paths.iter().any(|scanned| scanned
+                    .components()
+                    .any(|component| component.as_os_str() == *root_name)),
+                "no workspace cdylib file was scanned under a `{root_name}/` root — \
+                 the gate is passing vacuously for every crate rooted there"
+            );
+        }
     }
 }

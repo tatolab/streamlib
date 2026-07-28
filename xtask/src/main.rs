@@ -30,6 +30,15 @@ pub mod install_packages;
 pub mod lint_logging;
 pub mod manifest_schema;
 
+/// Rust source roots a workspace crate may hold: the classic `src/` and the
+/// folder-backed `processors/` a generated crate root declares its module arms
+/// out of. Every source-walking gate shares this list, and it spells the
+/// folder-backed root through [`streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME`]
+/// so renaming that root cannot leave a gate scanning a directory that no
+/// longer exists.
+pub const RUST_CRATE_SOURCE_ROOT_DIR_NAMES: &[&str] =
+    &["src", streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME];
+
 #[derive(Parser)]
 #[command(name = "xtask")]
 #[command(about = "StreamLib development tasks")]

@@ -87,17 +87,15 @@ fn is_example_src_file(path: &Path) -> bool {
             }
             continue;
         }
-        if CRATE_SOURCE_ROOT_DIR_NAMES.iter().any(|root| s == *root) {
+        if crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES
+            .iter()
+            .any(|root| s == *root)
+        {
             saw_source_root_after_examples = true;
         }
     }
     saw_examples && saw_source_root_after_examples
 }
-
-/// Rust source roots a crate may hold: the classic `src/` and the
-/// folder-backed `processors/` a generated crate root declares its module arms
-/// out of. An example plugin crate uses the latter.
-const CRATE_SOURCE_ROOT_DIR_NAMES: &[&str] = &["src", "processors"];
 
 pub fn lint_workspace(workspace_root: &Path) -> Result<Vec<LintViolation>> {
     let (violations, files_scanned) = lint_workspace_counted(workspace_root)?;
