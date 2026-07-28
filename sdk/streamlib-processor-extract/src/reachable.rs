@@ -747,7 +747,9 @@ impl ReachableModuleWalker<'_> {
         // `mod foo { #![cfg] }` instead folds them into `ItemMod::attrs`, which
         // `walk_item` gates.
         let Some(pushed_predicate_count) = self.enter_cfg_scope(&parsed.attrs) else {
-            self.warn_if_an_undefined_feature_pruned_the_scope(&parsed.attrs, file);
+            self.warn_if_an_undefined_cargo_feature_pruned_a_processor(&parsed.attrs, file, || {
+                self.pruned_module_file_declares_a_processor(file, mod_dir)
+            });
             tracing::trace!(file = %file.display(), "module file excluded by file-level cfg");
             return Ok(());
         };
@@ -783,12 +785,11 @@ impl ReachableModuleWalker<'_> {
                 // A struct behind a false `#[cfg(...)]` is not compiled, so its
                 // `#[processor]` (if any) is not a real processor for this target.
                 let Some(pushed_predicate_count) = self.enter_cfg_scope(&item_struct.attrs) else {
-                    if processor_attr(&item_struct.attrs).is_some() {
-                        self.warn_if_an_undefined_feature_pruned_the_scope(
-                            &item_struct.attrs,
-                            declaring_file,
-                        );
-                    }
+                    self.warn_if_an_undefined_cargo_feature_pruned_a_processor(
+                        &item_struct.attrs,
+                        declaring_file,
+                        || processor_attr(&item_struct.attrs).is_some(),
+                    );
                     return Ok(());
                 };
                 if let Some(attr) = processor_attr(&item_struct.attrs) {
@@ -813,9 +814,18 @@ impl ReachableModuleWalker<'_> {
             }
             syn::Item::Mod(item_mod) => {
                 let Some(pushed_predicate_count) = self.enter_cfg_scope(&item_mod.attrs) else {
-                    self.warn_if_an_undefined_feature_pruned_the_scope(
+                    self.warn_if_an_undefined_cargo_feature_pruned_a_processor(
                         &item_mod.attrs,
                         declaring_file,
+                        || {
+                            self.pruned_module_item_declares_a_processor(
+                                item,
+                                declaring_file,
+                                mod_dir,
+                                path_attribute_base_dir,
+                                rel_path,
+                            )
+                        },
                     );
                     return Ok(());
                 };
@@ -964,8 +974,8 @@ impl ReachableModuleWalker<'_> {
             .truncate(self.active_cfg_predicates.len() - pushed_predicate_count);
     }
 
-    /// Say so when a target-resolved walk pruned a scope for want of a cargo
-    /// feature.
+    /// Say so when a target-resolved walk pruned a `#[processor(...)]` for want
+    /// of a cargo feature.
     ///
     /// [`ModuleReachabilityTarget::for_host`] derives `target_os` / `target_arch`
     /// / `target_family` plus the family flag and infers no features — it cannot
@@ -975,14 +985,21 @@ impl ReachableModuleWalker<'_> {
     /// "listed in `processors:` but no longer declared in code" — a confusing
     /// error rather than a quiet one. Naming the file, the predicate and the
     /// missing feature turns it into an actionable one.
-    fn warn_if_an_undefined_feature_pruned_the_scope(
+    ///
+    /// `pruned_scope_declares_a_processor` is what keeps the message true: a
+    /// feature-gated helper module under `processors/` declares no processor,
+    /// so nothing left the derived set and there is nothing to explain.
+    fn warn_if_an_undefined_cargo_feature_pruned_a_processor(
         &self,
         attrs: &[syn::Attribute],
         declaring_file: &Path,
+        pruned_scope_declares_a_processor: impl FnOnce() -> bool,
     ) {
         let ModuleWalkCfgResolution::AgainstBuildTarget(target) = self.cfg_resolution else {
             return;
         };
+        let mut pruning_predicates: Vec<String> = Vec::new();
+        let mut undefined_features: BTreeSet<String> = BTreeSet::new();
         for attr in attrs.iter().filter(|attr| attr.path().is_ident("cfg")) {
             let Ok(meta) = attr.parse_args::<Meta>() else {
                 continue;
@@ -990,20 +1007,73 @@ impl ReachableModuleWalker<'_> {
             if eval_cfg_meta(&meta, target) {
                 continue;
             }
-            let mut undefined_features = BTreeSet::new();
-            collect_undefined_feature_atoms(&meta, target, &mut undefined_features);
-            if undefined_features.is_empty() {
+            let mut features_this_predicate_names = BTreeSet::new();
+            collect_undefined_feature_atoms(&meta, target, &mut features_this_predicate_names);
+            if features_this_predicate_names.is_empty() {
                 continue;
             }
-            tracing::warn!(
-                file = %declaring_file.display(),
-                predicate = %render_cfg_predicate(&meta),
-                undefined_features = %undefined_features.into_iter().collect::<Vec<_>>().join(", "),
-                "pruned a cfg scope gated on cargo features the scan target does not define — \
-                 any `#[processor(...)]` under it is absent from the derived `processors:` set \
-                 and will read as removed from code; declare the feature on the target with \
-                 `ModuleReachabilityTarget::with_feature` if the build enables it"
-            );
+            pruning_predicates.push(render_cfg_predicate(&meta));
+            undefined_features.extend(features_this_predicate_names);
+        }
+        if undefined_features.is_empty() || !pruned_scope_declares_a_processor() {
+            return;
+        }
+        tracing::warn!(
+            file = %declaring_file.display(),
+            predicate = %pruning_predicates.join(", "),
+            undefined_features = %undefined_features.into_iter().collect::<Vec<_>>().join(", "),
+            "pruned a `#[processor(...)]` behind a cfg gated on cargo features the scan target \
+             does not define — it is absent from the derived `processors:` set and will read as \
+             removed from code; declare the feature on the target with \
+             `ModuleReachabilityTarget::with_feature` if the build enables it"
+        );
+    }
+
+    /// Whether the module file a cfg predicate pruned would have declared a
+    /// `#[processor(...)]`.
+    fn pruned_module_file_declares_a_processor(&self, file: &Path, mod_dir: &Path) -> bool {
+        let mut across_every_build_target = self.walker_across_every_build_target();
+        across_every_build_target.walk_file(file, mod_dir).is_ok()
+            && !across_every_build_target.out.is_empty()
+    }
+
+    /// Whether the `mod` a cfg predicate pruned would have declared a
+    /// `#[processor(...)]`, in its own body or in any file below it.
+    fn pruned_module_item_declares_a_processor(
+        &self,
+        item: &syn::Item,
+        declaring_file: &Path,
+        mod_dir: &Path,
+        path_attribute_base_dir: &Path,
+        rel_path: &Path,
+    ) -> bool {
+        let mut across_every_build_target = self.walker_across_every_build_target();
+        across_every_build_target
+            .walk_item(
+                item,
+                declaring_file,
+                mod_dir,
+                path_attribute_base_dir,
+                rel_path,
+            )
+            .is_ok()
+            && !across_every_build_target.out.is_empty()
+    }
+
+    /// A second walker over the same package with cfg pruning off — how a
+    /// pruned scope is asked what it would have contributed. Its own walk
+    /// raises no diagnostics (the warning is target-resolved only), so this
+    /// cannot recurse.
+    fn walker_across_every_build_target(&self) -> ReachableModuleWalker<'_> {
+        ReachableModuleWalker {
+            package_dir: self.package_dir,
+            cfg_resolution: ModuleWalkCfgResolution::AcrossEveryBuildTarget,
+            top_level_arm_module_files: self.top_level_arm_module_files.clone(),
+            visited: BTreeSet::new(),
+            active_cfg_predicates: Vec::new(),
+            module_path_segments: Vec::new(),
+            enclosing_private_module_name: None,
+            out: Vec::new(),
         }
     }
 }
@@ -1590,6 +1660,41 @@ mod tests {
     fn names(mut procs: Vec<ExtractedProcessor>) -> Vec<String> {
         procs.sort_by(|a, b| a.schema.name.cmp(&b.schema.name));
         procs.into_iter().map(|p| p.schema.name).collect()
+    }
+
+    /// A `tracing` writer that keeps what a scan emitted, so a diagnostic can be
+    /// asserted on rather than only read in a log.
+    #[derive(Clone, Default)]
+    struct CapturedScanDiagnosticBuffer(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+    impl std::io::Write for CapturedScanDiagnosticBuffer {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(buf);
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'writer> tracing_subscriber::fmt::MakeWriter<'writer> for CapturedScanDiagnosticBuffer {
+        type Writer = Self;
+        fn make_writer(&'writer self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// The `WARN`-level diagnostics a scan emitted, rendered.
+    fn warnings_emitted_by(scan: impl FnOnce()) -> String {
+        let captured = CapturedScanDiagnosticBuffer::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_writer(captured.clone())
+            .with_max_level(tracing::Level::WARN)
+            .with_ansi(false)
+            .finish();
+        tracing::subscriber::with_default(subscriber, scan);
+        let rendered = captured.0.lock().unwrap().clone();
+        String::from_utf8(rendered).unwrap()
     }
 
     /// The parked-directory convention (`#![cfg(any())]` in
@@ -2865,6 +2970,91 @@ mod tests {
             names(extract_reachable_rust_processors(root, &macos()).unwrap()),
             vec!["Capture"]
         );
+    }
+
+    /// The diagnostic itself, observed: a feature-gated processor the scan
+    /// target cannot satisfy is named at the prune site, both when a file-level
+    /// `#![cfg]` prunes it and when the `mod` that would have reached it is
+    /// pruned a file above. Delete either call site and this fails.
+    #[test]
+    fn a_processor_pruned_by_an_undefined_feature_is_warned_about() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "processors/cuda_arm.rs",
+            r#"#![cfg(feature = "cuda")]
+            #[processor("@tatolab/demo/CudaCopy", execution = manual)]
+            pub struct CudaCopy;"#,
+        );
+        write(
+            root,
+            "processors/vulkan_arm/mod.rs",
+            r#"#[cfg(feature = "vulkan")]
+            pub mod blit;"#,
+        );
+        write(
+            root,
+            "processors/vulkan_arm/blit.rs",
+            r#"#[processor("@tatolab/demo/VulkanBlit", execution = manual)]
+            pub struct VulkanBlit;"#,
+        );
+
+        let warnings = warnings_emitted_by(|| {
+            let procs = extract_reachable_rust_processors(root, &linux()).unwrap();
+            assert!(names(procs).is_empty(), "neither feature is defined");
+        });
+        assert!(warnings.contains("processors/cuda_arm.rs"), "{warnings}");
+        assert!(warnings.contains("undefined_features=cuda"), "{warnings}");
+        assert!(
+            warnings.contains("processors/vulkan_arm/mod.rs"),
+            "{warnings}"
+        );
+        assert!(warnings.contains("undefined_features=vulkan"), "{warnings}");
+
+        // With the feature declared on the scan target nothing is pruned, so
+        // there is nothing to explain.
+        let quiet = warnings_emitted_by(|| {
+            let target = linux().with_feature("cuda").with_feature("vulkan");
+            let procs = extract_reachable_rust_processors(root, &target).unwrap();
+            assert_eq!(names(procs), vec!["CudaCopy", "VulkanBlit"]);
+        });
+        assert!(quiet.is_empty(), "{quiet}");
+    }
+
+    /// A feature-gated scope under `processors/` that declares NO processor is
+    /// pruned silently: nothing left the derived set, so the warning's whole
+    /// subject is absent and emitting it would be noise on every scan.
+    #[test]
+    fn a_feature_gated_scope_declaring_no_processor_is_pruned_silently() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "processors/arm/mod.rs",
+            r#"#[cfg(feature = "cuda")]
+            pub mod cuda_helpers;
+
+            #[processor("@tatolab/demo/Copy", execution = manual)]
+            pub struct Copy;"#,
+        );
+        write(
+            root,
+            "processors/arm/cuda_helpers.rs",
+            "pub fn align_pitch(width: usize) -> usize { width }",
+        );
+        write(
+            root,
+            "processors/cuda_only_helpers.rs",
+            r#"#![cfg(feature = "cuda")]
+            pub fn device_count() -> usize { 0 }"#,
+        );
+
+        let warnings = warnings_emitted_by(|| {
+            let procs = extract_reachable_rust_processors(root, &linux()).unwrap();
+            assert_eq!(names(procs), vec!["Copy"]);
+        });
+        assert!(warnings.is_empty(), "{warnings}");
     }
 
     /// A feature-gated scope the scan target cannot satisfy is named rather
