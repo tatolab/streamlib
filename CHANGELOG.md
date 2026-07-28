@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.9.0](https://github.com/tatolab/streamlib/compare/v0.8.4...v0.9.0) (2026-07-28)
+
+
+### ⚠ BREAKING CHANGES
+
+* **pkg:** `streamlib pkg build` and `streamlib pkg inspect` are removed.
+
+### Features
+
+* **pkg:** delete pack — ship plugins as a plain zip or directory ([#1622](https://github.com/tatolab/streamlib/issues/1622)) ([8a48c9e](https://github.com/tatolab/streamlib/commit/8a48c9ed101ca70c7b9a5de3c34918158aa4b160))
+
 ## [0.8.4](https://github.com/tatolab/streamlib/compare/v0.8.3...v0.8.4) (2026-07-28)
 
 
