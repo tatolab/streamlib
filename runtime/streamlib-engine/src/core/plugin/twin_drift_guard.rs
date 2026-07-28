@@ -51,6 +51,20 @@ const SDK_RUNTIME_SHUTDOWN_PUBLISH_FILE: &str = concat!(
 const RUNTIME_SHUTDOWN_PUBLISH_TWIN_BEGIN: &str = "twin-guard(runtime-shutdown-publish): BEGIN";
 const RUNTIME_SHUTDOWN_PUBLISH_TWIN_END: &str = "twin-guard(runtime-shutdown-publish): END";
 
+/// Engine-side `HostServices` → `HostCallbacks` field-map twin.
+const ENGINE_HOST_CALLBACKS_FIELD_MAP_FILE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/src/core/plugin/host_services/mod.rs"
+);
+/// SDK-side `HostServices` → `HostCallbacks` field-map twin.
+const SDK_HOST_CALLBACKS_FIELD_MAP_FILE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../sdk/streamlib-plugin-sdk/src/plugin.rs"
+);
+/// Line marker bracketing the guarded field map in each twin.
+const HOST_CALLBACKS_FIELD_MAP_TWIN_BEGIN: &str = "twin-guard(host-callbacks-field-map): BEGIN";
+const HOST_CALLBACKS_FIELD_MAP_TWIN_END: &str = "twin-guard(host-callbacks-field-map): END";
+
 /// Strip full-line comments + blank lines, apply the one known import-path shim
 /// (`super::host_services::` → `super::`), then drop all remaining whitespace.
 /// The result preserves the marshalling LOGIC (identifiers, calls, control
@@ -229,6 +243,88 @@ fn logic_identical_runtime_shutdown_publish_twins_stay_in_sync() {
          sdk/streamlib-plugin-sdk/src/runtime_control.rs\n\
          (Both publish the reserved runtime-shutdown control topic; the \
          engine-free SDK can't reuse the engine's copy.)\n"
+    );
+}
+
+/// The `HostServices` → `HostCallbacks` field map is the load handshake's last
+/// step, and it exists twice: the engine's copy runs in a facade cdylib, the
+/// SDK's in an engine-free one. A slot added to only one copy reaches only one
+/// cdylib flavor — a silent, flavor-dependent null callback, never a build
+/// failure. Only the mapping function is twinned in each file, so this is a
+/// marked-region entry. Unbypassable: there is no fixture to update — apply the
+/// same change to BOTH.
+#[test]
+fn logic_identical_host_callbacks_field_map_twins_stay_in_sync() {
+    let eng = normalize(&extract_marked_region(
+        &read_path(ENGINE_HOST_CALLBACKS_FIELD_MAP_FILE),
+        ENGINE_HOST_CALLBACKS_FIELD_MAP_FILE,
+        HOST_CALLBACKS_FIELD_MAP_TWIN_BEGIN,
+        HOST_CALLBACKS_FIELD_MAP_TWIN_END,
+    ));
+    let sdk = normalize(&extract_marked_region(
+        &read_path(SDK_HOST_CALLBACKS_FIELD_MAP_FILE),
+        SDK_HOST_CALLBACKS_FIELD_MAP_FILE,
+        HOST_CALLBACKS_FIELD_MAP_TWIN_BEGIN,
+        HOST_CALLBACKS_FIELD_MAP_TWIN_END,
+    ));
+    assert_eq!(
+        eng, sdk,
+        "\nengine↔SDK HostCallbacks field-map twin has DRIFTED — a slot landed \
+         in one copy but not the other, so it reaches only one cdylib flavor. \
+         Apply the SAME change to BOTH:\n  \
+         runtime/streamlib-engine/src/core/plugin/host_services/mod.rs\n  \
+         sdk/streamlib-plugin-sdk/src/plugin.rs\n"
+    );
+}
+
+/// The marked-region guards above compare NORMALIZED text, so their value rests
+/// on [`normalize`] not erasing the load-bearing tokens. This drives the
+/// comparison against deliberately drifted copies of the runtime-shutdown
+/// publish region: a swapped msgpack encoder or a swapped topic constant must
+/// read as drift, while a comment-only edit must not. Without this, a
+/// `normalize` that over-collapsed would leave every marked-region guard
+/// silently vacuous.
+#[test]
+fn the_marked_region_comparison_detects_a_one_sided_wire_change() {
+    let region = extract_marked_region(
+        &read_path(ENGINE_RUNTIME_SHUTDOWN_PUBLISH_FILE),
+        ENGINE_RUNTIME_SHUTDOWN_PUBLISH_FILE,
+        RUNTIME_SHUTDOWN_PUBLISH_TWIN_BEGIN,
+        RUNTIME_SHUTDOWN_PUBLISH_TWIN_END,
+    );
+    let baseline = normalize(&region);
+
+    for (what_drifted, drifted) in [
+        (
+            "the msgpack encoder",
+            region.replace("rmp_serde::to_vec(", "rmp_serde::to_vec_named("),
+        ),
+        (
+            "the reserved control topic",
+            region.replace(
+                "PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST",
+                "PUBSUB_CONTROL_TOPIC_SOME_OTHER_REQUEST",
+            ),
+        ),
+    ] {
+        assert_ne!(
+            drifted, region,
+            "the {what_drifted} substitution matched nothing — this test no \
+             longer exercises what it claims"
+        );
+        assert_ne!(
+            baseline,
+            normalize(&drifted),
+            "normalize() erased {what_drifted}, so the marked-region twin \
+             guards would not catch a one-sided change to it"
+        );
+    }
+
+    assert_eq!(
+        baseline,
+        normalize(&format!("// a comment-only edit\n{region}")),
+        "normalize() must ignore comment-only edits, or every marked-region \
+         guard fails on prose churn"
     );
 }
 

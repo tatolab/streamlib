@@ -54,6 +54,10 @@ async fn serve_in_process() -> Result<()> {
     )
     .await;
 
+    // This process owned the run loop, so it owns the take: leaving the request
+    // latched would end the next loop in this process before it began.
+    streamlib::sdk::runtime::take_runtime_shutdown_request_latch();
+
     // Tear the runtime down regardless of how the loop ended, then surface any
     // transport error.
     if let Err(stop_error) = runner.stop() {
@@ -63,12 +67,15 @@ async fn serve_in_process() -> Result<()> {
     Ok(())
 }
 
-/// Resolve once a runtime-shutdown request is latched. Polled at the same 100 ms
-/// granularity as `Runner::wait_for_signal_with`, and reads the host binary's
-/// latch — this process is the host that funnelled the request.
+/// Resolve once a runtime-shutdown request is latched, reading the host
+/// binary's latch — this process is the host that funnelled the request. Polled
+/// at the engine's own shutdown-observation granularity.
 async fn wait_until_runtime_shutdown_requested() {
     while !streamlib::sdk::runtime::is_runtime_shutdown_requested() {
-        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        tokio::time::sleep(
+            streamlib::sdk::runtime::RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL,
+        )
+        .await;
     }
 }
 
@@ -267,12 +274,21 @@ mod tests {
     /// What makes `serve_in_process` a run-loop owner: the future it hands the
     /// stdio serve loop pends until a request is latched, then resolves — so a
     /// `shutdown` tool call ends the loop and the existing `runner.stop()` tail
-    /// runs. The engine's latch is process-global and taking it is harness-owned
-    /// (`Runner::start`), so this test leaves it set; nothing else in this
-    /// binary observes it.
+    /// runs. The latch is process-global, so this test takes it back on every
+    /// exit path (including an assertion unwind) and leaves the binary clean,
+    /// the same discipline the engine's latch tests follow.
     #[tokio::test]
     #[serial_test::serial]
     async fn the_in_process_loop_owner_waits_for_a_latched_shutdown_request() {
+        struct RuntimeShutdownRequestLatchClearedOnDrop;
+        impl Drop for RuntimeShutdownRequestLatchClearedOnDrop {
+            fn drop(&mut self) {
+                streamlib::sdk::runtime::take_runtime_shutdown_request_latch();
+            }
+        }
+        streamlib::sdk::runtime::take_runtime_shutdown_request_latch();
+        let _latch_cleared_even_on_unwind = RuntimeShutdownRequestLatchClearedOnDrop;
+
         let pending = tokio::time::timeout(
             std::time::Duration::from_millis(250),
             wait_until_runtime_shutdown_requested(),

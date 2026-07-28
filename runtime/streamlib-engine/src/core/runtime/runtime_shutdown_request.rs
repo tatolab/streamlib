@@ -8,10 +8,12 @@
 //! publishes `Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown)`, and the
 //! loop owner ([`crate::core::runtime::Runner::wait_for_signal_with`]) runs the
 //! normal teardown. The latch is process-global (the signal handler and the
-//! plugin ABI hold no `Runner`), so the design assumes one run loop per
-//! process.
+//! plugin ABI hold no `Runner`) and first-observer-wins: whichever loop owner
+//! reads it takes it, so a request issued while no run loop is running is
+//! observed by the next one to start.
 
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use streamlib_plugin_abi::PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST;
 
@@ -26,6 +28,16 @@ use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent};
 /// its own copy of this static, which is precisely why the cdylib arm of the
 /// funnel publishes across the plugin ABI instead of storing here.
 static RUNTIME_SHUTDOWN_REQUEST_LATCH: AtomicBool = AtomicBool::new(false);
+
+/// Fired at most once per image, so the wrong-image diagnostic below stays
+/// fail-loud without becoming a log firehose: the predicate it guards is meant
+/// to be polled, and inside a facade cdylib every emit is a plugin-ABI hop.
+static WRONG_IMAGE_LATCH_READ_WARNING: std::sync::Once = std::sync::Once::new();
+
+/// How often a loop owner re-reads the latch. Shared so the run loop
+/// ([`crate::core::runtime::Runner::wait_for_signal_with`]) and every
+/// out-of-crate loop owner observe a request at the same granularity.
+pub const RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Ask whoever owns the run loop to shut the runtime down (equivalent to
 /// Ctrl+C / SIGTERM). Idempotent and fire-and-forget.
@@ -85,19 +97,46 @@ fn is_runtime_shutdown_requested_with_installed_host_callbacks(
     installed_host_callbacks: Option<&HostCallbacks>,
 ) -> bool {
     if installed_host_callbacks.is_some() {
-        tracing::warn!(
-            "is_runtime_shutdown_requested read inside a plugin cdylib: this image's latch is \
-             never set, so the answer is always `false` — the run loop that observes a shutdown \
-             request lives in the host"
-        );
+        WRONG_IMAGE_LATCH_READ_WARNING.call_once(|| {
+            tracing::warn!(
+                "is_runtime_shutdown_requested read inside a plugin cdylib: this image's latch is \
+                 never set, so the answer is always `false` — the run loop that observes a \
+                 shutdown request lives in the host (warned once per image)"
+            );
+        });
     }
     RUNTIME_SHUTDOWN_REQUEST_LATCH.load(Ordering::SeqCst)
 }
 
 /// Clear the latch, returning whether a request was pending. Host-only, for the
 /// same reason as [`is_runtime_shutdown_requested`].
-pub(crate) fn take_runtime_shutdown_request_latch() -> bool {
+///
+/// Taking the latch is what makes it first-observer-wins, so only whoever owns
+/// a run loop may call it — once its loop has ended, so the request it just
+/// observed does not end the next loop in the same process too.
+pub fn take_runtime_shutdown_request_latch() -> bool {
     RUNTIME_SHUTDOWN_REQUEST_LATCH.swap(false, Ordering::SeqCst)
+}
+
+/// Clears the latch on construction and again on drop, so a `#[serial]` test
+/// that touches the process-global latch leaves it clean even when an assertion
+/// unwinds past its own cleanup.
+#[cfg(test)]
+pub(crate) struct RuntimeShutdownRequestLatchClearedOnDrop;
+
+#[cfg(test)]
+impl RuntimeShutdownRequestLatchClearedOnDrop {
+    pub(crate) fn clear_now_and_on_drop() -> Self {
+        take_runtime_shutdown_request_latch();
+        Self
+    }
+}
+
+#[cfg(test)]
+impl Drop for RuntimeShutdownRequestLatchClearedOnDrop {
+    fn drop(&mut self) {
+        take_runtime_shutdown_request_latch();
+    }
 }
 
 /// Publish a shutdown request to the host on the reserved plugin-ABI control
@@ -134,17 +173,18 @@ fn publish_runtime_shutdown_request(callbacks: &HostCallbacks, reason: &str) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::plugin::host_services::host_services_test_support::host_services_with_capturing_pubsub_publish;
+    use crate::core::plugin::host_services::host_services_test_support::host_callbacks_with_capturing_pubsub_publish;
     use core::cell::RefCell;
     use serial_test::serial;
     use streamlib_plugin_abi::HostHandle;
 
     /// The latch is process-global, so every test that touches it runs
-    /// `#[serial]` and leaves it cleared for the next one.
+    /// `#[serial]` and leaves it cleared for the next one — including when an
+    /// assertion inside `body` unwinds.
     fn with_cleared_latch<F: FnOnce()>(body: F) {
-        take_runtime_shutdown_request_latch();
+        let _latch_cleared_even_on_unwind =
+            RuntimeShutdownRequestLatchClearedOnDrop::clear_now_and_on_drop();
         body();
-        take_runtime_shutdown_request_latch();
     }
 
     /// The host binary's `host_callbacks()` is `None`, so this drives the host
@@ -183,9 +223,9 @@ mod tests {
         });
     }
 
-    /// `Runner::start` takes the latch at entry (so a second in-process run is
-    /// not poisoned by the first run's request) and warns on the `true` it gets
-    /// back — a request nobody's run loop ever owned.
+    /// Taking the latch is what makes it first-observer-wins: the loop owner
+    /// that observed the request clears it, so the next loop in the same
+    /// process does not exit on a request that was already served.
     #[test]
     #[serial]
     fn taking_the_latch_reports_the_pending_request_and_unrequests_shutdown() {
@@ -235,10 +275,10 @@ mod tests {
     fn host_callbacks_with_capture(
         sink: &RefCell<Vec<CapturedRuntimeShutdownPublish>>,
     ) -> HostCallbacks {
-        HostCallbacks::from(&host_services_with_capturing_pubsub_publish(
+        host_callbacks_with_capturing_pubsub_publish(
             sink as *const RefCell<Vec<CapturedRuntimeShutdownPublish>> as HostHandle,
             capturing_pubsub_publish,
-        ))
+        )
     }
 
     /// The cdylib arm's wire selection is load-bearing: the host decodes the

@@ -31,6 +31,11 @@ impl EventListener for ShutdownListener {
 }
 
 /// Run a loop that automatically exits on shutdown events.
+///
+/// Host-only: both of its shutdown sources are inert inside a plugin cdylib —
+/// the plugin image's `PUBSUB` is never `init()`ed (so the subscription below
+/// never delivers) and the funnel's cdylib arm deliberately latches nothing in
+/// the plugin image's copy of the engine.
 pub fn shutdown_aware_loop<F, E>(mut f: F) -> std::result::Result<(), E>
 where
     F: FnMut() -> std::result::Result<LoopControl, E>,
@@ -85,21 +90,27 @@ mod tests {
     use serial_test::serial;
 
     /// A request latched before the loop subscribes leaves no event to receive,
-    /// so the loop must read the latch too. Mental-revert: dropping the
-    /// `is_runtime_shutdown_requested()` term hangs this test.
+    /// so the loop must read the latch too. The callback breaks itself after a
+    /// bounded number of iterations so a mental-revert (dropping the
+    /// `is_runtime_shutdown_requested()` term) fails the `iterations == 0`
+    /// assertion instead of spinning until a harness timeout.
     #[test]
     #[serial]
     fn latched_shutdown_request_exits_the_loop_without_an_event() {
-        crate::core::runtime::take_runtime_shutdown_request_latch();
+        let _latch_cleared_even_on_unwind =
+            crate::core::runtime::RuntimeShutdownRequestLatchClearedOnDrop::clear_now_and_on_drop();
         crate::core::runtime::request_runtime_shutdown("unit test")
             .expect("the host arm never fails");
 
+        const ITERATIONS_BEFORE_THE_CALLBACK_BREAKS_ITSELF: usize = 4;
         let mut iterations = 0;
         let result = shutdown_aware_loop(|| {
             iterations += 1;
+            if iterations >= ITERATIONS_BEFORE_THE_CALLBACK_BREAKS_ITSELF {
+                return Ok::<LoopControl, ()>(LoopControl::Break);
+            }
             Ok::<LoopControl, ()>(LoopControl::Continue)
         });
-        crate::core::runtime::take_runtime_shutdown_request_latch();
 
         assert!(result.is_ok());
         assert_eq!(
