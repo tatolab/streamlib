@@ -25,6 +25,7 @@ const input = typeof args === 'string' ? JSON.parse(args) : args || {};
 const today = input.today;
 const repoRoot = input.repo_root || '.';
 const maxParallel = input.max_parallel || 6;
+const maxWorktrees = input.max_worktrees || 4;
 const attemptCap = input.attempts_per_ticket || 3;
 const liveVerify = input.live_verify || 'unknown';
 const proposeOnlyForced = input.propose_only === true;
@@ -193,10 +194,20 @@ function planBatch(items) {
   const deferred = [];
   const takenHotFiles = new Set();
   let rigTaken = false;
+  let worktreesTaken = 0;
 
   for (const t of items) {
     if (batch.length >= maxParallel) {
       deferred.push({ issue: t.issue, why: 'max_parallel reached' });
+      continue;
+    }
+    // Only code-changing shapes cut a worktree; design and research are read-only.
+    // A worktree is a full checkout plus its own cargo target dir, so concurrent
+    // ones are bounded by disk and by how many heavy builds the box can run at
+    // once — a tighter limit than max_parallel, which read-only tickets fill.
+    const cutsWorktree = t.shape !== 'design-first' && t.shape !== 'research';
+    if (cutsWorktree && worktreesTaken >= maxWorktrees) {
+      deferred.push({ issue: t.issue, why: `max_worktrees (${maxWorktrees}) reached` });
       continue;
     }
     // One in-flight ticket per physical rig resource: a single GPU and one
@@ -214,6 +225,7 @@ function planBatch(items) {
     }
     for (const f of hot) takenHotFiles.add(f);
     if (needsRig) rigTaken = true;
+    if (cutsWorktree) worktreesTaken += 1;
     batch.push(t);
   }
   return { batch, deferred };

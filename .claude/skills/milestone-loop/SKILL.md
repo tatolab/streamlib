@@ -44,10 +44,10 @@ Launch in the **background**:
 
 ```
 Workflow({ scriptPath: ".claude/workflows/milestone-loop.js",
-           args: { today, repo_root, max_parallel, attempts_per_ticket, live_verify, attended } })
+           args: { today, repo_root, max_parallel, max_worktrees, attempts_per_ticket, live_verify, attended } })
 ```
 
-Knobs (`heartbeat`, `max_parallel`, `attempts_per_ticket`, `propose_only`, `live_verify`) come from `.claude/loops/README.md`.
+Knobs (`heartbeat`, `max_parallel`, `max_worktrees`, `attempts_per_ticket`, `propose_only`, `live_verify`) come from `.claude/loops/README.md`.
 
 Run this in the **primary checkout, never a worktree**. A session started in a worktree has no `.claude/loops/state/` and no `settings.local.json` — `git worktree add` checks out tracked files only. The loop would start with no state, write a fresh one, and split-brain against the primary. Git permits a worktree inside a worktree, so this fails silently rather than erroring.
 
