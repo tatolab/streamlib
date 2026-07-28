@@ -47,9 +47,8 @@ pub use derive::{
     DeriveError, DerivedProcessorSet, ExtractedManifestPort, ExtractedManifestProcessor,
     ManifestDriftReport, PackageLanguage, PortSchemaSurface, PortSurface, ProcessorSurface,
     SkippedLanguage, SubprocessProcessorExtractor, SystemSubprocessProcessorExtractor,
-    check_processor_manifest_drift, derive_package_processor_surfaces,
-    describe_processor_surface_difference, detect_package_languages, filter_committed_to_languages,
-    parse_subprocess_manifest_json_full,
+    check_processor_manifest_drift, derive_package_processor_surfaces, detect_package_languages,
+    filter_committed_to_languages, parse_subprocess_manifest_json_full,
 };
 pub use grammar::{ParsedPort, ParsedProcessorAttr};
 pub use reachable::{
@@ -71,10 +70,11 @@ pub use reachable::{
 pub struct ExtractedProcessor {
     /// The manifest-shaped processor schema derived from the attribute.
     pub schema: ProcessorSchema,
-    /// The full `@org/package/Type@version` identity the attribute declared.
-    /// [`ProcessorSchema`] keeps only the `Type` segment, so this is the only
-    /// place a scan consumer can tell two same-`Type` processors declared under
-    /// different `@org/package` apart.
+    /// The version-free `@org/package/Type` identity the attribute declared,
+    /// carrying the `0.0.0` sentinel the grammar synthesizes rather than a real
+    /// version. [`ProcessorSchema`] keeps only the `Type` segment, so this is
+    /// the only place a scan consumer can tell two same-`Type` processors
+    /// declared under different `@org/package` apart.
     pub schema_ident: SchemaIdent,
     /// The version-free config-schema identity the attribute declared (or
     /// synthesized from the config type), if the processor binds a config.

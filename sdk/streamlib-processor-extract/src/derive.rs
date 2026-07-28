@@ -724,7 +724,7 @@ const DERIVED_FROM_CODE_SURFACE_LABEL: &str = "code";
 /// meaningful between two `processors/` arms declaring one processor id, where
 /// neither side is "the manifest" — see
 /// [`describe_divergent_processor_declarations`].
-pub fn describe_processor_surface_difference(
+pub(crate) fn describe_processor_surface_difference(
     processor_type_name: &str,
     left_label: &str,
     left: &ProcessorSurface,
