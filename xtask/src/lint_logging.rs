@@ -93,14 +93,15 @@ pub fn run(project_root: &Path) -> Result<()> {
         );
     }
     if report.violations.is_empty() {
-        // A lint that scanned nothing passes for the wrong reason — the scan
-        // roots moving out from under it looks identical to a clean tree.
-        anyhow::ensure!(
-            report.files_scanned > 0,
-            "lint-logging scanned 0 files — the Rust ({:?}) or polyglot scan roots \
-             moved out from under the gate",
-            crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES
-        );
+        crate::ensure_source_walking_gate_read_source(
+            "lint-logging",
+            &format!(
+                "the Rust {:?} or polyglot scan roots",
+                crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES
+            ),
+            report.files_scanned,
+            "a banned print macro back in",
+        )?;
         println!(
             "lint-logging: {} file(s) scanned across Rust + polyglot SDKs, no violations",
             report.files_scanned,
@@ -320,19 +321,15 @@ fn collect_cfg_excluded_mod_paths(crate_root: &Path) -> Vec<PathBuf> {
     if lib_rs.exists() {
         walk_mods_for_exclusions(&lib_rs, &mut excluded);
     }
-    let processor_source_dir = crate_root.join("processors");
-    if let Ok(entries) = fs::read_dir(&processor_source_dir) {
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            let arm_file = if path.is_dir() {
-                path.join("mod.rs")
-            } else {
-                path.clone()
-            };
-            if !arm_file.is_file() || arm_file.extension().and_then(|e| e.to_str()) != Some("rs") {
-                continue;
-            }
-            walk_mods_for_exclusions(&arm_file, &mut excluded);
+    // "What is an arm" is owned by the extract crate's enumerator, so a change
+    // to the arm rule cannot leave this walker with a stale second definition.
+    // A crate whose `processors/` cannot be enumerated contributes no
+    // exclusions, matching the best-effort shape of the rest of this walk.
+    if let Ok(arms) =
+        streamlib_processor_extract::enumerate_processor_source_module_arms(crate_root)
+    {
+        for arm in &arms {
+            walk_mods_for_exclusions(&arm.module_file, &mut excluded);
         }
     }
     excluded

@@ -180,6 +180,38 @@ fn a_fully_parked_package_declares_no_processor_on_any_target() {
     }
 }
 
+/// `@tatolab/display` has no Apple implementation yet. Its refusal lives as its
+/// own arm (`processors/apple_unsupported.rs`, gated on the Apple targets and
+/// declaring no processor), so an Apple build fails at compile with the reason
+/// instead of producing a cdylib that registers nothing. The arm must be
+/// declared by the generated root and must contribute no `export_plugin!` entry.
+#[test]
+fn display_refuses_an_apple_build_with_a_reason_rather_than_an_empty_plugin() {
+    let dir = package_dir("display");
+    let refusal_arm = dir.join("processors").join("apple_unsupported.rs");
+    let arm_source = std::fs::read_to_string(&refusal_arm)
+        .unwrap_or_else(|e| panic!("{} must exist: {e}", refusal_arm.display()));
+    assert!(arm_source.contains("#![cfg(any(target_os = \"macos\", target_os = \"ios\"))]"));
+    assert!(arm_source.contains("compile_error!"));
+
+    let request = RustCrateRootGenerationRequest::for_package_dir(&dir).unwrap();
+    let generated = generate_rust_crate_root_source(&request).unwrap();
+    assert!(
+        generated.source.contains(
+            "#[cfg(any(target_os = \"macos\", target_os = \"ios\"))]\n\
+             #[path = \"../processors/apple_unsupported.rs\"]\npub mod apple_unsupported;"
+        ),
+        "{}",
+        generated.source
+    );
+    for os in ["macos", "ios"] {
+        assert!(
+            reachable_names(&dir, os).is_empty(),
+            "the refusal arm must declare no processor on {os}"
+        );
+    }
+}
+
 /// `packages/api-server` is the one in-tree Rust package that is a statically
 /// linked host rlib rather than a distributable cdylib, so it keeps a committed
 /// `src/lib.rs` crate root. It still authors its processor under `processors/`

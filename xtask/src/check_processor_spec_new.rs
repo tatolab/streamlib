@@ -44,7 +44,13 @@ pub struct LintViolation {
 }
 
 pub fn run(workspace_root: &Path) -> Result<()> {
-    let violations = lint_workspace(workspace_root)?;
+    let (violations, files_scanned) = lint_workspace(workspace_root)?;
+    crate::ensure_source_walking_gate_read_source(
+        "check-processor-spec-new",
+        &format!("{SCAN_DIR_PARENTS:?}"),
+        files_scanned,
+        "a bare-string ProcessorSpec::new back in",
+    )?;
 
     if violations.is_empty() {
         println!(
@@ -97,20 +103,10 @@ fn is_example_src_file(path: &Path) -> bool {
     saw_examples && saw_source_root_after_examples
 }
 
-pub fn lint_workspace(workspace_root: &Path) -> Result<Vec<LintViolation>> {
-    let (violations, files_scanned) = lint_workspace_counted(workspace_root)?;
-    anyhow::ensure!(
-        files_scanned > 0,
-        "check-processor-spec-new scanned 0 files under {SCAN_DIR_PARENTS:?} — \
-         the scan roots moved out from under the gate, which would let a \
-         bare-string ProcessorSpec::new back in unnoticed"
-    );
-    Ok(violations)
-}
-
-/// [`lint_workspace`] plus the number of files it read, so the non-zero
-/// assertion above is testable.
-pub fn lint_workspace_counted(workspace_root: &Path) -> Result<(Vec<LintViolation>, usize)> {
+/// Every bare-string `ProcessorSpec::new` / hand-rolled `SchemaIdent` site,
+/// plus how many files were read to find them — [`run`] refuses a scan that
+/// read nothing.
+pub fn lint_workspace(workspace_root: &Path) -> Result<(Vec<LintViolation>, usize)> {
     let mut violations = Vec::new();
     let mut files_scanned = 0usize;
     for parent in SCAN_DIR_PARENTS {
@@ -401,7 +397,7 @@ mod tests {
         // this must pass — every live `ProcessorSpec::new(` call site
         // takes a structured ident, not a bare PascalCase string.
         let workspace = workspace_root().expect("workspace root");
-        let violations = lint_workspace(&workspace).unwrap();
+        let (violations, _) = lint_workspace(&workspace).unwrap();
         assert!(
             violations.is_empty(),
             "workspace has bare-string ProcessorSpec::new sites: {:#?}",
@@ -427,7 +423,7 @@ mod tests {
     let s = ProcessorSpec::new(SchemaIdent::new(...), config);
 }"#,
         );
-        let violations = lint_workspace(dir.path()).unwrap();
+        let (violations, _) = lint_workspace(dir.path()).unwrap();
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].file, bad);
     }

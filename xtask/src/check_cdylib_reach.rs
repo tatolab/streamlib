@@ -98,7 +98,16 @@ pub struct DispatchViolation {
 
 pub fn run(workspace_root: &Path) -> Result<()> {
     let engine_violations = scan_workspace(workspace_root)?;
-    let dispatch_violations = scan_cdylib_dispatch_paths(workspace_root)?;
+    let (dispatch_violations, scanned_file_paths) = scan_cdylib_dispatch_paths(workspace_root)?;
+    crate::ensure_source_walking_gate_read_source(
+        "check-cdylib-reach",
+        &format!(
+            "every workspace cdylib crate's {:?}",
+            crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES
+        ),
+        scanned_file_paths.len(),
+        "a package reach for the host device",
+    )?;
     let total = engine_violations.len() + dispatch_violations.len();
 
     if total == 0 {
@@ -220,25 +229,10 @@ pub fn scan_workspace(workspace_root: &Path) -> Result<Vec<Violation>> {
 /// fires).
 ///
 /// This is the gate that stops package GPU code naming the host device or a
-/// raw RHI constructor, so it fails loudly rather than passing vacuously when
-/// it finds nothing to scan — a gate that scanned an empty directory is
-/// indistinguishable from a clean one.
-pub fn scan_cdylib_dispatch_paths(workspace_root: &Path) -> Result<Vec<DispatchViolation>> {
-    let (violations, scanned_file_paths) =
-        scan_cdylib_dispatch_paths_with_scanned_file_paths(workspace_root)?;
-    anyhow::ensure!(
-        !scanned_file_paths.is_empty(),
-        "check-cdylib-reach scanned 0 files across every workspace cdylib crate \
-         under {:?} — the scan roots moved out from under the gate, which would \
-         let a package reach for the host device unnoticed",
-        crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES
-    );
-    Ok(violations)
-}
-
-/// [`scan_cdylib_dispatch_paths`] plus every file path it read, so both the
-/// non-empty assertion above and the roots it actually reached are testable.
-pub fn scan_cdylib_dispatch_paths_with_scanned_file_paths(
+/// raw RHI constructor. It returns every file path it read alongside the
+/// violations so [`run`] can refuse a vacuous pass — a gate that scanned an
+/// empty directory is indistinguishable from a clean one.
+pub fn scan_cdylib_dispatch_paths(
     workspace_root: &Path,
 ) -> Result<(Vec<DispatchViolation>, Vec<PathBuf>)> {
     let mut all = Vec::new();
@@ -1006,8 +1000,7 @@ mod tests {
             .parent()
             .expect("xtask has no parent")
             .to_path_buf();
-        let (_, scanned_file_paths) =
-            scan_cdylib_dispatch_paths_with_scanned_file_paths(&workspace).expect("scan");
+        let (_, scanned_file_paths) = scan_cdylib_dispatch_paths(&workspace).expect("scan");
 
         for root_name in crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES {
             assert!(

@@ -124,7 +124,13 @@ pub struct Violation {
 }
 
 pub fn run(workspace_root: &Path) -> Result<()> {
-    let violations = scan_workspace(workspace_root)?;
+    let (violations, files_scanned) = scan_workspace(workspace_root)?;
+    crate::ensure_source_walking_gate_read_source(
+        "check-no-escalate-in-lifecycle",
+        &format!("{TARGET_DIRS:?}"),
+        files_scanned,
+        "a lifecycle body re-enter the escalate gate",
+    )?;
     if violations.is_empty() {
         println!(
             "✓ check-no-escalate-in-lifecycle: no `.escalate(...)` calls inside \
@@ -171,20 +177,9 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     anyhow::bail!("check-no-escalate-in-lifecycle failed");
 }
 
-pub fn scan_workspace(workspace_root: &Path) -> Result<Vec<Violation>> {
-    let (violations, files_scanned) = scan_workspace_counted(workspace_root)?;
-    anyhow::ensure!(
-        files_scanned > 0,
-        "check-no-escalate-in-lifecycle scanned 0 files under {TARGET_DIRS:?} — \
-         the scan roots moved out from under the gate, which would let a \
-         lifecycle body re-enter the escalate gate unnoticed"
-    );
-    Ok(violations)
-}
-
-/// [`scan_workspace`] plus the number of files it parsed, so the non-zero
-/// assertion above is testable.
-pub fn scan_workspace_counted(workspace_root: &Path) -> Result<(Vec<Violation>, usize)> {
+/// Every lifecycle-body escalate violation, plus how many files were parsed to
+/// find them — [`run`] refuses a scan that read nothing.
+pub fn scan_workspace(workspace_root: &Path) -> Result<(Vec<Violation>, usize)> {
     let mut all = Vec::new();
     let mut files_scanned = 0usize;
     for dir in TARGET_DIRS {

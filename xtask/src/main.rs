@@ -39,6 +39,27 @@ pub mod manifest_schema;
 pub const RUST_CRATE_SOURCE_ROOT_DIR_NAMES: &[&str] =
     &["src", streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME];
 
+/// Refuse a source-walking gate run that read no source at all.
+///
+/// A gate whose scan roots moved out from under it is indistinguishable from a
+/// clean tree: both report zero violations. `unnoticed_consequence` names what
+/// the gate would then let through, so the failure reads as the gate's own
+/// contract rather than a generic count assertion. One sentence shape for every
+/// gate, so a fifth one cannot invent a weaker phrasing.
+pub fn ensure_source_walking_gate_read_source(
+    gate_name: &str,
+    scan_roots_description: &str,
+    files_scanned: usize,
+    unnoticed_consequence: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        files_scanned > 0,
+        "{gate_name} scanned 0 files under {scan_roots_description} — the scan roots \
+         moved out from under the gate, which would let {unnoticed_consequence} unnoticed"
+    );
+    Ok(())
+}
+
 #[derive(Parser)]
 #[command(name = "xtask")]
 #[command(about = "StreamLib development tasks")]
