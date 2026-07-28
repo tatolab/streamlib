@@ -75,9 +75,30 @@ pub struct Violation {
     pub target: &'static str,
 }
 
+/// How many files one scan root contributed to a lint run.
+///
+/// Per-root rather than one workspace-wide total: this lint reads three
+/// independent trees (the Python SDK, the Deno SDK, and every opted-in Rust
+/// crate's source roots), and a single sum lets one tree going to zero hide
+/// behind the others' surviving files.
+#[derive(Debug)]
+pub struct LintLoggingScanRootFileCount {
+    pub scan_root_description: String,
+    pub files_scanned: usize,
+}
+
 pub struct LintReport {
     pub violations: Vec<Violation>,
-    pub files_scanned: usize,
+    pub scan_root_file_counts: Vec<LintLoggingScanRootFileCount>,
+}
+
+impl LintReport {
+    pub fn files_scanned(&self) -> usize {
+        self.scan_root_file_counts
+            .iter()
+            .map(|count| count.files_scanned)
+            .sum()
+    }
 }
 
 pub fn run(project_root: &Path) -> Result<()> {
@@ -93,43 +114,49 @@ pub fn run(project_root: &Path) -> Result<()> {
         );
     }
     if report.violations.is_empty() {
-        crate::ensure_source_walking_gate_read_source(
-            "lint-logging",
-            &format!(
-                "the Rust {:?} or polyglot scan roots",
-                crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES
-            ),
-            report.files_scanned,
-            "a banned print macro back in",
-        )?;
+        for count in &report.scan_root_file_counts {
+            crate::ensure_source_walking_gate_read_source(
+                "lint-logging",
+                &count.scan_root_description,
+                count.files_scanned,
+                "a banned print macro back in",
+            )?;
+        }
         println!(
             "lint-logging: {} file(s) scanned across Rust + polyglot SDKs, no violations",
-            report.files_scanned,
+            report.files_scanned(),
         );
         Ok(())
     } else {
         Err(anyhow::anyhow!(
             "lint-logging: {} violation(s) across {} file(s) scanned",
             report.violations.len(),
-            report.files_scanned,
+            report.files_scanned(),
         ))
     }
 }
 
 pub fn scan_all(project_root: &Path) -> Result<LintReport> {
     let mut violations = Vec::new();
-    let mut files_scanned = 0usize;
+    let mut scan_root_file_counts = Vec::new();
     for target in TARGETS {
         let root = project_root.join(target.root_relative);
-        if !root.exists() {
-            continue;
+        let mut files_scanned = 0usize;
+        if root.exists() {
+            scan_target(&root, target, &mut violations, &mut files_scanned)?;
         }
-        scan_target(&root, target, &mut violations, &mut files_scanned)?;
+        scan_root_file_counts.push(LintLoggingScanRootFileCount {
+            scan_root_description: format!(
+                "the {} scan root {}",
+                target.name, target.root_relative
+            ),
+            files_scanned,
+        });
     }
-    scan_rust(project_root, &mut violations, &mut files_scanned)?;
+    scan_root_file_counts.extend(scan_rust(project_root, &mut violations)?);
     Ok(LintReport {
         violations,
-        files_scanned,
+        scan_root_file_counts,
     })
 }
 
@@ -245,10 +272,13 @@ const RUST_BANNED_MACROS: &[(&str, &str)] = &[
     ("dbg", "dbg!"),
 ];
 
-/// Walks every `libs/*` crate that opts into workspace lints
+/// Walks every crate that opts into workspace lints
 /// (`[lints] workspace = true` in its Cargo.toml) and checks each `.rs` file
-/// under `src/` for banned macro invocations. Crates that don't opt in
-/// (CLI binaries, runtime binaries) are out of the lockout by design.
+/// under its source roots for banned macro invocations. Crates that don't opt
+/// in (CLI binaries, runtime binaries) are out of the lockout by design.
+///
+/// Returns one file count per source root name rather than a single total, so
+/// [`run`] can refuse a run in which one root read nothing.
 ///
 /// Respects `#[cfg(...)]` on out-of-line mod declarations in the crate root
 /// (e.g. `#[cfg(target_os = "macos")] mod apple;`) so that files the Linux
@@ -256,11 +286,13 @@ const RUST_BANNED_MACROS: &[(&str, &str)] = &[
 pub fn scan_rust(
     project_root: &Path,
     violations: &mut Vec<Violation>,
-    files_scanned: &mut usize,
-) -> Result<()> {
+) -> Result<Vec<LintLoggingScanRootFileCount>> {
+    let mut files_scanned_per_source_root =
+        vec![0usize; crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES.len()];
     for crate_root in discover_lint_opted_in_crates(project_root)? {
         let excluded = collect_cfg_excluded_mod_paths(&crate_root);
-        for root_name in crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES {
+        for (root_index, root_name) in crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES.iter().enumerate() {
+            let files_scanned = &mut files_scanned_per_source_root[root_index];
             let source_root = crate_root.join(root_name);
             if !source_root.exists() {
                 continue;
@@ -295,7 +327,16 @@ pub fn scan_rust(
             }
         }
     }
-    Ok(())
+    Ok(crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES
+        .iter()
+        .zip(files_scanned_per_source_root)
+        .map(|(root_name, files_scanned)| LintLoggingScanRootFileCount {
+            scan_root_description: format!(
+                "every lint-opted-in Rust crate's `{root_name}/` source root"
+            ),
+            files_scanned,
+        })
+        .collect())
 }
 
 /// Whether a path segment names a parked implementation dir per the
@@ -420,7 +461,11 @@ fn push_mod_exclusion(found: &Path, mod_name: &str, excluded: &mut Vec<PathBuf>)
 }
 
 fn discover_lint_opted_in_crates(project_root: &Path) -> Result<Vec<PathBuf>> {
-    const ZONE_PARENTS: &[&str] = &["runtime", "sdk", "adapters", "tools", "vendor"];
+    // `packages` carries the only in-tree crates rooted at `processors/`. Left
+    // out, this gate declares a source root nothing under it can ever hold, and
+    // the per-root refusal in `run` has no way to tell "the root moved" from
+    // "this gate never reads that root".
+    const ZONE_PARENTS: &[&str] = &["runtime", "sdk", "adapters", "tools", "vendor", "packages"];
     let mut result = Vec::new();
     for zone in ZONE_PARENTS {
         let zone_dir = project_root.join(zone);
@@ -1301,8 +1346,7 @@ mod tests {
         .unwrap();
 
         let mut violations = Vec::new();
-        let mut files_scanned = 0usize;
-        scan_rust(root, &mut violations, &mut files_scanned).unwrap();
+        scan_rust(root, &mut violations).unwrap();
         assert!(
             violations.is_empty(),
             "cfg(target_os=macos) mod subtree should be excluded on linux: {:?}",
@@ -1329,8 +1373,7 @@ mod tests {
         .unwrap();
 
         let mut violations = Vec::new();
-        let mut files_scanned = 0usize;
-        scan_rust(root, &mut violations, &mut files_scanned).unwrap();
+        scan_rust(root, &mut violations).unwrap();
         assert_eq!(
             violations.len(),
             1,
@@ -1357,12 +1400,74 @@ mod tests {
         .unwrap();
 
         let mut violations = Vec::new();
-        let mut files_scanned = 0usize;
-        scan_rust(root, &mut violations, &mut files_scanned).unwrap();
+        scan_rust(root, &mut violations).unwrap();
         assert!(
             violations.is_empty(),
             "non-opt-in crate should be skipped entirely: {:?}",
             violations
         );
+    }
+
+    // ----- anti-vacuity ------------------------------------------------------
+
+    /// One workspace-wide total cannot express this gate's contract: the
+    /// polyglot scan and the Rust scan read independent trees, so the Rust half
+    /// going to zero stays hidden behind the Python / TypeScript files that
+    /// still scan. A tree holding only polyglot source must be refused.
+    #[test]
+    fn a_tree_whose_rust_source_roots_read_nothing_is_refused_despite_surviving_polyglot_files() {
+        let tmp = TempDir::new().unwrap();
+        let root = tmp.path();
+        write_fixture(
+            &root.join(TARGETS[0].root_relative),
+            "streamlib/app.py",
+            "streamlib.log.info(\"ok\")\n",
+        );
+        write_fixture(
+            &root.join(TARGETS[1].root_relative),
+            "mod.ts",
+            "streamlib.log.info(\"ok\");\n",
+        );
+
+        let report = scan_all(root).unwrap();
+        assert!(report.violations.is_empty(), "{:?}", report.violations);
+        assert!(
+            report.files_scanned() > 0,
+            "the polyglot half must read source, or this fixture proves nothing"
+        );
+
+        let error = run(root).expect_err(
+            "a run whose Rust source roots read nothing must be refused, not reported clean",
+        );
+        assert!(
+            error.to_string().contains("scanned 0 files"),
+            "refusal must name the empty scan, got: {error}"
+        );
+    }
+
+    /// The non-empty assertion alone does not prove each source root is
+    /// reached: the Python SDK's files satisfy a workspace-wide total while
+    /// every Rust crate goes unscanned. Pin every root against the real
+    /// workspace so a renamed one cannot pass vacuously.
+    #[test]
+    fn the_logging_scan_reaches_every_polyglot_and_rust_source_root() {
+        let workspace = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("xtask has no parent")
+            .to_path_buf();
+        let report = scan_all(&workspace).expect("scan");
+
+        assert_eq!(
+            report.scan_root_file_counts.len(),
+            TARGETS.len() + crate::RUST_CRATE_SOURCE_ROOT_DIR_NAMES.len(),
+            "every polyglot target and every Rust source root must report its own count"
+        );
+        for count in &report.scan_root_file_counts {
+            assert!(
+                count.files_scanned > 0,
+                "no file was scanned under {} — the gate is passing vacuously there",
+                count.scan_root_description
+            );
+        }
     }
 }
