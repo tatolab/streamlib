@@ -166,15 +166,27 @@ independent ways. The target-resolved walk needs no reasoning: it resolved one
 concrete target and collected the name twice. The across-every-target walk
 brute-forces satisfiability of the two arms' conjoined predicates over only the
 atoms those predicates themselves mention, and refuses **only on a satisfying
-assignment it can print**. That search carries a deliberate domain model — every
-`target_*` key is single-valued except the genuinely set-valued `feature` /
-`target_feature` / `target_has_atomic`, and the `unix` / `windows` families are
-mutually exclusive with `windows` holding exactly one `target_os`. Without it,
-`target_os = "linux"` against `any(target_os = "macos", target_os = "ios")`
-reads satisfiable and every platform-split package fails its own build. The
-model's rules are facts about how `rustc` sets these atoms, so each one can only
-ever remove a FALSE overlap; the cost of being wrong in the other direction — a
-missed detection — is bounded by the concrete-target net.
+assignment it can print**. That search carries a deliberate domain model of how
+`rustc` sets these atoms: `target_*` keys are modelled single-valued except
+`feature` / `target_feature` / `target_has_atomic`; the `unix` / `windows`
+families are mutually exclusive, spelled interchangeably as a bare flag or a
+`target_family` value, with `windows` holding exactly one `target_os`; and a
+known `target_os` fixes the families its target defines, both ways. Without the
+first rule, `target_os = "linux"` against `any(target_os = "macos", target_os =
+"ios")` reads satisfiable and every platform-split package fails its own build.
+Without the last, `target_os = "ios"` against `not(unix)` reads satisfiable and
+a platform split with a non-unix fallback arm fails the same way.
+
+**The model's error direction is toward missing an overlap, never inventing
+one.** Every rule and every fact the model lacks PRUNES candidate assignments,
+so a witness is only ever offered when the model can say the assignment is one a
+real target could have. Two facts it deliberately lacks: `target_family` is
+genuinely multi-valued on the wasm-with-libc targets (`wasi` and `emscripten`
+are both `wasm` and `unix`) yet is modelled single-valued, and the `target_os` →
+family table names only single-family OSes. A `target_os` outside that table
+therefore cannot witness anything weighed against a family atom — it is left
+unproven rather than guessed. The cost of a missed detection is bounded by the
+concrete-target net: the host that actually compiles both arms still fails.
 
 **Divergence is refused over the whole derived projection, not just ports.** The
 `processors:` section is derived from whichever arm the publishing host

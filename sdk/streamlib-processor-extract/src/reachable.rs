@@ -125,7 +125,8 @@ impl ModuleReachabilityTarget {
     /// Whether `("key", "value")` is defined by this target.
     fn has_key_value(&self, key: &str, value: &str) -> bool {
         self.key_values
-            .contains(&(key.to_string(), value.to_string()))
+            .iter()
+            .any(|(defined_key, defined_value)| defined_key == key && defined_value == value)
     }
 
     /// Whether the bare flag `name` is defined by this target.
@@ -148,7 +149,7 @@ impl ModuleReachabilityTarget {
     /// The cfg atoms this target defines, rendered the way a `#[cfg(...)]`
     /// predicate spells them (`target_os = "linux", unix`) — how a diagnostic
     /// names the build target it is talking about.
-    pub fn describe_defined_cfg_atoms(&self) -> String {
+    pub(crate) fn describe_defined_cfg_atoms(&self) -> String {
         let mut atoms: Vec<String> = self
             .key_values
             .iter()
@@ -156,7 +157,7 @@ impl ModuleReachabilityTarget {
             .collect();
         atoms.extend(self.flags.iter().cloned());
         if atoms.is_empty() {
-            return "a build target defining no cfg atoms".to_string();
+            return "no cfg atoms".to_string();
         }
         atoms.join(", ")
     }
@@ -1144,17 +1145,70 @@ pub(crate) fn disjoin_distinct_cfg_predicates<'predicate>(
     }
 }
 
-/// cfg keys a build target may define more than one value for.
+/// cfg keys the model lets a build target define more than one value for.
 ///
-/// Everything else — `target_os`, `target_arch`, `target_family`, `target_env`,
+/// Every other key — `target_os`, `target_arch`, `target_family`, `target_env`,
 /// `target_vendor`, `target_endian`, `target_pointer_width`, `target_abi`,
-/// `panic`, and any custom key — admits at most one value, which is what makes
-/// `target_os = "linux"` and `any(target_os = "macos", target_os = "ios")`
-/// provably disjoint rather than reading as satisfiable. Single-valued is the
-/// deliberate default: modelling a genuinely set-valued key as single-valued
-/// can only ever MISS an overlap (the concrete-target net still catches it),
-/// while the reverse would invent one and refuse a correct package.
+/// `panic`, and any custom key — is modelled as admitting at most one value,
+/// which is what makes `target_os = "linux"` and `any(target_os = "macos",
+/// target_os = "ios")` provably disjoint rather than reading as satisfiable.
+/// Single-valued is the deliberate default: modelling a genuinely set-valued
+/// key as single-valued can only ever MISS an overlap (the concrete-target net
+/// still catches it), while the reverse would invent one and refuse a correct
+/// package.
+///
+/// `target_family` is the known exception the model deliberately keeps
+/// single-valued: `rustc` sets it twice for the wasm-with-libc targets (`wasi`
+/// and `emscripten` are both `wasm` AND `unix`). Those OSes are therefore
+/// absent from [`TARGET_FAMILIES_BY_KNOWN_TARGET_OS`], which makes a candidate
+/// assigning one unusable as a witness rather than a wrong one.
 const SET_VALUED_CFG_KEYS: [&str; 3] = ["feature", "target_feature", "target_has_atomic"];
+
+/// The `target_family` values `rustc` defines for a `target_os`, for the single-
+/// family OSes the model knows.
+///
+/// The implication the atom search cannot derive on its own: nothing in a
+/// predicate's own atoms says that `target_os = "ios"` forces `unix`, so
+/// without this table a candidate is free to assign the pair `target_os =
+/// "ios"` + no `unix` — a target that does not exist — and offer it as a proof
+/// that a `#[cfg(target_os = "ios")]` arm and a `#[cfg(not(unix))]` arm
+/// overlap.
+///
+/// Deliberately partial. A `target_os` this table does not name determines
+/// nothing about the target's families, so a candidate assigning one cannot
+/// witness a predicate pair that mentions a family atom at all (see
+/// [`CfgPredicateAtomUniverse::candidate_build_target_is_coherent`]) — an
+/// unknown OS costs a missed overlap, never a false one, which is why the
+/// multi-family wasm targets are left out rather than approximated.
+const TARGET_FAMILIES_BY_KNOWN_TARGET_OS: &[(&str, &[&str])] = &[
+    ("android", &["unix"]),
+    ("dragonfly", &["unix"]),
+    ("freebsd", &["unix"]),
+    ("fuchsia", &["unix"]),
+    ("haiku", &["unix"]),
+    ("illumos", &["unix"]),
+    ("ios", &["unix"]),
+    ("linux", &["unix"]),
+    ("macos", &["unix"]),
+    ("netbsd", &["unix"]),
+    ("none", &[]),
+    ("openbsd", &["unix"]),
+    ("redox", &["unix"]),
+    ("solaris", &["unix"]),
+    ("tvos", &["unix"]),
+    ("visionos", &["unix"]),
+    ("watchos", &["unix"]),
+    ("windows", &["windows"]),
+];
+
+/// The families [`TARGET_FAMILIES_BY_KNOWN_TARGET_OS`] pins for a `target_os`,
+/// or `None` for one it does not name.
+fn target_families_of_known_target_os(target_os: &str) -> Option<&'static [&'static str]> {
+    TARGET_FAMILIES_BY_KNOWN_TARGET_OS
+        .iter()
+        .find(|(known_target_os, _)| *known_target_os == target_os)
+        .map(|(_, families)| *families)
+}
 
 /// Ceiling on the assignment search. A processor group's predicates mention a
 /// handful of atoms in practice; a pathological one is left unproven (no
@@ -1165,12 +1219,18 @@ const MAX_CANDIDATE_BUILD_TARGET_ASSIGNMENTS: usize = 4096;
 /// none was found.
 ///
 /// Exhaustive over the atoms the two sets themselves mention — a predicate's
-/// truth depends only on the atoms it names — so a `Some` is a proof carrying
-/// its own witness. That polarity is the whole point: the caller refuses a
-/// build on it, so it must never be a hunch. A `None` is "not proven", NOT
-/// "proven disjoint": an unparseable predicate, a search past the ceiling, and
-/// a genuinely disjoint pair all land there, and the concrete-target duplicate
-/// check stays the backstop for the first two.
+/// truth depends only on the atoms it names — so a `Some` carries its own
+/// witness. That polarity is the whole point: the caller refuses a build on it,
+/// so the witness must be an assignment some real target could have, which is
+/// what [`CfgPredicateAtomUniverse::candidate_build_target_is_coherent`] is
+/// for. Every rule there, and every fact the model does not know, PRUNES
+/// candidates — so the model's error direction is toward `None`.
+///
+/// A `None` is therefore "not proven", NOT "proven disjoint": an unparseable
+/// predicate, a search past the ceiling, a `target_os` outside
+/// [`TARGET_FAMILIES_BY_KNOWN_TARGET_OS`] weighed against a family atom, and a
+/// genuinely disjoint pair all land there. The concrete-target duplicate check
+/// stays the backstop for every one of them.
 fn find_build_target_satisfying_both_cfg_predicate_sets(
     first_predicate_sources: &[String],
     second_predicate_sources: &[String],
@@ -1183,8 +1243,7 @@ fn find_build_target_satisfying_both_cfg_predicate_sets(
         atoms.collect_from(predicate);
     }
 
-    let candidates = atoms.candidate_build_targets()?;
-    candidates.into_iter().find(|candidate| {
+    atoms.candidate_build_targets()?.find(|candidate| {
         first_predicates
             .iter()
             .chain(&second_predicates)
@@ -1253,7 +1312,13 @@ impl CfgPredicateAtomUniverse {
 
     /// Every coherent build target that assigns these atoms, or `None` when the
     /// search space exceeds [`MAX_CANDIDATE_BUILD_TARGET_ASSIGNMENTS`].
-    fn candidate_build_targets(&self) -> Option<Vec<ModuleReachabilityTarget>> {
+    ///
+    /// Lazy: the caller stops at the first assignment that satisfies both
+    /// predicate sets, and the ceiling is what bounds the walk, so materializing
+    /// the space would only build targets nobody looks at.
+    fn candidate_build_targets(
+        &self,
+    ) -> Option<impl Iterator<Item = ModuleReachabilityTarget> + '_> {
         let choices = self.candidate_atom_choices();
         let mut assignment_count: usize = 1;
         for choice in &choices {
@@ -1267,20 +1332,17 @@ impl CfgPredicateAtomUniverse {
             }
         }
 
-        let mut candidates = Vec::with_capacity(assignment_count);
-        for encoded in 0..assignment_count {
+        Some((0..assignment_count).filter_map(move |encoded| {
             let mut remaining = encoded;
-            let mut target = ModuleReachabilityTarget::new();
+            let mut candidate = ModuleReachabilityTarget::new();
             for choice in &choices {
                 let arity = choice.arity();
-                choice.apply(remaining % arity, &mut target);
+                choice.apply(remaining % arity, &mut candidate);
                 remaining /= arity;
             }
-            if self.candidate_build_target_is_coherent(&target) {
-                candidates.push(target);
-            }
-        }
-        Some(candidates)
+            self.candidate_build_target_is_coherent(&candidate)
+                .then_some(candidate)
+        }))
     }
 
     fn candidate_atom_choices(&self) -> Vec<CandidateCfgAtomChoice<'_>> {
@@ -1302,6 +1364,27 @@ impl CfgPredicateAtomUniverse {
         choices
     }
 
+    /// Whether the predicates mention a bare flag atom.
+    fn mentions_flag(&self, flag: &str) -> bool {
+        self.flags.contains(flag)
+    }
+
+    /// Whether the predicates mention `key = "value"` for a single-valued key.
+    fn mentions_single_valued_key_value(&self, key: &str, value: &str) -> bool {
+        self.single_valued_key_values
+            .get(key)
+            .is_some_and(|mentioned| mentioned.contains(value))
+    }
+
+    /// Whether the predicates mention any atom whose truth is decided by the
+    /// target's families — the atoms a `target_os` outside
+    /// [`TARGET_FAMILIES_BY_KNOWN_TARGET_OS`] cannot decide.
+    fn mentions_a_target_family_atom(&self) -> bool {
+        self.mentions_flag("unix")
+            || self.mentions_flag("windows")
+            || self.single_valued_key_values.contains_key("target_family")
+    }
+
     /// Whether a candidate assignment describes a build target that could
     /// actually exist. Every rule is a fact about how `rustc` sets these atoms,
     /// so filtering by them only ever removes a target that would have proven a
@@ -1309,52 +1392,66 @@ impl CfgPredicateAtomUniverse {
     ///
     /// - `unix` and `windows` are the two target families a `cfg` names, and no
     ///   target is in both;
-    /// - the windows family holds exactly one `target_os`, `windows`;
     /// - `target_family = "unix"` / `"windows"` and the bare `unix` / `windows`
-    ///   flag are the same fact spelled two ways.
-    fn candidate_build_target_is_coherent(&self, target: &ModuleReachabilityTarget) -> bool {
-        let defines_unix = target.has_flag("unix");
-        let defines_windows = target.has_flag("windows");
-        if defines_unix && defines_windows {
+    ///   flag are the same fact spelled two ways;
+    /// - the windows family holds exactly one `target_os`, `windows`;
+    /// - a `target_os` [`TARGET_FAMILIES_BY_KNOWN_TARGET_OS`] names fixes the
+    ///   families the target defines, both ways — `target_os = "ios"` forces
+    ///   `unix`, and forbids `windows`.
+    ///
+    /// A `target_os` that table does NOT name fixes nothing, so such a
+    /// candidate is rejected outright once a family atom is in play: assigning
+    /// it either way would be a guess, and this function's answers are read as
+    /// proofs.
+    fn candidate_build_target_is_coherent(&self, candidate: &ModuleReachabilityTarget) -> bool {
+        if candidate.has_flag("unix") && candidate.has_flag("windows") {
             return false;
         }
-        let target_os = target.single_defined_value_of_cfg_key("target_os");
-        let target_family = target.single_defined_value_of_cfg_key("target_family");
+        let candidate_target_os = candidate.single_defined_value_of_cfg_key("target_os");
+        let candidate_target_family = candidate.single_defined_value_of_cfg_key("target_family");
 
-        if defines_windows && target_os.is_some_and(|os| os != "windows") {
+        for (family, opposite_family) in [("unix", "windows"), ("windows", "unix")] {
+            if candidate_target_family == Some(family) {
+                if candidate.has_flag(opposite_family) {
+                    return false;
+                }
+                if self.mentions_flag(family) && !candidate.has_flag(family) {
+                    return false;
+                }
+            }
+            if candidate.has_flag(family)
+                && self.mentions_single_valued_key_value("target_family", family)
+                && candidate_target_family != Some(family)
+            {
+                return false;
+            }
+        }
+
+        if (candidate.has_flag("windows") || candidate_target_family == Some("windows"))
+            && self.mentions_single_valued_key_value("target_os", "windows")
+            && candidate_target_os != Some("windows")
+        {
             return false;
         }
-        if defines_unix && target_os == Some("windows") {
-            return false;
-        }
-        if target_os == Some("windows") {
-            if self.flags.contains("windows") && !defines_windows {
-                return false;
-            }
-            if target_family.is_some_and(|family| family != "windows") {
-                return false;
-            }
-        }
-        if target_family == Some("windows") {
-            if target_os.is_some_and(|os| os != "windows") {
-                return false;
-            }
-            if self.flags.contains("unix") && defines_unix {
-                return false;
-            }
-            if self.flags.contains("windows") && !defines_windows {
+
+        let Some(candidate_target_os) = candidate_target_os else {
+            return true;
+        };
+        let Some(families) = target_families_of_known_target_os(candidate_target_os) else {
+            return !self.mentions_a_target_family_atom();
+        };
+        for family in ["unix", "windows"] {
+            if self.mentions_flag(family) && candidate.has_flag(family) != families.contains(&family)
+            {
                 return false;
             }
         }
-        if target_family == Some("unix") {
-            if defines_windows {
-                return false;
-            }
-            if self.flags.contains("unix") && !defines_unix {
-                return false;
-            }
+        match candidate_target_family {
+            Some(family) => families.contains(&family),
+            None => !families
+                .iter()
+                .any(|family| self.mentions_single_valued_key_value("target_family", family)),
         }
-        true
     }
 }
 
@@ -2276,6 +2373,120 @@ mod tests {
             .is_none(),
             "`target_family` and the family flag are the same fact"
         );
+    }
+
+    /// A `target_os` the model knows carries its family with it: no target is
+    /// both `target_os = "ios"` and `not(unix)`. Without
+    /// [`TARGET_FAMILIES_BY_KNOWN_TARGET_OS`] the search assigns that pair
+    /// freely, calls it a proof, and refuses the three-arm platform split
+    /// below on every build.
+    #[test]
+    fn a_known_os_and_a_negated_family_flag_have_no_satisfying_build_target() {
+        for os_predicate in [
+            r#"target_os = "linux""#,
+            r#"any(target_os = "macos", target_os = "ios")"#,
+            r#"target_os = "android""#,
+        ] {
+            assert!(
+                find_build_target_satisfying_both_cfg_predicate_sets(
+                    &predicates(&[os_predicate]),
+                    &predicates(&["not(unix)"]),
+                )
+                .is_none(),
+                "`{os_predicate}` names a unix-family OS, so no target satisfies it and `not(unix)`"
+            );
+        }
+        assert!(
+            find_build_target_satisfying_both_cfg_predicate_sets(
+                &predicates(&[r#"target_os = "windows""#]),
+                &predicates(&["not(windows)"]),
+            )
+            .is_none()
+        );
+        // The other direction still proves: a unix OS and the family flag it
+        // implies really do overlap.
+        assert!(
+            find_build_target_satisfying_both_cfg_predicate_sets(
+                &predicates(&[r#"target_os = "macos""#]),
+                &predicates(&["unix"]),
+            )
+            .is_some()
+        );
+    }
+
+    /// A `target_os` outside the family table decides nothing, so a pair that
+    /// weighs one against a family atom is left UNPROVEN rather than guessed in
+    /// either direction — `wasi` is both `wasm` and `unix`, which is exactly the
+    /// guess a partial table must not make.
+    #[test]
+    fn an_unmodelled_os_weighed_against_a_family_atom_is_left_unproven() {
+        assert!(
+            find_build_target_satisfying_both_cfg_predicate_sets(
+                &predicates(&[r#"target_os = "wasi""#]),
+                &predicates(&["not(unix)"]),
+            )
+            .is_none()
+        );
+        assert!(
+            find_build_target_satisfying_both_cfg_predicate_sets(
+                &predicates(&[r#"target_os = "wasi""#]),
+                &predicates(&["unix"]),
+            )
+            .is_none()
+        );
+        // With no family atom in play the same OS proves normally.
+        assert!(
+            find_build_target_satisfying_both_cfg_predicate_sets(
+                &predicates(&[r#"target_os = "wasi""#]),
+                &predicates(&[r#"target_pointer_width = "32""#]),
+            )
+            .is_some()
+        );
+    }
+
+    /// The shape milestone 39 endorses at its widest: a platform split whose
+    /// third arm is the `not(unix)` fallback. All three are pairwise disjoint on
+    /// every real target, so the scan must ACCEPT them and fold them into one
+    /// availability entry.
+    #[test]
+    fn a_platform_split_with_a_non_unix_fallback_arm_is_accepted() {
+        let tmp = tempdir();
+        let root = tmp.path();
+        write(
+            root,
+            "processors/linux_arm.rs",
+            r#"#![cfg(target_os = "linux")]
+            #[processor("@tatolab/demo/Capture", execution = manual)]
+            pub struct LinuxCapture;"#,
+        );
+        write(
+            root,
+            "processors/apple_arm.rs",
+            r#"#![cfg(any(target_os = "macos", target_os = "ios"))]
+            #[processor("@tatolab/demo/Capture", execution = manual)]
+            pub struct AppleCapture;"#,
+        );
+        write(
+            root,
+            "processors/other_arm.rs",
+            r#"#![cfg(not(unix))]
+            #[processor("@tatolab/demo/Capture", execution = manual)]
+            pub struct OtherCapture;"#,
+        );
+
+        let set = extract_processors_across_every_build_target(root)
+            .expect("three pairwise-disjoint arms are not an overlap");
+        assert_eq!(set.processor_declarations.len(), 3);
+        let availability = set
+            .availability_of_processor_type_name("Capture")
+            .expect("the three arms fold to one availability entry");
+        for os in ["linux", "macos", "ios", "windows"] {
+            assert!(
+                availability.is_available_on_build_target(&build_target_for_os(os)),
+                "some arm covers {os}: {:?}",
+                availability.availability_cfg_predicate
+            );
+        }
     }
 
     /// Cargo features are a SET, not a single value: a target enables many at
