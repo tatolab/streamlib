@@ -938,6 +938,39 @@ unsafe impl Sync for PluginDeclaration {}
 /// no anchor and is a compile error — never a silently unregistered
 /// plugin. A crate-root generator that mirrors per-target arms gates the
 /// whole invocation on the disjunction of its entry predicates instead.
+///
+/// # Unanchored-declaration refusal — compile-fail doctest gates
+///
+/// The refusal legs have no runtime surface to assert on, so the
+/// compile-time witnesses live here. If either leg ever started
+/// compiling, the emitted `STREAMLIB_PLUGIN` would carry a zero or
+/// absent `abi_layout_fingerprint` and the host's load handshake would
+/// have nothing to compare — these doctests flip and
+/// `cargo test --doc -p streamlib-plugin-abi` surfaces it.
+///
+/// No entries at all — the zero-entry arm's `compile_error!`:
+///
+/// ```compile_fail
+/// streamlib_plugin_abi::export_plugin!();
+/// fn main() {}
+/// ```
+///
+/// Every entry stripped by its own `#[cfg]` — const evaluation of the
+/// anchor fails (E0080, carrying the authored message), and the register
+/// callback's now-unreachable `Option::None` fallback has no type to
+/// infer (E0282). Both are hard errors; `macro_rules!` cannot see
+/// cfg-stripping, so this is the backstop under the crate-root
+/// generator's disjunction gate rather than the primary guard:
+///
+/// ```compile_fail
+/// pub struct EveryEntryStrippedStubProcessor;
+///
+/// streamlib_plugin_abi::export_plugin!(
+///     #[cfg(any())]
+///     EveryEntryStrippedStubProcessor,
+/// );
+/// fn main() {}
+/// ```
 #[macro_export]
 macro_rules! export_plugin {
     () => {
