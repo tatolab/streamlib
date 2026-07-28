@@ -37,6 +37,20 @@ const SDK_EMPTY_CONFIG_FILE: &str = concat!(
 const EMPTY_CONFIG_TWIN_BEGIN: &str = "twin-guard(empty-config-serde): BEGIN";
 const EMPTY_CONFIG_TWIN_END: &str = "twin-guard(empty-config-serde): END";
 
+/// Engine-side runtime-shutdown control-topic publish twin.
+const ENGINE_RUNTIME_SHUTDOWN_PUBLISH_FILE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/src/core/runtime/runtime_shutdown_request.rs"
+);
+/// SDK-side runtime-shutdown control-topic publish twin.
+const SDK_RUNTIME_SHUTDOWN_PUBLISH_FILE: &str = concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../sdk/streamlib-plugin-sdk/src/runtime_control.rs"
+);
+/// Line marker bracketing the guarded publish helper in each twin.
+const RUNTIME_SHUTDOWN_PUBLISH_TWIN_BEGIN: &str = "twin-guard(runtime-shutdown-publish): BEGIN";
+const RUNTIME_SHUTDOWN_PUBLISH_TWIN_END: &str = "twin-guard(runtime-shutdown-publish): END";
+
 /// Strip full-line comments + blank lines, apply the one known import-path shim
 /// (`super::host_services::` → `super::`), then drop all remaining whitespace.
 /// The result preserves the marshalling LOGIC (identifiers, calls, control
@@ -84,16 +98,18 @@ fn read_path(path: &str) -> String {
 /// Extract the lines strictly between the `BEGIN`/`END` marker lines. Panics if
 /// either marker is missing (a twin file whose guard region was renamed/removed
 /// must not silently pass this guard).
-fn extract_marked_region(src: &str, path: &str) -> String {
+fn extract_marked_region(src: &str, path: &str, begin_marker: &str, end_marker: &str) -> String {
     let lines: Vec<&str> = src.lines().collect();
     let begin = lines
         .iter()
-        .position(|l| l.contains(EMPTY_CONFIG_TWIN_BEGIN))
-        .unwrap_or_else(|| panic!("twin-drift guard: `{EMPTY_CONFIG_TWIN_BEGIN}` marker missing in `{path}`"));
+        .position(|l| l.contains(begin_marker))
+        .unwrap_or_else(|| {
+            panic!("twin-drift guard: `{begin_marker}` marker missing in `{path}`")
+        });
     let end = lines
         .iter()
-        .position(|l| l.contains(EMPTY_CONFIG_TWIN_END))
-        .unwrap_or_else(|| panic!("twin-drift guard: `{EMPTY_CONFIG_TWIN_END}` marker missing in `{path}`"));
+        .position(|l| l.contains(end_marker))
+        .unwrap_or_else(|| panic!("twin-drift guard: `{end_marker}` marker missing in `{path}`"));
     lines[begin + 1..end].join("\n")
 }
 
@@ -183,6 +199,39 @@ fn divergent_processor_vtable_twin_is_tripwired() {
     );
 }
 
+/// The runtime-shutdown request's cdylib-side publish is a wire-load-bearing
+/// twin: the engine's copy runs in a facade cdylib (which statically links the
+/// engine) and the SDK's in an engine-free one, and both must hand the host the
+/// SAME `(reserved control topic, msgpack reason)` pair. The host decodes the
+/// reason with `unwrap_or_default()` and shuts down anyway, so a one-sided edit
+/// is a silent attribution loss, never a failure. Only the publish helper is
+/// twinned in each file, so this is a marked-region entry. Unbypassable: there
+/// is no fixture to update — apply the same change to BOTH.
+#[test]
+fn logic_identical_runtime_shutdown_publish_twins_stay_in_sync() {
+    let eng = normalize(&extract_marked_region(
+        &read_path(ENGINE_RUNTIME_SHUTDOWN_PUBLISH_FILE),
+        ENGINE_RUNTIME_SHUTDOWN_PUBLISH_FILE,
+        RUNTIME_SHUTDOWN_PUBLISH_TWIN_BEGIN,
+        RUNTIME_SHUTDOWN_PUBLISH_TWIN_END,
+    ));
+    let sdk = normalize(&extract_marked_region(
+        &read_path(SDK_RUNTIME_SHUTDOWN_PUBLISH_FILE),
+        SDK_RUNTIME_SHUTDOWN_PUBLISH_FILE,
+        RUNTIME_SHUTDOWN_PUBLISH_TWIN_BEGIN,
+        RUNTIME_SHUTDOWN_PUBLISH_TWIN_END,
+    ));
+    assert_eq!(
+        eng, sdk,
+        "\nengine↔SDK runtime-shutdown publish twin has DRIFTED — a wire change \
+         landed in one copy but not the other. Apply the SAME change to BOTH:\n  \
+         runtime/streamlib-engine/src/core/runtime/runtime_shutdown_request.rs\n  \
+         sdk/streamlib-plugin-sdk/src/runtime_control.rs\n\
+         (Both publish the reserved runtime-shutdown control topic; the \
+         engine-free SDK can't reuse the engine's copy.)\n"
+    );
+}
+
 /// `EmptyConfig`'s `Serialize`/`Deserialize` is a wire-load-bearing twin: config
 /// crosses the plugin ABI, so the host's copy
 /// (`core/processors/mod.rs`) and the engine-free SDK's copy
@@ -204,10 +253,14 @@ fn divergent_empty_config_serde_twin_is_tripwired() {
     let eng = fnv1a(&normalize(&extract_marked_region(
         &read_path(ENGINE_EMPTY_CONFIG_FILE),
         ENGINE_EMPTY_CONFIG_FILE,
+        EMPTY_CONFIG_TWIN_BEGIN,
+        EMPTY_CONFIG_TWIN_END,
     )));
     let sdk = fnv1a(&normalize(&extract_marked_region(
         &read_path(SDK_EMPTY_CONFIG_FILE),
         SDK_EMPTY_CONFIG_FILE,
+        EMPTY_CONFIG_TWIN_BEGIN,
+        EMPTY_CONFIG_TWIN_END,
     )));
     assert!(
         eng == EXPECTED_ENGINE && sdk == EXPECTED_SDK,

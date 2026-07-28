@@ -4,18 +4,12 @@
 //! The one runtime-shutdown request funnel, plus the latch whoever owns the
 //! run loop observes.
 //!
-//! A shutdown *request* never tears the runtime down itself. It latches the
-//! request and publishes `Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown)`;
-//! the loop owner ([`crate::core::runtime::Runner::wait_for_signal_with`])
-//! observes it and runs the normal teardown. That separation is what keeps the
-//! harness in control — a request is never a second way to kill the runtime.
-//!
-//! Every boundary that can ask for shutdown funnels through
-//! [`request_runtime_shutdown`]: the POSIX signal handler, the
-//! [`RuntimeOperations`](crate::core::runtime::RuntimeOperations) verb, the
-//! api-server control-plane route, and an engine-free plugin publishing the
-//! reserved plugin-ABI control topic. One funnel means the `Event` encoding
-//! and the latch exist in exactly one place.
+//! A shutdown *request* never tears the runtime down itself: it latches and
+//! publishes `Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown)`, and the
+//! loop owner ([`crate::core::runtime::Runner::wait_for_signal_with`]) runs the
+//! normal teardown. The latch is process-global (the signal handler and the
+//! plugin ABI hold no `Runner`), so the design assumes one run loop per
+//! process.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -36,13 +30,10 @@ static RUNTIME_SHUTDOWN_REQUEST_LATCH: AtomicBool = AtomicBool::new(false);
 /// Ask whoever owns the run loop to shut the runtime down (equivalent to
 /// Ctrl+C / SIGTERM). Idempotent and fire-and-forget.
 ///
-/// `reason` is a human-readable attribution logged at `info` for
-/// shutdown-attribution (empty string = unspecified).
-///
-/// In a plugin cdylib whose `install_host_services` has run, this publishes
-/// the request to the host across the plugin ABI and returns; the host's own
-/// funnel does the latching. Failure is limited to that cdylib arm's msgpack
-/// encode of `reason`.
+/// `reason` is a human-readable attribution logged at `info` (empty string =
+/// unspecified). In a plugin cdylib whose `install_host_services` has run this
+/// publishes to the host across the plugin ABI and returns, and the only
+/// failure is that arm's msgpack encode of `reason`.
 #[tracing::instrument]
 pub fn request_runtime_shutdown(reason: &str) -> Result<()> {
     request_runtime_shutdown_with_installed_host_callbacks(
@@ -52,8 +43,7 @@ pub fn request_runtime_shutdown(reason: &str) -> Result<()> {
 }
 
 /// The funnel's two arms, with the "am I running inside a plugin cdylib?"
-/// answer passed in rather than read from the process-global set-once table,
-/// so the arm selection itself is testable without installing host services.
+/// answer passed in so the arm selection is testable.
 ///
 /// `Some` means this engine copy is the one statically linked into a facade
 /// plugin cdylib: it must publish across the plugin ABI and latch NOTHING,
@@ -64,7 +54,7 @@ fn request_runtime_shutdown_with_installed_host_callbacks(
     reason: &str,
 ) -> Result<()> {
     if let Some(callbacks) = installed_host_callbacks {
-        return publish_runtime_shutdown_request_through_host_callbacks(callbacks, reason);
+        return publish_runtime_shutdown_request(callbacks, reason);
     }
 
     tracing::info!(reason, "runtime shutdown requested");
@@ -77,19 +67,37 @@ fn request_runtime_shutdown_with_installed_host_callbacks(
     Ok(())
 }
 
-/// Whether a runtime-shutdown request has been latched since the last
-/// [`clear_runtime_shutdown_request_latch`].
+/// Whether a runtime-shutdown request is latched. Host-only — see
+/// [`is_runtime_shutdown_requested_with_installed_host_callbacks`].
 pub fn is_runtime_shutdown_requested() -> bool {
+    is_runtime_shutdown_requested_with_installed_host_callbacks(
+        crate::core::plugin::host_services::host_callbacks(),
+    )
+}
+
+/// Read the latch, with the "am I running inside a plugin cdylib?" answer
+/// passed in so the wrong-image warning is testable.
+///
+/// `Some` means this engine copy lives in a facade plugin cdylib, whose latch
+/// the funnel's cdylib arm never sets — the answer would be a silent `false`
+/// forever, so it is warned about rather than quietly returned.
+fn is_runtime_shutdown_requested_with_installed_host_callbacks(
+    installed_host_callbacks: Option<&HostCallbacks>,
+) -> bool {
+    if installed_host_callbacks.is_some() {
+        tracing::warn!(
+            "is_runtime_shutdown_requested read inside a plugin cdylib: this image's latch is \
+             never set, so the answer is always `false` — the run loop that observes a shutdown \
+             request lives in the host"
+        );
+    }
     RUNTIME_SHUTDOWN_REQUEST_LATCH.load(Ordering::SeqCst)
 }
 
-/// Clear the latch so a subsequent run loop starts unrequested.
-///
-/// `Runner::start` calls this at entry: a second in-process run must not be
-/// poisoned by the first run's request, and a request issued before any loop
-/// exists has no owner to observe it.
-pub fn clear_runtime_shutdown_request_latch() {
-    RUNTIME_SHUTDOWN_REQUEST_LATCH.store(false, Ordering::SeqCst);
+/// Clear the latch, returning whether a request was pending. Host-only, for the
+/// same reason as [`is_runtime_shutdown_requested`].
+pub(crate) fn take_runtime_shutdown_request_latch() -> bool {
+    RUNTIME_SHUTDOWN_REQUEST_LATCH.swap(false, Ordering::SeqCst)
 }
 
 /// Publish a shutdown request to the host on the reserved plugin-ABI control
@@ -100,24 +108,15 @@ pub fn clear_runtime_shutdown_request_latch() {
 /// NOT an `Event` msgpack: the reserved control topics are matched by the host
 /// before its general `Event` decode and carry the per-topic payload defined
 /// next to the topic constant.
-///
-/// Split out with an explicit `&HostCallbacks` so the load-bearing wire
-/// selection is driven by a hermetic test against a capturing `pubsub_publish`
-/// without installing the process-global, set-once host-callback table.
-fn publish_runtime_shutdown_request_through_host_callbacks(
-    callbacks: &HostCallbacks,
-    reason: &str,
-) -> Result<()> {
-    let reason_msgpack = rmp_serde::to_vec(reason).map_err(|e| {
-        Error::Runtime(format!(
-            "failed to encode runtime-shutdown reason for the plugin-ABI control topic: {e}"
-        ))
-    })?;
+// twin-guard(runtime-shutdown-publish): BEGIN
+fn publish_runtime_shutdown_request(callbacks: &HostCallbacks, reason: &str) -> Result<()> {
+    let reason_msgpack = rmp_serde::to_vec(reason)
+        .map_err(|e| Error::Runtime(format!("failed to encode shutdown reason: {e}")))?;
 
-    // SAFETY: `callbacks.pubsub_publish` and `callbacks.host` were populated by
-    // `install_host_services` from a host-provided `HostServices` and stay
-    // valid for the plugin's process lifetime. The topic and payload slices
-    // outlive the synchronous call.
+    // SAFETY: `callbacks.pubsub_publish` and `callbacks.host` were
+    // populated by `install_host_services` from a host-provided
+    // `HostServices` and stay valid for the plugin's process lifetime.
+    // The topic and payload slices outlive the synchronous call.
     unsafe {
         (callbacks.pubsub_publish)(
             callbacks.host,
@@ -130,24 +129,26 @@ fn publish_runtime_shutdown_request_through_host_callbacks(
 
     Ok(())
 }
+// twin-guard(runtime-shutdown-publish): END
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::plugin::host_services::host_services_test_support::host_services_with_capturing_pubsub_publish;
     use core::cell::RefCell;
-    use core::ffi::c_void;
     use serial_test::serial;
-    use streamlib_plugin_abi::{HostHandle, HostInterest, HostLogLevel, ProcessorVTable};
+    use streamlib_plugin_abi::HostHandle;
 
     /// The latch is process-global, so every test that touches it runs
     /// `#[serial]` and leaves it cleared for the next one.
     fn with_cleared_latch<F: FnOnce()>(body: F) {
-        clear_runtime_shutdown_request_latch();
+        take_runtime_shutdown_request_latch();
         body();
-        clear_runtime_shutdown_request_latch();
+        take_runtime_shutdown_request_latch();
     }
 
-    /// The host arm latches, so a loop owner that polls
+    /// The host binary's `host_callbacks()` is `None`, so this drives the host
+    /// arm: it latches, and a loop owner that polls
     /// `is_runtime_shutdown_requested` observes the request even when the
     /// pubsub listener missed the event.
     #[test]
@@ -182,17 +183,25 @@ mod tests {
         });
     }
 
-    /// `Runner::start` calls this at entry so a second in-process run is not
-    /// poisoned by the first run's request.
+    /// `Runner::start` takes the latch at entry (so a second in-process run is
+    /// not poisoned by the first run's request) and warns on the `true` it gets
+    /// back — a request nobody's run loop ever owned.
     #[test]
     #[serial]
-    fn clearing_the_latch_unrequests_shutdown() {
+    fn taking_the_latch_reports_the_pending_request_and_unrequests_shutdown() {
         with_cleared_latch(|| {
             request_runtime_shutdown("unit test").expect("the host arm never fails");
-            clear_runtime_shutdown_request_latch();
+            assert!(
+                take_runtime_shutdown_request_latch(),
+                "taking a set latch must report the pending request",
+            );
             assert!(
                 !is_runtime_shutdown_requested(),
-                "the cleared latch must read unrequested",
+                "the taken latch must read unrequested",
+            );
+            assert!(
+                !take_runtime_shutdown_request_latch(),
+                "taking a clear latch must report no pending request",
             );
         });
     }
@@ -220,107 +229,16 @@ mod tests {
             .push(CapturedRuntimeShutdownPublish { topic, payload });
     }
 
-    // The shutdown request reads only `host` + `pubsub_publish`; these stubs
-    // fill the remaining fn-pointer fields so a full `HostCallbacks` can be
-    // built without a live host.
-    unsafe extern "C" fn unused_tracing_register_callsite(
-        _: HostHandle,
-        _: *const u8,
-        _: usize,
-        _: HostLogLevel,
-    ) -> HostInterest {
-        HostInterest::Never
-    }
-    unsafe extern "C" fn unused_tracing_enabled(
-        _: HostHandle,
-        _: *const u8,
-        _: usize,
-        _: HostLogLevel,
-    ) -> bool {
-        false
-    }
-    unsafe extern "C" fn unused_tracing_emit(
-        _: HostHandle,
-        _: *const u8,
-        _: usize,
-        _: HostLogLevel,
-        _: *const u8,
-        _: usize,
-        _: *const u8,
-        _: usize,
-    ) {
-    }
-    unsafe extern "C" fn unused_schema_register(
-        _: HostHandle,
-        _: *const u8,
-        _: usize,
-        _: *const u8,
-        _: usize,
-    ) {
-    }
-    unsafe extern "C" fn unused_schema_lookup(
-        _: HostHandle,
-        _: *const u8,
-        _: usize,
-        _: extern "C" fn(*mut c_void, *const u8, usize),
-        _: *mut c_void,
-    ) {
-    }
-    unsafe extern "C" fn unused_iceoryx_log_emit(
-        _: HostHandle,
-        _: HostLogLevel,
-        _: *const u8,
-        _: usize,
-        _: *const u8,
-        _: usize,
-    ) {
-    }
-    unsafe extern "C" fn unused_processor_register(
-        _: HostHandle,
-        _: *const u8,
-        _: usize,
-        _: *const ProcessorVTable,
-    ) -> i32 {
-        0
-    }
-
     /// A `HostCallbacks` whose `pubsub_publish` records into `sink` and whose
     /// `host` points at it; every other slot is an unused stub or a null
     /// vtable pointer.
     fn host_callbacks_with_capture(
         sink: &RefCell<Vec<CapturedRuntimeShutdownPublish>>,
     ) -> HostCallbacks {
-        HostCallbacks {
-            host: sink as *const RefCell<Vec<CapturedRuntimeShutdownPublish>> as HostHandle,
-            tracing_register_callsite: unused_tracing_register_callsite,
-            tracing_enabled: unused_tracing_enabled,
-            tracing_emit: unused_tracing_emit,
-            pubsub_publish: capturing_pubsub_publish,
-            schema_register: unused_schema_register,
-            schema_lookup: unused_schema_lookup,
-            iceoryx_log_emit: unused_iceoryx_log_emit,
-            processor_register: unused_processor_register,
-            runtime_context_vtable: core::ptr::null(),
-            audio_clock_vtable: core::ptr::null(),
-            runtime_ops_vtable: core::ptr::null(),
-            gpu_context_limited_access_vtable: core::ptr::null(),
-            surface_store_vtable: core::ptr::null(),
-            gpu_context_full_access_vtable: core::ptr::null(),
-            texture_ring_methods_vtable: core::ptr::null(),
-            vulkan_compute_kernel_methods_vtable: core::ptr::null(),
-            vulkan_graphics_kernel_methods_vtable: core::ptr::null(),
-            vulkan_ray_tracing_kernel_methods_vtable: core::ptr::null(),
-            vulkan_acceleration_structure_methods_vtable: core::ptr::null(),
-            rhi_color_converter_methods_vtable: core::ptr::null(),
-            rhi_command_recorder_methods_vtable: core::ptr::null(),
-            output_writer_vtable: core::ptr::null(),
-            input_mailboxes_vtable: core::ptr::null(),
-            present_target_methods_vtable: core::ptr::null(),
-            video_encoder_session_methods_vtable: core::ptr::null(),
-            video_decoder_session_methods_vtable: core::ptr::null(),
-            host_timeline_semaphore_methods_vtable: core::ptr::null(),
-            vulkan_texture_readback_methods_vtable: core::ptr::null(),
-        }
+        HostCallbacks::from(&host_services_with_capturing_pubsub_publish(
+            sink as *const RefCell<Vec<CapturedRuntimeShutdownPublish>> as HostHandle,
+            capturing_pubsub_publish,
+        ))
     }
 
     /// The cdylib arm's wire selection is load-bearing: the host decodes the
@@ -335,8 +253,7 @@ mod tests {
         let sink: RefCell<Vec<CapturedRuntimeShutdownPublish>> = RefCell::new(Vec::new());
         let callbacks = host_callbacks_with_capture(&sink);
 
-        publish_runtime_shutdown_request_through_host_callbacks(&callbacks, "x")
-            .expect("the publish helper must succeed");
+        publish_runtime_shutdown_request(&callbacks, "x").expect("the publish helper must succeed");
 
         let captured = sink.borrow();
         assert_eq!(captured.len(), 1, "exactly one pubsub_publish call");
@@ -384,29 +301,27 @@ mod tests {
         });
     }
 
-    /// The mirror of the arm-selection lock: with no host callbacks installed
-    /// this engine copy IS the host, so it must latch and must NOT publish
-    /// across the plugin ABI. Mental-revert: dropping the `if let Some` guard
-    /// so both arms publish fails this.
+    /// The documented host-only semantic of the read side, composed with the
+    /// cdylib arm: a plugin image that requests shutdown can never see its own
+    /// request, because the request went to the host and the latch it reads is
+    /// its own. Mental-revert: making the cdylib arm latch as well as publish
+    /// fails this.
     #[test]
     #[serial]
-    fn host_arm_latches_without_publishing_across_the_plugin_abi() {
+    fn a_plugin_image_never_observes_its_own_shutdown_request() {
         with_cleared_latch(|| {
             let sink: RefCell<Vec<CapturedRuntimeShutdownPublish>> = RefCell::new(Vec::new());
-            // Built and dropped unused on purpose: the host arm must not reach
-            // any host callback at all.
-            let _callbacks = host_callbacks_with_capture(&sink);
+            let callbacks = host_callbacks_with_capture(&sink);
 
-            request_runtime_shutdown_with_installed_host_callbacks(None, "from the host")
-                .expect("the host arm never fails");
+            request_runtime_shutdown_with_installed_host_callbacks(
+                Some(&callbacks),
+                "from a cdylib",
+            )
+            .expect("the cdylib arm must succeed");
 
             assert!(
-                is_runtime_shutdown_requested(),
-                "the host arm must latch for the run loop to observe",
-            );
-            assert!(
-                sink.borrow().is_empty(),
-                "the host arm must not publish the plugin-ABI control topic to itself",
+                !is_runtime_shutdown_requested_with_installed_host_callbacks(Some(&callbacks)),
+                "a plugin image's own latch stays clear — the request is the host's to observe",
             );
         });
     }

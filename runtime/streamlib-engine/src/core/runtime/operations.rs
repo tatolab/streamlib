@@ -319,12 +319,16 @@ pub trait RuntimeOperations: Send + Sync {
     ///
     /// A *request*, not a teardown: the loop owner
     /// ([`Runner::wait_for_signal_with`](crate::core::runtime::Runner::wait_for_signal_with))
-    /// observes it and runs the normal stop sequence, so the harness stays in
-    /// control. Idempotent — requesting twice is not an error.
+    /// observes it and runs the normal stop sequence. Idempotent — requesting
+    /// twice is not an error.
     ///
-    /// Sync with no `*_async` twin, and the one sync method on this trait that
-    /// is safe from inside a tokio task: it is fire-and-forget with no
-    /// completion payload, so it never `block_on`s.
+    /// The effect is process-global (matching the `RuntimeShutdown` event on
+    /// `topics::RUNTIME_GLOBAL`): the receiver is not a scoping parameter, and
+    /// with two runtimes alive in one process both loop owners observe it.
+    ///
+    /// Fire-and-forget with no completion payload, so unlike every other sync
+    /// method on this trait it never `block_on`s and is safe to call from
+    /// inside a tokio task.
     fn request_runtime_shutdown(&self, reason: &str) -> Result<()>;
 
     // =========================================================================

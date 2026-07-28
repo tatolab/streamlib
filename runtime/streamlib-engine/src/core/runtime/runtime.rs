@@ -435,10 +435,15 @@ impl Runner {
     /// Processors can then call runtime operations directly without indirection.
     #[tracing::instrument(name = "runtime.start", skip_all)]
     pub fn start(self: &Arc<Self>) -> Result<()> {
-        // A shutdown request only means anything to a live run loop; clearing
-        // at entry keeps a second in-process run from inheriting the first
-        // run's request.
-        crate::core::runtime::clear_runtime_shutdown_request_latch();
+        // A shutdown request only means anything to a live run loop; taking the
+        // latch at entry keeps a second in-process run from inheriting the
+        // first run's request.
+        if crate::core::runtime::take_runtime_shutdown_request_latch() {
+            tracing::warn!(
+                "discarded a runtime-shutdown request latched before start(): no run loop owned \
+                 it yet, so nothing observed it"
+            );
+        }
 
         // Hard barrier: refuse to run the graph while any module load is
         // still in flight (its processor types may not be registered
@@ -960,9 +965,8 @@ impl Runner {
                     // shutdown observation rides in on the periodic callback,
                     // which routes through `app.terminate` →
                     // `applicationWillTerminate` → the stop callback above.
-                    if shutdown_flag_for_callback.load(Ordering::SeqCst)
-                        || crate::core::runtime::is_runtime_shutdown_requested()
-                    {
+                    if runtime_shutdown_observed(&shutdown_flag_for_callback) {
+                        crate::core::runtime::take_runtime_shutdown_request_latch();
                         return ControlFlow::Break(());
                     }
                     callback(&runtime_for_callback)
@@ -975,9 +979,7 @@ impl Runner {
         // Non-macOS: poll loop
         #[cfg(not(target_os = "macos"))]
         {
-            while !shutdown_flag.load(Ordering::SeqCst)
-                && !crate::core::runtime::is_runtime_shutdown_requested()
-            {
+            while !runtime_shutdown_observed(&shutdown_flag) {
                 // Call user callback
                 if let ControlFlow::Break(()) = callback(self) {
                     break;
@@ -986,6 +988,10 @@ impl Runner {
                 // Small sleep to avoid busy-waiting
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
+
+            // The request has been observed; leaving it latched would make the
+            // next `wait_for_signal_with` in this process return instantly.
+            crate::core::runtime::take_runtime_shutdown_request_latch();
 
             // Auto-stop on exit
             self.stop()?;
@@ -1337,6 +1343,14 @@ impl Runner {
     pub fn pipeline_name(&self) -> Option<String> {
         self.pipeline_name.lock().clone()
     }
+}
+
+/// Whether the run loop should stop: the `RuntimeShutdown` event was received,
+/// or a request is latched. One predicate so both `#[cfg]` arms of
+/// [`Runner::wait_for_signal_with`] observe the same set of sources.
+fn runtime_shutdown_observed(event_shutdown_flag: &AtomicBool) -> bool {
+    event_shutdown_flag.load(Ordering::SeqCst)
+        || crate::core::runtime::is_runtime_shutdown_requested()
 }
 
 /// PascalCase → camelCase for snapshot alias generation.

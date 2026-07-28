@@ -364,11 +364,9 @@ impl RuntimeOperations for RuntimeOpsShim {
     }
 
     fn request_runtime_shutdown(&self, reason: &str) -> Result<()> {
-        // No `RuntimeOpsVTable` slot: the request already has a wire form —
-        // the reserved plugin-ABI control topic the funnel's cdylib arm
-        // publishes — so spending a vtable slot (and the layout-fingerprint
-        // break that invalidates every already-built cdylib) would buy
-        // nothing. Same slot-free treatment as `tap_async`.
+        // Crosses on the reserved plugin-ABI control topic, not a
+        // `RuntimeOpsVTable` slot: fire-and-forget with no completion payload
+        // (a slot buys a return value or a typed error).
         crate::core::runtime::request_runtime_shutdown(reason)
     }
 }

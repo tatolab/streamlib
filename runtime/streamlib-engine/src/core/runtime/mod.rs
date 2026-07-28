@@ -31,9 +31,10 @@ pub use operations::{
     SchemaValidationPosture, SubmittedProcessorSource,
 };
 pub use runtime::Runner;
-pub use runtime_shutdown_request::{
-    clear_runtime_shutdown_request_latch, is_runtime_shutdown_requested, request_runtime_shutdown,
-};
+pub use runtime_shutdown_request::{is_runtime_shutdown_requested, request_runtime_shutdown};
+// Clearing the latch cancels a pending shutdown request; only the harness that
+// owns the run loop may do that, so it never reaches the SDK surface.
+pub(crate) use runtime_shutdown_request::take_runtime_shutdown_request_latch;
 pub use runtime_unique_id::RuntimeUniqueId;
 pub use status::RuntimeStatus;
 pub use streamlib_idents::app_modules::{
