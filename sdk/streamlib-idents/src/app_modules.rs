@@ -329,6 +329,34 @@ pub enum AppModulesError {
     #[error("'{source_label}' is not a valid streamlib package: {detail}")]
     InvalidPackage { source_label: String, detail: String },
 
+    /// The package carries a dev-time path artifact, so it resolves only on the
+    /// machine that authored it.
+    #[error(
+        "'{source_label}' carries path artifact(s) [{offenders}] — a path resolves only \
+         on the machine that wrote it, so the package is not installable. `add` and \
+         `install` take finalized artifacts; use `streamlib link` for a local checkout \
+         you are still editing"
+    )]
+    PackageIsNotStandalone {
+        source_label: String,
+        offenders: String,
+    },
+
+    /// A lockfile entry reproduces a package that carries a path artifact. Same
+    /// defect as [`AppModulesError::PackageIsNotStandalone`], reached through
+    /// `install` rather than `add`, and named by package because the user did
+    /// not type a source.
+    #[error(
+        "{package} carries path artifact(s) [{offenders}] — the lockfile pins a package \
+         that resolves only on the machine that wrote it, so it cannot be reproduced. \
+         Re-add it from a finalized artifact, or use `streamlib link` for a local \
+         checkout you are still editing"
+    )]
+    InstallPackageIsNotStandalone {
+        package: PackageRef,
+        offenders: String,
+    },
+
     /// The staged package's manifest has no `package:` identity block.
     #[error(
         "'{source_label}' has no `package:` block in its streamlib.yaml — a package \
@@ -598,6 +626,18 @@ impl AppModulesDir {
                 source_label: source_label.clone(),
                 detail: e.to_string(),
             })?;
+
+        // Refused here, before promote, so no slot and no lock entry ever
+        // records a package that resolves only on the machine that wrote it.
+        // Every container — folder, zip, tar.gz, module loader — reaches this
+        // one point, which is why the check cannot live producer-side.
+        refuse_path_artifacts(&staged_package_root, |offenders| {
+            AppModulesError::PackageIsNotStandalone {
+                source_label: source_label.clone(),
+                offenders,
+            }
+        })?;
+
         let package_meta =
             manifest
                 .package
@@ -1743,6 +1783,27 @@ fn sha256_hex(bytes: &[u8]) -> String {
 /// `content_hash` BEFORE promoting (so a mismatch leaves no partial slot),
 /// then atomically promote it into the package's slot. Shares the exact
 /// stage → locate → promote machinery `add_package` uses.
+/// Run the path-artifact predicate over a staged package root and let the
+/// caller name the subject: `add` knows the source the user typed, `install`
+/// knows the package the lockfile pinned, and neither should print the
+/// ephemeral staging directory that was actually scanned.
+fn refuse_path_artifacts(
+    staged_package_root: &Path,
+    to_error: impl FnOnce(String) -> AppModulesError,
+) -> Result<(), AppModulesError> {
+    let offenders = crate::path_artifact_guard::non_distributable_path_offenders(
+        staged_package_root,
+    )
+    .map_err(|e| AppModulesError::InvalidPackage {
+        source_label: staged_package_root.display().to_string(),
+        detail: format!("checking whether the package is standalone: {e}"),
+    })?;
+    if offenders.is_empty() {
+        return Ok(());
+    }
+    Err(to_error(offenders.join(", ")))
+}
+
 fn reproduce_materialized_from_lock(
     package: &PackageRef,
     source: AddPackageSource,
@@ -1760,6 +1821,21 @@ fn reproduce_materialized_from_lock(
         .map_err(|e| map_stage_error_to_install(package, e))?;
     let staged_root = locate_staged_package_root(staging.path(), &source, &source_label)
         .map_err(|e| map_stage_error_to_install(package, e))?;
+
+    // `install` reproduces from a lockfile written before this refusal existed,
+    // or from one a teammate committed, so the same guard `add_package` applies
+    // has to sit on this promote path too — otherwise a path-carrying package
+    // still reaches a slot, just through a different verb.
+    //
+    // Ordered before the content-hash verify below: "this package can never
+    // build anywhere" is the more actionable answer than "its bytes moved
+    // since you locked it" when both are true.
+    refuse_path_artifacts(&staged_root, |offenders| {
+        AppModulesError::InstallPackageIsNotStandalone {
+            package: package.clone(),
+            offenders,
+        }
+    })?;
 
     // Verify the reproduced contents against the pinned content hash BEFORE
     // promoting, so a mismatch leaves no partial slot (the staging dir is swept
@@ -2017,6 +2093,215 @@ mod tests {
             AddPackageSource::detect(at_dir.to_str().unwrap()).unwrap(),
             AddPackageSource::Folder { .. }
         ));
+    }
+
+    // =====================================================================
+    // Path artifacts — a package pinned to the machine that authored it
+    // =====================================================================
+
+    fn manifest_yaml_with_path_patch(org: &str, name: &str, version: &str) -> String {
+        format!(
+            "{}patch:\n  '@tatolab/core':\n    path: ../core\n",
+            manifest_yaml(org, name, version)
+        )
+    }
+
+    fn foo_package_entries_with_path_patch(
+        org: &str,
+        name: &str,
+        version: &str,
+    ) -> [(String, Vec<u8>); 2] {
+        [
+            (
+                Manifest::FILE_NAME.to_string(),
+                manifest_yaml_with_path_patch(org, name, version).into_bytes(),
+            ),
+            (
+                "schemas/foo_frame.yaml".to_string(),
+                SCHEMA_YAML.as_bytes().to_vec(),
+            ),
+        ]
+    }
+
+    fn write_package_folder_with_path_patch(dir: &Path) {
+        write_package_folder(dir, "tatolab", "camera", "2.0.0");
+        std::fs::write(
+            dir.join("streamlib.yaml"),
+            manifest_yaml_with_path_patch("tatolab", "camera", "2.0.0"),
+        )
+        .unwrap();
+    }
+
+    /// The defect (#1626): a dev-time `patch: path:` override installed
+    /// cleanly — slot materialized, lockfile written — and failed much later
+    /// inside the orchestrator's build, naming a missing path rather than the
+    /// unpublishable manifest that caused it.
+    #[test]
+    fn folder_add_refuses_a_manifest_carrying_a_path_patch_override() {
+        let src = tempfile::tempdir().unwrap();
+        write_package_folder_with_path_patch(src.path());
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+
+        let error = app
+            .add_package(
+                &AddPackageSource::Folder {
+                    path: src.path().to_path_buf(),
+                },
+                &AddPackageOptions::default(),
+            )
+            .expect_err("a path `patch:` override is not installable");
+
+        assert!(
+            matches!(error, AppModulesError::PackageIsNotStandalone { .. }),
+            "{error}"
+        );
+        let rendered = error.to_string();
+        assert!(rendered.contains("../core"), "{rendered}");
+        assert!(
+            rendered.contains("link"),
+            "the refusal must point at the local-development path: {rendered}"
+        );
+    }
+
+    /// A Cargo path dependency is the other half of the same defect, and the
+    /// half a manifest-only check would miss.
+    #[test]
+    fn folder_add_refuses_a_cargo_manifest_carrying_a_path_dependency() {
+        let src = tempfile::tempdir().unwrap();
+        write_package_folder(src.path(), "tatolab", "camera", "2.0.0");
+        std::fs::write(
+            src.path().join("Cargo.toml"),
+            "[package]\nname = \"camera\"\nversion = \"2.0.0\"\n\n\
+             [dependencies]\nstreamlib-plugin-sdk = { path = \"../../sdk/streamlib-plugin-sdk\" }\n",
+        )
+        .unwrap();
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+
+        let error = app
+            .add_package(
+                &AddPackageSource::Folder {
+                    path: src.path().to_path_buf(),
+                },
+                &AddPackageOptions::default(),
+            )
+            .expect_err("a Cargo path dependency is not installable");
+
+        assert!(
+            matches!(error, AppModulesError::PackageIsNotStandalone { .. }),
+            "{error}"
+        );
+        assert!(
+            error.to_string().contains("streamlib-plugin-sdk"),
+            "{error}"
+        );
+    }
+
+    /// The issue's own repro is a zip, and an archive source computes its
+    /// staged root differently from a folder — so the guard has to be proven on
+    /// that path too, not just asserted in prose.
+    #[test]
+    fn zip_add_refuses_a_package_carrying_a_path_patch_override() {
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+        let archive = app_root.path().join("camera.slpkg");
+        std::fs::write(
+            &archive,
+            package_archive_bytes(
+                &foo_package_entries_with_path_patch("tatolab", "camera", "2.0.0"),
+                ArchiveKind::Zip,
+                None,
+            ),
+        )
+        .unwrap();
+
+        let error = app
+            .add_package(
+                &AddPackageSource::Archive {
+                    path: archive.clone(),
+                },
+                &AddPackageOptions::default(),
+            )
+            .expect_err("a path `patch:` override is not installable from an archive either");
+
+        assert!(
+            matches!(error, AppModulesError::PackageIsNotStandalone { .. }),
+            "{error}"
+        );
+        assert!(
+            !error.to_string().contains(".staging-"),
+            "the refusal must name the source the user gave, not the ephemeral \
+             staging directory it was scanned in: {error}"
+        );
+    }
+
+    /// The whole point of refusing before promote: the old failure left a
+    /// materialized slot and a lockfile entry behind for a package that could
+    /// never build. Nothing may land — no slot, no lockfile, and no
+    /// `.staging-*` residue from the early return.
+    #[test]
+    fn a_refused_path_artifact_leaves_no_partial_state() {
+        let src = tempfile::tempdir().unwrap();
+        write_package_folder_with_path_patch(src.path());
+        let app_root = tempfile::tempdir().unwrap();
+        let app = AppModulesDir::at(app_root.path());
+
+        app.add_package(
+            &AddPackageSource::Folder {
+                path: src.path().to_path_buf(),
+            },
+            &AddPackageOptions::default(),
+        )
+        .expect_err("must refuse");
+
+        assert_no_partial_state(&app, &[], None);
+    }
+
+    /// `add` refuses a path-carrying package today, but a `streamlib.lock`
+    /// committed before that refusal existed — or written by a teammate —
+    /// still pins one. `install` reproduces through its own stage → promote
+    /// path, so the guard has to sit there too; otherwise the package reaches
+    /// a slot through a different verb and the defect is only half closed.
+    #[test]
+    fn install_from_lockfile_refuses_a_pinned_package_carrying_a_path_artifact() {
+        let src = tempfile::tempdir().unwrap();
+        write_package_folder(src.path(), "tatolab", "camera", "2.0.0");
+        let source_root = tempfile::tempdir().unwrap();
+        let source_app = AppModulesDir::at(source_root.path());
+        source_app
+            .add_package(
+                &AddPackageSource::Folder {
+                    path: src.path().to_path_buf(),
+                },
+                &AddPackageOptions::default(),
+            )
+            .expect("the clean package adds, producing the lock entry");
+
+        // The checkout gains a dev-time path override after it was locked.
+        std::fs::write(
+            src.path().join("streamlib.yaml"),
+            manifest_yaml_with_path_patch("tatolab", "camera", "2.0.0"),
+        )
+        .unwrap();
+
+        let dest_root = tempfile::tempdir().unwrap();
+        let dest = AppModulesDir::at(dest_root.path());
+        std::fs::copy(source_app.lockfile_path(), dest.lockfile_path()).unwrap();
+        let lock_bytes = std::fs::read(dest.lockfile_path()).unwrap();
+
+        let error = dest
+            .install_from_lockfile()
+            .expect_err("a pinned path-carrying package is not reproducible");
+
+        assert!(
+            matches!(error, AppModulesError::InstallPackageIsNotStandalone { .. }),
+            "{error}"
+        );
+        let rendered = error.to_string();
+        assert!(rendered.contains("@tatolab/camera"), "{rendered}");
+        assert!(rendered.contains("../core"), "{rendered}");
+        assert_no_partial_state(&dest, &[], Some(&lock_bytes));
     }
 
     // =====================================================================

@@ -326,6 +326,21 @@ pub enum AddModuleError {
         detail: String,
     },
 
+    /// The archive carries a dev-time path artifact — a path `patch:` override
+    /// or a Cargo path dependency — so it resolves only on the machine that
+    /// authored it and can never build here.
+    #[error(
+        "Package archive at {} carries path artifact(s) [{offenders}] — a path resolves \
+         only on the machine that wrote it, so the package cannot be materialized. \
+         Publish a standalone artifact, or use `streamlib link` for a local checkout \
+         you are still editing",
+        archive.display()
+    )]
+    PackageArchiveIsNotStandalone {
+        archive: std::path::PathBuf,
+        offenders: String,
+    },
+
     /// The archive carries a `streamlib.yaml` with no `package:` identity
     /// block, so the loader cannot derive the `@org/name` slot to materialize
     /// into.
