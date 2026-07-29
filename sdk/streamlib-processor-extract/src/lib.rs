@@ -58,6 +58,7 @@ pub use reachable::{
     enumerate_processor_source_module_arms,
     enumerate_processor_source_module_files_the_crate_names,
     extract_processors_across_every_build_target, extract_reachable_rust_processors,
+    refuse_rust_processor_attributes_naming_a_foreign_package,
 };
 
 /// One processor derived from a `#[processor(...)]` attribute in source.
@@ -234,7 +235,66 @@ pub enum ExtractError {
         /// The named disagreement, labelled with each arm's source file.
         difference: String,
     },
+
+    /// A `#[processor("@org/package/Type")]` attribute names an `@org/package`
+    /// that is not the declaring package's own.
+    ///
+    /// The derived `processors:` entry keeps only the `Type` segment, and at
+    /// load the runtime recomposes each ident from the package's own org and
+    /// name. The attribute's `@org/package` is therefore dropped on the derive
+    /// side and kept on the register side, so the artifact packs cleanly and
+    /// fails only at `add_module` — "declared in the manifest but not
+    /// registered by the dylib" — naming an ident that appears nowhere in the
+    /// source. A typo'd org is the common case.
+    #[error(
+        "processor `{processor_type_name}` in {declared_in} declares \
+         `@{declared_org}/{declared_package}`, but this package is \
+         `@{package_own_org}/{package_own_name}`. A `#[processor(...)]` attribute can \
+         only name its own package: the derived `processors:` entry keeps just the \
+         `Type`, and the runtime recomposes the ident from this package's org and name \
+         at load — so a foreign `@org/package` packs cleanly and fails at `add_module` \
+         with an ident that is in no source file. Write \
+         `@{package_own_org}/{package_own_name}/{processor_type_name}`, or move the \
+         processor into the package it names"
+    )]
+    ProcessorAttributeNamesAForeignPackage {
+        processor_type_name: String,
+        declared_in: PathBuf,
+        declared_org: String,
+        declared_package: String,
+        package_own_org: String,
+        package_own_name: String,
+    },
+
+    /// A `#[processor(...)]` attribute in a distributable package declared no
+    /// identity string, so the macro synthesized the in-app `@app/local`
+    /// sentinel. Same load-time failure as a foreign `@org/package`, but the
+    /// author wrote no `@org/package` at all — telling them to "move the
+    /// processor into the package it names" would name a package that does not
+    /// exist.
+    #[error(
+        "processor `{processor_type_name}` in {declared_in} declares no identity string, so \
+         the attribute synthesized the in-app `@{APP_LOCAL_ORG}/{APP_LOCAL_PACKAGE}` sentinel \
+         — which is for processors defined inside an application, not for a distributable \
+         package. This package is `@{package_own_org}/{package_own_name}`, and at load the \
+         runtime looks the processor up under that name, so the sentinel registration is \
+         never found. Give the attribute its identity: \
+         `@{package_own_org}/{package_own_name}/{processor_type_name}`"
+    )]
+    ProcessorAttributeDeclaresNoPackageIdentity {
+        processor_type_name: String,
+        declared_in: PathBuf,
+        package_own_org: String,
+        package_own_name: String,
+    },
 }
+
+/// The org half of the identity a `#[processor(...)]` attribute synthesizes
+/// when it declares none — the in-app sentinel, never a distributable package.
+pub const APP_LOCAL_ORG: &str = "app";
+
+/// The package half of the synthesized in-app identity. See [`APP_LOCAL_ORG`].
+pub const APP_LOCAL_PACKAGE: &str = "local";
 
 /// Derive the `processors:` manifest section from a Rust package's source.
 ///

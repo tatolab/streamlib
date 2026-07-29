@@ -53,6 +53,7 @@ use syn::punctuated::Punctuated;
 use syn::{Meta, Token};
 
 use streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME as PROCESSOR_SOURCE_DIR_NAME;
+use streamlib_idents::{Org, Package};
 
 use crate::derive::describe_divergent_processor_declarations;
 use crate::{
@@ -526,6 +527,50 @@ pub fn extract_processors_across_every_build_target(
         processor_declarations,
         processor_availability,
     })
+}
+
+/// Refuse a Rust `#[processor("@org/package/Type")]` attribute that names a
+/// package other than the one declaring it.
+///
+/// Checked across every build target rather than the host's: a foreign
+/// `@org/package` on an Apple-only arm is the same broken artifact, and
+/// publishing from Linux would ship it unremarked.
+///
+/// Rust only — the Python and Deno decorators carry the same
+/// `@org/package/Type` ident with the same asymmetry, and are not covered.
+#[tracing::instrument(skip_all, fields(package_dir = %package_dir.display()))]
+pub fn refuse_rust_processor_attributes_naming_a_foreign_package(
+    package_dir: &Path,
+    package_own_org: &Org,
+    package_own_name: &Package,
+) -> Result<(), ExtractError> {
+    let declared = extract_processors_across_every_build_target(package_dir)?;
+
+    for processor in &declared.processor_declarations {
+        let declared_ident = &processor.schema_ident;
+        if &declared_ident.org == package_own_org && &declared_ident.package == package_own_name {
+            continue;
+        }
+        if declared_ident.org.as_str() == crate::APP_LOCAL_ORG
+            && declared_ident.package.as_str() == crate::APP_LOCAL_PACKAGE
+        {
+            return Err(ExtractError::ProcessorAttributeDeclaresNoPackageIdentity {
+                processor_type_name: processor.schema.name.clone(),
+                declared_in: processor.source_file.clone(),
+                package_own_org: package_own_org.to_string(),
+                package_own_name: package_own_name.to_string(),
+            });
+        }
+        return Err(ExtractError::ProcessorAttributeNamesAForeignPackage {
+            processor_type_name: processor.schema.name.clone(),
+            declared_in: processor.source_file.clone(),
+            declared_org: declared_ident.org.to_string(),
+            declared_package: declared_ident.package.to_string(),
+            package_own_org: package_own_org.to_string(),
+            package_own_name: package_own_name.to_string(),
+        });
+    }
+    Ok(())
 }
 
 /// Refuse a processor `Type` that one build target collected twice.
@@ -3367,5 +3412,146 @@ mod tests {
         // `not(feature = "x")` is satisfied BY absence, so a scope it prunes
         // was pruned by the feature being PRESENT — not the confusing case.
         assert!(collect(r#"not(feature = "cuda")"#, &linux()).is_empty());
+    }
+}
+
+#[cfg(test)]
+mod foreign_package_attribute_tests {
+    use super::*;
+    use crate::scan_fixture_tempdir::{
+        ScanFixtureTempDir, scan_fixture_tempdir_named, write_scan_fixture_file as write,
+    };
+
+    fn tempdir() -> ScanFixtureTempDir {
+        scan_fixture_tempdir_named("slforeign")
+    }
+
+    fn demo_package() -> (Org, Package) {
+        (Org::new("tatolab").unwrap(), Package::new("demo").unwrap())
+    }
+
+    /// The bug: a foreign `@org/package` derives a clean entry, passes the
+    /// drift gate, packs, and fails only at `add_module`. Mental-revert —
+    /// delete the refusal and this returns `Ok`, which is exactly the artifact
+    /// that cannot load.
+    #[test]
+    fn a_processor_attribute_naming_another_package_is_refused() {
+        let tmp = tempdir();
+        write(
+            tmp.path(),
+            "processors/capture.rs",
+            r#"#[processor("@other/pkg/Capture", execution = manual)]
+            pub struct CaptureProcessor;"#,
+        );
+
+        let (org, package) = demo_package();
+        let error =
+            refuse_rust_processor_attributes_naming_a_foreign_package(tmp.path(), &org, &package)
+                .expect_err("a foreign @org/package must be refused");
+
+        let rendered = error.to_string();
+        assert!(rendered.contains("@other/pkg"), "{rendered}");
+        assert!(rendered.contains("@tatolab/demo"), "{rendered}");
+        assert!(rendered.contains("capture.rs"), "{rendered}");
+        assert!(rendered.contains("Capture"), "{rendered}");
+    }
+
+    /// Only the `@org/package` half is the package's business — the `Type`
+    /// segment is free, and every in-tree processor names its own package.
+    #[test]
+    fn a_processor_attribute_naming_its_own_package_is_accepted() {
+        let tmp = tempdir();
+        write(
+            tmp.path(),
+            "processors/capture.rs",
+            r#"#[processor("@tatolab/demo/Capture", execution = manual)]
+            pub struct CaptureProcessor;"#,
+        );
+
+        let (org, package) = demo_package();
+        refuse_rust_processor_attributes_naming_a_foreign_package(tmp.path(), &org, &package)
+            .expect("a processor naming its own package is fine");
+    }
+
+    /// A same-org, different-package attribute is the near-miss the `org`-only
+    /// comparison would wave through, and it fails at load identically.
+    #[test]
+    fn a_processor_attribute_naming_a_sibling_package_in_the_same_org_is_refused() {
+        let tmp = tempdir();
+        write(
+            tmp.path(),
+            "processors/capture.rs",
+            r#"#[processor("@tatolab/camera/Capture", execution = manual)]
+            pub struct CaptureProcessor;"#,
+        );
+
+        let (org, package) = demo_package();
+        let error =
+            refuse_rust_processor_attributes_naming_a_foreign_package(tmp.path(), &org, &package)
+                .expect_err("a sibling package in the same org must still be refused");
+        assert!(error.to_string().contains("@tatolab/camera"), "{error}");
+    }
+
+    /// Publishing happens from one host, so a foreign `@org/package` on an
+    /// arm that host does not compile would ship unremarked if the check
+    /// resolved against the host target instead of every build target.
+    #[test]
+    fn a_foreign_package_on_a_non_host_arm_is_still_refused() {
+        let tmp = tempdir();
+        write(
+            tmp.path(),
+            "processors/apple_capture.rs",
+            r#"#![cfg(target_os = "macos")]
+            #[processor("@other/pkg/AppleCapture", execution = manual)]
+            pub struct AppleCaptureProcessor;"#,
+        );
+
+        let (org, package) = demo_package();
+        let error =
+            refuse_rust_processor_attributes_naming_a_foreign_package(tmp.path(), &org, &package)
+                .expect_err("a non-host arm must be checked too");
+        assert!(error.to_string().contains("@other/pkg"), "{error}");
+    }
+
+    /// A bare `#[processor(execution = manual)]` synthesizes the in-app
+    /// `@app/local` sentinel. It fails at load exactly like a foreign
+    /// `@org/package`, but the author wrote no `@org/package` at all — so it
+    /// gets its own diagnostic rather than being told to move the processor
+    /// into a package that does not exist.
+    #[test]
+    fn a_processor_attribute_declaring_no_identity_is_refused_by_its_own_name() {
+        let tmp = tempdir();
+        write(
+            tmp.path(),
+            "processors/capture.rs",
+            r#"#[processor(execution = manual)]
+            pub struct CaptureProcessor;"#,
+        );
+
+        let (org, package) = demo_package();
+        let error =
+            refuse_rust_processor_attributes_naming_a_foreign_package(tmp.path(), &org, &package)
+                .expect_err("a synthesized @app/local identity must be refused");
+
+        assert!(
+            matches!(
+                error,
+                ExtractError::ProcessorAttributeDeclaresNoPackageIdentity { .. }
+            ),
+            "the sentinel gets its own variant, not the foreign-package one: {error}"
+        );
+        let rendered = error.to_string();
+        assert!(rendered.contains("@app/local"), "{rendered}");
+        assert!(rendered.contains("@tatolab/demo/Capture"), "{rendered}");
+    }
+
+    /// A package with no `processors/` at all is first-class and must not be
+    /// refused for having nothing to check.
+    #[test]
+    fn a_package_with_no_processor_source_dir_is_accepted() {
+        let tmp = tempdir();
+        let (org, package) = demo_package();
+        refuse_rust_processor_attributes_naming_a_foreign_package(tmp.path(), &org, &package)
+            .expect("a schema-only package declares no attribute to check");
     }
 }
