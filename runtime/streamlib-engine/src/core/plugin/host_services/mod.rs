@@ -843,14 +843,6 @@ unsafe extern "C" fn host_tracing_emit(
     )
 }
 
-/// Reserved topic-namespace prefix for host-interpreted `control:` topics
-/// (e.g. [`streamlib_plugin_abi::PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST`]).
-/// A topic under this prefix is mapped to a host action in
-/// [`host_pubsub_publish`] and is never decoded as an `Event` or delivered
-/// to subscribers; a prefixed topic that matches no handler is warn-dropped,
-/// never re-published.
-const RESERVED_CONTROL_TOPIC_PREFIX: &str = "control:";
-
 unsafe extern "C" fn host_pubsub_publish(
     _host: HostHandle,
     topic_ptr: *const u8,
@@ -891,7 +883,7 @@ unsafe extern "C" fn host_pubsub_publish(
             // into the general `Event` decode / re-publish path below, which
             // would silently hijack or swallow the reserved topic. Enforcing
             // the reservation here makes it host-defended, not prose.
-            if topic.starts_with(RESERVED_CONTROL_TOPIC_PREFIX) {
+            if topic.starts_with(streamlib_plugin_abi::PUBSUB_RESERVED_CONTROL_TOPIC_PREFIX) {
                 tracing::warn!(
                     target: "streamlib::plugin",
                     topic,
@@ -1535,7 +1527,11 @@ mod runtime_shutdown_control_topic_tests {
         PUBSUB.init(&runtime_id, node);
 
         // A reserved `control:`-prefixed topic that maps to NO host handler.
-        let unhandled_control_topic = format!("control:unhandled-{}", uuid::Uuid::new_v4());
+        let unhandled_control_topic = format!(
+            "{}unhandled-{}",
+            streamlib_plugin_abi::PUBSUB_RESERVED_CONTROL_TOPIC_PREFIX,
+            uuid::Uuid::new_v4()
+        );
 
         let (tx, rx) = mpsc::channel();
         let listener: Arc<Mutex<dyn EventListener>> =

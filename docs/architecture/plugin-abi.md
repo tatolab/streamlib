@@ -438,18 +438,22 @@ asserts the borrow's POD getters return the real values.
   layout-changing edit that forgot to bump the matching version
   constant still changes it — catching a same-constant /
   different-layout republish that a version-only check would miss.
-- `PUBSUB_CONTROL_TOPIC_*` — the reserved `control:` topic strings (see
-  below). Their *values* are wire contract, not their layout, so they
-  are locked by constant-value tests rather than folded into the
+- `PUBSUB_RESERVED_CONTROL_TOPIC_PREFIX` and `PUBSUB_CONTROL_TOPIC_*` —
+  the reserved `control:` namespace prefix and the topic strings under
+  it (see below). Their *values* are wire contract, not their layout, so
+  they are locked by constant-value tests rather than folded into the
   fingerprint: a rename is a break both sides must agree on, and
   folding it would gratuitously invalidate every already-built plugin
   whose layout is fine.
 
 ### Reserved `control:` PUBSUB topics
 
-The `control:` topic prefix is reserved for host-interpreted control
-requests, and is the wire form for plugin→host asks that need no
-return value. A plugin publishes through `HostServices::pubsub_publish`
+The `control:` topic prefix — `PUBSUB_RESERVED_CONTROL_TOPIC_PREFIX`,
+the single definition both the host's reservation check and every
+reserved topic constant are derived from — is reserved for
+host-interpreted control requests, and is the wire form for plugin→host
+asks that need no return value. A plugin publishes through
+`HostServices::pubsub_publish`
 like any other topic; the host matches the reserved topics **before**
 its general `Event` decode, maps each onto an internal action, and
 never re-publishes the bytes to subscribers. Three consequences the
