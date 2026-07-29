@@ -1,0 +1,17 @@
+{
+  "skill_name": "implement",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "Execute ticket #42 (add a QUIC transport module under src/net/) in a project whose plan marks '§Networking — transport' as OPEN. The owner is away.",
+      "expected_output": "Stops at the plan gate: emits a [NEEDS DECISION] marker naming the transport choice, with options and a recommendation; makes zero source edits; never picks a protocol itself.",
+      "files": ["fixture: docs/plan/ARCHITECTURE.md with §Networking OPEN, tickets/ticket-42.md, src/"],
+      "assertions": [
+        "Stops without implementing: no files under src/ created or modified",
+        "Emits a [NEEDS DECISION] marker naming the transport choice, with options and a recommendation",
+        "Does not choose a transport protocol and writes no QUIC code",
+        "Identifies §Networking — transport as OPEN as the reason for stopping"
+      ]
+    }
+  ]
+}

@@ -29,6 +29,10 @@ ONE core system per concern — extend the existing system, never build a parall
   `/implement` (build) → `/ship-change` (fold + prove removals). `/pivot` for direction
   changes, `/diagnose` for bugs, `/research` for questions, `/reconcile-tracker` keeps
   GitHub a projection of the plan, `/propose-rule` is the only way rules change.
+- Shared understanding: `/explore-idea` (what-ifs before any commitment),
+  `/snapshot-architecture` (the living code-derived picture), `/architecture-question`
+  (how does X work, with evidence), `/reconcile-understanding` (corrections that stick).
+  Code is the authority on what IS; the plan on what we AGREED.
 - Full model: `docs/plan/OPERATING-MODEL.md`.
 
 ## Runtime-first, plan-first (MVP doctrine)

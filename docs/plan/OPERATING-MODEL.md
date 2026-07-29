@@ -56,6 +56,21 @@ Rules that keep it alive (from what survives agent maintenance vs. what rots):
 3. **Staleness is detected, never auto-repaired.** `/audit-drift` reports sections whose
    verify-target changed; a human-approved change fixes them.
 
+### Two truths, one reconciliation
+
+**Code is the authority on what IS. The plan is the authority on what we AGREED.**
+Neither replaces the other:
+
+- A **SHIPPED** section is a claim about code — when code says otherwise, the code is
+  right about reality and the drift is the finding: either the code regressed (a bug
+  ticket) or the agreement moved silently (an `/align` session). The owner picks which
+  one moves; nothing auto-repairs.
+- **DECIDED / IN-FLIGHT sections and changes** are claims about intent — code cannot
+  contradict them, only lag them.
+- The reconciliation instruments are `/snapshot-architecture` (the code-derived view,
+  with a drift table against the plan) and `/audit-drift` (verify-marker staleness).
+  The snapshot is descriptive and regenerated at will; it is never the decision source.
+
 ### Diagrams — Mermaid source, Excalidraw view
 
 Excalidraw JSON is not agent-maintainable as a source of truth (opaque
@@ -151,6 +166,18 @@ wrangle determinism out of a stochastic system — predictability of process, no
 | `/audit-drift` | Verify-marker staleness report + dangling doc links + stale rule-path globs. Detection only, never repairs. (low) | nothing |
 | `/reconcile-tracker` | Audits every GitHub milestone and open ticket against the plan: a milestone must map to a plan section or an active change; a ticket must trace to a change or be a bug against SHIPPED behavior. Anything that doesn't trace gets a proposed action — close / retitle / re-milestone / rewrite — presented as ONE batch the owner approves as a list, then executed via `gh`. Never acts item-by-item without the approved batch. (medium) | manual milestone/ticket cleanup |
 | `/propose-rule` | The only way a rule is born or dies. Evidence in (a recurring review finding, a repeated owner correction, a shipped defect) → drafted rule text + the evidence + which existing rule or skill gate it overlaps → owner approves → lands in its own operating-model PR. Also proposes rule deletions when a skill gate supersedes prose. (low) | ad-hoc rule accretion |
+
+### Understanding & convergence (the shared-language layer)
+
+These four exist so the owner and Claude always hold an identical picture — every one
+ends with a say-back loop, and none of them commits work:
+
+| Skill | Procedure | Purpose |
+|---|---|---|
+| `/snapshot-architecture` | Read-only code survey → ONE living Claude Artifact (Mermaid diagrams, [VERIFIED file:line] vs [INFERRED] tags, drift table vs the plan, open questions) → redeployed to the same URL forever | The always-current picture of what the code actually is, from Claude's point of view, standing ready for correction |
+| `/architecture-question` | Verify in code first → answer in labeled layers ([CODE] / [PLAN] / [INFERRED]) → surface drift found on the way → say-back close | "How does X work", answered with evidence, never from memory |
+| `/reconcile-understanding` | Say-back gate → hunt the wrong belief in every home (memories, docs, plan, glossary, skills, snapshot, tickets) → one owner-approved fix batch → correction saved as a memory | Corrections that stick across sessions instead of evaporating |
+| `/explore-idea` | Situate (incl. reverse-engineering a messy milestone's intent) → sketch 2–3 shapes with unknowns + cost class → say-back → explicit exit: graduate to `/align` / `/propose-change`, park with a memo, or kill with the reason | The sandbox for what-ifs too fuzzy for a change proposal — burns down unknowns before any work stream exists |
 
 ### Kept, consolidated, retired
 

@@ -8,6 +8,11 @@ description: Interview the owner relentlessly, one question at a time, to reach 
 Interview until understanding is genuinely shared — then stop. Never act on the subject
 while grilling.
 
+- **Situate before the first question.** Read how the subject slots into the plan AND
+  the code: is it net-new, a refactor of an existing system, or a lesson learned from
+  using one (developer-experience pain)? A minute of searching beats a wasted opening
+  question. State what you found as premises the owner can shoot down before the
+  interview starts.
 - Ask **one question at a time** and wait. A wall of questions is bewildering.
 - Every question carries **your recommended answer** — the owner wants a strong read,
   not a menu.

@@ -9,6 +9,17 @@ disable-model-invocation: true
 Input: an approved `docs/plan/changes/<name>.md` with zero unresolved `[NEEDS DECISION]`
 markers. Anything else stops this skill.
 
+**Readiness gate — tickets are the LAST step of understanding, not a substitute for
+it.** Before drafting anything, check: the plan sections behind this change are DECIDED,
+the change contains no unknowns you would have to guess through, and both Claude and the
+owner could describe the target architecture identically. If the shape is still fuzzy,
+the unknowns many, or the scope smells like more than one milestone — stop and route to
+`/explore-idea` (burn down the unknowns) or back to `/align` (decide the architecture).
+Tickets derived from a half-understood architecture are the exact ticket-mess this
+operating model exists to prevent. Right-size for iteration: every change should advance
+the MVP with showable work; a change whose honest tracer bullets exceed five splits into
+sequential changes before ticketing, never into a mega-milestone.
+
 1. Draft **≤5 tickets**, each a tracer bullet: a narrow but COMPLETE vertical slice
    (schema → engine → SDK → test), demoable on its own, sized to one fresh context
    window. Never a horizontal slice of one layer. Needing more than 5 means the change

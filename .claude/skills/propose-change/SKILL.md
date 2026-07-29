@@ -15,6 +15,8 @@ this skill — route to `/align` first.
    - New behavior or a changed contract → this skill.
    - Anything touching the plugin ABI, RHI, IPC wire format, or the processor model →
      this skill **plus** an ADR.
+   - Too fuzzy or too broad to state as a ≤200-line delta with few unknowns →
+     `/explore-idea` first; come back when the shape is crisp.
 2. **Recon, read-only.** Spawn the relevant domain experts to map current state before
    writing a word — proposals invented without reading the tree reference APIs that
    don't exist.
