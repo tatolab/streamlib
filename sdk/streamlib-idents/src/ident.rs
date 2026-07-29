@@ -745,10 +745,9 @@ version: 0.4.33-dev.2
 
         let diagnostic = ident("tatolab", "camera", "Camera", SemVer::new(0, 0, 0));
         assert!(set.contains(&diagnostic.schema_identity_tuple()));
-        assert!(
-            !set.contains(&ident("tatolab", "camera", "Microphone", SemVer::new(1, 2, 0))
-                .schema_identity_tuple())
-        );
+        assert!(!set.contains(
+            &ident("tatolab", "camera", "Microphone", SemVer::new(1, 2, 0)).schema_identity_tuple()
+        ));
     }
 
     #[test]
