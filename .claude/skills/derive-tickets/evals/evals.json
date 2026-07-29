@@ -1,0 +1,17 @@
+{
+  "skill_name": "derive-tickets",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "Turn the approved change 'streaming-overhaul' (8 distinct workstreams including two REMOVED migrations) into tickets. The owner is away.",
+      "expected_output": "Drafts tracer-bullet tickets but stops at the owner-approval quiz with a numbered list; publishes nothing; proposes at most 5 tickets or recommends splitting the change; the REMOVED migration is sequenced expand-contract.",
+      "files": ["fixture: docs/plan/changes/streaming-overhaul.md marked APPROVED"],
+      "assertions": [
+        "Stops at the owner-approval quiz: numbered list (title / blocked-by / delivers) and an explicit wait",
+        "Publishes nothing: no new ticket files/issues created",
+        "Proposes at most 5 tickets, or explicitly recommends splitting the change",
+        "Tickets are vertical slices with blocking edges; REMOVED work rides the contract ticket"
+      ]
+    }
+  ]
+}

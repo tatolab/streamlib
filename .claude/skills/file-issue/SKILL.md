@@ -14,7 +14,7 @@ Match the intent to one of `.github/ISSUE_TEMPLATE/`:
 - **research** — a question to answer before building; produces a doc/decision, not code.
 
 Read the chosen form's YAML and fill **its** sections — don't invent a structure. As of now:
-- **feature**: What & why · Design (mermaid + trade-offs; required before build for engine-zone work — `draft-design` fills it) · Done means (2–4 outcome criteria) · Validation shape (test/check shape, not names) · Needs the physical rig? (GPU/camera/audio/none) · Non-derivable notes (hidden invariants / ruled-out approaches with the why; default "None").
+- **feature**: What & why · Design (for planned work this section only references the change proposal under `docs/plan/changes/` — `/propose-change` produces it; never restate or extend the plan in an issue) · Done means (2–4 outcome criteria) · Validation shape (test/check shape, not names) · Needs the physical rig? (GPU/camera/audio/none) · Non-derivable notes (hidden invariants / ruled-out approaches with the why; default "None").
 - **bug**: Symptom (exact error strings / VUIDs / behavior) · Where it bit · Expected · Repro (smallest sequence) · Needs the physical rig?
 - **research**: Question · Why now · Deliverable shape.
 

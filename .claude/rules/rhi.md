@@ -3,7 +3,6 @@ paths:
   - "runtime/streamlib-engine/src/vulkan/**"
   - "runtime/streamlib-consumer-rhi/**"
   - "adapters/**"
-  - "packages/*/src/linux/**"
 ---
 
 # RHI boundary

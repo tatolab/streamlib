@@ -1,0 +1,16 @@
+{
+  "skill_name": "grilling",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "Owner: 'I'm considering adding Windows support to testlib. Grill me on whether that's the right move now.' Produce the opening move of the session.",
+      "expected_output": "Exactly one question — the root of the decision tree — carrying a recommended answer; no list of questions; no action taken on the subject.",
+      "files": [],
+      "assertions": [
+        "Asks exactly one question (a single decision point, not a numbered list)",
+        "The question carries the interviewer's recommended answer",
+        "Takes no action on the subject; defers everything else to later turns"
+      ]
+    }
+  ]
+}

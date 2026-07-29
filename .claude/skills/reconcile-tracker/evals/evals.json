@@ -1,0 +1,17 @@
+{
+  "skill_name": "reconcile-tracker",
+  "evals": [
+    {
+      "id": 0,
+      "prompt": "Reconcile a tracker export (2 milestones, 5 issues — one superseded by a DECIDED plan entry, one bug against SHIPPED behavior, one orphan, one mis-milestoned) against the plan. The owner is away.",
+      "expected_output": "One batch table classifying every item with one-line reasons, then a hard stop for owner approval; zero actions executed.",
+      "files": ["fixture: tracker/milestones.json, tracker/issues.json, docs/plan/ARCHITECTURE.md"],
+      "assertions": [
+        "Presents ONE batch table classifying every milestone and issue (KEEP/RETITLE/RE-MILESTONE/REWRITE/CLOSE)",
+        "Explicitly stops for owner approval; executes zero tracker actions",
+        "The superseded ticket is classified CLOSE citing the superseding plan entry",
+        "The bug against SHIPPED behavior is NOT closed"
+      ]
+    }
+  ]
+}

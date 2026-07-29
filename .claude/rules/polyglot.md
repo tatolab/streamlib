@@ -9,11 +9,10 @@ paths:
 
 # Polyglot
 
-- **Python AND Deno land together.** Pipeline-level work (new processor + scenario, new escalate
-  op end-to-end, new FD-passing story) ships both runtimes in the same PR, or files paired tickets
-  that block each other and land in the same milestone. "Python first, Deno deferred" is the
-  failure mode this rule prevents. The only legitimate split is schema-only / language-specific by
-  construction — say so explicitly.
+- **Runtime parity is a plan decision, not a per-PR mandate.** The architecture plan
+  (`docs/plan/`) states which surfaces require Python/Deno parity and which runtime leads during
+  MVP. Where the plan marks a surface parity-required, both runtimes land together; everywhere
+  else a single runtime may lead and the lag is expected, not a ticket.
 - **Schema changes regenerate all three runtimes.** An `escalate_*.yaml` (or any JTD schema) edit
   is followed by `cargo xtask generate-schemas` and a rebuild of Rust + Python + Deno so the wire
   shapes stay in lock-step.
