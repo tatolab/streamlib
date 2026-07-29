@@ -994,6 +994,38 @@ mod tests {
         assert!(!mb_any.schema_mismatch_observed("in"));
     }
 
+    /// Exit-criterion lock for #1654 on the READ path — the other half of the
+    /// spurious cross-language warn. A frame stamped with the `0.0.0`
+    /// version-free sentinel a Rust cdylib synthesizes, arriving at a port
+    /// whose expected tag carries its schema owner's package version, is the
+    /// same schema: no mismatch, no once-per-port warn. Restore the
+    /// version-sensitive tag comparison and `schema_mismatch_observed` flips
+    /// to `true`, failing here.
+    #[test]
+    fn read_raw_is_silent_across_the_version_free_sentinel_asymmetry() {
+        let mailboxes = InputMailboxesInner::new();
+        mailboxes.add_port("in", 64, ReadMode::ReadNextInOrder);
+
+        let expected =
+            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
+        mailboxes.set_port_expected_schema_ident("in", expected);
+
+        let stamped_sentinel =
+            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 0, 0, 0).unwrap();
+        assert!(mailboxes.route(frame_with_schema("in", stamped_sentinel)));
+
+        let read = mailboxes
+            .read_raw("in")
+            .expect("read_raw must succeed")
+            .expect("a frame is queued");
+        assert_eq!(read.0, vec![9, 8, 7, 6], "payload delivered");
+        assert!(
+            !mailboxes.schema_mismatch_observed("in"),
+            "a version-only difference is the same schema identity and must not \
+             be observed as a mismatch",
+        );
+    }
+
     /// N→1 fan-in DELIVERY lock (#1419): a destination consuming TWO inbound
     /// channels binds two subscribers to ONE local input port; `receive_pending`
     /// routes every frame from both channels into that shared mailbox.

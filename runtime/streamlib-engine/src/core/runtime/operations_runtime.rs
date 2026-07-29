@@ -667,6 +667,8 @@ mod connect_schema_agreement_tests {
 
     const PRODUCER_TYPE: &str = "SchemaMismatchProducer";
     const CONSUMER_TYPE: &str = "SchemaMismatchConsumer";
+    const SENTINEL_PRODUCER_TYPE: &str = "VersionSentinelProducer";
+    const VERSIONED_CONSUMER_TYPE: &str = "VersionedSchemaConsumer";
 
     fn ident(package: &str, ty: &str) -> SchemaIdent {
         SchemaIdent::new(
@@ -679,6 +681,15 @@ mod connect_schema_agreement_tests {
 
     fn schema(ty: &str) -> PortSchemaSpec {
         PortSchemaSpec::Specific(ident("core", ty))
+    }
+
+    fn schema_at(ty: &str, major: u32, minor: u32, patch: u32) -> PortSchemaSpec {
+        PortSchemaSpec::Specific(SchemaIdent::new(
+            Org::new("test").unwrap(),
+            Package::new("core").unwrap(),
+            TypeName::new(ty).unwrap(),
+            SemVer::new(major, minor, patch),
+        ))
     }
 
     /// Register a producer type (`out` → VideoFrame) and a consumer type
@@ -707,17 +718,56 @@ mod connect_schema_agreement_tests {
         });
     }
 
-    /// Fresh compiler holding one producer node and one consumer node, plus the
-    /// wiring refs for their mismatched ports.
-    fn compiler_with_mismatched_pair() -> (Arc<Compiler>, OutputLinkPortRef, InputLinkPortRef) {
-        ensure_mismatch_types_registered();
+    /// Register the cross-language-shaped pair: a producer whose `out` port
+    /// carries the `0.0.0` version-free sentinel a Rust cdylib synthesizes, and
+    /// a consumer whose `in` port carries the `1.0.0` a manifest-resolved
+    /// Python/Deno port inherits from its schema owner's package. Same schema
+    /// identity, different version — the asymmetry every wireable Rust→Python
+    /// link in the tree hits. Idempotent across tests in the process.
+    fn ensure_cross_language_types_registered() {
+        static REGISTER: Once = Once::new();
+        REGISTER.call_once(|| {
+            let mut producer = ProcessorDescriptor::new(
+                ident("connectcheck", SENTINEL_PRODUCER_TYPE),
+                "version-free sentinel producer",
+            );
+            producer.outputs.push(PortDescriptor::iceoryx2(
+                "out",
+                "output",
+                schema_at("VideoFrame", 0, 0, 0),
+            ));
+            PROCESSOR_REGISTRY
+                .register_descriptor_only(producer)
+                .expect("register sentinel producer descriptor");
+
+            let mut consumer = ProcessorDescriptor::new(
+                ident("connectcheck", VERSIONED_CONSUMER_TYPE),
+                "manifest-versioned consumer",
+            );
+            consumer.inputs.push(PortDescriptor::iceoryx2(
+                "in",
+                "input",
+                schema_at("VideoFrame", 1, 0, 0),
+            ));
+            PROCESSOR_REGISTRY
+                .register_descriptor_only(consumer)
+                .expect("register versioned consumer descriptor");
+        });
+    }
+
+    /// Fresh compiler holding one node of each named registered type, plus the
+    /// wiring refs for the producer's `out` and the consumer's `in`.
+    fn compiler_with_pair(
+        producer_type: &str,
+        consumer_type: &str,
+    ) -> (Arc<Compiler>, OutputLinkPortRef, InputLinkPortRef) {
         let compiler = Arc::new(Compiler::new());
         let (from_id, to_id): (ProcessorUniqueId, ProcessorUniqueId) =
             compiler.scope(|graph, _tx| {
                 let from = graph
                     .traversal_mut()
                     .add_v(ProcessorSpec::new(
-                        ident("connectcheck", PRODUCER_TYPE),
+                        ident("connectcheck", producer_type),
                         Value::Null,
                     ))
                     .first()
@@ -727,7 +777,7 @@ mod connect_schema_agreement_tests {
                 let to = graph
                     .traversal_mut()
                     .add_v(ProcessorSpec::new(
-                        ident("connectcheck", CONSUMER_TYPE),
+                        ident("connectcheck", consumer_type),
                         Value::Null,
                     ))
                     .first()
@@ -741,6 +791,21 @@ mod connect_schema_agreement_tests {
             OutputLinkPortRef::new(from_id, "out"),
             InputLinkPortRef::new(to_id, "in"),
         )
+    }
+
+    /// Fresh compiler holding one producer node and one consumer node, plus the
+    /// wiring refs for their mismatched ports.
+    fn compiler_with_mismatched_pair() -> (Arc<Compiler>, OutputLinkPortRef, InputLinkPortRef) {
+        ensure_mismatch_types_registered();
+        compiler_with_pair(PRODUCER_TYPE, CONSUMER_TYPE)
+    }
+
+    /// Fresh compiler holding the cross-language-shaped pair, plus its wiring
+    /// refs.
+    fn compiler_with_cross_language_pair()
+    -> (Arc<Compiler>, OutputLinkPortRef, InputLinkPortRef) {
+        ensure_cross_language_types_registered();
+        compiler_with_pair(SENTINEL_PRODUCER_TYPE, VERSIONED_CONSUMER_TYPE)
     }
 
     fn block_on<F: std::future::Future>(fut: F) -> F::Output {
@@ -800,6 +865,61 @@ mod connect_schema_agreement_tests {
             "loose connect over a concrete producer/consumer schema mismatch must \
              emit the connect-time warn; captured WARN messages: {captured:?}"
         );
+    }
+
+    /// Exit-criterion lock for #1654: the cross-language link shape wires
+    /// SILENTLY. A Rust cdylib port stamps the `0.0.0` version-free sentinel
+    /// while its Python/Deno peer carries the schema owner's package version,
+    /// so before the version-blind comparator every wireable Rust→Python link
+    /// in the tree emitted this warn. CI never caught it because it runs
+    /// lib-tests only and never wires a live cross-language pipeline — this
+    /// test is that missing coverage, at the wiring site rather than in a unit
+    /// test of the classifier alone.
+    ///
+    /// Restore the version-sensitive comparison and the warn fires again,
+    /// failing here.
+    #[test]
+    fn loose_connect_is_silent_across_the_version_free_sentinel_asymmetry() {
+        let (compiler, from, to) = compiler_with_cross_language_pair();
+        let warnings = CapturedWarnings::default();
+        let subscriber = tracing_subscriber::registry().with(warnings.clone());
+
+        let result = tracing::subscriber::with_default(subscriber, || {
+            block_on(connect_impl(
+                compiler,
+                from,
+                to,
+                SchemaValidationPosture::Loose,
+            ))
+        });
+
+        result.expect("the cross-language pair must wire");
+
+        let captured = warnings.0.lock().unwrap();
+        assert!(
+            !captured
+                .iter()
+                .any(|m| m.contains("does not match consumer input")),
+            "a `0.0.0` sentinel producer and a `1.0.0` consumer share a schema \
+             identity and must wire without a schema warn; captured WARN \
+             messages: {captured:?}"
+        );
+    }
+
+    /// The same cross-language pair must also survive the STRICT posture — the
+    /// version axis is not a mismatch at any posture, so a safety-critical
+    /// channel does not have to choose between strict validation and wiring a
+    /// Python processor.
+    #[test]
+    fn strict_connect_accepts_the_version_free_sentinel_asymmetry() {
+        let (compiler, from, to) = compiler_with_cross_language_pair();
+        block_on(connect_impl(
+            compiler,
+            from,
+            to,
+            SchemaValidationPosture::Strict,
+        ))
+        .expect("strict posture must accept a version-only difference");
     }
 
     #[test]
