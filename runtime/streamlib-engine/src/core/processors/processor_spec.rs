@@ -74,10 +74,10 @@ mod tests {
 
     #[test]
     fn serde_emits_structured_name_object_not_joined_string() {
-        // Wire-format lock — the name field on the wire is a structured 4-key
-        // object, not the joined `@org/pkg/Type@version` form. The structured
-        // shape is the "structured-everywhere" rule from the architecture
-        // preamble (notes 1, 2 of the issue body).
+        // Wire-format lock — the name field on the wire is a structured 3-key
+        // object, not the joined `@org/pkg/Type` form. The structured shape is
+        // the "structured-everywhere" rule from the architecture preamble
+        // (notes 1, 2 of the issue body).
         let spec = ProcessorSpec::new(
             ident("tatolab", "core", "VideoFrame", SemVer::new(1, 0, 0)),
             serde_json::Value::Null,
@@ -91,12 +91,13 @@ mod tests {
         assert_eq!(name["org"], "tatolab");
         assert_eq!(name["package"], "core");
         assert_eq!(name["type"], "VideoFrame");
-        // `SemVer` serializes as the dotted string form `"1.0.0"`,
-        // not a structured `{major, minor, patch}` object — see
-        // `streamlib-idents::semver`. The four-field rule applies to
-        // `SchemaIdent` segments (org/package/type/version), not to the
-        // version's internal representation.
-        assert_eq!(name["version"], "1.0.0");
+        // Exactly those three keys — a processor reference names no version,
+        // so the `1.0.0` this spec was built from reaches no wire field.
+        assert_eq!(
+            name.as_object().unwrap().len(),
+            3,
+            "the wire form is exactly `org` + `package` + `type`, got {name}"
+        );
     }
 
     #[test]

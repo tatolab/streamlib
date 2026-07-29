@@ -1057,7 +1057,9 @@ mod lazy_load_error_tests {
     /// The recoverable lazy-load error names the referenced type, derives its
     /// providing package `@org/name` from the type's own org + package, and
     /// carries the underlying load-failure detail. Shared by the async and
-    /// blocking lazy paths.
+    /// blocking lazy paths. Narrowing a versioned ident through
+    /// [`ProcessorTypeReference`] drops the version, so the reported type
+    /// renders at the version-free placeholder.
     #[test]
     fn lazy_module_load_failed_names_type_package_and_detail() {
         let processor_type = crate::core::descriptors::SchemaIdent::new(
@@ -1080,7 +1082,19 @@ mod lazy_load_error_tests {
                 package,
                 detail,
             } => {
-                assert_eq!(reported_type, processor_type);
+                // Version-blind on purpose: `SchemaIdent`'s derived `PartialEq`
+                // is version-inclusive, so `reported_type == processor_type`
+                // would assert the version survives the narrowing.
+                assert!(
+                    reported_type.matches_schema_tuple(&processor_type),
+                    "expected the `{processor_type}` identity tuple, got `{reported_type}`"
+                );
+                assert_eq!(
+                    reported_type.version,
+                    streamlib_idents::SemVer::new(0, 0, 0),
+                    "a processor reference carries no version; the reported type \
+                     must render at the version-free placeholder"
+                );
                 assert_eq!(package.to_string(), "@tatolab/camera");
                 assert!(!detail.is_empty(), "the underlying reason must be carried");
             }
