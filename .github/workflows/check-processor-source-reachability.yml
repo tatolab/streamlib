@@ -1,0 +1,50 @@
+name: Check Processor Source Reachability
+
+# Orphan-file gate for the folder-backed package layout. Cargo and clippy
+# both ignore a `.rs` under `processors/` that no `mod` chain names, or that
+# only a predicate holding on zero build targets names — the author gets a
+# file that silently compiles nowhere, with no diagnostic.
+#
+# Choosing compiler-interpreted `cfg` over a scanner gave up the one thing a
+# scanner does well: telling you a file exists. `cargo xtask
+# check-processor-source-reachability` puts it back, walking every
+# folder-backed package's generated module tree with `syn` and reporting any
+# `.rs` under `processors/` it never reaches. Sub-second, no workspace build.
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  xtask-check-processor-source-reachability:
+    name: xtask check-processor-source-reachability
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        # A cache-service flake must never fail the job; a miss just means a cold build.
+        continue-on-error: true
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-xtask-${{ hashFiles('xtask/Cargo.toml', 'xtask/Cargo.lock', 'Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-xtask-
+
+      - name: cargo xtask check-processor-source-reachability
+        run: cargo run --locked -q -p xtask -- check-processor-source-reachability
+
+      - name: cargo test -p xtask check_processor_source_reachability (unit tests)
+        run: cargo test --locked -p xtask check_processor_source_reachability

@@ -40,8 +40,9 @@ use streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME as PROCESSOR_SOURCE_DIR_
 use streamlib_processor_schema::{ProcessorSchema, SchemaIdent};
 
 pub use crate_root::{
-    GeneratedCrateRootSource, RustCrateRootGenerationRequest, generate_rust_crate_root_source,
-    write_generated_rust_crate_root,
+    GeneratedCrateRootSource, RustCrateRootGenerationRequest,
+    discover_package_dirs_declaring_a_generated_crate_root, generate_rust_crate_root_source,
+    generated_crate_root_lib_path_value, write_generated_rust_crate_root,
 };
 pub use derive::{
     DeriveError, DerivedProcessorSet, ExtractedManifestPort, ExtractedManifestProcessor,
@@ -54,8 +55,9 @@ pub use grammar::{ParsedPort, ParsedProcessorAttr};
 pub use reachable::{
     ModuleReachabilityTarget, ProcessorAvailabilityAcrossBuildTargets,
     ProcessorSetAcrossEveryBuildTarget, ProcessorSourceModuleArm,
-    enumerate_processor_source_module_arms, extract_processors_across_every_build_target,
-    extract_reachable_rust_processors,
+    enumerate_processor_source_module_arms,
+    enumerate_processor_source_module_files_the_crate_names,
+    extract_processors_across_every_build_target, extract_reachable_rust_processors,
 };
 
 /// One processor derived from a `#[processor(...)]` attribute in source.
