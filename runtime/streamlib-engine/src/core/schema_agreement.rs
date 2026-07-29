@@ -100,9 +100,7 @@ pub fn classify_wire_schema_agreement(
     stamped: &SchemaIdentWire,
     expected: &SchemaIdentWire,
 ) -> SchemaAgreement {
-    if stamped.is_unset() || expected.is_unset() {
-        SchemaAgreement::Compatible
-    } else if stamped.matches_schema_tuple(expected) {
+    if stamped.is_unset() || expected.is_unset() || stamped.matches_schema_tuple(expected) {
         SchemaAgreement::Compatible
     } else {
         SchemaAgreement::Mismatch
