@@ -322,6 +322,11 @@ impl JsonSchema for TypeName {
 /// use streamlib_idents::SchemaIdent;
 /// let _: SchemaIdent = "@tatolab/core/VideoFrame@1.0.0".parse().unwrap();
 /// ```
+///
+/// The derived `PartialEq` below is version-inclusive. Every resolution
+/// surface in the runtime binds version-blind, so anything deciding whether
+/// two idents name the same schema compares [`Self::matches_schema_tuple`],
+/// not `==` — reaching for `==` there is what reintroduced #1460 as #1477.
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]

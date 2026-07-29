@@ -340,6 +340,13 @@ impl std::error::Error for SchemaIdentWireError {}
 ///
 /// Length-prefix semantics: `*_len = 0` means "empty segment" (zero
 /// readable bytes); the trailing buffer bytes are zeroed at construction.
+///
+/// The derived `PartialEq` / `Hash` below are version-INCLUSIVE, which is
+/// correct for byte-identity but wrong for deciding whether two ports carry
+/// the same schema: a Rust cdylib stamps the `0.0.0` version-free sentinel
+/// while its Python/Deno peer carries the schema owner's package version.
+/// Schema agreement compares [`Self::matches_schema_tuple`] instead. Reaching
+/// for `==` there is what reintroduced #1460 as #1477.
 #[derive(Clone, Copy, Eq, PartialEq, Hash, ZeroCopySend)]
 #[repr(C)]
 pub struct SchemaIdentWire {
