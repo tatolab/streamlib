@@ -559,6 +559,15 @@ pub fn assemble_artifact_with_cargo_config(
         // whose committed `processors:` disagrees. `StagedDir` (runtime
         // orchestrator load-time build) is exempt — it assembles an already-
         // published, drift-validated artifact.
+        //
+        // Ordered before the drift gate deliberately: a foreign `@org/package`
+        // derives an entry that AGREES with the manifest, so the drift gate
+        // reports nothing and the more specific diagnostic would never fire.
+        streamlib_processor_extract::refuse_rust_processor_attributes_naming_a_foreign_package(
+            pkg_dir,
+            &package.org,
+            &package.name,
+        )?;
         enforce_processor_manifest_matches_code(pkg_dir, &config.processors)?;
         // Reconcile the hand-declared `dependencies:` against the dependency
         // set derived from the package's schema/port references. An undeclared
@@ -1885,7 +1894,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.join("processors/camera.rs"),
-            r#"#[processor("@tatolab/camera/Camera", execution = manual, output("video", "@tatolab/core/VideoFrame"))]
+            r#"#[processor("@tatolab/cam/Camera", execution = manual, output("video", "@tatolab/core/VideoFrame"))]
             pub struct Camera;
             "#,
         )
@@ -1915,7 +1924,7 @@ mod tests {
         .unwrap();
         std::fs::write(
             dir.join("processors/camera.rs"),
-            r#"#[processor("@tatolab/camera/Camera", execution = manual, output("video", "@tatolab/core/VideoFrame"))]
+            r#"#[processor("@tatolab/cam/Camera", execution = manual, output("video", "@tatolab/core/VideoFrame"))]
             pub struct Camera;
             "#,
         )
@@ -2022,6 +2031,50 @@ mod tests {
         )
         .expect("in-sync manifest must build");
         assert_eq!(outcome.processors, 1);
+    }
+
+    /// A `#[processor("@other/pkg/Type")]` derives a `processors:` entry that
+    /// agrees with the manifest — only the `Type` survives the derive — so the
+    /// drift gate below waves it through and the `.slpkg` packs clean, failing
+    /// only at `add_module` on an ident found in no source file (#1644).
+    /// Mentally revert the `refuse_rust_processor_attributes_naming_a_foreign_package`
+    /// call and this build succeeds, shipping exactly that artifact.
+    #[test]
+    fn slpkg_build_fails_on_a_processor_attribute_naming_a_foreign_package() {
+        let dir = tempdir().unwrap();
+        write_rust_processor_pkg(
+            dir.path(),
+            "processors:\n- name: Camera\n  runtime: rust\n  execution: manual\n  \
+             outputs:\n  - name: video\n    schema: VideoFrame\n",
+        );
+        // Same `Camera` type the manifest declares — only the `@org/package`
+        // is foreign, which is precisely what the drift gate cannot see.
+        std::fs::write(
+            dir.path().join("processors/camera.rs"),
+            r#"#[processor("@other/pkg/Camera", execution = manual, output("video", "@tatolab/core/VideoFrame"))]
+            pub struct Camera;
+            "#,
+        )
+        .unwrap();
+
+        let out = dir.path().join("o.slpkg");
+        let err = assemble_artifact(
+            dir.path(),
+            &AssembleTarget::Slpkg(out),
+            &slpkg_opts(false),
+            &(),
+        )
+        .unwrap_err();
+
+        let msg = err.to_string();
+        assert!(
+            msg.contains("@other/pkg"),
+            "must name the foreign id: {msg}"
+        );
+        assert!(
+            msg.contains("@tatolab/cam"),
+            "must name the package's own id: {msg}"
+        );
     }
 
     /// The truth-flip gate (#1411): a `.slpkg` build is a hard error when the
