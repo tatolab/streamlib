@@ -14,30 +14,14 @@
 //! `publish()` does. It uses a schema-only package (no processors) so the
 //! source-only assemble needs no Rust/Python toolchain.
 
-use std::path::Path;
+mod cli_integration_support;
+
 use std::process::Command;
 
+use cli_integration_support::{
+    STREAMLIB_BINARY_PATH, run_streamlib_binary, write_schema_only_foo_package_source,
+};
 use streamlib_idents::{CatalogClient, Org, Package, SchemaIdent, SemVer, TypeName};
-
-const BIN: &str = env!("CARGO_BIN_EXE_streamlib");
-
-/// A schema-only `foo` package (one owned schema, no processors) — the smallest
-/// publishable package that assembles without a toolchain build.
-fn write_foo_package(dir: &Path) {
-    std::fs::create_dir_all(dir.join("schemas")).unwrap();
-    std::fs::write(
-        dir.join("streamlib.yaml"),
-        "package:\n  org: tatolab\n  name: foo\n  version: 1.1.0\n  \
-         description: a demo publish package\nschemas:\n  FooFrame:\n    file: schemas/foo_frame.yaml\n",
-    )
-    .unwrap();
-    std::fs::write(
-        dir.join("schemas/foo_frame.yaml"),
-        "metadata:\n  type: FooFrame\n  description: \"A demo frame\"\nproperties:\n  \
-         width:\n    type: uint32\n  height:\n    type: uint32\n",
-    )
-    .unwrap();
-}
 
 #[test]
 fn pkg_publish_writes_fetchable_catalog_and_owned_jtd() {
@@ -46,10 +30,10 @@ fn pkg_publish_writes_fetchable_catalog_and_owned_jtd() {
     // has a realistic layout to enumerate.
     let workspace = tempfile::tempdir().unwrap();
     let pkg_dir = workspace.path().join("packages").join("foo");
-    write_foo_package(&pkg_dir);
+    write_schema_only_foo_package_source(&pkg_dir, "a demo publish package");
 
     let package_source = format!("file://{}", tree.path().display());
-    let out = Command::new(BIN)
+    let out = Command::new(STREAMLIB_BINARY_PATH)
         .args(["pkg", "publish"])
         .current_dir(&pkg_dir)
         .env("STREAMLIB_PACKAGE_SOURCE", &package_source)
@@ -147,7 +131,7 @@ processors:
     .unwrap();
 
     let package_source = format!("file://{}", tree.path().display());
-    let out = Command::new(BIN)
+    let out = Command::new(STREAMLIB_BINARY_PATH)
         .args(["pkg", "publish"])
         .current_dir(&pkg_dir)
         .env("STREAMLIB_PACKAGE_SOURCE", &package_source)
@@ -171,10 +155,7 @@ processors:
 #[test]
 fn pkg_build_and_inspect_verbs_are_gone() {
     for removed_verb in ["build", "inspect"] {
-        let out = Command::new(BIN)
-            .args(["pkg", removed_verb])
-            .output()
-            .expect("spawn streamlib binary");
+        let out = run_streamlib_binary(&["pkg", removed_verb]);
         assert!(
             !out.status.success(),
             "`streamlib pkg {removed_verb}` must not be a recognized verb"
