@@ -53,7 +53,7 @@ Rules that keep it alive (from what survives agent maintenance vs. what rots):
    ADR and the plan links `[ADR-NNN]`. Rationale is what makes a doc un-updatable.
 2. **No restating what code shows.** C4 levels 1–3 only (context / container / component);
    never code-level detail.
-3. **Staleness is detected, never auto-repaired.** `/audit-drift` reports sections whose
+3. **Staleness is detected, never auto-repaired.** `/hygiene` reports sections whose
    verify-target changed; a human-approved change fixes them.
 
 ### Two truths, one reconciliation
@@ -68,7 +68,8 @@ Neither replaces the other:
 - **DECIDED / IN-FLIGHT sections and changes** are claims about intent — code cannot
   contradict them, only lag them.
 - The reconciliation instruments are `/snapshot-architecture` (the code-derived view,
-  with a drift table against the plan) and `/audit-drift` (verify-marker staleness).
+  with a drift table against the plan) and `/hygiene` (the full counter-model sweep:
+  doc/plan contradictions, retired-pattern endorsements, dead references, README rot).
   The snapshot is descriptive and regenerated at will; it is never the decision source.
 
 ### Diagrams — Mermaid source, Excalidraw view
@@ -163,7 +164,7 @@ wrangle determinism out of a stochastic system — predictability of process, no
 | `/pivot` | Owner declares a direction change → plan edited FIRST → inventory of now-legacy code/docs/rules → a rip-out change with REMOVED sections → deletion tickets. (medium) | nothing — legitimizes the deletion agents currently resist |
 | `/research` | Background agent, primary sources only, memo with citations. Produces no tickets and no code. (low) | ad-hoc research |
 | `/diagnose` | Feedback-loop-first debugging: no hypothesis before a red-capable, fast, deterministic repro command exists and has been run once. 3–5 ranked hypotheses before testing any. Regression test before fix. Tagged debug logs (`[DEBUG-xxxx]`) for one-grep cleanup. (medium) | ad-hoc debugging; composes with the domain experts |
-| `/audit-drift` | Verify-marker staleness report + dangling doc links + stale rule-path globs. Detection only, never repairs. (low) | nothing |
+| `/hygiene` | The counter-model sniffer: doc statements contradicting DECIDED/SHIPPED plan entries, retired patterns still endorsed, references to deleted machinery, README rot, dead rule globs, stale memories, verify-marker staleness. ONE table ordered by thrash risk, each finding routed to the skill that owns the fix. Detection only, never repairs. (low) | nothing — the missing smell test |
 | `/reconcile-tracker` | Audits every GitHub milestone and open ticket against the plan: a milestone must map to a plan section or an active change; a ticket must trace to a change or be a bug against SHIPPED behavior. Anything that doesn't trace gets a proposed action — close / retitle / re-milestone / rewrite — presented as ONE batch the owner approves as a list, then executed via `gh`. Never acts item-by-item without the approved batch. (medium) | manual milestone/ticket cleanup |
 | `/propose-rule` | The only way a rule is born or dies. Evidence in (a recurring review finding, a repeated owner correction, a shipped defect) → drafted rule text + the evidence + which existing rule or skill gate it overlaps → owner approves → lands in its own operating-model PR. Also proposes rule deletions when a skill gate supersedes prose. (low) | ad-hoc rule accretion |
 
@@ -282,7 +283,8 @@ PR — never accreted mid-session because something annoyed an agent once.
 5. **Wave 2 skills** — `/reconcile-tracker` first (clean today's misaligned milestones
    and tickets against the fresh plan), then `/propose-change`, `/derive-tickets`,
    `/implement`, `review-pr` consolidation: the first real change flows through them.
-6. **Wave 3** — `/ship-change`, `/pivot`, `/audit-drift`, then the docs-consolidation
+6. **Wave 3** — `/ship-change`, `/pivot`, `/hygiene` (whose first full run seeds the
+   kill-list), then the docs-consolidation
    change (retiring `docs/architecture/`) as the first big change run through the new
    system — the system migrates the old docs, proving itself on its own bootstrap.
 
