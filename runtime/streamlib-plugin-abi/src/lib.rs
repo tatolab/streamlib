@@ -408,6 +408,15 @@ pub const PLUGIN_ABI_LAYOUT_FINGERPRINT: u64 = {
 // Reserved PUBSUB control topics
 // =============================================================================
 
+/// Reserved topic-namespace prefix for [`HostServices::pubsub_publish`]. A
+/// topic under this prefix is host-interpreted: the host maps it onto an
+/// internal action and never decodes it as an `Event` or delivers it to
+/// subscribers, and a prefixed topic matching no handler is warn-dropped.
+///
+/// The prefix is wire contract shared by every host and every plugin, and
+/// every `PUBSUB_CONTROL_TOPIC_*` constant lives under it.
+pub const PUBSUB_RESERVED_CONTROL_TOPIC_PREFIX: &str = "control:";
+
 /// Reserved control topic for [`HostServices::pubsub_publish`]: an
 /// engine-free plugin asks the host runtime to shut down (equivalent
 /// to SIGINT/SIGTERM). The payload is a msgpack-encoded UTF-8 string —
@@ -1336,6 +1345,67 @@ mod control_topic_tests {
         assert_eq!(
             PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST,
             "control:runtime-shutdown-request"
+        );
+    }
+
+    /// The prefix is what the host's reservation check matches on, so its
+    /// value is wire contract in its own right: renaming it would make the
+    /// host deliver reserved topics to `Custom` subscribers.
+    #[test]
+    fn reserved_control_topic_prefix_value_is_locked() {
+        assert_eq!(PUBSUB_RESERVED_CONTROL_TOPIC_PREFIX, "control:");
+    }
+
+    /// A reserved topic declared outside the prefix skips the host's
+    /// reserved-namespace defense in `host_pubsub_publish` and falls
+    /// through to the general `Event` decode, so renaming either constant
+    /// alone is a break. The topics come from a scan of this crate's own
+    /// source rather than a hand-kept list, so a topic added later is
+    /// covered without anyone remembering to extend this test.
+    #[test]
+    fn every_reserved_control_topic_starts_with_the_reserved_prefix() {
+        // Top-level declarations only — the same text indented is this
+        // test talking about the pattern, not declaring a topic.
+        const TOPIC_DECLARATION_LINE_PREFIX: &str = "pub const PUBSUB_CONTROL_TOPIC_";
+
+        let source_lines: Vec<&str> = include_str!("lib.rs").lines().collect();
+        let mut scanned_topic_count = 0usize;
+
+        for (line_index, line) in source_lines.iter().enumerate() {
+            if !line.starts_with(TOPIC_DECLARATION_LINE_PREFIX) {
+                continue;
+            }
+
+            let mut declaration = String::new();
+            for continuation in &source_lines[line_index..] {
+                declaration.push_str(continuation);
+                if continuation.contains(';') {
+                    break;
+                }
+            }
+
+            let value_open = declaration
+                .find('"')
+                .unwrap_or_else(|| panic!("no string literal in declaration: {declaration}"));
+            let value_close = declaration[value_open + 1..]
+                .find('"')
+                .unwrap_or_else(|| panic!("unterminated string literal in: {declaration}"))
+                + value_open
+                + 1;
+            let topic = &declaration[value_open + 1..value_close];
+
+            assert!(
+                topic.starts_with(PUBSUB_RESERVED_CONTROL_TOPIC_PREFIX),
+                "reserved control topic {topic:?} does not start with \
+                 {PUBSUB_RESERVED_CONTROL_TOPIC_PREFIX:?}"
+            );
+            scanned_topic_count += 1;
+        }
+
+        assert!(
+            scanned_topic_count > 0,
+            "the scan matched no {TOPIC_DECLARATION_LINE_PREFIX:?} declaration — \
+             the declarations moved or changed shape, leaving this guard vacuous"
         );
     }
 }
