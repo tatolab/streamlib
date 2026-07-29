@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.6](https://github.com/tatolab/streamlib/compare/v0.9.5...v0.9.6) (2026-07-29)
+
+
+### Bug Fixes
+
+* **engine:** compare processor idents version-blind in remove_module's in-use guard ([#1664](https://github.com/tatolab/streamlib/issues/1664)) ([5f2490e](https://github.com/tatolab/streamlib/commit/5f2490e6fad0d7d67dfb5133a206c6b2e7084a47))
+
 ## [0.9.5](https://github.com/tatolab/streamlib/compare/v0.9.4...v0.9.5) (2026-07-29)
 
 
