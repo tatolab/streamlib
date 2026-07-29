@@ -1,5 +1,15 @@
 # Changelog
 
+## [0.9.7](https://github.com/tatolab/streamlib/compare/v0.9.6...v0.9.7) (2026-07-29)
+
+
+### Bug Fixes
+
+* **cli:** un-rot the package fixtures, collapsing four copies into one ([#1625](https://github.com/tatolab/streamlib/issues/1625)) ([#1669](https://github.com/tatolab/streamlib/issues/1669)) ([8093147](https://github.com/tatolab/streamlib/commit/80931474184e6576b47fb616aa9c073727aa425f))
+* **pack:** refuse a `#[processor]` attribute that names a foreign package ([#1644](https://github.com/tatolab/streamlib/issues/1644)) ([#1670](https://github.com/tatolab/streamlib/issues/1670)) ([0a886d3](https://github.com/tatolab/streamlib/commit/0a886d38693547dd5ead4ad063ed1e9cd01f4506))
+* **pkg:** refuse a path-carrying package where it is materialized ([#1626](https://github.com/tatolab/streamlib/issues/1626)) ([#1671](https://github.com/tatolab/streamlib/issues/1671)) ([de7930d](https://github.com/tatolab/streamlib/commit/de7930de0a1cd038c5fa6e2cef511e06f6aab3c1))
+* **plugin-abi:** one definition of the reserved `control:` topic prefix ([#1639](https://github.com/tatolab/streamlib/issues/1639)) ([#1666](https://github.com/tatolab/streamlib/issues/1666)) ([89ae6ce](https://github.com/tatolab/streamlib/commit/89ae6ce808b9b6a5ed80f6fcffad3e9469d5b949))
+
 ## [0.9.6](https://github.com/tatolab/streamlib/compare/v0.9.5...v0.9.6) (2026-07-29)
 
 
