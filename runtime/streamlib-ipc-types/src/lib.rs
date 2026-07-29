@@ -441,6 +441,16 @@ impl SchemaIdentWire {
         std::str::from_utf8(&self.type_name[..self.type_len as usize]).unwrap_or("")
     }
 
+    /// Whether two tags share the same `(org, package, type)` identity tuple,
+    /// version-blind — the wire-side mirror of
+    /// `streamlib_idents::SchemaIdent::matches_schema_tuple`, and the
+    /// projection every schema-agreement check compares on.
+    pub fn matches_schema_tuple(&self, other: &SchemaIdentWire) -> bool {
+        self.org_str() == other.org_str()
+            && self.package_str() == other.package_str()
+            && self.type_str() == other.type_str()
+    }
+
     /// Render the joined `@org/package/Type@major.minor.patch` form for
     /// human-facing surfaces (logs, error messages). One-way: the joined
     /// form never round-trips back through any parser at the structured
@@ -742,6 +752,27 @@ mod tests {
         assert_eq!(ident.version_minor, 0);
         assert_eq!(ident.version_patch, 0);
         assert_eq!(ident.render_joined(), "@tatolab/core/VideoFrame@1.0.0");
+    }
+
+    #[test]
+    fn schema_ident_wire_matches_schema_tuple_ignores_version() {
+        let ident = sample_ident();
+        let other_version =
+            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 9, 4, 2).unwrap();
+        assert!(ident.matches_schema_tuple(&other_version));
+        assert!(other_version.matches_schema_tuple(&ident));
+
+        for differing in [
+            SchemaIdentWire::from_segments("acme", "core", "VideoFrame", 1, 0, 0).unwrap(),
+            SchemaIdentWire::from_segments("tatolab", "vision", "VideoFrame", 1, 0, 0).unwrap(),
+            SchemaIdentWire::from_segments("tatolab", "core", "AudioFrame", 1, 0, 0).unwrap(),
+        ] {
+            assert!(
+                !ident.matches_schema_tuple(&differing),
+                "every segment of the identity tuple is load-bearing: {}",
+                differing.render_joined(),
+            );
+        }
     }
 
     #[test]

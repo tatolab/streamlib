@@ -14,8 +14,14 @@
 //!   the consumer port's expected tag), compared per read.
 //!
 //! Agreement is intentionally permissive: an `Any` / unset tag on *either* side
-//! is the tolerant wildcard and never mismatches. Only two concrete-but-unequal
-//! schemas are a mismatch. The default posture is [loose-but-observed][Loose] —
+//! is the tolerant wildcard and never mismatches. Only two concrete schemas
+//! with different `(org, package, type)` identity tuples are a mismatch.
+//! Comparison is version-blind, matching every other resolution surface in the
+//! runtime (registry lookup, loader cross-check, processor resolution): a Rust
+//! cdylib port carries the `0.0.0` version-free sentinel while a
+//! manifest-resolved Python/Deno port carries its schema owner's package
+//! version, and those two ends describe the same schema. The default posture is
+//! [loose-but-observed][Loose] —
 //! a mismatch is a `tracing::warn`, not a hard error — matching the #1345 design
 //! (a graph that ran yesterday must not stop running because a port was
 //! re-typed). A safety-critical wiring site opts into [`Strict`][Strict] to turn
@@ -53,10 +59,10 @@ pub enum SchemaValidationPosture {
 /// Whether a producer schema and a consumer schema agree.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SchemaAgreement {
-    /// The two ends agree — identical concrete schemas, or a wildcard
-    /// (`Any` / unset) on at least one side.
+    /// The two ends agree — concrete schemas sharing an identity tuple, or a
+    /// wildcard (`Any` / unset) on at least one side.
     Compatible,
-    /// Both ends declare a concrete schema and the two differ.
+    /// Both ends declare a concrete schema and their identity tuples differ.
     Mismatch,
 }
 
@@ -66,14 +72,15 @@ pub enum SchemaAgreement {
 /// [`PortSchemaSpec::Named`], which the registry never yields for a wired link
 /// but is handled here defensively — on either side is
 /// [`Compatible`](SchemaAgreement::Compatible): the check can only assert a
-/// mismatch when *both* ends are concrete [`PortSchemaSpec::Specific`].
+/// mismatch when *both* ends are concrete [`PortSchemaSpec::Specific`], and
+/// then only on the version-blind identity tuple.
 pub fn classify_port_schema_agreement(
     producer: &PortSchemaSpec,
     consumer: &PortSchemaSpec,
 ) -> SchemaAgreement {
     match (producer.specific(), consumer.specific()) {
         (Some(producer_ident), Some(consumer_ident)) => {
-            if producer_ident == consumer_ident {
+            if producer_ident.matches_schema_tuple(consumer_ident) {
                 SchemaAgreement::Compatible
             } else {
                 SchemaAgreement::Mismatch
@@ -87,14 +94,15 @@ pub fn classify_port_schema_agreement(
 /// Classify a stamped inbound-frame tag against a consumer port's expected tag.
 ///
 /// An [unset][SchemaIdentWire::is_unset] tag on either side is the wildcard and
-/// never mismatches; two set-but-unequal tags are a mismatch.
+/// never mismatches; two set tags with different identity tuples are a
+/// mismatch. Version-blind, like the connect-time classifier.
 pub fn classify_wire_schema_agreement(
     stamped: &SchemaIdentWire,
     expected: &SchemaIdentWire,
 ) -> SchemaAgreement {
     if stamped.is_unset() || expected.is_unset() {
         SchemaAgreement::Compatible
-    } else if stamped == expected {
+    } else if stamped.matches_schema_tuple(expected) {
         SchemaAgreement::Compatible
     } else {
         SchemaAgreement::Mismatch
@@ -159,13 +167,24 @@ mod tests {
     use super::*;
     use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
 
-    fn spec(org: &str, package: &str, ty: &str, major: u32) -> PortSchemaSpec {
+    fn spec_at(
+        org: &str,
+        package: &str,
+        ty: &str,
+        major: u32,
+        minor: u32,
+        patch: u32,
+    ) -> PortSchemaSpec {
         PortSchemaSpec::Specific(SchemaIdent::new(
             Org::new(org).unwrap(),
             Package::new(package).unwrap(),
             TypeName::new(ty).unwrap(),
-            SemVer::new(major, 0, 0),
+            SemVer::new(major, minor, patch),
         ))
+    }
+
+    fn spec(org: &str, package: &str, ty: &str, major: u32) -> PortSchemaSpec {
+        spec_at(org, package, ty, major, 0, 0)
     }
 
     fn ctx() -> ConnectSchemaContext<'static> {
@@ -205,23 +224,53 @@ mod tests {
         );
     }
 
-    /// Revert lock: two distinct concrete specs MUST classify as a mismatch.
-    /// Mentally revert the comparison to always-`Compatible` and this fails —
-    /// which is exactly the "no consumer reads the tag" gap #1430 closes.
+    /// Revert lock: two concrete specs with different identity tuples MUST
+    /// classify as a mismatch. Mentally revert the comparison to
+    /// always-`Compatible` and this fails — which is exactly the "no consumer
+    /// reads the tag" gap #1430 closes. Every segment of the tuple is
+    /// load-bearing, not just the type.
     #[test]
     fn distinct_concrete_specs_mismatch() {
         let producer = spec("tatolab", "core", "VideoFrame", 1);
-        let consumer = spec("tatolab", "core", "AudioFrame", 1);
-        assert_eq!(
-            classify_port_schema_agreement(&producer, &consumer),
-            SchemaAgreement::Mismatch,
-        );
-        // Same type, different major version is still a concrete mismatch.
-        let consumer_v2 = spec("tatolab", "core", "VideoFrame", 2);
-        assert_eq!(
-            classify_port_schema_agreement(&producer, &consumer_v2),
-            SchemaAgreement::Mismatch,
-        );
+        for consumer in [
+            spec("tatolab", "core", "AudioFrame", 1),
+            spec("tatolab", "vision", "VideoFrame", 1),
+            spec("acme", "core", "VideoFrame", 1),
+        ] {
+            assert_eq!(
+                classify_port_schema_agreement(&producer, &consumer),
+                SchemaAgreement::Mismatch,
+                "{producer} vs {consumer} differ in the identity tuple",
+            );
+        }
+    }
+
+    /// Revert lock (#1654): agreement is version-blind. A Rust cdylib port
+    /// carries the `0.0.0` version-free sentinel while a manifest-resolved
+    /// Python/Deno port carries its schema owner's package version — the same
+    /// schema, so the link must wire silently. Restore `==` over the derived
+    /// `PartialEq` (all four fields) and every cross-language link classifies
+    /// as `Mismatch` again, failing here.
+    #[test]
+    fn same_tuple_different_version_is_compatible() {
+        let sentinel = spec_at("tatolab", "core", "VideoFrame", 0, 0, 0);
+        for other in [
+            spec_at("tatolab", "core", "VideoFrame", 1, 0, 0),
+            spec_at("tatolab", "core", "VideoFrame", 2, 7, 3),
+            spec_at("tatolab", "core", "VideoFrame", 0, 1, 0),
+            spec_at("tatolab", "core", "VideoFrame", 0, 0, 5),
+        ] {
+            assert_eq!(
+                classify_port_schema_agreement(&sentinel, &other),
+                SchemaAgreement::Compatible,
+                "{sentinel} vs {other} share an identity tuple",
+            );
+            assert_eq!(
+                classify_port_schema_agreement(&other, &sentinel),
+                SchemaAgreement::Compatible,
+                "agreement is symmetric",
+            );
+        }
     }
 
     #[test]
@@ -305,6 +354,34 @@ mod tests {
             SchemaIdentWire::from_segments("tatolab", "core", "AudioFrame", 1, 0, 0).unwrap();
         assert_eq!(
             classify_wire_schema_agreement(&stamped, &expected),
+            SchemaAgreement::Mismatch,
+        );
+    }
+
+    /// Revert lock (#1654): the per-frame read path is version-blind too. The
+    /// stamped tag and the port's expected tag are resolved from the same two
+    /// asymmetric sources as the connect-time specs, so a version-sensitive
+    /// comparison here warns once per port on every cross-language link.
+    #[test]
+    fn wire_agreement_ignores_the_version_axis() {
+        let sentinel =
+            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 0, 0, 0).unwrap();
+        let versioned =
+            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 2, 3).unwrap();
+        assert_eq!(
+            classify_wire_schema_agreement(&sentinel, &versioned),
+            SchemaAgreement::Compatible,
+        );
+        assert_eq!(
+            classify_wire_schema_agreement(&versioned, &sentinel),
+            SchemaAgreement::Compatible,
+        );
+
+        // The version axis is ignored; the identity tuple is not.
+        let other_package =
+            SchemaIdentWire::from_segments("tatolab", "vision", "VideoFrame", 1, 2, 3).unwrap();
+        assert_eq!(
+            classify_wire_schema_agreement(&versioned, &other_package),
             SchemaAgreement::Mismatch,
         );
     }
