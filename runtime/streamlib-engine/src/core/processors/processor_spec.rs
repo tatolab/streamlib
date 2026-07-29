@@ -91,13 +91,8 @@ mod tests {
         assert_eq!(name["org"], "tatolab");
         assert_eq!(name["package"], "core");
         assert_eq!(name["type"], "VideoFrame");
-        // A processor reference carries no version — the `1.0.0` the spec was
-        // built from is dropped when the ident narrows. Asserted as absence, so
-        // re-pinning a version onto the wire form fails here.
-        assert!(
-            name.get("version").is_none(),
-            "the wire form must carry no `version` key, got {name}"
-        );
+        // Exactly those three keys — a processor reference names no version,
+        // so the `1.0.0` this spec was built from reaches no wire field.
         assert_eq!(
             name.as_object().unwrap().len(),
             3,
