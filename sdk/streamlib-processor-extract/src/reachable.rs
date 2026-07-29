@@ -661,6 +661,108 @@ fn refuse_divergent_processor_declarations(
     Ok(())
 }
 
+/// Every module file under `<package_dir>/processors` that the generated crate
+/// root's module tree names, whether or not any build target compiles it.
+///
+/// **Declaration** reachability, deliberately not compile reachability. The
+/// parked-module convention (`#![cfg(any())]` on an `_apple_impl_pending_/`
+/// arm) is a subtree the crate names and no target compiles, and unparking it
+/// must stay a cfg edit and nothing else — so a walk that pruned it would call
+/// every file under it an orphan. Cfg is therefore ignored outright rather
+/// than evaluated: the question this answers is "does anything name this
+/// file", which is the one question `cargo` and `clippy` cannot, because a
+/// file nothing names is simply absent from the build.
+///
+/// A `mod` that resolves to no file is skipped rather than refused: `rustc`
+/// does not require a module file for a `mod` the build prunes, so an
+/// unresolvable one is not evidence of an orphan.
+#[tracing::instrument(skip_all, fields(package_dir = %package_dir.display()))]
+pub fn enumerate_processor_source_module_files_the_crate_names(
+    package_dir: &Path,
+) -> Result<BTreeSet<PathBuf>, ExtractError> {
+    let arms = enumerate_processor_source_module_arms(package_dir)?;
+    let mut named = BTreeSet::new();
+
+    for arm in &arms {
+        collect_module_files_named_from(
+            &arm.module_file,
+            &arm.top_level_arm_child_module_search_dir(),
+            &mut named,
+        )?;
+    }
+
+    tracing::debug!(module_files = named.len(), "enumerated named module files");
+    Ok(named)
+}
+
+/// Parse `file`, record it, and descend into every `mod` it declares — inline
+/// or external, gated or not.
+fn collect_module_files_named_from(
+    file: &Path,
+    mod_dir: &Path,
+    named: &mut BTreeSet<PathBuf>,
+) -> Result<(), ExtractError> {
+    if !named.insert(file.to_path_buf()) {
+        return Ok(());
+    }
+
+    let body = std::fs::read_to_string(file).map_err(|e| ExtractError::Io {
+        path: file.to_path_buf(),
+        source: e,
+    })?;
+    let parsed = syn::parse_file(&body).map_err(|e| ExtractError::Syntax {
+        path: file.to_path_buf(),
+        source: e,
+    })?;
+
+    let path_attribute_base_dir = file.parent().unwrap_or_else(|| Path::new("")).to_path_buf();
+    for item in &parsed.items {
+        collect_module_files_named_by_item(item, file, mod_dir, &path_attribute_base_dir, named)?;
+    }
+    Ok(())
+}
+
+fn collect_module_files_named_by_item(
+    item: &syn::Item,
+    declaring_file: &Path,
+    mod_dir: &Path,
+    path_attribute_base_dir: &Path,
+    named: &mut BTreeSet<PathBuf>,
+) -> Result<(), ExtractError> {
+    let syn::Item::Mod(item_mod) = item else {
+        return Ok(());
+    };
+
+    match &item_mod.content {
+        Some((_, items)) => {
+            let inner_dir = mod_dir.join(item_mod.ident.to_string());
+            for inner in items {
+                collect_module_files_named_by_item(
+                    inner,
+                    declaring_file,
+                    &inner_dir,
+                    &inner_dir,
+                    named,
+                )?;
+            }
+        }
+        None => {
+            let Ok(resolved) = resolve_external_module_file(
+                item_mod,
+                declaring_file,
+                mod_dir,
+                path_attribute_base_dir,
+            ) else {
+                return Ok(());
+            };
+            let child_mod_dir =
+                resolved_child_module_search_dir(&resolved, &item_mod.ident.to_string());
+            collect_module_files_named_from(&resolved.module_file, &child_mod_dir, named)?;
+        }
+    }
+    Ok(())
+}
+
 fn walk_processor_source_arms(
     package_dir: &Path,
     cfg_resolution: ModuleWalkCfgResolution<'_>,
@@ -844,7 +946,7 @@ impl ReachableModuleWalker<'_> {
                     }
                     // External `mod foo;` resolves to a sibling file.
                     None => {
-                        let resolved = self.resolve_module_file(
+                        let resolved = resolve_external_module_file(
                             item_mod,
                             declaring_file,
                             mod_dir,
@@ -876,58 +978,6 @@ impl ReachableModuleWalker<'_> {
             _ => {}
         }
         Ok(())
-    }
-
-    /// Resolve an external `mod <name>;` to its source file, honoring a
-    /// `#[path = "..."]` override and otherwise the standard
-    /// `<mod_dir>/<name>.rs` then `<mod_dir>/<name>/mod.rs` search.
-    ///
-    /// `rustc` resolves a `#[path]` on a non-inline module against the directory
-    /// holding the declaring file (`path_attribute_base_dir`), which is NOT the
-    /// directory that module's plain `mod` children resolve against.
-    fn resolve_module_file(
-        &self,
-        item_mod: &syn::ItemMod,
-        declaring_file: &Path,
-        mod_dir: &Path,
-        path_attribute_base_dir: &Path,
-    ) -> Result<ResolvedChildModule, ExtractError> {
-        let name = item_mod.ident.to_string();
-
-        if let Some(path_attr) = path_override(&item_mod.attrs) {
-            let candidate = path_attribute_base_dir.join(&path_attr);
-            if candidate.is_file() {
-                return Ok(ResolvedChildModule {
-                    module_file: candidate,
-                    resolved_via_path_attribute: true,
-                });
-            }
-            return Err(ExtractError::UnresolvedModule {
-                module: name,
-                declared_in: declaring_file.to_path_buf(),
-                candidates: candidate.display().to_string(),
-            });
-        }
-
-        let flat = mod_dir.join(format!("{name}.rs"));
-        if flat.is_file() {
-            return Ok(ResolvedChildModule {
-                module_file: flat,
-                resolved_via_path_attribute: false,
-            });
-        }
-        let nested = mod_dir.join(&name).join("mod.rs");
-        if nested.is_file() {
-            return Ok(ResolvedChildModule {
-                module_file: nested,
-                resolved_via_path_attribute: false,
-            });
-        }
-        Err(ExtractError::UnresolvedModule {
-            module: name,
-            declared_in: declaring_file.to_path_buf(),
-            candidates: format!("{} or {}", flat.display(), nested.display()),
-        })
     }
 
     /// Enter the cfg scope an item's attributes open. Returns `None` when the
@@ -1110,6 +1160,61 @@ fn collect_undefined_feature_atoms(
 struct ResolvedChildModule {
     module_file: PathBuf,
     resolved_via_path_attribute: bool,
+}
+
+/// Resolve an external `mod <name>;` to its source file, honoring a
+/// `#[path = "..."]` override and otherwise the standard `<mod_dir>/<name>.rs`
+/// then `<mod_dir>/<name>/mod.rs` search.
+///
+/// `rustc` resolves a `#[path]` on a non-inline module against the directory
+/// holding the declaring file (`path_attribute_base_dir`), which is NOT the
+/// directory that module's plain `mod` children resolve against.
+///
+/// Shared by the cfg-resolved processor walk and the cfg-blind declaration
+/// walk: both must agree on which file a `mod` names, or the orphan gate would
+/// report a file the extractor reads (or miss one it doesn't).
+fn resolve_external_module_file(
+    item_mod: &syn::ItemMod,
+    declaring_file: &Path,
+    mod_dir: &Path,
+    path_attribute_base_dir: &Path,
+) -> Result<ResolvedChildModule, ExtractError> {
+    let name = item_mod.ident.to_string();
+
+    if let Some(path_attr) = path_override(&item_mod.attrs) {
+        let candidate = path_attribute_base_dir.join(&path_attr);
+        if candidate.is_file() {
+            return Ok(ResolvedChildModule {
+                module_file: candidate,
+                resolved_via_path_attribute: true,
+            });
+        }
+        return Err(ExtractError::UnresolvedModule {
+            module: name,
+            declared_in: declaring_file.to_path_buf(),
+            candidates: candidate.display().to_string(),
+        });
+    }
+
+    let flat = mod_dir.join(format!("{name}.rs"));
+    if flat.is_file() {
+        return Ok(ResolvedChildModule {
+            module_file: flat,
+            resolved_via_path_attribute: false,
+        });
+    }
+    let nested = mod_dir.join(&name).join("mod.rs");
+    if nested.is_file() {
+        return Ok(ResolvedChildModule {
+            module_file: nested,
+            resolved_via_path_attribute: false,
+        });
+    }
+    Err(ExtractError::UnresolvedModule {
+        module: name,
+        declared_in: declaring_file.to_path_buf(),
+        candidates: format!("{} or {}", flat.display(), nested.display()),
+    })
 }
 
 /// Evaluate a single `#[cfg(<predicate>)]`. A malformed predicate the parser

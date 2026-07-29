@@ -22,6 +22,7 @@ pub mod check_no_inventory_submit;
 pub mod check_no_reverse_dns;
 pub mod check_no_streamlib_metadata;
 pub mod check_package_version_drift;
+pub mod check_processor_source_reachability;
 pub mod check_processor_spec_new;
 pub mod check_schema_versions;
 pub mod check_vendored_vulkanalia;
@@ -153,6 +154,12 @@ enum Commands {
     /// `SchemaIdent::new(...)` or via the macro-emitted
     /// `<Module>::schema_ident()`).
     CheckProcessorSpecNew,
+
+    /// CI gate reporting `.rs` files under a folder-backed package's
+    /// `processors/` directory that no `mod` chain in the generated module
+    /// tree names. Cargo and clippy both ignore such a file — it is absent
+    /// from the build, not excluded from it — so nothing else says a word.
+    CheckProcessorSourceReachability,
 
     /// CI gate for the cdylib-reachability invariant on engine `Host*`
     /// constructors. Fails when any constructor-class method
@@ -324,6 +331,9 @@ fn main() -> Result<()> {
         Commands::CheckNoReverseDns => check_no_reverse_dns::run(&workspace_root()?)?,
         Commands::CheckNoInventorySubmit => check_no_inventory_submit::run(&workspace_root()?)?,
         Commands::CheckProcessorSpecNew => check_processor_spec_new::run(&workspace_root()?)?,
+        Commands::CheckProcessorSourceReachability => {
+            check_processor_source_reachability::run(&workspace_root()?)?
+        }
         Commands::CheckCdylibReach => check_cdylib_reach::run(&workspace_root()?)?,
         Commands::CheckNoEscalateInLifecycle => {
             check_no_escalate_in_lifecycle::run(&workspace_root()?)?
