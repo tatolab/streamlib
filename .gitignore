@@ -70,6 +70,10 @@ examples/camera-python-display/assets/*
 .claude/worktrees/
 .claude/scheduled_tasks.lock
 
+# Operating-model session markers (plan-gate hook): plan-session, active-ticket.json.
+# Machine-local, created/removed by the lifecycle skills — never tracked.
+.claude/state/
+
 # Loop runtime state — the reconciler's own memory (picture of in-flight tickets,
 # comment-id ledger, delta-probe cache) plus its append-only run-log. Machine-local
 # and rewritten every pass; `branch-shield.sh` refuses commits on main, so this must

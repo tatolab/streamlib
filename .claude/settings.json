@@ -16,7 +16,41 @@
       "Bash(docker --version)",
       "Bash(docker info *)"
     ],
+    "ask": [
+      "Edit(./docs/plan/**)",
+      "Write(./docs/plan/**)"
+    ],
     "deny": [
+      "Read(./examples/**)",
+      "Edit(./examples/**)",
+      "Read(./packages/audio/**)",
+      "Edit(./packages/audio/**)",
+      "Read(./packages/camera/**)",
+      "Edit(./packages/camera/**)",
+      "Read(./packages/clap/**)",
+      "Edit(./packages/clap/**)",
+      "Read(./packages/debug-utilities/**)",
+      "Edit(./packages/debug-utilities/**)",
+      "Read(./packages/display/**)",
+      "Edit(./packages/display/**)",
+      "Read(./packages/frame-tap/**)",
+      "Edit(./packages/frame-tap/**)",
+      "Read(./packages/h264/**)",
+      "Edit(./packages/h264/**)",
+      "Read(./packages/h265/**)",
+      "Edit(./packages/h265/**)",
+      "Read(./packages/jpeg/**)",
+      "Edit(./packages/jpeg/**)",
+      "Read(./packages/moq/**)",
+      "Edit(./packages/moq/**)",
+      "Read(./packages/mp4/**)",
+      "Edit(./packages/mp4/**)",
+      "Read(./packages/opus/**)",
+      "Edit(./packages/opus/**)",
+      "Read(./packages/screen-capture/**)",
+      "Edit(./packages/screen-capture/**)",
+      "Read(./packages/webrtc/**)",
+      "Edit(./packages/webrtc/**)",
       "Edit(vendor/tatolab-vulkanalia*/**)",
       "Edit(LICENSE)",
       "Edit(LICENSES/**)",
@@ -34,6 +68,15 @@
           {
             "type": "command",
             "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/rig-brake.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/plan-gate.sh"
           }
         ]
       }
