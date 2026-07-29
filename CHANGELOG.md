@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.5](https://github.com/tatolab/streamlib/compare/v0.9.4...v0.9.5) (2026-07-29)
+
+
+### Bug Fixes
+
+* **engine:** compare port schema idents version-blind ([#1656](https://github.com/tatolab/streamlib/issues/1656)) ([61bbf43](https://github.com/tatolab/streamlib/commit/61bbf43c8a490c4253e782265e9742b3b386bb94))
+
 ## [0.9.4](https://github.com/tatolab/streamlib/compare/v0.9.3...v0.9.4) (2026-07-28)
 
 
