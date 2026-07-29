@@ -620,10 +620,21 @@ impl Runner {
         // the removed types, RESTORE the registrations and refuse. Nodes
         // marked pending-deletion are excluded — the graph has committed
         // to removing them and the compiler never spawns one.
+        //
+        // The set keys on the version-blind identity tuple, not the whole
+        // ident: a node added while its type was unregistered carries the
+        // `(org, package, type)@0.0.0` diagnostic ident, while the ledger
+        // holds the registered version.
         let unregistered = crate::core::processors::PROCESSOR_REGISTRY
             .unregister_processor_types(&processor_idents);
-        let removed_type_set: std::collections::HashSet<&crate::core::descriptors::SchemaIdent> =
-            processor_idents.iter().collect();
+        let removed_type_set: HashSet<(
+            &crate::core::descriptors::Org,
+            &crate::core::descriptors::Package,
+            &crate::core::descriptors::TypeName,
+        )> = processor_idents
+            .iter()
+            .map(|ident| ident.schema_identity_tuple())
+            .collect();
         let processors_in_use: Vec<(
             crate::core::graph::ProcessorUniqueId,
             crate::core::descriptors::SchemaIdent,
@@ -634,7 +645,7 @@ impl Runner {
                 .v(())
                 .iter()
                 .filter(|node| {
-                    removed_type_set.contains(&node.processor_type)
+                    removed_type_set.contains(&node.processor_type.schema_identity_tuple())
                         && !node.has::<crate::core::graph::PendingDeletionComponent>()
                 })
                 .map(|node| (node.id.clone(), node.processor_type.clone()))

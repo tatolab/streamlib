@@ -1349,7 +1349,7 @@ impl ProcessorInstanceFactory {
         self.descriptors
             .read()
             .keys()
-            .filter(|id| &id.org == org && &id.package == package && &id.r#type == type_name)
+            .filter(|id| id.schema_identity_tuple() == (org, package, type_name))
             .max_by_key(|id| id.version)
             .cloned()
     }
