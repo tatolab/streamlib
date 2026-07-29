@@ -92,6 +92,10 @@ fn add_package_failure_to_add_module_error(
         AppModulesError::MissingPackageIdentity { .. } => {
             AddModuleError::PackageArchiveMissingPackageIdentity { archive }
         }
+        AppModulesError::PackageIsNotStandalone { offenders, .. }
+        | AppModulesError::InstallPackageIsNotStandalone { offenders, .. } => {
+            AddModuleError::PackageArchiveIsNotStandalone { archive, offenders }
+        }
         AppModulesError::StagePromoteFailed {
             package_dir,
             detail,
@@ -279,6 +283,38 @@ mod tests {
                 archive.display()
             ),
             "the extraction succeeded — the message must name the contents, not extraction"
+        );
+    }
+
+    /// A path artifact is a validation refusal, not a materialization failure.
+    /// Without its own arm it falls through to the stage-neutral catch-all,
+    /// which restates the archive path a second time — exactly what the arms
+    /// above exist to prevent.
+    #[test]
+    fn an_archive_carrying_a_path_artifact_names_the_offender_once() {
+        let app_root = tempfile::tempdir().unwrap();
+        let src = tempfile::tempdir().unwrap();
+        let archive = write_archive(
+            src.path(),
+            "path-artifact.slpkg",
+            &[entry(
+                "streamlib.yaml",
+                "package:\n  org: tatolab\n  name: camera\n  version: 1.0.0\n\
+                 patch:\n  '@tatolab/core':\n    path: ../core\n",
+            )],
+        );
+
+        let err = extract_failure(&archive, app_root.path());
+        assert!(
+            matches!(err, AddModuleError::PackageArchiveIsNotStandalone { .. }),
+            "{err:?}"
+        );
+        let rendered = err.to_string();
+        assert!(rendered.contains("../core"), "{rendered}");
+        assert_eq!(
+            rendered.matches(&archive.display().to_string()).count(),
+            1,
+            "the archive path must appear once, not restated by a nested Display: {rendered}"
         );
     }
 

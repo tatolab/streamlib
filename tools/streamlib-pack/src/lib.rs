@@ -44,6 +44,14 @@ use streamlib_idents::{DependencySpec, Manifest};
 use streamlib_processor_schema::ProcessorLanguage;
 
 pub use streamlib_cargo_build::CargoProfile;
+// The path-artifact predicate now lives beside the materialization primitive
+// that also enforces it (`streamlib_idents::app_modules`). Re-exported so the
+// publish path, the whole-tree emit's skip set, and `xtask install-packages`
+// all keep reading one definition.
+pub use streamlib_idents::path_artifact_guard::non_distributable_path_offenders;
+use streamlib_idents::path_artifact_guard::{
+    cargo_path_dependency_offenders, path_patch_offenders,
+};
 
 pub mod catalog;
 pub mod dependency_reconcile;
@@ -928,7 +936,7 @@ fn ensure_no_path_artifacts(pkg_dir: &Path) -> Result<()> {
         );
     }
 
-    let cargo_offenders = cargo_path_dep_offenders(pkg_dir)?;
+    let cargo_offenders = cargo_path_dependency_offenders(pkg_dir)?;
     if !cargo_offenders.is_empty() {
         anyhow::bail!(
             "{} declares path dependenc(ies) [{}] — a published package must be \
@@ -940,59 +948,6 @@ fn ensure_no_path_artifacts(pkg_dir: &Path) -> Result<()> {
         );
     }
     Ok(())
-}
-
-/// Names of dependency-table `path` deps in `<pkg_dir>/Cargo.toml` — the same
-/// scan [`ensure_no_path_artifacts`] rejects on. Empty when the Cargo.toml is
-/// absent or carries only version-resolved deps. Reads + parses the Cargo.toml
-/// then defers to [`cargo_path_dep_names`], so a `[[bin]].path` / `[lib].path`
-/// TARGET path never counts — only dependency tables are scanned.
-fn cargo_path_dep_offenders(pkg_dir: &Path) -> Result<Vec<String>> {
-    let cargo_path = pkg_dir.join("Cargo.toml");
-    if !cargo_path.exists() {
-        return Ok(Vec::new());
-    }
-    let body = std::fs::read_to_string(&cargo_path)
-        .with_context(|| format!("read {}", cargo_path.display()))?;
-    let doc: toml::Value =
-        toml::from_str(&body).with_context(|| format!("parse {}", cargo_path.display()))?;
-    Ok(cargo_path_dep_names(&doc))
-}
-
-/// Names of dependencies carrying a `path` key across every dependency table
-/// in a parsed `Cargo.toml` — `[dependencies]`, `[build-dependencies]`,
-/// `[dev-dependencies]`, and their `[target.<cfg>.…]` variants.
-fn cargo_path_dep_names(doc: &toml::Value) -> Vec<String> {
-    fn scan_dep_table(table: &toml::value::Table, out: &mut Vec<String>) {
-        for (name, spec) in table {
-            if let toml::Value::Table(t) = spec {
-                if t.contains_key("path") {
-                    out.push(name.clone());
-                }
-            }
-        }
-    }
-    fn scan_section(root: &toml::value::Table, out: &mut Vec<String>) {
-        for key in ["dependencies", "build-dependencies", "dev-dependencies"] {
-            if let Some(toml::Value::Table(t)) = root.get(key) {
-                scan_dep_table(t, out);
-            }
-        }
-    }
-    let mut out = Vec::new();
-    if let toml::Value::Table(root) = doc {
-        scan_section(root, &mut out);
-        if let Some(toml::Value::Table(targets)) = root.get("target") {
-            for (_cfg, tbl) in targets.iter() {
-                if let toml::Value::Table(t) = tbl {
-                    scan_section(t, &mut out);
-                }
-            }
-        }
-    }
-    out.sort();
-    out.dedup();
-    out
 }
 
 /// Whether a directory-entry name is a build artifact / dev-only file
@@ -1301,56 +1256,6 @@ fn manifest_bytes_for(pkg_dir: &Path, policy: PathDepPolicy) -> Result<Vec<u8>> 
         }
         PathDepPolicy::RewriteRelativeToAbsolute => rewrite_manifest_path_deps_absolute(pkg_dir),
     }
-}
-
-/// Names every path-flavor `patch:` entry in `<pkg_dir>/streamlib.yaml` —
-/// dev-time overrides that don't generalize to a distributed artifact. An
-/// empty result means the package is publishable through this gate; a
-/// non-empty one lists each offender (`` `dep` → `path` ``). A missing
-/// manifest is treated as no offenders.
-///
-/// The predicate the whole-tree static package-source emit skips on and the CLI
-/// `.slpkg` gate rejects on share this one definition — the skip is the same
-/// condition, sound by construction rather than a proxy. Filters exactly
-/// [`DependencySpec::Path`], so git/version-range `patch:` overrides never count.
-pub(crate) fn path_patch_offenders(pkg_dir: &Path) -> Result<Vec<String>> {
-    let manifest_path = pkg_dir.join(Manifest::FILE_NAME);
-    if !manifest_path.exists() {
-        return Ok(Vec::new());
-    }
-    let body = std::fs::read_to_string(&manifest_path)
-        .with_context(|| format!("read {}", manifest_path.display()))?;
-    let manifest: Manifest = serde_yaml::from_str(&body)
-        .with_context(|| format!("parse {}", manifest_path.display()))?;
-    Ok(manifest
-        .patch
-        .iter()
-        .filter_map(|(dep_ref, spec)| match spec {
-            DependencySpec::Path(p) => Some(format!("`{}` → `{}`", dep_ref, p.path.display())),
-            _ => None,
-        })
-        .collect())
-}
-
-/// Every non-distributable path artifact in a package dir — the union of
-/// `streamlib.yaml` path-`patch:` overrides ([`path_patch_offenders`]) and
-/// Cargo.toml dependency-table `path` deps ([`cargo_path_dep_offenders`]).
-///
-/// [`ensure_no_path_artifacts`] rejects on these exact same two helpers for
-/// the [`AssembleTarget::Slpkg`] target, so the whole-tree static package-source
-/// emit's skip predicate keys on the same condition it would otherwise
-/// hard-fail on: the skip set equals the rejection set, sound by construction
-/// (one shared definition per half) rather than a proxy. TARGET paths
-/// (`[[bin]].path` / `[lib].path`) are not dependency paths and never count.
-///
-/// `pub` so the `install-packages` CI enumerator (xtask) drives its skip set
-/// from this exact predicate — the same one the whole-tree emit and the
-/// single-package pack hard-fail on — so the CI skip set equals the emit skip
-/// set by construction rather than a re-derived YAML list.
-pub fn non_distributable_path_offenders(pkg_dir: &Path) -> Result<Vec<String>> {
-    let mut offenders = path_patch_offenders(pkg_dir)?;
-    offenders.extend(cargo_path_dep_offenders(pkg_dir)?);
-    Ok(offenders)
 }
 
 /// Reject path-flavor `patch:` entries (dev-time overrides that don't

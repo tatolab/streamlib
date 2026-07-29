@@ -19,6 +19,7 @@ pub mod link_marker;
 mod lockfile;
 mod manifest;
 mod package_source;
+pub mod path_artifact_guard;
 mod release;
 mod resolver;
 mod semver;
