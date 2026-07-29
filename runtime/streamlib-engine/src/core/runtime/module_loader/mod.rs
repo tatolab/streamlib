@@ -627,7 +627,7 @@ impl Runner {
         // holds the registered version.
         let unregistered = crate::core::processors::PROCESSOR_REGISTRY
             .unregister_processor_types(&processor_idents);
-        let removed_type_set: std::collections::HashSet<(
+        let removed_type_set: HashSet<(
             &crate::core::descriptors::Org,
             &crate::core::descriptors::Package,
             &crate::core::descriptors::TypeName,

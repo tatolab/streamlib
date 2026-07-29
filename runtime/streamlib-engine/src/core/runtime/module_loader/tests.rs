@@ -3793,6 +3793,110 @@ processors:
         );
     }
 
+    /// A node added *before* its module loaded carries the
+    /// `(org, package, type)@0.0.0` diagnostic ident, while the ledger holds
+    /// the registered version. The in-use guard must still see it — matching
+    /// version-inclusively let `remove_module` unload the module and strand
+    /// the node (#1660, the processor-ident arm of #1654's defect class).
+    #[test]
+    #[serial]
+    fn remove_module_in_use_guard_sees_a_node_stamped_with_the_diagnostic_version() {
+        let home = tempfile::tempdir().unwrap();
+        let _guard = HomeGuard::install(home.path());
+        let runtime = Runner::new().expect("Runner::new");
+        let tmp = tempfile::tempdir().unwrap();
+        let pkg = tmp.path().join("rm-stale-ident");
+        std::fs::create_dir_all(pkg.join("schemas")).unwrap();
+        std::fs::write(
+            pkg.join("schemas/rm_stale_ident_config.yaml"),
+            "metadata:\n  type: RmStaleIdentConfigSchema\n",
+        )
+        .unwrap();
+        std::fs::write(
+            pkg.join("streamlib.yaml"),
+            "package:\n  org: tatolab\n  name: rm-stale-ident\n  version: \"1.2.0\"\n\
+             schemas:\n  RmStaleIdentConfigSchema:\n    file: schemas/rm_stale_ident_config.yaml\n\
+             processors:\n\
+             \x20 - name: RmStaleIdentProcessor\n\
+             \x20   runtime: typescript\n\
+             \x20   entrypoint: main.ts\n\
+             \x20   execution: manual\n\
+             \x20   config:\n\
+             \x20     name: config\n\
+             \x20     schema: RmStaleIdentConfigSchema\n",
+        )
+        .unwrap();
+
+        // (1) Reference the type before its module loads. The package lives
+        // outside this Runner's home, so lazy discovery finds no provider and
+        // the node lands in Error state carrying the `@0.0.0` ident.
+        let type_reference = crate::core::processors::ProcessorTypeReference::new(
+            streamlib_idents::Org::new("tatolab").unwrap(),
+            streamlib_idents::Package::new("rm-stale-ident").unwrap(),
+            streamlib_idents::TypeName::new("RmStaleIdentProcessor").unwrap(),
+        );
+        let err = runtime
+            .add_processor(crate::core::processors::ProcessorSpec::new(
+                type_reference,
+                serde_json::json!({}),
+            ))
+            .expect_err("add_processor before the module loads must miss the registry");
+        assert!(
+            matches!(err, crate::core::Error::UnknownProcessorType { .. }),
+            "expected UnknownProcessorType, got: {err:?}",
+        );
+
+        // (2) Load the module, registering the type at its real version.
+        runtime
+            .add_module_with_blocking(
+                tatolab_ident("rm-stale-ident"),
+                path_strategy_never_build(&pkg),
+            )
+            .expect("processor package load must succeed");
+        let descriptor = crate::core::processors::PROCESSOR_REGISTRY
+            .list_registered()
+            .into_iter()
+            .find(|d| d.name.r#type.as_str() == "RmStaleIdentProcessor")
+            .expect("RmStaleIdentProcessor must be registered");
+        assert_eq!(
+            descriptor.name.version,
+            crate::core::descriptors::SemVer::new(1, 2, 0),
+            "the fixture must register a version the stranded node cannot be carrying"
+        );
+
+        // (3) The guard must refuse: the graph node names the same type, one
+        // version stamp apart.
+        let err = runtime
+            .remove_module(tatolab_ident("rm-stale-ident"))
+            .expect_err("removal must refuse while a stranded node still names the type");
+        match &err {
+            RemoveModuleError::ProcessorsInUse {
+                processor_ids,
+                processor_types,
+                ..
+            } => {
+                assert!(
+                    !processor_ids.is_empty(),
+                    "the refusal must name the node holding the type"
+                );
+                assert!(
+                    processor_types.iter().any(|t| {
+                        t.r#type.as_str() == "RmStaleIdentProcessor"
+                            && t.version == crate::core::descriptors::SemVer::new(0, 0, 0)
+                    }),
+                    "the reported node must be the one stamped with the diagnostic \
+                     version — a version-inclusive guard would have missed it: \
+                     {processor_types:?}"
+                );
+            }
+            other => panic!("expected ProcessorsInUse, got {other:?}"),
+        }
+        assert!(
+            crate::core::processors::PROCESSOR_REGISTRY.is_registered(&descriptor.name),
+            "a refused removal must restore the processor registration"
+        );
+    }
+
     /// Load/unload/reload ×2 of the same package on one Runner: the
     /// registry snapshot after every reload equals the snapshot after the
     /// first load.
