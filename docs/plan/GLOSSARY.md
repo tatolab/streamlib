@@ -19,6 +19,10 @@ directory.
 **Link**: the sole local-development path for consuming a package from a folder.
 `add`/`install` take finalized artifacts only.
 
+**App**: a consumer of packages — an entry file (`app.py` defining `setup(rt)`) plus
+`streamlib.lock` and `streamlib_modules/`; carries no manifest. Promotes to a package by
+adding the identity label. _Avoid_: "project", "consumer app" (redundant).
+
 **Processor**: the unit of pipeline computation, declared with `#[processor]` and wired
 by ports.
 
