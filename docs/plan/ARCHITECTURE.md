@@ -10,8 +10,27 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 
 ## Product (the MVP sentence)
 
-- **OPEN** — One sentence a real user acts on: what they install, what they run, what they see.
-  Every ticket traces to this sentence or does not exist.
+- **DECIDED** — A Python developer on Linux with an NVIDIA GPU installs streamlib from
+  PyPI, runs `streamlib new` then `streamlib dev`, sees their camera live in a window
+  within a minute, and makes the pipeline theirs by editing the scaffolded processor —
+  zero ceremony: no manifest, no `main()`, no schema wrangling, hot-reload on save.
+  Every ticket traces to this sentence or does not exist. [product-mvp-sentence]
+- **DECIDED** — Terms of the sentence: PyPI ships the single binary (CLI + runtime +
+  orchestrator); platform floor is Linux + NVIDIA; `streamlib new` scaffolds a working
+  camera → effect → display app with dependencies already installed — first `streamlib
+  dev` shows live video before any editing; `dev`/`run` find `app.py`'s `setup(rt)` by
+  convention, `-f <file>` overrides; an app carries no manifest (entry file +
+  `streamlib.lock` + `streamlib_modules/`) and promotes to a package by adding the
+  identity label; app-local processors live in `processors/`, discovered by the same
+  scan as plugins, minted `@app/local/<Name>`, and `rt.add` accepts the string id or
+  the imported class; the pipeline API is `add`/`connect`. [product-mvp-sentence]
+- **DECIDED** — The zero-ceremony bar (the sentence is untrue until all hold): no
+  manifest authoring; no boilerplate entry; bags/schemas fixed (no engine schema
+  matching, cast-at-read, no versions at the code layer); scaffolding commands for
+  app, plugin, processor, and schema. [product-mvp-sentence]
+- **DECIDED** — Rust processor authoring (C++ later) stays a supported capability for
+  hardware-facing packages, outside the MVP sentence; existing Rust plugins port to
+  the new format as the final step, so they install as modules. [product-mvp-sentence]
 
 ## Module system — packages, versions, imports
 
