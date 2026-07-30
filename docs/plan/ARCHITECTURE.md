@@ -8,7 +8,7 @@ never round-tripped back) move together: every DECIDED entry is represented in t
 
 Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an owner decision.
 
-## Product (the MVP sentence)
+## Product (the MVP sentence) — IN-FLIGHT (→ pypi-packaging)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU installs streamlib from
   PyPI, runs `streamlib new` then `streamlib dev`, sees their camera live in a window
