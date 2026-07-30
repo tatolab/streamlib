@@ -5,23 +5,21 @@ use std::sync::Arc;
 
 use super::Runner;
 use super::operations::{
-    BoxFuture, ConnectOptions, RegisterProcessorReceipt, ReplaceProcessorFromSource,
-    RuntimeOperations, SubmittedProcessorSource,
+    BoxFuture, RegisterProcessorReceipt, ReplaceProcessorFromSource, RuntimeOperations,
+    SubmittedProcessorSource,
 };
 use super::runtime::TokioRuntimeVariant;
 use crate::core::compiler::{Compiler, PendingOperation};
+use crate::core::embedded_schemas::resolve_node_port_schema;
 use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
     ProcessorUniqueId, StateComponent,
 };
-use crate::core::embedded_schemas::resolve_node_port_schema;
 use crate::core::processors::{ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
-use crate::core::schema_agreement::{
-    ConnectSchemaContext, SchemaValidationPosture, enforce_connect_schema_agreement,
-};
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, PortDirection, Result};
 use streamlib_idents::ChannelName;
+use streamlib_processor_schema::PortSchemaSpec;
 
 // =============================================================================
 // Core Implementation Functions ('static async fns for spawn compatibility)
@@ -153,26 +151,34 @@ async fn remove_processor_impl(
     Ok(())
 }
 
+/// Whether two resolved port schema hints are both concrete and name different
+/// `(org, package, type)` identity tuples — the only shape that draws the
+/// advisory connect warn. A wildcard (`Any`/unresolved) on either side never
+/// differs; versions never participate.
+fn port_schema_hints_differ(producer: &PortSchemaSpec, consumer: &PortSchemaSpec) -> bool {
+    match (producer.specific(), consumer.specific()) {
+        (Some(producer_ident), Some(consumer_ident)) => {
+            !producer_ident.matches_schema_tuple(consumer_ident)
+        }
+        _ => false,
+    }
+}
+
 /// Core implementation for connect - takes owned Arcs for 'static lifetime.
 ///
-/// `validation` selects the schema-agreement posture for this wiring site.
-/// [`connect`](Runner::connect) / [`connect_async`](RuntimeOperations::connect_async)
-/// pass [`SchemaValidationPosture::Loose`] (warn-but-wire); the
-/// [`connect_with`](Runner::connect_with) opt-in passes the caller's
-/// [`ConnectOptions`] posture, so a safety-critical channel selects
-/// [`Strict`][SchemaValidationPosture::Strict] to hard-fail a concrete
-/// producer/consumer schema mismatch with [`Error::SchemaIdentMismatch`]
-/// instead of only warning.
+/// Connect always wires: the engine mediates no schema agreement. Two
+/// concrete, tuple-distinct port schema hints get one advisory `warn` and the
+/// link is wired anyway — a type mismatch surfaces at the consuming
+/// processor's cast at read time.
 #[tracing::instrument(
     name = "runtime.connect",
     skip(compiler),
-    fields(from = %from, to = %to, validation = ?validation),
+    fields(from = %from, to = %to),
 )]
 async fn connect_impl(
     compiler: Arc<Compiler>,
     from: OutputLinkPortRef,
     to: InputLinkPortRef,
-    validation: SchemaValidationPosture,
 ) -> Result<LinkUniqueId> {
     let from_processor = from.processor_id.clone();
     let from_port = from.port_name.clone();
@@ -189,51 +195,48 @@ async fn connect_impl(
         }),
     );
 
-    let (link_id, channel) = compiler.scope(|graph, tx| -> Result<(LinkUniqueId, ChannelName)> {
-        // Validate endpoints + ports FIRST — before the channel-name
-        // derivation — so a missing processor/port reads as the typed
-        // ProcessorNotFound / ProcessorPortNotFound and never gets masked by an
-        // InvalidLink from the wire-name grammar. The `add_e` call still checks
-        // defensively; this pre-validation is what gets the typed error out.
-        // Validate source processor + output port.
-        {
-            let from_node = graph
-                .traversal()
-                .v(&from.processor_id)
-                .first()
-                .ok_or_else(|| Error::ProcessorNotFound(from.processor_id.to_string()))?;
-            if !from_node.has_output(&from.port_name) {
-                return Err(Error::ProcessorPortNotFound {
-                    processor_id: from.processor_id.to_string(),
-                    port_name: from.port_name.clone(),
-                    direction: PortDirection::Output,
-                });
+    let (link_id, channel) =
+        compiler.scope(|graph, tx| -> Result<(LinkUniqueId, ChannelName)> {
+            // Validate endpoints + ports FIRST — before the channel-name
+            // derivation — so a missing processor/port reads as the typed
+            // ProcessorNotFound / ProcessorPortNotFound and never gets masked by an
+            // InvalidLink from the wire-name grammar. The `add_e` call still checks
+            // defensively; this pre-validation is what gets the typed error out.
+            // Validate source processor + output port.
+            {
+                let from_node = graph
+                    .traversal()
+                    .v(&from.processor_id)
+                    .first()
+                    .ok_or_else(|| Error::ProcessorNotFound(from.processor_id.to_string()))?;
+                if !from_node.has_output(&from.port_name) {
+                    return Err(Error::ProcessorPortNotFound {
+                        processor_id: from.processor_id.to_string(),
+                        port_name: from.port_name.clone(),
+                        direction: PortDirection::Output,
+                    });
+                }
             }
-        }
-        // Validate target processor + input port.
-        {
-            let to_node = graph
-                .traversal()
-                .v(&to.processor_id)
-                .first()
-                .ok_or_else(|| Error::ProcessorNotFound(to.processor_id.to_string()))?;
-            if !to_node.has_input(&to.port_name) {
-                return Err(Error::ProcessorPortNotFound {
-                    processor_id: to.processor_id.to_string(),
-                    port_name: to.port_name.clone(),
-                    direction: PortDirection::Input,
-                });
+            // Validate target processor + input port.
+            {
+                let to_node = graph
+                    .traversal()
+                    .v(&to.processor_id)
+                    .first()
+                    .ok_or_else(|| Error::ProcessorNotFound(to.processor_id.to_string()))?;
+                if !to_node.has_input(&to.port_name) {
+                    return Err(Error::ProcessorPortNotFound {
+                        processor_id: to.processor_id.to_string(),
+                        port_name: to.port_name.clone(),
+                        direction: PortDirection::Input,
+                    });
+                }
             }
-        }
 
-        // Schema-agreement check at the wiring site: resolve the producer's
-        // output schema and the consumer's input schema from the registry and
-        // compare. A wildcard (`any`) on either side never mismatches; two
-        // concrete-but-unequal schemas warn (loose) or hard-fail (strict).
-        // Runs before `add_e` so a strict rejection rolls the pending link
-        // back rather than committing a mismatched edge. Endpoints are already
-        // validated to exist above.
-        {
+            // Advisory only — never a refusal, never a per-read check (plan:
+            // [data-plane-cast-not-contract]). Resolved here while `from`/`to`
+            // are still borrowable; warned only after `add_e` succeeds, so the
+            // advisory never describes a link that rolled back.
             let producer_schema = resolve_node_port_schema(
                 graph,
                 &from.processor_id,
@@ -246,43 +249,45 @@ async fn connect_impl(
                 &to.port_name,
                 PortDirection::Input,
             );
-            enforce_connect_schema_agreement(
-                &producer_schema,
-                &consumer_schema,
-                validation,
-                ConnectSchemaContext {
-                    from_processor: from.processor_id.as_str(),
-                    from_port: &from.port_name,
-                    to_processor: to.processor_id.as_str(),
-                    to_port: &to.port_name,
-                },
-            )?;
-        }
 
-        // The one channel this link's source output port publishes to — keyed
-        // on the SOURCE only (`{src_processor}/{src_output}`), so every link
-        // from this output port shares one channel / one publisher / N
-        // subscribers (D1, #1419). Endpoints are validated above, so a grammar
-        // failure here is a genuinely-illegal source PORT name (author error),
-        // surfaced as InvalidLink. The processor id is lowercased inside
-        // `source_channel_name`; underscore is legal and rides through. Deriving
-        // inside the transaction means an illegal port name rolls the pending
-        // link back rather than committing a half-built edge.
-        let channel = streamlib_idents::source_channel_name(
-            from.processor_id.as_str(),
-            &from.port_name,
-        )
-        .map_err(|source| Error::InvalidLink(source.to_string()))?;
+            // The one channel this link's source output port publishes to — keyed
+            // on the SOURCE only (`{src_processor}/{src_output}`), so every link
+            // from this output port shares one channel / one publisher / N
+            // subscribers (D1, #1419). Endpoints are validated above, so a grammar
+            // failure here is a genuinely-illegal source PORT name (author error),
+            // surfaced as InvalidLink. The processor id is lowercased inside
+            // `source_channel_name`; underscore is legal and rides through. Deriving
+            // inside the transaction means an illegal port name rolls the pending
+            // link back rather than committing a half-built edge.
+            let channel =
+                streamlib_idents::source_channel_name(from.processor_id.as_str(), &from.port_name)
+                    .map_err(|source| Error::InvalidLink(source.to_string()))?;
 
-        let link_id = graph
-            .traversal_mut()
-            .add_e(from, to)
-            .inspect(|link| tx.log(PendingOperation::AddLink(link.id.clone())))
-            .first()
-            .map(|link| link.id.clone())
-            .ok_or_else(|| Error::GraphError("failed to create link after validation".into()))?;
-        Ok((link_id, channel))
-    })?;
+            let link_id = graph
+                .traversal_mut()
+                .add_e(from, to)
+                .inspect(|link| tx.log(PendingOperation::AddLink(link.id.clone())))
+                .first()
+                .map(|link| link.id.clone())
+                .ok_or_else(|| {
+                    Error::GraphError("failed to create link after validation".into())
+                })?;
+
+            if port_schema_hints_differ(&producer_schema, &consumer_schema) {
+                tracing::warn!(
+                    from_processor = %from_processor,
+                    from_port = %from_port,
+                    to_processor = %to_processor,
+                    to_port = %to_port,
+                    producer_schema = %producer_schema,
+                    consumer_schema = %consumer_schema,
+                    "connect: producer output schema hint does not match consumer \
+                     input schema hint — wiring the link anyway; a real type \
+                     mismatch surfaces as a cast error at the consumer's read."
+                );
+            }
+            Ok((link_id, channel))
+        })?;
 
     tracing::debug!(
         link_id = %link_id,
@@ -390,7 +395,8 @@ impl RuntimeOperations for Runner {
         from: OutputLinkPortRef,
         to: InputLinkPortRef,
     ) -> BoxFuture<'_, Result<LinkUniqueId>> {
-        self.connect_with_async(from, to, ConnectOptions::loose())
+        let compiler = Arc::clone(&self.compiler);
+        Box::pin(connect_impl(compiler, from, to))
     }
 
     fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
@@ -460,7 +466,9 @@ impl RuntimeOperations for Runner {
             })
             .await
             .map_err(|join_error| {
-                Error::Runtime(format!("channel-tap start task failed to join: {join_error}"))
+                Error::Runtime(format!(
+                    "channel-tap start task failed to join: {join_error}"
+                ))
             })?
         })
     }
@@ -479,8 +487,7 @@ impl RuntimeOperations for Runner {
                 // Can't `.await` the borrowing lazy-load future in the spawned
                 // 'static task, so drive lazy discovery to completion here
                 // (blocking) and hand the outcome to the owned add_processor_impl.
-                let lazy_error =
-                    self.lazily_load_provider_for_processor_type_blocking(&spec.name);
+                let lazy_error = self.lazily_load_provider_for_processor_type_blocking(&spec.name);
                 let compiler = Arc::clone(&self.compiler);
                 let (tx, rx) = std::sync::mpsc::channel();
                 handle.spawn(async move {
@@ -513,7 +520,19 @@ impl RuntimeOperations for Runner {
     }
 
     fn connect(&self, from: OutputLinkPortRef, to: InputLinkPortRef) -> Result<LinkUniqueId> {
-        self.connect_with(from, to, ConnectOptions::loose())
+        match &self.tokio_runtime_variant {
+            TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.block_on(self.connect_async(from, to)),
+            TokioRuntimeVariant::ExternalTokioHandle(handle) => {
+                let compiler = Arc::clone(&self.compiler);
+                let (tx, rx) = std::sync::mpsc::channel();
+                handle.spawn(async move {
+                    let result = connect_impl(compiler, from, to).await;
+                    let _ = tx.send(result);
+                });
+                rx.recv()
+                    .map_err(|_| Error::Runtime("Task channel closed".into()))?
+            }
+        }
     }
 
     fn disconnect(&self, link_id: &LinkUniqueId) -> Result<()> {
@@ -552,54 +571,6 @@ impl RuntimeOperations for Runner {
     }
 }
 
-impl Runner {
-    /// Connect two ports under explicit [`ConnectOptions`] — the strict
-    /// schema-validation opt-in for a safety-critical wiring site.
-    ///
-    /// [`connect`](RuntimeOperations::connect) is the loose-but-observed default
-    /// (a concrete producer/consumer schema mismatch warns, then wires the link
-    /// anyway); this threads the caller's posture into the same wiring path, so
-    /// under [`ConnectOptions::strict`] the mismatch instead hard-fails with
-    /// [`Error::SchemaIdentMismatch`] and the link is not wired.
-    pub fn connect_with(
-        &self,
-        from: OutputLinkPortRef,
-        to: InputLinkPortRef,
-        options: ConnectOptions,
-    ) -> Result<LinkUniqueId> {
-        match &self.tokio_runtime_variant {
-            TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.block_on(connect_impl(
-                Arc::clone(&self.compiler),
-                from,
-                to,
-                options.validation,
-            )),
-            TokioRuntimeVariant::ExternalTokioHandle(handle) => {
-                let compiler = Arc::clone(&self.compiler);
-                let (tx, rx) = std::sync::mpsc::channel();
-                handle.spawn(async move {
-                    let result = connect_impl(compiler, from, to, options.validation).await;
-                    let _ = tx.send(result);
-                });
-                rx.recv()
-                    .map_err(|_| Error::Runtime("Task channel closed".into()))?
-            }
-        }
-    }
-
-    /// Async form of [`connect_with`](Self::connect_with) — safe from any
-    /// context, including a tokio task.
-    pub fn connect_with_async(
-        &self,
-        from: OutputLinkPortRef,
-        to: InputLinkPortRef,
-        options: ConnectOptions,
-    ) -> BoxFuture<'_, Result<LinkUniqueId>> {
-        let compiler = Arc::clone(&self.compiler);
-        Box::pin(connect_impl(compiler, from, to, options.validation))
-    }
-}
-
 #[cfg(test)]
 mod channel_wire_bound_tests {
     // The channel-name grammar (streamlib_idents) and the fixed PortKey wire
@@ -629,21 +600,13 @@ mod channel_wire_bound_tests {
 }
 
 #[cfg(test)]
-mod connect_schema_agreement_tests {
-    //! End-to-end connect-path revert lock for the connect-time schema
-    //! agreement check (#1430). Drives [`connect_impl`] against two registered
-    //! processor types whose concrete output / input schemas disagree, and
-    //! asserts the posture-dependent outcome: [`Loose`] warns but still wires
-    //! the link; [`Strict`] rejects it with a typed [`Error::SchemaIdentMismatch`].
-    //!
-    //! Mentally reverting the connect-time `enforce_connect_schema_agreement`
-    //! call in [`connect_impl`] collapses both halves — the Loose warn stops
-    //! firing and Strict stops rejecting — failing this module. The unit tests
-    //! on `enforce_connect_schema_agreement` alone do NOT catch that regression:
-    //! they never exercise the wiring site.
-    //!
-    //! [`Loose`]: SchemaValidationPosture::Loose
-    //! [`Strict`]: SchemaValidationPosture::Strict
+mod connect_advisory_schema_hint_tests {
+    //! Connect-path revert lock for the cast-not-contract data plane
+    //! (`[data-plane-cast-not-contract]`): connect ALWAYS wires. Two concrete,
+    //! tuple-distinct schema hints draw exactly one advisory warn; a wildcard
+    //! on either side and a version-only difference stay silent. Restoring any
+    //! refusal path or a version-sensitive comparison in [`connect_impl`]
+    //! fails this module.
 
     use std::sync::{Arc, Mutex, Once};
 
@@ -652,23 +615,27 @@ mod connect_schema_agreement_tests {
     use tracing_subscriber::Layer;
     use tracing_subscriber::layer::{Context, SubscriberExt};
 
-    use serial_test::serial;
-
     use super::connect_impl;
-    use super::{ConnectOptions, Runner};
-    use crate::core::Error;
+    use crate::core::Result;
     use crate::core::compiler::Compiler;
     use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
-    use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef, ProcessorUniqueId};
+    use crate::core::graph::{
+        InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId,
+    };
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
-    use crate::core::schema_agreement::SchemaValidationPosture;
     use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
     use streamlib_processor_schema::PortSchemaSpec;
 
     const PRODUCER_TYPE: &str = "SchemaMismatchProducer";
     const CONSUMER_TYPE: &str = "SchemaMismatchConsumer";
+    const WILDCARD_PRODUCER_TYPE: &str = "WildcardSchemaProducer";
+    const WILDCARD_CONSUMER_TYPE: &str = "WildcardSchemaConsumer";
     const SENTINEL_PRODUCER_TYPE: &str = "VersionSentinelProducer";
     const VERSIONED_CONSUMER_TYPE: &str = "VersionedSchemaConsumer";
+
+    /// The stable fragment of the advisory warn's message the assertions
+    /// match on, so unrelated WARN events never count.
+    const ADVISORY_WARN_FRAGMENT: &str = "does not match consumer";
 
     fn ident(package: &str, ty: &str) -> SchemaIdent {
         SchemaIdent::new(
@@ -692,29 +659,61 @@ mod connect_schema_agreement_tests {
         ))
     }
 
-    /// Register a producer type (`out` → VideoFrame) and a consumer type
-    /// (`in` → AudioFrame) so any wired producer→consumer link is a concrete
-    /// schema mismatch. Idempotent across tests in the process.
-    fn ensure_mismatch_types_registered() {
+    /// Register a producer type (`out` → VideoFrame), a consumer type
+    /// (`in` → AudioFrame), and wildcard types on both ends (`out`/`in` →
+    /// `Any`), so a producer→consumer link is a concrete tuple-distinct
+    /// pairing and either end of a pairing can be a wildcard. Idempotent
+    /// across tests in the process.
+    fn ensure_hint_types_registered() {
         static REGISTER: Once = Once::new();
         REGISTER.call_once(|| {
             let mut producer =
                 ProcessorDescriptor::new(ident("connectcheck", PRODUCER_TYPE), "mismatch producer");
-            producer
-                .outputs
-                .push(PortDescriptor::iceoryx2("out", "output", schema("VideoFrame")));
+            producer.outputs.push(PortDescriptor::iceoryx2(
+                "out",
+                "output",
+                schema("VideoFrame"),
+            ));
             PROCESSOR_REGISTRY
                 .register_descriptor_only(producer)
                 .expect("register mismatch producer descriptor");
 
             let mut consumer =
                 ProcessorDescriptor::new(ident("connectcheck", CONSUMER_TYPE), "mismatch consumer");
-            consumer
-                .inputs
-                .push(PortDescriptor::iceoryx2("in", "input", schema("AudioFrame")));
+            consumer.inputs.push(PortDescriptor::iceoryx2(
+                "in",
+                "input",
+                schema("AudioFrame"),
+            ));
             PROCESSOR_REGISTRY
                 .register_descriptor_only(consumer)
                 .expect("register mismatch consumer descriptor");
+
+            let mut wildcard_producer = ProcessorDescriptor::new(
+                ident("connectcheck", WILDCARD_PRODUCER_TYPE),
+                "wildcard producer",
+            );
+            wildcard_producer.outputs.push(PortDescriptor::iceoryx2(
+                "out",
+                "output",
+                PortSchemaSpec::Any,
+            ));
+            PROCESSOR_REGISTRY
+                .register_descriptor_only(wildcard_producer)
+                .expect("register wildcard producer descriptor");
+
+            let mut wildcard_consumer = ProcessorDescriptor::new(
+                ident("connectcheck", WILDCARD_CONSUMER_TYPE),
+                "wildcard consumer",
+            );
+            wildcard_consumer.inputs.push(PortDescriptor::iceoryx2(
+                "in",
+                "input",
+                PortSchemaSpec::Any,
+            ));
+            PROCESSOR_REGISTRY
+                .register_descriptor_only(wildcard_consumer)
+                .expect("register wildcard consumer descriptor");
         });
     }
 
@@ -793,21 +792,6 @@ mod connect_schema_agreement_tests {
         )
     }
 
-    /// Fresh compiler holding one producer node and one consumer node, plus the
-    /// wiring refs for their mismatched ports.
-    fn compiler_with_mismatched_pair() -> (Arc<Compiler>, OutputLinkPortRef, InputLinkPortRef) {
-        ensure_mismatch_types_registered();
-        compiler_with_pair(PRODUCER_TYPE, CONSUMER_TYPE)
-    }
-
-    /// Fresh compiler holding the cross-language-shaped pair, plus its wiring
-    /// refs.
-    fn compiler_with_cross_language_pair()
-    -> (Arc<Compiler>, OutputLinkPortRef, InputLinkPortRef) {
-        ensure_cross_language_types_registered();
-        compiler_with_pair(SENTINEL_PRODUCER_TYPE, VERSIONED_CONSUMER_TYPE)
-    }
-
     fn block_on<F: std::future::Future>(fut: F) -> F::Output {
         tokio::runtime::Builder::new_current_thread()
             .build()
@@ -816,9 +800,22 @@ mod connect_schema_agreement_tests {
     }
 
     /// Collects the message of every `WARN`-level tracing event so a test can
-    /// assert the connect-time schema warn actually fired.
+    /// assert the advisory connect warn fired (or stayed silent).
     #[derive(Clone, Default)]
     struct CapturedWarnings(Arc<Mutex<Vec<String>>>);
+
+    impl CapturedWarnings {
+        fn advisory_warn_count(&self) -> usize {
+            self.captured_messages()
+                .iter()
+                .filter(|message| message.contains(ADVISORY_WARN_FRAGMENT))
+                .count()
+        }
+
+        fn captured_messages(&self) -> Vec<String> {
+            self.0.lock().unwrap().clone()
+        }
+    }
 
     struct WarnMessageVisitor<'a>(&'a mut String);
     impl Visit for WarnMessageVisitor<'_> {
@@ -840,202 +837,85 @@ mod connect_schema_agreement_tests {
         }
     }
 
-    #[test]
-    fn loose_connect_warns_but_wires_a_mismatched_link() {
-        let (compiler, from, to) = compiler_with_mismatched_pair();
+    /// Drive [`connect_impl`] over the named pair with WARN capture attached.
+    fn connect_pair_capturing_warns(
+        producer_type: &str,
+        consumer_type: &str,
+    ) -> (Result<LinkUniqueId>, CapturedWarnings) {
+        let (compiler, from, to) = compiler_with_pair(producer_type, consumer_type);
         let warnings = CapturedWarnings::default();
         let subscriber = tracing_subscriber::registry().with(warnings.clone());
-
         let result = tracing::subscriber::with_default(subscriber, || {
-            block_on(connect_impl(
-                compiler,
-                from,
-                to,
-                SchemaValidationPosture::Loose,
-            ))
+            block_on(connect_impl(compiler, from, to))
         });
+        (result, warnings)
+    }
 
-        result.expect("loose posture must wire the mismatched link, not fail");
+    #[test]
+    fn connect_wires_a_tuple_distinct_pair_and_warns_exactly_once() {
+        ensure_hint_types_registered();
+        let (result, warnings) = connect_pair_capturing_warns(PRODUCER_TYPE, CONSUMER_TYPE);
 
-        let captured = warnings.0.lock().unwrap();
-        assert!(
-            captured
-                .iter()
-                .any(|m| m.contains("does not match consumer input")),
-            "loose connect over a concrete producer/consumer schema mismatch must \
-             emit the connect-time warn; captured WARN messages: {captured:?}"
+        result.expect("two concrete, tuple-distinct hints must wire the link, never fail");
+        assert_eq!(
+            warnings.advisory_warn_count(),
+            1,
+            "a concrete tuple-distinct pairing must emit exactly one advisory \
+             warn; captured WARN messages: {:?}",
+            warnings.captured_messages()
         );
     }
 
-    /// Exit-criterion lock for #1654: the cross-language link shape wires
-    /// SILENTLY. A Rust cdylib port stamps the `0.0.0` version-free sentinel
-    /// while its Python/Deno peer carries the schema owner's package version,
-    /// so before the version-blind comparator every wireable Rust→Python link
-    /// in the tree emitted this warn. CI never caught it because it runs
-    /// lib-tests only and never wires a live cross-language pipeline — this
-    /// test is that missing coverage, at the wiring site rather than in a unit
-    /// test of the classifier alone.
-    ///
-    /// Restore the version-sensitive comparison and the warn fires again,
-    /// failing here.
     #[test]
-    fn loose_connect_is_silent_across_the_version_free_sentinel_asymmetry() {
-        let (compiler, from, to) = compiler_with_cross_language_pair();
-        let warnings = CapturedWarnings::default();
-        let subscriber = tracing_subscriber::registry().with(warnings.clone());
+    fn connect_is_silent_when_the_consumer_hint_is_a_wildcard() {
+        ensure_hint_types_registered();
+        let (result, warnings) =
+            connect_pair_capturing_warns(PRODUCER_TYPE, WILDCARD_CONSUMER_TYPE);
 
-        let result = tracing::subscriber::with_default(subscriber, || {
-            block_on(connect_impl(
-                compiler,
-                from,
-                to,
-                SchemaValidationPosture::Loose,
-            ))
-        });
+        result.expect("a wildcard pairing must wire the link");
+        assert_eq!(
+            warnings.advisory_warn_count(),
+            0,
+            "a wildcard consumer end never draws the advisory warn; captured \
+             WARN messages: {:?}",
+            warnings.captured_messages()
+        );
+    }
+
+    #[test]
+    fn connect_is_silent_when_the_producer_hint_is_a_wildcard() {
+        ensure_hint_types_registered();
+        let (result, warnings) =
+            connect_pair_capturing_warns(WILDCARD_PRODUCER_TYPE, CONSUMER_TYPE);
+
+        result.expect("a wildcard pairing must wire the link");
+        assert_eq!(
+            warnings.advisory_warn_count(),
+            0,
+            "a wildcard producer end never draws the advisory warn; captured \
+             WARN messages: {:?}",
+            warnings.captured_messages()
+        );
+    }
+
+    /// Revert lock (#1654): versions never participate. A Rust cdylib port
+    /// stamps the `0.0.0` version-free sentinel while its Python/Deno peer
+    /// carries the schema owner's package version — the same schema, so the
+    /// link wires silently.
+    #[test]
+    fn connect_is_silent_across_the_version_free_sentinel_asymmetry() {
+        ensure_cross_language_types_registered();
+        let (result, warnings) =
+            connect_pair_capturing_warns(SENTINEL_PRODUCER_TYPE, VERSIONED_CONSUMER_TYPE);
 
         result.expect("the cross-language pair must wire");
-
-        let captured = warnings.0.lock().unwrap();
-        assert!(
-            !captured
-                .iter()
-                .any(|m| m.contains("does not match consumer input")),
+        assert_eq!(
+            warnings.advisory_warn_count(),
+            0,
             "a `0.0.0` sentinel producer and a `1.0.0` consumer share a schema \
              identity and must wire without a schema warn; captured WARN \
-             messages: {captured:?}"
+             messages: {:?}",
+            warnings.captured_messages()
         );
-    }
-
-    /// The same cross-language pair must also survive the STRICT posture — the
-    /// version axis is not a mismatch at any posture, so a safety-critical
-    /// channel does not have to choose between strict validation and wiring a
-    /// Python processor.
-    #[test]
-    fn strict_connect_accepts_the_version_free_sentinel_asymmetry() {
-        let (compiler, from, to) = compiler_with_cross_language_pair();
-        block_on(connect_impl(
-            compiler,
-            from,
-            to,
-            SchemaValidationPosture::Strict,
-        ))
-        .expect("strict posture must accept a version-only difference");
-    }
-
-    #[test]
-    fn strict_connect_rejects_a_mismatched_link() {
-        let (compiler, from, to) = compiler_with_mismatched_pair();
-        let err = block_on(connect_impl(
-            compiler,
-            from,
-            to,
-            SchemaValidationPosture::Strict,
-        ))
-        .expect_err("strict posture must reject the mismatched link");
-        assert!(
-            matches!(err, Error::SchemaIdentMismatch { .. }),
-            "strict connect over a concrete schema mismatch must surface \
-             Error::SchemaIdentMismatch; got {err:?}"
-        );
-    }
-
-    /// Criterion-3 revert lock for the *public* strict opt-in: driving the
-    /// `Runner::connect_with` authoring surface with [`ConnectOptions::strict`]
-    /// over a concrete producer/consumer schema mismatch hard-fails with the
-    /// typed [`Error::SchemaIdentMismatch`] and does not wire the link, while
-    /// [`ConnectOptions::loose`] over the same pair still wires it.
-    ///
-    /// Mentally reverting `connect_with` to drop `options.validation` — routing
-    /// through the loose `connect` — makes the strict half return `Ok` and fails
-    /// here. The `connect_impl`-level tests above never exercise the public
-    /// surface, so they don't catch that regression.
-    #[test]
-    #[serial]
-    fn connect_with_strict_rejects_a_mismatched_link_via_the_public_surface() {
-        ensure_mismatch_types_registered();
-        let runtime = Runner::new().expect("runner builds");
-
-        let producer = runtime
-            .add_processor(ProcessorSpec::new(
-                ident("connectcheck", PRODUCER_TYPE),
-                Value::Null,
-            ))
-            .expect("producer node adds");
-        let consumer = runtime
-            .add_processor(ProcessorSpec::new(
-                ident("connectcheck", CONSUMER_TYPE),
-                Value::Null,
-            ))
-            .expect("consumer node adds");
-
-        let err = runtime
-            .connect_with(
-                OutputLinkPortRef::new(producer.clone(), "out"),
-                InputLinkPortRef::new(consumer.clone(), "in"),
-                ConnectOptions::strict(),
-            )
-            .expect_err("strict connect_with must reject the mismatched link");
-        assert!(
-            matches!(err, Error::SchemaIdentMismatch { .. }),
-            "public strict opt-in must surface Error::SchemaIdentMismatch; got {err:?}"
-        );
-
-        runtime
-            .connect_with(
-                OutputLinkPortRef::new(producer, "out"),
-                InputLinkPortRef::new(consumer, "in"),
-                ConnectOptions::loose(),
-            )
-            .expect("loose connect_with over the same pair must still wire the link");
-    }
-
-    /// Async counterpart to
-    /// [`connect_with_strict_rejects_a_mismatched_link_via_the_public_surface`]:
-    /// awaiting `Runner::connect_with_async` from inside a tokio task under
-    /// [`ConnectOptions::strict`] hard-fails a concrete producer/consumer schema
-    /// mismatch with the typed [`Error::SchemaIdentMismatch`] and does not wire
-    /// the link, while [`ConnectOptions::loose`] over the same pair
-    /// still wires it.
-    ///
-    /// Mentally reverting `connect_with_async` to thread a hardcoded `Loose`
-    /// posture instead of `options.validation` makes the strict half return `Ok`
-    /// and fails here — the sync `connect_with` test never drives the async
-    /// opt-in path, so it doesn't catch that regression.
-    #[test]
-    #[serial]
-    fn connect_with_async_strict_rejects_a_mismatched_link_via_the_public_surface() {
-        ensure_mismatch_types_registered();
-        let runtime = Runner::new().expect("runner builds");
-
-        let producer = runtime
-            .add_processor(ProcessorSpec::new(
-                ident("connectcheck", PRODUCER_TYPE),
-                Value::Null,
-            ))
-            .expect("producer node adds");
-        let consumer = runtime
-            .add_processor(ProcessorSpec::new(
-                ident("connectcheck", CONSUMER_TYPE),
-                Value::Null,
-            ))
-            .expect("consumer node adds");
-
-        let err = block_on(runtime.connect_with_async(
-            OutputLinkPortRef::new(producer.clone(), "out"),
-            InputLinkPortRef::new(consumer.clone(), "in"),
-            ConnectOptions::strict(),
-        ))
-        .expect_err("strict connect_with_async must reject the mismatched link");
-        assert!(
-            matches!(err, Error::SchemaIdentMismatch { .. }),
-            "public async strict opt-in must surface Error::SchemaIdentMismatch; got {err:?}"
-        );
-
-        block_on(runtime.connect_with_async(
-            OutputLinkPortRef::new(producer, "out"),
-            InputLinkPortRef::new(consumer, "in"),
-            ConnectOptions::loose(),
-        ))
-        .expect("loose connect_with_async over the same pair must still wire the link");
     }
 }
