@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.10.1](https://github.com/tatolab/streamlib/compare/v0.10.0...v0.10.1) (2026-07-30)
+
+
+### Bug Fixes
+
+* **engine:** back-pressure test releases and joins its blocked publisher instead of wedging the suite ([#1695](https://github.com/tatolab/streamlib/issues/1695)) ([6b93869](https://github.com/tatolab/streamlib/commit/6b938695511b7bcb6cb902d0c2e9541748032352))
+
+## [0.10.0](https://github.com/tatolab/streamlib/compare/v0.9.7...v0.10.0) (2026-07-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** connect always wires — delete the strict/loose posture, advisory warn on differing hints ([#1687](https://github.com/tatolab/streamlib/issues/1687))
+
+### Features
+
+* **engine:** connect always wires — delete the strict/loose posture, advisory warn on differing hints ([#1687](https://github.com/tatolab/streamlib/issues/1687)) ([0113ea2](https://github.com/tatolab/streamlib/commit/0113ea20c037a172276a44f3fa60b18b46b2119e))
+
 ## [0.9.7](https://github.com/tatolab/streamlib/compare/v0.9.6...v0.9.7) (2026-07-29)
 
 

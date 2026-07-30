@@ -8,7 +8,7 @@ never round-tripped back) move together: every DECIDED entry is represented in t
 
 Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an owner decision.
 
-## Product (the MVP sentence) — IN-FLIGHT (→ pypi-packaging)
+## Product (the MVP sentence) — IN-FLIGHT (→ mvp-app-experience, pypi-packaging)
 
 - **DECIDED** — A Python developer on Linux with an NVIDIA GPU installs streamlib from
   PyPI, runs `streamlib new` then `streamlib dev`, sees their camera live in a window
@@ -82,7 +82,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 
 - **OPEN**
 
-## Control plane & observability
+## Control plane & observability — IN-FLIGHT (→ mvp-app-experience)
 
 - **DECIDED** — One control plane: the api-server's HTTP + WebSocket + MCP surface,
   hosted in-process by any runtime that enables it. The MCP tool set is the canonical
