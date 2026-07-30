@@ -84,4 +84,23 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 
 ## Control plane & observability
 
-- **OPEN**
+- **DECIDED** — One control plane: the api-server's HTTP + WebSocket + MCP surface,
+  hosted in-process by any runtime that enables it. The MCP tool set is the canonical
+  control vocabulary; the CLI is a pure JSON-RPC client of it — agents and humans drive
+  the same verbs; REST/WS routes serve the same operations for programmatic clients.
+  [control-plane-one-surface]
+- **DECIDED** — The api-server is engine-side infrastructure and relocates into the
+  `runtime/` tree: it is a host — statically linked, never dlopen'd — and cannot follow
+  the packages tree out of the repo. [control-plane-one-surface]
+- **DECIDED** — One shipped binary (CLI + runtime + build orchestration): `run`/`dev`
+  host the runtime in-process; the standalone streamlib-runtime binary retires. The
+  engine remains an embeddable Rust library for host apps; non-Rust embedding drives a
+  runtime through the client-SDK / control-plane path. [single-binary-launch]
+- **DECIDED** — Node discovery is a per-user on-disk registry — one JSON file per live
+  node in the OS's standard per-user runtime directory — written only by
+  control-plane-hosting runtimes, pruned only when both liveness signals (control
+  round-trip, process check) fail. [control-plane-one-surface]
+- **DECIDED** — Observability: the JSONL log schema is a durable contract; tap forwards
+  bags verbatim, trading completeness for guaranteed non-interference; graph and health
+  inspection ride the same control plane. [control-plane-one-surface]
+- **OPEN** — Auth and remote-access posture.

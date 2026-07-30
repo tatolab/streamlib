@@ -26,6 +26,13 @@ adding the identity label. _Avoid_: "project", "consumer app" (redundant).
 **Bag**: the self-describing msgpack named map a link carries — the schema-free view of
 a payload; consumers cast it to a type at read time. _Avoid_: "message", "envelope".
 
+**Control plane**: the HTTP/WebSocket/MCP surface a runtime hosts for inspection and
+mutation; the CLI and client SDKs are its clients. _Avoid_: "API server" as the concept
+(that is the component hosting it).
+
+**Node**: a live runtime reachable over its control plane; discovered via the per-user
+on-disk registry. _Avoid_: "instance", "server".
+
 **Processor**: the unit of pipeline computation, declared with `#[processor]` and wired
 by ports.
 

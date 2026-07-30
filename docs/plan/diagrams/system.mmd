@@ -4,11 +4,12 @@ flowchart LR
     apps["Example apps"]
   end
 
-  cli["streamlib CLI\n(tools/streamlib-cli)"]
-  engine["Engine runtime\n(runtime/streamlib-engine)"]
+  cli["streamlib — one shipped binary\n(CLI + runtime host + build orchestration)"]
+  ctl["Control plane\n(api-server: HTTP / WS / MCP — engine-side, runtime/)"]
+  engine["Engine runtime\n(runtime/streamlib-engine — embeddable library)"]
   rhi["RHI\n(vulkan/rhi + streamlib-consumer-rhi)"]
   abi["Plugin ABI\n(repr(C), runtime/streamlib-plugin-abi)"]
-  sdk["SDKs\n(Rust / Python / Deno)"]
+  sdk["SDKs\n(Rust / Python / Deno + control-plane client)"]
   pkgsrc["Package source\n(versioned artifacts, never sibling dirs)"]
 
   apps --> sdk
@@ -16,6 +17,7 @@ flowchart LR
   sdk --> abi
   abi --> engine
   engine --> rhi
-  cli --> engine
+  cli --> ctl
+  ctl --> engine
   cli --> pkgsrc
   pkgsrc --> engine
