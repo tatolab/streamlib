@@ -40,7 +40,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **OPEN** — Remaining resolution semantics (lockfile story, upgrade flow, engine-version
   compatibility signaling).
 
-## Processor model & scheduling
+## Processor model & scheduling — IN-FLIGHT (→ schema-agreement-ripout)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). Producer and consumer type declarations are
