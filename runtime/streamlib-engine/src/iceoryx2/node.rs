@@ -557,12 +557,12 @@ mod tests {
                     }
                 }
                 // Buffer is now at `depth`. Signal main and attempt the
-                // (depth+1)th send — this is what the main thread observes
-                // for back-pressure. Success carries the send's elapsed
-                // time so main can prove the send parked through the
-                // observation window rather than merely starting late.
-                let _ = filled_tx.send(());
+                // (depth+1)th send — the test signal. Success carries the
+                // send's elapsed time; the timer starts before the signal
+                // so a parked send's measured duration strictly contains
+                // main's observation window.
                 let observed_send_started_at = Instant::now();
+                let _ = filled_tx.send(());
                 let res = (|| -> std::result::Result<Duration, String> {
                     let sample = publisher
                         .loan_slice_uninit(8)
@@ -575,130 +575,127 @@ mod tests {
             })
             .expect("spawn worker");
 
-        // Every failure defers to the single panic site after the join —
-        // panicking mid-observation would strand the worker parked in a
-        // blocked `send()` owning posix-shm connection state, the exact
-        // suite-wide wedge this test must never cause (#1688).
-        let (back_pressure_contract_failure, worker_reported): (Option<String>, bool) =
-            if filled_rx.recv_timeout(Duration::from_secs(2)).is_err() {
-                (Some("worker did not finish pre-filling within 2s".into()), false)
-            } else {
-                // The (depth+1)th send is the test signal. Back-pressure
-                // honors either of:
-                //   - iceoryx2 Block strategy: send parks, worker delivers
-                //     no result → the 400ms timeout fires, and draining one
-                //     subscriber slot must complete the send.
-                //   - iceoryx2 DiscardSample / explicit PublisherSendError:
-                //     worker delivers Err promptly.
-                // Silent Ok would mean overflow wasn't actually disabled.
-                let observation_window = Duration::from_millis(400);
-                match result_rx.recv_timeout(observation_window) {
-                    Ok(Ok(prompt_send_duration)) => (
-                        Some(format!(
-                            "(depth+1)th publisher.send() completed successfully in \
-                             {prompt_send_duration:?} with enable_safe_overflow(false) — \
-                             back-pressure contract violated: producer must block or \
-                             surface an error, not silently succeed"
-                        )),
-                        true,
-                    ),
-                    Ok(Err(_back_pressure_signal)) => (None, true),
-                    Err(mpsc::RecvTimeoutError::Timeout) => {
-                        match back_pressure_release_subscriber.receive() {
-                            Ok(Some(drained_sample)) => {
-                                // receive() itself frees the queue slot (verified:
-                                // the parked send completes even while the sample
-                                // is held); the early drop returns the payload
-                                // chunk too before the bounded wait.
-                                drop(drained_sample);
-                                match result_rx.recv_timeout(Duration::from_secs(5)) {
-                                    // The worker's timer starts before main's
-                                    // observation window, so a genuinely parked
-                                    // send measures at least the window; a short
-                                    // duration means the send merely started
-                                    // late and never actually back-pressured.
-                                    Ok(Ok(released_send_duration))
-                                        if released_send_duration
-                                            >= observation_window - Duration::from_millis(50) =>
-                                    {
-                                        (None, true)
-                                    }
-                                    Ok(Ok(released_send_duration)) => (
-                                        Some(format!(
-                                            "released send spent only \
-                                             {released_send_duration:?} inside send() — it \
-                                             never parked through the {observation_window:?} \
-                                             observation window, so no back-pressure was \
-                                             demonstrated"
-                                        )),
-                                        true,
-                                    ),
-                                    Ok(Err(e)) => (
-                                        Some(format!(
-                                            "released send failed instead of completing: {e}"
-                                        )),
-                                        true,
-                                    ),
-                                    Err(e) => (
-                                        Some(format!(
-                                            "(depth+1)th send did not complete within 5s of \
-                                             draining a subscriber slot — the block was not \
-                                             buffer-fullness back-pressure: {e:?}"
-                                        )),
-                                        false,
-                                    ),
-                                }
-                            }
-                            Ok(None) => (
-                                Some(
-                                    "buffer was pre-filled to depth yet no sample was \
-                                     queued to drain"
-                                        .into(),
-                                ),
-                                false,
-                            ),
-                            Err(e) => (
-                                Some(format!(
-                                    "draining a sample to release the blocked send \
-                                     failed: {e:?}"
-                                )),
-                                false,
-                            ),
-                        }
-                    }
-                    Err(mpsc::RecvTimeoutError::Disconnected) => (
-                        Some("worker thread exited without reporting a result".into()),
-                        true,
-                    ),
-                }
-            };
+        // Every failure defers past the release pump to the single panic
+        // site after the join — panicking while the worker is parked in a
+        // blocked `send()` would strand posix-shm connection state, the
+        // exact suite-wide wedge this test must never cause (#1688). Only
+        // a worker that stays unreleasable after the pump fails earlier,
+        // at the assert.
+        #[derive(Debug)]
+        enum BackPressureObservation {
+            Honored,
+            ContractFailure(String),
+            WorkerStillParked(String),
+        }
+        use BackPressureObservation::{ContractFailure, Honored, WorkerStillParked};
 
-        // Release pump: on paths where the worker has not provably finished,
-        // keep freeing subscriber slots until it reports or exits, so the
-        // join below is bounded even if a send parked during pre-fill.
-        let mut worker_finished = worker_reported;
-        if !worker_finished {
-            for _ in 0..50 {
-                while let Ok(Some(_drained_sample)) = back_pressure_release_subscriber.receive() {}
-                match result_rx.recv_timeout(Duration::from_millis(100)) {
-                    Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => {
-                        worker_finished = true;
-                        break;
+        const RELEASE_PUMP_ATTEMPTS: u32 = 50;
+        const RELEASE_PUMP_POLL_INTERVAL: Duration = Duration::from_millis(100);
+        const RELEASED_SEND_COMPLETION_WINDOW: Duration = Duration::from_secs(5);
+
+        let observation = if filled_rx.recv_timeout(Duration::from_secs(2)).is_err() {
+            WorkerStillParked("worker did not finish pre-filling within 2s".into())
+        } else {
+            // The (depth+1)th send is the test signal. Back-pressure
+            // honors either of:
+            //   - iceoryx2 Block strategy: send parks, worker delivers
+            //     no result → the 400ms timeout fires, and draining one
+            //     subscriber slot must complete the send.
+            //   - iceoryx2 DiscardSample / explicit PublisherSendError:
+            //     worker delivers Err promptly.
+            // Silent Ok would mean overflow wasn't actually disabled.
+            let observation_window = Duration::from_millis(400);
+            match result_rx.recv_timeout(observation_window) {
+                Ok(Ok(prompt_send_duration)) => ContractFailure(format!(
+                    "(depth+1)th publisher.send() completed successfully in \
+                     {prompt_send_duration:?} with enable_safe_overflow(false) — \
+                     back-pressure contract violated: producer must block or \
+                     surface an error, not silently succeed"
+                )),
+                Ok(Err(_back_pressure_signal)) => Honored,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    match back_pressure_release_subscriber.receive() {
+                        Ok(Some(drained_sample)) => {
+                            // receive() frees the queue slot (verified); the
+                            // drop returns the payload chunk.
+                            drop(drained_sample);
+                            match result_rx.recv_timeout(RELEASED_SEND_COMPLETION_WINDOW) {
+                                // The worker's timer starts before main's
+                                // observation window opens, so a genuinely
+                                // parked send measures at least the full
+                                // window.
+                                Ok(Ok(released_send_duration))
+                                    if released_send_duration >= observation_window =>
+                                {
+                                    Honored
+                                }
+                                Ok(Ok(released_send_duration)) => ContractFailure(format!(
+                                    "released send spent only {released_send_duration:?} \
+                                     inside send() — it never parked through the \
+                                     {observation_window:?} observation window, so no \
+                                     back-pressure was demonstrated"
+                                )),
+                                Ok(Err(e)) => ContractFailure(format!(
+                                    "released send failed instead of completing: {e}"
+                                )),
+                                Err(mpsc::RecvTimeoutError::Disconnected) => ContractFailure(
+                                    "worker thread exited without reporting a result".into(),
+                                ),
+                                Err(mpsc::RecvTimeoutError::Timeout) => WorkerStillParked(format!(
+                                    "(depth+1)th send did not complete within \
+                                     {RELEASED_SEND_COMPLETION_WINDOW:?} of draining a \
+                                     subscriber slot — the block was not \
+                                     buffer-fullness back-pressure"
+                                )),
+                            }
+                        }
+                        Ok(None) => WorkerStillParked(
+                            "buffer was pre-filled to depth yet no sample was queued \
+                             to drain"
+                                .into(),
+                        ),
+                        Err(e) => WorkerStillParked(format!(
+                            "draining a sample to release the blocked send failed: {e:?}"
+                        )),
                     }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    ContractFailure("worker thread exited without reporting a result".into())
+                }
+            }
+        };
+
+        // Bounded release pump: keep freeing subscriber slots until the
+        // worker reports or exits, so the join below cannot park forever
+        // on a still-blocked send — even one parked during pre-fill.
+        let release_pump_frees_worker = || {
+            for _ in 0..RELEASE_PUMP_ATTEMPTS {
+                while let Ok(Some(_drained_sample)) = back_pressure_release_subscriber.receive() {}
+                match result_rx.recv_timeout(RELEASE_PUMP_POLL_INTERVAL) {
+                    Ok(_) | Err(mpsc::RecvTimeoutError::Disconnected) => return true,
                     Err(mpsc::RecvTimeoutError::Timeout) => {}
                 }
             }
-        }
+            false
+        };
+        let worker_finished =
+            !matches!(observation, WorkerStillParked(_)) || release_pump_frees_worker();
         assert!(
             worker_finished,
-            "worker never reported despite 5s of subscriber draining — joining would \
-             wedge the suite, failing loudly instead: {back_pressure_contract_failure:?}",
+            "worker never reported despite {:?} of subscriber draining — joining would \
+             hang this test, so failing loudly instead; expect later iceoryx2 tests in \
+             this binary to be perturbed by the still-parked publisher: {observation:?}",
+            RELEASE_PUMP_POLL_INTERVAL * RELEASE_PUMP_ATTEMPTS,
         );
         let worker_join_result = overflow_test_publisher_thread.join();
-        if let Some(failure) = back_pressure_contract_failure {
-            panic!("{failure}; worker join result: {worker_join_result:?}");
+        match observation {
+            Honored => {
+                worker_join_result.expect("overflow-test-publisher worker must exit cleanly")
+            }
+            ContractFailure(failure) | WorkerStillParked(failure) => {
+                panic!("{failure}; worker join result: {worker_join_result:?}")
+            }
         }
-        worker_join_result.expect("overflow-test-publisher worker must exit cleanly");
     }
 
     /// `Iceoryx2Service` stores the configured ring depth and exposes it
