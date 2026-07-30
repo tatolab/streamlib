@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.10.0](https://github.com/tatolab/streamlib/compare/v0.9.7...v0.10.0) (2026-07-30)
+
+
+### ⚠ BREAKING CHANGES
+
+* **engine:** connect always wires — delete the strict/loose posture, advisory warn on differing hints ([#1687](https://github.com/tatolab/streamlib/issues/1687))
+
+### Features
+
+* **engine:** connect always wires — delete the strict/loose posture, advisory warn on differing hints ([#1687](https://github.com/tatolab/streamlib/issues/1687)) ([0113ea2](https://github.com/tatolab/streamlib/commit/0113ea20c037a172276a44f3fa60b18b46b2119e))
+
 ## [0.9.7](https://github.com/tatolab/streamlib/compare/v0.9.6...v0.9.7) (2026-07-29)
 
 
