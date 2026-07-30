@@ -26,9 +26,9 @@ pub(crate) use module_loader::{
     stage_schema_via_active_cdylib_sink,
 };
 pub use operations::{
-    BoxFuture, ConnectOptions, ProcessorLanguage, RegisterProcessorReceipt, RegisteredPortReceipt,
+    BoxFuture, ProcessorLanguage, RegisterProcessorReceipt, RegisteredPortReceipt,
     RegisteredProcessorReceipt, ReplaceProcessorFromSource, RuntimeOperations,
-    SchemaValidationPosture, SubmittedProcessorSource,
+    SubmittedProcessorSource,
 };
 pub use runtime::Runner;
 #[cfg(test)]
