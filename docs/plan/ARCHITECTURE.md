@@ -42,7 +42,23 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 
 ## Processor model & scheduling
 
-- **OPEN**
+- **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
+  (self-describing msgpack named map). Producer and consumer type declarations are
+  unilateral hints, never compared; consuming is a cast at read time. The engine
+  mediates no schema agreement: connect never refuses a link (advisory log at most),
+  no per-read tag matching, the wire tag is inert observability metadata, and versions
+  never appear at the code layer — resolution-time only. [data-plane-cast-not-contract]
+- **DECIDED** — Channel policy (delivery profile, ring depth, overflow) is declared
+  port-locally at the consuming input port, never carried by schemas; a concretely-typed
+  input port with no declared delivery profile is a wiring error, not a silent default.
+  [data-plane-cast-not-contract]
+- **DECIDED** — Three execution modes (reactive / manual / continuous); one dedicated
+  OS thread per processor with descriptor-driven priority (realtime / high / normal);
+  synchronous lifecycle traits; Full/Limited capability typestate on the phase axis
+  (setup/teardown vs process). [execution-model]
+- **OPEN** — Additional execution flavors to scale processor count (lightweight /
+  green-thread style): intended, do not build until designed; hard constraint — no new
+  configuration dials. [execution-model]
 
 ## Graphics (RHI / GPU)
 
