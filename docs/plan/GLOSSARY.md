@@ -23,6 +23,9 @@ directory.
 `streamlib.lock` and `streamlib_modules/`; carries no manifest. Promotes to a package by
 adding the identity label. _Avoid_: "project", "consumer app" (redundant).
 
+**Bag**: the self-describing msgpack named map a link carries — the schema-free view of
+a payload; consumers cast it to a type at read time. _Avoid_: "message", "envelope".
+
 **Processor**: the unit of pipeline computation, declared with `#[processor]` and wired
 by ports.
 
