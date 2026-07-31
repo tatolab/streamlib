@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.2](https://github.com/tatolab/streamlib/compare/v0.10.1...v0.10.2) (2026-07-31)
+
+
+### Features
+
+* **cli:** run/dev verb skeletons — app.py setup(rt) convention and in-CLI control-plane host ([#1699](https://github.com/tatolab/streamlib/issues/1699)) ([b0ce084](https://github.com/tatolab/streamlib/commit/b0ce0844a4f6f67225ff6b0be730165d8e823841))
+
 ## [0.10.1](https://github.com/tatolab/streamlib/compare/v0.10.0...v0.10.1) (2026-07-30)
 
 
