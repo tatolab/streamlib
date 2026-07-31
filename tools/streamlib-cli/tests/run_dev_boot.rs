@@ -75,7 +75,13 @@ fn http_get_status(port: u16, path: &str) -> Option<u16> {
     let mut buf = Vec::new();
     stream.read_to_end(&mut buf).ok()?;
     let response = String::from_utf8_lossy(&buf);
-    response.lines().next()?.split_whitespace().nth(1)?.parse().ok()
+    response
+        .lines()
+        .next()?
+        .split_whitespace()
+        .nth(1)?
+        .parse()
+        .ok()
 }
 
 /// Poll `/health` across the api-server's bind-retry window until it returns
@@ -130,11 +136,8 @@ fn wait_for_sole_registry_entry(
 /// `setup(rt)`. Harness execution of that function lands with the language
 /// harnesses; boot only requires the file to resolve.
 fn write_minimal_app(app_dir: &Path, entry_file_name: &str) {
-    std::fs::write(
-        app_dir.join(entry_file_name),
-        "def setup(rt):\n    pass\n",
-    )
-    .expect("write app entry");
+    std::fs::write(app_dir.join(entry_file_name), "def setup(rt):\n    pass\n")
+        .expect("write app entry");
 }
 
 /// Spawn `streamlib <verb>` against an isolated home + node registry.
@@ -353,7 +356,10 @@ fn a_missing_explicit_entry_names_the_path_it_tried() {
         .output()
         .expect("spawn streamlib");
 
-    assert!(!output.status.success(), "a nonexistent `-f` target must fail");
+    assert!(
+        !output.status.success(),
+        "a nonexistent `-f` target must fail"
+    );
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         stderr.contains("gone.py"),

@@ -139,10 +139,8 @@ mod tests {
 
     impl TempDirRemovedOnDrop {
         fn new(name: &str) -> Self {
-            let path = std::env::temp_dir().join(format!(
-                "streamlib-run-entry-{name}-{}",
-                std::process::id()
-            ));
+            let path = std::env::temp_dir()
+                .join(format!("streamlib-run-entry-{name}-{}", std::process::id()));
             let _ = std::fs::remove_dir_all(&path);
             std::fs::create_dir_all(&path).expect("create temp dir");
             Self(path)
@@ -169,7 +167,11 @@ mod tests {
     #[test]
     fn no_args_resolves_the_conventional_entry_at_the_anchor() {
         let temp = TempDirRemovedOnDrop::new("conventional");
-        write_file(temp.path(), DEFAULT_APP_ENTRY_FILE_NAME, "def setup(rt):\n    pass\n");
+        write_file(
+            temp.path(),
+            DEFAULT_APP_ENTRY_FILE_NAME,
+            "def setup(rt):\n    pass\n",
+        );
 
         let resolved = resolve_app_entry_file(AppLaunchVerb::Run, temp.path(), None)
             .expect("app.py at the anchor resolves");
@@ -180,7 +182,11 @@ mod tests {
     #[test]
     fn explicit_entry_file_overrides_the_convention() {
         let temp = TempDirRemovedOnDrop::new("override");
-        write_file(temp.path(), DEFAULT_APP_ENTRY_FILE_NAME, "def setup(rt):\n    pass\n");
+        write_file(
+            temp.path(),
+            DEFAULT_APP_ENTRY_FILE_NAME,
+            "def setup(rt):\n    pass\n",
+        );
         write_file(temp.path(), "other.py", "def setup(rt):\n    pass\n");
 
         let resolved =
@@ -245,7 +251,11 @@ mod tests {
     #[test]
     fn resolution_never_walks_up_to_a_parent() {
         let temp = TempDirRemovedOnDrop::new("no-walk-up");
-        write_file(temp.path(), DEFAULT_APP_ENTRY_FILE_NAME, "def setup(rt):\n    pass\n");
+        write_file(
+            temp.path(),
+            DEFAULT_APP_ENTRY_FILE_NAME,
+            "def setup(rt):\n    pass\n",
+        );
         let nested = temp.path().join("nested");
         std::fs::create_dir_all(&nested).expect("create nested dir");
 
