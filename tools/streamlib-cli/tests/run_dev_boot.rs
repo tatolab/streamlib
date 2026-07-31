@@ -186,9 +186,22 @@ fn interrupt(pid: u32) {
 /// callers guard: if entry resolution ever starts walking up, the binary boots
 /// a node and waits for a signal instead of exiting. Killing at the deadline
 /// turns that into a red test rather than a wedged suite.
+///
+/// The isolated home / registry and the ephemeral port matter for exactly that
+/// failing case: the node this must never boot would otherwise land in the
+/// developer's real registry on the default port, and the deadline kill is
+/// SIGKILL, which skips the teardown that would have removed its entry.
 fn run_expecting_prompt_exit(args: &[&str]) -> (std::process::ExitStatus, String) {
+    let home = tempfile::tempdir().expect("create home dir");
+    let xdg = tempfile::tempdir().expect("create xdg dir");
+    let port = free_port().to_string();
+
     let mut child = Command::new(STREAMLIB_BINARY_PATH)
         .args(args)
+        .arg("--port")
+        .arg(&port)
+        .env("STREAMLIB_HOME", home.path())
+        .env("XDG_RUNTIME_DIR", xdg.path())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
@@ -307,14 +320,30 @@ fn assert_hosted_node_keeps_its_jsonl_log(graph_stdout: &[u8], streamlib_home: &
         Path::new(&log_path).starts_with(streamlib_home),
         "the JSONL log `{log_path}` must live under the node's STREAMLIB_HOME"
     );
+
+    // The resolution line is emitted after the Runner exists precisely so it
+    // lands here; moving it back before `Runner::with_auto_build()` silently
+    // drops it on the floor, and this is what notices.
+    let log_body = std::fs::read_to_string(&log_path).expect("read the node's JSONL log");
+    assert!(
+        log_body.contains("Resolved app entry"),
+        "the entry-resolution line must reach the JSONL log — it is emitted with no subscriber \
+         installed if it precedes the Runner; log was:\n{log_body}"
+    );
 }
 
 /// The `log_path` config value of the api-server processor in a graph snapshot.
+///
+/// Anchored on the object that also carries the api-server's `host` + `port` so
+/// an unrelated `log_path` elsewhere in a future graph cannot satisfy this.
 fn find_api_server_log_path(graph: &serde_json::Value) -> Option<String> {
     fn walk(value: &serde_json::Value) -> Option<String> {
         match value {
             serde_json::Value::Object(map) => {
-                if let Some(serde_json::Value::String(log_path)) = map.get("log_path") {
+                let is_api_server_config = map.contains_key("host") && map.contains_key("port");
+                if is_api_server_config
+                    && let Some(serde_json::Value::String(log_path)) = map.get("log_path")
+                {
                     return Some(log_path.clone());
                 }
                 map.values().find_map(walk)

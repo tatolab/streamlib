@@ -878,7 +878,7 @@ mod tests {
                 _ => unreachable!("`{verb}` parses to its own variant"),
             };
             assert_eq!(
-                launch.host, "127.0.0.1",
+                launch.bind_host, "127.0.0.1",
                 "`{verb}` must default to loopback"
             );
         }

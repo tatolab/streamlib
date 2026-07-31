@@ -41,30 +41,38 @@ impl std::fmt::Display for AppLaunchVerb {
 }
 
 /// The command line `run` and `dev` share; both verbs take exactly these.
+///
+/// Field names are the explicit forms the rest of the code uses; the `long =`
+/// flag names are the user-facing contract and stay short.
 #[derive(clap::Args)]
 pub struct AppLaunchCommandArgs {
     /// Entry file to launch, overriding the `app.py` convention.
     #[arg(short = 'f', long = "file", value_name = "FILE")]
-    pub file: Option<PathBuf>,
+    pub entry_file: Option<PathBuf>,
 
     /// App root to resolve the entry file against
     /// (default: current working directory, no walk-up).
-    #[arg(long)]
-    pub dir: Option<PathBuf>,
+    #[arg(long = "dir", value_name = "DIR")]
+    pub anchor_dir: Option<PathBuf>,
 
     /// Host address to bind the control plane to. The default is loopback: the
     /// control plane's mutating routes are open by default, so binding a wider
     /// interface exposes them.
-    #[arg(long, default_value = "127.0.0.1")]
-    pub host: String,
+    #[arg(long = "host", value_name = "HOST", default_value = "127.0.0.1")]
+    pub bind_host: String,
 
     /// Port for the control plane; increments on collision.
-    #[arg(short, long, default_value = "9000")]
-    pub port: u16,
+    #[arg(
+        short = 'p',
+        long = "port",
+        value_name = "PORT",
+        default_value = "9000"
+    )]
+    pub bind_port: u16,
 
     /// Node name published to the registry (auto-generated when omitted).
-    #[arg(long)]
-    pub name: Option<String>,
+    #[arg(long = "name", value_name = "NAME")]
+    pub node_name: Option<String>,
 }
 
 /// Resolve the app root: `--dir` when given, else the exact CWD.
@@ -119,22 +127,24 @@ pub fn resolve_app_entry_file(
 
 /// Boot the app's node and own its run loop until the user interrupts it.
 pub fn launch_app_node(verb: AppLaunchVerb, args: AppLaunchCommandArgs) -> Result<()> {
-    let anchor_dir = resolve_anchor_dir(args.dir)?;
-    let entry_file = resolve_app_entry_file(verb, &anchor_dir, args.file.as_deref())?;
+    let anchor_dir = resolve_anchor_dir(args.anchor_dir)?;
+    let entry_file = resolve_app_entry_file(verb, &anchor_dir, args.entry_file.as_deref())?;
 
+    // Every log line here must follow `Runner` construction: these verbs leave
+    // logging to the runtime, so nothing before this call has a subscriber.
+    let runtime = Runner::with_auto_build()?;
     tracing::info!(
         %verb,
         entry = %entry_file.display(),
         "Resolved app entry"
     );
 
-    let runtime = Runner::with_auto_build()?;
     register_api_server_control_plane_processor_on_runtime(
         &runtime,
         ApiServerControlPlaneHostConfig {
-            bind_host: args.host,
-            bind_port: args.port,
-            node_name: args.name,
+            bind_host: args.bind_host,
+            bind_port: args.bind_port,
+            node_name: args.node_name,
         },
     )?;
 
