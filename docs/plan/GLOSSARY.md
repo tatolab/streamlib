@@ -36,6 +36,18 @@ on-disk registry. _Avoid_: "instance", "server".
 **Processor**: the unit of pipeline computation, declared with `#[processor]` and wired
 by ports.
 
+**Engine primitive**: a hardware capability the engine owns and exposes to packages
+across the plugin ABI — GPU memory import/export, the present target, the audio clock,
+codec sessions. Packages compose primitives; they never reimplement them.
+
+**Present target**: the engine-owned presentation surface minted from a
+package-supplied window handle; the only way frames reach a window.
+
+**Lag by design**: consumers (distributable packages, examples) track the engine only at
+planned upgrade points — upgraded as the final step of a milestone once the runtime is
+proven solid, never continuously mid-development. _Avoid_: reading "lag" as "never
+upgraded", "abandoned".
+
 **The plan**: `docs/plan/ARCHITECTURE.md` plus `docs/plan/diagrams/` — the single source
 of architectural decisions.
 
