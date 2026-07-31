@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::runtime::Runner;
 use streamlib_api_server::control_plane_host::{
-    ApiServerControlPlaneBindConfig, register_api_server_control_plane_processor_on_runtime,
+    ApiServerControlPlaneHostConfig, register_api_server_control_plane_processor_on_runtime,
 };
 
 /// The entry file both verbs resolve when `--file` is not given.
@@ -25,40 +25,55 @@ pub const DEFAULT_APP_ENTRY_FILE_NAME: &str = "app.py";
 
 /// Which verb the user typed. Both boot identically today; the name is what
 /// reaches the logs and the error text.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy)]
 pub enum AppLaunchVerb {
     Run,
     Dev,
 }
 
-impl AppLaunchVerb {
-    fn as_str(self) -> &'static str {
-        match self {
+impl std::fmt::Display for AppLaunchVerb {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
             AppLaunchVerb::Run => "run",
             AppLaunchVerb::Dev => "dev",
-        }
+        })
     }
 }
 
-/// Everything `run` / `dev` take from the command line.
-pub struct AppLaunchArgs {
-    pub verb: AppLaunchVerb,
-    /// Explicit entry file (`-f`), overriding the `app.py` convention.
-    pub entry_file: Option<PathBuf>,
-    /// App root (`--dir`); the exact CWD when absent, never a parent.
-    pub anchor_dir: Option<PathBuf>,
-    pub bind_host: String,
-    pub bind_port: u16,
-    pub node_name: Option<String>,
+/// The command line `run` and `dev` share; both verbs take exactly these.
+#[derive(clap::Args)]
+pub struct AppLaunchCommandArgs {
+    /// Entry file to launch, overriding the `app.py` convention.
+    #[arg(short = 'f', long = "file", value_name = "FILE")]
+    pub file: Option<PathBuf>,
+
+    /// App root to resolve the entry file against
+    /// (default: current working directory, no walk-up).
+    #[arg(long)]
+    pub dir: Option<PathBuf>,
+
+    /// Host address to bind the control plane to. The default is loopback: the
+    /// control plane's mutating routes are open by default, so binding a wider
+    /// interface exposes them.
+    #[arg(long, default_value = "127.0.0.1")]
+    pub host: String,
+
+    /// Port for the control plane; increments on collision.
+    #[arg(short, long, default_value = "9000")]
+    pub port: u16,
+
+    /// Node name published to the registry (auto-generated when omitted).
+    #[arg(long)]
+    pub name: Option<String>,
 }
 
 /// Resolve the app root: `--dir` when given, else the exact CWD.
 ///
 /// No walk-up, deliberately mirroring `streamlib add` — inside a monorepo a
 /// walk-up makes "which app am I in" ambiguous.
-fn resolve_anchor_dir(anchor_dir: Option<&Path>) -> Result<PathBuf> {
+fn resolve_anchor_dir(anchor_dir: Option<PathBuf>) -> Result<PathBuf> {
     match anchor_dir {
-        Some(root) => Ok(root.to_path_buf()),
+        Some(root) => Ok(root),
         None => std::env::current_dir().context("resolve current working directory"),
     }
 }
@@ -81,7 +96,7 @@ pub fn resolve_app_entry_file(
                  Run it from your app root, point at one with `--dir <app-root>`, or name the \
                  entry file with `-f <file>`.",
                 anchor_dir.display(),
-                verb.as_str(),
+                verb,
             );
         }
         return Ok(conventional);
@@ -103,28 +118,30 @@ pub fn resolve_app_entry_file(
 }
 
 /// Boot the app's node and own its run loop until the user interrupts it.
-pub fn launch_app_node(args: AppLaunchArgs) -> Result<()> {
-    let anchor_dir = resolve_anchor_dir(args.anchor_dir.as_deref())?;
-    let entry_file = resolve_app_entry_file(args.verb, &anchor_dir, args.entry_file.as_deref())?;
+pub fn launch_app_node(verb: AppLaunchVerb, args: AppLaunchCommandArgs) -> Result<()> {
+    let anchor_dir = resolve_anchor_dir(args.dir)?;
+    let entry_file = resolve_app_entry_file(verb, &anchor_dir, args.file.as_deref())?;
 
     tracing::info!(
-        verb = args.verb.as_str(),
+        %verb,
         entry = %entry_file.display(),
-        "Starting StreamLib node"
+        "Resolved app entry"
     );
 
     let runtime = Runner::with_auto_build()?;
     register_api_server_control_plane_processor_on_runtime(
         &runtime,
-        ApiServerControlPlaneBindConfig {
-            bind_host: args.bind_host,
-            bind_port: args.bind_port,
-            node_name: args.node_name,
+        ApiServerControlPlaneHostConfig {
+            bind_host: args.host,
+            bind_port: args.port,
+            node_name: args.name,
         },
     )?;
 
     runtime.start()?;
-    tracing::info!("Node ready — `streamlib nodes` lists it. Press Ctrl+C to stop.");
+    tracing::info!(
+        "Node ready with an empty graph — `streamlib nodes` lists it. Press Ctrl+C to stop."
+    );
     runtime.wait_for_signal()?;
 
     Ok(())
@@ -133,29 +150,6 @@ pub fn launch_app_node(args: AppLaunchArgs) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A temp dir that removes itself when the test ends.
-    struct TempDirRemovedOnDrop(PathBuf);
-
-    impl TempDirRemovedOnDrop {
-        fn new(name: &str) -> Self {
-            let path = std::env::temp_dir()
-                .join(format!("streamlib-run-entry-{name}-{}", std::process::id()));
-            let _ = std::fs::remove_dir_all(&path);
-            std::fs::create_dir_all(&path).expect("create temp dir");
-            Self(path)
-        }
-
-        fn path(&self) -> &Path {
-            &self.0
-        }
-    }
-
-    impl Drop for TempDirRemovedOnDrop {
-        fn drop(&mut self) {
-            let _ = std::fs::remove_dir_all(&self.0);
-        }
-    }
 
     fn write_file(dir: &Path, name: &str, contents: &str) {
         if let Some(parent) = Path::new(name).parent() {
@@ -166,7 +160,7 @@ mod tests {
 
     #[test]
     fn no_args_resolves_the_conventional_entry_at_the_anchor() {
-        let temp = TempDirRemovedOnDrop::new("conventional");
+        let temp = tempfile::tempdir().expect("create temp dir");
         write_file(
             temp.path(),
             DEFAULT_APP_ENTRY_FILE_NAME,
@@ -181,7 +175,7 @@ mod tests {
 
     #[test]
     fn explicit_entry_file_overrides_the_convention() {
-        let temp = TempDirRemovedOnDrop::new("override");
+        let temp = tempfile::tempdir().expect("create temp dir");
         write_file(
             temp.path(),
             DEFAULT_APP_ENTRY_FILE_NAME,
@@ -198,7 +192,7 @@ mod tests {
 
     #[test]
     fn explicit_entry_file_may_be_absolute() {
-        let temp = TempDirRemovedOnDrop::new("absolute");
+        let temp = tempfile::tempdir().expect("create temp dir");
         write_file(temp.path(), "elsewhere.py", "def setup(rt):\n    pass\n");
         let absolute = temp.path().join("elsewhere.py");
 
@@ -210,7 +204,7 @@ mod tests {
 
     #[test]
     fn a_missing_conventional_entry_names_the_convention_and_the_anchor() {
-        let temp = TempDirRemovedOnDrop::new("missing");
+        let temp = tempfile::tempdir().expect("create temp dir");
 
         let error = resolve_app_entry_file(AppLaunchVerb::Dev, temp.path(), None)
             .expect_err("an empty anchor has no entry");
@@ -236,7 +230,7 @@ mod tests {
 
     #[test]
     fn a_missing_explicit_entry_names_the_path_it_tried() {
-        let temp = TempDirRemovedOnDrop::new("missing-explicit");
+        let temp = tempfile::tempdir().expect("create temp dir");
 
         let error =
             resolve_app_entry_file(AppLaunchVerb::Run, temp.path(), Some(Path::new("gone.py")))
@@ -250,7 +244,7 @@ mod tests {
 
     #[test]
     fn resolution_never_walks_up_to_a_parent() {
-        let temp = TempDirRemovedOnDrop::new("no-walk-up");
+        let temp = tempfile::tempdir().expect("create temp dir");
         write_file(
             temp.path(),
             DEFAULT_APP_ENTRY_FILE_NAME,
@@ -270,7 +264,7 @@ mod tests {
 
     #[test]
     fn a_directory_named_like_the_entry_is_not_an_entry() {
-        let temp = TempDirRemovedOnDrop::new("dir-not-file");
+        let temp = tempfile::tempdir().expect("create temp dir");
         std::fs::create_dir_all(temp.path().join(DEFAULT_APP_ENTRY_FILE_NAME))
             .expect("create dir shadowing the entry name");
 
@@ -287,10 +281,10 @@ mod tests {
 
     #[test]
     fn the_anchor_is_the_dir_flag_when_given() {
-        let temp = TempDirRemovedOnDrop::new("anchor-flag");
+        let temp = tempfile::tempdir().expect("create temp dir");
 
         assert_eq!(
-            resolve_anchor_dir(Some(temp.path())).expect("anchor resolves"),
+            resolve_anchor_dir(Some(temp.path().to_path_buf())).expect("anchor resolves"),
             temp.path(),
         );
     }

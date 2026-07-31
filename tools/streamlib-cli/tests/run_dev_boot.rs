@@ -5,17 +5,17 @@
 //!
 //! These drive the real `streamlib` binary end to end: it must resolve the
 //! app's entry file, boot a node carrying the statically-linked api-server,
-//! publish a node-registry entry that `streamlib nodes` can discover, and
-//! remove that entry on clean teardown.
+//! publish a node-registry entry that `streamlib nodes` can discover, keep the
+//! JSONL log the observability contract promises, and remove the entry on clean
+//! teardown.
 //!
 //! Booting initializes the full runtime (GPU init included) and binds a real
-//! socket, so the boot tests are local integration tests — the workspace CI
-//! runs `cargo test --lib`, which does not pick up `tests/`. The
-//! entry-resolution failure tests below need no rig: the binary exits before
-//! it builds a runtime.
+//! socket, matching `runtime/streamlib-runtime/tests/boot.rs`, which boots the
+//! same runtime and is likewise not gated. CI runs `cargo test --lib` and so
+//! picks up neither file.
 
-use std::io::{Read, Write};
-use std::net::{TcpListener, TcpStream};
+use std::io::Read;
+use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -23,35 +23,27 @@ use std::time::{Duration, Instant};
 mod cli_integration_support;
 use cli_integration_support::STREAMLIB_BINARY_PATH;
 
-/// Kills the spawned node when the test ends (pass or panic).
-struct ChildGuard(Child);
+/// How long a resolution-failure invocation may take before the test treats it
+/// as wedged. These exit before any runtime is built, so this is generous.
+const RESOLUTION_FAILURE_DEADLINE: Duration = Duration::from_secs(30);
 
-impl Drop for ChildGuard {
+/// Kills the spawned node when the test ends (pass or panic).
+struct SpawnedNodeKilledOnDrop(Child);
+
+impl SpawnedNodeKilledOnDrop {
+    fn process_id(&self) -> u32 {
+        self.0.id()
+    }
+
+    fn wait_for_exit(&mut self) -> std::process::ExitStatus {
+        self.0.wait().expect("wait for the node to exit")
+    }
+}
+
+impl Drop for SpawnedNodeKilledOnDrop {
     fn drop(&mut self) {
         let _ = self.0.kill();
         let _ = self.0.wait();
-    }
-}
-
-/// A temp dir tree that removes itself when the test ends.
-struct TempTreeRemovedOnDrop(PathBuf);
-
-impl TempTreeRemovedOnDrop {
-    fn new(name: &str, discriminator: u16) -> Self {
-        let path = std::env::temp_dir().join(format!("streamlib-run-boot-{name}-{discriminator}"));
-        let _ = std::fs::remove_dir_all(&path);
-        std::fs::create_dir_all(&path).expect("create temp tree");
-        Self(path)
-    }
-
-    fn path(&self) -> &Path {
-        &self.0
-    }
-}
-
-impl Drop for TempTreeRemovedOnDrop {
-    fn drop(&mut self) {
-        let _ = std::fs::remove_dir_all(&self.0);
     }
 }
 
@@ -65,23 +57,19 @@ fn free_port() -> u16 {
     port
 }
 
-/// Issue a bare HTTP/1.1 GET and return the numeric status code, or `None` if
-/// the connection/parse failed. Raw TCP keeps the test dependency-free.
+/// The HTTP status of a GET against the node, or `None` when the connection
+/// failed. `ureq` is already a dependency of this crate (the `mcp --attach`
+/// client), and its timeouts keep a silent socket from wedging a poll loop.
 fn http_get_status(port: u16, path: &str) -> Option<u16> {
-    let mut stream = TcpStream::connect(("127.0.0.1", port)).ok()?;
-    stream.set_read_timeout(Some(Duration::from_secs(5))).ok()?;
-    let request = format!("GET {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
-    stream.write_all(request.as_bytes()).ok()?;
-    let mut buf = Vec::new();
-    stream.read_to_end(&mut buf).ok()?;
-    let response = String::from_utf8_lossy(&buf);
-    response
-        .lines()
-        .next()?
-        .split_whitespace()
-        .nth(1)?
-        .parse()
-        .ok()
+    let agent = ureq::AgentBuilder::new()
+        .timeout_connect(Duration::from_secs(2))
+        .timeout(Duration::from_secs(5))
+        .build();
+    match agent.get(&format!("http://127.0.0.1:{port}{path}")).call() {
+        Ok(response) => Some(response.status()),
+        Err(ureq::Error::Status(code, _)) => Some(code),
+        Err(_) => None,
+    }
 }
 
 /// Poll `/health` across the api-server's bind-retry window until it returns
@@ -100,6 +88,11 @@ fn wait_for_health(base_port: u16, timeout: Duration) -> Option<u16> {
 }
 
 /// Every `*.json` node-registry entry under an isolated `XDG_RUNTIME_DIR`.
+///
+/// The layout is re-derived rather than read from
+/// `node_registry::registry_dir()` on purpose: that resolver reads *this*
+/// process's `XDG_RUNTIME_DIR`, not the spawned child's, so calling it would
+/// force a process-global env mutation and break isolation under parallelism.
 fn registry_entry_paths(xdg_runtime_dir: &Path) -> Vec<PathBuf> {
     let nodes_dir = xdg_runtime_dir.join("streamlib").join("nodes");
     let Ok(entries) = std::fs::read_dir(&nodes_dir) else {
@@ -148,8 +141,8 @@ fn spawn_app_node(
     streamlib_home: &Path,
     xdg_runtime_dir: &Path,
     extra_args: &[&str],
-) -> Child {
-    Command::new(STREAMLIB_BINARY_PATH)
+) -> SpawnedNodeKilledOnDrop {
+    let child = Command::new(STREAMLIB_BINARY_PATH)
         .arg(verb)
         .arg("--dir")
         .arg(app_dir)
@@ -163,7 +156,8 @@ fn spawn_app_node(
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .expect("spawn streamlib")
+        .expect("spawn streamlib");
+    SpawnedNodeKilledOnDrop(child)
 }
 
 /// Run a control verb against the isolated registry and return its output.
@@ -185,25 +179,60 @@ fn interrupt(pid: u32) {
     assert!(status.success(), "SIGINT delivery to pid {pid} failed");
 }
 
-/// Boot a node with `verb`, assert it is discoverable, then interrupt it and
-/// assert the registry entry is gone.
+/// Run `streamlib` with `args` and require it to exit within
+/// [`RESOLUTION_FAILURE_DEADLINE`], returning its exit status and stderr.
+///
+/// A plain `Command::output()` would block forever on the very regression these
+/// callers guard: if entry resolution ever starts walking up, the binary boots
+/// a node and waits for a signal instead of exiting. Killing at the deadline
+/// turns that into a red test rather than a wedged suite.
+fn run_expecting_prompt_exit(args: &[&str]) -> (std::process::ExitStatus, String) {
+    let mut child = Command::new(STREAMLIB_BINARY_PATH)
+        .args(args)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn streamlib");
+
+    let deadline = Instant::now() + RESOLUTION_FAILURE_DEADLINE;
+    let status = loop {
+        match child.try_wait().expect("poll streamlib") {
+            Some(status) => break status,
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!(
+                    "`streamlib {}` did not exit within {RESOLUTION_FAILURE_DEADLINE:?} — \
+                     entry resolution booted a node instead of failing",
+                    args.join(" "),
+                );
+            }
+            None => std::thread::sleep(Duration::from_millis(50)),
+        }
+    };
+
+    let mut stderr = String::new();
+    if let Some(mut pipe) = child.stderr.take() {
+        let _ = pipe.read_to_string(&mut stderr);
+    }
+    (status, stderr)
+}
+
+/// Boot a node with `verb`, assert it is a first-class runtime host, then
+/// interrupt it and assert the registry entry is gone.
 fn assert_verb_boots_registers_and_tears_down(verb: &str) {
+    let app = tempfile::tempdir().expect("create app dir");
+    let home = tempfile::tempdir().expect("create home dir");
+    let xdg = tempfile::tempdir().expect("create xdg dir");
     let port = free_port();
-    let app = TempTreeRemovedOnDrop::new(&format!("{verb}-app"), port);
-    let home = TempTreeRemovedOnDrop::new(&format!("{verb}-home"), port);
-    let xdg = TempTreeRemovedOnDrop::new(&format!("{verb}-xdg"), port);
     write_minimal_app(app.path(), "app.py");
 
-    let child = spawn_app_node(verb, app.path(), port, home.path(), xdg.path(), &[]);
-    let pid = child.id();
-    let mut guard = ChildGuard(child);
+    let mut node = spawn_app_node(verb, app.path(), port, home.path(), xdg.path(), &[]);
+    let pid = node.process_id();
 
     // Boot is process start + GPU init + socket bind; allow a generous window.
-    let served = wait_for_health(port, Duration::from_secs(60));
-    assert!(
-        served.is_some(),
-        "`streamlib {verb}` should boot a node serving /health"
-    );
+    let served_port = wait_for_health(port, Duration::from_secs(60))
+        .unwrap_or_else(|| panic!("`streamlib {verb}` should boot a node serving /health"));
 
     let entry = wait_for_sole_registry_entry(xdg.path(), Duration::from_secs(10))
         .unwrap_or_else(|| panic!("`streamlib {verb}` should publish one node-registry entry"));
@@ -214,7 +243,7 @@ fn assert_verb_boots_registers_and_tears_down(verb: &str) {
     );
     assert_eq!(
         entry["control_url"].as_str(),
-        Some(format!("http://127.0.0.1:{}", served.unwrap()).as_str()),
+        Some(format!("http://127.0.0.1:{served_port}").as_str()),
         "the entry must carry the reachable control URL"
     );
 
@@ -237,8 +266,10 @@ fn assert_verb_boots_registers_and_tears_down(verb: &str) {
         String::from_utf8_lossy(&graph.stderr)
     );
 
+    assert_hosted_node_keeps_its_jsonl_log(&graph.stdout, home.path(), verb);
+
     interrupt(pid);
-    let exited = guard.0.wait().expect("wait for the node to exit");
+    let exited = node.wait_for_exit();
     assert!(
         exited.success(),
         "`streamlib {verb}` should exit cleanly on SIGINT, got {exited}"
@@ -250,28 +281,70 @@ fn assert_verb_boots_registers_and_tears_down(verb: &str) {
     );
 }
 
+/// A CLI-hosted node must be as observable as a `streamlib-runtime`-hosted one:
+/// the api-server carries a `log_path` and that JSONL file exists.
+///
+/// `logging::init` is first-caller-wins, so a CLI that initialized its own
+/// short-lived logging before building the `Runner` would silently demote the
+/// runtime's init to a noop guard and leave `jsonl_log_path()` empty. This is
+/// the lock on that regression.
+fn assert_hosted_node_keeps_its_jsonl_log(graph_stdout: &[u8], streamlib_home: &Path, verb: &str) {
+    let graph: serde_json::Value =
+        serde_json::from_slice(graph_stdout).expect("`streamlib graph` should emit JSON");
+
+    let log_path = find_api_server_log_path(&graph).unwrap_or_else(|| {
+        panic!(
+            "`streamlib {verb}` must pass the runtime's JSONL log path to the api-server; \
+             graph was:\n{graph:#}"
+        )
+    });
+
+    assert!(
+        Path::new(&log_path).is_file(),
+        "the api-server's log_path `{log_path}` must exist on disk"
+    );
+    assert!(
+        Path::new(&log_path).starts_with(streamlib_home),
+        "the JSONL log `{log_path}` must live under the node's STREAMLIB_HOME"
+    );
+}
+
+/// The `log_path` config value of the api-server processor in a graph snapshot.
+fn find_api_server_log_path(graph: &serde_json::Value) -> Option<String> {
+    fn walk(value: &serde_json::Value) -> Option<String> {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::String(log_path)) = map.get("log_path") {
+                    return Some(log_path.clone());
+                }
+                map.values().find_map(walk)
+            }
+            serde_json::Value::Array(items) => items.iter().find_map(walk),
+            _ => None,
+        }
+    }
+    walk(graph)
+}
+
 #[test]
-#[ignore = "boots a full runtime (GPU init + socket bind) — needs the local rig"]
 fn run_boots_a_discoverable_node_and_tears_it_down_on_interrupt() {
     assert_verb_boots_registers_and_tears_down("run");
 }
 
 #[test]
-#[ignore = "boots a full runtime (GPU init + socket bind) — needs the local rig"]
 fn dev_shares_the_same_resolution_and_boot_path_as_run() {
     assert_verb_boots_registers_and_tears_down("dev");
 }
 
 #[test]
-#[ignore = "boots a full runtime (GPU init + socket bind) — needs the local rig"]
 fn an_explicit_entry_file_boots_a_node_when_the_convention_is_absent() {
+    let app = tempfile::tempdir().expect("create app dir");
+    let home = tempfile::tempdir().expect("create home dir");
+    let xdg = tempfile::tempdir().expect("create xdg dir");
     let port = free_port();
-    let app = TempTreeRemovedOnDrop::new("explicit-app", port);
-    let home = TempTreeRemovedOnDrop::new("explicit-home", port);
-    let xdg = TempTreeRemovedOnDrop::new("explicit-xdg", port);
     write_minimal_app(app.path(), "other.py");
 
-    let child = spawn_app_node(
+    let mut node = spawn_app_node(
         "run",
         app.path(),
         port,
@@ -279,8 +352,7 @@ fn an_explicit_entry_file_boots_a_node_when_the_convention_is_absent() {
         xdg.path(),
         &["-f", "other.py"],
     );
-    let pid = child.id();
-    let mut guard = ChildGuard(child);
+    let pid = node.process_id();
 
     assert!(
         wait_for_health(port, Duration::from_secs(60)).is_some(),
@@ -288,26 +360,21 @@ fn an_explicit_entry_file_boots_a_node_when_the_convention_is_absent() {
     );
 
     interrupt(pid);
-    let _ = guard.0.wait();
+    node.wait_for_exit();
 }
 
 #[test]
 fn a_missing_conventional_entry_fails_before_any_runtime_is_built() {
-    let app = TempTreeRemovedOnDrop::new("no-entry", free_port());
+    let app = tempfile::tempdir().expect("create app dir");
+    let anchor = app.path().display().to_string();
 
     for verb in ["run", "dev"] {
-        let output = Command::new(STREAMLIB_BINARY_PATH)
-            .arg(verb)
-            .arg("--dir")
-            .arg(app.path())
-            .output()
-            .expect("spawn streamlib");
+        let (status, stderr) = run_expecting_prompt_exit(&[verb, "--dir", &anchor]);
 
         assert!(
-            !output.status.success(),
+            !status.success(),
             "`streamlib {verb}` in an entry-less dir must fail"
         );
-        let stderr = String::from_utf8_lossy(&output.stderr);
         assert!(
             stderr.contains("app.py"),
             "the error must name the convention; stderr was:\n{stderr}"
@@ -317,7 +384,7 @@ fn a_missing_conventional_entry_fails_before_any_runtime_is_built() {
             "the error must state the no-walk-up rule; stderr was:\n{stderr}"
         );
         assert!(
-            stderr.contains(&app.path().display().to_string()),
+            stderr.contains(&anchor),
             "the error must name the anchor it searched; stderr was:\n{stderr}"
         );
     }
@@ -325,42 +392,36 @@ fn a_missing_conventional_entry_fails_before_any_runtime_is_built() {
 
 #[test]
 fn a_parent_directorys_entry_is_never_adopted() {
-    let app = TempTreeRemovedOnDrop::new("walk-up", free_port());
+    let app = tempfile::tempdir().expect("create app dir");
     write_minimal_app(app.path(), "app.py");
     let nested = app.path().join("nested");
     std::fs::create_dir_all(&nested).expect("create nested dir");
+    let nested_anchor = nested.display().to_string();
 
-    let output = Command::new(STREAMLIB_BINARY_PATH)
-        .arg("run")
-        .arg("--dir")
-        .arg(&nested)
-        .output()
-        .expect("spawn streamlib");
+    let (status, stderr) = run_expecting_prompt_exit(&["run", "--dir", &nested_anchor]);
 
     assert!(
-        !output.status.success(),
+        !status.success(),
         "a parent's app.py must not be adopted by a nested anchor"
+    );
+    assert!(
+        stderr.contains("never searches parent directories"),
+        "the failure must be the no-walk-up rule, not an unrelated error; stderr was:\n{stderr}"
+    );
+    assert!(
+        stderr.contains(&nested_anchor),
+        "the error must name the nested anchor, not the parent; stderr was:\n{stderr}"
     );
 }
 
 #[test]
 fn a_missing_explicit_entry_names_the_path_it_tried() {
-    let app = TempTreeRemovedOnDrop::new("missing-explicit", free_port());
+    let app = tempfile::tempdir().expect("create app dir");
+    let anchor = app.path().display().to_string();
 
-    let output = Command::new(STREAMLIB_BINARY_PATH)
-        .arg("run")
-        .arg("--dir")
-        .arg(app.path())
-        .arg("-f")
-        .arg("gone.py")
-        .output()
-        .expect("spawn streamlib");
+    let (status, stderr) = run_expecting_prompt_exit(&["run", "--dir", &anchor, "-f", "gone.py"]);
 
-    assert!(
-        !output.status.success(),
-        "a nonexistent `-f` target must fail"
-    );
-    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!status.success(), "a nonexistent `-f` target must fail");
     assert!(
         stderr.contains("gone.py"),
         "the error must name the path it tried; stderr was:\n{stderr}"

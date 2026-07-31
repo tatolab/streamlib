@@ -19,7 +19,7 @@ use clap::Parser;
 use streamlib::sdk::RunnerAutoBuild;
 use streamlib::sdk::runtime::Runner;
 use streamlib_api_server::control_plane_host::{
-    ApiServerControlPlaneBindConfig, register_api_server_control_plane_processor_on_runtime,
+    ApiServerControlPlaneHostConfig, register_api_server_control_plane_processor_on_runtime,
 };
 
 #[derive(Parser)]
@@ -74,8 +74,8 @@ async fn run(args: Args) -> Result<()> {
     // `PROCESSOR_REGISTRY`.
     register_api_server_control_plane_processor_on_runtime(
         &runtime,
-        ApiServerControlPlaneBindConfig {
-            bind_host: args.host.clone(),
+        ApiServerControlPlaneHostConfig {
+            bind_host: args.host,
             bind_port: args.port,
             node_name: args.name,
         },

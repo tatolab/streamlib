@@ -11,8 +11,8 @@ use streamlib::sdk::processor_type_ref;
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
 
-/// Where a host binary binds the control plane it hosts.
-pub struct ApiServerControlPlaneBindConfig {
+/// How a host binary stands up the control plane it hosts.
+pub struct ApiServerControlPlaneHostConfig {
     /// Address the HTTP listener binds.
     pub bind_host: String,
     /// Requested port; the api-server increments on collision.
@@ -27,7 +27,7 @@ pub struct ApiServerControlPlaneBindConfig {
 /// publishes the node-registry entry `streamlib nodes` discovers.
 pub fn register_api_server_control_plane_processor_on_runtime(
     runtime: &Runner,
-    config: ApiServerControlPlaneBindConfig,
+    config: ApiServerControlPlaneHostConfig,
 ) -> Result<()> {
     // A host, not a loadable plugin: the type is statically linked into the
     // caller and registered on the shared registry rather than dlopen'd.
