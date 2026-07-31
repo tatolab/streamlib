@@ -12,9 +12,9 @@ publish = false
 # checkout (the linked checkout is the package source; there is no central
 # package registry).
 [dependencies]
-streamlib = { version = "0.10.1" }
-streamlib-adapter-abi = { version = "0.10.1" }
-streamlib-adapter-cuda = { version = "0.10.1" }
+streamlib = { version = "0.10.2" }
+streamlib-adapter-abi = { version = "0.10.2" }
+streamlib-adapter-cuda = { version = "0.10.2" }
 serde_json = "1.0"
 
 [workspace]
