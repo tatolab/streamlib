@@ -7,6 +7,7 @@ pub mod _generated_ {
 }
 
 mod auth;
+pub mod control_plane_host;
 mod handlers;
 mod mcp;
 pub mod node_registry;

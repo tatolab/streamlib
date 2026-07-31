@@ -23,6 +23,61 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
+    /// Boot this app as a StreamLib node, hosting the control plane in-process.
+    ///
+    /// Reads `app.py` from the anchor directory — `--dir` when given, else the
+    /// exact CWD, never a parent — or the file named by `-f`. The node
+    /// publishes a node-registry entry, so `streamlib nodes`, `graph`, and
+    /// `tap` drive it. Runs until interrupted.
+    Run {
+        /// Entry file to launch, overriding the `app.py` convention.
+        #[arg(short = 'f', long = "file", value_name = "FILE")]
+        file: Option<PathBuf>,
+
+        /// App root to resolve the entry file against
+        /// (default: current working directory, no walk-up).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+
+        /// Host address to bind the control plane to.
+        #[arg(long, default_value = "0.0.0.0")]
+        host: String,
+
+        /// Port for the control plane; increments on collision.
+        #[arg(short, long, default_value = "9000")]
+        port: u16,
+
+        /// Node name published to the registry (auto-generated when omitted).
+        #[arg(long)]
+        name: Option<String>,
+    },
+
+    /// Boot this app as a StreamLib node for development.
+    ///
+    /// Same entry resolution and in-process control plane as `run`.
+    Dev {
+        /// Entry file to launch, overriding the `app.py` convention.
+        #[arg(short = 'f', long = "file", value_name = "FILE")]
+        file: Option<PathBuf>,
+
+        /// App root to resolve the entry file against
+        /// (default: current working directory, no walk-up).
+        #[arg(long)]
+        dir: Option<PathBuf>,
+
+        /// Host address to bind the control plane to.
+        #[arg(long, default_value = "0.0.0.0")]
+        host: String,
+
+        /// Port for the control plane; increments on collision.
+        #[arg(short, long, default_value = "9000")]
+        port: u16,
+
+        /// Node name published to the registry (auto-generated when omitted).
+        #[arg(long)]
+        name: Option<String>,
+    },
+
     /// Stream a runtime's on-disk JSONL log file in pretty format, or — with
     /// `--url` — collect a bounded sample of a running node's live event stream
     /// via its control plane.
@@ -591,6 +646,34 @@ async fn async_main(cli: Cli) -> Result<()> {
             })
             .await?
         }
+        Some(Commands::Run {
+            file,
+            dir,
+            host,
+            port,
+            name,
+        }) => commands::run::launch_app_node(commands::run::AppLaunchArgs {
+            verb: commands::run::AppLaunchVerb::Run,
+            entry_file: file,
+            anchor_dir: dir,
+            bind_host: host,
+            bind_port: port,
+            node_name: name,
+        })?,
+        Some(Commands::Dev {
+            file,
+            dir,
+            host,
+            port,
+            name,
+        }) => commands::run::launch_app_node(commands::run::AppLaunchArgs {
+            verb: commands::run::AppLaunchVerb::Dev,
+            entry_file: file,
+            anchor_dir: dir,
+            bind_host: host,
+            bind_port: port,
+            node_name: name,
+        })?,
         Some(Commands::Mcp { attach }) => commands::mcp::run(attach).await?,
         Some(Commands::Nodes) => commands::nodes::run()?,
         Some(Commands::Graph { url, node }) => {

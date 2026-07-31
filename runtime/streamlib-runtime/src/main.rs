@@ -17,9 +17,10 @@ use std::path::PathBuf;
 use anyhow::Result;
 use clap::Parser;
 use streamlib::sdk::RunnerAutoBuild;
-use streamlib::sdk::processor_type_ref;
-use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
+use streamlib_api_server::control_plane_host::{
+    ApiServerControlPlaneBindConfig, register_api_server_control_plane_processor_on_runtime,
+};
 
 #[derive(Parser)]
 #[command(name = "streamlib-runtime")]
@@ -70,27 +71,15 @@ async fn run(args: Args) -> Result<()> {
     // Seed the core module set. The API server is the always-present
     // control plane — a host, not a loadable plugin — so it is statically
     // linked into this binary and registered in-process on the shared
-    // `PROCESSOR_REGISTRY`. This registers the `ApiServer` processor type;
-    // the instance is added below.
-    PROCESSOR_REGISTRY.register::<streamlib_api_server::ApiServerProcessor::Processor>();
-
-    let log_path = runtime
-        .jsonl_log_path()
-        .map(|p| p.to_string_lossy().into_owned());
-
-    let mut api_config = serde_json::Map::new();
-    api_config.insert("host".into(), serde_json::Value::from(args.host.clone()));
-    api_config.insert("port".into(), serde_json::Value::from(args.port));
-    if let Some(name) = args.name {
-        api_config.insert("name".into(), serde_json::Value::from(name));
-    }
-    if let Some(path) = log_path {
-        api_config.insert("log_path".into(), serde_json::Value::from(path));
-    }
-    runtime.add_processor(ProcessorSpec::new(
-        processor_type_ref!("tatolab", "api-server", "ApiServer"),
-        serde_json::Value::Object(api_config),
-    ))?;
+    // `PROCESSOR_REGISTRY`.
+    register_api_server_control_plane_processor_on_runtime(
+        &runtime,
+        ApiServerControlPlaneBindConfig {
+            bind_host: args.host.clone(),
+            bind_port: args.port,
+            node_name: args.name,
+        },
+    )?;
 
     if let Some(ref path) = args.snapshot {
         println!("Loading pipeline: {}", path.display());
