@@ -55,10 +55,10 @@ pub struct AppLaunchCommandArgs {
     #[arg(long = "dir", value_name = "DIR")]
     pub anchor_dir: Option<PathBuf>,
 
-    /// Host address to bind the control plane to. The default is loopback: the
-    /// control plane's mutating routes are open by default, so binding a wider
-    /// interface exposes them.
-    #[arg(long = "host", value_name = "HOST", default_value = "127.0.0.1")]
+    /// Host address to bind the control plane to. Defaults to all interfaces,
+    /// matching `streamlib-runtime`, so nodes can reach each other; the
+    /// control plane's mutating routes are open unless auth is configured.
+    #[arg(long = "host", value_name = "HOST", default_value = "0.0.0.0")]
     pub bind_host: String,
 
     /// Port for the control plane; increments on collision.

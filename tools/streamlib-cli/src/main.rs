@@ -867,19 +867,19 @@ mod tests {
         }
     }
 
-    /// The control plane's mutating routes are open by default, so the
-    /// laptop-first verbs must not bind a wider interface than loopback without
-    /// the user asking for it.
+    /// Owner-decided (2026-07-30, #1683): every host of the one control plane
+    /// binds all interfaces by default so nodes can reach each other. `run` /
+    /// `dev` must not drift from `streamlib-runtime`'s default.
     #[test]
-    fn runtime_hosting_verbs_bind_loopback_by_default() {
+    fn runtime_hosting_verbs_bind_all_interfaces_by_default() {
         for verb in ["run", "dev"] {
             let launch = match parse_subcommand(verb) {
                 Commands::Run { launch } | Commands::Dev { launch } => launch,
                 _ => unreachable!("`{verb}` parses to its own variant"),
             };
             assert_eq!(
-                launch.bind_host, "127.0.0.1",
-                "`{verb}` must default to loopback"
+                launch.bind_host, "0.0.0.0",
+                "`{verb}` must match the runtime's all-interfaces default"
             );
         }
     }
