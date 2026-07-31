@@ -68,7 +68,28 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 
 ## Media I/O — camera, display, audio
 
-- **OPEN**
+- **DECIDED** — The engine ships no media processors: camera, display, and audio are
+  packages loaded over the plugin ABI. The engine owns the hardware primitives they
+  build on — DMA-BUF / OPAQUE_FD import and export, the present target, the audio
+  clock, color resolution, codec sessions — exposed only through `GpuContext`, the
+  RHI, and the ABI vtables. [media-io-layering]
+- **DECIDED** — First-party media packages lag by design during engine development and
+  are upgraded to the current engine as the final MVP step, once the runtime is proven
+  solid — before the MVP ships, never continuously. [media-io-layering]
+- **DECIDED** — V4L2 is the only capture backend (platform floor: Linux + NVIDIA).
+  Apple capture (AVFoundation) is post-MVP and undesigned; only the TCC permission
+  shims exist. [media-io-layering]
+- **DECIDED** — Windowing splits at the raw window handle: window creation and its
+  lifetime are package-side; the engine mints the present target from the raw handle
+  and owns every swapchain and acquire detail, plus the platform main-thread event
+  loop where the OS demands it. [media-io-layering]
+- **DECIDED** — Camera → GPU transport: zero-copy DMA-BUF import when the device
+  exports it, transparent CPU-upload fallback otherwise, selected automatically —
+  no configuration dial. [media-io-layering]
+- **OPEN** — Audio backend: PipeWire-native on Linux is the intent (the current
+  CPAL → ALSA path is interim); do not build until a research memo settles it. A/V
+  sync model likewise OPEN. The engine's decided audio surface is the clock
+  primitive. [media-io-layering]
 
 ## Networking — transport, moq, webrtc
 
