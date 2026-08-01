@@ -29,5 +29,6 @@ pub mod python_processor_callback_registry;
 pub mod rust_passthrough_floor_stage_processor;
 pub mod synthetic_frame_measurement_preamble;
 pub mod synthetic_frame_source_processor;
+pub mod synthetic_frame_wire_payload_mode;
 pub mod tier_a_measurement_cell;
 pub mod zero_copy_numpy_frame_view;

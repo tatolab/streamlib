@@ -22,6 +22,7 @@ use streamlib_pyembed_spike::machine_specification_probe::{
     machine_is_in_locked_measurement_state, probe_machine_specification,
 };
 use streamlib_pyembed_spike::python_processor_callback_registry::register_python_callback_under_token;
+use streamlib_pyembed_spike::synthetic_frame_wire_payload_mode::SyntheticFrameWirePayloadMode;
 use streamlib_pyembed_spike::tier_a_measurement_cell::{
     MeasurementArm, TierAMeasurementCellSpecification, run_tier_a_measurement_cell,
 };
@@ -44,6 +45,16 @@ struct TierAHarnessArguments {
 
     #[arg(long, default_value_t = 4)]
     channels: u32,
+
+    /// `surface-reference` matches what a real `VideoFrame` weighs on the wire
+    /// and is what the protocol cells measure; `full-pixel-payload` reproduces
+    /// the payload sweep that retracted the 27ms floor.
+    #[arg(
+        long,
+        default_value = "surface-reference",
+        value_parser = SyntheticFrameWirePayloadMode::parse_from_flag_value
+    )]
+    wire_payload_mode: SyntheticFrameWirePayloadMode,
 
     #[arg(long, default_value_t = 600)]
     duration_seconds: u64,
@@ -151,6 +162,7 @@ fn main() -> Result<()> {
         frame_height_pixels: arguments.frame_height,
         channel_count: arguments.channels,
         target_frames_per_second: arguments.fps,
+        wire_payload_mode: arguments.wire_payload_mode,
         cell_duration_seconds: arguments.duration_seconds,
         warmup_exclusion_seconds: arguments.warmup_exclusion_seconds,
         python_callback_registration_token,

@@ -18,6 +18,7 @@ use crate::python_processor_callback_registry::resolve_python_callback_for_token
 use crate::synthetic_frame_measurement_preamble::{
     SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES, SyntheticFrameMeasurementPreamble,
 };
+use crate::synthetic_frame_wire_payload_mode::SyntheticFrameWirePayloadMode;
 use crate::zero_copy_numpy_frame_view::{
     NumpyFrameViewEscapeOutcome, invoke_python_callback_over_zero_copy_frame_view,
     preload_numpy_c_array_api_before_first_frame_view,
@@ -46,6 +47,11 @@ pub struct PythonCallbackStageConfiguration {
     /// Anchoring the thread state removes a per-frame mmap/munmap pair. Off is
     /// the control condition that measures what anchoring is worth.
     pub anchor_processor_thread_gil: bool,
+    /// Must match the source's mode: it decides whether the callback's numpy
+    /// view is over the wire payload or over this stage's locally resolved
+    /// surface.
+    #[serde(default)]
+    pub wire_payload_mode: SyntheticFrameWirePayloadMode,
 }
 
 impl Default for PythonCallbackStageConfiguration {
@@ -56,7 +62,18 @@ impl Default for PythonCallbackStageConfiguration {
             channel_count: 4,
             python_callback_registration_token: String::new(),
             anchor_processor_thread_gil: true,
+            wire_payload_mode: SyntheticFrameWirePayloadMode::SurfaceReference,
         }
+    }
+}
+
+impl PythonCallbackStageConfiguration {
+    /// Pixel bytes for one frame of this geometry — the extent the callback's
+    /// numpy view spans, wherever those pixels live.
+    pub fn frame_pixel_byte_count(&self) -> usize {
+        self.frame_width_pixels as usize
+            * self.frame_height_pixels as usize
+            * self.channel_count as usize
     }
 }
 
@@ -71,6 +88,14 @@ impl Default for PythonCallbackStageConfiguration {
 pub struct PythonCallbackStageProcessor {
     resolved_python_callback: Option<Py<PyAny>>,
     observed_frame_view_escape_count: u64,
+    /// The pixels the callback sees under
+    /// [`SyntheticFrameWirePayloadMode::SurfaceReference`], standing in for what
+    /// `GpuContext::resolve_pixel_buffer_by_surface_id`
+    /// (`core/context/gpu_context.rs:681`) hands an in-process processor. It is
+    /// process-local by construction — a surface reference on the wire means
+    /// the pixels never made the hop, which is the whole point of the mode.
+    /// Empty under [`SyntheticFrameWirePayloadMode::FullPixelPayload`].
+    locally_resolved_surface_pixel_buffer: Vec<u8>,
 }
 
 impl PythonCallbackStageProcessor::Processor {
@@ -108,6 +133,15 @@ impl ReactiveProcessor for PythonCallbackStageProcessor::Processor {
                  starting the graph"
             ))
         })?);
+
+        if self.configuration.wire_payload_mode
+            == SyntheticFrameWirePayloadMode::SurfaceReference
+        {
+            let pixel_byte_count = self.configuration.frame_pixel_byte_count();
+            self.locally_resolved_surface_pixel_buffer = (0..pixel_byte_count)
+                .map(|index| (index % 251) as u8)
+                .collect();
+        }
         Ok(())
     }
 
@@ -119,7 +153,7 @@ impl ReactiveProcessor for PythonCallbackStageProcessor::Processor {
         };
         if frame_payload.len() <= SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES {
             return Err(Error::Link(format!(
-                "frame payload of {} bytes carries no pixels after the measurement preamble",
+                "frame payload of {} bytes carries nothing after the measurement preamble",
                 frame_payload.len()
             )));
         }
@@ -130,12 +164,32 @@ impl ReactiveProcessor for PythonCallbackStageProcessor::Processor {
             .as_ref()
             .ok_or_else(|| Error::Configuration("setup did not resolve a callable".to_string()))?;
 
+        // Under SurfaceReference the wire carried a reference, so the callback's
+        // view spans this stage's locally resolved surface; under
+        // FullPixelPayload the pixels arrived in-band and the view spans them.
+        let callback_pixel_bytes: &mut [u8] = match self.configuration.wire_payload_mode {
+            SyntheticFrameWirePayloadMode::SurfaceReference => {
+                &mut self.locally_resolved_surface_pixel_buffer
+            }
+            SyntheticFrameWirePayloadMode::FullPixelPayload => {
+                &mut frame_payload[SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES..]
+            }
+        };
+        if callback_pixel_bytes.len() != self.configuration.frame_pixel_byte_count() {
+            return Err(Error::Link(format!(
+                "stage has {} pixel bytes to view but its geometry declares {} — the source and \
+                 stage disagree about the wire payload mode",
+                callback_pixel_bytes.len(),
+                self.configuration.frame_pixel_byte_count()
+            )));
+        }
+
         let callback_started_nanoseconds = read_measurement_stamp_nanoseconds();
         let escape_outcome = Python::attach(|python| {
             invoke_python_callback_over_zero_copy_frame_view(
                 python,
                 callable,
-                &mut frame_payload[SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES..],
+                callback_pixel_bytes,
                 self.configuration.frame_height_pixels as usize,
                 self.configuration.frame_width_pixels as usize,
                 self.configuration.channel_count as usize,

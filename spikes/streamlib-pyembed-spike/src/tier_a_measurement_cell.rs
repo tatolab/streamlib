@@ -30,6 +30,7 @@ use crate::rust_passthrough_floor_stage_processor::{
 use crate::synthetic_frame_source_processor::{
     SyntheticFrameSourceConfiguration, SyntheticFrameSourceProcessor,
 };
+use crate::synthetic_frame_wire_payload_mode::SyntheticFrameWirePayloadMode;
 
 /// Which of the two Rust-side comparison arms a cell runs. The third arm, the
 /// subprocess baseline, is driven from `python/runner.py`.
@@ -61,6 +62,11 @@ pub struct TierAMeasurementCellSpecification {
     pub frame_height_pixels: u32,
     pub channel_count: u32,
     pub target_frames_per_second: u32,
+    /// What crossed the link. Owner decision 7 makes `surface-reference` the
+    /// protocol mode; a `full-pixel-payload` cell measures the retracted
+    /// payload sweep and must never back a gated number.
+    #[serde(default)]
+    pub wire_payload_mode: SyntheticFrameWirePayloadMode,
     pub cell_duration_seconds: u64,
     pub warmup_exclusion_seconds: u64,
     pub python_callback_registration_token: String,
@@ -87,9 +93,12 @@ impl TierAMeasurementCellSpecification {
     /// rates, and repetitions.
     pub fn artifact_directory_name(&self) -> String {
         format!(
-            "arm-{}__fps-{:03}__stage-{}__gil-anchor-{}__rep-{:02}",
+            "arm-{}__{:04}x{:04}__fps-{:03}__wire-{}__stage-{}__gil-anchor-{}__rep-{:02}",
             self.arm.as_artifact_token(),
+            self.frame_width_pixels,
+            self.frame_height_pixels,
             self.target_frames_per_second,
+            self.wire_payload_mode.as_artifact_token(),
             self.stage_callback_attribute,
             if self.anchor_processor_thread_gil {
                 "on"
@@ -156,6 +165,7 @@ pub fn run_tier_a_measurement_cell(
             frame_height_pixels: specification.frame_height_pixels,
             channel_count: specification.channel_count,
             target_frames_per_second: specification.target_frames_per_second,
+            wire_payload_mode: specification.wire_payload_mode,
         },
     )?;
 
@@ -170,6 +180,7 @@ pub fn run_tier_a_measurement_cell(
                         .python_callback_registration_token
                         .clone(),
                     anchor_processor_thread_gil: specification.anchor_processor_thread_gil,
+                    wire_payload_mode: specification.wire_payload_mode,
                 },
             )?,
         MeasurementArm::RustPassthroughFloor => app
@@ -178,6 +189,7 @@ pub fn run_tier_a_measurement_cell(
                     frame_width_pixels: specification.frame_width_pixels,
                     frame_height_pixels: specification.frame_height_pixels,
                     channel_count: specification.channel_count,
+                    wire_payload_mode: specification.wire_payload_mode,
                 },
             )?,
     };
@@ -262,6 +274,7 @@ mod tests {
             frame_height_pixels: 1080,
             channel_count: 4,
             target_frames_per_second: 60,
+            wire_payload_mode: SyntheticFrameWirePayloadMode::SurfaceReference,
             cell_duration_seconds: 600,
             warmup_exclusion_seconds: 60,
             python_callback_registration_token: "cell-token".to_string(),
@@ -282,7 +295,8 @@ mod tests {
         let name = example_specification().artifact_directory_name();
         assert_eq!(
             name,
-            "arm-in-process-python__fps-060__stage-passthrough_stage__gil-anchor-on__rep-03"
+            "arm-in-process-python__1920x1080__fps-060__wire-surface-reference__\
+             stage-passthrough_stage__gil-anchor-on__rep-03"
         );
 
         let floor_arm = TierAMeasurementCellSpecification {
@@ -290,6 +304,50 @@ mod tests {
             ..example_specification()
         };
         assert_ne!(floor_arm.artifact_directory_name(), name);
+    }
+
+    /// The amended matrix runs 720p and 1080p at both rates. Before geometry
+    /// entered the directory name, a 720p60 cell and a 1080p60 cell that agreed
+    /// on every other dimension shared a directory and the second silently
+    /// overwrote the first — losing half the resolution leg with no error.
+    #[test]
+    fn cells_differing_only_by_frame_geometry_get_distinct_directories() {
+        let ten_eighty = example_specification();
+        let seven_twenty = TierAMeasurementCellSpecification {
+            frame_width_pixels: 1280,
+            frame_height_pixels: 720,
+            ..example_specification()
+        };
+        assert_ne!(
+            seven_twenty.artifact_directory_name(),
+            ten_eighty.artifact_directory_name()
+        );
+    }
+
+    /// A surface-reference cell and a full-pixel cell measure different
+    /// phenomena at the same geometry; sharing a directory would let the
+    /// retracted payload sweep overwrite a gated cell.
+    #[test]
+    fn cells_differing_only_by_wire_payload_mode_get_distinct_directories() {
+        let reference = example_specification();
+        let full_pixels = TierAMeasurementCellSpecification {
+            wire_payload_mode: SyntheticFrameWirePayloadMode::FullPixelPayload,
+            ..example_specification()
+        };
+        assert_ne!(
+            reference.artifact_directory_name(),
+            full_pixels.artifact_directory_name()
+        );
+    }
+
+    /// Owner decision 7 rides the artifact: a summarizer reading a cell must be
+    /// able to tell a protocol cell from a payload-sweep cell without guessing.
+    #[test]
+    fn the_recorded_wire_payload_mode_defaults_to_surface_reference() {
+        assert_eq!(
+            example_specification().wire_payload_mode,
+            SyntheticFrameWirePayloadMode::SurfaceReference
+        );
     }
 
     /// Zero-padding keeps 30fps sorting before 60fps and rep-02 before rep-10 in
@@ -361,6 +419,7 @@ mod cell_directory_collision_tests {
             frame_height_pixels: 720,
             channel_count: 4,
             target_frames_per_second: 30,
+            wire_payload_mode: SyntheticFrameWirePayloadMode::SurfaceReference,
             cell_duration_seconds: 600,
             warmup_exclusion_seconds: 60,
             python_callback_registration_token: "token".to_string(),

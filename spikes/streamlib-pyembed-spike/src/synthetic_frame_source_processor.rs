@@ -16,14 +16,22 @@ use crate::monotonic_clock::{
 use crate::synthetic_frame_measurement_preamble::{
     SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES, SyntheticFrameMeasurementPreamble,
 };
+use crate::synthetic_frame_wire_payload_mode::{
+    SyntheticFrameWirePayloadMode, encode_surface_reference_body,
+};
 
-/// Frame geometry and pacing for [`SyntheticFrameSourceProcessor`].
+/// Frame geometry, pacing, and what rides the wire for
+/// [`SyntheticFrameSourceProcessor`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SyntheticFrameSourceConfiguration {
     pub frame_width_pixels: u32,
     pub frame_height_pixels: u32,
     pub channel_count: u32,
     pub target_frames_per_second: u32,
+    /// The geometry above always describes the frame; this decides whether the
+    /// pixels for it actually cross the link (owner decision 7 on #1702).
+    #[serde(default)]
+    pub wire_payload_mode: SyntheticFrameWirePayloadMode,
 }
 
 impl Default for SyntheticFrameSourceConfiguration {
@@ -33,16 +41,36 @@ impl Default for SyntheticFrameSourceConfiguration {
             frame_height_pixels: 1080,
             channel_count: 4,
             target_frames_per_second: 30,
+            wire_payload_mode: SyntheticFrameWirePayloadMode::SurfaceReference,
         }
     }
 }
 
 impl SyntheticFrameSourceConfiguration {
-    /// Pixel bytes per frame, excluding the measurement preamble.
+    /// Pixel bytes for one frame of this geometry, whether or not they cross
+    /// the wire.
     pub fn frame_pixel_byte_count(&self) -> usize {
         self.frame_width_pixels as usize
             * self.frame_height_pixels as usize
             * self.channel_count as usize
+    }
+
+    /// The bytes riding behind the measurement preamble under this mode.
+    pub fn wire_body_bytes(&self) -> Vec<u8> {
+        match self.wire_payload_mode {
+            SyntheticFrameWirePayloadMode::SurfaceReference => encode_surface_reference_body(
+                self.frame_width_pixels,
+                self.frame_height_pixels,
+                self.target_frames_per_second,
+            ),
+            SyntheticFrameWirePayloadMode::FullPixelPayload => {
+                // A non-uniform pattern so a stage that silently drops or zeroes
+                // the payload is distinguishable from one that passes it through.
+                (0..self.frame_pixel_byte_count())
+                    .map(|index| (index % 251) as u8)
+                    .collect()
+            }
+        }
     }
 
     /// Nanoseconds between consecutive frame emissions at the target rate.
@@ -75,22 +103,17 @@ pub struct SyntheticFrameSourceProcessor {
 
 impl ContinuousProcessor for SyntheticFrameSourceProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let total_payload_bytes = SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES
-            + self.configuration.frame_pixel_byte_count();
-        self.frame_payload_buffer = vec![0u8; total_payload_bytes];
-        // A non-uniform pattern so a stage that silently drops or zeroes the
-        // payload is distinguishable from one that passes it through.
-        for (index, byte) in self.frame_payload_buffer
-            [SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES..]
-            .iter_mut()
-            .enumerate()
-        {
-            *byte = (index % 251) as u8;
-        }
+        let wire_body = self.configuration.wire_body_bytes();
+        self.frame_payload_buffer =
+            Vec::with_capacity(SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES + wire_body.len());
+        self.frame_payload_buffer
+            .resize(SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES, 0u8);
+        self.frame_payload_buffer.extend_from_slice(&wire_body);
         self.next_frame_sequence_number = 0;
         self.emission_origin_monotonic_nanoseconds = read_monotonic_clock_nanoseconds();
         tracing::info!(
-            frame_bytes = total_payload_bytes,
+            frame_bytes = self.frame_payload_buffer.len(),
+            wire_payload_mode = self.configuration.wire_payload_mode.as_artifact_token(),
             target_fps = self.configuration.target_frames_per_second,
             "synthetic frame source ready"
         );
@@ -132,17 +155,20 @@ impl ContinuousProcessor for SyntheticFrameSourceProcessor::Processor {
 mod tests {
     use super::*;
 
-    /// 1080p BGRA plus the preamble must stay inside the 16 MiB untrusted-session
-    /// payload ceiling, because the subprocess baseline arm's links are
-    /// classified UntrustedSession (`open_iceoryx2_service_op.rs:149-153`,
+    /// A full-pixel 1080p frame plus the preamble must stay inside the 16 MiB
+    /// untrusted-session payload ceiling, because the subprocess baseline arm's
+    /// links are classified UntrustedSession (`open_iceoryx2_service_op.rs:149-153`,
     /// `streamlib-ipc-types/src/lib.rs:43`). Exceeding it would make the two
     /// arms structurally incomparable rather than merely slower.
     #[test]
-    fn default_frame_fits_the_untrusted_session_payload_ceiling() {
+    fn a_full_pixel_1080p_frame_fits_the_untrusted_session_payload_ceiling() {
         const UNTRUSTED_SESSION_PAYLOAD_CEILING_BYTES: usize = 16 * 1024 * 1024;
-        let configuration = SyntheticFrameSourceConfiguration::default();
-        let total_bytes = SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES
-            + configuration.frame_pixel_byte_count();
+        let configuration = SyntheticFrameSourceConfiguration {
+            wire_payload_mode: SyntheticFrameWirePayloadMode::FullPixelPayload,
+            ..SyntheticFrameSourceConfiguration::default()
+        };
+        let total_bytes =
+            SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES + configuration.wire_body_bytes().len();
         assert_eq!(configuration.frame_pixel_byte_count(), 8_294_400);
         assert!(
             total_bytes < UNTRUSTED_SESSION_PAYLOAD_CEILING_BYTES,
@@ -150,17 +176,81 @@ mod tests {
         );
     }
 
-    /// 4K would fit the in-process arm's 64 MiB Trusted ceiling but is refused
-    /// on the subprocess arm — the boundary that caps this benchmark at 1080p.
+    /// 4K pixels would fit the in-process arm's 64 MiB Trusted ceiling but are
+    /// refused on the subprocess arm — the boundary that caps the full-pixel
+    /// sweep at 1080p. The reference mode is not bound by it at any geometry.
     #[test]
-    fn four_k_frame_exceeds_the_untrusted_session_ceiling() {
+    fn four_k_pixels_exceed_the_untrusted_session_ceiling_but_a_reference_does_not() {
         const UNTRUSTED_SESSION_PAYLOAD_CEILING_BYTES: usize = 16 * 1024 * 1024;
-        let configuration = SyntheticFrameSourceConfiguration {
+        let four_k = SyntheticFrameSourceConfiguration {
             frame_width_pixels: 3840,
             frame_height_pixels: 2160,
+            wire_payload_mode: SyntheticFrameWirePayloadMode::FullPixelPayload,
             ..SyntheticFrameSourceConfiguration::default()
         };
-        assert!(configuration.frame_pixel_byte_count() > UNTRUSTED_SESSION_PAYLOAD_CEILING_BYTES);
+        assert!(four_k.wire_body_bytes().len() > UNTRUSTED_SESSION_PAYLOAD_CEILING_BYTES);
+
+        let four_k_by_reference = SyntheticFrameSourceConfiguration {
+            wire_payload_mode: SyntheticFrameWirePayloadMode::SurfaceReference,
+            ..four_k
+        };
+        assert!(
+            four_k_by_reference.wire_body_bytes().len()
+                < UNTRUSTED_SESSION_PAYLOAD_CEILING_BYTES
+        );
+    }
+
+    /// Owner decision 7: the protocol cells carry surface references, not
+    /// pictures. A default that regressed to full pixels would silently
+    /// reproduce the retracted 27ms floor and report it as a gated number.
+    #[test]
+    fn the_source_defaults_to_putting_a_surface_reference_on_the_wire() {
+        let configuration = SyntheticFrameSourceConfiguration::default();
+        assert_eq!(
+            configuration.wire_payload_mode,
+            SyntheticFrameWirePayloadMode::SurfaceReference
+        );
+        assert!(configuration.wire_body_bytes().len() < 1024);
+    }
+
+    /// The 1080p60 cell is only measurable because the wire body no longer
+    /// tracks geometry: a full-pixel two-hop service time exceeds the 16.6ms
+    /// frame period and the cell runs permanently saturated.
+    #[test]
+    fn a_surface_reference_wire_body_does_not_grow_with_frame_geometry() {
+        let seven_twenty = SyntheticFrameSourceConfiguration {
+            frame_width_pixels: 1280,
+            frame_height_pixels: 720,
+            ..SyntheticFrameSourceConfiguration::default()
+        };
+        let ten_eighty = SyntheticFrameSourceConfiguration::default();
+        assert_eq!(
+            seven_twenty.wire_body_bytes().len(),
+            ten_eighty.wire_body_bytes().len(),
+            "the resolution leg must vary pixel work, never transport width"
+        );
+        assert_ne!(
+            seven_twenty.frame_pixel_byte_count(),
+            ten_eighty.frame_pixel_byte_count()
+        );
+    }
+
+    /// The full-pixel body must keep the non-uniform pattern, which is what
+    /// distinguishes a stage that passed the payload through from one that
+    /// zeroed it.
+    #[test]
+    fn the_full_pixel_wire_body_carries_a_non_uniform_pattern() {
+        let configuration = SyntheticFrameSourceConfiguration {
+            frame_width_pixels: 4,
+            frame_height_pixels: 2,
+            channel_count: 4,
+            wire_payload_mode: SyntheticFrameWirePayloadMode::FullPixelPayload,
+            ..SyntheticFrameSourceConfiguration::default()
+        };
+        let body = configuration.wire_body_bytes();
+        assert_eq!(body.len(), 32);
+        assert_eq!(body[0], 0);
+        assert_eq!(body[31], 31);
     }
 
     /// Both protocol rates must produce exact periods; a rate that divided
@@ -200,10 +290,31 @@ mod tests {
             frame_height_pixels: 720,
             channel_count: 4,
             target_frames_per_second: 60,
+            wire_payload_mode: SyntheticFrameWirePayloadMode::FullPixelPayload,
         };
         let encoded = serde_json::to_value(&configuration).expect("serializes");
         let decoded: SyntheticFrameSourceConfiguration =
             serde_json::from_value(encoded).expect("deserializes");
         assert_eq!(decoded, configuration);
+    }
+
+    /// A config written before the mode existed must decode to the protocol
+    /// default rather than failing, so a cell can be replayed from an older
+    /// `cell-spec.json` without hand-editing it.
+    #[test]
+    fn a_configuration_without_a_wire_payload_mode_decodes_to_surface_reference() {
+        let decoded: SyntheticFrameSourceConfiguration = serde_json::from_value(
+            serde_json::json!({
+                "frame_width_pixels": 1280,
+                "frame_height_pixels": 720,
+                "channel_count": 4,
+                "target_frames_per_second": 60,
+            }),
+        )
+        .expect("deserializes without the mode");
+        assert_eq!(
+            decoded.wire_payload_mode,
+            SyntheticFrameWirePayloadMode::SurfaceReference
+        );
     }
 }
