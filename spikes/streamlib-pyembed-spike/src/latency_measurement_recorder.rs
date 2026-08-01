@@ -40,7 +40,7 @@ const ONE_SECOND_NANOSECONDS: i64 = 1_000_000_000;
 /// 60fps, the protocol's faster rate. File-scoped so every test module shares
 /// one period — the backlog check's absolute floor is derived from it, so two
 /// modules disagreeing would test two different thresholds.
-#[cfg(test)]
+#[cfg(all(test, not(feature = "stamping-compiled-out")))]
 const FRAME_PERIOD_NANOSECONDS: i64 = 16_666_666;
 
 /// Interval-log tag for the Tier A headline quantity.
