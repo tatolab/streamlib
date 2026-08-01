@@ -33,6 +33,13 @@ from spike_stage_callbacks import build_measurement_stage_callback_for_stage_nam
 
 MEASUREMENT_CELL_LOGGER = logging.getLogger("streamlib_pyembed_spike.runner")
 
+SPIKE_CRATE_ROOT_DIRECTORY = os.path.dirname(
+    os.path.dirname(os.path.abspath(__file__))
+)
+SUBPROCESS_BASELINE_PACKAGE_NAME = "pyembed-subprocess-baseline"
+APP_MODULES_DIRECTORY_ENVIRONMENT_VARIABLE = "STREAMLIB_MODULES_DIR"
+PYTHON_NATIVE_LIBRARY_ENVIRONMENT_VARIABLE = "STREAMLIB_PYTHON_NATIVE_LIB"
+
 RUNNER_MODE_IN_PROCESS_PYTHON = "in-process"
 RUNNER_MODE_SUBPROCESS_PYTHON = "subprocess"
 RUNNER_MODE_RUST_PASSTHROUGH_FLOOR = "rust-floor"
@@ -48,6 +55,7 @@ SUPPORTED_RUNNER_MODES = (
 HARNESS_ARM_BY_RUNNER_MODE = {
     RUNNER_MODE_IN_PROCESS_PYTHON: "in-process-python",
     RUNNER_MODE_RUST_PASSTHROUGH_FLOOR: "rust-passthrough-floor",
+    RUNNER_MODE_SUBPROCESS_PYTHON: "subprocess-python-baseline",
 }
 
 STAGE_NAME_PASSTHROUGH = "passthrough"
@@ -88,19 +96,17 @@ EXPLORATORY_CELL_WARMUP_EXCLUSION_SECONDS = 1
 CELL_DIRECTORY_MODIFICATION_TIME_SLACK_SECONDS = 2.0
 
 
-class SubprocessArmIsTierBAndNotImplementedError(NotImplementedError):
-    """Raised for `--mode subprocess`, which no code path in this PR implements."""
+class SubprocessBaselineArmIsNotProvisionedError(RuntimeError):
+    """Raised when `--mode subprocess` runs before its provisioning step.
+
+    The failure it replaces is silent and expensive: an unprovisioned slot
+    fails at graph build, and a matrix run would record the baseline arm as
+    absent rather than as unrunnable.
+    """
 
 
 def resolve_harness_arm_for_runner_mode(runner_mode):
     """Map a runner `--mode` to the harness `--arm` token it drives."""
-    if runner_mode == RUNNER_MODE_SUBPROCESS_PYTHON:
-        raise SubprocessArmIsTierBAndNotImplementedError(
-            "--mode subprocess is the Tier B baseline and is not in this PR: no "
-            "subprocess arm exists in the harness, which accepts only "
-            "in-process-python and rust-passthrough-floor. Run it from the Tier B "
-            "work on #1702."
-        )
     if runner_mode not in HARNESS_ARM_BY_RUNNER_MODE:
         raise ValueError(
             f"unsupported runner mode {runner_mode!r}; expected one of "
@@ -249,7 +255,67 @@ def build_tier_a_harness_process_environment():
         if existing_python_path
         else [spike_python_directory]
     )
+    harness_process_environment.update(read_subprocess_baseline_arm_environment())
     return harness_process_environment
+
+
+def read_subprocess_baseline_arm_environment():
+    """The two variables a subprocess cell needs, taken from the provisioning
+    record rather than re-derived.
+
+    Both are load-bearing and both fail silently. Without
+    `STREAMLIB_MODULES_DIR` the loader looks for the package beside whatever
+    the caller's cwd happens to be. Without `STREAMLIB_PYTHON_NATIVE_LIB` the
+    spawned subprocess resolves *some other* `libstreamlib_python_native.so`,
+    whose iceoryx2 service constants do not match the host's — the subprocess
+    then fails to open its own input channel with
+    `DoesNotSupportRequestedAmountOfPublishers`, the sink receives nothing, and
+    the cell reads as an arm that produced no frames rather than one that was
+    misconfigured. That is the failure #1702's finding 6 asked to be pinned
+    against, and it only appears when the runner drives the cell, because a
+    hand-run cell inherits the variable from the operator's shell.
+
+    Returns an empty mapping when nothing has been provisioned; the guard in
+    `require_subprocess_baseline_arm_is_provisioned` is what refuses the run.
+    """
+    provisioning_record_path = os.path.join(
+        SPIKE_CRATE_ROOT_DIRECTORY, ".provisioned", "provisioning-record.json"
+    )
+    if not os.path.isfile(provisioning_record_path):
+        return {}
+    with open(provisioning_record_path) as provisioning_record_file:
+        provisioning_record = json.load(provisioning_record_file)
+    return {
+        APP_MODULES_DIRECTORY_ENVIRONMENT_VARIABLE: provisioning_record[
+            "application_modules_root"
+        ],
+        PYTHON_NATIVE_LIBRARY_ENVIRONMENT_VARIABLE: provisioning_record[
+            "python_native_library_path"
+        ],
+    }
+
+
+def require_subprocess_baseline_arm_is_provisioned():
+    """Refuse a subprocess cell whose package slot was never provisioned.
+
+    Checked here rather than left to the graph build so an unattended matrix
+    run stops with the fix-it instead of recording the arm as absent.
+    """
+    venv_python = os.path.join(
+        SPIKE_CRATE_ROOT_DIRECTORY,
+        ".provisioned",
+        SUBPROCESS_BASELINE_PACKAGE_NAME,
+        ".venv",
+        "bin",
+        "python",
+    )
+    if not os.path.isfile(venv_python):
+        raise SubprocessBaselineArmIsNotProvisionedError(
+            "--mode subprocess needs its package provisioned first: no venv at "
+            f"{venv_python}. Run "
+            "`python3 python/provision_subprocess_baseline_package.py` from the "
+            "spike crate root, then rerun."
+        )
 
 
 def locate_measurement_cell_directory_created_by_harness(
@@ -496,6 +562,8 @@ def run_interleaved_measurement_schedule(command_line_arguments):
     """Run every cell of every repetition in A/B/A order, stopping at the first
     cell the harness refuses. Returns the process exit status."""
     resolve_harness_arm_for_runner_mode(command_line_arguments.mode)
+    if command_line_arguments.mode == RUNNER_MODE_SUBPROCESS_PYTHON:
+        require_subprocess_baseline_arm_is_provisioned()
     cell_duration_seconds = resolve_cell_duration_seconds(command_line_arguments.duration)
     warmup_exclusion_seconds = resolve_warmup_exclusion_seconds(
         command_line_arguments.warmup_exclusion_seconds, cell_duration_seconds
@@ -593,7 +661,8 @@ def parse_measurement_cell_command_line_arguments(command_line_argument_values=N
         required=True,
         help="the arm under test; rust-floor is a pure-Rust passthrough that "
         "isolates engine wire-hop cost from PyO3 cost, and is also the A of the "
-        "A/B/A schedule. subprocess is Tier B and not implemented in this PR",
+        "A/B/A schedule. subprocess is today's model and requires "
+        "provision_subprocess_baseline_package.py to have run",
     )
     argument_parser.add_argument(
         "--gc",
@@ -661,7 +730,7 @@ def main():
     command_line_arguments = parse_measurement_cell_command_line_arguments()
     try:
         return run_interleaved_measurement_schedule(command_line_arguments)
-    except (SubprocessArmIsTierBAndNotImplementedError, ValueError) as refusal:
+    except (SubprocessBaselineArmIsNotProvisionedError, ValueError) as refusal:
         MEASUREMENT_CELL_LOGGER.error("%s", refusal)
         return 2
 

@@ -270,6 +270,16 @@ def provision(release: bool) -> dict:
     }
 
 
+def provisioning_record_path() -> Path:
+    """Where `provision()`'s record is left for `runner.py` to read.
+
+    The record is the single source of the environment a subprocess cell needs.
+    Recomputing it in the runner would be a second copy of the same derivation,
+    and the two drifting is exactly how the cdylib pin gets lost.
+    """
+    return resolve_spike_crate_root() / ".provisioned" / "provisioning-record.json"
+
+
 def main() -> int:
     argument_parser = argparse.ArgumentParser(description=__doc__)
     argument_parser.add_argument(
@@ -286,6 +296,7 @@ def main() -> int:
     os.environ[APP_MODULES_DIRECTORY_ENVIRONMENT_VARIABLE] = record[
         "application_modules_root"
     ]
+    provisioning_record_path().write_text(json.dumps(record, indent=2) + "\n")
     sys.stdout.write(json.dumps(record, indent=2) + "\n")
     return 0
 
