@@ -225,6 +225,18 @@ impl LatencyMeasurementRecorder {
         self.measured_frame_count
     }
 
+    /// When the sink saw its very first frame, warmup exclusion ignored.
+    ///
+    /// The endpoint of gate 6's restart measurement: paired with a stamp the
+    /// battery takes before spawning the process, it is exec-to-first-frame on
+    /// one monotonic clock. Warmup exclusion is deliberately not applied — the
+    /// question is when output first appeared, not when measurement began.
+    pub fn first_frame_sink_receive_monotonic_nanoseconds(&self) -> Option<i64> {
+        self.every_received_frame_measurement
+            .first()
+            .map(|measurement| measurement.sink_receive_monotonic_nanoseconds)
+    }
+
     /// Samples whose computed duration was negative — a nonzero value here
     /// invalidates the cell's latency numbers rather than degrading them.
     pub fn negative_latency_anomaly_count(&self) -> u64 {

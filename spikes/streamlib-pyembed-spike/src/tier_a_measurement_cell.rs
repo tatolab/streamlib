@@ -181,6 +181,10 @@ pub struct TierAMeasurementCellOutcome {
     /// startup backlog and its percentiles describe queue occupancy, not
     /// latency — see [`LatencyMeasurementRecorder::backlog_drain_fraction`].
     pub backlog_drain_fraction: f64,
+    /// Raw `CLOCK_MONOTONIC` nanoseconds at which the sink saw its first frame.
+    /// Gate 6's restart battery pairs this with its own pre-spawn stamp to get
+    /// exec-to-first-frame without either side estimating the other's clock.
+    pub first_frame_sink_receive_monotonic_nanoseconds: Option<i64>,
     pub rolling_one_second_frame_rate_windows: Vec<f64>,
 }
 
@@ -309,6 +313,8 @@ pub fn run_tier_a_measurement_cell(
         negative_latency_anomaly_count: recorder.negative_latency_anomaly_count(),
         histogram_range_saturation_count: recorder.histogram_range_saturation_count(),
         backlog_drain_fraction: recorder.backlog_drain_fraction(),
+        first_frame_sink_receive_monotonic_nanoseconds: recorder
+            .first_frame_sink_receive_monotonic_nanoseconds(),
         rolling_one_second_frame_rate_windows: recorder.rolling_one_second_frame_rate_windows(),
     };
 
