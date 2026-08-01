@@ -15,7 +15,7 @@ use streamlib::sdk::processors::ReactiveProcessor;
 use crate::latency_measurement_recorder::{
     LatencyMeasurementRecorder, PerFrameLatencyMeasurement,
 };
-use crate::monotonic_clock::read_monotonic_clock_nanoseconds;
+use crate::monotonic_clock::read_measurement_stamp_nanoseconds;
 use crate::synthetic_frame_measurement_preamble::{
     SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES, SyntheticFrameMeasurementPreamble,
 };
@@ -86,7 +86,7 @@ impl ReactiveProcessor for MeasuringSinkProcessor::Processor {
         // Stamped immediately after the read returns, so the engine's own
         // read-side allocation and memcpy land inside the measured interval —
         // they are part of the latency a user would experience.
-        let sink_receive_monotonic_nanoseconds = read_monotonic_clock_nanoseconds();
+        let sink_receive_monotonic_nanoseconds = read_measurement_stamp_nanoseconds();
 
         let preamble = SyntheticFrameMeasurementPreamble::read_from_payload_prefix(&frame_payload)
             .ok_or_else(|| {
@@ -116,7 +116,9 @@ impl ReactiveProcessor for MeasuringSinkProcessor::Processor {
     }
 }
 
-#[cfg(test)]
+// The second test asserts recorder contents, which a control build does not
+// populate — see the note on the recorder's own test module.
+#[cfg(all(test, not(feature = "stamping-compiled-out")))]
 mod tests {
     use super::*;
 
@@ -125,7 +127,7 @@ mod tests {
     /// means a cell that ran for ten minutes and reported nothing.
     #[test]
     fn the_collection_point_round_trips_a_recorder() {
-        install_measurement_collection_point(LatencyMeasurementRecorder::new(0));
+        install_measurement_collection_point(LatencyMeasurementRecorder::new(0, 0));
         let recovered = take_measurement_collection_point();
         assert!(recovered.is_some());
         assert!(
@@ -138,7 +140,7 @@ mod tests {
     /// first — two cells in one process have to stay separate.
     #[test]
     fn installing_replaces_rather_than_merges() {
-        let mut first = LatencyMeasurementRecorder::new(0);
+        let mut first = LatencyMeasurementRecorder::new(0, 0);
         first.record_frame_measurement(PerFrameLatencyMeasurement {
             frame_sequence_number: 0,
             source_emit_monotonic_nanoseconds: 0,
@@ -146,7 +148,7 @@ mod tests {
             stage_callback_nanoseconds: 0,
         });
         install_measurement_collection_point(first);
-        install_measurement_collection_point(LatencyMeasurementRecorder::new(0));
+        install_measurement_collection_point(LatencyMeasurementRecorder::new(0, 0));
         let recovered = take_measurement_collection_point().expect("second recorder is installed");
         assert_eq!(
             recovered.received_frame_count(),

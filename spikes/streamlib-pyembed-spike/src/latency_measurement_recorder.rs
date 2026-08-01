@@ -24,10 +24,14 @@ use hdrhistogram::Histogram;
 use hdrhistogram::serialization::V2DeflateSerializer;
 use hdrhistogram::serialization::interval_log::{IntervalLogWriterBuilder, Tag};
 
-/// 100ns is one order below `CLOCK_MONOTONIC`'s reported 1ns resolution and 60s
-/// is two orders above the worst plausible stall, so no real sample lands
+/// 1ns matches `CLOCK_MONOTONIC`'s reported resolution, so nothing the clock can
+/// distinguish is quantized away. A coarser floor silently rounds sub-floor
+/// samples into the first bucket while `max()` still reports the true value,
+/// which publishes a summary where p50 exceeds max — observed with a 100ns floor
+/// against the floor arm's all-zero stage durations (p50 63ns, max 0ns).
+/// 60s is two orders above the worst plausible stall, so no real sample lands
 /// outside the range and every cell can share one bucket layout.
-const HISTOGRAM_LOWEST_DISCERNIBLE_NANOSECONDS: u64 = 100;
+const HISTOGRAM_LOWEST_DISCERNIBLE_NANOSECONDS: u64 = 1;
 const HISTOGRAM_HIGHEST_TRACKABLE_NANOSECONDS: u64 = 60_000_000_000;
 const HISTOGRAM_SIGNIFICANT_FIGURES: u8 = 3;
 
@@ -89,14 +93,21 @@ pub struct LatencyMeasurementRecorder {
 impl LatencyMeasurementRecorder {
     /// `warmup_exclusion_nanoseconds` drops early frames from the percentiles
     /// (the protocol excludes the first 60s of every cell).
-    pub fn new(warmup_exclusion_nanoseconds: i64) -> Self {
+    ///
+    /// `expected_frame_count` preallocates both per-frame vectors. It is a
+    /// measurement requirement, not a micro-optimization: `record_frame_measurement`
+    /// runs on the sink's per-frame path, and a `Vec` doubling there stalls that
+    /// frame's successor by the memcpy, landing self-inflicted spikes in exactly
+    /// the p99.9 tail this artifact publishes. An undersized hint degrades to the
+    /// old behavior rather than failing, so callers should pass slack.
+    pub fn new(warmup_exclusion_nanoseconds: i64, expected_frame_count: usize) -> Self {
         Self {
             warmup_exclusion_nanoseconds,
             first_source_emit_monotonic_nanoseconds: None,
-            every_received_frame_measurement: Vec::new(),
+            every_received_frame_measurement: Vec::with_capacity(expected_frame_count),
             source_emit_to_sink_receive_histogram: new_nanosecond_histogram(),
             stage_callback_histogram: new_nanosecond_histogram(),
-            measured_sink_receive_monotonic_nanoseconds: Vec::new(),
+            measured_sink_receive_monotonic_nanoseconds: Vec::with_capacity(expected_frame_count),
             lowest_measured_frame_sequence_number: None,
             highest_measured_frame_sequence_number: None,
             measured_frame_count: 0,
@@ -106,8 +117,16 @@ impl LatencyMeasurementRecorder {
     }
 
     /// Take one frame's stamps, called once per frame the sink observes.
+    ///
+    /// With `stamping-compiled-out` the stamps are all zero, so only the frame
+    /// count is kept: throughput stays observable, and no histogram or
+    /// percentile work runs. That is the whole point of the control build — any
+    /// throughput delta against a default build is instrument overhead.
     pub fn record_frame_measurement(&mut self, measurement: PerFrameLatencyMeasurement) {
         self.every_received_frame_measurement.push(measurement);
+        if !crate::monotonic_clock::MEASUREMENT_STAMPING_IS_COMPILED_IN {
+            return;
+        }
         let first_source_emit_monotonic_nanoseconds = *self
             .first_source_emit_monotonic_nanoseconds
             .get_or_insert(measurement.source_emit_monotonic_nanoseconds);
@@ -342,7 +361,11 @@ fn summarize_nanosecond_histogram(histogram: &Histogram<u64>) -> LatencyPercenti
     }
 }
 
-#[cfg(test)]
+// These exercise the recording logic that `stamping-compiled-out` removes. In a
+// control build there is nothing left to assert: `record_frame_measurement`
+// keeps only the frame count, which is what makes that build a throughput
+// control rather than a measurement.
+#[cfg(all(test, not(feature = "stamping-compiled-out")))]
 mod tests {
     use super::*;
     use hdrhistogram::serialization::interval_log::LogEntry;
@@ -377,7 +400,7 @@ mod tests {
     /// non-comparable.
     #[test]
     fn frame_exactly_on_the_warmup_deadline_is_measured() {
-        let mut recorder = LatencyMeasurementRecorder::new(WARMUP_EXCLUSION_NANOSECONDS);
+        let mut recorder = LatencyMeasurementRecorder::new(WARMUP_EXCLUSION_NANOSECONDS, 0);
         recorder.record_frame_measurement(build_per_frame_latency_measurement(0, 1_000, 5_000, 0));
         recorder.record_frame_measurement(build_per_frame_latency_measurement(
             1,
@@ -404,7 +427,7 @@ mod tests {
     /// disagree about which frames the cell measured.
     #[test]
     fn warmup_excluded_frames_reach_the_jsonl_but_not_the_histograms() {
-        let mut recorder = LatencyMeasurementRecorder::new(WARMUP_EXCLUSION_NANOSECONDS);
+        let mut recorder = LatencyMeasurementRecorder::new(WARMUP_EXCLUSION_NANOSECONDS, 0);
         for frame_sequence_number in 0..10u64 {
             recorder.record_frame_measurement(build_per_frame_latency_measurement(
                 frame_sequence_number,
@@ -434,7 +457,7 @@ mod tests {
     /// must be counted exactly once.
     #[test]
     fn dropped_frame_count_counts_a_synthetic_sequence_gap() {
-        let mut recorder = LatencyMeasurementRecorder::new(0);
+        let mut recorder = LatencyMeasurementRecorder::new(0, 0);
         for frame_sequence_number in [0u64, 1, 2, 5, 6] {
             recorder.record_frame_measurement(build_per_frame_latency_measurement(
                 frame_sequence_number,
@@ -451,7 +474,7 @@ mod tests {
     /// charged a gap against sequence number 0 or against nothing at all.
     #[test]
     fn first_observed_frame_reports_no_drop() {
-        let mut recorder = LatencyMeasurementRecorder::new(0);
+        let mut recorder = LatencyMeasurementRecorder::new(0, 0);
         recorder.record_frame_measurement(build_per_frame_latency_measurement(7, 1_000, 5_000, 0));
         assert_eq!(recorder.dropped_frame_count(), 0);
         assert_eq!(recorder.received_frame_count(), 1);
@@ -461,7 +484,7 @@ mod tests {
     /// leave a permanent phantom drop in the report.
     #[test]
     fn out_of_order_arrival_reports_no_phantom_drop() {
-        let mut recorder = LatencyMeasurementRecorder::new(0);
+        let mut recorder = LatencyMeasurementRecorder::new(0, 0);
         for frame_sequence_number in [0u64, 2, 1, 3] {
             recorder.record_frame_measurement(build_per_frame_latency_measurement(
                 frame_sequence_number,
@@ -478,7 +501,7 @@ mod tests {
     /// mode of the embedded arm and must be legible as such.
     #[test]
     fn no_frames_received_reports_a_zero_count_summary() {
-        let recorder = LatencyMeasurementRecorder::new(WARMUP_EXCLUSION_NANOSECONDS);
+        let recorder = LatencyMeasurementRecorder::new(WARMUP_EXCLUSION_NANOSECONDS, 0);
         assert_eq!(recorder.received_frame_count(), 0);
         assert_eq!(recorder.dropped_frame_count(), 0);
         assert!(recorder.rolling_one_second_frame_rate_windows().is_empty());
@@ -497,7 +520,7 @@ mod tests {
     /// it must be counted and kept out of the histogram.
     #[test]
     fn negative_latency_increments_the_anomaly_counter_and_skips_the_histogram() {
-        let mut recorder = LatencyMeasurementRecorder::new(0);
+        let mut recorder = LatencyMeasurementRecorder::new(0, 0);
         recorder.record_frame_measurement(build_per_frame_latency_measurement(
             0, 1_000_000, 2_000_000, 0,
         ));
@@ -517,7 +540,7 @@ mod tests {
     /// it means instrumentation is broken; it must surface, not be absorbed.
     #[test]
     fn negative_stage_callback_duration_increments_the_anomaly_counter() {
-        let mut recorder = LatencyMeasurementRecorder::new(0);
+        let mut recorder = LatencyMeasurementRecorder::new(0, 0);
         recorder.record_frame_measurement(build_per_frame_latency_measurement(
             0, 1_000_000, 500_000, -1,
         ));
@@ -537,7 +560,7 @@ mod tests {
     fn percentiles_match_a_hand_computed_distribution() {
         const ONE_MILLISECOND_NANOSECONDS: i64 = 1_000_000;
         const ONE_HUNDRED_MILLISECONDS_NANOSECONDS: i64 = 100_000_000;
-        let mut recorder = LatencyMeasurementRecorder::new(0);
+        let mut recorder = LatencyMeasurementRecorder::new(0, 0);
         for frame_sequence_number in 0..1_000u64 {
             let latency_nanoseconds = if frame_sequence_number < 990 {
                 ONE_MILLISECOND_NANOSECONDS
@@ -589,7 +612,7 @@ mod tests {
     #[test]
     fn rolling_windows_report_the_nominal_rate_of_a_perfectly_paced_stream() {
         const FIFTY_FPS_PERIOD_NANOSECONDS: i64 = ONE_SECOND_NANOSECONDS / 50;
-        let mut recorder = LatencyMeasurementRecorder::new(0);
+        let mut recorder = LatencyMeasurementRecorder::new(0, 0);
         for frame_sequence_number in 0..300u64 {
             recorder.record_frame_measurement(build_per_frame_latency_measurement(
                 frame_sequence_number,
@@ -610,7 +633,7 @@ mod tests {
     /// compact object per line, no wrapping array, every field intact.
     #[test]
     fn jsonl_round_trips_line_by_line_through_serde_json() {
-        let mut recorder = LatencyMeasurementRecorder::new(0);
+        let mut recorder = LatencyMeasurementRecorder::new(0, 0);
         let written_measurements: Vec<PerFrameLatencyMeasurement> = (0..5u64)
             .map(|frame_sequence_number| {
                 build_per_frame_latency_measurement(
@@ -663,8 +686,8 @@ mod tests {
     /// cross-cell percentiles would be uncomputable.
     #[test]
     fn histogram_export_decodes_and_merges_across_cells() {
-        let mut first_cell_recorder = LatencyMeasurementRecorder::new(0);
-        let mut second_cell_recorder = LatencyMeasurementRecorder::new(0);
+        let mut first_cell_recorder = LatencyMeasurementRecorder::new(0, 0);
+        let mut second_cell_recorder = LatencyMeasurementRecorder::new(0, 0);
         for frame_sequence_number in 0..100u64 {
             first_cell_recorder.record_frame_measurement(build_per_frame_latency_measurement(
                 frame_sequence_number,
@@ -752,5 +775,59 @@ mod tests {
             }
         }
         decoded_bytes
+    }
+}
+
+#[cfg(all(test, not(feature = "stamping-compiled-out")))]
+mod histogram_range_tests {
+    use super::*;
+
+    /// A summary must never report p50 above max. With a histogram floor above
+    /// the clock's resolution, sub-floor samples round up into the first bucket
+    /// while `max()` keeps the true value — the floor arm's all-zero stage
+    /// durations produced p50 63ns against max 0ns before the floor was
+    /// lowered to 1ns.
+    #[test]
+    fn an_all_zero_quantity_never_reports_a_percentile_above_its_maximum() {
+        let mut recorder = LatencyMeasurementRecorder::new(0, 8);
+        for frame_sequence_number in 0..300 {
+            recorder.record_frame_measurement(PerFrameLatencyMeasurement {
+                frame_sequence_number,
+                source_emit_monotonic_nanoseconds: 1_000 * frame_sequence_number as i64,
+                sink_receive_monotonic_nanoseconds: 1_000 * frame_sequence_number as i64 + 500,
+                stage_callback_nanoseconds: 0,
+            });
+        }
+        let summary = recorder.stage_callback_summary();
+        assert!(
+            summary.p50_nanoseconds <= summary.max_nanoseconds,
+            "p50 {} exceeds max {}",
+            summary.p50_nanoseconds,
+            summary.max_nanoseconds
+        );
+        assert!(summary.p99_9_nanoseconds <= summary.max_nanoseconds);
+    }
+
+    /// Sub-microsecond stage durations are the anchored PyO3 path's whole
+    /// signal (p50 ~110ns measured); a floor that quantized them would erase
+    /// the difference the spike exists to size.
+    #[test]
+    fn sub_microsecond_durations_are_not_quantized_into_one_bucket() {
+        let mut recorder = LatencyMeasurementRecorder::new(0, 8);
+        for (index, stage_callback_nanoseconds) in [100_i64, 200, 400, 800].into_iter().enumerate() {
+            recorder.record_frame_measurement(PerFrameLatencyMeasurement {
+                frame_sequence_number: index as u64,
+                source_emit_monotonic_nanoseconds: 1_000 * index as i64,
+                sink_receive_monotonic_nanoseconds: 1_000 * index as i64 + 500,
+                stage_callback_nanoseconds,
+            });
+        }
+        let summary = recorder.stage_callback_summary();
+        assert_eq!(summary.max_nanoseconds, 800);
+        assert!(
+            summary.p50_nanoseconds >= 200 && summary.p50_nanoseconds <= 400,
+            "p50 {} collapsed the 100..800ns spread",
+            summary.p50_nanoseconds
+        );
     }
 }

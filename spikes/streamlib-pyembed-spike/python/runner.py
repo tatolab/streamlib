@@ -2,8 +2,14 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Measurement-cell driver for the #1702 in-process-Python spike: resolves one
-cell of the (arm x fps x stage x gc) matrix, records its spec, and runs it.
+"""Drives the Rust Tier A harness over an A/B/A interleaved schedule: one
+harness process per cell, a pure-Rust floor cell on either side of the arm under
+test, so a drift in the machine between cells shows up as a floor-to-floor
+difference instead of being charged to the arm under test.
+
+The harness owns every measurement artifact of a cell, `cell-spec.json`
+included. This runner records only what it resolved itself, into
+`runner-invocation.json`, which points at the harness's cell directory.
 
 Throwaway spike code. Its API shape is explicitly not a proposal for the SDK."""
 
@@ -13,6 +19,7 @@ import logging
 import os
 import subprocess
 import sys
+import time
 
 import numpy
 
@@ -22,144 +29,261 @@ from gc_collection_attribution import (
     GarbageCollectionPauseAttributionRecorder,
     read_raw_monotonic_clock_nanoseconds,
 )
+from spike_stage_callbacks import build_measurement_stage_callback_for_stage_name
 
 MEASUREMENT_CELL_LOGGER = logging.getLogger("streamlib_pyembed_spike.runner")
 
-MEASUREMENT_ARM_IN_PROCESS_PYTHON = "in-process"
-MEASUREMENT_ARM_SUBPROCESS_PYTHON = "subprocess"
-MEASUREMENT_ARM_RUST_PASSTHROUGH_FLOOR = "rust-floor"
-SUPPORTED_MEASUREMENT_ARMS = (
-    MEASUREMENT_ARM_IN_PROCESS_PYTHON,
-    MEASUREMENT_ARM_SUBPROCESS_PYTHON,
-    MEASUREMENT_ARM_RUST_PASSTHROUGH_FLOOR,
+RUNNER_MODE_IN_PROCESS_PYTHON = "in-process"
+RUNNER_MODE_SUBPROCESS_PYTHON = "subprocess"
+RUNNER_MODE_RUST_PASSTHROUGH_FLOOR = "rust-floor"
+SUPPORTED_RUNNER_MODES = (
+    RUNNER_MODE_IN_PROCESS_PYTHON,
+    RUNNER_MODE_SUBPROCESS_PYTHON,
+    RUNNER_MODE_RUST_PASSTHROUGH_FLOOR,
 )
+
+# The runner's `--mode` spelling is the ticket's documented CLI; the harness's
+# `--arm` spelling is what lands in the artifacts. They are deliberately
+# separate vocabularies and this table is the only place they meet.
+HARNESS_ARM_BY_RUNNER_MODE = {
+    RUNNER_MODE_IN_PROCESS_PYTHON: "in-process-python",
+    RUNNER_MODE_RUST_PASSTHROUGH_FLOOR: "rust-passthrough-floor",
+}
 
 STAGE_NAME_PASSTHROUGH = "passthrough"
 STAGE_NAME_REALISTIC = "realistic"
 SUPPORTED_STAGE_NAMES = (STAGE_NAME_PASSTHROUGH, STAGE_NAME_REALISTIC)
 
-# Owner decision for #1702: latency percentiles are the primary signal and every
-# emitted sample must reach the sink, so no lossy delivery profile is offered.
-# Drops are counted and reported but do not gate.
-RESOLVED_DELIVERY_PROFILE = "every_sample"
+# The harness imports this module from PYTHONPATH inside its embedded
+# interpreter and calls the resolved attribute once per frame.
+HARNESS_STAGE_CALLBACK_MODULE_NAME = "spike_stage_callbacks"
+HARNESS_STAGE_CALLBACK_ATTRIBUTE_BY_STAGE_NAME = {
+    STAGE_NAME_PASSTHROUGH: "passthrough_stage",
+    STAGE_NAME_REALISTIC: "realistic_stage",
+}
 
-# The metric the Rust sink computes from the in-band preamble. "capture to
-# present" is NOT observable in this rig and must never be used as a metric name.
-PRIMARY_LATENCY_METRIC_NAME = "source_emit_to_sink_receive"
-
-FRAME_CHANNEL_COUNT = 4
-REALISTIC_STAGE_CALIBRATION_ITERATION_COUNT = 200
-REALISTIC_STAGE_CALIBRATION_WARMUP_ITERATION_COUNT = 10
-
-# Tuned on this rig (Ryzen-class x86_64, CPython 3.12.3, numpy 2.4.4) so the
-# realistic stage lands inside the ticket's 2-5ms budget for 1920x1080x4 uint8:
-# measured p50 ~2.5ms, p99 ~4.5ms. Changing any of these three constants
-# re-tunes the cost and invalidates cross-cell comparison.
-REALISTIC_STAGE_GAIN_NUMERATOR = 5
-REALISTIC_STAGE_GAIN_DENOMINATOR = 4
-REALISTIC_STAGE_BRIGHTNESS_BIAS = 8
-
-# PROVISIONAL, see the contract note on
-# `invoke_rust_measurement_harness_for_measurement_cell`: the handover mechanism
-# for the in-process arm's stage callable is not finalized.
-STAGE_CALLBACK_MODULE_ENVIRONMENT_VARIABLE = (
-    "STREAMLIB_PYEMBED_SPIKE_STAGE_CALLBACK_MODULE_PATH"
-)
-STAGE_CALLBACK_FACTORY_ENVIRONMENT_VARIABLE = (
-    "STREAMLIB_PYEMBED_SPIKE_STAGE_CALLBACK_FACTORY_NAME"
-)
 HARNESS_BINARY_ENVIRONMENT_VARIABLE = "STREAMLIB_PYEMBED_SPIKE_HARNESS_BINARY"
 
-MEASUREMENT_CELL_SPECIFICATION_FILE_NAME = "cell-spec.json"
-# Two files, because under the exec arrangement two interpreters exist and only
-# the one running the stage callback can explain a frame-latency tail spike.
+RUNNER_INVOCATION_RECORD_FILE_NAME = "runner-invocation.json"
+HARNESS_CELL_SPECIFICATION_FILE_NAME = "cell-spec.json"
+HARNESS_CELL_SUMMARY_FILE_NAME = "summary.json"
 RUNNER_INTERPRETER_GARBAGE_COLLECTION_RECORD_FILE_NAME = (
     "gc-collections-runner-interpreter.jsonl"
 )
-EMBEDDED_INTERPRETER_GARBAGE_COLLECTION_RECORD_FILE_NAME = (
-    "gc-collections-embedded-interpreter.jsonl"
-)
+
+FRAME_CHANNEL_COUNT = 4
+STAGE_CALLBACK_CALIBRATION_ITERATION_COUNT = 200
+STAGE_CALLBACK_CALIBRATION_WARMUP_ITERATION_COUNT = 10
+
+# The protocol excludes the first 60s of every cell. A cell shorter than that
+# cannot honour it, so short exploratory cells fall back to the value below and
+# are logged as non-protocol rather than silently measuring nothing.
+PROTOCOL_WARMUP_EXCLUSION_SECONDS = 60
+EXPLORATORY_CELL_WARMUP_EXCLUSION_SECONDS = 1
+
+# Some filesystems round modification times to whole seconds, so a cell
+# directory written milliseconds after the harness started can carry a stamp
+# fractionally before it. The newest match wins, so the slack only widens the
+# candidate set.
+CELL_DIRECTORY_MODIFICATION_TIME_SLACK_SECONDS = 2.0
 
 
-def passthrough_measurement_stage_callback(frame_pixel_array):
-    """The zero-work stage: everything it costs is GIL acquisition plus building
-    the numpy view over the Rust buffer."""
-    return None
+class SubprocessArmIsTierBAndNotImplementedError(NotImplementedError):
+    """Raised for `--mode subprocess`, which no code path in this PR implements."""
 
 
-def build_realistic_measurement_stage_callback(frame_width, frame_height):
-    """Build the ~2-5ms numpy stage callback for a frame geometry.
-
-    The returned callable mutates the caller's array in place. It never rebinds
-    the name: the array aliases a Rust-owned buffer, so a rebind would discard
-    the work silently."""
-    expected_element_count = frame_width * frame_height * FRAME_CHANNEL_COUNT
-    expected_frame_shape = (frame_height, frame_width, FRAME_CHANNEL_COUNT)
-    # Sized once and reused. A per-frame 16 MB int16 temporary would make this
-    # cell an allocator benchmark: the in-process arm shares the engine's
-    # allocator and the subprocess arm does not, so that churn would land
-    # unevenly on the two arms' tails and confound the comparison being made.
-    intermediate_pixel_scratch = numpy.empty(expected_frame_shape, dtype=numpy.int16)
-
-    def realistic_measurement_stage_callback(frame_pixel_array):
-        frame_pixel_view = _reshape_frame_pixel_array_without_copying(
-            frame_pixel_array, expected_element_count, expected_frame_shape
+def resolve_harness_arm_for_runner_mode(runner_mode):
+    """Map a runner `--mode` to the harness `--arm` token it drives."""
+    if runner_mode == RUNNER_MODE_SUBPROCESS_PYTHON:
+        raise SubprocessArmIsTierBAndNotImplementedError(
+            "--mode subprocess is the Tier B baseline and is not in this PR: no "
+            "subprocess arm exists in the harness, which accepts only "
+            "in-process-python and rust-passthrough-floor. Run it from the Tier B "
+            "work on #1702."
         )
-        numpy.copyto(intermediate_pixel_scratch, frame_pixel_view, casting="unsafe")
-        numpy.multiply(
-            intermediate_pixel_scratch,
-            REALISTIC_STAGE_GAIN_NUMERATOR,
-            out=intermediate_pixel_scratch,
-        )
-        numpy.floor_divide(
-            intermediate_pixel_scratch,
-            REALISTIC_STAGE_GAIN_DENOMINATOR,
-            out=intermediate_pixel_scratch,
-        )
-        numpy.add(
-            intermediate_pixel_scratch,
-            REALISTIC_STAGE_BRIGHTNESS_BIAS,
-            out=intermediate_pixel_scratch,
-        )
-        numpy.clip(intermediate_pixel_scratch, 0, 255, out=intermediate_pixel_scratch)
-        numpy.copyto(frame_pixel_view, intermediate_pixel_scratch, casting="unsafe")
-        return None
-
-    return realistic_measurement_stage_callback
-
-
-def _reshape_frame_pixel_array_without_copying(
-    frame_pixel_array, expected_element_count, expected_frame_shape
-):
-    if frame_pixel_array.size != expected_element_count:
+    if runner_mode not in HARNESS_ARM_BY_RUNNER_MODE:
         raise ValueError(
-            f"frame carries {frame_pixel_array.size} elements, "
-            f"cell geometry expects {expected_element_count}"
+            f"unsupported runner mode {runner_mode!r}; expected one of "
+            f"{SUPPORTED_RUNNER_MODES}"
         )
-    if frame_pixel_array.shape == expected_frame_shape:
-        return frame_pixel_array
-    # numpy.reshape falls back to a copy when the source is not C-contiguous,
-    # and a copy would send every pixel write to a temporary the Rust side never
-    # reads. Refuse rather than silently produce a no-op stage.
-    if not frame_pixel_array.flags.c_contiguous:
+    return HARNESS_ARM_BY_RUNNER_MODE[runner_mode]
+
+
+def resolve_harness_stage_callback_attribute_for_stage_name(stage_name):
+    """Map a runner `--stage` to the callable the harness imports per frame."""
+    if stage_name not in HARNESS_STAGE_CALLBACK_ATTRIBUTE_BY_STAGE_NAME:
         raise ValueError(
-            "frame buffer is not C-contiguous; reshaping it would copy and the "
-            "stage would no longer write through to the Rust buffer"
+            f"unsupported stage name {stage_name!r}; expected one of "
+            f"{SUPPORTED_STAGE_NAMES}"
         )
-    return frame_pixel_array.reshape(expected_frame_shape)
+    return HARNESS_STAGE_CALLBACK_ATTRIBUTE_BY_STAGE_NAME[stage_name]
 
 
-def build_measurement_stage_callback_for_stage_name(
-    stage_name, frame_width, frame_height
+def resolve_cell_duration_seconds(requested_duration_seconds):
+    """The harness measures in whole seconds, so a fractional duration is a
+    request the rig cannot honour and must not be rounded away silently."""
+    whole_duration_seconds = int(requested_duration_seconds)
+    if whole_duration_seconds != requested_duration_seconds:
+        raise ValueError(
+            f"--duration {requested_duration_seconds} is not a whole number of "
+            "seconds; the harness's --duration-seconds is integral"
+        )
+    if whole_duration_seconds < 1:
+        raise ValueError("--duration must be at least one second")
+    return whole_duration_seconds
+
+
+def resolve_warmup_exclusion_seconds(
+    requested_warmup_exclusion_seconds, cell_duration_seconds
 ):
-    """Resolve a `--stage` value to the callable the harness invokes per frame."""
-    if stage_name == STAGE_NAME_PASSTHROUGH:
-        return passthrough_measurement_stage_callback
-    if stage_name == STAGE_NAME_REALISTIC:
-        return build_realistic_measurement_stage_callback(frame_width, frame_height)
-    raise ValueError(
-        f"unsupported stage name {stage_name!r}; expected one of {SUPPORTED_STAGE_NAMES}"
+    """Resolve the warmup exclusion the harness is told to apply."""
+    if requested_warmup_exclusion_seconds is not None:
+        resolved_warmup_exclusion_seconds = requested_warmup_exclusion_seconds
+    elif cell_duration_seconds > PROTOCOL_WARMUP_EXCLUSION_SECONDS:
+        resolved_warmup_exclusion_seconds = PROTOCOL_WARMUP_EXCLUSION_SECONDS
+    else:
+        resolved_warmup_exclusion_seconds = EXPLORATORY_CELL_WARMUP_EXCLUSION_SECONDS
+        MEASUREMENT_CELL_LOGGER.warning(
+            "cell duration %ds cannot carry the protocol's %ds warmup exclusion; "
+            "excluding %ds instead — these cells are exploratory and their "
+            "percentiles are not protocol numbers",
+            cell_duration_seconds,
+            PROTOCOL_WARMUP_EXCLUSION_SECONDS,
+            EXPLORATORY_CELL_WARMUP_EXCLUSION_SECONDS,
+        )
+
+    if resolved_warmup_exclusion_seconds < 0:
+        raise ValueError("--warmup-exclusion-seconds cannot be negative")
+    # A cell whose warmup covers its whole duration still exits 0 and still
+    # writes a summary — one whose percentiles are all zero, which reads like a
+    # very fast cell rather than an empty one.
+    if resolved_warmup_exclusion_seconds >= cell_duration_seconds:
+        raise ValueError(
+            f"a {resolved_warmup_exclusion_seconds}s warmup exclusion covers the "
+            f"whole {cell_duration_seconds}s cell and no frame would be measured; "
+            "lengthen --duration or pass a smaller --warmup-exclusion-seconds"
+        )
+    return resolved_warmup_exclusion_seconds
+
+
+def build_interleaved_measurement_schedule_for_runner_mode(runner_mode):
+    """The cell order inside one repetition: floor, arm under test, floor.
+
+    A schedule of only floor cells would compare the floor against itself, so
+    the floor mode collapses to a single cell per repetition."""
+    if runner_mode == RUNNER_MODE_RUST_PASSTHROUGH_FLOOR:
+        return (RUNNER_MODE_RUST_PASSTHROUGH_FLOOR,)
+    return (
+        RUNNER_MODE_RUST_PASSTHROUGH_FLOOR,
+        runner_mode,
+        RUNNER_MODE_RUST_PASSTHROUGH_FLOOR,
     )
+
+
+def build_harness_repetition_index(
+    runner_repetition_index, schedule_position_index, schedule_length
+):
+    """Give every cell of every repetition its own harness repetition index.
+
+    The harness derives its cell directory name from arm, rate, GIL anchor and
+    repetition index — the two floor cells of one A/B/A repetition agree on all
+    but the last, so sharing an index would make the second silently overwrite
+    the first."""
+    return runner_repetition_index * schedule_length + schedule_position_index
+
+
+def build_tier_a_harness_command_line(
+    command_line_arguments,
+    harness_arm,
+    harness_repetition_index,
+    cell_duration_seconds,
+    warmup_exclusion_seconds,
+    garbage_collection_mode,
+):
+    """The exact argv for one cell. Every flag here is declared by
+    `src/bin/tier_a_harness.rs`; the harness rejects anything else."""
+    harness_command_line = [
+        command_line_arguments.harness_binary,
+        "--arm",
+        harness_arm,
+        "--fps",
+        str(command_line_arguments.fps),
+        "--frame-width",
+        str(command_line_arguments.frame_width),
+        "--frame-height",
+        str(command_line_arguments.frame_height),
+        "--channels",
+        str(FRAME_CHANNEL_COUNT),
+        "--duration-seconds",
+        str(cell_duration_seconds),
+        "--warmup-exclusion-seconds",
+        str(warmup_exclusion_seconds),
+        "--repetition-index",
+        str(harness_repetition_index),
+        "--stage-callback-module",
+        HARNESS_STAGE_CALLBACK_MODULE_NAME,
+        "--garbage-collection-mode",
+        garbage_collection_mode,
+        "--stage-callback-attribute",
+        resolve_harness_stage_callback_attribute_for_stage_name(
+            command_line_arguments.stage
+        ),
+        "--output-directory",
+        os.path.abspath(command_line_arguments.output_dir),
+    ]
+    if command_line_arguments.disable_gil_anchor:
+        harness_command_line.append("--disable-gil-anchor")
+    if command_line_arguments.require_locked_measurement_state:
+        harness_command_line.append("--require-locked-measurement-state")
+    return harness_command_line
+
+
+def build_tier_a_harness_process_environment():
+    """The harness imports the stage callback module by name from PYTHONPATH, so
+    this module's own directory has to be on it whatever the caller's cwd is."""
+    harness_process_environment = dict(os.environ)
+    spike_python_directory = os.path.dirname(os.path.abspath(__file__))
+    existing_python_path = harness_process_environment.get("PYTHONPATH", "")
+    harness_process_environment["PYTHONPATH"] = os.pathsep.join(
+        [spike_python_directory, existing_python_path]
+        if existing_python_path
+        else [spike_python_directory]
+    )
+    return harness_process_environment
+
+
+def locate_measurement_cell_directory_created_by_harness(
+    harness_output_directory, harness_started_at_epoch_seconds
+):
+    """Find the cell directory the harness just created, by looking rather than
+    predicting: the harness derives the name from its own specification and this
+    runner must not carry a second copy of that rule."""
+    if not os.path.isdir(harness_output_directory):
+        return None
+    earliest_acceptable_modification_time = (
+        harness_started_at_epoch_seconds - CELL_DIRECTORY_MODIFICATION_TIME_SLACK_SECONDS
+    )
+    newest_cell_directory_path = None
+    newest_summary_modification_time = None
+    with os.scandir(harness_output_directory) as output_directory_entries:
+        for output_directory_entry in output_directory_entries:
+            if not output_directory_entry.is_dir():
+                continue
+            candidate_summary_path = os.path.join(
+                output_directory_entry.path, HARNESS_CELL_SUMMARY_FILE_NAME
+            )
+            if not os.path.isfile(candidate_summary_path):
+                continue
+            summary_modification_time = os.stat(candidate_summary_path).st_mtime
+            if summary_modification_time < earliest_acceptable_modification_time:
+                continue
+            if (
+                newest_summary_modification_time is None
+                or summary_modification_time > newest_summary_modification_time
+            ):
+                newest_summary_modification_time = summary_modification_time
+                newest_cell_directory_path = output_directory_entry.path
+    return newest_cell_directory_path
 
 
 def summarize_sorted_nanosecond_samples(sorted_nanosecond_samples):
@@ -182,22 +306,24 @@ def summarize_sorted_nanosecond_samples(sorted_nanosecond_samples):
     }
 
 
-def measure_stage_callback_cost_on_this_machine(
-    measurement_stage_callback, frame_width, frame_height
-):
-    """Time the stage callback against a synthetic frame so the cell spec records
-    what the stage actually costs on the machine the cell ran on."""
+def measure_stage_callback_cost_in_runner_interpreter(stage_name, frame_width, frame_height):
+    """Time the harness's own stage callable against a synthetic frame, so the
+    invocation record says what that stage costs on this machine.
+
+    This runs in the runner's interpreter, not the harness's embedded one: it
+    sizes the stage, it does not measure the cell."""
+    measurement_stage_callback = build_measurement_stage_callback_for_stage_name(stage_name)
     synthetic_frame_pixel_array = numpy.random.default_rng(seed=1702).integers(
         0,
         256,
         size=(frame_height, frame_width, FRAME_CHANNEL_COUNT),
         dtype=numpy.uint8,
     )
-    for _ in range(REALISTIC_STAGE_CALIBRATION_WARMUP_ITERATION_COUNT):
+    for _ in range(STAGE_CALLBACK_CALIBRATION_WARMUP_ITERATION_COUNT):
         measurement_stage_callback(synthetic_frame_pixel_array)
 
     observed_nanosecond_samples = []
-    for _ in range(REALISTIC_STAGE_CALIBRATION_ITERATION_COUNT):
+    for _ in range(STAGE_CALLBACK_CALIBRATION_ITERATION_COUNT):
         started_at_nanoseconds = read_raw_monotonic_clock_nanoseconds()
         measurement_stage_callback(synthetic_frame_pixel_array)
         observed_nanosecond_samples.append(
@@ -207,169 +333,304 @@ def measure_stage_callback_cost_on_this_machine(
     return summarize_sorted_nanosecond_samples(observed_nanosecond_samples)
 
 
-def build_measurement_cell_directory_name(
-    measurement_arm, frames_per_second, stage_name, garbage_collection_mode,
-    repetition_index,
-):
-    """Unambiguous, lexically sortable directory name for one cell.
-
-    Zero-padded so a plain `sort` orders 8fps before 60fps, and arm-first so an
-    A/B/A schedule's cells still group by arm on disk."""
-    return (
-        f"arm-{measurement_arm}"
-        f"__fps-{frames_per_second:03d}"
-        f"__stage-{stage_name}"
-        f"__gc-{garbage_collection_mode}"
-        f"__rep-{repetition_index:03d}"
-    )
-
-
-def build_measurement_cell_specification(
+def build_runner_invocation_record(
     command_line_arguments,
-    garbage_collection_configuration,
+    harness_arm,
+    harness_command_line,
+    runner_repetition_index,
+    schedule_position_index,
+    harness_repetition_index,
+    cell_duration_seconds,
+    warmup_exclusion_seconds,
+    runner_interpreter_garbage_collection_configuration,
     stage_callback_cost_summary,
     measurement_cell_directory,
 ):
-    """Every resolved parameter of the cell.
+    """What this runner resolved for one cell, and where the harness's own
+    authoritative specification for that cell lives.
 
-    The summarizer refuses to evaluate a gate the recorded configuration cannot
-    support, so a missing field here silently drops a gate from the artifact."""
+    Deliberately carries no measurement parameter the harness records itself:
+    two files claiming to be the cell's specification is how the artifact
+    directory acquires two disagreeing answers."""
     return {
-        "measurement_arm": command_line_arguments.mode,
-        "frames_per_second": command_line_arguments.fps,
+        "runner_mode": command_line_arguments.mode,
+        "harness_arm": harness_arm,
         "stage_name": command_line_arguments.stage,
-        "garbage_collection_mode": command_line_arguments.gc,
-        "duration_seconds": command_line_arguments.duration,
-        "frame_width": command_line_arguments.frame_width,
-        "frame_height": command_line_arguments.frame_height,
-        "frame_channel_count": FRAME_CHANNEL_COUNT,
-        "repetition_index": command_line_arguments.repetition_index,
-        "output_directory": os.path.abspath(command_line_arguments.output_dir),
-        "measurement_cell_directory": os.path.abspath(measurement_cell_directory),
-        "delivery_profile": RESOLVED_DELIVERY_PROFILE,
-        "primary_latency_metric_name": PRIMARY_LATENCY_METRIC_NAME,
-        "expected_frame_count": int(
-            command_line_arguments.fps * command_line_arguments.duration
+        "harness_stage_callback_module": HARNESS_STAGE_CALLBACK_MODULE_NAME,
+        "harness_stage_callback_attribute": (
+            resolve_harness_stage_callback_attribute_for_stage_name(
+                command_line_arguments.stage
+            )
         ),
-        "applied_garbage_collection_configuration": garbage_collection_configuration,
-        "measured_stage_callback_cost": stage_callback_cost_summary,
-        "realistic_stage_operation": (
-            "int16 scratch: gain "
-            f"{REALISTIC_STAGE_GAIN_NUMERATOR}/{REALISTIC_STAGE_GAIN_DENOMINATOR}, "
-            f"bias +{REALISTIC_STAGE_BRIGHTNESS_BIAS}, clip 0..255, "
-            "written back in place"
+        "harness_binary_path": os.path.abspath(command_line_arguments.harness_binary),
+        "harness_command_line": harness_command_line,
+        "harness_output_directory": os.path.abspath(command_line_arguments.output_dir),
+        "measurement_cell_directory": measurement_cell_directory,
+        "authoritative_cell_specification_path": os.path.join(
+            measurement_cell_directory, HARNESS_CELL_SPECIFICATION_FILE_NAME
         ),
+        "interleaved_schedule": list(
+            build_interleaved_measurement_schedule_for_runner_mode(
+                command_line_arguments.mode
+            )
+        ),
+        "runner_repetition_index": runner_repetition_index,
+        "schedule_position_index": schedule_position_index,
+        "harness_repetition_index": harness_repetition_index,
+        "cell_duration_seconds": cell_duration_seconds,
+        "warmup_exclusion_seconds": warmup_exclusion_seconds,
+        "expected_frame_count": command_line_arguments.fps * cell_duration_seconds,
+        # Applied to the interpreter this runner runs in. Nothing configures the
+        # harness's embedded interpreter, so this must never be read as the
+        # cell's GC configuration.
+        "runner_interpreter_garbage_collection_configuration": (
+            runner_interpreter_garbage_collection_configuration
+        ),
+        "measured_stage_callback_cost_in_runner_interpreter": stage_callback_cost_summary,
         "python_version": sys.version,
         "numpy_version": numpy.__version__,
         "runner_module_path": os.path.abspath(__file__),
     }
 
 
-def invoke_rust_measurement_harness_for_measurement_cell(
-    harness_binary_path, measurement_cell_directory, measurement_cell_specification_path
+def write_json_document(output_path, document):
+    """Write one pretty-printed JSON document, newline-terminated."""
+    with open(output_path, "w", encoding="utf-8") as json_output_file:
+        json.dump(document, json_output_file, indent=2)
+        json_output_file.write("\n")
+
+
+def run_one_measurement_cell(
+    command_line_arguments,
+    cell_runner_mode,
+    runner_repetition_index,
+    schedule_position_index,
+    schedule_length,
+    cell_duration_seconds,
+    warmup_exclusion_seconds,
+    runner_interpreter_garbage_collection_configuration,
+    stage_callback_cost_summary,
 ):
-    """Run the Rust side of the cell. This is the only place the two languages meet.
-
-    Contract as implemented (subprocess exec):
-      argv: <harness_binary_path>
-            --cell-directory <measurement_cell_directory>
-            --cell-specification <measurement_cell_specification_path>
-      The harness reads every resolved parameter from the cell spec, writes its
-      per-frame JSONL into the cell directory, and exits 0 only on a clean run.
-      For the `in-process` arm it loads this module and calls
-      `build_measurement_stage_callback_for_stage_name`, located via the two
-      STAGE_CALLBACK_* environment variables set below.
-
-    OPEN: the orchestrator has not settled whether the harness is a binary that
-    embeds CPython (this path) or a cdylib that CPython imports (in which case
-    this function becomes an import plus a call, and the environment variables
-    below are unnecessary). Both arrangements keep the boundary in this one
-    function."""
-    harness_environment = dict(os.environ)
-    harness_environment[STAGE_CALLBACK_MODULE_ENVIRONMENT_VARIABLE] = os.path.abspath(
-        __file__
+    """Run one cell to completion. Returns the harness's exit status."""
+    harness_arm = resolve_harness_arm_for_runner_mode(cell_runner_mode)
+    harness_repetition_index = build_harness_repetition_index(
+        runner_repetition_index, schedule_position_index, schedule_length
     )
-    harness_environment[STAGE_CALLBACK_FACTORY_ENVIRONMENT_VARIABLE] = (
-        "build_measurement_stage_callback_for_stage_name"
+    harness_command_line = build_tier_a_harness_command_line(
+        command_line_arguments,
+        harness_arm,
+        harness_repetition_index,
+        cell_duration_seconds,
+        warmup_exclusion_seconds,
+        command_line_arguments.gc,
     )
-    harness_command_line = [
-        harness_binary_path,
-        "--cell-directory",
-        measurement_cell_directory,
-        "--cell-specification",
-        measurement_cell_specification_path,
-    ]
     MEASUREMENT_CELL_LOGGER.info(
-        "invoking rust measurement harness: %s", " ".join(harness_command_line)
+        "repetition %d position %d of %d: invoking harness: %s",
+        runner_repetition_index,
+        schedule_position_index,
+        schedule_length,
+        " ".join(harness_command_line),
     )
-    completed_harness_process = subprocess.run(
-        harness_command_line, env=harness_environment, check=False
-    )
-    return completed_harness_process.returncode
 
-
-def set_up_embedded_interpreter_for_measurement_cell(measurement_cell_specification):
-    """Call this from inside the interpreter that will actually run the stage
-    callback, before the first frame.
-
-    Under the exec arrangement that interpreter is the one the harness binary
-    embeds, not the one running this module's `__main__` — a GC recorder
-    installed in the wrong interpreter records collections that cannot have
-    caused any frame's latency. Returns the stage callback paired with the
-    recorder to hand back to `tear_down_embedded_interpreter_for_measurement_cell`."""
     garbage_collection_recorder = GarbageCollectionPauseAttributionRecorder()
-    garbage_collection_recorder.apply_garbage_collection_mode(
-        measurement_cell_specification["garbage_collection_mode"]
-    )
     garbage_collection_recorder.install_collection_phase_callback()
-    measurement_stage_callback = build_measurement_stage_callback_for_stage_name(
-        measurement_cell_specification["stage_name"],
-        measurement_cell_specification["frame_width"],
-        measurement_cell_specification["frame_height"],
+    harness_started_at_epoch_seconds = time.time()
+    try:
+        completed_harness_process = subprocess.run(
+            harness_command_line,
+            env=build_tier_a_harness_process_environment(),
+            check=False,
+        )
+    finally:
+        garbage_collection_recorder.uninstall_collection_phase_callback()
+    harness_exit_status = completed_harness_process.returncode
+
+    measurement_cell_directory = locate_measurement_cell_directory_created_by_harness(
+        os.path.abspath(command_line_arguments.output_dir),
+        harness_started_at_epoch_seconds,
     )
-    return measurement_stage_callback, garbage_collection_recorder
+    if measurement_cell_directory is None:
+        MEASUREMENT_CELL_LOGGER.error(
+            "harness exited %d and left no cell directory under %s",
+            harness_exit_status,
+            os.path.abspath(command_line_arguments.output_dir),
+        )
+        return harness_exit_status if harness_exit_status != 0 else 2
+    MEASUREMENT_CELL_LOGGER.info(
+        "harness exited %d for cell %s", harness_exit_status, measurement_cell_directory
+    )
 
-
-def tear_down_embedded_interpreter_for_measurement_cell(
-    garbage_collection_recorder, measurement_cell_specification
-):
-    """Stop recording and flush the embedded interpreter's GC records into the
-    cell directory. Returns the number of phase events written."""
-    garbage_collection_recorder.uninstall_collection_phase_callback()
-    return garbage_collection_recorder.export_collection_records_as_jsonl(
+    written_record_count = garbage_collection_recorder.export_collection_records_as_jsonl(
         os.path.join(
-            measurement_cell_specification["measurement_cell_directory"],
-            EMBEDDED_INTERPRETER_GARBAGE_COLLECTION_RECORD_FILE_NAME,
+            measurement_cell_directory,
+            RUNNER_INTERPRETER_GARBAGE_COLLECTION_RECORD_FILE_NAME,
         )
     )
+    MEASUREMENT_CELL_LOGGER.info(
+        "recorded %d gc phase events in the runner interpreter while the cell ran",
+        written_record_count,
+    )
+
+    write_json_document(
+        os.path.join(measurement_cell_directory, RUNNER_INVOCATION_RECORD_FILE_NAME),
+        build_runner_invocation_record(
+            command_line_arguments,
+            harness_arm,
+            harness_command_line,
+            runner_repetition_index,
+            schedule_position_index,
+            harness_repetition_index,
+            cell_duration_seconds,
+            warmup_exclusion_seconds,
+            runner_interpreter_garbage_collection_configuration,
+            stage_callback_cost_summary
+            if cell_runner_mode == RUNNER_MODE_IN_PROCESS_PYTHON
+            else None,
+            measurement_cell_directory,
+        ),
+    )
+    return harness_exit_status
+
+
+def run_interleaved_measurement_schedule(command_line_arguments):
+    """Run every cell of every repetition in A/B/A order, stopping at the first
+    cell the harness refuses. Returns the process exit status."""
+    resolve_harness_arm_for_runner_mode(command_line_arguments.mode)
+    cell_duration_seconds = resolve_cell_duration_seconds(command_line_arguments.duration)
+    warmup_exclusion_seconds = resolve_warmup_exclusion_seconds(
+        command_line_arguments.warmup_exclusion_seconds, cell_duration_seconds
+    )
+    interleaved_schedule = build_interleaved_measurement_schedule_for_runner_mode(
+        command_line_arguments.mode
+    )
+
+    if not command_line_arguments.harness_binary:
+        MEASUREMENT_CELL_LOGGER.error(
+            "no harness binary; pass --harness-binary or set $%s",
+            HARNESS_BINARY_ENVIRONMENT_VARIABLE,
+        )
+        return 2
+    if not os.path.isfile(command_line_arguments.harness_binary):
+        MEASUREMENT_CELL_LOGGER.error(
+            "harness binary %s does not exist; run `cargo build --release`",
+            command_line_arguments.harness_binary,
+        )
+        return 2
+
+    garbage_collection_recorder = GarbageCollectionPauseAttributionRecorder()
+    runner_interpreter_garbage_collection_configuration = (
+        garbage_collection_recorder.apply_garbage_collection_mode(
+            command_line_arguments.gc
+        )
+    )
+    MEASUREMENT_CELL_LOGGER.info(
+        "gc mode %s applied to the runner interpreter only; the harness's embedded "
+        "interpreter runs its own default configuration",
+        command_line_arguments.gc,
+    )
+
+    stage_callback_cost_summary = measure_stage_callback_cost_in_runner_interpreter(
+        command_line_arguments.stage,
+        command_line_arguments.frame_width,
+        command_line_arguments.frame_height,
+    )
+    MEASUREMENT_CELL_LOGGER.info(
+        "stage %s measured cost p50=%.3fms p99=%.3fms max=%.3fms",
+        command_line_arguments.stage,
+        stage_callback_cost_summary["p50_nanoseconds"] / 1e6,
+        stage_callback_cost_summary["p99_nanoseconds"] / 1e6,
+        stage_callback_cost_summary["max_nanoseconds"] / 1e6,
+    )
+
+    os.makedirs(os.path.abspath(command_line_arguments.output_dir), exist_ok=True)
+
+    if command_line_arguments.skip_harness_invocation:
+        MEASUREMENT_CELL_LOGGER.info(
+            "skipping harness invocation; schedule for %d repetition(s): %s",
+            command_line_arguments.repetitions,
+            " -> ".join(interleaved_schedule),
+        )
+        return 0
+
+    for repetition_offset in range(command_line_arguments.repetitions):
+        runner_repetition_index = (
+            command_line_arguments.repetition_index + repetition_offset
+        )
+        for schedule_position_index, cell_runner_mode in enumerate(interleaved_schedule):
+            harness_exit_status = run_one_measurement_cell(
+                command_line_arguments,
+                cell_runner_mode,
+                runner_repetition_index,
+                schedule_position_index,
+                len(interleaved_schedule),
+                cell_duration_seconds,
+                warmup_exclusion_seconds,
+                runner_interpreter_garbage_collection_configuration,
+                stage_callback_cost_summary,
+            )
+            if harness_exit_status != 0:
+                MEASUREMENT_CELL_LOGGER.error(
+                    "stopping the schedule: repetition %d position %d exited %d",
+                    runner_repetition_index,
+                    schedule_position_index,
+                    harness_exit_status,
+                )
+                return harness_exit_status
+    return 0
 
 
 def parse_measurement_cell_command_line_arguments(command_line_argument_values=None):
-    """Parse one cell's parameters."""
+    """Parse the schedule's parameters."""
     argument_parser = argparse.ArgumentParser(
-        prog="runner.py", description="Run one #1702 measurement cell."
+        prog="runner.py",
+        description="Run an A/B/A interleaved schedule of #1702 measurement cells.",
     )
     argument_parser.add_argument("--fps", type=int, required=True)
-    argument_parser.add_argument(
-        "--stage", choices=SUPPORTED_STAGE_NAMES, required=True
-    )
+    argument_parser.add_argument("--stage", choices=SUPPORTED_STAGE_NAMES, required=True)
     argument_parser.add_argument(
         "--mode",
-        choices=SUPPORTED_MEASUREMENT_ARMS,
+        choices=SUPPORTED_RUNNER_MODES,
         required=True,
-        help="the comparison arm; rust-floor is a pure-Rust passthrough that "
-        "isolates engine wire-hop cost from PyO3 cost",
+        help="the arm under test; rust-floor is a pure-Rust passthrough that "
+        "isolates engine wire-hop cost from PyO3 cost, and is also the A of the "
+        "A/B/A schedule. subprocess is Tier B and not implemented in this PR",
     )
     argument_parser.add_argument(
         "--gc",
         choices=(GARBAGE_COLLECTION_MODE_DEFAULT, GARBAGE_COLLECTION_MODE_TUNED),
         default=GARBAGE_COLLECTION_MODE_DEFAULT,
+        help="GC configuration for the runner's own interpreter; it does not "
+        "reach the harness's embedded interpreter",
     )
-    argument_parser.add_argument("--duration", type=float, required=True)
+    argument_parser.add_argument(
+        "--duration", type=float, required=True, help="per-cell duration in whole seconds"
+    )
     argument_parser.add_argument("--output-dir", required=True)
     argument_parser.add_argument("--frame-width", type=int, default=1920)
     argument_parser.add_argument("--frame-height", type=int, default=1080)
-    argument_parser.add_argument("--repetition-index", type=int, default=0)
+    argument_parser.add_argument(
+        "--warmup-exclusion-seconds",
+        type=int,
+        default=None,
+        help=f"defaults to {PROTOCOL_WARMUP_EXCLUSION_SECONDS}s for cells long "
+        f"enough to carry it, {EXPLORATORY_CELL_WARMUP_EXCLUSION_SECONDS}s otherwise",
+    )
+    argument_parser.add_argument(
+        "--repetition-index",
+        type=int,
+        default=0,
+        help="index of the first repetition, so a second schedule can extend an "
+        "existing output directory without overwriting its cells",
+    )
+    argument_parser.add_argument(
+        "--repetitions",
+        type=int,
+        default=1,
+        help="how many A/B/A repetitions to run; each contributes one harness "
+        "process per cell",
+    )
+    argument_parser.add_argument("--disable-gil-anchor", action="store_true")
+    argument_parser.add_argument("--require-locked-measurement-state", action="store_true")
     argument_parser.add_argument(
         "--harness-binary",
         default=os.environ.get(HARNESS_BINARY_ENVIRONMENT_VARIABLE),
@@ -379,7 +640,7 @@ def parse_measurement_cell_command_line_arguments(command_line_argument_values=N
     argument_parser.add_argument(
         "--skip-harness-invocation",
         action="store_true",
-        help="resolve the cell and write cell-spec.json without running it",
+        help="resolve and log the schedule without running any cell",
     )
     return argument_parser.parse_args(command_line_argument_values)
 
@@ -394,102 +655,16 @@ def configure_measurement_cell_logging():
     )
 
 
-def run_measurement_cell(command_line_arguments):
-    """Resolve, record and run one cell. Returns the process exit status."""
-    measurement_cell_directory = os.path.join(
-        os.path.abspath(command_line_arguments.output_dir),
-        build_measurement_cell_directory_name(
-            command_line_arguments.mode,
-            command_line_arguments.fps,
-            command_line_arguments.stage,
-            command_line_arguments.gc,
-            command_line_arguments.repetition_index,
-        ),
-    )
-    os.makedirs(measurement_cell_directory, exist_ok=True)
-
-    garbage_collection_recorder = GarbageCollectionPauseAttributionRecorder()
-    garbage_collection_configuration = (
-        garbage_collection_recorder.apply_garbage_collection_mode(
-            command_line_arguments.gc
-        )
-    )
-
-    measurement_stage_callback = build_measurement_stage_callback_for_stage_name(
-        command_line_arguments.stage,
-        command_line_arguments.frame_width,
-        command_line_arguments.frame_height,
-    )
-    stage_callback_cost_summary = measure_stage_callback_cost_on_this_machine(
-        measurement_stage_callback,
-        command_line_arguments.frame_width,
-        command_line_arguments.frame_height,
-    )
-    MEASUREMENT_CELL_LOGGER.info(
-        "stage %s measured cost p50=%.3fms p99=%.3fms max=%.3fms",
-        command_line_arguments.stage,
-        stage_callback_cost_summary["p50_nanoseconds"] / 1e6,
-        stage_callback_cost_summary["p99_nanoseconds"] / 1e6,
-        stage_callback_cost_summary["max_nanoseconds"] / 1e6,
-    )
-
-    measurement_cell_specification = build_measurement_cell_specification(
-        command_line_arguments,
-        garbage_collection_configuration,
-        stage_callback_cost_summary,
-        measurement_cell_directory,
-    )
-    measurement_cell_specification_path = os.path.join(
-        measurement_cell_directory, MEASUREMENT_CELL_SPECIFICATION_FILE_NAME
-    )
-    with open(
-        measurement_cell_specification_path, "w", encoding="utf-8"
-    ) as specification_file:
-        json.dump(measurement_cell_specification, specification_file, indent=2)
-        specification_file.write("\n")
-    MEASUREMENT_CELL_LOGGER.info(
-        "wrote cell spec %s", measurement_cell_specification_path
-    )
-
-    if command_line_arguments.skip_harness_invocation:
-        return 0
-    if not command_line_arguments.harness_binary:
-        MEASUREMENT_CELL_LOGGER.error(
-            "no harness binary; pass --harness-binary or set $%s",
-            HARNESS_BINARY_ENVIRONMENT_VARIABLE,
-        )
-        return 2
-
-    garbage_collection_recorder.install_collection_phase_callback()
+def main():
+    """Entry point: exit status is the first failing cell's, or 0."""
+    configure_measurement_cell_logging()
+    command_line_arguments = parse_measurement_cell_command_line_arguments()
     try:
-        harness_exit_status = invoke_rust_measurement_harness_for_measurement_cell(
-            command_line_arguments.harness_binary,
-            measurement_cell_directory,
-            measurement_cell_specification_path,
-        )
-    finally:
-        garbage_collection_recorder.uninstall_collection_phase_callback()
-        written_record_count = (
-            garbage_collection_recorder.export_collection_records_as_jsonl(
-                os.path.join(
-                    measurement_cell_directory,
-                    RUNNER_INTERPRETER_GARBAGE_COLLECTION_RECORD_FILE_NAME,
-                )
-            )
-        )
-        MEASUREMENT_CELL_LOGGER.info(
-            "recorded %d gc phase events in the runner interpreter", written_record_count
-        )
-
-    if harness_exit_status != 0:
-        MEASUREMENT_CELL_LOGGER.error(
-            "harness exited %d for cell %s",
-            harness_exit_status,
-            measurement_cell_directory,
-        )
-    return harness_exit_status
+        return run_interleaved_measurement_schedule(command_line_arguments)
+    except (SubprocessArmIsTierBAndNotImplementedError, ValueError) as refusal:
+        MEASUREMENT_CELL_LOGGER.error("%s", refusal)
+        return 2
 
 
 if __name__ == "__main__":
-    configure_measurement_cell_logging()
-    sys.exit(run_measurement_cell(parse_measurement_cell_command_line_arguments()))
+    sys.exit(main())

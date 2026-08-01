@@ -10,7 +10,8 @@ use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ContinuousProcessor;
 
 use crate::monotonic_clock::{
-    MonotonicNanoseconds, read_monotonic_clock_nanoseconds, spin_until_monotonic_deadline,
+    MonotonicNanoseconds, read_measurement_stamp_nanoseconds, read_monotonic_clock_nanoseconds,
+    spin_until_monotonic_deadline,
 };
 use crate::synthetic_frame_measurement_preamble::{
     SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES, SyntheticFrameMeasurementPreamble,
@@ -106,7 +107,7 @@ impl ContinuousProcessor for SyntheticFrameSourceProcessor::Processor {
         // write, so pacing wait never lands inside the measured latency.
         let preamble = SyntheticFrameMeasurementPreamble {
             frame_sequence_number: self.next_frame_sequence_number,
-            source_emit_monotonic_nanoseconds: read_monotonic_clock_nanoseconds(),
+            source_emit_monotonic_nanoseconds: read_measurement_stamp_nanoseconds(),
             // The stage patches this in place; the source leaves it zero so a
             // frame that never reached a stage is distinguishable.
             stage_callback_nanoseconds: 0,

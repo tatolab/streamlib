@@ -16,8 +16,15 @@ The engine is untouched. Every processor enters through the existing `App::add_l
 
 This crate self-roots its own `[workspace]` table, the same convention `examples/*` and most
 `packages/*` follow (root `Cargo.toml:44-56`). It builds with `cd spikes/streamlib-pyembed-spike
-&& cargo build`, keeps its own `Cargo.lock`, and never enters the engine's release closure or CI
-gate surface. Cold dependency build measured at **63s** on the reference machine.
+&& cargo build` and never enters the engine's release closure or CI gate surface. Cold dependency
+build measured at **63s** on the reference machine.
+
+Its `Cargo.lock` is **not committed** — the repo ignores every non-root lockfile
+(`.gitignore:51-52`) and this crate follows that convention rather than overriding it. The cost is
+real for a benchmark: `pyo3`/`numpy`/`hdrhistogram` are caret ranges, so a rerun can resolve
+different patch versions than the run that produced a given number. Until that is addressed, the
+resolved versions of a run are recoverable only from the machine that produced it. Raised as a note
+for the owner rather than decided here.
 
 ## What is measured, and what is not
 
@@ -56,6 +63,13 @@ Smoke numbers from this branch (10s cells, not protocol runs — see "Status" be
 The Python arm is indistinguishable from the pure-Rust floor at the same geometry. The wire hop
 dominates by three orders of magnitude over the PyO3 callback.
 
+**The floor scales with payload, and that bounds the protocol.** Floor-arm p50 is 1.44ms at
+640x480, 9.63ms at 720p, ~27ms at 1080p — the engine's `read_raw` allocates a fresh 64 KiB `Vec`,
+then a fresh full-size `Vec`, then memcpys, per read per hop. At 1080p the two-hop service time
+exceeds the 60fps frame period (16.6ms), so a 1080p60 cell runs saturated and its percentiles would
+describe queue occupancy rather than latency. Posted to #1702; 1080p is a 30fps-only geometry until
+the owner rules.
+
 ## The GIL attachment anchor
 
 `Python::attach` on a foreign thread maps to `PyGILState_Ensure()`, which builds a thread state on
@@ -89,8 +103,8 @@ PYTHONPATH=python ./target/release/tier_a_harness \
   --output-directory ./artifacts
 ```
 
-`python/runner.py` drives A/B/A interleaving across cells; one cell per process keeps interpreter,
-GC, and allocator state from leaking between cells.
+`python/runner.py` invokes the harness once per cell; one cell per process keeps interpreter, GC,
+and allocator state from leaking between cells.
 
 Add `--require-locked-measurement-state` for gated cells. The harness **verifies** the machine is
 locked and fails fast; it never invokes `sudo` (`sudo -n` fails on the reference box and a password
@@ -106,10 +120,28 @@ owner checklist of privileged commands as data.
 | `per-frame-measurements.jsonl` | One object per frame, warmup-excluded frames included (raw data is raw). |
 | `source-emit-to-sink-receive.histogram` | Mergeable HDR histogram export. |
 | `summary.json` | p50/p99/p99.9/max, drop count, and the anomaly counters. Never a headline mean — the distribution is heavily tailed. |
+| `gc-collections-embedded-interpreter.jsonl` | Every CPython collection in the interpreter that ran the callback, monotonic-stamped so a latency tail spike can be attributed to a GC. In-process arm only. |
+
+An empty GC record file is a real result, not a broken recorder: the per-frame numpy view is
+released as soon as the callback returns, so gen0's tracked-container count does not climb and no
+generational pass is triggered during a short cell. The recorder is asserted functional
+independently (`python/test_spike_harness_contract.py` forces collections and asserts a nonzero
+count).
 
 Two counters invalidate a cell rather than degrading it, and the harness logs both at `error`:
 `negative_latency_anomaly_count` (sink stamp before emit stamp ⇒ the arms' clocks disagree) and
 `histogram_range_saturation_count` (percentiles are clipped).
+
+## Which arrangement Tier A measures
+
+A Rust `main` that calls `Python::initialize()` and embeds CPython — **not** the `PyApp`
+`#[pyclass]` that CPython imports, which is what #1702's design sketches. The crate is
+`crate-type = ["rlib"]` only; there is no `#[pymodule]`.
+
+The per-frame path is identical either way (the processor thread is a foreign thread to CPython in
+both arrangements), so `source_emit_to_sink_receive` transfers. What does NOT transfer is main-thread
+ownership, SIGINT ownership, and interpreter-init ordering against `GpuContext` — which is exactly
+what the warm-restart battery measures. Posted to #1702 as an owner decision.
 
 ## Status
 

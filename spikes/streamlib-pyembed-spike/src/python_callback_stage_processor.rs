@@ -12,7 +12,7 @@ use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAcc
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ReactiveProcessor;
 
-use crate::monotonic_clock::read_monotonic_clock_nanoseconds;
+use crate::monotonic_clock::read_measurement_stamp_nanoseconds;
 use crate::python_gil_attachment_anchor::PythonGilAttachmentAnchorForProcessorThread;
 use crate::python_processor_callback_registry::resolve_python_callback_for_token;
 use crate::synthetic_frame_measurement_preamble::{
@@ -130,7 +130,7 @@ impl ReactiveProcessor for PythonCallbackStageProcessor::Processor {
             .as_ref()
             .ok_or_else(|| Error::Configuration("setup did not resolve a callable".to_string()))?;
 
-        let callback_started_nanoseconds = read_monotonic_clock_nanoseconds();
+        let callback_started_nanoseconds = read_measurement_stamp_nanoseconds();
         let escape_outcome = Python::attach(|python| {
             invoke_python_callback_over_zero_copy_frame_view(
                 python,
@@ -144,7 +144,7 @@ impl ReactiveProcessor for PythonCallbackStageProcessor::Processor {
         .map_err(|python_error| {
             Error::Runtime(format!("python stage callback raised: {python_error}"))
         })?;
-        let callback_finished_nanoseconds = read_monotonic_clock_nanoseconds();
+        let callback_finished_nanoseconds = read_measurement_stamp_nanoseconds();
 
         if let NumpyFrameViewEscapeOutcome::RetainedByPythonWithRefcount(refcount) = escape_outcome {
             self.observed_frame_view_escape_count += 1;

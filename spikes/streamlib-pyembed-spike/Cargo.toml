@@ -19,19 +19,16 @@ publish = false
 
 [lib]
 name = "streamlib_pyembed_spike"
-# `rlib` feeds the Rust-launched Tier A harness binary; `cdylib` is what CPython
-# dlopens when the spike is driven from `python3 python/runner.py`. The two are
-# built in separate invocations because they need opposite `extension-module`
-# settings — see the feature comment below.
-crate-type = ["rlib", "cdylib"]
+# `rlib` only. A `cdylib` + `extension-module` pair would claim CPython can
+# import this crate, but there is no `#[pymodule]` here: Tier A embeds CPython in
+# a Rust binary instead. #1702's design sketches the opposite arrangement
+# (a `PyApp` `#[pyclass]` CPython imports), and which one the pivot ships is an
+# owner decision — see the embed-vs-import note posted to the issue. Declaring an
+# unusable build target would only make that open question look settled.
+crate-type = ["rlib"]
 
 [features]
 default = []
-# PyO3's `extension-module` omits the libpython link. It MUST be on when CPython
-# dlopens our cdylib (the interpreter already provides the symbols) and MUST be
-# off when a Rust binary embeds the interpreter (nothing else supplies them).
-# The Tier A harness binary is the embedding case, so this stays off by default.
-extension-module = ["pyo3/extension-module"]
 # Compiles every measurement stamp out. The control cell for "does the
 # instrument move the measurement" builds with this on; a throughput delta
 # between it and a default build is instrument overhead, not signal.
@@ -55,6 +52,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 clap = { version = "4", features = ["derive"] }
 tracing = "0.1.41"
+# Used only for the post-stop scoped subscriber in the harness binary: the
+# engine owns the global dispatcher and drops it at `Runner::stop()`, so a cell's
+# completion and invalidation records need a subscriber of our own to reach a log.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 [lints]

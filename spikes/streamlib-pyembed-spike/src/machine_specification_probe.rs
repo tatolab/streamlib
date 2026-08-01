@@ -102,7 +102,16 @@ pub struct MachineSpecification {
     /// RAM and swap.
     pub memory: MemorySpecification,
     /// The interpreter and numpy the Python arms run against.
-    pub python_runtime: PythonRuntimeSpecification,
+    /// The `python3` on PATH — the interpreter the SUBPROCESS baseline arm
+    /// launches. Not necessarily the one the in-process arm runs.
+    pub subprocess_python_runtime: PythonRuntimeSpecification,
+    /// The interpreter CPython is embedded from in THIS process, which is what
+    /// produced the in-process arm's numbers. PyO3 links it at build time, so it
+    /// need not be the `python3` on PATH, and it resolves numpy against a
+    /// different `sys.path`. `None` until
+    /// [`record_embedded_python_runtime`] is called from inside a
+    /// `Python::attach` — the probe itself cannot take the GIL.
+    pub embedded_python_runtime: Option<PythonRuntimeSpecification>,
     /// Scheduling class and niceness of the process that ran this probe.
     pub probing_process_scheduling: ProbingProcessSchedulingSpecification,
     /// What else was resident on the box when the probe ran.
@@ -386,7 +395,8 @@ pub fn probe_machine_specification() -> MachineSpecification {
         c_library_version: probe_c_library_version(),
         graphics_processing_unit: probe_graphics_processing_unit(),
         memory: probe_memory(),
-        python_runtime: probe_python_runtime(),
+        subprocess_python_runtime: probe_python_runtime(),
+        embedded_python_runtime: None,
         probing_process_scheduling: probe_process_scheduling(),
         machine_load_at_probe_time: probe_machine_load(),
         locked_measurement_state_violations: Vec::new(),
@@ -683,19 +693,6 @@ pub fn owner_checklist_to_reach_locked_measurement_state(
     checklist
 }
 
-/// Serialize the specification to `machine-spec.json` under `directory_path`.
-pub fn write_machine_specification_json_file(
-    specification: &MachineSpecification,
-    directory_path: &Path,
-) -> std::io::Result<std::path::PathBuf> {
-    std::fs::create_dir_all(directory_path)?;
-    let file_path = directory_path.join(MACHINE_SPECIFICATION_JSON_FILE_NAME);
-    let serialized = serde_json::to_string_pretty(specification)
-        .map_err(|error| std::io::Error::other(error.to_string()))?;
-    std::fs::write(&file_path, serialized)?;
-    Ok(file_path)
-}
-
 fn record_violation_unless_boolean_knob_matches(
     probed_knob: &ProbedValueOrUnavailableReason<bool>,
     required_value: bool,
@@ -792,10 +789,21 @@ fn read_sysfs_boolean_flag(path: &str) -> ProbedValueOrUnavailableReason<bool> {
     }
 }
 
+/// Programs this module refuses to spawn. Enforced at the single call site every
+/// probe funnels through, rather than by scanning source text for `sudo` — a
+/// program name reaching `Command::new` through a variable would defeat that.
+const PRIVILEGE_ESCALATION_PROGRAMS_THIS_MODULE_REFUSES_TO_SPAWN: &[&str] =
+    &["sudo", "doas", "pkexec", "su", "run0"];
+
 fn run_command_capturing_trimmed_standard_output(
     program: &str,
     arguments: &[&str],
 ) -> Result<String, String> {
+    if PRIVILEGE_ESCALATION_PROGRAMS_THIS_MODULE_REFUSES_TO_SPAWN.contains(&program) {
+        return Err(format!(
+            "refusing to spawn `{program}`: a privileged probe would sit on a password prompt              and wedge an unattended measurement run. The locking commands are emitted as data              for the owner to run, never executed here."
+        ));
+    }
     let output = std::process::Command::new(program)
         .args(arguments)
         .output()
@@ -1578,6 +1586,73 @@ fn probe_machine_load() -> MachineLoadSpecification {
     }
 }
 
+/// Fill in [`MachineSpecification::embedded_python_runtime`] by asking the
+/// interpreter embedded in this process about itself.
+///
+/// Separate from [`probe_machine_specification`] because it needs the GIL, and
+/// the probe runs before `Python::initialize()` on the arms that never embed an
+/// interpreter at all.
+pub fn record_embedded_python_runtime(
+    specification: &mut MachineSpecification,
+    python: pyo3::Python<'_>,
+) {
+    use pyo3::types::PyAnyMethods as _;
+
+    fn probe_embedded_attribute(
+        python: pyo3::Python<'_>,
+        module_name: &str,
+        attribute_expression: &str,
+    ) -> ProbedValueOrUnavailableReason<String> {
+        use pyo3::types::PyAnyMethods as _;
+
+        match python
+            .import(module_name)
+            .and_then(|module| module.getattr(attribute_expression))
+            .and_then(|attribute| attribute.str())
+        {
+            Ok(text) => match text.extract::<String>() {
+                Ok(value) => ProbedValueOrUnavailableReason::observed(value),
+                Err(error) => ProbedValueOrUnavailableReason::unavailable(format!(
+                    "{module_name}.{attribute_expression} did not extract as str: {error}"
+                )),
+            },
+            Err(error) => ProbedValueOrUnavailableReason::unavailable(format!(
+                "reading {module_name}.{attribute_expression} from the embedded interpreter \
+                 failed: {error}"
+            )),
+        }
+    }
+
+    let version = python.version_info();
+    let interpreter_version = ProbedValueOrUnavailableReason::observed(format!(
+        "{}.{}.{}",
+        version.major, version.minor, version.patch
+    ));
+
+    // `sys._is_gil_enabled` exists only on free-threaded-capable builds; its
+    // absence means a conventional GIL build, which is the answer we want.
+    let global_interpreter_lock_is_disabled = match python
+        .import("sys")
+        .and_then(|sys| sys.getattr("_is_gil_enabled"))
+    {
+        Ok(callable) => match callable.call0().and_then(|result| result.extract::<bool>()) {
+            Ok(gil_is_enabled) => ProbedValueOrUnavailableReason::observed(!gil_is_enabled),
+            Err(error) => ProbedValueOrUnavailableReason::unavailable(format!(
+                "sys._is_gil_enabled() failed: {error}"
+            )),
+        },
+        Err(_) => ProbedValueOrUnavailableReason::observed(false),
+    };
+
+    specification.embedded_python_runtime = Some(PythonRuntimeSpecification {
+        interpreter_executable_path: probe_embedded_attribute(python, "sys", "executable"),
+        interpreter_version,
+        interpreter_version_banner: probe_embedded_attribute(python, "sys", "version"),
+        numpy_version: probe_embedded_attribute(python, "numpy", "__version__"),
+        global_interpreter_lock_is_disabled,
+    });
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1745,13 +1820,28 @@ mod tests {
     /// prompt in an unattended multi-hour run wedges the whole measurement.
     #[test]
     fn no_probe_path_invokes_a_privileged_command() {
-        let module_source = include_str!("machine_specification_probe.rs");
-        for line in module_source.lines() {
-            let is_command_invocation = line.contains("Command::new");
+        // Asserted at the chokepoint every probe funnels through, not by
+        // scanning source text: `Command::new(program)` takes a variable, so a
+        // grep for a literal `sudo` beside `Command::new` would pass a caller
+        // that reached it through one.
+        for privileged_program in PRIVILEGE_ESCALATION_PROGRAMS_THIS_MODULE_REFUSES_TO_SPAWN {
+            let outcome =
+                run_command_capturing_trimmed_standard_output(privileged_program, &["--version"]);
+            let refusal = outcome.expect_err("a privileged program must be refused, not spawned");
             assert!(
-                !(is_command_invocation && line.contains("sudo")),
-                "a probe must never spawn sudo: {line}"
+                refusal.contains("refusing to spawn"),
+                "expected an explicit refusal for `{privileged_program}`, got: {refusal}"
             );
         }
+    }
+
+    /// The deny list must not block ordinary probes — an over-broad refusal
+    /// would turn every observation into an `Unavailable` and silently make the
+    /// machine look unlocked.
+    #[test]
+    fn an_ordinary_probe_program_is_still_spawnable() {
+        let observed =
+            run_command_capturing_trimmed_standard_output("uname", &["-r"]).expect("uname runs");
+        assert!(!observed.is_empty());
     }
 }

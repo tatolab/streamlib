@@ -44,6 +44,20 @@ impl PythonGilAttachmentAnchorForProcessorThread {
     /// The caller must not hold the GIL when calling this, and
     /// `Python::initialize()` must already have run.
     pub fn attach_current_thread_and_park_gil() -> Self {
+        // Both preconditions are fatal-or-UB if violated: `PyGILState_Ensure` on
+        // an uninitialized interpreter is a `Py_FatalError`, and a recursive
+        // ensure followed by the unconditional `PyEval_SaveThread` below would
+        // drop the GIL out from under an outer holder.
+        debug_assert_ne!(
+            unsafe { pyo3::ffi::Py_IsInitialized() },
+            0,
+            "Python::initialize() must run before a processor thread anchors"
+        );
+        debug_assert_eq!(
+            unsafe { pyo3::ffi::PyGILState_Check() },
+            0,
+            "the anchoring thread must not already hold the GIL"
+        );
         // SAFETY: the interpreter is initialized before any processor thread
         // starts (the harness calls `Python::initialize()` before `App::new`),
         // and this thread holds no thread state yet — `PyGILState_Ensure`

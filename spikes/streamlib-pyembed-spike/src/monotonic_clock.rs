@@ -32,6 +32,32 @@ pub fn read_monotonic_clock_nanoseconds() -> MonotonicNanoseconds {
     timespec.tv_sec * 1_000_000_000 + timespec.tv_nsec
 }
 
+/// Read a measurement stamp, or return 0 when stamping is compiled out.
+///
+/// Every instrumentation stamp goes through this, and nothing else does — the
+/// source's frame pacing calls [`read_monotonic_clock_nanoseconds`] directly
+/// because pacing is the cell's behavior, not its instrument. Building with
+/// `--features stamping-compiled-out` therefore removes exactly the
+/// instrumentation and leaves the graph running identically, which is what makes
+/// a throughput delta between the two builds attributable to the instrument.
+#[cfg(not(feature = "stamping-compiled-out"))]
+#[inline(always)]
+pub fn read_measurement_stamp_nanoseconds() -> MonotonicNanoseconds {
+    read_monotonic_clock_nanoseconds()
+}
+
+/// Stamping compiled out — see the enabled variant for the contract.
+#[cfg(feature = "stamping-compiled-out")]
+#[inline(always)]
+pub fn read_measurement_stamp_nanoseconds() -> MonotonicNanoseconds {
+    0
+}
+
+/// Whether this build records measurements. Written into `cell-spec.json` so a
+/// control-cell artifact can never be mistaken for a measurement cell.
+pub const MEASUREMENT_STAMPING_IS_COMPILED_IN: bool =
+    cfg!(not(feature = "stamping-compiled-out"));
+
 /// Read the resolution `CLOCK_MONOTONIC` reports for itself, in nanoseconds.
 /// A measurement whose spread approaches this number is reporting clock
 /// granularity rather than the thing being measured.
@@ -102,6 +128,36 @@ mod tests {
                 "pacer returned before its deadline"
             );
         }
+    }
+
+    /// The control build must actually compile stamping out. A declared feature
+    /// with no `cfg` site would make the "does the instrument move the
+    /// measurement" control cell report zero overhead by construction — a
+    /// fabricated number in the one crate whose whole output is numbers.
+    #[test]
+    fn the_stamping_feature_actually_changes_what_is_compiled() {
+        if MEASUREMENT_STAMPING_IS_COMPILED_IN {
+            assert_ne!(
+                read_measurement_stamp_nanoseconds(),
+                0,
+                "a measurement build must return real stamps"
+            );
+        } else {
+            assert_eq!(
+                read_measurement_stamp_nanoseconds(),
+                0,
+                "a stamping-compiled-out build must not read the clock"
+            );
+        }
+    }
+
+    /// Pacing must survive the control build: the source paces off
+    /// [`read_monotonic_clock_nanoseconds`], not the gated stamp, so a control
+    /// cell still emits frames at the target rate and its throughput stays
+    /// comparable to a measurement cell's.
+    #[test]
+    fn pacing_reads_the_clock_regardless_of_the_stamping_feature() {
+        assert_ne!(read_monotonic_clock_nanoseconds(), 0);
     }
 
     /// Resolution must be fine enough that microsecond-scale stage overhead is

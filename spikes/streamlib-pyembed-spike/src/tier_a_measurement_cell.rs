@@ -13,14 +13,14 @@ use streamlib::sdk::error::{Error, Result};
 use crate::latency_measurement_recorder::{
     LatencyMeasurementRecorder, LatencyPercentileSummary,
 };
-use crate::machine_specification_probe::{MachineSpecification, probe_machine_specification};
+use crate::machine_specification_probe::{
+    MACHINE_SPECIFICATION_JSON_FILE_NAME, MachineSpecification, probe_machine_specification,
+};
 use crate::measuring_sink_processor::{
     MeasuringSinkConfiguration, MeasuringSinkProcessor, install_measurement_collection_point,
     take_measurement_collection_point,
 };
-use crate::monotonic_clock::{
-    read_monotonic_clock_nanoseconds, spin_until_monotonic_deadline,
-};
+use crate::monotonic_clock::{read_monotonic_clock_nanoseconds, spin_until_monotonic_deadline};
 use crate::python_callback_stage_processor::{
     PythonCallbackStageConfiguration, PythonCallbackStageProcessor,
 };
@@ -31,7 +31,8 @@ use crate::synthetic_frame_source_processor::{
     SyntheticFrameSourceConfiguration, SyntheticFrameSourceProcessor,
 };
 
-/// Which of the three comparison arms a cell runs.
+/// Which of the two Rust-side comparison arms a cell runs. The third arm, the
+/// subprocess baseline, is driven from `python/runner.py`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MeasurementArm {
@@ -64,6 +65,10 @@ pub struct TierAMeasurementCellSpecification {
     pub warmup_exclusion_seconds: u64,
     pub python_callback_registration_token: String,
     pub anchor_processor_thread_gil: bool,
+    /// The callable the stage invoked, e.g. `passthrough_stage`. Part of the
+    /// cell directory name: two cells differing only by stage would otherwise
+    /// collide and the second would overwrite the first.
+    pub stage_callback_attribute: String,
     /// Declared on every input port. Owner decision for #1702: latency
     /// percentiles are the primary signal, so drops are reported not gated.
     pub resolved_delivery_profile: String,
@@ -71,6 +76,10 @@ pub struct TierAMeasurementCellSpecification {
     /// "capture-to-present" — Tier A has no capture and no present.
     pub measured_metric_name: String,
     pub repetition_index: u32,
+    /// False in a `stamping-compiled-out` control build, whose only valid output
+    /// is a throughput comparison. Recorded so a control cell's artifact can
+    /// never be read as a measurement cell's.
+    pub measurement_stamping_is_compiled_in: bool,
 }
 
 impl TierAMeasurementCellSpecification {
@@ -78,9 +87,10 @@ impl TierAMeasurementCellSpecification {
     /// rates, and repetitions.
     pub fn artifact_directory_name(&self) -> String {
         format!(
-            "arm-{}__fps-{:03}__gil-anchor-{}__rep-{:02}",
+            "arm-{}__fps-{:03}__stage-{}__gil-anchor-{}__rep-{:02}",
             self.arm.as_artifact_token(),
             self.target_frames_per_second,
+            self.stage_callback_attribute,
             if self.anchor_processor_thread_gil {
                 "on"
             } else {
@@ -130,8 +140,13 @@ pub fn run_tier_a_measurement_cell(
         .ok_or_else(|| {
             Error::Configuration("warmup exclusion overflows a nanosecond count".to_string())
         })?;
+    let expected_frame_count = (specification.cell_duration_seconds as usize)
+        .saturating_mul(specification.target_frames_per_second as usize)
+        .saturating_mul(12)
+        / 10;
     install_measurement_collection_point(LatencyMeasurementRecorder::new(
         warmup_exclusion_nanoseconds,
+        expected_frame_count,
     ));
 
     let app = App::new()?;
@@ -220,7 +235,10 @@ pub fn run_tier_a_measurement_cell(
         &artifact_directory.join("cell-spec.json"),
         &outcome.specification,
     )?;
-    write_json_artifact(&artifact_directory.join("machine-spec.json"), &outcome.machine_specification)?;
+    write_json_artifact(
+        &artifact_directory.join(MACHINE_SPECIFICATION_JSON_FILE_NAME),
+        &outcome.machine_specification,
+    )?;
     write_json_artifact(&artifact_directory.join("summary.json"), &outcome)?;
 
     Ok(outcome)
@@ -248,9 +266,11 @@ mod tests {
             warmup_exclusion_seconds: 60,
             python_callback_registration_token: "cell-token".to_string(),
             anchor_processor_thread_gil: true,
+            stage_callback_attribute: "passthrough_stage".to_string(),
             resolved_delivery_profile: "every_sample".to_string(),
             measured_metric_name: "source_emit_to_sink_receive".to_string(),
             repetition_index: 3,
+            measurement_stamping_is_compiled_in: true,
         }
     }
 
@@ -260,7 +280,10 @@ mod tests {
     #[test]
     fn cell_directory_names_encode_every_distinguishing_dimension() {
         let name = example_specification().artifact_directory_name();
-        assert_eq!(name, "arm-in-process-python__fps-060__gil-anchor-on__rep-03");
+        assert_eq!(
+            name,
+            "arm-in-process-python__fps-060__stage-passthrough_stage__gil-anchor-on__rep-03"
+        );
 
         let floor_arm = TierAMeasurementCellSpecification {
             arm: MeasurementArm::RustPassthroughFloor,
@@ -320,5 +343,41 @@ mod tests {
         let decoded: TierAMeasurementCellSpecification =
             serde_json::from_value(encoded).expect("deserializes");
         assert_eq!(decoded, specification);
+    }
+}
+
+#[cfg(test)]
+mod cell_directory_collision_tests {
+    use super::*;
+
+    /// Two cells differing only by stage must not share a directory. They did
+    /// before the stage token was added, and the second silently overwrote the
+    /// first — losing half a matrix with no error.
+    #[test]
+    fn cells_differing_only_by_stage_get_distinct_directories() {
+        let passthrough = TierAMeasurementCellSpecification {
+            arm: MeasurementArm::InProcessPython,
+            frame_width_pixels: 1280,
+            frame_height_pixels: 720,
+            channel_count: 4,
+            target_frames_per_second: 30,
+            cell_duration_seconds: 600,
+            warmup_exclusion_seconds: 60,
+            python_callback_registration_token: "token".to_string(),
+            anchor_processor_thread_gil: true,
+            stage_callback_attribute: "passthrough_stage".to_string(),
+            resolved_delivery_profile: "every_sample".to_string(),
+            measured_metric_name: "source_emit_to_sink_receive".to_string(),
+            repetition_index: 0,
+            measurement_stamping_is_compiled_in: true,
+        };
+        let realistic = TierAMeasurementCellSpecification {
+            stage_callback_attribute: "realistic_stage".to_string(),
+            ..passthrough.clone()
+        };
+        assert_ne!(
+            passthrough.artifact_directory_name(),
+            realistic.artifact_directory_name()
+        );
     }
 }
