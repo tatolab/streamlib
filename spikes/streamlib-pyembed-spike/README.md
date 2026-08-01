@@ -44,7 +44,7 @@ its own name rather than an unmeasured one under the frozen name.
 |---|---|
 | `rust-passthrough-floor` | The engine's own wire-hop cost, no interpreter. Run this first at every cell. |
 | `in-process-python` | The same graph with a Python callable on the processor thread. |
-| subprocess baseline | Today's model. **Not in this PR** — Tier B, see #1702. |
+| `subprocess-python-baseline` | Today's model: same callback, own process, own venv, through the python-native cdylib. The arm the pivot is measured against. |
 
 The floor arm exists because gate 5 does not discriminate: PyO3 callback overhead passes its
 0.5ms budget by ~39x naive and ~3300x anchored, while the engine's `read_raw` allocates a fresh
@@ -52,44 +52,48 @@ The floor arm exists because gate 5 does not discriminate: PyO3 callback overhea
 (`plugin-abi/src/vtables/input_mailboxes.rs:156-157`, allocation inside the retry loop). Without a
 floor arm a large absolute latency is unattributable.
 
-Smoke numbers from this branch (10s cells, not protocol runs — see "Status" below):
+Numbers from this branch (720p60, passthrough, 30s cells, surface references — not protocol runs;
+see "Status"):
 
 ```
-720p30  floor  emit->sink p50 9.63ms   p99 11.09ms
-720p30  python emit->sink p50 9.61ms   p99 11.08ms   stage callback p50 13.8µs
-1080p30 python emit->sink p50 27.16ms  p99 29.38ms   stage callback p50 4.18ms (realistic)
+arm                          p50       p99     p99.9       max
+rust-passthrough-floor   0.071ms   0.107ms   0.120ms   0.124ms
+in-process-python        0.089ms   0.120ms   0.133ms   0.144ms
+subprocess-python-baseline 0.180ms 0.238ms   0.265ms   1.141ms
 ```
 
-The Python arm is indistinguishable from the pure-Rust floor at the same geometry. The wire hop
-dominates by three orders of magnitude over the PyO3 callback.
+In-process beats the baseline 2.0x at p50 and 2.0x at p99. PyO3 costs ~18µs at p50 over the
+pure-Rust floor.
 
-**The floor scales with payload, and that bounds the protocol.** Floor-arm p50 is 1.44ms at
-640x480, 9.63ms at 720p, ~27ms at 1080p — the engine's `read_raw` allocates a fresh 64 KiB `Vec`,
-then a fresh full-size `Vec`, then memcpys, per read per hop. At 1080p the two-hop service time
-exceeds the 60fps frame period (16.6ms), so a 1080p60 cell runs saturated and its percentiles would
-describe queue occupancy rather than latency. Posted to #1702; 1080p is a 30fps-only geometry until
-the owner rules.
+## What crosses the wire
 
-## The GIL attachment anchor
+`--wire-payload-mode surface-reference` (the default) puts a fixed-width surface reference on the
+link, matching what a real `@tatolab/core/VideoFrame` weighs — it references its GPU surface by id
+(`packages/core/schemas/video_frame.yaml`). The pixels the callback views are resolved
+process-locally, standing in for `GpuContext::resolve_pixel_buffer_by_surface_id`
+(`gpu_context.rs:681`), which an in-process processor can already reach with no engine change.
 
-`Python::attach` on a foreign thread maps to `PyGILState_Ensure()`, which builds a thread state on
-entry and destroys it on exit. CPython 3.12 virtual-allocates the frame datastack chunk on first
-Python frame push and frees it on thread-state delete — one `mmap` + one `munmap` per frame
-(measured: 1041 mmap / 1005 munmap per 1000 calls). The anchor holds one unreleased
-`PyGILState_Ensure` parked with `PyEval_SaveThread`, dropping per-call cost from p50 6.3µs to
-p50 110ns. Public `pyo3::ffi` only.
+`--wire-payload-mode full-pixel-payload` pushes whole uncompressed pictures instead. It exists only
+to reproduce the payload sweep that retracted an earlier ~27ms 1080p "floor", and the summarizer
+refuses to let such a cell back any gate. At 1080p60 the two modes differ by 175x (0.091ms vs
+15.917ms) — the earlier figure was the harness's transport choice, not an engine property.
 
-Whether the real SDK should anchor processor threads is a pivot design question these numbers do
-not settle: anchoring trades a resident thread state per processor thread for the syscall pair.
-`--disable-gil-anchor` is the control condition.
+The reference body is padded to a fixed 192 bytes on purpose: a bare encoding varies with the
+decimal digit count of the geometry it describes, which would make the resolution leg of the matrix
+vary transport width as well as pixel work.
 
-## Delivery profile
+## Startup settle
 
-Every input port declares `delivery_profile = "every_sample"`. Owner decision on #1702: latency
-percentiles are the primary signal; drop counts are reported, not gated. Under `latest`
-(SkipToLatest) the sink drains to the newest sample, pinning latency near one frame period and
-making the percentile gates near-vacuous. `delivery_profile` is a compile error on an `output(...)`
-(`grammar.rs:432-448`) — it is consumer-side only.
+`--startup-settle-seconds` (default 2.0) is a quiet period before the source's first frame, held
+identical across arms. `Runner::start()` returns once the graph compiles, but a Python subprocess
+needs ~0.66s more to spawn, import, and reach its poll loop; frames emitted into that window queue
+up, and under `every_sample` the backlog is never dropped. It drains only as fast as the consumer
+runs ahead of the source, so it outlives the warmup exclusion, which excludes by *time*.
+
+Before the settle existed, the baseline arm reported p50 183ms over a 20s cell and 84ms over a 40s
+cell against 0.089ms in-process. All of it was startup transient. The recorder now also compares its
+first measured decile against its last and reports `backlog_drain_fraction`; a cell that shed a
+fifth of its latency across its own life is refused rather than reported.
 
 ## Running a cell
 
@@ -103,8 +107,63 @@ PYTHONPATH=python ./target/release/tier_a_harness \
   --output-directory ./artifacts
 ```
 
-`python/runner.py` invokes the harness once per cell; one cell per process keeps interpreter, GC,
-and allocator state from leaking between cells.
+`python/runner.py` invokes the harness once per cell over an A/B/A schedule; one cell per process
+keeps interpreter, GC, and allocator state from leaking between cells.
+
+### The subprocess baseline arm needs provisioning first
+
+```
+python3 python/provision_subprocess_baseline_package.py
+```
+
+Idempotent, and required before any `--mode subprocess` cell. Three prerequisites the harness
+cannot satisfy from inside a measurement run, each of which fails in a way that reads as a slow or
+absent baseline rather than a broken one:
+
+- `libstreamlib_python_native.so` is absent from `target/`. It is built and pinned by absolute path
+  via `STREAMLIB_PYTHON_NATIVE_LIB` so a stale or foreign artifact cannot win — an unpinned
+  subprocess resolves a different cdylib whose iceoryx2 service constants disagree with the host's,
+  fails to open its own input channel with `DoesNotSupportRequestedAmountOfPublishers`, and the cell
+  reports an arm that produced no frames.
+- The package's `streamlib` dependency resolves from no index. A `[tool.uv.sources]` path override
+  at this checkout's Python SDK is injected into a staged copy — the same rewrite
+  `streamlib link --engine` performs (`python_venv.rs:360-393`), scoped to the package so a
+  measurement run neither depends on nor disturbs global link state.
+- `streamlib install` skips linked entries by design and the module loader refuses to cold-build an
+  installed slot, so nothing in between provisions a linked Python package's venv.
+
+`STREAMLIB_MODULES_DIR` points the module slot, the link, and the lock file at the spike crate, so
+provisioning writes nothing outside `spikes/`.
+
+### Warm-restart battery (gate 6)
+
+```
+PYTHONPATH=python python3 python/warm_restart_battery.py \
+  --harness-binary ./target/release/tier_a_harness \
+  --warm-run-count 10 --extra-import torch --output-dir ./artifacts/restart
+```
+
+1 cold + N warm restarts, each a fresh process, measuring exec-to-first-frame from a pre-spawn
+`CLOCK_MONOTONIC` stamp to the sink's first-frame stamp. On this branch: warm median **0.869s**
+against a 1.5s threshold, cold 0.919s.
+
+### Evaluating the gates
+
+```
+python3 python/summarize_measurement_matrix.py ./artifacts
+```
+
+Built around one rule: never report a verdict a cell cannot support, because a silently skipped gate
+reads as a passed one. Cells are refused — loudly, with the reason — when they were built with
+stamping compiled out, carry the full-pixel payload, resolved a delivery profile other than
+`every_sample`, received no frames, disagreed on clocks, saturated the histogram, or drained a
+startup backlog.
+
+Two gates stay NOT EVALUATED until the owner states a number. Owner decision 3 made the
+floor-vs-PyO3 delta the gate and decision 4 added an absolute p99.9 ceiling; neither names a
+threshold, and #1702 states thresholds are evaluated verbatim and never decided inline. Both
+quantities are computed and printed; `--floor-delta-gate-ms` and `--absolute-p99-9-ceiling-ms` turn
+them into verdicts.
 
 Add `--require-locked-measurement-state` for gated cells. The harness **verifies** the machine is
 locked and fails fast; it never invokes `sudo` (`sudo -n` fails on the reference box and a password
@@ -119,7 +178,7 @@ owner checklist of privileged commands as data.
 | `machine-spec.json` | CPU/governor/boost, kernel + preemption, glibc, GPU + driver, Python/numpy, scheduling class, loadavg. Unknown knobs carry an explicit reason, never a silent default. |
 | `per-frame-measurements.jsonl` | One object per frame, warmup-excluded frames included (raw data is raw). |
 | `source-emit-to-sink-receive.histogram` | Mergeable HDR histogram export. |
-| `summary.json` | p50/p99/p99.9/max, drop count, and the anomaly counters. Never a headline mean — the distribution is heavily tailed. |
+| `summary.json` | p50/p99/p99.9/max, drop count, the anomaly counters, `backlog_drain_fraction`, and the sink's first-frame stamp (gate 6's endpoint). Never a headline mean — the distribution is heavily tailed. |
 | `gc-collections-embedded-interpreter.jsonl` | Every CPython collection in the interpreter that ran the callback, monotonic-stamped so a latency tail spike can be attributed to a GC. In-process arm only. |
 
 An empty GC record file is a real result, not a broken recorder: the per-frame numpy view is
@@ -128,9 +187,11 @@ generational pass is triggered during a short cell. The recorder is asserted fun
 independently (`python/test_spike_harness_contract.py` forces collections and asserts a nonzero
 count).
 
-Two counters invalidate a cell rather than degrading it, and the harness logs both at `error`:
-`negative_latency_anomaly_count` (sink stamp before emit stamp ⇒ the arms' clocks disagree) and
-`histogram_range_saturation_count` (percentiles are clipped).
+Three signals invalidate a cell rather than degrading it, and the harness logs each at `error`:
+`negative_latency_anomaly_count` (sink stamp before emit stamp ⇒ the arms' clocks disagree),
+`histogram_range_saturation_count` (percentiles are clipped), and `backlog_drain_fraction` past
+0.20 (the cell was draining a startup queue, so its percentiles describe occupancy and vary with
+how long it ran).
 
 ## Which arrangement Tier A measures
 
@@ -145,13 +206,16 @@ what the warm-restart battery measures. Posted to #1702 as an owner decision.
 
 ## Status
 
-**This PR delivers the Tier A harness and proves it runs end-to-end. It does not deliver the
-protocol numbers.** No 10-minute cell, no A/B/A matrix, no soak, no GC-tuned cells. Those and the
-subprocess baseline are Tier B (PR 2), and two protocol questions remain open with the owner:
-SCHED_OTHER vs SCHED_FIFO for the primary numbers, and whether to add an absolute p99.9 ceiling
-(tail risk sits beyond p99 — measured 611µs p99.9 and 12.8ms max under GIL contention, where only
-a relative-to-baseline delta is gated today).
+**Delivered here: all three arms, the warm-restart battery, and the gate evaluator. Not delivered:
+the protocol matrix or the verdict.** No 10-minute cells, no soak, no GC-tuned cells, no Tier B —
+those are the next PR in the stack.
+
+Gate 6 is measured and passes (0.869s warm median against 1.5s). Gates 1, 2, 4 and 5 pass on
+exploratory 720p60 cells. Gates 3 and the floor-delta gate cannot be evaluated at all until the
+owner states their thresholds.
 
 Payload is capped at 1080p: subprocess links are `UntrustedSession` (16 MiB ceiling), in-process
 host-to-host links are `Trusted` (64 MiB). 4K BGRA fits the in-process arm and is refused on the
-subprocess arm, so the two are structurally incomparable above 16 MiB.
+subprocess arm, so the two are structurally incomparable above 16 MiB — though under
+`surface-reference` the wire body no longer tracks geometry, so the cap binds only the full-pixel
+sweep.
