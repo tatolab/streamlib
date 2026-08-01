@@ -32,6 +32,25 @@ pub struct SyntheticFrameSourceConfiguration {
     /// pixels for it actually cross the link (owner decision 7 on #1702).
     #[serde(default)]
     pub wire_payload_mode: SyntheticFrameWirePayloadMode,
+    /// Quiet period between `setup()` and the first emitted frame.
+    ///
+    /// Load-bearing for the subprocess baseline arm and harmless for the other
+    /// two. `Runner::start()` returns once the graph is compiled, but a Python
+    /// subprocess needs a few hundred milliseconds more to spawn, import, and
+    /// reach its poll loop. Frames emitted into that window queue up, and under
+    /// `every_sample` the backlog is never dropped — it drains only as fast as
+    /// the consumer runs ahead of the source. Measured on this branch at
+    /// 720p60: p50 183ms over a 20s cell, 84ms over a 40s cell, against 0.09ms
+    /// for the in-process arm. Those are startup transients, not latencies, and
+    /// excluding warmup *by time* does not remove them because the backlog
+    /// outlives the exclusion window.
+    #[serde(default = "default_startup_settle_seconds")]
+    pub startup_settle_seconds: f64,
+}
+
+/// Comfortably past the ~0.66s the subprocess arm takes to reach its poll loop.
+fn default_startup_settle_seconds() -> f64 {
+    2.0
 }
 
 impl Default for SyntheticFrameSourceConfiguration {
@@ -42,6 +61,7 @@ impl Default for SyntheticFrameSourceConfiguration {
             channel_count: 4,
             target_frames_per_second: 30,
             wire_payload_mode: SyntheticFrameWirePayloadMode::SurfaceReference,
+            startup_settle_seconds: default_startup_settle_seconds(),
         }
     }
 }
@@ -110,9 +130,11 @@ impl ContinuousProcessor for SyntheticFrameSourceProcessor::Processor {
             .resize(SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES, 0u8);
         self.frame_payload_buffer.extend_from_slice(&wire_body);
         self.next_frame_sequence_number = 0;
-        self.emission_origin_monotonic_nanoseconds = read_monotonic_clock_nanoseconds();
+        self.emission_origin_monotonic_nanoseconds = read_monotonic_clock_nanoseconds()
+            + (self.configuration.startup_settle_seconds * 1_000_000_000.0) as i64;
         tracing::info!(
             frame_bytes = self.frame_payload_buffer.len(),
+            startup_settle_seconds = self.configuration.startup_settle_seconds,
             wire_payload_mode = self.configuration.wire_payload_mode.as_artifact_token(),
             target_fps = self.configuration.target_frames_per_second,
             "synthetic frame source ready"
@@ -291,11 +313,40 @@ mod tests {
             channel_count: 4,
             target_frames_per_second: 60,
             wire_payload_mode: SyntheticFrameWirePayloadMode::FullPixelPayload,
+            startup_settle_seconds: 2.5,
         };
         let encoded = serde_json::to_value(&configuration).expect("serializes");
         let decoded: SyntheticFrameSourceConfiguration =
             serde_json::from_value(encoded).expect("deserializes");
         assert_eq!(decoded, configuration);
+    }
+
+    /// The settle exists because the subprocess arm needs ~0.66s to reach its
+    /// poll loop; frames emitted before then become a backlog that the warmup
+    /// exclusion cannot remove. A default of zero would silently restore the
+    /// 183ms-vs-0.09ms comparison that measured startup transients.
+    #[test]
+    fn the_source_settles_before_its_first_frame_by_default() {
+        assert!(SyntheticFrameSourceConfiguration::default().startup_settle_seconds >= 1.0);
+    }
+
+    /// An older `cell-spec.json` predating the settle must not silently replay
+    /// with no settle at all — the field defaults to the protocol value.
+    #[test]
+    fn a_configuration_without_a_startup_settle_decodes_to_the_protocol_default() {
+        let decoded: SyntheticFrameSourceConfiguration = serde_json::from_value(
+            serde_json::json!({
+                "frame_width_pixels": 1280,
+                "frame_height_pixels": 720,
+                "channel_count": 4,
+                "target_frames_per_second": 60,
+            }),
+        )
+        .expect("deserializes without the settle");
+        assert_eq!(
+            decoded.startup_settle_seconds,
+            SyntheticFrameSourceConfiguration::default().startup_settle_seconds
+        );
     }
 
     /// A config written before the mode existed must decode to the protocol

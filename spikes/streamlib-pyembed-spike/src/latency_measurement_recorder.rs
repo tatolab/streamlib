@@ -237,6 +237,49 @@ impl LatencyMeasurementRecorder {
         self.histogram_range_saturation_count
     }
 
+    /// How much lower the last tenth of the cell's latencies run than the first
+    /// tenth, as a ratio of the first tenth's median.
+    ///
+    /// A cell in steady state hovers near zero. A materially positive value
+    /// means the graph entered the measured window with a queue and spent the
+    /// cell draining it, so the percentiles describe queue occupancy decaying
+    /// over time rather than per-frame latency — and, critically, they depend
+    /// on how long the cell ran. Measured on this branch before the source
+    /// gained its startup settle: the subprocess arm at 720p60 reported p50
+    /// 183ms over 20s and 84ms over 40s, purely from frames emitted while the
+    /// subprocess was still spawning. Excluding warmup by time does not remove
+    /// it, because the backlog outlives the exclusion window.
+    ///
+    /// Zero when there are too few measured frames for two disjoint deciles.
+    pub fn backlog_drain_fraction(&self) -> f64 {
+        let latencies: Vec<i64> = self
+            .every_received_frame_measurement
+            .iter()
+            .filter(|measurement| {
+                let Some(first) = self.first_source_emit_monotonic_nanoseconds else {
+                    return false;
+                };
+                measurement.source_emit_monotonic_nanoseconds - first
+                    >= self.warmup_exclusion_nanoseconds
+            })
+            .map(|measurement| {
+                measurement.sink_receive_monotonic_nanoseconds
+                    - measurement.source_emit_monotonic_nanoseconds
+            })
+            .collect();
+
+        let decile_length = latencies.len() / 10;
+        if decile_length == 0 {
+            return 0.0;
+        }
+        let first_decile_median = median_of(&latencies[..decile_length]);
+        let last_decile_median = median_of(&latencies[latencies.len() - decile_length..]);
+        if first_decile_median <= 0 {
+            return 0.0;
+        }
+        (first_decile_median - last_decile_median) as f64 / first_decile_median as f64
+    }
+
     /// Rolling 1-second achieved-frame-rate windows, for the fps-stability check.
     ///
     /// One entry per measured frame whose full 1-second lookback fits inside the
@@ -327,6 +370,17 @@ impl LatencyMeasurementRecorder {
     }
 }
 
+/// Median of an already-chronological slice, taken by sorting a copy so the
+/// caller's ordering (which carries the time axis) survives.
+fn median_of(samples: &[i64]) -> i64 {
+    if samples.is_empty() {
+        return 0;
+    }
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    sorted[sorted.len() / 2]
+}
+
 fn new_nanosecond_histogram() -> Histogram<u64> {
     Histogram::<u64>::new_with_bounds(
         HISTOGRAM_LOWEST_DISCERNIBLE_NANOSECONDS,
@@ -385,6 +439,61 @@ mod tests {
                 + source_emit_to_sink_receive_nanoseconds,
             stage_callback_nanoseconds,
         }
+    }
+
+    /// Record `frame_count` post-warmup frames whose latency runs linearly from
+    /// `first_latency_nanoseconds` to `last_latency_nanoseconds`.
+    fn record_cell_with_latency_trend(
+        first_latency_nanoseconds: i64,
+        last_latency_nanoseconds: i64,
+        frame_count: u64,
+    ) -> LatencyMeasurementRecorder {
+        let mut recorder = LatencyMeasurementRecorder::new(0, frame_count as usize);
+        for index in 0..frame_count {
+            let progress = index as f64 / (frame_count - 1) as f64;
+            let latency = first_latency_nanoseconds
+                + ((last_latency_nanoseconds - first_latency_nanoseconds) as f64 * progress) as i64;
+            recorder.record_frame_measurement(build_per_frame_latency_measurement(
+                index,
+                index as i64 * 16_666_666,
+                latency,
+                1_000,
+            ));
+        }
+        recorder
+    }
+
+    /// The detector's whole job: a cell that entered the measured window with a
+    /// queue reports percentiles that describe the queue draining, and they
+    /// change with cell duration. This is what made a 720p60 subprocess cell
+    /// report p50 183ms over 20s and 84ms over 40s.
+    #[test]
+    fn a_cell_draining_a_startup_backlog_is_detected() {
+        let recorder = record_cell_with_latency_trend(180_000_000, 20_000_000, 1_000);
+        assert!(
+            recorder.backlog_drain_fraction() > 0.20,
+            "a cell whose latency fell 9x across its life was not flagged: {}",
+            recorder.backlog_drain_fraction()
+        );
+    }
+
+    /// A steady cell must not be flagged, or every valid cell would be refused.
+    #[test]
+    fn a_steady_state_cell_is_not_flagged_as_draining() {
+        let recorder = record_cell_with_latency_trend(90_000, 91_000, 1_000);
+        assert!(
+            recorder.backlog_drain_fraction().abs() < 0.20,
+            "a steady cell was flagged as draining: {}",
+            recorder.backlog_drain_fraction()
+        );
+    }
+
+    /// Too few frames for two disjoint deciles must yield no verdict rather
+    /// than a verdict computed from overlapping samples.
+    #[test]
+    fn a_cell_too_short_to_form_two_deciles_yields_no_drain_verdict() {
+        let recorder = record_cell_with_latency_trend(180_000_000, 20_000_000, 9);
+        assert_eq!(recorder.backlog_drain_fraction(), 0.0);
     }
 
     fn temporary_artifact_path(file_name: &str) -> std::path::PathBuf {

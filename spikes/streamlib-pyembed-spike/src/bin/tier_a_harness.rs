@@ -27,6 +27,13 @@ use streamlib_pyembed_spike::tier_a_measurement_cell::{
     MeasurementArm, TierAMeasurementCellSpecification, run_tier_a_measurement_cell,
 };
 
+/// A steady-state cell's first and last measured deciles agree to within noise.
+/// A fifth of the latency disappearing across the cell is a draining queue, not
+/// jitter — see [`LatencyMeasurementRecorder::backlog_drain_fraction`].
+///
+/// [`LatencyMeasurementRecorder::backlog_drain_fraction`]: streamlib_pyembed_spike::latency_measurement_recorder::LatencyMeasurementRecorder::backlog_drain_fraction
+const BACKLOG_DRAIN_FRACTION_INVALIDATING_A_CELL: f64 = 0.20;
+
 #[derive(Parser, Debug)]
 #[command(about = "Run one Tier A measurement cell for the #1702 PyO3 spike")]
 struct TierAHarnessArguments {
@@ -55,6 +62,13 @@ struct TierAHarnessArguments {
         value_parser = SyntheticFrameWirePayloadMode::parse_from_flag_value
     )]
     wire_payload_mode: SyntheticFrameWirePayloadMode,
+
+    /// Quiet period before the source's first frame. Sized for the slowest arm
+    /// and held identical across arms: the subprocess arm needs ~0.66s to reach
+    /// its poll loop, and frames emitted into that window become a backlog that
+    /// outlives the warmup exclusion.
+    #[arg(long, default_value_t = 2.0)]
+    startup_settle_seconds: f64,
 
     #[arg(long, default_value_t = 600)]
     duration_seconds: u64,
@@ -95,8 +109,10 @@ fn parse_measurement_arm(value: &str) -> std::result::Result<MeasurementArm, Str
     match value {
         "in-process-python" => Ok(MeasurementArm::InProcessPython),
         "rust-passthrough-floor" => Ok(MeasurementArm::RustPassthroughFloor),
+        "subprocess-python-baseline" => Ok(MeasurementArm::SubprocessPythonBaseline),
         other => Err(format!(
-            "unknown arm `{other}` — expected `in-process-python` or `rust-passthrough-floor`"
+            "unknown arm `{other}` — expected `in-process-python`, `rust-passthrough-floor`, \
+             or `subprocess-python-baseline`"
         )),
     }
 }
@@ -119,17 +135,22 @@ fn main() -> Result<()> {
         ));
     }
 
-    // CPython comes up before `App::new` so interpreter initialization is
-    // ordered ahead of GpuContext init and iceoryx2 node creation rather than
-    // racing them from a processor thread.
-    Python::initialize();
+    // The subprocess baseline arm runs its callback in a spawned interpreter,
+    // so bringing one up here would add a cost that arm does not have and
+    // would misattribute this process's GC pauses to it.
+    if arguments.arm.runs_the_callback_in_the_harness_interpreter() {
+        // CPython comes up before `App::new` so interpreter initialization is
+        // ordered ahead of GpuContext init and iceoryx2 node creation rather
+        // than racing them from a processor thread.
+        Python::initialize();
+    }
 
     let python_callback_registration_token = format!(
         "{}::{}::rep-{}",
         arguments.stage_callback_module, arguments.stage_callback_attribute, arguments.repetition_index
     );
 
-    if arguments.arm == MeasurementArm::InProcessPython {
+    if arguments.arm.runs_the_callback_in_the_harness_interpreter() {
         Python::attach(|python| -> Result<()> {
             let module = python
                 .import(arguments.stage_callback_module.as_str())
@@ -163,6 +184,7 @@ fn main() -> Result<()> {
         channel_count: arguments.channels,
         target_frames_per_second: arguments.fps,
         wire_payload_mode: arguments.wire_payload_mode,
+        startup_settle_seconds: arguments.startup_settle_seconds,
         cell_duration_seconds: arguments.duration_seconds,
         warmup_exclusion_seconds: arguments.warmup_exclusion_seconds,
         python_callback_registration_token,
@@ -181,7 +203,10 @@ fn main() -> Result<()> {
     // The recorder has to live in the interpreter that runs the callback. In the
     // runner's interpreter it would time collections that cannot have caused any
     // frame's latency — which is what it did before, reporting 0 events.
-    let garbage_collection_recorder = if arguments.arm == MeasurementArm::InProcessPython {
+    let garbage_collection_recorder = if arguments
+        .arm
+        .runs_the_callback_in_the_harness_interpreter()
+    {
         Some(install_embedded_interpreter_garbage_collection_recorder(
             &arguments.garbage_collection_mode,
         )?)
@@ -229,6 +254,15 @@ fn main() -> Result<()> {
         tracing::error!(
             count = outcome.histogram_range_saturation_count,
             "samples exceeded the histogram range — reported percentiles are clipped"
+        );
+    }
+    if outcome.backlog_drain_fraction > BACKLOG_DRAIN_FRACTION_INVALIDATING_A_CELL {
+        tracing::error!(
+            backlog_drain_fraction = outcome.backlog_drain_fraction,
+            startup_settle_seconds = specification.startup_settle_seconds,
+            "cell latency fell steadily from its first measured decile to its last — it was \
+             draining a startup backlog, so these percentiles describe queue occupancy and \
+             depend on how long the cell ran; raise --startup-settle-seconds and rerun"
         );
     }
     });

@@ -1,0 +1,33 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+#
+# The #1702 subprocess baseline arm: the same stage the in-process arm runs,
+# hosted the way today's model hosts a Python processor — its own process, its
+# own venv, frames crossing iceoryx2 through the python-native cdylib.
+#
+# Ports are `any` so the payload stays the spike's opaque preamble + body and no
+# msgpack encode/decode enters the measured path. That matches the in-process
+# arm's `write_raw`/`read_raw`, which is the only way the two arms measure the
+# same quantity.
+
+package:
+  org: spike
+  name: pyembed-subprocess-baseline
+  version: 0.1.0
+  description: 'Subprocess baseline arm for the #1702 in-process Python go/no-go spike'
+
+processors:
+- name: PyembedSubprocessBaselineStage
+  description: 'Runs the spike stage callback in a subprocess-hosted Python processor — the arm the in-process arm is measured against'
+  runtime: python
+  entrypoint: pyembed_subprocess_baseline_stage:PyembedSubprocessBaselineStage
+  execution: reactive
+  config: null
+  state: []
+  inputs:
+  - name: frame_in
+    schema: any
+    delivery_profile: every_sample
+  outputs:
+  - name: frame_out
+    schema: any

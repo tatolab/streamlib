@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::App;
 use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::descriptors::{Org, Package, TypeName};
+use streamlib::sdk::processors::ProcessorTypeReference;
 
 use crate::latency_measurement_recorder::{
     LatencyMeasurementRecorder, LatencyPercentileSummary,
@@ -32,8 +34,35 @@ use crate::synthetic_frame_source_processor::{
 };
 use crate::synthetic_frame_wire_payload_mode::SyntheticFrameWirePayloadMode;
 
-/// Which of the two Rust-side comparison arms a cell runs. The third arm, the
-/// subprocess baseline, is driven from `python/runner.py`.
+/// Identity of the processor the subprocess baseline arm instantiates.
+/// Provisioned into a `streamlib_modules/@spike/...` slot by
+/// `python/provision_subprocess_baseline_package.py`, which must have run
+/// before a cell on this arm starts.
+pub const SUBPROCESS_BASELINE_STAGE_ORG: &str = "spike";
+pub const SUBPROCESS_BASELINE_STAGE_PACKAGE: &str = "pyembed-subprocess-baseline";
+pub const SUBPROCESS_BASELINE_STAGE_TYPE_NAME: &str = "PyembedSubprocessBaselineStage";
+
+/// Module on `PYTHONPATH` exposing the stage callables both Python arms invoke.
+/// Shared on purpose: the arms must run byte-identical callback bodies or the
+/// comparison measures two different workloads.
+pub const SPIKE_STAGE_CALLBACK_MODULE: &str = "spike_stage_callbacks";
+
+/// Build the baseline stage's type reference from its three identity segments.
+pub fn subprocess_baseline_stage_type_reference() -> Result<ProcessorTypeReference> {
+    fn malformed(segment: &str, error: impl std::fmt::Display) -> Error {
+        Error::Configuration(format!(
+            "the subprocess baseline stage's {segment} segment is malformed: {error}"
+        ))
+    }
+    Ok(ProcessorTypeReference::new(
+        Org::new(SUBPROCESS_BASELINE_STAGE_ORG).map_err(|e| malformed("org", e))?,
+        Package::new(SUBPROCESS_BASELINE_STAGE_PACKAGE).map_err(|e| malformed("package", e))?,
+        TypeName::new(SUBPROCESS_BASELINE_STAGE_TYPE_NAME).map_err(|e| malformed("type", e))?,
+    ))
+}
+
+/// Which comparison arm a cell runs. All three build the same three-processor
+/// graph and differ only in what hosts the stage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MeasurementArm {
@@ -41,6 +70,10 @@ pub enum MeasurementArm {
     InProcessPython,
     /// Pure-Rust passthrough — the engine wire-hop floor, no interpreter.
     RustPassthroughFloor,
+    /// Today's model: the same callback in its own process, its own venv,
+    /// reached through the python-native cdylib. The arm the pivot is measured
+    /// against.
+    SubprocessPythonBaseline,
 }
 
 impl MeasurementArm {
@@ -49,7 +82,15 @@ impl MeasurementArm {
         match self {
             MeasurementArm::InProcessPython => "in-process-python",
             MeasurementArm::RustPassthroughFloor => "rust-passthrough-floor",
+            MeasurementArm::SubprocessPythonBaseline => "subprocess-python-baseline",
         }
+    }
+
+    /// Whether this arm runs its callback inside the harness's own interpreter.
+    /// The subprocess arm does not, so registering a callback for it, or
+    /// installing a GC recorder in this process, would measure nothing.
+    pub fn runs_the_callback_in_the_harness_interpreter(self) -> bool {
+        matches!(self, MeasurementArm::InProcessPython)
     }
 }
 
@@ -67,6 +108,12 @@ pub struct TierAMeasurementCellSpecification {
     /// payload sweep and must never back a gated number.
     #[serde(default)]
     pub wire_payload_mode: SyntheticFrameWirePayloadMode,
+    /// Quiet period before the source's first frame, so a slow-starting arm is
+    /// measured from a quiescent graph rather than through its own startup
+    /// backlog. Identical across arms — it is a property of the cell, not of
+    /// the arm, or the arms would not be comparable.
+    #[serde(default)]
+    pub startup_settle_seconds: f64,
     pub cell_duration_seconds: u64,
     pub warmup_exclusion_seconds: u64,
     pub python_callback_registration_token: String,
@@ -129,6 +176,11 @@ pub struct TierAMeasurementCellOutcome {
     /// reported percentiles are clipped and the cell must be rerun with a wider
     /// range, not interpreted.
     pub histogram_range_saturation_count: u64,
+    /// How far the cell's latency fell from its first measured decile to its
+    /// last. Materially positive means the cell spent its life draining a
+    /// startup backlog and its percentiles describe queue occupancy, not
+    /// latency — see [`LatencyMeasurementRecorder::backlog_drain_fraction`].
+    pub backlog_drain_fraction: f64,
     pub rolling_one_second_frame_rate_windows: Vec<f64>,
 }
 
@@ -166,6 +218,7 @@ pub fn run_tier_a_measurement_cell(
             channel_count: specification.channel_count,
             target_frames_per_second: specification.target_frames_per_second,
             wire_payload_mode: specification.wire_payload_mode,
+            startup_settle_seconds: specification.startup_settle_seconds,
         },
     )?;
 
@@ -192,6 +245,21 @@ pub fn run_tier_a_measurement_cell(
                     wire_payload_mode: specification.wire_payload_mode,
                 },
             )?,
+        // `add`, not `add_local`: this arm exists to exercise the package +
+        // compiler language-dispatch path that spawns a Python subprocess
+        // (`spawn_python_native_subprocess_op.rs`), which is exactly what the
+        // in-process arm proposes to replace.
+        MeasurementArm::SubprocessPythonBaseline => app.add(
+            subprocess_baseline_stage_type_reference()?,
+            serde_json::json!({
+                "frame_width_pixels": specification.frame_width_pixels,
+                "frame_height_pixels": specification.frame_height_pixels,
+                "channel_count": specification.channel_count,
+                "wire_payload_mode": specification.wire_payload_mode,
+                "stage_callback_module": SPIKE_STAGE_CALLBACK_MODULE,
+                "stage_callback_attribute": specification.stage_callback_attribute,
+            }),
+        )?,
     };
 
     let sink = app.add_local::<MeasuringSinkProcessor::Processor>(MeasuringSinkConfiguration {})?;
@@ -240,6 +308,7 @@ pub fn run_tier_a_measurement_cell(
         dropped_frame_count: recorder.dropped_frame_count(),
         negative_latency_anomaly_count: recorder.negative_latency_anomaly_count(),
         histogram_range_saturation_count: recorder.histogram_range_saturation_count(),
+        backlog_drain_fraction: recorder.backlog_drain_fraction(),
         rolling_one_second_frame_rate_windows: recorder.rolling_one_second_frame_rate_windows(),
     };
 
@@ -275,6 +344,7 @@ mod tests {
             channel_count: 4,
             target_frames_per_second: 60,
             wire_payload_mode: SyntheticFrameWirePayloadMode::SurfaceReference,
+            startup_settle_seconds: 2.0,
             cell_duration_seconds: 600,
             warmup_exclusion_seconds: 60,
             python_callback_registration_token: "cell-token".to_string(),
@@ -420,6 +490,7 @@ mod cell_directory_collision_tests {
             channel_count: 4,
             target_frames_per_second: 30,
             wire_payload_mode: SyntheticFrameWirePayloadMode::SurfaceReference,
+            startup_settle_seconds: 2.0,
             cell_duration_seconds: 600,
             warmup_exclusion_seconds: 60,
             python_callback_registration_token: "token".to_string(),

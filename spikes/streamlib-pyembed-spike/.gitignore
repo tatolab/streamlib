@@ -1,2 +1,5 @@
 /target
 /artifacts
+/.provisioned
+/streamlib_modules
+/streamlib.lock
