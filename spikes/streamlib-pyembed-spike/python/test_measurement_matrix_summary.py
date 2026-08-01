@@ -43,6 +43,7 @@ def build_cell_summary(
             "wire_payload_mode": wire_payload_mode,
             "startup_settle_seconds": startup_settle_seconds,
             "stage_callback_attribute": "passthrough_stage",
+            "stage_callback_module": "spike_stage_callbacks",
             "anchor_processor_thread_gil": True,
             "resolved_delivery_profile": delivery_profile,
             "measured_metric_name": "source_emit_to_sink_receive",

@@ -154,6 +154,11 @@ def build_cell_condition_key(cell: dict) -> tuple:
         specification["frame_height_pixels"],
         specification["target_frames_per_second"],
         specification["stage_callback_attribute"],
+        # The module too, not just the attribute: it became a per-cell knob in
+        # the same change that added the settle, so two cells running
+        # same-named callables from different modules would otherwise be
+        # compared head-to-head.
+        specification.get("stage_callback_module"),
         specification["anchor_processor_thread_gil"],
         # Part of the key, not just the admissibility check: arms measured under
         # different settles are not comparable, and omitting it let a settle-0
@@ -219,7 +224,15 @@ def evaluate_condition(
     absolute_p99_9_ceiling_milliseconds: float | None,
 ) -> dict:
     """Evaluate every gate this condition's admissible cells can support."""
-    width, height, frames_per_second, stage, gil_anchor, startup_settle = condition_key
+    (
+        width,
+        height,
+        frames_per_second,
+        stage,
+        stage_module,
+        gil_anchor,
+        startup_settle,
+    ) = condition_key
     verdicts: dict[str, dict] = {}
 
     def record(gate: str, passed: bool | None, detail: str) -> None:
@@ -370,6 +383,7 @@ def evaluate_condition(
             "frame_height_pixels": height,
             "target_frames_per_second": frames_per_second,
             "stage_callback_attribute": stage,
+            "stage_callback_module": stage_module,
             "anchor_processor_thread_gil": gil_anchor,
             "startup_settle_seconds": startup_settle,
         },

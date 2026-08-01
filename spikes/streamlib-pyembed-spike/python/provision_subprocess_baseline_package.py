@@ -171,15 +171,14 @@ def link_staged_package_into_app_modules(
     return slot
 
 
-def resolve_interpreter_embedded_by_harness(spike_crate_root: Path) -> str:
-    """The CPython `major.minor` the harness binary links, e.g. `3.12`.
+def probe_embedded_python_runtime(spike_crate_root: Path) -> dict:
+    """Ask the harness which interpreter it actually embeds.
 
-    Read from the binary rather than assumed, because it is the interpreter the
-    in-process arm actually runs and the baseline's venv has to match it. Left
-    unpinned, `uv venv` picks the newest interpreter on the box: this rig
-    produced CPython 3.14.4 for the subprocess arm against 3.12.3 embedded in
-    the harness, which makes the two arms' numbers a comparison of interpreter
-    versions as much as of hosting.
+    Asked rather than inferred. `ldd` yields only `3.12`, and `uv venv --python
+    3.12` is then free to resolve its own managed build: this rig paired an
+    embedded CPython 3.12.3 (Ubuntu/GCC) with a baseline venv on 3.12.13
+    (python-build-standalone/Clang) — a different compiler, ten patch releases
+    apart — while a major.minor comparison called them the same runtime.
     """
     harness_binary = spike_crate_root / "target" / "release" / "tier_a_harness"
     if not harness_binary.is_file():
@@ -187,68 +186,84 @@ def resolve_interpreter_embedded_by_harness(spike_crate_root: Path) -> str:
             f"{harness_binary} is absent; build it before provisioning so the "
             "baseline venv can be pinned to the interpreter it embeds"
         )
-    linked_libraries = subprocess.run(
-        ["ldd", str(harness_binary)], check=True, capture_output=True, text=True
-    ).stdout
-    match = re.search(r"libpython(\d+\.\d+)\.so", linked_libraries)
-    if match is None:
-        raise RuntimeError(
-            f"{harness_binary} links no libpython — cannot determine which "
-            "interpreter the in-process arm runs, so the arms cannot be matched"
-        )
-    return match.group(1)
-
-
-def resolve_numpy_version_for_interpreter(interpreter: str) -> str | None:
-    """numpy's version under `interpreter`, or None when it is not installed."""
-    probe = subprocess.run(
-        [interpreter, "-c", "import numpy; print(numpy.__version__)"],
+    report_path = provisioned_package_root() / "embedded-python-runtime.json"
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            str(harness_binary),
+            "--report-embedded-python-runtime-to",
+            str(report_path),
+        ],
+        check=True,
         capture_output=True,
-        text=True,
     )
-    return probe.stdout.strip() if probe.returncode == 0 else None
+    return json.loads(report_path.read_text())
 
 
-def assert_arms_share_a_runtime(
-    venv_python: Path,
-    embedded_interpreter: str,
-    in_process_numpy_version: str | None,
-) -> None:
+def resolve_interpreter_executable_for_runtime(embedded_runtime: dict) -> str:
+    """The executable for the embedded interpreter, from its own `base_prefix`."""
+    candidate = (
+        Path(embedded_runtime["base_prefix"])
+        / "bin"
+        / f"python{embedded_runtime['major_minor']}"
+    )
+    if not candidate.is_file():
+        raise RuntimeError(
+            f"the harness embeds CPython {embedded_runtime['version']} with base_prefix "
+            f"{embedded_runtime['base_prefix']}, but {candidate} does not exist, so the "
+            "baseline venv cannot be pinned to the same interpreter"
+        )
+    return str(candidate)
+
+
+def assert_arms_share_a_runtime(venv_python: Path, embedded_runtime: dict) -> None:
     """Refuse a provisioning whose two arms would run different Pythons.
 
-    Checked here rather than trusted, because the failure is invisible in every
-    artifact the run produces: both arms report plausible latencies and the
-    difference between them silently includes an interpreter-version delta.
+    Compares the full `major.minor.micro` and the build banner, not just the
+    minor version: two CPython 3.12 builds from different compilers ten patch
+    releases apart are not the same runtime, and a guard that says they are
+    reproduces the confound it was written to prevent. numpy is compared
+    exactly, and an absent version on either side is a refusal rather than a
+    skipped check.
     """
     reported = subprocess.run(
         [
             str(venv_python),
             "-c",
-            "import sys, numpy; "
-            "print(f'{sys.version_info.major}.{sys.version_info.minor}'); "
-            "print(numpy.__version__)",
+            "import sys, json;\n"
+            "v = sys.version_info;\n"
+            "try:\n"
+            "    import numpy; n = numpy.__version__\n"
+            "except ImportError:\n"
+            "    n = None\n"
+            "print(json.dumps({'version': f'{v.major}.{v.minor}.{v.micro}', "
+            "'version_banner': sys.version, 'numpy_version': n}))",
         ],
         check=True,
         capture_output=True,
         text=True,
-    ).stdout.split()
-    venv_interpreter, venv_numpy_version = reported[0], reported[1]
+    ).stdout.strip()
+    venv_runtime = json.loads(reported)
 
-    if venv_interpreter != embedded_interpreter:
-        raise RuntimeError(
-            f"the baseline venv runs CPython {venv_interpreter} but the harness "
-            f"embeds {embedded_interpreter}; the two arms would differ by "
-            "interpreter version as well as by hosting"
-        )
-    if (
-        in_process_numpy_version is not None
-        and venv_numpy_version != in_process_numpy_version
+    for field, description in (
+        ("version", "CPython version"),
+        ("version_banner", "CPython build"),
+        ("numpy_version", "numpy version"),
     ):
-        raise RuntimeError(
-            f"the baseline venv has numpy {venv_numpy_version} but the in-process "
-            f"arm runs {in_process_numpy_version}; the realistic stage's cost is "
-            "numpy's, so the arms would not be comparable"
-        )
+        embedded_value = embedded_runtime.get(field)
+        venv_value = venv_runtime.get(field)
+        if embedded_value is None or venv_value is None:
+            raise RuntimeError(
+                f"the {description} is unknown on one of the arms "
+                f"(in-process {embedded_value!r}, baseline {venv_value!r}); the arms "
+                "cannot be shown to share a runtime, so they are not comparable"
+            )
+        if embedded_value != venv_value:
+            raise RuntimeError(
+                f"the arms disagree on {description}: the in-process arm runs "
+                f"{embedded_value!r} and the baseline venv runs {venv_value!r}; every "
+                "reported difference between them would include that delta"
+            )
 
 
 def provision_package_venv(staged_directory: Path, spike_crate_root: Path) -> Path:
@@ -267,29 +282,49 @@ def provision_package_venv(staged_directory: Path, spike_crate_root: Path) -> Pa
     (`ensure_streamlib_generated_in_venv`) has nothing left to do; it is
     verified rather than repeated.
     """
-    embedded_interpreter = resolve_interpreter_embedded_by_harness(spike_crate_root)
+    embedded_runtime = probe_embedded_python_runtime(spike_crate_root)
+    embedded_interpreter_executable = resolve_interpreter_executable_for_runtime(
+        embedded_runtime
+    )
     venv_directory = staged_directory / ".venv"
     subprocess.run(
-        ["uv", "venv", "--python", embedded_interpreter, str(venv_directory)],
+        [
+            "uv",
+            "venv",
+            "--python",
+            embedded_interpreter_executable,
+            str(venv_directory),
+        ],
         check=True,
     )
     venv_python = venv_directory / "bin" / "python"
 
-    # numpy pinned to the in-process arm's version for the same reason as the
-    # interpreter: the realistic stage's cost is numpy's, so two versions make
-    # the stage-callback column a comparison of numpy releases.
-    in_process_numpy_version = resolve_numpy_version_for_interpreter(
-        f"python{embedded_interpreter}"
+    # numpy pinned to the in-process arm's own version, taken from the embedded
+    # interpreter rather than from a `python3.X` on PATH: the realistic stage's
+    # cost is numpy's, so two versions make the stage-callback column a
+    # comparison of numpy releases.
+    in_process_numpy_version = embedded_runtime.get("numpy_version")
+    if in_process_numpy_version is None:
+        raise RuntimeError(
+            "the embedded interpreter has no numpy, so the baseline cannot be pinned "
+            "to the in-process arm's version and the arms would not be comparable"
+        )
+    subprocess.run(
+        [
+            "uv",
+            "pip",
+            "install",
+            "--python",
+            str(venv_python),
+            f"numpy=={in_process_numpy_version}",
+            str(staged_directory),
+        ],
+        check=True,
     )
-    install_arguments = ["uv", "pip", "install", "--python", str(venv_python)]
-    if in_process_numpy_version is not None:
-        install_arguments.append(f"numpy=={in_process_numpy_version}")
-    install_arguments.append(str(staged_directory))
-    subprocess.run(install_arguments, check=True)
     if not venv_python.is_file():
         raise RuntimeError(f"uv reported success but {venv_python} is absent")
 
-    assert_arms_share_a_runtime(venv_python, embedded_interpreter, in_process_numpy_version)
+    assert_arms_share_a_runtime(venv_python, embedded_runtime)
 
     generated_probe = subprocess.run(
         [
@@ -349,7 +384,7 @@ def provision(release: bool) -> dict:
         ),
         "staged_package_directory": str(staged_directory),
         "package_venv_python": str(venv_python),
-        "embedded_interpreter": resolve_interpreter_embedded_by_harness(
+        "embedded_python_runtime": probe_embedded_python_runtime(
             application_modules_root
         ),
         "linked_module_slot": str(slot),

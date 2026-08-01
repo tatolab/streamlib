@@ -37,8 +37,12 @@ const BACKLOG_TREND_FRACTION_INVALIDATING_A_CELL: f64 = 0.20;
 #[command(about = "Run one Tier A measurement cell for the #1702 PyO3 spike")]
 struct TierAHarnessArguments {
     /// Which comparison arm to run.
-    #[arg(long, value_parser = MeasurementArm::parse_from_flag_value)]
-    arm: MeasurementArm,
+    #[arg(
+        long,
+        value_parser = MeasurementArm::parse_from_flag_value,
+        required_unless_present = "report_embedded_python_runtime_to"
+    )]
+    arm: Option<MeasurementArm>,
 
     #[arg(long, default_value_t = 30)]
     fps: u32,
@@ -100,8 +104,53 @@ struct TierAHarnessArguments {
     #[arg(long)]
     require_locked_measurement_state: bool,
 
+    /// Write the embedded interpreter's identity as JSON to this path and exit,
+    /// without running a cell. Provisioning uses it to pin the baseline venv to
+    /// the exact interpreter the in-process arm runs, rather than to a
+    /// `python3.X` on PATH that merely shares a minor version. A file rather
+    /// than stdout: the engine's tracing output shares stdout, and a parser
+    /// would have to pick the JSON back out of it.
     #[arg(long)]
-    output_directory: PathBuf,
+    report_embedded_python_runtime_to: Option<PathBuf>,
+
+    #[arg(long, required_unless_present = "report_embedded_python_runtime_to")]
+    output_directory: Option<PathBuf>,
+}
+
+/// Report the embedded interpreter's full version, install prefix and numpy.
+fn report_embedded_python_runtime(report_path: &std::path::Path) -> Result<()> {
+    Python::initialize();
+    let report = Python::attach(|python| -> Result<String> {
+        let probe = python
+            .import("sys")
+            .and_then(|sys| {
+                let version: String = sys.getattr("version")?.extract()?;
+                let base_prefix: String = sys.getattr("base_prefix")?.extract()?;
+                let version_info = sys.getattr("version_info")?;
+                let major: u32 = version_info.getattr("major")?.extract()?;
+                let minor: u32 = version_info.getattr("minor")?.extract()?;
+                let micro: u32 = version_info.getattr("micro")?.extract()?;
+                let numpy_version: Option<String> = python
+                    .import("numpy")
+                    .ok()
+                    .and_then(|numpy| numpy.getattr("__version__").ok())
+                    .and_then(|value| value.extract().ok());
+                Ok(serde_json::json!({
+                    "version_banner": version,
+                    "version": format!("{major}.{minor}.{micro}"),
+                    "major_minor": format!("{major}.{minor}"),
+                    "base_prefix": base_prefix,
+                    "numpy_version": numpy_version,
+                })
+                .to_string())
+            })
+            .map_err(|error| {
+                Error::Runtime(format!("probing the embedded interpreter failed: {error}"))
+            })?;
+        Ok(probe)
+    })?;
+    std::fs::write(report_path, report)?;
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -109,6 +158,18 @@ fn main() -> Result<()> {
     // engine's global tracing dispatcher, and a second `set_global_default`
     // aborts the run before a single frame is measured.
     let arguments = TierAHarnessArguments::parse();
+
+    if let Some(report_path) = arguments.report_embedded_python_runtime_to.as_deref() {
+        return report_embedded_python_runtime(report_path);
+    }
+
+    let arm = arguments
+        .arm
+        .ok_or_else(|| Error::Configuration("--arm is required".to_string()))?;
+    let output_directory = arguments
+        .output_directory
+        .clone()
+        .ok_or_else(|| Error::Configuration("--output-directory is required".to_string()))?;
 
     let machine_specification = probe_machine_specification();
     if arguments.require_locked_measurement_state
@@ -125,7 +186,7 @@ fn main() -> Result<()> {
     // The subprocess baseline arm runs its callback in a spawned interpreter,
     // so bringing one up here would add a cost that arm does not have and
     // would misattribute this process's GC pauses to it.
-    if arguments.arm.runs_the_callback_in_the_harness_interpreter() {
+    if arm.runs_the_callback_in_the_harness_interpreter() {
         // CPython comes up before `App::new` so interpreter initialization is
         // ordered ahead of GpuContext init and iceoryx2 node creation rather
         // than racing them from a processor thread.
@@ -139,7 +200,7 @@ fn main() -> Result<()> {
         arguments.repetition_index
     );
 
-    if arguments.arm.runs_the_callback_in_the_harness_interpreter() {
+    if arm.runs_the_callback_in_the_harness_interpreter() {
         Python::attach(|python| -> Result<()> {
             let module = python
                 .import(arguments.stage_callback_module.as_str())
@@ -167,7 +228,7 @@ fn main() -> Result<()> {
     }
 
     let specification = TierAMeasurementCellSpecification {
-        arm: arguments.arm,
+        arm,
         frame_width_pixels: arguments.frame_width,
         frame_height_pixels: arguments.frame_height,
         channel_count: arguments.channels,
@@ -186,15 +247,13 @@ fn main() -> Result<()> {
         measurement_stamping_is_compiled_in: MEASUREMENT_STAMPING_IS_COMPILED_IN,
     };
 
-    let cell_directory = arguments
-        .output_directory
-        .join(specification.artifact_directory_name());
+    let cell_directory = output_directory.join(specification.artifact_directory_name());
 
     // The recorder has to live in the interpreter that runs the callback. In the
     // runner's interpreter it would time collections that cannot have caused any
     // frame's latency — which is what it did before, reporting 0 events.
     let garbage_collection_recorder =
-        if arguments.arm.runs_the_callback_in_the_harness_interpreter() {
+        if arm.runs_the_callback_in_the_harness_interpreter() {
             Some(install_embedded_interpreter_garbage_collection_recorder(
                 &arguments.garbage_collection_mode,
             )?)

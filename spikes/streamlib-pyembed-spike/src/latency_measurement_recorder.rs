@@ -318,11 +318,15 @@ impl LatencyMeasurementRecorder {
         if first_decile_median <= 0 {
             return 0.0;
         }
-        let absolute_drop_nanoseconds = first_decile_median - last_decile_median;
-        if absolute_drop_nanoseconds < self.frame_period_nanoseconds / 2 {
+        // The floor applies to the magnitude, and the returned fraction keeps
+        // its sign. Testing the signed drop against a positive floor made every
+        // growing cell return exactly 0.0, so the saturation direction was
+        // unreachable and both callers' `abs()` was dead.
+        let signed_drop_nanoseconds = first_decile_median - last_decile_median;
+        if signed_drop_nanoseconds.abs() < self.frame_period_nanoseconds / 2 {
             return 0.0;
         }
-        absolute_drop_nanoseconds as f64 / first_decile_median as f64
+        signed_drop_nanoseconds as f64 / first_decile_median as f64
     }
 
     /// Rolling 1-second achieved-frame-rate windows, for the fps-stability check.
@@ -570,6 +574,21 @@ mod tests {
     fn a_proportionally_identical_drop_of_whole_frame_periods_is_flagged() {
         let recorder = record_cell_with_latency_trend(110_000_000, 76_000_000, 1_000);
         assert!(recorder.backlog_drain_fraction() > 0.20);
+    }
+
+    /// A cell whose latency GREW is saturating, which invalidates it just as a
+    /// draining one does. Reported as a negative fraction so the direction
+    /// survives to the caller; testing the signed drop against a positive floor
+    /// previously collapsed every growing cell to exactly 0.0, leaving the
+    /// saturation direction unreachable and both callers' `abs()` dead.
+    #[test]
+    fn a_cell_whose_latency_grew_reports_a_negative_fraction() {
+        let recorder = record_cell_with_latency_trend(76_000_000, 110_000_000, 1_000);
+        assert!(
+            recorder.backlog_drain_fraction() <= -0.20,
+            "a saturating cell reported {}",
+            recorder.backlog_drain_fraction()
+        );
     }
 
     /// Too few frames for two disjoint deciles must yield no verdict rather

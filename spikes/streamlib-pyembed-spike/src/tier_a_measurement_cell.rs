@@ -306,7 +306,18 @@ pub fn run_tier_a_measurement_cell(
     app.connect((&source, "frame_out"), (&stage, "frame_in"))?;
     app.connect((&stage, "frame_out"), (&sink, "frame_in"))?;
 
-    let machine_specification = probe_machine_specification();
+    let mut machine_specification = probe_machine_specification();
+    // Without this the in-process arm's own artifact names only the *other*
+    // arm's interpreter, so a reader of the headline number cannot see what
+    // produced it.
+    if specification.arm.runs_the_callback_in_the_harness_interpreter() {
+        pyo3::Python::attach(|python| {
+            crate::machine_specification_probe::record_embedded_python_runtime(
+                &mut machine_specification,
+                python,
+            )
+        });
+    }
 
     app.runner().start()?;
     let cell_deadline = read_monotonic_clock_nanoseconds()
