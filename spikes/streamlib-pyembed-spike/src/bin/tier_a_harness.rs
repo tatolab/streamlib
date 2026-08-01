@@ -17,28 +17,27 @@ use std::path::PathBuf;
 use clap::Parser;
 use pyo3::prelude::*;
 use streamlib::sdk::error::{Error, Result};
-use streamlib_pyembed_spike::monotonic_clock::MEASUREMENT_STAMPING_IS_COMPILED_IN;
 use streamlib_pyembed_spike::machine_specification_probe::{
     machine_is_in_locked_measurement_state, probe_machine_specification,
 };
+use streamlib_pyembed_spike::monotonic_clock::MEASUREMENT_STAMPING_IS_COMPILED_IN;
 use streamlib_pyembed_spike::python_processor_callback_registry::register_python_callback_under_token;
+use streamlib_pyembed_spike::synthetic_frame_source_processor::default_startup_settle_seconds;
 use streamlib_pyembed_spike::synthetic_frame_wire_payload_mode::SyntheticFrameWirePayloadMode;
 use streamlib_pyembed_spike::tier_a_measurement_cell::{
     MeasurementArm, TierAMeasurementCellSpecification, run_tier_a_measurement_cell,
 };
 
 /// A steady-state cell's first and last measured deciles agree to within noise.
-/// A fifth of the latency disappearing across the cell is a draining queue, not
-/// jitter — see [`LatencyMeasurementRecorder::backlog_drain_fraction`].
-///
-/// [`LatencyMeasurementRecorder::backlog_drain_fraction`]: streamlib_pyembed_spike::latency_measurement_recorder::LatencyMeasurementRecorder::backlog_drain_fraction
-const BACKLOG_DRAIN_FRACTION_INVALIDATING_A_CELL: f64 = 0.20;
+/// Compared as a magnitude: a cell whose latency grew is saturating, which is
+/// as disqualifying as one that was draining.
+const BACKLOG_TREND_FRACTION_INVALIDATING_A_CELL: f64 = 0.20;
 
 #[derive(Parser, Debug)]
 #[command(about = "Run one Tier A measurement cell for the #1702 PyO3 spike")]
 struct TierAHarnessArguments {
     /// Which comparison arm to run.
-    #[arg(long, value_parser = parse_measurement_arm)]
+    #[arg(long, value_parser = MeasurementArm::parse_from_flag_value)]
     arm: MeasurementArm,
 
     #[arg(long, default_value_t = 30)]
@@ -67,7 +66,7 @@ struct TierAHarnessArguments {
     /// and held identical across arms: the subprocess arm needs ~0.66s to reach
     /// its poll loop, and frames emitted into that window become a backlog that
     /// outlives the warmup exclusion.
-    #[arg(long, default_value_t = 2.0)]
+    #[arg(long, default_value_t = default_startup_settle_seconds())]
     startup_settle_seconds: f64,
 
     #[arg(long, default_value_t = 600)]
@@ -105,18 +104,6 @@ struct TierAHarnessArguments {
     output_directory: PathBuf,
 }
 
-fn parse_measurement_arm(value: &str) -> std::result::Result<MeasurementArm, String> {
-    match value {
-        "in-process-python" => Ok(MeasurementArm::InProcessPython),
-        "rust-passthrough-floor" => Ok(MeasurementArm::RustPassthroughFloor),
-        "subprocess-python-baseline" => Ok(MeasurementArm::SubprocessPythonBaseline),
-        other => Err(format!(
-            "unknown arm `{other}` — expected `in-process-python`, `rust-passthrough-floor`, \
-             or `subprocess-python-baseline`"
-        )),
-    }
-}
-
 fn main() -> Result<()> {
     // No subscriber is installed here on purpose: `Runner::new()` installs the
     // engine's global tracing dispatcher, and a second `set_global_default`
@@ -147,7 +134,9 @@ fn main() -> Result<()> {
 
     let python_callback_registration_token = format!(
         "{}::{}::rep-{}",
-        arguments.stage_callback_module, arguments.stage_callback_attribute, arguments.repetition_index
+        arguments.stage_callback_module,
+        arguments.stage_callback_attribute,
+        arguments.repetition_index
     );
 
     if arguments.arm.runs_the_callback_in_the_harness_interpreter() {
@@ -189,6 +178,7 @@ fn main() -> Result<()> {
         warmup_exclusion_seconds: arguments.warmup_exclusion_seconds,
         python_callback_registration_token,
         anchor_processor_thread_gil: !arguments.disable_gil_anchor,
+        stage_callback_module: arguments.stage_callback_module.clone(),
         stage_callback_attribute: arguments.stage_callback_attribute.clone(),
         resolved_delivery_profile: "every_sample".to_string(),
         measured_metric_name: "source_emit_to_sink_receive".to_string(),
@@ -203,16 +193,14 @@ fn main() -> Result<()> {
     // The recorder has to live in the interpreter that runs the callback. In the
     // runner's interpreter it would time collections that cannot have caused any
     // frame's latency — which is what it did before, reporting 0 events.
-    let garbage_collection_recorder = if arguments
-        .arm
-        .runs_the_callback_in_the_harness_interpreter()
-    {
-        Some(install_embedded_interpreter_garbage_collection_recorder(
-            &arguments.garbage_collection_mode,
-        )?)
-    } else {
-        None
-    };
+    let garbage_collection_recorder =
+        if arguments.arm.runs_the_callback_in_the_harness_interpreter() {
+            Some(install_embedded_interpreter_garbage_collection_recorder(
+                &arguments.garbage_collection_mode,
+            )?)
+        } else {
+            None
+        };
 
     let outcome = run_tier_a_measurement_cell(&specification, &cell_directory)?;
 
@@ -231,40 +219,47 @@ fn main() -> Result<()> {
         )
         .finish();
     tracing::subscriber::with_default(post_stop_subscriber, || {
-    tracing::info!(
-        cell = %specification.artifact_directory_name(),
-        received_frames = outcome.received_frame_count,
-        measured_frames = outcome.measured_frame_count,
-        dropped_frames = outcome.dropped_frame_count,
-        p50_ns = outcome.source_emit_to_sink_receive.p50_nanoseconds,
-        p99_ns = outcome.source_emit_to_sink_receive.p99_nanoseconds,
-        p99_9_ns = outcome.source_emit_to_sink_receive.p99_9_nanoseconds,
-        max_ns = outcome.source_emit_to_sink_receive.max_nanoseconds,
-        "cell complete"
-    );
+        tracing::info!(
+            cell = %specification.artifact_directory_name(),
+            received_frames = outcome.received_frame_count,
+            measured_frames = outcome.measured_frame_count,
+            dropped_frames = outcome.dropped_frame_count,
+            p50_ns = outcome.source_emit_to_sink_receive.p50_nanoseconds,
+            p99_ns = outcome.source_emit_to_sink_receive.p99_nanoseconds,
+            p99_9_ns = outcome.source_emit_to_sink_receive.p99_9_nanoseconds,
+            max_ns = outcome.source_emit_to_sink_receive.max_nanoseconds,
+            "cell complete"
+        );
 
-    if outcome.negative_latency_anomaly_count > 0 {
-        tracing::error!(
-            count = outcome.negative_latency_anomaly_count,
-            "cell recorded sink stamps earlier than their emit stamps — the clocks disagree \
+        if outcome.negative_latency_anomaly_count > 0 {
+            tracing::error!(
+                count = outcome.negative_latency_anomaly_count,
+                "cell recorded sink stamps earlier than their emit stamps — the clocks disagree \
              and this cell's percentiles must not be used"
-        );
-    }
-    if outcome.histogram_range_saturation_count > 0 {
-        tracing::error!(
-            count = outcome.histogram_range_saturation_count,
-            "samples exceeded the histogram range — reported percentiles are clipped"
-        );
-    }
-    if outcome.backlog_drain_fraction > BACKLOG_DRAIN_FRACTION_INVALIDATING_A_CELL {
-        tracing::error!(
-            backlog_drain_fraction = outcome.backlog_drain_fraction,
-            startup_settle_seconds = specification.startup_settle_seconds,
-            "cell latency fell steadily from its first measured decile to its last — it was \
-             draining a startup backlog, so these percentiles describe queue occupancy and \
-             depend on how long the cell ran; raise --startup-settle-seconds and rerun"
-        );
-    }
+            );
+        }
+        if outcome.histogram_range_saturation_count > 0 {
+            tracing::error!(
+                count = outcome.histogram_range_saturation_count,
+                "samples exceeded the histogram range — reported percentiles are clipped"
+            );
+        }
+        if outcome.backlog_drain_fraction.abs() > BACKLOG_TREND_FRACTION_INVALIDATING_A_CELL {
+            tracing::error!(
+                backlog_trend_fraction = outcome.backlog_drain_fraction,
+                direction = if outcome.backlog_drain_fraction > 0.0 {
+                    "draining"
+                } else {
+                    "building"
+                },
+                startup_settle_seconds = specification.startup_settle_seconds,
+                "cell latency moved steadily between its first and last measured decile, so \
+                 these percentiles describe queue occupancy and depend on how long the cell \
+                 ran. Two causes: a startup backlog, which --startup-settle-seconds fixes, or \
+                 per-frame service time at or above the frame period, which it cannot — \
+                 compare the achieved rate against the target to tell them apart"
+            );
+        }
     });
 
     Ok(())
@@ -330,9 +325,7 @@ fn export_embedded_interpreter_garbage_collection_records(
                 "export_collection_records_as_jsonl",
                 (record_path.to_string_lossy().as_ref(),),
             )
-            .map_err(|error| {
-                Error::Runtime(format!("exporting the GC records failed: {error}"))
-            })?;
+            .map_err(|error| Error::Runtime(format!("exporting the GC records failed: {error}")))?;
         tracing::info!(
             recorded_event_count,
             path = %record_path.display(),

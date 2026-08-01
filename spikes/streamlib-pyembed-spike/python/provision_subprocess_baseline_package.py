@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -94,7 +95,7 @@ def build_python_native_cdylib(engine_checkout_root: Path, release: bool) -> Pat
 def stage_baseline_package_with_sdk_path_override(
     engine_checkout_root: Path,
 ) -> Path:
-    """Copy the package source to a gitignored slot, injecting the SDK path.
+    """Copy the package source to a slot under target/, injecting the SDK path.
 
     The override carries an absolute path, so the staged copy stays valid
     wherever the build orchestrator relocates it.
@@ -103,9 +104,7 @@ def stage_baseline_package_with_sdk_path_override(
     if not (source_directory / "streamlib.yaml").is_file():
         raise RuntimeError(f"no package source at {source_directory}")
 
-    staged_directory = (
-        resolve_spike_crate_root() / ".provisioned" / PACKAGE_NAME
-    )
+    staged_directory = provisioned_package_root() / PACKAGE_NAME
     if staged_directory.exists():
         shutil.rmtree(staged_directory)
     staged_directory.parent.mkdir(parents=True, exist_ok=True)
@@ -172,7 +171,87 @@ def link_staged_package_into_app_modules(
     return slot
 
 
-def provision_package_venv(staged_directory: Path) -> Path:
+def resolve_interpreter_embedded_by_harness(spike_crate_root: Path) -> str:
+    """The CPython `major.minor` the harness binary links, e.g. `3.12`.
+
+    Read from the binary rather than assumed, because it is the interpreter the
+    in-process arm actually runs and the baseline's venv has to match it. Left
+    unpinned, `uv venv` picks the newest interpreter on the box: this rig
+    produced CPython 3.14.4 for the subprocess arm against 3.12.3 embedded in
+    the harness, which makes the two arms' numbers a comparison of interpreter
+    versions as much as of hosting.
+    """
+    harness_binary = spike_crate_root / "target" / "release" / "tier_a_harness"
+    if not harness_binary.is_file():
+        raise RuntimeError(
+            f"{harness_binary} is absent; build it before provisioning so the "
+            "baseline venv can be pinned to the interpreter it embeds"
+        )
+    linked_libraries = subprocess.run(
+        ["ldd", str(harness_binary)], check=True, capture_output=True, text=True
+    ).stdout
+    match = re.search(r"libpython(\d+\.\d+)\.so", linked_libraries)
+    if match is None:
+        raise RuntimeError(
+            f"{harness_binary} links no libpython — cannot determine which "
+            "interpreter the in-process arm runs, so the arms cannot be matched"
+        )
+    return match.group(1)
+
+
+def resolve_numpy_version_for_interpreter(interpreter: str) -> str | None:
+    """numpy's version under `interpreter`, or None when it is not installed."""
+    probe = subprocess.run(
+        [interpreter, "-c", "import numpy; print(numpy.__version__)"],
+        capture_output=True,
+        text=True,
+    )
+    return probe.stdout.strip() if probe.returncode == 0 else None
+
+
+def assert_arms_share_a_runtime(
+    venv_python: Path,
+    embedded_interpreter: str,
+    in_process_numpy_version: str | None,
+) -> None:
+    """Refuse a provisioning whose two arms would run different Pythons.
+
+    Checked here rather than trusted, because the failure is invisible in every
+    artifact the run produces: both arms report plausible latencies and the
+    difference between them silently includes an interpreter-version delta.
+    """
+    reported = subprocess.run(
+        [
+            str(venv_python),
+            "-c",
+            "import sys, numpy; "
+            "print(f'{sys.version_info.major}.{sys.version_info.minor}'); "
+            "print(numpy.__version__)",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.split()
+    venv_interpreter, venv_numpy_version = reported[0], reported[1]
+
+    if venv_interpreter != embedded_interpreter:
+        raise RuntimeError(
+            f"the baseline venv runs CPython {venv_interpreter} but the harness "
+            f"embeds {embedded_interpreter}; the two arms would differ by "
+            "interpreter version as well as by hosting"
+        )
+    if (
+        in_process_numpy_version is not None
+        and venv_numpy_version != in_process_numpy_version
+    ):
+        raise RuntimeError(
+            f"the baseline venv has numpy {venv_numpy_version} but the in-process "
+            f"arm runs {in_process_numpy_version}; the realistic stage's cost is "
+            "numpy's, so the arms would not be comparable"
+        )
+
+
+def provision_package_venv(staged_directory: Path, spike_crate_root: Path) -> Path:
     """Create the package's `.venv`, which is what makes the slot loadable.
 
     `streamlib install` skips linked entries ("linked entries stay
@@ -188,22 +267,29 @@ def provision_package_venv(staged_directory: Path) -> Path:
     (`ensure_streamlib_generated_in_venv`) has nothing left to do; it is
     verified rather than repeated.
     """
+    embedded_interpreter = resolve_interpreter_embedded_by_harness(spike_crate_root)
     venv_directory = staged_directory / ".venv"
-    subprocess.run(["uv", "venv", str(venv_directory)], check=True)
-    venv_python = venv_directory / "bin" / "python"
     subprocess.run(
-        [
-            "uv",
-            "pip",
-            "install",
-            "--python",
-            str(venv_python),
-            str(staged_directory),
-        ],
+        ["uv", "venv", "--python", embedded_interpreter, str(venv_directory)],
         check=True,
     )
+    venv_python = venv_directory / "bin" / "python"
+
+    # numpy pinned to the in-process arm's version for the same reason as the
+    # interpreter: the realistic stage's cost is numpy's, so two versions make
+    # the stage-callback column a comparison of numpy releases.
+    in_process_numpy_version = resolve_numpy_version_for_interpreter(
+        f"python{embedded_interpreter}"
+    )
+    install_arguments = ["uv", "pip", "install", "--python", str(venv_python)]
+    if in_process_numpy_version is not None:
+        install_arguments.append(f"numpy=={in_process_numpy_version}")
+    install_arguments.append(str(staged_directory))
+    subprocess.run(install_arguments, check=True)
     if not venv_python.is_file():
         raise RuntimeError(f"uv reported success but {venv_python} is absent")
+
+    assert_arms_share_a_runtime(venv_python, embedded_interpreter, in_process_numpy_version)
 
     generated_probe = subprocess.run(
         [
@@ -245,7 +331,7 @@ def provision(release: bool) -> dict:
     staged_directory = stage_baseline_package_with_sdk_path_override(
         engine_checkout_root
     )
-    venv_python = provision_package_venv(staged_directory)
+    venv_python = provision_package_venv(staged_directory, application_modules_root)
     slot = link_staged_package_into_app_modules(
         application_modules_root,
         staged_directory,
@@ -263,11 +349,27 @@ def provision(release: bool) -> dict:
         ),
         "staged_package_directory": str(staged_directory),
         "package_venv_python": str(venv_python),
+        "embedded_interpreter": resolve_interpreter_embedded_by_harness(
+            application_modules_root
+        ),
         "linked_module_slot": str(slot),
         "processor_type_reference": (
             f"@{PACKAGE_ORG}/{PACKAGE_NAME}/PyembedSubprocessBaselineStage"
         ),
     }
+
+
+def provisioned_package_root() -> Path:
+    """Where the staged package and its venv live.
+
+    Under `target/` rather than a dot-directory at the crate root because the
+    repo's `check-manifest-schema` walk skips `target/`, `node_modules/`,
+    `.git/` and `.streamlib/` and nothing else (`xtask/src/manifest_schema.rs:66`).
+    A staged copy anywhere else puts both its own manifest and the `streamlib.yaml`
+    vendored inside its venv in front of that gate, failing it locally on any
+    machine that has provisioned — a false failure on a file no one committed.
+    """
+    return resolve_spike_crate_root() / "target" / "provisioned"
 
 
 def provisioning_record_path() -> Path:
@@ -277,7 +379,7 @@ def provisioning_record_path() -> Path:
     Recomputing it in the runner would be a second copy of the same derivation,
     and the two drifting is exactly how the cdylib pin gets lost.
     """
-    return resolve_spike_crate_root() / ".provisioned" / "provisioning-record.json"
+    return provisioned_package_root() / "provisioning-record.json"
 
 
 def main() -> int:

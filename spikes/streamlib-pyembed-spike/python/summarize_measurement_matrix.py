@@ -45,8 +45,22 @@ ARM_SUBPROCESS_PYTHON_BASELINE = "subprocess-python-baseline"
 # frame and the percentiles are pinned near one frame period whatever happens.
 REQUIRED_DELIVERY_PROFILE = "every_sample"
 
-# Matches the Rust harness's own invalidation bound.
-BACKLOG_DRAIN_FRACTION_INVALIDATING_A_CELL = 0.20
+# Matches the Rust harness's own invalidation bound. Applied to the absolute
+# value: a cell whose latency *grew* across its life is saturating, which is as
+# disqualifying as one that was draining.
+BACKLOG_TREND_FRACTION_INVALIDATING_A_CELL = 0.20
+
+# A pipeline whose per-frame service time reaches its frame period cannot keep
+# up, so its percentiles describe queue occupancy rather than latency. This is
+# the check that catches a *steady* backlog, which no trend detector can see:
+# with the settle removed, a subprocess cell sat at p50 66.9ms with a trend of
+# -0.002 — a stable queue, invisible to the decile comparison, and the
+# summarizer passed gate 1 against it at 0.127ms vs 66.9ms.
+SATURATION_FRAME_PERIOD_MULTIPLE_INVALIDATING_A_CELL = 1.0
+
+# Owner decision: cells must be measured from a quiescent graph. A cell run with
+# a shorter settle than its peers is not comparable to them.
+PROTOCOL_STARTUP_SETTLE_SECONDS = 2.0
 
 # Gate 2's stated absolute ceilings, by target rate.
 GATE_2_ABSOLUTE_CEILING_MILLISECONDS_BY_RATE = {60: 50.0, 30: 100.0}
@@ -98,15 +112,36 @@ def describe_cell_inadmissibility(cell: dict) -> str | None:
         return "recorded sink stamps earlier than their emit stamps; the clocks disagree"
     if summary.get("histogram_range_saturation_count", 0):
         return "saturated the histogram range; its top percentiles are floors, not values"
-    if (
-        summary.get("backlog_drain_fraction", 0.0)
-        > BACKLOG_DRAIN_FRACTION_INVALIDATING_A_CELL
-    ):
+    backlog_trend = summary.get("backlog_drain_fraction", 0.0)
+    if abs(backlog_trend) > BACKLOG_TREND_FRACTION_INVALIDATING_A_CELL:
+        direction = "shed" if backlog_trend > 0 else "gained"
         return (
-            "shed "
-            f"{summary['backlog_drain_fraction']:.0%} of its latency across its own "
-            "life; it was draining a startup backlog, so its percentiles describe "
-            "queue occupancy and depend on how long it ran"
+            f"{direction} {abs(backlog_trend):.0%} of its latency across its own life; "
+            "it was draining or building a queue, so its percentiles describe queue "
+            "occupancy and depend on how long it ran"
+        )
+
+    frame_period_milliseconds = 1000.0 / specification["target_frames_per_second"]
+    p50_milliseconds = (
+        summary["source_emit_to_sink_receive"]["p50_nanoseconds"]
+        / NANOSECONDS_PER_MILLISECOND
+    )
+    saturation_ceiling = (
+        frame_period_milliseconds * SATURATION_FRAME_PERIOD_MULTIPLE_INVALIDATING_A_CELL
+    )
+    if p50_milliseconds >= saturation_ceiling:
+        return (
+            f"ran at p50 {p50_milliseconds:.3f}ms against a {frame_period_milliseconds:.3f}ms "
+            "frame period; per-frame service time reached the frame period, so the "
+            "pipeline was saturated and these percentiles describe queue occupancy"
+        )
+
+    settle = specification.get("startup_settle_seconds")
+    if settle is None or settle < PROTOCOL_STARTUP_SETTLE_SECONDS:
+        return (
+            f"ran with a {settle}s startup settle, below the protocol's "
+            f"{PROTOCOL_STARTUP_SETTLE_SECONDS}s; frames emitted before the graph was "
+            "quiescent queue up and the backlog outlives the warmup exclusion"
         )
     return None
 
@@ -120,6 +155,10 @@ def build_cell_condition_key(cell: dict) -> tuple:
         specification["target_frames_per_second"],
         specification["stage_callback_attribute"],
         specification["anchor_processor_thread_gil"],
+        # Part of the key, not just the admissibility check: arms measured under
+        # different settles are not comparable, and omitting it let a settle-0
+        # baseline be compared head-to-head with settle-2 in-process cells.
+        specification.get("startup_settle_seconds"),
     )
 
 
@@ -180,7 +219,7 @@ def evaluate_condition(
     absolute_p99_9_ceiling_milliseconds: float | None,
 ) -> dict:
     """Evaluate every gate this condition's admissible cells can support."""
-    width, height, frames_per_second, stage, gil_anchor = condition_key
+    width, height, frames_per_second, stage, gil_anchor, startup_settle = condition_key
     verdicts: dict[str, dict] = {}
 
     def record(gate: str, passed: bool | None, detail: str) -> None:
@@ -271,14 +310,30 @@ def evaluate_condition(
                 "no cell was long enough to produce a full rolling 1s window",
             )
         else:
+            # Only the first of gate 4's four clauses. Reported under its own
+            # name so the other three are visibly absent rather than folded
+            # into a bare PASS for the whole gate.
             record(
-                "gate_4_frame_rate_stability",
+                "gate_4a_rolling_frame_rate_floor",
                 worst_window >= frames_per_second - 1,
                 f"worst rolling 1s window {worst_window:.2f}fps against a "
                 f"{frames_per_second - 1}fps floor; "
                 f"{in_process['dropped_frame_count']} drops (reported, not gated — "
                 "owner decision 1)",
             )
+        record(
+            "gate_4b_sub_target_windows_are_gc_attributable",
+            None,
+            "not implemented: needs the sub-target windows joined against "
+            "gc-collections-embedded-interpreter.jsonl, which this evaluator does "
+            "not read",
+        )
+        record(
+            "gate_4c_soak_shows_no_monotonic_growth",
+            None,
+            "not implemented: needs a soak cell and an RSS series, neither of which "
+            "this PR produces",
+        )
         record(
             "gate_5_callback_sanity",
             in_process["stage_callback_p99_ms"] <= GATE_5_CALLBACK_SANITY_MILLISECONDS,
@@ -316,9 +371,35 @@ def evaluate_condition(
             "target_frames_per_second": frames_per_second,
             "stage_callback_attribute": stage,
             "anchor_processor_thread_gil": gil_anchor,
+            "startup_settle_seconds": startup_settle,
         },
         "arms": arms,
         "gates": verdicts,
+    }
+
+
+def evaluate_warm_restart_battery(matrix_directory: str) -> dict:
+    """Gate 6, read from the battery's own record when one is present.
+
+    Folded into this report rather than left in a separate file: the GO decision
+    is read from one place, and a gate that lives somewhere else reads as a gate
+    nobody measured.
+    """
+    battery_path = os.path.join(matrix_directory, "warm-restart-battery.json")
+    if not os.path.isfile(battery_path):
+        return {
+            "verdict": "NOT EVALUATED",
+            "detail": f"no warm-restart-battery.json under {matrix_directory}; run "
+            "python/warm_restart_battery.py",
+        }
+    with open(battery_path) as battery_file:
+        battery = json.load(battery_file)
+    return {
+        "verdict": "PASS" if battery["gate_6_passes"] else "FAIL",
+        "detail": f"warm restart median {battery['warm_restart_median_seconds']:.3f}s "
+        f"against {battery['gate_6_median_threshold_seconds']}s "
+        f"(first run {battery['first_restart_seconds']:.3f}s, "
+        f"arm {battery['harness_arm']})",
     }
 
 
@@ -359,17 +440,19 @@ def summarize_measurement_matrix(
         for condition_key, arms in sorted(cells_by_condition_and_arm.items())
     ]
 
+    warm_restart_gate = evaluate_warm_restart_battery(matrix_directory)
     every_verdict = [
         verdict["verdict"]
         for condition in conditions
         for verdict in condition["gates"].values()
-    ]
+    ] + [warm_restart_gate["verdict"]]
     return {
         "matrix_directory": matrix_directory,
         "cell_count": len(cells),
         "admissible_cell_count": len(admissible),
         "excluded_cells": excluded,
         "conditions": conditions,
+        "gate_6_warm_restart": warm_restart_gate,
         "gate_tally": {
             "pass": every_verdict.count("PASS"),
             "fail": every_verdict.count("FAIL"),
@@ -407,6 +490,11 @@ def render_report(matrix_summary: dict) -> str:
             lines.append(f"  [{gate['verdict']:>13}] {gate_name}")
             lines.append(f"                  {gate['detail']}")
         lines.append("")
+
+    warm_restart_gate = matrix_summary["gate_6_warm_restart"]
+    lines.append(f"  [{warm_restart_gate['verdict']:>13}] gate_6_warm_restart")
+    lines.append(f"                  {warm_restart_gate['detail']}")
+    lines.append("")
 
     tally = matrix_summary["gate_tally"]
     lines.append(

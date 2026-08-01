@@ -21,18 +21,18 @@ use streamlib::sdk::processors::ReactiveProcessor;
 use crate::synthetic_frame_measurement_preamble::{
     SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES, SyntheticFrameMeasurementPreamble,
 };
-use crate::synthetic_frame_wire_payload_mode::SyntheticFrameWirePayloadMode;
-
-/// Frame geometry and wire mode for [`RustPassthroughFloorStageProcessor`].
-/// Deliberately mirrors the Python stage's fields so the two arms are
-/// configured identically.
+/// Frame geometry for [`RustPassthroughFloorStageProcessor`]. Deliberately
+/// mirrors the Python stage's geometry fields so the two arms are configured
+/// identically.
+///
+/// No wire-mode field: this stage copies its payload through without looking at
+/// it, so the wire width it sees is entirely the source's choice and a mode knob
+/// here would be inert.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RustPassthroughFloorStageConfiguration {
     pub frame_width_pixels: u32,
     pub frame_height_pixels: u32,
     pub channel_count: u32,
-    #[serde(default)]
-    pub wire_payload_mode: SyntheticFrameWirePayloadMode,
 }
 
 impl Default for RustPassthroughFloorStageConfiguration {
@@ -41,7 +41,6 @@ impl Default for RustPassthroughFloorStageConfiguration {
             frame_width_pixels: 1920,
             frame_height_pixels: 1080,
             channel_count: 4,
-            wire_payload_mode: SyntheticFrameWirePayloadMode::SurfaceReference,
         }
     }
 }
@@ -93,25 +92,11 @@ mod tests {
     #[test]
     fn floor_geometry_defaults_match_the_python_stage_geometry() {
         let floor = RustPassthroughFloorStageConfiguration::default();
-        let python = crate::python_callback_stage_processor::PythonCallbackStageConfiguration::default();
+        let python =
+            crate::python_callback_stage_processor::PythonCallbackStageConfiguration::default();
         assert_eq!(floor.frame_width_pixels, python.frame_width_pixels);
         assert_eq!(floor.frame_height_pixels, python.frame_height_pixels);
         assert_eq!(floor.channel_count, python.channel_count);
-        assert_eq!(floor.wire_payload_mode, python.wire_payload_mode);
-    }
-
-    /// The floor arm's whole value is attributing latency to the wire hop, so
-    /// it must carry the same wire payload mode the Python arm does. A floor
-    /// measured on surface references against a Python arm measured on whole
-    /// pictures would report the PyO3 delta as the difference between two
-    /// payload sizes.
-    #[test]
-    fn the_floor_arm_defaults_to_the_same_wire_payload_mode_as_the_source() {
-        assert_eq!(
-            RustPassthroughFloorStageConfiguration::default().wire_payload_mode,
-            crate::synthetic_frame_source_processor::SyntheticFrameSourceConfiguration::default()
-                .wire_payload_mode
-        );
     }
 
     /// The config must survive the serde round-trip the engine performs when it
@@ -122,7 +107,6 @@ mod tests {
             frame_width_pixels: 1280,
             frame_height_pixels: 720,
             channel_count: 4,
-            wire_payload_mode: SyntheticFrameWirePayloadMode::FullPixelPayload,
         };
         let encoded = serde_json::to_value(&configuration).expect("serializes");
         let decoded: RustPassthroughFloorStageConfiguration =

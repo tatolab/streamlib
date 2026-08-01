@@ -17,7 +17,8 @@ use crate::synthetic_frame_measurement_preamble::{
     SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES, SyntheticFrameMeasurementPreamble,
 };
 use crate::synthetic_frame_wire_payload_mode::{
-    SyntheticFrameWirePayloadMode, encode_surface_reference_body,
+    SyntheticFrameWirePayloadMode, encode_surface_reference_body, encode_synthetic_pixel_bytes,
+    frame_pixel_byte_count,
 };
 
 /// Frame geometry, pacing, and what rides the wire for
@@ -49,7 +50,12 @@ pub struct SyntheticFrameSourceConfiguration {
 }
 
 /// Comfortably past the ~0.66s the subprocess arm takes to reach its poll loop.
-fn default_startup_settle_seconds() -> f64 {
+///
+/// The single home for this value: the cell specification, the harness's clap
+/// default, and this config all read it, so a cell replayed from an older
+/// artifact cannot decode to a zero settle and silently reproduce the startup
+/// backlog the settle exists to prevent.
+pub fn default_startup_settle_seconds() -> f64 {
     2.0
 }
 
@@ -70,9 +76,11 @@ impl SyntheticFrameSourceConfiguration {
     /// Pixel bytes for one frame of this geometry, whether or not they cross
     /// the wire.
     pub fn frame_pixel_byte_count(&self) -> usize {
-        self.frame_width_pixels as usize
-            * self.frame_height_pixels as usize
-            * self.channel_count as usize
+        frame_pixel_byte_count(
+            self.frame_width_pixels,
+            self.frame_height_pixels,
+            self.channel_count,
+        )
     }
 
     /// The bytes riding behind the measurement preamble under this mode.
@@ -84,11 +92,7 @@ impl SyntheticFrameSourceConfiguration {
                 self.target_frames_per_second,
             ),
             SyntheticFrameWirePayloadMode::FullPixelPayload => {
-                // A non-uniform pattern so a stage that silently drops or zeroes
-                // the payload is distinguishable from one that passes it through.
-                (0..self.frame_pixel_byte_count())
-                    .map(|index| (index % 251) as u8)
-                    .collect()
+                encode_synthetic_pixel_bytes(self.frame_pixel_byte_count())
             }
         }
     }
@@ -217,8 +221,7 @@ mod tests {
             ..four_k
         };
         assert!(
-            four_k_by_reference.wire_body_bytes().len()
-                < UNTRUSTED_SESSION_PAYLOAD_CEILING_BYTES
+            four_k_by_reference.wire_body_bytes().len() < UNTRUSTED_SESSION_PAYLOAD_CEILING_BYTES
         );
     }
 
@@ -286,7 +289,9 @@ mod tests {
                 ..SyntheticFrameSourceConfiguration::default()
             };
             assert_eq!(
-                configuration.frame_period_nanoseconds().expect("valid rate"),
+                configuration
+                    .frame_period_nanoseconds()
+                    .expect("valid rate"),
                 expected_period_nanoseconds
             );
         }
@@ -334,15 +339,14 @@ mod tests {
     /// with no settle at all — the field defaults to the protocol value.
     #[test]
     fn a_configuration_without_a_startup_settle_decodes_to_the_protocol_default() {
-        let decoded: SyntheticFrameSourceConfiguration = serde_json::from_value(
-            serde_json::json!({
+        let decoded: SyntheticFrameSourceConfiguration =
+            serde_json::from_value(serde_json::json!({
                 "frame_width_pixels": 1280,
                 "frame_height_pixels": 720,
                 "channel_count": 4,
                 "target_frames_per_second": 60,
-            }),
-        )
-        .expect("deserializes without the settle");
+            }))
+            .expect("deserializes without the settle");
         assert_eq!(
             decoded.startup_settle_seconds,
             SyntheticFrameSourceConfiguration::default().startup_settle_seconds
@@ -354,15 +358,14 @@ mod tests {
     /// `cell-spec.json` without hand-editing it.
     #[test]
     fn a_configuration_without_a_wire_payload_mode_decodes_to_surface_reference() {
-        let decoded: SyntheticFrameSourceConfiguration = serde_json::from_value(
-            serde_json::json!({
+        let decoded: SyntheticFrameSourceConfiguration =
+            serde_json::from_value(serde_json::json!({
                 "frame_width_pixels": 1280,
                 "frame_height_pixels": 720,
                 "channel_count": 4,
                 "target_frames_per_second": 60,
-            }),
-        )
-        .expect("deserializes without the mode");
+            }))
+            .expect("deserializes without the mode");
         assert_eq!(
             decoded.wire_payload_mode,
             SyntheticFrameWirePayloadMode::SurfaceReference

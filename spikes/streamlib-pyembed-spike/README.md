@@ -95,6 +95,27 @@ cell against 0.089ms in-process. All of it was startup transient. The recorder n
 first measured decile against its last and reports `backlog_drain_fraction`; a cell that shed a
 fifth of its latency across its own life is refused rather than reported.
 
+## The GIL attachment anchor
+
+`Python::attach` on a foreign thread maps to `PyGILState_Ensure()`, which builds a thread state on
+entry and destroys it on exit. CPython 3.12 virtual-allocates the frame datastack chunk on first
+Python frame push and frees it on thread-state delete — one `mmap` + one `munmap` per frame
+(measured: 1041 mmap / 1005 munmap per 1000 calls). The anchor holds one unreleased
+`PyGILState_Ensure` parked with `PyEval_SaveThread`, dropping per-call cost from p50 6.3µs to
+p50 110ns. Public `pyo3::ffi` only.
+
+Whether the real SDK should anchor processor threads is a pivot design question these numbers do
+not settle: anchoring trades a resident thread state per processor thread for the syscall pair.
+`--disable-gil-anchor` is the control condition.
+
+## Delivery profile
+
+Every input port declares `delivery_profile = "every_sample"`. Owner decision on #1702: latency
+percentiles are the primary signal; drop counts are reported, not gated. Under `latest`
+(SkipToLatest) the sink drains to the newest sample, pinning latency near one frame period and
+making the percentile gates near-vacuous. `delivery_profile` is a compile error on an `output(...)`
+(`grammar.rs:432-448`) — it is consumer-side only.
+
 ## Running a cell
 
 ```

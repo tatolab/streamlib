@@ -8,13 +8,11 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::App;
-use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::descriptors::{Org, Package, TypeName};
+use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::ProcessorTypeReference;
 
-use crate::latency_measurement_recorder::{
-    LatencyMeasurementRecorder, LatencyPercentileSummary,
-};
+use crate::latency_measurement_recorder::{LatencyMeasurementRecorder, LatencyPercentileSummary};
 use crate::machine_specification_probe::{
     MACHINE_SPECIFICATION_JSON_FILE_NAME, MachineSpecification, probe_machine_specification,
 };
@@ -32,7 +30,9 @@ use crate::rust_passthrough_floor_stage_processor::{
 use crate::synthetic_frame_source_processor::{
     SyntheticFrameSourceConfiguration, SyntheticFrameSourceProcessor,
 };
-use crate::synthetic_frame_wire_payload_mode::SyntheticFrameWirePayloadMode;
+use crate::synthetic_frame_wire_payload_mode::{
+    SURFACE_REFERENCE_BODY_BYTES, SYNTHETIC_PIXEL_PATTERN_MODULUS, SyntheticFrameWirePayloadMode,
+};
 
 /// Identity of the processor the subprocess baseline arm instantiates.
 /// Provisioned into a `streamlib_modules/@spike/...` slot by
@@ -43,9 +43,12 @@ pub const SUBPROCESS_BASELINE_STAGE_PACKAGE: &str = "pyembed-subprocess-baseline
 pub const SUBPROCESS_BASELINE_STAGE_TYPE_NAME: &str = "PyembedSubprocessBaselineStage";
 
 /// Module on `PYTHONPATH` exposing the stage callables both Python arms invoke.
-/// Shared on purpose: the arms must run byte-identical callback bodies or the
-/// comparison measures two different workloads.
 pub const SPIKE_STAGE_CALLBACK_MODULE: &str = "spike_stage_callbacks";
+
+/// Default for [`TierAMeasurementCellSpecification::stage_callback_module`].
+pub fn default_stage_callback_module() -> String {
+    SPIKE_STAGE_CALLBACK_MODULE.to_string()
+}
 
 /// Build the baseline stage's type reference from its three identity segments.
 pub fn subprocess_baseline_stage_type_reference() -> Result<ProcessorTypeReference> {
@@ -86,6 +89,22 @@ impl MeasurementArm {
         }
     }
 
+    /// Parse the `--arm` flag value. Colocated with [`Self::as_artifact_token`]
+    /// so the two spellings cannot drift: the token is a cell-directory
+    /// component, and a printed token that no longer parses back makes a cell
+    /// unreplayable from its own artifact.
+    pub fn parse_from_flag_value(value: &str) -> std::result::Result<Self, String> {
+        match value {
+            "in-process-python" => Ok(MeasurementArm::InProcessPython),
+            "rust-passthrough-floor" => Ok(MeasurementArm::RustPassthroughFloor),
+            "subprocess-python-baseline" => Ok(MeasurementArm::SubprocessPythonBaseline),
+            other => Err(format!(
+                "unknown arm `{other}` — expected `in-process-python`, \
+                 `rust-passthrough-floor`, or `subprocess-python-baseline`"
+            )),
+        }
+    }
+
     /// Whether this arm runs its callback inside the harness's own interpreter.
     /// The subprocess arm does not, so registering a callback for it, or
     /// installing a GC recorder in this process, would measure nothing.
@@ -112,12 +131,23 @@ pub struct TierAMeasurementCellSpecification {
     /// measured from a quiescent graph rather than through its own startup
     /// backlog. Identical across arms — it is a property of the cell, not of
     /// the arm, or the arms would not be comparable.
-    #[serde(default)]
+    ///
+    /// A bare `#[serde(default)]` would be 0.0 here, and this value is copied
+    /// into the source's config unconditionally — so replaying a `cell-spec.json`
+    /// written before this field existed would silently reinstate the startup
+    /// backlog rather than the protocol settle.
+    #[serde(default = "crate::synthetic_frame_source_processor::default_startup_settle_seconds")]
     pub startup_settle_seconds: f64,
     pub cell_duration_seconds: u64,
     pub warmup_exclusion_seconds: u64,
     pub python_callback_registration_token: String,
     pub anchor_processor_thread_gil: bool,
+    /// The module both Python arms import the callable from. Recorded and
+    /// threaded to the subprocess arm rather than hardcoded there: the two arms
+    /// must run byte-identical callback bodies, and a non-default module on the
+    /// in-process side used to leave the subprocess side on the default.
+    #[serde(default = "default_stage_callback_module")]
+    pub stage_callback_module: String,
     /// The callable the stage invoked, e.g. `passthrough_stage`. Part of the
     /// cell directory name: two cells differing only by stage would otherwise
     /// collide and the second would overwrite the first.
@@ -211,6 +241,7 @@ pub fn run_tier_a_measurement_cell(
         / 10;
     install_measurement_collection_point(LatencyMeasurementRecorder::new(
         warmup_exclusion_nanoseconds,
+        1_000_000_000 / specification.target_frames_per_second.max(1) as i64,
         expected_frame_count,
     ));
 
@@ -246,7 +277,6 @@ pub fn run_tier_a_measurement_cell(
                     frame_width_pixels: specification.frame_width_pixels,
                     frame_height_pixels: specification.frame_height_pixels,
                     channel_count: specification.channel_count,
-                    wire_payload_mode: specification.wire_payload_mode,
                 },
             )?,
         // `add`, not `add_local`: this arm exists to exercise the package +
@@ -260,8 +290,13 @@ pub fn run_tier_a_measurement_cell(
                 "frame_height_pixels": specification.frame_height_pixels,
                 "channel_count": specification.channel_count,
                 "wire_payload_mode": specification.wire_payload_mode,
-                "stage_callback_module": SPIKE_STAGE_CALLBACK_MODULE,
+                "stage_callback_module": specification.stage_callback_module,
                 "stage_callback_attribute": specification.stage_callback_attribute,
+                // Sent rather than re-typed in Python: both Python arms must
+                // hand the callback identical bytes or the comparison stops
+                // comparing like with like.
+                "synthetic_pixel_pattern_modulus": SYNTHETIC_PIXEL_PATTERN_MODULUS,
+                "surface_reference_body_bytes": SURFACE_REFERENCE_BODY_BYTES,
             }),
         )?,
     };
@@ -296,8 +331,9 @@ pub fn run_tier_a_measurement_cell(
         )));
     }
 
-    recorder
-        .write_per_frame_measurement_jsonl(&artifact_directory.join("per-frame-measurements.jsonl"))?;
+    recorder.write_per_frame_measurement_jsonl(
+        &artifact_directory.join("per-frame-measurements.jsonl"),
+    )?;
     recorder.write_mergeable_histogram_export(
         &artifact_directory.join("source-emit-to-sink-receive.histogram"),
     )?;
@@ -353,6 +389,7 @@ mod tests {
             startup_settle_seconds: 2.0,
             cell_duration_seconds: 600,
             warmup_exclusion_seconds: 60,
+            stage_callback_module: SPIKE_STAGE_CALLBACK_MODULE.to_string(),
             python_callback_registration_token: "cell-token".to_string(),
             anchor_processor_thread_gil: true,
             stage_callback_attribute: "passthrough_stage".to_string(),
@@ -416,6 +453,43 @@ mod tests {
         );
     }
 
+    /// Every arm token the harness prints must parse back, or a cell cannot be
+    /// replayed from its own `cell-spec.json` and its directory name stops
+    /// naming anything the harness accepts.
+    #[test]
+    fn arm_tokens_round_trip_through_the_flag_parser() {
+        for arm in [
+            MeasurementArm::InProcessPython,
+            MeasurementArm::RustPassthroughFloor,
+            MeasurementArm::SubprocessPythonBaseline,
+        ] {
+            assert_eq!(
+                MeasurementArm::parse_from_flag_value(arm.as_artifact_token()),
+                Ok(arm)
+            );
+        }
+        assert!(MeasurementArm::parse_from_flag_value("in-process").is_err());
+    }
+
+    /// The settle is copied into the source's config unconditionally, so a spec
+    /// decoding to 0.0 would reinstate the startup backlog the settle exists to
+    /// prevent — silently, on an artifact written before the field existed.
+    #[test]
+    fn a_specification_without_a_startup_settle_decodes_to_the_protocol_default() {
+        let mut encoded = serde_json::to_value(example_specification()).expect("serializes");
+        encoded
+            .as_object_mut()
+            .expect("a spec encodes to an object")
+            .remove("startup_settle_seconds");
+        let decoded: TierAMeasurementCellSpecification =
+            serde_json::from_value(encoded).expect("deserializes without the settle");
+        assert_eq!(
+            decoded.startup_settle_seconds,
+            crate::synthetic_frame_source_processor::default_startup_settle_seconds()
+        );
+        assert!(decoded.startup_settle_seconds > 0.0);
+    }
+
     /// Owner decision 7 rides the artifact: a summarizer reading a cell must be
     /// able to tell a protocol cell from a payload-sweep cell without guessing.
     #[test]
@@ -465,7 +539,10 @@ mod tests {
     /// the summarizer keys gate eligibility off this field.
     #[test]
     fn the_recorded_delivery_profile_is_every_sample() {
-        assert_eq!(example_specification().resolved_delivery_profile, "every_sample");
+        assert_eq!(
+            example_specification().resolved_delivery_profile,
+            "every_sample"
+        );
     }
 
     /// The spec round-trips so a cell can be replayed exactly from its own
@@ -499,6 +576,7 @@ mod cell_directory_collision_tests {
             startup_settle_seconds: 2.0,
             cell_duration_seconds: 600,
             warmup_exclusion_seconds: 60,
+            stage_callback_module: SPIKE_STAGE_CALLBACK_MODULE.to_string(),
             python_callback_registration_token: "token".to_string(),
             anchor_processor_thread_gil: true,
             stage_callback_attribute: "passthrough_stage".to_string(),

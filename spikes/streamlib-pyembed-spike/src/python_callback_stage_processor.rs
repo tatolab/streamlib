@@ -18,7 +18,10 @@ use crate::python_processor_callback_registry::resolve_python_callback_for_token
 use crate::synthetic_frame_measurement_preamble::{
     SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES, SyntheticFrameMeasurementPreamble,
 };
-use crate::synthetic_frame_wire_payload_mode::SyntheticFrameWirePayloadMode;
+use crate::synthetic_frame_wire_payload_mode::{
+    SURFACE_REFERENCE_BODY_BYTES, SyntheticFrameWirePayloadMode, encode_synthetic_pixel_bytes,
+    frame_pixel_byte_count,
+};
 use crate::zero_copy_numpy_frame_view::{
     NumpyFrameViewEscapeOutcome, invoke_python_callback_over_zero_copy_frame_view,
     preload_numpy_c_array_api_before_first_frame_view,
@@ -71,9 +74,11 @@ impl PythonCallbackStageConfiguration {
     /// Pixel bytes for one frame of this geometry — the extent the callback's
     /// numpy view spans, wherever those pixels live.
     pub fn frame_pixel_byte_count(&self) -> usize {
-        self.frame_width_pixels as usize
-            * self.frame_height_pixels as usize
-            * self.channel_count as usize
+        frame_pixel_byte_count(
+            self.frame_width_pixels,
+            self.frame_height_pixels,
+            self.channel_count,
+        )
     }
 }
 
@@ -117,7 +122,10 @@ impl PythonCallbackStageProcessor::Processor {
 
 impl ReactiveProcessor for PythonCallbackStageProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let token = self.configuration.python_callback_registration_token.clone();
+        let token = self
+            .configuration
+            .python_callback_registration_token
+            .clone();
         let callable = Python::attach(|python| -> Result<Option<Py<PyAny>>> {
             // numpy's C API table is imported lazily on first use. Forcing it
             // here keeps that one-time cost out of the first measured frame,
@@ -134,13 +142,9 @@ impl ReactiveProcessor for PythonCallbackStageProcessor::Processor {
             ))
         })?);
 
-        if self.configuration.wire_payload_mode
-            == SyntheticFrameWirePayloadMode::SurfaceReference
-        {
-            let pixel_byte_count = self.configuration.frame_pixel_byte_count();
-            self.locally_resolved_surface_pixel_buffer = (0..pixel_byte_count)
-                .map(|index| (index % 251) as u8)
-                .collect();
+        if self.configuration.wire_payload_mode == SyntheticFrameWirePayloadMode::SurfaceReference {
+            self.locally_resolved_surface_pixel_buffer =
+                encode_synthetic_pixel_bytes(self.configuration.frame_pixel_byte_count());
         }
         Ok(())
     }
@@ -167,6 +171,27 @@ impl ReactiveProcessor for PythonCallbackStageProcessor::Processor {
         // Under SurfaceReference the wire carried a reference, so the callback's
         // view spans this stage's locally resolved surface; under
         // FullPixelPayload the pixels arrived in-band and the view spans them.
+        // Checked against the *wire body's* width, not the local buffer's: under
+        // SurfaceReference the local buffer is geometry-sized by construction, so
+        // comparing it to the geometry would pass a full-pixel source paired with
+        // a surface-reference stage without a word.
+        let wire_body_byte_count = frame_payload.len() - SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES;
+        let expected_wire_body_byte_count = match self.configuration.wire_payload_mode {
+            SyntheticFrameWirePayloadMode::SurfaceReference => SURFACE_REFERENCE_BODY_BYTES,
+            SyntheticFrameWirePayloadMode::FullPixelPayload => {
+                self.configuration.frame_pixel_byte_count()
+            }
+        };
+        if wire_body_byte_count != expected_wire_body_byte_count {
+            return Err(Error::Link(format!(
+                "stage is configured for {} and expects a {}-byte wire body, but {} bytes \
+                 arrived — the source and stage disagree about the wire payload mode",
+                self.configuration.wire_payload_mode.as_artifact_token(),
+                expected_wire_body_byte_count,
+                wire_body_byte_count
+            )));
+        }
+
         let callback_pixel_bytes: &mut [u8] = match self.configuration.wire_payload_mode {
             SyntheticFrameWirePayloadMode::SurfaceReference => {
                 &mut self.locally_resolved_surface_pixel_buffer
@@ -175,14 +200,6 @@ impl ReactiveProcessor for PythonCallbackStageProcessor::Processor {
                 &mut frame_payload[SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES..]
             }
         };
-        if callback_pixel_bytes.len() != self.configuration.frame_pixel_byte_count() {
-            return Err(Error::Link(format!(
-                "stage has {} pixel bytes to view but its geometry declares {} — the source and \
-                 stage disagree about the wire payload mode",
-                callback_pixel_bytes.len(),
-                self.configuration.frame_pixel_byte_count()
-            )));
-        }
 
         let callback_started_nanoseconds = read_measurement_stamp_nanoseconds();
         let escape_outcome = Python::attach(|python| {
@@ -200,7 +217,8 @@ impl ReactiveProcessor for PythonCallbackStageProcessor::Processor {
         })?;
         let callback_finished_nanoseconds = read_measurement_stamp_nanoseconds();
 
-        if let NumpyFrameViewEscapeOutcome::RetainedByPythonWithRefcount(refcount) = escape_outcome {
+        if let NumpyFrameViewEscapeOutcome::RetainedByPythonWithRefcount(refcount) = escape_outcome
+        {
             self.observed_frame_view_escape_count += 1;
             // Not fatal to the run, but it invalidates the zero-copy premise for
             // this frame and the retained view now aliases a buffer about to be
@@ -243,7 +261,10 @@ mod tests {
         let decoded: PythonCallbackStageConfiguration =
             serde_json::from_value(encoded).expect("deserializes");
         assert_eq!(decoded, configuration);
-        assert_eq!(decoded.python_callback_registration_token, "cell-42-passthrough");
+        assert_eq!(
+            decoded.python_callback_registration_token,
+            "cell-42-passthrough"
+        );
         assert!(!decoded.anchor_processor_thread_gil);
     }
 

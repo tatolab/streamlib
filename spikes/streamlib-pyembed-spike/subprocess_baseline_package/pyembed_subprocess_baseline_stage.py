@@ -3,25 +3,33 @@
 
 """The #1702 baseline arm: the spike's stage callback, hosted in a subprocess.
 
-Byte-for-byte the same work the in-process arm does per frame — read the
-payload, hand a numpy view of the frame's pixels to the same callable from
+The same shape of work the in-process arm does per frame — read the payload,
+hand a numpy view of the frame's pixels to the same callable from
 ``spike_stage_callbacks``, patch the stage duration into the measurement
-preamble, write the payload on. Everything that differs is the hosting: a
+preamble, write the payload on — hosted the way today's model hosts it: a
 separate process, a per-package venv, and the payload crossing iceoryx2 through
 the python-native cdylib rather than staying in one address space.
 
-Two deliberate departures from the SDK's public surface, both in service of
-measuring the same quantity as the in-process arm:
+Two departures from the SDK's public surface, both taken so the two arms measure
+the same quantity:
 
 * ``inputs._read_raw`` / ``slpn_output_write`` are used directly instead of
   ``inputs.read`` / ``outputs.write``. The public pair msgpack-encodes and
   decodes, which the in-process arm's ``read_raw``/``write_raw`` do not — the
   encode would land inside the measured span and show up as PyO3 winning.
 * The pixels the callback views come from a process-local buffer allocated at
-  setup, exactly as on the in-process arm. A real subprocess would pay a
-  cpu-readback escalate round trip to reach a GPU surface's pixels, so this
-  biases the comparison *toward* the baseline. That direction is the safe one:
-  a GO decided against a conservatively-fast baseline is still a GO.
+  setup, exactly as on the in-process arm.
+
+The per-frame work is NOT byte-for-byte identical across the arms, and the
+residual asymmetries pull in both directions. Against the in-process arm: it
+builds a fresh numpy array per frame and runs a refcount escape check, neither
+of which this stage does (it reuses one array from setup). Against this arm: it
+makes three payload copies per frame (``bytearray``, ``bytes``, and
+``from_buffer_copy``) and drains a lifecycle queue, none of which the in-process
+arm has. Separately, a real subprocess would pay a cpu-readback escalate round
+trip to reach a GPU surface's pixels, which this stage does not — that one
+biases *toward* the baseline, which is the safe direction: a GO decided against
+a conservatively-fast baseline is still a GO.
 """
 
 from __future__ import annotations
@@ -38,6 +46,13 @@ STAGE_CALLBACK_NANOSECONDS_OFFSET = 16
 
 DEFAULT_STAGE_CALLBACK_MODULE = "spike_stage_callbacks"
 DEFAULT_STAGE_CALLBACK_ATTRIBUTE = "passthrough_stage"
+
+# Both arrive in the config from the Rust side rather than being re-typed here.
+# The pattern modulus is load-bearing: both Python arms must hand the callback
+# identical bytes, or the arm comparison stops comparing like with like. The
+# fallbacks exist only so a hand-written config still runs.
+DEFAULT_SYNTHETIC_PIXEL_PATTERN_MODULUS = 251
+DEFAULT_SURFACE_REFERENCE_BODY_BYTES = 192
 
 
 class PyembedSubprocessBaselineStage:
@@ -64,12 +79,24 @@ class PyembedSubprocessBaselineStage:
             importlib.import_module(module_name), attribute_name
         )
 
+        self._surface_reference_body_bytes = int(
+            config.get(
+                "surface_reference_body_bytes", DEFAULT_SURFACE_REFERENCE_BODY_BYTES
+            )
+        )
+        pattern_modulus = int(
+            config.get(
+                "synthetic_pixel_pattern_modulus",
+                DEFAULT_SYNTHETIC_PIXEL_PATTERN_MODULUS,
+            )
+        )
+
         pixel_byte_count = (
             self._frame_width_pixels * self._frame_height_pixels * self._channel_count
         )
         # Same non-uniform fill the in-process arm's locally resolved surface
         # carries, so a callback that inspects content sees identical input.
-        pattern = bytes((index % 251) for index in range(251))
+        pattern = bytes((index % pattern_modulus) for index in range(pattern_modulus))
         repeats = pixel_byte_count // len(pattern) + 1
         self._locally_resolved_surface_pixels = numpy.frombuffer(
             (pattern * repeats)[:pixel_byte_count], dtype=numpy.uint8
@@ -77,6 +104,13 @@ class PyembedSubprocessBaselineStage:
             self._frame_height_pixels, self._frame_width_pixels, self._channel_count
         ).copy()
 
+        # Resolved at setup, never per frame: the guard below runs on the hot
+        # path and `.tobytes()` there would allocate a full picture every frame.
+        self._expected_wire_body_byte_count = (
+            pixel_byte_count
+            if self._wire_payload_mode == "full-pixel-payload"
+            else self._surface_reference_body_bytes
+        )
         self._observed_frame_count = 0
 
     def process(self, ctx) -> None:
@@ -85,10 +119,13 @@ class PyembedSubprocessBaselineStage:
         frame_payload, frame_timestamp_ns = ctx.inputs._read_raw("frame_in")
         if frame_payload is None:
             return
-        if len(frame_payload) <= MEASUREMENT_PREAMBLE_BYTES:
+        wire_body_byte_count = len(frame_payload) - MEASUREMENT_PREAMBLE_BYTES
+        if wire_body_byte_count != self._expected_wire_body_byte_count:
             raise ValueError(
-                f"frame payload of {len(frame_payload)} bytes carries nothing after "
-                "the measurement preamble"
+                f"stage is configured for {self._wire_payload_mode!r} and expects a "
+                f"{self._expected_wire_body_byte_count}-byte wire body, but "
+                f"{wire_body_byte_count} bytes arrived — the source and stage "
+                "disagree about the wire payload mode"
             )
 
         if self._wire_payload_mode == "full-pixel-payload":

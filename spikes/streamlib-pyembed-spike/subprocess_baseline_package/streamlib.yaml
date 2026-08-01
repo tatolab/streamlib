@@ -1,5 +1,6 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
+# yaml-language-server: $schema=../../../schemas/streamlib.schema.json
 #
 # The #1702 subprocess baseline arm: the same stage the in-process arm runs,
 # hosted the way today's model hosts a Python processor — its own process, its

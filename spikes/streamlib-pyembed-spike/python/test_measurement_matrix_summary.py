@@ -30,6 +30,7 @@ def build_cell_summary(
     negative_latency_anomaly_count=0,
     histogram_range_saturation_count=0,
     backlog_drain_fraction=0.0,
+    startup_settle_seconds=2.0,
     rolling_windows=None,
 ):
     return {
@@ -40,6 +41,7 @@ def build_cell_summary(
             "channel_count": 4,
             "target_frames_per_second": frames_per_second,
             "wire_payload_mode": wire_payload_mode,
+            "startup_settle_seconds": startup_settle_seconds,
             "stage_callback_attribute": "passthrough_stage",
             "anchor_processor_thread_gil": True,
             "resolved_delivery_profile": delivery_profile,
@@ -133,7 +135,49 @@ class CellAdmissibilityTest(unittest.TestCase):
                 ),
             }
         )
-        self.assertIn("startup backlog", reason)
+        self.assertIn("queue", reason)
+
+    def test_a_cell_whose_latency_grew_cannot_back_a_gate(self):
+        """Saturation is as disqualifying as draining, and the harness's check
+        was one-sided: a cell that gained 35% across its life was admitted."""
+        reason = summarizer.describe_cell_inadmissibility(
+            {
+                "directory": "d",
+                "summary": build_cell_summary(
+                    "in-process-python", backlog_drain_fraction=-0.35
+                ),
+            }
+        )
+        self.assertIn("gained", reason)
+
+    def test_a_saturated_cell_cannot_back_a_gate_even_with_a_flat_trend(self):
+        """The case no trend detector can see. With the settle removed, a
+        subprocess cell sat at p50 66.9ms with a trend of -0.002 — a stable
+        queue — and gate 1 passed against it at 0.127ms vs 66.9ms."""
+        reason = summarizer.describe_cell_inadmissibility(
+            {
+                "directory": "d",
+                "summary": build_cell_summary(
+                    "subprocess-python-baseline",
+                    p50_nanoseconds=66_900_000,
+                    p99_nanoseconds=71_600_000,
+                    p99_9_nanoseconds=72_000_000,
+                    backlog_drain_fraction=-0.002,
+                ),
+            }
+        )
+        self.assertIn("saturated", reason)
+
+    def test_a_cell_run_below_the_protocol_settle_cannot_back_a_gate(self):
+        reason = summarizer.describe_cell_inadmissibility(
+            {
+                "directory": "d",
+                "summary": build_cell_summary(
+                    "in-process-python", startup_settle_seconds=0.0
+                ),
+            }
+        )
+        self.assertIn("startup settle", reason)
 
     def test_a_clock_disagreement_cannot_back_a_gate(self):
         reason = summarizer.describe_cell_inadmissibility(
@@ -209,7 +253,7 @@ class GateEvaluationTest(unittest.TestCase):
         for gate_name in (
             "gate_1_p50",
             "gate_2_p99",
-            "gate_4_frame_rate_stability",
+            "gate_4a_rolling_frame_rate_floor",
             "gate_5_callback_sanity",
         ):
             self.assertEqual(
@@ -290,7 +334,7 @@ class GateEvaluationTest(unittest.TestCase):
             self.build_three_arm_matrix(rolling_windows=[60.0, 60.0, 51.0])
         )
         self.assertEqual(
-            self.gate(matrix_summary, "gate_4_frame_rate_stability")["verdict"], "FAIL"
+            self.gate(matrix_summary, "gate_4a_rolling_frame_rate_floor")["verdict"], "FAIL"
         )
 
     def test_inadmissible_cells_are_reported_rather_than_dropped_silently(self):

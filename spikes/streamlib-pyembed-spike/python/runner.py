@@ -39,6 +39,7 @@ SPIKE_CRATE_ROOT_DIRECTORY = os.path.dirname(
 SUBPROCESS_BASELINE_PACKAGE_NAME = "pyembed-subprocess-baseline"
 APP_MODULES_DIRECTORY_ENVIRONMENT_VARIABLE = "STREAMLIB_MODULES_DIR"
 PYTHON_NATIVE_LIBRARY_ENVIRONMENT_VARIABLE = "STREAMLIB_PYTHON_NATIVE_LIB"
+BASELINE_VENV_PYTHON_ENVIRONMENT_VARIABLE = "STREAMLIB_BASELINE_VENV_PYTHON"
 
 RUNNER_MODE_IN_PROCESS_PYTHON = "in-process"
 RUNNER_MODE_SUBPROCESS_PYTHON = "subprocess"
@@ -279,7 +280,7 @@ def read_subprocess_baseline_arm_environment():
     `require_subprocess_baseline_arm_is_provisioned` is what refuses the run.
     """
     provisioning_record_path = os.path.join(
-        SPIKE_CRATE_ROOT_DIRECTORY, ".provisioned", "provisioning-record.json"
+        SPIKE_CRATE_ROOT_DIRECTORY, "target", "provisioned", "provisioning-record.json"
     )
     if not os.path.isfile(provisioning_record_path):
         return {}
@@ -292,6 +293,12 @@ def read_subprocess_baseline_arm_environment():
         PYTHON_NATIVE_LIBRARY_ENVIRONMENT_VARIABLE: provisioning_record[
             "python_native_library_path"
         ],
+        # Without this the machine-spec probe falls back to reporting the
+        # interpreter as unknown rather than reporting `python3` on PATH as if
+        # it were the one the subprocess arm launches.
+        BASELINE_VENV_PYTHON_ENVIRONMENT_VARIABLE: provisioning_record[
+            "package_venv_python"
+        ],
     }
 
 
@@ -303,7 +310,8 @@ def require_subprocess_baseline_arm_is_provisioned():
     """
     venv_python = os.path.join(
         SPIKE_CRATE_ROOT_DIRECTORY,
-        ".provisioned",
+        "target",
+        "provisioned",
         SUBPROCESS_BASELINE_PACKAGE_NAME,
         ".venv",
         "bin",

@@ -86,6 +86,31 @@ impl RepresentativeVideoFrameSurfaceReference {
     }
 }
 
+/// Modulus of the non-uniform byte pattern every pixel buffer in the spike
+/// carries, wherever those pixels live.
+///
+/// Shared rather than re-typed because the comparison depends on it: the
+/// full-pixel wire body, the in-process stage's locally resolved surface, and
+/// the subprocess baseline's own buffer must feed the callback identical
+/// bytes, or a mode or arm comparison stops comparing like with like. The
+/// Python side reads it from the config this constant fills.
+pub const SYNTHETIC_PIXEL_PATTERN_MODULUS: usize = 251;
+
+/// Pixel bytes for one frame of this geometry.
+pub fn frame_pixel_byte_count(width_pixels: u32, height_pixels: u32, channel_count: u32) -> usize {
+    width_pixels as usize * height_pixels as usize * channel_count as usize
+}
+
+/// `pixel_byte_count` bytes of the shared non-uniform pattern.
+///
+/// Non-uniform so a stage that silently drops or zeroes the payload is
+/// distinguishable from one that passes it through.
+pub fn encode_synthetic_pixel_bytes(pixel_byte_count: usize) -> Vec<u8> {
+    (0..pixel_byte_count)
+        .map(|index| (index % SYNTHETIC_PIXEL_PATTERN_MODULUS) as u8)
+        .collect()
+}
+
 /// Fixed wire width of a surface reference, in bytes.
 ///
 /// Held constant across geometries on purpose. A bare encoding varies by a
@@ -119,8 +144,13 @@ pub fn encode_surface_reference_body(
         frames_per_second,
     );
     // Infallible for this struct — every member is a plain scalar or String.
-    let mut body = serde_json::to_vec(&reference).unwrap_or_default();
-    debug_assert!(
+    let mut body = serde_json::to_vec(&reference)
+        .expect("a struct of plain scalars and Strings always serializes");
+    // `assert!`, not `debug_assert!`: the numbers are taken in release, and the
+    // `resize` below would *truncate* an over-long encoding into a silently
+    // narrower wire — losing the one property the mode rests on, in exactly the
+    // build where it matters. Runs once at setup, off any measured path.
+    assert!(
         body.len() <= SURFACE_REFERENCE_BODY_BYTES,
         "a {}x{} surface reference encodes to {} bytes, over the fixed wire width of {}",
         width_pixels,
@@ -171,7 +201,9 @@ mod tests {
             .map(|(width, height)| encode_surface_reference_body(width, height, 30).len())
             .collect();
         assert!(
-            widths.iter().all(|width| *width == SURFACE_REFERENCE_BODY_BYTES),
+            widths
+                .iter()
+                .all(|width| *width == SURFACE_REFERENCE_BODY_BYTES),
             "surface reference widths varied across geometries: {widths:?}"
         );
     }

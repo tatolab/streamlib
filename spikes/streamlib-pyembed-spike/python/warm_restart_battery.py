@@ -11,10 +11,11 @@ sides read the same clock on the same machine, so no offset estimation is
 involved and nothing depends on the harness reporting its own start time
 honestly.
 
-Why the cold run is separate rather than dropped: it is the only one that pays
-the page cache, and reporting it inside the median would understate the warm
-figure the dev loop actually feels while overstating the first-run figure a user
-hits. Both are reported; only the warm ones back the gate.
+The first run is reported separately rather than dropped, because it carries
+whatever one-time cost the box has not yet paid. It is deliberately NOT called a
+cold restart: nothing here evicts the page cache, so it is "the first run of
+this battery", not a measurement of a cold start. Only the warm runs back the
+gate.
 
 The battery forces `--startup-settle-seconds 0`. The settle exists so latency
 cells measure a quiescent graph; here it would simply be added to every number.
@@ -27,7 +28,6 @@ is attributable rather than folded into the harness's own startup.
 from __future__ import annotations
 
 import argparse
-import importlib
 import json
 import os
 import statistics
@@ -147,6 +147,13 @@ def measure_extra_import_seconds(module_name: str) -> float:
     return float(probe.stdout.strip())
 
 
+# The battery's own cells live here rather than beside the matrix's. They share
+# arm, geometry and rate with protocol cells, so the harness derives the same
+# directory name and a battery run pointed at a matrix directory silently
+# overwrites the cells it collides with.
+BATTERY_CELL_SUBDIRECTORY_NAME = "warm-restart-cells"
+
+
 def run_warm_restart_battery(
     harness_binary_path: str,
     harness_arm: str,
@@ -155,12 +162,14 @@ def run_warm_restart_battery(
     extra_import_module_names: list[str],
 ) -> dict:
     os.makedirs(output_directory, exist_ok=True)
-    cold_restart_seconds = run_one_restart_and_measure_seconds(
-        harness_binary_path, harness_arm, output_directory, 0
+    cell_directory = os.path.join(output_directory, BATTERY_CELL_SUBDIRECTORY_NAME)
+    os.makedirs(cell_directory, exist_ok=True)
+    first_restart_seconds = run_one_restart_and_measure_seconds(
+        harness_binary_path, harness_arm, cell_directory, 0
     )
     warm_restart_seconds = [
         run_one_restart_and_measure_seconds(
-            harness_binary_path, harness_arm, output_directory, index + 1
+            harness_binary_path, harness_arm, cell_directory, index + 1
         )
         for index in range(warm_run_count)
     ]
@@ -168,7 +177,7 @@ def run_warm_restart_battery(
     warm_restart_median_seconds = statistics.median(warm_restart_seconds)
     return {
         "harness_arm": harness_arm,
-        "cold_restart_seconds": cold_restart_seconds,
+        "first_restart_seconds": first_restart_seconds,
         "warm_restart_seconds": warm_restart_seconds,
         "warm_restart_median_seconds": warm_restart_median_seconds,
         "warm_restart_maximum_seconds": max(warm_restart_seconds),

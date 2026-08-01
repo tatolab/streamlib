@@ -205,7 +205,8 @@ class TierAHarnessCommandLineContractTest(unittest.TestCase):
         if not os.path.isfile(
             os.path.join(
                 runner.SPIKE_CRATE_ROOT_DIRECTORY,
-                ".provisioned",
+                "target",
+                "provisioned",
                 "provisioning-record.json",
             )
         ):
