@@ -75,11 +75,13 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   synchronous lifecycle traits; Full/Limited capability typestate on the phase axis
   (setup/teardown vs process). [execution-model]
 - **DECIDED** — Execution placement is an engine concern, never a user-facing runtime
-  definition: Python processors run in-process by default, and the engine may place a
-  processor in a helper process spawned from the same interpreter and venv
-  (`sys.executable`) — same code either way, no interpreter zoo, no per-processor
-  environments, no placement configuration surface beyond a single opt-in.
-  [importable-python-library]
+  definition. Both placements are first-class: in-process (lowest latency, shares the
+  app's interpreter) and helper processes spawned from that same interpreter and venv
+  (`sys.executable` — each with its own GIL, the isolation model dora-style systems
+  run on). The engine chooses per processor; placement heuristics are engine
+  implementation, not plan-level commitments. Same user code either way — no
+  interpreter zoo, no per-processor environments, no placement configuration surface
+  beyond a single opt-in. [importable-python-library]
 - **DECIDED** — JTD schemas are advisory, experimental type information behind a
   rip-out-cheap seam — never a requirement for accessing data, in-graph or on the
   wire, and never baked in as fundamental (replaceable wholesale, e.g. by Arrow,
