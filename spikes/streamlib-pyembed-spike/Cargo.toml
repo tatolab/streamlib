@@ -1,0 +1,72 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+# Throwaway spike for #1702 — measures in-process Python (CPython embedded via
+# PyO3) against today's subprocess-per-Python-processor model. Not a workspace
+# member and not a distributable: it self-roots via the `[workspace]` table
+# below, the same convention `examples/*` and most `packages/*` follow (see the
+# root Cargo.toml comment at :44-56). Nothing in the engine depends on it.
+
+[package]
+name = "streamlib-pyembed-spike"
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.85"
+authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
+license-file = "../../LICENSE"
+repository = "https://github.com/tatolab/streamlib"
+publish = false
+
+[lib]
+name = "streamlib_pyembed_spike"
+# `rlib` only. A `cdylib` + `extension-module` pair would claim CPython can
+# import this crate, but there is no `#[pymodule]` here: Tier A embeds CPython in
+# a Rust binary instead. #1702's design sketches the opposite arrangement
+# (a `PyApp` `#[pyclass]` CPython imports), and which one the pivot ships is an
+# owner decision — see the embed-vs-import note posted to the issue. Declaring an
+# unusable build target would only make that open question look settled.
+crate-type = ["rlib"]
+
+[features]
+default = []
+# Compiles every measurement stamp out. The control cell for "does the
+# instrument move the measurement" builds with this on; a throughput delta
+# between it and a default build is instrument overhead, not signal.
+stamping-compiled-out = []
+
+[dependencies]
+streamlib = { path = "../../sdk/streamlib-sdk" }
+
+# pyo3 0.29 is the first release with the `attach`/`detach` naming; 0.28 and
+# earlier spell these `Python::with_gil` / `py.allow_threads`, which were
+# REMOVED rather than deprecated. rust-numpy 0.29 is the matching release.
+# `auto-initialize` is deliberately absent: the harness calls
+# `Python::initialize()` itself so interpreter startup is ordered explicitly
+# against `GpuContext` init and iceoryx2 node creation.
+pyo3 = "0.29.0"
+numpy = "0.29.0"
+
+hdrhistogram = "7.5"
+libc = "0.2.177"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+clap = { version = "4", features = ["derive"] }
+tracing = "0.1.41"
+# Used only for the post-stop scoped subscriber in the harness binary: the
+# engine owns the global dispatcher and drops it at `Runner::stop()`, so a cell's
+# completion and invalidation records need a subscriber of our own to reach a log.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[lints]
+workspace = true
+
+# Self-root. The spike is its own workspace, so it inherits nothing from the
+# engine tree — including the clippy lint table. The `disallowed_macros` deny
+# below plus the sibling clippy.toml reproduce the engine's println/eprintln ban
+# here; without them the doctrine would be unenforced in exactly the crate
+# nobody reviews closely (xtask lint-logging's ZONE_PARENTS does not cover
+# `spikes/`).
+[workspace]
+
+[workspace.lints.clippy]
+disallowed_macros = "deny"
