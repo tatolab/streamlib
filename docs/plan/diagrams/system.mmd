@@ -1,23 +1,28 @@
 flowchart LR
-  subgraph consumers["Consumers — tatolab/streamlib-packages (lag by design)"]
-    pkgs["Distributable packages"]
-    apps["Example apps"]
+  subgraph env["One uv-managed venv — one Python, PyPI deps only"]
+    app["User Python app\n(app.py setup(rt) — normal codebase)"]
+    pkgs["Processor packages\n(ordinary PyPI packages; native internals\nexpose handles, never streamlib internals)"]
+    wheel["streamlib wheel — PyPI\n(Python API + CLI + engine, PyO3)"]
   end
 
-  cli["streamlib — one shipped binary\n(CLI + runtime host + build orchestration)"]
-  ctl["Control plane\n(api-server: HTTP / WS / MCP — engine-side, runtime/)"]
-  engine["Engine runtime\n(runtime/streamlib-engine — embeddable library)"]
+  rustapp["Rust app\n(plain cargo project)"]
+  crate["streamlib crate\n(embeddable Rust library)"]
+  engine["Engine runtime\n(runtime/streamlib-engine)"]
+  media["Built-in media blocks\n(camera / display / audio — native,\nin the wheel, handle-shaped primitives)"]
   rhi["RHI\n(vulkan/rhi + streamlib-consumer-rhi)"]
-  abi["Plugin ABI\n(repr(C), runtime/streamlib-plugin-abi)"]
-  sdk["SDKs\n(Rust / Python / Deno + control-plane client)"]
-  pkgsrc["Package source\n(versioned artifacts, never sibling dirs)"]
+  interop["Interop adapters\n(Vulkan↔CUDA, Vulkan↔GL — in-process)"]
+  ctl["Control plane\n(api-server: HTTP / WS / MCP — engine-side)"]
+  cli["CLI (in the wheel)\nnew / dev / run · nodes / graph / tap / logs / mcp"]
+  wire["Wire\n(self-describing bags between nodes —\nthe only cross-language boundary)"]
 
-  apps --> sdk
-  pkgs --> abi
-  sdk --> abi
-  abi --> engine
+  pkgs --> app
+  app --> wheel
+  wheel --> engine
+  rustapp --> crate
+  crate --> engine
+  media --> engine
   engine --> rhi
-  cli --> ctl
+  engine --> interop
   ctl --> engine
-  cli --> pkgsrc
-  pkgsrc --> engine
+  cli --> ctl
+  engine --> wire

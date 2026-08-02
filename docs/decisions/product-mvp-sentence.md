@@ -24,8 +24,10 @@ Its load-bearing terms:
 
 - **Python consumer.** Python vision/ML developers are the audience for realtime GPU
   pipelines without writing Vulkan.
-- **PyPI ships the single binary** (CLI + runtime + build orchestration) — the ruff/uv
-  pattern: one install, no toolchain, native motion for the persona.
+- ~~**PyPI ships the single binary** (CLI + runtime + build orchestration) — the
+  ruff/uv pattern.~~ — Superseded 2026-08-02 by `importable-python-library.md`. PyPI
+  ships one *wheel* — Python API + CLI + engine via PyO3, the pydantic-core pattern;
+  build orchestration is deleted. Still one install, no toolchain.
 - **Batteries-included scaffold.** `streamlib new` generates a *working* camera →
   effect → display app with dependencies already installed; first `streamlib dev` shows
   live video before any code is written; the user's first act is editing the scaffolded
@@ -35,16 +37,21 @@ Its load-bearing terms:
 - **`app.py` + `setup(rt)` by convention, `-f` override.** Matches what Python
   developers rely on (Flask defaults to `app.py`; FastAPI's `uvicorn main:app` is the
   explicit variant); the override keeps the point-at-a-script launch.
-- **Apps carry no manifest.** The npm model: `add`/`link` write `streamlib.lock`,
+- **Apps carry no manifest.** ~~The npm model: `add`/`link` write `streamlib.lock`,
   `streamlib_modules/` holds the installed set, and the identity label exists only
-  because a package is shared. An app promotes to a package by adding the label.
-- **App-local processors use the plugin discovery scan** on the app's `processors/`
-  folder, minted `@app/local/<Name>`. Two reference spellings resolve to one
-  registration: the string id, or the imported class — the decorated class carries its
-  identity; importing it in `app.py` attaches metadata only, execution stays in the
-  engine-spawned subprocess. The class form keeps go-to-definition and type checking
-  working, which is also what makes the loop agent-friendly (small `app.py`, one obvious
-  processor file, `graph`/`tap` to verify an edit landed).
+  because a package is shared. An app promotes to a package by adding the label.~~ —
+  Superseded 2026-08-02 by `importable-python-library.md`. Stronger now: the pip/uv
+  model, no streamlib-specific files at all — `pyproject.toml` and the venv are the
+  whole dependency story; a processor package is an ordinary PyPI package.
+- ~~**App-local processors use the plugin discovery scan** on the app's `processors/`
+  folder, minted `@app/local/<Name>`; execution stays in the engine-spawned
+  subprocess.~~ — Superseded 2026-08-02 by `importable-python-library.md`. App-local
+  processors are ordinary Python classes imported into `app.py`; `rt.add` takes the
+  class; no discovery scan, no minted ids, and execution placement (in-process or a
+  same-interpreter helper process) is the engine's decision. The surviving point: the
+  class form keeps go-to-definition and type checking working, which is what makes the
+  loop agent-friendly (small `app.py`, one obvious processor file, `graph`/`tap` to
+  verify an edit landed).
 - **`add`/`connect` is the pipeline API** — the existing primitive, explicit about
   ports.
 
@@ -76,7 +83,10 @@ Its load-bearing terms:
 - The zero-ceremony bar makes the schema-agreement rip-out (no engine schema matching,
   cast-at-read, no versions at the code layer) MVP-blocking work, not cleanup.
 - `streamlib new` (app scaffold) is a new command to design and build.
-- Existing Rust plugins port to the new format as the final step, so they install as
-  modules; consumer examples continue to lag by design until then.
+- ~~Existing Rust plugins port to the new format as the final step, so they install as
+  modules; consumer examples continue to lag by design until then.~~ — Superseded
+  2026-08-02 by `importable-python-library.md`: there is no plugin format to port to;
+  first-party media becomes engine-tree built-ins, and other plugin functionality is
+  re-authored as Python packages or cargo crates per the pivot's change file.
 - The MVP claim is narrow (one persona, one platform, one GPU vendor) and must be kept
   honest: widening any axis is a plan change, not a ticket.
