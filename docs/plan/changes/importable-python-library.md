@@ -33,6 +33,15 @@ Scale tier: touches the plugin ABI and the processor model → change artifact +
   handles — the display block becomes window lifecycle + one call per frame.
 - `streamlib new` app scaffold: `app.py` with `setup(rt)`, `pyproject.toml`,
   `.python-version` pinned (3.12), working camera → effect → display wiring.
+- Engine kernel primitives exposed to Python as configured blocks: shader/compute
+  source and binding config passed from Python; the engine compiles and runs it on its
+  device (the custom-GPU-effect story — no Rust, no user-side Vulkan). API design gets
+  its own session; the change commits only to the shape.
+- Standard zero-copy exchange surface: streamlib frames/textures expose DLPack and the
+  CUDA Array Interface, plus DMA-BUF export/import, with sync, lifetime (pinned to the
+  Python object), and layout owned by the engine's export surface — external native
+  code receives memory in its own dialect (torch/cupy/CUDA/fd) and never creates a
+  GPU context; Vulkan is written by this engine alone.
 
 ## MODIFIED
 
