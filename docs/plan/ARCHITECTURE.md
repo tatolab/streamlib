@@ -10,8 +10,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 
 ## Product (the MVP sentence) — IN-FLIGHT (→ importable-python-library)
 
-- **DECIDED** — A Python developer on Linux with an NVIDIA GPU installs streamlib from
-  PyPI into an ordinary uv-managed venv, runs `streamlib new` then `streamlib dev`,
+- **DECIDED** — A Python developer on Linux with an NVIDIA GPU pip-installs streamlib
+  (initially from this repo's releases; PyPI after the project rename) into an
+  ordinary uv-managed venv, runs `streamlib new` then `streamlib dev`,
   sees their camera live in a window within a minute, and makes the pipeline theirs by
   editing the scaffolded processor — zero ceremony: no manifest, no `main()`, no schema
   wrangling, hot-reload on save. Every ticket traces to this sentence or does not
@@ -150,10 +151,12 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 
 ## Distribution & versioning — IN-FLIGHT (→ importable-python-library)
 
-- **DECIDED** — Two artifacts, one version, released together: the streamlib wheel on
-  PyPI (Python API + CLI + engine) and the `streamlib` crate for Rust apps.
-  Positioning is "realtime engine, Python authoring" — the Rust engine is named as
-  material; never marketed as "a Python library" even though the shape is one.
+- **DECIDED** — Two artifacts, one version, released together: the streamlib wheel
+  (Python API + CLI + engine) and the `streamlib` crate for Rust apps. Initial
+  release channel is this repo's releases (pip/uv-installable wheel artifacts) —
+  PyPI publication waits for the project rename; the artifact is identical either
+  way. Positioning is "realtime engine, Python authoring" — the Rust engine is named
+  as material; never marketed as "a Python library" even though the shape is one.
   [importable-python-library]
 
 ## Control plane & observability — IN-FLIGHT (→ importable-python-library)

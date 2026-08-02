@@ -108,7 +108,11 @@ contract satisfies without putting Python in deadline paths.
   inventoried by the pivot's change file, never kept running in parallel.
 - The wheel becomes the build product: maturin/CI, abi3 across a small Python version range,
   camera/display statically linked. Our CI builds our wheel; nothing else is ever compiled by
-  streamlib.
+  streamlib. Initial releases are repo-hosted wheel artifacts; PyPI publication is deferred
+  until the project rename (name reservation before then would burn the throwaway name).
+- Re-authoring the old packages and examples into the new shapes (built-ins absorption aside,
+  which is rip-out work) is deferred to its own planning sessions and milestones after the
+  wheel exists — dispositions are recorded in the pivot's change file, not ticketed now.
 - First-party media moves *into* the engine tree; lag-by-design ends for built-ins.
 - The Python SDK grows a load-bearing GIL-release contract (zero `allow_threads` exists today);
   the spike's latency numbers were measured with no blocking I/O in any callback and must not
