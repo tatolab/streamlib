@@ -21,10 +21,13 @@ use streamlib::sdk::processors::ReactiveProcessor;
 use crate::synthetic_frame_measurement_preamble::{
     SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES, SyntheticFrameMeasurementPreamble,
 };
-
 /// Frame geometry for [`RustPassthroughFloorStageProcessor`]. Deliberately
 /// mirrors the Python stage's geometry fields so the two arms are configured
 /// identically.
+///
+/// No wire-mode field: this stage copies its payload through without looking at
+/// it, so the wire width it sees is entirely the source's choice and a mode knob
+/// here would be inert.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RustPassthroughFloorStageConfiguration {
     pub frame_width_pixels: u32,
@@ -61,7 +64,7 @@ impl ReactiveProcessor for RustPassthroughFloorStageProcessor::Processor {
         };
         if frame_payload.len() <= SYNTHETIC_FRAME_MEASUREMENT_PREAMBLE_BYTES {
             return Err(Error::Link(format!(
-                "frame payload of {} bytes carries no pixels after the measurement preamble",
+                "frame payload of {} bytes carries nothing after the measurement preamble",
                 frame_payload.len()
             )));
         }
@@ -89,7 +92,8 @@ mod tests {
     #[test]
     fn floor_geometry_defaults_match_the_python_stage_geometry() {
         let floor = RustPassthroughFloorStageConfiguration::default();
-        let python = crate::python_callback_stage_processor::PythonCallbackStageConfiguration::default();
+        let python =
+            crate::python_callback_stage_processor::PythonCallbackStageConfiguration::default();
         assert_eq!(floor.frame_width_pixels, python.frame_width_pixels);
         assert_eq!(floor.frame_height_pixels, python.frame_height_pixels);
         assert_eq!(floor.channel_count, python.channel_count);

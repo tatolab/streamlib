@@ -127,7 +127,7 @@ mod tests {
     /// means a cell that ran for ten minutes and reported nothing.
     #[test]
     fn the_collection_point_round_trips_a_recorder() {
-        install_measurement_collection_point(LatencyMeasurementRecorder::new(0, 0));
+        install_measurement_collection_point(LatencyMeasurementRecorder::new(0, 0, 0));
         let recovered = take_measurement_collection_point();
         assert!(recovered.is_some());
         assert!(
@@ -140,7 +140,7 @@ mod tests {
     /// first — two cells in one process have to stay separate.
     #[test]
     fn installing_replaces_rather_than_merges() {
-        let mut first = LatencyMeasurementRecorder::new(0, 0);
+        let mut first = LatencyMeasurementRecorder::new(0, 0, 0);
         first.record_frame_measurement(PerFrameLatencyMeasurement {
             frame_sequence_number: 0,
             source_emit_monotonic_nanoseconds: 0,
@@ -148,7 +148,7 @@ mod tests {
             stage_callback_nanoseconds: 0,
         });
         install_measurement_collection_point(first);
-        install_measurement_collection_point(LatencyMeasurementRecorder::new(0, 0));
+        install_measurement_collection_point(LatencyMeasurementRecorder::new(0, 0, 0));
         let recovered = take_measurement_collection_point().expect("second recorder is installed");
         assert_eq!(
             recovered.received_frame_count(),

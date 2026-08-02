@@ -17,21 +17,32 @@ use std::path::PathBuf;
 use clap::Parser;
 use pyo3::prelude::*;
 use streamlib::sdk::error::{Error, Result};
-use streamlib_pyembed_spike::monotonic_clock::MEASUREMENT_STAMPING_IS_COMPILED_IN;
 use streamlib_pyembed_spike::machine_specification_probe::{
     machine_is_in_locked_measurement_state, probe_machine_specification,
 };
+use streamlib_pyembed_spike::monotonic_clock::MEASUREMENT_STAMPING_IS_COMPILED_IN;
 use streamlib_pyembed_spike::python_processor_callback_registry::register_python_callback_under_token;
+use streamlib_pyembed_spike::synthetic_frame_source_processor::default_startup_settle_seconds;
+use streamlib_pyembed_spike::synthetic_frame_wire_payload_mode::SyntheticFrameWirePayloadMode;
 use streamlib_pyembed_spike::tier_a_measurement_cell::{
     MeasurementArm, TierAMeasurementCellSpecification, run_tier_a_measurement_cell,
 };
+
+/// A steady-state cell's first and last measured deciles agree to within noise.
+/// Compared as a magnitude: a cell whose latency grew is saturating, which is
+/// as disqualifying as one that was draining.
+const BACKLOG_TREND_FRACTION_INVALIDATING_A_CELL: f64 = 0.20;
 
 #[derive(Parser, Debug)]
 #[command(about = "Run one Tier A measurement cell for the #1702 PyO3 spike")]
 struct TierAHarnessArguments {
     /// Which comparison arm to run.
-    #[arg(long, value_parser = parse_measurement_arm)]
-    arm: MeasurementArm,
+    #[arg(
+        long,
+        value_parser = MeasurementArm::parse_from_flag_value,
+        required_unless_present = "report_embedded_python_runtime_to"
+    )]
+    arm: Option<MeasurementArm>,
 
     #[arg(long, default_value_t = 30)]
     fps: u32,
@@ -44,6 +55,23 @@ struct TierAHarnessArguments {
 
     #[arg(long, default_value_t = 4)]
     channels: u32,
+
+    /// `surface-reference` matches what a real `VideoFrame` weighs on the wire
+    /// and is what the protocol cells measure; `full-pixel-payload` reproduces
+    /// the payload sweep that retracted the 27ms floor.
+    #[arg(
+        long,
+        default_value = "surface-reference",
+        value_parser = SyntheticFrameWirePayloadMode::parse_from_flag_value
+    )]
+    wire_payload_mode: SyntheticFrameWirePayloadMode,
+
+    /// Quiet period before the source's first frame. Sized for the slowest arm
+    /// and held identical across arms: the subprocess arm needs ~0.66s to reach
+    /// its poll loop, and frames emitted into that window become a backlog that
+    /// outlives the warmup exclusion.
+    #[arg(long, default_value_t = default_startup_settle_seconds())]
+    startup_settle_seconds: f64,
 
     #[arg(long, default_value_t = 600)]
     duration_seconds: u64,
@@ -76,18 +104,53 @@ struct TierAHarnessArguments {
     #[arg(long)]
     require_locked_measurement_state: bool,
 
+    /// Write the embedded interpreter's identity as JSON to this path and exit,
+    /// without running a cell. Provisioning uses it to pin the baseline venv to
+    /// the exact interpreter the in-process arm runs, rather than to a
+    /// `python3.X` on PATH that merely shares a minor version. A file rather
+    /// than stdout: the engine's tracing output shares stdout, and a parser
+    /// would have to pick the JSON back out of it.
     #[arg(long)]
-    output_directory: PathBuf,
+    report_embedded_python_runtime_to: Option<PathBuf>,
+
+    #[arg(long, required_unless_present = "report_embedded_python_runtime_to")]
+    output_directory: Option<PathBuf>,
 }
 
-fn parse_measurement_arm(value: &str) -> std::result::Result<MeasurementArm, String> {
-    match value {
-        "in-process-python" => Ok(MeasurementArm::InProcessPython),
-        "rust-passthrough-floor" => Ok(MeasurementArm::RustPassthroughFloor),
-        other => Err(format!(
-            "unknown arm `{other}` — expected `in-process-python` or `rust-passthrough-floor`"
-        )),
-    }
+/// Report the embedded interpreter's full version, install prefix and numpy.
+fn report_embedded_python_runtime(report_path: &std::path::Path) -> Result<()> {
+    Python::initialize();
+    let report = Python::attach(|python| -> Result<String> {
+        let probe = python
+            .import("sys")
+            .and_then(|sys| {
+                let version: String = sys.getattr("version")?.extract()?;
+                let base_prefix: String = sys.getattr("base_prefix")?.extract()?;
+                let version_info = sys.getattr("version_info")?;
+                let major: u32 = version_info.getattr("major")?.extract()?;
+                let minor: u32 = version_info.getattr("minor")?.extract()?;
+                let micro: u32 = version_info.getattr("micro")?.extract()?;
+                let numpy_version: Option<String> = python
+                    .import("numpy")
+                    .ok()
+                    .and_then(|numpy| numpy.getattr("__version__").ok())
+                    .and_then(|value| value.extract().ok());
+                Ok(serde_json::json!({
+                    "version_banner": version,
+                    "version": format!("{major}.{minor}.{micro}"),
+                    "major_minor": format!("{major}.{minor}"),
+                    "base_prefix": base_prefix,
+                    "numpy_version": numpy_version,
+                })
+                .to_string())
+            })
+            .map_err(|error| {
+                Error::Runtime(format!("probing the embedded interpreter failed: {error}"))
+            })?;
+        Ok(probe)
+    })?;
+    std::fs::write(report_path, report)?;
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -95,6 +158,18 @@ fn main() -> Result<()> {
     // engine's global tracing dispatcher, and a second `set_global_default`
     // aborts the run before a single frame is measured.
     let arguments = TierAHarnessArguments::parse();
+
+    if let Some(report_path) = arguments.report_embedded_python_runtime_to.as_deref() {
+        return report_embedded_python_runtime(report_path);
+    }
+
+    let arm = arguments
+        .arm
+        .ok_or_else(|| Error::Configuration("--arm is required".to_string()))?;
+    let output_directory = arguments
+        .output_directory
+        .clone()
+        .ok_or_else(|| Error::Configuration("--output-directory is required".to_string()))?;
 
     let machine_specification = probe_machine_specification();
     if arguments.require_locked_measurement_state
@@ -108,17 +183,24 @@ fn main() -> Result<()> {
         ));
     }
 
-    // CPython comes up before `App::new` so interpreter initialization is
-    // ordered ahead of GpuContext init and iceoryx2 node creation rather than
-    // racing them from a processor thread.
-    Python::initialize();
+    // The subprocess baseline arm runs its callback in a spawned interpreter,
+    // so bringing one up here would add a cost that arm does not have and
+    // would misattribute this process's GC pauses to it.
+    if arm.runs_the_callback_in_the_harness_interpreter() {
+        // CPython comes up before `App::new` so interpreter initialization is
+        // ordered ahead of GpuContext init and iceoryx2 node creation rather
+        // than racing them from a processor thread.
+        Python::initialize();
+    }
 
     let python_callback_registration_token = format!(
         "{}::{}::rep-{}",
-        arguments.stage_callback_module, arguments.stage_callback_attribute, arguments.repetition_index
+        arguments.stage_callback_module,
+        arguments.stage_callback_attribute,
+        arguments.repetition_index
     );
 
-    if arguments.arm == MeasurementArm::InProcessPython {
+    if arm.runs_the_callback_in_the_harness_interpreter() {
         Python::attach(|python| -> Result<()> {
             let module = python
                 .import(arguments.stage_callback_module.as_str())
@@ -146,15 +228,18 @@ fn main() -> Result<()> {
     }
 
     let specification = TierAMeasurementCellSpecification {
-        arm: arguments.arm,
+        arm,
         frame_width_pixels: arguments.frame_width,
         frame_height_pixels: arguments.frame_height,
         channel_count: arguments.channels,
         target_frames_per_second: arguments.fps,
+        wire_payload_mode: arguments.wire_payload_mode,
+        startup_settle_seconds: arguments.startup_settle_seconds,
         cell_duration_seconds: arguments.duration_seconds,
         warmup_exclusion_seconds: arguments.warmup_exclusion_seconds,
         python_callback_registration_token,
         anchor_processor_thread_gil: !arguments.disable_gil_anchor,
+        stage_callback_module: arguments.stage_callback_module.clone(),
         stage_callback_attribute: arguments.stage_callback_attribute.clone(),
         resolved_delivery_profile: "every_sample".to_string(),
         measured_metric_name: "source_emit_to_sink_receive".to_string(),
@@ -162,20 +247,19 @@ fn main() -> Result<()> {
         measurement_stamping_is_compiled_in: MEASUREMENT_STAMPING_IS_COMPILED_IN,
     };
 
-    let cell_directory = arguments
-        .output_directory
-        .join(specification.artifact_directory_name());
+    let cell_directory = output_directory.join(specification.artifact_directory_name());
 
     // The recorder has to live in the interpreter that runs the callback. In the
     // runner's interpreter it would time collections that cannot have caused any
     // frame's latency — which is what it did before, reporting 0 events.
-    let garbage_collection_recorder = if arguments.arm == MeasurementArm::InProcessPython {
-        Some(install_embedded_interpreter_garbage_collection_recorder(
-            &arguments.garbage_collection_mode,
-        )?)
-    } else {
-        None
-    };
+    let garbage_collection_recorder =
+        if arm.runs_the_callback_in_the_harness_interpreter() {
+            Some(install_embedded_interpreter_garbage_collection_recorder(
+                &arguments.garbage_collection_mode,
+            )?)
+        } else {
+            None
+        };
 
     let outcome = run_tier_a_measurement_cell(&specification, &cell_directory)?;
 
@@ -194,31 +278,47 @@ fn main() -> Result<()> {
         )
         .finish();
     tracing::subscriber::with_default(post_stop_subscriber, || {
-    tracing::info!(
-        cell = %specification.artifact_directory_name(),
-        received_frames = outcome.received_frame_count,
-        measured_frames = outcome.measured_frame_count,
-        dropped_frames = outcome.dropped_frame_count,
-        p50_ns = outcome.source_emit_to_sink_receive.p50_nanoseconds,
-        p99_ns = outcome.source_emit_to_sink_receive.p99_nanoseconds,
-        p99_9_ns = outcome.source_emit_to_sink_receive.p99_9_nanoseconds,
-        max_ns = outcome.source_emit_to_sink_receive.max_nanoseconds,
-        "cell complete"
-    );
+        tracing::info!(
+            cell = %specification.artifact_directory_name(),
+            received_frames = outcome.received_frame_count,
+            measured_frames = outcome.measured_frame_count,
+            dropped_frames = outcome.dropped_frame_count,
+            p50_ns = outcome.source_emit_to_sink_receive.p50_nanoseconds,
+            p99_ns = outcome.source_emit_to_sink_receive.p99_nanoseconds,
+            p99_9_ns = outcome.source_emit_to_sink_receive.p99_9_nanoseconds,
+            max_ns = outcome.source_emit_to_sink_receive.max_nanoseconds,
+            "cell complete"
+        );
 
-    if outcome.negative_latency_anomaly_count > 0 {
-        tracing::error!(
-            count = outcome.negative_latency_anomaly_count,
-            "cell recorded sink stamps earlier than their emit stamps — the clocks disagree \
+        if outcome.negative_latency_anomaly_count > 0 {
+            tracing::error!(
+                count = outcome.negative_latency_anomaly_count,
+                "cell recorded sink stamps earlier than their emit stamps — the clocks disagree \
              and this cell's percentiles must not be used"
-        );
-    }
-    if outcome.histogram_range_saturation_count > 0 {
-        tracing::error!(
-            count = outcome.histogram_range_saturation_count,
-            "samples exceeded the histogram range — reported percentiles are clipped"
-        );
-    }
+            );
+        }
+        if outcome.histogram_range_saturation_count > 0 {
+            tracing::error!(
+                count = outcome.histogram_range_saturation_count,
+                "samples exceeded the histogram range — reported percentiles are clipped"
+            );
+        }
+        if outcome.backlog_drain_fraction.abs() > BACKLOG_TREND_FRACTION_INVALIDATING_A_CELL {
+            tracing::error!(
+                backlog_trend_fraction = outcome.backlog_drain_fraction,
+                direction = if outcome.backlog_drain_fraction > 0.0 {
+                    "draining"
+                } else {
+                    "building"
+                },
+                startup_settle_seconds = specification.startup_settle_seconds,
+                "cell latency moved steadily between its first and last measured decile, so \
+                 these percentiles describe queue occupancy and depend on how long the cell \
+                 ran. Two causes: a startup backlog, which --startup-settle-seconds fixes, or \
+                 per-frame service time at or above the frame period, which it cannot — \
+                 compare the achieved rate against the target to tell them apart"
+            );
+        }
     });
 
     Ok(())
@@ -284,9 +384,7 @@ fn export_embedded_interpreter_garbage_collection_records(
                 "export_collection_records_as_jsonl",
                 (record_path.to_string_lossy().as_ref(),),
             )
-            .map_err(|error| {
-                Error::Runtime(format!("exporting the GC records failed: {error}"))
-            })?;
+            .map_err(|error| Error::Runtime(format!("exporting the GC records failed: {error}")))?;
         tracing::info!(
             recorded_event_count,
             path = %record_path.display(),

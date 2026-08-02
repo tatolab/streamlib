@@ -14,6 +14,7 @@ import subprocess
 import tempfile
 import time
 import unittest
+import unittest.mock
 
 import numpy
 
@@ -166,12 +167,70 @@ class TierAHarnessCommandLineContractTest(unittest.TestCase):
                 )
             )
 
-    def test_subprocess_mode_is_refused_as_tier_b(self):
-        with self.assertRaises(runner.SubprocessArmIsTierBAndNotImplementedError) as refusal:
+    def test_subprocess_mode_resolves_to_the_baseline_arm(self):
+        self.assertEqual(
             runner.resolve_harness_arm_for_runner_mode(
                 runner.RUNNER_MODE_SUBPROCESS_PYTHON
+            ),
+            "subprocess-python-baseline",
+        )
+
+    def test_every_runner_mode_maps_to_a_harness_arm(self):
+        """A mode accepted by argparse but absent from the table would fail
+        mid-schedule, after earlier cells had already burned their minutes."""
+        for runner_mode in runner.SUPPORTED_RUNNER_MODES:
+            self.assertIn(runner_mode, runner.HARNESS_ARM_BY_RUNNER_MODE)
+
+    def test_an_unprovisioned_subprocess_arm_is_refused_before_any_cell_runs(self):
+        """The failure this replaces is silent: an unprovisioned slot fails at
+        graph build, and an unattended matrix would record the baseline arm as
+        absent rather than as unrunnable."""
+        with unittest.mock.patch("os.path.isfile", return_value=False):
+            with self.assertRaises(
+                runner.SubprocessBaselineArmIsNotProvisionedError
+            ) as refusal:
+                runner.require_subprocess_baseline_arm_is_provisioned()
+        self.assertIn("provision_subprocess_baseline_package.py", str(refusal.exception))
+
+    def test_the_harness_environment_carries_both_subprocess_arm_pins(self):
+        """Both are load-bearing and both fail silently when absent.
+
+        Losing the cdylib pin is the one that actually happened: the spawned
+        subprocess resolved a different `libstreamlib_python_native.so`, failed
+        to open its own input channel with
+        `DoesNotSupportRequestedAmountOfPublishers`, and the cell reported an
+        arm that produced no frames rather than one that was misconfigured. It
+        only reproduced under the runner, because a hand-run cell inherits the
+        variable from the operator's shell."""
+        if not os.path.isfile(
+            os.path.join(
+                runner.SPIKE_CRATE_ROOT_DIRECTORY,
+                "target",
+                "provisioned",
+                "provisioning-record.json",
             )
-        self.assertIn("not in this PR", str(refusal.exception))
+        ):
+            raise unittest.SkipTest(
+                "no provisioning record; run "
+                "python/provision_subprocess_baseline_package.py"
+            )
+        environment = runner.build_tier_a_harness_process_environment()
+        self.assertTrue(
+            os.path.isdir(
+                environment[runner.APP_MODULES_DIRECTORY_ENVIRONMENT_VARIABLE]
+            )
+        )
+        self.assertTrue(
+            os.path.isfile(
+                environment[runner.PYTHON_NATIVE_LIBRARY_ENVIRONMENT_VARIABLE]
+            )
+        )
+
+    def test_an_unprovisioned_checkout_yields_no_subprocess_arm_environment(self):
+        """The refusal belongs to the provisioning guard, which names the fix.
+        Silently exporting a guessed path here would restore the failure above."""
+        with unittest.mock.patch("os.path.isfile", return_value=False):
+            self.assertEqual(runner.read_subprocess_baseline_arm_environment(), {})
 
     def test_a_fractional_duration_is_refused_rather_than_rounded(self):
         with self.assertRaises(ValueError):

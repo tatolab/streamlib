@@ -37,6 +37,12 @@ const HISTOGRAM_SIGNIFICANT_FIGURES: u8 = 3;
 
 const ONE_SECOND_NANOSECONDS: i64 = 1_000_000_000;
 
+/// 60fps, the protocol's faster rate. File-scoped so every test module shares
+/// one period — the backlog check's absolute floor is derived from it, so two
+/// modules disagreeing would test two different thresholds.
+#[cfg(all(test, not(feature = "stamping-compiled-out")))]
+const FRAME_PERIOD_NANOSECONDS: i64 = 16_666_666;
+
 /// Interval-log tag for the Tier A headline quantity.
 const SOURCE_EMIT_TO_SINK_RECEIVE_HISTOGRAM_TAG: &str = "source_emit_to_sink_receive";
 /// Interval-log tag for time spent inside the stage callback.
@@ -78,6 +84,7 @@ impl LatencyPercentileSummary {
 /// Accumulates one measurement cell's frames and writes its artifacts.
 pub struct LatencyMeasurementRecorder {
     warmup_exclusion_nanoseconds: i64,
+    frame_period_nanoseconds: i64,
     first_source_emit_monotonic_nanoseconds: Option<i64>,
     every_received_frame_measurement: Vec<PerFrameLatencyMeasurement>,
     source_emit_to_sink_receive_histogram: Histogram<u64>,
@@ -100,9 +107,19 @@ impl LatencyMeasurementRecorder {
     /// frame's successor by the memcpy, landing self-inflicted spikes in exactly
     /// the p99.9 tail this artifact publishes. An undersized hint degrades to the
     /// old behavior rather than failing, so callers should pass slack.
-    pub fn new(warmup_exclusion_nanoseconds: i64, expected_frame_count: usize) -> Self {
+    ///
+    /// `frame_period_nanoseconds` is what makes the backlog verdict meaningful:
+    /// a queue is measured in whole frames, so the drain check requires an
+    /// absolute drop of at least half a frame period as well as a proportional
+    /// one.
+    pub fn new(
+        warmup_exclusion_nanoseconds: i64,
+        frame_period_nanoseconds: i64,
+        expected_frame_count: usize,
+    ) -> Self {
         Self {
             warmup_exclusion_nanoseconds,
+            frame_period_nanoseconds,
             first_source_emit_monotonic_nanoseconds: None,
             every_received_frame_measurement: Vec::with_capacity(expected_frame_count),
             source_emit_to_sink_receive_histogram: new_nanosecond_histogram(),
@@ -131,12 +148,11 @@ impl LatencyMeasurementRecorder {
             .first_source_emit_monotonic_nanoseconds
             .get_or_insert(measurement.source_emit_monotonic_nanoseconds);
 
-        // Boundary rule: a frame whose emit stamp sits exactly on the warmup
-        // deadline is MEASURED. The exclusion is "the first N nanoseconds", a
-        // half-open interval, so the deadline itself is the first measured instant.
-        let elapsed_since_first_emit_nanoseconds =
-            measurement.source_emit_monotonic_nanoseconds - first_source_emit_monotonic_nanoseconds;
-        if elapsed_since_first_emit_nanoseconds < self.warmup_exclusion_nanoseconds {
+        if !measurement_is_post_warmup(
+            &measurement,
+            first_source_emit_monotonic_nanoseconds,
+            self.warmup_exclusion_nanoseconds,
+        ) {
             return;
         }
 
@@ -225,6 +241,18 @@ impl LatencyMeasurementRecorder {
         self.measured_frame_count
     }
 
+    /// When the sink saw its very first frame, warmup exclusion ignored.
+    ///
+    /// The endpoint of gate 6's restart measurement: paired with a stamp the
+    /// battery takes before spawning the process, it is exec-to-first-frame on
+    /// one monotonic clock. Warmup exclusion is deliberately not applied — the
+    /// question is when output first appeared, not when measurement began.
+    pub fn first_frame_sink_receive_monotonic_nanoseconds(&self) -> Option<i64> {
+        self.every_received_frame_measurement
+            .first()
+            .map(|measurement| measurement.sink_receive_monotonic_nanoseconds)
+    }
+
     /// Samples whose computed duration was negative — a nonzero value here
     /// invalidates the cell's latency numbers rather than degrading them.
     pub fn negative_latency_anomaly_count(&self) -> u64 {
@@ -235,6 +263,70 @@ impl LatencyMeasurementRecorder {
     /// nonzero value means `max` and the top percentiles are floors, not values.
     pub fn histogram_range_saturation_count(&self) -> u64 {
         self.histogram_range_saturation_count
+    }
+
+    /// How much lower the last tenth of the cell's latencies run than the first
+    /// tenth, as a ratio of the first tenth's median.
+    ///
+    /// A cell in steady state hovers near zero. A materially positive value
+    /// means the graph entered the measured window with a queue and spent the
+    /// cell draining it, so the percentiles describe queue occupancy decaying
+    /// over time rather than per-frame latency — and, critically, they depend
+    /// on how long the cell ran. Measured on this branch before the source
+    /// gained its startup settle: the subprocess arm at 720p60 reported p50
+    /// 183ms over 20s and 84ms over 40s, purely from frames emitted while the
+    /// subprocess was still spawning. Excluding warmup by time does not remove
+    /// it, because the backlog outlives the exclusion window.
+    ///
+    /// Zero when there are too few measured frames for two disjoint deciles, or
+    /// when the absolute drop is smaller than half a frame period.
+    ///
+    /// The absolute floor is load-bearing, not belt-and-braces. A backlog is
+    /// queued frames, so a real one sheds whole frame periods — the case this
+    /// exists for shed 100ms+ at a 16.7ms period. Without the floor, a healthy
+    /// in-process cell running at ~90µs total was reported as 27-31% "draining"
+    /// off a ~30µs difference between its first and last decile, which is cache
+    /// warming. A ratio alone rejects precisely the fastest, healthiest cells.
+    pub fn backlog_drain_fraction(&self) -> f64 {
+        let Some(first_source_emit_monotonic_nanoseconds) =
+            self.first_source_emit_monotonic_nanoseconds
+        else {
+            return 0.0;
+        };
+        let latencies: Vec<i64> = self
+            .every_received_frame_measurement
+            .iter()
+            .filter(|measurement| {
+                measurement_is_post_warmup(
+                    measurement,
+                    first_source_emit_monotonic_nanoseconds,
+                    self.warmup_exclusion_nanoseconds,
+                )
+            })
+            .map(|measurement| {
+                measurement.sink_receive_monotonic_nanoseconds
+                    - measurement.source_emit_monotonic_nanoseconds
+            })
+            .collect();
+
+        let decile_length = latencies.len() / 10;
+        if decile_length == 0 {
+            return 0.0;
+        }
+        let first_decile_median = median_of(&latencies[..decile_length]);
+        let last_decile_median = median_of(&latencies[latencies.len() - decile_length..]);
+        if first_decile_median <= 0 {
+            return 0.0;
+        }
+        // The floor applies to the magnitude, and the returned fraction keeps
+        // its sign. Testing the signed drop against a positive floor made every
+        // growing cell return exactly 0.0, so the saturation direction was
+        // unreachable and both callers' `abs()` was dead.
+        let signed_drop_nanoseconds = first_decile_median - last_decile_median;
+        if signed_drop_nanoseconds.abs() < self.frame_period_nanoseconds / 2 {
+            return 0.0;
+        }
+        signed_drop_nanoseconds as f64 / first_decile_median as f64
     }
 
     /// Rolling 1-second achieved-frame-rate windows, for the fps-stability check.
@@ -327,6 +419,33 @@ impl LatencyMeasurementRecorder {
     }
 }
 
+/// Whether a frame survives the warmup exclusion.
+///
+/// One definition, two callers. Boundary rule: a frame whose emit stamp sits
+/// exactly on the warmup deadline is MEASURED — the exclusion is "the first N
+/// nanoseconds", a half-open interval, so the deadline itself is the first
+/// measured instant. Two copies of that rule drifting would make the
+/// percentiles and the backlog verdict describe different sample sets.
+fn measurement_is_post_warmup(
+    measurement: &PerFrameLatencyMeasurement,
+    first_source_emit_monotonic_nanoseconds: i64,
+    warmup_exclusion_nanoseconds: i64,
+) -> bool {
+    measurement.source_emit_monotonic_nanoseconds - first_source_emit_monotonic_nanoseconds
+        >= warmup_exclusion_nanoseconds
+}
+
+/// Median of an already-chronological slice, taken by sorting a copy so the
+/// caller's ordering (which carries the time axis) survives.
+fn median_of(samples: &[i64]) -> i64 {
+    if samples.is_empty() {
+        return 0;
+    }
+    let mut sorted = samples.to_vec();
+    sorted.sort_unstable();
+    sorted[sorted.len() / 2]
+}
+
 fn new_nanosecond_histogram() -> Histogram<u64> {
     Histogram::<u64>::new_with_bounds(
         HISTOGRAM_LOWEST_DISCERNIBLE_NANOSECONDS,
@@ -387,6 +506,99 @@ mod tests {
         }
     }
 
+    /// Record `frame_count` post-warmup frames whose latency runs linearly from
+    /// `first_latency_nanoseconds` to `last_latency_nanoseconds`.
+    fn record_cell_with_latency_trend(
+        first_latency_nanoseconds: i64,
+        last_latency_nanoseconds: i64,
+        frame_count: u64,
+    ) -> LatencyMeasurementRecorder {
+        let mut recorder =
+            LatencyMeasurementRecorder::new(0, FRAME_PERIOD_NANOSECONDS, frame_count as usize);
+        for index in 0..frame_count {
+            let progress = index as f64 / (frame_count - 1) as f64;
+            let latency = first_latency_nanoseconds
+                + ((last_latency_nanoseconds - first_latency_nanoseconds) as f64 * progress) as i64;
+            recorder.record_frame_measurement(build_per_frame_latency_measurement(
+                index,
+                index as i64 * 16_666_666,
+                latency,
+                1_000,
+            ));
+        }
+        recorder
+    }
+
+    /// The detector's whole job: a cell that entered the measured window with a
+    /// queue reports percentiles that describe the queue draining, and they
+    /// change with cell duration. This is what made a 720p60 subprocess cell
+    /// report p50 183ms over 20s and 84ms over 40s.
+    #[test]
+    fn a_cell_draining_a_startup_backlog_is_detected() {
+        let recorder = record_cell_with_latency_trend(180_000_000, 20_000_000, 1_000);
+        assert!(
+            recorder.backlog_drain_fraction() > 0.20,
+            "a cell whose latency fell 9x across its life was not flagged: {}",
+            recorder.backlog_drain_fraction()
+        );
+    }
+
+    /// A steady cell must not be flagged, or every valid cell would be refused.
+    #[test]
+    fn a_steady_state_cell_is_not_flagged_as_draining() {
+        let recorder = record_cell_with_latency_trend(90_000, 91_000, 1_000);
+        assert!(
+            recorder.backlog_drain_fraction().abs() < 0.20,
+            "a steady cell was flagged as draining: {}",
+            recorder.backlog_drain_fraction()
+        );
+    }
+
+    /// The absolute floor is the difference between a working detector and one
+    /// that rejects the fastest cells in the matrix.
+    ///
+    /// A healthy in-process cell runs around 90µs end to end, so tens of µs of
+    /// cache warming between its first and last decile is a *large fraction* of
+    /// a very small number. Two real 720p60 cells were refused at 27% and 31%
+    /// off ~30µs of drift before this floor existed. A backlog is queued frames
+    /// and sheds whole frame periods; 30µs at a 16.7ms period is not one.
+    #[test]
+    fn a_fast_cell_drifting_by_microseconds_is_not_flagged_as_draining() {
+        let recorder = record_cell_with_latency_trend(110_000, 76_000, 1_000);
+        assert_eq!(recorder.backlog_drain_fraction(), 0.0);
+    }
+
+    /// ...while a drop of whole frame periods at the same proportion still
+    /// trips, so the floor narrows the detector rather than disabling it.
+    #[test]
+    fn a_proportionally_identical_drop_of_whole_frame_periods_is_flagged() {
+        let recorder = record_cell_with_latency_trend(110_000_000, 76_000_000, 1_000);
+        assert!(recorder.backlog_drain_fraction() > 0.20);
+    }
+
+    /// A cell whose latency GREW is saturating, which invalidates it just as a
+    /// draining one does. Reported as a negative fraction so the direction
+    /// survives to the caller; testing the signed drop against a positive floor
+    /// previously collapsed every growing cell to exactly 0.0, leaving the
+    /// saturation direction unreachable and both callers' `abs()` dead.
+    #[test]
+    fn a_cell_whose_latency_grew_reports_a_negative_fraction() {
+        let recorder = record_cell_with_latency_trend(76_000_000, 110_000_000, 1_000);
+        assert!(
+            recorder.backlog_drain_fraction() <= -0.20,
+            "a saturating cell reported {}",
+            recorder.backlog_drain_fraction()
+        );
+    }
+
+    /// Too few frames for two disjoint deciles must yield no verdict rather
+    /// than a verdict computed from overlapping samples.
+    #[test]
+    fn a_cell_too_short_to_form_two_deciles_yields_no_drain_verdict() {
+        let recorder = record_cell_with_latency_trend(180_000_000, 20_000_000, 9);
+        assert_eq!(recorder.backlog_drain_fraction(), 0.0);
+    }
+
     fn temporary_artifact_path(file_name: &str) -> std::path::PathBuf {
         std::env::temp_dir().join(format!(
             "streamlib-pyembed-spike-{}-{file_name}",
@@ -400,7 +612,7 @@ mod tests {
     /// non-comparable.
     #[test]
     fn frame_exactly_on_the_warmup_deadline_is_measured() {
-        let mut recorder = LatencyMeasurementRecorder::new(WARMUP_EXCLUSION_NANOSECONDS, 0);
+        let mut recorder = LatencyMeasurementRecorder::new(WARMUP_EXCLUSION_NANOSECONDS, FRAME_PERIOD_NANOSECONDS, 0);
         recorder.record_frame_measurement(build_per_frame_latency_measurement(0, 1_000, 5_000, 0));
         recorder.record_frame_measurement(build_per_frame_latency_measurement(
             1,
@@ -427,7 +639,7 @@ mod tests {
     /// disagree about which frames the cell measured.
     #[test]
     fn warmup_excluded_frames_reach_the_jsonl_but_not_the_histograms() {
-        let mut recorder = LatencyMeasurementRecorder::new(WARMUP_EXCLUSION_NANOSECONDS, 0);
+        let mut recorder = LatencyMeasurementRecorder::new(WARMUP_EXCLUSION_NANOSECONDS, FRAME_PERIOD_NANOSECONDS, 0);
         for frame_sequence_number in 0..10u64 {
             recorder.record_frame_measurement(build_per_frame_latency_measurement(
                 frame_sequence_number,
@@ -457,7 +669,7 @@ mod tests {
     /// must be counted exactly once.
     #[test]
     fn dropped_frame_count_counts_a_synthetic_sequence_gap() {
-        let mut recorder = LatencyMeasurementRecorder::new(0, 0);
+        let mut recorder = LatencyMeasurementRecorder::new(0, FRAME_PERIOD_NANOSECONDS, 0);
         for frame_sequence_number in [0u64, 1, 2, 5, 6] {
             recorder.record_frame_measurement(build_per_frame_latency_measurement(
                 frame_sequence_number,
@@ -474,7 +686,7 @@ mod tests {
     /// charged a gap against sequence number 0 or against nothing at all.
     #[test]
     fn first_observed_frame_reports_no_drop() {
-        let mut recorder = LatencyMeasurementRecorder::new(0, 0);
+        let mut recorder = LatencyMeasurementRecorder::new(0, FRAME_PERIOD_NANOSECONDS, 0);
         recorder.record_frame_measurement(build_per_frame_latency_measurement(7, 1_000, 5_000, 0));
         assert_eq!(recorder.dropped_frame_count(), 0);
         assert_eq!(recorder.received_frame_count(), 1);
@@ -484,7 +696,7 @@ mod tests {
     /// leave a permanent phantom drop in the report.
     #[test]
     fn out_of_order_arrival_reports_no_phantom_drop() {
-        let mut recorder = LatencyMeasurementRecorder::new(0, 0);
+        let mut recorder = LatencyMeasurementRecorder::new(0, FRAME_PERIOD_NANOSECONDS, 0);
         for frame_sequence_number in [0u64, 2, 1, 3] {
             recorder.record_frame_measurement(build_per_frame_latency_measurement(
                 frame_sequence_number,
@@ -501,7 +713,7 @@ mod tests {
     /// mode of the embedded arm and must be legible as such.
     #[test]
     fn no_frames_received_reports_a_zero_count_summary() {
-        let recorder = LatencyMeasurementRecorder::new(WARMUP_EXCLUSION_NANOSECONDS, 0);
+        let recorder = LatencyMeasurementRecorder::new(WARMUP_EXCLUSION_NANOSECONDS, FRAME_PERIOD_NANOSECONDS, 0);
         assert_eq!(recorder.received_frame_count(), 0);
         assert_eq!(recorder.dropped_frame_count(), 0);
         assert!(recorder.rolling_one_second_frame_rate_windows().is_empty());
@@ -520,7 +732,7 @@ mod tests {
     /// it must be counted and kept out of the histogram.
     #[test]
     fn negative_latency_increments_the_anomaly_counter_and_skips_the_histogram() {
-        let mut recorder = LatencyMeasurementRecorder::new(0, 0);
+        let mut recorder = LatencyMeasurementRecorder::new(0, FRAME_PERIOD_NANOSECONDS, 0);
         recorder.record_frame_measurement(build_per_frame_latency_measurement(
             0, 1_000_000, 2_000_000, 0,
         ));
@@ -540,7 +752,7 @@ mod tests {
     /// it means instrumentation is broken; it must surface, not be absorbed.
     #[test]
     fn negative_stage_callback_duration_increments_the_anomaly_counter() {
-        let mut recorder = LatencyMeasurementRecorder::new(0, 0);
+        let mut recorder = LatencyMeasurementRecorder::new(0, FRAME_PERIOD_NANOSECONDS, 0);
         recorder.record_frame_measurement(build_per_frame_latency_measurement(
             0, 1_000_000, 500_000, -1,
         ));
@@ -560,7 +772,7 @@ mod tests {
     fn percentiles_match_a_hand_computed_distribution() {
         const ONE_MILLISECOND_NANOSECONDS: i64 = 1_000_000;
         const ONE_HUNDRED_MILLISECONDS_NANOSECONDS: i64 = 100_000_000;
-        let mut recorder = LatencyMeasurementRecorder::new(0, 0);
+        let mut recorder = LatencyMeasurementRecorder::new(0, FRAME_PERIOD_NANOSECONDS, 0);
         for frame_sequence_number in 0..1_000u64 {
             let latency_nanoseconds = if frame_sequence_number < 990 {
                 ONE_MILLISECOND_NANOSECONDS
@@ -612,7 +824,7 @@ mod tests {
     #[test]
     fn rolling_windows_report_the_nominal_rate_of_a_perfectly_paced_stream() {
         const FIFTY_FPS_PERIOD_NANOSECONDS: i64 = ONE_SECOND_NANOSECONDS / 50;
-        let mut recorder = LatencyMeasurementRecorder::new(0, 0);
+        let mut recorder = LatencyMeasurementRecorder::new(0, FRAME_PERIOD_NANOSECONDS, 0);
         for frame_sequence_number in 0..300u64 {
             recorder.record_frame_measurement(build_per_frame_latency_measurement(
                 frame_sequence_number,
@@ -633,7 +845,7 @@ mod tests {
     /// compact object per line, no wrapping array, every field intact.
     #[test]
     fn jsonl_round_trips_line_by_line_through_serde_json() {
-        let mut recorder = LatencyMeasurementRecorder::new(0, 0);
+        let mut recorder = LatencyMeasurementRecorder::new(0, FRAME_PERIOD_NANOSECONDS, 0);
         let written_measurements: Vec<PerFrameLatencyMeasurement> = (0..5u64)
             .map(|frame_sequence_number| {
                 build_per_frame_latency_measurement(
@@ -686,8 +898,8 @@ mod tests {
     /// cross-cell percentiles would be uncomputable.
     #[test]
     fn histogram_export_decodes_and_merges_across_cells() {
-        let mut first_cell_recorder = LatencyMeasurementRecorder::new(0, 0);
-        let mut second_cell_recorder = LatencyMeasurementRecorder::new(0, 0);
+        let mut first_cell_recorder = LatencyMeasurementRecorder::new(0, FRAME_PERIOD_NANOSECONDS, 0);
+        let mut second_cell_recorder = LatencyMeasurementRecorder::new(0, FRAME_PERIOD_NANOSECONDS, 0);
         for frame_sequence_number in 0..100u64 {
             first_cell_recorder.record_frame_measurement(build_per_frame_latency_measurement(
                 frame_sequence_number,
@@ -789,7 +1001,7 @@ mod histogram_range_tests {
     /// lowered to 1ns.
     #[test]
     fn an_all_zero_quantity_never_reports_a_percentile_above_its_maximum() {
-        let mut recorder = LatencyMeasurementRecorder::new(0, 8);
+        let mut recorder = LatencyMeasurementRecorder::new(0, crate::latency_measurement_recorder::FRAME_PERIOD_NANOSECONDS, 8);
         for frame_sequence_number in 0..300 {
             recorder.record_frame_measurement(PerFrameLatencyMeasurement {
                 frame_sequence_number,
@@ -813,8 +1025,9 @@ mod histogram_range_tests {
     /// the difference the spike exists to size.
     #[test]
     fn sub_microsecond_durations_are_not_quantized_into_one_bucket() {
-        let mut recorder = LatencyMeasurementRecorder::new(0, 8);
-        for (index, stage_callback_nanoseconds) in [100_i64, 200, 400, 800].into_iter().enumerate() {
+        let mut recorder = LatencyMeasurementRecorder::new(0, crate::latency_measurement_recorder::FRAME_PERIOD_NANOSECONDS, 8);
+        for (index, stage_callback_nanoseconds) in [100_i64, 200, 400, 800].into_iter().enumerate()
+        {
             recorder.record_frame_measurement(PerFrameLatencyMeasurement {
                 frame_sequence_number: index as u64,
                 source_emit_monotonic_nanoseconds: 1_000 * index as i64,

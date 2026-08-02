@@ -8,11 +8,11 @@ use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 use streamlib::sdk::App;
+use streamlib::sdk::descriptors::{Org, Package, TypeName};
 use streamlib::sdk::error::{Error, Result};
+use streamlib::sdk::processors::ProcessorTypeReference;
 
-use crate::latency_measurement_recorder::{
-    LatencyMeasurementRecorder, LatencyPercentileSummary,
-};
+use crate::latency_measurement_recorder::{LatencyMeasurementRecorder, LatencyPercentileSummary};
 use crate::machine_specification_probe::{
     MACHINE_SPECIFICATION_JSON_FILE_NAME, MachineSpecification, probe_machine_specification,
 };
@@ -30,9 +30,42 @@ use crate::rust_passthrough_floor_stage_processor::{
 use crate::synthetic_frame_source_processor::{
     SyntheticFrameSourceConfiguration, SyntheticFrameSourceProcessor,
 };
+use crate::synthetic_frame_wire_payload_mode::{
+    SURFACE_REFERENCE_BODY_BYTES, SYNTHETIC_PIXEL_PATTERN_MODULUS, SyntheticFrameWirePayloadMode,
+};
 
-/// Which of the two Rust-side comparison arms a cell runs. The third arm, the
-/// subprocess baseline, is driven from `python/runner.py`.
+/// Identity of the processor the subprocess baseline arm instantiates.
+/// Provisioned into a `streamlib_modules/@spike/...` slot by
+/// `python/provision_subprocess_baseline_package.py`, which must have run
+/// before a cell on this arm starts.
+pub const SUBPROCESS_BASELINE_STAGE_ORG: &str = "spike";
+pub const SUBPROCESS_BASELINE_STAGE_PACKAGE: &str = "pyembed-subprocess-baseline";
+pub const SUBPROCESS_BASELINE_STAGE_TYPE_NAME: &str = "PyembedSubprocessBaselineStage";
+
+/// Module on `PYTHONPATH` exposing the stage callables both Python arms invoke.
+pub const SPIKE_STAGE_CALLBACK_MODULE: &str = "spike_stage_callbacks";
+
+/// Default for [`TierAMeasurementCellSpecification::stage_callback_module`].
+pub fn default_stage_callback_module() -> String {
+    SPIKE_STAGE_CALLBACK_MODULE.to_string()
+}
+
+/// Build the baseline stage's type reference from its three identity segments.
+pub fn subprocess_baseline_stage_type_reference() -> Result<ProcessorTypeReference> {
+    fn malformed(segment: &str, error: impl std::fmt::Display) -> Error {
+        Error::Configuration(format!(
+            "the subprocess baseline stage's {segment} segment is malformed: {error}"
+        ))
+    }
+    Ok(ProcessorTypeReference::new(
+        Org::new(SUBPROCESS_BASELINE_STAGE_ORG).map_err(|e| malformed("org", e))?,
+        Package::new(SUBPROCESS_BASELINE_STAGE_PACKAGE).map_err(|e| malformed("package", e))?,
+        TypeName::new(SUBPROCESS_BASELINE_STAGE_TYPE_NAME).map_err(|e| malformed("type", e))?,
+    ))
+}
+
+/// Which comparison arm a cell runs. All three build the same three-processor
+/// graph and differ only in what hosts the stage.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum MeasurementArm {
@@ -40,6 +73,10 @@ pub enum MeasurementArm {
     InProcessPython,
     /// Pure-Rust passthrough — the engine wire-hop floor, no interpreter.
     RustPassthroughFloor,
+    /// Today's model: the same callback in its own process, its own venv,
+    /// reached through the python-native cdylib. The arm the pivot is measured
+    /// against.
+    SubprocessPythonBaseline,
 }
 
 impl MeasurementArm {
@@ -48,7 +85,31 @@ impl MeasurementArm {
         match self {
             MeasurementArm::InProcessPython => "in-process-python",
             MeasurementArm::RustPassthroughFloor => "rust-passthrough-floor",
+            MeasurementArm::SubprocessPythonBaseline => "subprocess-python-baseline",
         }
+    }
+
+    /// Parse the `--arm` flag value. Colocated with [`Self::as_artifact_token`]
+    /// so the two spellings cannot drift: the token is a cell-directory
+    /// component, and a printed token that no longer parses back makes a cell
+    /// unreplayable from its own artifact.
+    pub fn parse_from_flag_value(value: &str) -> std::result::Result<Self, String> {
+        match value {
+            "in-process-python" => Ok(MeasurementArm::InProcessPython),
+            "rust-passthrough-floor" => Ok(MeasurementArm::RustPassthroughFloor),
+            "subprocess-python-baseline" => Ok(MeasurementArm::SubprocessPythonBaseline),
+            other => Err(format!(
+                "unknown arm `{other}` — expected `in-process-python`, \
+                 `rust-passthrough-floor`, or `subprocess-python-baseline`"
+            )),
+        }
+    }
+
+    /// Whether this arm runs its callback inside the harness's own interpreter.
+    /// The subprocess arm does not, so registering a callback for it, or
+    /// installing a GC recorder in this process, would measure nothing.
+    pub fn runs_the_callback_in_the_harness_interpreter(self) -> bool {
+        matches!(self, MeasurementArm::InProcessPython)
     }
 }
 
@@ -61,10 +122,32 @@ pub struct TierAMeasurementCellSpecification {
     pub frame_height_pixels: u32,
     pub channel_count: u32,
     pub target_frames_per_second: u32,
+    /// What crossed the link. Owner decision 7 makes `surface-reference` the
+    /// protocol mode; a `full-pixel-payload` cell measures the retracted
+    /// payload sweep and must never back a gated number.
+    #[serde(default)]
+    pub wire_payload_mode: SyntheticFrameWirePayloadMode,
+    /// Quiet period before the source's first frame, so a slow-starting arm is
+    /// measured from a quiescent graph rather than through its own startup
+    /// backlog. Identical across arms — it is a property of the cell, not of
+    /// the arm, or the arms would not be comparable.
+    ///
+    /// A bare `#[serde(default)]` would be 0.0 here, and this value is copied
+    /// into the source's config unconditionally — so replaying a `cell-spec.json`
+    /// written before this field existed would silently reinstate the startup
+    /// backlog rather than the protocol settle.
+    #[serde(default = "crate::synthetic_frame_source_processor::default_startup_settle_seconds")]
+    pub startup_settle_seconds: f64,
     pub cell_duration_seconds: u64,
     pub warmup_exclusion_seconds: u64,
     pub python_callback_registration_token: String,
     pub anchor_processor_thread_gil: bool,
+    /// The module both Python arms import the callable from. Recorded and
+    /// threaded to the subprocess arm rather than hardcoded there: the two arms
+    /// must run byte-identical callback bodies, and a non-default module on the
+    /// in-process side used to leave the subprocess side on the default.
+    #[serde(default = "default_stage_callback_module")]
+    pub stage_callback_module: String,
     /// The callable the stage invoked, e.g. `passthrough_stage`. Part of the
     /// cell directory name: two cells differing only by stage would otherwise
     /// collide and the second would overwrite the first.
@@ -87,9 +170,12 @@ impl TierAMeasurementCellSpecification {
     /// rates, and repetitions.
     pub fn artifact_directory_name(&self) -> String {
         format!(
-            "arm-{}__fps-{:03}__stage-{}__gil-anchor-{}__rep-{:02}",
+            "arm-{}__{:04}x{:04}__fps-{:03}__wire-{}__stage-{}__gil-anchor-{}__rep-{:02}",
             self.arm.as_artifact_token(),
+            self.frame_width_pixels,
+            self.frame_height_pixels,
             self.target_frames_per_second,
+            self.wire_payload_mode.as_artifact_token(),
             self.stage_callback_attribute,
             if self.anchor_processor_thread_gil {
                 "on"
@@ -120,6 +206,15 @@ pub struct TierAMeasurementCellOutcome {
     /// reported percentiles are clipped and the cell must be rerun with a wider
     /// range, not interpreted.
     pub histogram_range_saturation_count: u64,
+    /// How far the cell's latency fell from its first measured decile to its
+    /// last. Materially positive means the cell spent its life draining a
+    /// startup backlog and its percentiles describe queue occupancy, not
+    /// latency — see [`LatencyMeasurementRecorder::backlog_drain_fraction`].
+    pub backlog_drain_fraction: f64,
+    /// Raw `CLOCK_MONOTONIC` nanoseconds at which the sink saw its first frame.
+    /// Gate 6's restart battery pairs this with its own pre-spawn stamp to get
+    /// exec-to-first-frame without either side estimating the other's clock.
+    pub first_frame_sink_receive_monotonic_nanoseconds: Option<i64>,
     pub rolling_one_second_frame_rate_windows: Vec<f64>,
 }
 
@@ -146,6 +241,7 @@ pub fn run_tier_a_measurement_cell(
         / 10;
     install_measurement_collection_point(LatencyMeasurementRecorder::new(
         warmup_exclusion_nanoseconds,
+        1_000_000_000 / specification.target_frames_per_second.max(1) as i64,
         expected_frame_count,
     ));
 
@@ -156,6 +252,8 @@ pub fn run_tier_a_measurement_cell(
             frame_height_pixels: specification.frame_height_pixels,
             channel_count: specification.channel_count,
             target_frames_per_second: specification.target_frames_per_second,
+            wire_payload_mode: specification.wire_payload_mode,
+            startup_settle_seconds: specification.startup_settle_seconds,
         },
     )?;
 
@@ -170,6 +268,7 @@ pub fn run_tier_a_measurement_cell(
                         .python_callback_registration_token
                         .clone(),
                     anchor_processor_thread_gil: specification.anchor_processor_thread_gil,
+                    wire_payload_mode: specification.wire_payload_mode,
                 },
             )?,
         MeasurementArm::RustPassthroughFloor => app
@@ -180,6 +279,26 @@ pub fn run_tier_a_measurement_cell(
                     channel_count: specification.channel_count,
                 },
             )?,
+        // `add`, not `add_local`: this arm exists to exercise the package +
+        // compiler language-dispatch path that spawns a Python subprocess
+        // (`spawn_python_native_subprocess_op.rs`), which is exactly what the
+        // in-process arm proposes to replace.
+        MeasurementArm::SubprocessPythonBaseline => app.add(
+            subprocess_baseline_stage_type_reference()?,
+            serde_json::json!({
+                "frame_width_pixels": specification.frame_width_pixels,
+                "frame_height_pixels": specification.frame_height_pixels,
+                "channel_count": specification.channel_count,
+                "wire_payload_mode": specification.wire_payload_mode,
+                "stage_callback_module": specification.stage_callback_module,
+                "stage_callback_attribute": specification.stage_callback_attribute,
+                // Sent rather than re-typed in Python: both Python arms must
+                // hand the callback identical bytes or the comparison stops
+                // comparing like with like.
+                "synthetic_pixel_pattern_modulus": SYNTHETIC_PIXEL_PATTERN_MODULUS,
+                "surface_reference_body_bytes": SURFACE_REFERENCE_BODY_BYTES,
+            }),
+        )?,
     };
 
     let sink = app.add_local::<MeasuringSinkProcessor::Processor>(MeasuringSinkConfiguration {})?;
@@ -187,7 +306,18 @@ pub fn run_tier_a_measurement_cell(
     app.connect((&source, "frame_out"), (&stage, "frame_in"))?;
     app.connect((&stage, "frame_out"), (&sink, "frame_in"))?;
 
-    let machine_specification = probe_machine_specification();
+    let mut machine_specification = probe_machine_specification();
+    // Without this the in-process arm's own artifact names only the *other*
+    // arm's interpreter, so a reader of the headline number cannot see what
+    // produced it.
+    if specification.arm.runs_the_callback_in_the_harness_interpreter() {
+        pyo3::Python::attach(|python| {
+            crate::machine_specification_probe::record_embedded_python_runtime(
+                &mut machine_specification,
+                python,
+            )
+        });
+    }
 
     app.runner().start()?;
     let cell_deadline = read_monotonic_clock_nanoseconds()
@@ -212,8 +342,9 @@ pub fn run_tier_a_measurement_cell(
         )));
     }
 
-    recorder
-        .write_per_frame_measurement_jsonl(&artifact_directory.join("per-frame-measurements.jsonl"))?;
+    recorder.write_per_frame_measurement_jsonl(
+        &artifact_directory.join("per-frame-measurements.jsonl"),
+    )?;
     recorder.write_mergeable_histogram_export(
         &artifact_directory.join("source-emit-to-sink-receive.histogram"),
     )?;
@@ -228,6 +359,9 @@ pub fn run_tier_a_measurement_cell(
         dropped_frame_count: recorder.dropped_frame_count(),
         negative_latency_anomaly_count: recorder.negative_latency_anomaly_count(),
         histogram_range_saturation_count: recorder.histogram_range_saturation_count(),
+        backlog_drain_fraction: recorder.backlog_drain_fraction(),
+        first_frame_sink_receive_monotonic_nanoseconds: recorder
+            .first_frame_sink_receive_monotonic_nanoseconds(),
         rolling_one_second_frame_rate_windows: recorder.rolling_one_second_frame_rate_windows(),
     };
 
@@ -262,8 +396,11 @@ mod tests {
             frame_height_pixels: 1080,
             channel_count: 4,
             target_frames_per_second: 60,
+            wire_payload_mode: SyntheticFrameWirePayloadMode::SurfaceReference,
+            startup_settle_seconds: 2.0,
             cell_duration_seconds: 600,
             warmup_exclusion_seconds: 60,
+            stage_callback_module: SPIKE_STAGE_CALLBACK_MODULE.to_string(),
             python_callback_registration_token: "cell-token".to_string(),
             anchor_processor_thread_gil: true,
             stage_callback_attribute: "passthrough_stage".to_string(),
@@ -282,7 +419,8 @@ mod tests {
         let name = example_specification().artifact_directory_name();
         assert_eq!(
             name,
-            "arm-in-process-python__fps-060__stage-passthrough_stage__gil-anchor-on__rep-03"
+            "arm-in-process-python__1920x1080__fps-060__wire-surface-reference__\
+             stage-passthrough_stage__gil-anchor-on__rep-03"
         );
 
         let floor_arm = TierAMeasurementCellSpecification {
@@ -290,6 +428,87 @@ mod tests {
             ..example_specification()
         };
         assert_ne!(floor_arm.artifact_directory_name(), name);
+    }
+
+    /// The amended matrix runs 720p and 1080p at both rates. Before geometry
+    /// entered the directory name, a 720p60 cell and a 1080p60 cell that agreed
+    /// on every other dimension shared a directory and the second silently
+    /// overwrote the first — losing half the resolution leg with no error.
+    #[test]
+    fn cells_differing_only_by_frame_geometry_get_distinct_directories() {
+        let ten_eighty = example_specification();
+        let seven_twenty = TierAMeasurementCellSpecification {
+            frame_width_pixels: 1280,
+            frame_height_pixels: 720,
+            ..example_specification()
+        };
+        assert_ne!(
+            seven_twenty.artifact_directory_name(),
+            ten_eighty.artifact_directory_name()
+        );
+    }
+
+    /// A surface-reference cell and a full-pixel cell measure different
+    /// phenomena at the same geometry; sharing a directory would let the
+    /// retracted payload sweep overwrite a gated cell.
+    #[test]
+    fn cells_differing_only_by_wire_payload_mode_get_distinct_directories() {
+        let reference = example_specification();
+        let full_pixels = TierAMeasurementCellSpecification {
+            wire_payload_mode: SyntheticFrameWirePayloadMode::FullPixelPayload,
+            ..example_specification()
+        };
+        assert_ne!(
+            reference.artifact_directory_name(),
+            full_pixels.artifact_directory_name()
+        );
+    }
+
+    /// Every arm token the harness prints must parse back, or a cell cannot be
+    /// replayed from its own `cell-spec.json` and its directory name stops
+    /// naming anything the harness accepts.
+    #[test]
+    fn arm_tokens_round_trip_through_the_flag_parser() {
+        for arm in [
+            MeasurementArm::InProcessPython,
+            MeasurementArm::RustPassthroughFloor,
+            MeasurementArm::SubprocessPythonBaseline,
+        ] {
+            assert_eq!(
+                MeasurementArm::parse_from_flag_value(arm.as_artifact_token()),
+                Ok(arm)
+            );
+        }
+        assert!(MeasurementArm::parse_from_flag_value("in-process").is_err());
+    }
+
+    /// The settle is copied into the source's config unconditionally, so a spec
+    /// decoding to 0.0 would reinstate the startup backlog the settle exists to
+    /// prevent — silently, on an artifact written before the field existed.
+    #[test]
+    fn a_specification_without_a_startup_settle_decodes_to_the_protocol_default() {
+        let mut encoded = serde_json::to_value(example_specification()).expect("serializes");
+        encoded
+            .as_object_mut()
+            .expect("a spec encodes to an object")
+            .remove("startup_settle_seconds");
+        let decoded: TierAMeasurementCellSpecification =
+            serde_json::from_value(encoded).expect("deserializes without the settle");
+        assert_eq!(
+            decoded.startup_settle_seconds,
+            crate::synthetic_frame_source_processor::default_startup_settle_seconds()
+        );
+        assert!(decoded.startup_settle_seconds > 0.0);
+    }
+
+    /// Owner decision 7 rides the artifact: a summarizer reading a cell must be
+    /// able to tell a protocol cell from a payload-sweep cell without guessing.
+    #[test]
+    fn the_recorded_wire_payload_mode_defaults_to_surface_reference() {
+        assert_eq!(
+            example_specification().wire_payload_mode,
+            SyntheticFrameWirePayloadMode::SurfaceReference
+        );
     }
 
     /// Zero-padding keeps 30fps sorting before 60fps and rep-02 before rep-10 in
@@ -331,7 +550,10 @@ mod tests {
     /// the summarizer keys gate eligibility off this field.
     #[test]
     fn the_recorded_delivery_profile_is_every_sample() {
-        assert_eq!(example_specification().resolved_delivery_profile, "every_sample");
+        assert_eq!(
+            example_specification().resolved_delivery_profile,
+            "every_sample"
+        );
     }
 
     /// The spec round-trips so a cell can be replayed exactly from its own
@@ -361,8 +583,11 @@ mod cell_directory_collision_tests {
             frame_height_pixels: 720,
             channel_count: 4,
             target_frames_per_second: 30,
+            wire_payload_mode: SyntheticFrameWirePayloadMode::SurfaceReference,
+            startup_settle_seconds: 2.0,
             cell_duration_seconds: 600,
             warmup_exclusion_seconds: 60,
+            stage_callback_module: SPIKE_STAGE_CALLBACK_MODULE.to_string(),
             python_callback_registration_token: "token".to_string(),
             anchor_processor_thread_gil: true,
             stage_callback_attribute: "passthrough_stage".to_string(),

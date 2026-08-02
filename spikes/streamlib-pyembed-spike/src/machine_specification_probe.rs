@@ -102,8 +102,11 @@ pub struct MachineSpecification {
     /// RAM and swap.
     pub memory: MemorySpecification,
     /// The interpreter and numpy the Python arms run against.
-    /// The `python3` on PATH — the interpreter the SUBPROCESS baseline arm
-    /// launches. Not necessarily the one the in-process arm runs.
+    /// The interpreter the SUBPROCESS baseline arm actually launches: the
+    /// provisioned package venv named by `STREAMLIB_BASELINE_VENV_PYTHON`.
+    /// Unavailable, never guessed, when that is unset — probing `python3` on
+    /// PATH instead reported this rig's 3.12.3 while the arm was really running
+    /// the venv's 3.14.4, which is a confound the artifact then denied.
     pub subprocess_python_runtime: PythonRuntimeSpecification,
     /// The interpreter CPython is embedded from in THIS process, which is what
     /// produced the in-process arm's numbers. PyO3 links it at build time, so it
@@ -1380,6 +1383,10 @@ const PYTHON_RUNTIME_PROBE_SOURCE: &str = "import json, sys\n\
      \x20   report['numpy_import_failure'] = repr(import_failure)\n\
      print(json.dumps(report))\n";
 
+/// Names the provisioned baseline venv's interpreter. Set by
+/// `python/runner.py` from the provisioning record.
+pub const BASELINE_VENV_PYTHON_ENVIRONMENT_VARIABLE: &str = "STREAMLIB_BASELINE_VENV_PYTHON";
+
 fn probe_python_runtime() -> PythonRuntimeSpecification {
     let unavailable_python = |reason: String| PythonRuntimeSpecification {
         interpreter_executable_path: ProbedValueOrUnavailableReason::unavailable(reason.clone()),
@@ -1389,8 +1396,16 @@ fn probe_python_runtime() -> PythonRuntimeSpecification {
         global_interpreter_lock_is_disabled: ProbedValueOrUnavailableReason::unavailable(reason),
     };
 
+    let Ok(baseline_venv_python) = std::env::var(BASELINE_VENV_PYTHON_ENVIRONMENT_VARIABLE)
+    else {
+        return unavailable_python(format!(
+            "${BASELINE_VENV_PYTHON_ENVIRONMENT_VARIABLE} is unset, so the interpreter \
+             the subprocess arm launches is unknown; run \
+             python/provision_subprocess_baseline_package.py"
+        ));
+    };
     let report_json = match run_command_capturing_trimmed_standard_output(
-        "python3",
+        &baseline_venv_python,
         &["-c", PYTHON_RUNTIME_PROBE_SOURCE],
     ) {
         Ok(report_json) => report_json,
@@ -1400,7 +1415,7 @@ fn probe_python_runtime() -> PythonRuntimeSpecification {
         Ok(report) => report,
         Err(error) => {
             return unavailable_python(format!(
-                "the python3 probe printed `{report_json}`, which is not JSON: {error}"
+                "the baseline venv probe printed `{report_json}`, which is not JSON: {error}"
             ));
         }
     };
@@ -1408,7 +1423,7 @@ fn probe_python_runtime() -> PythonRuntimeSpecification {
     let text_member = |key: &str| match report.get(key).and_then(serde_json::Value::as_str) {
         Some(value) => ProbedValueOrUnavailableReason::observed(value.to_string()),
         None => ProbedValueOrUnavailableReason::unavailable(format!(
-            "the python3 probe report carried no `{key}`"
+            "the baseline venv probe report carried no `{key}`"
         )),
     };
 
