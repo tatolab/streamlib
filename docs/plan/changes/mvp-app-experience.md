@@ -1,5 +1,11 @@
 # Change: mvp-app-experience
 
+> **Partially superseded 2026-08-02 by `importable-python-library.md`.** Its
+> package-source, discovery-scan, string-id, and subprocess-execution sections are dead;
+> the `app.py`/`setup(rt)` convention, `streamlib new`, and class-form `rt.add` survive
+> and are restated by the pivot change. `/reconcile-tracker` sorts its tickets
+> accordingly; derive nothing new from this file.
+
 Implements §Product's sentence terms — `streamlib new`, the `app.py`/`setup(rt)` entry
 convention, app-local processors, string-or-class `rt.add` — and §Control plane's
 "`run`/`dev` host the runtime in-process" entry. ADRs: `product-mvp-sentence.md`,
