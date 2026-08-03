@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.3](https://github.com/tatolab/streamlib/compare/v0.10.2...v0.10.3) (2026-08-03)
+
+
+### Features
+
+* **python:** the importable wheel + interpreter-lifecycle contract ([#1718](https://github.com/tatolab/streamlib/issues/1718)) ([c5db010](https://github.com/tatolab/streamlib/commit/c5db010d51142d63c34627c95c17f569861a0f8f))
+
 ## [0.10.2](https://github.com/tatolab/streamlib/compare/v0.10.1...v0.10.2) (2026-07-31)
 
 
