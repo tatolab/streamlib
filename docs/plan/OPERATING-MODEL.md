@@ -90,7 +90,8 @@ dangle silently, unreviewable PR diffs). The pipeline instead:
 
 A change proposal (`changes/<name>.md`) is written as a **delta against the plan**, never
 a restatement: sections marked `ADDED` / `MODIFIED` / `REMOVED`, ≤200 lines, deriving
-≤5 tickets. Two markers with different powers:
+as few tracer-bullet tickets as it honestly needs (count is guidance, not a cap —
+owner decision 2026-08-02). Two markers with different powers:
 
 - `[NEEDS CLARIFICATION]` — a factual gap; the agent resolves it by reading the repo.
 - `[NEEDS DECISION]` — an architectural choice; the agent may NOT resolve it. It stops,
@@ -122,10 +123,10 @@ Retired by consolidation change (its own tracked change with tickets, not a side
 
 | Cluster | Today | Becomes |
 |---|---|---|
-| Package/module system (6 docs, 2,367 L, densest supersession zone) | competing, unowned | ARCHITECTURE.md §Module system + at most one reference doc |
-| Surface adapters (4 docs, 1,931 L) | overlapping | §Adapters + one authoring reference |
+| Package/module system (6 docs, 2,367 L, densest supersession zone) | competing, unowned | ~~ARCHITECTURE.md §Module system + at most one reference doc~~ — Superseded 2026-08-02 by `importable-python-library`: the module system is deleted; these docs are removed outright by the rip-out change |
+| Surface adapters (4 docs, 1,931 L) | overlapping | §Adapters + one authoring reference (ABI halves deleted by the pivot; consolidate what survives) |
 | RHI kernels (5 docs, one identical skeleton) | five copies of one template | one reference doc, five sections |
-| Plugin ABI / cdylib (3 docs, 1,425 L) | mixed state+rationale | §Plugin ABI; `cdylib-reachability.md`'s decision-tree content moves to an ADR |
+| Plugin ABI / cdylib (3 docs, 1,425 L) | mixed state+rationale | ~~§Plugin ABI; `cdylib-reachability.md`'s decision-tree content moves to an ADR~~ — Superseded 2026-08-02: the plugin ABI is deleted; these docs are removed outright by the rip-out change |
 | `vendored-vulkanalia.md`, logging pair | fine | kept |
 | Root `README.md` | worst-rotted doc in the tree | rewritten against the plan |
 
@@ -158,7 +159,7 @@ wrangle determinism out of a stochastic system — predictability of process, no
 | `/plan` | Router. Reads ARCHITECTURE.md statuses + open changes + ticket frontier, says where you are and which skill is next. (reference, no procedure) | remembering the catalog |
 | `/align` | `batch-grilling` + `glossary` over one plan section → OPEN→DECIDED edits + diagram update. Nothing else moves. (high freedom) | the debate you want to have once |
 | `/propose-change` | Read-only recon by domain experts first (the measured fix for context-blind specs) → delta proposal with `[NEEDS DECISION]` blocks → **stop for owner approval**. (medium) | `draft-design` |
-| `/derive-tickets` | Approved change → ≤5 tracer-bullet tickets: vertical slices, each demoable, each sized to one context window, blocking edges declared; wide refactors sequenced expand→migrate-in-batches→contract. Quiz the owner on the list until approved, then publish. (medium) | `file-issue` for planned work (kept for bugs) |
+| `/derive-tickets` | Approved change → tracer-bullet tickets (as few as honestly needed; count is guidance, not a cap): vertical slices, each demoable, each sized to one context window, blocking edges declared; wide refactors sequenced expand→migrate-in-batches→contract. Quiz the owner on the list until approved, then publish. (medium) | `file-issue` for planned work (kept for bugs) |
 | `/implement` | Load ticket + its change + plan section → **plan gate**: any needed decision not DECIDED ⇒ stop with `[NEEDS DECISION]` → announce plan, owner confirms → build test-first at pre-agreed seams → gate battery via `local-ci-runner` → one review pass → PR (`Closes #N` per line). (low freedom at the gates, normal freedom in the code) | the external `amos-next` protocol, brought in-tree |
 | `/ship-change` | Fold delta into plan, flip statuses, REMOVED-grep gate, regenerate diagrams + Excalidraw export, archive. Exact scripts, no prose latitude. (lowest freedom) | nothing — the missing piece |
 | `/pivot` | Owner declares a direction change → plan edited FIRST → inventory of now-legacy code/docs/rules → a rip-out change with REMOVED sections → deletion tickets. (medium) | nothing — legitimizes the deletion agents currently resist |
@@ -187,7 +188,9 @@ ends with a say-back loop, and none of them commits work:
   `gh-stack`; `local-ci-runner`; `rust-craftsmanship-reviewer`; the five domain experts
   (with two charter fixes: `polyglot-ipc-expert` still mandates the repealed
   Python+Deno-together rule; `package-source-expert` aligns to the plan's module-system
-  entry).
+  entry). — Charter-fix note superseded 2026-08-02 by `importable-python-library`:
+  `plugin-abi-expert` and `package-source-expert` retire with their subjects;
+  `polyglot-ipc-expert` re-scopes to helper-process IPC.
 - **Consolidated:** `pr-review-gate` + `change-verifier` overlap heavily (both check test
   lock-in, scope, boundaries, naming) and each PR currently runs up to four review
   lenses. Owner review is the bottleneck — one merged `review-pr` lens (plus
@@ -245,7 +248,7 @@ Agents cannot quietly rewrite the decision source:
 ### Rules have a lifecycle
 
 Rules under `.claude/rules/` shrink to **invariants only** (licensing, naming, RHI
-boundary, plugin ABI, comments). Process prose migrates into skill gates, which are
+boundary, comments — the plugin-ABI rule retires with the ABI, 2026-08-02). Process prose migrates into skill gates, which are
 testable; a rule that a skill gate now enforces gets deleted via `/propose-rule`. New
 rules enter only through `/propose-rule` — evidence, draft, owner approval, dedicated
 PR — never accreted mid-session because something annoyed an agent once.
@@ -265,10 +268,13 @@ PR — never accreted mid-session because something annoyed an agent once.
 
 ## Numeric caps (hard numbers survive agent interpretation; prose doesn't)
 
-- Change proposal ≤ 200 lines. Tickets per change ≤ 5 — exceeding means split the change.
+- Change proposal ≤ 200 lines. Ticket count per change is guidance, not a cap (owner
+  decision 2026-08-02): as few tracer bullets as the change honestly needs.
 - Scale gate, decided at entry: bug fix / refactor / test work → **no change artifact at
   all** (the default path); new behavior or changed contract → delta change; anything
-  touching plugin ABI, RHI, IPC wire format, or the processor model → delta + ADR.
+  touching the RHI, the IPC wire format, the processor model, or the Python API's
+  public contract → delta + ADR (the plugin-ABI trigger retired 2026-08-02 with the
+  ABI).
 
 ## Rollout (MVP-first; each wave usable before the next starts)
 
@@ -296,10 +302,13 @@ PR — never accreted mid-session because something annoyed an agent once.
    primary (today's "LOOP-RUN" vocabulary gets renamed `self-run`; no relation to the
    retired loop), owner-terminal handshake as fallback.
 4. The three edit-denied docs (`logging-schema.md`, `testing-hardware.md`,
-   `schema-identity-and-packaging.md`) — the last has four supersession blocks and can
-   only rot while frozen. Unfreeze into the consolidation, or keep frozen?
-5. Parked ticket #1624 (retire `.slpkg` for plain `.zip`) — becomes a plan decision in
-   §Distribution; ~650 occurrences hang on it.
+   `schema-identity-and-packaging.md`) — ~~the last has four supersession blocks and
+   can only rot while frozen. Unfreeze into the consolidation, or keep frozen?~~ —
+   Resolved 2026-08-02 by `importable-python-library`: `schema-identity-and-packaging`
+   is deleted by the rip-out; the question remains only for the first two.
+5. ~~Parked ticket #1624 (retire `.slpkg` for plain `.zip`) — becomes a plan decision
+   in §Distribution; ~650 occurrences hang on it.~~ — Resolved 2026-08-02: `.slpkg` is
+   deleted entirely by `importable-python-library`; #1624 is moot.
 6. Bring the ticket lifecycle in-tree (replace external amos-next protocol with
    `/implement`) — recommend yes; it is the single highest-leverage move the inventory
    found.

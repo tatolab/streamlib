@@ -3,53 +3,58 @@
 The shared language. Terms only — zero implementation detail. Maintained by the
 `glossary` skill inside plan-editing sessions; project-specific terms only.
 
-**Host**: the engine process that loads plugins. _Avoid_: "runtime process", "main app".
+**The wheel**: the single distributed artifact for Python — Python API + CLI + engine
+in one PyO3 package. _Avoid_: "the binary" (pre-pivot), "the SDK" (that is its API
+surface).
 
-**Plugin**: a package's compiled cdylib loaded by the host across the plugin ABI.
-_Avoid_: DSO, shared object, FFI module.
+**App**: a normal Python codebase — an entry file (`app.py` defining `setup(rt)`) plus
+`pyproject.toml` and one venv; no manifest, no streamlib-specific files. _Avoid_:
+"project", "consumer app" (redundant).
 
-**Plugin ABI**: the `#[repr(C)]` boundary between host and plugin. _Avoid_: FFI, COM.
+**Package**: an ordinary PyPI or cargo package. A processor package's native internals
+expose handles to Python and never speak streamlib internals. _Avoid_: "plugin",
+"module" (pre-pivot module-system terms).
 
-**Package**: the distributable unit (source tree + `streamlib.yaml`) resolved by version
-from a package source. _Avoid_: "plugin" (that is the compiled artifact).
+**Built-in**: a first-party native processor shipped inside the wheel (camera, display,
+audio) — instantiated and configured from Python; its per-frame path never enters the
+interpreter.
 
-**Package source**: the store packages resolve from at build time — never a sibling
-directory.
-
-**Link**: the sole local-development path for consuming a package from a folder.
-`add`/`install` take finalized artifacts only.
-
-**App**: a consumer of packages — an entry file (`app.py` defining `setup(rt)`) plus
-`streamlib.lock` and `streamlib_modules/`; carries no manifest. Promotes to a package by
-adding the identity label. _Avoid_: "project", "consumer app" (redundant).
+**Placement**: where the engine runs a processor — in-process, or in a helper process
+spawned from the same interpreter and venv. An engine decision behind a single opt-in,
+never a user-facing runtime definition.
 
 **Bag**: the self-describing msgpack named map a link carries — the schema-free view of
 a payload; consumers cast it to a type at read time. _Avoid_: "message", "envelope".
 
-**Control plane**: the HTTP/WebSocket/MCP surface a runtime hosts for inspection and
-mutation; the CLI and client SDKs are its clients. _Avoid_: "API server" as the concept
-(that is the component hosting it).
+**Control plane**: the HTTP/WebSocket/MCP surface a runtime hosts for observing and
+inspecting running nodes; the CLI is its client. Embedding happens by importing the
+wheel, never through the control plane. _Avoid_: "API server" as the concept (that is
+the component hosting it).
 
 **Node**: a live runtime reachable over its control plane; discovered via the per-user
 on-disk registry. _Avoid_: "instance", "server".
 
-**Processor**: the unit of pipeline computation, declared with `#[processor]` and wired
-by ports.
+**Processor**: the unit of pipeline computation — a Python class (`@processor`) or a
+Rust type (`#[processor]`) — wired by ports.
 
-**Engine primitive**: a hardware capability the engine owns and exposes to packages
-across the plugin ABI — GPU memory import/export, the present target, the audio clock,
-codec sessions. Packages compose primitives; they never reimplement them.
+**Engine primitive**: a hardware capability the engine owns and exposes through its
+handle-shaped surface — GPU memory import/export (DMA-BUF / OPAQUE_FD), the present
+target, texture rings, codec sessions, the audio clock, color resolution. Built-ins and
+external code compose primitives; they never reimplement them.
 
-**Present target**: the engine-owned presentation surface minted from a
-package-supplied window handle; the only way frames reach a window.
+**Handle**: a transferable value crossing the native↔Python boundary — a DMA-BUF fd, a
+CUDA device pointer, a surface id, a byte buffer. Pixels never cross as Python objects.
 
-**Lag by design**: consumers (distributable packages, examples) track the engine only at
-planned upgrade points — upgraded as the final step of a milestone once the runtime is
-proven solid, never continuously mid-development. _Avoid_: reading "lag" as "never
-upgraded", "abandoned".
+**Present target**: the engine-owned presentation surface minted from a raw window
+handle; the only way frames reach a window.
 
 **The plan**: `docs/plan/ARCHITECTURE.md` plus `docs/plan/diagrams/` — the single source
 of architectural decisions.
 
 **Change**: a typed delta proposal against the plan (`docs/plan/changes/`), marked
 ADDED / MODIFIED / REMOVED.
+
+Retired by the 2026-08-02 pivot (see `docs/decisions/importable-python-library.md`):
+**Host** (loads-plugins sense), **Plugin**, **Plugin ABI**, **Package source**,
+**Link**, **Lag by design** — these named the deleted plugin-ABI / module-system world;
+do not reuse them.

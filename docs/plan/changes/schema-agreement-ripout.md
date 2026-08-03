@@ -1,5 +1,12 @@
 # Change: schema-agreement-ripout
 
+> **Reconciliation note 2026-08-02** (`importable-python-library` pivot): the core
+> decision here — advisory connect, cast-at-read, inert wire tag — stands unchanged.
+> But this file's STAY rationale cites `module_loader/` paths, `sdk/streamlib-deno`,
+> the consumer-upgrade-backlog doctrine, and plugin-ABI version bumps — all deleted by
+> the pivot. Where a cited path is gone, the pivot's change files govern; the
+> `SchemaIdent` survival case is registry/factory only.
+
 Implements `[data-plane-cast-not-contract]` (§Processor model & scheduling) and the
 "bags/schemas fixed" clause of the zero-ceremony bar (§Product). ADR:
 `docs/decisions/data-plane-cast-not-contract.md`. Recon verified every claim below at

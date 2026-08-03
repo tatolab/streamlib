@@ -1,5 +1,10 @@
 # Change: pypi-packaging
 
+> **Superseded 2026-08-02 by `importable-python-library.md`.** The shipped artifact is
+> now a PyO3 wheel (Python API + CLI + engine), not packaging around a standalone
+> binary, and initial releases are repo-hosted (PyPI deferred until the rename). Do not
+> derive tickets from this file; `/reconcile-tracker` retires its open tickets.
+
 Implements the "installs streamlib from PyPI" clause of `[product-mvp-sentence]`
 (§Product) and the "PyPI ships exactly one artifact" consequence of
 `[single-binary-launch]` (§Control plane). No ADR: nothing here touches the plugin ABI,

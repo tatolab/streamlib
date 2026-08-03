@@ -15,17 +15,24 @@ The MVP promises the **developer experience**, not the capability. Camera → pr
 display pipelines, shader/compute processors, and packages already exist and work; what
 does not exist is the simplified experience around them. The sentence:
 
-> A Python developer on Linux with an NVIDIA GPU installs streamlib from PyPI, runs
+> A Python developer on Linux with an NVIDIA GPU pip-installs streamlib, runs
 > `streamlib new` then `streamlib dev`, sees their camera live in a window within a
 > minute, and makes the pipeline theirs by editing the scaffolded processor — zero
-> ceremony: no manifest, no `main()`, no schema wrangling, hot-reload on save.
+> ceremony: no manifest, no `main()`, no schema wrangling, a fast edit loop.
+
+(Sentence updated 2026-08-02 by `importable-python-library`: "from PyPI" → pip-install
+from repo releases until the rename; "hot-reload on save" → "a fast edit loop" —
+re-running `dev` is the MVP loop; processor-granular reload-on-save is a nicety,
+never module machinery.)
 
 Its load-bearing terms:
 
 - **Python consumer.** Python vision/ML developers are the audience for realtime GPU
   pipelines without writing Vulkan.
-- **PyPI ships the single binary** (CLI + runtime + build orchestration) — the ruff/uv
-  pattern: one install, no toolchain, native motion for the persona.
+- ~~**PyPI ships the single binary** (CLI + runtime + build orchestration) — the
+  ruff/uv pattern.~~ — Superseded 2026-08-02 by `importable-python-library.md`. PyPI
+  ships one *wheel* — Python API + CLI + engine via PyO3, the pydantic-core pattern;
+  build orchestration is deleted. Still one install, no toolchain.
 - **Batteries-included scaffold.** `streamlib new` generates a *working* camera →
   effect → display app with dependencies already installed; first `streamlib dev` shows
   live video before any code is written; the user's first act is editing the scaffolded
@@ -35,16 +42,21 @@ Its load-bearing terms:
 - **`app.py` + `setup(rt)` by convention, `-f` override.** Matches what Python
   developers rely on (Flask defaults to `app.py`; FastAPI's `uvicorn main:app` is the
   explicit variant); the override keeps the point-at-a-script launch.
-- **Apps carry no manifest.** The npm model: `add`/`link` write `streamlib.lock`,
+- **Apps carry no manifest.** ~~The npm model: `add`/`link` write `streamlib.lock`,
   `streamlib_modules/` holds the installed set, and the identity label exists only
-  because a package is shared. An app promotes to a package by adding the label.
-- **App-local processors use the plugin discovery scan** on the app's `processors/`
-  folder, minted `@app/local/<Name>`. Two reference spellings resolve to one
-  registration: the string id, or the imported class — the decorated class carries its
-  identity; importing it in `app.py` attaches metadata only, execution stays in the
-  engine-spawned subprocess. The class form keeps go-to-definition and type checking
-  working, which is also what makes the loop agent-friendly (small `app.py`, one obvious
-  processor file, `graph`/`tap` to verify an edit landed).
+  because a package is shared. An app promotes to a package by adding the label.~~ —
+  Superseded 2026-08-02 by `importable-python-library.md`. Stronger now: the pip/uv
+  model, no streamlib-specific files at all — `pyproject.toml` and the venv are the
+  whole dependency story; a processor package is an ordinary PyPI package.
+- ~~**App-local processors use the plugin discovery scan** on the app's `processors/`
+  folder, minted `@app/local/<Name>`; execution stays in the engine-spawned
+  subprocess.~~ — Superseded 2026-08-02 by `importable-python-library.md`. App-local
+  processors are ordinary Python classes imported into `app.py`; `rt.add` takes the
+  class; no discovery scan, no minted ids, and execution placement (in-process or a
+  same-interpreter helper process) is the engine's decision. The surviving point: the
+  class form keeps go-to-definition and type checking working, which is what makes the
+  loop agent-friendly (small `app.py`, one obvious processor file, `graph`/`tap` to
+  verify an edit landed).
 - **`add`/`connect` is the pipeline API** — the existing primitive, explicit about
   ports.
 
@@ -64,9 +76,11 @@ Its load-bearing terms:
 - **Entry point named in a config file** — ceremony returning through the side door.
 - **Every app is also a package** — a consumer needs no publishable identity; forcing
   one re-creates the manifest ceremony being removed.
-- **Import-only or strings-only local processors** — import-only forks the discovery
-  model from plugins; strings-only loses IDE/agent ergonomics. One mechanism, two
-  spellings, costs neither.
+- ~~**Import-only or strings-only local processors** — import-only forks the discovery
+  model from plugins; strings-only loses IDE/agent ergonomics.~~ — Superseded
+  2026-08-02 by `importable-python-library.md`: import-only (class-form `rt.add`) IS
+  the decided shape; the discovery-scan model it would have "forked from" is deleted,
+  and IDE/agent ergonomics are what the class form provides.
 - **Higher-level pipeline API now** (chaining sugar, declarative graphs, or a
   Holoscan-style `compose()` subclass) — the subclass shape is *more* ceremony than
   `setup(rt)`; sugar remains compatible later where port inference is unambiguous.
@@ -76,7 +90,10 @@ Its load-bearing terms:
 - The zero-ceremony bar makes the schema-agreement rip-out (no engine schema matching,
   cast-at-read, no versions at the code layer) MVP-blocking work, not cleanup.
 - `streamlib new` (app scaffold) is a new command to design and build.
-- Existing Rust plugins port to the new format as the final step, so they install as
-  modules; consumer examples continue to lag by design until then.
+- ~~Existing Rust plugins port to the new format as the final step, so they install as
+  modules; consumer examples continue to lag by design until then.~~ — Superseded
+  2026-08-02 by `importable-python-library.md`: there is no plugin format to port to;
+  first-party media becomes engine-tree built-ins, and other plugin functionality is
+  re-authored as Python packages or cargo crates per the pivot's change file.
 - The MVP claim is narrow (one persona, one platform, one GPU vendor) and must be kept
   honest: widening any axis is a plan change, not a ticket.
