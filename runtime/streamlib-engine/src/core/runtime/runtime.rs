@@ -626,6 +626,14 @@ impl Runner {
     /// Stop the runtime.
     #[tracing::instrument(name = "runtime.stop", skip_all)]
     pub fn stop(&self) -> Result<()> {
+        // Idempotent: the run loop stops the runtime itself, and an embedding
+        // host tears down afterwards. Without this both publish the
+        // Stopping/Stopped pair and every subscriber sees the transition twice.
+        if *self.status.lock() == RuntimeStatus::Stopped {
+            tracing::debug!("[stop] Already stopped");
+            return Ok(());
+        }
+
         tracing::info!("[stop] Beginning graceful shutdown");
         *self.status.lock() = RuntimeStatus::Stopping;
         PUBSUB.publish(
@@ -910,9 +918,25 @@ impl Runner {
     /// that lands on CPython's handler there can never be turned into a
     /// `KeyboardInterrupt` and the process hangs.
     pub fn start_and_wait_for_shutdown(self: &Arc<Self>) -> Result<()> {
-        let _shutdown_signals = Self::take_shutdown_signal_ownership()?;
-        self.start()?;
-        self.wait_for_shutdown_observation_with(|_| ControlFlow::Continue(()))
+        let run_outcome = {
+            let _shutdown_signals = Self::take_shutdown_signal_ownership()?;
+            self.start().and_then(|()| {
+                self.wait_for_shutdown_observation_with(|_| ControlFlow::Continue(()))
+            })
+        };
+        Self::clear_shutdown_requests_latched_during_teardown();
+        run_outcome
+    }
+
+    /// Take any request that landed after the run loop stopped observing.
+    ///
+    /// Called once shutdown-signal ownership has dropped, so no further signal
+    /// can reach the funnel. Without it a Ctrl-C during teardown stays latched
+    /// and the next run loop in this process returns immediately having run
+    /// nothing — the embedded case, where one interpreter hosts several run
+    /// loops in turn.
+    fn clear_shutdown_requests_latched_during_teardown() {
+        crate::core::runtime::take_runtime_shutdown_request_latch();
     }
 
     fn take_shutdown_signal_ownership()
@@ -937,10 +961,14 @@ impl Runner {
     where
         F: FnMut(&Self) -> ControlFlow<()>,
     {
-        // Held to the end of this function, so the dispositions are handed back
-        // only after the teardown below has run.
-        let _shutdown_signals = Self::take_shutdown_signal_ownership()?;
-        self.wait_for_shutdown_observation_with(callback)
+        let wait_outcome = {
+            // Held only for the wait, so the dispositions are handed back once
+            // the teardown inside has run.
+            let _shutdown_signals = Self::take_shutdown_signal_ownership()?;
+            self.wait_for_shutdown_observation_with(callback)
+        };
+        Self::clear_shutdown_requests_latched_during_teardown();
+        wait_outcome
     }
 
     /// The wait loop itself, for callers that already own the shutdown signals.

@@ -203,7 +203,7 @@ impl ScopedShutdownSignalOwnership {
         let self_pipe = shutdown_signal_self_pipe()?;
         // A signal delivered during the previous owner's teardown would
         // otherwise be read by this owner and shut it down on the spot.
-        drain_pending_bytes(self_pipe.read_end);
+        drain_pending_bytes(self_pipe.read_end)?;
 
         // Both displacements restore themselves if anything below fails —
         // including the thread spawn, which would otherwise leave the handlers
@@ -421,17 +421,29 @@ fn stop_forwarding_thread() {
 }
 
 /// Discard bytes left in the pipe by a previous owner.
+///
+/// Both `fcntl`s are checked because the drain below only terminates while the
+/// read end is non-blocking — on an unchecked failure it would block forever
+/// inside `install()`, which is inside `rt.run()`.
 #[cfg(all(unix, not(target_os = "macos")))]
-fn drain_pending_bytes(read_end: std::os::fd::RawFd) {
+fn drain_pending_bytes(read_end: std::os::fd::RawFd) -> std::io::Result<()> {
     // SAFETY: `read_end` stays open for the process lifetime; the destination
     // buffer is owned by this frame.
     unsafe {
         let original_flags = libc::fcntl(read_end, libc::F_GETFL);
-        libc::fcntl(read_end, libc::F_SETFL, original_flags | libc::O_NONBLOCK);
+        if original_flags < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        if libc::fcntl(read_end, libc::F_SETFL, original_flags | libc::O_NONBLOCK) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
         let mut discarded = [0u8; 32];
         while libc::read(read_end, discarded.as_mut_ptr().cast(), discarded.len()) > 0 {}
-        libc::fcntl(read_end, libc::F_SETFL, original_flags);
+        if libc::fcntl(read_end, libc::F_SETFL, original_flags) < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
     }
+    Ok(())
 }
 
 /// Read a signal's current disposition without changing it. The restoration

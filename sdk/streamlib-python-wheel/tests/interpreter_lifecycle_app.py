@@ -20,11 +20,6 @@ import streamlib
 
 KEYBOARD_INTERRUPT_UPPER_BOUND_SECONDS = 5.0
 
-# Held at module scope on purpose: a Runtime still reachable from a module
-# global when the interpreter starts finalizing is the case `Drop` alone does
-# not obviously cover, and the one the `atexit` hook exists for.
-RUNTIME_HELD_AT_MODULE_SCOPE: "streamlib.Runtime | None" = None
-
 
 def marker(text: str) -> None:
     print(f"MARKER:{text}", flush=True)
@@ -109,15 +104,27 @@ def scenario_never_run() -> None:
     marker("CONSTRUCTED_WITHOUT_RUNNING")
 
 
-def scenario_still_referenced_at_exit() -> None:
-    """A Runtime alive at interpreter exit must still tear the engine down.
+def scenario_held_by_a_live_thread_at_exit() -> None:
+    """A Runtime reachable only from a live daemon thread's frame at exit.
 
-    Nothing here drops the reference, so teardown has to come from interpreter
-    shutdown — the `atexit` hook, or module-global clearing reaching `Drop`.
+    This is the case the `atexit` hook is actually load-bearing for. A
+    module-global reference is not: interpreter shutdown clears module globals
+    and that reaches `Drop` on its own. Here the only reference lives in a
+    parked daemon thread's frame, which CPython never unwinds — without the
+    hook the engine's threads are simply alive when the interpreter finalizes,
+    and no teardown runs at all.
     """
-    global RUNTIME_HELD_AT_MODULE_SCOPE
-    RUNTIME_HELD_AT_MODULE_SCOPE = streamlib.Runtime()
-    marker("STILL_REFERENCED_AT_EXIT")
+    holding_thread_is_parked = threading.Event()
+
+    def hold_runtime_forever() -> None:
+        _runtime_held_in_this_frame = streamlib.Runtime()  # noqa: F841
+        holding_thread_is_parked.set()
+        # Never returns, so the frame — and the only reference — stays alive.
+        threading.Event().wait()
+
+    threading.Thread(target=hold_runtime_forever, daemon=True).start()
+    holding_thread_is_parked.wait(timeout=60.0)
+    marker("HELD_BY_LIVE_THREAD_AT_EXIT")
 
 
 def scenario_second_run_is_refused() -> None:
@@ -160,15 +167,37 @@ def scenario_shutdown_from_another_thread() -> None:
         marker("STOPPED_FROM_ANOTHER_THREAD")
 
 
+def scenario_two_pipelines_in_one_process() -> None:
+    """Two run loops in turn, each through the context manager.
+
+    The driver Ctrl-Cs each one. The second must block on its own account — if
+    it inherits the first pipeline's shutdown request it returns immediately,
+    which the reported monotonic span makes visible. The engine initializes its
+    logging pathway once per process, so the second runtime emits no log lines
+    of its own and this scenario announces its own readiness instead.
+    """
+    with streamlib.Runtime() as first_runtime:
+        first_runtime.run()
+    marker("PIPELINE_1_RETURNED")
+
+    with streamlib.Runtime() as second_runtime:
+        marker("PIPELINE_2_RUNNING")
+        started = time.monotonic()
+        second_runtime.run()
+        blocked_milliseconds = round((time.monotonic() - started) * 1000)
+    marker(f"PIPELINE_2_BLOCKED_MS={blocked_milliseconds}")
+
+
 SCENARIOS = {
     "ctrl_c": scenario_ctrl_c,
     "gil_released": scenario_gil_released_while_running,
     "sigint_handed_back": scenario_sigint_handed_back_to_cpython,
     "exception_in_context_manager": scenario_exception_inside_context_manager,
     "never_run": scenario_never_run,
-    "still_referenced_at_exit": scenario_still_referenced_at_exit,
+    "held_by_a_live_thread_at_exit": scenario_held_by_a_live_thread_at_exit,
     "second_run_refused": scenario_second_run_is_refused,
     "shutdown_from_another_thread": scenario_shutdown_from_another_thread,
+    "two_pipelines_in_one_process": scenario_two_pipelines_in_one_process,
 }
 
 

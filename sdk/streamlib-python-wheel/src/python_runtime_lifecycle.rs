@@ -8,6 +8,7 @@
 //! not merely stopped — before [`PythonRuntimeHandle::run`] returns, so no
 //! engine thread can still be alive when CPython finalizes.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use pyo3::exceptions::PyRuntimeError;
@@ -44,6 +45,14 @@ pub struct PythonRuntimeHandle {
     /// blocking call, and `shutdown()` from a worker thread then fails on the
     /// borrow instead of stopping the pipeline.
     engine: Mutex<Option<Arc<Runner>>>,
+    /// True only while `run()` is blocked on the engine.
+    ///
+    /// `shutdown()` needs it to tell "a run loop is waiting for a request" from
+    /// "teardown already happened". The shutdown-request latch is
+    /// process-global and first-observer-wins, so requesting one with no run
+    /// loop waiting leaves it set for the *next* run loop in this interpreter,
+    /// which then returns immediately having run nothing.
+    run_loop_is_blocking: AtomicBool,
 }
 
 impl PythonRuntimeHandle {
@@ -99,6 +108,7 @@ impl PythonRuntimeHandle {
             .map_err(|engine_failure| PyRuntimeError::new_err(engine_failure.to_string()))?;
         Ok(Self {
             engine: Mutex::new(Some(engine)),
+            run_loop_is_blocking: AtomicBool::new(false),
         })
     }
 
@@ -106,6 +116,11 @@ impl PythonRuntimeHandle {
     ///
     /// Owns SIGINT while it blocks and hands it back to CPython before
     /// returning, so a later Ctrl-C raises `KeyboardInterrupt` as usual.
+    ///
+    /// Linux only, matching the platform floor. On macOS the engine's run loop
+    /// is an `NSApplication` loop that terminates the process instead of
+    /// returning, so none of the above holds there — not the return, not the
+    /// teardown, not the handback.
     fn run(&self, python: Python<'_>) -> PyResult<()> {
         let engine = self.take_engine().ok_or_else(|| {
             PyRuntimeError::new_err(
@@ -117,7 +132,9 @@ impl PythonRuntimeHandle {
         // GIL released here, a SIGINT that reached CPython's handler instead
         // could never become a `KeyboardInterrupt`, and this call would block
         // forever.
+        self.run_loop_is_blocking.store(true, Ordering::SeqCst);
         let run_outcome = python.detach(|| engine.start_and_wait_for_shutdown());
+        self.run_loop_is_blocking.store(false, Ordering::SeqCst);
 
         // Unconditional: a failed start must still not leave engine threads
         // alive to race interpreter finalization.
@@ -136,15 +153,18 @@ impl PythonRuntimeHandle {
     /// funnel Ctrl-C does, and `run()` performs the teardown. Before `run()`,
     /// it tears the engine down here. Idempotent either way.
     fn shutdown(&self, python: Python<'_>) -> PyResult<()> {
-        match self.take_engine() {
-            Some(engine) => Ok(Self::drop_engine_without_holding_the_gil(python, engine)?),
-            // Either `run()` owns the engine and is blocking on it, or teardown
-            // already happened — the request funnel is idempotent, so asking
-            // again costs nothing and the second case is a no-op.
-            None => python
-                .detach(|| request_runtime_shutdown("streamlib.Runtime.shutdown()"))
-                .map_err(|request_failure| PyRuntimeError::new_err(request_failure.to_string())),
+        if let Some(engine) = self.take_engine() {
+            return Ok(Self::drop_engine_without_holding_the_gil(python, engine)?);
         }
+        if !self.run_loop_is_blocking.load(Ordering::SeqCst) {
+            // Teardown already happened. Requesting here would latch a shutdown
+            // nobody is waiting for, and the next run loop in this interpreter
+            // would observe it and exit immediately.
+            return Ok(());
+        }
+        python
+            .detach(|| request_runtime_shutdown("streamlib.Runtime.shutdown()"))
+            .map_err(|request_failure| PyRuntimeError::new_err(request_failure.to_string()))
     }
 
     fn __enter__(python_self: PyRef<'_, Self>) -> PyRef<'_, Self> {
