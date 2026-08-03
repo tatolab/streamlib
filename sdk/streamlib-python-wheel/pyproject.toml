@@ -1,0 +1,42 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[build-system]
+requires = ["maturin>=1.7,<2.0"]
+build-backend = "maturin"
+
+[project]
+name = "streamlib"
+version = "0.10.2"
+description = "StreamLib — a realtime streaming engine with Python authoring"
+# abi3-py310 in Cargo.toml is the binding half of this floor; the two move
+# together or the wheel claims interpreters its ABI tag does not cover.
+requires-python = ">=3.10"
+license = { text = "BUSL-1.1" }
+authors = [{ name = "Jonathan Fontanez", email = "fontanezj1@gmail.com" }]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[tool.pytest.ini_options]
+markers = [
+    # `Runner::start()` initializes a GPU context, and the engine's DMA-BUF
+    # pool pre-warm needs a driver that can actually allocate exportable
+    # device memory. A software rasterizer (lavapipe) cannot, so a GPU-less
+    # runner deselects these with `-m "not requires_gpu"`.
+    "requires_gpu: needs a Vulkan device that can allocate exportable DMA-BUF memory",
+]
+
+[tool.maturin]
+python-source = "python"
+module-name = "streamlib._engine"
+features = ["extension-module"]

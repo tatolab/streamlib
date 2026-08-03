@@ -898,28 +898,56 @@ impl Runner {
         self.wait_for_signal_with(|_| ControlFlow::Continue(()))
     }
 
+    /// Own the shutdown signals, [`start`](Self::start), block until shutdown,
+    /// and tear down — the whole run in one call.
+    ///
+    /// Preferred over `start()` followed by
+    /// [`wait_for_signal`](Self::wait_for_signal), because signal ownership
+    /// spans startup here: a Ctrl-C arriving while the graph is still coming up
+    /// reaches the request funnel rather than whatever disposition was
+    /// installed before. In an embedded host that gap is not merely a lost
+    /// signal — the wheel's `rt.run()` blocks with the GIL released, so a SIGINT
+    /// that lands on CPython's handler there can never be turned into a
+    /// `KeyboardInterrupt` and the process hangs.
+    pub fn start_and_wait_for_shutdown(self: &Arc<Self>) -> Result<()> {
+        let _shutdown_signals = Self::take_shutdown_signal_ownership()?;
+        self.start()?;
+        self.wait_for_shutdown_observation_with(|_| ControlFlow::Continue(()))
+    }
+
+    fn take_shutdown_signal_ownership()
+    -> Result<crate::core::signals::ScopedShutdownSignalOwnership> {
+        crate::core::signals::ScopedShutdownSignalOwnership::take_until_dropped().map_err(
+            |ownership_failure| {
+                crate::core::Error::Configuration(format!(
+                    "Failed to own shutdown signals: {}",
+                    ownership_failure
+                ))
+            },
+        )
+    }
+
     /// Block until shutdown signal, with periodic callback for dynamic control.
     ///
     /// This is the run-loop owner: it observes both the `RuntimeShutdown`
     /// event and the shutdown-request latch, then runs the normal teardown.
     /// The latch is polled as well as the event because a request published
     /// before this subscriber was wired up leaves no event to receive.
-    pub fn wait_for_signal_with<F>(self: &Arc<Self>, mut callback: F) -> Result<()>
+    pub fn wait_for_signal_with<F>(self: &Arc<Self>, callback: F) -> Result<()>
     where
         F: FnMut(&Self) -> ControlFlow<()>,
     {
         // Held to the end of this function, so the dispositions are handed back
         // only after the teardown below has run.
-        let _shutdown_signals =
-            crate::core::signals::ScopedShutdownSignalOwnership::take_until_dropped().map_err(
-                |e| {
-                    crate::core::Error::Configuration(format!(
-                        "Failed to own shutdown signals: {}",
-                        e
-                    ))
-                },
-            )?;
+        let _shutdown_signals = Self::take_shutdown_signal_ownership()?;
+        self.wait_for_shutdown_observation_with(callback)
+    }
 
+    /// The wait loop itself, for callers that already own the shutdown signals.
+    fn wait_for_shutdown_observation_with<F>(self: &Arc<Self>, mut callback: F) -> Result<()>
+    where
+        F: FnMut(&Self) -> ControlFlow<()>,
+    {
         let shutdown_flag = Arc::new(AtomicBool::new(false));
         let shutdown_flag_clone = Arc::clone(&shutdown_flag);
 

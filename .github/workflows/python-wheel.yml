@@ -1,0 +1,78 @@
+name: Python Wheel
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  wheel-interpreter-lifecycle:
+    name: Wheel build + interpreter lifecycle (no GPU)
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        # Same minimal engine build set as test.yml: the engine's build.rs
+        # compiles GLSL with glslc and generates JTD bindings, and the Linux
+        # dep set links Vulkan.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            pkg-config \
+            protobuf-compiler \
+            libvulkan-dev \
+            glslc
+
+      - name: Install jtd-codegen
+        run: |
+          curl -sSL https://github.com/jsontypedef/json-typedef-codegen/releases/download/v0.4.1/x86_64-unknown-linux-gnu.zip -o /tmp/jtd-codegen.zip
+          unzip -q /tmp/jtd-codegen.zip -d /tmp/jtd-codegen
+          sudo install -m 0755 /tmp/jtd-codegen/jtd-codegen /usr/local/bin/jtd-codegen
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        continue-on-error: true
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-wheel-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-wheel-
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      - name: Build and install the wheel
+        # `maturin develop` is the local build the ticket scopes; release
+        # packaging (repo release artifacts + the PEP 503 simple index) is a
+        # later ticket.
+        working-directory: sdk/streamlib-python-wheel
+        run: |
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest
+          VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
+
+      # The runner has no GPU. `Runner::start()` initializes a GPU context whose
+      # DMA-BUF pool pre-warm needs a driver that can allocate exportable device
+      # memory, and a software rasterizer (lavapipe) cannot — verified in a
+      # GPU-less container. So this job proves the half of the contract that
+      # does not need a device: the wheel imports, the engine boots and tears
+      # down, and neither the exception path nor a never-run Runtime hangs at
+      # interpreter finalization. The `requires_gpu` half — Ctrl-C during and
+      # after startup, GIL release while blocking, SIGINT handback, no zombie —
+      # runs on the rig.
+      - name: Interpreter-lifecycle contract (GPU-free half)
+        working-directory: sdk/streamlib-python-wheel
+        env:
+          XDG_RUNTIME_DIR: /tmp/streamlib-runtime-dir
+        run: |
+          mkdir -p "$XDG_RUNTIME_DIR"
+          .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"

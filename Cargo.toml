@@ -36,6 +36,7 @@ members = [
     "adapters/streamlib-adapter-skia-abi", # Cross-DSO callback table for streamlib-adapter-skia — extern "C" vtable consumed by host wiring + cdylib shim (#889)
     "sdk/streamlib-deno-native", # FFI cdylib for Deno subprocess iceoryx2 access
     "sdk/streamlib-python-native", # FFI cdylib for Python subprocess iceoryx2 access
+    "sdk/streamlib-python-wheel", # The importable Python wheel — CPython imports the engine and authors pipelines in-process
     "runtime/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
     "runtime/streamlib-moq",        # MoQ-over-QUIC transport library (sessions + catalog); the @tatolab/moq package's processors + the api-server build on it
     "vendor/tatolab-vulkanalia",     # Vendored vulkanalia fork (Apache-2.0) — see docs/architecture/vendored-vulkanalia.md
