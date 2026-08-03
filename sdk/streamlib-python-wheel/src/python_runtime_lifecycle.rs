@@ -87,6 +87,14 @@ impl PythonRuntimeHandle {
     /// GIL-released engine call deadlocks: `detach` re-attaches before it
     /// returns, so this thread would wait for the GIL while holding the lock
     /// that `run()` and `shutdown()` take *with* the GIL held.
+    ///
+    /// What that trades away: a `shutdown()` landing while an `add` still holds
+    /// its clone makes teardown's `Arc::into_inner` return `None` and report an
+    /// incomplete teardown. Harmless here and only here — this state is
+    /// pre-`start()`, so the engine owns no threads for the report to be about,
+    /// and the adder's clone drops moments later. The alternative is making
+    /// teardown wait out an in-flight `add`, which reintroduces the wait this
+    /// exists to avoid.
     fn engine_being_built(&self, what: &str) -> PyResult<Arc<Runner>> {
         match &*self.lifecycle() {
             PythonRuntimeLifecycleState::EngineConstructedNotYetRun(engine) => Ok(engine.clone()),

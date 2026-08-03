@@ -134,7 +134,9 @@ fn python_object_to_msgpack_value(value: &Bound<'_, PyAny>) -> PyResult<Value> {
 ///
 /// An extension type is somebody else's payload, so decoding renders it as data
 /// a processor can look at and encoding puts it back exactly as it was — a
-/// passthrough processor must not rewrite what it only forwards.
+/// passthrough processor must not rewrite what it only forwards. This holds for
+/// a nested value; a bag is a named map, so a *top-level* extension is not a bag
+/// and never re-encodes as one.
 const EXTENSION_TYPE_KEY: &str = "__msgpack_ext_type__";
 const EXTENSION_DATA_KEY: &str = "__msgpack_ext_data__";
 

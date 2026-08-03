@@ -9,13 +9,20 @@ up. That is what lets these run on every pull request rather than only on the
 rig.
 """
 
-import queue
-import threading
+from pathlib import Path
 
 import pytest
 
 import streamlib
 from streamlib import LinkInputDataPort, LinkOutputDataPort, processor
+
+GRAPH_BUILDING_APP = Path(__file__).parent / "graph_building_app.py"
+
+
+@pytest.fixture
+def graph_building_app(start_app_under_test):
+    """Starts this suite's app; the shared fixture owns the cleanup."""
+    return lambda scenario: start_app_under_test(GRAPH_BUILDING_APP, scenario)
 
 
 @processor
@@ -29,57 +36,43 @@ class GraphBuildingFilter:
             self.frames_to_downstream.write(frame)
 
 
-CONCURRENT_GRAPH_BUILD_ADDS = 200
-# A wedged pair never completes, so any finite bound turns the deadlock into a
-# failure. Generous enough that a slow runner cannot trip it: 400 adds finish in
-# well under a second when nothing is wedged.
-CONCURRENT_GRAPH_BUILD_TIMEOUT_SECONDS = 60.0
-
-
-def test_building_the_graph_from_two_threads_does_not_deadlock():
+def test_building_the_graph_from_two_threads_does_not_deadlock(graph_building_app):
     """`add` must not hold the lifecycle lock while it releases the GIL.
 
     The deadly embrace this locks out: a thread inside `add` holds the lifecycle
     mutex and, having detached, waits to re-attach, while another thread holds
     the GIL and blocks on that same mutex.
 
-    Honest about how it fails: the wedge takes the GIL down with it, so this
-    does not report a failed assertion — the whole interpreter stops, including
-    the join below and anything after it. It goes red as a job that runs out of
-    time, which is why the workflow puts a `timeout-minutes` on the job.
-    Verified by reverting the fix: killed at the 150s mark having printed
-    nothing, versus 0.4s green with the fix in place.
+    Driven out of process because the wedge takes the GIL with it — an in-process
+    assertion could never run, and the suite would hang rather than fail.
+    Mental-revert: keeping the lifecycle guard alive across the `python.detach`
+    in `add`. The app then stops after RUNTIME_CONSTRUCTED and this fails on the
+    bounded wait for GRAPH_BUILT, which is how a deadlock should read.
     """
-    runtime = streamlib.Runtime()
-    failures: "queue.Queue[BaseException]" = queue.Queue()
+    app = graph_building_app("concurrent_graph_building")
+    app.await_marker("GRAPH_BUILT")
+    app.await_clean_exit()
 
-    def add_repeatedly() -> None:
-        try:
-            for _ in range(CONCURRENT_GRAPH_BUILD_ADDS):
-                runtime.add(GraphBuildingFilter)
-        except BaseException as add_failure:  # noqa: BLE001 — surfaced below
-            failures.put(add_failure)
 
-    builders = [
-        threading.Thread(target=add_repeatedly, name=f"graph-builder-{index}", daemon=True)
-        for index in range(2)
-    ]
-    for builder in builders:
-        builder.start()
-    for builder in builders:
-        builder.join(timeout=CONCURRENT_GRAPH_BUILD_TIMEOUT_SECONDS)
+def test_shutdown_racing_graph_building_does_not_wedge(graph_building_app):
+    """`shutdown()` landing mid-`add` must resolve, either way round.
 
-    still_running = [builder.name for builder in builders if builder.is_alive()]
-    assert not still_running, (
-        f"{still_running} never finished building the graph — `add` deadlocked against "
-        f"the lifecycle lock"
+    `add` releases the GIL around the engine call and `shutdown` takes the same
+    lock while holding it, so this is the other order of the same pair. Every
+    add is either accepted or refused by name; none may hang.
+    """
+    app = graph_building_app("shutdown_racing_graph_building")
+    app.await_clean_exit()
+
+    refusals = next(
+        int(marker.removeprefix("REFUSED_AFTER_SHUTDOWN="))
+        for marker in app.markers()
+        if marker.startswith("REFUSED_AFTER_SHUTDOWN=")
     )
-    runtime.shutdown()
-
-    try:
-        raise failures.get_nowait()
-    except queue.Empty:
-        pass
+    assert refusals > 0, (
+        f"every add succeeded after shutdown() — the lifecycle state was never "
+        f"observed; output:\n{app.output}"
+    )
 
 
 def test_two_added_processors_of_one_class_get_their_own_identities():

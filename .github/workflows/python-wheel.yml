@@ -29,7 +29,8 @@ jobs:
             pkg-config \
             protobuf-compiler \
             libvulkan-dev \
-            glslc
+            glslc \
+            python3-dev
 
       - name: Install jtd-codegen
         run: |
@@ -74,17 +75,19 @@ jobs:
           VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
+      # The crate's own unit tests link libpython rather than building as an
+      # extension module (the `extension-module` feature is off by default for
+      # exactly this), which is why `python3-dev` is in the apt list above.
+      # Without this step they run on developer machines only.
+      - name: Wheel crate unit tests
+        run: cargo test --locked -p streamlib-python-wheel --lib
+
       # The only check that compares the stub to the binary. It imports the
       # built module, introspects it, and fails on a name or signature the
       # hand-written `_engine.pyi` no longer describes — which is what makes a
       # hand-maintained stub safe. `pyright --verifytypes` cannot substitute:
       # it scores annotation completeness, so a stub describing a method the
       # binary dropped still reads as 100% complete.
-      # The crate's own unit tests need a linked interpreter, which this job
-      # already has. Without this step they run on developer machines only.
-      - name: Wheel crate unit tests
-        run: cargo test --locked -p streamlib-python-wheel --lib
-
       - name: Type stubs match the compiled module
         working-directory: sdk/streamlib-python-wheel
         run: .venv/bin/python -m mypy.stubtest streamlib._engine

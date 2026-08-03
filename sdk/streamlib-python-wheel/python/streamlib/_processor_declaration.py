@@ -12,7 +12,7 @@ the contract between this module and the native half, and the two move together.
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Optional, Pattern, TypeVar, Union
+from typing import Any, Mapping, Optional, Pattern, TypeVar, Union
 
 __all__ = [
     "LinkInputDataPort",
@@ -102,12 +102,14 @@ class LinkOutputDataPort:
         self.port_name: Optional[str] = None
         self._link_data_access: Optional[Any] = None
 
-    def write(self, bag: Any) -> None:
+    def write(self, bag: "Mapping[str, Any]") -> None:
         """Publish one bag to every downstream link on this port.
 
-        The value is encoded to the self-describing msgpack the wire carries, so
-        it must be built from ordinary Python data — dicts, lists, str, bytes,
-        int, float, bool, None.
+        A bag is a named map: a dict with string keys, whose values are ordinary
+        Python data — dicts, lists, tuples, str, bytes, int, float, bool, None.
+        The wire carries a named map because a processor in another language
+        reads it into a struct, so a list or a non-string key is refused rather
+        than published as bytes only Python can decode.
         """
         self._bound_link_data_access().write_to_output_port(self._bound_name(), bag)
 

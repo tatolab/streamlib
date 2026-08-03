@@ -10,191 +10,25 @@ interpreter finalization, a non-zero exit — are only visible to a parent.
 """
 
 import os
-import queue
 import signal
-import subprocess
-import sys
-import threading
 import time
 from pathlib import Path
 
 import pytest
 
+from app_under_test import (
+    ENGINE_STARTING_LOG_LINE,
+    ENGINE_STOPPED_LOG_LINE,
+    AppUnderTest,
+)
+
 APP_UNDER_TEST = Path(__file__).parent / "interpreter_lifecycle_app.py"
-
-# Generous: a cold engine boot stands up an iceoryx2 node, a surface-sharing
-# socket, and a GPU context. A real hang blows through it anyway.
-ENGINE_READY_TIMEOUT_SECONDS = 60.0
-CLEAN_EXIT_TIMEOUT_SECONDS = 60.0
-
-MARKER_PREFIX = "MARKER:"
-
-ENGINE_READY_LOG_LINE = "[start] Runtime started"
-# Emitted early inside `start()` — after the run loop has taken shutdown-signal
-# ownership, but well before the graph is up.
-ENGINE_STARTING_LOG_LINE = "[start] Initializing GPU context"
-ENGINE_STOPPED_LOG_LINE = "[stop] Graceful shutdown complete"
-
-
-class AppUnderTest:
-    """A running `python app.py`, with its output pumped off the pipe.
-
-    Every wait here is bounded. A plain `readline()` blocks indefinitely when
-    the app goes quiet, which makes a deadline checked between lines useless —
-    that is how a hung app turns into a hung test run rather than a failure with
-    a diagnostic.
-    """
-
-    def __init__(self, process: "subprocess.Popen[str]"):
-        # Asserted rather than assumed: without a pipe the pump below raises
-        # inside a daemon thread, and every wait in this class then fails on
-        # its timeout instead of on the reason.
-        assert process.stdout is not None, "the app was started without a stdout pipe"
-        self.process = process
-        self._output_pipe = process.stdout
-        self.output_lines: list[str] = []
-        self._incoming: queue.Queue[str | None] = queue.Queue()
-        self._reached_end_of_output = False
-        threading.Thread(target=self._pump_output, daemon=True).start()
-
-    def _pump_output(self) -> None:
-        for line in self._output_pipe:
-            self._incoming.put(line)
-        self._incoming.put(None)
-
-    @property
-    def output(self) -> str:
-        return "".join(self.output_lines)
-
-    def _next_line(self, deadline: float) -> str | None:
-        """The next line, or None at end of output. Raises past the deadline."""
-        while True:
-            if self._reached_end_of_output:
-                return None
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError
-            try:
-                line = self._incoming.get(timeout=min(0.5, remaining))
-            except queue.Empty:
-                continue
-            if line is None:
-                self._reached_end_of_output = True
-                return None
-            self.output_lines.append(line)
-            return line
-
-    def await_output_containing(self, awaited: str, what: str) -> None:
-        """Wait for a line containing `awaited`.
-
-        Sequencing on the app's or engine's own output rather than a sleep is
-        what pins the point of the lifecycle a signal is delivered at.
-        """
-        deadline = time.monotonic() + ENGINE_READY_TIMEOUT_SECONDS
-        while True:
-            try:
-                line = self._next_line(deadline)
-            except TimeoutError:
-                raise AssertionError(
-                    f"timed out waiting for {what}; output:\n{self.output}"
-                ) from None
-            if line is None:
-                raise AssertionError(f"the app exited before {what}; output:\n{self.output}")
-            if awaited in line:
-                return
-
-    def await_engine_ready(self) -> None:
-        self.await_output_containing(ENGINE_READY_LOG_LINE, "the engine to start")
-
-    def await_marker(self, marker: str) -> None:
-        self.await_output_containing(f"{MARKER_PREFIX}{marker}", f"marker {marker}")
-
-    def markers(self) -> set[str]:
-        # Matched anywhere in the line, not just at its start: while the engine
-        # is alive its stdio interceptor captures the app's `print()` and
-        # re-emits it inside a tracing record, so a marker emitted before
-        # teardown arrives as `… stdio_interceptor — MARKER:X`.
-        found: set[str] = set()
-        for line in self.output_lines:
-            marker_start = line.find(MARKER_PREFIX)
-            if marker_start != -1:
-                found.add(line[marker_start + len(MARKER_PREFIX) :].strip())
-        return found
-
-    def interrupt(self) -> None:
-        self.process.send_signal(signal.SIGINT)
-
-    def await_clean_exit(self) -> "AppUnderTest":
-        """Drain the remaining output and require a clean, timely exit."""
-        deadline = time.monotonic() + CLEAN_EXIT_TIMEOUT_SECONDS
-        try:
-            while self._next_line(deadline) is not None:
-                pass
-        except TimeoutError:
-            self.process.kill()
-            raise AssertionError(
-                f"the app did not exit within {CLEAN_EXIT_TIMEOUT_SECONDS}s — engine teardown "
-                f"hung, or the interpreter hung at finalization; output:\n{self.output}"
-            ) from None
-
-        returncode = self.process.wait(timeout=max(0.0, deadline - time.monotonic()))
-        assert returncode == 0, (
-            f"expected a clean exit, got returncode {returncode}; output:\n{self.output}"
-        )
-        assert "CLEAN_EXIT" in self.markers(), (
-            f"the app did not reach the end of its scenario; output:\n{self.output}"
-        )
-        return self
-
-
-    def kill_process_group(self) -> None:
-        """Leave nothing behind, however this app's test ended.
-
-        A failed wait raises without touching the process, and the app runs in
-        its own session — so without this an assertion failure strands a live
-        engine holding a GPU context, an iceoryx2 node and a socket, silently
-        contaminating every later run on the same rig.
-        """
-        try:
-            os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
-        for pipe in (self.process.stdout, self.process.stdin):
-            if pipe is not None and not pipe.closed:
-                pipe.close()
 
 
 @pytest.fixture
-def app_under_test():
-    """Hands out apps and kills their process groups no matter how a test ends."""
-    started: list[AppUnderTest] = []
-
-    def start(scenario: str) -> AppUnderTest:
-        app = start_app(scenario)
-        started.append(app)
-        return app
-
-    try:
-        yield start
-    finally:
-        for app in started:
-            app.kill_process_group()
-
-
-def start_app(scenario: str) -> AppUnderTest:
-    process = subprocess.Popen(
-        [sys.executable, str(APP_UNDER_TEST), scenario],
-        stdin=subprocess.PIPE,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        text=True,
-        bufsize=1,
-        # Its own process group, so a SIGINT aimed at the app cannot reach the
-        # test runner that spawned it — and so the group can be checked for
-        # survivors after it exits.
-        start_new_session=True,
-    )
-    return AppUnderTest(process)
+def app_under_test(start_app_under_test):
+    """Starts this suite's app; the shared fixture owns the cleanup."""
+    return lambda scenario: start_app_under_test(APP_UNDER_TEST, scenario)
 
 
 def run_scenario_to_completion(start, scenario: str) -> AppUnderTest:

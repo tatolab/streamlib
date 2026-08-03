@@ -14,6 +14,7 @@ binary no longer exports still reads as complete.
 """
 
 from types import TracebackType
+from collections.abc import Mapping
 from typing import Any, Literal, final
 
 from typing_extensions import disjoint_base
@@ -94,7 +95,7 @@ class ProcessorLinkDataAccess:
 
     def read_from_input_port(self, port_name: str) -> Any | None: ...
     def input_port_has_data(self, port_name: str) -> bool: ...
-    def write_to_output_port(self, port_name: str, bag: Any) -> None: ...
+    def write_to_output_port(self, port_name: str, bag: Mapping[str, Any]) -> None: ...
 
 def media_clock_now_ns() -> int:
     """The clock the engine stamps bags with, in nanoseconds."""

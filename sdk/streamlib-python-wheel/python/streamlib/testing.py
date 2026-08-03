@@ -15,7 +15,7 @@ from __future__ import annotations
 import itertools
 import queue
 import threading
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from . import Runtime
 from ._processor_declaration import (
@@ -192,8 +192,11 @@ class SingleProcessorTestPipeline:
             _running_pipeline_lock.release()
         return False
 
-    def feed(self, port_name: str, bag: Any) -> None:
-        """Queue one bag for delivery to the processor's `port_name` input."""
+    def feed(self, port_name: str, bag: "Mapping[str, Any]") -> None:
+        """Queue one bag for delivery to the processor's `port_name` input.
+
+        A bag is a named map, same as anything a processor writes.
+        """
         _fed_bags[self._channel_for(self._input_channels, port_name, "input")].put(bag)
 
     def await_bag(
