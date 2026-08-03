@@ -24,21 +24,56 @@ use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 /// The module holding the Python half of processor construction.
 const PROCESSOR_HOSTING_MODULE: &str = "streamlib._processor_hosting";
 
-/// The lifecycle hooks a processor class may define. Absent hooks are not
-/// errors — a filter that only implements `process` is the common case.
-const SETUP_HOOK: &str = "setup";
-const TEARDOWN_HOOK: &str = "teardown";
-const PROCESS_HOOK: &str = "process";
-const START_HOOK: &str = "start";
-const STOP_HOOK: &str = "stop";
-const ON_PAUSE_HOOK: &str = "on_pause";
-const ON_RESUME_HOOK: &str = "on_resume";
+/// A lifecycle callback a processor class may define.
+///
+/// All of them are optional — a filter implementing only `process` is the
+/// common case — so which ones exist is resolved once at construction rather
+/// than rediscovered on every tick.
+#[derive(Clone, Copy)]
+enum ProcessorLifecycleHook {
+    Setup,
+    Teardown,
+    Process,
+    Start,
+    Stop,
+    OnPause,
+    OnResume,
+}
+
+impl ProcessorLifecycleHook {
+    const ALL: [Self; 7] = [
+        Self::Setup,
+        Self::Teardown,
+        Self::Process,
+        Self::Start,
+        Self::Stop,
+        Self::OnPause,
+        Self::OnResume,
+    ];
+
+    fn python_method_name(self) -> &'static str {
+        match self {
+            Self::Setup => "setup",
+            Self::Teardown => "teardown",
+            Self::Process => "process",
+            Self::Start => "start",
+            Self::Stop => "stop",
+            Self::OnPause => "on_pause",
+            Self::OnResume => "on_resume",
+        }
+    }
+}
 
 pub(crate) struct PythonProcessorHost {
-    /// The user's own object. Constructed once, on the thread that calls
-    /// `Runtime.add`, and used only from its processor thread after that.
-    processor_instance: Py<PyAny>,
-    link_data_access: Py<PythonProcessorLinkDataAccess>,
+    /// The user's own object. Constructed on the engine's compile thread as the
+    /// graph comes up, then used only from this processor's own dedicated
+    /// thread — a different thread from the one that built it.
+    ///
+    /// `Option` so [`Drop`] can take it and release it while attached.
+    processor_instance: Option<Py<PyAny>>,
+    link_data_access: Option<Py<PythonProcessorLinkDataAccess>>,
+    /// Which hooks the class defines, indexed by [`ProcessorLifecycleHook`].
+    declared_hooks: [bool; ProcessorLifecycleHook::ALL.len()],
     descriptor: ProcessorDescriptor,
     execution_config: ExecutionConfig,
     /// Names this processor in every log line and error — the graph's display
@@ -61,21 +96,25 @@ impl PythonProcessorHost {
             let link_data_access = Py::new(python, PythonProcessorLinkDataAccess::new())?;
 
             let hosting = python.import(PROCESSOR_HOSTING_MODULE)?;
-            let processor_instance = hosting
-                .getattr("construct_processor_instance")?
-                .call1((
-                    processor_class.bind(python),
-                    configuration
-                        .as_ref()
-                        .map(|config| json_value_to_python_object(python, config))
-                        .transpose()?,
-                    link_data_access.bind(python),
-                ))?
-                .unbind();
+            let processor_instance = hosting.getattr("construct_processor_instance")?.call1((
+                processor_class.bind(python),
+                configuration
+                    .as_ref()
+                    .map(|config| json_value_to_python_object(python, config))
+                    .transpose()?,
+                link_data_access.bind(python),
+            ))?;
+
+            let mut declared_hooks = [false; ProcessorLifecycleHook::ALL.len()];
+            for hook in ProcessorLifecycleHook::ALL {
+                declared_hooks[hook as usize] =
+                    processor_instance.hasattr(hook.python_method_name())?;
+            }
 
             Ok(Self {
-                processor_instance,
-                link_data_access,
+                processor_instance: Some(processor_instance.unbind()),
+                link_data_access: Some(link_data_access),
+                declared_hooks,
                 descriptor: declaration.descriptor.clone(),
                 execution_config: declaration.execution_config,
                 processor_display_name: held_display_name,
@@ -90,25 +129,35 @@ impl PythonProcessorHost {
         })
     }
 
-    /// Call a lifecycle hook if the class defines one.
+    /// Call a lifecycle hook, if the class defined one.
     ///
-    /// The GIL is attached here and released the moment the callback returns.
-    fn dispatch_hook(&mut self, hook: &str) -> Result<()> {
+    /// A class that did not costs no GIL acquisition at all — which is the
+    /// per-tick path for a processor driven by something other than `process`.
+    fn dispatch_hook(&mut self, hook: ProcessorLifecycleHook) -> Result<()> {
+        if !self.declared_hooks[hook as usize] {
+            return Ok(());
+        }
+        let Some(processor_instance) = self.processor_instance.as_ref() else {
+            return Ok(());
+        };
+
         Python::attach(|python| -> PyResult<()> {
-            let processor_instance = self.processor_instance.bind(python);
-            if !processor_instance.hasattr(hook)? {
-                return Ok(());
-            }
-            processor_instance.call_method0(hook)?;
+            processor_instance
+                .bind(python)
+                .call_method0(hook.python_method_name())?;
             Ok(())
         })
         .map_err(|hook_failure| {
             Error::Runtime(format_python_failure(
                 &self.processor_display_name,
-                &format!("raised in {hook}()"),
+                &format!("raised in {}()", hook.python_method_name()),
                 hook_failure,
             ))
         })
+    }
+
+    fn link_data_access(&self) -> Option<&PythonProcessorLinkDataAccess> {
+        self.link_data_access.as_ref().map(|access| access.get())
     }
 }
 
@@ -130,46 +179,46 @@ impl DynGeneratedProcessor for PythonProcessorHost {
         &mut self,
         _ctx: &streamlib::sdk::context::RuntimeContextFullAccess<'_>,
     ) -> Result<()> {
-        self.dispatch_hook(SETUP_HOOK)
+        self.dispatch_hook(ProcessorLifecycleHook::Setup)
     }
 
     fn __generated_teardown(
         &mut self,
         _ctx: &streamlib::sdk::context::RuntimeContextFullAccess<'_>,
     ) -> Result<()> {
-        self.dispatch_hook(TEARDOWN_HOOK)
+        self.dispatch_hook(ProcessorLifecycleHook::Teardown)
     }
 
     fn __generated_on_pause(
         &mut self,
         _ctx: &streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
     ) -> Result<()> {
-        self.dispatch_hook(ON_PAUSE_HOOK)
+        self.dispatch_hook(ProcessorLifecycleHook::OnPause)
     }
 
     fn __generated_on_resume(
         &mut self,
         _ctx: &streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
     ) -> Result<()> {
-        self.dispatch_hook(ON_RESUME_HOOK)
+        self.dispatch_hook(ProcessorLifecycleHook::OnResume)
     }
 
     fn process(
         &mut self,
         _ctx: &streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
     ) -> Result<()> {
-        self.dispatch_hook(PROCESS_HOOK)
+        self.dispatch_hook(ProcessorLifecycleHook::Process)
     }
 
     fn start(
         &mut self,
         _ctx: &streamlib::sdk::context::RuntimeContextFullAccess<'_>,
     ) -> Result<()> {
-        self.dispatch_hook(START_HOOK)
+        self.dispatch_hook(ProcessorLifecycleHook::Start)
     }
 
     fn stop(&mut self, _ctx: &streamlib::sdk::context::RuntimeContextFullAccess<'_>) -> Result<()> {
-        self.dispatch_hook(STOP_HOOK)
+        self.dispatch_hook(ProcessorLifecycleHook::Stop)
     }
 
     fn name(&self) -> &str {
@@ -201,7 +250,9 @@ impl DynGeneratedProcessor for PythonProcessorHost {
         // pair: the inner is an ordinary `Send + Sync` Rust value that the
         // Python-facing object can hold, and calling it skips the vtable hop
         // the host would otherwise take to reach itself.
-        let link_data_access = self.link_data_access.get();
+        let Some(link_data_access) = self.link_data_access() else {
+            return Ok(());
+        };
         if let Some(output_writer) = output_writer.and_then(|writer| writer.inner_arc()) {
             link_data_access.install_output_writer(output_writer);
         }
@@ -214,21 +265,23 @@ impl DynGeneratedProcessor for PythonProcessorHost {
     fn iceoryx2_output_writer_inner(
         &self,
     ) -> Option<std::sync::Arc<streamlib::sdk::iceoryx2::OutputWriterInner>> {
-        self.link_data_access.get().output_writer_inner()
+        self.link_data_access()?.output_writer_inner()
     }
 
     fn iceoryx2_input_mailboxes_inner(
         &self,
     ) -> Option<std::sync::Arc<streamlib::sdk::iceoryx2::InputMailboxesInner>> {
-        self.link_data_access.get().input_mailboxes_inner()
+        self.link_data_access()?.input_mailboxes_inner()
     }
 
     fn apply_config_json(&mut self, config_json: &serde_json::Value) -> Result<()> {
+        let Some(processor_instance) = self.processor_instance.as_ref() else {
+            return Ok(());
+        };
         Python::attach(|python| -> PyResult<()> {
-            let processor_instance = self.processor_instance.bind(python);
             let hosting = python.import(PROCESSOR_HOSTING_MODULE)?;
             hosting.getattr("apply_configuration")?.call1((
-                processor_instance,
+                processor_instance.bind(python),
                 json_value_to_python_object(python, config_json)?,
             ))?;
             Ok(())
@@ -256,17 +309,17 @@ impl DynGeneratedProcessor for PythonProcessorHost {
 }
 
 impl Drop for PythonProcessorHost {
-    /// Releases the user's object while holding the GIL.
+    /// Releases both Python objects while attached.
     ///
-    /// Dropping a `Py` without the GIL only queues the decrement for whichever
-    /// thread attaches next, so a processor holding a file, a socket or a device
-    /// context would keep it open past the teardown the author can observe.
+    /// Dropping a `Py` detached only queues the decrement for whichever thread
+    /// attaches next, so a processor holding a file, a socket or a device
+    /// context would keep it open past the teardown the author can observe. The
+    /// fields are taken here rather than left to drop glue, which runs after
+    /// this returns and after the attach has been released.
     fn drop(&mut self) {
-        Python::attach(|python| {
-            drop(std::mem::replace(
-                &mut self.processor_instance,
-                python.None(),
-            ));
+        Python::attach(|_python| {
+            drop(self.processor_instance.take());
+            drop(self.link_data_access.take());
         });
     }
 }

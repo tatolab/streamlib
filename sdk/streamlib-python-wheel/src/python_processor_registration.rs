@@ -7,7 +7,8 @@
 //! called twice registers `Blur` once and adds two processors to the graph,
 //! each with its own configuration and its own instance of the class.
 
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
@@ -19,11 +20,14 @@ use crate::python_processor_host::PythonProcessorHost;
 
 /// Which Python class each registered identity was registered from.
 ///
-/// The engine's registry is keyed by identity and rejects a second
-/// registration, so without this a module reloaded under a different class
-/// object would fail with the registry's generic duplicate error rather than
-/// the reason.
-static REGISTERED_PROCESSOR_CLASSES: Mutex<Vec<(SchemaIdent, Py<PyAny>)>> = Mutex::new(Vec::new());
+/// A cache of *which class*, never the authority on *whether* a type is
+/// registered — that stays the engine's registry, consulted below, so this can
+/// never suppress a re-registration the engine actually needs.
+fn registered_processor_classes() -> &'static Mutex<HashMap<SchemaIdent, Py<PyAny>>> {
+    static REGISTERED_PROCESSOR_CLASSES: OnceLock<Mutex<HashMap<SchemaIdent, Py<PyAny>>>> =
+        OnceLock::new();
+    REGISTERED_PROCESSOR_CLASSES.get_or_init(|| Mutex::new(HashMap::new()))
+}
 
 /// Register `processor_class` if this identity is not already registered.
 ///
@@ -35,13 +39,16 @@ pub(crate) fn register_processor_class(
     let declaration = PythonProcessorDeclaration::read_from_class(processor_class)?;
     let identity = declaration.descriptor.name.clone();
 
-    let mut registered = REGISTERED_PROCESSOR_CLASSES
+    // Held across the check and the registration, so two threads adding the
+    // same class cannot both get past the engine registry's non-atomic
+    // read-then-write.
+    let mut registered = registered_processor_classes()
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
 
-    if let Some((_, already_registered)) = registered
-        .iter()
-        .find(|(registered_identity, _)| *registered_identity == identity)
+    if let Some(already_registered) = registered
+        .get(&identity)
+        .filter(|_| PROCESSOR_REGISTRY.is_registered(&identity))
     {
         return if already_registered.bind(python).is(processor_class) {
             Ok(declaration.type_reference)
@@ -76,7 +83,7 @@ pub(crate) fn register_processor_class(
         )
         .map_err(|registration_failure| PyValueError::new_err(registration_failure.to_string()))?;
 
-    registered.push((identity, held_processor_class));
+    registered.insert(identity, held_processor_class);
     Ok(type_reference)
 }
 

@@ -8,10 +8,6 @@ a test exercises is what production runs — the same construction, the same
 lifecycle hooks, the same links. What it does not need is hardware: the frames
 come from this module's own feeder processor rather than a camera, and the
 output lands in a queue rather than a window.
-
-    with SingleProcessorTestPipeline(BrightnessFilter, config={"gain": 2.0}) as pipeline:
-        pipeline.feed("frames_from_upstream", {"value": 21})
-        assert pipeline.await_bag("frames_to_downstream") == {"value": 42}
 """
 
 from __future__ import annotations

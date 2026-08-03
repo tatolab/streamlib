@@ -10,6 +10,11 @@ jobs:
   wheel-interpreter-lifecycle:
     name: Wheel build + interpreter lifecycle (no GPU)
     runs-on: ubuntu-latest
+    # A lock-order defect between the lifecycle mutex and the GIL wedges the
+    # whole interpreter rather than raising, so its regression test can only go
+    # red by running out of time. Without a bound it would burn the default six
+    # hours instead.
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -75,6 +80,11 @@ jobs:
       # hand-maintained stub safe. `pyright --verifytypes` cannot substitute:
       # it scores annotation completeness, so a stub describing a method the
       # binary dropped still reads as 100% complete.
+      # The crate's own unit tests need a linked interpreter, which this job
+      # already has. Without this step they run on developer machines only.
+      - name: Wheel crate unit tests
+        run: cargo test --locked -p streamlib-python-wheel --lib
+
       - name: Type stubs match the compiled module
         working-directory: sdk/streamlib-python-wheel
         run: .venv/bin/python -m mypy.stubtest streamlib._engine
@@ -100,6 +110,7 @@ jobs:
   python-types:
     name: Pyright (no build)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
 
     # Deliberately independent of the wheel build. With `_engine.pyi` checked
     # in, pyright reads the stub rather than the compiled module — it never

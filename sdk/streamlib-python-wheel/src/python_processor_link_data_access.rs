@@ -16,9 +16,7 @@ use pyo3::prelude::*;
 use streamlib::sdk::iceoryx2::{InputMailboxesInner, OutputWriterInner};
 use streamlib::sdk::media_clock::MediaClock;
 
-use crate::python_bag_conversion::{
-    decode_msgpack_to_python_object, encode_python_object_to_msgpack,
-};
+use crate::python_bag_conversion::{decode_msgpack_to_python_object, encode_bag_to_msgpack};
 
 /// One processor's links, as seen from Python.
 ///
@@ -99,7 +97,7 @@ impl PythonProcessorLinkDataAccess {
         let Some(output_writer) = self.output_writer.get() else {
             return Err(unwired_port_error("output", port_name));
         };
-        let encoded = encode_python_object_to_msgpack(bag)?;
+        let encoded = encode_bag_to_msgpack(bag)?;
         let timestamp_ns = MediaClock::now().as_nanos() as i64;
         python
             .detach(|| output_writer.write_raw(port_name, &encoded, timestamp_ns))

@@ -150,6 +150,12 @@ Settled while implementing in-process authoring; recorded so the shape is not re
 - **Python ports declare no schema.** The wire is self-describing and consuming is a cast at read
   time, so a port carries a name, a description and (on inputs) a delivery profile. Adding a
   schema hint here would build on the per-read matching being deleted.
+- **A Python input port may omit its delivery profile**, and resolves to `latest`. The
+  channel-policy rule that makes an undeclared profile a wiring error is scoped to a
+  *concretely-typed* input port, where the type's flow class is the thing being contradicted. A
+  Python port is a wildcard by construction — it declares no type at all — so there is no type-level
+  default for the omission to silently override, and requiring the knob on every port would be
+  ceremony the zero-ceremony bar rules out.
 - **Registration is idempotent per identity, and a collision is named.** Two different classes
   claiming one identity is refused with both qualified names and the fix, rather than surfacing
   the registry's generic duplicate error.

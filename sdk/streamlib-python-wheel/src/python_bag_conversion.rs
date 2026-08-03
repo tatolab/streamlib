@@ -13,10 +13,28 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple};
 use rmpv::Value;
 
-/// Encode a Python object to the msgpack bytes the wire carries.
-pub(crate) fn encode_python_object_to_msgpack(value: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+/// Encode a bag to the msgpack bytes the wire carries.
+///
+/// A bag is a named map — a dict with string keys — because that is what the
+/// wire format is, not a convention this layer invented: a Rust processor
+/// downstream deserializes the payload into a struct, which needs named fields.
+/// A list, a bare scalar, or a dict with non-string keys encodes to msgpack
+/// fine and then cannot be read on the other side, so it is refused here rather
+/// than published as bytes only Python can decode.
+pub(crate) fn encode_bag_to_msgpack(bag: &Bound<'_, PyAny>) -> PyResult<Vec<u8>> {
+    let named_map = bag.cast::<PyDict>().map_err(|_| {
+        PyTypeError::new_err(format!(
+            "a bag is a dict with string keys — the wire carries a named map, and a \
+             {} cannot be read as one by a processor in another language. Wrap it: \
+             `{{\"value\": …}}`.",
+            bag.get_type()
+                .name()
+                .map_or_else(|_| "value".to_string(), |type_name| type_name.to_string())
+        ))
+    })?;
+
     let mut encoded = Vec::new();
-    rmpv::encode::write_value(&mut encoded, &python_object_to_msgpack_value(value)?)
+    rmpv::encode::write_value(&mut encoded, &named_map_to_msgpack_value(named_map)?)
         .map_err(|encode_failure| PyValueError::new_err(encode_failure.to_string()))?;
     Ok(encoded)
 }
@@ -94,14 +112,10 @@ fn python_object_to_msgpack_value(value: &Bound<'_, PyAny>) -> PyResult<Value> {
         return Ok(Value::Binary(bytes.as_bytes().to_vec()));
     }
     if let Ok(mapping) = value.cast::<PyDict>() {
-        let mut entries = Vec::with_capacity(mapping.len());
-        for (key, entry) in mapping.iter() {
-            entries.push((
-                python_object_to_msgpack_value(&key)?,
-                python_object_to_msgpack_value(&entry)?,
-            ));
-        }
-        return Ok(Value::Map(entries));
+        return match msgpack_extension_from_python_mapping(mapping)? {
+            Some(extension) => Ok(extension),
+            None => named_map_to_msgpack_value(mapping),
+        };
     }
     if let Ok(sequence) = value.cast::<PyList>() {
         return sequence_to_msgpack_array(sequence.iter());
@@ -114,6 +128,57 @@ fn python_object_to_msgpack_value(value: &Bound<'_, PyAny>) -> PyResult<Value> {
          float, bool and None. A GPU frame is not copied into Python — it travels as a handle.",
         value.get_type().name()?
     )))
+}
+
+/// The keys a decoded msgpack extension value is carried under.
+///
+/// An extension type is somebody else's payload, so decoding renders it as data
+/// a processor can look at and encoding puts it back exactly as it was — a
+/// passthrough processor must not rewrite what it only forwards.
+const EXTENSION_TYPE_KEY: &str = "__msgpack_ext_type__";
+const EXTENSION_DATA_KEY: &str = "__msgpack_ext_data__";
+
+/// Recognize the shape [`msgpack_value_to_python_object`] decodes an extension
+/// value into, so it re-encodes as one.
+fn msgpack_extension_from_python_mapping(mapping: &Bound<'_, PyDict>) -> PyResult<Option<Value>> {
+    if mapping.len() != 2 {
+        return Ok(None);
+    }
+    let (Some(type_tag), Some(data)) = (
+        mapping.get_item(EXTENSION_TYPE_KEY)?,
+        mapping.get_item(EXTENSION_DATA_KEY)?,
+    ) else {
+        return Ok(None);
+    };
+    let (Ok(type_tag), Ok(data)) = (type_tag.extract::<i8>(), data.cast::<PyBytes>()) else {
+        return Ok(None);
+    };
+    Ok(Some(Value::Ext(type_tag, data.as_bytes().to_vec())))
+}
+
+/// Encode a dict, requiring string keys at every level.
+///
+/// msgpack maps allow any key type, but a named map is what every other
+/// language on the wire deserializes into a struct — an int-keyed map would
+/// encode and then fail to read there.
+fn named_map_to_msgpack_value(mapping: &Bound<'_, PyDict>) -> PyResult<Value> {
+    let mut entries = Vec::with_capacity(mapping.len());
+    for (key, entry) in mapping.iter() {
+        let key = key.cast::<PyString>().map_err(|_| {
+            PyTypeError::new_err(format!(
+                "bag keys must be strings — the wire carries a named map; got a {} key",
+                key.get_type().name().map_or_else(
+                    |_| "non-string".to_string(),
+                    |type_name| type_name.to_string()
+                )
+            ))
+        })?;
+        entries.push((
+            Value::from(key.to_cow()?.into_owned()),
+            python_object_to_msgpack_value(&entry)?,
+        ));
+    }
+    Ok(Value::Map(entries))
 }
 
 fn sequence_to_msgpack_array<'py>(
@@ -169,12 +234,9 @@ fn msgpack_value_to_python_object<'py>(
             mapping.into_any()
         }
         Value::Ext(type_tag, bytes) => {
-            // Preserved rather than dropped: an extension type is somebody
-            // else's payload, and a processor that only forwards a bag must be
-            // able to hand it on unchanged.
             let extension = PyDict::new(python);
-            extension.set_item("__msgpack_ext_type__", type_tag)?;
-            extension.set_item("__msgpack_ext_data__", PyBytes::new(python, bytes))?;
+            extension.set_item(EXTENSION_TYPE_KEY, type_tag)?;
+            extension.set_item(EXTENSION_DATA_KEY, PyBytes::new(python, bytes))?;
             extension.into_any()
         }
     };
@@ -206,7 +268,7 @@ mod tests {
             nested.set_item("inner", "value").unwrap();
             source.set_item("nested", &nested).unwrap();
 
-            let encoded = encode_python_object_to_msgpack(source.as_any()).unwrap();
+            let encoded = encode_bag_to_msgpack(source.as_any()).unwrap();
             let decoded = decode_msgpack_to_python_object(python, &encoded).unwrap();
 
             assert!(decoded.eq(&source).unwrap(), "round trip changed the bag");
@@ -219,12 +281,11 @@ mod tests {
     fn booleans_do_not_decay_into_integers() {
         Python::initialize();
         Python::attach(|python| {
-            let encoded = encode_python_object_to_msgpack(
-                &true.into_pyobject(python).unwrap().to_owned().into_any(),
-            )
-            .unwrap();
+            let source = PyDict::new(python);
+            source.set_item("flag", true).unwrap();
+            let encoded = encode_bag_to_msgpack(source.as_any()).unwrap();
             let decoded = decode_msgpack_to_python_object(python, &encoded).unwrap();
-            assert!(decoded.is_instance_of::<PyBool>());
+            assert!(decoded.get_item("flag").unwrap().is_instance_of::<PyBool>());
         });
     }
 
@@ -234,11 +295,15 @@ mod tests {
     fn a_tuple_is_accepted_and_arrives_as_a_list() {
         Python::initialize();
         Python::attach(|python| {
-            let source = PyTuple::new(python, [1i64, 2, 3]).unwrap();
-            let encoded = encode_python_object_to_msgpack(source.as_any()).unwrap();
+            let source = PyDict::new(python);
+            source
+                .set_item("items", PyTuple::new(python, [1i64, 2, 3]).unwrap())
+                .unwrap();
+            let encoded = encode_bag_to_msgpack(source.as_any()).unwrap();
             let decoded = decode_msgpack_to_python_object(python, &encoded).unwrap();
-            assert!(decoded.is_instance_of::<PyList>());
-            assert_eq!(decoded.len().unwrap(), 3);
+            let items = decoded.get_item("items").unwrap();
+            assert!(items.is_instance_of::<PyList>());
+            assert_eq!(items.len().unwrap(), 3);
         });
     }
 
@@ -255,10 +320,70 @@ mod tests {
                 .unwrap()
                 .call0()
                 .unwrap();
-            let failure = encode_python_object_to_msgpack(&unencodable).unwrap_err();
+            let source = PyDict::new(python);
+            source.set_item("payload", unencodable).unwrap();
+            let failure = encode_bag_to_msgpack(source.as_any()).unwrap_err();
             assert!(
                 failure.to_string().contains("a bag is built from"),
                 "the refusal must state what is allowed, got: {failure}"
+            );
+        });
+    }
+
+    /// A bag that is not a named map encodes to valid msgpack and is then
+    /// unreadable by a processor in another language, so it is refused at the
+    /// boundary rather than published.
+    #[test]
+    fn a_bag_that_is_not_a_named_map_is_refused() {
+        Python::initialize();
+        Python::attach(|python| {
+            let list_bag = PyList::new(python, [1i64, 2, 3]).unwrap();
+            let failure = encode_bag_to_msgpack(list_bag.as_any()).unwrap_err();
+            assert!(
+                failure
+                    .to_string()
+                    .contains("a bag is a dict with string keys"),
+                "got: {failure}"
+            );
+
+            let int_keyed = PyDict::new(python);
+            int_keyed.set_item(1i64, "value").unwrap();
+            let failure = encode_bag_to_msgpack(int_keyed.as_any()).unwrap_err();
+            assert!(
+                failure.to_string().contains("bag keys must be strings"),
+                "got: {failure}"
+            );
+
+            // Nested too — a named map all the way down, not just at the top.
+            let nested_int_keyed = PyDict::new(python);
+            nested_int_keyed.set_item("inner", &int_keyed).unwrap();
+            assert!(encode_bag_to_msgpack(nested_int_keyed.as_any()).is_err());
+        });
+    }
+
+    /// An extension value survives a processor that only forwards the bag.
+    ///
+    /// Nothing in the engine emits one today, but a decode that turned it into
+    /// an ordinary map would make a passthrough processor silently rewrite
+    /// somebody else's payload.
+    #[test]
+    fn a_msgpack_extension_value_round_trips_unchanged() {
+        Python::initialize();
+        Python::attach(|python| {
+            let original = Value::Map(vec![(
+                Value::from("payload"),
+                Value::Ext(42, vec![1, 2, 3]),
+            )]);
+            let mut encoded = Vec::new();
+            rmpv::encode::write_value(&mut encoded, &original).unwrap();
+
+            let decoded = decode_msgpack_to_python_object(python, &encoded).unwrap();
+            let re_encoded = encode_bag_to_msgpack(&decoded).unwrap();
+
+            assert_eq!(
+                rmpv::decode::read_value(&mut &re_encoded[..]).unwrap(),
+                original,
+                "an Ext value did not survive decode-then-encode"
             );
         });
     }

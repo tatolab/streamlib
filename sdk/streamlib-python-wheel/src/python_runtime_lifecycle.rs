@@ -75,18 +75,21 @@ impl PythonRuntimeHandle {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    /// Borrow the engine to build the graph, before the run loop owns it.
+    /// Take a reference to the engine to build the graph, before the run loop
+    /// owns it.
     ///
     /// Graph building happens between construction and `run()`; once the run
     /// loop has taken the engine there is no handle left to add to, which is
     /// what makes this a lifecycle error rather than a missing feature.
-    fn with_engine_being_built<T>(
-        &self,
-        what: &str,
-        build: impl FnOnce(&Arc<Runner>) -> PyResult<T>,
-    ) -> PyResult<T> {
+    ///
+    /// Returns an owned `Arc` rather than lending the guard's contents, so the
+    /// lock is released before the caller detaches. Holding it across a
+    /// GIL-released engine call deadlocks: `detach` re-attaches before it
+    /// returns, so this thread would wait for the GIL while holding the lock
+    /// that `run()` and `shutdown()` take *with* the GIL held.
+    fn engine_being_built(&self, what: &str) -> PyResult<Arc<Runner>> {
         match &*self.lifecycle() {
-            PythonRuntimeLifecycleState::EngineConstructedNotYetRun(engine) => build(engine),
+            PythonRuntimeLifecycleState::EngineConstructedNotYetRun(engine) => Ok(engine.clone()),
             PythonRuntimeLifecycleState::RunLoopBlockedUntilShutdownRequested => {
                 Err(PyRuntimeError::new_err(format!(
                     "cannot {what}: this Runtime is already running. Build the whole graph \
@@ -150,10 +153,11 @@ impl PythonRuntimeHandle {
 
     /// Add a processor class to the graph.
     ///
-    /// Takes the class, not an instance: the engine constructs it on the
-    /// thread it will run on, passing `config` as keyword arguments. Adding the
-    /// same class twice gives two processors, each with its own instance and
-    /// its own configuration.
+    /// Takes the class, not an instance. `config` becomes the keyword arguments
+    /// the class is constructed with — which happens later, on the engine's
+    /// compile thread as `run()` brings the graph up, so a failing `__init__`
+    /// surfaces from `run()` rather than from here. Adding the same class twice
+    /// gives two processors, each with its own instance and configuration.
     #[pyo3(signature = (processor_class, *, config = None, display_name = None))]
     fn add(
         &self,
@@ -170,6 +174,11 @@ impl PythonRuntimeHandle {
             )));
         }
 
+        // Before registering: registration writes to the process-global
+        // registry, and a runtime that can no longer be built should not leave
+        // a processor type behind for a node that will never exist.
+        let engine = self.engine_being_built("add a processor")?;
+
         let type_reference = register_processor_class(python, processor_class)?;
         let configuration = match config {
             Some(config) => python_object_to_json_value(config.as_any())?,
@@ -183,15 +192,13 @@ impl PythonRuntimeHandle {
         let spec = ProcessorSpec::new(type_reference, configuration)
             .with_display_name(display_name.clone());
 
-        self.with_engine_being_built("add a processor", |engine| {
-            let processor_id = python
-                .detach(|| engine.add_processor(spec))
-                .map_err(|add_failure| PyRuntimeError::new_err(add_failure.to_string()))?;
-            Ok(PythonAddedProcessor::new(
-                processor_id.as_str().to_string(),
-                display_name,
-            ))
-        })
+        let processor_id = python
+            .detach(|| engine.add_processor(spec))
+            .map_err(|add_failure| PyRuntimeError::new_err(add_failure.to_string()))?;
+        Ok(PythonAddedProcessor::new(
+            processor_id.as_str().to_string(),
+            display_name,
+        ))
     }
 
     /// Link one processor's output port to another's input port.
@@ -206,12 +213,11 @@ impl PythonRuntimeHandle {
             destination.processor_id.clone(),
             destination.port_name.clone(),
         );
-        self.with_engine_being_built("connect two processors", |engine| {
-            python
-                .detach(|| engine.connect(from, to))
-                .map(|_link_id| ())
-                .map_err(|connect_failure| PyRuntimeError::new_err(connect_failure.to_string()))
-        })
+        let engine = self.engine_being_built("connect two processors")?;
+        python
+            .detach(|| engine.connect(from, to))
+            .map(|_link_id| ())
+            .map_err(|connect_failure| PyRuntimeError::new_err(connect_failure.to_string()))
     }
 
     /// Run the pipeline until Ctrl-C, SIGTERM, or [`shutdown`], then tear the

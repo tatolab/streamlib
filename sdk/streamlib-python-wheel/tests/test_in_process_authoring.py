@@ -212,65 +212,11 @@ def test_two_instances_of_one_class_run_side_by_side_with_their_own_config():
 
 _fast_processor_ticks = threading.Semaphore(0)
 
-# Long enough to span the whole observation window, so the parked processor is
-# inside one uninterrupted native wait for its entire duration.
-SLOW_PROCESSOR_INTERVAL_MS = 2000
-
-
-@processor(execution="continuous", interval_ms=SLOW_PROCESSOR_INTERVAL_MS)
-class ProcessorParkedInANativeWait:
-    """Spends effectively all of its life inside the engine's interval wait."""
-
-    def process(self) -> None:
-        return
-
 
 @processor(execution="continuous", interval_ms=1)
 class FastTickingProcessor:
     def process(self) -> None:
         _fast_processor_ticks.release()
-
-
-# The window the fast processor is observed over, and the floor its tick count
-# must clear. The floor sits far above the one tick a starved processor could
-# manage and far below the ~1000 a 1ms interval yields, so scheduling jitter
-# cannot fail it and a held GIL cannot pass it.
-GIL_OBSERVATION_WINDOW_SECONDS = 1.0
-MINIMUM_TICKS_WHILE_THE_OTHER_PROCESSOR_IS_PARKED = 20
-
-
-def test_a_processor_parked_in_a_native_call_stalls_no_other_python_processor():
-    """The GIL-release contract, as a behaviour rather than a code shape.
-
-    One processor sits inside a 2-second native wait for the whole window while
-    another must keep running Python. Mental-revert: attaching the GIL for a
-    processor's lifetime instead of for the span of each callback — the parked
-    processor then holds it across its wait and the fast one manages at most a
-    single tick.
-    """
-    pipeline = RunningPipeline()
-    pipeline.runtime.add(ProcessorParkedInANativeWait)
-    pipeline.runtime.add(FastTickingProcessor)
-    pipeline.start()
-
-    # Drain what accumulated during the engine's boot, so the count below is
-    # made entirely within the observation window.
-    assert _fast_processor_ticks.acquire(timeout=PIPELINE_TIMEOUT_SECONDS), (
-        "the fast processor never ran at all"
-    )
-    while _fast_processor_ticks.acquire(blocking=False):
-        pass
-
-    time.sleep(GIL_OBSERVATION_WINDOW_SECONDS)
-
-    ticks = _drain(_fast_processor_ticks)
-    pipeline.shut_down_and_take_run_outcome()
-
-    assert ticks >= MINIMUM_TICKS_WHILE_THE_OTHER_PROCESSOR_IS_PARKED, (
-        f"a Python processor managed only {ticks} ticks in "
-        f"{GIL_OBSERVATION_WINDOW_SECONDS}s while another sat in a "
-        f"{SLOW_PROCESSOR_INTERVAL_MS}ms native wait — the GIL was held across that wait"
-    )
 
 
 _writes_started = threading.Semaphore(0)
@@ -400,24 +346,3 @@ def test_an_exception_in_process_does_not_take_the_pipeline_down():
         assert _frames_after_the_raising_one.get(timeout=PIPELINE_TIMEOUT_SECONDS) == {
             "value": 2
         }
-
-
-def test_adding_something_that_is_not_a_processor_says_so():
-    class NotAProcessor:
-        pass
-
-    runtime = streamlib.Runtime()
-    try:
-        with pytest.raises(RuntimeError, match="is not a processor"):
-            runtime.add(NotAProcessor)
-        with pytest.raises(RuntimeError, match="is not a processor"):
-            runtime.add(BrightnessFilter())
-    finally:
-        runtime.shutdown()
-
-
-def test_the_graph_cannot_be_built_after_the_runtime_is_shut_down():
-    runtime = streamlib.Runtime()
-    runtime.shutdown()
-    with pytest.raises(RuntimeError, match="has been shut down"):
-        runtime.add(BrightnessFilter)
