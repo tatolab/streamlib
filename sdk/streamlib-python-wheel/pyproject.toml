@@ -7,6 +7,11 @@ build-backend = "maturin"
 
 [project]
 name = "streamlib"
+# Tracks [workspace.package].version in the root Cargo.toml — the plan's "two
+# artifacts, one version, released together". Nothing bumps this yet:
+# release-please's extra-files list covers only the workspace Cargo.toml, and
+# check-package-version-drift scans `packages/*`. Wiring the bump belongs with
+# release packaging (#1711); until then keep it in sync by hand on release.
 version = "0.10.2"
 description = "StreamLib — a realtime streaming engine with Python authoring"
 # abi3-py310 in Cargo.toml is the binding half of this floor; the two move

@@ -47,6 +47,13 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-wheel-
 
+      # Scoped to the signals module rather than the whole engine lib suite,
+      # which is a tracked follow-up (see test.yml) pending a parallel-run
+      # flake. These need no GPU, and without them the ownership, restoration,
+      # retake and stale-signal locks run nowhere in CI.
+      - name: Shutdown-signal ownership tests
+        run: cargo test --locked -p streamlib-engine --lib -- core::signals
+
       - name: Install uv
         uses: astral-sh/setup-uv@v5
 
@@ -65,10 +72,11 @@ jobs:
       # memory, and a software rasterizer (lavapipe) cannot — verified in a
       # GPU-less container. So this job proves the half of the contract that
       # does not need a device: the wheel imports, the engine boots and tears
-      # down, and neither the exception path nor a never-run Runtime hangs at
-      # interpreter finalization. The `requires_gpu` half — Ctrl-C during and
-      # after startup, GIL release while blocking, SIGINT handback, no zombie —
-      # runs on the rig.
+      # down, and neither the exception path nor a Runtime still referenced at
+      # interpreter exit hangs finalization. The `requires_gpu` half — Ctrl-C
+      # during and after startup, GIL release while blocking, SIGINT handback,
+      # cross-thread shutdown, no surviving process group — is rig-only by
+      # owner decision (2026-08-03) rather than a self-hosted GPU runner.
       - name: Interpreter-lifecycle contract (GPU-free half)
         working-directory: sdk/streamlib-python-wheel
         env:

@@ -37,8 +37,80 @@ pub struct ScopedShutdownSignalOwnership {
 #[cfg(all(unix, not(target_os = "macos")))]
 struct UnixSignalForwarding {
     forwarding_thread: std::thread::JoinHandle<()>,
-    previous_sigint_disposition: libc::sigaction,
-    previous_sigterm_disposition: libc::sigaction,
+    displaced_sigint: DisplacedSignalDisposition,
+    displaced_sigterm: DisplacedSignalDisposition,
+}
+
+/// One signal's pre-existing disposition, restored on drop unless already
+/// restored explicitly.
+///
+/// The restore is RAII because it must survive every failure path in
+/// `install()` — a handler left pointing at the self-pipe with no forwarding
+/// thread behind it swallows Ctrl-C and SIGTERM for the rest of the process.
+/// Carrying the signal number alongside its action also makes restoring one
+/// signal's disposition onto another unrepresentable.
+#[cfg(all(unix, not(target_os = "macos")))]
+struct DisplacedSignalDisposition {
+    signal: libc::c_int,
+    previous_action: libc::sigaction,
+    already_restored: bool,
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+impl DisplacedSignalDisposition {
+    /// Point `signal` at the self-pipe handler, capturing what it displaced.
+    fn displace_with_self_pipe_handler(signal: libc::c_int) -> std::io::Result<Self> {
+        // SAFETY: `requested` is fully initialized before use, `displaced` is
+        // owned here and written by the kernel, and the handler installed is a
+        // plain `extern "C"` function with no Rust-level invariants to uphold.
+        unsafe {
+            let mut requested: libc::sigaction = std::mem::zeroed();
+            let handler: extern "C" fn(libc::c_int) = write_delivered_signal_to_self_pipe;
+            requested.sa_sigaction = handler as usize;
+            // SA_RESTART so a shutdown signal does not surface as EINTR in
+            // engine threads blocked on a syscall — the request funnel is the
+            // only path that reacts to it.
+            requested.sa_flags = libc::SA_RESTART;
+            libc::sigemptyset(&mut requested.sa_mask);
+
+            let mut previous_action: libc::sigaction = std::mem::zeroed();
+            if libc::sigaction(signal, &requested, &mut previous_action) != 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(Self {
+                signal,
+                previous_action,
+                already_restored: false,
+            })
+        }
+    }
+
+    /// Hand the signal back to whoever held it. Idempotent.
+    fn restore_now(&mut self) {
+        if self.already_restored {
+            return;
+        }
+        self.already_restored = true;
+        // SAFETY: `previous_action` was captured by this same value's
+        // constructor for this same signal, and a NULL `oldact` discards the
+        // displaced action.
+        let restored =
+            unsafe { libc::sigaction(self.signal, &self.previous_action, std::ptr::null_mut()) };
+        if restored != 0 {
+            tracing::error!(
+                signal = self.signal,
+                error = %std::io::Error::last_os_error(),
+                "failed to restore the previous signal disposition"
+            );
+        }
+    }
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+impl Drop for DisplacedSignalDisposition {
+    fn drop(&mut self) {
+        self.restore_now();
+    }
 }
 
 /// The process-lifetime self-pipe the signal handler writes to.
@@ -62,11 +134,23 @@ static SHUTDOWN_SIGNAL_SELF_PIPE: std::sync::OnceLock<ShutdownSignalSelfPipe> =
 #[cfg(all(unix, not(target_os = "macos")))]
 const FORWARDING_THREAD_STOP_BYTE: u8 = 0;
 
+/// What actually bounds the join in `Drop` — the stop byte only shortens the
+/// wait, so losing it must not be able to hang teardown.
+#[cfg(all(unix, not(target_os = "macos")))]
+static FORWARDING_THREAD_SHOULD_STOP: AtomicBool = AtomicBool::new(false);
+
+#[cfg(all(unix, not(target_os = "macos")))]
+const FORWARDING_THREAD_STOP_POLL_INTERVAL_MILLISECONDS: libc::c_int = 250;
+
 /// Writes the delivered signal number to the self-pipe.
 ///
-/// Async-signal-safe by construction: one `write(2)` to a descriptor that lives
-/// for the process lifetime, and nothing else. All interpretation — logging,
+/// Three calls, each async-signal-safe: the `OnceLock` read is a plain atomic
+/// load with no locking, `__errno_location` is a pure TLS address computation,
+/// and `write(2)` is on the POSIX AS-safe list. All interpretation — logging,
 /// attribution, the shutdown request itself — happens on the forwarding thread.
+/// Re-entry is safe too: `sa_mask` is empty, so a SIGTERM may preempt this
+/// mid-SIGINT, and the nested errno save/restore still leaves the outer value
+/// intact.
 #[cfg(all(unix, not(target_os = "macos")))]
 extern "C" fn write_delivered_signal_to_self_pipe(delivered_signal: libc::c_int) {
     let Some(self_pipe) = SHUTDOWN_SIGNAL_SELF_PIPE.get() else {
@@ -74,10 +158,11 @@ extern "C" fn write_delivered_signal_to_self_pipe(delivered_signal: libc::c_int)
     };
     let delivered_signal_byte = delivered_signal as u8;
     // SAFETY: `write_end` stays open for the process lifetime, and the source
-    // is one byte of stack this frame owns. A failed or short write means the
-    // pipe is full — a shutdown request is already queued, so dropping this one
-    // changes nothing. `errno` is saved and restored around the write because
-    // the handler preempted a syscall that may be about to read its own errno.
+    // is one byte of stack this frame owns. The write is non-blocking, so a
+    // failure here means the pipe is backed up and a shutdown request is
+    // already queued — dropping this one changes nothing. `errno` is saved and
+    // restored around it because the handler preempted a syscall that may be
+    // about to read its own errno.
     unsafe {
         let errno_slot = libc::__errno_location();
         let interrupted_errno = *errno_slot;
@@ -120,15 +205,14 @@ impl ScopedShutdownSignalOwnership {
         // otherwise be read by this owner and shut it down on the spot.
         drain_pending_bytes(self_pipe.read_end);
 
-        let previous_sigint_disposition = install_self_pipe_handler(SIGINT)?;
-        let previous_sigterm_disposition = match install_self_pipe_handler(SIGTERM) {
-            Ok(previous) => previous,
-            Err(sigterm_failure) => {
-                restore_disposition(SIGINT, &previous_sigint_disposition);
-                return Err(sigterm_failure);
-            }
-        };
+        // Both displacements restore themselves if anything below fails —
+        // including the thread spawn, which would otherwise leave the handlers
+        // installed with nothing reading the pipe.
+        let displaced_sigint = DisplacedSignalDisposition::displace_with_self_pipe_handler(SIGINT)?;
+        let displaced_sigterm =
+            DisplacedSignalDisposition::displace_with_self_pipe_handler(SIGTERM)?;
 
+        FORWARDING_THREAD_SHOULD_STOP.store(false, Ordering::SeqCst);
         let read_end = self_pipe.read_end;
         let forwarding_thread = std::thread::Builder::new()
             .name("shutdown-signal-forwarding".to_string())
@@ -138,26 +222,37 @@ impl ScopedShutdownSignalOwnership {
         Ok(Self {
             signal_forwarding: Some(UnixSignalForwarding {
                 forwarding_thread,
-                previous_sigint_disposition,
-                previous_sigterm_disposition,
+                displaced_sigint,
+                displaced_sigterm,
             }),
         })
     }
 
     #[cfg(target_os = "macos")]
     fn install() -> std::io::Result<Self> {
-        // Ctrl+C reaches teardown through `NSApplication.terminate` rather than
-        // the request funnel, because an AppKit app's shutdown must run
-        // `applicationWillTerminate` on the main thread.
-        ctrlc::set_handler(move || {
-            tracing::info!("Ctrl+C received, triggering graceful shutdown");
-            trigger_macos_termination();
-        })
-        .map_err(std::io::Error::other)?;
+        // Installed once per process, not once per owner: `ctrlc::set_handler`
+        // refuses a second call outright, and each SIGTERM registration would
+        // leak another polling thread. Ownership after the first take is
+        // therefore the claim alone — which is also why `Drop` restores nothing
+        // here.
+        if MACOS_TERMINATION_HANDLERS_INSTALLED.get().is_none() {
+            // Ctrl+C reaches teardown through `NSApplication.terminate` rather
+            // than the request funnel, because an AppKit app's shutdown must
+            // run `applicationWillTerminate` on the main thread.
+            ctrlc::set_handler(move || {
+                tracing::info!("Ctrl+C received, triggering graceful shutdown");
+                trigger_macos_termination();
+            })
+            .map_err(std::io::Error::other)?;
 
-        install_sigterm_handler_macos()?;
+            install_sigterm_handler_macos()?;
 
-        tracing::info!("macOS shutdown signals owned (Ctrl+C via ctrlc, SIGTERM via signal-hook)");
+            let _ = MACOS_TERMINATION_HANDLERS_INSTALLED.set(());
+            tracing::info!(
+                "macOS shutdown signals owned (Ctrl+C via ctrlc, SIGTERM via signal-hook)"
+            );
+        }
+
         Ok(Self {})
     }
 
@@ -172,18 +267,14 @@ impl ScopedShutdownSignalOwnership {
 impl Drop for ScopedShutdownSignalOwnership {
     fn drop(&mut self) {
         #[cfg(all(unix, not(target_os = "macos")))]
-        if let Some(forwarding) = self.signal_forwarding.take() {
-            // Restore first, so no further delivery reaches our handler while
-            // the forwarding thread is being wound down. This is the call that
-            // hands SIGINT back to CPython in the wheel.
-            restore_disposition(
-                signal_hook::consts::signal::SIGINT,
-                &forwarding.previous_sigint_disposition,
-            );
-            restore_disposition(
-                signal_hook::consts::signal::SIGTERM,
-                &forwarding.previous_sigterm_disposition,
-            );
+        if let Some(mut forwarding) = self.signal_forwarding.take() {
+            // Restore before winding the thread down, so a signal arriving
+            // during teardown reaches whoever held the disposition rather than
+            // a handler whose reader is going away. This is the call that hands
+            // SIGINT back to CPython in the wheel. Both are already-restored
+            // after this, so their `Drop` is a no-op.
+            forwarding.displaced_sigint.restore_now();
+            forwarding.displaced_sigterm.restore_now();
 
             stop_forwarding_thread();
             if forwarding.forwarding_thread.join().is_err() {
@@ -214,9 +305,18 @@ fn shutdown_signal_self_pipe() -> std::io::Result<&'static ShutdownSignalSelfPip
 
     // A full pipe must never block the handler, so the write end is
     // non-blocking; a dropped byte only ever means a request is already queued.
+    // Checked rather than assumed: leaving the write end blocking would let the
+    // handler stall inside signal context, the one thing this design must not
+    // do.
     // SAFETY: `pipe_ends[1]` was just returned by `pipe2`.
-    unsafe {
-        libc::fcntl(pipe_ends[1], libc::F_SETFL, libc::O_NONBLOCK);
+    if unsafe { libc::fcntl(pipe_ends[1], libc::F_SETFL, libc::O_NONBLOCK) } < 0 {
+        let flag_failure = std::io::Error::last_os_error();
+        // SAFETY: both ends were just created here and are not published yet.
+        unsafe {
+            libc::close(pipe_ends[0]);
+            libc::close(pipe_ends[1]);
+        }
+        return Err(flag_failure);
     }
 
     Ok(
@@ -227,36 +327,42 @@ fn shutdown_signal_self_pipe() -> std::io::Result<&'static ShutdownSignalSelfPip
     )
 }
 
-/// Point `signal` at the self-pipe handler, returning the displaced disposition.
-#[cfg(all(unix, not(target_os = "macos")))]
-fn install_self_pipe_handler(signal: libc::c_int) -> std::io::Result<libc::sigaction> {
-    // SAFETY: `requested` is fully initialized below before use, `displaced` is
-    // owned here and written by the kernel, and the handler installed is a
-    // plain `extern "C"` function with no Rust-level invariants to uphold.
-    unsafe {
-        let mut requested: libc::sigaction = std::mem::zeroed();
-        let handler: extern "C" fn(libc::c_int) = write_delivered_signal_to_self_pipe;
-        requested.sa_sigaction = handler as usize;
-        // SA_RESTART so a shutdown signal does not surface as EINTR in engine
-        // threads blocked on a syscall — the request funnel is the only path
-        // that reacts to it.
-        requested.sa_flags = libc::SA_RESTART;
-        libc::sigemptyset(&mut requested.sa_mask);
-
-        let mut displaced: libc::sigaction = std::mem::zeroed();
-        if libc::sigaction(signal, &requested, &mut displaced) != 0 {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok(displaced)
-    }
-}
-
-/// Read the self-pipe until the stop byte arrives, funnelling each delivered
-/// signal into [`request_runtime_shutdown`].
+/// Read the self-pipe until stopped, funnelling each delivered signal into
+/// [`request_runtime_shutdown`].
+///
+/// The wait is a bounded `poll` rather than a blocking `read` so the stop flag
+/// is observed even if the stop byte never lands — a lost wakeup here would
+/// hang `join()` inside a `Drop`.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn forward_signals_until_stopped(read_end: std::os::fd::RawFd) {
     tracing::debug!("Shutdown-signal forwarding thread started");
-    loop {
+    while !FORWARDING_THREAD_SHOULD_STOP.load(Ordering::SeqCst) {
+        let mut awaited = libc::pollfd {
+            fd: read_end,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        // SAFETY: one owned `pollfd` describing a descriptor that stays open
+        // for the process lifetime.
+        let ready = unsafe {
+            libc::poll(
+                std::ptr::from_mut(&mut awaited),
+                1,
+                FORWARDING_THREAD_STOP_POLL_INTERVAL_MILLISECONDS,
+            )
+        };
+        if ready < 0 {
+            let poll_failure = std::io::Error::last_os_error();
+            if poll_failure.kind() == std::io::ErrorKind::Interrupted {
+                continue;
+            }
+            tracing::error!(error = %poll_failure, "Shutdown-signal forwarding: poll failed");
+            break;
+        }
+        if ready == 0 {
+            continue;
+        }
+
         let mut delivered = 0u8;
         // SAFETY: `read_end` stays open for the process lifetime and the
         // destination is one byte of stack this frame owns.
@@ -286,20 +392,30 @@ fn forward_signals_until_stopped(read_end: std::os::fd::RawFd) {
     tracing::debug!("Shutdown-signal forwarding thread exiting");
 }
 
-/// Wake the forwarding thread with the stop byte so it can leave its blocking
-/// read.
+/// Ask the forwarding thread to stop, and nudge it out of its poll.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn stop_forwarding_thread() {
+    // The flag is what actually bounds the join; the byte only shortens the
+    // wait from the poll interval to immediately, so a failed write is
+    // recoverable and not worth failing teardown over.
+    FORWARDING_THREAD_SHOULD_STOP.store(true, Ordering::SeqCst);
+
     let Some(self_pipe) = SHUTDOWN_SIGNAL_SELF_PIPE.get() else {
         return;
     };
     // SAFETY: `write_end` stays open for the process lifetime; the source is
     // one byte of stack this frame owns.
-    unsafe {
+    let written = unsafe {
         libc::write(
             self_pipe.write_end,
             std::ptr::from_ref(&FORWARDING_THREAD_STOP_BYTE).cast(),
             1,
+        )
+    };
+    if written != 1 {
+        tracing::debug!(
+            error = %std::io::Error::last_os_error(),
+            "Shutdown-signal forwarding: stop byte not delivered; the thread will stop on its next poll"
         );
     }
 }
@@ -332,19 +448,9 @@ fn read_current_disposition(signal: libc::c_int) -> libc::sigaction {
     }
 }
 
-#[cfg(all(unix, not(target_os = "macos")))]
-fn restore_disposition(signal: libc::c_int, disposition: &libc::sigaction) {
-    // SAFETY: `disposition` was produced by the query above for this same
-    // signal, and a NULL `oldact` discards the displaced action.
-    let restored = unsafe { libc::sigaction(signal, disposition, std::ptr::null_mut()) };
-    if restored != 0 {
-        tracing::error!(
-            signal,
-            error = %std::io::Error::last_os_error(),
-            "failed to restore the previous signal disposition"
-        );
-    }
-}
+/// Set once the process-lifetime macOS handlers are in place.
+#[cfg(target_os = "macos")]
+static MACOS_TERMINATION_HANDLERS_INSTALLED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
 #[cfg(target_os = "macos")]
 fn install_sigterm_handler_macos() -> std::io::Result<()> {

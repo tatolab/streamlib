@@ -8,11 +8,24 @@
 //! not merely stopped — before [`PythonRuntimeHandle::run`] returns, so no
 //! engine thread can still be alive when CPython finalizes.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use streamlib::sdk::runtime::Runner;
+use streamlib::sdk::runtime::{Runner, request_runtime_shutdown};
+
+/// A reference to the engine outlived the handle, so its threads were not
+/// joined and the teardown contract was not kept.
+struct EngineTeardownIncomplete;
+
+impl From<EngineTeardownIncomplete> for PyErr {
+    fn from(_: EngineTeardownIncomplete) -> Self {
+        PyRuntimeError::new_err(
+            "engine teardown left a live reference behind — engine threads may outlive \
+             interpreter finalization",
+        )
+    }
+}
 
 /// The engine, held by a Python object.
 ///
@@ -22,32 +35,57 @@ use streamlib::sdk::runtime::Runner;
 /// promise.
 // `subclass` so the Python-side `streamlib.Runtime` can extend this to register
 // itself with the `atexit` teardown hook.
-#[pyclass(name = "Runtime", module = "streamlib", unsendable, subclass)]
+#[pyclass(name = "Runtime", module = "streamlib", subclass)]
 pub struct PythonRuntimeHandle {
     /// `None` once the engine has been run or torn down.
-    engine: Option<Arc<Runner>>,
+    ///
+    /// Behind a lock rather than `&mut self` so every method takes `&self`: a
+    /// `&mut self` `run()` keeps the pyclass mutably borrowed for the whole
+    /// blocking call, and `shutdown()` from a worker thread then fails on the
+    /// borrow instead of stopping the pipeline.
+    engine: Mutex<Option<Arc<Runner>>>,
 }
 
 impl PythonRuntimeHandle {
+    /// Take the engine out, leaving the handle empty. Whoever gets `Some` owns
+    /// the teardown.
+    fn take_engine(&self) -> Option<Arc<Runner>> {
+        self.engine
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .take()
+    }
+
     /// Drop the engine with the GIL released, joining its threads.
     ///
     /// Releasing the GIL is not an optimization: an engine thread that needs
     /// the GIL to finish (a Python processor, once those exist) would deadlock
     /// against a teardown that held it.
-    fn drop_engine_without_holding_the_gil(python: Python<'_>, engine: Arc<Runner>) {
+    fn drop_engine_without_holding_the_gil(
+        python: Python<'_>,
+        engine: Arc<Runner>,
+    ) -> Result<(), EngineTeardownIncomplete> {
         python.detach(move || {
-            let Some(owned_engine) = Arc::into_inner(engine) else {
-                // Something outlived the handle's reference, so dropping here
-                // joins nothing. Fail loud rather than let `run()` return on a
-                // contract it did not keep.
-                tracing::error!(
-                    "engine teardown left a live reference behind — engine threads may outlive \
-                     interpreter finalization"
-                );
-                return;
-            };
-            drop(owned_engine);
-        });
+            // `start()` parks an `Arc<Runner>` inside the `RuntimeContext` it
+            // stores on the runner, and only `stop()` clears it. Without this
+            // the cycle survives every path where the run loop did not stop the
+            // engine itself — a failed `start()`, or a handle torn down before
+            // it ever ran — and `into_inner` below would join nothing.
+            if let Err(stop_failure) = engine.stop() {
+                tracing::warn!(%stop_failure, "engine stop reported a failure during teardown");
+            }
+
+            match Arc::into_inner(engine) {
+                Some(owned_engine) => {
+                    drop(owned_engine);
+                    Ok(())
+                }
+                // Reached only if something still holds a reference, which means
+                // the threads are not joined. The caller raises rather than
+                // returning on a contract it did not keep.
+                None => Err(EngineTeardownIncomplete),
+            }
+        })
     }
 }
 
@@ -60,7 +98,7 @@ impl PythonRuntimeHandle {
             .detach(Runner::new)
             .map_err(|engine_failure| PyRuntimeError::new_err(engine_failure.to_string()))?;
         Ok(Self {
-            engine: Some(engine),
+            engine: Mutex::new(Some(engine)),
         })
     }
 
@@ -68,8 +106,8 @@ impl PythonRuntimeHandle {
     ///
     /// Owns SIGINT while it blocks and hands it back to CPython before
     /// returning, so a later Ctrl-C raises `KeyboardInterrupt` as usual.
-    fn run(&mut self, python: Python<'_>) -> PyResult<()> {
-        let engine = self.engine.take().ok_or_else(|| {
+    fn run(&self, python: Python<'_>) -> PyResult<()> {
+        let engine = self.take_engine().ok_or_else(|| {
             PyRuntimeError::new_err(
                 "this Runtime has already been run; construct a new one to run again",
             )
@@ -83,18 +121,29 @@ impl PythonRuntimeHandle {
 
         // Unconditional: a failed start must still not leave engine threads
         // alive to race interpreter finalization.
-        Self::drop_engine_without_holding_the_gil(python, engine);
+        let teardown_outcome = Self::drop_engine_without_holding_the_gil(python, engine);
 
-        run_outcome.map_err(|engine_failure| PyRuntimeError::new_err(engine_failure.to_string()))
+        // The run failure is the more informative one, so it wins if both fired.
+        run_outcome
+            .map_err(|engine_failure| PyRuntimeError::new_err(engine_failure.to_string()))?;
+        Ok(teardown_outcome?)
     }
 
-    /// Tear the engine down if it has not been run. Idempotent.
+    /// Ask the pipeline to stop, and tear the engine down if it never ran.
     ///
-    /// The escape hatch for the exception path — `streamlib`'s `atexit` hook
-    /// and `__exit__` both land here.
-    fn shutdown(&mut self, python: Python<'_>) {
-        if let Some(engine) = self.engine.take() {
-            Self::drop_engine_without_holding_the_gil(python, engine);
+    /// Safe to call from any thread and at any point: while `run()` is
+    /// blocking, this is what ends it — the request goes through the same
+    /// funnel Ctrl-C does, and `run()` performs the teardown. Before `run()`,
+    /// it tears the engine down here. Idempotent either way.
+    fn shutdown(&self, python: Python<'_>) -> PyResult<()> {
+        match self.take_engine() {
+            Some(engine) => Ok(Self::drop_engine_without_holding_the_gil(python, engine)?),
+            // Either `run()` owns the engine and is blocking on it, or teardown
+            // already happened — the request funnel is idempotent, so asking
+            // again costs nothing and the second case is a no-op.
+            None => python
+                .detach(|| request_runtime_shutdown("streamlib.Runtime.shutdown()"))
+                .map_err(|request_failure| PyRuntimeError::new_err(request_failure.to_string())),
         }
     }
 
@@ -105,21 +154,33 @@ impl PythonRuntimeHandle {
     /// Never suppresses the exception — returning false lets it propagate once
     /// the engine is down.
     #[pyo3(signature = (*_exception_details))]
-    fn __exit__(&mut self, python: Python<'_>, _exception_details: &Bound<'_, PyAny>) -> bool {
-        self.shutdown(python);
-        false
+    fn __exit__(
+        &self,
+        python: Python<'_>,
+        _exception_details: &Bound<'_, PyAny>,
+    ) -> PyResult<bool> {
+        self.shutdown(python)?;
+        Ok(false)
     }
 }
 
 impl Drop for PythonRuntimeHandle {
     /// Covers the garbage-collected path, where neither `__exit__` nor the
     /// `atexit` hook ran.
+    ///
+    /// Only reachable while the handle still owns the engine; a `Drop` cannot
+    /// report failure, so this is the one caller that may only log.
     fn drop(&mut self) {
-        let Some(engine) = self.engine.take() else {
+        let Some(engine) = self.take_engine() else {
             return;
         };
         Python::attach(|python| {
-            Self::drop_engine_without_holding_the_gil(python, engine);
+            if Self::drop_engine_without_holding_the_gil(python, engine).is_err() {
+                tracing::error!(
+                    "engine teardown left a live reference behind — engine threads may outlive \
+                     interpreter finalization"
+                );
+            }
         });
     }
 }
