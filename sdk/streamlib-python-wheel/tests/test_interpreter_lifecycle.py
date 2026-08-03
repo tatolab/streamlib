@@ -142,6 +142,40 @@ class AppUnderTest:
         return self
 
 
+    def kill_process_group(self) -> None:
+        """Leave nothing behind, however this app's test ended.
+
+        A failed wait raises without touching the process, and the app runs in
+        its own session — so without this an assertion failure strands a live
+        engine holding a GPU context, an iceoryx2 node and a socket, silently
+        contaminating every later run on the same rig.
+        """
+        try:
+            os.killpg(os.getpgid(self.process.pid), signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+        for pipe in (self.process.stdout, self.process.stdin):
+            if pipe is not None and not pipe.closed:
+                pipe.close()
+
+
+@pytest.fixture
+def app_under_test():
+    """Hands out apps and kills their process groups no matter how a test ends."""
+    started: list[AppUnderTest] = []
+
+    def start(scenario: str) -> AppUnderTest:
+        app = start_app(scenario)
+        started.append(app)
+        return app
+
+    try:
+        yield start
+    finally:
+        for app in started:
+            app.kill_process_group()
+
+
 def start_app(scenario: str) -> AppUnderTest:
     process = subprocess.Popen(
         [sys.executable, str(APP_UNDER_TEST), scenario],
@@ -158,34 +192,34 @@ def start_app(scenario: str) -> AppUnderTest:
     return AppUnderTest(process)
 
 
-def run_scenario_to_completion(scenario: str) -> AppUnderTest:
+def run_scenario_to_completion(start, scenario: str) -> AppUnderTest:
     """Run a scenario that ends on its own."""
-    return start_app(scenario).await_clean_exit()
+    return start(scenario).await_clean_exit()
 
 
-def run_scenario_interrupted_once_running(scenario: str) -> AppUnderTest:
+def run_scenario_interrupted_once_running(start, scenario: str) -> AppUnderTest:
     """Boot the scenario, wait for the engine's ready line, then Ctrl-C it."""
-    app = start_app(scenario)
+    app = start(scenario)
     app.await_engine_ready()
     app.interrupt()
     return app.await_clean_exit()
 
 
 @pytest.mark.requires_gpu
-def test_ctrl_c_exits_cleanly():
+def test_ctrl_c_exits_cleanly(app_under_test):
     """The demo: Ctrl-C on a running pipeline returns from `run()` and exits 0.
 
     This is the arrangement the #1702 spike never ran — there, Rust embedded
     CPython; here CPython imports the engine.
     """
-    app = run_scenario_interrupted_once_running("ctrl_c")
+    app = run_scenario_interrupted_once_running(app_under_test, "ctrl_c")
     assert "RUN_RETURNED" in app.markers(), (
         f"run() must return on Ctrl-C rather than raising; output:\n{app.output}"
     )
 
 
 @pytest.mark.requires_gpu
-def test_ctrl_c_during_startup_still_exits_cleanly():
+def test_ctrl_c_during_startup_still_exits_cleanly(app_under_test):
     """Ctrl-C while the graph is still coming up must still exit cleanly.
 
     Regression lock on a real hang: signal ownership used to begin inside the
@@ -195,7 +229,7 @@ def test_ctrl_c_during_startup_still_exits_cleanly():
     shutting down. Mental-revert: moving ownership back inside the wait loop
     (`start()` then `wait_for_signal()`) hangs here until the timeout.
     """
-    app = start_app("ctrl_c")
+    app = app_under_test("ctrl_c")
     app.await_output_containing(ENGINE_STARTING_LOG_LINE, "the engine to begin starting")
     app.interrupt()
 
@@ -206,7 +240,7 @@ def test_ctrl_c_during_startup_still_exits_cleanly():
 
 
 @pytest.mark.requires_gpu
-def test_no_survivors_are_left_in_the_process_group():
+def test_no_survivors_are_left_in_the_process_group(app_under_test):
     """The app's whole process group must be gone, not just its leader.
 
     A `waitpid` check cannot show this — the parent has already reaped the
@@ -214,7 +248,7 @@ def test_no_survivors_are_left_in_the_process_group():
     The engine spawns threads rather than children today, so this is a forward
     lock for #1714, which places processors in child interpreters.
     """
-    app = start_app("ctrl_c")
+    app = app_under_test("ctrl_c")
     process_group = os.getpgid(app.process.pid)
     app.await_engine_ready()
     app.interrupt()
@@ -226,13 +260,13 @@ def test_no_survivors_are_left_in_the_process_group():
 
 
 @pytest.mark.requires_gpu
-def test_the_gil_is_released_while_run_blocks():
+def test_the_gil_is_released_while_run_blocks(app_under_test):
     """A Python thread must keep running while `run()` blocks.
 
     Mental-revert: dropping the `python.detach` around the run loop pins the
     GIL for the whole run and leaves the counter at zero.
     """
-    app = run_scenario_interrupted_once_running("gil_released")
+    app = run_scenario_interrupted_once_running(app_under_test, "gil_released")
 
     ticks = next(
         int(marker.removeprefix("PYTHON_THREAD_TICKS="))
@@ -246,39 +280,39 @@ def test_the_gil_is_released_while_run_blocks():
 
 
 @pytest.mark.requires_gpu
-def test_sigint_is_handed_back_to_cpython():
+def test_sigint_is_handed_back_to_cpython(app_under_test):
     """After `run()` returns, Ctrl-C must raise KeyboardInterrupt again.
 
     Mental-revert: leaving the engine's handler installed swallows the second
     SIGINT and the app reports SIGINT_WAS_SWALLOWED instead.
     """
-    app = run_scenario_interrupted_once_running("sigint_handed_back")
+    app = run_scenario_interrupted_once_running(app_under_test, "sigint_handed_back")
     assert "KEYBOARD_INTERRUPT_RAISED" in app.markers(), (
         f"SIGINT after run() must reach CPython's handler; output:\n{app.output}"
     )
 
 
-def test_an_exception_still_tears_the_engine_down():
+def test_an_exception_still_tears_the_engine_down(app_under_test):
     """The exception path keeps the teardown guarantee and re-raises."""
-    app = run_scenario_to_completion("exception_in_context_manager")
+    app = run_scenario_to_completion(app_under_test, "exception_in_context_manager")
     assert "EXCEPTION_PROPAGATED" in app.markers(), (
         f"__exit__ must not suppress the exception; output:\n{app.output}"
     )
 
 
-def test_a_runtime_that_never_runs_does_not_hang_at_exit():
+def test_a_runtime_that_never_runs_does_not_hang_at_exit(app_under_test):
     """A booted-but-unrun engine shuts down without hanging the interpreter.
 
     This is the `Drop` path: the scenario leaves the Runtime unbound, so it is
     refcounted to zero on the spot. The at-exit case is the test below.
     """
-    app = run_scenario_to_completion("never_run")
+    app = run_scenario_to_completion(app_under_test, "never_run")
     assert "CONSTRUCTED_WITHOUT_RUNNING" in app.markers(), (
         f"the scenario did not run; output:\n{app.output}"
     )
 
 
-def test_a_runtime_held_by_a_live_thread_is_torn_down_at_exit():
+def test_a_runtime_held_by_a_live_thread_is_torn_down_at_exit(app_under_test):
     """The `atexit` hook's lock: a Runtime CPython will never collect.
 
     The reference lives in a parked daemon thread's frame, which interpreter
@@ -290,7 +324,7 @@ def test_a_runtime_held_by_a_live_thread_is_torn_down_at_exit():
     Mental-revert: removing `@atexit.register` from `streamlib/__init__.py`
     leaves the shutdown line absent entirely.
     """
-    app = run_scenario_to_completion("held_by_a_live_thread_at_exit")
+    app = run_scenario_to_completion(app_under_test, "held_by_a_live_thread_at_exit")
     assert "HELD_BY_LIVE_THREAD_AT_EXIT" in app.markers(), (
         f"the scenario did not run; output:\n{app.output}"
     )
@@ -301,7 +335,7 @@ def test_a_runtime_held_by_a_live_thread_is_torn_down_at_exit():
 
 
 @pytest.mark.requires_gpu
-def test_a_second_pipeline_in_one_process_still_blocks():
+def test_a_second_pipeline_in_one_process_still_blocks(app_under_test):
     """Two run loops in one interpreter: the second must not inherit the first's
     shutdown request.
 
@@ -319,7 +353,7 @@ def test_a_second_pipeline_in_one_process_still_blocks():
     Mental-revert: dropping the `run_loop_is_blocking` guard in `shutdown()`
     makes the second run return in milliseconds and fails the threshold below.
     """
-    app = start_app("two_pipelines_in_one_process")
+    app = app_under_test("two_pipelines_in_one_process")
 
     app.await_engine_ready()
     app.interrupt()
@@ -355,17 +389,57 @@ SECOND_PIPELINE_MINIMUM_BLOCKED_MILLISECONDS = 2000
 
 
 @pytest.mark.requires_gpu
-def test_a_second_run_is_refused():
+def test_shutdown_spun_across_the_run_loop_exit_does_not_poison_the_next(app_under_test):
+    """A `shutdown()` racing the run loop's exit must not reach the next loop.
+
+    The defect this covers is real and was reproduced independently at ~350ms in
+    2 of 3 trials: a check-then-act guard lets a worker read "still running",
+    release the GIL, and issue its request after the run loop stopped observing,
+    so the next pipeline inherits it.
+
+    Honest scope: this is a concurrent smoke test, NOT a regression lock. The
+    fix is structural — the request is issued under the same lock `run()` takes
+    to transition and clear the latch, so the interleaving cannot occur — and
+    reintroducing the racy shape does not make this test red on this rig (3 of 3
+    green). Treat a failure here as real; do not read a pass as proof.
+    """
+    app = app_under_test("shutdown_spun_across_the_run_loop_exit")
+    app.await_engine_ready()
+
+    # Starts the spinner; it keeps calling shutdown() straight through the exit.
+    app.process.stdin.close()
+    app.process.stdin = None
+
+    app.await_marker("PIPELINE_1_RETURNED")
+    app.await_marker("PIPELINE_2_RUNNING")
+    time.sleep(SECOND_PIPELINE_OBSERVATION_WINDOW_SECONDS)
+    app.interrupt()
+
+    app.await_clean_exit()
+
+    blocked_milliseconds = next(
+        int(marker.removeprefix("PIPELINE_2_BLOCKED_MS="))
+        for marker in app.markers()
+        if marker.startswith("PIPELINE_2_BLOCKED_MS=")
+    )
+    assert blocked_milliseconds >= SECOND_PIPELINE_MINIMUM_BLOCKED_MILLISECONDS, (
+        f"the second run loop returned after only {blocked_milliseconds}ms — a shutdown() "
+        f"racing the first loop's exit escaped into it; output:\n{app.output}"
+    )
+
+
+@pytest.mark.requires_gpu
+def test_a_second_run_is_refused(app_under_test):
     """`run()` drops the engine to keep its teardown promise, so the handle is
     single-use and says so."""
-    app = run_scenario_interrupted_once_running("second_run_refused")
+    app = run_scenario_interrupted_once_running(app_under_test, "second_run_refused")
     assert "SECOND_RUN_REFUSED" in app.markers(), (
         f"a second run() must raise rather than silently do nothing; output:\n{app.output}"
     )
 
 
 @pytest.mark.requires_gpu
-def test_shutdown_from_another_thread_ends_a_blocking_run():
+def test_shutdown_from_another_thread_ends_a_blocking_run(app_under_test):
     """`shutdown()` must end a running pipeline, from any thread.
 
     The programmatic stop, with no signal involved. Two ways this regresses:
@@ -373,7 +447,7 @@ def test_shutdown_from_another_thread_ends_a_blocking_run():
     `PanicException`, and letting `shutdown()` return early when `run()` owns
     the engine makes it a silent no-op that never ends the run.
     """
-    app = start_app("shutdown_from_another_thread")
+    app = app_under_test("shutdown_from_another_thread")
     app.await_engine_ready()
 
     # Closing stdin is the readiness handshake the app waits on, so the

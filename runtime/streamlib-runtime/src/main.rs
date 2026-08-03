@@ -91,14 +91,12 @@ async fn run(args: Args) -> Result<()> {
             .await?;
     }
 
-    runtime.start()?;
-
     if args.snapshot.is_none() {
-        println!("Empty graph ready — use the API to add processors");
+        println!("Starting with an empty graph — use the API to add processors");
     }
     println!("Press Ctrl+C to stop");
 
-    runtime.wait_for_signal()?;
+    runtime.start_and_wait_for_shutdown()?;
 
     Ok(())
 }

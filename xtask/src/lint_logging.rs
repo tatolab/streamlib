@@ -28,41 +28,32 @@ pub struct LintTarget {
     pub allow_substring: &'static str,
 }
 
+/// One policy, applied to every Python root the engine tree owns. A second
+/// literal would let the wheel's package silently lint less than the SDK's the
+/// first time the ban list or the exclusions change.
+const fn python_logging_lint_target(name: &'static str, root_relative: &'static str) -> LintTarget {
+    LintTarget {
+        name,
+        root_relative,
+        extension: "py",
+        exclude_path_segments: &[
+            "tests",
+            "_generated_",
+            "__pycache__",
+            ".venv",
+            "build",
+            "dist",
+        ],
+        exclude_file_suffixes: &["_test.py"],
+        comment_prefix: "#",
+        banned_substrings: &["print(", "sys.stdout", "sys.stderr", "logging.basicConfig"],
+        allow_substring: "streamlib.log.",
+    }
+}
+
 pub const TARGETS: &[LintTarget] = &[
-    LintTarget {
-        name: "python",
-        root_relative: "sdk/streamlib-python",
-        extension: "py",
-        exclude_path_segments: &[
-            "tests",
-            "_generated_",
-            "__pycache__",
-            ".venv",
-            "build",
-            "dist",
-        ],
-        exclude_file_suffixes: &["_test.py"],
-        comment_prefix: "#",
-        banned_substrings: &["print(", "sys.stdout", "sys.stderr", "logging.basicConfig"],
-        allow_substring: "streamlib.log.",
-    },
-    LintTarget {
-        name: "python-wheel",
-        root_relative: "sdk/streamlib-python-wheel/python",
-        extension: "py",
-        exclude_path_segments: &[
-            "tests",
-            "_generated_",
-            "__pycache__",
-            ".venv",
-            "build",
-            "dist",
-        ],
-        exclude_file_suffixes: &["_test.py"],
-        comment_prefix: "#",
-        banned_substrings: &["print(", "sys.stdout", "sys.stderr", "logging.basicConfig"],
-        allow_substring: "streamlib.log.",
-    },
+    python_logging_lint_target("python", "sdk/streamlib-python"),
+    python_logging_lint_target("python-wheel", "sdk/streamlib-python-wheel/python"),
     LintTarget {
         name: "typescript",
         root_relative: "sdk/streamlib-deno",
@@ -984,12 +975,22 @@ mod tests {
         violations
     }
 
-    const PYTHON_TARGET: &LintTarget = &TARGETS[0];
-    const TYPESCRIPT_TARGET: &LintTarget = &TARGETS[1];
+    /// Resolved by name, not position: `TARGETS` gains entries over time, and
+    /// an index would silently retarget every assertion below when it does.
+    fn lint_target_named(name: &str) -> &'static LintTarget {
+        TARGETS
+            .iter()
+            .find(|target| target.name == name)
+            .unwrap_or_else(|| panic!("no lint target named {name}"))
+    }
 
     #[test]
     fn rejects_print_in_python_library() {
-        let v = scan_fixture_tree(PYTHON_TARGET, "print(\"hello\")\n", "src/app.py");
+        let v = scan_fixture_tree(
+            lint_target_named("python"),
+            "print(\"hello\")\n",
+            "src/app.py",
+        );
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].matched_pattern, "print(");
     }
@@ -997,7 +998,7 @@ mod tests {
     #[test]
     fn rejects_sys_stdout_in_python() {
         let v = scan_fixture_tree(
-            PYTHON_TARGET,
+            lint_target_named("python"),
             "import sys\nsys.stdout.write(\"hi\")\n",
             "src/app.py",
         );
@@ -1008,7 +1009,7 @@ mod tests {
     #[test]
     fn rejects_logging_basicconfig_in_python() {
         let v = scan_fixture_tree(
-            PYTHON_TARGET,
+            lint_target_named("python"),
             "import logging\nlogging.basicConfig(level=logging.INFO)\n",
             "src/app.py",
         );
@@ -1018,7 +1019,11 @@ mod tests {
 
     #[test]
     fn rejects_console_log_in_ts_library() {
-        let v = scan_fixture_tree(TYPESCRIPT_TARGET, "console.log(\"hello\");\n", "src/app.ts");
+        let v = scan_fixture_tree(
+            lint_target_named("typescript"),
+            "console.log(\"hello\");\n",
+            "src/app.ts",
+        );
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].matched_pattern, "console.log");
     }
@@ -1026,7 +1031,7 @@ mod tests {
     #[test]
     fn rejects_deno_stdout_write_in_ts() {
         let v = scan_fixture_tree(
-            TYPESCRIPT_TARGET,
+            lint_target_named("typescript"),
             "await Deno.stdout.write(new TextEncoder().encode(\"x\"));\n",
             "src/app.ts",
         );
@@ -1038,7 +1043,7 @@ mod tests {
     fn rejects_every_console_method_variant() {
         for method in ["log", "warn", "error", "info", "debug"] {
             let src = format!("console.{}(\"x\");\n", method);
-            let v = scan_fixture_tree(TYPESCRIPT_TARGET, &src, "src/app.ts");
+            let v = scan_fixture_tree(lint_target_named("typescript"), &src, "src/app.ts");
             assert_eq!(v.len(), 1, "console.{} should be rejected", method);
         }
     }
@@ -1046,7 +1051,7 @@ mod tests {
     #[test]
     fn accepts_streamlib_log_python() {
         let v = scan_fixture_tree(
-            PYTHON_TARGET,
+            lint_target_named("python"),
             "import streamlib\nstreamlib.log.info(\"hi\")\n",
             "src/app.py",
         );
@@ -1056,7 +1061,7 @@ mod tests {
     #[test]
     fn accepts_streamlib_log_ts() {
         let v = scan_fixture_tree(
-            TYPESCRIPT_TARGET,
+            lint_target_named("typescript"),
             "import * as streamlib from \"./mod.ts\";\nstreamlib.log.info(\"hi\");\n",
             "src/app.ts",
         );
@@ -1066,7 +1071,7 @@ mod tests {
     #[test]
     fn skips_comment_lines_python() {
         let v = scan_fixture_tree(
-            PYTHON_TARGET,
+            lint_target_named("python"),
             "# don't use print(\"x\") here\nstreamlib.log.info(\"ok\")\n",
             "src/app.py",
         );
@@ -1076,7 +1081,7 @@ mod tests {
     #[test]
     fn skips_comment_lines_ts() {
         let v = scan_fixture_tree(
-            TYPESCRIPT_TARGET,
+            lint_target_named("typescript"),
             "// don't use console.log here\nstreamlib.log.info(\"ok\");\n",
             "src/app.ts",
         );
@@ -1095,7 +1100,13 @@ mod tests {
         write_fixture(&root, "src/app.py", "streamlib.log.info(\"ok\")\n");
         let mut violations = Vec::new();
         let mut files_scanned = 0usize;
-        scan_target(&root, PYTHON_TARGET, &mut violations, &mut files_scanned).unwrap();
+        scan_target(
+            &root,
+            lint_target_named("python"),
+            &mut violations,
+            &mut files_scanned,
+        )
+        .unwrap();
         assert!(
             violations.is_empty(),
             "tests/ should be excluded: {:?}",
@@ -1106,7 +1117,7 @@ mod tests {
     #[test]
     fn allow_file_pragma_skips_entire_file_python() {
         let v = scan_fixture_tree(
-            PYTHON_TARGET,
+            lint_target_named("python"),
             "# streamlib:lint-logging:allow-file — this is the interceptor installer itself\nimport sys\nsys.stdout = MyInterceptor()\n",
             "src/_log_interceptors.py",
         );
@@ -1120,7 +1131,7 @@ mod tests {
     #[test]
     fn allow_file_pragma_skips_entire_file_ts() {
         let v = scan_fixture_tree(
-            TYPESCRIPT_TARGET,
+            lint_target_named("typescript"),
             "// streamlib:lint-logging:allow-file — interceptor installer\nDeno.stdout.write(new Uint8Array());\n",
             "src/_log_interceptors.ts",
         );
@@ -1134,7 +1145,7 @@ mod tests {
     #[test]
     fn allow_line_pragma_skips_single_line_python() {
         let v = scan_fixture_tree(
-            PYTHON_TARGET,
+            lint_target_named("python"),
             "sys.stderr.write(\"fallback\")  # streamlib:lint-logging:allow-line\nprint(\"bad\")\n",
             "src/app.py",
         );
@@ -1152,7 +1163,7 @@ mod tests {
         let mut files_scanned = 0usize;
         scan_target(
             &root,
-            TYPESCRIPT_TARGET,
+            lint_target_named("typescript"),
             &mut violations,
             &mut files_scanned,
         )
@@ -1436,12 +1447,12 @@ mod tests {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
         write_fixture(
-            &root.join(TARGETS[0].root_relative),
+            &root.join(lint_target_named("python").root_relative),
             "streamlib/app.py",
             "streamlib.log.info(\"ok\")\n",
         );
         write_fixture(
-            &root.join(TARGETS[1].root_relative),
+            &root.join(lint_target_named("typescript").root_relative),
             "mod.ts",
             "streamlib.log.info(\"ok\");\n",
         );

@@ -43,12 +43,6 @@ struct UnixSignalForwarding {
 
 /// One signal's pre-existing disposition, restored on drop unless already
 /// restored explicitly.
-///
-/// The restore is RAII because it must survive every failure path in
-/// `install()` — a handler left pointing at the self-pipe with no forwarding
-/// thread behind it swallows Ctrl-C and SIGTERM for the rest of the process.
-/// Carrying the signal number alongside its action also makes restoring one
-/// signal's disposition onto another unrepresentable.
 #[cfg(all(unix, not(target_os = "macos")))]
 struct DisplacedSignalDisposition {
     signal: libc::c_int,
@@ -158,11 +152,11 @@ extern "C" fn write_delivered_signal_to_self_pipe(delivered_signal: libc::c_int)
     };
     let delivered_signal_byte = delivered_signal as u8;
     // SAFETY: `write_end` stays open for the process lifetime, and the source
-    // is one byte of stack this frame owns. The write is non-blocking, so a
-    // failure here means the pipe is backed up and a shutdown request is
-    // already queued — dropping this one changes nothing. `errno` is saved and
-    // restored around it because the handler preempted a syscall that may be
-    // about to read its own errno.
+    // is one byte of stack this frame owns. A failure is either a full pipe (a
+    // request is already queued) or a descriptor the process has lost; neither
+    // is actionable from signal context. `errno` is saved and restored around
+    // it because the handler preempted a syscall that may be about to read its
+    // own errno.
     unsafe {
         let errno_slot = libc::__errno_location();
         let interrupted_errno = *errno_slot;
@@ -205,9 +199,6 @@ impl ScopedShutdownSignalOwnership {
         // otherwise be read by this owner and shut it down on the spot.
         drain_pending_bytes(self_pipe.read_end)?;
 
-        // Both displacements restore themselves if anything below fails —
-        // including the thread spawn, which would otherwise leave the handlers
-        // installed with nothing reading the pipe.
         let displaced_sigint = DisplacedSignalDisposition::displace_with_self_pipe_handler(SIGINT)?;
         let displaced_sigterm =
             DisplacedSignalDisposition::displace_with_self_pipe_handler(SIGTERM)?;
@@ -244,10 +235,13 @@ impl ScopedShutdownSignalOwnership {
                 trigger_macos_termination();
             })
             .map_err(std::io::Error::other)?;
+            // Claimed here rather than after the SIGTERM install below: the
+            // ctrlc handler is already irreversible, so a later failure that
+            // left this unset would re-enter this branch forever and every
+            // subsequent take would fail on `MultipleHandlers`.
+            let _ = MACOS_TERMINATION_HANDLERS_INSTALLED.set(());
 
             install_sigterm_handler_macos()?;
-
-            let _ = MACOS_TERMINATION_HANDLERS_INSTALLED.set(());
             tracing::info!(
                 "macOS shutdown signals owned (Ctrl+C via ctrlc, SIGTERM via signal-hook)"
             );
@@ -270,9 +264,7 @@ impl Drop for ScopedShutdownSignalOwnership {
         if let Some(mut forwarding) = self.signal_forwarding.take() {
             // Restore before winding the thread down, so a signal arriving
             // during teardown reaches whoever held the disposition rather than
-            // a handler whose reader is going away. This is the call that hands
-            // SIGINT back to CPython in the wheel. Both are already-restored
-            // after this, so their `Drop` is a no-op.
+            // a handler whose reader is going away.
             forwarding.displaced_sigint.restore_now();
             forwarding.displaced_sigterm.restore_now();
 
@@ -305,9 +297,6 @@ fn shutdown_signal_self_pipe() -> std::io::Result<&'static ShutdownSignalSelfPip
 
     // A full pipe must never block the handler, so the write end is
     // non-blocking; a dropped byte only ever means a request is already queued.
-    // Checked rather than assumed: leaving the write end blocking would let the
-    // handler stall inside signal context, the one thing this design must not
-    // do.
     // SAFETY: `pipe_ends[1]` was just returned by `pipe2`.
     if unsafe { libc::fcntl(pipe_ends[1], libc::F_SETFL, libc::O_NONBLOCK) } < 0 {
         let flag_failure = std::io::Error::last_os_error();
@@ -329,10 +318,6 @@ fn shutdown_signal_self_pipe() -> std::io::Result<&'static ShutdownSignalSelfPip
 
 /// Read the self-pipe until stopped, funnelling each delivered signal into
 /// [`request_runtime_shutdown`].
-///
-/// The wait is a bounded `poll` rather than a blocking `read` so the stop flag
-/// is observed even if the stop byte never lands — a lost wakeup here would
-/// hang `join()` inside a `Drop`.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn forward_signals_until_stopped(read_end: std::os::fd::RawFd) {
     tracing::debug!("Shutdown-signal forwarding thread started");
@@ -395,9 +380,6 @@ fn forward_signals_until_stopped(read_end: std::os::fd::RawFd) {
 /// Ask the forwarding thread to stop, and nudge it out of its poll.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn stop_forwarding_thread() {
-    // The flag is what actually bounds the join; the byte only shortens the
-    // wait from the poll interval to immediately, so a failed write is
-    // recoverable and not worth failing teardown over.
     FORWARDING_THREAD_SHOULD_STOP.store(true, Ordering::SeqCst);
 
     let Some(self_pipe) = SHUTDOWN_SIGNAL_SELF_PIPE.get() else {
@@ -420,11 +402,8 @@ fn stop_forwarding_thread() {
     }
 }
 
-/// Discard bytes left in the pipe by a previous owner.
-///
-/// Both `fcntl`s are checked because the drain below only terminates while the
-/// read end is non-blocking — on an unchecked failure it would block forever
-/// inside `install()`, which is inside `rt.run()`.
+/// Discard bytes left in the pipe by a previous owner. Terminates only while
+/// the read end is non-blocking, so both `fcntl`s are checked.
 #[cfg(all(unix, not(target_os = "macos")))]
 fn drain_pending_bytes(read_end: std::os::fd::RawFd) -> std::io::Result<()> {
     // SAFETY: `read_end` stays open for the process lifetime; the destination

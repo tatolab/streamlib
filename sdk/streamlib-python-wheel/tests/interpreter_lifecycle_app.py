@@ -167,6 +167,45 @@ def scenario_shutdown_from_another_thread() -> None:
         marker("STOPPED_FROM_ANOTHER_THREAD")
 
 
+def scenario_shutdown_spun_across_the_run_loop_exit() -> None:
+    """Hammer `shutdown()` from a worker across the first run loop's exit.
+
+    The sequential `with`-block case only ever calls `shutdown()` once `run()`
+    has fully returned. This one deliberately lands calls *during* the exit —
+    the window where a request can be issued after the run loop stopped
+    observing but before the handle is marked torn down. Any request that
+    escapes is inherited by the second pipeline, which then returns instantly.
+    """
+    first_runtime = streamlib.Runtime()
+    keep_requesting = threading.Event()
+    keep_requesting.set()
+
+    def spin_shutdown() -> None:
+        while keep_requesting.is_set():
+            first_runtime.shutdown()
+
+    spinner = threading.Thread(target=spin_shutdown, daemon=True)
+
+    def start_spinning_once_running() -> None:
+        sys.stdin.read()
+        spinner.start()
+
+    threading.Thread(target=start_spinning_once_running, daemon=True).start()
+    first_runtime.run()
+    # Keeps spinning across the exit on purpose — stopped only once the second
+    # pipeline is about to start.
+    keep_requesting.clear()
+    spinner.join(timeout=10.0)
+    marker("PIPELINE_1_RETURNED")
+
+    with streamlib.Runtime() as second_runtime:
+        marker("PIPELINE_2_RUNNING")
+        started = time.monotonic()
+        second_runtime.run()
+        blocked_milliseconds = round((time.monotonic() - started) * 1000)
+    marker(f"PIPELINE_2_BLOCKED_MS={blocked_milliseconds}")
+
+
 def scenario_two_pipelines_in_one_process() -> None:
     """Two run loops in turn, each through the context manager.
 
@@ -198,6 +237,7 @@ SCENARIOS = {
     "second_run_refused": scenario_second_run_is_refused,
     "shutdown_from_another_thread": scenario_shutdown_from_another_thread,
     "two_pipelines_in_one_process": scenario_two_pipelines_in_one_process,
+    "shutdown_spun_across_the_run_loop_exit": scenario_shutdown_spun_across_the_run_loop_exit,
 }
 
 

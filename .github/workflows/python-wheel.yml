@@ -51,8 +51,10 @@ jobs:
       # which is a tracked follow-up (see test.yml) pending a parallel-run
       # flake. These need no GPU, and without them the ownership, restoration,
       # retake and stale-signal locks run nowhere in CI.
-      - name: Shutdown-signal ownership tests
-        run: cargo test --locked -p streamlib-engine --lib -- core::signals
+      - name: Shutdown-signal ownership and stop-idempotency tests
+        run: |
+          cargo test --locked -p streamlib-engine --lib -- \
+            core::signals core::runtime::runtime::tests::stopping
 
       - name: Install uv
         uses: astral-sh/setup-uv@v5
