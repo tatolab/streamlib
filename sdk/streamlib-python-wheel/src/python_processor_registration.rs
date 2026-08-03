@@ -68,13 +68,13 @@ pub(crate) fn register_processor_class(
         .register_dynamic(
             descriptor,
             Box::new(move |node| {
-                PythonProcessorHost::construct(&declaration, &constructor_class, node)
-                    .map(|host| Box::new(host) as Box<dyn streamlib::sdk::processors::DynGeneratedProcessor + Send>)
+                PythonProcessorHost::construct(&declaration, &constructor_class, node).map(|host| {
+                    Box::new(host)
+                        as Box<dyn streamlib::sdk::processors::DynGeneratedProcessor + Send>
+                })
             }),
         )
-        .map_err(|registration_failure| {
-            PyValueError::new_err(registration_failure.to_string())
-        })?;
+        .map_err(|registration_failure| PyValueError::new_err(registration_failure.to_string()))?;
 
     registered.push((identity, held_processor_class));
     Ok(type_reference)

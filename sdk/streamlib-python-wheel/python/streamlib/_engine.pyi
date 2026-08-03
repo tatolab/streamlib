@@ -99,5 +99,5 @@ class ProcessorLinkDataAccess:
 def media_clock_now_ns() -> int:
     """The clock the engine stamps bags with, in nanoseconds."""
 
-def log_event(level: str, target: str, message: str) -> None:
+def log_event(level: str, emitted_by: str, message: str) -> None:
     """Emit one record on the engine's log pipeline."""

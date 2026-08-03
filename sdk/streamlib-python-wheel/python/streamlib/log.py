@@ -3,9 +3,9 @@
 
 """Logging from a processor, straight onto the engine's log pipeline.
 
-`print()` also works, but while the engine is alive it is captured and re-emitted
-at WARN by the stdio interceptor. These functions carry the level the author
-meant and interleave in order with the engine's own records.
+Writing to stdout also works, but while the engine is alive the stdio
+interceptor captures it and re-emits it at WARN. These functions carry the level
+the author meant and interleave in order with the engine's own records.
 """
 
 from __future__ import annotations
@@ -14,29 +14,29 @@ from ._engine import log_event
 
 __all__ = ["debug", "error", "info", "trace", "warning"]
 
-_DEFAULT_TARGET = "app"
+_DEFAULT_EMITTER = "app"
 
 
-def trace(message: str, *, target: str = _DEFAULT_TARGET) -> None:
+def trace(message: str, *, emitted_by: str = _DEFAULT_EMITTER) -> None:
     """Emit a TRACE record."""
-    log_event("trace", target, message)
+    log_event("trace", emitted_by, message)
 
 
-def debug(message: str, *, target: str = _DEFAULT_TARGET) -> None:
+def debug(message: str, *, emitted_by: str = _DEFAULT_EMITTER) -> None:
     """Emit a DEBUG record."""
-    log_event("debug", target, message)
+    log_event("debug", emitted_by, message)
 
 
-def info(message: str, *, target: str = _DEFAULT_TARGET) -> None:
+def info(message: str, *, emitted_by: str = _DEFAULT_EMITTER) -> None:
     """Emit an INFO record."""
-    log_event("info", target, message)
+    log_event("info", emitted_by, message)
 
 
-def warning(message: str, *, target: str = _DEFAULT_TARGET) -> None:
+def warning(message: str, *, emitted_by: str = _DEFAULT_EMITTER) -> None:
     """Emit a WARN record."""
-    log_event("warn", target, message)
+    log_event("warn", emitted_by, message)
 
 
-def error(message: str, *, target: str = _DEFAULT_TARGET) -> None:
+def error(message: str, *, emitted_by: str = _DEFAULT_EMITTER) -> None:
     """Emit an ERROR record."""
-    log_event("error", target, message)
+    log_event("error", emitted_by, message)

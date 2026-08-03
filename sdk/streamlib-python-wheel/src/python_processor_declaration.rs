@@ -101,7 +101,9 @@ fn read_execution_config(processor_class: &Bound<'_, PyAny>) -> PyResult<Executi
         "continuous" => ProcessExecution::Continuous {
             interval_ms: execution.get_item("interval_ms")?.map_or(Ok(0), |value| {
                 value.extract::<u32>().map_err(|_| {
-                    PyTypeError::new_err("__streamlib_processor_execution__.interval_ms must be an int")
+                    PyTypeError::new_err(
+                        "__streamlib_processor_execution__.interval_ms must be an int",
+                    )
                 })
             })?,
         },

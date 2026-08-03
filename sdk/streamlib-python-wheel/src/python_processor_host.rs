@@ -58,8 +58,7 @@ impl PythonProcessorHost {
         let configuration = node.config.clone();
 
         Python::attach(move |python| -> PyResult<Self> {
-            let link_data_access =
-                Py::new(python, PythonProcessorLinkDataAccess::new())?;
+            let link_data_access = Py::new(python, PythonProcessorLinkDataAccess::new())?;
 
             let hosting = python.import(PROCESSOR_HOSTING_MODULE)?;
             let processor_instance = hosting
@@ -212,7 +211,9 @@ impl DynGeneratedProcessor for PythonProcessorHost {
         Ok(())
     }
 
-    fn iceoryx2_output_writer_inner(&self) -> Option<std::sync::Arc<streamlib::sdk::iceoryx2::OutputWriterInner>> {
+    fn iceoryx2_output_writer_inner(
+        &self,
+    ) -> Option<std::sync::Arc<streamlib::sdk::iceoryx2::OutputWriterInner>> {
         self.link_data_access.get().output_writer_inner()
     }
 

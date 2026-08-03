@@ -24,7 +24,10 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_added_processor::PythonProcessorOutputPortReference>()?;
     module.add_class::<python_added_processor::PythonProcessorInputPortReference>()?;
     module.add_class::<python_processor_link_data_access::PythonProcessorLinkDataAccess>()?;
-    module.add_function(wrap_pyfunction!(python_logging::media_clock_now_ns, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        python_logging::media_clock_now_ns,
+        module
+    )?)?;
     module.add_function(wrap_pyfunction!(python_logging::log_event, module)?)?;
     Ok(())
 }
