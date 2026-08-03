@@ -15,7 +15,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   ordinary uv-managed venv, runs `streamlib new` then `streamlib dev`,
   sees their camera live in a window within a minute, and makes the pipeline theirs by
   editing the scaffolded processor — zero ceremony: no manifest, no `main()`, no schema
-  wrangling, hot-reload on save. Every ticket traces to this sentence or does not
+  wrangling, a fast edit loop. Every ticket traces to this sentence or does not
   exist. [importable-python-library]
 - **DECIDED** — Terms of the sentence: StreamLib is an importable Python library — one
   PyPI wheel carrying the Python API, the CLI, and the Rust engine (PyO3, the
@@ -54,10 +54,13 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   [importable-python-library]
 - **DECIDED** — The engine's handle-shaped primitive surface is the public contract
   for native interop: DMA-BUF / OPAQUE_FD import and export, the present target,
-  texture rings, codec byte pumps, the audio clock, color resolution. The
-  Vulkan↔CUDA and Vulkan↔GL interop adapters survive as in-process capabilities
-  (torch/cupy and GL consumers); only their cross-DSO `-abi` halves die with the
-  plugin ABI. [importable-python-library]
+  texture rings, codec byte pumps, the audio clock, color resolution — surfaced to
+  the Python ecosystem as DLPack and the CUDA Array Interface (DLPack first). The
+  contract is zero-CPU-copy, stated honestly: tiled engine textures reach a linear
+  tensor via one GPU blit into an exportable staging buffer, because DLPack expresses
+  strided linear memory only. The Vulkan↔CUDA and Vulkan↔GL interop adapters survive
+  as in-process capabilities (torch/cupy and GL consumers); only their cross-DSO
+  `-abi` halves die with the plugin ABI. [importable-python-library]
 
 ## Processor model & scheduling — IN-FLIGHT (→ schema-agreement-ripout, importable-python-library)
 
@@ -82,7 +85,15 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   run on). The engine chooses per processor; placement heuristics are engine
   implementation, not plan-level commitments. Same user code either way — no
   interpreter zoo, no per-processor environments, no placement configuration surface
-  beyond a single opt-in. [importable-python-library]
+  beyond a single opt-in. Constraints that make transparency true: helper spawn is
+  exec-of-`sys.executable`, never fork (GPU contexts are fork-unsafe); a
+  helper-placeable processor class must be import-addressable from a module whose
+  import is side-effect-safe; the engine equalizes link limits across placements or
+  refuses a transparent move it cannot honor. [importable-python-library]
+- **DECIDED** — The MVP edit loop is re-running `dev` (warm restart is sub-second by
+  construction). Reload-on-save is a nicety, not MVP-gating, and when built it is
+  processor-granular — stop the processor, re-import its class, re-instantiate,
+  rewire its ports — never module-loading machinery. [importable-python-library]
 - **DECIDED** — JTD schemas are advisory, experimental type information behind a
   rip-out-cheap seam — never a requirement for accessing data, in-graph or on the
   wire, and never baked in as fundamental (replaceable wholesale, e.g. by Arrow,
@@ -96,6 +107,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 
 - **DECIDED** — All Vulkan lives in the RHI (`vulkan/rhi/` + `streamlib-consumer-rhi`); one
   kernel abstraction per pipeline kind; consumers go through `GpuContext` only.
+- **DECIDED** — The engine's kernel primitives are exposable to Python as configured
+  blocks: shader/compute source and binding config passed from Python, compiled and
+  executed by the engine on its device — no user-side Vulkan, ever. Shape only; the
+  Python-facing API design is its own session. [importable-python-library]
 - **OPEN** — Everything else.
 
 ## Media I/O — camera, display, audio — IN-FLIGHT (→ importable-python-library)
@@ -129,7 +144,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **OPEN** — Audio backend: PipeWire-native on Linux is the intent (the current
   CPAL → ALSA path is interim); do not build until a research memo settles it. A/V
   sync model likewise OPEN. The engine's decided audio surface is the clock
-  primitive. [media-io-layering]
+  primitive. Hard constraint for the memo: the backend must be dlopen-at-runtime or
+  live outside the wheel — a linked libasound/libpipewire is not
+  manylinux-portable. [media-io-layering]
 
 ## Networking — transport, moq, webrtc
 
@@ -148,27 +165,46 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — The Python SDK carries a GIL-release contract: every native binding
   that can block releases the GIL around the blocking call, and pixels never cross
   into Python — frames travel as handles / surface ids. [importable-python-library]
+- **DECIDED** — The wheel carries an interpreter-lifecycle contract: `rt.run()` owns
+  SIGINT while it blocks (Ctrl-C returns cleanly and restores CPython's handler), and
+  engine teardown strictly precedes interpreter finalization — all engine threads
+  joined and every anchored thread state released before `rt.run()` returns, with an
+  `atexit`/context-manager guarantee on the exception path. Proven against a real
+  `python app.py` harness, the arrangement the spike never ran.
+  [importable-python-library]
 
 ## Distribution & versioning — IN-FLIGHT (→ importable-python-library)
 
 - **DECIDED** — Two artifacts, one version, released together: the streamlib wheel
   (Python API + CLI + engine) and the `streamlib` crate for Rust apps. Initial
-  release channel is this repo's releases (pip/uv-installable wheel artifacts) —
-  PyPI publication waits for the project rename; the artifact is identical either
-  way. Positioning is "realtime engine, Python authoring" — the Rust engine is named
-  as material; never marketed as "a Python library" even though the shape is one.
+  release channel is this repo's releases served through a static PEP 503 simple
+  index (`pip install streamlib --index-url …` — one stable incantation) — PyPI
+  publication waits for the project rename; the artifact is identical either way.
+  Positioning is "realtime engine, Python authoring" — the Rust engine is named as
+  material; never marketed as "a Python library" even though the shape is one.
   [importable-python-library]
+- **DECIDED** — Wheel portability model: system libraries (Vulkan loader, window
+  system, libcuda) are dlopen'd at runtime, never linked — the wgpu/opencv-python
+  manylinux shape; "baked in" means our Rust is compiled in, not that system deps
+  are static. abi3 across a small range of GIL-enabled CPython builds only
+  (free-threaded builds wait for the stable ABI to exist for them). The wheel's
+  adapter closure excludes skia. Helper processes import the wheel itself — one
+  native artifact, no separate helper cdylib. [importable-python-library]
 
 ## Control plane & observability — IN-FLIGHT (→ importable-python-library)
 
 - **DECIDED** — One control plane: the api-server's HTTP + WebSocket + MCP surface,
   hosted in-process by any runtime that enables it. The MCP tool set is the canonical
-  control vocabulary; the CLI is a pure JSON-RPC client of it — agents and humans drive
+  control vocabulary; the CLI is a pure JSON-RPC client of it — agents and humans use
   the same verbs; REST/WS routes serve the same operations for programmatic clients.
-  [control-plane-one-surface]
+  Post-pivot the vocabulary is observation-shaped: graph, tap, logs, health, nodes.
+  The live-mutation verbs (submit / replace / connect / remove) and their MCP tools
+  are removed — code is the source of truth; the edit loop is `dev`, not live
+  mutation. `dev` binds loopback by default. [importable-python-library]
 - **DECIDED** — The api-server is engine-side infrastructure and relocates into the
-  `runtime/` tree: it is a host — statically linked, never dlopen'd — and cannot follow
-  the packages tree out of the repo. [control-plane-one-surface]
+  `runtime/` tree: it is a host — statically linked, never dlopen'd. Its new host is
+  the wheel (and the `streamlib` crate for Rust apps); the relocation is a sequencing
+  prerequisite of the rip-out. [control-plane-one-surface]
 - **DECIDED** — The CLI ships inside the wheel and slims to `new` / `dev` / `run` (a
   thin runner over the same engine the wheel exposes) plus the observation verbs
   (`nodes` / `graph` / `tap` / `logs` / `mcp`); build-orchestration, packaging,

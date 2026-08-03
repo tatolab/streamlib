@@ -15,10 +15,15 @@ The MVP promises the **developer experience**, not the capability. Camera → pr
 display pipelines, shader/compute processors, and packages already exist and work; what
 does not exist is the simplified experience around them. The sentence:
 
-> A Python developer on Linux with an NVIDIA GPU installs streamlib from PyPI, runs
+> A Python developer on Linux with an NVIDIA GPU pip-installs streamlib, runs
 > `streamlib new` then `streamlib dev`, sees their camera live in a window within a
 > minute, and makes the pipeline theirs by editing the scaffolded processor — zero
-> ceremony: no manifest, no `main()`, no schema wrangling, hot-reload on save.
+> ceremony: no manifest, no `main()`, no schema wrangling, a fast edit loop.
+
+(Sentence updated 2026-08-02 by `importable-python-library`: "from PyPI" → pip-install
+from repo releases until the rename; "hot-reload on save" → "a fast edit loop" —
+re-running `dev` is the MVP loop; processor-granular reload-on-save is a nicety,
+never module machinery.)
 
 Its load-bearing terms:
 
@@ -71,9 +76,11 @@ Its load-bearing terms:
 - **Entry point named in a config file** — ceremony returning through the side door.
 - **Every app is also a package** — a consumer needs no publishable identity; forcing
   one re-creates the manifest ceremony being removed.
-- **Import-only or strings-only local processors** — import-only forks the discovery
-  model from plugins; strings-only loses IDE/agent ergonomics. One mechanism, two
-  spellings, costs neither.
+- ~~**Import-only or strings-only local processors** — import-only forks the discovery
+  model from plugins; strings-only loses IDE/agent ergonomics.~~ — Superseded
+  2026-08-02 by `importable-python-library.md`: import-only (class-form `rt.add`) IS
+  the decided shape; the discovery-scan model it would have "forked from" is deleted,
+  and IDE/agent ergonomics are what the class form provides.
 - **Higher-level pipeline API now** (chaining sugar, declarative graphs, or a
   Holoscan-style `compose()` subclass) — the subclass shape is *more* ceremony than
   `setup(rt)`; sugar remains compatible later where port inference is unambiguous.

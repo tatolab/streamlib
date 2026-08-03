@@ -41,9 +41,13 @@ the one wheel.
 
 ## Consequences
 
-- PyPI ships exactly one artifact; there is no version skew between "the CLI" and "the
-  runtime."
+- ~~PyPI ships exactly one artifact.~~ — Superseded 2026-08-02 by
+  `importable-python-library.md`: two artifacts, one version (wheel + `streamlib`
+  crate), repo-hosted until the rename. Still no version skew between "the CLI" and
+  "the runtime" — both live in the wheel.
 - Retiring the standalone runtime binary is engine-tree work to schedule; its
   boot/registry behaviors move into the CLI-hosted path.
-- The client SDK (launch + control from Python/TS) is a real surface the plan now
-  depends on for the embedding story.
+- ~~The client SDK (launch + control from Python/TS) is a real surface the plan now
+  depends on for the embedding story.~~ — Superseded 2026-08-02 by
+  `importable-python-library.md`: Python embeds by importing the wheel; the control
+  plane observes running nodes, it does not embed.

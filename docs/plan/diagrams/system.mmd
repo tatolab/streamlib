@@ -2,7 +2,8 @@ flowchart LR
   subgraph env["One uv-managed venv — one Python, PyPI deps only"]
     app["User Python app\n(app.py setup(rt) — normal codebase)"]
     pkgs["Processor packages\n(ordinary PyPI packages; native internals\nexpose handles, never streamlib internals)"]
-    wheel["streamlib wheel — PyPI\n(Python API + CLI + engine, PyO3)"]
+    wheel["streamlib wheel\n(Python API + CLI + engine, PyO3 —\nrepo releases now, PyPI after rename)"]
+    helper["Helper processes\n(spawned from sys.executable — engine\nplacement decision, same code either way)"]
   end
 
   rustapp["Rust app\n(plain cargo project)"]
@@ -15,9 +16,13 @@ flowchart LR
   cli["CLI (in the wheel)\nnew / dev / run · nodes / graph / tap / logs / mcp"]
   wire["Wire\n(self-describing bags between nodes —\nthe only cross-language boundary)"]
 
+  registry["Node registry\n(per-user on-disk, one JSON per live node)"]
+
   pkgs --> app
   app --> wheel
   wheel --> engine
+  engine --> helper
+  ctl --> registry
   rustapp --> crate
   crate --> engine
   media --> engine

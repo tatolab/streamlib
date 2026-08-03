@@ -1,132 +1,79 @@
 # Change: importable-python-library
 
-The rip-out and reshape for the SDK-shape pivot. Implements every
-`[importable-python-library]` DECIDED entry (§Product, §Packages & extension model,
-§Processor model, §Media I/O, §Networking, §Language SDKs, §Distribution, §Control
-plane). ADR: `docs/decisions/importable-python-library.md` (carries the owner-confirmed
-five-sentence direction). Recon verified 2026-08-02: three read-only agent sweeps
-(engine media primitives, GIL/data-plane cost, ecosystem precedent) plus direct
-enumeration of the module loader, plugin host, CLI verbs, and workspace members.
+**Change A of the pivot pair — build the new world beside the old.** The rip-out is
+`importable-python-library-ripout.md` (Change B), blocked on this change shipping.
+Implements the `[importable-python-library]` DECIDED entries (§Product, §Packages &
+extension model, §Processor model, §Graphics, §Media I/O, §Language SDKs,
+§Distribution, §Control plane). ADR: `docs/decisions/importable-python-library.md`.
+Recon verified 2026-08-02: three read-only agent sweeps (engine media primitives,
+GIL/data-plane cost, ecosystem precedent) plus a four-agent audit pass (plan coherence,
+rip-out completeness, DX red-team, technical risk) — findings folded in below.
 
-Scale tier: touches the plugin ABI and the processor model → change artifact + ADR.
+Scale tier: touches the processor model and the Python API's public contract → change
+artifact + ADR.
 
 ## ADDED
 
-- The streamlib wheel: maturin-built PyO3 package = Python API + CLI + engine,
-  statically linked camera/display; abi3 across a small Python version range; released
-  as repo-hosted wheel artifacts (PyPI deferred until the project rename).
-- In-process Python authoring: `Runtime` exposed to Python via PyO3; `@processor`
-  classes execute in-process; `rt.add` accepts the imported class; `rt.run()` blocks
-  with the GIL released while the engine (and any OS-mandated main-thread pump) runs.
-- Helper-process placement: the engine may place a Python processor in a process
-  spawned from `sys.executable` (same interpreter, same venv) over the existing
-  iceoryx2 transport; placement is engine policy with a single opt-in, no other
-  user-facing surface.
-- GIL-release contract in the Python SDK: every native binding that can block releases
-  the GIL around the blocking call; frames travel as handles / surface ids, never as
-  pixels in Python.
-- Built-in media blocks in the engine tree: camera (V4L2), display, audio as native
-  processors written against the handle-shaped primitives (DMA-BUF/OPAQUE_FD import,
-  present target, texture ring, color resolution, audio clock).
-- Engine present-composition call ("present this surface, fit/fill, color-managed")
-  absorbing the draw step the old display package drove through recorder/kernel
-  handles — the display block becomes window lifecycle + one call per frame.
-- `streamlib new` app scaffold: `app.py` with `setup(rt)`, `pyproject.toml`,
-  `.python-version` pinned (3.12), working camera → effect → display wiring.
-- Engine kernel primitives exposed to Python as configured blocks: shader/compute
-  source and binding config passed from Python; the engine compiles and runs it on its
-  device (the custom-GPU-effect story — no Rust, no user-side Vulkan). API design gets
-  its own session; the change commits only to the shape.
-- Standard zero-copy exchange surface: streamlib frames/textures expose DLPack and the
-  CUDA Array Interface, plus DMA-BUF export/import, with sync, lifetime (pinned to the
-  Python object), and layout owned by the engine's export surface — external native
-  code receives memory in its own dialect (torch/cupy/CUDA/fd) and never creates a
-  GPU context; Vulkan is written by this engine alone.
+- **The wheel proof + interpreter-lifecycle contract** (the riskiest assumption,
+  retired first): a maturin-built abi3 PyO3 wheel; `rt.run()` owns SIGINT while it
+  blocks (Ctrl-C returns cleanly, CPython's handler restored) and engine teardown
+  strictly precedes interpreter finalization — threads joined, anchored thread states
+  released, `atexit`/context-manager guarantee on the exception path. Proven against a
+  real `python app.py` harness in headless CI — the arrangement the spike never ran.
+- **In-process Python authoring**: `Runtime` via PyO3; `@processor` classes execute
+  in-process on the dedicated-thread model; `rt.add(ImportedClass)`; the GIL-release
+  contract (every blocking native binding releases the GIL; pixels never cross —
+  handles/surface ids only) with a test proving a blocked native call stalls no other
+  Python processor. Generated `.pyi` stubs ship in the wheel (IDE autocomplete). A
+  single-processor test harness (feed a synthetic frame, assert output — no hardware)
+  ships with it; it is also how built-ins are tested.
+- **Built-in media blocks**: native V4L2 camera and display processors in the engine
+  tree, written against the handle-shaped primitives; the engine absorbs the draw step
+  via a "present this surface (fit/fill, color-managed)" composition call. Display is
+  greenfield against `vulkan_present_target` (window/event-pump code never lived in the
+  engine) — budgeted as a rewrite, not a move. Human-shaped failure messages (no
+  camera, no `video` group, no Vulkan ICD, wrong Python) plus a test-pattern fallback
+  source so the scaffold demos hardware-free.
+- **Zero-CPU-copy exchange surface, DLPack first**: frames/textures expose
+  `__dlpack__` (CUDA Array Interface may follow; its default-stream semantics are
+  weaker), DMA-BUF export/import, and a CPU numpy view fallback via the cpu-readback
+  adapter. Tiled textures reach a linear tensor via one GPU blit into an exportable
+  staging buffer — stated honestly, never marketed as copy-free. Sync, lifetime
+  (pinned to the Python object; ring-slot reuse gated on consume), and layout owned by
+  the engine's export surface. Regression tests: use-after-free, read-before-signal.
+- **The dev experience**: `dev`/`run` import `app.py` and execute `setup(rt)` (today's
+  run boots an empty graph — this is the missing glue); a bad save prints the
+  traceback and keeps the last good pipeline running; the MVP edit loop is re-running
+  `dev` (reload-on-save is a later nicety, processor-granular per the plan, never
+  module machinery); a dev-mode GIL-hold watchdog warns when a callback holds the GIL
+  beyond threshold; `dev` binds loopback. `streamlib new` scaffolds `app.py` +
+  `pyproject.toml` + `.python-version` (3.12) with working camera → effect → display
+  wiring where the effect touches pixels via the exchange surface.
+- **Packaging + release channel**: the CLI ships as the wheel's console script; wheels
+  publish as repo release artifacts served through a static PEP 503 simple index
+  (`pip install streamlib --index-url …` — one stable incantation; identical artifact
+  when PyPI arrives after the rename). System libs (Vulkan loader, window system,
+  libcuda) are dlopen'd at runtime, never linked; adapter closure excludes skia;
+  GIL-enabled CPython builds only.
 
 ## MODIFIED
 
-- `sdk/streamlib-python`: subprocess SDK → the wheel's Python API surface (authoring
-  decorators kept; hosting/provisioning code dropped).
-- Subprocess machinery (`spawn_python_native_subprocess_op`, `subprocess_bridge`,
-  `subprocess_escalate`, `streamlib-python-native`, `surface_share`,
-  `streamlib-surface-client`): retained and re-scoped as the helper-process placement
-  path — same-interpreter spawns only; all venv-provisioning and module-resolution
-  tendrils removed.
-- Adapters: `streamlib-adapter-vulkan` / `-opengl` / `-cuda` / `-skia` /
-  `-cpu-readback` cores retained as in-process interop capabilities; their cross-DSO
-  `-abi` and `-helpers` crates removed (see REMOVED).
-- CLI: `run` / `dev` stay (thin runner, #1699 shape) plus `nodes` / `graph` / `tap` /
-  `logs` / `mcp`; ships inside the wheel as a console script. Live-mutation control
-  verbs (`submit` / `replace` / `connect` / `remove`) and their MCP tools are removed;
-  `dev`'s hot-reload is the edit loop.
-- `sdk/streamlib-jtd-codegen`: internal-only (first-party Rust↔Python type parity
-  behind the rip-out-cheap seam); no user-facing codegen verb.
-- `sdk/vulkan-jpeg`: retained; cdylib-safety constraint dropped.
-- `xtask` / CI: lints and gates referencing the ABI, cdylib flavors, or `.slpkg`
-  cross-build soundness removed with their subjects.
-- `.claude/` rules, agents, and skills tied to dead systems (rule `plugin-boundary`,
-  agents `plugin-abi-expert` / `package-source-expert`, skills
-  `author-and-submit-processor` / `hot-swap-live-processor`, CLAUDE.md +
-  `engine-doctrine` ABI/packages-lag/`streamlib.yaml`-purity lines): updated in a
-  dedicated operating-model PR per the flow rule, sequenced with the rip-out.
+- `sdk/streamlib-python`: authoring surface (`decorators.py`, `processor_context.py`,
+  `frame_payload.py`, `gpu_surface.py`, `clock.py`, `log.py`, `schema_ident.py`,
+  `_generated_/`) carries over into the wheel's API; the hosting/provisioning half
+  (`_processor_registry.py`, `extract_processors.py`, setuptools packaging,
+  `streamlib.yaml`, `cgl_context.py`) is Change-B deletion scope.
+- `tools/streamlib-cli` `run`/`dev`: gain the `setup(rt)` import-and-execute path and
+  drop `RunnerAutoBuild` from the run path (auto-build dies with Change B).
+- Kernel primitives exposed to Python as configured blocks (§Graphics DECIDED): shape
+  committed here; API design is its own session before any ticket exists.
 
-## REMOVED
+## Out of scope (this change)
 
-Each bullet is a pattern the ship gate verifies is gone from the tree.
-
-- REMOVED: `runtime/streamlib-plugin-abi` (all 22 vtables, PluginAbiObject, layout tests)
-- REMOVED: `sdk/streamlib-plugin-sdk`
-- REMOVED: `export_plugin!` / `install_host_services` / `HostServices` / `ProcessorVTable`
-- REMOVED: `adapters/streamlib-adapter-abi`
-- REMOVED: `streamlib-adapter-vulkan-abi` / `streamlib-adapter-vulkan-helpers`
-- REMOVED: `streamlib-adapter-opengl-abi`
-- REMOVED: `streamlib-adapter-cpu-readback-abi` / `streamlib-adapter-cpu-readback-helpers`
-- REMOVED: `streamlib-adapter-cuda-abi` / `streamlib-adapter-cuda-helpers`
-- REMOVED: `streamlib-adapter-skia-abi`
-- REMOVED: `runtime/streamlib-engine/src/core/plugin/` (host vtable backings,
-  `build_fingerprint`, `twin_drift_guard`, load handshake)
-- REMOVED: `runtime/streamlib-engine/src/core/runtime/module_loader/` (incl.
-  `BuildOrchestrator`, package archive/staging/ledger/acquire)
-- REMOVED: `tools/streamlib-build-orchestrator`
-- REMOVED: `tools/streamlib-cargo-build`
-- REMOVED: `tools/streamlib-pack`
-- REMOVED: `tools/streamlib-cross-rustc-fixture`
-- REMOVED: `.slpkg`
-- REMOVED: `streamlib_modules`
-- REMOVED: `tools/streamlib-cli/src/commands/{add,install,link,pkg,build_on_place,generate,schema,setup}.rs`
-  (+ `commands/link/`; `setup` is PATH plumbing for the retired standalone binary —
-  pip console scripts own PATH)
-- REMOVED: `runtime/streamlib-runtime` (standalone binary)
-- REMOVED: `sdk/streamlib-deno` / `sdk/streamlib-deno-native`
-- REMOVED: `spawn_deno_subprocess_op`
-- REMOVED: `sdk/streamlib-processor-extract` (manifest derivation from source)
-- REMOVED: manifest/lockfile types in `sdk/streamlib-idents` /
-  `sdk/streamlib-processor-schema` (schema-ident types behind the JTD seam survive)
-- REMOVED: `packages/test-fixtures-abi-mismatch`
-- REMOVED: `docs/architecture/{plugin-abi,package-development-model,package-source,package-staging-layout,runtime-module-materialization,schema-identity-and-packaging,subprocess-rhi-parity,cdylib-reachability,zero-ceremony-authoring}.md`
-  (shipped-state docs follow their code out; adapter docs lose their ABI halves)
-
-## Dispositions — deferred re-authoring (recorded, not ticketed)
-
-Old consumers are re-authored, never mechanically ported, in their own planning
-sessions and milestones after the wheel exists:
-
-- Camera / display packages → absorbed into the wheel as built-ins (the one
-  disposition that IS this change's work).
-- mavlink-class packages → plain-Python processor packages (e.g. over pymavlink).
-- Hardware/GPU-heavy packages → Python packages with a native wheel inside exposing
-  handles only; the Python processor class is the sole exposed surface.
-- `escalate` host-side ops → reshaped with the helper-process machinery (engine tree).
-- `polyglot-*` and `camera-deno-subprocess` examples → deleted; replaced by normal
-  Python app examples.
-- MoQ package → rides `runtime/streamlib-moq` (survives); disposition when
-  §Networking is scheduled.
-
-## Out of scope
-
-- PyPI publication and the project rename (repo-hosted wheels until then).
-- Consumer re-authoring beyond built-ins absorption (own sessions, own milestones).
-- Audio backend selection (§Media I/O OPEN — research memo), A/V sync, additional
-  execution flavors, networking transport.
-- Folding `streamlib-consumer-rhi` back into the RHI (a later simplification; the
-  crate split is harmless meanwhile).
+- Everything REMOVED — that is Change B (`importable-python-library-ripout.md`),
+  blocked on this change: the plugin ABI, module system, build tools, Deno SDK, CLI
+  verb deletion, survivor rewires, api-server relocation, helper-process re-scope,
+  companion operating-model PR.
+- PyPI publication and the rename; consumer re-authoring (dispositions recorded in
+  Change B); audio built-in (backend OPEN); kernel-blocks API design session; TS SDK;
+  networking transport.

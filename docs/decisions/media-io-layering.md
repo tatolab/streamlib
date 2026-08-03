@@ -59,8 +59,12 @@ surface is the clock primitive.
 - **Deciding AVFoundation capture now** — no MVP trace (the floor is Linux + NVIDIA);
   designing it without a driving consumer violates plan-first.
 - **Engine-owned windows** — drags winit event handling, input, and window policy into
-  the engine for one consumer's convenience; the raw-window-handle seam already gives
-  the engine everything the swapchain needs.
+  the engine *core* for one consumer's convenience; the raw-window-handle seam already
+  gives the engine everything the swapchain needs. — Scope narrowed 2026-08-02 by
+  `importable-python-library.md`: the built-in display block (engine tree, wheel) now
+  owns window creation and the event pump, but the raw-window-handle seam between
+  windowing code and the present target stands; the engine *core* still never owns
+  window policy.
 - **Zero-copy required (no CPU fallback)** — kills virtual and test devices (vivid,
   v4l2loopback) and any driver without DMA-BUF export; a user-visible transport dial
   would break the zero-ceremony bar.

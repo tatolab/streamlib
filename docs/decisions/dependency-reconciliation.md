@@ -1,5 +1,10 @@
 # Dependency reconciliation at package publish
 
+> **Superseded 2026-08-02 by `importable-python-library.md`.** The pivot deletes `pkg
+> publish`, `streamlib-pack`, the `dependencies:`/`schemas:` manifest maps, `.slpkg`,
+> and the orchestrator staging this ADR reconciles — PyPI and cargo own dependency
+> resolution now. Kept for the historical record only.
+
 ## Trigger
 
 Reach for this when touching how a package's declared `dependencies:` relates to

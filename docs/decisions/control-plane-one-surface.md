@@ -34,8 +34,14 @@ Auth and remote-access posture remain OPEN — nothing here decides a security m
 - **A second control path** (bespoke CLI socket, side-channel debug API) — two
   vocabularies drift; agents and humans stop seeing the same system.
 - **api-server as a distributable package** — it drives the registry, pubsub, and the
-  graph API; a host cannot cross the plugin ABI, and its current home made it a standing
-  exception to "packages are downstream consumers."
+  graph API; ~~a host cannot cross the plugin ABI, and its current home made it a
+  standing exception to "packages are downstream consumers."~~ — Rationale updated
+  2026-08-02 by `importable-python-library.md` (the plugin ABI and packages doctrine
+  are deleted): the api-server is statically-linked engine infrastructure hosted by
+  the wheel and the `streamlib` crate; the relocation into `runtime/` stands and is a
+  sequencing prerequisite of the rip-out. Its mutation verbs (submit / replace /
+  connect / remove) and their MCP tools are removed — the vocabulary is
+  observation-shaped.
 - **A discovery daemon or well-known port** — files in the per-user runtime directory
   need no daemon, survive nothing they shouldn't, and prune safely on double-dead
   evidence.

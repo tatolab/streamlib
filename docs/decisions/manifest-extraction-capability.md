@@ -1,5 +1,13 @@
 # Manifest extraction as a shared source-scan capability
 
+> **Superseded 2026-08-02 by `importable-python-library.md`.** The pivot deletes the
+> `processors:` manifest, `streamlib-processor-extract`, `streamlib-pack`, `pkg
+> publish`, `.slpkg`, the Deno extractor, and `export_plugin!` — this ADR describes the
+> deleted world. Two things survive it: the `#[processor(...)]` attribute as the single
+> source of truth for a Rust processor's identity/mode/ports, and the requirement that
+> its grammar has exactly one parser — which must relocate out of the deleted
+> `streamlib_processor_extract` crate into a surviving home for `streamlib-macros`.
+
 ## Trigger
 
 Reach for this when touching how a package's `processors:` manifest section
