@@ -47,6 +47,23 @@ pub const TARGETS: &[LintTarget] = &[
         allow_substring: "streamlib.log.",
     },
     LintTarget {
+        name: "python-wheel",
+        root_relative: "sdk/streamlib-python-wheel/python",
+        extension: "py",
+        exclude_path_segments: &[
+            "tests",
+            "_generated_",
+            "__pycache__",
+            ".venv",
+            "build",
+            "dist",
+        ],
+        exclude_file_suffixes: &["_test.py"],
+        comment_prefix: "#",
+        banned_substrings: &["print(", "sys.stdout", "sys.stderr", "logging.basicConfig"],
+        allow_substring: "streamlib.log.",
+    },
+    LintTarget {
         name: "typescript",
         root_relative: "sdk/streamlib-deno",
         extension: "ts",
