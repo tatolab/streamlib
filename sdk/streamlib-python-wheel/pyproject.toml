@@ -54,6 +54,11 @@ exclude = ["**/__pycache__/**"]
 # The wheel's Python half, checked at the version floor rather than whatever
 # interpreter the venv happens to be — `requires-python` is the promise.
 include = ["python", "tests"]
+# The package is checked from source, not from an install, so `tests/` needs
+# the package root on the search path. Without it a checkout that has not run
+# `maturin develop` reports every `import streamlib` unresolved — which is
+# precisely the state the no-build job runs in.
+extraPaths = ["python"]
 pythonVersion = "3.10"
 # Standard rather than strict: strict turns on `reportPrivateUsage`, which
 # fights the `_engine` / `_NativeRuntime` shape this package is built on, and
