@@ -104,11 +104,9 @@ impl App {
     }
 
     /// Start the graph, then block until a shutdown signal
-    /// ([`Runner::start`](crate::sdk::runtime::Runner) +
-    /// [`wait_for_signal`](crate::sdk::runtime::Runner)).
+    /// ([`Runner::start_and_wait_for_shutdown`](crate::sdk::runtime::Runner)).
     pub fn run(&self) -> Result<()> {
-        self.runner.start()?;
-        self.runner.wait_for_signal()
+        self.runner.start_and_wait_for_shutdown()
     }
 
     /// The underlying [`Runner`] — the escape

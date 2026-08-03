@@ -626,8 +626,20 @@ impl Runner {
     /// Stop the runtime.
     #[tracing::instrument(name = "runtime.stop", skip_all)]
     pub fn stop(&self) -> Result<()> {
+        // Idempotent, and claimed under one lock acquisition so two concurrent
+        // callers cannot both pass the check: the run loop stops the runtime
+        // itself and an embedding host tears down afterwards, and without this
+        // every subscriber sees the Stopping/Stopped pair twice.
+        {
+            let mut runtime_status = self.status.lock();
+            if *runtime_status == RuntimeStatus::Stopped {
+                tracing::debug!("[stop] Already stopped");
+                return Ok(());
+            }
+            *runtime_status = RuntimeStatus::Stopping;
+        }
+
         tracing::info!("[stop] Beginning graceful shutdown");
-        *self.status.lock() = RuntimeStatus::Stopping;
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeStopping),
@@ -898,21 +910,70 @@ impl Runner {
         self.wait_for_signal_with(|_| ControlFlow::Continue(()))
     }
 
+    /// Own the shutdown signals, [`start`](Self::start), block until shutdown,
+    /// and tear down — the whole run in one call.
+    ///
+    /// Preferred over `start()` followed by
+    /// [`wait_for_signal`](Self::wait_for_signal), because signal ownership
+    /// spans startup here: a Ctrl-C arriving while the graph is still coming up
+    /// reaches the request funnel rather than whatever disposition was
+    /// installed before.
+    pub fn start_and_wait_for_shutdown(self: &Arc<Self>) -> Result<()> {
+        let run_outcome = {
+            let _shutdown_signals = Self::take_shutdown_signal_ownership()?;
+            self.start().and_then(|()| {
+                self.wait_for_shutdown_observation_with(|_| ControlFlow::Continue(()))
+            })
+        };
+        Self::clear_shutdown_requests_latched_during_teardown();
+        run_outcome
+    }
+
+    /// Take any request that landed after the run loop stopped observing.
+    ///
+    /// Called once shutdown-signal ownership has dropped, so no further signal
+    /// can reach the funnel.
+    fn clear_shutdown_requests_latched_during_teardown() {
+        crate::core::runtime::take_runtime_shutdown_request_latch();
+    }
+
+    fn take_shutdown_signal_ownership()
+    -> Result<crate::core::signals::ScopedShutdownSignalOwnership> {
+        crate::core::signals::ScopedShutdownSignalOwnership::take_until_dropped().map_err(
+            |ownership_failure| {
+                crate::core::Error::Configuration(format!(
+                    "Failed to own shutdown signals: {}",
+                    ownership_failure
+                ))
+            },
+        )
+    }
+
     /// Block until shutdown signal, with periodic callback for dynamic control.
     ///
     /// This is the run-loop owner: it observes both the `RuntimeShutdown`
     /// event and the shutdown-request latch, then runs the normal teardown.
     /// The latch is polled as well as the event because a request published
     /// before this subscriber was wired up leaves no event to receive.
-    pub fn wait_for_signal_with<F>(self: &Arc<Self>, mut callback: F) -> Result<()>
+    pub fn wait_for_signal_with<F>(self: &Arc<Self>, callback: F) -> Result<()>
     where
         F: FnMut(&Self) -> ControlFlow<()>,
     {
-        // Install signal handlers
-        crate::core::signals::install_signal_handlers().map_err(|e| {
-            crate::core::Error::Configuration(format!("Failed to install signal handlers: {}", e))
-        })?;
+        let wait_outcome = {
+            // Held only for the wait, so the dispositions are handed back once
+            // the teardown inside has run.
+            let _shutdown_signals = Self::take_shutdown_signal_ownership()?;
+            self.wait_for_shutdown_observation_with(callback)
+        };
+        Self::clear_shutdown_requests_latched_during_teardown();
+        wait_outcome
+    }
 
+    /// The wait loop itself, for callers that already own the shutdown signals.
+    fn wait_for_shutdown_observation_with<F>(self: &Arc<Self>, mut callback: F) -> Result<()>
+    where
+        F: FnMut(&Self) -> ControlFlow<()>,
+    {
         let shutdown_flag = Arc::new(AtomicBool::new(false));
         let shutdown_flag_clone = Arc::clone(&shutdown_flag);
 
@@ -985,11 +1046,9 @@ impl Runner {
                 );
             }
 
-            // The request has been observed; leaving it latched would make the
-            // next `wait_for_signal_with` in this process return instantly.
-            crate::core::runtime::take_runtime_shutdown_request_latch();
-
-            // Auto-stop on exit
+            // Auto-stop on exit. The observed request is taken by the caller
+            // once shutdown-signal ownership has dropped, which also catches
+            // anything latched during this teardown.
             self.stop()?;
 
             Ok(())
@@ -1748,5 +1807,69 @@ mod tests {
                 assert!(resp.get("error").is_some());
             });
         }
+    }
+
+    /// An embedding host tears the engine down after the run loop already
+    /// stopped it, so the second `stop()` must be a no-op rather than a second
+    /// full teardown that republishes the transition to every subscriber.
+    ///
+    /// Mental-revert: removing the already-stopped early return in `stop()`
+    /// makes the second call publish `RuntimeStopping`/`RuntimeStopped` again
+    /// and fails the counts below.
+    #[test]
+    #[serial_test::serial]
+    fn stopping_an_already_stopped_runtime_is_a_no_op() {
+        use crate::core::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
+
+        #[derive(Default)]
+        struct StopTransitionCounter {
+            stopping: usize,
+            stopped: usize,
+        }
+
+        struct CountingListener(Arc<Mutex<StopTransitionCounter>>);
+
+        impl EventListener for CountingListener {
+            fn on_event(&mut self, event: &Event) -> Result<()> {
+                let mut counts = self.0.lock();
+                match event {
+                    Event::RuntimeGlobal(RuntimeEvent::RuntimeStopping) => counts.stopping += 1,
+                    Event::RuntimeGlobal(RuntimeEvent::RuntimeStopped) => counts.stopped += 1,
+                    _ => {}
+                }
+                Ok(())
+            }
+        }
+
+        let runner = Runner::new().expect("a runner boots without a graph");
+        let counts = Arc::new(Mutex::new(StopTransitionCounter::default()));
+        let listener: Arc<Mutex<dyn EventListener>> =
+            Arc::new(Mutex::new(CountingListener(Arc::clone(&counts))));
+        PUBSUB.subscribe(topics::RUNTIME_GLOBAL, Arc::clone(&listener));
+
+        runner.stop().expect("the first stop succeeds");
+        runner.stop().expect("the second stop succeeds");
+
+        // Delivery is not synchronous with the publish, so wait for the first
+        // teardown's pair to land before counting — otherwise a duplicate that
+        // simply arrived late would read as "published once".
+        let delivery_deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::time::Instant::now() < delivery_deadline {
+            if counts.lock().stopped >= 1 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        std::thread::sleep(std::time::Duration::from_millis(250));
+
+        let observed = counts.lock();
+        assert_eq!(
+            observed.stopping, 1,
+            "RuntimeStopping must be published exactly once across two stops",
+        );
+        assert_eq!(
+            observed.stopped, 1,
+            "RuntimeStopped must be published exactly once across two stops",
+        );
     }
 }

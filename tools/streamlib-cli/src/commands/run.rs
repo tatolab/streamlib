@@ -148,11 +148,10 @@ pub fn launch_app_node(verb: AppLaunchVerb, args: AppLaunchCommandArgs) -> Resul
         },
     )?;
 
-    runtime.start()?;
     tracing::info!(
-        "Node ready with an empty graph — `streamlib nodes` lists it. Press Ctrl+C to stop."
+        "Starting node with an empty graph — `streamlib nodes` lists it. Press Ctrl+C to stop."
     );
-    runtime.wait_for_signal()?;
+    runtime.start_and_wait_for_shutdown()?;
 
     Ok(())
 }
