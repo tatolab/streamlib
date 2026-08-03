@@ -90,7 +90,8 @@ dangle silently, unreviewable PR diffs). The pipeline instead:
 
 A change proposal (`changes/<name>.md`) is written as a **delta against the plan**, never
 a restatement: sections marked `ADDED` / `MODIFIED` / `REMOVED`, ≤200 lines, deriving
-≤5 tickets. Two markers with different powers:
+as few tracer-bullet tickets as it honestly needs (count is guidance, not a cap —
+owner decision 2026-08-02). Two markers with different powers:
 
 - `[NEEDS CLARIFICATION]` — a factual gap; the agent resolves it by reading the repo.
 - `[NEEDS DECISION]` — an architectural choice; the agent may NOT resolve it. It stops,
@@ -158,7 +159,7 @@ wrangle determinism out of a stochastic system — predictability of process, no
 | `/plan` | Router. Reads ARCHITECTURE.md statuses + open changes + ticket frontier, says where you are and which skill is next. (reference, no procedure) | remembering the catalog |
 | `/align` | `batch-grilling` + `glossary` over one plan section → OPEN→DECIDED edits + diagram update. Nothing else moves. (high freedom) | the debate you want to have once |
 | `/propose-change` | Read-only recon by domain experts first (the measured fix for context-blind specs) → delta proposal with `[NEEDS DECISION]` blocks → **stop for owner approval**. (medium) | `draft-design` |
-| `/derive-tickets` | Approved change → ≤5 tracer-bullet tickets: vertical slices, each demoable, each sized to one context window, blocking edges declared; wide refactors sequenced expand→migrate-in-batches→contract. Quiz the owner on the list until approved, then publish. (medium) | `file-issue` for planned work (kept for bugs) |
+| `/derive-tickets` | Approved change → tracer-bullet tickets (as few as honestly needed; count is guidance, not a cap): vertical slices, each demoable, each sized to one context window, blocking edges declared; wide refactors sequenced expand→migrate-in-batches→contract. Quiz the owner on the list until approved, then publish. (medium) | `file-issue` for planned work (kept for bugs) |
 | `/implement` | Load ticket + its change + plan section → **plan gate**: any needed decision not DECIDED ⇒ stop with `[NEEDS DECISION]` → announce plan, owner confirms → build test-first at pre-agreed seams → gate battery via `local-ci-runner` → one review pass → PR (`Closes #N` per line). (low freedom at the gates, normal freedom in the code) | the external `amos-next` protocol, brought in-tree |
 | `/ship-change` | Fold delta into plan, flip statuses, REMOVED-grep gate, regenerate diagrams + Excalidraw export, archive. Exact scripts, no prose latitude. (lowest freedom) | nothing — the missing piece |
 | `/pivot` | Owner declares a direction change → plan edited FIRST → inventory of now-legacy code/docs/rules → a rip-out change with REMOVED sections → deletion tickets. (medium) | nothing — legitimizes the deletion agents currently resist |
@@ -267,7 +268,8 @@ PR — never accreted mid-session because something annoyed an agent once.
 
 ## Numeric caps (hard numbers survive agent interpretation; prose doesn't)
 
-- Change proposal ≤ 200 lines. Tickets per change ≤ 5 — exceeding means split the change.
+- Change proposal ≤ 200 lines. Ticket count per change is guidance, not a cap (owner
+  decision 2026-08-02): as few tracer bullets as the change honestly needs.
 - Scale gate, decided at entry: bug fix / refactor / test work → **no change artifact at
   all** (the default path); new behavior or changed contract → delta change; anything
   touching the RHI, the IPC wire format, the processor model, or the Python API's
