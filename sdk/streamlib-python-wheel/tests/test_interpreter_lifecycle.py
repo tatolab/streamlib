@@ -45,15 +45,20 @@ class AppUnderTest:
     a diagnostic.
     """
 
-    def __init__(self, process: subprocess.Popen):
+    def __init__(self, process: "subprocess.Popen[str]"):
+        # Asserted rather than assumed: without a pipe the pump below raises
+        # inside a daemon thread, and every wait in this class then fails on
+        # its timeout instead of on the reason.
+        assert process.stdout is not None, "the app was started without a stdout pipe"
         self.process = process
+        self._output_pipe = process.stdout
         self.output_lines: list[str] = []
         self._incoming: queue.Queue[str | None] = queue.Queue()
         self._reached_end_of_output = False
         threading.Thread(target=self._pump_output, daemon=True).start()
 
     def _pump_output(self) -> None:
-        for line in self.process.stdout:
+        for line in self._output_pipe:
             self._incoming.put(line)
         self._incoming.put(None)
 

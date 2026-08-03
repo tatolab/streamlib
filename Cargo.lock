@@ -5454,6 +5454,8 @@ name = "streamlib-python-wheel"
 version = "0.10.3"
 dependencies = [
  "pyo3",
+ "rmpv",
+ "serde_json",
  "streamlib",
  "tracing",
 ]
