@@ -12,7 +12,7 @@ name = "streamlib"
 # release-please's extra-files list covers only the workspace Cargo.toml, and
 # check-package-version-drift scans `packages/*`. Wiring the bump belongs with
 # release packaging (#1711); until then keep it in sync by hand on release.
-version = "0.10.2"
+version = "0.10.3"
 description = "StreamLib — a realtime streaming engine with Python authoring"
 # abi3-py310 in Cargo.toml is the binding half of this floor; the two move
 # together or the wheel claims interpreters its ABI tag does not cover.

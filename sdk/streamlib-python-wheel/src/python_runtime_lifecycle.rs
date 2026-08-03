@@ -12,9 +12,18 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
     Runner, request_runtime_shutdown, take_runtime_shutdown_request_latch,
 };
+
+use crate::python_added_processor::{
+    PythonAddedProcessor, PythonProcessorInputPortReference, PythonProcessorOutputPortReference,
+};
+use crate::python_bag_conversion::python_object_to_json_value;
+use crate::python_processor_registration::register_processor_class;
 
 /// A reference to the engine outlived the handle, so its threads were not
 /// joined and the teardown contract was not kept.
@@ -66,6 +75,32 @@ impl PythonRuntimeHandle {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// Borrow the engine to build the graph, before the run loop owns it.
+    ///
+    /// Graph building happens between construction and `run()`; once the run
+    /// loop has taken the engine there is no handle left to add to, which is
+    /// what makes this a lifecycle error rather than a missing feature.
+    fn with_engine_being_built<T>(
+        &self,
+        what: &str,
+        build: impl FnOnce(&Arc<Runner>) -> PyResult<T>,
+    ) -> PyResult<T> {
+        match &*self.lifecycle() {
+            PythonRuntimeLifecycleState::EngineConstructedNotYetRun(engine) => build(engine),
+            PythonRuntimeLifecycleState::RunLoopBlockedUntilShutdownRequested => {
+                Err(PyRuntimeError::new_err(format!(
+                    "cannot {what}: this Runtime is already running. Build the whole graph \
+                     before calling run()."
+                )))
+            }
+            PythonRuntimeLifecycleState::EngineTornDownAndThreadsJoined => {
+                Err(PyRuntimeError::new_err(format!(
+                    "cannot {what}: this Runtime has been shut down. Construct a new one."
+                )))
+            }
+        }
+    }
+
     /// Drop the engine with the GIL released, joining its threads.
     ///
     /// Releasing the GIL is not an optimization: an engine thread that needs
@@ -110,6 +145,72 @@ impl PythonRuntimeHandle {
             lifecycle: Mutex::new(PythonRuntimeLifecycleState::EngineConstructedNotYetRun(
                 engine,
             )),
+        })
+    }
+
+    /// Add a processor class to the graph.
+    ///
+    /// Takes the class, not an instance: the engine constructs it on the
+    /// thread it will run on, passing `config` as keyword arguments. Adding the
+    /// same class twice gives two processors, each with its own instance and
+    /// its own configuration.
+    #[pyo3(signature = (processor_class, *, config = None, display_name = None))]
+    fn add(
+        &self,
+        python: Python<'_>,
+        processor_class: &Bound<'_, PyAny>,
+        config: Option<&Bound<'_, PyDict>>,
+        display_name: Option<String>,
+    ) -> PyResult<PythonAddedProcessor> {
+        if !crate::python_processor_declaration::is_declared_processor_class(processor_class) {
+            return Err(PyRuntimeError::new_err(format!(
+                "{} is not a processor: decorate the class with @streamlib.processor, and pass \
+                 the class itself rather than an instance of it",
+                processor_class
+            )));
+        }
+
+        let type_reference = register_processor_class(python, processor_class)?;
+        let configuration = match config {
+            Some(config) => python_object_to_json_value(config.as_any())?,
+            None => serde_json::Value::Null,
+        };
+
+        // The same rule the graph applies when it names the node, so the handle
+        // and `streamlib graph` agree without a round trip to ask.
+        let display_name =
+            display_name.unwrap_or_else(|| type_reference.r#type().as_str().to_string());
+        let spec = ProcessorSpec::new(type_reference, configuration)
+            .with_display_name(display_name.clone());
+
+        self.with_engine_being_built("add a processor", |engine| {
+            let processor_id = python
+                .detach(|| engine.add_processor(spec))
+                .map_err(|add_failure| PyRuntimeError::new_err(add_failure.to_string()))?;
+            Ok(PythonAddedProcessor::new(
+                processor_id.as_str().to_string(),
+                display_name,
+            ))
+        })
+    }
+
+    /// Link one processor's output port to another's input port.
+    fn connect(
+        &self,
+        python: Python<'_>,
+        source: &PythonProcessorOutputPortReference,
+        destination: &PythonProcessorInputPortReference,
+    ) -> PyResult<()> {
+        let from = OutputLinkPortRef::new(source.processor_id.clone(), source.port_name.clone());
+        let to = InputLinkPortRef::new(
+            destination.processor_id.clone(),
+            destination.port_name.clone(),
+        );
+        self.with_engine_being_built("connect two processors", |engine| {
+            python
+                .detach(|| engine.connect(from, to))
+                .map(|_link_id| ())
+                .map_err(|connect_failure| PyRuntimeError::new_err(connect_failure.to_string()))
         })
     }
 

@@ -42,6 +42,11 @@ pyo3 = { version = "0.29.0", features = ["abi3-py310"] }
 # resolves nothing from source and links no build tooling.
 streamlib = { path = "../streamlib-sdk", version = "0.10.3", default-features = false }
 
+# The bag's value tree. A bag crosses into Python as ordinary Python data, and
+# `rmpv`'s native `bin` variant is what keeps a byte payload from decoding as
+# text on the way through.
+rmpv = { workspace = true }
+serde_json = { workspace = true }
 tracing = { workspace = true }
 
 [lints]

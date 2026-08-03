@@ -3,16 +3,37 @@
 
 """StreamLib — a realtime streaming engine with Python authoring.
 
-The engine runs in this interpreter's process: `Runtime()` boots it and
-`rt.run()` blocks until Ctrl-C with the GIL released.
+The engine runs in this interpreter's process: `Runtime()` boots it, `rt.add`
+puts processors in its graph, `rt.connect` links them, and `rt.run()` blocks
+until Ctrl-C with the GIL released.
 """
 
 import atexit
 import weakref
 
+from . import log as log
+from ._engine import AddedProcessor as AddedProcessor
+from ._engine import ProcessorInputPortReference as ProcessorInputPortReference
+from ._engine import ProcessorLinkDataAccess as ProcessorLinkDataAccess
+from ._engine import ProcessorOutputPortReference as ProcessorOutputPortReference
 from ._engine import Runtime as _NativeRuntime
+from ._engine import media_clock_now_ns as media_clock_now_ns
+from ._processor_declaration import LinkInputDataPort as LinkInputDataPort
+from ._processor_declaration import LinkOutputDataPort as LinkOutputDataPort
+from ._processor_declaration import processor as processor
 
-__all__ = ["Runtime"]
+__all__ = [
+    "AddedProcessor",
+    "LinkInputDataPort",
+    "LinkOutputDataPort",
+    "ProcessorInputPortReference",
+    "ProcessorLinkDataAccess",
+    "ProcessorOutputPortReference",
+    "Runtime",
+    "log",
+    "media_clock_now_ns",
+    "processor",
+]
 
 
 # Engine threads must be joined before CPython finalizes. `Runtime.run()` does
