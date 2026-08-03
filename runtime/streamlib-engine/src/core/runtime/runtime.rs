@@ -908,10 +908,17 @@ impl Runner {
     where
         F: FnMut(&Self) -> ControlFlow<()>,
     {
-        // Install signal handlers
-        crate::core::signals::install_signal_handlers().map_err(|e| {
-            crate::core::Error::Configuration(format!("Failed to install signal handlers: {}", e))
-        })?;
+        // Held to the end of this function, so the dispositions are handed back
+        // only after the teardown below has run.
+        let _shutdown_signals =
+            crate::core::signals::ScopedShutdownSignalOwnership::take_until_dropped().map_err(
+                |e| {
+                    crate::core::Error::Configuration(format!(
+                        "Failed to own shutdown signals: {}",
+                        e
+                    ))
+                },
+            )?;
 
         let shutdown_flag = Arc::new(AtomicBool::new(false));
         let shutdown_flag_clone = Arc::clone(&shutdown_flag);
