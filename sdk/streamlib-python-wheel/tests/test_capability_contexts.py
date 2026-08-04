@@ -314,7 +314,7 @@ def test_a_context_stashed_from_setup_expires_with_the_hook():
         graph.shut_down_and_take_run_outcome()
 
     stashed_context = _stashed_contexts.get_nowait()
-    with pytest.raises(RuntimeError, match="only valid during the lifecycle hook"):
+    with pytest.raises(RuntimeError, match="only valid during the lifecycle hook or escalate"):
         stashed_context.is_paused()
 
 
@@ -487,4 +487,75 @@ def test_a_closed_pixel_buffer_returns_its_pool_slot():
         graph.shut_down_and_take_run_outcome()
     assert observation["outcomes"] == ["ok"] * 8, (
         f"a closed pixel buffer did not return its pool slot: {observation['outcomes']}"
+    )
+
+
+@processor(execution="manual")
+class WorkerThreadEscalator:
+    """The native camera's shape: stash Limited in setup, escalate once on a worker.
+
+    `camera_linux.rs` is the reference — its capture thread holds only
+    `GpuContextLimitedAccess` and upgrades exactly once at thread start for
+    privileged construction. This proves a Python processor can follow the
+    same pattern rather than reaching past the type system the way
+    `avatar_character.py`'s `# type: ignore[attr-defined]` had to.
+    """
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        self._stashed_gpu_limited = ctx.gpu_limited_access
+
+    def start(self, ctx: RuntimeContextFullAccess) -> None:
+        self._worker = threading.Thread(target=self._construct_resources, daemon=True)
+        self._worker.start()
+
+    def _construct_resources(self) -> None:
+        stashed_escalated_capability = []
+
+        def privileged_construction(full):
+            with full.acquire_pixel_buffer(48, 48) as surface_handle:
+                stashed_escalated_capability.append(full)
+                return {"surface_id": surface_handle.surface_id}
+
+        try:
+            construction_outcome = self._stashed_gpu_limited.escalate(privileged_construction)
+            # The escalated capability expired with the callback; using it
+            # afterwards must raise, not silently keep privileged access.
+            try:
+                stashed_escalated_capability[0].wait_device_idle()
+                escape_outcome = "granted"
+            except RuntimeError as expiry_refusal:
+                escape_outcome = str(expiry_refusal)
+            _hook_observations.put(
+                {
+                    "observed": "worker_escalate",
+                    "construction_outcome": construction_outcome,
+                    "escape_outcome": escape_outcome,
+                }
+            )
+        except BaseException as escalate_failure:  # noqa: BLE001 — surfaced by the test
+            _hook_observations.put(
+                {"observed": "worker_escalate", "failure": repr(escalate_failure)}
+            )
+
+    def stop(self, ctx: RuntimeContextFullAccess) -> None:
+        self._worker.join(timeout=30.0)
+
+
+def test_a_worker_thread_escalates_once_like_the_native_camera():
+    graph = RunningGraph()
+    graph.runtime.add(WorkerThreadEscalator)
+    graph.start()
+    try:
+        observation = _await_observation("worker_escalate")
+    finally:
+        graph.shut_down_and_take_run_outcome()
+    assert "failure" not in observation, (
+        f"the camera pattern failed from Python: {observation.get('failure')}"
+    )
+    assert observation["construction_outcome"]["surface_id"], (
+        "escalate did not hand back the callback's return value"
+    )
+    assert "only valid during" in observation["escape_outcome"], (
+        f"an escalated capability stashed past its callback must expire, got: "
+        f"{observation['escape_outcome']!r}"
     )

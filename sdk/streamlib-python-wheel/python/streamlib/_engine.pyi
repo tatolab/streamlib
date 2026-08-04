@@ -14,10 +14,12 @@ binary no longer exports still reads as complete.
 """
 
 from types import TracebackType
-from collections.abc import Mapping
-from typing import Any, Literal, NoReturn, final
+from collections.abc import Callable, Mapping
+from typing import Any, Literal, NoReturn, TypeVar, final
 
 from typing_extensions import disjoint_base
+
+_EscalateResult = TypeVar("_EscalateResult")
 
 __all__ = [
     "AddedProcessor",
@@ -203,6 +205,8 @@ class GpuContextLimitedAccess:
         self, width: int, height: int, format: str, usage: list[str]
     ) -> GpuSurfaceHandle: ...
     def resolve_surface(self, surface_id: str) -> GpuSurfaceHandle: ...
+    def escalate(self, privileged_callback: Callable[[GpuContextFullAccess], _EscalateResult]) -> _EscalateResult:
+        """Run the callback with a temporary full-access capability, camera-pattern style."""
 
 @final
 class GpuContextFullAccess:

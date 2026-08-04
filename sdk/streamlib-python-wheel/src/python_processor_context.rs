@@ -22,7 +22,7 @@ use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use streamlib::sdk::context::{
-    GpuContextLimitedAccess, PooledTextureHandle, RuntimeContextFullAccess,
+    GpuContextFullAccess, GpuContextLimitedAccess, PooledTextureHandle, RuntimeContextFullAccess,
     RuntimeContextLimitedAccess, SurfaceStore, TexturePoolDescriptor,
 };
 use streamlib::sdk::rhi::{
@@ -69,7 +69,10 @@ type LimitedAccessRuntimeContextViewLease =
     Arc<RwLock<Option<LimitedAccessRuntimeContextViewPointer>>>;
 
 fn expired_context_error() -> PyErr {
-    PyRuntimeError::new_err("this context is only valid during the lifecycle hook that received it")
+    PyRuntimeError::new_err(
+        "this capability is only valid during the lifecycle hook or escalate callback that \
+         received it",
+    )
 }
 
 fn context_not_yet_activated_error() -> PyErr {
@@ -390,6 +393,62 @@ impl PythonGpuContextLimitedAccess {
         })
     }
 
+    /// Run `privileged_callback` with a temporary full-access GPU capability.
+    ///
+    /// The in-process door for one-shot privileged construction from a worker
+    /// thread — the pattern every native capture processor uses: stash this
+    /// object in `setup`, spawn a thread in `start`, escalate exactly once for
+    /// resource construction, run per-frame work on the limited surface. The
+    /// engine's escalate gate serializes all escalations runtime-wide and
+    /// waits for device idle afterwards, so this is for setup-shaped moments,
+    /// never per-frame — and it must never nest: an escalate inside an
+    /// escalate on one thread is a same-thread gate re-entry, which the
+    /// engine refuses by construction.
+    ///
+    /// Returns whatever the callback returns. The capability object handed to
+    /// the callback expires when the callback does — stashing it and calling
+    /// it later raises rather than granting privileged access forever.
+    fn escalate(
+        &self,
+        python: Python<'_>,
+        privileged_callback: &Bound<'_, PyAny>,
+    ) -> PyResult<Py<PyAny>> {
+        let engine_view = self.engine_view()?.clone();
+        let held_callback = privileged_callback.clone().unbind();
+        // Attaching while the escalate gate is held cannot deadlock here:
+        // every gate-entering call in this crate detaches before reaching the
+        // engine, so no thread ever waits on the gate while holding the GIL.
+        python.detach(move || {
+            let escalate_outcome: Result<PyResult<Py<PyAny>>, _> =
+                engine_view.escalate(|gpu_full_access| {
+                    let callback_lease: EscalatedGpuFullAccessViewLease =
+                        Arc::new(RwLock::new(Some(EscalatedGpuFullAccessViewPointer(
+                            NonNull::from(gpu_full_access),
+                        ))));
+                    let callback_outcome = Python::attach(|python| {
+                        let escalated_capability = Py::new(
+                            python,
+                            PythonGpuContextFullAccess {
+                                gpu_full_access_source: GpuFullAccessSource::EscalateCallback(
+                                    Arc::clone(&callback_lease),
+                                ),
+                            },
+                        )?;
+                        held_callback.call1(python, (escalated_capability,))
+                    });
+                    // Revoked detached, blocking until every in-flight reader
+                    // finishes — the pointer never outlives the closure's
+                    // borrow. A callback failure still reaches this line.
+                    *callback_lease.write() = None;
+                    Ok(callback_outcome)
+                });
+            match escalate_outcome {
+                Ok(callback_outcome) => callback_outcome,
+                Err(escalate_failure) => Err(gpu_operation_error(escalate_failure)),
+            }
+        })
+    }
+
     /// Resolve a surface id another processor published into a handle.
     fn resolve_surface(
         &self,
@@ -409,10 +468,58 @@ impl PythonGpuContextLimitedAccess {
     }
 }
 
-/// Privileged GPU capability, valid only while a full-access hook runs.
+struct EscalatedGpuFullAccessViewPointer(NonNull<GpuContextFullAccess>);
+
+// SAFETY: same protocol as the runtime-context view pointers — dereferenced
+// only under its lease's read guard, revoked (write-lock, blocking on
+// readers) before the engine borrow it erased ends.
+unsafe impl Send for EscalatedGpuFullAccessViewPointer {}
+unsafe impl Sync for EscalatedGpuFullAccessViewPointer {}
+
+type EscalatedGpuFullAccessViewLease = Arc<RwLock<Option<EscalatedGpuFullAccessViewPointer>>>;
+
+/// Where a full-access GPU capability object borrows its engine handle from.
+///
+/// One pyclass for both doors so the op surface never forks: a full-phase
+/// hook's `ctx.gpu_full_access` and the object an `escalate` callback
+/// receives are the same class, differing only in which lease scopes them.
+enum GpuFullAccessSource {
+    /// `ctx.gpu_full_access` in a setup/teardown/start/stop hook — scoped to
+    /// that hook's runtime-view lease.
+    FullAccessHook(FullAccessRuntimeContextViewLease),
+    /// The handle an [`escalate`](PythonGpuContextLimitedAccess::escalate)
+    /// callback receives — scoped to the escalate closure.
+    EscalateCallback(EscalatedGpuFullAccessViewLease),
+}
+
+/// Run `use_gpu_full_access` against whichever lease backs this capability,
+/// detached from the GIL.
+fn read_gpu_full_access<T: Send>(
+    python: Python<'_>,
+    source: &GpuFullAccessSource,
+    use_gpu_full_access: impl FnOnce(&GpuContextFullAccess) -> PyResult<T> + Send,
+) -> PyResult<T> {
+    match source {
+        GpuFullAccessSource::FullAccessHook(lease) => {
+            read_full_access_view(python, lease, |view| {
+                use_gpu_full_access(view.gpu_full_access())
+            })
+        }
+        GpuFullAccessSource::EscalateCallback(lease) => python.detach(|| {
+            let guard = lease.read();
+            let Some(view_pointer) = guard.as_ref() else {
+                return Err(expired_context_error());
+            };
+            // SAFETY: same protocol as `read_full_access_view`.
+            use_gpu_full_access(unsafe { view_pointer.0.as_ref() })
+        }),
+    }
+}
+
+/// Privileged GPU capability — a full-access hook's, or an escalate callback's.
 #[pyclass(name = "GpuContextFullAccess", module = "streamlib", frozen)]
 pub(crate) struct PythonGpuContextFullAccess {
-    full_access_view_lease: FullAccessRuntimeContextViewLease,
+    gpu_full_access_source: GpuFullAccessSource,
 }
 
 #[pymethods]
@@ -427,8 +534,7 @@ impl PythonGpuContextFullAccess {
         format: &str,
     ) -> PyResult<PythonGpuSurfaceHandle> {
         let pixel_format = parse_pixel_format_name(format)?;
-        read_full_access_view(python, &self.full_access_view_lease, |view| {
-            let gpu_full_access = view.gpu_full_access();
+        read_gpu_full_access(python, &self.gpu_full_access_source, |gpu_full_access| {
             let (pool_id, pixel_buffer) = gpu_full_access
                 .acquire_pixel_buffer(width, height, pixel_format)
                 .map_err(gpu_operation_error)?;
@@ -456,11 +562,10 @@ impl PythonGpuContextFullAccess {
     ) -> PyResult<PythonGpuSurfaceHandle> {
         let texture_format = parse_texture_format_name(format)?;
         let texture_usages = parse_texture_usage_names(&usage)?;
-        read_full_access_view(python, &self.full_access_view_lease, |view| {
+        read_gpu_full_access(python, &self.gpu_full_access_source, |gpu_full_access| {
             let descriptor = TexturePoolDescriptor::new(width, height, texture_format)
                 .with_usage(texture_usages);
-            let pooled_texture = view
-                .gpu_full_access()
+            let pooled_texture = gpu_full_access
                 .acquire_texture(&descriptor)
                 .map_err(gpu_operation_error)?;
             Ok(PythonGpuSurfaceHandle::from_pooled_texture(pooled_texture))
@@ -469,8 +574,8 @@ impl PythonGpuContextFullAccess {
 
     /// Block until the GPU device is idle.
     fn wait_device_idle(&self, python: Python<'_>) -> PyResult<()> {
-        read_full_access_view(python, &self.full_access_view_lease, |view| {
-            view.gpu_full_access()
+        read_gpu_full_access(python, &self.gpu_full_access_source, |gpu_full_access| {
+            gpu_full_access
                 .wait_device_idle()
                 .map_err(gpu_operation_error)
         })
@@ -505,7 +610,9 @@ impl PythonRuntimeContextFullAccess {
             gpu_full_access_context: Py::new(
                 python,
                 PythonGpuContextFullAccess {
-                    full_access_view_lease: Arc::clone(&full_access_view_lease),
+                    gpu_full_access_source: GpuFullAccessSource::FullAccessHook(Arc::clone(
+                        &full_access_view_lease,
+                    )),
                 },
             )?,
             gpu_limited_access_context: Py::new(
