@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.11.0](https://github.com/tatolab/streamlib/compare/v0.10.3...v0.11.0) (2026-08-04)
+
+
+### ⚠ BREAKING CHANGES
+
+* **python:** in-process authoring — capability-typed contexts, @input/@output, rt.add, GIL-release contract ([#1720](https://github.com/tatolab/streamlib/issues/1720))
+
+### Features
+
+* **python:** in-process authoring — capability-typed contexts, @input/[@output](https://github.com/output), rt.add, GIL-release contract ([#1720](https://github.com/tatolab/streamlib/issues/1720)) ([59604a2](https://github.com/tatolab/streamlib/commit/59604a255f0bc83a8a6b25336c3afbadfd67fef0)), closes [#1708](https://github.com/tatolab/streamlib/issues/1708)
+
 ## [0.10.3](https://github.com/tatolab/streamlib/compare/v0.10.2...v0.10.3) (2026-08-03)
 
 
