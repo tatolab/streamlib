@@ -13,6 +13,7 @@ members = [
     "tools/streamlib-pack",      # Package-artifact assembly shared between `streamlib pkg publish` (CLI) and `streamlib-build-orchestrator` (runtime) — emits a .slpkg or an extracted staged dir
     "tools/streamlib-build-orchestrator", # Default polyglot BuildOrchestrator impl — runtime materialization of source packages (depends on engine for the trait + cargo-build for the helpers)
     "runtime/streamlib-runtime",   # Standalone runtime binary (spawned by CLI)
+    "runtime/streamlib-media-builtins", # First-party media built-ins (test pattern, camera, display) — native blocks statically linked into the wheel
     "sdk/streamlib-processor-schema", # Processor schema types + YAML parser shared between streamlib runtime and streamlib-macros
     "sdk/streamlib-jtd-codegen", # JTD-codegen pipeline: schema YAML → typed Rust/Python/TypeScript bindings
     "sdk/streamlib-idents",    # Structured schema identifiers, semver, manifest/lockfile types (#399)

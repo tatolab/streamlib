@@ -5326,6 +5326,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "streamlib-media-builtins"
+version = "0.11.0"
+dependencies = [
+ "rmp-serde",
+ "rmpv",
+ "serde",
+ "serde_json",
+ "streamlib",
+ "tracing",
+]
+
+[[package]]
 name = "streamlib-moq"
 version = "0.11.0"
 dependencies = [
@@ -5459,6 +5471,7 @@ dependencies = [
  "rmpv",
  "serde_json",
  "streamlib",
+ "streamlib-media-builtins",
  "tracing",
 ]
 

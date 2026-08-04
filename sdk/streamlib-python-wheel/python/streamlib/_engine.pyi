@@ -35,10 +35,24 @@ __all__ = [
     "Runtime",
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
+    "TestPatternSource",
     "log_event",
     "media_clock_now_ns",
     "monotonic_now_ns",
 ]
+
+@final
+class TestPatternSource:
+    """Native built-in block: SMPTE-style color bars, no hardware.
+
+    A marker type — pass the class itself to `Runtime.add`
+    (`rt.add(TestPatternSource, config={"width": 1280, "height": 720})`);
+    it is never instantiated and its per-frame path never enters the
+    interpreter.
+    """
+
+    # Keeps pytest from collecting the `Test*`-named class in user suites.
+    __test__: Literal[False]
 
 @disjoint_base
 class Runtime:
