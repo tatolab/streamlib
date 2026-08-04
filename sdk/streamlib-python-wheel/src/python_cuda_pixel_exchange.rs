@@ -30,8 +30,10 @@
 //! copies against host memory. `cudaPointerGetAttributes` is what tells
 //! the two apart, so the capsule reports what the driver actually did.
 
-use std::os::unix::io::RawFd;
+use std::ffi::c_void;
+use std::os::fd::{AsRawFd as _, IntoRawFd as _, OwnedFd};
 
+use cudarc::runtime::result as cuda_result;
 use cudarc::runtime::result::external_memory;
 use cudarc::runtime::sys;
 use streamlib_adapter_cuda::dlpack::{Device, DeviceType};
@@ -64,12 +66,24 @@ impl CudaImportedSurface {
 
 impl Drop for CudaImportedSurface {
     fn drop(&mut self) {
-        // SAFETY: `external_memory` came from a successful
-        // `cudaImportExternalMemory` and is destroyed exactly once.
-        if let Err(destroy_failure) =
-            unsafe { external_memory::destroy_external_memory(self.external_memory) }
-        {
-            tracing::debug!(?destroy_failure, "cudaDestroyExternalMemory failed");
+        // Order matters and is not interchangeable: CUDA requires every
+        // buffer mapped onto an external-memory object to be freed
+        // *before* the object is destroyed. Freeing after — or not at
+        // all — leaks the mapping and violates the destroy precondition.
+        //
+        // SAFETY: `device_pointer` came from `get_mapped_buffer` on
+        // `external_memory` and is freed exactly once; `external_memory`
+        // came from a successful `cudaImportExternalMemory`, is destroyed
+        // exactly once, and by this line has no mapped buffers left.
+        unsafe {
+            if let Err(free_failure) = cuda_result::memory_free(self.device_pointer as *mut c_void) {
+                tracing::debug!(?free_failure, "cudaFree of the mapped buffer failed");
+            }
+            if let Err(destroy_failure) =
+                external_memory::destroy_external_memory(self.external_memory)
+            {
+                tracing::debug!(?destroy_failure, "cudaDestroyExternalMemory failed");
+            }
         }
     }
 }
@@ -132,33 +146,33 @@ fn bind_cuda_device_by_uuid(vulkan_device_uuid: [u8; 16]) -> Result<i32, String>
 /// Import an engine-exported OPAQUE_FD into CUDA and map a device
 /// pointer over it.
 ///
-/// **Consumes `opaque_fd`**: CUDA takes ownership on success, and every
-/// failure path closes it before returning.
+/// Takes `opaque_fd` by value: every early return drops it closed, and
+/// only the successful `cudaImportExternalMemory` — which adopts the fd —
+/// releases it with `into_raw_fd`. Hand-closing on each failure path
+/// would put the fd's lifetime back in the reader's head, and a later
+/// early return would silently leak it.
 pub(crate) fn import_opaque_fd_into_cuda(
-    opaque_fd: RawFd,
+    opaque_fd: OwnedFd,
     byte_size: u64,
     vulkan_device_uuid: [u8; 16],
 ) -> Result<CudaImportedSurface, String> {
     if let Some(reason) = cuda_unavailable_reason() {
-        unsafe { libc::close(opaque_fd) };
         return Err(reason);
     }
+    let device_ordinal = bind_cuda_device_by_uuid(vulkan_device_uuid)?;
 
-    let device_ordinal = match bind_cuda_device_by_uuid(vulkan_device_uuid) {
-        Ok(ordinal) => ordinal,
-        Err(binding_failure) => {
-            unsafe { libc::close(opaque_fd) };
-            return Err(binding_failure);
-        }
-    };
-
-    // SAFETY: on success the CUDA driver adopts `opaque_fd` and it must
-    // not be closed here; on failure ownership stays with us.
+    // SAFETY: the CUDA driver adopts the fd on success, so ownership is
+    // released with `into_raw_fd` only for the call that may take it. On
+    // failure the raw fd is re-adopted below so it is still closed once.
+    let raw_fd = opaque_fd.as_raw_fd();
     let external_memory =
-        match unsafe { external_memory::import_external_memory_opaque_fd(opaque_fd, byte_size) } {
-            Ok(external_memory) => external_memory,
+        match unsafe { external_memory::import_external_memory_opaque_fd(raw_fd, byte_size) } {
+            Ok(external_memory) => {
+                let _adopted_by_cuda = opaque_fd.into_raw_fd();
+                external_memory
+            }
             Err(import_failure) => {
-                unsafe { libc::close(opaque_fd) };
+                // `opaque_fd` still owns it; dropping here closes it.
                 return Err(format!("cudaImportExternalMemory: {import_failure:?}"));
             }
         };
@@ -180,7 +194,12 @@ pub(crate) fn import_opaque_fd_into_cuda(
     let dlpack_device_type = match classify_device_pointer(device_pointer) {
         Ok(device_type) => device_type,
         Err(classification_failure) => {
-            let _ = unsafe { external_memory::destroy_external_memory(external_memory) };
+            // The mapping exists by this point, so it has to go before the
+            // object it was mapped onto — same order as `Drop`.
+            unsafe {
+                let _ = cuda_result::memory_free(device_pointer as *mut c_void);
+                let _ = external_memory::destroy_external_memory(external_memory);
+            }
             return Err(classification_failure);
         }
     };

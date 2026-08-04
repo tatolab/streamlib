@@ -241,12 +241,14 @@ def test_a_read_only_lock_produces_a_read_only_view():
 
 
 def test_an_export_taken_without_a_lock_is_refused():
-    """The lock is where the wait for the producer happens.
+    """The gate is access discipline, not synchronisation.
 
-    Handing out a tensor without one would let a processor read a frame the
-    camera is still writing — a torn image that looks like a driver bug rather
-    than a missing synchronisation point. `base_address` reports 0 rather than
-    a live pointer for the same reason.
+    It does not wait for anything — ordering against the producer comes from
+    publication, since a source finishes its GPU work before it sends the
+    frame on. What the gate buys is that read/write intent is stated at the
+    call site, which is what carries through to the exported tensor's flags,
+    and that `base_address` never hands out a pointer nobody declared a use
+    for.
     """
     observation = _run_probe(UnlockedExportProbe, "unlocked_export")
     assert "not locked" in observation["unlocked_dlpack"]

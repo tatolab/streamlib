@@ -322,7 +322,12 @@ class GpuSurfaceHandle:
         traceback: TracebackType | None = ...,
     ) -> Literal[False]: ...
     def lock(self, read_only: bool = True) -> None:
-        """Open CPU access, waiting for the producer to finish writing first."""
+        """Open CPU access, declaring read or write intent.
+
+        Performs no wait — ordering against the producer comes from
+        publication, since a source finishes its GPU work before it sends the
+        frame on. `read_only=False` marks an exported tensor writable.
+        """
 
     def unlock(self, read_only: bool = True) -> None:
         """Close CPU access. Idempotent."""

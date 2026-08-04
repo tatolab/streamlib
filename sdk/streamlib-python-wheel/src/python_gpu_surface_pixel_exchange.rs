@@ -22,8 +22,7 @@
 //! rather than silently exported as its first plane.
 
 use std::ffi::{CStr, c_void};
-#[cfg(target_os = "linux")]
-use std::os::unix::io::RawFd;
+use std::os::fd::OwnedFd;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
@@ -65,9 +64,9 @@ pub(crate) struct DeviceExchangeBuffer {
     pub(crate) device_local: bool,
     /// The OPAQUE_FD, exported at acquire time because exporting needs
     /// the privileged capability and `__dlpack__` does not have one.
-    /// Consumed by the first CUDA import — which adopts the fd — and
-    /// closed by `Drop` if no export ever happens.
-    exported_opaque_fd: Mutex<Option<RawFd>>,
+    /// Taken by the first CUDA import; an `OwnedFd` so an export that
+    /// never happens still closes it, with no destructor to write.
+    exported_opaque_fd: Mutex<Option<OwnedFd>>,
     byte_size: u64,
     /// The exporting device's `VkPhysicalDeviceIDProperties::deviceUUID`,
     /// which is how the CUDA import finds the GPU that owns the memory.
@@ -79,7 +78,7 @@ impl DeviceExchangeBuffer {
     pub(crate) fn new(
         pixel_buffer: PixelBuffer,
         device_local: bool,
-        exported_opaque_fd: RawFd,
+        exported_opaque_fd: OwnedFd,
         byte_size: u64,
         vulkan_device_uuid: [u8; 16],
     ) -> Self {
@@ -89,16 +88,6 @@ impl DeviceExchangeBuffer {
             exported_opaque_fd: Mutex::new(Some(exported_opaque_fd)),
             byte_size,
             vulkan_device_uuid,
-        }
-    }
-}
-
-impl Drop for DeviceExchangeBuffer {
-    fn drop(&mut self) {
-        // Only reached when nothing ever exported to CUDA — a successful
-        // import adopts the fd and takes it out of this slot.
-        if let Some(unconsumed_fd) = self.exported_opaque_fd.lock().take() {
-            unsafe { libc::close(unconsumed_fd) };
         }
     }
 }
@@ -681,10 +670,14 @@ pub(crate) fn is_device_exchange(owned_memory: &Arc<GpuSurfaceOwnedMemory>) -> b
 
 /// Whether the surface is currently locked for CPU access, and for what.
 ///
-/// The gate is what makes "read before the producer signalled" a refusal
-/// rather than a half-drawn frame: `lock` is where the wait for the
-/// producer happens, so an export taken without one has no ordering
-/// guarantee behind it.
+/// An access-discipline flag, not a synchronisation point — it performs
+/// no wait. Ordering against the producer comes from publication: a
+/// built-in source waits on its own timeline before it writes the
+/// surface id to its output port (`camera_source.rs` does this at its
+/// host-readback wait), so a frame a consumer can name is a frame the
+/// GPU has finished writing. The gate's job is narrower: it makes the
+/// read/write intent explicit at the call site, and it is what carries
+/// `read_only` through to the exported tensor's flags.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum CpuAccessLock {
     Unlocked,
@@ -732,9 +725,9 @@ impl CpuAccessGate {
             return Ok(());
         }
         Err(PyRuntimeError::new_err(
-            "surface is not locked for CPU access: call lock() first (or use the surface as a \
-             context manager). The lock is where the wait for the producer happens, so reading \
-             without one can observe a half-written frame.",
+            "surface is not locked for CPU access: call lock() first, or use the surface as a \
+             context manager. lock(read_only=False) is also what marks the exported tensor \
+             writable.",
         ))
     }
 }

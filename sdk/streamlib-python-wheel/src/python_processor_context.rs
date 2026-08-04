@@ -31,6 +31,10 @@ use streamlib::sdk::rhi::{
     PixelBuffer, PixelBufferPoolId, PixelFormat, TextureFormat, TextureUsages,
 };
 use streamlib_adapter_cuda::dlpack::DeviceType;
+#[cfg(target_os = "linux")]
+use std::os::fd::FromRawFd as _;
+#[cfg(target_os = "linux")]
+use std::os::fd::OwnedFd;
 
 use crate::python_bag_conversion::json_value_to_python_object;
 use crate::python_gpu_surface_pixel_exchange::{
@@ -318,8 +322,12 @@ impl PythonGpuSurfaceHandle {
         false
     }
 
-    /// Open CPU access to the pixels, waiting for the producer to finish
-    /// writing them first.
+    /// Open CPU access to the pixels, declaring read or write intent.
+    ///
+    /// This performs no wait: ordering against the producer comes from
+    /// publication, since a source finishes its GPU work before it writes the
+    /// surface id downstream. `read_only=False` is what marks an exported
+    /// tensor writable.
     #[pyo3(signature = (read_only = true))]
     fn lock(&self, python: Python<'_>, read_only: bool) -> PyResult<()> {
         let owned_memory = self.owned_memory()?;
@@ -787,9 +795,12 @@ impl PythonGpuContextFullAccess {
                 .map_err(gpu_operation_error)?;
             // Exported here because exporting is privileged and `__dlpack__`
             // is not. The fd is consumed by the first CUDA import.
-            let (opaque_fd, exported_size, vulkan_device_uuid) = gpu_full_access
+            let (raw_opaque_fd, exported_size, vulkan_device_uuid) = gpu_full_access
                 .export_storage_buffer_opaque_fd(&storage_buffer)
                 .map_err(gpu_operation_error)?;
+            // SAFETY: the export hands over a fresh dup'd fd that nothing
+            // else holds, so adopting it here is the only ownership claim.
+            let opaque_fd = unsafe { OwnedFd::from_raw_fd(raw_opaque_fd) };
             Ok(PythonGpuSurfaceHandle::new(
                 None,
                 width,
