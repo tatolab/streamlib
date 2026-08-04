@@ -33,6 +33,7 @@ __all__ = [
     "ProcessorLinkDataAccess",
     "ProcessorOutputPortReference",
     "CameraSource",
+    "DisplayWindow",
     "Runtime",
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
@@ -50,6 +51,16 @@ class CameraSource:
     (`rt.add(CameraSource, config={"device_id": "/dev/video0"})`); it is
     never instantiated and its per-frame path never enters the interpreter.
     Camera→GPU transport auto-selects zero-copy DMA-BUF or CPU upload.
+    """
+
+@final
+class DisplayWindow:
+    """Native built-in block: video frames in a vsync'd window (Linux).
+
+    A marker type — pass the class itself to `Runtime.add`
+    (`rt.add(DisplayWindow, config={"title": "My app", "scaling": "fit"})`);
+    it is never instantiated and its per-frame path never enters the
+    interpreter. `scaling` is `"fit"`, `"fill"`, or `"stretch"`.
     """
 
 @final

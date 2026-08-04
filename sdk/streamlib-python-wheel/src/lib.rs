@@ -26,6 +26,7 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<PythonRuntimeHandle>()?;
     module.add_class::<python_native_builtin_blocks::PythonTestPatternSourceBlock>()?;
     module.add_class::<python_native_builtin_blocks::PythonCameraSourceBlock>()?;
+    module.add_class::<python_native_builtin_blocks::PythonDisplayWindowBlock>()?;
     module.add_class::<python_added_processor::PythonAddedProcessor>()?;
     module.add_class::<python_added_processor::PythonProcessorOutputPortReference>()?;
     module.add_class::<python_added_processor::PythonProcessorInputPortReference>()?;

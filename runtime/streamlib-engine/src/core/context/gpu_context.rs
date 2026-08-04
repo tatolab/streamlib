@@ -3716,6 +3716,56 @@ impl GpuContextFullAccess {
         }
     }
 
+    /// Build a swapchain-backed [`crate::vulkan::rhi::VulkanPresentTarget`]
+    /// from a native window handle. In-process (Boxed) only — cdylib
+    /// consumers use the plugin-ABI `create_present_target` slot, which
+    /// hands out the ABI-safe handle flavor instead.
+    #[cfg(target_os = "linux")]
+    pub fn create_present_target(
+        &self,
+        window: &(impl raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle),
+        width: u32,
+        height: u32,
+        vsync: bool,
+        color_traits: Option<&crate::core::color::ColorTraits>,
+    ) -> Result<crate::vulkan::rhi::VulkanPresentTarget> {
+        match self.handle_kind {
+            HandleKind::Boxed => crate::vulkan::rhi::VulkanPresentTarget::new(
+                &self.host_inner().device.inner,
+                window,
+                width,
+                height,
+                vsync,
+                color_traits,
+            ),
+            HandleKind::ScopeToken => Err(Error::GpuError(
+                "create_present_target: available in-process only — cdylib consumers use \
+                 the plugin-ABI present-target slot"
+                    .into(),
+            )),
+        }
+    }
+
+    /// Build a [`crate::vulkan::rhi::VulkanPresentCompositor`] for
+    /// `attachment_format` (typically the present target's
+    /// [`color_format`](crate::vulkan::rhi::VulkanPresentTarget::color_format)).
+    /// In-process (Boxed) only.
+    #[cfg(target_os = "linux")]
+    pub fn create_present_compositor(
+        &self,
+        attachment_format: crate::core::rhi::TextureFormat,
+    ) -> Result<crate::vulkan::rhi::VulkanPresentCompositor> {
+        match self.handle_kind {
+            HandleKind::Boxed => crate::vulkan::rhi::VulkanPresentCompositor::new(
+                &self.host_inner().device.inner,
+                attachment_format,
+            ),
+            HandleKind::ScopeToken => Err(Error::GpuError(
+                "create_present_compositor: available in-process only".into(),
+            )),
+        }
+    }
+
     /// Wait for the GPU device to become idle.
     ///
     /// Mode-routed; see [`Self::create_compute_kernel`] for the

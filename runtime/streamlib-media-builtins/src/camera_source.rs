@@ -14,9 +14,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
-use streamlib::sdk::color::{
-    ColorSpaceKind, MatrixId, PrimariesId, RangeId, TransferId, resolve_color_defaults,
-};
+use streamlib::sdk::color::{ColorSpaceKind, RangeId, TransferId, resolve_color_defaults};
 use streamlib::sdk::context::{GpuContextLimitedAccess, RuntimeContextFullAccess};
 use streamlib::sdk::engine::host_rhi::{
     HostSurfaceStoreExt, HostVulkanTimelineSemaphore, ImageCopyRegion, RhiCommandRecorder,
@@ -546,10 +544,13 @@ fn capture_thread_loop(
     // converter's push constants use. Held for the life of the capture
     // thread — V4L2 colorspace doesn't change mid-stream.
     let resolved_color = resolve_color_defaults(
-        cached_color_info.primaries.as_ref().map(primaries_id),
-        cached_color_info.transfer.as_ref().map(transfer_id),
-        cached_color_info.matrix.as_ref().map(matrix_id),
-        cached_color_info.range.as_ref().map(range_id),
+        cached_color_info
+            .primaries
+            .as_ref()
+            .map(Primaries::engine_id),
+        cached_color_info.transfer.as_ref().map(Transfer::engine_id),
+        cached_color_info.matrix.as_ref().map(Matrix::engine_id),
+        cached_color_info.range.as_ref().map(Range::engine_id),
         ColorSpaceKind::Yuv,
     );
 
@@ -1145,67 +1146,6 @@ fn capture_thread_loop(
     drop(camera_timeline);
 }
 
-// Per-axis maps from the bag's H.273 vocabulary to the engine's color IDs.
-// The engine accepts only its own primitive types in public signatures, so
-// each consumer translates at the boundary.
-
-fn primaries_id(p: &Primaries) -> PrimariesId {
-    match p {
-        Primaries::Bt709 => PrimariesId::Bt709,
-        Primaries::Bt470M => PrimariesId::Bt470M,
-        Primaries::Bt470Bg => PrimariesId::Bt470Bg,
-        Primaries::Smpte170m => PrimariesId::Smpte170m,
-        Primaries::Smpte240m => PrimariesId::Smpte240m,
-        Primaries::Film => PrimariesId::Film,
-        Primaries::Bt2020 => PrimariesId::Bt2020,
-        Primaries::Smpte428 => PrimariesId::Smpte428,
-        Primaries::Smpte431 => PrimariesId::Smpte431,
-        Primaries::Smpte432 => PrimariesId::Smpte432,
-        Primaries::Ebu3213 => PrimariesId::Ebu3213,
-    }
-}
-
-fn transfer_id(t: &Transfer) -> TransferId {
-    match t {
-        Transfer::Srgb => TransferId::Srgb,
-        Transfer::Bt709
-        | Transfer::Smpte170m
-        | Transfer::Bt2020TenBit
-        | Transfer::Bt2020TwelveBit => TransferId::Bt709,
-        Transfer::Smpte2084 => TransferId::Pq,
-        Transfer::AribStdB67 => TransferId::Hlg,
-        Transfer::Linear => TransferId::Linear,
-        // Gamma22 / Gamma28 / Smpte240m / Log* / Xvycc / Bt1361 / Smpte428
-        // are uncommon end-to-end; map to Linear (no transform).
-        _ => TransferId::Linear,
-    }
-}
-
-fn matrix_id(m: &Matrix) -> MatrixId {
-    match m {
-        Matrix::Identity => MatrixId::Identity,
-        Matrix::Bt709 => MatrixId::Bt709,
-        Matrix::Fcc => MatrixId::Fcc,
-        Matrix::Bt470Bg => MatrixId::Bt470Bg,
-        Matrix::Smpte170m => MatrixId::Smpte170m,
-        Matrix::Smpte240m => MatrixId::Smpte240m,
-        Matrix::Ycgco => MatrixId::Ycgco,
-        Matrix::Bt2020Ncl => MatrixId::Bt2020Ncl,
-        Matrix::Bt2020Cl => MatrixId::Bt2020Cl,
-        Matrix::Smpte2085 => MatrixId::Smpte2085,
-        Matrix::ChromaNcl => MatrixId::ChromaNcl,
-        Matrix::ChromaCl => MatrixId::ChromaCl,
-        Matrix::Ictcp => MatrixId::Ictcp,
-    }
-}
-
-fn range_id(r: &Range) -> RangeId {
-    match r {
-        Range::Limited => RangeId::Limited,
-        Range::Full => RangeId::Full,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1223,15 +1163,5 @@ mod tests {
         let config: CameraSourceConfig = serde_json::from_str("{}").expect("empty config");
         assert_eq!(config.device_id, None);
         assert_eq!((config.max_width, config.max_height), (None, None));
-    }
-
-    /// Every bag-vocabulary color axis maps to an engine ID without panicking.
-    #[test]
-    fn color_axis_maps_are_total() {
-        use crate::video_frame::{Matrix, Primaries, Range, Transfer};
-        let _ = primaries_id(&Primaries::Bt709);
-        let _ = transfer_id(&Transfer::Xvycc);
-        let _ = matrix_id(&Matrix::Ictcp);
-        let _ = range_id(&Range::Full);
     }
 }

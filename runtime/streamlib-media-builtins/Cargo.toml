@@ -23,6 +23,8 @@ tracing = { workspace = true }
 v4l = "0.14"
 uuid = { version = "1.11", features = ["v4"] }
 libc = { workspace = true }
+winit = "0.30"
+raw-window-handle = "0.6"
 
 [dev-dependencies]
 serde_json = { workspace = true }

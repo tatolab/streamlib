@@ -33,6 +33,10 @@ impl PythonTestPatternSourceBlock {
 #[pyclass(name = "CameraSource", module = "streamlib", frozen)]
 pub(crate) struct PythonCameraSourceBlock;
 
+/// `streamlib.DisplayWindow` — video frames in a vsync'd window (Linux).
+#[pyclass(name = "DisplayWindow", module = "streamlib", frozen)]
+pub(crate) struct PythonDisplayWindowBlock;
+
 /// Resolve a Python object to a native built-in's type reference, if it is
 /// one of the wheel-exported marker type objects. The identity comes from the
 /// native processor's own declaration — authored once, in the built-ins crate.
@@ -46,6 +50,10 @@ pub(crate) fn native_builtin_type_reference(
     #[cfg(target_os = "linux")]
     if processor_class.is(python.get_type::<PythonCameraSourceBlock>()) {
         return Some(streamlib_media_builtins::CameraSource::Processor::schema_ident().into());
+    }
+    #[cfg(target_os = "linux")]
+    if processor_class.is(python.get_type::<PythonDisplayWindowBlock>()) {
+        return Some(streamlib_media_builtins::DisplayWindow::Processor::schema_ident().into());
     }
     None
 }
