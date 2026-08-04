@@ -5514,6 +5514,7 @@ dependencies = [
 name = "streamlib-python-wheel"
 version = "0.11.1"
 dependencies = [
+ "cudarc",
  "libc",
  "parking_lot",
  "pyo3",

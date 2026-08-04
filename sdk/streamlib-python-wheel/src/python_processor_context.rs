@@ -18,7 +18,9 @@ use std::ptr::NonNull;
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::{Mutex, RwLock};
-use pyo3::exceptions::{PyBufferError, PyNotImplementedError, PyRuntimeError, PyValueError};
+use pyo3::exceptions::{
+    PyBufferError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError,
+};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use streamlib::sdk::context::{
@@ -28,12 +30,16 @@ use streamlib::sdk::context::{
 use streamlib::sdk::rhi::{
     PixelBuffer, PixelBufferPoolId, PixelFormat, TextureFormat, TextureUsages,
 };
+use streamlib_adapter_cuda::dlpack::DeviceType;
 
 use crate::python_bag_conversion::json_value_to_python_object;
 use crate::python_gpu_surface_pixel_exchange::{
-    CpuAccessGate, GpuSurfaceOwnedMemory, GpuSurfaceOwnedValue, HOST_VISIBLE_DLPACK_DEVICE,
-    exchange_shape_for_max_version, host_visible_dlpack_capsule, pixel_buffer_bytes_per_row,
+    CpuAccessGate, DeviceExchangeBuffer, GpuSurfaceOwnedMemory, GpuSurfaceOwnedValue,
+    HOST_VISIBLE_DLPACK_DEVICE, exchange_shape_for_max_version, host_visible_dlpack_capsule,
+    is_device_exchange, pixel_buffer_bytes_per_row,
 };
+#[cfg(target_os = "linux")]
+use crate::python_gpu_surface_pixel_exchange::{device_dlpack_capsule, imported_device_for};
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 
@@ -234,17 +240,6 @@ impl PythonGpuSurfaceHandle {
         })
     }
 
-    fn pixel_buffer_only(
-        owned_memory: &Arc<GpuSurfaceOwnedMemory>,
-    ) -> PyResult<&'_ PixelBuffer> {
-        match owned_memory.owned_value() {
-            GpuSurfaceOwnedValue::PixelBuffer(pixel_buffer) => Ok(pixel_buffer),
-            GpuSurfaceOwnedValue::PooledTexture(_) => Err(PyNotImplementedError::new_err(
-                "this surface is a pooled texture: its pixels are device-local, so CPU access \
-                 goes through the texture export path rather than a host mapping",
-            )),
-        }
-    }
 }
 
 impl Drop for PythonGpuSurfaceHandle {
@@ -288,7 +283,7 @@ impl PythonGpuSurfaceHandle {
     #[getter]
     fn bytes_per_row(&self, python: Python<'_>) -> PyResult<u64> {
         let owned_memory = self.owned_memory()?;
-        python.detach(|| pixel_buffer_bytes_per_row(Self::pixel_buffer_only(&owned_memory)?))
+        python.detach(|| pixel_buffer_bytes_per_row(owned_memory.host_mapped_pixel_buffer()?))
     }
 
     /// Base address of the host mapping, or `0` when the surface is not
@@ -301,7 +296,7 @@ impl PythonGpuSurfaceHandle {
         }
         let owned_memory = self.owned_memory()?;
         python.detach(|| {
-            Ok(Self::pixel_buffer_only(&owned_memory)?.plane_base_address(0) as usize)
+            Ok(owned_memory.host_mapped_pixel_buffer()?.plane_base_address(0) as usize)
         })
     }
 
@@ -332,8 +327,15 @@ impl PythonGpuSurfaceHandle {
     fn lock(&self, python: Python<'_>, read_only: bool) -> PyResult<()> {
         let owned_memory = self.owned_memory()?;
         python.detach(|| -> PyResult<()> {
-            let pixel_buffer = Self::pixel_buffer_only(&owned_memory)?;
-            if pixel_buffer.plane_base_address(0).is_null() {
+            // A device-only surface has no CPU mapping to open, but its
+            // export gate is the same one — so the lock is recorded and
+            // the host accessors refuse on their own terms.
+            if !is_device_exchange(&owned_memory)
+                && owned_memory
+                    .host_mapped_pixel_buffer()?
+                    .plane_base_address(0)
+                    .is_null()
+            {
                 return Err(PyBufferError::new_err(
                     "surface has no host mapping; it is a DEVICE_LOCAL allocation",
                 ));
@@ -351,11 +353,25 @@ impl PythonGpuSurfaceHandle {
     }
 
     /// The DLPack device this surface's tensors live on.
-    fn __dlpack_device__(&self) -> (i32, i32) {
-        (
+    ///
+    /// A device-exchange surface answers with the CUDA device its memory is
+    /// imported onto, performing the import if it has not happened yet — the
+    /// driver's classification of the pointer is what distinguishes true
+    /// device memory from a downgrade to pinned host memory, and guessing
+    /// here would contradict the capsule `__dlpack__` goes on to hand back.
+    fn __dlpack_device__(&self, python: Python<'_>) -> PyResult<(i32, i32)> {
+        let owned_memory = self.owned_memory()?;
+        #[cfg(target_os = "linux")]
+        if is_device_exchange(&owned_memory) {
+            let device = python.detach(|| imported_device_for(&owned_memory))?;
+            return Ok((device.device_type as i32, device.device_id));
+        }
+        #[cfg(not(target_os = "linux"))]
+        let _ = (python, &owned_memory);
+        Ok((
             HOST_VISIBLE_DLPACK_DEVICE.device_type as i32,
             HOST_VISIBLE_DLPACK_DEVICE.device_id,
-        )
+        ))
     }
 
     /// A DLPack capsule over the pixels — what `torch.from_dlpack` and
@@ -372,19 +388,15 @@ impl PythonGpuSurfaceHandle {
         python: Python<'py>,
         stream: Option<&Bound<'py, PyAny>>,
         max_version: Option<(u32, u32)>,
-        dl_device: Option<&Bound<'py, PyAny>>,
+        dl_device: Option<(i32, i32)>,
         copy: Option<bool>,
     ) -> PyResult<Bound<'py, PyAny>> {
-        // Host-visible memory has no stream to order against. The other two
-        // are refused rather than ignored: silently exporting in place when a
-        // consumer asked for a copy or a different device would hand back a
-        // tensor aliasing memory it believes it owns.
+        // No stream to order against: the host mapping is CPU memory, and the
+        // device path's ordering is the lock, not a CUDA stream.
         let _ = stream;
-        if dl_device.is_some() {
-            return Err(PyValueError::new_err(
-                "this surface exports where it already lives; it cannot move to another device",
-            ));
-        }
+        // Refused rather than ignored — exporting in place when the consumer
+        // asked for a copy hands back a tensor aliasing memory it believes it
+        // owns, and the aliasing shows up much later as corruption.
         if copy == Some(true) {
             return Err(PyValueError::new_err(
                 "this surface exports in place; ask the consumer to copy the tensor instead",
@@ -392,12 +404,32 @@ impl PythonGpuSurfaceHandle {
         }
         self.cpu_access.require_locked()?;
         let owned_memory = self.owned_memory()?;
-        host_visible_dlpack_capsule(
-            python,
-            &owned_memory,
-            exchange_shape_for_max_version(max_version),
-            self.cpu_access.is_read_only(),
-        )
+        let exchange_shape = exchange_shape_for_max_version(max_version);
+        let read_only = self.cpu_access.is_read_only();
+
+        // `dl_device` is the consumer's request for a particular side of a
+        // surface that has two. Absent means "wherever you naturally live",
+        // which for an exchange buffer is the device it was allocated for.
+        let wants_host = match dl_device {
+            Some((device_type, _)) => device_type == DeviceType::Cpu as i32,
+            None => !is_device_exchange(&owned_memory),
+        };
+        if wants_host {
+            return host_visible_dlpack_capsule(
+                python,
+                &owned_memory,
+                exchange_shape,
+                read_only,
+            );
+        }
+        #[cfg(target_os = "linux")]
+        {
+            device_dlpack_capsule(python, &owned_memory, exchange_shape, read_only)
+        }
+        #[cfg(not(target_os = "linux"))]
+        Err(PyValueError::new_err(
+            "device export is available on Linux only",
+        ))
     }
 
     /// A numpy view of the pixels, sharing memory with the surface.
@@ -412,8 +444,24 @@ impl PythonGpuSurfaceHandle {
             PyRuntimeError::new_err("as_numpy needs numpy installed; `__dlpack__` works without it")
         })?;
         // `from_dlpack` consumes the exporting object and calls `__dlpack__`
-        // on it, so there is exactly one export path.
-        numpy.call_method1("from_dlpack", (python_self,))
+        // on it, so there is exactly one export path. `device="cpu"` is not
+        // decoration: an exchange surface's natural side is the GPU, and
+        // without the request numpy would be handed a device pointer and
+        // refuse it.
+        let host_request = pyo3::types::PyDict::new(python);
+        host_request.set_item("device", "cpu")?;
+        numpy
+            .call_method("from_dlpack", (python_self,), Some(&host_request))
+            .map_err(|from_dlpack_failure| {
+                if from_dlpack_failure.is_instance_of::<PyTypeError>(python) {
+                    return PyRuntimeError::new_err(
+                        "as_numpy needs numpy 2.1 or newer, whose `from_dlpack` accepts a \
+                         `device` request; older numpy cannot ask for the host side of a \
+                         surface",
+                    );
+                }
+                from_dlpack_failure
+            })
     }
 }
 
@@ -699,6 +747,74 @@ impl PythonGpuContextFullAccess {
                 .acquire_texture(&descriptor)
                 .map_err(gpu_operation_error)?;
             Ok(PythonGpuSurfaceHandle::from_pooled_texture(pooled_texture))
+        })
+    }
+
+    /// Acquire a buffer whose memory external device code can import.
+    ///
+    /// The engine allocates it OPAQUE_FD-exportable — the handle flavour CUDA
+    /// imports — rather than from the ordinary pixel-buffer pool, whose
+    /// allocations are DMA-BUF-flavoured and have no OPAQUE_FD export path
+    /// under VMA's per-pool memory configuration. `device_local=False` keeps a
+    /// host mapping alongside, so the same bytes serve numpy and CUDA.
+    ///
+    /// Privileged and setup-shaped: allocate once and keep the handle, never
+    /// per frame.
+    #[cfg(target_os = "linux")]
+    #[pyo3(signature = (width, height, format = "bgra", device_local = true))]
+    fn acquire_device_exchange_buffer(
+        &self,
+        python: Python<'_>,
+        width: u32,
+        height: u32,
+        format: &str,
+        device_local: bool,
+    ) -> PyResult<PythonGpuSurfaceHandle> {
+        let pixel_format = parse_pixel_format_name(format)?;
+        let bytes_per_pixel = device_exchange_bytes_per_pixel(pixel_format)?;
+        let byte_size = u64::from(width) * u64::from(height) * u64::from(bytes_per_pixel);
+        if byte_size == 0 {
+            return Err(PyValueError::new_err(
+                "width and height must both be greater than zero",
+            ));
+        }
+        read_gpu_full_access(python, &self.gpu_full_access_source, |gpu_full_access| {
+            let storage_buffer = gpu_full_access
+                .create_opaque_fd_export_buffer(byte_size, device_local)
+                .map_err(gpu_operation_error)?;
+            // One allocation, two views: the pixel-shaped wrapper shares the
+            // storage buffer's `Arc<HostVulkanBuffer>` rather than copying.
+            let pixel_buffer = gpu_full_access
+                .wrap_storage_buffer_as_pixel_buffer(
+                    &storage_buffer,
+                    width,
+                    height,
+                    bytes_per_pixel,
+                    pixel_format,
+                )
+                .map_err(gpu_operation_error)?;
+            // Exported here because exporting is privileged and `__dlpack__`
+            // is not. The fd is consumed by the first CUDA import.
+            let (opaque_fd, exported_size, vulkan_device_uuid) = gpu_full_access
+                .export_storage_buffer_opaque_fd(&storage_buffer)
+                .map_err(gpu_operation_error)?;
+            Ok(PythonGpuSurfaceHandle::new(
+                None,
+                width,
+                height,
+                pixel_format_name(pixel_format).to_string(),
+                GpuSurfaceOwnedMemory::new(
+                    GpuSurfaceOwnedValue::DeviceExchange(DeviceExchangeBuffer::new(
+                        pixel_buffer,
+                        device_local,
+                        opaque_fd,
+                        exported_size,
+                        vulkan_device_uuid,
+                    )),
+                    None,
+                    None,
+                ),
+            ))
         })
     }
 
@@ -1117,6 +1233,24 @@ fn texture_format_name(format: TextureFormat) -> &'static str {
         TextureFormat::Rgba16Float => "rgba16_float",
         TextureFormat::Rgba32Float => "rgba32_float",
         TextureFormat::Nv12 => "nv12",
+    }
+}
+
+/// Bytes per pixel for the formats a device-exchange buffer can carry.
+///
+/// Restricted to the single-plane formats deliberately: the allocation is a
+/// flat buffer sized `width * height * bytes_per_pixel`, and a multi-plane
+/// format has no single such size.
+fn device_exchange_bytes_per_pixel(format: PixelFormat) -> PyResult<u32> {
+    match format {
+        PixelFormat::Bgra32 | PixelFormat::Rgba32 | PixelFormat::Argb32 => Ok(4),
+        PixelFormat::Rgba64 => Ok(8),
+        PixelFormat::Gray8 => Ok(1),
+        PixelFormat::Yuyv422 | PixelFormat::Uyvy422 => Ok(2),
+        multi_plane_or_unknown => Err(PyValueError::new_err(format!(
+            "pixel format {multi_plane_or_unknown:?} has no flat device-exchange size: a \
+             device-exchange buffer is one linear allocation, which a multi-plane format is not"
+        ))),
     }
 }
 

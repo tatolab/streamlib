@@ -22,13 +22,18 @@
 //! rather than silently exported as its first plane.
 
 use std::ffi::{CStr, c_void};
+#[cfg(target_os = "linux")]
+use std::os::unix::io::RawFd;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use pyo3::exceptions::{PyBufferError, PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyBufferError, PyNotImplementedError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use streamlib::sdk::context::{PooledTextureHandle, SurfaceStore};
 use streamlib::sdk::rhi::{PixelBuffer, PixelFormat};
+
+#[cfg(target_os = "linux")]
+use crate::python_cuda_pixel_exchange::{CudaImportedSurface, import_opaque_fd_into_cuda};
 use streamlib_adapter_cuda::dlpack::{
     self, DataType, DataTypeCode, Device, DeviceType, Flags, ManagedTensor,
     ManagedTensorVersioned,
@@ -45,6 +50,60 @@ const DLPACK_VERSIONED_CAPSULE_NAME: &CStr = c"dltensor_versioned";
 // Owned memory — the lifetime anchor shared by the handle and its capsules
 // =============================================================================
 
+/// An engine allocation whose memory CUDA can import: an OPAQUE_FD
+/// `StorageBuffer`, plus the pixel-shaped view of the same allocation.
+///
+/// The two are one allocation, not two — `wrap_storage_buffer_as_pixel_buffer`
+/// shares the underlying `Arc<HostVulkanBuffer>`. That is what lets a
+/// host-visible exchange buffer serve numpy and CUDA from the same bytes.
+pub(crate) struct DeviceExchangeBuffer {
+    /// The allocation, pixel-shaped. This alone keeps it alive — the wrap
+    /// shares the storage buffer's `Arc`, so holding both would be one
+    /// refcount doing nothing.
+    pub(crate) pixel_buffer: PixelBuffer,
+    /// Device-local allocations have no host mapping, so `as_numpy` and
+    /// the CPU DLPack path refuse rather than hand back a null pointer.
+    pub(crate) device_local: bool,
+    /// The OPAQUE_FD, exported at acquire time because exporting needs
+    /// the privileged capability and `__dlpack__` does not have one.
+    /// Consumed by the first CUDA import — which adopts the fd — and
+    /// closed by `Drop` if no export ever happens.
+    exported_opaque_fd: Mutex<Option<RawFd>>,
+    byte_size: u64,
+    /// The exporting device's `VkPhysicalDeviceIDProperties::deviceUUID`,
+    /// which is how the CUDA import finds the GPU that owns the memory.
+    vulkan_device_uuid: [u8; 16],
+}
+
+#[cfg(target_os = "linux")]
+impl DeviceExchangeBuffer {
+    pub(crate) fn new(
+        pixel_buffer: PixelBuffer,
+        device_local: bool,
+        exported_opaque_fd: RawFd,
+        byte_size: u64,
+        vulkan_device_uuid: [u8; 16],
+    ) -> Self {
+        Self {
+            pixel_buffer,
+            device_local,
+            exported_opaque_fd: Mutex::new(Some(exported_opaque_fd)),
+            byte_size,
+            vulkan_device_uuid,
+        }
+    }
+}
+
+impl Drop for DeviceExchangeBuffer {
+    fn drop(&mut self) {
+        // Only reached when nothing ever exported to CUDA — a successful
+        // import adopts the fd and takes it out of this slot.
+        if let Some(unconsumed_fd) = self.exported_opaque_fd.lock().take() {
+            unsafe { libc::close(unconsumed_fd) };
+        }
+    }
+}
+
 /// The engine resource a [`GpuSurfaceOwnedMemory`] keeps alive.
 pub(crate) enum GpuSurfaceOwnedValue {
     PixelBuffer(PixelBuffer),
@@ -52,6 +111,7 @@ pub(crate) enum GpuSurfaceOwnedValue {
     /// it once the texture half of the exchange surface lands.
     #[expect(dead_code, reason = "lifetime-only until the texture export path reads it")]
     PooledTexture(PooledTextureHandle),
+    DeviceExchange(DeviceExchangeBuffer),
 }
 
 /// The engine value plus the surface-store release it owes, held behind
@@ -69,6 +129,11 @@ pub(crate) struct GpuSurfaceOwnedMemory {
     /// only if release evicts it.
     surface_store_owing_a_release: Option<SurfaceStore>,
     minted_surface_id: Option<String>,
+    /// The CUDA import, made on first device export and kept here rather
+    /// than on the handle: a capsule outliving its handle must keep the
+    /// import alive too, or the device pointer it carries dangles.
+    #[cfg(target_os = "linux")]
+    cuda_import: Mutex<Option<Arc<CudaImportedSurface>>>,
 }
 
 impl GpuSurfaceOwnedMemory {
@@ -81,17 +146,45 @@ impl GpuSurfaceOwnedMemory {
             owned_value,
             surface_store_owing_a_release,
             minted_surface_id,
+            #[cfg(target_os = "linux")]
+            cuda_import: Mutex::new(None),
         })
     }
 
-    pub(crate) fn owned_value(&self) -> &GpuSurfaceOwnedValue {
-        &self.owned_value
+    /// The host-mapped pixel view, or a refusal naming why this surface
+    /// has none. The single answer to "can the CPU address these bytes?"
+    /// — every host-side accessor routes through it.
+    pub(crate) fn host_mapped_pixel_buffer(&self) -> PyResult<&PixelBuffer> {
+        match &self.owned_value {
+            GpuSurfaceOwnedValue::PixelBuffer(pixel_buffer) => Ok(pixel_buffer),
+            GpuSurfaceOwnedValue::DeviceExchange(exchange) if !exchange.device_local => {
+                Ok(&exchange.pixel_buffer)
+            }
+            GpuSurfaceOwnedValue::DeviceExchange(_) => Err(PyBufferError::new_err(
+                "this exchange buffer is device-local: its bytes live in VRAM with no host \
+                 mapping. Export it to CUDA with `__dlpack__`, or acquire it with \
+                 `device_local=False` to reach it from the CPU as well.",
+            )),
+            GpuSurfaceOwnedValue::PooledTexture(_) => Err(PyNotImplementedError::new_err(
+                "this surface is a pooled texture: its pixels are device-local and tiled, so CPU \
+                 access goes through the texture export path rather than a host mapping",
+            )),
+        }
     }
 
-    fn pixel_buffer(&self) -> Option<&PixelBuffer> {
+    /// The pixel shape of this surface, host mapping or not.
+    fn pixel_shape(&self) -> Option<&PixelBuffer> {
         match &self.owned_value {
             GpuSurfaceOwnedValue::PixelBuffer(pixel_buffer) => Some(pixel_buffer),
+            GpuSurfaceOwnedValue::DeviceExchange(exchange) => Some(&exchange.pixel_buffer),
             GpuSurfaceOwnedValue::PooledTexture(_) => None,
+        }
+    }
+
+    fn device_exchange(&self) -> Option<&DeviceExchangeBuffer> {
+        match &self.owned_value {
+            GpuSurfaceOwnedValue::DeviceExchange(exchange) => Some(exchange),
+            GpuSurfaceOwnedValue::PixelBuffer(_) | GpuSurfaceOwnedValue::PooledTexture(_) => None,
         }
     }
 }
@@ -383,12 +476,7 @@ pub(crate) fn host_visible_dlpack_capsule<'py>(
     exchange_shape: DlpackExchangeShape,
     read_only: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let pixel_buffer = owned_memory.pixel_buffer().ok_or_else(|| {
-        PyRuntimeError::new_err(
-            "this surface is a pooled texture; its pixels are device-local and reach a linear \
-             tensor through the texture export path, not the host mapping",
-        )
-    })?;
+    let pixel_buffer = owned_memory.host_mapped_pixel_buffer()?;
 
     let base_address = pixel_buffer.plane_base_address(0);
     if base_address.is_null() {
@@ -439,6 +527,133 @@ pub(crate) fn host_visible_dlpack_capsule<'py>(
             ),
         ),
     }
+}
+
+// =============================================================================
+// Device export — the same memory, in CUDA's dialect
+// =============================================================================
+
+/// Import this surface's memory into CUDA, or return the cached import.
+///
+/// The import is cached on the shared owned-memory anchor rather than
+/// redone per export, both because `cudaImportExternalMemory` is
+/// expensive and because every tensor must name the *same* device
+/// pointer — a second import would produce a second mapping of the same
+/// bytes, and freeing one would strand the other.
+#[cfg(target_os = "linux")]
+fn cuda_import_for(
+    owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+) -> PyResult<Arc<CudaImportedSurface>> {
+    let mut cached = owned_memory.cuda_import.lock();
+    if let Some(existing) = cached.as_ref() {
+        return Ok(Arc::clone(existing));
+    }
+    let exchange = owned_memory.device_exchange().ok_or_else(|| {
+        PyRuntimeError::new_err(
+            "this surface was not allocated for device exchange: acquire it with \
+             `acquire_device_exchange_buffer` so its memory is OPAQUE_FD-exportable. A pooled \
+             pixel buffer is DMA-BUF-flavoured and cannot export the handle CUDA imports.",
+        )
+    })?;
+    let opaque_fd = exchange.exported_opaque_fd.lock().take().ok_or_else(|| {
+        PyRuntimeError::new_err(
+            "this surface's export handle was already consumed and the import did not survive; \
+             acquire the buffer again",
+        )
+    })?;
+    let imported =
+        import_opaque_fd_into_cuda(opaque_fd, exchange.byte_size, exchange.vulkan_device_uuid)
+            .map(Arc::new)
+            .map_err(PyRuntimeError::new_err)?;
+    *cached = Some(Arc::clone(&imported));
+    Ok(imported)
+}
+
+/// Build a DLPack capsule over this surface's CUDA device pointer.
+///
+/// The capsule owner holds both the engine allocation and the CUDA
+/// import, so a tensor outliving its handle keeps a live mapping — the
+/// same lifetime contract as the host path, extended across the second
+/// allocator.
+#[cfg(target_os = "linux")]
+pub(crate) fn device_dlpack_capsule<'py>(
+    python: Python<'py>,
+    owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+    exchange_shape: DlpackExchangeShape,
+    read_only: bool,
+) -> PyResult<Bound<'py, PyAny>> {
+    let imported = cuda_import_for(owned_memory)?;
+    let pixel_shape = owned_memory
+        .pixel_shape()
+        .ok_or_else(|| PyRuntimeError::new_err("this surface has no pixel shape to export"))?;
+    // A device-exchange allocation is tightly packed by construction —
+    // it is sized `width * height * bytes_per_pixel` at acquire, with no
+    // driver row padding to discover.
+    let bytes_per_row = pixel_buffer_bytes_per_row(pixel_shape)?;
+    let layout = PixelExchangeTensorLayout::for_pixel_format(
+        pixel_shape.format(),
+        pixel_shape.width,
+        pixel_shape.height,
+        bytes_per_row,
+    )?;
+
+    let device_pointer = imported.device_pointer();
+    let device = imported.dlpack_device();
+    // Two owners in one box: the engine's allocation and CUDA's mapping
+    // of it. Dropping either early dangles the other.
+    let owner: Box<dyn std::any::Any + Send> =
+        Box::new((Arc::clone(owned_memory), Arc::clone(&imported)));
+
+    match exchange_shape {
+        DlpackExchangeShape::Versioned => {
+            let flags = if read_only {
+                Flags::READ_ONLY
+            } else {
+                Flags::empty()
+            };
+            dlpack_versioned_capsule_from_managed_tensor(
+                python,
+                dlpack::build_managed_tensor_versioned(
+                    device_pointer,
+                    layout.shape,
+                    Some(layout.strides),
+                    layout.dtype,
+                    device,
+                    flags,
+                    owner,
+                ),
+            )
+        }
+        DlpackExchangeShape::Unversioned => dlpack_capsule_from_managed_tensor(
+            python,
+            dlpack::build_managed_tensor(
+                device_pointer,
+                layout.shape,
+                Some(layout.strides),
+                layout.dtype,
+                device,
+                owner,
+            ),
+        ),
+    }
+}
+
+/// The DLPack device this surface's memory is imported onto, importing
+/// it if that has not happened yet.
+///
+/// Answering without the import would mean guessing whether the driver
+/// produced device or pinned-host memory — and a wrong guess here
+/// contradicts the capsule the very next call hands back.
+#[cfg(target_os = "linux")]
+pub(crate) fn imported_device_for(
+    owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+) -> PyResult<Device> {
+    Ok(cuda_import_for(owned_memory)?.dlpack_device())
+}
+
+/// Whether this surface was allocated for device exchange.
+pub(crate) fn is_device_exchange(owned_memory: &Arc<GpuSurfaceOwnedMemory>) -> bool {
+    owned_memory.device_exchange().is_some()
 }
 
 // =============================================================================

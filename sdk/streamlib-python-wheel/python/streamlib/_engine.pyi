@@ -258,6 +258,20 @@ class GpuContextFullAccess:
     def acquire_texture(
         self, width: int, height: int, format: str, usage: list[str]
     ) -> GpuSurfaceHandle: ...
+    def acquire_device_exchange_buffer(
+        self,
+        width: int,
+        height: int,
+        format: str = "bgra",
+        device_local: bool = True,
+    ) -> GpuSurfaceHandle:
+        """Acquire a buffer whose memory external device code can import.
+
+        Allocated OPAQUE_FD-exportable — the handle flavour CUDA imports.
+        `device_local=False` keeps a host mapping alongside, so the same bytes
+        serve numpy and CUDA. Setup-shaped: allocate once, never per frame.
+        """
+
     def wait_device_idle(self) -> None: ...
 
 @final

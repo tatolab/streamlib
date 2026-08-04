@@ -63,11 +63,20 @@ tracing = { workspace = true }
 
 # Raw CLOCK_MONOTONIC + timerfd: the wheel's clock contract is the kernel's
 # monotonic epoch (comparable to `time.clock_gettime_ns(time.CLOCK_MONOTONIC)`),
-# which std does not expose.
+# which std does not expose. Also the fd ownership the CUDA import path needs.
 libc = { workspace = true }
 # Guards the lifecycle-scoped context leases; non-poisoning, so a panicking
 # hook cannot wedge every later lease install.
 parking_lot = "0.12"
+
+# The CUDA import half of the pixel exchange. Depended on unconditionally on
+# Linux rather than behind a feature: `fallback-dynamic-loading` means
+# `libcuda.so` is dlopen'd at first use, never linked, so a machine without an
+# NVIDIA driver gets a clean "no CUDA driver" refusal instead of a wheel that
+# fails to load. That is the plan's portability model, and the shape
+# `streamlib-python-native` already ships.
+[target.'cfg(target_os = "linux")'.dependencies]
+cudarc = { workspace = true }
 
 [lints]
 workspace = true
