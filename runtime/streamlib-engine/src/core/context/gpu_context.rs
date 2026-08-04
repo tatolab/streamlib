@@ -3697,6 +3697,25 @@ impl GpuContextLimitedAccess {
 }
 
 impl GpuContextFullAccess {
+    /// Construct an OPAQUE_FD-exportable timeline semaphore (the FullAccess
+    /// entry point [`GpuContext::create_exportable_timeline_semaphore`]
+    /// documents). In-process (Boxed) only — the cdylib scope-token path has
+    /// no vtable slot for it.
+    #[cfg(target_os = "linux")]
+    pub fn create_exportable_timeline_semaphore(
+        &self,
+        initial_value: u64,
+    ) -> Result<std::sync::Arc<crate::vulkan::rhi::HostVulkanTimelineSemaphore>> {
+        match self.handle_kind {
+            HandleKind::Boxed => self
+                .host_inner()
+                .create_exportable_timeline_semaphore(initial_value),
+            HandleKind::ScopeToken => Err(Error::GpuError(
+                "create_exportable_timeline_semaphore: available in-process only".into(),
+            )),
+        }
+    }
+
     /// Wait for the GPU device to become idle.
     ///
     /// Mode-routed; see [`Self::create_compute_kernel`] for the
@@ -5100,7 +5119,8 @@ impl GpuContextFullAccess {
             HandleKind::ScopeToken => {
                 if self.vtable.is_null() {
                     return Err(Error::GpuError(
-                        "create_opaque_fd_export_buffer: GpuContextFullAccess has null vtable".into(),
+                        "create_opaque_fd_export_buffer: GpuContextFullAccess has null vtable"
+                            .into(),
                     ));
                 }
                 let mut out_buffer: std::mem::MaybeUninit<crate::core::rhi::StorageBuffer> =
@@ -5265,15 +5285,11 @@ impl GpuContextFullAccess {
                     ));
                 }
                 let (consume_handle, consume_value) = match consume_done {
-                    Some((sem, value)) => {
-                        (sem as *const _ as *const std::ffi::c_void, value)
-                    }
+                    Some((sem, value)) => (sem as *const _ as *const std::ffi::c_void, value),
                     None => (std::ptr::null(), 0),
                 };
                 let (produce_handle, produce_value) = match produce_done {
-                    Some((sem, value)) => {
-                        (sem as *const _ as *const std::ffi::c_void, value)
-                    }
+                    Some((sem, value)) => (sem as *const _ as *const std::ffi::c_void, value),
                     None => (std::ptr::null(), 0),
                 };
                 let mut err_buf = [0u8; 512];
@@ -5303,7 +5319,6 @@ impl GpuContextFullAccess {
             }
         }
     }
-
 
     /// Read-once GPU capability snapshot. Backs the camera processor's
     /// vendor-name / external-memory / cross-device-DMA-BUF-probe
@@ -5674,7 +5689,13 @@ mod tests {
         // Wrap → PixelBuffer sharing the same allocation, with the
         // caller's pixel-shape metadata cached.
         let pixel_buffer = gpu
-            .wrap_storage_buffer_as_pixel_buffer(&storage, W, H, BPP, crate::core::rhi::PixelFormat::Bgra32)
+            .wrap_storage_buffer_as_pixel_buffer(
+                &storage,
+                W,
+                H,
+                BPP,
+                crate::core::rhi::PixelFormat::Bgra32,
+            )
             .expect("wrap_storage_buffer_as_pixel_buffer failed");
         assert_eq!(pixel_buffer.width, W);
         assert_eq!(pixel_buffer.height, H);
@@ -5875,7 +5896,10 @@ mod tests {
         for i in 0..BYTES as usize {
             let got = unsafe { *dst_ptr.add(i) };
             let want = (i % 251) as u8;
-            assert_eq!(got, want, "destination byte {i} mismatch: got {got}, want {want}");
+            assert_eq!(
+                got, want,
+                "destination byte {i} mismatch: got {got}, want {want}"
+            );
         }
 
         println!(

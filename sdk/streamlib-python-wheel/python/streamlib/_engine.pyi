@@ -32,6 +32,7 @@ __all__ = [
     "ProcessorInputPortReference",
     "ProcessorLinkDataAccess",
     "ProcessorOutputPortReference",
+    "CameraSource",
     "Runtime",
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
@@ -40,6 +41,16 @@ __all__ = [
     "media_clock_now_ns",
     "monotonic_now_ns",
 ]
+
+@final
+class CameraSource:
+    """Native built-in block: live V4L2 camera capture (Linux).
+
+    A marker type — pass the class itself to `Runtime.add`
+    (`rt.add(CameraSource, config={"device_id": "/dev/video0"})`); it is
+    never instantiated and its per-frame path never enters the interpreter.
+    Camera→GPU transport auto-selects zero-copy DMA-BUF or CPU upload.
+    """
 
 @final
 class TestPatternSource:

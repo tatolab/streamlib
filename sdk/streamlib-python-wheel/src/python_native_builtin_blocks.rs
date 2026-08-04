@@ -29,6 +29,10 @@ impl PythonTestPatternSourceBlock {
     }
 }
 
+/// `streamlib.CameraSource` — live V4L2 camera capture (Linux).
+#[pyclass(name = "CameraSource", module = "streamlib", frozen)]
+pub(crate) struct PythonCameraSourceBlock;
+
 /// Resolve a Python object to a native built-in's type reference, if it is
 /// one of the wheel-exported marker type objects. The identity comes from the
 /// native processor's own declaration — authored once, in the built-ins crate.
@@ -38,6 +42,10 @@ pub(crate) fn native_builtin_type_reference(
 ) -> Option<ProcessorTypeReference> {
     if processor_class.is(python.get_type::<PythonTestPatternSourceBlock>()) {
         return Some(streamlib_media_builtins::TestPatternSource::Processor::schema_ident().into());
+    }
+    #[cfg(target_os = "linux")]
+    if processor_class.is(python.get_type::<PythonCameraSourceBlock>()) {
+        return Some(streamlib_media_builtins::CameraSource::Processor::schema_ident().into());
     }
     None
 }
