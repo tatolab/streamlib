@@ -1,26 +1,40 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The device half of the pixel exchange, proven against a real GPU.
+"""The device half of the pixel exchange: graph frames as GPU tensors.
 
-An exchange buffer's memory is allocated by the engine, imported by CUDA, and
-handed to a framework as a DLPack tensor — no copy, and CUDA never allocates.
-What is worth breaking a build over here is the import landing on the right
-device, the capsule reporting the memory it actually got, and the tensor
-outliving its handle across two allocators rather than one.
+A frame published into the graph reaches CUDA through one engine-side blit
+into an exportable staging buffer — zero CPU copies, and CUDA never
+allocates. The consumer writes ordinary user code: resolve the frame,
+`torch.from_dlpack`, work on a CUDA tensor. What is worth breaking a build
+over is that the tensor really is device-resident, that its pixels are the
+frame's pixels, that a device-side edit publishes back into the surface at
+unlock, and that a tensor outliving its handle keeps every layer of the
+mapping alive.
 
-These need an NVIDIA driver as well as a GPU; a rig without one skips rather
-than fails, because the refusal path is itself covered below.
+These need an NVIDIA driver as well as a GPU; a rig without one skips,
+because the CPU fallback is itself under test.
 """
 
 import queue
 import threading
 import time
 
+import numpy
 import pytest
 
 import streamlib
-from streamlib import RuntimeContextFullAccess, processor
+
+# `input` is streamlib's port decorator — the test reads like user code,
+# which spells it exactly this way.
+from streamlib import (  # noqa: A004
+    RuntimeContextFullAccess,
+    RuntimeContextLimitedAccess,
+    TestPatternSource,
+    VideoFrame,
+    input,
+    processor,
+)
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -69,21 +83,30 @@ def _observe(matching: str, probe_body):
         _hook_observations.put({"observed": matching, "failure": traceback.format_exc()})
 
 
-def _run_probe(probe_class: type, matching: str) -> dict:
-    graph = RunningGraph()
-    graph.runtime.add(probe_class)
-    graph.start()
+def _await_observation(matching: str) -> dict:
     deadline = time.monotonic() + PIPELINE_TIMEOUT_SECONDS
+    while True:
+        remaining = deadline - time.monotonic()
+        assert remaining > 0, f"no {matching!r} observation arrived within the timeout"
+        try:
+            observation = _hook_observations.get(timeout=min(0.5, remaining))
+        except queue.Empty:
+            continue
+        if observation.get("observed") == matching:
+            return observation
+
+
+def _run_frame_probe(probe_class: type, matching: str) -> dict:
+    """Run TestPatternSource → probe and collect the probe's observation."""
+    graph = RunningGraph()
+    pattern = graph.runtime.add(
+        TestPatternSource, config={"width": SURFACE_WIDTH, "height": SURFACE_HEIGHT}
+    )
+    probe = graph.runtime.add(probe_class)
+    graph.runtime.connect(pattern.output("video"), probe.input("video_from_upstream"))
+    graph.start()
     try:
-        while True:
-            remaining = deadline - time.monotonic()
-            assert remaining > 0, f"no {matching!r} observation arrived within the timeout"
-            try:
-                observation = _hook_observations.get(timeout=min(0.5, remaining))
-            except queue.Empty:
-                continue
-            if observation.get("observed") == matching:
-                break
+        observation = _await_observation(matching)
     finally:
         graph.shut_down()
     if "failure" in observation:
@@ -91,194 +114,255 @@ def _run_probe(probe_class: type, matching: str) -> dict:
     return observation
 
 
-def _skip_without_cuda_driver(observation: dict) -> None:
+def _skip_without_cuda(observation: dict) -> None:
     reason = observation.get("cuda_unavailable")
     if reason:
-        pytest.skip(f"no usable CUDA driver on this rig: {reason}")
+        pytest.skip(f"no usable CUDA runtime on this rig: {reason}")
+
+
+class _FrameProbeBase:
+    """Reads exactly one frame bag, then reports through `_observe`."""
+
+    observation_name = ""
+
+    def _probe(self, ctx: RuntimeContextLimitedAccess, frame: VideoFrame) -> dict:
+        raise NotImplementedError
+
+    @input(delivery_profile="every_sample")
+    def video_from_upstream(self) -> None: ...
+
+    def __init__(self) -> None:
+        self.frames_seen = 0
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        bag = ctx.inputs.read("video_from_upstream")
+        if bag is None or self.frames_seen >= 1:
+            return
+        self.frames_seen += 1
+        _observe(self.observation_name, lambda: self._probe(ctx, VideoFrame.from_bag(bag)))
 
 
 # ---------------------------------------------------------------------------
-# The export itself
+# The headline: a graph frame is a CUDA tensor
 # ---------------------------------------------------------------------------
 
 
-def _host_request_outcome(surface_handle) -> str:
-    """What asking a device-local surface for its host side does."""
-    try:
-        surface_handle.__dlpack__(max_version=(1, 0), dl_device=(DLPACK_DEVICE_CPU, 0))
-    except BufferError:
-        return "device-local, as expected"
-    return "handed back a host tensor"
+@processor
+class GraphFrameToTorchProbe(_FrameProbeBase):
+    observation_name = "graph_frame_to_torch"
 
-
-@processor(execution="manual")
-class DeviceExportProbe:
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _observe("device_export", lambda: self._probe(ctx))
-
-    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
-        with ctx.gpu_full_access.acquire_device_exchange_buffer(
-            SURFACE_WIDTH, SURFACE_HEIGHT
-        ) as surface_handle:
-            surface_handle.lock(read_only=False)
-            try:
-                reported_device = surface_handle.__dlpack_device__()
-            except RuntimeError as import_failure:
-                return {"cuda_unavailable": str(import_failure)}
-            capsule = surface_handle.__dlpack__(max_version=(1, 0))
-            observation = {
-                "reported_device": reported_device,
-                "capsule_type": type(capsule).__name__,
-                # The import is cached, so a second query must agree with the
-                # first — two imports of one allocation would be two mappings,
-                # and freeing either would strand the other.
-                "device_on_second_query": surface_handle.__dlpack_device__(),
-                # The host side is still reachable on request, which is what
-                # `as_numpy` relies on for a non-device-local buffer.
-                "host_request_refused": _host_request_outcome(surface_handle),
-            }
-            surface_handle.unlock()
-            return observation
-
-
-def test_an_exchange_buffer_exports_device_memory_to_dlpack():
-    """The reported device is the one the driver actually mapped onto.
-
-    `__dlpack_device__` performs the import rather than predicting its
-    outcome, because `cudaPointerGetAttributes` is what distinguishes true
-    device memory from a driver that quietly downgraded to pinned host
-    memory — and a consumer trusts this answer before it ever looks at the
-    capsule.
-    """
-    observation = _run_probe(DeviceExportProbe, "device_export")
-    _skip_without_cuda_driver(observation)
-    assert observation["capsule_type"] == "PyCapsule"
-    device_type, device_ordinal = observation["reported_device"]
-    assert device_type == DLPACK_DEVICE_CUDA, (
-        f"the imported pointer was classified as device type {device_type}, not CUDA device "
-        f"memory — the driver downgraded the import"
-    )
-    assert device_ordinal >= 0
-    assert observation["device_on_second_query"] == observation["reported_device"]
-    assert observation["host_request_refused"] == "device-local, as expected"
-
-
-# ---------------------------------------------------------------------------
-# The round trip a user actually writes
-# ---------------------------------------------------------------------------
-
-
-@processor(execution="manual")
-class TorchRoundTripProbe:
-    """Writes through the host view, reads back as a torch CUDA tensor."""
-
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _observe("torch_round_trip", lambda: self._probe(ctx))
-
-    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+    def _probe(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
         import torch
 
-        # `device_local=False` keeps a host mapping alongside the
-        # device-importable one, so the same bytes can be seeded from the CPU
-        # and then read by CUDA — which is what makes this a round trip rather
-        # than two unrelated observations.
-        with ctx.gpu_full_access.acquire_device_exchange_buffer(
-            SURFACE_WIDTH, SURFACE_HEIGHT, "bgra", False
-        ) as surface_handle:
-            surface_handle.lock(read_only=False)
-            try:
-                tensor = torch.from_dlpack(surface_handle)
-            except RuntimeError as export_failure:
-                return {"cuda_unavailable": str(export_failure)}
-
+        with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
+            surface.lock()
+            reported_device = surface.__dlpack_device__()
+            if reported_device[0] != DLPACK_DEVICE_CUDA:
+                surface.unlock()
+                return {"cuda_unavailable": f"__dlpack_device__ reported {reported_device}"}
+            tensor = torch.from_dlpack(surface)
+            host_view = numpy.from_dlpack(surface, device="cpu")
             observation = {
+                "reported_device": reported_device,
                 "tensor_device": str(tensor.device),
                 "tensor_shape": tuple(tensor.shape),
                 "tensor_dtype": str(tensor.dtype),
+                # The tensor's pixels are the frame's pixels: compare a
+                # sample against the host mapping of the same surface.
+                "pixels_match_host": bool(
+                    (tensor[3, 5].cpu().numpy() == host_view[3, 5]).all()
+                ),
             }
-            # A write on the GPU, read back through the host mapping of the
-            # same allocation. If anything copied, this does not survive.
-            tensor[:, :, :] = 0
-            tensor[4, 6] = torch.tensor(
-                [12, 34, 56, 78], dtype=torch.uint8, device=tensor.device
-            )
-            torch.cuda.synchronize()
-            host_view = surface_handle.as_numpy()
-            observation["pixel_seen_by_the_host"] = host_view[4, 6].tolist()
-            observation["an_untouched_pixel"] = host_view[0, 0].tolist()
-            surface_handle.unlock()
+            surface.unlock()
             return observation
 
 
-def test_a_torch_cuda_tensor_and_the_host_view_are_the_same_memory():
-    """The headline contract: a GPU write is visible to the CPU with no copy.
+def test_a_graph_frame_reaches_torch_as_a_cuda_tensor():
+    """The ticket's headline, in the user's own spelling.
 
-    torch writes through a CUDA device pointer; the host mapping of the same
-    engine allocation observes it. Two mappings, one allocation — which is the
-    whole claim the exchange surface makes.
+    `torch.from_dlpack(resolved_frame)` yields a GPU-resident tensor whose
+    pixels are the frame's pixels — one engine-side blit, no CPU copy, no
+    user-facing buffer flavour to pick.
     """
     pytest.importorskip("torch")
-    observation = _run_probe(TorchRoundTripProbe, "torch_round_trip")
-    _skip_without_cuda_driver(observation)
+    observation = _run_frame_probe(GraphFrameToTorchProbe, "graph_frame_to_torch")
+    _skip_without_cuda(observation)
+    assert observation["reported_device"][0] == DLPACK_DEVICE_CUDA
     assert observation["tensor_device"].startswith("cuda")
     assert observation["tensor_shape"] == (SURFACE_HEIGHT, SURFACE_WIDTH, 4)
     assert observation["tensor_dtype"] == "torch.uint8"
-    assert observation["pixel_seen_by_the_host"] == [12, 34, 56, 78]
-    assert observation["an_untouched_pixel"] == [0, 0, 0, 0]
+    assert observation["pixels_match_host"], (
+        "the CUDA tensor's pixels differ from the frame's — the blit exported the wrong memory"
+    )
 
 
 # ---------------------------------------------------------------------------
-# Lifetime across two allocators
+# In-place edit: device write publishes back at unlock
 # ---------------------------------------------------------------------------
 
 
-@processor(execution="manual")
-class TensorOutlivesExchangeBufferProbe:
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _observe("tensor_outlives_exchange", lambda: self._probe(ctx))
+@processor
+class DeviceEditProbe(_FrameProbeBase):
+    observation_name = "device_edit"
 
-    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+    def _probe(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
         import torch
 
-        surface_handle = ctx.gpu_full_access.acquire_device_exchange_buffer(
-            SURFACE_WIDTH, SURFACE_HEIGHT
-        )
-        surface_handle.lock(read_only=False)
-        try:
-            tensor = torch.from_dlpack(surface_handle)
-        except RuntimeError as export_failure:
-            return {"cuda_unavailable": str(export_failure)}
-        tensor[:, :, :] = 5
+        gpu = ctx.gpu_limited_access
+        with gpu.resolve_surface(frame.surface_id) as surface:
+            surface.lock(read_only=False)
+            if surface.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
+                surface.unlock()
+                return {"cuda_unavailable": "device side not reachable"}
+            tensor = torch.from_dlpack(surface)
+            tensor[:, :, :] = 0
+            tensor[9, 11] = torch.tensor(
+                [17, 34, 51, 68], dtype=torch.uint8, device=tensor.device
+            )
+            torch.cuda.synchronize()
+            # unlock is the publication point for a device-side write.
+            surface.unlock()
+
+        with gpu.resolve_surface(frame.surface_id) as reread:
+            reread.lock()
+            fresh_view = numpy.from_dlpack(reread, device="cpu")
+            observation = {
+                "pixel_after_publish": fresh_view[9, 11].tolist(),
+                "cleared_pixel": fresh_view[0, 0].tolist(),
+            }
+            reread.unlock()
+            return observation
+
+
+def test_a_device_side_edit_publishes_back_to_the_surface_at_unlock():
+    """The mutate-in-place demo, on the GPU.
+
+    torch writes the staging buffer; `unlock()` copies it back into the
+    frame's own allocation, so a second, independent resolve observes the
+    edit. Mental-revert: drop the copy-back from unlock and the fresh
+    resolve reads the original pattern.
+    """
+    pytest.importorskip("torch")
+    observation = _run_frame_probe(DeviceEditProbe, "device_edit")
+    _skip_without_cuda(observation)
+    assert observation["pixel_after_publish"] == [17, 34, 51, 68]
+    assert observation["cleared_pixel"] == [0, 0, 0, 0]
+
+
+# ---------------------------------------------------------------------------
+# Lifetime across three layers
+# ---------------------------------------------------------------------------
+
+
+@processor
+class TensorOutlivesHandleProbe(_FrameProbeBase):
+    observation_name = "tensor_outlives_handle"
+
+    def _probe(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
+        import torch
+
+        surface = ctx.gpu_limited_access.resolve_surface(frame.surface_id)
+        surface.lock()
+        if surface.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
+            surface.unlock()
+            return {"cuda_unavailable": "device side not reachable"}
+        tensor = torch.from_dlpack(surface)
+        checksum_before = int(tensor.to(torch.int64).sum().item())
+        surface.unlock()
+        surface.close()
+        del surface
+
+        # The handle is gone; the tensor must still address live memory —
+        # its capsule holds the surface, the staging, and the CUDA import.
         torch.cuda.synchronize()
-
-        # The frame is done with; the tensor is not.
-        surface_handle.unlock()
-        surface_handle.close()
-        del surface_handle
-
-        # Reaching the memory now goes through both the engine allocation and
-        # the CUDA import, either of which being freed early would fault here.
+        checksum_after = int(tensor.to(torch.int64).sum().item())
         return {
-            "sum_after_close": int(tensor.sum().item()),
-            "expected_sum": SURFACE_WIDTH * SURFACE_HEIGHT * 4 * 5,
+            "checksum_before": checksum_before,
+            "checksum_after": checksum_after,
         }
 
 
 def test_a_device_tensor_outliving_its_handle_keeps_a_live_mapping():
-    """Use-after-free across two allocators.
-
-    The capsule owns a share of both the engine allocation and the CUDA
-    import, so closing the handle frees neither while a tensor is live.
-
-    Mental-revert: drop the `CudaImportedSurface` from the capsule's owner —
-    `cudaDestroyExternalMemory` then runs while torch still holds the pointer.
-    """
+    """Use-after-free across the engine allocation, the staging, and the
+    CUDA import — closing the handle frees none of them while a tensor
+    lives."""
     pytest.importorskip("torch")
-    observation = _run_probe(
-        TensorOutlivesExchangeBufferProbe, "tensor_outlives_exchange"
+    observation = _run_frame_probe(TensorOutlivesHandleProbe, "tensor_outlives_handle")
+    _skip_without_cuda(observation)
+    assert observation["checksum_after"] == observation["checksum_before"]
+
+
+# ---------------------------------------------------------------------------
+# The explicit host side, and refusals
+# ---------------------------------------------------------------------------
+
+
+@processor
+class HostSideProbe(_FrameProbeBase):
+    observation_name = "host_side"
+
+    def _probe(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
+        with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
+            surface.lock()
+            host_view = numpy.from_dlpack(surface, device="cpu")
+            via_as_numpy = surface.as_numpy()
+            observation = {
+                "host_shape": host_view.shape,
+                "as_numpy_shape": via_as_numpy.shape,
+                "same_pixels": bool((host_view[2, 2] == via_as_numpy[2, 2]).all()),
+            }
+            surface.unlock()
+            return observation
+
+
+def test_the_host_side_stays_reachable_on_explicit_request():
+    """`dl_device=(1, 0)` — numpy's `device="cpu"` — still yields the host
+    mapping when a device side exists; `as_numpy` rides the same request."""
+    observation = _run_frame_probe(HostSideProbe, "host_side")
+    assert observation["host_shape"] == (SURFACE_HEIGHT, SURFACE_WIDTH, 4)
+    assert observation["as_numpy_shape"] == (SURFACE_HEIGHT, SURFACE_WIDTH, 4)
+    assert observation["same_pixels"]
+
+
+@processor(execution="manual")
+class NoExportKeyProbe:
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        _observe("no_export_key", lambda: self._probe(ctx))
+
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        outcomes = {}
+        # A pooled texture carries no surface id — nothing keys an export.
+        with ctx.gpu_limited_access.acquire_texture(
+            SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", ["copy_src", "texture_binding"]
+        ) as texture_handle:
+            outcomes["texture_device"] = texture_handle.__dlpack_device__()
+
+        # An acquired pixel buffer resolves the device path through its id.
+        with ctx.gpu_limited_access.acquire_pixel_buffer(
+            SURFACE_WIDTH, SURFACE_HEIGHT
+        ) as buffer_handle:
+            outcomes["acquired_buffer_device"] = buffer_handle.__dlpack_device__()
+        return outcomes
+
+
+def test_export_keying_matches_what_the_surface_carries():
+    graph = RunningGraph()
+    graph.runtime.add(NoExportKeyProbe)
+    graph.start()
+    try:
+        observation = _await_observation("no_export_key")
+    finally:
+        graph.shut_down()
+    if "failure" in observation:
+        pytest.fail(f"the probe raised:\n{observation['failure']}")
+    # No id → no device export to attempt; the host mapping answers.
+    assert observation["texture_device"] == (DLPACK_DEVICE_CPU, 0)
+    # An id + the limited capability → the device side may answer (CUDA)
+    # or fall back to the host on a driverless rig; both are legal here.
+    assert observation["acquired_buffer_device"][0] in (
+        DLPACK_DEVICE_CPU,
+        DLPACK_DEVICE_CUDA,
     )
-    _skip_without_cuda_driver(observation)
-    assert observation["sum_after_close"] == observation["expected_sum"]
 
 
 # ---------------------------------------------------------------------------
@@ -325,74 +409,17 @@ def test_a_dma_buf_export_reimports_as_the_same_memory():
     """The export/import pair is a handle to one allocation, not a copy.
 
     This is the shape third-party native code gets: an fd it can hand to EGL,
-    a V4L2 output device, or another process. Round-tripping it through the
-    engine's own importer is how we check the handle actually describes the
-    frame rather than merely being a valid fd.
+    a V4L2 output device, or another process.
     """
-    observation = _run_probe(DmaBufRoundTripProbe, "dma_buf_round_trip")
+    graph = RunningGraph()
+    graph.runtime.add(DmaBufRoundTripProbe)
+    graph.start()
+    try:
+        observation = _await_observation("dma_buf_round_trip")
+    finally:
+        graph.shut_down()
+    if "failure" in observation:
+        pytest.fail(f"the probe raised:\n{observation['failure']}")
     assert observation["fd_is_real"]
     assert observation["byte_size"] == observation["expected_byte_size"]
     assert observation["pixel_seen_through_the_import"] == [21, 43, 65, 87]
-
-
-# ---------------------------------------------------------------------------
-# Refusals
-# ---------------------------------------------------------------------------
-
-
-@processor(execution="manual")
-class ExchangeRefusalProbe:
-    def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _observe("exchange_refusals", lambda: self._probe(ctx))
-
-    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
-        outcomes = {}
-        gpu_full = ctx.gpu_full_access
-
-        # A device-local buffer has no host mapping to hand numpy.
-        with gpu_full.acquire_device_exchange_buffer(
-            SURFACE_WIDTH, SURFACE_HEIGHT
-        ) as device_only:
-            device_only.lock()
-            try:
-                device_only.as_numpy()
-                outcomes["numpy_on_device_local"] = "returned a view"
-            except BufferError as refusal:
-                outcomes["numpy_on_device_local"] = str(refusal)
-            device_only.unlock()
-
-        # An ordinary pooled pixel buffer is DMA-BUF-flavoured, so it has no
-        # OPAQUE_FD to give CUDA. Refusing beats importing nothing.
-        with ctx.gpu_limited_access.acquire_pixel_buffer(
-            SURFACE_WIDTH, SURFACE_HEIGHT
-        ) as pooled:
-            pooled.lock()
-            outcomes["pooled_buffer_device"] = pooled.__dlpack_device__()
-            pooled.unlock()
-
-        try:
-            gpu_full.acquire_device_exchange_buffer(SURFACE_WIDTH, SURFACE_HEIGHT, "nv12")
-            outcomes["nv12_exchange"] = "allocated"
-        except ValueError as refusal:
-            outcomes["nv12_exchange"] = str(refusal)
-
-        # The two external-handle flavours are not interchangeable: an
-        # exchange buffer is OPAQUE_FD and has no DMA-BUF to give.
-        with gpu_full.acquire_device_exchange_buffer(
-            SURFACE_WIDTH, SURFACE_HEIGHT
-        ) as exchange_buffer:
-            try:
-                gpu_full.export_dma_buf(exchange_buffer)
-                outcomes["dma_buf_from_exchange_buffer"] = "exported"
-            except ValueError as refusal:
-                outcomes["dma_buf_from_exchange_buffer"] = str(refusal)
-        return outcomes
-
-
-def test_the_device_path_refuses_what_it_cannot_honour():
-    observation = _run_probe(ExchangeRefusalProbe, "exchange_refusals")
-    assert "device-local" in observation["numpy_on_device_local"]
-    # A pooled buffer never claims CUDA: it has no device import to report.
-    assert observation["pooled_buffer_device"] == (DLPACK_DEVICE_CPU, 0)
-    assert "one linear allocation" in observation["nv12_exchange"]
-    assert "OPAQUE_FD-flavoured" in observation["dma_buf_from_exchange_buffer"]

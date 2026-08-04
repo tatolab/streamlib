@@ -258,20 +258,6 @@ class GpuContextFullAccess:
     def acquire_texture(
         self, width: int, height: int, format: str, usage: list[str]
     ) -> GpuSurfaceHandle: ...
-    def acquire_device_exchange_buffer(
-        self,
-        width: int,
-        height: int,
-        format: str = "bgra",
-        device_local: bool = True,
-    ) -> GpuSurfaceHandle:
-        """Acquire a buffer whose memory external device code can import.
-
-        Allocated OPAQUE_FD-exportable — the handle flavour CUDA imports.
-        `device_local=False` keeps a host mapping alongside, so the same bytes
-        serve numpy and CUDA. Setup-shaped: allocate once, never per frame.
-        """
-
     def export_dma_buf(self, surface: GpuSurfaceHandle) -> tuple[int, int]:
         """Export a DMA-BUF file descriptor for `surface`, as `(fd, byte_size)`.
 
@@ -344,6 +330,13 @@ class GpuSurfaceHandle:
         copy: bool | None = ...,
     ) -> Any:
         """A DLPack capsule over the pixels. Requires a lock.
+
+        A graph frame's natural side is the device: with a usable CUDA
+        runtime the tensor is GPU-resident (one engine-side blit into an
+        exportable staging buffer — zero CPU copies, never claimed
+        copy-free); otherwise, or with `dl_device=(1, 0)`, it is the host
+        mapping. A writable device tensor's edits publish back to the
+        surface at `unlock()`.
 
         The tensor may outlive this handle: it holds its own share of the
         surface, so the pool slot is not reused until the tensor is released.

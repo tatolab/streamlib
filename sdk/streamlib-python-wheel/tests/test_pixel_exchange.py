@@ -144,7 +144,6 @@ class NumpyViewProbe:
                 "strides": view.strides,
                 "bytes_per_row": surface_handle.bytes_per_row,
                 "owns_its_data": view.flags["OWNDATA"],
-                "dlpack_device": surface_handle.__dlpack_device__(),
             }
             surface_handle.unlock()
             return observation
@@ -165,8 +164,6 @@ def test_the_numpy_view_is_a_shared_window_with_the_allocations_row_pitch():
     assert not observation["owns_its_data"], (
         "the view copied the pixels instead of sharing them"
     )
-    # kDLCPU — a host-visible mapping, addressed with ordinary loads.
-    assert observation["dlpack_device"] == (1, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -416,9 +413,10 @@ class DlpackConsumerProbe:
         ) as surface_handle:
             surface_handle.lock(read_only=False)
             surface_handle.as_numpy()[2, 2] = [1, 2, 3, 4]
-            # What a framework's own `from_dlpack` does: consume the exporting
-            # object, which calls `__dlpack__` on it.
-            consumed = numpy.from_dlpack(surface_handle)
+            # What a CPU framework's `from_dlpack` does: consume the exporting
+            # object, asking for the host side — a graph frame's natural side
+            # is the device, so the request is load-bearing, not decoration.
+            consumed = numpy.from_dlpack(surface_handle, device="cpu")
             observation = {
                 "pixel": consumed[2, 2].tolist(),
                 "shape": consumed.shape,

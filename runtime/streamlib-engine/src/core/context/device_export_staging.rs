@@ -130,40 +130,39 @@ impl GpuContext {
         surface_id: &str,
         texture_layout: Option<i32>,
     ) -> Result<Arc<SurfaceDeviceExportStaging>> {
-        let (source, staging_byte_size, writable) =
-            match self.resolve_texture_registration_by_surface_id(surface_id, texture_layout, 0, 0)
-            {
-                Ok(registration) => {
-                    let texture = registration.texture();
-                    let (width, height, format) =
-                        (texture.width(), texture.height(), texture.format());
-                    let bytes_per_pixel = texture_format_bytes_per_pixel(format)?;
-                    let byte_size = u64::from(width) * u64::from(height) * bytes_per_pixel;
-                    (
-                        DeviceExportSource::RegisteredTexture {
-                            registration,
-                            width,
-                            height,
-                        },
-                        byte_size,
-                        false,
-                    )
+        let (source, staging_byte_size, writable) = match self
+            .resolve_texture_registration_by_surface_id(surface_id, texture_layout, 0, 0)
+        {
+            Ok(registration) => {
+                let texture = registration.texture();
+                let (width, height, format) = (texture.width(), texture.height(), texture.format());
+                let bytes_per_pixel = texture_format_bytes_per_pixel(format)?;
+                let byte_size = u64::from(width) * u64::from(height) * bytes_per_pixel;
+                (
+                    DeviceExportSource::RegisteredTexture {
+                        registration,
+                        width,
+                        height,
+                    },
+                    byte_size,
+                    false,
+                )
+            }
+            Err(_) => {
+                let pixel_buffer = self.resolve_pixel_buffer_by_surface_id(surface_id)?;
+                let byte_size = pixel_buffer.plane_size(0);
+                if byte_size == 0 {
+                    return Err(Error::GpuError(format!(
+                        "surface {surface_id} resolves to a zero-byte plane; nothing to export"
+                    )));
                 }
-                Err(_) => {
-                    let pixel_buffer = self.resolve_pixel_buffer_by_surface_id(surface_id)?;
-                    let byte_size = pixel_buffer.plane_size(0);
-                    if byte_size == 0 {
-                        return Err(Error::GpuError(format!(
-                            "surface {surface_id} resolves to a zero-byte plane; nothing to export"
-                        )));
-                    }
-                    (
-                        DeviceExportSource::PixelBuffer { pixel_buffer },
-                        byte_size,
-                        true,
-                    )
-                }
-            };
+                (
+                    DeviceExportSource::PixelBuffer { pixel_buffer },
+                    byte_size,
+                    true,
+                )
+            }
+        };
 
         let vulkan_device = self.device().vulkan_device();
         let staging_buffer = Arc::new(HostVulkanBuffer::new_opaque_fd_export_device_local(
@@ -237,7 +236,9 @@ impl GpuContext {
                 )?;
             }
         }
-        let signal_value = staging.next_refill_signal_value.fetch_add(1, Ordering::SeqCst);
+        let signal_value = staging
+            .next_refill_signal_value
+            .fetch_add(1, Ordering::SeqCst);
         recorder.submit_signaling_timeline(&staging.refill_done_timeline, signal_value)?;
         drop(recorder);
         staging
@@ -270,7 +271,9 @@ impl GpuContext {
             pixel_buffer,
             staging.staging_byte_size,
         )?;
-        let signal_value = staging.next_refill_signal_value.fetch_add(1, Ordering::SeqCst);
+        let signal_value = staging
+            .next_refill_signal_value
+            .fetch_add(1, Ordering::SeqCst);
         recorder.submit_signaling_timeline(&staging.refill_done_timeline, signal_value)?;
         drop(recorder);
         staging
@@ -287,7 +290,10 @@ impl GpuContext {
         staging: &SurfaceDeviceExportStaging,
     ) -> Result<(std::os::unix::io::RawFd, u64, [u8; 16])> {
         let fd = staging.staging_buffer.export_opaque_fd_memory()?;
-        let uuid = staging.staging_buffer.vulkan_device().physical_device_uuid();
+        let uuid = staging
+            .staging_buffer
+            .vulkan_device()
+            .physical_device_uuid();
         Ok((fd, staging.staging_byte_size, uuid))
     }
 }
