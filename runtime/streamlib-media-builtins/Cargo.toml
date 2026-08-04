@@ -1,0 +1,26 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-media-builtins"
+description = "First-party media built-ins: native pre-built blocks (test-pattern source, camera, display) statically linked into the wheel and instantiated from Python by configuration. Written against the SDK's handle-shaped primitives, never engine internals."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lib]
+name = "streamlib_media_builtins"
+path = "src/lib.rs"
+
+[dependencies]
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.11.0", default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+tracing = { version = "0.1.41", features = ["release_max_level_debug"] }
+
+[dev-dependencies]
+serde_json = { version = "1.0", features = ["preserve_order"] }
+
+[lints]
+workspace = true
