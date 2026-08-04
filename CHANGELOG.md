@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.11.1](https://github.com/tatolab/streamlib/compare/v0.11.0...v0.11.1) (2026-08-04)
+
+
+### Features
+
+* **media:** CameraSource + DisplayWindow built-ins — live camera to window, verified on the rig ([#1733](https://github.com/tatolab/streamlib/issues/1733)) ([5cb2d86](https://github.com/tatolab/streamlib/commit/5cb2d8670c4f4fc21bb46be6bba947fdabb5cba5))
+* **media:** media built-ins foundation — present compositor, TestPatternSource, rt.add native blocks ([#1732](https://github.com/tatolab/streamlib/issues/1732)) ([6082a16](https://github.com/tatolab/streamlib/commit/6082a16244482b4c9a0b04ce34552cd4c07ed4b1))
+
 ## [0.11.0](https://github.com/tatolab/streamlib/compare/v0.10.3...v0.11.0) (2026-08-04)
 
 
