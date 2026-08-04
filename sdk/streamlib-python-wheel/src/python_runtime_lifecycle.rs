@@ -12,9 +12,18 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
+use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
+use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::{
     Runner, request_runtime_shutdown, take_runtime_shutdown_request_latch,
 };
+
+use crate::python_added_processor::{
+    PythonAddedProcessor, PythonProcessorInputPortReference, PythonProcessorOutputPortReference,
+};
+use crate::python_bag_conversion::python_object_to_json_value;
+use crate::python_processor_registration::register_processor_class;
 
 /// A reference to the engine outlived the handle, so its threads were not
 /// joined and the teardown contract was not kept.
@@ -66,6 +75,43 @@ impl PythonRuntimeHandle {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    /// Take a reference to the engine to build the graph, before the run loop
+    /// owns it.
+    ///
+    /// Graph building happens between construction and `run()`; once the run
+    /// loop has taken the engine there is no handle left to add to, which is
+    /// what makes this a lifecycle error rather than a missing feature.
+    ///
+    /// Returns an owned `Arc` rather than lending the guard's contents, so the
+    /// lock is released before the caller detaches. Holding it across a
+    /// GIL-released engine call deadlocks: `detach` re-attaches before it
+    /// returns, so this thread would wait for the GIL while holding the lock
+    /// that `run()` and `shutdown()` take *with* the GIL held.
+    ///
+    /// What that trades away: a `shutdown()` landing while an `add` still holds
+    /// its clone makes teardown's `Arc::into_inner` return `None` and report an
+    /// incomplete teardown. Harmless here and only here — this state is
+    /// pre-`start()`, so the engine owns no threads for the report to be about,
+    /// and the adder's clone drops moments later. The alternative is making
+    /// teardown wait out an in-flight `add`, which reintroduces the wait this
+    /// exists to avoid.
+    fn engine_being_built(&self, what: &str) -> PyResult<Arc<Runner>> {
+        match &*self.lifecycle() {
+            PythonRuntimeLifecycleState::EngineConstructedNotYetRun(engine) => Ok(engine.clone()),
+            PythonRuntimeLifecycleState::RunLoopBlockedUntilShutdownRequested => {
+                Err(PyRuntimeError::new_err(format!(
+                    "cannot {what}: this Runtime is already running. Build the whole graph \
+                     before calling run()."
+                )))
+            }
+            PythonRuntimeLifecycleState::EngineTornDownAndThreadsJoined => {
+                Err(PyRuntimeError::new_err(format!(
+                    "cannot {what}: this Runtime has been shut down. Construct a new one."
+                )))
+            }
+        }
+    }
+
     /// Drop the engine with the GIL released, joining its threads.
     ///
     /// Releasing the GIL is not an optimization: an engine thread that needs
@@ -111,6 +157,75 @@ impl PythonRuntimeHandle {
                 engine,
             )),
         })
+    }
+
+    /// Add a processor class to the graph.
+    ///
+    /// Takes the class, not an instance. `config` becomes the keyword arguments
+    /// the class is constructed with — which happens later, on the engine's
+    /// compile thread as `run()` brings the graph up, so a failing `__init__`
+    /// surfaces from `run()` rather than from here. Adding the same class twice
+    /// gives two processors, each with its own instance and configuration.
+    #[pyo3(signature = (processor_class, *, config = None, display_name = None))]
+    fn add(
+        &self,
+        python: Python<'_>,
+        processor_class: &Bound<'_, PyAny>,
+        config: Option<&Bound<'_, PyDict>>,
+        display_name: Option<String>,
+    ) -> PyResult<PythonAddedProcessor> {
+        if !crate::python_processor_declaration::is_declared_processor_class(processor_class) {
+            return Err(PyRuntimeError::new_err(format!(
+                "{} is not a processor: decorate the class with @streamlib.processor, and pass \
+                 the class itself rather than an instance of it",
+                processor_class
+            )));
+        }
+
+        // Before registering: registration writes to the process-global
+        // registry, and a runtime that can no longer be built should not leave
+        // a processor type behind for a node that will never exist.
+        let engine = self.engine_being_built("add a processor")?;
+
+        let type_reference = register_processor_class(python, processor_class)?;
+        let configuration = match config {
+            Some(config) => python_object_to_json_value(config.as_any())?,
+            None => serde_json::Value::Null,
+        };
+
+        // The same rule the graph applies when it names the node, so the handle
+        // and `streamlib graph` agree without a round trip to ask.
+        let display_name =
+            display_name.unwrap_or_else(|| type_reference.r#type().as_str().to_string());
+        let spec = ProcessorSpec::new(type_reference, configuration)
+            .with_display_name(display_name.clone());
+
+        let processor_id = python
+            .detach(|| engine.add_processor(spec))
+            .map_err(|add_failure| PyRuntimeError::new_err(add_failure.to_string()))?;
+        Ok(PythonAddedProcessor::new(
+            processor_id.as_str().to_string(),
+            display_name,
+        ))
+    }
+
+    /// Link one processor's output port to another's input port.
+    fn connect(
+        &self,
+        python: Python<'_>,
+        source: &PythonProcessorOutputPortReference,
+        destination: &PythonProcessorInputPortReference,
+    ) -> PyResult<()> {
+        let from = OutputLinkPortRef::new(source.processor_id.clone(), source.port_name.clone());
+        let to = InputLinkPortRef::new(
+            destination.processor_id.clone(),
+            destination.port_name.clone(),
+        );
+        let engine = self.engine_being_built("connect two processors")?;
+        python
+            .detach(|| engine.connect(from, to))
+            .map(|_link_id| ())
+            .map_err(|connect_failure| PyRuntimeError::new_err(connect_failure.to_string()))
     }
 
     /// Run the pipeline until Ctrl-C, SIGTERM, or [`shutdown`], then tear the

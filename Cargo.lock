@@ -5453,7 +5453,11 @@ dependencies = [
 name = "streamlib-python-wheel"
 version = "0.10.3"
 dependencies = [
+ "libc",
+ "parking_lot",
  "pyo3",
+ "rmpv",
+ "serde_json",
  "streamlib",
  "tracing",
 ]

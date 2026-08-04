@@ -105,9 +105,12 @@ pub(crate) fn spawn_processor(
         scheduling_strategy_for_processor(node)
     };
 
+    // Names the authoring language, not a placement: a Python processor runs in
+    // the app's own interpreter, so calling it a subprocess host would describe
+    // every in-process one wrongly.
     let runtime_label = match runtime {
         ProcessorRuntime::Rust => "Rust processor",
-        ProcessorRuntime::Python => "Python subprocess host",
+        ProcessorRuntime::Python => "Python processor",
         ProcessorRuntime::TypeScript => "Deno subprocess host",
     };
     tracing::info!(

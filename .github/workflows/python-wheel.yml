@@ -10,6 +10,11 @@ jobs:
   wheel-interpreter-lifecycle:
     name: Wheel build + interpreter lifecycle (no GPU)
     runs-on: ubuntu-latest
+    # A lock-order defect between the lifecycle mutex and the GIL wedges the
+    # whole interpreter rather than raising, so its regression test can only go
+    # red by running out of time. Without a bound it would burn the default six
+    # hours instead.
+    timeout-minutes: 45
 
     steps:
       - uses: actions/checkout@v4
@@ -24,7 +29,8 @@ jobs:
             pkg-config \
             protobuf-compiler \
             libvulkan-dev \
-            glslc
+            glslc \
+            python3-dev
 
       - name: Install jtd-codegen
         run: |
@@ -66,8 +72,25 @@ jobs:
         working-directory: sdk/streamlib-python-wheel
         run: |
           uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
+
+      # The crate's own unit tests link libpython rather than building as an
+      # extension module (the `extension-module` feature is off by default for
+      # exactly this), which is why `python3-dev` is in the apt list above.
+      # Without this step they run on developer machines only.
+      - name: Wheel crate unit tests
+        run: cargo test --locked -p streamlib-python-wheel --lib
+
+      # The only check that compares the stub to the binary. It imports the
+      # built module, introspects it, and fails on a name or signature the
+      # hand-written `_engine.pyi` no longer describes — which is what makes a
+      # hand-maintained stub safe. `pyright --verifytypes` cannot substitute:
+      # it scores annotation completeness, so a stub describing a method the
+      # binary dropped still reads as 100% complete.
+      - name: Type stubs match the compiled module
+        working-directory: sdk/streamlib-python-wheel
+        run: .venv/bin/python -m mypy.stubtest streamlib._engine
 
       # The runner has no GPU. `Runner::start()` initializes a GPU context whose
       # DMA-BUF pool pre-warm needs a driver that can allocate exportable device
@@ -86,3 +109,32 @@ jobs:
         run: |
           mkdir -p "$XDG_RUNTIME_DIR"
           .venv/bin/python -m pytest tests/ -v -m "not requires_gpu"
+
+  python-types:
+    name: Pyright (no build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    # Deliberately independent of the wheel build. With `_engine.pyi` checked
+    # in, pyright reads the stub rather than the compiled module — it never
+    # imports anything — so this needs no Rust toolchain, no Vulkan, and no
+    # maturin, and finishes in seconds. It is also the check the author's editor
+    # runs: Pylance is pyright, so a green job here means working completion and
+    # correct hovers for anyone writing a processor.
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+
+      # pytest only, so its `py.typed` annotations resolve in `tests/`. The
+      # package under test is read from source; nothing is installed.
+      - name: Prepare the environment pyright resolves against
+        working-directory: sdk/streamlib-python-wheel
+        run: |
+          uv venv --python 3.12 .venv
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest
+
+      - name: Type-check the wheel's Python surface
+        working-directory: sdk/streamlib-python-wheel
+        run: uvx pyright@1.1.411

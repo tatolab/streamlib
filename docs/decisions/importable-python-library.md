@@ -123,3 +123,39 @@ contract satisfies without putting Python in deadline paths.
   torch/cupy zero-copy story is the largest remaining technical risk, now explicit.
 - M39 is re-derived against this direction; the client-SDK/control-plane embedding story for
   Python is superseded by in-process embedding via the wheel.
+
+## The authoring grammar, as built
+
+Settled while implementing in-process authoring; recorded so the shape is not re-litigated.
+
+- **Ports are class attributes, not decorated methods.** `frames_from_upstream =
+  LinkInputDataPort()` makes the attribute name the port name, so a port is named once and
+  `self.frames_from_upstream.read()` is a typed, completable expression. The alternative —
+  decorating a stub method that exists only to carry metadata, then reading and writing by string
+  through a context object — repeats every port name and gives an editor nothing to complete
+  against. The engine binds a fresh per-instance port object when it constructs the processor;
+  the class attribute stays a declaration, so two instances of one class read different links.
+- **Lifecycle hooks take no arguments.** With ports on `self`, logging module-level and the clock
+  module-level, a context parameter would carry nothing. `def process(self) -> None` is the whole
+  signature.
+- **`execution=` defaults to reactive only where reacting is possible.** A class declaring at
+  least one input port defaults; one declaring none must say what it is. A source has nothing to
+  react to, so the default would hand the author a processor that silently never runs — the one
+  case where the convenient default is a trap.
+- **Configuration is constructor keyword arguments.** `rt.add(Blur, config={"radius": 3})`
+  constructs `Blur(radius=3)`, so a processor's settings are ordinary Python parameters with
+  ordinary defaults and there is no configuration object to learn. It travels as JSON on the graph
+  node rather than captured in a closure, because one class added twice must yield two
+  independently configured instances — and because that keeps it visible in `graph`.
+- **Python ports declare no schema.** The wire is self-describing and consuming is a cast at read
+  time, so a port carries a name, a description and (on inputs) a delivery profile. Adding a
+  schema hint here would build on the per-read matching being deleted.
+- **A Python input port may omit its delivery profile**, and resolves to `latest`. The
+  channel-policy rule that makes an undeclared profile a wiring error is scoped to a
+  *concretely-typed* input port, where the type's flow class is the thing being contradicted. A
+  Python port is a wildcard by construction — it declares no type at all — so there is no type-level
+  default for the omission to silently override, and requiring the knob on every port would be
+  ceremony the zero-ceremony bar rules out.
+- **Registration is idempotent per identity, and a collision is named.** Two different classes
+  claiming one identity is refused with both qualified names and the fix, rather than surfacing
+  the registry's generic duplicate error.

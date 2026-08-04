@@ -75,6 +75,10 @@ impl SurfaceCache {
         }
     }
 
+    fn remove(&mut self, surface_id: &str) {
+        self.surfaces.remove(surface_id);
+    }
+
     fn clear(&mut self) {
         self.surfaces.clear();
     }
@@ -734,6 +738,11 @@ impl SurfaceStoreInner {
     /// since the surface-share service already treats the client's socket-close as a full
     /// release.
     pub fn release(&self, surface_id: &str) -> Result<()> {
+        // Evict the local cache's strong reference first: `check_in` parks a
+        // clone there, and a pixel-buffer pool frees a slot only once the
+        // buffer's strong count returns to 1 — without this eviction a
+        // released surface pins its pool slot for the store's lifetime.
+        self.cache.lock().remove(surface_id);
         #[cfg(target_os = "macos")]
         {
             self.release_from_surface_share(surface_id)

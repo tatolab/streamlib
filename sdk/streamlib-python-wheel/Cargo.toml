@@ -42,7 +42,20 @@ pyo3 = { version = "0.29.0", features = ["abi3-py310"] }
 # resolves nothing from source and links no build tooling.
 streamlib = { path = "../streamlib-sdk", version = "0.10.3", default-features = false }
 
+# The bag's value tree. A bag crosses into Python as ordinary Python data, and
+# `rmpv`'s native `bin` variant is what keeps a byte payload from decoding as
+# text on the way through.
+rmpv = { workspace = true }
+serde_json = { workspace = true }
 tracing = { workspace = true }
+
+# Raw CLOCK_MONOTONIC + timerfd: the wheel's clock contract is the kernel's
+# monotonic epoch (comparable to `time.clock_gettime_ns(time.CLOCK_MONOTONIC)`),
+# which std does not expose.
+libc = { workspace = true }
+# Guards the lifecycle-scoped context leases; non-poisoning, so a panicking
+# hook cannot wedge every later lease install.
+parking_lot = "0.12"
 
 [lints]
 workspace = true

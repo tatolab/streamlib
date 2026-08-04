@@ -12,7 +12,7 @@ name = "streamlib"
 # release-please's extra-files list covers only the workspace Cargo.toml, and
 # check-package-version-drift scans `packages/*`. Wiring the bump belongs with
 # release packaging (#1711); until then keep it in sync by hand on release.
-version = "0.10.2"
+version = "0.10.3"
 description = "StreamLib — a realtime streaming engine with Python authoring"
 # abi3-py310 in Cargo.toml is the binding half of this floor; the two move
 # together or the wheel claims interpreters its ABI tag does not cover.
@@ -45,3 +45,28 @@ markers = [
 python-source = "python"
 module-name = "streamlib._engine"
 features = ["extension-module"]
+# A local `maturin develop` leaves compiled bytecode next to the sources,
+# and maturin globs the directory — without this an incremental build ships
+# one interpreter's stale `.pyc` files inside an abi3 wheel.
+exclude = ["**/__pycache__/**"]
+
+[tool.pyright]
+# The wheel's Python half, checked at the version floor rather than whatever
+# interpreter the venv happens to be — `requires-python` is the promise.
+include = ["python", "tests"]
+# The package is checked from source, not from an install, so `tests/` needs
+# the package root on the search path. Without it a checkout that has not run
+# `maturin develop` reports every `import streamlib` unresolved — which is
+# precisely the state the no-build job runs in.
+extraPaths = ["python"]
+pythonVersion = "3.10"
+# Standard rather than strict: strict turns on `reportPrivateUsage`, which
+# fights the `_engine` / `_NativeRuntime` shape this package is built on, and
+# demands annotations on every pytest fixture parameter.
+typeCheckingMode = "standard"
+venvPath = "."
+venv = ".venv"
+# The engine module is a compiled artifact, so a checkout has the stub and
+# not the `.so` it describes. That is the intended shape here, not a gap —
+# `mypy.stubtest` is what checks the stub against the real binary.
+reportMissingModuleSource = "none"
