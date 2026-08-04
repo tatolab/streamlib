@@ -267,7 +267,12 @@ class GpuContextFullAccess:
         """
 
     def import_dma_buf(
-        self, fd: int, width: int, height: int, format: str = "bgra"
+        self,
+        fd: int,
+        width: int,
+        height: int,
+        format: str = "bgra",
+        byte_size: int | None = None,
     ) -> GpuSurfaceHandle:
         """Import a DMA-BUF file descriptor as a surface this graph can read.
 

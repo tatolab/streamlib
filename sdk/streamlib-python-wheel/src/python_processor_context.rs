@@ -314,8 +314,9 @@ impl PythonGpuSurfaceHandle {
     fn surface_id(&self) -> PyResult<String> {
         self.minted_surface_id.clone().ok_or_else(|| {
             PyNotImplementedError::new_err(
-                "this pooled texture carries no surface id: publishing one registers it with the \
-                 surface store, which a texture acquire does not do",
+                "this surface carries no id: handles minted through the lease-bound full-access \
+                 capability or a raw DMA-BUF import are not registered anywhere a consumer \
+                 could resolve them",
             )
         })
     }
@@ -368,10 +369,16 @@ impl PythonGpuSurfaceHandle {
         // context-manager spelling reaches close without an explicit
         // unlock, and dropping the edit silently there is data loss.
         python.detach(|| -> PyResult<()> {
+            // A failed publish must not skip the release: the handle would
+            // stay open with its pool slot pinned, in the exact spelling
+            // (`with` → close) users write. Clean up, then surface the
+            // failure.
             #[cfg(target_os = "linux")]
-            self.publish_pending_device_write()?;
+            let publish_outcome = self.publish_pending_device_write();
             self.cpu_access.unlock();
             self.release_owned_engine_value();
+            #[cfg(target_os = "linux")]
+            publish_outcome?;
             Ok(())
         })
     }
@@ -426,9 +433,15 @@ impl PythonGpuSurfaceHandle {
     /// into the surface first. Idempotent.
     fn unlock(&self, python: Python<'_>) -> PyResult<()> {
         python.detach(|| -> PyResult<()> {
+            // The gate opens whether or not the publish succeeded — a
+            // surface left locked after a failed publish would refuse
+            // every later access with a message about locking, hiding
+            // the real failure this raises.
             #[cfg(target_os = "linux")]
-            self.publish_pending_device_write()?;
+            let publish_outcome = self.publish_pending_device_write();
             self.cpu_access.unlock();
+            #[cfg(target_os = "linux")]
+            publish_outcome?;
             Ok(())
         })
     }
@@ -442,20 +455,13 @@ impl PythonGpuSurfaceHandle {
     /// here would contradict the capsule `__dlpack__` goes on to hand back.
     fn __dlpack_device__(&self, python: Python<'_>) -> PyResult<(i32, i32)> {
         let owned_memory = self.owned_memory()?;
+        // Routed through the same once-per-handle decision `__dlpack__`
+        // serves, so a probe failure here (answered CPU) cannot be
+        // followed by a successful device capsule there.
         #[cfg(target_os = "linux")]
-        if device_export_available(&owned_memory) {
-            // A graph frame's device-resident truth is the GPU, so the device
-            // side is the preferred answer — but a rig without a usable CUDA
-            // runtime falls back to the host mapping rather than erroring a
-            // surface the CPU can serve.
-            match python.detach(|| imported_device_for(&owned_memory)) {
-                Ok(device) => return Ok((device.device_type as i32, device.device_id)),
-                Err(device_unavailable) => {
-                    if owned_memory.host_mapped_pixel_buffer().is_err() {
-                        return Err(device_unavailable);
-                    }
-                }
-            }
+        if python.detach(|| self.natural_side_is_device(&owned_memory)) {
+            let device = python.detach(|| imported_device_for(&owned_memory))?;
+            return Ok((device.device_type as i32, device.device_id));
         }
         #[cfg(not(target_os = "linux"))]
         let _ = python;
@@ -489,7 +495,7 @@ impl PythonGpuSurfaceHandle {
         // asked for a copy hands back a tensor aliasing memory it believes it
         // owns, and the aliasing shows up much later as corruption.
         if copy == Some(true) {
-            return Err(PyValueError::new_err(
+            return Err(PyBufferError::new_err(
                 "this surface exports in place; ask the consumer to copy the tensor instead",
             ));
         }
@@ -917,7 +923,7 @@ impl PythonGpuContextFullAccess {
     /// must not be closed afterwards. On failure the fd is still the
     /// caller's.
     #[cfg(target_os = "linux")]
-    #[pyo3(signature = (fd, width, height, format = "bgra"))]
+    #[pyo3(signature = (fd, width, height, format = "bgra", byte_size = None))]
     fn import_dma_buf(
         &self,
         python: Python<'_>,
@@ -925,10 +931,14 @@ impl PythonGpuContextFullAccess {
         width: u32,
         height: u32,
         format: &str,
+        byte_size: Option<u64>,
     ) -> PyResult<PythonGpuSurfaceHandle> {
         let pixel_format = parse_pixel_format_name(format)?;
         let bytes_per_pixel = device_exchange_bytes_per_pixel(pixel_format)?;
-        let byte_size = u64::from(width) * u64::from(height) * u64::from(bytes_per_pixel);
+        // `export_dma_buf` reports the allocation's real size; passing it
+        // back accepts a padded row pitch the tight product would refuse.
+        let byte_size = byte_size
+            .unwrap_or_else(|| u64::from(width) * u64::from(height) * u64::from(bytes_per_pixel));
         if byte_size == 0 {
             return Err(PyValueError::new_err(
                 "width and height must both be greater than zero",

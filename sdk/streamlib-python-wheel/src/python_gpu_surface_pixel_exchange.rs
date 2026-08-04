@@ -595,6 +595,10 @@ pub(crate) fn surface_device_export_for(
         .map_err(|failure| PyRuntimeError::new_err(failure.to_string()))?;
 
     let mut memo = CUDA_IMPORTS_BY_SURFACE.lock();
+    // Entries whose staging died (context torn down, surface
+    // unregistered) are unreachable by the ptr-eq check below; sweep
+    // them so the memo is bounded by live stagings, not process history.
+    memo.retain(|_, (staging_it_was_made_for, _)| staging_it_was_made_for.strong_count() > 0);
     if let Some((staging_it_was_made_for, cuda_import)) = memo.get(surface_id)
         && staging_it_was_made_for
             .upgrade()
@@ -648,21 +652,17 @@ pub(crate) fn prepare_device_export(
     // Geometry comes from the staging alone — the object the byte span
     // was sized for — never mixed with the handle's own pixel view.
     let staging = &export.staging;
-    let layout = match staging.pixel_format() {
-        Some(pixel_format) => PixelExchangeTensorLayout::for_pixel_format(
-            pixel_format,
-            staging.surface_width(),
-            staging.surface_height(),
-            staging.bytes_per_row(),
-        )?,
-        // Texture-backed stagings are tightly packed 4-byte color.
-        None => PixelExchangeTensorLayout::for_pixel_format(
-            PixelFormat::Rgba32,
-            staging.surface_width(),
-            staging.surface_height(),
-            staging.bytes_per_row(),
-        )?,
-    };
+    // The engine records the pixel shape for both source kinds (a
+    // texture source maps to its 4-byte color shape — BGRA stays BGRA).
+    let pixel_format = staging.pixel_format().ok_or_else(|| {
+        PyRuntimeError::new_err("this staging carries no pixel shape; nothing to lay out")
+    })?;
+    let layout = PixelExchangeTensorLayout::for_pixel_format(
+        pixel_format,
+        staging.surface_width(),
+        staging.surface_height(),
+        staging.bytes_per_row(),
+    )?;
     let writable = staging.writable();
     Ok(PreparedDeviceExport {
         export,

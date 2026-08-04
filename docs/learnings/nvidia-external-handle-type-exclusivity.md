@@ -16,9 +16,15 @@
 
 ## Root cause (measured, not inferred)
 
-A `vkGetPhysicalDeviceExternalBufferProperties` probe on the MVP floor
-platform (RTX 3090, driver 595.84) reports the two handle types in
-**disjoint** `compatibleHandleTypes` sets:
+Scope of the measurement: **buffers, Linux + NVIDIA** (RTX 3090, driver
+595.84, `VkPhysicalDeviceExternalBufferInfo` with storage/transfer usage
+and no create flags). Image-side external handles carry their own
+constraints (the engine's register path already branches by flavour for
+`VkImage`s too); other vendors report differently — Mesa Intel/AMD list
+the two types as mutually compatible. Re-measure before generalising.
+
+A `vkGetPhysicalDeviceExternalBufferProperties` probe reports the two
+handle types in **disjoint** `compatibleHandleTypes` sets:
 
     OPAQUE_FD:    compatibleHandleTypes = { OPAQUE_FD }
     DMA_BUF_EXT:  compatibleHandleTypes = { DMA_BUF }
@@ -28,9 +34,7 @@ requested handle type to appear in the others' compatibility set, so a
 single allocation requesting `OPAQUE_FD | DMA_BUF_EXT` is spec-invalid on
 this driver. Note this is **not** VMA's one-export-info-per-pool
 limitation — `handleTypes` is a bitmask and one pool could legally chain
-both; the driver's compatibility report is what refuses. (Mesa
-Intel/AMD report the types mutually compatible — both are dma-bufs
-underneath — but the plan's platform floor is Linux + NVIDIA.)
+both; the driver's compatibility report is what refuses.
 
 ## Consequence for design
 

@@ -71,11 +71,23 @@ impl Drop for CudaImportedSurface {
         // *before* the object is destroyed. Freeing after — or not at
         // all — leaks the mapping and violates the destroy precondition.
         //
+        // The owning device must be current first: both cleanup calls act
+        // on the calling thread's device, and Drop can run on any thread —
+        // a Python GC of a capsule, the memo sweep — that never bound this
+        // GPU.
+        //
         // SAFETY: `device_pointer` came from `get_mapped_buffer` on
         // `external_memory` and is freed exactly once; `external_memory`
         // came from a successful `cudaImportExternalMemory`, is destroyed
         // exactly once, and by this line has no mapped buffers left.
         unsafe {
+            if let Err(bind_failure) = sys::cudaSetDevice(self.dlpack_device.device_id).result() {
+                tracing::debug!(
+                    ?bind_failure,
+                    device_id = self.dlpack_device.device_id,
+                    "cudaSetDevice before external-memory cleanup failed"
+                );
+            }
             if let Err(free_failure) = cuda_result::memory_free(self.device_pointer as *mut c_void)
             {
                 tracing::debug!(?free_failure, "cudaFree of the mapped buffer failed");

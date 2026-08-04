@@ -54,17 +54,20 @@ use streamlib_consumer_rhi::{PixelFormat, TextureFormat, VulkanLayout};
 /// queue, not a slow copy.
 const STAGING_REFILL_WAIT_TIMEOUT_NS: u64 = 2_000_000_000;
 
-/// The formats a device-export blit accepts: single-plane color whose
-/// byte arithmetic a DLPack consumer can express. Multi-plane formats
-/// are refused — a one-buffer export would drop chroma.
-fn export_bytes_per_pixel_for_texture(format: TextureFormat) -> Result<u32> {
+/// The pixel shape a texture-backed export presents to a DLPack
+/// consumer. Restricted to 4-byte color: the refill's geometry guard,
+/// the tightly-packed copy region, and the consumer-side tensor layout
+/// all express exactly that today — accepting a wider format here would
+/// size a staging no refill can fill. BGRA stays BGRA: relabeling those
+/// bytes RGBA would silently swap channels.
+fn export_pixel_shape_for_texture(format: TextureFormat) -> Result<PixelFormat> {
     match format {
-        TextureFormat::Rgba8Unorm
-        | TextureFormat::Rgba8UnormSrgb
-        | TextureFormat::Bgra8Unorm
-        | TextureFormat::Bgra8UnormSrgb
-        | TextureFormat::Rgba16Float
-        | TextureFormat::Rgba32Float => Ok(format.bytes_per_pixel()),
+        TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => Ok(PixelFormat::Rgba32),
+        TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => Ok(PixelFormat::Bgra32),
+        TextureFormat::Rgba16Float | TextureFormat::Rgba32Float => Err(Error::GpuError(format!(
+            "device export supports 4-byte color textures today; {format:?} needs the wider \
+             tensor layouts no consumer path expresses yet"
+        ))),
         TextureFormat::Nv12 => Err(Error::GpuError(
             "device export refuses NV12: it is two planes, and a one-buffer export would drop \
              chroma"
@@ -105,8 +108,8 @@ pub struct SurfaceDeviceExportStaging {
     staging_byte_size: u64,
     surface_width: u32,
     surface_height: u32,
-    /// The pixel shape the staging was sized for, when the source is a
-    /// pixel buffer; textures export as tightly-packed 4/8/16-byte color.
+    /// The pixel shape the staging was sized for — the buffer's own
+    /// format, or the 4-byte color shape a texture source maps to.
     pixel_format: Option<PixelFormat>,
     /// Whether [`GpuContext::copy_device_export_staging_back_to_surface`]
     /// can honour a write — true only for buffer-backed sources today.
@@ -193,34 +196,36 @@ impl GpuContext {
             return Ok(Arc::clone(existing));
         }
 
-        let (staging_byte_size, surface_width, surface_height, pixel_format, writable) = match self
-            .resolve_device_export_source(surface_id)?
-        {
-            ResolvedBlitSource::RegisteredTexture(registration) => {
-                let texture = registration.texture();
-                let bytes_per_pixel = export_bytes_per_pixel_for_texture(texture.format())?;
-                let (width, height) = (texture.width(), texture.height());
-                let byte_size = u64::from(width) * u64::from(height) * u64::from(bytes_per_pixel);
-                (byte_size, width, height, None, false)
-            }
-            ResolvedBlitSource::PixelBuffer(pixel_buffer) => {
-                let format = pixel_buffer.format();
-                export_bytes_per_pixel_for_pixel_format(format)?;
-                let byte_size = pixel_buffer.plane_size(0);
-                if byte_size == 0 {
-                    return Err(Error::GpuError(format!(
-                        "surface {surface_id} resolves to a zero-byte plane; nothing to export"
-                    )));
+        let (staging_byte_size, surface_width, surface_height, pixel_format, writable) =
+            match self.resolve_device_export_source(surface_id)? {
+                ResolvedBlitSource::RegisteredTexture(registration) => {
+                    let texture = registration.texture();
+                    let pixel_shape = export_pixel_shape_for_texture(texture.format())?;
+                    let (width, height) = (texture.width(), texture.height());
+                    // 4-byte color by `export_pixel_shape_for_texture`'s
+                    // restriction — the same arithmetic the refill guard and
+                    // the copy region assume.
+                    let byte_size = u64::from(width) * u64::from(height) * 4;
+                    (byte_size, width, height, Some(pixel_shape), false)
                 }
-                (
-                    byte_size,
-                    pixel_buffer.width,
-                    pixel_buffer.height,
-                    Some(format),
-                    true,
-                )
-            }
-        };
+                ResolvedBlitSource::PixelBuffer(pixel_buffer) => {
+                    let format = pixel_buffer.format();
+                    export_bytes_per_pixel_for_pixel_format(format)?;
+                    let byte_size = pixel_buffer.plane_size(0);
+                    if byte_size == 0 {
+                        return Err(Error::GpuError(format!(
+                            "surface {surface_id} resolves to a zero-byte plane; nothing to export"
+                        )));
+                    }
+                    (
+                        byte_size,
+                        pixel_buffer.width,
+                        pixel_buffer.height,
+                        Some(format),
+                        true,
+                    )
+                }
+            };
 
         let vulkan_device = self.device().vulkan_device();
         let staging_buffer = Arc::new(HostVulkanBuffer::new_opaque_fd_export_device_local(
@@ -244,9 +249,16 @@ impl GpuContext {
             pixel_format,
             writable,
         });
-        self.device_export_stagings
-            .lock()
-            .insert(surface_id.to_string(), Arc::clone(&staging));
+        // Double-check under the insert lock: a concurrent asker for the
+        // same surface_id may have published one while this thread was
+        // allocating. The loser's freshly-built staging drops here rather
+        // than replacing the entry other holders (and the wheel's
+        // CUDA-import memo) key on.
+        let mut stagings = self.device_export_stagings.lock();
+        if let Some(published) = stagings.get(surface_id) {
+            return Ok(Arc::clone(published));
+        }
+        stagings.insert(surface_id.to_string(), Arc::clone(&staging));
         Ok(staging)
     }
 
@@ -368,6 +380,16 @@ impl GpuContext {
                         staging.staging_byte_size,
                     )));
                 }
+                // Visibility for a prior producer's GPU writes: submission
+                // order alone doesn't make an earlier submission's buffer
+                // writes visible to this TRANSFER_READ.
+                recorder.record_buffer_barrier(
+                    pixel_buffer,
+                    VulkanStage::ALL_COMMANDS,
+                    VulkanStage::ALL_TRANSFER,
+                    VulkanAccess::MEMORY_WRITE,
+                    VulkanAccess::TRANSFER_READ,
+                )?;
                 recorder.record_copy_buffer_to_buffer(
                     pixel_buffer,
                     staging.staging_buffer.as_ref(),
@@ -409,6 +431,16 @@ impl GpuContext {
                 staging.staging_buffer.as_ref(),
                 &pixel_buffer,
                 staging.staging_byte_size,
+            )?;
+            // The published edit must be visible to whoever reads next —
+            // downstream GPU consumers and, via the coherent mapping the
+            // host wait covers, CPU readers.
+            recorder.record_buffer_barrier(
+                &pixel_buffer,
+                VulkanStage::ALL_TRANSFER,
+                VulkanStage::ALL_COMMANDS,
+                VulkanAccess::TRANSFER_WRITE,
+                VulkanAccess::MEMORY_READ,
             )
         })
     }

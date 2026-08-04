@@ -30,7 +30,10 @@ classifiers = [
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=7.0"]
+# numpy and torch are test-and-types dependencies, not runtime ones — the
+# wheel itself never imports either; the exchange surface hands frames to
+# whichever consumer the user installed.
+dev = ["pytest>=7.0", "numpy>=2.1", "torch>=2.0"]
 
 [tool.pytest.ini_options]
 markers = [
