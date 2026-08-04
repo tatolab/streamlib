@@ -19,7 +19,17 @@ import numpy
 import pytest
 
 import streamlib
-from streamlib import RuntimeContextFullAccess, processor
+
+# `input` is streamlib's port decorator — the test reads like user code,
+# which spells it exactly this way.
+from streamlib import (  # noqa: A004
+    RuntimeContextFullAccess,
+    RuntimeContextLimitedAccess,
+    TestPatternSource,
+    VideoFrame,
+    input,
+    processor,
+)
 
 pytestmark = pytest.mark.requires_gpu
 
@@ -419,6 +429,96 @@ def test_a_dlpack_consumer_sees_the_same_pixels():
     observation = _run_probe(DlpackConsumerProbe, "dlpack_consumer")
     assert observation["pixel"] == [1, 2, 3, 4]
     assert observation["shape"] == (SURFACE_HEIGHT, SURFACE_WIDTH, 4)
+
+
+# ---------------------------------------------------------------------------
+# The whole point, end to end
+# ---------------------------------------------------------------------------
+
+_effect_reports: "queue.Queue[dict]" = queue.Queue()
+
+
+@processor
+class InvertingEffect:
+    """What a user writes: read the frame, change the pixels, pass it on.
+
+    The frame arrives as a surface id, not pixels — so the effect resolves it,
+    opens CPU access, and edits the engine's own memory in place.
+    """
+
+    @input(delivery_profile="every_sample")
+    def video_from_upstream(self) -> None: ...
+
+    def __init__(self) -> None:
+        self.frames_seen = 0
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        bag = ctx.inputs.read("video_from_upstream")
+        if bag is None or self.frames_seen >= 1:
+            return
+        self.frames_seen += 1
+        frame = VideoFrame.from_bag(bag)
+        try:
+            with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
+                surface.lock(read_only=False)
+                pixels = surface.as_numpy()
+                before = pixels[10, 10].tolist()
+                # The edit: invert every channel, in place.
+                numpy.subtract(255, pixels, out=pixels)
+                after_through_this_view = pixels[10, 10].tolist()
+                surface.unlock()
+
+            # A second, independent resolve of the same id. If the edit had
+            # landed in a copy, this reads the original pattern back.
+            with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as reread:
+                reread.lock()
+                after_through_a_fresh_resolve = reread.as_numpy()[10, 10].tolist()
+                reread.unlock()
+
+            _effect_reports.put(
+                {
+                    "before": before,
+                    "after_through_this_view": after_through_this_view,
+                    "after_through_a_fresh_resolve": after_through_a_fresh_resolve,
+                    "frame_size": (frame.width, frame.height),
+                }
+            )
+        except BaseException:  # noqa: BLE001 — surfaced by the test
+            import traceback
+
+            _effect_reports.put({"failure": traceback.format_exc()})
+
+
+def test_a_processor_edits_a_synthetic_frames_pixels_in_place():
+    """The user-facing story: source → effect → the pixels really changed.
+
+    A native source produces frames the interpreter never touches; a Python
+    processor reaches into one and rewrites it. Re-resolving the surface
+    afterwards is what proves the edit went into the engine's memory rather
+    than a copy handed to Python.
+    """
+    while not _effect_reports.empty():
+        _effect_reports.get_nowait()
+
+    graph = RunningGraph()
+    pattern = graph.runtime.add(
+        TestPatternSource, config={"width": 320, "height": 180}
+    )
+    effect = graph.runtime.add(InvertingEffect)
+    graph.runtime.connect(pattern.output("video"), effect.input("video_from_upstream"))
+    graph.start()
+    try:
+        report = _effect_reports.get(timeout=PIPELINE_TIMEOUT_SECONDS)
+    finally:
+        graph.shut_down()
+
+    if "failure" in report:
+        pytest.fail(f"the effect raised:\n{report['failure']}")
+    assert report["frame_size"] == (320, 180)
+    assert report["after_through_this_view"] == [255 - channel for channel in report["before"]]
+    assert report["after_through_a_fresh_resolve"] == report["after_through_this_view"], (
+        "a fresh resolve did not see the edit — the pixels Python wrote were a copy"
+    )
 
 
 @processor(execution="manual")
