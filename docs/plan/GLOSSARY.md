@@ -53,6 +53,17 @@ itself.
 `latest`, `every_sample`, or `lossless`. Declared explicitly on every input port; there
 is no default. _Avoid_: "QoS", "channel mode".
 
+**Monotonic clock**: the machine's boot-relative clock (`CLOCK_MONOTONIC` /
+`mach_absolute_time`) — the epoch of every data-plane timestamp and of the V4L2 and ALSA
+driver stamps. The default; anything a processor stamps or compares uses it. _Avoid_:
+"media clock" for the epoch (`MediaClock` is the Rust naming seam, not a second clock),
+"timestamp" unqualified where the epoch matters.
+
+**Wall clock**: UNIX time — permitted only on the four observability surfaces (log
+`host_ts`, log `source_ts`, log file naming, control-plane event timestamp), because they
+correlate with the outside world. Never on the data plane, never compared against a
+monotonic timestamp. _Avoid_: "system time", "real time".
+
 **Engine primitive**: a hardware capability the engine owns and exposes through its
 handle-shaped surface — GPU memory import/export (DMA-BUF / OPAQUE_FD), the present
 target, texture rings, codec sessions, the audio clock, color resolution. Built-ins and

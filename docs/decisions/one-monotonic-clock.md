@@ -10,7 +10,15 @@ language, and before writing code that assumes a timestamp starts near zero.
 
 ## Decision
 
-One concept — the machine's monotonic clock — in every language the project speaks.
+One concept — the machine's monotonic clock — in every language the project speaks, on
+the data plane. Scoped by the owner (2026-08-03) to what a processor stamps, reads, or
+compares: frames, bags, audio ticks, `ctx.time`. Wall clock survives on exactly four
+observability surfaces — log record `host_ts` and `source_ts`, log file naming, and the
+control-plane pubsub event timestamp — because correlating with the outside world and
+with other hosts' logs is a job monotonic time cannot do. Everything else is monotonic;
+a wall-clock value never enters the data plane and is never compared against a media
+timestamp. Adding a fifth wall-clock surface is a plan change, not a judgement call, and
+`cargo xtask check-clock-usage` enforces the list mechanically.
 Timestamps are raw `clock_gettime(CLOCK_MONOTONIC)` on Linux and `mach_absolute_time`
 on Apple: the same epoch V4L2 and ALSA stamp their buffers with, and the same value any
 other process on the host would read. No process-relative epoch, and exactly one

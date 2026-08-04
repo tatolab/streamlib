@@ -62,7 +62,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   as in-process capabilities (torch/cupy and GL consumers); only their cross-DSO
   `-abi` halves die with the plugin ABI. [importable-python-library]
 
-## Processor model & scheduling — IN-FLIGHT (→ schema-agreement-ripout, importable-python-library)
+## Processor model & scheduling — IN-FLIGHT (→ schema-free-ports, processor-class-identity, importable-python-library)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -111,9 +111,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — A processor's identity is its class, named by its fully-qualified
   import path (`my_app.filters:BlurProcessor` in Python, the type path in Rust) —
   derived mechanically, never authored, and the same string in the registry, in the
-  control plane's type field, and for helper-process placement. The entry file is
-  imported as a module, never executed as `__main__`, so identity never depends on how
-  the app was launched. The `@org/package/Type` identity grammar is deleted along with
+  control plane's type field, and for helper-process placement. A processor defined in
+  the entry file run as `python app.py` identifies as `__main__:<Type>` and is legal
+  in-process; the engine refuses to helper-place it, with an error naming the fix (move
+  the class to an importable module). The `@org/package/Type` identity grammar is deleted along with
   the `@app/local` synthesis; `@processor` declares execution, interval, scheduling
   priority, and description only. [schema-free-ports]
 - **DECIDED** — An instance's display name is the human-facing label — passed at `add`,
@@ -134,7 +135,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   Python-facing API design is its own session. [importable-python-library]
 - **OPEN** — Everything else.
 
-## Media I/O — camera, display, audio — IN-FLIGHT (→ importable-python-library)
+## Media I/O — camera, display, audio — IN-FLIGHT (→ importable-python-library, one-monotonic-clock)
 
 - **DECIDED** — First-party camera, display, and audio are native built-in processors
   in the engine tree, statically linked into the wheel — pre-built named blocks
@@ -162,10 +163,16 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   deadlines allow: camera-class sources and block-level audio are viable behind the
   SDK's GIL-release contract; vsync-paced present loops and device audio callbacks
   stay native, always. [importable-python-library]
-- **DECIDED** — One clock: every engine timestamp is the machine's monotonic clock
-  (`CLOCK_MONOTONIC` on Linux, `mach_absolute_time` on Apple) — the same epoch the
-  V4L2 and ALSA driver stamps carry, comparable across every node on a host. No
+- **DECIDED** — One clock on the data plane: every timestamp a processor stamps, reads,
+  or compares — frames, bags, audio ticks, `ctx.time` — is the machine's monotonic clock
+  (`CLOCK_MONOTONIC` on Linux, `mach_absolute_time` on Apple), the same epoch the V4L2
+  and ALSA driver stamps carry, comparable across every node on a host. No
   process-relative epoch anywhere, and each language exports exactly one name for it.
+  Wall clock is permitted on exactly four observability surfaces and nowhere else: log
+  record `host_ts` and `source_ts`, log file naming, and the control-plane pubsub event
+  timestamp — their job is correlating with the outside world, which monotonic time
+  cannot do. A wall-clock value never enters the data plane and is never compared against
+  a media timestamp; a fifth surface is a plan change, not a judgement call.
   [one-monotonic-clock]
 - **OPEN** — Audio backend: PipeWire-native on Linux is the intent (the current
   CPAL → ALSA path is interim); do not build until a research memo settles it. A/V
