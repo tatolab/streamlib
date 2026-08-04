@@ -5469,6 +5469,7 @@ dependencies = [
  "rmpv",
  "serde_json",
  "streamlib",
+ "streamlib-media-builtins",
  "tracing",
 ]
 

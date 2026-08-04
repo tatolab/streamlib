@@ -28,22 +28,30 @@ from ._engine import ProcessorOutputPortReference as ProcessorOutputPortReferenc
 from ._engine import Runtime as _NativeRuntime
 from ._engine import RuntimeContextFullAccess as RuntimeContextFullAccess
 from ._engine import RuntimeContextLimitedAccess as RuntimeContextLimitedAccess
+from ._engine import TestPatternSource as TestPatternSource
 from ._engine import media_clock_now_ns as media_clock_now_ns
 from ._engine import monotonic_now_ns as monotonic_now_ns
 from ._processor_declaration import input as input
 from ._processor_declaration import output as output
 from ._processor_declaration import processor as processor
 from .schema_ident import SchemaIdent as SchemaIdent
+from .video_frame import ColorInfo as ColorInfo
+from .video_frame import ContentLight as ContentLight
+from .video_frame import MasteringDisplay as MasteringDisplay
+from .video_frame import VideoFrame as VideoFrame
 
 # `input` and `output` shadow the builtins at module scope on purpose — the
 # authoring grammar reads `@input(...)` / `@output(...)`, matching the old SDK.
 __all__ = [
     "AddedProcessor",
+    "ColorInfo",
+    "ContentLight",
     "GpuContextFullAccess",
     "GpuContextLimitedAccess",
     "GpuSurfaceHandle",
     "LinkInputDataReader",
     "LinkOutputDataWriter",
+    "MasteringDisplay",
     "MonotonicTimer",
     "ProcessorInputPortReference",
     "ProcessorLinkDataAccess",
@@ -52,6 +60,8 @@ __all__ = [
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
     "SchemaIdent",
+    "TestPatternSource",
+    "VideoFrame",
     "clock",
     "input",
     "log",

@@ -174,7 +174,14 @@ impl PythonRuntimeHandle {
         config: Option<&Bound<'_, PyDict>>,
         display_name: Option<String>,
     ) -> PyResult<PythonAddedProcessor> {
-        if !crate::python_processor_declaration::is_declared_processor_class(processor_class) {
+        let native_builtin_reference =
+            crate::python_native_builtin_blocks::native_builtin_type_reference(
+                python,
+                processor_class,
+            );
+        if native_builtin_reference.is_none()
+            && !crate::python_processor_declaration::is_declared_processor_class(processor_class)
+        {
             return Err(PyRuntimeError::new_err(format!(
                 "{} is not a processor: decorate the class with @streamlib.processor, and pass \
                  the class itself rather than an instance of it",
@@ -187,7 +194,12 @@ impl PythonRuntimeHandle {
         // a processor type behind for a node that will never exist.
         let engine = self.engine_being_built("add a processor")?;
 
-        let type_reference = register_processor_class(python, processor_class)?;
+        // Native built-ins were registered at module import; only a Python
+        // class needs registering here.
+        let type_reference = match native_builtin_reference {
+            Some(native_reference) => native_reference,
+            None => register_processor_class(python, processor_class)?,
+        };
         let configuration = match config {
             Some(config) => python_object_to_json_value(config.as_any())?,
             None => serde_json::Value::Null,
