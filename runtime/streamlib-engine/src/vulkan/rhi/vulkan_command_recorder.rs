@@ -471,6 +471,41 @@ impl RhiCommandRecorderInner {
         Ok(())
     }
 
+    /// Record `vkCmdCopyBuffer` over the first `byte_size` bytes of both
+    /// buffers.
+    pub fn record_copy_buffer_to_buffer(
+        &mut self,
+        src: &(impl VulkanBufferLike + ?Sized),
+        dst: &(impl VulkanBufferLike + ?Sized),
+        byte_size: u64,
+    ) -> Result<()> {
+        self.expect_recording("record_copy_buffer_to_buffer")?;
+        if byte_size > src.vk_buffer_size() || byte_size > dst.vk_buffer_size() {
+            return Err(Error::GpuError(format!(
+                "RhiCommandRecorder '{}': record_copy_buffer_to_buffer: copy of {} bytes exceeds \
+                 src ({}) or dst ({})",
+                self.label,
+                byte_size,
+                src.vk_buffer_size(),
+                dst.vk_buffer_size(),
+            )));
+        }
+        let region = vk::BufferCopy::builder()
+            .src_offset(0)
+            .dst_offset(0)
+            .size(byte_size as vk::DeviceSize)
+            .build();
+        unsafe {
+            self.device.cmd_copy_buffer(
+                self.command_buffer,
+                src.vk_buffer(),
+                dst.vk_buffer(),
+                &[region],
+            );
+        }
+        Ok(())
+    }
+
     /// Record a compute dispatch via [`VulkanComputeKernel::record`]
     /// into the recorder's command buffer.
     ///
@@ -1281,6 +1316,18 @@ impl RhiCommandRecorder {
     ) -> Result<()> {
         self.host_inner_mut()
             .record_copy_buffer_to_image(src, dst, dst_layout, region)
+    }
+
+    /// Copy buffer → buffer. Host-only until a cdylib consumer
+    /// arrives; cdylib callers panic at [`Self::host_inner_mut`].
+    pub fn record_copy_buffer_to_buffer(
+        &mut self,
+        src: &(impl VulkanBufferLike + ?Sized),
+        dst: &(impl VulkanBufferLike + ?Sized),
+        byte_size: u64,
+    ) -> Result<()> {
+        self.host_inner_mut()
+            .record_copy_buffer_to_buffer(src, dst, byte_size)
     }
 
     /// Compute dispatch.

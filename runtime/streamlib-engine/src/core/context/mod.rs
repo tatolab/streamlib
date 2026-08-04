@@ -9,6 +9,8 @@ mod compute_kernel_bridge;
 mod cpu_readback_bridge;
 pub(crate) mod escalate_gate;
 pub(crate) mod escalate_scope_registry;
+#[cfg(target_os = "linux")]
+mod device_export_staging;
 mod gpu_context;
 #[cfg(target_os = "linux")]
 mod graphics_kernel_bridge;
@@ -34,6 +36,8 @@ pub use compute_kernel_bridge::ComputeKernelBridge;
 pub use cpu_readback_bridge::{CpuReadbackBridge, CpuReadbackCopyDirection};
 #[cfg(target_os = "linux")]
 pub use gpu_context::GpuCapabilitiesSnapshot;
+#[cfg(target_os = "linux")]
+pub use device_export_staging::SurfaceDeviceExportStaging;
 pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
 #[cfg(target_os = "linux")]
 pub use graphics_kernel_bridge::{
