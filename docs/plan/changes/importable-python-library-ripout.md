@@ -39,8 +39,12 @@ The REMOVED inventory below was verified by a dedicated audit agent against the 
   dies; logging paths and the node registry keep a home-dir resolver.
 - **`sdk/streamlib-idents` / `sdk/streamlib-processor-schema`**: manifest/lockfile
   modules die (`app_modules`, `archive`, `catalog`, `lockfile`, `manifest`,
-  `package_source`, `path_artifact_guard`, `release`, `resolver`); the schema-ident
-  core behind the JTD seam survives; `streamlib-jtd-codegen` goes internal-only.
+  `package_source`, `path_artifact_guard`, `release`, `resolver`). The schema-ident core
+  and `streamlib-jtd-codegen` survive **this** change only — both are deleted outright by
+  `schema-free-ports.md` / `processor-class-identity.md` (amended 2026-08-03; this file
+  previously preserved the ident core behind the JTD seam and demoted the codegen crate
+  to internal-only, which `[schema-free-ports]` supersedes). Do not invest in reshaping
+  either; carry them unchanged and let the successor changes delete them.
 - **`packages/test-fixtures`** loses its plugin/cdylib arm (the in-process
   attribute-macro tests keep it alive); `test-fixtures-abi-mismatch` dies whole.
 - **CI/xtask**: die — `check-cdylib-reach`, `check-pack-load`,
@@ -109,6 +113,18 @@ Retires `.claude/rules/plugin-boundary.md`, agents `plugin-abi-expert` +
 `streamlib.yaml` purity line); lifts `.claude/settings.json` deny rules for
 `packages/**`/`examples/**` as those trees are deleted; prunes issue-template
 package/plugin fields; rewrites the workspace-comment block in `Cargo.toml`.
+
+## What follows this change — derive these next
+
+When the contract-deletion ticket (#1715) lands, two approved changes are unblocked and
+**their tickets do not exist yet**. Run, in order:
+
+1. `/derive-tickets docs/plan/changes/schema-free-ports.md`
+2. `/derive-tickets docs/plan/changes/processor-class-identity.md` (blocked on 1)
+
+Both were deliberately left unticketed: they are several tickets deep behind #1715, and
+the tree they describe is largely deleted by this change, so any file:line inventory
+written earlier would be stale before it was picked up.
 
 ## Dispositions — deferred re-authoring (recorded, not ticketed)
 
