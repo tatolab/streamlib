@@ -39,7 +39,7 @@ fn classify_processor_class(
     processor_class: &Bound<'_, PyAny>,
 ) -> PyResult<AddedProcessorClassKind> {
     if let Some(native_reference) =
-        crate::python_native_builtin_blocks::native_builtin_type_reference(python, processor_class)
+        crate::python_native_builtin_blocks::native_builtin_type_reference(python, processor_class)?
     {
         return Ok(AddedProcessorClassKind::NativeBuiltin(native_reference));
     }

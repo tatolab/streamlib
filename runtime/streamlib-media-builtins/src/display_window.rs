@@ -148,12 +148,15 @@ impl ManualProcessor for DisplayWindow::Processor {
             .spawn(move || {
                 let event_loop = {
                     // The event loop runs on this render thread, not the
-                    // process main thread; X11 permits that with the
-                    // any-thread opt-in. (Wayland winit permits it too via
-                    // its own extension; the X11 builder path covers today's
-                    // rig.)
+                    // process main thread; both Linux backends need their
+                    // own any-thread opt-in (each trait method flags only
+                    // its backend).
+                    use winit::platform::wayland::EventLoopBuilderExtWayland;
                     use winit::platform::x11::EventLoopBuilderExtX11;
-                    EventLoop::builder().with_any_thread(true).build()
+                    let mut builder = EventLoop::builder();
+                    EventLoopBuilderExtX11::with_any_thread(&mut builder, true);
+                    EventLoopBuilderExtWayland::with_any_thread(&mut builder, true);
+                    builder.build()
                 };
                 let event_loop = match event_loop {
                     Ok(el) => el,
@@ -180,6 +183,7 @@ impl ManualProcessor for DisplayWindow::Processor {
                     current_frame_color_info: None,
                     inactive: false,
                     last_unresolved_surface_id: None,
+                    last_failed_recreate_color_info: None,
                 };
                 if let Err(e) = event_loop.run_app(&mut handler) {
                     tracing::error!(error = %e, "DisplayWindow: event loop exited with error");
@@ -250,6 +254,10 @@ struct DisplayWindowEventLoopHandler {
     /// The last surface id that failed to resolve, so the failure warns once
     /// per surface instead of once per redraw.
     last_unresolved_surface_id: Option<String>,
+    /// The last `color_info` whose swapchain recreate failed, so the failure
+    /// warns once per description instead of once per frame (each frame
+    /// retries the recreate).
+    last_failed_recreate_color_info: Option<Option<ColorInfo>>,
 }
 
 impl ApplicationHandler for DisplayWindowEventLoopHandler {
@@ -284,6 +292,7 @@ impl ApplicationHandler for DisplayWindowEventLoopHandler {
                 self.present_target = Some(present_target);
                 self.compositor = Some(compositor);
                 self.window = Some(window);
+                self.inactive = false;
                 tracing::info!(
                     width = self.width,
                     height = self.height,
@@ -415,6 +424,7 @@ impl DisplayWindowEventLoopHandler {
             match present_target.recreate(self.width, self.height, color_traits.as_ref()) {
                 Ok(()) => {
                     self.current_frame_color_info = frame_bag.color_info.clone();
+                    self.last_failed_recreate_color_info = None;
                     let new_format = present_target.color_format();
                     if let Some(compositor) = self.compositor.as_mut() {
                         match compositor.ensure_attachment_format(new_format) {
@@ -438,10 +448,15 @@ impl DisplayWindowEventLoopHandler {
                     }
                 }
                 Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "DisplayWindow: colorspace recreate failed (keeping previous swapchain)"
-                    );
+                    if self.last_failed_recreate_color_info.as_ref() != Some(&frame_bag.color_info)
+                    {
+                        tracing::warn!(
+                            error = %e,
+                            "DisplayWindow: colorspace recreate failed (keeping previous \
+                             swapchain; warning once per color description)"
+                        );
+                        self.last_failed_recreate_color_info = Some(frame_bag.color_info.clone());
+                    }
                 }
             }
         }
@@ -488,26 +503,20 @@ impl DisplayWindowEventLoopHandler {
                 return;
             }
         };
-        let frame_texture = registration.texture();
-        let source_layout = registration.current_layout();
-
         let scaling = self.scaling;
         let (Some(present_target), Some(compositor)) =
             (self.present_target.as_mut(), self.compositor.as_ref())
         else {
             return;
         };
+        // The compositor owns the source's layout bookkeeping via the
+        // registration, so a draw error after the barrier cannot leave the
+        // registration stale.
         let present_result = present_target.render_frame(|frame| {
-            compositor.compose_to_present_frame(frame, frame_texture, source_layout, scaling)
+            compositor.compose_to_present_frame(frame, &registration, scaling)
         });
-        match present_result {
-            Ok(_presented) => {
-                // The compositor left the source in SHADER_READ_ONLY_OPTIMAL.
-                registration.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "DisplayWindow: present failed");
-            }
+        if let Err(e) = present_result {
+            tracing::warn!(error = %e, "DisplayWindow: present failed");
         }
         self.frame_counter.fetch_add(1, Ordering::Relaxed);
     }

@@ -61,6 +61,10 @@ class DisplayWindow:
     (`rt.add(DisplayWindow, config={"title": "My app", "scaling": "fit"})`);
     it is never instantiated and its per-frame path never enters the
     interpreter. `scaling` is `"fit"`, `"fill"`, or `"stretch"`.
+
+    One window per process today: the display owns the process-wide event
+    loop, so a second DisplayWindow logs an error and drains its input
+    without showing anything.
     """
 
 @final

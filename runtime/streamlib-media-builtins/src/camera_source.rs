@@ -104,6 +104,15 @@ pub fn list_camera_capture_devices() -> Result<Vec<CameraCaptureDevice>> {
             name: caps.card,
         });
     }
+    // `read_dir` order is unspecified; sort by the numeric node index so the
+    // "first camera found" default is stable across runs.
+    devices.sort_by_key(|device| {
+        device
+            .id
+            .trim_start_matches("/dev/video")
+            .parse::<u32>()
+            .unwrap_or(u32::MAX)
+    });
     Ok(devices)
 }
 
@@ -215,46 +224,31 @@ impl ManualProcessor for CameraSource::Processor {
             .map_err(|e| Error::Configuration(format!("Failed to read current format: {}", e)))?;
 
         // Negotiate format + resolution: enumerate frame sizes for NV12
-        // (preferred) or YUYV, pick the highest resolution, then set_format.
-        let fmt = negotiate_capture_format(&mut dev, current_fmt, &self.camera_name)?;
-
-        // Cap capture resolution at config.max_width / max_height (defaults
-        // 1920x1080 preserve the real-time-encoding guardrail; high-resolution
-        // use cases opt in by raising the cap).
+        // (preferred) or YUYV and pick the highest resolution that fits the
+        // configured cap (defaults 1920x1080 preserve the real-time-encoding
+        // guardrail; high-resolution use cases opt in by raising it).
+        // VIDIOC_S_FMT snaps to the nearest supported size — which can be
+        // LARGER than a naive capped request — so the cap constrains the
+        // enumeration, and a driver that still snaps above it gets a warning.
         let max_width = self.config.max_width.unwrap_or(1920);
         let max_height = self.config.max_height.unwrap_or(1080);
-        let fmt = if fmt.width > max_width || fmt.height > max_height {
-            let mut capped = fmt;
-            capped.width = max_width;
-            capped.height = max_height;
-            match dev.set_format(&capped) {
-                Ok(f) => {
-                    tracing::info!(
-                        "CameraSource {}: capped resolution from {}x{} to {}x{}",
-                        self.camera_name,
-                        fmt.width,
-                        fmt.height,
-                        f.width,
-                        f.height
-                    );
-                    f
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        "CameraSource {}: failed to cap resolution to {}x{} ({}), using {}x{}",
-                        self.camera_name,
-                        max_width,
-                        max_height,
-                        e,
-                        fmt.width,
-                        fmt.height
-                    );
-                    fmt
-                }
-            }
-        } else {
-            fmt
-        };
+        let fmt = negotiate_capture_format(
+            &mut dev,
+            current_fmt,
+            &self.camera_name,
+            max_width,
+            max_height,
+        )?;
+        if fmt.width > max_width || fmt.height > max_height {
+            tracing::warn!(
+                "CameraSource {}: driver snapped to {}x{}, above the configured cap {}x{}",
+                self.camera_name,
+                fmt.width,
+                fmt.height,
+                max_width,
+                max_height
+            );
+        }
 
         let capture_width = fmt.width;
         let capture_height = fmt.height;
@@ -359,11 +353,14 @@ impl CameraSource::Processor {
     }
 }
 
-/// Pick NV12 (preferred) or YUYV at the highest resolution the device offers.
+/// Pick NV12 (preferred) or YUYV at the highest enumerated resolution that
+/// fits within `max_width` x `max_height`.
 fn negotiate_capture_format(
     dev: &mut v4l::Device,
     current_fmt: v4l::format::Format,
     camera_name: &str,
+    max_width: u32,
+    max_height: u32,
 ) -> Result<v4l::format::Format> {
     let nv12_fourcc = FourCC::new(b"NV12");
     let yuyv_fourcc = FourCC::new(b"YUYV");
@@ -374,8 +371,15 @@ fn negotiate_capture_format(
         for fs in framesizes {
             let (w, h) = match &fs.size {
                 v4l::framesize::FrameSizeEnum::Discrete(d) => (d.width, d.height),
-                v4l::framesize::FrameSizeEnum::Stepwise(s) => (s.max_width, s.max_height),
+                // Stepwise ranges include every size up to the max; clamp the
+                // candidate into the cap instead of discarding the range.
+                v4l::framesize::FrameSizeEnum::Stepwise(s) => {
+                    (s.max_width.min(max_width), s.max_height.min(max_height))
+                }
             };
+            if w > max_width || h > max_height {
+                continue;
+            }
             let pixels = w as u64 * h as u64;
             if pixels > best_pixels {
                 best_pixels = pixels;
@@ -816,28 +820,54 @@ fn capture_thread_loop(
                 v4l2_buf.type_ = v4l::buffer::Type::VideoCapture as u32;
                 v4l2_buf.memory = v4l::memory::Memory::Mmap as u32;
                 v4l2_buf.index = i;
-                libc::ioctl(
+                if libc::ioctl(
                     device_fd,
                     v4l::v4l2::vidioc::VIDIOC_QBUF as libc::c_ulong,
                     &mut v4l2_buf,
-                );
+                ) != 0
+                {
+                    tracing::error!(
+                        camera = camera_name,
+                        buffer_index = i,
+                        errno = std::io::Error::last_os_error().raw_os_error(),
+                        "initial VIDIOC_QBUF failed"
+                    );
+                }
             }
             let mut buf_type: u32 = v4l::buffer::Type::VideoCapture as u32;
-            libc::ioctl(
+            if libc::ioctl(
                 device_fd,
                 v4l::v4l2::vidioc::VIDIOC_STREAMON as libc::c_ulong,
                 &mut buf_type,
-            );
+            ) != 0
+            {
+                tracing::error!(
+                    camera = camera_name,
+                    errno = std::io::Error::last_os_error().raw_os_error(),
+                    "VIDIOC_STREAMON failed — camera produces no frames; stopping capture thread"
+                );
+                return;
+            }
         }
     }
 
     let requeue = |buf: Option<v4l::v4l_sys::v4l2_buffer>| {
         if let Some(mut v4l2_buf) = buf {
-            unsafe {
+            let result = unsafe {
                 libc::ioctl(
                     device_fd,
                     v4l::v4l2::vidioc::VIDIOC_QBUF as libc::c_ulong,
                     &mut v4l2_buf,
+                )
+            };
+            if result != 0 {
+                // Each failed requeue permanently removes one buffer from the
+                // driver queue; after V4L2_BUFFER_COUNT of them the DMA-BUF
+                // path starves silently.
+                tracing::error!(
+                    buffer_index = v4l2_buf.index,
+                    errno = std::io::Error::last_os_error().raw_os_error(),
+                    "VIDIOC_QBUF requeue failed — one capture buffer lost"
                 );
             }
         }

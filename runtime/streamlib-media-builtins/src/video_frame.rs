@@ -241,14 +241,21 @@ impl Transfer {
             Transfer::Srgb => TransferId::Srgb,
             Transfer::Bt709
             | Transfer::Smpte170m
+            | Transfer::Smpte240m
             | Transfer::Bt2020TenBit
             | Transfer::Bt2020TwelveBit => TransferId::Bt709,
             Transfer::Smpte2084 => TransferId::Pq,
             Transfer::AribStdB67 => TransferId::Hlg,
             Transfer::Linear => TransferId::Linear,
-            // Gamma22 / Gamma28 / Smpte240m / Log* / Xvycc / Bt1361 /
-            // Smpte428 are uncommon end-to-end; map to Linear (no transform).
-            _ => TransferId::Linear,
+            // No exact engine id for these encoded transfers; a BT.709-shaped
+            // approximation beats Linear, which would skip decoding entirely.
+            Transfer::Gamma22
+            | Transfer::Gamma28
+            | Transfer::Bt1361
+            | Transfer::Log100
+            | Transfer::Log100Sqrt10
+            | Transfer::Smpte428
+            | Transfer::Xvycc => TransferId::Bt709,
         }
     }
 }

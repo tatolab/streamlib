@@ -84,9 +84,9 @@ fn primaries_from_v4l2(colorspace: u32) -> Option<Primaries> {
         V4L2_COLORSPACE_470_SYSTEM_BG => Some(Primaries::Bt470Bg),
         // V4L2_COLORSPACE_JPEG is "shorthand for SRGB primaries + BT.601
         // matrix + full range" per kernel comment.
-        V4L2_COLORSPACE_JPEG | V4L2_COLORSPACE_SRGB | V4L2_COLORSPACE_OPRGB => {
-            Some(Primaries::Bt709)
-        }
+        V4L2_COLORSPACE_JPEG | V4L2_COLORSPACE_SRGB => Some(Primaries::Bt709),
+        // OPRGB (Adobe RGB) primaries have no H.273 code point; don't guess.
+        V4L2_COLORSPACE_OPRGB => None,
         V4L2_COLORSPACE_BT2020 => Some(Primaries::Bt2020),
         V4L2_COLORSPACE_DCI_P3 => Some(Primaries::Smpte431),
         // RAW, anything unrecognized: don't guess.
@@ -147,12 +147,14 @@ fn matrix_from_v4l2(ycbcr_enc: u32, colorspace: u32) -> Option<Matrix> {
 
 fn range_from_v4l2(quantization: u32, colorspace: u32) -> Option<Range> {
     let resolved = if quantization == V4L2_QUANTIZATION_DEFAULT {
-        // V4L2_MAP_QUANTIZATION_DEFAULT: full for JPEG / SRGB / OPRGB,
-        // limited for everything else.
+        // V4L2_MAP_QUANTIZATION_DEFAULT with is_rgb_or_hsv = false (this
+        // path is YUV-only): full range for JPEG only; SRGB and OPRGB YUV
+        // data defaults to limited like everything else. Mapping SRGB to
+        // full (a former bug carried from the incumbent) skipped the range
+        // expansion and rendered limited-range webcam data with crushed
+        // contrast.
         match colorspace {
-            V4L2_COLORSPACE_JPEG | V4L2_COLORSPACE_SRGB | V4L2_COLORSPACE_OPRGB => {
-                V4L2_QUANTIZATION_FULL_RANGE
-            }
+            V4L2_COLORSPACE_JPEG => V4L2_QUANTIZATION_FULL_RANGE,
             V4L2_COLORSPACE_DEFAULT => return None,
             _ => V4L2_QUANTIZATION_LIM_RANGE,
         }
@@ -201,10 +203,11 @@ mod tests {
     }
 
     #[test]
-    fn webcam_srgb_with_defaults_resolves_to_bt601_matrix_full_range() {
-        // The standard UVC webcam combo per V4L2 convention: SRGB
-        // colorspace means SRGB primaries + sRGB transfer + BT.601 matrix +
-        // FULL range. Surprising but documented.
+    fn webcam_srgb_with_defaults_resolves_to_bt601_matrix_limited_range() {
+        // The standard UVC webcam combo: SRGB colorspace means sRGB
+        // primaries/transfer + BT.601 matrix, and the YUV quantization
+        // default is LIMITED — V4L2_MAP_QUANTIZATION_DEFAULT returns full
+        // only for JPEG when the data is YCbCr.
         let info = v4l2_color_to_color_info(
             V4L2_COLORSPACE_SRGB,
             V4L2_XFER_FUNC_DEFAULT,
@@ -214,7 +217,33 @@ mod tests {
         assert_eq!(info.primaries, Some(Primaries::Bt709));
         assert_eq!(info.transfer, Some(Transfer::Srgb));
         assert_eq!(info.matrix, Some(Matrix::Smpte170m));
+        assert_eq!(info.range, Some(Range::Limited));
+    }
+
+    #[test]
+    fn jpeg_with_defaults_is_the_only_full_range_yuv_default() {
+        let info = v4l2_color_to_color_info(
+            V4L2_COLORSPACE_JPEG,
+            V4L2_XFER_FUNC_DEFAULT,
+            V4L2_YCBCR_ENC_DEFAULT,
+            V4L2_QUANTIZATION_DEFAULT,
+        );
         assert_eq!(info.range, Some(Range::Full));
+    }
+
+    #[test]
+    fn oprgb_primaries_are_not_misrepresented() {
+        // OPRGB has no H.273 primaries code point; both axes stay unknown
+        // rather than guessing BT.709.
+        let info = v4l2_color_to_color_info(
+            V4L2_COLORSPACE_OPRGB,
+            V4L2_XFER_FUNC_DEFAULT,
+            V4L2_YCBCR_ENC_DEFAULT,
+            V4L2_QUANTIZATION_DEFAULT,
+        );
+        assert_eq!(info.primaries, None);
+        assert_eq!(info.transfer, None);
+        assert_eq!(info.range, Some(Range::Limited));
     }
 
     #[test]
