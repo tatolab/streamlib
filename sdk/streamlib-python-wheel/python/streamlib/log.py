@@ -4,39 +4,45 @@
 """Logging from a processor, straight onto the engine's log pipeline.
 
 Writing to stdout also works, but while the engine is alive the stdio
-interceptor captures it and re-emits it at WARN. These functions carry the level
-the author meant and interleave in order with the engine's own records.
+interceptor captures it and re-emits it at WARN. These functions carry the
+level the author meant and interleave in order with the engine's own records.
+Keyword arguments become the structured `attrs` columns of the JSONL record —
+`log.info("captured frame", width=1920)` — and processor attribution is
+automatic inside lifecycle hooks; nothing needs to be threaded through.
 """
 
 from __future__ import annotations
 
+from typing import Any
+
 from ._engine import log_event
 
-__all__ = ["debug", "error", "info", "trace", "warning"]
-
-_DEFAULT_EMITTER = "app"
+__all__ = ["debug", "error", "info", "trace", "warn", "warning"]
 
 
-def trace(message: str, *, emitted_by: str = _DEFAULT_EMITTER) -> None:
+def trace(message: str, **attrs: Any) -> None:
     """Emit a TRACE record."""
-    log_event("trace", emitted_by, message)
+    log_event("trace", message, attrs or None)
 
 
-def debug(message: str, *, emitted_by: str = _DEFAULT_EMITTER) -> None:
+def debug(message: str, **attrs: Any) -> None:
     """Emit a DEBUG record."""
-    log_event("debug", emitted_by, message)
+    log_event("debug", message, attrs or None)
 
 
-def info(message: str, *, emitted_by: str = _DEFAULT_EMITTER) -> None:
+def info(message: str, **attrs: Any) -> None:
     """Emit an INFO record."""
-    log_event("info", emitted_by, message)
+    log_event("info", message, attrs or None)
 
 
-def warning(message: str, *, emitted_by: str = _DEFAULT_EMITTER) -> None:
+def warn(message: str, **attrs: Any) -> None:
     """Emit a WARN record."""
-    log_event("warn", emitted_by, message)
+    log_event("warn", message, attrs or None)
 
 
-def error(message: str, *, emitted_by: str = _DEFAULT_EMITTER) -> None:
+warning = warn
+
+
+def error(message: str, **attrs: Any) -> None:
     """Emit an ERROR record."""
-    log_event("error", emitted_by, message)
+    log_event("error", message, attrs or None)

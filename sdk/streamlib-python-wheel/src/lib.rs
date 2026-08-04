@@ -9,6 +9,8 @@ use pyo3::prelude::*;
 mod python_added_processor;
 mod python_bag_conversion;
 mod python_logging;
+mod python_monotonic_timer;
+mod python_processor_context;
 mod python_processor_declaration;
 mod python_processor_host;
 mod python_processor_link_data_access;
@@ -24,10 +26,19 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_class::<python_added_processor::PythonProcessorOutputPortReference>()?;
     module.add_class::<python_added_processor::PythonProcessorInputPortReference>()?;
     module.add_class::<python_processor_link_data_access::PythonProcessorLinkDataAccess>()?;
+    module.add_class::<python_processor_context::PythonRuntimeContextFullAccess>()?;
+    module.add_class::<python_processor_context::PythonRuntimeContextLimitedAccess>()?;
+    module.add_class::<python_processor_context::PythonGpuContextFullAccess>()?;
+    module.add_class::<python_processor_context::PythonGpuContextLimitedAccess>()?;
+    module.add_class::<python_processor_context::PythonGpuSurfaceHandle>()?;
+    module.add_class::<python_processor_context::PythonLinkInputDataReader>()?;
+    module.add_class::<python_processor_context::PythonLinkOutputDataWriter>()?;
+    module.add_class::<python_monotonic_timer::PythonMonotonicTimer>()?;
     module.add_function(wrap_pyfunction!(
         python_logging::media_clock_now_ns,
         module
     )?)?;
+    module.add_function(wrap_pyfunction!(python_logging::monotonic_now_ns, module)?)?;
     module.add_function(wrap_pyfunction!(python_logging::log_event, module)?)?;
     Ok(())
 }

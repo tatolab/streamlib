@@ -49,5 +49,13 @@ rmpv = { workspace = true }
 serde_json = { workspace = true }
 tracing = { workspace = true }
 
+# Raw CLOCK_MONOTONIC + timerfd: the wheel's clock contract is the kernel's
+# monotonic epoch (comparable to `time.clock_gettime_ns(time.CLOCK_MONOTONIC)`),
+# which std does not expose.
+libc = { workspace = true }
+# Guards the lifecycle-scoped context leases; non-poisoning, so a panicking
+# hook cannot wedge every later lease install.
+parking_lot = "0.12"
+
 [lints]
 workspace = true

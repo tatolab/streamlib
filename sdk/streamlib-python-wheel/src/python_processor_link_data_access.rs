@@ -13,10 +13,11 @@ use std::sync::{Arc, OnceLock};
 
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
+use streamlib::sdk::error::Error;
 use streamlib::sdk::iceoryx2::{InputMailboxesInner, OutputWriterInner};
-use streamlib::sdk::media_clock::MediaClock;
 
 use crate::python_bag_conversion::{decode_msgpack_to_python_object, encode_bag_to_msgpack};
+use crate::python_logging::monotonic_clock_now_ns;
 
 /// One processor's links, as seen from Python.
 ///
@@ -60,7 +61,7 @@ impl PythonProcessorLinkDataAccess {
 #[pymethods]
 impl PythonProcessorLinkDataAccess {
     /// The next bag on `port_name`, or `None` when the mailbox is empty.
-    fn read_from_input_port<'py>(
+    pub(crate) fn read_from_input_port<'py>(
         &self,
         python: Python<'py>,
         port_name: &str,
@@ -79,8 +80,34 @@ impl PythonProcessorLinkDataAccess {
         }
     }
 
+    /// The next bag on `port_name` with its stamp, or `(None, None)` when the
+    /// mailbox is empty.
+    pub(crate) fn read_from_input_port_with_timestamp<'py>(
+        &self,
+        python: Python<'py>,
+        port_name: &str,
+    ) -> PyResult<(Option<Bound<'py, PyAny>>, Option<i64>)> {
+        let Some(input_mailboxes) = self.input_mailboxes.get() else {
+            return Err(unwired_port_error("input", port_name));
+        };
+        let read = python
+            .detach(|| input_mailboxes.read_raw(port_name))
+            .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
+        match read {
+            Some((encoded, timestamp_ns)) => Ok((
+                Some(decode_msgpack_to_python_object(python, &encoded)?),
+                Some(timestamp_ns),
+            )),
+            None => Ok((None, None)),
+        }
+    }
+
     /// Whether a bag is waiting on `port_name`, without consuming it.
-    fn input_port_has_data(&self, python: Python<'_>, port_name: &str) -> PyResult<bool> {
+    pub(crate) fn input_port_has_data(
+        &self,
+        python: Python<'_>,
+        port_name: &str,
+    ) -> PyResult<bool> {
         let Some(input_mailboxes) = self.input_mailboxes.get() else {
             return Err(unwired_port_error("input", port_name));
         };
@@ -88,20 +115,37 @@ impl PythonProcessorLinkDataAccess {
     }
 
     /// Publish one bag to every downstream link on `port_name`.
-    fn write_to_output_port(
+    ///
+    /// An over-ceiling bag is refused-and-counted by the engine, never raised
+    /// here — the old SDK's never-die contract for the write path.
+    #[pyo3(signature = (port_name, bag, timestamp_ns = None))]
+    pub(crate) fn write_to_output_port(
         &self,
         python: Python<'_>,
         port_name: &str,
         bag: &Bound<'_, PyAny>,
+        timestamp_ns: Option<i64>,
     ) -> PyResult<()> {
         let Some(output_writer) = self.output_writer.get() else {
             return Err(unwired_port_error("output", port_name));
         };
         let encoded = encode_bag_to_msgpack(bag)?;
-        let timestamp_ns = MediaClock::now().as_nanos() as i64;
-        python
-            .detach(|| output_writer.write_raw(port_name, &encoded, timestamp_ns))
-            .map_err(|write_failure| PyRuntimeError::new_err(write_failure.to_string()))
+        // Default stamp is raw CLOCK_MONOTONIC, bug-compatible with the old
+        // SDK's NativeOutputs.write — NOT the MediaClock epoch the engine's
+        // Rust processors stamp with. Unifying the two epochs is a flagged
+        // owner decision.
+        let timestamp_ns = timestamp_ns.unwrap_or_else(|| monotonic_clock_now_ns() as i64);
+        match python.detach(|| output_writer.write_raw(port_name, &encoded, timestamp_ns)) {
+            Ok(()) => Ok(()),
+            Err(Error::PayloadExceedsChannelCeiling { .. }) => {
+                tracing::debug!(
+                    port_name,
+                    "bag refused over the channel ceiling; dropped without raising"
+                );
+                Ok(())
+            }
+            Err(write_failure) => Err(PyRuntimeError::new_err(write_failure.to_string())),
+        }
     }
 }
 

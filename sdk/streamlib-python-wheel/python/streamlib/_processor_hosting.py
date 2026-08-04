@@ -4,15 +4,13 @@
 """Turning a declared processor class into a running processor object.
 
 The engine calls into this module rather than constructing the object itself:
-binding a port means creating a per-instance attribute, which is Python's job.
-App code never calls anything here.
+mapping configuration onto constructor keywords is Python's job. App code
+never calls anything here.
 """
 
 from __future__ import annotations
 
 from typing import Any, Optional
-
-from ._processor_declaration import bind_declared_ports_to_running_processor
 
 __all__ = ["apply_configuration", "construct_processor_instance"]
 
@@ -20,26 +18,25 @@ __all__ = ["apply_configuration", "construct_processor_instance"]
 def construct_processor_instance(
     processor_class: type,
     configuration: Optional[Any],
-    link_data_access: Any,
+    _link_data_access: Any,
 ) -> Any:
-    """Instantiate `processor_class` and bind its declared ports to its links.
+    """Instantiate `processor_class` with its configuration.
 
     Configuration arrives as the keyword arguments the class was added with, so
     a processor's settings are ordinary constructor parameters with ordinary
-    Python defaults — there is no configuration object to learn.
+    Python defaults — there is no configuration object to learn. The link data
+    access argument is unused: ports are reached through `ctx.inputs` /
+    `ctx.outputs`, but the host still passes it, so the arity stays.
     """
     keyword_arguments = _as_keyword_arguments(processor_class, configuration)
     try:
-        processor_instance = processor_class(**keyword_arguments)
+        return processor_class(**keyword_arguments)
     except TypeError as construction_failure:
         raise TypeError(
             f"{processor_class.__name__}({_render_call(keyword_arguments)}) failed: "
             f"{construction_failure}. `rt.add(cls, config={{...}})` passes config as "
             f"keyword arguments to the class."
         ) from construction_failure
-
-    bind_declared_ports_to_running_processor(processor_instance, link_data_access)
-    return processor_instance
 
 
 def apply_configuration(processor_instance: Any, configuration: Optional[Any]) -> None:

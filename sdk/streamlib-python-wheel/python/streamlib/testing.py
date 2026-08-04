@@ -18,11 +18,8 @@ import threading
 from typing import Any, Dict, Mapping, Optional
 
 from . import Runtime
-from ._processor_declaration import (
-    LinkInputDataPort,
-    LinkOutputDataPort,
-    processor,
-)
+from ._engine import RuntimeContextLimitedAccess
+from ._processor_declaration import input, output, processor
 
 __all__ = ["SingleProcessorTestPipeline"]
 
@@ -55,17 +52,18 @@ _running_pipeline_lock = threading.Lock()
 class TestBagFeeder:
     """Publishes whatever a test hands it, in order."""
 
-    bags_to_downstream = LinkOutputDataPort()
-
     def __init__(self, channel: str) -> None:
         self.channel = channel
 
-    def process(self) -> None:
+    @output()
+    def bags_to_downstream(self) -> None: ...
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         try:
             bag = _fed_bags[self.channel].get_nowait()
         except queue.Empty:
             return
-        self.bags_to_downstream.write(bag)
+        ctx.outputs.write("bags_to_downstream", bag)
 
 
 @processor("@streamlib/testing/TestBagCollector", execution="reactive")
@@ -76,13 +74,14 @@ class TestBagCollector:
     so dropping a bag under a burst would make the assertion lie.
     """
 
-    bags_from_upstream = LinkInputDataPort(delivery_profile="every_sample")
-
     def __init__(self, channel: str) -> None:
         self.channel = channel
 
-    def process(self) -> None:
-        bag = self.bags_from_upstream.read()
+    @input(delivery_profile="every_sample")
+    def bags_from_upstream(self) -> None: ...
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        bag = ctx.inputs.read("bags_from_upstream")
         if bag is not None:
             _collected_bags[self.channel].put(bag)
 

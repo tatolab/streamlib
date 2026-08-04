@@ -14,7 +14,7 @@ from pathlib import Path
 import pytest
 
 import streamlib
-from streamlib import LinkInputDataPort, LinkOutputDataPort, processor
+from streamlib import RuntimeContextLimitedAccess, input, output, processor
 
 GRAPH_BUILDING_APP = Path(__file__).parent / "graph_building_app.py"
 
@@ -27,13 +27,16 @@ def graph_building_app(start_app_under_test):
 
 @processor
 class GraphBuildingFilter:
-    frames_from_upstream = LinkInputDataPort()
-    frames_to_downstream = LinkOutputDataPort()
+    @input()
+    def frames_from_upstream(self) -> None: ...
 
-    def process(self) -> None:
-        frame = self.frames_from_upstream.read()
+    @output()
+    def frames_to_downstream(self) -> None: ...
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        frame = ctx.inputs.read("frames_from_upstream")
         if frame is not None:
-            self.frames_to_downstream.write(frame)
+            ctx.outputs.write("frames_to_downstream", frame)
 
 
 def test_building_the_graph_from_two_threads_does_not_deadlock(graph_building_app):

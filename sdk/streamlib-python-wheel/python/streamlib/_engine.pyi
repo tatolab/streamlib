@@ -15,18 +15,27 @@ binary no longer exports still reads as complete.
 
 from types import TracebackType
 from collections.abc import Mapping
-from typing import Any, Literal, final
+from typing import Any, Literal, NoReturn, final
 
 from typing_extensions import disjoint_base
 
 __all__ = [
     "AddedProcessor",
+    "GpuContextFullAccess",
+    "GpuContextLimitedAccess",
+    "GpuSurfaceHandle",
+    "LinkInputDataReader",
+    "LinkOutputDataWriter",
+    "MonotonicTimer",
     "ProcessorInputPortReference",
     "ProcessorLinkDataAccess",
     "ProcessorOutputPortReference",
     "Runtime",
+    "RuntimeContextFullAccess",
+    "RuntimeContextLimitedAccess",
     "log_event",
     "media_clock_now_ns",
+    "monotonic_now_ns",
 ]
 
 @disjoint_base
@@ -91,14 +100,190 @@ class ProcessorInputPortReference:
 
 @final
 class ProcessorLinkDataAccess:
-    """One processor's links. The engine binds it to a port; app code never builds one."""
+    """One processor's links. The engine binds it; app code never builds one."""
 
     def read_from_input_port(self, port_name: str) -> Any | None: ...
+    def read_from_input_port_with_timestamp(
+        self, port_name: str
+    ) -> tuple[Any, int] | tuple[None, None]: ...
     def input_port_has_data(self, port_name: str) -> bool: ...
-    def write_to_output_port(self, port_name: str, bag: Mapping[str, Any]) -> None: ...
+    def write_to_output_port(
+        self,
+        port_name: str,
+        bag: Mapping[str, Any],
+        timestamp_ns: int | None = None,
+    ) -> None: ...
+
+@final
+class RuntimeContextFullAccess:
+    """Privileged runtime context handed to `setup` / `teardown` / `start` / `stop`.
+
+    Lease-bound members are only valid during the hook that received the
+    context; touching them afterwards raises `RuntimeError`.
+    """
+
+    @property
+    def config(self) -> dict[str, Any]: ...
+    @property
+    def time(self) -> int: ...
+    @property
+    def inputs(self) -> LinkInputDataReader: ...
+    @property
+    def outputs(self) -> LinkOutputDataWriter: ...
+    @property
+    def gpu_limited_access(self) -> GpuContextLimitedAccess: ...
+    @property
+    def gpu_full_access(self) -> GpuContextFullAccess: ...
+    @property
+    def runtime_id(self) -> str: ...
+    @property
+    def processor_id(self) -> str | None: ...
+    def is_paused(self) -> bool: ...
+    def should_process(self) -> bool: ...
+
+@final
+class RuntimeContextLimitedAccess:
+    """Restricted runtime context handed to `process` / `on_pause` / `on_resume`.
+
+    `gpu_full_access` is deliberately absent — reaching for it raises
+    `AttributeError`, mirroring the Rust capability split.
+    """
+
+    @property
+    def config(self) -> dict[str, Any]: ...
+    @property
+    def time(self) -> int: ...
+    @property
+    def inputs(self) -> LinkInputDataReader: ...
+    @property
+    def outputs(self) -> LinkOutputDataWriter: ...
+    @property
+    def gpu_limited_access(self) -> GpuContextLimitedAccess: ...
+    @property
+    def runtime_id(self) -> str: ...
+    @property
+    def processor_id(self) -> str | None: ...
+    def is_paused(self) -> bool: ...
+    def should_process(self) -> bool: ...
+
+@final
+class LinkInputDataReader:
+    """A processor's input ports, as `ctx.inputs`."""
+
+    def read(self, port_name: str) -> Any | None: ...
+    def read_with_timestamp(
+        self, port_name: str
+    ) -> tuple[Any, int] | tuple[None, None]: ...
+    def has_data(self, port_name: str) -> bool: ...
+
+@final
+class LinkOutputDataWriter:
+    """A processor's output ports, as `ctx.outputs`."""
+
+    def write(
+        self,
+        port_name: str,
+        bag: Mapping[str, Any],
+        timestamp_ns: int | None = None,
+    ) -> None:
+        """Publish one bag to every downstream link on `port_name`.
+
+        Writes past a `lossless` link's ceiling block; on other profiles an
+        over-ceiling write is silently dropped.
+        """
+
+@final
+class GpuContextLimitedAccess:
+    """Non-allocating GPU capability, valid for the whole processor life."""
+
+    def acquire_pixel_buffer(
+        self, width: int, height: int, format: str = "bgra"
+    ) -> GpuSurfaceHandle: ...
+    def acquire_texture(
+        self, width: int, height: int, format: str, usage: list[str]
+    ) -> GpuSurfaceHandle: ...
+    def resolve_surface(self, surface_id: str) -> GpuSurfaceHandle: ...
+
+@final
+class GpuContextFullAccess:
+    """Privileged GPU capability, valid only while a full-access hook runs."""
+
+    def acquire_pixel_buffer(
+        self, width: int, height: int, format: str = "bgra"
+    ) -> GpuSurfaceHandle: ...
+    def acquire_texture(
+        self, width: int, height: int, format: str, usage: list[str]
+    ) -> GpuSurfaceHandle: ...
+    def wait_device_idle(self) -> None: ...
+
+@final
+class GpuSurfaceHandle:
+    """An owned GPU surface. Pixel access lands with ticket #1710."""
+
+    @property
+    def surface_id(self) -> str: ...
+    @property
+    def width(self) -> int: ...
+    @property
+    def height(self) -> int: ...
+    @property
+    def format(self) -> str: ...
+    def close(self) -> None:
+        """Release the underlying GPU resource. Idempotent."""
+
+    def __enter__(self) -> GpuSurfaceHandle: ...
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None = ...,
+        exception: BaseException | None = ...,
+        traceback: TracebackType | None = ...,
+    ) -> Literal[False]: ...
+    # Raise NotImplementedError until the pixel-exchange surface (#1710) lands.
+    def as_numpy(self) -> NoReturn: ...
+    def __dlpack__(self) -> NoReturn: ...
+    def lock(self) -> NoReturn: ...
+    def unlock(self) -> NoReturn: ...
+
+@final
+class MonotonicTimer:
+    """Drift-free periodic timer backed by `timerfd_create(CLOCK_MONOTONIC)`.
+
+    The first absolute deadline is `now + interval`, then `TFD_TIMER_ABSTIME`
+    repeats, so ticks never accumulate drift.
+    """
+
+    def __new__(cls, interval_ns: int) -> MonotonicTimer: ...
+    @property
+    def interval_ns(self) -> int: ...
+    def wait(self, timeout_ms: int = 100) -> int:
+        """Wait up to `timeout_ms` for the next tick.
+
+        Returns a positive expiration count when a tick fired, 0 on timeout,
+        -1 once closed.
+        """
+
+    def close(self) -> None:
+        """Release the timer's file descriptor. Idempotent."""
+
+    def __enter__(self) -> MonotonicTimer: ...
+    def __exit__(
+        self,
+        exception_type: type[BaseException] | None = ...,
+        exception: BaseException | None = ...,
+        traceback: TracebackType | None = ...,
+    ) -> Literal[False]: ...
+
+def monotonic_now_ns() -> int:
+    """Current monotonic time in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`."""
 
 def media_clock_now_ns() -> int:
-    """The clock the engine stamps bags with, in nanoseconds."""
+    """The clock the engine stamps bags with, in nanoseconds.
 
-def log_event(level: str, emitted_by: str, message: str) -> None:
-    """Emit one record on the engine's log pipeline."""
+    Not the system-wide `CLOCK_MONOTONIC` epoch — the origin is this process's
+    engine start, so a value from one process means nothing in another.
+    """
+
+def log_event(
+    level: str, message: str, attrs: dict[str, Any] | None = None
+) -> None:
+    """Emit one record on the engine's log pipeline, with structured attrs."""

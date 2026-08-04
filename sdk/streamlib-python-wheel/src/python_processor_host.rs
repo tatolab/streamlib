@@ -9,7 +9,10 @@
 //! an input, not teardown's join. That is what lets a processor parked in a
 //! native call leave every other Python processor running.
 
+use std::sync::{Arc, OnceLock};
+
 use pyo3::prelude::*;
+use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::descriptors::ProcessorDescriptor;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::execution::ExecutionConfig;
@@ -18,6 +21,12 @@ use streamlib::sdk::iceoryx2::{InputMailboxes, OutputWriter};
 use streamlib::sdk::processors::DynGeneratedProcessor;
 
 use crate::python_bag_conversion::json_value_to_python_object;
+use crate::python_logging::{
+    PythonProcessorLogAttribution, set_current_python_processor_log_attribution,
+};
+use crate::python_processor_context::{
+    PythonRuntimeContextFullAccess, PythonRuntimeContextLimitedAccess,
+};
 use crate::python_processor_declaration::PythonProcessorDeclaration;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 
@@ -64,6 +73,13 @@ impl ProcessorLifecycleHook {
     }
 }
 
+/// The engine view a lifecycle hook was handed, phase-mapped by the trait
+/// impl below: Setup/Teardown/Start/Stop carry Full, the hot path Limited.
+enum LifecycleHookContextView<'call, 'engine> {
+    FullAccess(&'call RuntimeContextFullAccess<'engine>),
+    LimitedAccess(&'call RuntimeContextLimitedAccess<'engine>),
+}
+
 pub(crate) struct PythonProcessorHost {
     /// The user's own object. Constructed on the engine's compile thread as the
     /// graph comes up, then used only from this processor's own dedicated
@@ -72,6 +88,11 @@ pub(crate) struct PythonProcessorHost {
     /// `Option` so [`Drop`] can take it and release it while attached.
     processor_instance: Option<Py<PyAny>>,
     link_data_access: Option<Py<PythonProcessorLinkDataAccess>>,
+    /// The two long-lived context objects hooks receive; their leases are
+    /// installed and revoked around every invocation, so no per-tick
+    /// allocation happens here.
+    full_access_runtime_context: Option<Py<PythonRuntimeContextFullAccess>>,
+    limited_access_runtime_context: Option<Py<PythonRuntimeContextLimitedAccess>>,
     /// Which hooks the class defines, indexed by [`ProcessorLifecycleHook`].
     declared_hooks: [bool; ProcessorLifecycleHook::ALL.len()],
     descriptor: ProcessorDescriptor,
@@ -79,6 +100,9 @@ pub(crate) struct PythonProcessorHost {
     /// Names this processor in every log line and error — the graph's display
     /// name, which is what the author sees in `streamlib graph`.
     processor_display_name: String,
+    /// Built at the first hook (the id comes from the engine view) and shared
+    /// with the per-thread marker `log_event` reads.
+    log_attribution: OnceLock<Arc<PythonProcessorLogAttribution>>,
 }
 
 impl PythonProcessorHost {
@@ -94,6 +118,23 @@ impl PythonProcessorHost {
 
         Python::attach(move |python| -> PyResult<Self> {
             let link_data_access = Py::new(python, PythonProcessorLinkDataAccess::new())?;
+            let context_configuration = configuration.clone().unwrap_or(serde_json::Value::Null);
+            let full_access_runtime_context = Py::new(
+                python,
+                PythonRuntimeContextFullAccess::create_for_processor(
+                    python,
+                    context_configuration.clone(),
+                    &link_data_access,
+                )?,
+            )?;
+            let limited_access_runtime_context = Py::new(
+                python,
+                PythonRuntimeContextLimitedAccess::create_for_processor(
+                    python,
+                    context_configuration,
+                    &link_data_access,
+                )?,
+            )?;
 
             let hosting = python.import(PROCESSOR_HOSTING_MODULE)?;
             let processor_instance = hosting.getattr("construct_processor_instance")?.call1((
@@ -114,10 +155,13 @@ impl PythonProcessorHost {
             Ok(Self {
                 processor_instance: Some(processor_instance.unbind()),
                 link_data_access: Some(link_data_access),
+                full_access_runtime_context: Some(full_access_runtime_context),
+                limited_access_runtime_context: Some(limited_access_runtime_context),
                 declared_hooks,
                 descriptor: declaration.descriptor.clone(),
                 execution_config: declaration.execution_config,
                 processor_display_name: held_display_name,
+                log_attribution: OnceLock::new(),
             })
         })
         .map_err(|construction_failure| {
@@ -129,11 +173,24 @@ impl PythonProcessorHost {
         })
     }
 
-    /// Call a lifecycle hook, if the class defined one.
+    /// Call a lifecycle hook, if the class defined one, handing it the
+    /// phase-matched context object.
     ///
     /// A class that did not costs no GIL acquisition at all — which is the
     /// per-tick path for a processor driven by something other than `process`.
-    fn dispatch_hook(&mut self, hook: ProcessorLifecycleHook) -> Result<()> {
+    ///
+    /// Per invocation: (with no GIL attached) install the context's view
+    /// lease and the log-attribution marker, attach and call the hook with
+    /// the context object, then (detached again) revoke the lease — whose
+    /// write-lock acquisition blocks until any thread still reading through
+    /// the context finishes. A hook defined without the ctx parameter
+    /// TypeErrors through the failure formatter below; that loud failure is
+    /// the contract.
+    fn dispatch_hook(
+        &mut self,
+        hook: ProcessorLifecycleHook,
+        context_view: LifecycleHookContextView<'_, '_>,
+    ) -> Result<()> {
         if !self.declared_hooks[hook as usize] {
             return Ok(());
         }
@@ -141,13 +198,58 @@ impl PythonProcessorHost {
             return Ok(());
         };
 
-        Python::attach(|python| -> PyResult<()> {
-            processor_instance
-                .bind(python)
-                .call_method0(hook.python_method_name())?;
-            Ok(())
-        })
-        .map_err(|hook_failure| {
+        let hook_outcome = match context_view {
+            LifecycleHookContextView::FullAccess(engine_view) => {
+                let Some(context) = self.full_access_runtime_context.as_ref() else {
+                    return Ok(());
+                };
+                let log_attribution = self.log_attribution.get_or_init(|| {
+                    Arc::new(PythonProcessorLogAttribution {
+                        processor_id: engine_view.processor_id(),
+                        processor_display_name: self.processor_display_name.clone(),
+                    })
+                });
+                set_current_python_processor_log_attribution(Some(Arc::clone(log_attribution)));
+                context
+                    .get()
+                    .install_view_lease_and_prime_caches(engine_view);
+                let _lease_guard = LifecycleHookLeaseGuard {
+                    revoke_view_lease: Box::new(|| context.get().revoke_view_lease()),
+                };
+                Python::attach(|python| -> PyResult<()> {
+                    processor_instance
+                        .bind(python)
+                        .call_method1(hook.python_method_name(), (context.bind(python),))?;
+                    Ok(())
+                })
+            }
+            LifecycleHookContextView::LimitedAccess(engine_view) => {
+                let Some(context) = self.limited_access_runtime_context.as_ref() else {
+                    return Ok(());
+                };
+                let log_attribution = self.log_attribution.get_or_init(|| {
+                    Arc::new(PythonProcessorLogAttribution {
+                        processor_id: engine_view.processor_id(),
+                        processor_display_name: self.processor_display_name.clone(),
+                    })
+                });
+                set_current_python_processor_log_attribution(Some(Arc::clone(log_attribution)));
+                context
+                    .get()
+                    .install_view_lease_and_prime_caches(engine_view);
+                let _lease_guard = LifecycleHookLeaseGuard {
+                    revoke_view_lease: Box::new(|| context.get().revoke_view_lease()),
+                };
+                Python::attach(|python| -> PyResult<()> {
+                    processor_instance
+                        .bind(python)
+                        .call_method1(hook.python_method_name(), (context.bind(python),))?;
+                    Ok(())
+                })
+            }
+        };
+
+        hook_outcome.map_err(|hook_failure| {
             Error::Runtime(format_python_failure(
                 &self.processor_display_name,
                 &format!("raised in {}()", hook.python_method_name()),
@@ -174,51 +276,71 @@ fn format_python_failure(processor_display_name: &str, what: &str, failure: PyEr
     format!("[{processor_display_name}] {what}:\n{rendered}")
 }
 
+/// Revokes a context's view lease and clears log attribution when dropped.
+///
+/// A guard rather than straight-line calls so a Rust panic unwinding out of
+/// the hook invocation cannot leave the lease holding a pointer into a dead
+/// stack frame — the revoke is the entire safety argument for the lease's
+/// lifetime erasure, so it must run on every exit path.
+struct LifecycleHookLeaseGuard<'host> {
+    revoke_view_lease: Box<dyn Fn() + 'host>,
+}
+
+impl Drop for LifecycleHookLeaseGuard<'_> {
+    fn drop(&mut self) {
+        (self.revoke_view_lease)();
+        set_current_python_processor_log_attribution(None);
+    }
+}
+
 impl DynGeneratedProcessor for PythonProcessorHost {
-    fn __generated_setup(
-        &mut self,
-        _ctx: &streamlib::sdk::context::RuntimeContextFullAccess<'_>,
-    ) -> Result<()> {
-        self.dispatch_hook(ProcessorLifecycleHook::Setup)
+    fn __generated_setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        self.dispatch_hook(
+            ProcessorLifecycleHook::Setup,
+            LifecycleHookContextView::FullAccess(ctx),
+        )
     }
 
-    fn __generated_teardown(
-        &mut self,
-        _ctx: &streamlib::sdk::context::RuntimeContextFullAccess<'_>,
-    ) -> Result<()> {
-        self.dispatch_hook(ProcessorLifecycleHook::Teardown)
+    fn __generated_teardown(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        self.dispatch_hook(
+            ProcessorLifecycleHook::Teardown,
+            LifecycleHookContextView::FullAccess(ctx),
+        )
     }
 
-    fn __generated_on_pause(
-        &mut self,
-        _ctx: &streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
-    ) -> Result<()> {
-        self.dispatch_hook(ProcessorLifecycleHook::OnPause)
+    fn __generated_on_pause(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        self.dispatch_hook(
+            ProcessorLifecycleHook::OnPause,
+            LifecycleHookContextView::LimitedAccess(ctx),
+        )
     }
 
-    fn __generated_on_resume(
-        &mut self,
-        _ctx: &streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
-    ) -> Result<()> {
-        self.dispatch_hook(ProcessorLifecycleHook::OnResume)
+    fn __generated_on_resume(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        self.dispatch_hook(
+            ProcessorLifecycleHook::OnResume,
+            LifecycleHookContextView::LimitedAccess(ctx),
+        )
     }
 
-    fn process(
-        &mut self,
-        _ctx: &streamlib::sdk::context::RuntimeContextLimitedAccess<'_>,
-    ) -> Result<()> {
-        self.dispatch_hook(ProcessorLifecycleHook::Process)
+    fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+        self.dispatch_hook(
+            ProcessorLifecycleHook::Process,
+            LifecycleHookContextView::LimitedAccess(ctx),
+        )
     }
 
-    fn start(
-        &mut self,
-        _ctx: &streamlib::sdk::context::RuntimeContextFullAccess<'_>,
-    ) -> Result<()> {
-        self.dispatch_hook(ProcessorLifecycleHook::Start)
+    fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        self.dispatch_hook(
+            ProcessorLifecycleHook::Start,
+            LifecycleHookContextView::FullAccess(ctx),
+        )
     }
 
-    fn stop(&mut self, _ctx: &streamlib::sdk::context::RuntimeContextFullAccess<'_>) -> Result<()> {
-        self.dispatch_hook(ProcessorLifecycleHook::Stop)
+    fn stop(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        self.dispatch_hook(
+            ProcessorLifecycleHook::Stop,
+            LifecycleHookContextView::FullAccess(ctx),
+        )
     }
 
     fn name(&self) -> &str {
@@ -320,6 +442,8 @@ impl Drop for PythonProcessorHost {
         Python::attach(|_python| {
             drop(self.processor_instance.take());
             drop(self.link_data_access.take());
+            drop(self.full_access_runtime_context.take());
+            drop(self.limited_access_runtime_context.take());
         });
     }
 }

@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `@processor` grammar, exercised without an engine.
+"""The `@processor` / `@input` / `@output` grammar, exercised without an engine.
 
 Everything here is a pure declaration check — no runtime boots — so this is the
 half of the authoring surface that stays honest on a machine with no GPU.
@@ -9,7 +9,7 @@ half of the authoring surface that stays honest on a machine with no GPU.
 
 import pytest
 
-from streamlib import LinkInputDataPort, LinkOutputDataPort, processor
+from streamlib import SchemaIdent, input, output, processor
 
 
 def test_a_bare_decorator_needs_no_arguments_at_all():
@@ -17,8 +17,11 @@ def test_a_bare_decorator_needs_no_arguments_at_all():
 
     @processor
     class BrightnessFilter:
-        frames_from_upstream = LinkInputDataPort()
-        frames_to_downstream = LinkOutputDataPort()
+        @input()
+        def frames_from_upstream(self) -> None: ...
+
+        @output()
+        def frames_to_downstream(self) -> None: ...
 
     assert BrightnessFilter.__streamlib_processor_type_reference__ == {
         "org": "app",
@@ -31,24 +34,124 @@ def test_a_bare_decorator_needs_no_arguments_at_all():
     }
 
 
-def test_the_attribute_name_is_the_port_name():
+def test_the_method_name_is_the_port_name():
     """A port is named once — no string repeated between declaration and use."""
 
     @processor
     class Passthrough:
-        frames_from_upstream = LinkInputDataPort(delivery_profile="every_sample")
-        frames_to_downstream = LinkOutputDataPort(description="the filtered frames")
+        @input(delivery_profile="every_sample")
+        def frames_from_upstream(self) -> None: ...
+
+        @output(description="the filtered frames")
+        def frames_to_downstream(self) -> None: ...
 
     assert Passthrough.__streamlib_processor_input_ports__ == [
         {
             "name": "frames_from_upstream",
             "description": "",
             "delivery_profile": "every_sample",
+            "schema": None,
         }
     ]
     assert Passthrough.__streamlib_processor_output_ports__ == [
-        {"name": "frames_to_downstream", "description": "the filtered frames"}
+        {
+            "name": "frames_to_downstream",
+            "description": "the filtered frames",
+            "schema": None,
+        }
     ]
+
+
+def test_an_explicit_name_overrides_the_method_name():
+    @processor
+    class Renamed:
+        @input(name="video_in")
+        def handle_incoming_video(self) -> None: ...
+
+        @output(name="video_out")
+        def handle_outgoing_video(self) -> None: ...
+
+    assert [port["name"] for port in Renamed.__streamlib_processor_input_ports__] == [
+        "video_in"
+    ]
+    assert [port["name"] for port in Renamed.__streamlib_processor_output_ports__] == [
+        "video_out"
+    ]
+
+
+def test_a_schema_ident_instance_is_stored_as_its_wire_dict():
+    video_frame = SchemaIdent("tatolab", "core", "VideoFrame", "1.0.0")
+
+    @processor
+    class Typed:
+        @input(schema=video_frame, description="frames")
+        def frames_from_upstream(self) -> None: ...
+
+        @output(schema=video_frame)
+        def frames_to_downstream(self) -> None: ...
+
+    expected_wire_dict = {
+        "org": "tatolab",
+        "package": "core",
+        "type": "VideoFrame",
+        "version": "1.0.0",
+    }
+    assert Typed.__streamlib_processor_input_ports__[0]["schema"] == expected_wire_dict
+    assert Typed.__streamlib_processor_output_ports__[0]["schema"] == expected_wire_dict
+
+
+def test_a_codegen_class_carrying_a_schema_ident_is_accepted():
+    class VideoFrame:
+        __streamlib_schema_ident__ = SchemaIdent("tatolab", "core", "VideoFrame", "1.0.0")
+
+    @processor
+    class Typed:
+        @input(schema=VideoFrame)
+        def frames_from_upstream(self) -> None: ...
+
+    assert Typed.__streamlib_processor_input_ports__[0]["schema"] == {
+        "org": "tatolab",
+        "package": "core",
+        "type": "VideoFrame",
+        "version": "1.0.0",
+    }
+
+
+def test_a_string_schema_is_refused_with_the_structured_alternative():
+    with pytest.raises(TypeError, match="string schema references are no longer accepted"):
+        input(schema="VideoFrame")  # pyright: ignore[reportArgumentType]
+    with pytest.raises(TypeError, match="string schema references"):
+        output(schema="@tatolab/core/VideoFrame@1.0.0")  # pyright: ignore[reportArgumentType]
+
+
+def test_a_class_without_schema_metadata_is_refused():
+    class Plain:
+        pass
+
+    with pytest.raises(TypeError, match="does not carry a structured SchemaIdent"):
+        input(schema=Plain)
+
+
+def test_a_schema_of_an_unsupported_type_is_refused():
+    with pytest.raises(TypeError, match="unsupported type"):
+        output(schema=42)  # type: ignore[arg-type]
+
+
+def test_an_unknown_delivery_profile_is_refused_at_decoration():
+    with pytest.raises(ValueError, match="invalid delivery_profile"):
+        input(delivery_profile="eventually")
+
+
+def test_a_duplicate_port_name_is_refused():
+    with pytest.raises(ValueError, match="more than once"):
+
+        @processor
+        class Clashing:
+            @input(name="frames")
+            def frames_in(self) -> None: ...
+
+            @output(name="frames")
+            def frames_out(self) -> None: ...
 
 
 def test_a_source_must_declare_its_execution_mode():
@@ -62,13 +165,15 @@ def test_a_source_must_declare_its_execution_mode():
 
         @processor
         class TestPatternSource:
-            frames_to_downstream = LinkOutputDataPort()
+            @output()
+            def frames_to_downstream(self) -> None: ...
 
 
 def test_a_source_that_declares_a_mode_is_accepted():
     @processor(execution="continuous", interval_ms=33)
     class TestPatternSource:
-        frames_to_downstream = LinkOutputDataPort()
+        @output()
+        def frames_to_downstream(self) -> None: ...
 
     assert TestPatternSource.__streamlib_processor_execution__ == {
         "mode": "continuous",
@@ -79,7 +184,8 @@ def test_a_source_that_declares_a_mode_is_accepted():
 def test_an_explicit_identity_is_parsed_into_its_three_segments():
     @processor("@tatolab/camera/Camera", execution="manual", scheduling="realtime")
     class Camera:
-        frames_to_downstream = LinkOutputDataPort()
+        @output()
+        def frames_to_downstream(self) -> None: ...
 
     assert Camera.__streamlib_processor_type_reference__ == {
         "org": "tatolab",
@@ -104,7 +210,8 @@ def test_a_malformed_identity_is_refused_with_its_reason(identity, expected_mess
 
         @processor(identity, execution="manual")
         class Camera:
-            frames_to_downstream = LinkOutputDataPort()
+            @output()
+            def frames_to_downstream(self) -> None: ...
 
 
 def test_a_class_name_that_cannot_be_an_identity_says_so():
@@ -112,7 +219,8 @@ def test_a_class_name_that_cannot_be_an_identity_says_so():
 
         @processor
         class lowercase_name:
-            frames_from_upstream = LinkInputDataPort()
+            @input()
+            def frames_from_upstream(self) -> None: ...
 
 
 @pytest.mark.parametrize(
@@ -127,12 +235,8 @@ def test_an_unknown_mode_or_priority_is_refused(keyword, value, expected_message
 
         @processor(**{keyword: value})
         class Filter:
-            frames_from_upstream = LinkInputDataPort()
-
-
-def test_an_unknown_delivery_profile_is_refused_at_declaration():
-    with pytest.raises(ValueError, match="invalid delivery_profile"):
-        LinkInputDataPort(delivery_profile="eventually")
+            @input()
+            def frames_from_upstream(self) -> None: ...
 
 
 def test_a_negative_interval_is_refused():
@@ -140,41 +244,33 @@ def test_a_negative_interval_is_refused():
 
         @processor(execution="continuous", interval_ms=-1)
         class TestPatternSource:
-            frames_to_downstream = LinkOutputDataPort()
+            @output()
+            def frames_to_downstream(self) -> None: ...
 
 
 def test_ports_are_inherited_and_a_subclass_can_redeclare_one():
     @processor
     class BaseFilter:
-        frames_from_upstream = LinkInputDataPort(delivery_profile="latest")
-        frames_to_downstream = LinkOutputDataPort()
+        @input(delivery_profile="latest")
+        def frames_from_upstream(self) -> None: ...
+
+        @output()
+        def frames_to_downstream(self) -> None: ...
 
     @processor
     class AudioFilter(BaseFilter):
-        frames_from_upstream = LinkInputDataPort(delivery_profile="every_sample")
+        @input(delivery_profile="every_sample")
+        def frames_from_upstream(self) -> None: ...
 
     assert AudioFilter.__streamlib_processor_input_ports__ == [
         {
             "name": "frames_from_upstream",
             "description": "",
             "delivery_profile": "every_sample",
+            "schema": None,
         }
     ]
     # The inherited output survives the subclass's redeclaration of the input.
     assert [port["name"] for port in AudioFilter.__streamlib_processor_output_ports__] == [
         "frames_to_downstream"
     ]
-
-
-def test_an_unbound_port_explains_itself_rather_than_failing_silently():
-    """Reading a port off a hand-instantiated processor is a mistake with a name."""
-
-    @processor
-    class Passthrough:
-        frames_from_upstream = LinkInputDataPort()
-        frames_to_downstream = LinkOutputDataPort()
-
-    with pytest.raises(RuntimeError, match="not bound to a running processor"):
-        Passthrough().frames_from_upstream.read()
-    with pytest.raises(RuntimeError, match="not bound to a running processor"):
-        Passthrough().frames_to_downstream.write({"frame": 1})

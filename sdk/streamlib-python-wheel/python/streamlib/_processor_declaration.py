@@ -4,19 +4,24 @@
 """The `@processor` grammar — identity, execution mode, and ports, declared in code.
 
 Nothing is read from disk: there is no manifest, and a bare `.py` module defines
-a working processor. The decorator attaches the metadata the engine reads at
+a working processor. `@processor` attaches the metadata the engine reads at
 `Runtime.add` time as `__streamlib_processor_*__` class attributes; that set is
 the contract between this module and the native half, and the two move together.
+Ports are declared with the `@input` / `@output` method decorators and accessed
+at run time through `ctx.inputs` / `ctx.outputs` — the marker methods themselves
+are never called.
 """
 
 from __future__ import annotations
 
 import re
-from typing import Any, Mapping, Optional, Pattern, TypeVar, Union
+from typing import Any, Callable, Optional, Pattern, TypeVar, Union
+
+from .schema_ident import SchemaIdent
 
 __all__ = [
-    "LinkInputDataPort",
-    "LinkOutputDataPort",
+    "input",
+    "output",
     "processor",
 ]
 
@@ -31,112 +36,124 @@ _EXECUTION_MODES = ("reactive", "manual", "continuous")
 _SCHEDULING_PRIORITIES = ("realtime", "high", "normal")
 _DELIVERY_PROFILES = ("latest", "every_sample", "lossless")
 
+_INPUT_PORT_MARKER_ATTRIBUTE = "_streamlib_input_port"
+_OUTPUT_PORT_MARKER_ATTRIBUTE = "_streamlib_output_port"
+
 ProcessorClass = TypeVar("ProcessorClass", bound=type)
+MethodUnderDecoration = TypeVar("MethodUnderDecoration", bound=Callable[..., Any])
 
 
-class LinkInputDataPort:
-    """An input port, declared as a class attribute and read from in `process()`.
+def input(
+    name: Optional[str] = None,
+    *,
+    schema: Union[SchemaIdent, type, None] = None,
+    description: str = "",
+    delivery_profile: Optional[str] = None,
+) -> "Callable[[MethodUnderDecoration], MethodUnderDecoration]":
+    """Mark a method as declaring an input port.
 
-    The attribute name is the port name, so a port is named once. Reading before
-    the engine has bound the port raises rather than returning nothing.
+    The port is named after the method unless `name` overrides it. `schema` is
+    a structured carrier — a [`SchemaIdent`] instance or a codegen-emitted
+    class carrying `__streamlib_schema_ident__` — never a string.
+    `delivery_profile` is `"latest"`, `"every_sample"`, or `"lossless"`; omit
+    it to default from the wire type's flow class. The decorated method is a
+    declaration only: bags are read with `ctx.inputs.read(port_name)`.
     """
+    if delivery_profile is not None and delivery_profile not in _DELIVERY_PROFILES:
+        raise ValueError(
+            f"invalid delivery_profile {delivery_profile!r}: must be one of "
+            f"{', '.join(_DELIVERY_PROFILES)}"
+        )
+    resolved_schema = _resolve_schema_ident(schema)
 
-    def __init__(
-        self,
-        *,
-        delivery_profile: Optional[str] = None,
-        description: str = "",
-    ) -> None:
-        if delivery_profile is not None and delivery_profile not in _DELIVERY_PROFILES:
-            raise ValueError(
-                f"invalid delivery_profile {delivery_profile!r}: must be one of "
-                f"{', '.join(_DELIVERY_PROFILES)}"
-            )
-        self.delivery_profile = delivery_profile
-        self.description = description
-        self.port_name: Optional[str] = None
-        self._link_data_access: Optional[Any] = None
+    def attach_input_port_marker(method: MethodUnderDecoration) -> MethodUnderDecoration:
+        setattr(
+            method,
+            _INPUT_PORT_MARKER_ATTRIBUTE,
+            {
+                "name": name or method.__name__,
+                "schema": resolved_schema,
+                "description": description,
+                "delivery_profile": delivery_profile,
+            },
+        )
+        return method
 
-    def read(self) -> Optional[Any]:
-        """The next bag on this port, or `None` when nothing is waiting.
-
-        The bag arrives as ordinary Python data — a dict for the named map the
-        wire carries. Consuming it is a cast at read time: the engine mediates
-        no schema agreement, so what a producer declared is a hint, never a
-        guarantee this call checks.
-        """
-        return self._bound_link_data_access().read_from_input_port(self._bound_name())
-
-    def has_data(self) -> bool:
-        """Whether a bag is waiting, without consuming it."""
-        return self._bound_link_data_access().input_port_has_data(self._bound_name())
-
-    def _bound_name(self) -> str:
-        name = self.port_name
-        if name is None:
-            raise RuntimeError(
-                "this input port was never named — declare it as a class attribute of "
-                "a @processor class, where the attribute name becomes the port name"
-            )
-        return name
-
-    def _bound_link_data_access(self) -> Any:
-        if self._link_data_access is None:
-            raise RuntimeError(
-                f"input port {self.port_name!r} is not bound to a running processor — "
-                f"ports are bound by the engine when the processor is constructed, so "
-                f"reading from a class attribute or a hand-instantiated processor "
-                f"cannot work. Use streamlib.testing to drive a processor in a test."
-            )
-        return self._link_data_access
-
-    def __repr__(self) -> str:
-        return f"LinkInputDataPort(name={self.port_name!r}, bound={self._link_data_access is not None})"
+    return attach_input_port_marker
 
 
-class LinkOutputDataPort:
-    """An output port, declared as a class attribute and written to in `process()`."""
+def output(
+    name: Optional[str] = None,
+    *,
+    schema: Union[SchemaIdent, type, None] = None,
+    description: str = "",
+) -> "Callable[[MethodUnderDecoration], MethodUnderDecoration]":
+    """Mark a method as declaring an output port.
 
-    def __init__(self, *, description: str = "") -> None:
-        self.description = description
-        self.port_name: Optional[str] = None
-        self._link_data_access: Optional[Any] = None
+    Same shape as [`input`], minus the delivery profile — delivery is the
+    consuming port's policy. Bags are written with
+    `ctx.outputs.write(port_name, bag)`.
+    """
+    resolved_schema = _resolve_schema_ident(schema)
 
-    def write(self, bag: "Mapping[str, Any]") -> None:
-        """Publish one bag to every downstream link on this port.
+    def attach_output_port_marker(method: MethodUnderDecoration) -> MethodUnderDecoration:
+        setattr(
+            method,
+            _OUTPUT_PORT_MARKER_ATTRIBUTE,
+            {
+                "name": name or method.__name__,
+                "schema": resolved_schema,
+                "description": description,
+            },
+        )
+        return method
 
-        A bag is a named map: a dict with string keys, whose values are ordinary
-        Python data — dicts, lists, tuples, str, bytes, int, float, bool, None.
-        The wire carries a named map because a processor in another language
-        reads it into a struct, so a list or a non-string key is refused rather
-        than published as bytes only Python can decode.
-        """
-        self._bound_link_data_access().write_to_output_port(self._bound_name(), bag)
-
-    def _bound_name(self) -> str:
-        name = self.port_name
-        if name is None:
-            raise RuntimeError(
-                "this output port was never named — declare it as a class attribute of "
-                "a @processor class, where the attribute name becomes the port name"
-            )
-        return name
-
-    def _bound_link_data_access(self) -> Any:
-        if self._link_data_access is None:
-            raise RuntimeError(
-                f"output port {self.port_name!r} is not bound to a running processor — "
-                f"ports are bound by the engine when the processor is constructed, so "
-                f"writing from a class attribute or a hand-instantiated processor "
-                f"cannot work. Use streamlib.testing to drive a processor in a test."
-            )
-        return self._link_data_access
-
-    def __repr__(self) -> str:
-        return f"LinkOutputDataPort(name={self.port_name!r}, bound={self._link_data_access is not None})"
+    return attach_output_port_marker
 
 
-AnyDataPort = Union[LinkInputDataPort, LinkOutputDataPort]
+def _resolve_schema_ident(
+    schema_arg: "Union[SchemaIdent, type, None]",
+) -> Optional[SchemaIdent]:
+    """Resolve a `schema=` argument to a structured `SchemaIdent`.
+
+    Accepts:
+        - `None` (port has no declared schema)
+        - `SchemaIdent` instance (returned as-is)
+        - a codegen-emitted class carrying `__streamlib_schema_ident__`
+          as a `ClassVar[SchemaIdent]` attribute (produced by
+          `streamlib generate` from the package's JTD/YAML schemas)
+
+    Rejects:
+        - any string (bare type name OR joined `@org/pkg/Type@v` form)
+        - classes without structured-ident metadata
+    """
+    if schema_arg is None:
+        return None
+    if isinstance(schema_arg, SchemaIdent):
+        return schema_arg
+    if isinstance(schema_arg, str):
+        raise TypeError(
+            f"schema={schema_arg!r}: string schema references are no longer "
+            f"accepted. Pass a structured `SchemaIdent(org, package, type_, version)` "
+            f"instance instead. Joined-string forms like '@tatolab/core/VideoFrame@1.0.0' "
+            f"and bare type names like 'VideoFrame' are both rejected — schemas are "
+            f"cross-package references by definition and have no shorthand. See "
+            f"docs/architecture/schema-identity-and-packaging.md."
+        )
+    if isinstance(schema_arg, type):
+        ident = getattr(schema_arg, "__streamlib_schema_ident__", None)
+        if isinstance(ident, SchemaIdent):
+            return ident
+        raise TypeError(
+            f"schema={schema_arg.__name__}: class does not carry a structured "
+            f"SchemaIdent. Import a codegen-emitted class from "
+            f"streamlib._generated_.<package>, or pass a `SchemaIdent` "
+            f"instance directly."
+        )
+    raise TypeError(
+        f"schema={schema_arg!r}: unsupported type {type(schema_arg).__name__}. "
+        f"Pass a `SchemaIdent` instance or a codegen-emitted schema class."
+    )
 
 
 def processor(
@@ -219,24 +236,67 @@ def _declare_processor(
 def _collect_declared_ports(
     processor_class: type,
 ) -> "tuple[list[dict[str, Any]], list[dict[str, Any]]]":
-    """Name every declared port after the attribute holding it."""
+    """Every `@input` / `@output` declaration, as the dicts the engine reads.
+
+    The `"schema"` value is rendered to the 4-field wire dict here — the native
+    reader consumes plain dicts, never `SchemaIdent` instances.
+    """
     input_ports: "list[dict[str, Any]]" = []
     output_ports: "list[dict[str, Any]]" = []
-    for attribute_name, declaration in _declared_ports(processor_class):
-        declaration.port_name = attribute_name
-        if isinstance(declaration, LinkInputDataPort):
+    claimed_port_names: "set[str]" = set()
+    for marker in _declared_port_markers(processor_class):
+        port_name = marker["name"]
+        if port_name in claimed_port_names:
+            raise ValueError(
+                f"{processor_class.__name__} declares the port name {port_name!r} more "
+                f"than once — every port, input or output, needs its own name"
+            )
+        claimed_port_names.add(port_name)
+        declared_schema: Optional[SchemaIdent] = marker["schema"]
+        wire_schema = None if declared_schema is None else declared_schema.to_wire_dict()
+        if "delivery_profile" in marker:
             input_ports.append(
                 {
-                    "name": attribute_name,
-                    "description": declaration.description,
-                    "delivery_profile": declaration.delivery_profile,
+                    "name": port_name,
+                    "description": marker["description"],
+                    "delivery_profile": marker["delivery_profile"],
+                    "schema": wire_schema,
                 }
             )
         else:
             output_ports.append(
-                {"name": attribute_name, "description": declaration.description}
+                {
+                    "name": port_name,
+                    "description": marker["description"],
+                    "schema": wire_schema,
+                }
             )
     return input_ports, output_ports
+
+
+def _declared_port_markers(processor_class: type) -> "list[dict[str, Any]]":
+    """Every port marker declared on the class or inherited, in declaration order.
+
+    Walks the MRO in reverse so a subclass's redeclaration of an inherited
+    method wins, and a base class's ports are inherited rather than lost.
+    """
+    markers_by_attribute: "dict[str, list[dict[str, Any]]]" = {}
+    for ancestor in reversed(processor_class.__mro__):
+        for attribute_name, attribute in vars(ancestor).items():
+            attribute_markers = [
+                marker
+                for marker_attribute in (
+                    _INPUT_PORT_MARKER_ATTRIBUTE,
+                    _OUTPUT_PORT_MARKER_ATTRIBUTE,
+                )
+                for marker in [getattr(attribute, marker_attribute, None)]
+                if marker is not None
+            ]
+            if attribute_markers:
+                markers_by_attribute[attribute_name] = attribute_markers
+    return [
+        marker for markers in markers_by_attribute.values() for marker in markers
+    ]
 
 
 def _resolve_type_reference(
@@ -321,41 +381,3 @@ def _validate_scheduling(scheduling: Optional[str]) -> Optional[str]:
             f"{', '.join(_SCHEDULING_PRIORITIES)}"
         )
     return scheduling
-
-
-def bind_declared_ports_to_running_processor(
-    processor_instance: Any, link_data_access: Any
-) -> None:
-    """Give a freshly constructed processor its own bound copy of every port.
-
-    Called by the engine, never by app code. The declarations live on the class
-    and are therefore shared by every instance of it, so binding sets a fresh
-    per-instance port on the object rather than mutating what the class holds —
-    two instances of one processor class read different links.
-    """
-    for attribute_name, declaration in _declared_ports(type(processor_instance)):
-        bound: AnyDataPort
-        if isinstance(declaration, LinkInputDataPort):
-            bound = LinkInputDataPort(
-                delivery_profile=declaration.delivery_profile,
-                description=declaration.description,
-            )
-        else:
-            bound = LinkOutputDataPort(description=declaration.description)
-        bound.port_name = attribute_name
-        bound._link_data_access = link_data_access
-        setattr(processor_instance, attribute_name, bound)
-
-
-def _declared_ports(processor_class: type) -> "list[tuple[str, AnyDataPort]]":
-    """Every port declared on the class or inherited, in declaration order.
-
-    Walks the MRO in reverse so a subclass's redeclaration of an inherited port
-    name wins, and a base class's ports are inherited rather than lost.
-    """
-    declarations: "dict[str, AnyDataPort]" = {}
-    for ancestor in reversed(processor_class.__mro__):
-        for attribute_name, attribute in vars(ancestor).items():
-            if isinstance(attribute, (LinkInputDataPort, LinkOutputDataPort)):
-                declarations[attribute_name] = attribute
-    return list(declarations.items())

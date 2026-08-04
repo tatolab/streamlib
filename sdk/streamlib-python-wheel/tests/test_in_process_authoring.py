@@ -16,7 +16,7 @@ import time
 import pytest
 
 import streamlib
-from streamlib import LinkInputDataPort, LinkOutputDataPort, processor
+from streamlib import RuntimeContextLimitedAccess, input, output, processor
 from streamlib.testing import SingleProcessorTestPipeline
 
 pytestmark = pytest.mark.requires_gpu
@@ -28,19 +28,22 @@ PIPELINE_TIMEOUT_SECONDS = 30.0
 
 @processor
 class BrightnessFilter:
-    """The shape the scaffold teaches: ports as attributes, config as arguments."""
-
-    frames_from_upstream = LinkInputDataPort()
-    frames_to_downstream = LinkOutputDataPort()
+    """The shape the scaffold teaches: ports as decorators, config as arguments."""
 
     def __init__(self, gain: float = 1.0) -> None:
         self.gain = gain
 
-    def process(self) -> None:
-        frame = self.frames_from_upstream.read()
+    @input()
+    def frames_from_upstream(self) -> None: ...
+
+    @output()
+    def frames_to_downstream(self) -> None: ...
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        frame = ctx.inputs.read("frames_from_upstream")
         if frame is None:
             return
-        self.frames_to_downstream.write({"value": frame["value"] * self.gain})
+        ctx.outputs.write("frames_to_downstream", {"value": frame["value"] * self.gain})
 
 
 def test_a_processor_runs_in_process_and_transforms_what_it_is_fed():
@@ -70,22 +73,24 @@ _frames_reaching_the_sink: "queue.Queue[dict]" = queue.Queue()
 
 @processor(execution="continuous", interval_ms=1)
 class CountingFrameSource:
-    frames_to_downstream = LinkOutputDataPort()
-
     def __init__(self) -> None:
         self.frames_produced = 0
 
-    def process(self) -> None:
+    @output()
+    def frames_to_downstream(self) -> None: ...
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         self.frames_produced += 1
-        self.frames_to_downstream.write({"frame_number": self.frames_produced})
+        ctx.outputs.write("frames_to_downstream", {"frame_number": self.frames_produced})
 
 
 @processor
 class FrameCountingSink:
-    frames_from_upstream = LinkInputDataPort(delivery_profile="every_sample")
+    @input(delivery_profile="every_sample")
+    def frames_from_upstream(self) -> None: ...
 
-    def process(self) -> None:
-        frame = self.frames_from_upstream.read()
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        frame = ctx.inputs.read("frames_from_upstream")
         if frame is not None:
             _frames_reaching_the_sink.put(frame)
 
@@ -152,21 +157,23 @@ _values_reaching_the_sink: "queue.Queue[dict]" = queue.Queue()
 
 @processor(execution="continuous", interval_ms=1)
 class ConstantValueSource:
-    frames_to_downstream = LinkOutputDataPort()
-
     def __init__(self, value: float = 1.0) -> None:
         self.value = value
 
-    def process(self) -> None:
-        self.frames_to_downstream.write({"value": self.value})
+    @output()
+    def frames_to_downstream(self) -> None: ...
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        ctx.outputs.write("frames_to_downstream", {"value": self.value})
 
 
 @processor
 class ValueCollectingSink:
-    frames_from_upstream = LinkInputDataPort()
+    @input()
+    def frames_from_upstream(self) -> None: ...
 
-    def process(self) -> None:
-        frame = self.frames_from_upstream.read()
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        frame = ctx.inputs.read("frames_from_upstream")
         if frame is not None:
             _values_reaching_the_sink.put(frame)
 
@@ -215,7 +222,7 @@ _fast_processor_ticks = threading.Semaphore(0)
 
 @processor(execution="continuous", interval_ms=1)
 class FastTickingProcessor:
-    def process(self) -> None:
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         _fast_processor_ticks.release()
 
 
@@ -227,11 +234,12 @@ _writes_finished = threading.Semaphore(0)
 class ProducerBlockedByBackpressure:
     """Writes as fast as it can into a link its consumer barely drains."""
 
-    bags_to_downstream = LinkOutputDataPort()
+    @output()
+    def bags_to_downstream(self) -> None: ...
 
-    def process(self) -> None:
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
         _writes_started.release()
-        self.bags_to_downstream.write({"payload": "x" * 1024})
+        ctx.outputs.write("bags_to_downstream", {"payload": "x" * 1024})
         _writes_finished.release()
 
 
@@ -239,10 +247,11 @@ class ProducerBlockedByBackpressure:
 class GlacialConsumer:
     """`lossless`, so the producer blocks rather than the engine dropping bags."""
 
-    bags_from_upstream = LinkInputDataPort(delivery_profile="lossless")
+    @input(delivery_profile="lossless")
+    def bags_from_upstream(self) -> None: ...
 
-    def process(self) -> None:
-        self.bags_from_upstream.read()
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        ctx.inputs.read("bags_from_upstream")
         time.sleep(GLACIAL_CONSUMER_DELAY_SECONDS)
 
 
@@ -260,10 +269,10 @@ MINIMUM_TICKS_WHILE_A_WRITE_IS_BLOCKED = 100
 def test_a_write_blocked_by_backpressure_stalls_no_other_python_processor():
     """The GIL-release contract on the path that genuinely blocks.
 
-    A `lossless` link makes the producer's `write()` block inside the engine
-    rather than drop the bag, so this is a Python processor parked in a native
-    call for nearly the whole window. Another Python processor must keep
-    running throughout.
+    A `lossless` link makes the producer's `ctx.outputs.write()` block inside
+    the engine rather than drop the bag, so this is a Python processor parked
+    in a native call for nearly the whole window. Another Python processor must
+    keep running throughout.
 
     Mental-revert: dropping the `python.detach` around `write_raw` — the blocked
     producer then holds the GIL for the duration of every blocked write and the
@@ -318,13 +327,14 @@ _frames_after_the_raising_one: "queue.Queue[dict]" = queue.Queue()
 
 @processor
 class ProcessorThatRaisesOnce:
-    frames_from_upstream = LinkInputDataPort(delivery_profile="every_sample")
-
     def __init__(self) -> None:
         self.frames_seen = 0
 
-    def process(self) -> None:
-        frame = self.frames_from_upstream.read()
+    @input(delivery_profile="every_sample")
+    def frames_from_upstream(self) -> None: ...
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        frame = ctx.inputs.read("frames_from_upstream")
         if frame is None:
             return
         self.frames_seen += 1
