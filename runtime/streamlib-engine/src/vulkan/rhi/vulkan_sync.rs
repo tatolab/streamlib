@@ -337,9 +337,10 @@ impl HostVulkanTimelineSemaphore {
     /// Block until the timeline counter has reached or surpassed `value`.
     ///
     /// `timeout_ns` is the per-call timeout; pass `u64::MAX` for "no
-    /// timeout". Returns `Ok(())` on success and
-    /// [`Error::GpuError`] (containing the underlying VkResult) on
-    /// timeout or driver failure.
+    /// timeout". Returns `Ok(())` only when the value was reached:
+    /// `vkWaitSemaphores` reports a timeout as `VK_TIMEOUT` — a *positive*
+    /// success code — which maps to [`Error::GpuError`] here, alongside
+    /// genuine driver failures.
     pub fn wait(&self, value: u64, timeout_ns: u64) -> Result<()> {
         let semaphores = [self.semaphore];
         let values = [value];
@@ -348,13 +349,17 @@ impl HostVulkanTimelineSemaphore {
             .semaphores(&semaphores)
             .values(&values)
             .build();
-        unsafe { self.device.wait_semaphores(&info, timeout_ns) }
-            .map(|_| ())
-            .map_err(|e| {
-                Error::GpuError(format!(
-                    "vkWaitSemaphores(value={value}, timeout_ns={timeout_ns}): {e}"
-                ))
-            })
+        let outcome = unsafe { self.device.wait_semaphores(&info, timeout_ns) }.map_err(|e| {
+            Error::GpuError(format!(
+                "vkWaitSemaphores(value={value}, timeout_ns={timeout_ns}): {e}"
+            ))
+        })?;
+        if outcome == vk::SuccessCode::TIMEOUT {
+            return Err(Error::GpuError(format!(
+                "vkWaitSemaphores(value={value}) timed out after {timeout_ns} ns"
+            )));
+        }
+        Ok(())
     }
 
     /// Host-side signal: advance the counter to `value` from the CPU.
@@ -447,6 +452,36 @@ mod tests {
         let semaphore = VulkanSemaphore::new(device.device());
         assert!(semaphore.is_ok(), "Semaphore creation should succeed");
         println!("Vulkan semaphore created successfully");
+    }
+
+    /// `vkWaitSemaphores` reports timeout as `VK_TIMEOUT` — a *positive*
+    /// success code — so a wrapper that only checks `Err` silently converts
+    /// a timed-out wait into `Ok`. Mental-revert: with the `SuccessCode::
+    /// TIMEOUT` mapping removed from [`HostVulkanTimelineSemaphore::wait`],
+    /// this test fails at the `expect_err`.
+    #[cfg(target_os = "linux")]
+    #[cfg_attr(
+        not(feature = "hardware-tests"),
+        ignore = "hardware integration — set --features streamlib/hardware-tests + run with --test-threads=1. See docs/testing-hardware.md"
+    )]
+    #[test]
+    fn timeline_semaphore_bounded_wait_reports_timeout_as_error() {
+        let device = match HostVulkanDevice::new() {
+            Ok(d) => d,
+            Err(_) => {
+                println!("Skipping test - Vulkan not available");
+                return;
+            }
+        };
+        let sem = HostVulkanTimelineSemaphore::new(device.device(), 0)
+            .expect("create timeline semaphore");
+        let timeout_error = sem
+            .wait(1, 1_000_000)
+            .expect_err("a 1 ms wait on a never-signaled value must be an error, not Ok");
+        assert!(
+            format!("{timeout_error}").contains("timed out"),
+            "error names the timeout: {timeout_error}"
+        );
     }
 
     #[cfg(target_os = "linux")]

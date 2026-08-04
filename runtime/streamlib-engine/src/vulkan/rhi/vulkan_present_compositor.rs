@@ -211,18 +211,21 @@ impl VulkanPresentCompositor {
         )
     }
 
-    /// Record the composition of `source` onto an acquired swapchain frame.
+    /// Record the composition of a registered source texture onto an
+    /// acquired swapchain frame.
     ///
-    /// Transitions `source` to `SHADER_READ_ONLY_OPTIMAL` when
-    /// `source_current_layout` says it is not there already — the caller's
-    /// layout bookkeeping must record that transition. Opens and closes its
-    /// own dynamic-rendering pass (clearing to black) on both the success and
-    /// the error path, so call it once per frame with no pass active.
+    /// Owns the source's layout bookkeeping: when the registration says the
+    /// texture is not in `SHADER_READ_ONLY_OPTIMAL`, the transition is
+    /// recorded and the registration updated at record time — the present
+    /// target submits everything recorded even when a later step fails (its
+    /// forward-progress contract), so recorded means executed. Opens and
+    /// closes its own dynamic-rendering pass (clearing to black) on both the
+    /// success and the error path; call it once per frame with no pass
+    /// active.
     pub fn compose_to_present_frame(
         &self,
         frame: &mut PresentFrame<'_>,
-        source: &Texture,
-        source_current_layout: VulkanLayout,
+        source_registration: &crate::core::context::TextureRegistration,
         scaling: PresentScalingMode,
     ) -> Result<()> {
         self.reject_attachment_format_mismatch(
@@ -231,6 +234,8 @@ impl VulkanPresentCompositor {
         )?;
         let frame_index = frame.frame_index;
         let destination_extent = frame.extent;
+        let source = source_registration.texture();
+        let source_current_layout = source_registration.current_layout();
 
         self.stage_source_and_scaling(frame_index, source, destination_extent, scaling)?;
         if source_current_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
@@ -243,6 +248,7 @@ impl VulkanPresentCompositor {
                 VulkanAccess::MEMORY_WRITE,
                 VulkanAccess::SHADER_SAMPLED_READ,
             )?;
+            source_registration.update_layout(VulkanLayout::SHADER_READ_ONLY_OPTIMAL);
         }
 
         frame.begin_rendering(Some([0.0, 0.0, 0.0, 1.0]))?;

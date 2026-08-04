@@ -19,6 +19,13 @@ streamlib = { path = "../../sdk/streamlib-sdk", version = "0.11.0", default-feat
 serde = { workspace = true }
 tracing = { workspace = true }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+v4l = "0.14"
+uuid = { version = "1.11", features = ["v4"] }
+libc = { workspace = true }
+winit = "0.30"
+raw-window-handle = "0.6"
+
 [dev-dependencies]
 serde_json = { workspace = true }
 rmp-serde = { workspace = true }

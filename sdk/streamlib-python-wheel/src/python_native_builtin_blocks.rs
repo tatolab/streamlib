@@ -8,6 +8,7 @@
 //! object itself and resolves it to the statically-linked native processor —
 //! per-frame paths never enter the interpreter.
 
+use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use streamlib::sdk::processors::ProcessorTypeReference;
 
@@ -29,17 +30,52 @@ impl PythonTestPatternSourceBlock {
     }
 }
 
+/// `streamlib.CameraSource` — live V4L2 camera capture (Linux).
+#[pyclass(name = "CameraSource", module = "streamlib", frozen)]
+pub(crate) struct PythonCameraSourceBlock;
+
+/// `streamlib.DisplayWindow` — video frames in a vsync'd window (Linux).
+#[pyclass(name = "DisplayWindow", module = "streamlib", frozen)]
+pub(crate) struct PythonDisplayWindowBlock;
+
 /// Resolve a Python object to a native built-in's type reference, if it is
 /// one of the wheel-exported marker type objects. The identity comes from the
-/// native processor's own declaration — authored once, in the built-ins crate.
+/// native processor's own declaration — authored once, in the built-ins
+/// crate. On a platform where a marker's native processor is not compiled
+/// in, the answer is an explicit unsupported-platform error rather than the
+/// generic "not a processor" rejection.
 pub(crate) fn native_builtin_type_reference(
     python: Python<'_>,
     processor_class: &Bound<'_, PyAny>,
-) -> Option<ProcessorTypeReference> {
+) -> PyResult<Option<ProcessorTypeReference>> {
     if processor_class.is(python.get_type::<PythonTestPatternSourceBlock>()) {
-        return Some(streamlib_media_builtins::TestPatternSource::Processor::schema_ident().into());
+        return Ok(Some(
+            streamlib_media_builtins::TestPatternSource::Processor::schema_ident().into(),
+        ));
     }
-    None
+    if processor_class.is(python.get_type::<PythonCameraSourceBlock>()) {
+        #[cfg(target_os = "linux")]
+        return Ok(Some(
+            streamlib_media_builtins::CameraSource::Processor::schema_ident().into(),
+        ));
+        #[cfg(not(target_os = "linux"))]
+        return Err(PyRuntimeError::new_err(
+            "CameraSource is Linux-only (V4L2 capture); this platform is not supported \
+             by the streamlib wheel yet",
+        ));
+    }
+    if processor_class.is(python.get_type::<PythonDisplayWindowBlock>()) {
+        #[cfg(target_os = "linux")]
+        return Ok(Some(
+            streamlib_media_builtins::DisplayWindow::Processor::schema_ident().into(),
+        ));
+        #[cfg(not(target_os = "linux"))]
+        return Err(PyRuntimeError::new_err(
+            "DisplayWindow is Linux-only today; this platform is not supported by the \
+             streamlib wheel yet",
+        ));
+    }
+    Ok(None)
 }
 
 /// Register the native built-in processor types on the process-wide registry.

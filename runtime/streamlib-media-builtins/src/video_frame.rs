@@ -211,6 +211,96 @@ pub struct MasteringDisplay {
     pub white_point_y: u32,
 }
 
+// Per-axis maps from the bag's H.273 vocabulary to the engine's color IDs.
+// The engine accepts only its own primitive types in public signatures, so
+// this crate translates at the boundary.
+
+impl Primaries {
+    pub(crate) fn engine_id(&self) -> streamlib::sdk::color::PrimariesId {
+        use streamlib::sdk::color::PrimariesId;
+        match self {
+            Primaries::Bt709 => PrimariesId::Bt709,
+            Primaries::Bt470M => PrimariesId::Bt470M,
+            Primaries::Bt470Bg => PrimariesId::Bt470Bg,
+            Primaries::Smpte170m => PrimariesId::Smpte170m,
+            Primaries::Smpte240m => PrimariesId::Smpte240m,
+            Primaries::Film => PrimariesId::Film,
+            Primaries::Bt2020 => PrimariesId::Bt2020,
+            Primaries::Smpte428 => PrimariesId::Smpte428,
+            Primaries::Smpte431 => PrimariesId::Smpte431,
+            Primaries::Smpte432 => PrimariesId::Smpte432,
+            Primaries::Ebu3213 => PrimariesId::Ebu3213,
+        }
+    }
+}
+
+impl Transfer {
+    pub(crate) fn engine_id(&self) -> streamlib::sdk::color::TransferId {
+        use streamlib::sdk::color::TransferId;
+        match self {
+            Transfer::Srgb => TransferId::Srgb,
+            Transfer::Bt709
+            | Transfer::Smpte170m
+            | Transfer::Smpte240m
+            | Transfer::Bt2020TenBit
+            | Transfer::Bt2020TwelveBit => TransferId::Bt709,
+            Transfer::Smpte2084 => TransferId::Pq,
+            Transfer::AribStdB67 => TransferId::Hlg,
+            Transfer::Linear => TransferId::Linear,
+            // No exact engine id for these encoded transfers; a BT.709-shaped
+            // approximation beats Linear, which would skip decoding entirely.
+            Transfer::Gamma22
+            | Transfer::Gamma28
+            | Transfer::Bt1361
+            | Transfer::Log100
+            | Transfer::Log100Sqrt10
+            | Transfer::Smpte428
+            | Transfer::Xvycc => TransferId::Bt709,
+        }
+    }
+}
+
+impl Matrix {
+    pub(crate) fn engine_id(&self) -> streamlib::sdk::color::MatrixId {
+        use streamlib::sdk::color::MatrixId;
+        match self {
+            Matrix::Identity => MatrixId::Identity,
+            Matrix::Bt709 => MatrixId::Bt709,
+            Matrix::Fcc => MatrixId::Fcc,
+            Matrix::Bt470Bg => MatrixId::Bt470Bg,
+            Matrix::Smpte170m => MatrixId::Smpte170m,
+            Matrix::Smpte240m => MatrixId::Smpte240m,
+            Matrix::Ycgco => MatrixId::Ycgco,
+            Matrix::Bt2020Ncl => MatrixId::Bt2020Ncl,
+            Matrix::Bt2020Cl => MatrixId::Bt2020Cl,
+            Matrix::Smpte2085 => MatrixId::Smpte2085,
+            Matrix::ChromaNcl => MatrixId::ChromaNcl,
+            Matrix::ChromaCl => MatrixId::ChromaCl,
+            Matrix::Ictcp => MatrixId::Ictcp,
+        }
+    }
+}
+
+impl Range {
+    pub(crate) fn engine_id(&self) -> streamlib::sdk::color::RangeId {
+        use streamlib::sdk::color::RangeId;
+        match self {
+            Range::Limited => RangeId::Limited,
+            Range::Full => RangeId::Full,
+        }
+    }
+}
+
+impl ColorInfo {
+    /// The engine's colorspace-pick input: primaries + transfer only.
+    pub(crate) fn engine_color_traits(&self) -> streamlib::sdk::color::ColorTraits {
+        streamlib::sdk::color::ColorTraits {
+            primaries: self.primaries.as_ref().map(Primaries::engine_id),
+            transfer: self.transfer.as_ref().map(Transfer::engine_id),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

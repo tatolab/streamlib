@@ -25,6 +25,8 @@ from ._engine import MonotonicTimer as MonotonicTimer
 from ._engine import ProcessorInputPortReference as ProcessorInputPortReference
 from ._engine import ProcessorLinkDataAccess as ProcessorLinkDataAccess
 from ._engine import ProcessorOutputPortReference as ProcessorOutputPortReference
+from ._engine import CameraSource as CameraSource
+from ._engine import DisplayWindow as DisplayWindow
 from ._engine import Runtime as _NativeRuntime
 from ._engine import RuntimeContextFullAccess as RuntimeContextFullAccess
 from ._engine import RuntimeContextLimitedAccess as RuntimeContextLimitedAccess
@@ -44,8 +46,10 @@ from .video_frame import VideoFrame as VideoFrame
 # authoring grammar reads `@input(...)` / `@output(...)`, matching the old SDK.
 __all__ = [
     "AddedProcessor",
+    "CameraSource",
     "ColorInfo",
     "ContentLight",
+    "DisplayWindow",
     "GpuContextFullAccess",
     "GpuContextLimitedAccess",
     "GpuSurfaceHandle",
