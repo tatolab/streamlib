@@ -195,7 +195,7 @@ impl ManualProcessor for CameraSource::Processor {
         let max_width = self.config.max_width.unwrap_or(1920);
         let max_height = self.config.max_height.unwrap_or(1080);
         let fmt = if fmt.width > max_width || fmt.height > max_height {
-            let mut capped = fmt.clone();
+            let mut capped = fmt;
             capped.width = max_width;
             capped.height = max_height;
             match dev.set_format(&capped) {
@@ -240,7 +240,7 @@ impl ManualProcessor for CameraSource::Processor {
         );
 
         let mut stream =
-            v4l::io::mmap::Stream::with_buffers(&mut dev, Type::VideoCapture, V4L2_BUFFER_COUNT)
+            v4l::io::mmap::Stream::with_buffers(&dev, Type::VideoCapture, V4L2_BUFFER_COUNT)
                 .map_err(|e| {
                     Error::Configuration(format!("Failed to create V4L2 mmap stream: {}", e))
                 })?;
@@ -355,7 +355,7 @@ fn negotiate_capture_format(
     if let Ok(framesizes) = dev.enum_framesizes(nv12_fourcc)
         && let Some((best_w, best_h)) = highest_resolution(&framesizes)
     {
-        let mut try_fmt = current_fmt.clone();
+        let mut try_fmt = current_fmt;
         try_fmt.fourcc = nv12_fourcc;
         try_fmt.width = best_w;
         try_fmt.height = best_h;
@@ -1115,7 +1115,7 @@ fn capture_thread_loop(
                 ?fourcc,
                 "first frame captured via GPU compute",
             );
-        } else if frame_num % 300 == 0 {
+        } else if frame_num.is_multiple_of(300) {
             tracing::debug!(camera = camera_name, frame = frame_num, "frame milestone");
         }
 
