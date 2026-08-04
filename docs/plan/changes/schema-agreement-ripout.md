@@ -1,5 +1,14 @@
 # Change: schema-agreement-ripout
 
+> **Superseded 2026-08-03 by `schema-free-ports.md`** (align #1723, ADR
+> `docs/decisions/schema-free-ports.md`). This change was built around three things the
+> decision deletes: unilateral port hints, an advisory connect warn, and an inert-but-
+> stamped wire tag. Its connect-time half already shipped (commit `0113ea20`); the
+> advisory warn it proposed was never built; its per-read half is absorbed by
+> `schema-free-ports.md`. Its central constraint — "`FrameHeader`/`SchemaIdentWire` byte
+> layout is unchanged" — is now false: the header goes 204 → 76 bytes. Do not derive
+> tickets from this file; `/reconcile-tracker` retires #1679 and #1655.
+
 > **Reconciliation note 2026-08-02** (`importable-python-library` pivot): the core
 > decision here — advisory connect, cast-at-read, inert wire tag — stands unchanged.
 > But this file's STAY rationale cites `module_loader/` paths, `sdk/streamlib-deno`,

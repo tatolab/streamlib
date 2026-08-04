@@ -54,7 +54,12 @@ grammar is deleted from every authoring surface.
 - Identity and label separate cleanly: the import path is exact and machine-facing, the
   instance's display name is human-facing and may repeat. Engine-appended counters on
   duplicate labels are a convenience the owner accepted as revisitable (2026-08-03).
-- The entry file must be imported, not executed as a script — otherwise a class defined
-  in it identifies as `__main__:…`, which no helper process can import and which varies
-  with the launch path.
+- A class defined in the entry file run as `python app.py` identifies as `__main__:…`.
+  That is legal and runs in-process (owner, 2026-08-03) — forbidding it would contradict
+  "an importable Python library" and retire the `python app.py` harness the
+  interpreter-lifecycle contract was proven against. The consequence lands where it
+  actually bites: no helper process can import `__main__`, so the engine refuses to
+  helper-place such a class, with an error naming the fix. Identity is therefore
+  per-launch-arrangement, and the only cross-process reader of it is the placement path
+  that already refuses these classes.
 - Cross-language and cross-node interop rest entirely on the bag being self-describing.
