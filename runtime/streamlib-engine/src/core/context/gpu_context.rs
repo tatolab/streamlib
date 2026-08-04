@@ -416,6 +416,14 @@ pub struct GpuContext {
     /// `resolve_texture_registration_by_surface_id` get the same lifecycle metadata
     /// adapter consumers do.
     texture_cache: Arc<Mutex<HashMap<String, TextureRegistration>>>,
+    /// Device-export stagings keyed by surface_id — sibling of
+    /// `texture_cache`, but spanning registration replacements: a
+    /// rotating producer re-registers per frame, and the staging must
+    /// survive that while its blit source is re-resolved per refill.
+    /// Dropped with the context; evicted by `unregister_texture`.
+    #[cfg(target_os = "linux")]
+    pub(crate) device_export_stagings:
+        Arc<parking_lot::Mutex<HashMap<String, Arc<super::SurfaceDeviceExportStaging>>>>,
     /// Cache of textures backing surface-share-registered pixel buffers
     /// (`escalate_acquire_pixel_buffer` flow). Refreshed on every resolve so
     /// rotating-pool producers don't render stale contents — kept separate
@@ -493,6 +501,8 @@ impl GpuContext {
             surface_store: Arc::new(Mutex::new(None)),
             blitter,
             texture_cache: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(target_os = "linux")]
+            device_export_stagings: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -520,6 +530,8 @@ impl GpuContext {
             surface_store: Arc::new(Mutex::new(None)),
             blitter,
             texture_cache: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(target_os = "linux")]
+            device_export_stagings: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -731,6 +743,8 @@ impl GpuContext {
     pub fn unregister_texture(&self, id: &str) {
         let mut cache = self.texture_cache.lock().unwrap();
         cache.remove(id);
+        #[cfg(target_os = "linux")]
+        self.evict_device_export_staging(id);
     }
 
     /// Refresh the registration's `current_layout` for a given

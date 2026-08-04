@@ -28,7 +28,7 @@ use streamlib::sdk::context::{
     RuntimeContextLimitedAccess, SurfaceStore, TexturePoolDescriptor,
 };
 use streamlib::sdk::rhi::{
-    PixelBuffer, PixelBufferPoolId, PixelFormat, TextureFormat, TextureUsages,
+    PixelBuffer, PixelBufferPoolId, PixelFormat, TextureFormat, TextureUsages, VulkanLayout,
 };
 use streamlib_adapter_cuda::dlpack::DeviceType;
 
@@ -40,7 +40,7 @@ use crate::python_gpu_surface_pixel_exchange::{
 };
 #[cfg(target_os = "linux")]
 use crate::python_gpu_surface_pixel_exchange::{
-    device_dlpack_capsule, device_export_writable, imported_device_for,
+    device_dlpack_capsule, imported_device_for, prepare_device_export,
     publish_device_write_back_to_surface,
 };
 use crate::python_logging::monotonic_clock_now_ns;
@@ -148,8 +148,15 @@ pub(crate) struct PythonGpuSurfaceHandle {
     owned_memory: Mutex<Option<Arc<GpuSurfaceOwnedMemory>>>,
     cpu_access: CpuAccessGate,
     /// A writable device tensor was exported under the current write
-    /// lock; `unlock()` publishes the staging back into the surface.
+    /// lock; `unlock()` / `close()` publishes the staging back into the
+    /// surface.
+    #[cfg(target_os = "linux")]
     device_write_pending: std::sync::atomic::AtomicBool,
+    /// Which DLPack side this handle serves when the consumer expresses
+    /// no preference — decided once, so `__dlpack_device__` and
+    /// `__dlpack__` cannot disagree across calls.
+    #[cfg(target_os = "linux")]
+    natural_dlpack_side_is_device: std::sync::OnceLock<bool>,
 }
 
 impl PythonGpuSurfaceHandle {
@@ -167,7 +174,10 @@ impl PythonGpuSurfaceHandle {
             surface_format_name,
             owned_memory: Mutex::new(Some(owned_memory)),
             cpu_access: CpuAccessGate::new_unlocked(),
+            #[cfg(target_os = "linux")]
             device_write_pending: std::sync::atomic::AtomicBool::new(false),
+            #[cfg(target_os = "linux")]
+            natural_dlpack_side_is_device: std::sync::OnceLock::new(),
         }
     }
 
@@ -223,22 +233,25 @@ impl PythonGpuSurfaceHandle {
         )
     }
 
-    fn from_pooled_texture(pooled_texture: PooledTextureHandle) -> Self {
+    fn from_pooled_texture(
+        pooled_texture: PooledTextureHandle,
+        registered_surface_id: Option<String>,
+        gpu_limited_access: Option<GpuContextLimitedAccess>,
+    ) -> Self {
         let (width, height, format) = (
             pooled_texture.width(),
             pooled_texture.height(),
             pooled_texture.format(),
         );
         Self::new(
-            None,
+            registered_surface_id.clone(),
             width,
             height,
             texture_format_name(format).to_string(),
-            GpuSurfaceOwnedMemory::new(
+            GpuSurfaceOwnedMemory::new_with_texture_registration_debt(
                 GpuSurfaceOwnedValue::PooledTexture(pooled_texture),
-                None,
-                None,
-                None,
+                registered_surface_id,
+                gpu_limited_access,
             ),
         )
     }
@@ -254,6 +267,34 @@ impl PythonGpuSurfaceHandle {
         self.owned_memory.lock().clone().ok_or_else(|| {
             PyRuntimeError::new_err("this surface is closed; acquire or resolve it again")
         })
+    }
+}
+
+impl PythonGpuSurfaceHandle {
+    /// Decide — once per handle — whether the no-preference DLPack side
+    /// is the device. Detached work: the first call may allocate staging
+    /// and import into CUDA. A handle that answered kDLCUDA here never
+    /// silently downgrades later; a refill failure after this raises.
+    #[cfg(target_os = "linux")]
+    fn natural_side_is_device(&self, owned_memory: &Arc<GpuSurfaceOwnedMemory>) -> bool {
+        *self.natural_dlpack_side_is_device.get_or_init(|| {
+            device_export_available(owned_memory) && imported_device_for(owned_memory).is_ok()
+        })
+    }
+
+    /// Publish a pending device-side write, once. Shared by `unlock` and
+    /// `close` so the context-manager spelling cannot silently drop an
+    /// edit.
+    #[cfg(target_os = "linux")]
+    fn publish_pending_device_write(&self) -> PyResult<()> {
+        if self
+            .device_write_pending
+            .swap(false, std::sync::atomic::Ordering::SeqCst)
+            && let Some(owned_memory) = self.owned_memory.lock().clone()
+        {
+            publish_device_write_back_to_surface(&owned_memory)?;
+        }
+        Ok(())
     }
 }
 
@@ -301,31 +342,38 @@ impl PythonGpuSurfaceHandle {
         python.detach(|| pixel_buffer_bytes_per_row(owned_memory.host_mapped_pixel_buffer()?))
     }
 
-    /// Base address of the host mapping, or `0` when the surface is not
-    /// locked. Callers that want a typed view use `as_numpy` or `__dlpack__`;
-    /// this is the escape hatch for building one by hand.
+    /// Base address of the host mapping, or `None` when the surface is
+    /// not locked. Callers that want a typed view use `as_numpy` or
+    /// `__dlpack__`; this is the escape hatch for building one by hand.
     #[getter]
-    fn base_address(&self, python: Python<'_>) -> PyResult<usize> {
+    fn base_address(&self, python: Python<'_>) -> PyResult<Option<usize>> {
         if !self.cpu_access.is_locked() {
-            return Ok(0);
+            return Ok(None);
         }
         let owned_memory = self.owned_memory()?;
         python.detach(|| {
-            Ok(owned_memory
-                .host_mapped_pixel_buffer()?
-                .plane_base_address(0) as usize)
+            Ok(Some(
+                owned_memory
+                    .host_mapped_pixel_buffer()?
+                    .plane_base_address(0) as usize,
+            ))
         })
     }
 
     /// Release the underlying GPU resource. Idempotent.
-    fn close(&self, python: Python<'_>) {
+    fn close(&self, python: Python<'_>) -> PyResult<()> {
         // Releasing can return a slot to a pool under engine locks and talk to
         // the surface-share daemon — detached, like every potentially-blocking
-        // engine call.
-        python.detach(|| {
+        // engine call. A pending device write publishes first: the
+        // context-manager spelling reaches close without an explicit
+        // unlock, and dropping the edit silently there is data loss.
+        python.detach(|| -> PyResult<()> {
+            #[cfg(target_os = "linux")]
+            self.publish_pending_device_write()?;
             self.cpu_access.unlock();
             self.release_owned_engine_value();
-        });
+            Ok(())
+        })
     }
 
     fn __enter__(python_self: PyRef<'_, Self>) -> PyRef<'_, Self> {
@@ -333,9 +381,13 @@ impl PythonGpuSurfaceHandle {
     }
 
     #[pyo3(signature = (*_exception_details))]
-    fn __exit__(&self, python: Python<'_>, _exception_details: &Bound<'_, PyAny>) -> bool {
-        self.close(python);
-        false
+    fn __exit__(
+        &self,
+        python: Python<'_>,
+        _exception_details: &Bound<'_, PyAny>,
+    ) -> PyResult<bool> {
+        self.close(python)?;
+        Ok(false)
     }
 
     /// Open CPU access to the pixels, declaring read or write intent.
@@ -348,14 +400,22 @@ impl PythonGpuSurfaceHandle {
     fn lock(&self, python: Python<'_>, read_only: bool) -> PyResult<()> {
         let owned_memory = self.owned_memory()?;
         python.detach(|| -> PyResult<()> {
-            if owned_memory
-                .host_mapped_pixel_buffer()?
-                .plane_base_address(0)
-                .is_null()
-            {
-                return Err(PyBufferError::new_err(
-                    "surface has no host mapping; it is a DEVICE_LOCAL allocation",
-                ));
+            // The gate serves both sides: a device-only surface (a pooled
+            // texture) has no host mapping to check, but its device export
+            // still rides the same lock.
+            match owned_memory.host_mapped_pixel_buffer() {
+                Ok(pixel_buffer) => {
+                    if pixel_buffer.plane_base_address(0).is_null() {
+                        return Err(PyBufferError::new_err(
+                            "surface has no host mapping; it is a DEVICE_LOCAL allocation",
+                        ));
+                    }
+                }
+                Err(no_host_side) => {
+                    if !device_export_available(&owned_memory) {
+                        return Err(no_host_side);
+                    }
+                }
             }
             self.cpu_access.lock_for(read_only);
             Ok(())
@@ -364,18 +424,10 @@ impl PythonGpuSurfaceHandle {
 
     /// Close CPU access, publishing any pending device-side write back
     /// into the surface first. Idempotent.
-    #[pyo3(signature = (read_only = true))]
-    fn unlock(&self, python: Python<'_>, read_only: bool) -> PyResult<()> {
-        let _ = read_only;
+    fn unlock(&self, python: Python<'_>) -> PyResult<()> {
         python.detach(|| -> PyResult<()> {
             #[cfg(target_os = "linux")]
-            if self
-                .device_write_pending
-                .swap(false, std::sync::atomic::Ordering::SeqCst)
-                && let Some(owned_memory) = self.owned_memory.lock().clone()
-            {
-                publish_device_write_back_to_surface(&owned_memory)?;
-            }
+            self.publish_pending_device_write()?;
             self.cpu_access.unlock();
             Ok(())
         })
@@ -447,49 +499,42 @@ impl PythonGpuSurfaceHandle {
         let read_only = self.cpu_access.is_read_only();
 
         // `dl_device` is the consumer's request for a particular side of a
-        // surface that has two. Absent means "wherever you naturally live",
-        // and a graph frame's natural side is the device — its host mapping
-        // is the derived copy. `__dlpack_device__` is what already told the
-        // consumer which side to expect.
-        let wants_host = match dl_device {
-            Some((device_type, _)) => device_type == DeviceType::Cpu as i32,
-            None => !device_export_available(&owned_memory),
-        };
-        if wants_host {
-            return host_visible_dlpack_capsule(python, &owned_memory, exchange_shape, read_only);
-        }
+        // surface that has two. Absent means "wherever you naturally
+        // live" — the side `__dlpack_device__` already advertised, decided
+        // once per handle. A device-side failure after that raises: a
+        // consumer told kDLCUDA must never be handed a host capsule.
         #[cfg(target_os = "linux")]
         {
-            let capsule = device_dlpack_capsule(python, &owned_memory, exchange_shape, read_only);
-            match capsule {
-                Ok(capsule) => {
-                    if !read_only && device_export_writable(&owned_memory) {
-                        self.device_write_pending
-                            .store(true, std::sync::atomic::Ordering::SeqCst);
-                    }
-                    Ok(capsule)
-                }
-                // No usable CUDA runtime, but the CPU can serve this surface:
-                // fall back to the side `__dlpack_device__` would also have
-                // fallen back to, rather than failing a workable export.
-                Err(device_failure) => {
-                    if dl_device.is_none() && owned_memory.host_mapped_pixel_buffer().is_ok() {
-                        host_visible_dlpack_capsule(
-                            python,
-                            &owned_memory,
-                            exchange_shape,
-                            read_only,
-                        )
-                    } else {
-                        Err(device_failure)
-                    }
-                }
+            let wants_host = match dl_device {
+                Some((device_type, _)) => device_type == DeviceType::Cpu as i32,
+                None => !python.detach(|| self.natural_side_is_device(&owned_memory)),
+            };
+            if wants_host {
+                return host_visible_dlpack_capsule(
+                    python,
+                    &owned_memory,
+                    exchange_shape,
+                    read_only,
+                );
             }
+            // The refill (a GPU submit plus a bounded wait, and on first
+            // call the staging allocation + CUDA import) runs detached;
+            // only the capsule construction needs the GIL.
+            let prepared = python.detach(|| prepare_device_export(&owned_memory))?;
+            let writable_export = !read_only && prepared.writable;
+            let capsule =
+                device_dlpack_capsule(python, &owned_memory, prepared, exchange_shape, read_only)?;
+            if writable_export {
+                self.device_write_pending
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+            }
+            Ok(capsule)
         }
         #[cfg(not(target_os = "linux"))]
-        Err(PyValueError::new_err(
-            "device export is available on Linux only",
-        ))
+        {
+            let _ = dl_device;
+            host_visible_dlpack_capsule(python, &owned_memory, exchange_shape, read_only)
+        }
     }
 
     /// A numpy view of the pixels, sharing memory with the surface.
@@ -513,12 +558,19 @@ impl PythonGpuSurfaceHandle {
         numpy
             .call_method("from_dlpack", (python_self,), Some(&host_request))
             .map_err(|from_dlpack_failure| {
-                if from_dlpack_failure.is_instance_of::<PyTypeError>(python) {
-                    return PyRuntimeError::new_err(
+                // Only the specific unexpected-keyword TypeError means old
+                // numpy; any other failure is numpy's own and passes through
+                // with the hint chained as the cause, never replaced.
+                if from_dlpack_failure.is_instance_of::<PyTypeError>(python)
+                    && from_dlpack_failure.to_string().contains("device")
+                {
+                    let old_numpy_hint = PyRuntimeError::new_err(
                         "as_numpy needs numpy 2.1 or newer, whose `from_dlpack` accepts a \
                          `device` request; older numpy cannot ask for the host side of a \
                          surface",
                     );
+                    old_numpy_hint.set_cause(python, Some(from_dlpack_failure));
+                    return old_numpy_hint;
                 }
                 from_dlpack_failure
             })
@@ -628,7 +680,21 @@ impl PythonGpuContextLimitedAccess {
             let pooled_texture = engine_view
                 .acquire_texture(&descriptor)
                 .map_err(gpu_operation_error)?;
-            Ok(PythonGpuSurfaceHandle::from_pooled_texture(pooled_texture))
+            // Registering under a minted id is what gives the texture a
+            // device-export path — same-process only, and undone when the
+            // handle's memory releases. Contents are whatever the texture
+            // holds; a fresh pool texture is undefined until written.
+            let minted_surface_id = mint_pooled_texture_surface_id();
+            engine_view.register_texture_with_layout(
+                &minted_surface_id,
+                pooled_texture.texture_clone(),
+                VulkanLayout::UNDEFINED,
+            );
+            Ok(PythonGpuSurfaceHandle::from_pooled_texture(
+                pooled_texture,
+                Some(minted_surface_id),
+                Some(engine_view.clone()),
+            ))
         })
     }
 
@@ -812,7 +878,14 @@ impl PythonGpuContextFullAccess {
             let pooled_texture = gpu_full_access
                 .acquire_texture(&descriptor)
                 .map_err(gpu_operation_error)?;
-            Ok(PythonGpuSurfaceHandle::from_pooled_texture(pooled_texture))
+            // The full-access view is lease-bound and cannot be stashed, so
+            // no registration and no device export — acquire from the
+            // limited capability for an exportable texture.
+            Ok(PythonGpuSurfaceHandle::from_pooled_texture(
+                pooled_texture,
+                None,
+                None,
+            ))
         })
     }
 
@@ -1243,6 +1316,18 @@ impl PythonLinkOutputDataWriter {
 // =============================================================================
 // Python-string <-> engine-enum format vocabularies
 // =============================================================================
+
+/// A same-process-unique id for a pooled texture registered at acquire.
+/// A counter, not a UUID: the id never crosses the process, and one
+/// engine per process is a plan decision.
+fn mint_pooled_texture_surface_id() -> String {
+    static NEXT_POOLED_TEXTURE_NUMBER: std::sync::atomic::AtomicU64 =
+        std::sync::atomic::AtomicU64::new(0);
+    format!(
+        "pooled-texture-{}",
+        NEXT_POOLED_TEXTURE_NUMBER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    )
+}
 
 /// The same vocabulary the subprocess escalate handler accepted, so a
 /// processor migrated from the old SDK keeps its format strings.

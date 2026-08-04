@@ -76,7 +76,8 @@ impl Drop for CudaImportedSurface {
         // came from a successful `cudaImportExternalMemory`, is destroyed
         // exactly once, and by this line has no mapped buffers left.
         unsafe {
-            if let Err(free_failure) = cuda_result::memory_free(self.device_pointer as *mut c_void) {
+            if let Err(free_failure) = cuda_result::memory_free(self.device_pointer as *mut c_void)
+            {
                 tracing::debug!(?free_failure, "cudaFree of the mapped buffer failed");
             }
             if let Err(destroy_failure) =
@@ -216,6 +217,8 @@ pub(crate) fn import_opaque_fd_into_cuda(
 
 /// Ask the driver what kind of memory the imported pointer actually is.
 fn classify_device_pointer(device_pointer: u64) -> Result<DeviceType, String> {
+    // SAFETY: sound only because the driver fully writes the struct when
+    // the call succeeds — `assume_init` runs strictly after `.result()?`.
     let attributes = unsafe {
         let mut attributes = std::mem::MaybeUninit::<sys::cudaPointerAttributes>::uninit();
         sys::cudaPointerGetAttributes(

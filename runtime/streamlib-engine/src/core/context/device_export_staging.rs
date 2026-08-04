@@ -14,90 +14,129 @@
 //! DEVICE_LOCAL, allocated once per surface, refilled by a VRAM-side
 //! copy each time a consumer asks.
 //!
-//! Shape constraint: this is the surface both placements share. In-process
-//! callers use it directly; the helper-process arrangement (#1714)
-//! registers the same staging + timeline with surface-share once and
-//! triggers refills over the existing timeline protocol — so nothing
+//! The blit source is resolved **per refill**, never cached: rotating
+//! producers re-register a different texture under the same surface id
+//! every frame (the camera's ring does exactly this), so a source
+//! resolved at creation silently blits the previous cycle's frame. The
+//! staging itself is per-surface-id and spans those re-registrations —
+//! which is why it lives in a [`GpuContext`]-owned map beside
+//! `texture_cache` rather than on the `TextureRegistration` that
+//! rotates out from under it.
+//!
+//! Ordering: the refill orders against the producer through queue
+//! submission order — every producer in this engine submits on the one
+//! `GpuContext` queue, and the refill's ALL_COMMANDS barrier makes prior
+//! submissions' writes visible. A multi-queue engine would need the
+//! refill to wait on the producer's timeline instead.
+//!
+//! Shape constraint: this is the surface both placements share.
+//! In-process callers use it directly; the helper-process arrangement
+//! (#1714) registers the same staging + timeline with surface-share once
+//! and triggers refills over the existing timeline protocol — so nothing
 //! here may assume the consumer lives in this process. The bounded host
 //! wait after each submit is the in-process convenience only; the
 //! exportable timeline is the contract.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use parking_lot::Mutex;
 
 use crate::core::context::GpuContext;
 use crate::core::error::{Error, Result};
-use crate::core::rhi::PixelBuffer;
 use crate::host_rhi::{HostGpuDeviceExt as _, VulkanAccess, VulkanStage};
 use crate::vulkan::rhi::{
     HostVulkanBuffer, HostVulkanTimelineSemaphore, ImageCopyRegion, RhiCommandRecorder,
 };
-use streamlib_consumer_rhi::{TextureFormat, VulkanLayout};
+use streamlib_consumer_rhi::{PixelFormat, TextureFormat, VulkanLayout};
 
 /// Bound on the host wait for a staging refill. The copy is VRAM→VRAM
 /// (tens of microseconds); a wait that reaches this bound is a wedged
 /// queue, not a slow copy.
 const STAGING_REFILL_WAIT_TIMEOUT_NS: u64 = 2_000_000_000;
 
-/// The texture formats a device-export blit accepts: 4-byte single-plane
-/// color. The staging buffer is sized `width * height * 4` and DLPack
-/// consumers see `(H, W, 4)` u8 — a format that breaks that arithmetic
-/// must be refused at creation, not exported with wrong strides.
-fn texture_format_bytes_per_pixel(format: TextureFormat) -> Result<u64> {
+/// The formats a device-export blit accepts: single-plane color whose
+/// byte arithmetic a DLPack consumer can express. Multi-plane formats
+/// are refused — a one-buffer export would drop chroma.
+fn export_bytes_per_pixel_for_texture(format: TextureFormat) -> Result<u32> {
     match format {
         TextureFormat::Rgba8Unorm
         | TextureFormat::Rgba8UnormSrgb
         | TextureFormat::Bgra8Unorm
-        | TextureFormat::Bgra8UnormSrgb => Ok(4),
-        other => Err(Error::GpuError(format!(
-            "device export supports 4-byte single-plane color textures; {other:?} has no \
-             single-buffer DLPack shape at 4 bytes per pixel"
-        ))),
+        | TextureFormat::Bgra8UnormSrgb
+        | TextureFormat::Rgba16Float
+        | TextureFormat::Rgba32Float => Ok(format.bytes_per_pixel()),
+        TextureFormat::Nv12 => Err(Error::GpuError(
+            "device export refuses NV12: it is two planes, and a one-buffer export would drop \
+             chroma"
+                .into(),
+        )),
     }
 }
 
-/// The source a staging buffer refills from, resolved once at creation.
-///
-/// Texture-first, matching the engine's own resolve order — the
-/// registered ring texture is the frame's device-resident truth, and
-/// blitting from it is VRAM→VRAM; the pooled pixel buffer is already a
-/// derived host-visible copy, so sourcing from it crosses PCIe and is
-/// the fallback for textureless producers.
-enum DeviceExportSource {
-    RegisteredTexture {
-        registration: crate::core::context::TextureRegistration,
-        width: u32,
-        height: u32,
-    },
-    PixelBuffer {
-        pixel_buffer: PixelBuffer,
-    },
+fn export_bytes_per_pixel_for_pixel_format(format: PixelFormat) -> Result<u32> {
+    if format.plane_count() > 1 || format == PixelFormat::Unknown {
+        return Err(Error::GpuError(format!(
+            "device export refuses {format:?}: DLPack expresses one strided linear buffer, and \
+             exporting only the first plane would hand out part of the image"
+        )));
+    }
+    Ok(format.bits_per_pixel() / 8)
+}
+
+/// The recorder plus the next timeline value, under one lock: the
+/// correctness of the strictly-increasing signal values depends on the
+/// value being drawn and submitted while this lock is held, so the
+/// invariant is structural rather than a convention beside an atomic.
+struct RefillSubmission {
+    recorder: RhiCommandRecorder,
+    next_signal_value: u64,
 }
 
 /// One surface's device-export staging: the OPAQUE_FD buffer an external
 /// device consumer imports, the exportable timeline that orders refills,
 /// and the recorder that reuses one command pool across them.
 pub struct SurfaceDeviceExportStaging {
+    surface_id: String,
     staging_buffer: Arc<HostVulkanBuffer>,
     refill_done_timeline: Arc<HostVulkanTimelineSemaphore>,
-    next_refill_signal_value: AtomicU64,
     /// One recorder, reused: per-refill pool creation is the exact churn
     /// `docs/learnings/nvidia-opaque-fd-after-swapchain.md` warns about.
-    refill_recorder: Mutex<RhiCommandRecorder>,
-    source: DeviceExportSource,
+    refill_submission: Mutex<RefillSubmission>,
     staging_byte_size: u64,
+    surface_width: u32,
+    surface_height: u32,
+    /// The pixel shape the staging was sized for, when the source is a
+    /// pixel buffer; textures export as tightly-packed 4/8/16-byte color.
+    pixel_format: Option<PixelFormat>,
     /// Whether [`GpuContext::copy_device_export_staging_back_to_surface`]
     /// can honour a write — true only for buffer-backed sources today.
     writable: bool,
 }
 
 impl SurfaceDeviceExportStaging {
-    /// Byte size of the staging buffer — the size a DLPack consumer's
-    /// tensor spans.
+    /// Byte size of the staging buffer — the span a DLPack tensor covers.
     pub fn staging_byte_size(&self) -> u64 {
         self.staging_byte_size
+    }
+
+    /// Width in pixels of the surface this staging was sized for.
+    pub fn surface_width(&self) -> u32 {
+        self.surface_width
+    }
+
+    /// Height in pixels of the surface this staging was sized for.
+    pub fn surface_height(&self) -> u32 {
+        self.surface_height
+    }
+
+    /// Row pitch in bytes, derived from the staging's own geometry.
+    pub fn bytes_per_row(&self) -> u64 {
+        self.staging_byte_size / u64::from(self.surface_height.max(1))
+    }
+
+    /// The pixel format the source carries, when it is a pixel buffer.
+    pub fn pixel_format(&self) -> Option<PixelFormat> {
+        self.pixel_format
     }
 
     /// Whether a device consumer may write and copy back.
@@ -117,39 +156,56 @@ impl SurfaceDeviceExportStaging {
     }
 }
 
+/// What a refill resolved this frame — looked up fresh on every copy so
+/// a rotating producer's re-registration is honoured, never a snapshot.
+enum ResolvedBlitSource {
+    RegisteredTexture(crate::core::context::TextureRegistration),
+    PixelBuffer(crate::core::rhi::PixelBuffer),
+}
+
 impl GpuContext {
-    /// Create the device-export staging for `surface_id`, resolving the
-    /// blit source once: the registered texture when one exists, the
-    /// pooled pixel buffer otherwise.
-    ///
-    /// One per surface, held by the caller — creation per frame would
-    /// churn exportable `vkAllocateMemory`, which NVIDIA's kernel
-    /// accounting punishes even when freed.
-    pub fn create_surface_device_export_staging(
+    /// Resolve the current blit source for `surface_id`, texture-first —
+    /// the registered texture is the frame's device-resident truth; the
+    /// pooled pixel buffer is a derived host-visible copy and the
+    /// fallback for textureless producers.
+    fn resolve_device_export_source(&self, surface_id: &str) -> Result<ResolvedBlitSource> {
+        match self.resolve_texture_registration_by_surface_id(surface_id, None, 0, 0) {
+            Ok(registration) => Ok(ResolvedBlitSource::RegisteredTexture(registration)),
+            Err(texture_miss) => match self.resolve_pixel_buffer_by_surface_id(surface_id) {
+                Ok(pixel_buffer) => Ok(ResolvedBlitSource::PixelBuffer(pixel_buffer)),
+                Err(buffer_miss) => Err(Error::GpuError(format!(
+                    "surface {surface_id} resolves to neither a registered texture \
+                     ({texture_miss}) nor a pixel buffer ({buffer_miss})"
+                ))),
+            },
+        }
+    }
+
+    /// The device-export staging for `surface_id`, created on first ask
+    /// and cached on this context — it dies with the context and is
+    /// evicted by [`Self::unregister_texture`], never by a rotating
+    /// re-registration, which the per-refill source resolve absorbs.
+    pub fn surface_device_export_staging(
         &self,
         surface_id: &str,
-        texture_layout: Option<i32>,
     ) -> Result<Arc<SurfaceDeviceExportStaging>> {
-        let (source, staging_byte_size, writable) = match self
-            .resolve_texture_registration_by_surface_id(surface_id, texture_layout, 0, 0)
+        if let Some(existing) = self.device_export_stagings.lock().get(surface_id) {
+            return Ok(Arc::clone(existing));
+        }
+
+        let (staging_byte_size, surface_width, surface_height, pixel_format, writable) = match self
+            .resolve_device_export_source(surface_id)?
         {
-            Ok(registration) => {
+            ResolvedBlitSource::RegisteredTexture(registration) => {
                 let texture = registration.texture();
-                let (width, height, format) = (texture.width(), texture.height(), texture.format());
-                let bytes_per_pixel = texture_format_bytes_per_pixel(format)?;
-                let byte_size = u64::from(width) * u64::from(height) * bytes_per_pixel;
-                (
-                    DeviceExportSource::RegisteredTexture {
-                        registration,
-                        width,
-                        height,
-                    },
-                    byte_size,
-                    false,
-                )
+                let bytes_per_pixel = export_bytes_per_pixel_for_texture(texture.format())?;
+                let (width, height) = (texture.width(), texture.height());
+                let byte_size = u64::from(width) * u64::from(height) * u64::from(bytes_per_pixel);
+                (byte_size, width, height, None, false)
             }
-            Err(_) => {
-                let pixel_buffer = self.resolve_pixel_buffer_by_surface_id(surface_id)?;
+            ResolvedBlitSource::PixelBuffer(pixel_buffer) => {
+                let format = pixel_buffer.format();
+                export_bytes_per_pixel_for_pixel_format(format)?;
                 let byte_size = pixel_buffer.plane_size(0);
                 if byte_size == 0 {
                     return Err(Error::GpuError(format!(
@@ -157,8 +213,10 @@ impl GpuContext {
                     )));
                 }
                 (
-                    DeviceExportSource::PixelBuffer { pixel_buffer },
                     byte_size,
+                    pixel_buffer.width,
+                    pixel_buffer.height,
+                    Some(format),
                     true,
                 )
             }
@@ -170,41 +228,111 @@ impl GpuContext {
             staging_byte_size,
         )?);
         let refill_done_timeline = self.create_exportable_timeline_semaphore(0)?;
-        let refill_recorder = Mutex::new(self.create_command_recorder("device_export_refill")?);
+        let refill_submission = Mutex::new(RefillSubmission {
+            recorder: self.create_command_recorder("device_export_refill")?,
+            next_signal_value: 1,
+        });
 
-        Ok(Arc::new(SurfaceDeviceExportStaging {
+        let staging = Arc::new(SurfaceDeviceExportStaging {
+            surface_id: surface_id.to_string(),
             staging_buffer,
             refill_done_timeline,
-            next_refill_signal_value: AtomicU64::new(1),
-            refill_recorder,
-            source,
+            refill_submission,
             staging_byte_size,
+            surface_width,
+            surface_height,
+            pixel_format,
             writable,
-        }))
+        });
+        self.device_export_stagings
+            .lock()
+            .insert(surface_id.to_string(), Arc::clone(&staging));
+        Ok(staging)
     }
 
-    /// Copy the surface's current pixels into the staging buffer, signal
-    /// the refill timeline, and wait (bounded) for the copy to land.
-    /// Returns the signalled timeline value — what a cross-process
-    /// consumer would wait on instead of relying on this host wait.
+    /// Drop the cached device-export staging for `surface_id`, if any.
+    /// Outstanding consumers keep theirs alive through their own `Arc`s.
+    pub(crate) fn evict_device_export_staging(&self, surface_id: &str) {
+        self.device_export_stagings.lock().remove(surface_id);
+    }
+
+    /// Record + submit one staging copy and wait (bounded) for it to
+    /// land, returning the signalled timeline value.
+    ///
+    /// The lock/begin/record/submit/wait choreography lives here once:
+    /// the signal value must be drawn and submitted under the recorder
+    /// lock (strictly-increasing timeline values), the lock must drop
+    /// before the host wait, and any record failure must abort the
+    /// recording — a recorder left mid-recording refuses every later
+    /// `begin`, which would brick this surface's export for the life of
+    /// the cache entry.
+    fn submit_staging_copy_and_wait(
+        &self,
+        staging: &SurfaceDeviceExportStaging,
+        record_copy: impl FnOnce(&mut RhiCommandRecorder) -> Result<()>,
+    ) -> Result<u64> {
+        let signal_value;
+        {
+            let mut submission = staging.refill_submission.lock();
+            submission.recorder.begin()?;
+            if let Err(record_failure) = record_copy(&mut submission.recorder) {
+                submission.recorder.abort_recording();
+                return Err(record_failure);
+            }
+            signal_value = submission.next_signal_value;
+            submission.next_signal_value += 1;
+            if let Err(submit_failure) = submission
+                .recorder
+                .submit_signaling_timeline(&staging.refill_done_timeline, signal_value)
+            {
+                submission.recorder.abort_recording();
+                return Err(submit_failure);
+            }
+        }
+        staging
+            .refill_done_timeline
+            .wait(signal_value, STAGING_REFILL_WAIT_TIMEOUT_NS)?;
+        Ok(signal_value)
+    }
+
+    /// Copy the surface's current pixels into the staging buffer.
+    /// Resolves the source fresh — a rotating producer's latest
+    /// registration, not a snapshot. Returns the signalled timeline
+    /// value a cross-process consumer would wait on instead of relying
+    /// on the in-process host wait.
     pub fn refill_device_export_staging(
         &self,
         staging: &SurfaceDeviceExportStaging,
     ) -> Result<u64> {
-        let mut recorder = staging.refill_recorder.lock();
-        recorder.begin()?;
-        match &staging.source {
-            DeviceExportSource::RegisteredTexture {
-                registration,
-                width,
-                height,
-            } => {
-                // The texture's last-known layout is the barrier's source;
-                // restored afterwards so the producer's next frame and any
-                // sibling consumer see the layout the registration claims.
+        let source = self.resolve_device_export_source(&staging.surface_id)?;
+        self.submit_staging_copy_and_wait(staging, |recorder| match &source {
+            ResolvedBlitSource::RegisteredTexture(registration) => {
+                let texture = registration.texture();
+                if u64::from(texture.width()) * u64::from(texture.height()) * 4
+                    != staging.staging_byte_size
+                {
+                    return Err(Error::GpuError(format!(
+                        "surface {} was re-registered with different geometry ({}x{}); the \
+                         cached staging is sized for {}x{} — resolve the surface again",
+                        staging.surface_id,
+                        texture.width(),
+                        texture.height(),
+                        staging.surface_width,
+                        staging.surface_height,
+                    )));
+                }
+                // The registration's last-known layout is the barrier's
+                // source. UNDEFINED (a texture nothing has written yet)
+                // cannot be a restore target, so such a texture comes to
+                // rest in GENERAL and the registration records that.
                 let resting_layout = registration.current_layout();
+                let restore_layout = if resting_layout == VulkanLayout::UNDEFINED {
+                    VulkanLayout::GENERAL
+                } else {
+                    resting_layout
+                };
                 recorder.record_image_barrier(
-                    registration.texture(),
+                    texture,
                     resting_layout,
                     VulkanLayout::TRANSFER_SRC_OPTIMAL,
                     VulkanStage::ALL_COMMANDS,
@@ -213,38 +341,40 @@ impl GpuContext {
                     VulkanAccess::TRANSFER_READ,
                 )?;
                 recorder.record_copy_image_to_buffer(
-                    registration.texture(),
+                    texture,
                     VulkanLayout::TRANSFER_SRC_OPTIMAL,
                     staging.staging_buffer.as_ref(),
-                    ImageCopyRegion::tightly_packed(*width, *height),
+                    ImageCopyRegion::tightly_packed(texture.width(), texture.height()),
                 )?;
                 recorder.record_image_barrier(
-                    registration.texture(),
+                    texture,
                     VulkanLayout::TRANSFER_SRC_OPTIMAL,
-                    resting_layout,
+                    restore_layout,
                     VulkanStage::ALL_TRANSFER,
                     VulkanStage::ALL_COMMANDS,
                     VulkanAccess::TRANSFER_READ,
                     VulkanAccess::MEMORY_READ,
                 )?;
+                registration.update_layout(restore_layout);
+                Ok(())
             }
-            DeviceExportSource::PixelBuffer { pixel_buffer } => {
+            ResolvedBlitSource::PixelBuffer(pixel_buffer) => {
+                if pixel_buffer.plane_size(0) != staging.staging_byte_size {
+                    return Err(Error::GpuError(format!(
+                        "surface {} now resolves to a {}-byte buffer; the cached staging is \
+                         sized for {} — resolve the surface again",
+                        staging.surface_id,
+                        pixel_buffer.plane_size(0),
+                        staging.staging_byte_size,
+                    )));
+                }
                 recorder.record_copy_buffer_to_buffer(
                     pixel_buffer,
                     staging.staging_buffer.as_ref(),
                     staging.staging_byte_size,
-                )?;
+                )
             }
-        }
-        let signal_value = staging
-            .next_refill_signal_value
-            .fetch_add(1, Ordering::SeqCst);
-        recorder.submit_signaling_timeline(&staging.refill_done_timeline, signal_value)?;
-        drop(recorder);
-        staging
-            .refill_done_timeline
-            .wait(signal_value, STAGING_REFILL_WAIT_TIMEOUT_NS)?;
-        Ok(signal_value)
+        })
     }
 
     /// Copy a written staging buffer back into its source surface, so an
@@ -257,29 +387,30 @@ impl GpuContext {
         &self,
         staging: &SurfaceDeviceExportStaging,
     ) -> Result<u64> {
-        let DeviceExportSource::PixelBuffer { pixel_buffer } = &staging.source else {
+        let source = self.resolve_device_export_source(&staging.surface_id)?;
+        let ResolvedBlitSource::PixelBuffer(pixel_buffer) = source else {
             return Err(Error::GpuError(
                 "this surface's device export is read-only: it is texture-backed, and the \
                  write-back path exists for buffer-backed surfaces only"
                     .into(),
             ));
         };
-        let mut recorder = staging.refill_recorder.lock();
-        recorder.begin()?;
-        recorder.record_copy_buffer_to_buffer(
-            staging.staging_buffer.as_ref(),
-            pixel_buffer,
-            staging.staging_byte_size,
-        )?;
-        let signal_value = staging
-            .next_refill_signal_value
-            .fetch_add(1, Ordering::SeqCst);
-        recorder.submit_signaling_timeline(&staging.refill_done_timeline, signal_value)?;
-        drop(recorder);
-        staging
-            .refill_done_timeline
-            .wait(signal_value, STAGING_REFILL_WAIT_TIMEOUT_NS)?;
-        Ok(signal_value)
+        if pixel_buffer.plane_size(0) != staging.staging_byte_size {
+            return Err(Error::GpuError(format!(
+                "surface {} now resolves to a {}-byte buffer; the staged write is sized for {} \
+                 — the edit cannot be published",
+                staging.surface_id,
+                pixel_buffer.plane_size(0),
+                staging.staging_byte_size,
+            )));
+        }
+        self.submit_staging_copy_and_wait(staging, |recorder| {
+            recorder.record_copy_buffer_to_buffer(
+                staging.staging_buffer.as_ref(),
+                &pixel_buffer,
+                staging.staging_byte_size,
+            )
+        })
     }
 
     /// Export the staging buffer's OPAQUE_FD plus byte size and the
@@ -304,14 +435,12 @@ impl GpuContext {
 // grown for a surface #1715 deletes — a cdylib caller panics at the
 // `host_inner` guard.
 impl crate::core::context::GpuContextLimitedAccess {
-    /// See [`GpuContext::create_surface_device_export_staging`].
-    pub fn create_surface_device_export_staging(
+    /// See [`GpuContext::surface_device_export_staging`].
+    pub fn surface_device_export_staging(
         &self,
         surface_id: &str,
-        texture_layout: Option<i32>,
     ) -> Result<Arc<SurfaceDeviceExportStaging>> {
-        self.host_inner()
-            .create_surface_device_export_staging(surface_id, texture_layout)
+        self.host_inner().surface_device_export_staging(surface_id)
     }
 
     /// See [`GpuContext::refill_device_export_staging`].

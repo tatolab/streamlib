@@ -325,43 +325,195 @@ def test_the_host_side_stays_reachable_on_explicit_request():
 
 
 @processor(execution="manual")
-class NoExportKeyProbe:
+class PooledTextureExportProbe:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
-        _observe("no_export_key", lambda: self._probe(ctx))
+        _observe("pooled_texture_export", lambda: self._probe(ctx))
 
     def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        import torch
+
         outcomes = {}
-        # A pooled texture carries no surface id — nothing keys an export.
+        # A pooled texture acquired from the limited capability is
+        # registered at acquire, so the same staging blit that serves
+        # camera ring textures serves it — this is also the suite's
+        # coverage of the texture-first blit arm, hardware-free.
         with ctx.gpu_limited_access.acquire_texture(
             SURFACE_WIDTH, SURFACE_HEIGHT, "rgba8_unorm", ["copy_src", "texture_binding"]
         ) as texture_handle:
-            outcomes["texture_device"] = texture_handle.__dlpack_device__()
+            outcomes["texture_surface_id"] = texture_handle.surface_id
+            device = texture_handle.__dlpack_device__()
+            outcomes["texture_device"] = device
+            if device[0] == DLPACK_DEVICE_CUDA:
+                texture_handle.lock()
+                tensor = torch.from_dlpack(texture_handle)
+                outcomes["texture_tensor_shape"] = tuple(tensor.shape)
+                outcomes["texture_tensor_device"] = str(tensor.device)
+                texture_handle.unlock()
 
-        # An acquired pixel buffer resolves the device path through its id.
-        with ctx.gpu_limited_access.acquire_pixel_buffer(
+        # A full-access acquire cannot stash the lease-bound capability,
+        # so its handles stay host-side.
+        with ctx.gpu_full_access.acquire_pixel_buffer(
             SURFACE_WIDTH, SURFACE_HEIGHT
-        ) as buffer_handle:
-            outcomes["acquired_buffer_device"] = buffer_handle.__dlpack_device__()
+        ) as full_access_buffer:
+            outcomes["full_access_buffer_device"] = full_access_buffer.__dlpack_device__()
         return outcomes
 
 
-def test_export_keying_matches_what_the_surface_carries():
+def test_a_pooled_texture_exports_a_device_tensor():
+    """The ruling's "pooled textures are in scope", and the texture-first
+    blit arm's hardware-free coverage: registration at acquire is what
+    keys the export, and the tensor is read-only device memory of the
+    texture's (undefined-until-written) contents.
+    """
+    pytest.importorskip("torch")
     graph = RunningGraph()
-    graph.runtime.add(NoExportKeyProbe)
+    graph.runtime.add(PooledTextureExportProbe)
     graph.start()
     try:
-        observation = _await_observation("no_export_key")
+        observation = _await_observation("pooled_texture_export")
     finally:
         graph.shut_down()
     if "failure" in observation:
         pytest.fail(f"the probe raised:\n{observation['failure']}")
-    # No id → no device export to attempt; the host mapping answers.
-    assert observation["texture_device"] == (DLPACK_DEVICE_CPU, 0)
-    # An id + the limited capability → the device side may answer (CUDA)
-    # or fall back to the host on a driverless rig; both are legal here.
-    assert observation["acquired_buffer_device"][0] in (
-        DLPACK_DEVICE_CPU,
-        DLPACK_DEVICE_CUDA,
+    assert observation["texture_surface_id"].startswith("pooled-texture-")
+    if observation["texture_device"][0] != DLPACK_DEVICE_CUDA:
+        pytest.skip(f"no usable CUDA runtime: {observation['texture_device']}")
+    assert observation["texture_tensor_shape"] == (SURFACE_HEIGHT, SURFACE_WIDTH, 4)
+    assert observation["texture_tensor_device"].startswith("cuda")
+    # The lease-bound path stays host-side by construction.
+    assert observation["full_access_buffer_device"] == (DLPACK_DEVICE_CPU, 0)
+
+
+@processor
+class WithBlockEditProbe(_FrameProbeBase):
+    observation_name = "with_block_edit"
+
+    def _probe(self, ctx: RuntimeContextLimitedAccess, frame) -> dict:
+        import torch
+
+        gpu = ctx.gpu_limited_access
+        # The idiomatic spelling: no explicit unlock — the with-block's
+        # close is the publication point.
+        with gpu.resolve_surface(frame.surface_id) as surface:
+            surface.lock(read_only=False)
+            if surface.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
+                return {"cuda_unavailable": "device side not reachable"}
+            tensor = torch.from_dlpack(surface)
+            tensor[5, 5] = torch.tensor(
+                [99, 88, 77, 66], dtype=torch.uint8, device=tensor.device
+            )
+            torch.cuda.synchronize()
+
+        with gpu.resolve_surface(frame.surface_id) as reread:
+            reread.lock()
+            observation = {
+                "pixel_after_with_block": numpy.from_dlpack(reread, device="cpu")[
+                    5, 5
+                ].tolist()
+            }
+            reread.unlock()
+            return observation
+
+
+def test_a_device_edit_survives_the_with_block_spelling():
+    """close() publishes pending device writes too.
+
+    A `with` block that never calls unlock reaches close() directly; an
+    edit silently discarded there is data loss in the API's own idiomatic
+    spelling. Mental-revert: drop the publish from close() and this reads
+    the untouched pattern.
+    """
+    pytest.importorskip("torch")
+    observation = _run_frame_probe(WithBlockEditProbe, "with_block_edit")
+    _skip_without_cuda(observation)
+    assert observation["pixel_after_with_block"] == [99, 88, 77, 66]
+
+
+@processor
+class CameraRotationIdentityProbe:
+    """Compares device pixels against host pixels across ring cycles."""
+
+    @input(delivery_profile="every_sample")
+    def video_from_upstream(self) -> None: ...
+
+    def __init__(self) -> None:
+        self.comparisons: "list[bool]" = []
+        self.reported = False
+
+    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
+        bag = ctx.inputs.read("video_from_upstream")
+        if bag is None or self.reported:
+            return
+        frame = VideoFrame.from_bag(bag)
+
+        def compare() -> dict:
+            import torch
+
+            with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
+                surface.lock()
+                if surface.__dlpack_device__()[0] != DLPACK_DEVICE_CUDA:
+                    return {"cuda_unavailable": "device side not reachable"}
+                device_pixels = torch.from_dlpack(surface).cpu().numpy()
+                host_pixels = numpy.from_dlpack(surface, device="cpu")
+                return {"match": bool((device_pixels == host_pixels).all())}
+
+        try:
+            outcome = compare()
+        except BaseException:  # noqa: BLE001 — surfaced via the queue
+            import traceback
+
+            self.reported = True
+            _hook_observations.put(
+                {"observed": "camera_rotation", "failure": traceback.format_exc()}
+            )
+            return
+        if "cuda_unavailable" in outcome:
+            self.reported = True
+            _hook_observations.put({"observed": "camera_rotation", **outcome})
+            return
+        self.comparisons.append(outcome["match"])
+        # Twelve frames spans the ring several times over — the window
+        # where a source frozen at staging creation lags by a cycle.
+        if len(self.comparisons) >= 12:
+            self.reported = True
+            _hook_observations.put(
+                {"observed": "camera_rotation", "comparisons": self.comparisons}
+            )
+
+
+def test_camera_device_pixels_match_host_across_ring_cycles():
+    """Regression lock on the stale-blit-source bug.
+
+    The camera re-registers a different ring texture under the same
+    surface id every frame. A staging that resolved its source once at
+    creation blits the previous cycle's frame — live-reproduced during
+    review as device pixels lagging host pixels by one ring cycle from
+    frame ~6 on. Per-refill resolution is the fix; this asserts identity
+    across 12 consecutive frames.
+    """
+    pytest.importorskip("torch")
+    import pathlib
+
+    if not pathlib.Path("/dev/video0").exists():
+        pytest.skip("no camera on this rig")
+    from streamlib import CameraSource
+
+    graph = RunningGraph()
+    camera = graph.runtime.add(CameraSource, config={"device_id": "/dev/video0"})
+    probe = graph.runtime.add(CameraRotationIdentityProbe)
+    graph.runtime.connect(camera.output("video"), probe.input("video_from_upstream"))
+    graph.start()
+    try:
+        observation = _await_observation("camera_rotation")
+    finally:
+        graph.shut_down()
+    if "failure" in observation:
+        pytest.fail(f"the probe raised:\n{observation['failure']}")
+    _skip_without_cuda(observation)
+    mismatches = [i for i, ok in enumerate(observation["comparisons"]) if not ok]
+    assert not mismatches, (
+        f"device pixels diverged from host pixels on frames {mismatches} — the blit "
+        f"exported a stale ring texture"
     )
 
 

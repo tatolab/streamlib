@@ -44,15 +44,64 @@ struct ManagerCtx {
     _strides: Option<Box<[i64]>>,
 }
 
+/// Reclaim the boxed [`ManagerCtx`] a managed tensor's `manager_ctx`
+/// owns — the one subtle half both deleters share.
+///
+/// SAFETY: `manager_ctx` must be the `Box::into_raw(Box<ManagerCtx>)`
+/// stored by [`boxed_manager_ctx_and_tensor`], reclaimed at most once.
+unsafe fn reclaim_manager_ctx(manager_ctx: *mut c_void) {
+    if !manager_ctx.is_null() {
+        drop(unsafe { Box::from_raw(manager_ctx as *mut ManagerCtx) });
+    }
+}
+
+/// Box the shape/strides, park them (with `owner`) in a leaked
+/// [`ManagerCtx`], and assemble the `Tensor` whose raw pointers point
+/// into those boxes — the ownership plumbing both builders share, kept
+/// in one place because a divergence dangles one copy's pointers.
+fn boxed_manager_ctx_and_tensor(
+    device_ptr: u64,
+    shape: Vec<i64>,
+    strides: Option<Vec<i64>>,
+    dtype: DataType,
+    device: Device,
+    owner: CapsuleOwner,
+) -> (*mut c_void, Tensor) {
+    let shape: Box<[i64]> = shape.into_boxed_slice();
+    let shape_ptr = shape.as_ptr() as *mut i64;
+    let ndim = shape.len() as i32;
+
+    let strides: Option<Box<[i64]>> = strides.map(Vec::into_boxed_slice);
+    let strides_ptr: *mut i64 = match &strides {
+        Some(s) => s.as_ptr() as *mut i64,
+        None => std::ptr::null_mut(),
+    };
+
+    let ctx = Box::new(ManagerCtx {
+        _owner: owner,
+        _shape: shape,
+        _strides: strides,
+    });
+    let tensor = Tensor {
+        data: device_ptr as *mut c_void,
+        device,
+        ndim,
+        dtype,
+        shape: shape_ptr,
+        strides: strides_ptr,
+        byte_offset: 0,
+    };
+    (Box::into_raw(ctx) as *mut c_void, tensor)
+}
+
 unsafe extern "C" fn deleter(t: *mut ManagedTensor) {
     if t.is_null() {
         return;
     }
     let mt = unsafe { Box::from_raw(t) };
-    if !mt.manager_ctx.is_null() {
-        let ctx = unsafe { Box::from_raw(mt.manager_ctx as *mut ManagerCtx) };
-        drop(ctx);
-    }
+    // SAFETY: `manager_ctx` came from `boxed_manager_ctx_and_tensor` in
+    // `build_managed_tensor`, reclaimed only here.
+    unsafe { reclaim_manager_ctx(mt.manager_ctx) };
     drop(mt);
 }
 
@@ -76,38 +125,13 @@ pub fn build_managed_tensor(
     device: Device,
     owner: CapsuleOwner,
 ) -> *mut ManagedTensor {
-    let shape: Box<[i64]> = shape.into_boxed_slice();
-    let shape_ptr = shape.as_ptr() as *mut i64;
-    let ndim = shape.len() as i32;
-
-    let strides: Option<Box<[i64]>> = strides.map(Vec::into_boxed_slice);
-    let strides_ptr: *mut i64 = match &strides {
-        Some(s) => s.as_ptr() as *mut i64,
-        None => std::ptr::null_mut(),
-    };
-
-    let ctx = Box::new(ManagerCtx {
-        _owner: owner,
-        _shape: shape,
-        _strides: strides,
-    });
-    let ctx_ptr = Box::into_raw(ctx);
-
-    let dl_tensor = Tensor {
-        data: device_ptr as *mut c_void,
-        device,
-        ndim,
-        dtype,
-        shape: shape_ptr,
-        strides: strides_ptr,
-        byte_offset: 0,
-    };
-    let mt = Box::new(ManagedTensor {
+    let (manager_ctx, dl_tensor) =
+        boxed_manager_ctx_and_tensor(device_ptr, shape, strides, dtype, device, owner);
+    Box::into_raw(Box::new(ManagedTensor {
         dl_tensor,
-        manager_ctx: ctx_ptr as *mut c_void,
+        manager_ctx,
         deleter: Some(deleter),
-    });
-    Box::into_raw(mt)
+    }))
 }
 
 unsafe extern "C" fn versioned_deleter(t: *mut ManagedTensorVersioned) {
@@ -115,10 +139,9 @@ unsafe extern "C" fn versioned_deleter(t: *mut ManagedTensorVersioned) {
         return;
     }
     let mt = unsafe { Box::from_raw(t) };
-    if !mt.manager_ctx.is_null() {
-        let ctx = unsafe { Box::from_raw(mt.manager_ctx as *mut ManagerCtx) };
-        drop(ctx);
-    }
+    // SAFETY: `manager_ctx` came from `boxed_manager_ctx_and_tensor` in
+    // `build_managed_tensor_versioned`, reclaimed only here.
+    unsafe { reclaim_manager_ctx(mt.manager_ctx) };
     drop(mt);
 }
 
@@ -142,39 +165,15 @@ pub fn build_managed_tensor_versioned(
     flags: Flags,
     owner: CapsuleOwner,
 ) -> *mut ManagedTensorVersioned {
-    let shape: Box<[i64]> = shape.into_boxed_slice();
-    let shape_ptr = shape.as_ptr() as *mut i64;
-    let ndim = shape.len() as i32;
-
-    let strides: Option<Box<[i64]>> = strides.map(Vec::into_boxed_slice);
-    let strides_ptr: *mut i64 = match &strides {
-        Some(s) => s.as_ptr() as *mut i64,
-        None => std::ptr::null_mut(),
-    };
-
-    let ctx = Box::new(ManagerCtx {
-        _owner: owner,
-        _shape: shape,
-        _strides: strides,
-    });
-    let ctx_ptr = Box::into_raw(ctx);
-
-    let mt = Box::new(ManagedTensorVersioned {
+    let (manager_ctx, dl_tensor) =
+        boxed_manager_ctx_and_tensor(device_ptr, shape, strides, dtype, device, owner);
+    Box::into_raw(Box::new(ManagedTensorVersioned {
         version: PackVersion::default(),
-        manager_ctx: ctx_ptr as *mut c_void,
+        manager_ctx,
         deleter: Some(versioned_deleter),
         flags,
-        dl_tensor: Tensor {
-            data: device_ptr as *mut c_void,
-            device,
-            ndim,
-            dtype,
-            shape: shape_ptr,
-            strides: strides_ptr,
-            byte_offset: 0,
-        },
-    });
-    Box::into_raw(mt)
+        dl_tensor,
+    }))
 }
 
 /// Convenience: wrap a flat byte buffer at `device_ptr` as a 1-D

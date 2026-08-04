@@ -189,7 +189,7 @@ class UnlockedExportProbe:
             outcomes["unlocked_base_address"] = surface_handle.base_address
 
             surface_handle.lock()
-            outcomes["locked_base_address_is_nonzero"] = surface_handle.base_address != 0
+            outcomes["locked_base_address_is_real"] = surface_handle.base_address is not None
             surface_handle.unlock()
 
             try:
@@ -244,13 +244,13 @@ def test_an_export_taken_without_a_lock_is_refused():
     publication, since a source finishes its GPU work before it sends the
     frame on. What the gate buys is that read/write intent is stated at the
     call site, which is what carries through to the exported tensor's flags,
-    and that `base_address` never hands out a pointer nobody declared a use
-    for.
+    and that `base_address` is None rather than a live pointer nobody
+    declared a use for.
     """
     observation = _run_probe(UnlockedExportProbe, "unlocked_export")
     assert "not locked" in observation["unlocked_dlpack"]
-    assert observation["unlocked_base_address"] == 0
-    assert observation["locked_base_address_is_nonzero"]
+    assert observation["unlocked_base_address"] is None
+    assert observation["locked_base_address_is_real"]
     assert "not locked" in observation["after_unlock"], (
         "unlock must close the gate again, not leave it open for the surface's life"
     )

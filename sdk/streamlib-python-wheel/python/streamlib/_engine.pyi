@@ -294,8 +294,8 @@ class GpuSurfaceHandle:
         """Row pitch in bytes, including any padding the allocation carries."""
 
     @property
-    def base_address(self) -> int:
-        """Base address of the host mapping, or 0 when not locked."""
+    def base_address(self) -> int | None:
+        """Base address of the host mapping, or None when not locked."""
 
     def close(self) -> None:
         """Release the underlying GPU resource. Idempotent."""
@@ -315,8 +315,10 @@ class GpuSurfaceHandle:
         frame on. `read_only=False` marks an exported tensor writable.
         """
 
-    def unlock(self, read_only: bool = True) -> None:
-        """Close CPU access. Idempotent."""
+    def unlock(self) -> None:
+        """Close CPU access, publishing any pending device-side write back
+        into the surface first. Idempotent.
+        """
 
     def as_numpy(self) -> Any:
         """A numpy view sharing memory with the surface. Requires a lock."""
