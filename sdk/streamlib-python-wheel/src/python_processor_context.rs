@@ -200,11 +200,7 @@ impl PythonGpuSurfaceHandle {
             pixel_format_name(format).to_string(),
             // A resolved handle owes no release: it never checked the buffer
             // in, so releasing would evict somebody else's surface.
-            GpuSurfaceOwnedMemory::new(
-                GpuSurfaceOwnedValue::PixelBuffer(pixel_buffer),
-                None,
-                None,
-            ),
+            GpuSurfaceOwnedMemory::new(GpuSurfaceOwnedValue::PixelBuffer(pixel_buffer), None, None),
         )
     }
 
@@ -239,7 +235,6 @@ impl PythonGpuSurfaceHandle {
             PyRuntimeError::new_err("this surface is closed; acquire or resolve it again")
         })
     }
-
 }
 
 impl Drop for PythonGpuSurfaceHandle {
@@ -296,7 +291,9 @@ impl PythonGpuSurfaceHandle {
         }
         let owned_memory = self.owned_memory()?;
         python.detach(|| {
-            Ok(owned_memory.host_mapped_pixel_buffer()?.plane_base_address(0) as usize)
+            Ok(owned_memory
+                .host_mapped_pixel_buffer()?
+                .plane_base_address(0) as usize)
         })
     }
 
@@ -415,12 +412,7 @@ impl PythonGpuSurfaceHandle {
             None => !is_device_exchange(&owned_memory),
         };
         if wants_host {
-            return host_visible_dlpack_capsule(
-                python,
-                &owned_memory,
-                exchange_shape,
-                read_only,
-            );
+            return host_visible_dlpack_capsule(python, &owned_memory, exchange_shape, read_only);
         }
         #[cfg(target_os = "linux")]
         {
@@ -811,6 +803,78 @@ impl PythonGpuContextFullAccess {
                         exported_size,
                         vulkan_device_uuid,
                     )),
+                    None,
+                    None,
+                ),
+            ))
+        })
+    }
+
+    /// Export a DMA-BUF file descriptor for `surface`, for native code that
+    /// speaks DMA-BUF — EGL, a V4L2 output device, another process.
+    ///
+    /// Returns `(fd, byte_size)`. **The caller owns the fd** and must close
+    /// it, or hand it to something that takes ownership. Only a surface from
+    /// the ordinary pixel-buffer pool can answer: a device-exchange buffer is
+    /// OPAQUE_FD-flavoured and has no DMA-BUF export path.
+    #[cfg(target_os = "linux")]
+    fn export_dma_buf(
+        &self,
+        python: Python<'_>,
+        surface: &PythonGpuSurfaceHandle,
+    ) -> PyResult<(i32, u64)> {
+        let owned_memory = surface.owned_memory()?;
+        read_gpu_full_access(python, &self.gpu_full_access_source, |gpu_full_access| {
+            let pixel_buffer = owned_memory.dma_buf_exportable_pixel_buffer()?;
+            gpu_full_access
+                .export_pixel_buffer_dma_buf_fd(pixel_buffer)
+                .map_err(gpu_operation_error)
+        })
+    }
+
+    /// Import a DMA-BUF file descriptor as a surface this graph can read.
+    ///
+    /// **Takes ownership of `fd` on success** — the driver adopts it, and it
+    /// must not be closed afterwards. On failure the fd is still the
+    /// caller's.
+    #[cfg(target_os = "linux")]
+    #[pyo3(signature = (fd, width, height, format = "bgra"))]
+    fn import_dma_buf(
+        &self,
+        python: Python<'_>,
+        fd: i32,
+        width: u32,
+        height: u32,
+        format: &str,
+    ) -> PyResult<PythonGpuSurfaceHandle> {
+        let pixel_format = parse_pixel_format_name(format)?;
+        let bytes_per_pixel = device_exchange_bytes_per_pixel(pixel_format)?;
+        let byte_size = u64::from(width) * u64::from(height) * u64::from(bytes_per_pixel);
+        if byte_size == 0 {
+            return Err(PyValueError::new_err(
+                "width and height must both be greater than zero",
+            ));
+        }
+        read_gpu_full_access(python, &self.gpu_full_access_source, |gpu_full_access| {
+            let storage_buffer = gpu_full_access
+                .import_dma_buf_storage_buffer(fd, byte_size)
+                .map_err(gpu_operation_error)?;
+            let pixel_buffer = gpu_full_access
+                .wrap_storage_buffer_as_pixel_buffer(
+                    &storage_buffer,
+                    width,
+                    height,
+                    bytes_per_pixel,
+                    pixel_format,
+                )
+                .map_err(gpu_operation_error)?;
+            Ok(PythonGpuSurfaceHandle::new(
+                None,
+                width,
+                height,
+                pixel_format_name(pixel_format).to_string(),
+                GpuSurfaceOwnedMemory::new(
+                    GpuSurfaceOwnedValue::PixelBuffer(pixel_buffer),
                     None,
                     None,
                 ),

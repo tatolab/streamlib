@@ -343,7 +343,11 @@ mod tests {
             let deleter = (*mt).deleter.expect("deleter must be Some");
             deleter(mt);
         }
-        assert_eq!(drops.load(Ordering::SeqCst), 1, "owner dropped exactly once");
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            1,
+            "owner dropped exactly once"
+        );
     }
 
     #[test]

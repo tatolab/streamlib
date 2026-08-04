@@ -113,10 +113,7 @@ fn bind_cuda_device_by_uuid(vulkan_device_uuid: [u8; 16]) -> Result<i32, String>
             }
             properties.assume_init()
         };
-        let cuda_uuid: [u8; 16] = properties
-            .uuid
-            .bytes
-            .map(|signed_byte| signed_byte as u8);
+        let cuda_uuid: [u8; 16] = properties.uuid.bytes.map(|signed_byte| signed_byte as u8);
         if cuda_uuid == vulkan_device_uuid {
             unsafe {
                 sys::cudaSetDevice(ordinal)
@@ -169,26 +166,24 @@ pub(crate) fn import_opaque_fd_into_cuda(
     // SAFETY: the flat-pointer mapping helper; the returned pointer
     // aliases the memory the OPAQUE_FD `VkBuffer` is bound to and stays
     // valid until `cudaDestroyExternalMemory`.
-    let device_pointer = match unsafe {
-        external_memory::get_mapped_buffer(external_memory, 0, byte_size)
-    } {
-        Ok(pointer) => pointer as u64,
-        Err(mapping_failure) => {
-            let _ = unsafe { external_memory::destroy_external_memory(external_memory) };
-            return Err(format!(
-                "cudaExternalMemoryGetMappedBuffer: {mapping_failure:?}"
-            ));
-        }
-    };
-
-    let dlpack_device_type =
-        match classify_device_pointer(device_pointer) {
-            Ok(device_type) => device_type,
-            Err(classification_failure) => {
+    let device_pointer =
+        match unsafe { external_memory::get_mapped_buffer(external_memory, 0, byte_size) } {
+            Ok(pointer) => pointer as u64,
+            Err(mapping_failure) => {
                 let _ = unsafe { external_memory::destroy_external_memory(external_memory) };
-                return Err(classification_failure);
+                return Err(format!(
+                    "cudaExternalMemoryGetMappedBuffer: {mapping_failure:?}"
+                ));
             }
         };
+
+    let dlpack_device_type = match classify_device_pointer(device_pointer) {
+        Ok(device_type) => device_type,
+        Err(classification_failure) => {
+            let _ = unsafe { external_memory::destroy_external_memory(external_memory) };
+            return Err(classification_failure);
+        }
+    };
 
     Ok(CudaImportedSurface {
         external_memory,

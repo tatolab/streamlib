@@ -282,6 +282,60 @@ def test_a_device_tensor_outliving_its_handle_keeps_a_live_mapping():
 
 
 # ---------------------------------------------------------------------------
+# DMA-BUF — the other dialect native code speaks
+# ---------------------------------------------------------------------------
+
+
+@processor(execution="manual")
+class DmaBufRoundTripProbe:
+    """Exports a surface's DMA-BUF fd and imports it back as a second surface."""
+
+    def setup(self, ctx: RuntimeContextFullAccess) -> None:
+        _observe("dma_buf_round_trip", lambda: self._probe(ctx))
+
+    def _probe(self, ctx: RuntimeContextFullAccess) -> dict:
+        gpu_full = ctx.gpu_full_access
+        with ctx.gpu_limited_access.acquire_pixel_buffer(
+            SURFACE_WIDTH, SURFACE_HEIGHT
+        ) as exported_surface:
+            exported_surface.lock(read_only=False)
+            exported_surface.as_numpy()[:, :, :] = 0
+            exported_surface.as_numpy()[7, 9] = [21, 43, 65, 87]
+            exported_surface.unlock()
+
+            fd, byte_size = gpu_full.export_dma_buf(exported_surface)
+            observation = {
+                "fd_is_real": fd >= 0,
+                "byte_size": byte_size,
+                "expected_byte_size": SURFACE_WIDTH * SURFACE_HEIGHT * 4,
+            }
+            # The import adopts the fd, so nothing here closes it.
+            with gpu_full.import_dma_buf(
+                fd, SURFACE_WIDTH, SURFACE_HEIGHT
+            ) as imported_surface:
+                imported_surface.lock()
+                observation["pixel_seen_through_the_import"] = (
+                    imported_surface.as_numpy()[7, 9].tolist()
+                )
+                imported_surface.unlock()
+            return observation
+
+
+def test_a_dma_buf_export_reimports_as_the_same_memory():
+    """The export/import pair is a handle to one allocation, not a copy.
+
+    This is the shape third-party native code gets: an fd it can hand to EGL,
+    a V4L2 output device, or another process. Round-tripping it through the
+    engine's own importer is how we check the handle actually describes the
+    frame rather than merely being a valid fd.
+    """
+    observation = _run_probe(DmaBufRoundTripProbe, "dma_buf_round_trip")
+    assert observation["fd_is_real"]
+    assert observation["byte_size"] == observation["expected_byte_size"]
+    assert observation["pixel_seen_through_the_import"] == [21, 43, 65, 87]
+
+
+# ---------------------------------------------------------------------------
 # Refusals
 # ---------------------------------------------------------------------------
 
@@ -321,6 +375,17 @@ class ExchangeRefusalProbe:
             outcomes["nv12_exchange"] = "allocated"
         except ValueError as refusal:
             outcomes["nv12_exchange"] = str(refusal)
+
+        # The two external-handle flavours are not interchangeable: an
+        # exchange buffer is OPAQUE_FD and has no DMA-BUF to give.
+        with gpu_full.acquire_device_exchange_buffer(
+            SURFACE_WIDTH, SURFACE_HEIGHT
+        ) as exchange_buffer:
+            try:
+                gpu_full.export_dma_buf(exchange_buffer)
+                outcomes["dma_buf_from_exchange_buffer"] = "exported"
+            except ValueError as refusal:
+                outcomes["dma_buf_from_exchange_buffer"] = str(refusal)
         return outcomes
 
 
@@ -330,3 +395,4 @@ def test_the_device_path_refuses_what_it_cannot_honour():
     # A pooled buffer never claims CUDA: it has no device import to report.
     assert observation["pooled_buffer_device"] == (DLPACK_DEVICE_CPU, 0)
     assert "one linear allocation" in observation["nv12_exchange"]
+    assert "OPAQUE_FD-flavoured" in observation["dma_buf_from_exchange_buffer"]

@@ -35,8 +35,7 @@ use streamlib::sdk::rhi::{PixelBuffer, PixelFormat};
 #[cfg(target_os = "linux")]
 use crate::python_cuda_pixel_exchange::{CudaImportedSurface, import_opaque_fd_into_cuda};
 use streamlib_adapter_cuda::dlpack::{
-    self, DataType, DataTypeCode, Device, DeviceType, Flags, ManagedTensor,
-    ManagedTensorVersioned,
+    self, DataType, DataTypeCode, Device, DeviceType, Flags, ManagedTensor, ManagedTensorVersioned,
 };
 
 /// Capsule names before a consumer takes ownership. The DLPack protocol
@@ -109,7 +108,10 @@ pub(crate) enum GpuSurfaceOwnedValue {
     PixelBuffer(PixelBuffer),
     /// Held to keep the pool slot alive; the device-local export path reads
     /// it once the texture half of the exchange surface lands.
-    #[expect(dead_code, reason = "lifetime-only until the texture export path reads it")]
+    #[expect(
+        dead_code,
+        reason = "lifetime-only until the texture export path reads it"
+    )]
     PooledTexture(PooledTextureHandle),
     DeviceExchange(DeviceExchangeBuffer),
 }
@@ -149,6 +151,26 @@ impl GpuSurfaceOwnedMemory {
             #[cfg(target_os = "linux")]
             cuda_import: Mutex::new(None),
         })
+    }
+
+    /// The pixel buffer a DMA-BUF export can be taken from, or a refusal
+    /// naming why this surface cannot answer.
+    ///
+    /// An allocation carries one external-handle flavour: pool buffers are
+    /// DMA-BUF, exchange buffers are OPAQUE_FD, and neither exports the
+    /// other's handle type under VMA's per-pool memory configuration.
+    pub(crate) fn dma_buf_exportable_pixel_buffer(&self) -> PyResult<&PixelBuffer> {
+        match &self.owned_value {
+            GpuSurfaceOwnedValue::PixelBuffer(pixel_buffer) => Ok(pixel_buffer),
+            GpuSurfaceOwnedValue::DeviceExchange(_) => Err(PyValueError::new_err(
+                "a device-exchange buffer is OPAQUE_FD-flavoured and has no DMA-BUF export; \
+                 hand it to CUDA with `__dlpack__`, or acquire an ordinary pixel buffer for a \
+                 DMA-BUF consumer",
+            )),
+            GpuSurfaceOwnedValue::PooledTexture(_) => Err(PyNotImplementedError::new_err(
+                "exporting a pooled texture's DMA-BUF goes through the texture export path",
+            )),
+        }
     }
 
     /// The host-mapped pixel view, or a refusal naming why this surface
@@ -271,7 +293,7 @@ impl PixelExchangeTensorLayout {
         };
 
         let element_bytes = u64::from(dtype.bits / 8);
-        if element_bytes == 0 || bytes_per_row % element_bytes != 0 {
+        if element_bytes == 0 || !bytes_per_row.is_multiple_of(element_bytes) {
             return Err(PyValueError::new_err(format!(
                 "row pitch {bytes_per_row} is not a whole number of {element_bytes}-byte elements"
             )));
@@ -312,7 +334,7 @@ pub(crate) fn pixel_buffer_bytes_per_row(pixel_buffer: &PixelBuffer) -> PyResult
             "surface reports a zero-byte plane; it is not CPU-mappable",
         ));
     }
-    if plane_size % height != 0 {
+    if !plane_size.is_multiple_of(height) {
         return Err(PyRuntimeError::new_err(format!(
             "plane size {plane_size} is not a whole number of {height} rows"
         )));
@@ -337,9 +359,8 @@ unsafe extern "C" fn dlpack_capsule_destructor(capsule: *mut pyo3::ffi::PyObject
             // does not set an exception, so there is nothing to clear.
             return;
         }
-        let managed_tensor =
-            pyo3::ffi::PyCapsule_GetPointer(capsule, DLPACK_CAPSULE_NAME.as_ptr())
-                as *mut ManagedTensor;
+        let managed_tensor = pyo3::ffi::PyCapsule_GetPointer(capsule, DLPACK_CAPSULE_NAME.as_ptr())
+            as *mut ManagedTensor;
         if managed_tensor.is_null() {
             // Defensive: `IsValid` already proved the name matches, so a
             // null pointer here would be a capsule built by someone else.
@@ -645,9 +666,7 @@ pub(crate) fn device_dlpack_capsule<'py>(
 /// produced device or pinned-host memory — and a wrong guess here
 /// contradicts the capsule the very next call hands back.
 #[cfg(target_os = "linux")]
-pub(crate) fn imported_device_for(
-    owned_memory: &Arc<GpuSurfaceOwnedMemory>,
-) -> PyResult<Device> {
+pub(crate) fn imported_device_for(owned_memory: &Arc<GpuSurfaceOwnedMemory>) -> PyResult<Device> {
     Ok(cuda_import_for(owned_memory)?.dlpack_device())
 }
 
@@ -762,9 +781,8 @@ mod tests {
 
     #[test]
     fn gray8_has_no_channel_axis() {
-        let layout =
-            PixelExchangeTensorLayout::for_pixel_format(PixelFormat::Gray8, 320, 200, 320)
-                .expect("gray8 has a single-buffer shape");
+        let layout = PixelExchangeTensorLayout::for_pixel_format(PixelFormat::Gray8, 320, 200, 320)
+            .expect("gray8 has a single-buffer shape");
         assert_eq!(layout.shape, vec![200, 320]);
         assert_eq!(layout.strides, vec![320, 1]);
     }
@@ -838,12 +856,14 @@ mod tests {
         Python::initialize();
         let drops = Arc::new(AtomicUsize::new(0));
         Python::attach(|python| {
-            let capsule = dlpack_capsule_from_managed_tensor(
-                python,
-                counted_managed_tensor(&drops),
-            )
-            .expect("capsule");
-            assert_eq!(drops.load(Ordering::SeqCst), 0, "still owned by the capsule");
+            let capsule =
+                dlpack_capsule_from_managed_tensor(python, counted_managed_tensor(&drops))
+                    .expect("capsule");
+            assert_eq!(
+                drops.load(Ordering::SeqCst),
+                0,
+                "still owned by the capsule"
+            );
             drop(capsule);
         });
         assert_eq!(
@@ -861,17 +881,14 @@ mod tests {
         Python::initialize();
         let drops = Arc::new(AtomicUsize::new(0));
         let adopted = Python::attach(|python| {
-            let capsule = dlpack_capsule_from_managed_tensor(
-                python,
-                counted_managed_tensor(&drops),
-            )
-            .expect("capsule");
+            let capsule =
+                dlpack_capsule_from_managed_tensor(python, counted_managed_tensor(&drops))
+                    .expect("capsule");
             // What every `from_dlpack` implementation does on adoption.
             let adopted = unsafe {
-                let raw = pyo3::ffi::PyCapsule_GetPointer(
-                    capsule.as_ptr(),
-                    DLPACK_CAPSULE_NAME.as_ptr(),
-                ) as *mut ManagedTensor;
+                let raw =
+                    pyo3::ffi::PyCapsule_GetPointer(capsule.as_ptr(), DLPACK_CAPSULE_NAME.as_ptr())
+                        as *mut ManagedTensor;
                 assert_eq!(
                     pyo3::ffi::PyCapsule_SetName(
                         capsule.as_ptr(),

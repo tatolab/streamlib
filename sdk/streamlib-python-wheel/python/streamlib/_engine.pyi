@@ -272,6 +272,23 @@ class GpuContextFullAccess:
         serve numpy and CUDA. Setup-shaped: allocate once, never per frame.
         """
 
+    def export_dma_buf(self, surface: GpuSurfaceHandle) -> tuple[int, int]:
+        """Export a DMA-BUF file descriptor for `surface`, as `(fd, byte_size)`.
+
+        The caller owns the fd and must close it, or hand it to something that
+        takes ownership. Only an ordinary pixel buffer can answer — a
+        device-exchange buffer is OPAQUE_FD-flavoured.
+        """
+
+    def import_dma_buf(
+        self, fd: int, width: int, height: int, format: str = "bgra"
+    ) -> GpuSurfaceHandle:
+        """Import a DMA-BUF file descriptor as a surface this graph can read.
+
+        Takes ownership of `fd` on success — the driver adopts it and it must
+        not be closed afterwards. On failure the fd is still the caller's.
+        """
+
     def wait_device_idle(self) -> None: ...
 
 @final
