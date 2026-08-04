@@ -266,6 +266,44 @@ mod tests {
         assert_eq!(frame.surface_id, "9");
     }
 
+    /// The actual wire is msgpack via `rmp_serde::to_vec_named` (what
+    /// `OutputWriter::write` does) — lock the named-map encoding and the
+    /// documented keys at that boundary, not just JSON.
+    #[test]
+    fn video_frame_msgpack_wire_is_a_named_map_with_the_documented_keys() {
+        let frame = VideoFrame {
+            surface_id: "42".to_string(),
+            width: 1280,
+            height: 720,
+            timestamp_ns: 123_456_789,
+            fps: Some(30),
+            ..VideoFrame::default()
+        };
+        let wire_bytes = rmp_serde::to_vec_named(&frame).expect("msgpack serialize");
+        let value: rmpv::Value =
+            rmpv::decode::read_value(&mut wire_bytes.as_slice()).expect("msgpack decode");
+        let rmpv::Value::Map(entries) = value else {
+            panic!("wire value must be a named map, got {value:?}");
+        };
+        let key = |name: &str| {
+            entries
+                .iter()
+                .find(|(k, _)| k.as_str() == Some(name))
+                .unwrap_or_else(|| panic!("wire map missing key {name:?}"))
+                .1
+                .clone()
+        };
+        assert_eq!(key("surface_id").as_str(), Some("42"));
+        assert_eq!(key("width").as_u64(), Some(1280));
+        assert_eq!(key("height").as_u64(), Some(720));
+        assert_eq!(key("timestamp_ns").as_i64(), Some(123_456_789));
+        assert_eq!(key("fps").as_u64(), Some(30));
+
+        let round_tripped: VideoFrame =
+            rmp_serde::from_slice(&wire_bytes).expect("msgpack deserialize");
+        assert_eq!(round_tripped, frame);
+    }
+
     #[test]
     fn video_frame_round_trips() {
         let frame = VideoFrame {

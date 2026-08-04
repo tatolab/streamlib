@@ -21,6 +21,8 @@ tracing = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+rmp-serde = { workspace = true }
+rmpv = { workspace = true }
 
 [lints]
 workspace = true

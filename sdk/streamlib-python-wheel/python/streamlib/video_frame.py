@@ -13,8 +13,9 @@ frame references a GPU surface by `surface_id`, resolved out-of-band.
 from __future__ import annotations
 
 import typing
+from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal, Mapping, cast
+from typing import Any, Literal, cast
 
 __all__ = [
     "ColorInfo",
@@ -39,6 +40,23 @@ Matrix = Literal[
 Range = Literal["full", "limited"]
 
 _NestedCast = typing.TypeVar("_NestedCast", "ContentLight", "MasteringDisplay")
+
+
+def _is_plain_int(value: Any) -> bool:
+    """`bool` is an `int` subclass; a frame dimension of `True` is a bug."""
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _require_int_or_none(key: str, value: Any) -> "int | None":
+    if value is not None and not _is_plain_int(value):
+        raise ValueError(f"bag is not a video frame: {key!r} must be int or absent")
+    return value
+
+
+def _require_mapping_or_none(key: str, value: Any) -> "Mapping[str, Any] | None":
+    if value is not None and not isinstance(value, Mapping):
+        raise ValueError(f"bag is not a video frame: {key!r} must be a mapping or absent")
+    return value
 
 
 def _cast_nested(
@@ -112,7 +130,8 @@ class VideoFrame:
 
     @classmethod
     def from_bag(cls, bag: Mapping[str, Any]) -> "VideoFrame":
-        """Construct from a bag dict, raising on missing or mistyped keys."""
+        """Construct from a bag dict, raising ValueError on missing or
+        mistyped keys — required and optional alike."""
         try:
             surface_id = bag["surface_id"]
             width = bag["width"]
@@ -124,24 +143,26 @@ class VideoFrame:
             ) from None
         if (
             not isinstance(surface_id, str)
-            or not isinstance(width, int)
-            or not isinstance(height, int)
-            or not isinstance(timestamp_ns, int)
+            or not _is_plain_int(width)
+            or not _is_plain_int(height)
+            or not _is_plain_int(timestamp_ns)
         ):
             raise ValueError(
                 "bag is not a video frame: surface_id must be str and "
                 "width/height/timestamp_ns must be int"
             )
 
-        color_info_bag = bag.get("color_info")
-        content_light_bag = bag.get("content_light")
-        mastering_display_bag = bag.get("mastering_display")
+        color_info_bag = _require_mapping_or_none("color_info", bag.get("color_info"))
+        content_light_bag = _require_mapping_or_none("content_light", bag.get("content_light"))
+        mastering_display_bag = _require_mapping_or_none(
+            "mastering_display", bag.get("mastering_display")
+        )
         return cls(
             surface_id=surface_id,
             width=width,
             height=height,
             timestamp_ns=timestamp_ns,
-            fps=bag.get("fps"),
+            fps=_require_int_or_none("fps", bag.get("fps")),
             color_info=(
                 ColorInfo(
                     primaries=cast("Primaries | None", color_info_bag.get("primaries")),
@@ -162,5 +183,5 @@ class VideoFrame:
                 if mastering_display_bag is not None
                 else None
             ),
-            texture_layout=bag.get("texture_layout"),
+            texture_layout=_require_int_or_none("texture_layout", bag.get("texture_layout")),
         )

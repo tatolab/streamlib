@@ -213,10 +213,9 @@ mod tests {
         let (width, height) = (61u32, 2u32);
         let mut plane = vec![7u8; (width * height * 4) as usize];
         fill_smpte_bars_rgba(&mut plane, width);
-        // Every alpha byte written → no pixel skipped.
-        for x in 0..width {
-            let offset = ((x * 4) + 3) as usize;
-            assert_eq!(plane[offset], 255, "pixel {x} alpha written");
+        // Every alpha byte written, in every row → no pixel skipped.
+        for (pixel_index, pixel) in plane.chunks_exact(4).enumerate() {
+            assert_eq!(pixel[3], 255, "pixel {pixel_index} alpha written");
         }
     }
 

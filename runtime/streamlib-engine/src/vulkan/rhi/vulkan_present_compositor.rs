@@ -273,6 +273,23 @@ impl VulkanPresentCompositor {
         scaling: PresentScalingMode,
     ) -> Result<()> {
         self.reject_attachment_format_mismatch(destination.format(), "the offscreen destination")?;
+        // Sampling and rendering the same image is a feedback loop, undefined
+        // without ATTACHMENT_FEEDBACK_LOOP setup this kernel doesn't do.
+        // Compare the underlying VkImages: distinct `Texture` wrappers can
+        // still alias one image.
+        {
+            use crate::host_rhi::HostTextureExt;
+            let source_image = source.vulkan_inner().image();
+            let destination_image = destination.vulkan_inner().image();
+            if source_image.is_some() && source_image == destination_image {
+                return Err(Error::Configuration(
+                    "VulkanPresentCompositor: source and destination are the same VkImage — \
+                     composing a texture onto itself is a feedback loop; render into a \
+                     separate destination"
+                        .into(),
+                ));
+            }
+        }
         if source_current_layout != VulkanLayout::SHADER_READ_ONLY_OPTIMAL {
             let mut recorder = RhiCommandRecorder::new(
                 &self.vulkan_device,
@@ -425,6 +442,29 @@ mod tests {
             "format flip must rebuild"
         );
         assert_eq!(compositor.attachment_format(), TextureFormat::Rgba8Unorm);
+    }
+
+    #[test]
+    fn composing_a_texture_onto_itself_is_rejected() {
+        let Some(device) = try_vulkan_device() else {
+            return;
+        };
+        let compositor =
+            VulkanPresentCompositor::new(&device, TextureFormat::Bgra8Unorm).expect("compositor");
+        let texture = make_solid_texture(&device, 64, 64, TextureFormat::Bgra8Unorm, [0; 4]);
+        let err = compositor
+            .compose_to_offscreen_texture(
+                0,
+                &texture,
+                &texture,
+                VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                PresentScalingMode::Stretch,
+            )
+            .expect_err("same VkImage as source and destination must be rejected");
+        assert!(
+            format!("{err}").contains("feedback loop"),
+            "error names the hazard: {err}"
+        );
     }
 
     #[test]

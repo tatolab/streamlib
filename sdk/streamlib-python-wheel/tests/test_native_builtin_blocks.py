@@ -10,12 +10,19 @@ The graph tests boot a real engine (GPU required); the marker and
 
 import queue
 import threading
-import time
 
 import pytest
 
 import streamlib
-from streamlib import RuntimeContextLimitedAccess, TestPatternSource, VideoFrame, input, processor
+# `input` is streamlib's port decorator — the test reads like user code,
+# which spells it exactly this way.
+from streamlib import (  # noqa: A004
+    RuntimeContextLimitedAccess,
+    TestPatternSource,
+    VideoFrame,
+    input,
+    processor,
+)
 
 PIPELINE_TIMEOUT_SECONDS = 30.0
 ENGINE_TEARDOWN_TIMEOUT_SECONDS = 60.0
@@ -74,6 +81,24 @@ def test_video_frame_rejects_mistyped_fields():
     with pytest.raises(ValueError, match="must be int"):
         VideoFrame.from_bag(
             {"surface_id": "1", "width": 1, "height": 1, "timestamp_ns": "not-an-int"}
+        )
+
+
+def test_video_frame_rejects_mistyped_optional_fields():
+    valid = {"surface_id": "1", "width": 1, "height": 1, "timestamp_ns": 0}
+    with pytest.raises(ValueError, match="fps"):
+        VideoFrame.from_bag({**valid, "fps": "30"})
+    with pytest.raises(ValueError, match="texture_layout"):
+        VideoFrame.from_bag({**valid, "texture_layout": "GENERAL"})
+    with pytest.raises(ValueError, match="color_info"):
+        VideoFrame.from_bag({**valid, "color_info": "srgb"})
+
+
+def test_video_frame_rejects_bool_dimensions():
+    # bool is an int subclass; a width of True is a bug, not a width.
+    with pytest.raises(ValueError, match="must be int"):
+        VideoFrame.from_bag(
+            {"surface_id": "1", "width": True, "height": 1, "timestamp_ns": 0}
         )
 
 

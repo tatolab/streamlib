@@ -31,7 +31,7 @@ from ._engine import RuntimeContextLimitedAccess as RuntimeContextLimitedAccess
 from ._engine import TestPatternSource as TestPatternSource
 from ._engine import media_clock_now_ns as media_clock_now_ns
 from ._engine import monotonic_now_ns as monotonic_now_ns
-from ._processor_declaration import input as input
+from ._processor_declaration import input as input  # noqa: A004 — deliberate, see below
 from ._processor_declaration import output as output
 from ._processor_declaration import processor as processor
 from .schema_ident import SchemaIdent as SchemaIdent
