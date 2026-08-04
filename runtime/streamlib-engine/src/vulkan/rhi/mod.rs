@@ -103,9 +103,7 @@ pub(crate) use vulkan_present_target::PresentTargetInner;
 #[cfg(target_os = "linux")]
 mod vulkan_present_compositor;
 #[cfg(target_os = "linux")]
-pub use vulkan_present_compositor::{
-    PresentScalingMode, VulkanPresentCompositor, composition_scale,
-};
+pub use vulkan_present_compositor::{PresentScalingMode, VulkanPresentCompositor};
 
 #[cfg(target_os = "linux")]
 mod vulkan_swapchain_colorspace;

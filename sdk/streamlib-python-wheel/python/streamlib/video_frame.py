@@ -12,6 +12,7 @@ frame references a GPU surface by `surface_id`, resolved out-of-band.
 
 from __future__ import annotations
 
+import typing
 from dataclasses import dataclass
 from typing import Any, Literal, Mapping, cast
 
@@ -36,6 +37,20 @@ Matrix = Literal[
     "fcc", "ictcp", "identity", "smpte170m", "smpte2085", "smpte240m", "ycgco",
 ]
 Range = Literal["full", "limited"]
+
+_NestedCast = typing.TypeVar("_NestedCast", "ContentLight", "MasteringDisplay")
+
+
+def _cast_nested(
+    key: str, nested_type: "type[_NestedCast]", nested_bag: Mapping[str, Any]
+) -> "_NestedCast":
+    """Construct a nested cast, keeping the ValueError contract of `from_bag`."""
+    try:
+        return nested_type(**nested_bag)
+    except TypeError as construction_error:
+        raise ValueError(
+            f"bag is not a video frame: {key!r} is malformed ({construction_error})"
+        ) from None
 
 
 @dataclass(frozen=True)
@@ -80,8 +95,9 @@ class MasteringDisplay:
 class VideoFrame:
     """A video-frame bag, cast: GPU surface reference plus per-frame metadata.
 
-    ``surface_id`` is the handoff contract; ``timestamp_ns`` (machine-monotonic
-    nanoseconds) is the ordering primitive.
+    ``surface_id`` is the handoff contract; ``timestamp_ns`` (monotonic
+    nanoseconds — process-relative until the engine's clock-epoch unification
+    lands) is the ordering primitive.
     """
 
     surface_id: str
@@ -137,12 +153,12 @@ class VideoFrame:
                 else None
             ),
             content_light=(
-                ContentLight(**content_light_bag)
+                _cast_nested("content_light", ContentLight, content_light_bag)
                 if content_light_bag is not None
                 else None
             ),
             mastering_display=(
-                MasteringDisplay(**mastering_display_bag)
+                _cast_nested("mastering_display", MasteringDisplay, mastering_display_bag)
                 if mastering_display_bag is not None
                 else None
             ),

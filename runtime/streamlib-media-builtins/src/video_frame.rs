@@ -6,7 +6,9 @@
 //! A link carries a self-describing msgpack named map; these types are the
 //! optional Rust cast for it — never declared on a port, never registered
 //! anywhere. The field names ARE the wire contract: a consumer in any
-//! language reads the same keys from the bag dict.
+//! language reads the same keys from the bag dict. The map is open — a
+//! producer may carry extra keys and this cast ignores them, matching the
+//! Python cast's behavior.
 
 use serde::{Deserialize, Serialize};
 
@@ -17,7 +19,6 @@ use serde::{Deserialize, Serialize};
 /// need "frame N" semantics derive it from timestamps, never from a
 /// cross-processor counter.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct VideoFrame {
     /// GPU surface id, resolved out-of-band via the engine's surface APIs.
     pub surface_id: String,
@@ -25,8 +26,10 @@ pub struct VideoFrame {
     pub width: u32,
     /// Frame height in pixels.
     pub height: u32,
-    /// Machine-monotonic timestamp in nanoseconds — the same epoch V4L2 and
-    /// ALSA driver stamps carry.
+    /// Monotonic timestamp in nanoseconds, stamped via `MediaClock`. Today
+    /// that epoch is process-relative; it becomes the machine's monotonic
+    /// epoch (comparable to V4L2/ALSA driver stamps) when #1725 lands —
+    /// until then, compare stamps only within one process.
     pub timestamp_ns: i64,
     /// H.273 / ITU-T VUI four-tuple describing this frame's color. Absent
     /// means unknown; every consumer treats absent as all-`unspecified`.
@@ -52,7 +55,6 @@ pub struct VideoFrame {
 
 /// Per-frame color description (H.273 / ITU-T VUI 4-tuple).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ColorInfo {
     /// YCbCr matrix coefficients (H.273 `MatrixCoefficients`). Absent =
     /// unspecified (H.273 value 2).
@@ -177,7 +179,6 @@ pub enum Transfer {
 
 /// HDR10 content light level (MaxCLL / MaxFALL).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct ContentLight {
     /// Maximum content light level in cd/m², peak single-pixel.
     pub max_cll: u32,
@@ -187,7 +188,6 @@ pub struct ContentLight {
 
 /// SMPTE ST.2086 mastering display color volume (HDR10 static metadata).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct MasteringDisplay {
     /// Blue primary x chromaticity in 1/50000 increments.
     pub display_primaries_b_x: u32,
@@ -249,6 +249,21 @@ mod tests {
             !map.contains_key("content_light") && !map.contains_key("mastering_display"),
             "absent optionals stay off the wire"
         );
+    }
+
+    /// The bag map is open: a producer carrying extra keys must not break
+    /// this cast (mirrors the Python cast's behavior).
+    #[test]
+    fn video_frame_cast_ignores_unknown_keys() {
+        let bag = serde_json::json!({
+            "surface_id": "9",
+            "width": 16,
+            "height": 16,
+            "timestamp_ns": 5,
+            "a_future_key": "ignored",
+        });
+        let frame: VideoFrame = serde_json::from_value(bag).expect("open map");
+        assert_eq!(frame.surface_id, "9");
     }
 
     #[test]

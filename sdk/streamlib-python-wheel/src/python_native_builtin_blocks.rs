@@ -9,7 +9,6 @@
 //! per-frame paths never enter the interpreter.
 
 use pyo3::prelude::*;
-use streamlib::sdk::descriptors::{Org, Package, TypeName};
 use streamlib::sdk::processors::ProcessorTypeReference;
 
 /// `streamlib.TestPatternSource` — SMPTE-style color bars, no hardware.
@@ -31,17 +30,14 @@ impl PythonTestPatternSourceBlock {
 }
 
 /// Resolve a Python object to a native built-in's type reference, if it is
-/// one of the wheel-exported marker type objects.
+/// one of the wheel-exported marker type objects. The identity comes from the
+/// native processor's own declaration — authored once, in the built-ins crate.
 pub(crate) fn native_builtin_type_reference(
     python: Python<'_>,
     processor_class: &Bound<'_, PyAny>,
 ) -> Option<ProcessorTypeReference> {
     if processor_class.is(python.get_type::<PythonTestPatternSourceBlock>()) {
-        return Some(ProcessorTypeReference::new(
-            Org::new("tatolab").expect("static org ident"),
-            Package::new("media-builtins").expect("static package ident"),
-            TypeName::new("TestPatternSource").expect("static type ident"),
-        ));
+        return Some(streamlib_media_builtins::TestPatternSource::Processor::schema_ident().into());
     }
     None
 }

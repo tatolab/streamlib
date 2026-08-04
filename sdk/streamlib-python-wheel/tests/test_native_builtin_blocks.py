@@ -77,6 +77,19 @@ def test_video_frame_rejects_mistyped_fields():
         )
 
 
+def test_video_frame_wraps_malformed_nested_metadata_in_the_same_error():
+    with pytest.raises(ValueError, match="content_light"):
+        VideoFrame.from_bag(
+            {
+                "surface_id": "1",
+                "width": 1,
+                "height": 1,
+                "timestamp_ns": 0,
+                "content_light": {"max_cll": 1000, "unexpected_key": 1},
+            }
+        )
+
+
 # ---- the native block in a real graph (GPU) --------------------------------
 
 _received_bags: "queue.Queue[dict]" = queue.Queue()

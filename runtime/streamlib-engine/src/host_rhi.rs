@@ -64,7 +64,7 @@ pub use crate::vulkan::rhi::{
 #[cfg(target_os = "linux")]
 pub use crate::vulkan::rhi::{
     MAX_FRAMES_IN_FLIGHT, PresentFrame, PresentScalingMode, VulkanPresentCompositor,
-    VulkanPresentTarget, composition_scale,
+    VulkanPresentTarget,
 };
 
 pub use vulkanalia::vk::GeometryInstanceFlagsKHR;
