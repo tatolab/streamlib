@@ -72,7 +72,9 @@ pub(crate) fn fill_smpte_bars_rgba(plane: &mut [u8], width: u32) {
 const TEST_PATTERN_FPS: u32 = 30;
 
 /// The one-shot acquisition of the pattern surface, as a single state.
+#[derive(Default)]
 enum TestPatternSurfaceState {
+    #[default]
     NotYetAcquired,
     Ready {
         pool_id: PixelBufferPoolId,
@@ -83,12 +85,6 @@ enum TestPatternSurfaceState {
     /// Acquisition failed once, loudly; every later tick stays quiet instead
     /// of re-erroring at 30 Hz.
     AcquireFailedPermanently,
-}
-
-impl Default for TestPatternSurfaceState {
-    fn default() -> Self {
-        Self::NotYetAcquired
-    }
 }
 
 #[streamlib::sdk::processor(
