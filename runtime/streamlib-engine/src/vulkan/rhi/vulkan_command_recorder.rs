@@ -886,8 +886,9 @@ impl RhiCommandRecorderInner {
     /// The begun-but-unsubmitted command buffer is discarded at that
     /// `begin()`'s `reset_command_buffer`. Used when a frame is abandoned
     /// after `begin()` but before submit (e.g. swapchain `OUT_OF_DATE_KHR`
-    /// on acquire), so the recorder slot is reusable next attempt.
-    pub(crate) fn abort_recording(&mut self) {
+    /// on acquire, or a failed per-frame record), so the recorder slot is
+    /// reusable next attempt. Harmless when nothing is recording.
+    pub fn abort_recording(&mut self) {
         self.render_pass_balance.mark_closed();
         *self.state.lock() = RecorderState::Idle;
     }
@@ -1140,14 +1141,13 @@ impl RhiCommandRecorder {
         unsafe { (*(self.handle as *const RhiCommandRecorderInner)).in_render_pass() }
     }
 
-    /// Host-side abandon-recording used by
-    /// [`VulkanPresentTarget::begin_frame`](super::vulkan_present_target::VulkanPresentTarget::begin_frame)
-    /// when a frame is dropped after `begin()` but before submit (swapchain
-    /// `OUT_OF_DATE_KHR` on acquire). Resets the recorder to `Idle` so the
-    /// reused slot begins clean next attempt. See
-    /// [`RhiCommandRecorderInner::abort_recording`]. **Panics if called
-    /// from cdylib code** (present targets are host-only).
-    pub(crate) fn abort_recording(&mut self) {
+    /// Abandon an in-progress recording used when a frame is dropped after
+    /// `begin()` but before submit (swapchain `OUT_OF_DATE_KHR` on acquire,
+    /// or a failed per-frame record). Resets the recorder to `Idle` so the
+    /// reused slot begins clean next attempt; harmless when nothing is
+    /// recording. See [`RhiCommandRecorderInner::abort_recording`].
+    /// **Panics if called from cdylib code** (host-only recorders).
+    pub fn abort_recording(&mut self) {
         self.host_inner_mut().abort_recording();
     }
 

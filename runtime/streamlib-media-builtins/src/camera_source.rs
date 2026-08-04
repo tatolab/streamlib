@@ -25,8 +25,8 @@ use streamlib::sdk::iceoryx2::OutputWriter;
 use streamlib::sdk::media_clock::MediaClock;
 use streamlib::sdk::processors::ManualProcessor;
 use streamlib::sdk::rhi::{
-    PixelFormat, RhiColorConverter, SourceLayoutInfo, StorageBuffer, Texture, TextureFormat,
-    VulkanLayout,
+    PixelBuffer, PixelFormat, RhiColorConverter, SourceLayoutInfo, StorageBuffer, Texture,
+    TextureFormat, VulkanLayout,
 };
 
 use v4l::FourCC;
@@ -42,6 +42,14 @@ const RING_TEXTURE_COUNT: usize = 2;
 
 /// Number of V4L2 mmap buffers to request.
 const V4L2_BUFFER_COUNT: u32 = 4;
+
+/// Bound on the wait for a ring slot's previous frame. Normally sub-frame;
+/// a stalled GPU degrades to dropped frames, never a hung capture thread.
+const RING_SLOT_WAIT_TIMEOUT_NS: u64 = 2_000_000_000;
+
+/// Bound on the host wait for this frame's own submit. The signal is certain
+/// after a successful submit unless the device is lost.
+const HOST_READBACK_WAIT_TIMEOUT_NS: u64 = 5_000_000_000;
 
 /// Configuration for [`CameraSource`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -130,10 +138,7 @@ impl ManualProcessor for CameraSource::Processor {
             self.camera_name,
             frame_count
         );
-        self.is_capturing.store(false, Ordering::Release);
-        if let Some(handle) = self.capture_thread_handle.take() {
-            let _ = handle.join();
-        }
+        self.stop_capture_thread();
         Ok(())
     }
 
@@ -158,15 +163,39 @@ impl ManualProcessor for CameraSource::Processor {
         };
 
         let mut dev = v4l::Device::with_path(&device_path).map_err(|e| {
-            Error::Configuration(if e.kind() == std::io::ErrorKind::PermissionDenied {
-                format!(
+            Error::Configuration(match e.kind() {
+                std::io::ErrorKind::PermissionDenied => format!(
                     "Camera '{}' exists but you don't have permission to open it. Add \
-                         yourself to the `video` group — `sudo usermod -aG video $USER` — \
-                         then log out and back in.",
+                     yourself to the `video` group — `sudo usermod -aG video $USER` — \
+                     then log out and back in.",
                     device_path
-                )
-            } else {
-                format!("Failed to open V4L2 device '{}': {}", device_path, e)
+                ),
+                std::io::ErrorKind::NotFound => {
+                    let attached = list_camera_capture_devices()
+                        .map(|devices| {
+                            devices
+                                .iter()
+                                .map(|device| format!("{} ({})", device.id, device.name))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        })
+                        .unwrap_or_default();
+                    if attached.is_empty() {
+                        format!(
+                            "Camera '{}' does not exist and no other camera is attached. \
+                             Check the camera is plugged in (`ls /dev/video*`), or use \
+                             TestPatternSource to run without one.",
+                            device_path
+                        )
+                    } else {
+                        format!(
+                            "Camera '{}' does not exist. Attached cameras: {}. Fix \
+                             device_id, or omit it to use the first camera found.",
+                            device_path, attached
+                        )
+                    }
+                }
+                _ => format!("Failed to open V4L2 device '{}': {}", device_path, e),
             })
         })?;
 
@@ -294,6 +323,18 @@ impl ManualProcessor for CameraSource::Processor {
     }
 
     fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+        self.stop_capture_thread();
+        tracing::info!(
+            "CameraSource {}: stopped ({} frames)",
+            self.camera_name,
+            self.frame_counter.load(Ordering::Relaxed)
+        );
+        Ok(())
+    }
+}
+
+impl CameraSource::Processor {
+    fn stop_capture_thread(&mut self) {
         self.is_capturing.store(false, Ordering::Release);
 
         // Bounded wait: the capture thread can be inside a long timeline wait
@@ -315,13 +356,6 @@ impl ManualProcessor for CameraSource::Processor {
                 );
             }
         }
-
-        tracing::info!(
-            "CameraSource {}: stopped ({} frames)",
-            self.camera_name,
-            self.frame_counter.load(Ordering::Relaxed)
-        );
-        Ok(())
     }
 }
 
@@ -418,9 +452,25 @@ struct CameraGpuResources {
     ring_texture_ids: Vec<String>,
     use_dmabuf: bool,
     dmabuf_imported_buffers: Vec<StorageBuffer>,
-    dmabuf_fds: [i32; V4L2_BUFFER_COUNT as usize],
     vulkan_device_name: String,
     probe_skipped: bool,
+}
+
+/// The two V4L2 capture formats the GPU converter has shaders for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CaptureFormat {
+    Nv12,
+    Yuyv,
+}
+
+impl CaptureFormat {
+    fn from_fourcc(fourcc: FourCC) -> Option<Self> {
+        match &fourcc.repr {
+            b"NV12" => Some(Self::Nv12),
+            b"YUYV" => Some(Self::Yuyv),
+            _ => None,
+        }
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -436,19 +486,14 @@ fn capture_thread_loop(
     fourcc: FourCC,
     capture_fps: Option<u32>,
 ) {
-    let fourcc_bytes = fourcc.repr;
-
-    match &fourcc_bytes {
-        b"NV12" | b"YUYV" => {}
-        _ => {
-            tracing::error!(
-                camera = camera_name,
-                ?fourcc,
-                "unsupported format — no GPU compute shader available",
-            );
-            return;
-        }
-    }
+    let Some(capture_format) = CaptureFormat::from_fourcc(fourcc) else {
+        tracing::error!(
+            camera = camera_name,
+            ?fourcc,
+            "unsupported format — no GPU compute shader available",
+        );
+        return;
+    };
 
     let device_fd = stream.handle().fd();
 
@@ -508,15 +553,9 @@ fn capture_thread_loop(
         } else {
             // ioctl failed — emit "all unknown" colors and fall back to
             // tight-packed buffer sizing.
-            let tight_bytes_per_line = match &fourcc_bytes {
-                b"NV12" => width,
-                b"YUYV" => width * 2,
-                _ => unreachable!("guarded by FourCC match above"),
-            };
-            let tight_size_image = match &fourcc_bytes {
-                b"NV12" => width * height * 3 / 2,
-                b"YUYV" => width * height * 2,
-                _ => unreachable!(),
+            let (tight_bytes_per_line, tight_size_image) = match capture_format {
+                CaptureFormat::Nv12 => (width, width * height * 3 / 2),
+                CaptureFormat::Yuyv => (width * 2, width * height * 2),
             };
             (ColorInfo::default(), tight_bytes_per_line, tight_size_image)
         }
@@ -526,19 +565,18 @@ fn capture_thread_loop(
     // (vivid reports 3840-byte stride for 1920-wide NV12). Truncating to
     // tight-pack size memcpys only half the Y plane and reads garbage UV.
     let input_byte_size = v4l2_size_image as usize;
-    let input_alloc_size = input_byte_size.div_ceil(4).wrapping_mul(4) as u64;
+    let input_alloc_size = input_byte_size.next_multiple_of(4) as u64;
 
     // Source-buffer layout for the converter's push constants. NV12 uses
     // `bytesperline` for both planes (V4L2 bi-planar convention); YUYV is a
     // single packed plane.
-    let src_layout = match &fourcc_bytes {
-        b"NV12" => SourceLayoutInfo::nv12(
+    let src_layout = match capture_format {
+        CaptureFormat::Nv12 => SourceLayoutInfo::nv12(
             v4l2_bytes_per_line,
             v4l2_bytes_per_line,
             v4l2_bytes_per_line * height,
         ),
-        b"YUYV" => SourceLayoutInfo::yuyv(v4l2_bytes_per_line),
-        _ => unreachable!("guarded by FourCC match above"),
+        CaptureFormat::Yuyv => SourceLayoutInfo::yuyv(v4l2_bytes_per_line),
     };
     tracing::info!(
         camera = camera_name,
@@ -566,11 +604,10 @@ fn capture_thread_loop(
     // Map (fourcc, resolved range) to the canonical PixelFormat used as the
     // converter cache key. The push-constant matrix bakes the range
     // expansion in.
-    let src_pixel_format = match (&fourcc_bytes, &resolved_color.range) {
-        (b"NV12", RangeId::Full) => PixelFormat::Nv12FullRange,
-        (b"NV12", _) => PixelFormat::Nv12VideoRange,
-        (b"YUYV", _) => PixelFormat::Yuyv422,
-        _ => unreachable!("guarded by FourCC match above"),
+    let src_pixel_format = match (capture_format, &resolved_color.range) {
+        (CaptureFormat::Nv12, RangeId::Full) => PixelFormat::Nv12FullRange,
+        (CaptureFormat::Nv12, _) => PixelFormat::Nv12VideoRange,
+        (CaptureFormat::Yuyv, _) => PixelFormat::Yuyv422,
     };
 
     let setup_result = gpu_context.escalate(|full| {
@@ -613,12 +650,16 @@ fn capture_thread_loop(
         // it stays inside the escalation; failure falls through to MMAP.
         let probe_skipped = !caps.supports_cross_device_dma_buf_probe;
         let mut use_dmabuf = false;
-        let mut dmabuf_fds: [i32; V4L2_BUFFER_COUNT as usize] = [-1; V4L2_BUFFER_COUNT as usize];
         let mut dmabuf_imported_buffers: Vec<StorageBuffer> = Vec::new();
         if caps.supports_external_memory && !is_virtual_device && !probe_skipped {
-            let mut imported: Vec<Option<StorageBuffer>> =
-                (0..V4L2_BUFFER_COUNT as usize).map(|_| None).collect();
-            let mut all_imported = true;
+            // Fd ownership: `import_dma_buf_storage_buffer` consumes the fd
+            // on success (`vkImportMemoryFdInfoKHR` transfers it to the
+            // driver, which closes it at free); on failure the fd stays ours
+            // and is closed here. Successfully imported fds are never closed
+            // by this code. Buffers already imported when a later index
+            // fails are dropped with the Vec, freeing their memory (and fd)
+            // through Vulkan.
+            let mut imported: Vec<StorageBuffer> = Vec::with_capacity(V4L2_BUFFER_COUNT as usize);
             for i in 0..V4L2_BUFFER_COUNT as usize {
                 let fd: i32 = unsafe {
                     let mut expbuf: v4l::v4l_sys::v4l2_exportbuffer = std::mem::zeroed();
@@ -639,14 +680,10 @@ fn capture_thread_loop(
                             "VIDIOC_EXPBUF not supported — using MMAP path"
                         );
                     }
-                    all_imported = false;
                     break;
                 }
                 match full.import_dma_buf_storage_buffer(fd, input_alloc_size) {
-                    Ok(buf) => {
-                        dmabuf_fds[i] = fd;
-                        imported[i] = Some(buf);
-                    }
+                    Ok(imported_buffer) => imported.push(imported_buffer),
                     Err(e) => {
                         if i == 0 {
                             if vulkan_device_name.to_lowercase().contains("nvidia") {
@@ -668,21 +705,13 @@ fn capture_thread_loop(
                             }
                         }
                         unsafe { libc::close(fd) };
-                        all_imported = false;
                         break;
                     }
                 }
             }
-            if all_imported {
-                dmabuf_imported_buffers = imported.into_iter().map(|o| o.unwrap()).collect();
+            if imported.len() == V4L2_BUFFER_COUNT as usize {
+                dmabuf_imported_buffers = imported;
                 use_dmabuf = true;
-            } else {
-                for fd in &mut dmabuf_fds {
-                    if *fd >= 0 {
-                        unsafe { libc::close(*fd) };
-                        *fd = -1;
-                    }
-                }
             }
         }
 
@@ -698,7 +727,6 @@ fn capture_thread_loop(
             ring_texture_ids,
             use_dmabuf,
             dmabuf_imported_buffers,
-            dmabuf_fds,
             vulkan_device_name,
             probe_skipped,
         })
@@ -716,7 +744,6 @@ fn capture_thread_loop(
         ring_texture_ids,
         use_dmabuf,
         dmabuf_imported_buffers,
-        mut dmabuf_fds,
         vulkan_device_name,
         probe_skipped,
     } = match setup_result {
@@ -817,6 +844,7 @@ fn capture_thread_loop(
     };
 
     let mut ping_pong_index: usize = 0;
+    let mut consecutive_dropped_frames: u64 = 0;
 
     while is_capturing.load(Ordering::Acquire) {
         // ---- Step 1: Acquire frame and select input SSBO ----
@@ -898,188 +926,197 @@ fn capture_thread_loop(
         // Frame N uses slot N % RING_TEXTURE_COUNT; the previous use was
         // frame N - RING_TEXTURE_COUNT which signaled timeline value
         // (N - RING_TEXTURE_COUNT + 1). The first RING_TEXTURE_COUNT frames
-        // skip (initial timeline value 0).
-        let frame_num_peek = frame_counter.load(Ordering::Relaxed);
-        if frame_num_peek >= RING_TEXTURE_COUNT as u64 {
-            let wait_value = frame_num_peek - (RING_TEXTURE_COUNT as u64 - 1);
-            if let Err(e) = camera_timeline.wait(wait_value, u64::MAX) {
-                tracing::warn!(camera = camera_name, error = %e, "timeline wait failed");
+        // skip (initial timeline value 0). The counter advances only after a
+        // fully-submitted frame, so this wait always names a signal that is
+        // genuinely in flight; the bound turns a stalled GPU into dropped
+        // frames instead of a hung capture thread.
+        let frame_num = frame_counter.load(Ordering::Relaxed);
+        if frame_num >= RING_TEXTURE_COUNT as u64 {
+            let wait_value = frame_num - (RING_TEXTURE_COUNT as u64 - 1);
+            if let Err(e) = camera_timeline.wait(wait_value, RING_SLOT_WAIT_TIMEOUT_NS) {
+                tracing::warn!(
+                    camera = camera_name,
+                    error = %e,
+                    "ring-slot timeline wait failed — dropping frame"
+                );
+                requeue(v4l2_requeue_buf);
+                continue;
             }
         }
 
-        let frame_num = frame_counter.fetch_add(1, Ordering::Relaxed);
-
-        // ---- Step 2: Select ring texture + acquire pixel buffer for IPC ----
         let ring_index = (frame_num as usize) % RING_TEXTURE_COUNT;
 
-        let (pool_id, pooled_buffer) = match gpu_context.acquire_pixel_buffer(
-            width,
-            height,
-            PixelFormat::Rgba32,
-        ) {
-            Ok(result) => result,
-            Err(e) => {
-                if frame_num == 0 {
-                    tracing::error!(camera = camera_name, error = %e, "failed to acquire pixel buffer");
-                }
-                requeue(v4l2_requeue_buf);
-                continue;
+        // The per-frame GPU unit is one fallible block so there is exactly
+        // one failure exit: the V4L2 buffer is requeued and the recorder
+        // reset on every path, and the frame counter advances only after the
+        // submit that signals its timeline value.
+        let frame_result: Result<(String, PixelBuffer)> = (|| {
+            // Acquire the pooled pixel buffer for IPC + CPU readback. Its
+            // pool_id is the surface_id — the universal key: same-process
+            // texture cache, cross-process surface-share, and CPU readback
+            // all resolve through it.
+            let (pool_id, pooled_buffer) = gpu_context
+                .acquire_pixel_buffer(width, height, PixelFormat::Rgba32)
+                .map_err(|e| Error::GpuError(format!("acquire pixel buffer: {e}")))?;
+            let surface_id = pool_id.to_string();
+
+            // Register the ring texture under the pixel buffer's pool_id so
+            // a same-process display resolves the texture via the same
+            // surface_id used for pixel-buffer IPC.
+            gpu_context.register_texture_with_layout(
+                &surface_id,
+                ring_textures[ring_index].clone(),
+                VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+            );
+
+            let input_buffer = if use_dmabuf {
+                &dmabuf_imported_buffers[input_ssbo_index]
+            } else {
+                &input_storage_buffers[input_ssbo_index]
+            };
+            let kernel = color_converter
+                .prepare_buffer_to_image_storage(
+                    input_buffer,
+                    src_layout,
+                    &ring_textures[ring_index],
+                    &resolved_color,
+                    // Display path consumes RGBA8_UNORM treated as
+                    // sRGB-encoded by the swapchain; #817 will replace this
+                    // hardcode with the negotiated VkColorSpaceKHR.
+                    TransferId::Srgb,
+                )
+                .map_err(|e| Error::GpuError(format!("color-converter prepare: {e}")))?;
+
+            recorder
+                .begin()
+                .map_err(|e| Error::GpuError(format!("recorder begin: {e}")))?;
+
+            // pre-compute: ring texture UNDEFINED → GENERAL.
+            recorder
+                .record_image_barrier(
+                    &ring_textures[ring_index],
+                    VulkanLayout::UNDEFINED,
+                    VulkanLayout::GENERAL,
+                    VulkanStage::NONE,
+                    VulkanStage::COMPUTE_SHADER,
+                    VulkanAccess::NONE,
+                    VulkanAccess::SHADER_WRITE,
+                )
+                .map_err(|e| Error::GpuError(format!("pre-compute image barrier: {e}")))?;
+
+            // pre-compute: imported DMA-BUF SSBO needs an explicit
+            // read-availability barrier (the V4L2 driver wrote it before we
+            // got the fd). HOST_VISIBLE SSBOs don't — coherent host writes
+            // need no GPU-side sync beyond the implicit submit-time barrier.
+            if use_dmabuf {
+                recorder
+                    .record_buffer_barrier(
+                        &dmabuf_imported_buffers[input_ssbo_index],
+                        VulkanStage::NONE,
+                        VulkanStage::COMPUTE_SHADER,
+                        VulkanAccess::NONE,
+                        VulkanAccess::SHADER_READ,
+                    )
+                    .map_err(|e| Error::GpuError(format!("pre-compute buffer barrier: {e}")))?;
             }
-        };
 
-        // Register the ring texture under the pixel buffer's pool_id so a
-        // same-process display resolves the texture via the same surface_id
-        // used for pixel-buffer IPC.
-        gpu_context.register_texture_with_layout(
-            &pool_id.to_string(),
-            ring_textures[ring_index].clone(),
-            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-        );
+            recorder
+                .record_dispatch(&kernel, dispatch_x, dispatch_y, 1)
+                .map_err(|e| Error::GpuError(format!("record dispatch: {e}")))?;
 
-        // ---- Step 3: Bind kernel via the color converter ----
-        let input_buffer = if use_dmabuf {
-            &dmabuf_imported_buffers[input_ssbo_index]
-        } else {
-            &input_storage_buffers[input_ssbo_index]
-        };
-        let kernel = match color_converter.prepare_buffer_to_image_storage(
-            input_buffer,
-            src_layout,
-            &ring_textures[ring_index],
-            &resolved_color,
-            // Display path consumes RGBA8_UNORM treated as sRGB-encoded by
-            // the swapchain; #817 will replace this hardcode with the
-            // negotiated VkColorSpaceKHR.
-            TransferId::Srgb,
-        ) {
-            Ok(k) => k,
-            Err(e) => {
-                tracing::error!(camera = camera_name, error = %e, "color_converter prepare failed");
-                requeue(v4l2_requeue_buf);
-                continue;
-            }
-        };
+            // post-compute: ring texture GENERAL → TRANSFER_SRC for the host
+            // pixel-buffer copy.
+            recorder
+                .record_image_barrier(
+                    &ring_textures[ring_index],
+                    VulkanLayout::GENERAL,
+                    VulkanLayout::TRANSFER_SRC_OPTIMAL,
+                    VulkanStage::COMPUTE_SHADER,
+                    VulkanStage::ALL_TRANSFER,
+                    VulkanAccess::SHADER_WRITE,
+                    VulkanAccess::TRANSFER_READ,
+                )
+                .map_err(|e| Error::GpuError(format!("post-compute image barrier: {e}")))?;
 
-        // ---- Step 4: Record + submit ----
-        if let Err(e) = recorder.begin() {
-            tracing::error!(camera = camera_name, error = %e, "recorder.begin failed");
-            requeue(v4l2_requeue_buf);
-            continue;
-        }
+            // Copy ring → pooled pixel buffer (cross-process IPC + CPU
+            // readback).
+            recorder
+                .record_copy_image_to_buffer(
+                    &ring_textures[ring_index],
+                    VulkanLayout::TRANSFER_SRC_OPTIMAL,
+                    &pooled_buffer,
+                    ImageCopyRegion::tightly_packed(width, height),
+                )
+                .map_err(|e| Error::GpuError(format!("copy image to pixel buffer: {e}")))?;
 
-        // pre-compute: ring texture UNDEFINED → GENERAL.
-        if let Err(e) = recorder.record_image_barrier(
-            &ring_textures[ring_index],
-            VulkanLayout::UNDEFINED,
-            VulkanLayout::GENERAL,
-            VulkanStage::NONE,
-            VulkanStage::COMPUTE_SHADER,
-            VulkanAccess::NONE,
-            VulkanAccess::SHADER_WRITE,
-        ) {
-            tracing::error!(camera = camera_name, error = %e, "pre-compute image barrier failed");
-            continue;
-        }
+            // post-copy: ring texture TRANSFER_SRC → SHADER_READ_ONLY
+            // (consumed by display); pixel buffer TRANSFER_WRITE → HOST_READ.
+            recorder
+                .record_image_barrier(
+                    &ring_textures[ring_index],
+                    VulkanLayout::TRANSFER_SRC_OPTIMAL,
+                    VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                    VulkanStage::ALL_TRANSFER,
+                    VulkanStage::FRAGMENT_SHADER,
+                    VulkanAccess::TRANSFER_READ,
+                    VulkanAccess::SHADER_READ,
+                )
+                .map_err(|e| Error::GpuError(format!("post-copy image barrier: {e}")))?;
+            recorder
+                .record_buffer_barrier(
+                    &pooled_buffer,
+                    VulkanStage::ALL_TRANSFER,
+                    VulkanStage::HOST,
+                    VulkanAccess::TRANSFER_WRITE,
+                    VulkanAccess::HOST_READ,
+                )
+                .map_err(|e| Error::GpuError(format!("pixel-buffer host-read barrier: {e}")))?;
 
-        // pre-compute: imported DMA-BUF SSBO needs an explicit
-        // read-availability barrier (the V4L2 driver wrote it before we got
-        // the fd). HOST_VISIBLE SSBOs don't — coherent host writes need no
-        // GPU-side sync beyond the implicit submit-time barrier.
-        if use_dmabuf
-            && let Err(e) = recorder.record_buffer_barrier(
-                &dmabuf_imported_buffers[input_ssbo_index],
-                VulkanStage::NONE,
-                VulkanStage::COMPUTE_SHADER,
-                VulkanAccess::NONE,
-                VulkanAccess::SHADER_READ,
-            )
-        {
-            tracing::error!(camera = camera_name, error = %e, "pre-compute buffer barrier failed");
-            continue;
-        }
+            // Submit + signal timeline value (= frame_num + 1 so consumers
+            // can wait on a monotonically advancing counter), then wait so
+            // the pixel buffer is host-readable before the IPC write below.
+            recorder
+                .submit_signaling_timeline(&camera_timeline, frame_num + 1)
+                .map_err(|e| Error::GpuError(format!("submit compute dispatch: {e}")))?;
+            camera_timeline
+                .wait(frame_num + 1, HOST_READBACK_WAIT_TIMEOUT_NS)
+                .map_err(|e| Error::GpuError(format!("host-readback timeline wait: {e}")))?;
 
-        if let Err(e) = recorder.record_dispatch(&kernel, dispatch_x, dispatch_y, 1) {
-            tracing::error!(camera = camera_name, error = %e, "record_dispatch failed");
-            continue;
-        }
+            Ok((surface_id, pooled_buffer))
+        })();
 
-        // post-compute: ring texture GENERAL → TRANSFER_SRC for the host
-        // pixel-buffer copy.
-        if let Err(e) = recorder.record_image_barrier(
-            &ring_textures[ring_index],
-            VulkanLayout::GENERAL,
-            VulkanLayout::TRANSFER_SRC_OPTIMAL,
-            VulkanStage::COMPUTE_SHADER,
-            VulkanStage::ALL_TRANSFER,
-            VulkanAccess::SHADER_WRITE,
-            VulkanAccess::TRANSFER_READ,
-        ) {
-            tracing::error!(camera = camera_name, error = %e, "post-compute image barrier failed");
-            continue;
-        }
-
-        // Copy ring → pooled pixel buffer (cross-process IPC + CPU readback).
-        let copy_region = ImageCopyRegion::tightly_packed(width, height);
-        if let Err(e) = recorder.record_copy_image_to_buffer(
-            &ring_textures[ring_index],
-            VulkanLayout::TRANSFER_SRC_OPTIMAL,
-            &pooled_buffer,
-            copy_region,
-        ) {
-            tracing::error!(camera = camera_name, error = %e, "record_copy_image_to_buffer failed");
-            continue;
-        }
-
-        // post-copy: ring texture TRANSFER_SRC → SHADER_READ_ONLY (consumed
-        // by display); pixel buffer TRANSFER_WRITE → HOST_READ.
-        if let Err(e) = recorder.record_image_barrier(
-            &ring_textures[ring_index],
-            VulkanLayout::TRANSFER_SRC_OPTIMAL,
-            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
-            VulkanStage::ALL_TRANSFER,
-            VulkanStage::FRAGMENT_SHADER,
-            VulkanAccess::TRANSFER_READ,
-            VulkanAccess::SHADER_READ,
-        ) {
-            tracing::error!(camera = camera_name, error = %e, "post-copy image barrier failed");
-            continue;
-        }
-        if let Err(e) = recorder.record_buffer_barrier(
-            &pooled_buffer,
-            VulkanStage::ALL_TRANSFER,
-            VulkanStage::HOST,
-            VulkanAccess::TRANSFER_WRITE,
-            VulkanAccess::HOST_READ,
-        ) {
-            tracing::error!(camera = camera_name, error = %e, "pixel-buffer host-read barrier failed");
-            continue;
-        }
-
-        // Submit + signal timeline value (= frame_num + 1 so consumers can
-        // wait on a monotonically advancing counter), then wait so the pixel
-        // buffer is host-readable before the IPC write below.
-        let timeline_signal_value = frame_num + 1;
-        if let Err(e) = recorder.submit_signaling_timeline(&camera_timeline, timeline_signal_value)
-        {
-            if frame_num == 0 {
-                tracing::error!(camera = camera_name, error = %e, "failed to submit compute dispatch");
-            }
-            requeue(v4l2_requeue_buf);
-            continue;
-        }
-        if let Err(e) = camera_timeline.wait(timeline_signal_value, u64::MAX) {
-            tracing::warn!(camera = camera_name, error = %e, "host-readback timeline wait failed");
-        }
-
-        // ---- Step 5: Re-queue V4L2 buffer in DMA-BUF mode ----
+        // The V4L2 buffer goes back to the driver on success and failure
+        // alike — a skipped requeue starves the DMA-BUF queue after
+        // V4L2_BUFFER_COUNT drops.
         requeue(v4l2_requeue_buf);
 
-        // ---- Step 6: Publish frame ----
-        // The pixel-buffer pool_id is the surface_id — the universal key:
-        // same-process texture cache, cross-process surface-share, and CPU
-        // readback all resolve through it.
+        let (surface_id, pooled_buffer) = match frame_result {
+            Ok(frame_surfaces) => frame_surfaces,
+            Err(frame_error) => {
+                // A begun-but-unsubmitted recording would fail the next
+                // begin(); reset it. Harmless when nothing is recording.
+                recorder.abort_recording();
+                consecutive_dropped_frames += 1;
+                if consecutive_dropped_frames == 1 || consecutive_dropped_frames.is_multiple_of(300)
+                {
+                    tracing::warn!(
+                        camera = camera_name,
+                        consecutive_dropped = consecutive_dropped_frames,
+                        error = %frame_error,
+                        "frame dropped"
+                    );
+                }
+                continue;
+            }
+        };
+        consecutive_dropped_frames = 0;
+
+        // Commit the frame: its signal (frame_num + 1) is on the timeline,
+        // so the next ring-slot wait can never outrun it.
+        frame_counter.fetch_add(1, Ordering::Relaxed);
+
         let frame = VideoFrame {
-            surface_id: pool_id.to_string(),
+            surface_id,
             width,
             height,
             timestamp_ns: MediaClock::now().as_nanos() as i64,
@@ -1136,15 +1173,8 @@ fn capture_thread_loop(
         }
     }
 
-    // The VIDIOC_EXPBUF fds were dup'd into Vulkan imports; the V4L2-side
-    // fds are ours to close.
-    for fd in &mut dmabuf_fds {
-        if *fd >= 0 {
-            unsafe { libc::close(*fd) };
-            *fd = -1;
-        }
-    }
-
+    // The imported fds are driver-owned (`vkImportMemoryFdInfoKHR` took
+    // ownership); dropping the buffers frees them through Vulkan.
     drop(dmabuf_imported_buffers);
     drop(ring_textures);
     drop(ring_produce_done);

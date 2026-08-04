@@ -406,7 +406,9 @@ impl DisplayWindowEventLoopHandler {
                 .color_info
                 .as_ref()
                 .map(ColorInfo::engine_color_traits);
-            let present_target = self.present_target.as_mut().expect("checked above");
+            let Some(present_target) = self.present_target.as_mut() else {
+                return;
+            };
             match present_target.recreate(self.width, self.height, color_traits.as_ref()) {
                 Ok(()) => {
                     self.current_frame_color_info = frame_bag.color_info.clone();
@@ -483,14 +485,17 @@ impl DisplayWindowEventLoopHandler {
                 return;
             }
         };
-        let frame_texture = registration.texture().clone();
+        let frame_texture = registration.texture();
         let source_layout = registration.current_layout();
 
-        let compositor = self.compositor.as_ref().expect("checked above");
         let scaling = self.scaling;
-        let present_target = self.present_target.as_mut().expect("checked above");
+        let (Some(present_target), Some(compositor)) =
+            (self.present_target.as_mut(), self.compositor.as_ref())
+        else {
+            return;
+        };
         let present_result = present_target.render_frame(|frame| {
-            compositor.compose_to_present_frame(frame, &frame_texture, source_layout, scaling)
+            compositor.compose_to_present_frame(frame, frame_texture, source_layout, scaling)
         });
         match present_result {
             Ok(_presented) => {

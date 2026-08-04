@@ -1418,6 +1418,24 @@ impl GpuContext {
         vsync: bool,
         color_traits: Option<&crate::core::color::ColorTraits>,
     ) -> Result<crate::vulkan::rhi::PresentTarget> {
+        let target =
+            self.create_vulkan_present_target(window, width, height, vsync, color_traits)?;
+        Ok(crate::vulkan::rhi::PresentTarget::from_target(target))
+    }
+
+    /// The host-side flavor of [`Self::create_present_target`]: mints the
+    /// raw [`crate::vulkan::rhi::VulkanPresentTarget`] without the ABI-safe
+    /// wrapper. In-process consumers (via
+    /// [`GpuContextFullAccess::create_present_target`]) drive it directly.
+    #[cfg(target_os = "linux")]
+    pub fn create_vulkan_present_target(
+        &self,
+        window: &(impl raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle),
+        width: u32,
+        height: u32,
+        vsync: bool,
+        color_traits: Option<&crate::core::color::ColorTraits>,
+    ) -> Result<crate::vulkan::rhi::VulkanPresentTarget> {
         tracing::debug!(
             rhi_op = "create_present_target",
             width,
@@ -1425,16 +1443,29 @@ impl GpuContext {
             vsync,
             "GpuContext::create_present_target"
         );
-        let vulkan_device = &self.device.inner;
-        let target = crate::vulkan::rhi::VulkanPresentTarget::new(
-            vulkan_device,
+        crate::vulkan::rhi::VulkanPresentTarget::new(
+            &self.device.inner,
             window,
             width,
             height,
             vsync,
             color_traits,
-        )?;
-        Ok(crate::vulkan::rhi::PresentTarget::from_target(target))
+        )
+    }
+
+    /// Build a [`crate::vulkan::rhi::VulkanPresentCompositor`] for
+    /// `attachment_format`.
+    #[cfg(target_os = "linux")]
+    pub fn create_present_compositor(
+        &self,
+        attachment_format: crate::core::rhi::TextureFormat,
+    ) -> Result<crate::vulkan::rhi::VulkanPresentCompositor> {
+        tracing::debug!(
+            rhi_op = "create_present_compositor",
+            ?attachment_format,
+            "GpuContext::create_present_compositor"
+        );
+        crate::vulkan::rhi::VulkanPresentCompositor::new(&self.device.inner, attachment_format)
     }
 
     /// Create a Vulkan video session — the privileged
@@ -3705,10 +3736,10 @@ impl GpuContextLimitedAccess {
 }
 
 impl GpuContextFullAccess {
-    /// Construct an OPAQUE_FD-exportable timeline semaphore (the FullAccess
-    /// entry point [`GpuContext::create_exportable_timeline_semaphore`]
-    /// documents). In-process (Boxed) only — the cdylib scope-token path has
-    /// no vtable slot for it.
+    /// Construct an OPAQUE_FD-exportable timeline semaphore — the
+    /// FullAccess-callable entry point over
+    /// [`GpuContext::create_exportable_timeline_semaphore`]. In-process
+    /// (Boxed) only — the cdylib scope-token path has no vtable slot for it.
     #[cfg(target_os = "linux")]
     pub fn create_exportable_timeline_semaphore(
         &self,
@@ -3738,8 +3769,7 @@ impl GpuContextFullAccess {
         color_traits: Option<&crate::core::color::ColorTraits>,
     ) -> Result<crate::vulkan::rhi::VulkanPresentTarget> {
         match self.handle_kind {
-            HandleKind::Boxed => crate::vulkan::rhi::VulkanPresentTarget::new(
-                &self.host_inner().device.inner,
+            HandleKind::Boxed => self.host_inner().create_vulkan_present_target(
                 window,
                 width,
                 height,
@@ -3764,10 +3794,9 @@ impl GpuContextFullAccess {
         attachment_format: crate::core::rhi::TextureFormat,
     ) -> Result<crate::vulkan::rhi::VulkanPresentCompositor> {
         match self.handle_kind {
-            HandleKind::Boxed => crate::vulkan::rhi::VulkanPresentCompositor::new(
-                &self.host_inner().device.inner,
-                attachment_format,
-            ),
+            HandleKind::Boxed => self
+                .host_inner()
+                .create_present_compositor(attachment_format),
             HandleKind::ScopeToken => Err(Error::GpuError(
                 "create_present_compositor: available in-process only".into(),
             )),
@@ -5680,6 +5709,41 @@ mod tests {
         assert_eq!(resolved.height(), 480);
 
         println!("Texture cache: register + resolve OK");
+    }
+
+    /// A same-process producer that publishes only a pixel buffer (no
+    /// texture registration) must resolve through the pool's local cache —
+    /// the cross-process surface store cannot serve OPAQUE_FD-backed buffers
+    /// to a host-side consumer at all. Mental-revert: removing the
+    /// pool-cache arm in `resolve_texture_registration_by_surface_id`'s
+    /// Path 3 makes this test fail with "No texture or pixel buffer found".
+    /// GPU-gated: skips when no device is present.
+    #[test]
+    #[cfg(target_os = "linux")]
+    fn same_process_pixel_buffer_resolves_without_the_surface_store() {
+        let gpu = match GpuContext::init_for_platform() {
+            Ok(g) => g,
+            Err(_) => {
+                println!("Skipping - no GPU device available");
+                return;
+            }
+        };
+
+        let (pool_id, pixel_buffer) = gpu
+            .acquire_pixel_buffer(16, 16, PixelFormat::Rgba32)
+            .expect("acquire pixel buffer");
+
+        let registration = gpu
+            .resolve_texture_registration_by_surface_id(&pool_id.to_string(), None, 16, 16)
+            .expect("pixel-buffer-only surface must resolve same-process");
+        assert_eq!(registration.texture().width(), 16);
+        assert_eq!(registration.texture().height(), 16);
+        assert_eq!(
+            registration.current_layout(),
+            VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+            "the refresh upload leaves the texture shader-readable"
+        );
+        drop(pixel_buffer);
     }
 
     /// #1262 OPAQUE_FD/CUDA producer surface — positive mint/export/wrap
