@@ -52,8 +52,10 @@ before implementation. Sessions implement the plan; they never make architecture
   for this session. Do not file tickets for it.
 - File an issue only when something blocks the current milestone. Non-blocking findings go in the
   PR description as a note, then we move on. Getting an MVP into users' hands beats completeness.
-- These directories are moving to `tatolab/streamlib-packages` (#1672); until then, permission
-  deny rules block reading them — that is intentional, not an obstacle to work around.
+- These directories are moving to `tatolab/streamlib-packages` (#1672). Reading them is allowed —
+  they are reference material for parity and completeness checks (how processors are actually
+  written, which API surfaces real code exercises). Editing stays deny-ruled: they are never bent
+  to make an engine change pass, and never treated as contract sources.
 
 Captured knowledge lives in `docs/learnings/`; design rationale in `docs/decisions/`. However, these may go stale and should be verified, not viewed as facts. It serves as a cache. Everything else is re-derived
 from code at need — do not create summary docs of what code already shows.
