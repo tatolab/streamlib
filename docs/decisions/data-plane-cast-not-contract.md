@@ -1,5 +1,11 @@
 # Data plane: cast, not contract
 
+> Partially superseded 2026-08-03 by `schema-free-ports.md`. The cast-at-read core and
+> the port-local channel policy stand. What no longer holds: unilateral type hints on a
+> port (there are no port type declarations at all), the advisory connect warning
+> (nothing to compare), the surviving inert wire tag (removed), and "concretely-typed"
+> as a qualifier on the delivery-profile rule (every input port must declare one).
+
 Rationale for the `[data-plane-cast-not-contract]` entries in
 `docs/plan/ARCHITECTURE.md` §Processor model & scheduling, decided 2026-07-29.
 

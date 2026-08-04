@@ -35,7 +35,23 @@ the component hosting it).
 on-disk registry. _Avoid_: "instance", "server".
 
 **Processor**: the unit of pipeline computation — a Python class (`@processor`) or a
-Rust type (`#[processor]`) — wired by ports.
+Rust type (`#[processor]`) — wired by ports. Its identity is the class itself, named by
+its fully-qualified import path. _Avoid_: an authored `@org/package/Type` name.
+
+**Display name**: an instance's human-facing label — passed at `add`, prefixing its log
+records, defaulting to the class's short name. Never an identity. _Avoid_: "processor
+name", "id".
+
+**Port**: a processor's named attachment point for a link. Declares name, description,
+and — on an input — delivery profile; never a type. _Avoid_: "channel" for the port
+itself.
+
+**Link**: one wired connection, output port → input port, carrying bags. _Avoid_:
+"edge", "connection", "pipe".
+
+**Delivery profile**: the consuming input port's policy for which bags it receives —
+`latest`, `every_sample`, or `lossless`. Declared explicitly on every input port; there
+is no default. _Avoid_: "QoS", "channel mode".
 
 **Engine primitive**: a hardware capability the engine owns and exposes through its
 handle-shaped surface — GPU memory import/export (DMA-BUF / OPAQUE_FD), the present
@@ -56,5 +72,11 @@ ADDED / MODIFIED / REMOVED.
 
 Retired by the 2026-08-02 pivot (see `docs/decisions/importable-python-library.md`):
 **Host** (loads-plugins sense), **Plugin**, **Plugin ABI**, **Package source**,
-**Link**, **Lag by design** — these named the deleted plugin-ABI / module-system world;
-do not reuse them.
+**Link** (the CLI verb — the local-dev install path, not the connection above),
+**Lag by design** — these named the deleted plugin-ABI / module-system world; do not
+reuse them.
+
+Retired by the 2026-08-03 schema-free-ports decision (see
+`docs/decisions/schema-free-ports.md`): **Schema**, **SchemaIdent**, **Schema
+agreement**, **Wire tag**, **Flow class** — the engine has no type layer, so these name
+nothing. Type information is the authoring language's and has no project-specific term.

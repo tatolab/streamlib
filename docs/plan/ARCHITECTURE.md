@@ -65,15 +65,29 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 ## Processor model & scheduling — IN-FLIGHT (→ schema-agreement-ripout, importable-python-library)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
-  (self-describing msgpack named map). Producer and consumer type declarations are
-  unilateral hints, never compared; consuming is a cast at read time. The engine
-  mediates no schema agreement: connect never refuses a link (advisory log at most),
-  no per-read tag matching, the wire tag is inert observability metadata, and versions
-  never appear at the code layer — resolution-time only. [data-plane-cast-not-contract]
+  (self-describing msgpack named map). The engine has no type layer: ports carry no
+  type declaration, connect never inspects or compares types and never warns, no read
+  path examines a tag, and the frame header carries no schema ident. Consuming is a
+  cast at read time; a mismatch surfaces as a decode failure at the consuming
+  processor. [schema-free-ports]
+- **DECIDED** — A port declares three things and nothing else: name, description, and
+  — on an input — delivery profile. Type information belongs to the authoring language
+  and never reaches the engine: in Python the port method's return annotation is the
+  declaration, read by humans and type checkers only, with `ctx.inputs.read(port)`
+  yielding the bag as a mapping and `read(port, into=T)` the opt-in strictness dial
+  (a TypedDict casts for free, a dataclass or pydantic model constructs and validates,
+  raising at read); in Rust the read target's `Deserialize` impl is the validation,
+  always on, with no free-cast mode. [schema-free-ports]
 - **DECIDED** — Channel policy (delivery profile, ring depth, overflow) is declared
-  port-locally at the consuming input port, never carried by schemas; a concretely-typed
-  input port with no declared delivery profile is a wiring error, not a silent default.
-  [data-plane-cast-not-contract]
+  port-locally at the consuming input port. Every input port declares its delivery
+  profile explicitly — there is no default and nothing left to infer one from, so an
+  input port without one is a wiring error. [schema-free-ports]
+- **DECIDED** — There is no schema layer: no JTD, no schema registry, no embedded
+  schemas, no codegen and no generated type classes, and no schema identity grammar
+  anywhere in the engine or the authoring surfaces. [schema-free-ports]
+- **DECIDED** — Port rendering in the control plane is name, description, delivery
+  profile, and direction; no port carries a type in `graph`, `tap`, or any snapshot.
+  [schema-free-ports]
 - **DECIDED** — Three execution modes (reactive / manual / continuous); one dedicated
   OS thread per processor with descriptor-driven priority (realtime / high / normal);
   synchronous lifecycle traits; Full/Limited capability typestate on the phase axis
@@ -94,11 +108,18 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   construction). Reload-on-save is a nicety, not MVP-gating, and when built it is
   processor-granular — stop the processor, re-import its class, re-instantiate,
   rewire its ports — never module-loading machinery. [importable-python-library]
-- **DECIDED** — JTD schemas are advisory, experimental type information behind a
-  rip-out-cheap seam — never a requirement for accessing data, in-graph or on the
-  wire, and never baked in as fundamental (replaceable wholesale, e.g. by Arrow,
-  without touching the data plane). No user-facing codegen verb.
-  [importable-python-library]
+- **DECIDED** — A processor's identity is its class, named by its fully-qualified
+  import path (`my_app.filters:BlurProcessor` in Python, the type path in Rust) —
+  derived mechanically, never authored, and the same string in the registry, in the
+  control plane's type field, and for helper-process placement. The entry file is
+  imported as a module, never executed as `__main__`, so identity never depends on how
+  the app was launched. The `@org/package/Type` identity grammar is deleted along with
+  the `@app/local` synthesis; `@processor` declares execution, interval, scheduling
+  priority, and description only. [schema-free-ports]
+- **DECIDED** — An instance's display name is the human-facing label — passed at `add`,
+  readable off the returned handle, and the prefix on its log records; it defaults to
+  the class's short name and the engine disambiguates duplicates within one graph.
+  Identity is never derived from it. [schema-free-ports]
 - **OPEN** — Additional execution flavors to scale processor count (lightweight /
   green-thread style): intended, do not build until designed; hard constraint — no new
   configuration dials. [execution-model]
@@ -141,6 +162,11 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   deadlines allow: camera-class sources and block-level audio are viable behind the
   SDK's GIL-release contract; vsync-paced present loops and device audio callbacks
   stay native, always. [importable-python-library]
+- **DECIDED** — One clock: every engine timestamp is the machine's monotonic clock
+  (`CLOCK_MONOTONIC` on Linux, `mach_absolute_time` on Apple) — the same epoch the
+  V4L2 and ALSA driver stamps carry, comparable across every node on a host. No
+  process-relative epoch anywhere, and each language exports exactly one name for it.
+  [one-monotonic-clock]
 - **OPEN** — Audio backend: PipeWire-native on Linux is the intent (the current
   CPAL → ALSA path is interim); do not build until a research memo settles it. A/V
   sync model likewise OPEN. The engine's decided audio surface is the clock
