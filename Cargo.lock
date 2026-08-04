@@ -5520,6 +5520,7 @@ dependencies = [
  "rmpv",
  "serde_json",
  "streamlib",
+ "streamlib-adapter-cuda",
  "streamlib-media-builtins",
  "tracing",
 ]

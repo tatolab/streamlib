@@ -18,7 +18,7 @@ use std::ptr::NonNull;
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::{Mutex, RwLock};
-use pyo3::exceptions::{PyNotImplementedError, PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyBufferError, PyNotImplementedError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use streamlib::sdk::context::{
@@ -30,6 +30,10 @@ use streamlib::sdk::rhi::{
 };
 
 use crate::python_bag_conversion::json_value_to_python_object;
+use crate::python_gpu_surface_pixel_exchange::{
+    CpuAccessGate, GpuSurfaceOwnedMemory, GpuSurfaceOwnedValue, HOST_VISIBLE_DLPACK_DEVICE,
+    exchange_shape_for_max_version, host_visible_dlpack_capsule, pixel_buffer_bytes_per_row,
+};
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 
@@ -118,94 +122,128 @@ fn read_limited_access_view<T: Send>(
 // GPU surface handle
 // =============================================================================
 
-// Owned purely so Drop releases the underlying resource on close; the first
-// read access lands with the pixel-exchange surface (#1710).
-#[expect(dead_code)]
-enum GpuSurfaceHandleValue {
-    OwnedPixelBuffer(PixelBuffer),
-    OwnedPooledTexture(PooledTextureHandle),
-}
-
 /// An owned GPU surface as seen from Python.
 ///
 /// Owning the engine value (rather than an id to re-resolve) is what keeps a
 /// pool slot or a pooled texture alive until `close()` / the context manager
-/// releases it.
+/// releases it. The value itself sits behind an `Arc` shared with every DLPack
+/// capsule minted from this handle, so a tensor Python is still holding keeps
+/// the memory addressable after the handle is closed.
 #[pyclass(name = "GpuSurfaceHandle", module = "streamlib", frozen)]
 pub(crate) struct PythonGpuSurfaceHandle {
     /// `None` for pooled textures — see [`Self::surface_id`].
     minted_surface_id: Option<String>,
-    /// Present only on a handle whose acquire checked the buffer into the
-    /// surface store. The check-in parks a strong clone in the store, so the
-    /// pool slot comes back only if release evicts it — a handle that skips
-    /// this pins its slot for the store's lifetime, and a resolved handle
-    /// must never release somebody else's surface.
-    surface_store_owing_a_release: Option<SurfaceStore>,
     surface_width: u32,
     surface_height: u32,
     surface_format_name: String,
-    owned_value: Mutex<Option<GpuSurfaceHandleValue>>,
+    owned_memory: Mutex<Option<Arc<GpuSurfaceOwnedMemory>>>,
+    cpu_access: CpuAccessGate,
 }
 
 impl PythonGpuSurfaceHandle {
+    fn new(
+        minted_surface_id: Option<String>,
+        surface_width: u32,
+        surface_height: u32,
+        surface_format_name: String,
+        owned_memory: Arc<GpuSurfaceOwnedMemory>,
+    ) -> Self {
+        Self {
+            minted_surface_id,
+            surface_width,
+            surface_height,
+            surface_format_name,
+            owned_memory: Mutex::new(Some(owned_memory)),
+            cpu_access: CpuAccessGate::new_unlocked(),
+        }
+    }
+
     fn from_acquired_pixel_buffer(
         minted_surface_id: String,
         surface_store_owing_a_release: Option<SurfaceStore>,
         pixel_buffer: PixelBuffer,
     ) -> Self {
-        Self {
-            minted_surface_id: Some(minted_surface_id),
-            surface_store_owing_a_release,
-            surface_width: pixel_buffer.width,
-            surface_height: pixel_buffer.height,
-            surface_format_name: pixel_format_name(pixel_buffer.format()).to_string(),
-            owned_value: Mutex::new(Some(GpuSurfaceHandleValue::OwnedPixelBuffer(pixel_buffer))),
-        }
+        let (width, height, format) = (
+            pixel_buffer.width,
+            pixel_buffer.height,
+            pixel_buffer.format(),
+        );
+        Self::new(
+            Some(minted_surface_id.clone()),
+            width,
+            height,
+            pixel_format_name(format).to_string(),
+            GpuSurfaceOwnedMemory::new(
+                GpuSurfaceOwnedValue::PixelBuffer(pixel_buffer),
+                surface_store_owing_a_release,
+                Some(minted_surface_id),
+            ),
+        )
     }
 
     fn from_resolved_pixel_buffer(surface_id: String, pixel_buffer: PixelBuffer) -> Self {
-        Self {
-            minted_surface_id: Some(surface_id),
-            surface_store_owing_a_release: None,
-            surface_width: pixel_buffer.width,
-            surface_height: pixel_buffer.height,
-            surface_format_name: pixel_format_name(pixel_buffer.format()).to_string(),
-            owned_value: Mutex::new(Some(GpuSurfaceHandleValue::OwnedPixelBuffer(pixel_buffer))),
-        }
+        let (width, height, format) = (
+            pixel_buffer.width,
+            pixel_buffer.height,
+            pixel_buffer.format(),
+        );
+        Self::new(
+            Some(surface_id),
+            width,
+            height,
+            pixel_format_name(format).to_string(),
+            // A resolved handle owes no release: it never checked the buffer
+            // in, so releasing would evict somebody else's surface.
+            GpuSurfaceOwnedMemory::new(
+                GpuSurfaceOwnedValue::PixelBuffer(pixel_buffer),
+                None,
+                None,
+            ),
+        )
     }
 
     fn from_pooled_texture(pooled_texture: PooledTextureHandle) -> Self {
-        Self {
-            minted_surface_id: None,
-            surface_store_owing_a_release: None,
-            surface_width: pooled_texture.width(),
-            surface_height: pooled_texture.height(),
-            surface_format_name: texture_format_name(pooled_texture.format()).to_string(),
-            owned_value: Mutex::new(Some(GpuSurfaceHandleValue::OwnedPooledTexture(
-                pooled_texture,
-            ))),
-        }
+        let (width, height, format) = (
+            pooled_texture.width(),
+            pooled_texture.height(),
+            pooled_texture.format(),
+        );
+        Self::new(
+            None,
+            width,
+            height,
+            texture_format_name(format).to_string(),
+            GpuSurfaceOwnedMemory::new(
+                GpuSurfaceOwnedValue::PooledTexture(pooled_texture),
+                None,
+                None,
+            ),
+        )
     }
 
-    /// Release the owned engine value and settle the check-in debt. Runs on
-    /// `close()` (detached) and on garbage collection; idempotent.
+    /// Drop this handle's share of the owned memory. The engine resource goes
+    /// away once the last outstanding DLPack capsule does too; idempotent.
     fn release_owned_engine_value(&self) {
-        let taken_value = self.owned_value.lock().take();
-        if taken_value.is_none() {
-            return;
+        drop(self.owned_memory.lock().take());
+    }
+
+    /// Borrow the shared memory anchor, or fail if the handle is closed.
+    fn owned_memory(&self) -> PyResult<Arc<GpuSurfaceOwnedMemory>> {
+        self.owned_memory.lock().clone().ok_or_else(|| {
+            PyRuntimeError::new_err("this surface is closed; acquire or resolve it again")
+        })
+    }
+
+    fn pixel_buffer_only(
+        owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+    ) -> PyResult<&'_ PixelBuffer> {
+        match owned_memory.owned_value() {
+            GpuSurfaceOwnedValue::PixelBuffer(pixel_buffer) => Ok(pixel_buffer),
+            GpuSurfaceOwnedValue::PooledTexture(_) => Err(PyNotImplementedError::new_err(
+                "this surface is a pooled texture: its pixels are device-local, so CPU access \
+                 goes through the texture export path rather than a host mapping",
+            )),
         }
-        if let (Some(store), Some(surface_id)) = (
-            self.surface_store_owing_a_release.as_ref(),
-            self.minted_surface_id.as_ref(),
-        ) {
-            // Best-effort, mirroring the subprocess release path: the store
-            // eviction is what frees the pool slot; the daemon half already
-            // treats a dropped connection as a full release.
-            if let Err(release_failure) = store.release(surface_id) {
-                tracing::debug!(%surface_id, %release_failure, "surface-store release failed");
-            }
-        }
-        drop(taken_value);
     }
 }
 
@@ -218,23 +256,17 @@ impl Drop for PythonGpuSurfaceHandle {
     }
 }
 
-fn pixel_exchange_not_yet_implemented_error() -> PyErr {
-    PyNotImplementedError::new_err(
-        "the pixel-exchange surface lands with ticket #1710 (DLPack first, DMA-BUF, numpy fallback)",
-    )
-}
-
 #[pymethods]
 impl PythonGpuSurfaceHandle {
     /// The id downstream processors resolve this surface by.
     #[getter]
     fn surface_id(&self) -> PyResult<String> {
-        // Pooled textures carry no id yet: surface-share registration for a
-        // texture needs host timeline semaphores, which ride the
-        // pixel-exchange work.
-        self.minted_surface_id
-            .clone()
-            .ok_or_else(pixel_exchange_not_yet_implemented_error)
+        self.minted_surface_id.clone().ok_or_else(|| {
+            PyNotImplementedError::new_err(
+                "this pooled texture carries no surface id: publishing one registers it with the \
+                 surface store, which a texture acquire does not do",
+            )
+        })
     }
 
     #[getter]
@@ -252,12 +284,36 @@ impl PythonGpuSurfaceHandle {
         self.surface_format_name.clone()
     }
 
+    /// Row pitch in bytes, including any padding the allocation carries.
+    #[getter]
+    fn bytes_per_row(&self, python: Python<'_>) -> PyResult<u64> {
+        let owned_memory = self.owned_memory()?;
+        python.detach(|| pixel_buffer_bytes_per_row(Self::pixel_buffer_only(&owned_memory)?))
+    }
+
+    /// Base address of the host mapping, or `0` when the surface is not
+    /// locked. Callers that want a typed view use `as_numpy` or `__dlpack__`;
+    /// this is the escape hatch for building one by hand.
+    #[getter]
+    fn base_address(&self, python: Python<'_>) -> PyResult<usize> {
+        if !self.cpu_access.is_locked() {
+            return Ok(0);
+        }
+        let owned_memory = self.owned_memory()?;
+        python.detach(|| {
+            Ok(Self::pixel_buffer_only(&owned_memory)?.plane_base_address(0) as usize)
+        })
+    }
+
     /// Release the underlying GPU resource. Idempotent.
     fn close(&self, python: Python<'_>) {
         // Releasing can return a slot to a pool under engine locks and talk to
         // the surface-share daemon — detached, like every potentially-blocking
         // engine call.
-        python.detach(|| self.release_owned_engine_value());
+        python.detach(|| {
+            self.cpu_access.unlock();
+            self.release_owned_engine_value();
+        });
     }
 
     fn __enter__(python_self: PyRef<'_, Self>) -> PyRef<'_, Self> {
@@ -270,20 +326,94 @@ impl PythonGpuSurfaceHandle {
         false
     }
 
-    fn as_numpy(&self) -> PyResult<()> {
-        Err(pixel_exchange_not_yet_implemented_error())
+    /// Open CPU access to the pixels, waiting for the producer to finish
+    /// writing them first.
+    #[pyo3(signature = (read_only = true))]
+    fn lock(&self, python: Python<'_>, read_only: bool) -> PyResult<()> {
+        let owned_memory = self.owned_memory()?;
+        python.detach(|| -> PyResult<()> {
+            let pixel_buffer = Self::pixel_buffer_only(&owned_memory)?;
+            if pixel_buffer.plane_base_address(0).is_null() {
+                return Err(PyBufferError::new_err(
+                    "surface has no host mapping; it is a DEVICE_LOCAL allocation",
+                ));
+            }
+            self.cpu_access.lock_for(read_only);
+            Ok(())
+        })
     }
 
-    fn __dlpack__(&self) -> PyResult<()> {
-        Err(pixel_exchange_not_yet_implemented_error())
+    /// Close CPU access. Idempotent.
+    #[pyo3(signature = (read_only = true))]
+    fn unlock(&self, python: Python<'_>, read_only: bool) {
+        let _ = read_only;
+        python.detach(|| self.cpu_access.unlock());
     }
 
-    fn lock(&self) -> PyResult<()> {
-        Err(pixel_exchange_not_yet_implemented_error())
+    /// The DLPack device this surface's tensors live on.
+    fn __dlpack_device__(&self) -> (i32, i32) {
+        (
+            HOST_VISIBLE_DLPACK_DEVICE.device_type as i32,
+            HOST_VISIBLE_DLPACK_DEVICE.device_id,
+        )
     }
 
-    fn unlock(&self) -> PyResult<()> {
-        Err(pixel_exchange_not_yet_implemented_error())
+    /// A DLPack capsule over the pixels — what `torch.from_dlpack` and
+    /// `numpy.from_dlpack` consume.
+    ///
+    /// The tensor may outlive this handle: it holds its own share of the
+    /// surface, so the pool slot is not reused until the tensor is released.
+    /// A consumer that negotiates `max_version >= (1, 0)` gets the versioned
+    /// exchange shape, which is the only one that can report the surface as
+    /// writable.
+    #[pyo3(signature = (stream = None, max_version = None, dl_device = None, copy = None))]
+    fn __dlpack__<'py>(
+        &self,
+        python: Python<'py>,
+        stream: Option<&Bound<'py, PyAny>>,
+        max_version: Option<(u32, u32)>,
+        dl_device: Option<&Bound<'py, PyAny>>,
+        copy: Option<bool>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        // Host-visible memory has no stream to order against. The other two
+        // are refused rather than ignored: silently exporting in place when a
+        // consumer asked for a copy or a different device would hand back a
+        // tensor aliasing memory it believes it owns.
+        let _ = stream;
+        if dl_device.is_some() {
+            return Err(PyValueError::new_err(
+                "this surface exports where it already lives; it cannot move to another device",
+            ));
+        }
+        if copy == Some(true) {
+            return Err(PyValueError::new_err(
+                "this surface exports in place; ask the consumer to copy the tensor instead",
+            ));
+        }
+        self.cpu_access.require_locked()?;
+        let owned_memory = self.owned_memory()?;
+        host_visible_dlpack_capsule(
+            python,
+            &owned_memory,
+            exchange_shape_for_max_version(max_version),
+            self.cpu_access.is_read_only(),
+        )
+    }
+
+    /// A numpy view of the pixels, sharing memory with the surface.
+    ///
+    /// `(height, width, channels)` `uint8` for the 8-bit formats, with the
+    /// allocation's row pitch preserved in the strides.
+    fn as_numpy<'py>(python_self: &Bound<'py, Self>) -> PyResult<Bound<'py, PyAny>> {
+        let python = python_self.py();
+        // Imported lazily so the wheel never takes a numpy dependency: a user
+        // reaching for a numpy view already has numpy.
+        let numpy = python.import("numpy").map_err(|_| {
+            PyRuntimeError::new_err("as_numpy needs numpy installed; `__dlpack__` works without it")
+        })?;
+        // `from_dlpack` consumes the exporting object and calls `__dlpack__`
+        // on it, so there is exactly one export path.
+        numpy.call_method1("from_dlpack", (python_self,))
     }
 }
 

@@ -8,6 +8,7 @@ use pyo3::prelude::*;
 
 mod python_added_processor;
 mod python_bag_conversion;
+mod python_gpu_surface_pixel_exchange;
 mod python_logging;
 mod python_monotonic_timer;
 mod python_native_builtin_blocks;

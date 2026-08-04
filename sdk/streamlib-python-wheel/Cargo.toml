@@ -47,6 +47,13 @@ streamlib = { path = "../streamlib-sdk", version = "0.11.1", default-features = 
 # construction.
 streamlib-media-builtins = { path = "../../runtime/streamlib-media-builtins", version = "0.11.1" }
 
+# The workspace's single DLPack home: the `#[repr(C)]` v0.8 ABI mirrors, the
+# managed-tensor builders, and the layout regression test that pins them. The
+# pixel-exchange surface builds its capsules here rather than growing a second
+# copy of the spec — the CUDA half of the same adapter is what the device-memory
+# export path uses.
+streamlib-adapter-cuda = { path = "../../adapters/streamlib-adapter-cuda", version = "0.11.1" }
+
 # The bag's value tree. A bag crosses into Python as ordinary Python data, and
 # `rmpv`'s native `bin` variant is what keeps a byte payload from decoding as
 # text on the way through.
