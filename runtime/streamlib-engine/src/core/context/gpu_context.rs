@@ -831,12 +831,20 @@ impl GpuContext {
         // silently render the previous frame.
         #[cfg(target_os = "linux")]
         {
-            let buffer = {
-                let surface_store = self.surface_store.lock().unwrap();
-                surface_store
-                    .as_ref()
-                    .and_then(|store| store.lookup_buffer(surface_id).ok())
-            };
+            // Same-process pool first: a producer that published only a
+            // pixel buffer (no texture registration) resolves through the
+            // pool's local cache without any socket round-trip — the
+            // cross-process store can't serve OPAQUE_FD-backed buffers to a
+            // host-side consumer at all.
+            let buffer = self
+                .pixel_buffer_pool_manager
+                .get_from_cache(surface_id)
+                .or_else(|| {
+                    let surface_store = self.surface_store.lock().unwrap();
+                    surface_store
+                        .as_ref()
+                        .and_then(|store| store.lookup_buffer(surface_id).ok())
+                });
             if let Some(buffer) = buffer {
                 let texture =
                     self.refresh_pixel_buffer_texture(surface_id, &buffer, width, height)?;

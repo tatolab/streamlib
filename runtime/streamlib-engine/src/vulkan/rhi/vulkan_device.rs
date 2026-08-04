@@ -542,15 +542,27 @@ impl HostVulkanDevice {
             .flags(instance_create_flags)
             .build();
 
-        let instance = unsafe { entry.create_instance(&instance_info, None) }
-            .map_err(|e| Error::GpuError(format!("Failed to create Vulkan instance: {e}")))?;
+        let instance = unsafe { entry.create_instance(&instance_info, None) }.map_err(|e| {
+            Error::GpuError(if e == vk::ErrorCode::INCOMPATIBLE_DRIVER {
+                "No usable Vulkan driver (ICD) was found. Install your GPU vendor's Vulkan \
+                 driver — the proprietary NVIDIA driver, or `mesa-vulkan-drivers` for \
+                 AMD/Intel — then check `vulkaninfo` runs."
+                    .to_string()
+            } else {
+                format!("Failed to create Vulkan instance: {e}")
+            })
+        })?;
 
         // 5. Select physical device
         let physical_devices = unsafe { instance.enumerate_physical_devices() }
             .map_err(|e| Error::GpuError(format!("Failed to enumerate devices: {e}")))?;
 
         if physical_devices.is_empty() {
-            return Err(Error::GpuError("No Vulkan devices found".into()));
+            return Err(Error::GpuError(
+                "A Vulkan loader is present but reports no GPU. Check that your GPU vendor's \
+                 Vulkan driver is installed and `vulkaninfo` lists a device."
+                    .into(),
+            ));
         }
 
         // Prefer discrete GPU, fall back to first available

@@ -148,17 +148,26 @@ impl ManualProcessor for CameraSource::Processor {
                 let devices = list_camera_capture_devices()?;
                 devices.first().map(|d| d.id.clone()).ok_or_else(|| {
                     Error::Configuration(
-                        "No V4L2 capture devices found. Check that a camera is connected.".into(),
+                        "No camera found: nothing under /dev/video* reports video capture. \
+                         Check the camera is plugged in (`ls /dev/video*`), or use \
+                         TestPatternSource to run without one."
+                            .into(),
                     )
                 })?
             }
         };
 
         let mut dev = v4l::Device::with_path(&device_path).map_err(|e| {
-            Error::Configuration(format!(
-                "Failed to open V4L2 device '{}': {}",
-                device_path, e
-            ))
+            Error::Configuration(if e.kind() == std::io::ErrorKind::PermissionDenied {
+                format!(
+                    "Camera '{}' exists but you don't have permission to open it. Add \
+                         yourself to the `video` group — `sudo usermod -aG video $USER` — \
+                         then log out and back in.",
+                    device_path
+                )
+            } else {
+                format!("Failed to open V4L2 device '{}': {}", device_path, e)
+            })
         })?;
 
         let caps = dev.query_caps().map_err(|e| {

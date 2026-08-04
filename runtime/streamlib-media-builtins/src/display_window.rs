@@ -179,6 +179,7 @@ impl ManualProcessor for DisplayWindow::Processor {
                     scaling: scaling.present_scaling_mode(),
                     current_frame_color_info: None,
                     inactive: false,
+                    last_unresolved_surface_id: None,
                 };
                 if let Err(e) = event_loop.run_app(&mut handler) {
                     tracing::error!(error = %e, "DisplayWindow: event loop exited with error");
@@ -246,6 +247,9 @@ struct DisplayWindowEventLoopHandler {
     /// Degraded mode: no surface could be created. The display then behaves
     /// as a sink — drains and discards — so upstream sees a live consumer.
     inactive: bool,
+    /// The last surface id that failed to resolve, so the failure warns once
+    /// per surface instead of once per redraw.
+    last_unresolved_surface_id: Option<String>,
 }
 
 impl ApplicationHandler for DisplayWindowEventLoopHandler {
@@ -460,13 +464,22 @@ impl DisplayWindowEventLoopHandler {
             frame_bag.width,
             frame_bag.height,
         ) {
-            Ok(registration) => registration,
+            Ok(registration) => {
+                self.last_unresolved_surface_id = None;
+                registration
+            }
             Err(e) => {
-                tracing::warn!(
-                    surface_id = %frame_bag.surface_id,
-                    error = %e,
-                    "DisplayWindow: failed to resolve frame texture"
-                );
+                // Redraws retry at frame rate; warn once per surface, not
+                // once per attempt.
+                if self.last_unresolved_surface_id.as_deref() != Some(frame_bag.surface_id.as_str())
+                {
+                    tracing::warn!(
+                        surface_id = %frame_bag.surface_id,
+                        error = %e,
+                        "DisplayWindow: failed to resolve frame texture (warning once per surface)"
+                    );
+                    self.last_unresolved_surface_id = Some(frame_bag.surface_id.clone());
+                }
                 return;
             }
         };
