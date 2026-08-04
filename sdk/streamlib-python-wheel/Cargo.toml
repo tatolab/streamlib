@@ -40,12 +40,12 @@ pyo3 = { version = "0.29.0", features = ["abi3-py310"] }
 
 # `default-features = false` drops the SDK's `auto-build` feature: the wheel
 # resolves nothing from source and links no build tooling.
-streamlib = { path = "../streamlib-sdk", version = "0.11.0", default-features = false }
+streamlib = { path = "../streamlib-sdk", version = "0.11.1", default-features = false }
 
 # The native media built-ins the wheel exports as pre-built named blocks
 # (`rt.add(TestPatternSource)`), statically linked so they are current by
 # construction.
-streamlib-media-builtins = { path = "../../runtime/streamlib-media-builtins", version = "0.11.0" }
+streamlib-media-builtins = { path = "../../runtime/streamlib-media-builtins", version = "0.11.1" }
 
 # The bag's value tree. A bag crosses into Python as ordinary Python data, and
 # `rmpv`'s native `bin` variant is what keeps a byte payload from decoding as
