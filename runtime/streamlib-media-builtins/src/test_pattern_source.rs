@@ -113,8 +113,7 @@ impl TestPatternSource::Processor {
             // of a freshly-acquired HOST_VISIBLE pixel buffer, valid for
             // `plane_size` bytes for the buffer's lifetime; the buffer is
             // held on `self` until teardown.
-            let plane =
-                unsafe { std::slice::from_raw_parts_mut(plane_pointer, expected_size) };
+            let plane = unsafe { std::slice::from_raw_parts_mut(plane_pointer, expected_size) };
             fill_smpte_bars_rgba(plane, width, height);
 
             tracing::info!(

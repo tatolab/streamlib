@@ -216,9 +216,14 @@ impl VulkanPresentCompositor {
             first_vertex: 0,
             first_instance: 0,
             viewport: Some(Viewport::full(destination_extent.0, destination_extent.1)),
-            scissor: Some(ScissorRect::full(destination_extent.0, destination_extent.1)),
+            scissor: Some(ScissorRect::full(
+                destination_extent.0,
+                destination_extent.1,
+            )),
         };
-        frame.recorder.record_draw(&self.kernel, frame_index, &draw)?;
+        frame
+            .recorder
+            .record_draw(&self.kernel, frame_index, &draw)?;
         frame.end_rendering()
     }
 

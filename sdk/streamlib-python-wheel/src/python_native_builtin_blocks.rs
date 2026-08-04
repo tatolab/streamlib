@@ -36,7 +36,7 @@ pub(crate) fn native_builtin_type_reference(
     python: Python<'_>,
     processor_class: &Bound<'_, PyAny>,
 ) -> Option<ProcessorTypeReference> {
-    if processor_class.is(&python.get_type::<PythonTestPatternSourceBlock>()) {
+    if processor_class.is(python.get_type::<PythonTestPatternSourceBlock>()) {
         return Some(ProcessorTypeReference::new(
             Org::new("tatolab").expect("static org ident"),
             Package::new("media-builtins").expect("static package ident"),
