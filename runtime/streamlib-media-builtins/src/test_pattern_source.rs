@@ -57,6 +57,9 @@ const SMPTE_BAR_COLORS_RGBA: [[u8; 4]; 8] = [
 /// Fill a tightly-packed RGBA plane with vertical SMPTE bars. Rows are
 /// `width * 4` bytes; a slice shorter than a whole row count fills fewer rows.
 pub(crate) fn fill_smpte_bars_rgba(plane: &mut [u8], width: u32) {
+    if width == 0 {
+        return;
+    }
     let bar_count = SMPTE_BAR_COLORS_RGBA.len() as u32;
     for row in plane.chunks_exact_mut(width as usize * 4) {
         for (x, pixel) in row.chunks_exact_mut(4).enumerate() {
@@ -158,10 +161,8 @@ impl ContinuousProcessor for TestPatternSource::Processor {
                 }
             }
         }
-        let pool_id = match &self.surface_state {
-            TestPatternSurfaceState::Ready { pool_id, .. } => pool_id,
-            TestPatternSurfaceState::AcquireFailedPermanently => return Ok(()),
-            TestPatternSurfaceState::NotYetAcquired => unreachable!("acquired or failed above"),
+        let TestPatternSurfaceState::Ready { pool_id, .. } = &self.surface_state else {
+            return Ok(());
         };
 
         let frame = VideoFrame {
