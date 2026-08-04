@@ -382,6 +382,9 @@ impl DisplayWindowEventLoopHandler {
         if !self.inputs.has_data("video") {
             return;
         }
+        // Not a redundant twin of the let-else below: this early-out runs
+        // before the destructive `latest` read, so a frame is not consumed
+        // when there is nothing to render it into.
         if self.present_target.is_none() || self.compositor.is_none() {
             return;
         }

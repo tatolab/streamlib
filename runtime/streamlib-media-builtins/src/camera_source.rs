@@ -845,6 +845,12 @@ fn capture_thread_loop(
 
     let mut ping_pong_index: usize = 0;
     let mut consecutive_dropped_frames: u64 = 0;
+    // The next timeline value to signal. Advances the moment a submit
+    // succeeds — even when the frame is later dropped on a readback timeout —
+    // because timeline signals must be strictly increasing and that submit's
+    // signal is already in flight. Distinct from `frame_counter`, which
+    // counts *published* frames only.
+    let mut next_timeline_signal_value: u64 = 1;
 
     while is_capturing.load(Ordering::Acquire) {
         // ---- Step 1: Acquire frame and select input SSBO ----
@@ -923,16 +929,16 @@ fn capture_thread_loop(
         }
 
         // Wait for the previous use of this ring texture slot to complete.
-        // Frame N uses slot N % RING_TEXTURE_COUNT; the previous use was
-        // frame N - RING_TEXTURE_COUNT which signaled timeline value
-        // (N - RING_TEXTURE_COUNT + 1). The first RING_TEXTURE_COUNT frames
-        // skip (initial timeline value 0). The counter advances only after a
-        // fully-submitted frame, so this wait always names a signal that is
-        // genuinely in flight; the bound turns a stalled GPU into dropped
-        // frames instead of a hung capture thread.
-        let frame_num = frame_counter.load(Ordering::Relaxed);
-        if frame_num >= RING_TEXTURE_COUNT as u64 {
-            let wait_value = frame_num - (RING_TEXTURE_COUNT as u64 - 1);
+        // Submission N (zero-based) uses slot N % RING_TEXTURE_COUNT; the
+        // previous use was submission N - RING_TEXTURE_COUNT, which signaled
+        // timeline value (N - RING_TEXTURE_COUNT + 1). The first
+        // RING_TEXTURE_COUNT submissions skip (initial timeline value 0).
+        // The signal counter advances only on a successful submit, so this
+        // wait always names a signal that is genuinely in flight; the bound
+        // turns a stalled GPU into dropped frames instead of a hung thread.
+        let submitted_frames = next_timeline_signal_value - 1;
+        if submitted_frames >= RING_TEXTURE_COUNT as u64 {
+            let wait_value = submitted_frames - (RING_TEXTURE_COUNT as u64 - 1);
             if let Err(e) = camera_timeline.wait(wait_value, RING_SLOT_WAIT_TIMEOUT_NS) {
                 tracing::warn!(
                     camera = camera_name,
@@ -944,7 +950,7 @@ fn capture_thread_loop(
             }
         }
 
-        let ring_index = (frame_num as usize) % RING_TEXTURE_COUNT;
+        let ring_index = (submitted_frames as usize) % RING_TEXTURE_COUNT;
 
         // The per-frame GPU unit is one fallible block so there is exactly
         // one failure exit: the V4L2 buffer is requeued and the recorder
@@ -1072,14 +1078,18 @@ fn capture_thread_loop(
                 )
                 .map_err(|e| Error::GpuError(format!("pixel-buffer host-read barrier: {e}")))?;
 
-            // Submit + signal timeline value (= frame_num + 1 so consumers
-            // can wait on a monotonically advancing counter), then wait so
-            // the pixel buffer is host-readable before the IPC write below.
+            // Submit + signal the next timeline value, then wait so the
+            // pixel buffer is host-readable before the IPC write below. The
+            // signal counter advances as soon as the submit lands — the
+            // signal is in flight even if the wait below times out, and a
+            // timeline value must never be signaled twice.
+            let signaled_value = next_timeline_signal_value;
             recorder
-                .submit_signaling_timeline(&camera_timeline, frame_num + 1)
+                .submit_signaling_timeline(&camera_timeline, signaled_value)
                 .map_err(|e| Error::GpuError(format!("submit compute dispatch: {e}")))?;
+            next_timeline_signal_value += 1;
             camera_timeline
-                .wait(frame_num + 1, HOST_READBACK_WAIT_TIMEOUT_NS)
+                .wait(signaled_value, HOST_READBACK_WAIT_TIMEOUT_NS)
                 .map_err(|e| Error::GpuError(format!("host-readback timeline wait: {e}")))?;
 
             Ok((surface_id, pooled_buffer))
@@ -1111,9 +1121,8 @@ fn capture_thread_loop(
         };
         consecutive_dropped_frames = 0;
 
-        // Commit the frame: its signal (frame_num + 1) is on the timeline,
-        // so the next ring-slot wait can never outrun it.
-        frame_counter.fetch_add(1, Ordering::Relaxed);
+        // Commit the published frame count.
+        let published_frames = frame_counter.fetch_add(1, Ordering::Relaxed);
 
         let frame = VideoFrame {
             surface_id,
@@ -1137,7 +1146,7 @@ fn capture_thread_loop(
         // write has been delivered into the link's ring.
         drop(pooled_buffer);
 
-        if frame_num == 0 {
+        if published_frames == 0 {
             let mode = if use_dmabuf {
                 "DMA-BUF zero-copy"
             } else {
@@ -1152,8 +1161,12 @@ fn capture_thread_loop(
                 ?fourcc,
                 "first frame captured via GPU compute",
             );
-        } else if frame_num.is_multiple_of(300) {
-            tracing::debug!(camera = camera_name, frame = frame_num, "frame milestone");
+        } else if published_frames.is_multiple_of(300) {
+            tracing::debug!(
+                camera = camera_name,
+                frame = published_frames,
+                "frame milestone"
+            );
         }
 
         if !use_dmabuf {
