@@ -228,7 +228,7 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
 
     /// Power-user accessor: the registered pixel-buffer Arc for a
     /// buffer-flavored surface. Used by the carve-out test in
-    /// `streamlib-adapter-cuda-helpers` to call
+    /// the carve-out tests to call
     /// `export_opaque_fd_memory()` on the underlying buffer; future
     /// cdylib work will route this through the surface-share service
     /// instead. Returns `None` when the surface isn't registered OR

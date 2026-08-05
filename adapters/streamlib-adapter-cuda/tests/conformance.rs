@@ -9,7 +9,7 @@
 //! pairs, parallel reads, `WriteContended` on contention, `try_acquire_*`
 //! returning `Ok(None)`, multi-thread Send+Sync). A green run confirms
 //! the trait shape is honored — it does NOT prove CUDA interop; that's
-//! the carve-out test in `streamlib-adapter-cuda-helpers`.
+//! the carve-out tests in this crate.
 //!
 //! The test allocates an OPAQUE_FD-exportable HOST_VISIBLE buffer
 //! (the resource shape CUDA imports). Even when CUDA isn't installed

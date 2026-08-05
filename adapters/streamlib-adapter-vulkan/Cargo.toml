@@ -45,6 +45,10 @@ streamlib-engine = { path = "../../runtime/streamlib-engine" }
 streamlib = { path = "../../sdk/streamlib-sdk" }
 streamlib-adapter-vulkan-helpers = { path = "../streamlib-adapter-vulkan-helpers" }
 serde = { workspace = true }
+# Serialize Vulkan-device-touching tests; concurrent `VkDevice` /
+# `VkInstance` creation on NVIDIA Linux trips the dual-device crash
+# documented in `docs/learnings/nvidia-dual-vulkan-device-crash.md`.
+serial_test = "3.2"
 
 [[test]]
 name = "conformance"
@@ -79,6 +83,10 @@ path = "tests/subprocess_crash_mid_write.rs"
 [[test]]
 name = "persistent_command_pool"
 path = "tests/persistent_command_pool.rs"
+
+[[test]]
+name = "consumer_carve_out"
+path = "tests/consumer_carve_out.rs"
 
 # Subprocess test helper lives in `streamlib-adapter-vulkan-helpers`
 # (a dev-dependency of this crate). Tests reach it via

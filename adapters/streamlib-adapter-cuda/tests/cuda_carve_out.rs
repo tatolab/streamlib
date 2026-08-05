@@ -29,7 +29,7 @@
 //!
 //! Test gating:
 //! - `#[cfg(feature = "cuda")]` — the test is only compiled when the
-//!   `cuda` feature on `streamlib-adapter-cuda-helpers` is enabled.
+//!   `cuda` feature on `streamlib-adapter-cuda` is enabled.
 //!   Default-OFF keeps `cargo test` working for contributors without
 //!   `libcuda.so`.
 //! - `cudarc::runtime::sys::is_culib_present()` — runtime probe for
