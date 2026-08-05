@@ -49,8 +49,9 @@ for these is **app-process**:
 ## Enforcement
 
 - `cargo xtask check-no-in-process-placement` gates the vocabulary once its ticket lands
-  (commissioned by the 2026-08-04 pivot; a behavioural test — the parent never imports a
-  user processor's module — lands with #1714). Until the code that hosts in-process is
+  (commissioned by the 2026-08-04 pivot; a behavioural test — beyond the app's own
+  registration import, `rt.add` and running bags add nothing to the parent's
+  `sys.modules`, and the processor reports a child pid — lands with #1714). Until the code that hosts in-process is
   deleted by #1714, the current tree is transitional debt, never evidence of intent — never
   read the tree as the model.
 - `review-pr` and `rust-craftsmanship-reviewer` return `blocker` on any STOP-WORK shape.
