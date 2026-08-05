@@ -55,11 +55,28 @@ jobs:
           # The engine's build.rs compiles GLSL and generates JTD bindings, so
           # the container needs the same toolchain the test workflows install.
           before-script-linux: |
+            set -euo pipefail
             dnf install -y pkgconfig protobuf-compiler clang-devel \
-              vulkan-headers vulkan-loader-devel glslang python3-devel unzip
+              vulkan-headers vulkan-loader-devel python3-devel unzip \
+              cmake ninja-build git
             curl -sSL https://github.com/jsontypedef/json-typedef-codegen/releases/download/v0.4.1/x86_64-unknown-linux-gnu.zip -o /tmp/jtd-codegen.zip
             unzip -q /tmp/jtd-codegen.zip -d /tmp/jtd-codegen
             install -m 0755 /tmp/jtd-codegen/jtd-codegen /usr/local/bin/jtd-codegen
+            # `glslc`, which the engine's build.rs invokes to compile GLSL.
+            # Built from source rather than installed: AlmaLinux 8 — the
+            # manylinux_2_28 base — packages no glslc in base or EPEL (it lives
+            # in shaderc, not glslang, and neither is there), and Google's own
+            # prebuilt link currently 404s. Pinned so a release build is
+            # reproducible; ~4 minutes with ninja.
+            git clone --depth 1 --branch v2026.3 https://github.com/google/shaderc /tmp/shaderc
+            cd /tmp/shaderc
+            ./utils/git-sync-deps
+            cmake -GNinja -B build -DCMAKE_BUILD_TYPE=Release \
+              -DSHADERC_SKIP_TESTS=ON -DSHADERC_SKIP_EXAMPLES=ON \
+              -DSHADERC_SKIP_COPYRIGHT_CHECK=ON
+            ninja -C build glslc_exe
+            install -m 0755 build/glslc/glslc /usr/local/bin/glslc
+            glslc --version
 
       # A wheel that cannot be installed and cannot answer `--help` is not a
       # release artifact. This is the first moment the console script exists as
