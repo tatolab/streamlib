@@ -3,7 +3,7 @@
 
 //! `streamlib_adapter_skia::tests::subprocess_crash_mid_write` —
 //! exercises the public `SubprocessCrashHarness` from
-//! `streamlib-adapter-abi::testing` against a subprocess that has
+//! `streamlib-surface-adapter::testing` against a subprocess that has
 //! built a full `SkiaGlContext` on top of the OpenGL adapter, drawn
 //! into a Skia canvas, and then `abort()`s before its drop hook can
 //! call `flush_and_submit_surface`.
@@ -41,8 +41,8 @@ use streamlib::sdk::engine::HostTextureExt;
 
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::rhi::TextureFormat;
-use streamlib_adapter_abi::testing::{CrashTiming, SubprocessCrashHarness};
 use streamlib_adapter_opengl::DRM_FORMAT_ARGB8888;
+use streamlib_surface_adapter::testing::{CrashTiming, SubprocessCrashHarness};
 
 fn try_init_gpu() -> Option<GpuContext> {
     let _ = tracing_subscriber::fmt()

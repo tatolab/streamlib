@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `streamlib_adapter_skia::tests::conformance_gl` — runs the public
-//! `run_conformance` suite from `streamlib-adapter-abi` against the
+//! `run_conformance` suite from `streamlib-surface-adapter` against the
 //! GL-backed Skia adapter wired to a host-allocated DMA-BUF render-
 //! target image and a real surfaceless EGL+GL context.
 //!
@@ -21,15 +21,15 @@ use streamlib::sdk::engine::HostTextureExt;
 
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::rhi::{Texture, TextureFormat};
-use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
-use streamlib_adapter_abi::{
-    AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId, SurfaceSyncState,
-    SurfaceTransportHandle, SurfaceUsage,
-};
 use streamlib_adapter_opengl::{
     DRM_FORMAT_ARGB8888, EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter,
 };
 use streamlib_adapter_skia::SkiaGlSurfaceAdapter;
+use streamlib_surface_adapter::testing::{empty_surface, run_conformance};
+use streamlib_surface_adapter::{
+    AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId, SurfaceSyncState,
+    SurfaceTransportHandle, SurfaceUsage,
+};
 
 fn try_init() -> Option<(GpuContext, Arc<EglRuntime>)> {
     let _ = tracing_subscriber::fmt()
@@ -71,7 +71,7 @@ impl<'a> ConformanceFactory<'a> {
     }
 }
 
-impl streamlib_adapter_abi::testing::ConformanceSurfaceFactory for ConformanceFactory<'_> {
+impl streamlib_surface_adapter::testing::ConformanceSurfaceFactory for ConformanceFactory<'_> {
     fn make(&self, id: SurfaceId) -> StreamlibSurface {
         let texture = self
             .gpu

@@ -1294,7 +1294,7 @@ mod tests {
 
     /// `drm_format_modifier` and `plane_strides` ride along through the
     /// register/lookup path. The host adapter writes the modifier into the
-    /// `SurfaceTransportHandle` field defined in `streamlib-adapter-abi`; the
+    /// `SurfaceTransportHandle` field defined in `streamlib-surface-adapter`; the
     /// consumer reads it from the lookup response and passes it to
     /// `EGL_DMA_BUF_PLANE0_MODIFIER_LO/HI_EXT` (or the Vulkan equivalent).
     /// A round-trip through the wire is the test that locks the contract.

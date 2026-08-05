@@ -29,7 +29,7 @@
 //!
 //! Test gating:
 //! - `#[cfg(feature = "cuda")]` — the test is only compiled when the
-//!   `cuda` feature on `streamlib-adapter-cuda-helpers` is enabled.
+//!   `cuda` feature on `streamlib-adapter-cuda` is enabled.
 //!   Default-OFF keeps `cargo test` working for contributors without
 //!   `libcuda.so`.
 //! - `cudarc::runtime::sys::is_culib_present()` — runtime probe for
@@ -51,10 +51,10 @@ use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::host_rhi::{
     HostVulkanBuffer, HostVulkanDevice, HostVulkanTimelineSemaphore,
 };
-use streamlib_adapter_abi::{
+use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
+use streamlib_surface_adapter::{
     StreamlibSurface, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle, SurfaceUsage,
 };
-use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
 
 const W: u32 = 32;
 const H: u32 = 32;
@@ -164,7 +164,7 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
     // the underlying mapped pointer (the view doesn't expose mapped
     // bytes yet — that's the cuda-typed view work in #589/#590).
     {
-        use streamlib_adapter_abi::SurfaceAdapter as _;
+        use streamlib_surface_adapter::SurfaceAdapter as _;
         let _wguard = adapter.acquire_write(&surface).expect("host acquire_write");
         // SAFETY: `pixel_buffer` is HOST_VISIBLE | HOST_COHERENT and the
         // mapped pointer stays valid for the buffer's lifetime; we hold
@@ -182,7 +182,7 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
     // pattern. The acquire waits on timeline=1 (already signaled)
     // and returns immediately.
     {
-        use streamlib_adapter_abi::SurfaceAdapter as _;
+        use streamlib_surface_adapter::SurfaceAdapter as _;
         let _rguard = adapter
             .acquire_read(&surface)
             .expect("host acquire_read sanity");
@@ -406,10 +406,10 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
 
     // The `_v2` suffixed name is the canonical extern in cuda
     // 11.4..12.9 bindings; the unsuffixed `cudaWaitExternalSemaphoresAsync`
-    // is gated on cuda-13xxx. We pin to `cuda-12090` (see helpers
-    // Cargo.toml) so the `_v2` symbol is the right one. The runtime
-    // libcudart on cuda 13.x continues to export `_v2` for ABI
-    // stability, so the dlopen path resolves.
+    // is gated on cuda-13xxx. `cudarc` is pinned to the `cuda-12060`
+    // floor (see the workspace Cargo.toml) so the `_v2` symbol is the
+    // right one. The runtime libcudart on cuda 13.x continues to export
+    // `_v2` for ABI stability, so the dlopen path resolves.
     let wait_result = unsafe {
         sys::cudaWaitExternalSemaphoresAsync_v2(&ext_sem, &wait_params, 1, stream).result()
     };

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 /**
- * Deno mirror of streamlib_adapter_abi.
+ * Deno mirror of streamlib_surface_adapter.
  *
  * Provides SurfaceFormat / SurfaceUsage / AccessMode constants, the
  * SurfaceAdapter interface (scoped acquireRead / acquireWrite returning
@@ -129,7 +129,7 @@ export type AccessMode = (typeof AccessMode)[keyof typeof AccessMode];
 /**
  * Byte offsets and sizes of the `#[repr(C)] StreamlibSurface` struct
  * and its components. Locked against the Rust unit test in
- * adapters/streamlib-adapter-abi/src/surface.rs and the Python mirror.
+ * adapters/streamlib-surface-adapter/src/surface.rs and the Python mirror.
  *
  * Subprocess adapters use these to read fields out of a surface
  * descriptor passed across FFI via Deno.UnsafePointerView.

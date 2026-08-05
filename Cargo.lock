@@ -4897,10 +4897,6 @@ dependencies = [
 name = "streamlib-adapter-abi"
 version = "0.13.2"
 dependencies = [
- "bitflags 2.11.0",
- "libc",
- "parking_lot",
- "thiserror 2.0.18",
  "tracing",
 ]
 
@@ -4911,12 +4907,14 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "serial_test",
  "streamlib",
  "streamlib-adapter-abi",
  "streamlib-adapter-cpu-readback-abi",
  "streamlib-adapter-cpu-readback-helpers",
  "streamlib-consumer-rhi",
  "streamlib-engine",
+ "streamlib-surface-adapter",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
  "thiserror 2.0.18",
@@ -4937,7 +4935,6 @@ dependencies = [
  "serde_json",
  "serial_test",
  "streamlib",
- "streamlib-adapter-abi",
  "streamlib-adapter-cpu-readback",
  "streamlib-consumer-rhi",
  "streamlib-engine",
@@ -4951,14 +4948,17 @@ dependencies = [
 name = "streamlib-adapter-cuda"
 version = "0.13.2"
 dependencies = [
+ "cudarc",
  "dlpark",
  "libc",
+ "serde_json",
+ "serial_test",
  "streamlib",
  "streamlib-adapter-abi",
  "streamlib-adapter-cuda-abi",
- "streamlib-adapter-cuda-helpers",
  "streamlib-consumer-rhi",
  "streamlib-engine",
+ "streamlib-surface-adapter",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
  "thiserror 2.0.18",
@@ -4969,25 +4969,6 @@ dependencies = [
 [[package]]
 name = "streamlib-adapter-cuda-abi"
 version = "0.13.2"
-
-[[package]]
-name = "streamlib-adapter-cuda-helpers"
-version = "0.13.2"
-dependencies = [
- "cudarc",
- "libc",
- "serde_json",
- "serial_test",
- "streamlib",
- "streamlib-adapter-abi",
- "streamlib-adapter-cuda",
- "streamlib-consumer-rhi",
- "streamlib-engine",
- "streamlib-surface-client",
- "tatolab-vulkanalia",
- "tracing",
- "tracing-subscriber",
-]
 
 [[package]]
 name = "streamlib-adapter-opengl"
@@ -5006,6 +4987,7 @@ dependencies = [
  "streamlib-adapter-vulkan",
  "streamlib-consumer-rhi",
  "streamlib-engine",
+ "streamlib-surface-adapter",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
  "thiserror 2.0.18",
@@ -5034,6 +5016,7 @@ dependencies = [
  "streamlib-adapter-vulkan",
  "streamlib-consumer-rhi",
  "streamlib-engine",
+ "streamlib-surface-adapter",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
  "thiserror 2.0.18",
@@ -5052,12 +5035,14 @@ dependencies = [
  "libc",
  "serde",
  "serde_json",
+ "serial_test",
  "streamlib",
  "streamlib-adapter-abi",
  "streamlib-adapter-vulkan-abi",
  "streamlib-adapter-vulkan-helpers",
  "streamlib-consumer-rhi",
  "streamlib-engine",
+ "streamlib-surface-adapter",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
  "thiserror 2.0.18",
@@ -5078,7 +5063,6 @@ dependencies = [
  "serde_json",
  "serial_test",
  "streamlib",
- "streamlib-adapter-abi",
  "streamlib-adapter-vulkan",
  "streamlib-consumer-rhi",
  "streamlib-engine",
@@ -5206,14 +5190,13 @@ dependencies = [
  "rmp-serde",
  "serde",
  "serde_json",
- "streamlib-adapter-abi",
  "streamlib-adapter-cpu-readback",
  "streamlib-adapter-cuda",
  "streamlib-adapter-opengl",
  "streamlib-adapter-vulkan",
  "streamlib-consumer-rhi",
  "streamlib-ipc-types",
- "streamlib-plugin-abi",
+ "streamlib-surface-adapter",
  "streamlib-surface-client",
  "tracing",
  "tracing-subscriber",
@@ -5283,6 +5266,7 @@ dependencies = [
  "streamlib-plugin-abi",
  "streamlib-processor-extract",
  "streamlib-processor-schema",
+ "streamlib-surface-adapter",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
  "tatolab-vulkanalia-vma",
@@ -5335,6 +5319,7 @@ name = "streamlib-ipc-types"
 version = "0.13.2"
 dependencies = [
  "iceoryx2",
+ "tracing",
 ]
 
 [[package]]
@@ -5431,7 +5416,6 @@ dependencies = [
 name = "streamlib-plugin-abi"
 version = "0.13.2"
 dependencies = [
- "streamlib-ipc-types",
  "tracing",
 ]
 
@@ -5497,14 +5481,13 @@ dependencies = [
  "rmp-serde",
  "serde",
  "serde_json",
- "streamlib-adapter-abi",
  "streamlib-adapter-cpu-readback",
  "streamlib-adapter-cuda",
  "streamlib-adapter-opengl",
  "streamlib-adapter-vulkan",
  "streamlib-consumer-rhi",
  "streamlib-ipc-types",
- "streamlib-plugin-abi",
+ "streamlib-surface-adapter",
  "streamlib-surface-client",
  "tracing",
  "tracing-subscriber",
@@ -5538,6 +5521,17 @@ dependencies = [
  "streamlib",
  "streamlib-api-server",
  "tokio",
+ "tracing",
+]
+
+[[package]]
+name = "streamlib-surface-adapter"
+version = "0.13.2"
+dependencies = [
+ "bitflags 2.11.0",
+ "libc",
+ "parking_lot",
+ "thiserror 2.0.18",
  "tracing",
 ]
 

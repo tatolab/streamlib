@@ -6,7 +6,7 @@
 //! enforces at the API level.
 
 use khronos_egl as egl;
-use streamlib_adapter_abi::{SurfaceId, SurfaceRegistration};
+use streamlib_surface_adapter::{SurfaceId, SurfaceRegistration};
 
 #[allow(dead_code)] // referenced via SurfaceState; kept private to the adapter
 type EglImage = egl::Image;

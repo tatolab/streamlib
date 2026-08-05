@@ -619,18 +619,19 @@ pub unsafe extern "C" fn slpn_input_read(
             continue;
         }
         let queue = &mut state.pending;
-        if queue.is_empty() {
-            continue;
-        }
 
         // Grow-and-retry: a publisher under PowerOfTwo growth can deliver a frame
         // larger than the caller's buffer. Peek the frame that would be returned
         // WITHOUT consuming it; if it does not fit, report its length and leave it
-        // in place so the SDK can resize and read again. Nothing is dropped.
-        let required = streamlib_plugin_abi::next_read_required_len(
+        // in place so the SDK can resize and read again. Nothing is dropped. An
+        // empty queue is this subscriber declining the read — fan-in means the
+        // next one may satisfy it.
+        let Some(required) = streamlib_ipc_types::next_read_required_len(
             queue,
             read_mode == READ_MODE_READ_NEXT_IN_ORDER,
-        );
+        ) else {
+            continue;
+        };
         if required > buf_len as usize {
             if !out_len.is_null() {
                 unsafe { *out_len = required as u32 };
@@ -931,7 +932,7 @@ pub unsafe extern "C" fn slpn_output_write(
         &mut state.refused_over_ceiling_count,
         &mut state.current_slot_capacity_bytes,
     );
-    streamlib_plugin_abi::emit_channel_egress_admission_tracing(
+    streamlib_ipc_types::emit_channel_egress_admission_tracing(
         Some(("slpn", &ctx.processor_id)),
         streamlib_ipc_types::ChannelTrustTier::UntrustedSession,
         &state.channel_service_name,
@@ -3357,13 +3358,13 @@ mod opengl {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
-    use streamlib_adapter_abi::{
-        StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
-        SurfaceTransportHandle, SurfaceUsage,
-    };
     use streamlib_adapter_opengl::{
         DRM_FORMAT_ABGR8888, DRM_FORMAT_ARGB8888, EglRuntime, HostSurfaceRegistration,
         OpenGlSurfaceAdapter, OwnedMakeCurrentGuard,
+    };
+    use streamlib_surface_adapter::{
+        StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
+        SurfaceTransportHandle, SurfaceUsage,
     };
 
     use super::gpu_surface::SurfaceHandle;
@@ -3875,16 +3876,16 @@ mod vulkan {
     use std::os::unix::io::RawFd;
     use std::sync::{Arc, Mutex};
 
-    use streamlib_adapter_abi::{
-        StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
-        SurfaceTransportHandle, SurfaceUsage,
-    };
     use streamlib_adapter_vulkan::{
         HostSurfaceRegistration, VulkanLayout, VulkanSurfaceAdapter, raw_handles,
     };
     use streamlib_consumer_rhi::{
         ConsumerMarker, ConsumerVulkanDevice, ConsumerVulkanTexture,
         ConsumerVulkanTimelineSemaphore, TextureFormat,
+    };
+    use streamlib_surface_adapter::{
+        StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
+        SurfaceTransportHandle, SurfaceUsage,
     };
 
     use super::gpu_surface::SurfaceHandle;
@@ -3931,10 +3932,10 @@ mod vulkan {
     }
 
     /// Per-image VkImageInfo descriptor for a registered surface.
-    /// Mirrors `streamlib_adapter_abi::VkImageInfo` field-for-field —
+    /// Mirrors `streamlib_surface_adapter::VkImageInfo` field-for-field —
     /// kept as a separate `#[repr(C)]` here so the cdylib's ABI
     /// surface stays self-contained (the SDK doesn't need to mirror
-    /// `streamlib-adapter-abi` to read this).
+    /// `streamlib-surface-adapter` to read this).
     ///
     /// Per-image (fixed at registration), NOT per-acquire. Polyglot
     /// Skia wrappers call `slpn_vulkan_get_image_info` once per
@@ -4427,7 +4428,7 @@ mod vulkan {
         );
         match kind {
             AcquireKind::Write => {
-                use streamlib_adapter_abi::VulkanWritable;
+                use streamlib_surface_adapter::VulkanWritable;
                 match rt.adapter.acquire_write(&surface) {
                     Ok(g) => {
                         out_view.vk_image = g.view().vk_image().0;
@@ -4444,7 +4445,7 @@ mod vulkan {
                 }
             }
             AcquireKind::Read => {
-                use streamlib_adapter_abi::VulkanWritable;
+                use streamlib_surface_adapter::VulkanWritable;
                 match rt.adapter.acquire_read(&surface) {
                     Ok(g) => {
                         out_view.vk_image = g.view().vk_image().0;
@@ -4492,10 +4493,6 @@ mod cpu_readback {
     use std::os::unix::io::RawFd;
     use std::sync::{Arc, Mutex};
 
-    use streamlib_adapter_abi::{
-        AdapterError, StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
-        SurfaceTransportHandle, SurfaceUsage,
-    };
     use streamlib_adapter_cpu_readback::{
         CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter, CpuReadbackTriggerContext,
         HostSurfaceRegistration, VulkanLayout,
@@ -4503,6 +4500,10 @@ mod cpu_readback {
     use streamlib_consumer_rhi::{
         ConsumerMarker, ConsumerVulkanBuffer, ConsumerVulkanDevice,
         ConsumerVulkanTimelineSemaphore, PixelFormat,
+    };
+    use streamlib_surface_adapter::{
+        AdapterError, StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
+        SurfaceTransportHandle, SurfaceUsage,
     };
 
     use super::gpu_surface::SurfaceHandle;
@@ -4540,7 +4541,7 @@ mod cpu_readback {
     pub struct SlpnCpuReadbackView {
         pub width: u32,
         pub height: u32,
-        /// Mirrors `streamlib_adapter_abi::SurfaceFormat as u32`
+        /// Mirrors `streamlib_surface_adapter::SurfaceFormat as u32`
         /// (Bgra8 = 0, Rgba8 = 1, Nv12 = 2).
         pub format: u32,
         pub plane_count: u32,
@@ -5314,10 +5315,6 @@ mod cuda {
 
     use cudarc::runtime::result::external_memory;
     use cudarc::runtime::sys;
-    use streamlib_adapter_abi::{
-        StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
-        SurfaceTransportHandle, SurfaceUsage,
-    };
     use streamlib_adapter_cuda::dlpack::{
         self, CapsuleOwner, Device as DlpackDevice, DeviceType as DlpackDeviceType,
         ManagedTensor as DlpackManagedTensor,
@@ -5328,6 +5325,10 @@ mod cuda {
     use streamlib_consumer_rhi::{
         ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTexture,
         ConsumerVulkanTimelineSemaphore, TextureFormat,
+    };
+    use streamlib_surface_adapter::{
+        StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
+        SurfaceTransportHandle, SurfaceUsage,
     };
 
     use super::gpu_surface::SurfaceHandle;

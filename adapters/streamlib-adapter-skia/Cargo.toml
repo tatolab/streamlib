@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-adapter-skia"
-description = "Skia surface adapter (Linux). Customer sees skia::Surface directly — never GrVkImageInfo, GrBackendTexture, or VkImageLayout. Composes on streamlib-adapter-vulkan via the VulkanWritable / VulkanImageInfoExt capability traits from streamlib-adapter-abi."
+description = "Skia surface adapter (Linux). Customer sees skia::Surface directly — never GrVkImageInfo, GrBackendTexture, or VkImageLayout. Composes on streamlib-adapter-vulkan via the VulkanWritable / VulkanImageInfoExt capability traits from streamlib-surface-adapter."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -15,6 +15,7 @@ name = "streamlib_adapter_skia"
 path = "src/lib.rs"
 
 [dependencies]
+streamlib-surface-adapter = { path = "../streamlib-surface-adapter", version = "0.13.2" }
 streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.13.2" }
 streamlib-adapter-skia-abi = { path = "../streamlib-adapter-skia-abi", version = "0.13.2" }
 thiserror.workspace = true

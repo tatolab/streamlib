@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-adapter-cpu-readback"
-description = "Explicit GPU→CPU surface adapter (Linux). The single named, opt-in path for customers who need CPU memory access to a streamlib surface — returns numpy.ndarray (Python) / Uint8Array (Deno) / &[u8] (Rust) from a host-side vkCmdCopyImageToBuffer at acquire time. Sole implementor of the CpuReadable / CpuWritable capability traits from streamlib-adapter-abi; GPU adapters do not implement them, by design."
+description = "Explicit GPU→CPU surface adapter (Linux). The single named, opt-in path for customers who need CPU memory access to a streamlib surface — returns numpy.ndarray (Python) / Uint8Array (Deno) / &[u8] (Rust) from a host-side vkCmdCopyImageToBuffer at acquire time. Sole implementor of the CpuReadable / CpuWritable capability traits from streamlib-surface-adapter; GPU adapters do not implement them, by design."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
@@ -15,6 +15,7 @@ name = "streamlib_adapter_cpu_readback"
 path = "src/lib.rs"
 
 [dependencies]
+streamlib-surface-adapter = { path = "../streamlib-surface-adapter", version = "0.13.2" }
 streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.13.2" }
 streamlib-adapter-cpu-readback-abi = { path = "../streamlib-adapter-cpu-readback-abi", version = "0.13.2" }
 thiserror.workspace = true
@@ -48,6 +49,10 @@ serde = { workspace = true }
 # runtime dep graph (and from there into the cdylibs). Tests reach the
 # bin via `env!("CARGO_BIN_EXE_cpu_readback_adapter_subprocess_helper")`.
 streamlib-adapter-cpu-readback-helpers = { path = "../streamlib-adapter-cpu-readback-helpers" }
+# Serialize Vulkan-device-touching tests; concurrent `VkDevice` /
+# `VkInstance` creation on NVIDIA Linux trips the dual-device crash
+# documented in `docs/learnings/nvidia-dual-vulkan-device-crash.md`.
+serial_test = "3.2"
 
 [[test]]
 name = "conformance"
@@ -72,6 +77,10 @@ path = "tests/subprocess_crash_mid_write.rs"
 [[test]]
 name = "persistent_command_pool"
 path = "tests/persistent_command_pool.rs"
+
+[[test]]
+name = "consumer_carve_out"
+path = "tests/consumer_carve_out.rs"
 
 [lints]
 workspace = true

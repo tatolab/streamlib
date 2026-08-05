@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: BUSL-1.1
 
 """Layout regression suite for the Python ctypes mirror of
-streamlib_adapter_abi::StreamlibSurface and friends.
+streamlib_surface_adapter::StreamlibSurface and friends.
 
 Numbers must match the Rust unit tests in
-adapters/streamlib-adapter-abi/src/surface.rs (search for `streamlib_surface_layout`).
+adapters/streamlib-surface-adapter/src/surface.rs (search for `streamlib_surface_layout`).
 When this file changes, update the Rust tests too — both are the
 contract.
 """

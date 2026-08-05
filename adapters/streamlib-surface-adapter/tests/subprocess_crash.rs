@@ -21,7 +21,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use streamlib_adapter_abi::testing::{CrashTiming, SubprocessCrashHarness};
+use streamlib_surface_adapter::testing::{CrashTiming, SubprocessCrashHarness};
 
 /// Spawn a `sleep` subprocess that inherits a write end of a pipe; SIGKILL
 /// it via the harness; verify the parent observes EOF on the read end

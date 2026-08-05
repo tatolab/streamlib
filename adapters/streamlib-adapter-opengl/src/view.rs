@@ -18,7 +18,7 @@
 
 use std::marker::PhantomData;
 
-use streamlib_adapter_abi::GlWritable;
+use streamlib_surface_adapter::GlWritable;
 
 /// `GL_TEXTURE_2D` enumerant. Re-exported so customers don't need a
 /// `gl` crate import to compare `view.target`.

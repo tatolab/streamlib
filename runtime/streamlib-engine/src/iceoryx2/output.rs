@@ -263,7 +263,7 @@ impl OutputWriterInner {
             &mut egress.refused_over_ceiling_count,
             &mut egress.current_slot_capacity_bytes,
         );
-        streamlib_plugin_abi::emit_channel_egress_admission_tracing(
+        streamlib_ipc_types::emit_channel_egress_admission_tracing(
             None,
             egress.trust_tier,
             &egress.channel_service_name,

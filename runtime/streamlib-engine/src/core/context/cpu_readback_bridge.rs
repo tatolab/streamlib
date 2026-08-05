@@ -28,7 +28,7 @@
 
 #![cfg(target_os = "linux")]
 
-use streamlib_adapter_abi::SurfaceId;
+use streamlib_surface_adapter::SurfaceId;
 
 /// Which direction the host runs the GPU copy.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]

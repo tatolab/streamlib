@@ -28,12 +28,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use streamlib_adapter_abi::{
-    AdapterError, ReadGuard, Registry, StreamlibSurface, SurfaceAdapter, SurfaceId,
-    SurfaceRegistration, VkImageInfo, WriteGuard,
-};
 use streamlib_consumer_rhi::{
     DevicePrivilege, VulkanRhiDevice, VulkanTextureLike, VulkanTimelineSemaphoreLike,
+};
+use streamlib_surface_adapter::{
+    AdapterError, ReadGuard, Registry, StreamlibSurface, SurfaceAdapter, SurfaceId,
+    SurfaceRegistration, VkImageInfo, WriteGuard,
 };
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -701,7 +701,7 @@ impl<D: VulkanRhiDevice + 'static> SurfaceAdapter for VulkanSurfaceAdapter<D> {
 /// lives in `streamlib-adapter-cpu-readback::adapter::AdapterPersistentSubmitContext`
 /// and `streamlib-adapter-cuda::adapter::AdapterPersistentSubmitContext`;
 /// fix ALL THREE if you change ANY (issue #620 + #640 AI Agent
-/// Notes — `streamlib-adapter-abi` deliberately does not depend on
+/// Notes — `streamlib-surface-adapter` deliberately does not depend on
 /// `vulkanalia`, so duplication is the project pattern here).
 ///
 /// The fence is created signaled so the first submit doesn't block.

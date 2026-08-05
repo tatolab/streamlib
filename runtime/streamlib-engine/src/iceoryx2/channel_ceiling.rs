@@ -6,7 +6,8 @@
 //! The per-channel ceiling is structural by default — selected from the
 //! channel's [`ChannelTrustTier`] via [`ChannelTrustTier::default_ceiling_bytes`].
 //! An operator tunes it per deployment through a tier-scoped env var, read and
-//! parsed here in the engine so [`streamlib_ipc_types`] stays logging-free.
+//! parsed here in the engine: the override is a deployment concern, not part of
+//! the wire contract [`streamlib_ipc_types`] carries between processes.
 
 use crate::iceoryx2::ChannelTrustTier;
 

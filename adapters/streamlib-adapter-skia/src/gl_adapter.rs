@@ -12,7 +12,7 @@
 //!
 //! Mirror-shape of [`crate::SkiaSurfaceAdapter`] but composed on
 //! [`OpenGlSurfaceAdapter`] via the `GlWritable` capability marker
-//! from `streamlib-adapter-abi`. Both backends share the same
+//! from `streamlib-surface-adapter`. Both backends share the same
 //! [`crate::skia_internal::SyncDirectContext`] mutex pattern and
 //! drop-order template — see `skia_internal.rs`.
 
@@ -23,11 +23,11 @@ use skia_safe::gpu::{
     surfaces,
 };
 use skia_safe::{AlphaType, ColorSpace, ColorType};
-use streamlib_adapter_abi::{
+use streamlib_adapter_opengl::{EglRuntime, GL_TEXTURE_2D, OpenGlSurfaceAdapter};
+use streamlib_surface_adapter::{
     AdapterError, GlWritable, ReadGuard, StreamlibSurface, SurfaceAdapter, SurfaceFormat,
     SurfaceId, WriteGuard,
 };
-use streamlib_adapter_opengl::{EglRuntime, GL_TEXTURE_2D, OpenGlSurfaceAdapter};
 
 use crate::error::SkiaAdapterError;
 use crate::gl_view::{SkiaGlReadView, SkiaGlWriteView};

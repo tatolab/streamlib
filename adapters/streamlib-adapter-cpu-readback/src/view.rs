@@ -8,16 +8,16 @@
 //! report one plane per logical plane (Y + UV for NV12). Each plane is a
 //! tightly-packed byte slice (`width * bytes_per_pixel` per row).
 //!
-//! These are the only [`streamlib_adapter_abi::SurfaceAdapter`] views
-//! in-tree that implement [`streamlib_adapter_abi::CpuReadable`] /
-//! [`streamlib_adapter_abi::CpuWritable`]. GPU adapters
+//! These are the only [`streamlib_surface_adapter::SurfaceAdapter`] views
+//! in-tree that implement [`streamlib_surface_adapter::CpuReadable`] /
+//! [`streamlib_surface_adapter::CpuWritable`]. GPU adapters
 //! (`streamlib-adapter-vulkan`, `-opengl`, `-skia`) deliberately do
 //! not — switching to this adapter is the contractual signal that the
 //! caller has opted into a host-side GPU→CPU copy.
 
 use std::marker::PhantomData;
 
-use streamlib_adapter_abi::{CpuReadable, CpuWritable, SurfaceFormat};
+use streamlib_surface_adapter::{CpuReadable, CpuWritable, SurfaceFormat};
 
 /// Read-only view of one plane of an acquired surface — tightly-packed
 /// pixel content, dimensions in plane texels (NV12 UV: half width × half

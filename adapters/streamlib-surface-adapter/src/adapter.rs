@@ -1,26 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `SurfaceAdapter` trait, ABI version constant, and capability marker traits.
+//! `SurfaceAdapter` trait and capability marker traits.
 
 use crate::error::AdapterError;
 use crate::guard::{ReadGuard, WriteGuard};
 use crate::surface::{StreamlibSurface, SurfaceId};
-
-/// Major version of the surface-adapter ABI.
-///
-/// Bumped on a breaking trait change (renamed/removed method, changed
-/// signature, changed `#[repr(C)]` field of any associated type).
-/// Adding new methods is non-breaking and does NOT bump.
-///
-/// Rust's vtable layout already enforces in-process compatibility at
-/// compile time — a mismatched `streamlib-adapter-abi` rlib version
-/// can't link into the runtime in the first place. This constant is
-/// load-bearing only at the cdylib boundary, where it'll be checked
-/// from a `#[repr(C)] AdapterDeclaration` shape (mirroring
-/// `streamlib-plugin-abi`'s `PluginDeclaration`) when dynamic adapter
-/// loading lands.
-pub const STREAMLIB_ADAPTER_ABI_VERSION: u32 = 1;
 
 /// Public ABI for a streamlib surface adapter.
 ///

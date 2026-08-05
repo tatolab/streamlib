@@ -3,7 +3,7 @@
 
 //! `streamlib_adapter_opengl::tests::subprocess_crash_mid_write` —
 //! exercises the public `SubprocessCrashHarness` from
-//! `streamlib-adapter-abi::testing` to confirm the OpenGL adapter's
+//! `streamlib-surface-adapter::testing` to confirm the OpenGL adapter's
 //! crash path matches the contract.
 //!
 //! The harness spawns the helper subprocess
@@ -30,7 +30,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 use streamlib::sdk::engine::HostTextureExt;
 
-use streamlib_adapter_abi::testing::{CrashTiming, SubprocessCrashHarness};
+use streamlib_surface_adapter::testing::{CrashTiming, SubprocessCrashHarness};
 
 use common::HostFixture;
 

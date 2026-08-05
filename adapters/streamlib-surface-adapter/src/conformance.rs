@@ -10,7 +10,7 @@
 //! fn my_adapter_is_conformant() {
 //!     let adapter = MyAdapter::new();
 //!     let factory = |id| my_test_surface(id);
-//!     streamlib_adapter_abi::testing::run_conformance(&adapter, factory);
+//!     streamlib_surface_adapter::testing::run_conformance(&adapter, factory);
 //! }
 //! ```
 //!

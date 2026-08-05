@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `streamlib_adapter_cpu_readback::tests::conformance` — runs the
-//! public `run_conformance` suite from `streamlib-adapter-abi` against
+//! public `run_conformance` suite from `streamlib-surface-adapter` against
 //! a real cpu-readback adapter wired to a host-allocated DMA-BUF
 //! `VkImage`, per-plane staging buffers, and an exportable timeline
 //! semaphore.
@@ -22,11 +22,11 @@ use streamlib::sdk::engine::HostTextureExt;
 
 use streamlib::sdk::engine::host_rhi::{HostMarker, HostVulkanBuffer, HostVulkanTimelineSemaphore};
 use streamlib::sdk::rhi::TextureFormat;
-use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
-use streamlib_adapter_abi::{
+use streamlib_adapter_cpu_readback::{HostSurfaceRegistration, VulkanLayout};
+use streamlib_surface_adapter::testing::{empty_surface, run_conformance};
+use streamlib_surface_adapter::{
     AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId,
 };
-use streamlib_adapter_cpu_readback::{HostSurfaceRegistration, VulkanLayout};
 
 use common::HostFixture;
 
@@ -34,7 +34,7 @@ struct ConformanceFactory<'a> {
     fixture: &'a HostFixture,
 }
 
-impl<'a> streamlib_adapter_abi::testing::ConformanceSurfaceFactory for ConformanceFactory<'a> {
+impl<'a> streamlib_surface_adapter::testing::ConformanceSurfaceFactory for ConformanceFactory<'a> {
     fn make(&self, id: SurfaceId) -> StreamlibSurface {
         self.fixture.register_surface(id, 64, 64)
     }

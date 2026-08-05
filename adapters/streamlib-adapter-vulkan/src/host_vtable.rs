@@ -40,12 +40,12 @@ use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use streamlib_adapter_abi::{StreamlibSurface, SurfaceAdapter, VkImageInfo};
 use streamlib_adapter_vulkan_abi::{
     RawVulkanHandlesRepr, VULKAN_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION, VkImageInfoRepr,
     VkImageLayoutValueRepr, VulkanSurfaceAdapterVTable, VulkanViewRepr,
 };
 use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout, VulkanRhiDevice};
+use streamlib_surface_adapter::{StreamlibSurface, SurfaceAdapter, VkImageInfo};
 
 use crate::adapter::VulkanSurfaceAdapter;
 use crate::raw_handles::raw_handles;
@@ -434,7 +434,7 @@ where
 }
 
 fn read_guard_to_repr<D: VulkanRhiDevice + 'static>(
-    guard: streamlib_adapter_abi::ReadGuard<'_, VulkanSurfaceAdapter<D>>,
+    guard: streamlib_surface_adapter::ReadGuard<'_, VulkanSurfaceAdapter<D>>,
 ) -> VulkanViewRepr {
     let view = guard.view();
     // SAFETY: we deliberately leak the guard's `end_read_access`
@@ -442,32 +442,32 @@ fn read_guard_to_repr<D: VulkanRhiDevice + 'static>(
     // its own ReadGuard::drop via the vtable. Calling Drop here
     // would double-signal.
     let view_repr = VulkanViewRepr {
-        vk_image: streamlib_adapter_abi::VulkanWritable::vk_image(view).0,
+        vk_image: streamlib_surface_adapter::VulkanWritable::vk_image(view).0,
         vk_image_layout: VkImageLayoutValueRepr(
-            streamlib_adapter_abi::VulkanWritable::vk_image_layout(view).0,
+            streamlib_surface_adapter::VulkanWritable::vk_image_layout(view).0,
         ),
         _padding: 0,
-        info: vk_image_info_to_repr(streamlib_adapter_abi::VulkanImageInfoExt::vk_image_info(
-            view,
-        )),
+        info: vk_image_info_to_repr(
+            streamlib_surface_adapter::VulkanImageInfoExt::vk_image_info(view),
+        ),
     };
     core::mem::forget(guard);
     view_repr
 }
 
 fn write_guard_to_repr<D: VulkanRhiDevice + 'static>(
-    guard: streamlib_adapter_abi::WriteGuard<'_, VulkanSurfaceAdapter<D>>,
+    guard: streamlib_surface_adapter::WriteGuard<'_, VulkanSurfaceAdapter<D>>,
 ) -> VulkanViewRepr {
     let view = guard.view();
     let view_repr = VulkanViewRepr {
-        vk_image: streamlib_adapter_abi::VulkanWritable::vk_image(view).0,
+        vk_image: streamlib_surface_adapter::VulkanWritable::vk_image(view).0,
         vk_image_layout: VkImageLayoutValueRepr(
-            streamlib_adapter_abi::VulkanWritable::vk_image_layout(view).0,
+            streamlib_surface_adapter::VulkanWritable::vk_image_layout(view).0,
         ),
         _padding: 0,
-        info: vk_image_info_to_repr(streamlib_adapter_abi::VulkanImageInfoExt::vk_image_info(
-            view,
-        )),
+        info: vk_image_info_to_repr(
+            streamlib_surface_adapter::VulkanImageInfoExt::vk_image_info(view),
+        ),
     };
     core::mem::forget(guard);
     view_repr
@@ -768,7 +768,7 @@ mod tier1_null_handle_tests {
     type D = ConsumerVulkanDevice;
 
     /// `VkImageInfoRepr` (defined in `streamlib-adapter-vulkan-abi`)
-    /// MUST mirror `streamlib_adapter_abi::VkImageInfo` byte-for-byte.
+    /// MUST mirror `streamlib_surface_adapter::VkImageInfo` byte-for-byte.
     /// This crate has both in scope so it's the natural place to
     /// lock the contract; the abi crate is dep-free by design and
     /// can't import the source type itself.

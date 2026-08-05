@@ -37,13 +37,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use streamlib_adapter_abi::{
-    AdapterError, ReadGuard, Registry, StreamlibSurface, SurfaceAdapter, SurfaceId,
-    SurfaceRegistration, WriteGuard,
-};
 use streamlib_consumer_rhi::{
     DevicePrivilege, TextureFormat, VulkanLayout, VulkanRhiBuffer, VulkanRhiDevice,
     VulkanTextureLike, VulkanTimelineSemaphoreLike,
+};
+use streamlib_surface_adapter::{
+    AdapterError, ReadGuard, Registry, StreamlibSurface, SurfaceAdapter, SurfaceId,
+    SurfaceRegistration, WriteGuard,
 };
 #[cfg(target_os = "linux")]
 use vulkanalia::prelude::v1_4::*;
@@ -228,7 +228,7 @@ impl<D: VulkanRhiDevice> CudaSurfaceAdapter<D> {
 
     /// Power-user accessor: the registered pixel-buffer Arc for a
     /// buffer-flavored surface. Used by the carve-out test in
-    /// `streamlib-adapter-cuda-helpers` to call
+    /// the carve-out tests to call
     /// `export_opaque_fd_memory()` on the underlying buffer; future
     /// cdylib work will route this through the surface-share service
     /// instead. Returns `None` when the surface isn't registered OR
@@ -871,7 +871,7 @@ where
 /// `streamlib-adapter-cpu-readback::adapter::AdapterPersistentSubmitContext`
 /// and `streamlib-adapter-vulkan::adapter::AdapterPersistentSubmitContext`;
 /// fix ALL THREE if you change ANY (issue #620 + #640 AI Agent
-/// Notes — `streamlib-adapter-abi` deliberately does not depend on
+/// Notes — `streamlib-surface-adapter` deliberately does not depend on
 /// `vulkanalia`, so duplication is the project pattern here).
 ///
 /// The fence is created signaled so the first submit doesn't block.

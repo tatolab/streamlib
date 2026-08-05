@@ -8,16 +8,15 @@
 //! `vkCmdCopyImageToBuffer` lands its bytes in a HOST_VISIBLE staging
 //! `VkBuffer`; the buffer's DMA-BUF FD is exported and re-imported on
 //! a separate `ConsumerVulkanDevice`; the consumer sees the same
-//! bytes through its own mapped pointer. This is the primitive the
-//! polyglot blur example exercises end-to-end through the cdylib +
-//! escalate IPC; the helper crate exercises the same primitive
-//! in-process so a regression in `ConsumerVulkanBuffer::from_dma_buf_fd`
-//! lights up here without needing a full subprocess spawn.
+//! bytes through its own mapped pointer. This is the primitive a
+//! helper process exercises end-to-end through the escalate IPC; here
+//! it runs in-process so a regression in
+//! `ConsumerVulkanBuffer::from_dma_buf_fd` lights up without needing a
+//! full subprocess spawn.
 //!
-//! Same `#[serial]` discipline as the adapter-vulkan helper:
-//! concurrent `VkInstance` / `VkDevice` creation on NVIDIA Linux trips
-//! the dual-device crash, and the test serializes against any other
-//! Vulkan-touching test in this binary.
+//! `#[serial]` because concurrent `VkInstance` / `VkDevice` creation on
+//! NVIDIA Linux trips the dual-device crash; the test serializes
+//! against any other Vulkan-touching test in this binary.
 
 #![cfg(target_os = "linux")]
 
@@ -27,18 +26,17 @@ use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 use serial_test::serial;
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::host_rhi::{HostMarker, HostVulkanBuffer, HostVulkanTimelineSemaphore};
-use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
-use streamlib_adapter_abi::{
-    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
-    SurfaceUsage,
-};
+use streamlib::sdk::rhi::TextureFormat;
 use streamlib_adapter_cpu_readback::{
     CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter, HostSurfaceRegistration,
     InProcessCpuReadbackCopyTrigger, VulkanLayout,
 };
 use streamlib_consumer_rhi::{
     ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTimelineSemaphore,
-    PixelFormat as ConsumerPixelFormat,
+};
+use streamlib_surface_adapter::{
+    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
+    SurfaceUsage,
 };
 
 const W: u32 = 32;

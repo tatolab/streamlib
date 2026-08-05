@@ -19,7 +19,7 @@
 //! - Host-flavor scaffold from #587: [`CudaSurfaceAdapter`],
 //!   [`HostSurfaceRegistration`], [`CudaContext`], the registry-of-state
 //!   machinery, and the host-side OPAQUE_FD export entry points the
-//!   carve-out test in `streamlib-adapter-cuda-helpers` exercises.
+//!   carve-out tests in this crate exercise.
 //! - OPAQUE_FD plumbing chain from #588: the adapter is generic over
 //!   `D: VulkanRhiDevice` and instantiates against either flavor of
 //!   device — `HostVulkanDevice` host-side, `ConsumerVulkanDevice`

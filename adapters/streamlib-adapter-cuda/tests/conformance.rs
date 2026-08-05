@@ -2,14 +2,14 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `streamlib_adapter_cuda::tests::conformance` — runs the public
-//! `run_conformance` suite from `streamlib-adapter-abi` against the
+//! `run_conformance` suite from `streamlib-surface-adapter` against the
 //! CUDA adapter, plus a duplicate-registration negative case.
 //!
 //! Exercises the same eight contracts MockAdapter passes (acquire/drop
 //! pairs, parallel reads, `WriteContended` on contention, `try_acquire_*`
 //! returning `Ok(None)`, multi-thread Send+Sync). A green run confirms
 //! the trait shape is honored — it does NOT prove CUDA interop; that's
-//! the carve-out test in `streamlib-adapter-cuda-helpers`.
+//! the carve-out tests in this crate.
 //!
 //! The test allocates an OPAQUE_FD-exportable HOST_VISIBLE buffer
 //! (the resource shape CUDA imports). Even when CUDA isn't installed
@@ -25,12 +25,12 @@ use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::host_rhi::{
     HostVulkanBuffer, HostVulkanDevice, HostVulkanTimelineSemaphore,
 };
-use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
-use streamlib_adapter_abi::{
+use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
+use streamlib_surface_adapter::testing::{empty_surface, run_conformance};
+use streamlib_surface_adapter::{
     AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId, SurfaceSyncState,
     SurfaceTransportHandle, SurfaceUsage,
 };
-use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
 
 const W: u32 = 32;
 const H: u32 = 32;
@@ -81,7 +81,7 @@ struct ConformanceFactory<'a> {
     adapter: &'a CudaSurfaceAdapter<HostVulkanDevice>,
 }
 
-impl<'a> streamlib_adapter_abi::testing::ConformanceSurfaceFactory for ConformanceFactory<'a> {
+impl<'a> streamlib_surface_adapter::testing::ConformanceSurfaceFactory for ConformanceFactory<'a> {
     fn make(&self, id: SurfaceId) -> StreamlibSurface {
         register_one(self.adapter, id).expect("register_one")
     }

@@ -27,8 +27,7 @@ streamlib-plugin-abi = { path = "../../runtime/streamlib-plugin-abi", version = 
 streamlib-macros = { path = "../streamlib-macros", version = "0.13.2" }
 # Engine-free panic-safety helper (run_host_extern_c) shared by the engine
 # and the five surface adapters; the SDK's processor_vtable thunks route
-# every extern "C" boundary crossing through it. Deps: bitflags / parking_lot
-# / thiserror / tracing / libc — no engine.
+# every extern "C" boundary crossing through it. Dep: tracing — no engine.
 streamlib-adapter-abi = { path = "../../adapters/streamlib-adapter-abi", version = "0.13.2" }
 
 serde = { workspace = true }

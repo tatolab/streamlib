@@ -968,12 +968,12 @@ fn dispatch_run_cpu_readback_copy<F>(
 where
     F: FnOnce(
         &dyn CpuReadbackBridge,
-        streamlib_adapter_abi::SurfaceId,
+        streamlib_surface_adapter::SurfaceId,
     ) -> std::result::Result<Option<u64>, String>,
 {
     use std::sync::Arc;
 
-    let surface_id: streamlib_adapter_abi::SurfaceId = match surface_id_str.parse() {
+    let surface_id: streamlib_surface_adapter::SurfaceId = match surface_id_str.parse() {
         Ok(v) => v,
         Err(e) => {
             return EscalateResponse::Err(EscalateResponseErr {
@@ -2820,7 +2820,7 @@ mod tests {
         use crate::core::context::{
             CpuReadbackBridge, CpuReadbackCopyDirection, GpuContext, GpuContextLimitedAccess,
         };
-        use streamlib_adapter_abi::SurfaceId;
+        use streamlib_surface_adapter::SurfaceId;
 
         struct AlwaysContendedBridge;
         impl CpuReadbackBridge for AlwaysContendedBridge {

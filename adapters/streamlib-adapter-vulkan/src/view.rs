@@ -4,14 +4,14 @@
 //! Read and write views handed back to consumers inside an acquire scope.
 //!
 //! The views are short-lived (lifetime-bound to the guard) and implement
-//! the capability traits from `streamlib-adapter-abi` so outer adapters
+//! the capability traits from `streamlib-surface-adapter` so outer adapters
 //! (`streamlib-adapter-skia`, third-party Vulkan-on-Vulkan compositions)
 //! can compose on top without touching DMA-BUF fds or layout state
 //! directly.
 
 use std::marker::PhantomData;
 
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     VkImageHandle, VkImageInfo, VkImageLayoutValue, VulkanImageInfoExt, VulkanWritable,
 };
 use vulkanalia::vk;
@@ -77,7 +77,7 @@ impl VulkanImageInfoExt for VulkanWriteView<'_> {
 // silently appear CPU-readable.
 mod _assert_vulkan_read_view_not_cpu_readable {
     use super::VulkanReadView;
-    use streamlib_adapter_abi::CpuReadable;
+    use streamlib_surface_adapter::CpuReadable;
 
     trait AmbiguousIfImpl<A> {
         fn some_item() {}

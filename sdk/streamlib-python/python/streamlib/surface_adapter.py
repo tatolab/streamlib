@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""Python mirror of streamlib_adapter_abi.
+"""Python mirror of streamlib_surface_adapter.
 
 Provides:
   - StreamlibSurface — concrete frozen dataclass carrying the
@@ -11,7 +11,7 @@ Provides:
     matching the Rust shape.
   - _SurfaceTransportHandleC, _SurfaceSyncStateC, _StreamlibSurfaceC
     ctypes mirrors locked to the Rust #[repr(C)] layout. Twin tests in
-    adapters/streamlib-adapter-abi/src/surface.rs (Rust) and
+    adapters/streamlib-surface-adapter/src/surface.rs (Rust) and
     tests/test_surface_adapter.py (Python) enforce that the offsets
     match — both must be updated in lockstep.
   - SurfaceAdapter Protocol — the trait shape Python adapter authors

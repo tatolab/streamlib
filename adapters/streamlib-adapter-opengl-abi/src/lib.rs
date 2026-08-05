@@ -33,7 +33,7 @@
 //! (against `adapters/streamlib-adapter-opengl/src/`) enumerated:
 //!
 //! 1. `SurfaceAdapter` trait methods (from
-//!    `streamlib-adapter-abi`) implemented on `OpenGlSurfaceAdapter`:
+//!    `streamlib-surface-adapter`) implemented on `OpenGlSurfaceAdapter`:
 //!    `acquire_read`, `acquire_write`, `try_acquire_read`,
 //!    `try_acquire_write`, `end_read_access`, `end_write_access`.
 //! 2. Inherent methods on `OpenGlSurfaceAdapter`:

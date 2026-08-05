@@ -12,7 +12,7 @@
 //!
 //! This is why [`crate::SkiaSurfaceAdapter::end_write_access`] /
 //! [`crate::SkiaSurfaceAdapter::end_read_access`] are no-ops: the
-//! field-drop order in `streamlib_adapter_abi::WriteGuard` runs the
+//! field-drop order in `streamlib_surface_adapter::WriteGuard` runs the
 //! adapter's `end_*_access` *before* dropping the view, but our work
 //! has to happen in the opposite order — flush THEN signal — so the
 //! drop logic lives on the view itself.
@@ -20,9 +20,9 @@
 use std::mem::ManuallyDrop;
 use std::sync::{Arc, Mutex};
 
-use streamlib_adapter_abi::{ReadGuard, WriteGuard};
 use streamlib_adapter_vulkan::VulkanSurfaceAdapter;
 use streamlib_consumer_rhi::VulkanRhiDevice;
+use streamlib_surface_adapter::{ReadGuard, WriteGuard};
 use vulkanalia::vk;
 
 use crate::skia_internal::{

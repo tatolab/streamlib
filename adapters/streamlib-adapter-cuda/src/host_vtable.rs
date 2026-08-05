@@ -40,12 +40,12 @@ use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use streamlib_adapter_abi::{StreamlibSurface, SurfaceAdapter};
 use streamlib_adapter_cuda_abi::{
     CUDA_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION, CudaBufferViewRepr, CudaImageViewRepr,
     CudaSurfaceAdapterVTable, TextureFormatRepr,
 };
 use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout, VulkanRhiDevice};
+use streamlib_surface_adapter::{StreamlibSurface, SurfaceAdapter};
 use vulkanalia::vk::Handle;
 
 use crate::adapter::CudaSurfaceAdapter;
@@ -582,7 +582,7 @@ where
 /// guard will issue the release through the vtable's
 /// `end_*_access` slot when it's dropped.
 fn read_guard_to_buffer_repr<D: VulkanRhiDevice + 'static>(
-    guard: streamlib_adapter_abi::ReadGuard<'_, CudaSurfaceAdapter<D>>,
+    guard: streamlib_surface_adapter::ReadGuard<'_, CudaSurfaceAdapter<D>>,
 ) -> CudaBufferViewRepr {
     let view = guard.view();
     let repr = CudaBufferViewRepr {
@@ -594,7 +594,7 @@ fn read_guard_to_buffer_repr<D: VulkanRhiDevice + 'static>(
 }
 
 fn write_guard_to_buffer_repr<D: VulkanRhiDevice + 'static>(
-    guard: streamlib_adapter_abi::WriteGuard<'_, CudaSurfaceAdapter<D>>,
+    guard: streamlib_surface_adapter::WriteGuard<'_, CudaSurfaceAdapter<D>>,
 ) -> CudaBufferViewRepr {
     let view = guard.view();
     let repr = CudaBufferViewRepr {

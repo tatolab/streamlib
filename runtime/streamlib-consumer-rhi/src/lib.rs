@@ -109,7 +109,7 @@ pub use device_capability::private;
 /// What these doctests do **NOT** prove on their own: that the
 /// polyglot cdylibs (which depend on this crate *plus*
 /// `streamlib-adapter-vulkan`, `streamlib-adapter-opengl`,
-/// `streamlib-adapter-abi`, etc.) can't reach `streamlib` through
+/// `streamlib-surface-adapter`, etc.) can't reach `streamlib` through
 /// a different path. That stronger property is asserted by:
 ///
 /// - `cargo tree -p streamlib-{python,deno}-native | grep -c "^streamlib v"`

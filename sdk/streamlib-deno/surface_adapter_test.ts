@@ -3,10 +3,10 @@
 
 /**
  * Layout regression suite for the Deno mirror of
- * streamlib_adapter_abi::StreamlibSurface.
+ * streamlib_surface_adapter::StreamlibSurface.
  *
  * These offsets must match the Rust unit tests in
- * adapters/streamlib-adapter-abi/src/surface.rs (`streamlib_surface_layout`,
+ * adapters/streamlib-surface-adapter/src/surface.rs (`streamlib_surface_layout`,
  * `surface_transport_handle_layout`, `surface_sync_state_layout`) and
  * the Python mirror in
  * sdk/streamlib-python/python/streamlib/tests/test_surface_adapter.py.

@@ -13,7 +13,7 @@
 mod common;
 
 use streamlib::sdk::rhi::TextureFormat;
-use streamlib_adapter_abi::{CpuReadable, StreamlibSurface, SurfaceFormat};
+use streamlib_surface_adapter::{CpuReadable, StreamlibSurface, SurfaceFormat};
 
 use crate::common::HostFixture;
 

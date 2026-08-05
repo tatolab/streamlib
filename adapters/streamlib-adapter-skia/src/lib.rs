@@ -21,7 +21,7 @@
 //! The inner `VulkanWriteView<'g>` is held *inside* `SkiaWriteView`
 //! and never reaches the customer; the deliberate
 //! `VulkanWritable::vk_image_layout()` escape hatch from
-//! `streamlib-adapter-abi` lives on a capability trait that public
+//! `streamlib-surface-adapter` lives on a capability trait that public
 //! consumers of `SurfaceAdapter` cannot reach. See
 //! `docs/architecture/surface-adapter.md` for the full architecture
 //! brief.

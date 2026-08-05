@@ -5,7 +5,7 @@
 //! host-allocated `VkImage` to any consumer that speaks Vulkan.
 //!
 //! This is the canonical implementor of the `VulkanWritable` and
-//! `VulkanImageInfoExt` capability traits from `streamlib-adapter-abi`.
+//! `VulkanImageInfoExt` capability traits from `streamlib-surface-adapter`.
 //! Cross-API adapters (`streamlib-adapter-opengl`, `streamlib-adapter-skia`)
 //! compose on top of these views without ever seeing DMA-BUF fds, DRM
 //! modifiers, or timeline-semaphore handles directly.

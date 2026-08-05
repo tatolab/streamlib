@@ -35,7 +35,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use streamlib_adapter_abi::testing::{CrashTiming, SubprocessCrashHarness};
+use streamlib_surface_adapter::testing::{CrashTiming, SubprocessCrashHarness};
 
 #[test]
 fn panic_mid_write_releases_lock_for_next_acquire() {

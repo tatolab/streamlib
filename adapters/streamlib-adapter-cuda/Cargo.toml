@@ -15,18 +15,16 @@ name = "streamlib_adapter_cuda"
 path = "src/lib.rs"
 
 [features]
-# Default OFF — enabling pulls the CUDA SDK into this crate's transitive
-# build surface. cudarc itself loads `libcuda.so` lazily via dlopen
-# (`fallback-dynamic-loading`), so toolkit absence at runtime is a
-# graceful skip rather than a build error; the feature flag still
-# gates the *type surface* (CUDA-typed views, FFI hooks) so non-CUDA
-# customers don't pay for unused API.
-#
-# #587 introduces the feature scaffold so customers know how to opt in;
-# the dependent CUDA cdylib + DLPack work (#589/#590) wires its
-# functionality into the public surface.
+# Default OFF. The feature does exactly one thing: pull optional `cudarc`
+# in so the `cuda_carve_out` test (its `required-features`) compiles.
+# Nothing in `src/` is feature-gated. cudarc must stay a regular optional
+# dep rather than a dev-dep because Cargo has no optional dev-dependencies,
+# and `dep:` can only name a real dependency. cudarc loads `libcuda.so`
+# lazily via dlopen (`fallback-dynamic-loading`), so toolkit absence is a
+# graceful runtime skip — enabling the feature never demands a CUDA
+# toolkit on the builder.
 default = []
-cuda = []
+cuda = ["dep:cudarc"]
 
 [dependencies]
 # DLPack ABI mirrors only — `default-features = false` pulls in only
@@ -35,6 +33,7 @@ cuda = []
 # spec's `#[repr(C)]` types, and off-Linux consumers (the wheel's CPU
 # capsule path) need exactly it.
 dlpark.workspace = true
+streamlib-surface-adapter = { path = "../streamlib-surface-adapter", version = "0.13.2" }
 streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.13.2" }
 streamlib-adapter-cuda-abi = { path = "../streamlib-adapter-cuda-abi", version = "0.13.2" }
 thiserror.workspace = true
@@ -45,23 +44,26 @@ streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", versio
 streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.13.2" }
 vulkanalia.workspace = true
 libc.workspace = true
+cudarc = { workspace = true, optional = true }
 
-
-# `streamlib` and the helper-binary crate are *test*-only deps: the
-# carve-out test brings up a `HostVulkanDevice`, allocates an
-# OPAQUE_FD-exportable buffer + timeline, and (when the `cuda`
-# feature on the helpers crate is enabled) imports both into CUDA
-# via cudarc to assert byte-equal. The runtime crate (above) does
-# NOT pull `streamlib`, so future subprocess cdylibs depending on
-# `streamlib-adapter-cuda` get the consumer-rhi carve-out only,
-# with `streamlib` absent from their dep graph. The helper bin
-# lives in `streamlib-adapter-cuda-helpers` for the same reason —
-# see that crate's Cargo.toml for the full rationale.
+# `streamlib` is a *test*-only dep: the carve-out tests bring up a
+# `HostVulkanDevice`, allocate an OPAQUE_FD-exportable buffer + timeline,
+# and (under the `cuda` feature) import both into CUDA via cudarc to
+# assert byte-equal. The runtime crate (above) does NOT pull `streamlib`,
+# so helper processes depending on `streamlib-adapter-cuda` get the
+# consumer-rhi carve-out only, with `streamlib` absent from their dep
+# graph.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
 streamlib-engine = { path = "../../runtime/streamlib-engine" }
 streamlib = { path = "../../sdk/streamlib-sdk" }
-streamlib-adapter-cuda-helpers = { path = "../streamlib-adapter-cuda-helpers" }
 tracing-subscriber.workspace = true
+# Serialize Vulkan-device-touching tests; concurrent `VkDevice` /
+# `VkInstance` creation on NVIDIA Linux trips the dual-device crash
+# documented in `docs/learnings/nvidia-dual-vulkan-device-crash.md`.
+serial_test = "3.2"
+# The OPAQUE_FD round-trip tests drive the surface-share daemon directly
+# so they exercise the same wire format helper processes consume.
+serde_json.workspace = true
 
 [[test]]
 name = "conformance"
@@ -70,6 +72,19 @@ path = "tests/conformance.rs"
 [[test]]
 name = "persistent_command_pool"
 path = "tests/persistent_command_pool.rs"
+
+[[test]]
+name = "opaque_fd_consumer_rhi_round_trip"
+path = "tests/opaque_fd_consumer_rhi_round_trip.rs"
+
+[[test]]
+name = "opaque_fd_image_consumer_rhi_round_trip"
+path = "tests/opaque_fd_image_consumer_rhi_round_trip.rs"
+
+[[test]]
+name = "cuda_carve_out"
+path = "tests/cuda_carve_out.rs"
+required-features = ["cuda"]
 
 [lints]
 workspace = true

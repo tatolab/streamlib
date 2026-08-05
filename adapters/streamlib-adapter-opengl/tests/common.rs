@@ -14,12 +14,12 @@ use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::host_rhi::HostVulkanTexture;
 use streamlib::sdk::rhi::{Texture, TextureDescriptor, TextureFormat, TextureUsages};
-use streamlib_adapter_abi::{
-    StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,
-    SurfaceUsage,
-};
 use streamlib_adapter_opengl::{
     DRM_FORMAT_ARGB8888, EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter,
+};
+use streamlib_surface_adapter::{
+    StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,
+    SurfaceUsage,
 };
 
 pub fn try_init_runtime() -> Option<(GpuContext, Arc<EglRuntime>)> {

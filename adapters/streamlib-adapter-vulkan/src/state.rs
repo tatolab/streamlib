@@ -12,8 +12,8 @@
 
 use std::sync::Arc;
 
-use streamlib_adapter_abi::{SurfaceId, SurfaceRegistration};
 use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout};
+use streamlib_surface_adapter::{SurfaceId, SurfaceRegistration};
 
 /// Inputs handed to [`crate::VulkanSurfaceAdapter::register_host_surface`].
 ///

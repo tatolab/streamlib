@@ -492,6 +492,10 @@ const CDYLIB_DEP_RATIONALE: &str = "cdylibs and adapter crates must depend on st
 const NO_STREAMLIB_RUNTIME_DEP: &[&str] = &[
     "sdk/streamlib-python-native/Cargo.toml",
     "sdk/streamlib-deno-native/Cargo.toml",
+    // Both sit directly beneath every adapter core below, so a `streamlib`
+    // dep in either would reach all of their runtime graphs at once.
+    "adapters/streamlib-surface-adapter/Cargo.toml",
+    "adapters/streamlib-adapter-abi/Cargo.toml",
     "adapters/streamlib-adapter-vulkan/Cargo.toml",
     "adapters/streamlib-adapter-opengl/Cargo.toml",
     "adapters/streamlib-adapter-cpu-readback/Cargo.toml",

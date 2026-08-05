@@ -33,14 +33,14 @@ use streamlib::sdk::engine::host_rhi::{
     HostVulkanBuffer, HostVulkanDevice, HostVulkanTexture, HostVulkanTimelineSemaphore,
 };
 use streamlib::sdk::rhi::{TextureDescriptor, TextureFormat as RhiTextureFormat};
-use streamlib_adapter_abi::{
-    AdapterError, StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState,
-    SurfaceTransportHandle, SurfaceUsage,
-};
 use streamlib_adapter_cuda::{
     CudaSurfaceAdapter, HostImageSurfaceRegistration, HostSurfaceRegistration, VulkanLayout,
 };
 use streamlib_consumer_rhi::TextureFormat as ConsumerTextureFormat;
+use streamlib_surface_adapter::{
+    AdapterError, StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState,
+    SurfaceTransportHandle, SurfaceUsage,
+};
 
 const W: u32 = 32;
 const H: u32 = 32;
@@ -361,7 +361,7 @@ fn buffer_path_rejects_image_surface_with_usage_correction_hint() {
         )
         .expect("register");
     let surface = make_surface(id);
-    use streamlib_adapter_abi::SurfaceAdapter;
+    use streamlib_surface_adapter::SurfaceAdapter;
     match adapter.acquire_read(&surface) {
         Err(AdapterError::BackendRejected { reason }) => {
             assert!(

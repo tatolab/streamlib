@@ -104,8 +104,8 @@ pub(crate) fn drop_skia_image_under_lock(
 }
 
 /// Compile-time invariant: Skia views must NOT impl
-/// [`streamlib_adapter_abi::CpuReadable`] or
-/// [`streamlib_adapter_abi::CpuWritable`].
+/// [`streamlib_surface_adapter::CpuReadable`] or
+/// [`streamlib_surface_adapter::CpuWritable`].
 ///
 /// Switching to `streamlib-adapter-cpu-readback` is the contractual
 /// signal for "I want CPU bytes" — see #514. This macro stamps out
@@ -119,7 +119,7 @@ macro_rules! assert_skia_views_not_cpu_readable {
         mod $module {
             #[allow(unused_imports)]
             use super::*;
-            use streamlib_adapter_abi::CpuReadable;
+            use streamlib_surface_adapter::CpuReadable;
 
             trait AmbiguousIfImpl<A> {
                 fn some_item() {}

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `streamlib_adapter_opengl::tests::conformance` — runs the public
-//! `run_conformance` suite from `streamlib-adapter-abi` against a
+//! `run_conformance` suite from `streamlib-surface-adapter` against a
 //! real `OpenGlSurfaceAdapter` wired to a host-allocated DMA-BUF
 //! render-target image and an EGL surfaceless context.
 //!
@@ -21,9 +21,9 @@ mod common;
 
 use streamlib::sdk::engine::HostTextureExt;
 use streamlib::sdk::rhi::TextureFormat;
-use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
-use streamlib_adapter_abi::{AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceId};
 use streamlib_adapter_opengl::{DRM_FORMAT_ARGB8888, HostSurfaceRegistration};
+use streamlib_surface_adapter::testing::{empty_surface, run_conformance};
+use streamlib_surface_adapter::{AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceId};
 
 use common::HostFixture;
 
@@ -31,7 +31,7 @@ struct ConformanceFactory<'a> {
     fixture: &'a HostFixture,
 }
 
-impl streamlib_adapter_abi::testing::ConformanceSurfaceFactory for ConformanceFactory<'_> {
+impl streamlib_surface_adapter::testing::ConformanceSurfaceFactory for ConformanceFactory<'_> {
     fn make(&self, id: SurfaceId) -> StreamlibSurface {
         // 64×64 BGRA8 — small enough to keep the per-surface
         // allocation cheap, large enough that the modifier-aware

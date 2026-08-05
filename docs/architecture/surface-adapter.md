@@ -167,16 +167,19 @@ signature or `#[repr(C)]` field, is a major bump.
 
 The trait does not carry a `trait_version()` method — Rust's vtable
 layout already enforces in-process compatibility at compile time. A
-mismatched `streamlib-adapter-abi` rlib version cannot link into the
+mismatched `streamlib-surface-adapter` rlib version cannot link into the
 runtime in the first place. The constant is load-bearing at any
 future cdylib boundary; `streamlib-plugin-abi`'s `PluginDeclaration`
 is the precedent shape for that check.
 
 ## Where the code lives
 
-- `adapters/streamlib-adapter-abi/` — the contract crate. Trait,
+- `adapters/streamlib-surface-adapter/` — the contract crate. Trait,
   descriptor, errors, guards, mock, conformance suite, subprocess
   crash harness.
+- `adapters/streamlib-adapter-abi/` — the cross-DSO half: the
+  `extern "C"` panic net every host-side adapter vtable shares, and
+  the ABI version constant.
 - `sdk/streamlib-python/python/streamlib/surface_adapter.py` —
   Python mirror.
 - `sdk/streamlib-deno/surface_adapter.ts` — Deno mirror.

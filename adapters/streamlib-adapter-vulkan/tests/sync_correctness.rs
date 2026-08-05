@@ -20,12 +20,12 @@ use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::host_rhi::HostVulkanTimelineSemaphore;
 use streamlib::sdk::rhi::TextureFormat;
-use streamlib_adapter_abi::{
-    StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,
-    SurfaceUsage,
-};
 use streamlib_adapter_vulkan::{
     HostSurfaceRegistration, VulkanContext, VulkanLayout, VulkanSurfaceAdapter,
+};
+use streamlib_surface_adapter::{
+    StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,
+    SurfaceUsage,
 };
 
 fn try_init_gpu() -> Option<GpuContext> {

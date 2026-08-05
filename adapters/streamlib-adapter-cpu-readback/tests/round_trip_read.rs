@@ -10,7 +10,7 @@
 #[path = "common.rs"]
 mod common;
 
-use streamlib_adapter_abi::CpuReadable;
+use streamlib_surface_adapter::CpuReadable;
 
 use crate::common::HostFixture;
 
@@ -21,7 +21,7 @@ use crate::common::HostFixture;
 /// the customer — that's what we assert.
 fn prime_with_pattern(
     fixture: &HostFixture,
-    descriptor: &streamlib_adapter_abi::StreamlibSurface,
+    descriptor: &streamlib_surface_adapter::StreamlibSurface,
     pattern: [u8; 4],
 ) {
     let mut guard = fixture

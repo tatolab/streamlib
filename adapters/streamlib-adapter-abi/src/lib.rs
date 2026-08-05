@@ -1,34 +1,24 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Public ABI for StreamLib surface adapters.
+//! Cross-DSO half of the surface-adapter contract.
 //!
-//! See `docs/architecture/surface-adapter.md` for the architecture
-//! brief and `docs/architecture/adapter-authoring.md` for the 3rd-party
-//! adapter author guide.
+//! The contract every adapter core implements lives in
+//! `streamlib-surface-adapter`; this crate carries only what the plugin
+//! ABI's dynamic boundary needs. See `docs/architecture/surface-adapter.md`.
 
-mod adapter;
-mod conformance;
-mod error;
 pub mod ffi;
-mod guard;
-mod mock;
-mod registry;
-mod surface;
 
-#[cfg(target_os = "linux")]
-mod subprocess_crash;
-
-pub mod testing;
-
-pub use adapter::{
-    CpuReadable, CpuWritable, GlWritable, STREAMLIB_ADAPTER_ABI_VERSION, SurfaceAdapter,
-    VkImageHandle, VkImageInfo, VkImageLayoutValue, VulkanImageInfoExt, VulkanWritable,
-};
-pub use error::AdapterError;
-pub use guard::{ReadGuard, WriteGuard};
-pub use registry::{Registry, SurfaceRegistration};
-pub use surface::{
-    AccessMode, StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState,
-    SurfaceTransportHandle, SurfaceUsage,
-};
+/// Major version of the surface-adapter ABI.
+///
+/// Bumped on a breaking trait change (renamed/removed method, changed
+/// signature, changed `#[repr(C)]` field of any associated type).
+/// Adding new methods is non-breaking and does NOT bump.
+///
+/// Rust's vtable layout already enforces in-process compatibility at
+/// compile time — a mismatched rlib version can't link into the runtime
+/// in the first place. This constant is load-bearing only at the cdylib
+/// boundary, where it'll be checked from a `#[repr(C)] AdapterDeclaration`
+/// shape (mirroring `streamlib-plugin-abi`'s `PluginDeclaration`) when
+/// dynamic adapter loading lands.
+pub const STREAMLIB_ADAPTER_ABI_VERSION: u32 = 1;

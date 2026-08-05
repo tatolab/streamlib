@@ -13,6 +13,13 @@
 //! the `streamlib` host crate (or directly from the Surface 2 IPC envelope
 //! for cdylibs) and call [`SchemaIdentWire::from_segments`] to materialize
 //! the wire bytes.
+//!
+//! Alongside the payload types, this crate owns the channel rules the host
+//! and every language native must agree on byte-for-byte or silently drift:
+//! [`decide_channel_egress_admission`] with its
+//! [`emit_channel_egress_admission_tracing`] diagnostics (so the crate does
+//! emit `tracing`), and [`next_read_required_len`], the peek rule over a
+//! native's local receive queue.
 
 use iceoryx2::prelude::*;
 
@@ -120,8 +127,10 @@ pub enum ChannelEgressAdmission {
 /// drift: it increments `refused_over_ceiling_count` on a refusal, advances
 /// `current_slot_capacity_bytes` to the next power of two on a growth (both in
 /// place), and reports whether that growth first crossed a quarter of the
-/// ceiling. The caller owns the tracing and the refusal surface (typed error vs.
-/// refuse return code), keeping this wire-types crate logging-free.
+/// ceiling. The caller owns the refusal surface (typed error vs. refuse return
+/// code); the shared diagnostics live in
+/// [`emit_channel_egress_admission_tracing`] beside this decision so they cannot
+/// drift from it.
 pub fn decide_channel_egress_admission(
     frame_total_bytes: usize,
     channel_ceiling_bytes: usize,
@@ -149,6 +158,80 @@ pub fn decide_channel_egress_admission(
         None
     };
     ChannelEgressAdmission::Admitted { grew_to }
+}
+
+/// Emit the channel-egress admission tracing shared by the host writer and the
+/// helper-process SDK natives' output-write path, so every writer stays
+/// lock-step on the refusal / segment-growth / quarter-of-ceiling diagnostics
+/// off the same [`decide_channel_egress_admission`] decision. `trust_tier`
+/// labels each line; `log_prefix` is `None` for the host and
+/// `Some((runtime_tag, processor_id))` for a native (its runtime tag plus its
+/// processor id) to scope the message with a `[tag:id] ` prefix. The caller
+/// still maps [`ChannelEgressAdmission::RefusedOverCeiling`] to its own refuse
+/// return code or typed error.
+pub fn emit_channel_egress_admission_tracing(
+    log_prefix: Option<(&str, &str)>,
+    trust_tier: ChannelTrustTier,
+    channel_service_name: &str,
+    channel_ceiling_bytes: usize,
+    payload_total_bytes: usize,
+    admission: &ChannelEgressAdmission,
+) {
+    let prefix = match log_prefix {
+        Some((runtime_tag, processor_id)) => format!("[{}:{}] ", runtime_tag, processor_id),
+        None => String::new(),
+    };
+
+    match admission {
+        ChannelEgressAdmission::RefusedOverCeiling { refused_count } => {
+            tracing::warn!(
+                channel = channel_service_name,
+                payload_bytes = payload_total_bytes,
+                ceiling_bytes = channel_ceiling_bytes,
+                tier = trust_tier.as_str(),
+                refused_count = *refused_count,
+                "{}output channel refused a payload above its per-channel ceiling",
+                prefix,
+            );
+        }
+        ChannelEgressAdmission::Admitted { grew_to } => {
+            if let Some(growth) = grew_to {
+                tracing::info!(
+                    channel = channel_service_name,
+                    old_segment_bytes = growth.old_segment_bytes,
+                    new_segment_bytes = growth.new_segment_bytes,
+                    tier = trust_tier.as_str(),
+                    "{}iceoryx2 publisher data segment grew (PowerOfTwo)",
+                    prefix,
+                );
+                if growth.crossed_quarter_ceiling {
+                    tracing::warn!(
+                        channel = channel_service_name,
+                        segment_bytes = growth.new_segment_bytes,
+                        ceiling_bytes = channel_ceiling_bytes,
+                        tier = trust_tier.as_str(),
+                        "{}iceoryx2 publisher segment crossed a quarter of the channel ceiling",
+                        prefix,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Byte length of the frame a read would return next from a native SDK's local
+/// `pending` receive queue, so every native shares one peek rule.
+/// `read_next_in_order` selects the FIFO front; otherwise the SkipToLatest
+/// newest. `None` when the queue is empty. The caller compares the returned
+/// length against its receive buffer to decide whether to grow before
+/// consuming the frame.
+pub fn next_read_required_len(queue: &[(Vec<u8>, i64)], read_next_in_order: bool) -> Option<usize> {
+    let next = if read_next_in_order {
+        queue.first()
+    } else {
+        queue.last()
+    };
+    next.map(|(frame, _)| frame.len())
 }
 
 /// Default iceoryx2 ring depth (slot count, not bytes) for the data
@@ -738,6 +821,19 @@ mod tests {
 
     fn sample_ident() -> SchemaIdentWire {
         SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap()
+    }
+
+    #[test]
+    fn next_read_required_len_picks_front_or_back_by_read_mode() {
+        let queue: Vec<(Vec<u8>, i64)> = vec![
+            (vec![0u8; 4], 1),
+            (vec![0u8; 16], 2),
+            (vec![0u8; 64], 3),
+        ];
+        assert_eq!(next_read_required_len(&queue, true), Some(4));
+        assert_eq!(next_read_required_len(&queue, false), Some(64));
+        assert_eq!(next_read_required_len(&[], true), None);
+        assert_eq!(next_read_required_len(&[], false), None);
     }
 
     #[test]
