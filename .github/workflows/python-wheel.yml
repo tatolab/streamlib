@@ -146,3 +146,10 @@ jobs:
       - name: Type-check the wheel's Python surface
         working-directory: sdk/streamlib-python-wheel
         run: uvx pyright@1.1.411
+
+      # The release channel's index generator. Stdlib-only, so it rides the
+      # no-build job rather than waiting on a wheel it has nothing to do with —
+      # and a broken index is only otherwise visible at release time.
+      - name: Simple-index generator tests
+        working-directory: scripts
+        run: python3 -m unittest test_build_simple_index

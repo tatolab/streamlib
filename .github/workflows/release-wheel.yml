@@ -1,0 +1,118 @@
+name: Release Wheel
+
+# The release channel: release-please publishes a GitHub release, this builds
+# the wheel onto it and rebuilds the PEP 503 simple index that serves it, so
+# `pip install streamlib --index-url <pages-url>` is one stable incantation.
+# PyPI publication waits for the project rename; the artifact is identical.
+on:
+  release:
+    types: [published]
+  # Rebuilding the index alone is the common manual case — a release edited or
+  # deleted by hand leaves the index describing files that are not there.
+  workflow_dispatch:
+    inputs:
+      build_wheel:
+        description: "Build and upload a wheel, or only rebuild the index"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build-wheel:
+    name: manylinux wheel
+    if: github.event_name == 'release' || inputs.build_wheel
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # abi3-py310: one wheel covers CPython 3.10 and every later GIL-enabled
+      # release, so this is a single build rather than a matrix. The container
+      # is manylinux_2_28 because the plan's portability model is the
+      # wgpu/opencv-python shape — the Vulkan loader, the window system and
+      # libcuda are dlopen'd at runtime, never linked, so the only glibc floor
+      # that matters is the one our own code compiles against.
+      - name: Build the wheel
+        uses: PyO3/maturin-action@v1
+        with:
+          working-directory: sdk/streamlib-python-wheel
+          target: x86_64
+          manylinux: 2_28
+          args: --release --out dist
+          # The engine's build.rs compiles GLSL and generates JTD bindings, so
+          # the container needs the same toolchain the test workflows install.
+          before-script-linux: |
+            dnf install -y pkgconfig protobuf-compiler clang-devel \
+              vulkan-headers vulkan-loader-devel glslang python3-devel unzip
+            curl -sSL https://github.com/jsontypedef/json-typedef-codegen/releases/download/v0.4.1/x86_64-unknown-linux-gnu.zip -o /tmp/jtd-codegen.zip
+            unzip -q /tmp/jtd-codegen.zip -d /tmp/jtd-codegen
+            install -m 0755 /tmp/jtd-codegen/jtd-codegen /usr/local/bin/jtd-codegen
+
+      # A wheel that cannot be installed and cannot answer `--help` is not a
+      # release artifact. This is the first moment the console script exists as
+      # a real entry point rather than a table in pyproject.toml.
+      - name: The wheel installs and its console script runs
+        run: |
+          python3 -m venv /tmp/wheel-check
+          /tmp/wheel-check/bin/pip install --no-index sdk/streamlib-python-wheel/dist/*.whl
+          /tmp/wheel-check/bin/streamlib --help
+          /tmp/wheel-check/bin/streamlib new /tmp/scaffold-check --test-pattern
+          test -f /tmp/scaffold-check/app.py
+
+      - name: Attach the wheel to the release
+        if: github.event_name == 'release'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release upload "${{ github.event.release.tag_name }}" \
+            sdk/streamlib-python-wheel/dist/*.whl --clobber
+
+  publish-simple-index:
+    name: PEP 503 simple index
+    # Always after the wheel job when it ran, so the index sees the release the
+    # run is about. `always()` plus the explicit result check: a skipped build
+    # (index-only rebuild) must not skip this too.
+    needs: build-wheel
+    if: always() && needs.build-wheel.result != 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # GitHub Pages, sourced from Actions rather than a gh-pages branch — no
+    # committed build output, and the index is regenerated from the release
+    # history on every run.
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: The index generator's own tests
+        working-directory: scripts
+        run: python3 -m unittest test_build_simple_index
+
+      # Rebuilt from the whole release history rather than appended to, so a
+      # re-run repairs a bad index and a deleted release drops out on its own.
+      - name: Generate the index from every published release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/releases" --paginate --slurp \
+            > /tmp/releases.json
+          python3 scripts/build_simple_index.py \
+            --releases-json /tmp/releases.json \
+            --output-dir /tmp/pages
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: /tmp/pages
+      - id: deploy
+        uses: actions/deploy-pages@v4

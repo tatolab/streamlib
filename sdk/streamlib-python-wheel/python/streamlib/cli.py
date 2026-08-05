@@ -125,7 +125,7 @@ def execute_app_entry_file(entry_file: Path) -> "dict[str, Any]":
 
 def read_app_setup_function(
     entry_namespace: "dict[str, Any]", entry_file: Path
-) -> "Callable[[Runtime], None]":
+) -> "Callable[[Runtime], Any]":
     """Take `setup` out of the executed entry namespace.
 
     The convention is the whole contract — a missing or non-callable `setup` is

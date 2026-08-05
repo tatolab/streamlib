@@ -14,10 +14,11 @@ import ast
 import subprocess
 import sys
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-from streamlib import cli
+from streamlib import Runtime, cli
 
 MINIMAL_APP_SOURCE = "def setup(rt):\n    pass\n"
 
@@ -131,7 +132,9 @@ def test_the_entry_file_executes_and_yields_its_setup_function(tmp_path: Path):
     namespace = cli.execute_app_entry_file(entry_file)
     app_setup_function = cli.read_app_setup_function(namespace, entry_file)
 
-    assert app_setup_function(None) == "called"
+    # The runtime this `setup` never touches: what is under test is that the
+    # entry file's own function came back, not what it does with the argument.
+    assert app_setup_function(cast(Runtime, None)) == "called"
 
 
 def test_the_entry_runs_as_main_with_its_own_directory_importable(tmp_path: Path):
