@@ -16,8 +16,12 @@ another application.
 > Rust path compiles a generated-main harness around the user's entry; Python/TS entries
 > run through the subprocess SDK bound to the control plane).~~ — Superseded 2026-08-02
 > by `importable-python-library.md`. The shipped artifact is the PyPI wheel (Python API +
-> CLI + engine via PyO3); build orchestration is deleted entirely; Python entries run
-> in-process via the wheel, not through a subprocess SDK. The generated-main Rust harness
+> CLI + engine via PyO3); build orchestration is deleted entirely; the entry file and
+> `setup(rt)` run in the app's own process via the wheel, not through a subprocess SDK —
+> while every *processor* runs in a helper process spawned by the engine (precision added
+> 2026-08-04 by `helper-process-placement-only.md`: what died 2026-08-02 was the module
+> system's subprocess *provisioning*, never process-per-processor execution, which is now
+> the only execution model). The generated-main Rust harness
 > is dead — a Rust app is a plain cargo project.
 
 The standalone streamlib-runtime binary retires. What survives of this decision: there
@@ -34,8 +38,13 @@ the one wheel.
 ## Rejected alternatives
 
 - **Two binaries (CLI spawns a runtime executable)** — two hosts drift, two artifacts
-  ship, and the subprocess indirection buys nothing the in-process host doesn't already
-  provide.
+  ship.
+  > ~~the subprocess indirection buys nothing the in-process host doesn't already
+  > provide~~ — Superseded 2026-08-04 by `helper-process-placement-only.md`. True of a
+  > second *CLI/runtime binary* — that rejection stands, and the wheel remains one
+  > artifact. False as a general principle: helper-process indirection buys per-processor
+  > isolation, the model's optimised axis. Helper processes are not a second binary —
+  > they exec `sys.executable` and import the same wheel.
 - **Binary-only runtime (no library path)** — kills legitimate Rust embedding; the
   library is the substrate, the binary is one consumer of it.
 

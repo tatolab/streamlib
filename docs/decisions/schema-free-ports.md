@@ -55,11 +55,18 @@ grammar is deleted from every authoring surface.
   instance's display name is human-facing and may repeat. Engine-appended counters on
   duplicate labels are a convenience the owner accepted as revisitable (2026-08-03).
 - A class defined in the entry file run as `python app.py` identifies as `__main__:…`.
-  That is legal and runs in-process (owner, 2026-08-03) — forbidding it would contradict
-  "an importable Python library" and retire the `python app.py` harness the
-  interpreter-lifecycle contract was proven against. The consequence lands where it
-  actually bites: no helper process can import `__main__`, so the engine refuses to
-  helper-place such a class, with an error naming the fix. Identity is therefore
-  per-launch-arrangement, and the only cross-process reader of it is the placement path
-  that already refuses these classes.
+  > ~~That is legal and runs in-process (owner, 2026-08-03) — forbidding it would contradict
+  > "an importable Python library" and retire the `python app.py` harness the
+  > interpreter-lifecycle contract was proven against. The consequence lands where it
+  > actually bites: no helper process can import `__main__`, so the engine refuses to
+  > helper-place such a class, with an error naming the fix. Identity is therefore
+  > per-launch-arrangement, and the only cross-process reader of it is the placement path
+  > that already refuses these classes.~~ — Superseded 2026-08-04 by
+  > `helper-process-placement-only.md`, which reverses the 2026-08-03 call: a
+  > `__main__`-defined processor class is a wiring error at `rt.add`, naming its fix (move
+  > the class to an importable module). The harness argument does not survive — `python
+  > app.py` still works; the *app* may be `__main__`, only a *processor class* may not,
+  > because every processor class is imported by a child interpreter. Identity is no longer
+  > per-launch-arrangement: a legal processor always lives in an importable module and
+  > always has the same name. The type-layer decision this ADR records is unaffected.
 - Cross-language and cross-node interop rest entirely on the bag being self-describing.

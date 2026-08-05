@@ -7,7 +7,9 @@ extension model, §Processor model, §Graphics, §Media I/O, §Language SDKs,
 §Distribution, §Control plane). ADR: `docs/decisions/importable-python-library.md`.
 Recon verified 2026-08-02: three read-only agent sweeps (engine media primitives,
 GIL/data-plane cost, ecosystem precedent) plus a four-agent audit pass (plan coherence,
-rip-out completeness, DX red-team, technical risk) — findings folded in below.
+rip-out completeness, DX red-team, technical risk) — findings folded in below. (The
+GIL/data-plane-cost sweep's placement conclusions were superseded 2026-08-04 by the
+helper-only ruling; its media-primitive and precedent findings stand.)
 
 Scale tier: touches the processor model and the Python API's public contract → change
 artifact + ADR.
@@ -20,13 +22,19 @@ artifact + ADR.
   strictly precedes interpreter finalization — threads joined, anchored thread states
   released, `atexit`/context-manager guarantee on the exception path. Proven against a
   real `python app.py` harness in headless CI — the arrangement the spike never ran.
-- **In-process Python authoring**: `Runtime` via PyO3; `@processor` classes execute
-  in-process on the dedicated-thread model; `rt.add(ImportedClass)`; the GIL-release
-  contract (every blocking native binding releases the GIL; pixels never cross —
-  handles/surface ids only) with a test proving a blocked native call stalls no other
-  Python processor. Generated `.pyi` stubs ship in the wheel (IDE autocomplete). A
-  single-processor test harness (feed a synthetic frame, assert output — no hardware)
-  ships with it; it is also how built-ins are tested.
+- **Python authoring** (retitled 2026-08-04 by the helper-placement pivot; was
+  "In-process Python authoring" — in-process hosting of a Python processor is banned,
+  see `docs/decisions/helper-process-placement-only.md`): `Runtime` via PyO3;
+  `@processor` classes execute on the dedicated-thread model inside their own helper
+  process; `rt.add(ImportedClass)` records the class's import path and the engine
+  spawns the helper; the GIL-release contract (every blocking native binding releases
+  the GIL; pixels never cross — handles/surface ids only) so a blocking binding never
+  stalls its own interpreter's threads — never a co-tenancy test, since no two Python
+  processors share an interpreter. Generated `.pyi` stubs ship in the wheel (IDE
+  autocomplete). A single-processor test harness (feed a synthetic frame, assert
+  output — no hardware) ships with it; it is also how built-ins are tested — its
+  transport under helper-only placement is an open `[NEEDS DECISION]` recorded in the
+  pivot's rip-out change.
 - **Built-in media blocks**: native V4L2 camera and display processors in the engine
   tree, written against the handle-shaped primitives; the engine absorbs the draw step
   via a "present this surface (fit/fill, color-managed)" composition call. Display is
@@ -45,8 +53,12 @@ artifact + ADR.
   run boots an empty graph — this is the missing glue); a bad save prints the
   traceback and keeps the last good pipeline running; the MVP edit loop is re-running
   `dev` (reload-on-save is a later nicety, processor-granular per the plan, never
-  module machinery); a dev-mode GIL-hold watchdog warns when a callback holds the GIL
-  beyond threshold; `dev` binds loopback. `streamlib new` scaffolds `app.py` +
+  module machinery); `dev` binds loopback. (A "dev-mode GIL-hold watchdog" clause was removed
+  here 2026-08-04: it measured shared-GIL starvation, which helper-only placement
+  makes unrepresentable — built on #1711, reverted in `4caaa1fa`, banned by
+  `docs/decisions/helper-process-placement-only.md`.) `streamlib new` scaffolds
+  `app.py` + the effect class in its own importable module (a `__main__`-defined
+  processor is a wiring error) +
   `pyproject.toml` + `.python-version` (3.12) with working camera → effect → display
   wiring where the effect touches pixels via the exchange surface.
 - **Packaging + release channel**: the CLI ships as the wheel's console script; wheels

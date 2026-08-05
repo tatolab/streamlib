@@ -52,8 +52,12 @@ Its load-bearing terms:
   folder, minted `@app/local/<Name>`; execution stays in the engine-spawned
   subprocess.~~ — Superseded 2026-08-02 by `importable-python-library.md`. App-local
   processors are ordinary Python classes imported into `app.py`; `rt.add` takes the
-  class; no discovery scan, no minted ids, and execution placement (in-process or a
-  same-interpreter helper process) is the engine's decision. The surviving point: the
+  class; no discovery scan, no minted ids. (This replacement's own "execution placement
+  (in-process or a same-interpreter helper process) is the engine's decision" clause was
+  superseded 2026-08-04 by `helper-process-placement-only.md`: there is one placement — a
+  helper process per Python processor — and it is not a decision. "Imported into
+  `app.py`" is now a hard requirement, not a convenience: the class must live in an
+  importable module, so `app.py` imports it rather than defining it.) The surviving point: the
   class form keeps go-to-definition and type checking working, which is what makes the
   loop agent-friendly (small `app.py`, one obvious processor file, `graph`/`tap` to
   verify an edit landed).
