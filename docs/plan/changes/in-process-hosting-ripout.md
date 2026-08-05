@@ -108,6 +108,18 @@ inlined; no API invented here is unverified against the tree.
 - `docs/plan/changes/one-monotonic-clock.md`'s MODIFIED bullet targeting
   `spikes/streamlib-pyembed-spike/src/monotonic_clock.rs` retires with the spike tree
   (below) — one line, must not be forgotten.
+- **Engine-side in-process leftovers get named dispositions** (merged-PR audit,
+  2026-08-05 — the only three engine-side items the in-process era left behind; nothing
+  cross-process was removed, weakened, or bypassed by #1718/#1720/#1732/#1733/#1737):
+  `emit_python_processor_log_record` (`core/logging/mod.rs`, from #1720) dies with its
+  sole wheel caller unless the helper log protocol explicitly reuses it — either way,
+  named, never silently kept; the `spawn_processor_op.rs` comment justifying the
+  "Python processor" label with "runs in the app's own interpreter" is corrected (the
+  label may stay); `device_export_staging`'s module-doc obligations to #1714 —
+  register each staging + exportable timeline with surface-share, and provide a
+  helper-reachable refill/copy-back trigger (the `GpuContextLimitedAccess`
+  passthroughs are host-direct by design today) — are promoted from doc comment to
+  checklist items.
 - 13 doc comments premised on a shared GIL are purged in the edits touching their
   methods (`python_processor_host.rs`, `python_processor_link_data_access.rs`,
   `python_runtime_lifecycle.rs`, `python_logging.rs`, `python_processor_context.rs`
