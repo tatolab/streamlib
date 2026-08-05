@@ -9,6 +9,8 @@ paths:
 
 # Polyglot
 
+- **One Python processor, one helper process, one GIL** — hosting a processor in the app's
+  interpreter is a STOP-WORK violation. See `.claude/rules/placement.md`.
 - **Runtime parity is a plan decision, not a per-PR mandate.** The architecture plan
   (`docs/plan/`) states which surfaces require Python/Deno parity and which runtime leads during
   MVP. Where the plan marks a surface parity-required, both runtimes land together; everywhere

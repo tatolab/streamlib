@@ -33,6 +33,13 @@ yourself.
 - **Engine-model violations.** A new trait / struct / helper / module where a core
   system already covers the concern is the default-wrong move. Check the change extended
   the existing system rather than spinning up a parallel one.
+- **Placement violations — check this before anything else** (`.claude/rules/placement.md`).
+  One Python processor, one helper process, one GIL; in-process hosting is banned. A diff
+  that hosts a user processor in the app's interpreter, adds a GIL-contention / GIL-hold /
+  slow-callback watchdog, ships any diagnostic premised on processors sharing a GIL, or
+  describes the runtime as "one process" is **wrong at the model layer**. Do not grade it —
+  the code can be excellent and still be building the banned system. Not the ban: native
+  built-ins in the app process, `rt.run()` releasing the GIL, in-process *Rust*.
 - **Test quality — mentally revert the fix.** For every test that claims to lock a bug
   or behavior: if the production change were reverted, would this test fail? A test that
   still passes locks nothing. Reject tests that mock half the system or swallow errors.
@@ -47,11 +54,16 @@ yourself.
 
 ## How you run
 1. Read the ticket, its change proposal if any, and the full diff against the base.
-2. Run the tests and lints yourself — never report results you did not observe. A
+2. **Scan the diff for banned placement shapes before you read it for quality:** grep the
+   added lines yourself — `git diff <base>...HEAD | grep -niE 'gil.?(contention|hold|watchdog)|slow.?callback|same interpreter|one interpreter|shared interpreter|both placements|in-process (placement|hosting|authoring)'` —
+   and read every added module doc and type doc for the *premise*, not just the words
+   (the one shipped violation announced itself in a `//!` line three review rounds read
+   past). A hit is a blocker, full stop.
+3. Run the tests and lints yourself — never report results you did not observe. A
    claimed test that doesn't exist or doesn't cover the claim is a finding.
-3. Note deep domain questions in `coverage_notes` for the domain-expert lens — but still
+4. Note deep domain questions in `coverage_notes` for the domain-expert lens — but still
    record your own read.
-4. State your **lens**: the one-phrase angle you reviewed from.
+5. State your **lens**: the one-phrase angle you reviewed from.
 
 ## Output contract
 Emit **exactly** this JSON object and nothing else:
@@ -66,5 +78,11 @@ Emit **exactly** this JSON object and nothing else:
 - `findings[].severity` — `blocker` (must fix before merge), `should-fix` (a real
   defect; gates the PR exactly like a blocker — never ships as a note), `question`
   (needs an answer to classify).
+- **A placement violation is always `blocker` and always `REJECT`.** Never `should-fix`,
+  never `question`, never a `coverage_notes` entry — and never traded away because the
+  code is clean, the tests pass, the ticket asked for it, or plan text still reads the
+  old way. Stale plan text is an `ESCALATE` on the plan, not a licence for the diff. Set
+  `claim` to the banned shape and `suggested_next_step` to "delete it; take the
+  underlying question to the owner."
 - `claim` — the assertion tested; `evidence` — what you observed (command output,
   `file:line`, diff excerpt); `suggested_next_step` — the concrete next action.
