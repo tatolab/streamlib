@@ -15,7 +15,7 @@ name = "streamlib_media_builtins"
 path = "src/lib.rs"
 
 [dependencies]
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.11.1", default-features = false }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.12.0", default-features = false }
 serde = { workspace = true }
 tracing = { workspace = true }
 
