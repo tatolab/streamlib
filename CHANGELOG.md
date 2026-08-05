@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.2](https://github.com/tatolab/streamlib/compare/v0.13.1...v0.13.2) (2026-08-05)
+
+
+### Bug Fixes
+
+* **ci:** keep the wheel build's working directory out of the shaderc checkout ([#1748](https://github.com/tatolab/streamlib/issues/1748)) ([e8066fc](https://github.com/tatolab/streamlib/commit/e8066fca77a06797f2b71cbd6d06228ae3d8a7f0))
+
 ## [0.13.1](https://github.com/tatolab/streamlib/compare/v0.13.0...v0.13.1) (2026-08-05)
 
 
