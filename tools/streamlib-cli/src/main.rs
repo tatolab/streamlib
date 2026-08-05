@@ -23,25 +23,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Boot this app as a StreamLib node, hosting the control plane in-process.
-    ///
-    /// Reads `app.py` from the anchor directory — `--dir` when given, else the
-    /// exact CWD, never a parent — or the file named by `-f`. The node
-    /// publishes a node-registry entry, so `streamlib nodes`, `graph`, and
-    /// `tap` drive it. Runs until interrupted.
-    Run {
-        #[command(flatten)]
-        launch: commands::run::AppLaunchCommandArgs,
-    },
-
-    /// Boot this app as a StreamLib node for development.
-    ///
-    /// Same entry resolution and in-process control plane as `run`.
-    Dev {
-        #[command(flatten)]
-        launch: commands::run::AppLaunchCommandArgs,
-    },
-
     /// Stream a runtime's on-disk JSONL log file in pretty format, or — with
     /// `--url` — collect a bounded sample of a running node's live event stream
     /// via its control plane.
@@ -561,35 +542,24 @@ fn main() -> Result<()> {
         .block_on(async_main(cli))
 }
 
-/// The short-lived-CLI logging config for `command`, or `None` when the
-/// subcommand hosts a runtime and must leave logging to it.
+/// The short-lived-CLI logging config for `command`.
 ///
-/// Every short-lived subcommand mirrors pretty logs to stdout except `mcp`,
-/// which speaks a byte protocol on stdout and so routes its mirror to stderr to
-/// keep fd 1 carrying only MCP JSON-RPC frames. `run` / `dev` return `None`:
-/// `logging::init` is first-caller-wins, so initializing here would demote the
-/// `Runner`'s own runtime-shaped init to a noop guard and cost the hosted node
-/// its JSONL log — the durable observability contract — and fd-level stdio
-/// interception.
+/// Every subcommand mirrors pretty logs to stdout except `mcp`, which speaks a
+/// byte protocol on stdout and so routes its mirror to stderr to keep fd 1
+/// carrying only MCP JSON-RPC frames.
 fn logging_config_for(
     command: &Option<Commands>,
-) -> Option<streamlib::sdk::logging::StreamlibLoggingConfig> {
+) -> streamlib::sdk::logging::StreamlibLoggingConfig {
     match command {
-        Some(Commands::Run { .. } | Commands::Dev { .. }) => None,
-        Some(Commands::Mcp { .. }) => Some(
-            streamlib::sdk::logging::StreamlibLoggingConfig::for_stdio_protocol("streamlib-cli"),
-        ),
-        _ => Some(streamlib::sdk::logging::StreamlibLoggingConfig::for_cli(
-            "streamlib-cli",
-        )),
+        Some(Commands::Mcp { .. }) => {
+            streamlib::sdk::logging::StreamlibLoggingConfig::for_stdio_protocol("streamlib-cli")
+        }
+        _ => streamlib::sdk::logging::StreamlibLoggingConfig::for_cli("streamlib-cli"),
     }
 }
 
 async fn async_main(cli: Cli) -> Result<()> {
-    let _logging_guard = match logging_config_for(&cli.command) {
-        Some(config) => Some(streamlib::sdk::logging::init(config)?),
-        None => None,
-    };
+    let _logging_guard = streamlib::sdk::logging::init(logging_config_for(&cli.command))?;
 
     match cli.command {
         Some(Commands::Logs {
@@ -624,12 +594,6 @@ async fn async_main(cli: Cli) -> Result<()> {
                 since: since.as_deref(),
             })
             .await?
-        }
-        Some(Commands::Run { launch }) => {
-            commands::run::launch_app_node(commands::run::AppLaunchVerb::Run, launch)?
-        }
-        Some(Commands::Dev { launch }) => {
-            commands::run::launch_app_node(commands::run::AppLaunchVerb::Dev, launch)?
         }
         Some(Commands::Mcp { attach }) => commands::mcp::run(attach).await?,
         Some(Commands::Nodes) => commands::nodes::run()?,
@@ -835,8 +799,7 @@ mod tests {
     /// here, catching a regression that would re-pollute the protocol stream.
     #[test]
     fn mcp_subcommand_mirrors_logs_to_stderr_not_stdout() {
-        let mcp = logging_config_for(&Some(Commands::Mcp { attach: None }))
-            .expect("mcp owns its own short-lived logging");
+        let mcp = logging_config_for(&Some(Commands::Mcp { attach: None }));
         assert_eq!(
             mcp.pretty_mirror_stream,
             PrettyMirrorStream::Stderr,
@@ -848,49 +811,21 @@ mod tests {
     /// mirror.
     #[test]
     fn non_mcp_invocation_mirrors_logs_to_stdout() {
-        let config = logging_config_for(&None).expect("short-lived verbs own their logging");
+        let config = logging_config_for(&None);
         assert_eq!(config.pretty_mirror_stream, PrettyMirrorStream::Stdout);
     }
 
-    /// `run` / `dev` host a runtime, and `logging::init` is first-caller-wins:
-    /// initializing the CLI's short-lived config here would demote the
-    /// `Runner`'s runtime-shaped init to a noop guard, costing the hosted node
-    /// its JSONL log and fd-level stdio interception. Returning a config for
-    /// either verb goes red here.
+    /// The app-launch verbs live in the wheel's console script, which is the
+    /// only host with an interpreter to run `app.py` in. A Rust `run` / `dev`
+    /// reappearing here is a second launcher answering to the same name.
     #[test]
-    fn runtime_hosting_verbs_defer_logging_to_the_runner() {
+    fn the_rust_cli_owns_no_app_launch_verb() {
         for verb in ["run", "dev"] {
             assert!(
-                logging_config_for(&Some(parse_subcommand(verb))).is_none(),
-                "`{verb}` hosts a runtime and must leave logging to the Runner"
+                Cli::try_parse_from(["streamlib", verb]).is_err(),
+                "`streamlib {verb}` belongs to the wheel's console script, not this binary"
             );
         }
-    }
-
-    /// Owner-decided (2026-07-30, #1683): every host of the one control plane
-    /// binds all interfaces by default so nodes can reach each other. `run` /
-    /// `dev` must not drift from `streamlib-runtime`'s default.
-    #[test]
-    fn runtime_hosting_verbs_bind_all_interfaces_by_default() {
-        for verb in ["run", "dev"] {
-            let launch = match parse_subcommand(verb) {
-                Commands::Run { launch } | Commands::Dev { launch } => launch,
-                _ => unreachable!("`{verb}` parses to its own variant"),
-            };
-            assert_eq!(
-                launch.bind_host, "0.0.0.0",
-                "`{verb}` must match the runtime's all-interfaces default"
-            );
-        }
-    }
-
-    /// Parse `streamlib <verb>` with no further arguments, so clap supplies the
-    /// real defaults rather than the test hand-building the struct.
-    fn parse_subcommand(verb: &str) -> Commands {
-        Cli::try_parse_from(["streamlib", verb])
-            .unwrap_or_else(|error| panic!("`streamlib {verb}` must parse bare: {error}"))
-            .command
-            .expect("a subcommand was given")
     }
 
     /// `--count` is control-plane-only: `logs <runtime_id> --count N` (local
@@ -910,8 +845,15 @@ mod tests {
     /// `--node`.
     #[test]
     fn logs_count_with_a_control_target_parses() {
-        Cli::try_parse_from(["streamlib", "logs", "--url", "http://127.0.0.1:9000", "--count", "5"])
-            .expect("`logs --url ... --count N` must parse");
+        Cli::try_parse_from([
+            "streamlib",
+            "logs",
+            "--url",
+            "http://127.0.0.1:9000",
+            "--count",
+            "5",
+        ])
+        .expect("`logs --url ... --count N` must parse");
         Cli::try_parse_from(["streamlib", "logs", "--node", "Rnode", "--count", "5"])
             .expect("`logs --node ... --count N` must parse");
     }

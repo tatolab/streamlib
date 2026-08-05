@@ -217,9 +217,14 @@ impl PythonRuntimeHandle {
                 register_processor_class(python, processor_class)?
             }
         };
+        // An omitted `config` is an empty object, never null: a processor's
+        // config type is a struct whose fields carry serde defaults, and a
+        // struct deserializes from `{}` but not from `null`. Sending null made
+        // `rt.add(CameraSource)` — the spelling the plan blesses for a block
+        // that needs no configuration — fail at graph compile time.
         let configuration = match config {
             Some(config) => python_object_to_json_value(config.as_any())?,
-            None => serde_json::Value::Null,
+            None => serde_json::Value::Object(serde_json::Map::new()),
         };
 
         // The same rule the graph applies when it names the node, so the handle
@@ -255,6 +260,25 @@ impl PythonRuntimeHandle {
             .detach(|| engine.connect(from, to))
             .map(|_link_id| ())
             .map_err(|connect_failure| PyRuntimeError::new_err(connect_failure.to_string()))
+    }
+
+    /// Host the control plane in this process, so the node is discoverable.
+    ///
+    /// Opt-in: a runtime that never calls this runs headless and publishes no
+    /// node-registry entry. Called before `run()`, like every other
+    /// graph-building call — the control plane is a processor in the graph.
+    #[pyo3(signature = (*, bind_host = "0.0.0.0".to_string(), bind_port = 9000, node_name = None))]
+    fn host_control_plane(
+        &self,
+        python: Python<'_>,
+        bind_host: String,
+        bind_port: u16,
+        node_name: Option<String>,
+    ) -> PyResult<()> {
+        let engine = self.engine_being_built("host the control plane")?;
+        crate::python_control_plane_hosting::host_control_plane_on_engine(
+            python, &engine, bind_host, bind_port, node_name,
+        )
     }
 
     /// Run the pipeline until Ctrl-C, SIGTERM, or [`shutdown`], then tear the

@@ -13,6 +13,11 @@
           "type": "toml",
           "path": "Cargo.toml",
           "jsonpath": "$.workspace.package.version"
+        },
+        {
+          "type": "toml",
+          "path": "sdk/streamlib-python-wheel/pyproject.toml",
+          "jsonpath": "$.project.version"
         }
       ]
     }

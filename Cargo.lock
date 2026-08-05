@@ -5522,6 +5522,7 @@ dependencies = [
  "serde_json",
  "streamlib",
  "streamlib-adapter-cuda",
+ "streamlib-api-server",
  "streamlib-media-builtins",
  "tracing",
 ]

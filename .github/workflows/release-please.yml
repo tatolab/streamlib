@@ -140,3 +140,18 @@ jobs:
     if: ${{ needs.release-please.outputs.release_created }}
     uses: ./.github/workflows/schemas.yml
     secrets: inherit
+
+  # Build the wheel onto the release just cut and republish the simple index.
+  # Called in-run for the same reason trigger-schemas is: the release was
+  # created by GITHUB_TOKEN, so `on: release` would never fire.
+  trigger-wheel-release:
+    needs: release-please
+    if: ${{ needs.release-please.outputs.release_created }}
+    permissions:
+      contents: write
+      pages: write
+      id-token: write
+    uses: ./.github/workflows/release-wheel.yml
+    with:
+      tag_name: ${{ needs.release-please.outputs.tag_name }}
+    secrets: inherit

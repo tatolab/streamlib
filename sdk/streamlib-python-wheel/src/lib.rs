@@ -8,6 +8,7 @@ use pyo3::prelude::*;
 
 mod python_added_processor;
 mod python_bag_conversion;
+mod python_control_plane_hosting;
 #[cfg(target_os = "linux")]
 mod python_cuda_pixel_exchange;
 mod python_gpu_surface_pixel_exchange;

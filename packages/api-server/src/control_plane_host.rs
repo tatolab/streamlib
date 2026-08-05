@@ -1,10 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! The boot recipe a host binary follows to stand this crate's control plane up
-//! inside its own runtime — shared by the `streamlib-runtime` binary and the
-//! CLI's `run` / `dev` verbs so a node is discoverable the same way whichever
-//! one launched it.
+//! The boot recipe a host follows to stand this crate's control plane up inside
+//! its own runtime — shared by the `streamlib-runtime` binary and the wheel's
+//! `Runtime.host_control_plane`, so a node is discoverable the same way
+//! whichever one launched it.
 
 use streamlib::sdk::error::Result;
 use streamlib::sdk::processor_type_ref;

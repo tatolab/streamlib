@@ -8,11 +8,9 @@ build-backend = "maturin"
 [project]
 name = "streamlib"
 # Tracks [workspace.package].version in the root Cargo.toml — the plan's "two
-# artifacts, one version, released together". Nothing bumps this yet:
-# release-please's extra-files list covers only the workspace Cargo.toml, and
-# check-package-version-drift scans `packages/*`. Wiring the bump belongs with
-# release packaging (#1711); until then keep it in sync by hand on release.
-version = "0.10.3"
+# artifacts, one version, released together". release-please bumps this file
+# through its `extra-files` list, so the wheel and the crate never drift.
+version = "0.12.0"
 description = "StreamLib — a realtime streaming engine with Python authoring"
 # abi3-py310 in Cargo.toml is the binding half of this floor; the two move
 # together or the wheel claims interpreters its ABI tag does not cover.
@@ -28,6 +26,11 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
 ]
+
+# pip owns PATH: installing the wheel is what puts `streamlib` on it. There is
+# no second artifact to install and no shell setup step.
+[project.scripts]
+streamlib = "streamlib.cli:main"
 
 [project.optional-dependencies]
 # numpy and torch are test-and-types dependencies, not runtime ones — the

@@ -99,6 +99,23 @@ class Runtime:
     ) -> None:
         """Link one processor's output port to another's input port."""
 
+    # `bind_host` is `...` rather than its literal default because the binding
+    # builds that string at call time, which is what the compiled signature
+    # reports — the same shape `__exit__` below has.
+    def host_control_plane(
+        self,
+        *,
+        bind_host: str = ...,
+        bind_port: int = 9000,
+        node_name: str | None = None,
+    ) -> None:
+        """Host the control plane in this process, so the node is discoverable.
+
+        Binds all interfaces (`0.0.0.0`) and port 9000 by default, incrementing
+        the port on collision. Opt-in: a runtime that never calls this
+        publishes no node-registry entry. Call it before `run()`.
+        """
+
     def run(self) -> None:
         """Run the pipeline until Ctrl-C, SIGTERM or `shutdown()`, then tear down."""
 
@@ -392,3 +409,4 @@ def log_event(
     level: str, message: str, attrs: dict[str, Any] | None = None
 ) -> None:
     """Emit one record on the engine's log pipeline, with structured attrs."""
+
