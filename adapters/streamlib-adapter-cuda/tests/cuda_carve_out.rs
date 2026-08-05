@@ -408,9 +408,8 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
     // 11.4..12.9 bindings; the unsuffixed `cudaWaitExternalSemaphoresAsync`
     // is gated on cuda-13xxx. `cudarc` is pinned to the `cuda-12060`
     // floor (see the workspace Cargo.toml) so the `_v2` symbol is the
-    // right one. The runtime
-    // libcudart on cuda 13.x continues to export `_v2` for ABI
-    // stability, so the dlopen path resolves.
+    // right one. The runtime libcudart on cuda 13.x continues to export
+    // `_v2` for ABI stability, so the dlopen path resolves.
     let wait_result = unsafe {
         sys::cudaWaitExternalSemaphoresAsync_v2(&ext_sem, &wait_params, 1, stream).result()
     };
