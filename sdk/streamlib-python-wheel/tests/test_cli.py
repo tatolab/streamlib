@@ -222,6 +222,101 @@ def test_a_missing_entry_exits_without_a_python_traceback(tmp_path: Path):
     )
 
 
+def test_the_apps_traceback_carries_none_of_the_launchers_frames(tmp_path: Path):
+    """The user's own line must be the first frame they read.
+
+    `runpy` is frozen since CPython 3.11 and its frames report
+    `<frozen runpy>`, so matching only `runpy.__file__` leaves three of its
+    frames sitting on top of the app's.
+    """
+    write_app(tmp_path, "app.py", "raise ValueError('bad wiring')\n")
+
+    finished = run_cli("run", "--dir", str(tmp_path))
+
+    assert "runpy" not in finished.stderr, (
+        f"no launcher frame may appear in the app's traceback; stderr was:\n{finished.stderr}"
+    )
+    assert "cli.py" not in finished.stderr, (
+        f"the launcher's own frames must be stripped; stderr was:\n{finished.stderr}"
+    )
+    assert "app.py" in finished.stderr
+
+
+def test_the_app_does_not_see_the_launchers_arguments(tmp_path: Path):
+    """`sys.argv` belongs to the app, not to `streamlib run`."""
+    write_app(
+        tmp_path,
+        "app.py",
+        "import sys\nARGV = list(sys.argv)\ndef setup(rt):\n    pass\n",
+    )
+    entry_file = tmp_path / "app.py"
+
+    namespace = cli.execute_app_entry_file(entry_file)
+
+    assert namespace["ARGV"] == [str(entry_file)], (
+        "the app must see only its own path, as `python app.py` gives it"
+    )
+
+
+def test_the_launcher_restores_its_own_argv(tmp_path: Path):
+    write_app(tmp_path, "app.py")
+    launcher_argv = list(sys.argv)
+
+    cli.execute_app_entry_file(tmp_path / "app.py")
+
+    assert sys.argv == launcher_argv
+
+
+def test_dev_arms_the_slow_callback_watchdog(tmp_path: Path, monkeypatch):
+    """The one behavior `dev` and `run` differ by.
+
+    The entry file raises, so this stops before an engine is built — what is
+    under test is the launcher's wiring, not the diagnostic itself.
+    """
+    write_app(tmp_path, "app.py", "raise ValueError('stop before the engine')\n")
+    armings: "list[bool]" = []
+    monkeypatch.setattr(cli, "arm_slow_callback_watchdog", lambda: armings.append(True))
+
+    exit_code = cli.launch_app_node(
+        "dev",
+        requested_anchor_directory=tmp_path,
+        requested_entry_file=None,
+        bind_host="127.0.0.1",
+        bind_port=0,
+        node_name=None,
+    )
+
+    assert exit_code == 1
+    assert armings == [True], "`dev` must arm the slow-callback watchdog"
+
+
+def test_run_leaves_the_slow_callback_watchdog_off(tmp_path: Path, monkeypatch):
+    """A deployed node pays nothing for a diagnostic it did not ask for."""
+    write_app(tmp_path, "app.py", "raise ValueError('stop before the engine')\n")
+    armings: "list[bool]" = []
+    monkeypatch.setattr(cli, "arm_slow_callback_watchdog", lambda: armings.append(True))
+
+    cli.launch_app_node(
+        "run",
+        requested_anchor_directory=tmp_path,
+        requested_entry_file=None,
+        bind_host="127.0.0.1",
+        bind_port=0,
+        node_name=None,
+    )
+
+    assert armings == [], "`run` must leave the watchdog disarmed"
+
+
+def test_the_control_plane_binds_every_interface_by_default():
+    """Owner decision (2026-07-30 #1683, reaffirmed 2026-08-04): every host of
+    the one control plane binds all interfaces so nodes can reach each other
+    across a mesh. The guard lived on the deleted Rust `run`/`dev`; the default
+    now lives here, so the guard does too.
+    """
+    assert cli.DEFAULT_CONTROL_PLANE_BIND_HOST == "0.0.0.0"
+
+
 # ---------------------------------------------------------------------------
 # `streamlib new`
 # ---------------------------------------------------------------------------

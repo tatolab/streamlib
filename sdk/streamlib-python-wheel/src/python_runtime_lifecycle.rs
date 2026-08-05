@@ -217,9 +217,14 @@ impl PythonRuntimeHandle {
                 register_processor_class(python, processor_class)?
             }
         };
+        // An omitted `config` is an empty object, never null: a processor's
+        // config type is a struct whose fields carry serde defaults, and a
+        // struct deserializes from `{}` but not from `null`. Sending null made
+        // `rt.add(CameraSource)` — the spelling the plan blesses for a block
+        // that needs no configuration — fail at graph compile time.
         let configuration = match config {
             Some(config) => python_object_to_json_value(config.as_any())?,
-            None => serde_json::Value::Null,
+            None => serde_json::Value::Object(serde_json::Map::new()),
         };
 
         // The same rule the graph applies when it names the node, so the handle

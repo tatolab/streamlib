@@ -4,10 +4,18 @@
 """The `streamlib` console script: `new`, `run`, and `dev`.
 
 `run` and `dev` are a thin runner over the engine this wheel already exposes.
-They resolve the app's entry file, execute it exactly as `python app.py` would,
-call its `setup(rt)`, and block in `rt.run()` — so the launched app and a
-hand-run script are the same arrangement, not two. `new` writes an app that
-works before the user has written anything.
+They resolve the app's entry file, execute it as `python app.py` would, call its
+`setup(rt)`, and block in `rt.run()` — so the launched app and a hand-run script
+are the same arrangement, not two. `new` writes an app that works before the
+user has written anything.
+
+streamlib:lint-logging:allow-file — a console script's diagnostics are its
+output, and every one of them happens before a logging pipeline exists: `new`
+never builds an engine at all, and a `run` that cannot resolve or execute the
+entry file must say so before there is a Runner to carry a subscriber. This is
+the pragma's stated purpose (see `xtask/src/lint_logging.rs`), not an exemption
+from the logging rule — once the engine is up, everything downstream logs
+through it.
 """
 
 from __future__ import annotations
@@ -20,7 +28,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
-from . import Runtime, arm_gil_hold_watchdog
+from . import Runtime, arm_slow_callback_watchdog
 
 __all__ = ["main"]
 
@@ -85,8 +93,13 @@ def resolve_app_entry_file(
 
 
 def _launcher_source_file_names() -> "frozenset[str]":
-    """The files whose frames are this launcher's, not the app's."""
-    return frozenset({__file__, runpy.__file__})
+    """The files whose frames are this launcher's, not the app's.
+
+    `<frozen runpy>` as well as `runpy.__file__`: since CPython 3.11 runpy is
+    frozen into the binary and its frames report the former, so matching only
+    the latter leaves three runpy frames sitting on top of the user's own.
+    """
+    return frozenset({__file__, runpy.__file__, "<frozen runpy>"})
 
 
 def print_app_failure(entry_file: Path, app_failure: BaseException) -> None:
@@ -115,12 +128,21 @@ def execute_app_entry_file(entry_file: Path) -> "dict[str, Any]":
 
     Run under the name `__main__` with its own directory leading `sys.path`,
     which is what `python app.py` does — so an app that imports its own
-    `processors/` package resolves it here exactly as it does there.
+    `processors/` package resolves it here exactly as it does there. `sys.argv`
+    is narrowed to the entry file for the same reason: the launcher's own flags
+    are not the app's, and an app that parses `sys.argv` would otherwise see
+    `run --dir … --port …`.
     """
     entry_directory = str(entry_file.parent)
     if sys.path[:1] != [entry_directory]:
         sys.path.insert(0, entry_directory)
-    return runpy.run_path(str(entry_file), run_name="__main__")
+
+    launcher_argv = sys.argv
+    sys.argv = [str(entry_file)]
+    try:
+        return runpy.run_path(str(entry_file), run_name="__main__")
+    finally:
+        sys.argv = launcher_argv
 
 
 def read_app_setup_function(
@@ -168,13 +190,13 @@ def launch_app_node(
     # What `dev` is: the same launch as `run`, plus the diagnostics an author
     # iterating wants and a deployed node should not pay for.
     if verb == "dev":
-        arm_gil_hold_watchdog()
+        arm_slow_callback_watchdog()
 
     try:
         entry_namespace = execute_app_entry_file(entry_file)
-    except AppLaunchError:
-        raise
-    except BaseException as entry_failure:  # noqa: BLE001 — reported as the app's own
+    # SystemExit passes through: an app that calls `sys.exit()` at module scope
+    # chose its exit code, and reporting that as a failure would override it.
+    except Exception as entry_failure:  # noqa: BLE001 — reported as the app's own
         print_app_failure(entry_file, entry_failure)
         return 1
 
@@ -186,17 +208,24 @@ def launch_app_node(
     runtime = Runtime()
     try:
         app_setup_function(runtime)
-    except BaseException as setup_failure:  # noqa: BLE001 — reported as the app's own
+    except Exception as setup_failure:  # noqa: BLE001 — reported as the app's own
         print_app_failure(entry_file, setup_failure)
         runtime.shutdown()
         return 1
 
-    # After `setup`, so an app that failed to build its graph publishes no node
-    # entry for `streamlib nodes` to find.
-    runtime.host_control_plane(
-        bind_host=bind_host, bind_port=bind_port, node_name=node_name
-    )
-    runtime.run()
+    try:
+        # After `setup`, so an app that failed to build its graph publishes no
+        # node entry for `streamlib nodes` to find.
+        runtime.host_control_plane(
+            bind_host=bind_host, bind_port=bind_port, node_name=node_name
+        )
+        runtime.run()
+    except RuntimeError as engine_failure:
+        # The engine compiles the graph at `run()`, so the failures a user hits
+        # most — a bad config, no camera, no Vulkan ICD — surface here rather
+        # than from `setup`. They are the app's problem, not a launcher crash,
+        # and must not arrive as a traceback through this file.
+        raise AppLaunchError(str(engine_failure)) from engine_failure
     return 0
 
 

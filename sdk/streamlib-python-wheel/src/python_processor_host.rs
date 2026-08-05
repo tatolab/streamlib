@@ -216,16 +216,12 @@ impl PythonProcessorHost {
                 let _lease_guard = LifecycleHookLeaseGuard {
                     revoke_view_lease: Box::new(|| context.get().revoke_view_lease()),
                 };
-                Python::attach(|python| -> PyResult<()> {
-                    crate::python_gil_hold_watchdog::call_watching_gil_hold(
-                        &self.processor_display_name,
-                        hook.python_method_name(),
-                        || {
-                            processor_instance
-                                .bind(python)
-                                .call_method1(hook.python_method_name(), (context.bind(python),))?;
-                            Ok(())
-                        },
+                Python::attach(|python| {
+                    self.call_hook_method_on_processor_instance(
+                        python,
+                        processor_instance,
+                        hook,
+                        context.bind(python).as_any(),
                     )
                 })
             }
@@ -246,16 +242,12 @@ impl PythonProcessorHost {
                 let _lease_guard = LifecycleHookLeaseGuard {
                     revoke_view_lease: Box::new(|| context.get().revoke_view_lease()),
                 };
-                Python::attach(|python| -> PyResult<()> {
-                    crate::python_gil_hold_watchdog::call_watching_gil_hold(
-                        &self.processor_display_name,
-                        hook.python_method_name(),
-                        || {
-                            processor_instance
-                                .bind(python)
-                                .call_method1(hook.python_method_name(), (context.bind(python),))?;
-                            Ok(())
-                        },
+                Python::attach(|python| {
+                    self.call_hook_method_on_processor_instance(
+                        python,
+                        processor_instance,
+                        hook,
+                        context.bind(python).as_any(),
                     )
                 })
             }
@@ -268,6 +260,30 @@ impl PythonProcessorHost {
                 hook_failure,
             ))
         })
+    }
+
+    /// Call `hook`'s method on the instance, handing it `python_context`.
+    ///
+    /// The two `dispatch_hook` arms differ only in which context they resolve;
+    /// past that point they are the same call, so the phase-typed context is
+    /// erased to `PyAny` here rather than duplicating the body per arm.
+    fn call_hook_method_on_processor_instance(
+        &self,
+        python: Python<'_>,
+        processor_instance: &Py<PyAny>,
+        hook: ProcessorLifecycleHook,
+        python_context: &Bound<'_, PyAny>,
+    ) -> PyResult<()> {
+        crate::python_slow_callback_watchdog::call_watching_callback_duration(
+            &self.processor_display_name,
+            hook.python_method_name(),
+            || {
+                processor_instance
+                    .bind(python)
+                    .call_method1(hook.python_method_name(), (python_context,))?;
+                Ok(())
+            },
+        )
     }
 
     fn link_data_access(&self) -> Option<&PythonProcessorLinkDataAccess> {

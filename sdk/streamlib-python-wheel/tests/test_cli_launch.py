@@ -22,6 +22,8 @@ from pathlib import Path
 
 import pytest
 
+from streamlib import cli
+
 pytestmark = pytest.mark.requires_gpu
 
 # Boot is process start + engine init + GPU context + socket bind.
@@ -73,8 +75,16 @@ def await_sole_registry_entry(runtime_directory: Path, timeout: float) -> dict:
 class LaunchedNode:
     """A `streamlib <verb>` child, killed by its process group however the test ends."""
 
-    def __init__(self, process: "subprocess.Popen[str]") -> None:
+    def __init__(
+        self, process: "subprocess.Popen[str]", output_file: "Path | None" = None
+    ) -> None:
         self.process = process
+        self.output_file = output_file
+
+    def captured_output(self) -> str:
+        """Everything the child wrote, for a test that asserts on its report."""
+        assert self.output_file is not None, "this node was launched without capture"
+        return self.output_file.read_text(errors="replace")
 
     def interrupt(self) -> None:
         self.process.send_signal(signal.SIGINT)
@@ -110,22 +120,35 @@ def launch_node(isolated_runtime_directory: Path):
     """Launches nodes and leaves nothing holding a GPU context behind."""
     launched: "list[LaunchedNode]" = []
 
-    def launch(verb: str, app_directory: Path, port: int) -> LaunchedNode:
-        node = LaunchedNode(
-            subprocess.Popen(
+    def launch(
+        verb: str, app_directory: Path, port: int, capture_output: bool = False
+    ) -> LaunchedNode:
+        # A file rather than a pipe: nothing here reads the child while it runs,
+        # and a full pipe buffer would wedge a node the test is still polling.
+        output_file = app_directory / "node-output.log" if capture_output else None
+        output_sink = (
+            open(output_file, "w", encoding="utf-8") if output_file is not None else None
+        )
+        try:
+            process = subprocess.Popen(
                 [
                     sys.executable, "-m", "streamlib.cli", verb,
                     "--dir", str(app_directory),
                     "--host", "127.0.0.1",
                     "--port", str(port),
                 ],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
+                stdout=output_sink if output_sink is not None else subprocess.DEVNULL,
+                stderr=(
+                    subprocess.STDOUT if output_sink is not None else subprocess.DEVNULL
+                ),
                 text=True,
                 start_new_session=True,
                 env={**os.environ, "XDG_RUNTIME_DIR": str(isolated_runtime_directory)},
             )
-        )
+        finally:
+            if output_sink is not None:
+                output_sink.close()
+        node = LaunchedNode(process, output_file)
         launched.append(node)
         return node
 
@@ -166,6 +189,97 @@ def test_a_launched_app_registers_as_a_node_and_tears_down(
     assert registry_entry_paths(runtime_directory) == [], (
         "clean teardown must remove the node-registry entry"
     )
+
+
+def test_a_native_block_added_without_config_reaches_a_running_graph(
+    tmp_path: Path, isolated_runtime_directory: Path, launch_node
+):
+    """`rt.add(TestPatternSource)` with no `config` — the spelling the plan
+    blesses for a block that needs no configuration.
+
+    The config travels to the engine as JSON and every field of a built-in's
+    config struct carries a serde default, so `{}` deserializes and `null` does
+    not. Sending null made this exact line fail at graph-compile time, which is
+    after `setup` returned and therefore after every Python-side check passed.
+    """
+    app_directory = tmp_path / "app"
+    app_directory.mkdir()
+    (app_directory / "app.py").write_text(
+        "from streamlib import TestPatternSource\n"
+        "\n"
+        "\n"
+        "def setup(rt):\n"
+        "    rt.add(TestPatternSource)\n"
+    )
+
+    node = launch_node("run", app_directory, free_port())
+    entry = await_sole_registry_entry(
+        isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS
+    )
+
+    assert entry["pid"] == node.process.pid, (
+        "the graph must compile and start with no config given"
+    )
+
+
+def test_the_scaffolded_app_reaches_a_running_graph(
+    tmp_path: Path, isolated_runtime_directory: Path, launch_node
+):
+    """What `streamlib new` writes must actually run, not merely parse.
+
+    The display is rewired out because a window needs a display server this
+    suite cannot assume; what is under test is that the scaffold's source and
+    its pixel-editing effect compile, wire and start against the real API.
+    """
+    app_directory = tmp_path / "app"
+    cli.scaffold_new_app(app_directory, use_test_pattern_source=True)
+
+    entry_source = (app_directory / "app.py").read_text()
+    entry_source = entry_source.replace(
+        '    window = rt.add(DisplayWindow, config={"title": "StreamLib", "scaling": "fit"})\n',
+        "",
+    ).replace(
+        '    rt.connect(effect.output("video_to_downstream"), window.input("video"))\n',
+        "",
+    )
+    assert "rt.add(DisplayWindow" not in entry_source, (
+        "the display rewire must have applied — the scaffold's wiring changed shape"
+    )
+    (app_directory / "app.py").write_text(entry_source)
+
+    node = launch_node("dev", app_directory, free_port())
+    entry = await_sole_registry_entry(
+        isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS
+    )
+
+    assert entry["pid"] == node.process.pid, (
+        "the scaffolded app must reach a running graph"
+    )
+
+
+def test_a_bad_config_is_reported_without_a_launcher_traceback(
+    tmp_path: Path, isolated_runtime_directory: Path, launch_node
+):
+    """The engine compiles the graph at `run()`, so a bad config surfaces after
+    `setup` returned. It is still the app's problem, not a launcher crash."""
+    app_directory = tmp_path / "app"
+    app_directory.mkdir()
+    (app_directory / "app.py").write_text(
+        "from streamlib import TestPatternSource\n"
+        "\n"
+        "\n"
+        "def setup(rt):\n"
+        '    rt.add(TestPatternSource, config={"width": "not a number"})\n'
+    )
+
+    node = launch_node("run", app_directory, free_port(), capture_output=True)
+
+    assert node.await_exit(NODE_READY_TIMEOUT_SECONDS) == 1
+    output = node.captured_output()
+    assert "Traceback (most recent call last)" not in output, (
+        f"an engine-side failure must not arrive as a launcher traceback; output was:\n{output}"
+    )
+    assert "error:" in output
 
 
 def test_a_setup_that_raises_publishes_no_node(

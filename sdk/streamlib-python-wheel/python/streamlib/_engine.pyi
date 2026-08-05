@@ -38,8 +38,8 @@ __all__ = [
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
     "TestPatternSource",
-    "arm_gil_hold_watchdog",
-    "disarm_gil_hold_watchdog",
+    "arm_slow_callback_watchdog",
+    "disarm_slow_callback_watchdog",
     "log_event",
     "media_clock_now_ns",
     "monotonic_now_ns",
@@ -412,13 +412,16 @@ def log_event(
 ) -> None:
     """Emit one record on the engine's log pipeline, with structured attrs."""
 
-def arm_gil_hold_watchdog(*, threshold_ms: int | None = None) -> None:
-    """Warn when a processor callback holds the GIL past `threshold_ms`.
+def arm_slow_callback_watchdog(*, threshold_ms: int | None = None) -> None:
+    """Warn when a processor callback runs longer than `threshold_ms`.
 
     The `dev` diagnostic: one interpreter runs every Python processor, so a
-    callback that holds the GIL stalls all of them. `None` takes the default
-    threshold rather than disarming.
+    callback that holds the GIL stalls all of them. What is measured is how
+    long the callback ran while attached to the interpreter — an upper bound on
+    the GIL hold, since a callback that releases the GIL while blocking spends
+    the same wall time and stalls nobody. `None` takes the default threshold
+    rather than disarming.
     """
 
-def disarm_gil_hold_watchdog() -> None:
-    """Turn the GIL-hold watchdog off — the `run` posture."""
+def disarm_slow_callback_watchdog() -> None:
+    """Turn the slow-callback watchdog off — the `run` posture."""

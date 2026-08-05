@@ -549,22 +549,17 @@ fn main() -> Result<()> {
 /// carrying only MCP JSON-RPC frames.
 fn logging_config_for(
     command: &Option<Commands>,
-) -> Option<streamlib::sdk::logging::StreamlibLoggingConfig> {
+) -> streamlib::sdk::logging::StreamlibLoggingConfig {
     match command {
-        Some(Commands::Mcp { .. }) => Some(
-            streamlib::sdk::logging::StreamlibLoggingConfig::for_stdio_protocol("streamlib-cli"),
-        ),
-        _ => Some(streamlib::sdk::logging::StreamlibLoggingConfig::for_cli(
-            "streamlib-cli",
-        )),
+        Some(Commands::Mcp { .. }) => {
+            streamlib::sdk::logging::StreamlibLoggingConfig::for_stdio_protocol("streamlib-cli")
+        }
+        _ => streamlib::sdk::logging::StreamlibLoggingConfig::for_cli("streamlib-cli"),
     }
 }
 
 async fn async_main(cli: Cli) -> Result<()> {
-    let _logging_guard = match logging_config_for(&cli.command) {
-        Some(config) => Some(streamlib::sdk::logging::init(config)?),
-        None => None,
-    };
+    let _logging_guard = streamlib::sdk::logging::init(logging_config_for(&cli.command))?;
 
     match cli.command {
         Some(Commands::Logs {
@@ -804,8 +799,7 @@ mod tests {
     /// here, catching a regression that would re-pollute the protocol stream.
     #[test]
     fn mcp_subcommand_mirrors_logs_to_stderr_not_stdout() {
-        let mcp = logging_config_for(&Some(Commands::Mcp { attach: None }))
-            .expect("mcp owns its own short-lived logging");
+        let mcp = logging_config_for(&Some(Commands::Mcp { attach: None }));
         assert_eq!(
             mcp.pretty_mirror_stream,
             PrettyMirrorStream::Stderr,
@@ -817,7 +811,7 @@ mod tests {
     /// mirror.
     #[test]
     fn non_mcp_invocation_mirrors_logs_to_stdout() {
-        let config = logging_config_for(&None).expect("short-lived verbs own their logging");
+        let config = logging_config_for(&None);
         assert_eq!(config.pretty_mirror_stream, PrettyMirrorStream::Stdout);
     }
 
@@ -851,8 +845,15 @@ mod tests {
     /// `--node`.
     #[test]
     fn logs_count_with_a_control_target_parses() {
-        Cli::try_parse_from(["streamlib", "logs", "--url", "http://127.0.0.1:9000", "--count", "5"])
-            .expect("`logs --url ... --count N` must parse");
+        Cli::try_parse_from([
+            "streamlib",
+            "logs",
+            "--url",
+            "http://127.0.0.1:9000",
+            "--count",
+            "5",
+        ])
+        .expect("`logs --url ... --count N` must parse");
         Cli::try_parse_from(["streamlib", "logs", "--node", "Rnode", "--count", "5"])
             .expect("`logs --node ... --count N` must parse");
     }

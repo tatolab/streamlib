@@ -1,33 +1,43 @@
 name: Release Wheel
 
-# The release channel: release-please publishes a GitHub release, this builds
-# the wheel onto it and rebuilds the PEP 503 simple index that serves it, so
+# The release channel: release-please cuts a GitHub release, this builds the
+# wheel onto it and rebuilds the PEP 503 simple index that serves it, so
 # `pip install streamlib --index-url <pages-url>` is one stable incantation.
 # PyPI publication waits for the project rename; the artifact is identical.
+#
+# Called from release-please.yml rather than triggered by `on: release`, for the
+# same reason `trigger-schemas` is: release-please runs on the default
+# GITHUB_TOKEN, and GitHub does not start workflow runs from events that token
+# raises. An `on: release` trigger here would simply never fire.
 on:
-  release:
-    types: [published]
+  workflow_call:
+    inputs:
+      tag_name:
+        description: "Release tag to attach the wheel to"
+        type: string
+        required: true
   # Rebuilding the index alone is the common manual case — a release edited or
   # deleted by hand leaves the index describing files that are not there.
   workflow_dispatch:
     inputs:
-      build_wheel:
-        description: "Build and upload a wheel, or only rebuild the index"
-        type: boolean
-        default: false
-
-permissions:
-  contents: write
+      tag_name:
+        description: "Release tag to attach a wheel to (blank = rebuild the index only)"
+        type: string
+        required: false
 
 jobs:
   build-wheel:
     name: manylinux wheel
-    if: github.event_name == 'release' || inputs.build_wheel
+    if: inputs.tag_name != ''
     runs-on: ubuntu-latest
     timeout-minutes: 90
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag_name }}
 
       # abi3-py310: one wheel covers CPython 3.10 and every later GIL-enabled
       # release, so this is a single build rather than a matrix. The container
@@ -63,18 +73,16 @@ jobs:
           test -f /tmp/scaffold-check/app.py
 
       - name: Attach the wheel to the release
-        if: github.event_name == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload "${{ github.event.release.tag_name }}" \
+          gh release upload "${{ inputs.tag_name }}" \
             sdk/streamlib-python-wheel/dist/*.whl --clobber
 
   publish-simple-index:
     name: PEP 503 simple index
-    # Always after the wheel job when it ran, so the index sees the release the
-    # run is about. `always()` plus the explicit result check: a skipped build
-    # (index-only rebuild) must not skip this too.
+    # `always()` plus the explicit result check: an index-only rebuild skips the
+    # wheel job, and a skipped dependency must not skip this too.
     needs: build-wheel
     if: always() && needs.build-wheel.result != 'failure'
     runs-on: ubuntu-latest

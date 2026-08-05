@@ -67,9 +67,8 @@ jobs:
         uses: astral-sh/setup-uv@v5
 
       - name: Build and install the wheel
-        # `maturin develop` is the local build the ticket scopes; release
-        # packaging (repo release artifacts + the PEP 503 simple index) is a
-        # later ticket.
+        # The local build. Release packaging — repo release artifacts and the
+        # PEP 503 simple index — is `release-wheel.yml`.
         working-directory: sdk/streamlib-python-wheel
         run: |
           uv venv --python 3.12 .venv

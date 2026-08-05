@@ -11,7 +11,6 @@ mod python_bag_conversion;
 mod python_control_plane_hosting;
 #[cfg(target_os = "linux")]
 mod python_cuda_pixel_exchange;
-mod python_gil_hold_watchdog;
 mod python_gpu_surface_pixel_exchange;
 mod python_logging;
 mod python_monotonic_timer;
@@ -22,6 +21,7 @@ mod python_processor_host;
 mod python_processor_link_data_access;
 mod python_processor_registration;
 mod python_runtime_lifecycle;
+mod python_slow_callback_watchdog;
 
 pub use python_runtime_lifecycle::PythonRuntimeHandle;
 
@@ -51,11 +51,11 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(python_logging::monotonic_now_ns, module)?)?;
     module.add_function(wrap_pyfunction!(python_logging::log_event, module)?)?;
     module.add_function(wrap_pyfunction!(
-        python_gil_hold_watchdog::arm_gil_hold_watchdog,
+        python_slow_callback_watchdog::arm_slow_callback_watchdog,
         module
     )?)?;
     module.add_function(wrap_pyfunction!(
-        python_gil_hold_watchdog::disarm_gil_hold_watchdog,
+        python_slow_callback_watchdog::disarm_slow_callback_watchdog,
         module
     )?)?;
     Ok(())
