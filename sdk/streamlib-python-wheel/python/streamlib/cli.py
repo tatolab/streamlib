@@ -230,22 +230,57 @@ def _python_distribution_name_for(directory_name: str) -> str:
     return normalized.lower() or "streamlib-app"
 
 
+SCAFFOLDED_EFFECT_MODULE_PATH = "processors/inverting_effect.py"
+SCAFFOLDED_EFFECT_CLASS_NAME = "InvertingEffect"
+SCAFFOLDED_EFFECT_MODULE_NAME = "processors.inverting_effect"
+
+
 def _scaffolded_app_entry_source(*, source_class_name: str) -> str:
+    """The entry file: imports, wiring, and nothing else.
+
+    The effect lives in its own module rather than here because a processor
+    class defined in the entry file identifies as `__main__:<Type>`, which is a
+    wiring error — the entry file runs as `__main__`, and the child interpreter
+    that runs the processor imports its class by name.
+    """
     source_description = (
         "camera" if source_class_name == "CameraSource" else "test pattern"
     )
     return f'''"""A StreamLib app: {source_description} → effect → window.
 
 `streamlib dev` finds `setup(rt)` below by convention — there is no manifest and
-no `main()`. Edit `InvertingEffect`, re-run `streamlib dev`, and see the change.
+no `main()`. Edit `{SCAFFOLDED_EFFECT_MODULE_PATH}` and re-run `streamlib dev` to
+see the change.
+
+Processors live in their own modules, never in this file: each one runs in its
+own child interpreter, which imports the class by name.
+"""
+
+from {SCAFFOLDED_EFFECT_MODULE_NAME} import {SCAFFOLDED_EFFECT_CLASS_NAME}
+from streamlib import {source_class_name}, DisplayWindow, Runtime
+
+
+def setup(rt: Runtime) -> None:
+    source = rt.add({source_class_name})
+    effect = rt.add({SCAFFOLDED_EFFECT_CLASS_NAME})
+    window = rt.add(DisplayWindow, config={{"title": "StreamLib", "scaling": "fit"}})
+
+    rt.connect(source.output("video"), effect.input("video_from_upstream"))
+    rt.connect(effect.output("video_to_downstream"), window.input("video"))
+'''
+
+
+def _scaffolded_effect_module_source() -> str:
+    """The effect, in a module the engine can import by name."""
+    return f'''"""The effect the app wires between its source and its window.
+
+Importable as `{SCAFFOLDED_EFFECT_MODULE_NAME}:{SCAFFOLDED_EFFECT_CLASS_NAME}`, which is the
+name the engine spawns this processor's child interpreter with.
 """
 
 import numpy
 
 from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
-    {source_class_name},
-    DisplayWindow,
-    Runtime,
     RuntimeContextLimitedAccess,
     VideoFrame,
     input,
@@ -255,7 +290,7 @@ from streamlib import (  # noqa: A004 — `input` is streamlib's port decorator
 
 
 @processor
-class InvertingEffect:
+class {SCAFFOLDED_EFFECT_CLASS_NAME}:
     """Reads each frame, inverts its colors in place, and passes it on."""
 
     @input(delivery_profile="latest")
@@ -284,15 +319,6 @@ class InvertingEffect:
             pixels[...] = edited
             surface.unlock()
         ctx.outputs.write("video_to_downstream", bag)
-
-
-def setup(rt: Runtime) -> None:
-    source = rt.add({source_class_name})
-    effect = rt.add(InvertingEffect)
-    window = rt.add(DisplayWindow, config={{"title": "StreamLib", "scaling": "fit"}})
-
-    rt.connect(source.output("video"), effect.input("video_from_upstream"))
-    rt.connect(effect.output("video_to_downstream"), window.input("video"))
 '''
 
 
@@ -330,6 +356,8 @@ def scaffold_new_app(target_directory: Path, *, use_test_pattern_source: bool) -
         DEFAULT_APP_ENTRY_FILE_NAME: _scaffolded_app_entry_source(
             source_class_name=source_class_name
         ),
+        "processors/__init__.py": "",
+        SCAFFOLDED_EFFECT_MODULE_PATH: _scaffolded_effect_module_source(),
         "pyproject.toml": _scaffolded_project_manifest(
             _python_distribution_name_for(target_directory.resolve().name)
         ),
@@ -351,7 +379,9 @@ def scaffold_new_app(target_directory: Path, *, use_test_pattern_source: bool) -
 
     target_directory.mkdir(parents=True, exist_ok=True)
     for file_name, contents in scaffolded_files.items():
-        (target_directory / file_name).write_text(contents, encoding="utf-8")
+        scaffolded_file = target_directory / file_name
+        scaffolded_file.parent.mkdir(parents=True, exist_ok=True)
+        scaffolded_file.write_text(contents, encoding="utf-8")
 
     print(f"Created a StreamLib app in `{target_directory}`.\n")
     print("Next:")

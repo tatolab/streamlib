@@ -304,15 +304,9 @@ def test_an_observation_verb_names_itself_rather_than_looking_like_a_typo(
 
 
 def test_the_control_plane_binds_every_interface_by_default():
-    """Owner decision, in session, 2026-08-04: `dev` stays network-wide because
-    the system has to reach mesh networks; scoping down comes later.
-
-    This contradicts `ARCHITECTURE.md` §Control plane ("`dev` binds loopback by
-    default") and the ticket's own bullet. The owner's call governs the code;
-    the plan amendment is pending via `/propose-change`, and this test exists so
-    the default cannot drift back silently in the meantime. The behavior is not
-    new — the deleted Rust `run`/`dev` bound all interfaces too — only its home
-    is.
+    """§Control plane: "`dev` and `run` bind the control plane identically: all
+    interfaces". Reachability is not the lever that scopes exposure — auth is —
+    so no narrower bind default is set ahead of the auth posture.
     """
     assert cli.DEFAULT_CONTROL_PLANE_BIND_HOST == "0.0.0.0"
 
@@ -321,7 +315,14 @@ def test_the_control_plane_binds_every_interface_by_default():
 # `streamlib new`
 # ---------------------------------------------------------------------------
 
-SCAFFOLDED_FILE_NAMES = ("app.py", "pyproject.toml", ".python-version", ".gitignore")
+SCAFFOLDED_FILE_NAMES = (
+    "app.py",
+    "processors/__init__.py",
+    "processors/inverting_effect.py",
+    "pyproject.toml",
+    ".python-version",
+    ".gitignore",
+)
 
 
 def test_new_writes_a_working_app(tmp_path: Path):
@@ -356,6 +357,34 @@ def test_the_scaffolded_app_parses_and_declares_setup(tmp_path: Path):
     assert "DisplayWindow" in entry_source
 
 
+def test_the_scaffolded_processor_lives_outside_the_entry_file(tmp_path: Path):
+    """A processor class in the entry file identifies as `__main__:<Type>`,
+    which is a wiring error — the entry runs as `__main__`, and the child
+    interpreter that runs the processor imports its class by name.
+
+    So the scaffold must teach the shape that works: wiring in `app.py`, the
+    class in an importable module beside it.
+    """
+    app_directory = tmp_path / "demo"
+    cli.scaffold_new_app(app_directory, use_test_pattern_source=False)
+
+    entry_source = (app_directory / "app.py").read_text()
+    effect_source = (app_directory / "processors" / "inverting_effect.py").read_text()
+
+    assert "@processor" not in entry_source, (
+        "a processor class in the entry file would identify as `__main__:<Type>`"
+    )
+    assert "class InvertingEffect" not in entry_source
+    assert "@processor" in effect_source, "the class belongs in the importable module"
+    assert "class InvertingEffect" in effect_source
+    assert "from processors.inverting_effect import InvertingEffect" in entry_source, (
+        "the entry file imports the class it wires"
+    )
+    # Both halves must parse — the entry is useless if its effect module is not.
+    ast.parse(entry_source)
+    ast.parse(effect_source)
+
+
 def test_the_test_pattern_scaffold_needs_no_capture_device(tmp_path: Path):
     app_directory = tmp_path / "demo"
 
@@ -365,6 +394,8 @@ def test_the_test_pattern_scaffold_needs_no_capture_device(tmp_path: Path):
     ast.parse(entry_source)
     assert "TestPatternSource" in entry_source
     assert "CameraSource" not in entry_source
+    # The effect is source-agnostic, so the split must not have made it vary.
+    ast.parse((app_directory / "processors" / "inverting_effect.py").read_text())
 
 
 def test_the_scaffold_pins_streamlib_to_its_own_index(tmp_path: Path):

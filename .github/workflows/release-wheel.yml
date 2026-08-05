@@ -64,13 +64,29 @@ jobs:
       # A wheel that cannot be installed and cannot answer `--help` is not a
       # release artifact. This is the first moment the console script exists as
       # a real entry point rather than a table in pyproject.toml.
-      - name: The wheel installs and its console script runs
+      - name: The wheel installs, and its scaffold is importable by name
         run: |
           python3 -m venv /tmp/wheel-check
           /tmp/wheel-check/bin/pip install --no-index sdk/streamlib-python-wheel/dist/*.whl
           /tmp/wheel-check/bin/streamlib --help
           /tmp/wheel-check/bin/streamlib new /tmp/scaffold-check --test-pattern
           test -f /tmp/scaffold-check/app.py
+          test -f /tmp/scaffold-check/processors/inverting_effect.py
+          # A processor class in the entry file identifies as `__main__:<Type>`
+          # and is a wiring error: the entry runs as `__main__`, and the child
+          # interpreter that runs the processor imports the class by name.
+          # An explicit `if`, not `! grep` — `set -e` does not abort on a
+          # command whose status is inverted with `!`, so the negated form
+          # could never have failed this step.
+          if grep -q '@processor' /tmp/scaffold-check/app.py; then
+            echo "::error::the scaffold put a processor class in app.py — it would identify as __main__:<Type>"
+            exit 1
+          fi
+          # The name the engine will spawn the child with must actually resolve.
+          # Importing the module runs the decorator; it boots no engine, so this
+          # needs no GPU.
+          cd /tmp/scaffold-check && /tmp/wheel-check/bin/python -c \
+            'from processors.inverting_effect import InvertingEffect'
 
       - name: Attach the wheel to the release
         env:
