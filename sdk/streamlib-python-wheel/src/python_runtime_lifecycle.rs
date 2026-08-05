@@ -257,6 +257,25 @@ impl PythonRuntimeHandle {
             .map_err(|connect_failure| PyRuntimeError::new_err(connect_failure.to_string()))
     }
 
+    /// Host the control plane in this process, so the node is discoverable.
+    ///
+    /// Opt-in: a runtime that never calls this runs headless and publishes no
+    /// node-registry entry. Called before `run()`, like every other
+    /// graph-building call — the control plane is a processor in the graph.
+    #[pyo3(signature = (*, bind_host = "0.0.0.0".to_string(), bind_port = 9000, node_name = None))]
+    fn host_control_plane(
+        &self,
+        python: Python<'_>,
+        bind_host: String,
+        bind_port: u16,
+        node_name: Option<String>,
+    ) -> PyResult<()> {
+        let engine = self.engine_being_built("host the control plane")?;
+        crate::python_control_plane_hosting::host_control_plane_on_engine(
+            python, &engine, bind_host, bind_port, node_name,
+        )
+    }
+
     /// Run the pipeline until Ctrl-C, SIGTERM, or [`shutdown`], then tear the
     /// engine down.
     ///

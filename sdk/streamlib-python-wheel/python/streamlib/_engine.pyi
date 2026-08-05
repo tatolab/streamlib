@@ -38,6 +38,8 @@ __all__ = [
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
     "TestPatternSource",
+    "arm_gil_hold_watchdog",
+    "disarm_gil_hold_watchdog",
     "log_event",
     "media_clock_now_ns",
     "monotonic_now_ns",
@@ -98,6 +100,19 @@ class Runtime:
         self, source: ProcessorOutputPortReference, destination: ProcessorInputPortReference
     ) -> None:
         """Link one processor's output port to another's input port."""
+
+    def host_control_plane(
+        self,
+        *,
+        bind_host: str = "0.0.0.0",
+        bind_port: int = 9000,
+        node_name: str | None = None,
+    ) -> None:
+        """Host the control plane in this process, so the node is discoverable.
+
+        Opt-in: a runtime that never calls this publishes no node-registry
+        entry. Call it before `run()`.
+        """
 
     def run(self) -> None:
         """Run the pipeline until Ctrl-C, SIGTERM or `shutdown()`, then tear down."""
@@ -392,3 +407,14 @@ def log_event(
     level: str, message: str, attrs: dict[str, Any] | None = None
 ) -> None:
     """Emit one record on the engine's log pipeline, with structured attrs."""
+
+def arm_gil_hold_watchdog(*, threshold_ms: int | None = None) -> None:
+    """Warn when a processor callback holds the GIL past `threshold_ms`.
+
+    The `dev` diagnostic: one interpreter runs every Python processor, so a
+    callback that holds the GIL stalls all of them. `None` takes the default
+    threshold rather than disarming.
+    """
+
+def disarm_gil_hold_watchdog() -> None:
+    """Turn the GIL-hold watchdog off — the `run` posture."""

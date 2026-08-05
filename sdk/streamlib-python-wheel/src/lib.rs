@@ -8,8 +8,10 @@ use pyo3::prelude::*;
 
 mod python_added_processor;
 mod python_bag_conversion;
+mod python_control_plane_hosting;
 #[cfg(target_os = "linux")]
 mod python_cuda_pixel_exchange;
+mod python_gil_hold_watchdog;
 mod python_gpu_surface_pixel_exchange;
 mod python_logging;
 mod python_monotonic_timer;
@@ -48,5 +50,13 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(python_logging::monotonic_now_ns, module)?)?;
     module.add_function(wrap_pyfunction!(python_logging::log_event, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        python_gil_hold_watchdog::arm_gil_hold_watchdog,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_gil_hold_watchdog::disarm_gil_hold_watchdog,
+        module
+    )?)?;
     Ok(())
 }

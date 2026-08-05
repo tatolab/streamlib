@@ -217,10 +217,16 @@ impl PythonProcessorHost {
                     revoke_view_lease: Box::new(|| context.get().revoke_view_lease()),
                 };
                 Python::attach(|python| -> PyResult<()> {
-                    processor_instance
-                        .bind(python)
-                        .call_method1(hook.python_method_name(), (context.bind(python),))?;
-                    Ok(())
+                    crate::python_gil_hold_watchdog::call_watching_gil_hold(
+                        &self.processor_display_name,
+                        hook.python_method_name(),
+                        || {
+                            processor_instance
+                                .bind(python)
+                                .call_method1(hook.python_method_name(), (context.bind(python),))?;
+                            Ok(())
+                        },
+                    )
                 })
             }
             LifecycleHookContextView::LimitedAccess(engine_view) => {
@@ -241,10 +247,16 @@ impl PythonProcessorHost {
                     revoke_view_lease: Box::new(|| context.get().revoke_view_lease()),
                 };
                 Python::attach(|python| -> PyResult<()> {
-                    processor_instance
-                        .bind(python)
-                        .call_method1(hook.python_method_name(), (context.bind(python),))?;
-                    Ok(())
+                    crate::python_gil_hold_watchdog::call_watching_gil_hold(
+                        &self.processor_display_name,
+                        hook.python_method_name(),
+                        || {
+                            processor_instance
+                                .bind(python)
+                                .call_method1(hook.python_method_name(), (context.bind(python),))?;
+                            Ok(())
+                        },
+                    )
                 })
             }
         };

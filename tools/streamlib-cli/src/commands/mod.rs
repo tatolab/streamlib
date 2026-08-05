@@ -11,6 +11,5 @@ pub mod logs;
 pub mod mcp;
 pub mod nodes;
 pub mod pkg;
-pub mod run;
 pub mod schema;
 pub mod setup;
