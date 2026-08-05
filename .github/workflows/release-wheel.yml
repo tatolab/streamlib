@@ -96,6 +96,11 @@ jobs:
         run: |
           python3 -m venv /tmp/wheel-check
           /tmp/wheel-check/bin/pip install --no-index sdk/streamlib-python-wheel/dist/*.whl
+          # The scaffolded effect imports numpy, which the scaffold declares as
+          # its own dependency — installing it here is what `uv sync` does for a
+          # real user, and it makes the import below prove the declared set is
+          # actually sufficient.
+          /tmp/wheel-check/bin/pip install 'numpy>=2.1'
           /tmp/wheel-check/bin/streamlib --help
           /tmp/wheel-check/bin/streamlib new /tmp/scaffold-check --test-pattern
           test -f /tmp/scaffold-check/app.py
