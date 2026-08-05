@@ -4884,7 +4884,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "streamlib"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "iceoryx2",
  "serde",
@@ -4895,7 +4895,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-abi"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "bitflags 2.11.0",
  "libc",
@@ -4906,7 +4906,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-cpu-readback"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "libc",
  "serde",
@@ -4926,11 +4926,11 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-cpu-readback-abi"
-version = "0.12.0"
+version = "0.13.0"
 
 [[package]]
 name = "streamlib-adapter-cpu-readback-helpers"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "libc",
  "serde",
@@ -4949,7 +4949,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-cuda"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "dlpark",
  "libc",
@@ -4968,11 +4968,11 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-cuda-abi"
-version = "0.12.0"
+version = "0.13.0"
 
 [[package]]
 name = "streamlib-adapter-cuda-helpers"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "cudarc",
  "libc",
@@ -4991,7 +4991,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-opengl"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "gl",
  "khronos-egl",
@@ -5015,11 +5015,11 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-opengl-abi"
-version = "0.12.0"
+version = "0.13.0"
 
 [[package]]
 name = "streamlib-adapter-skia"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "libc",
  "libloading 0.8.9",
@@ -5043,11 +5043,11 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-skia-abi"
-version = "0.12.0"
+version = "0.13.0"
 
 [[package]]
 name = "streamlib-adapter-vulkan"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "libc",
  "serde",
@@ -5067,11 +5067,11 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-vulkan-abi"
-version = "0.12.0"
+version = "0.13.0"
 
 [[package]]
 name = "streamlib-adapter-vulkan-helpers"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "libc",
  "serde",
@@ -5117,7 +5117,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-build-orchestrator"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -5140,7 +5140,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-cargo-build"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -5155,7 +5155,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-cli"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5187,7 +5187,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-consumer-rhi"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "libc",
  "streamlib-surface-client",
@@ -5198,7 +5198,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-deno-native"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "cudarc",
  "iceoryx2",
@@ -5221,7 +5221,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-engine"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "ahash",
  "anyhow",
@@ -5302,7 +5302,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-error"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "streamlib-consumer-rhi",
@@ -5312,7 +5312,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-idents"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "flate2",
  "schemars 0.8.22",
@@ -5332,14 +5332,14 @@ dependencies = [
 
 [[package]]
 name = "streamlib-ipc-types"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "iceoryx2",
 ]
 
 [[package]]
 name = "streamlib-jtd-codegen"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5354,7 +5354,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-macros"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "crossbeam-channel",
  "proc-macro-crate",
@@ -5371,7 +5371,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-media-builtins"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "libc",
  "raw-window-handle",
@@ -5388,7 +5388,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-moq"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "bytes",
  "moq-transport",
@@ -5408,7 +5408,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-pack"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -5429,7 +5429,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-plugin-abi"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "streamlib-ipc-types",
  "tracing",
@@ -5437,7 +5437,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-plugin-sdk"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "criterion",
  "iceoryx2-log",
@@ -5457,7 +5457,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-processor-extract"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5475,7 +5475,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-processor-schema"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "rmp-serde",
  "schemars 0.8.22",
@@ -5489,7 +5489,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-python-native"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "cudarc",
  "iceoryx2",
@@ -5512,7 +5512,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-python-wheel"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "cudarc",
  "libc",
@@ -5529,7 +5529,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-runtime"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5543,7 +5543,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-surface-client"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "libc",
  "serde_json",
@@ -5551,7 +5551,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-test-fixtures"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "serde",
  "streamlib",
@@ -5563,7 +5563,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-test-fixtures-abi-mismatch"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "streamlib-plugin-abi",
 ]
@@ -6289,7 +6289,7 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "vulkan-jpeg"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "bytemuck",
  "jpeg-encoder",
