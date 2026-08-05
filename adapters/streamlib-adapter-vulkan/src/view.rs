@@ -11,7 +11,7 @@
 
 use std::marker::PhantomData;
 
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     VkImageHandle, VkImageInfo, VkImageLayoutValue, VulkanImageInfoExt, VulkanWritable,
 };
 use vulkanalia::vk;
@@ -77,7 +77,7 @@ impl VulkanImageInfoExt for VulkanWriteView<'_> {
 // silently appear CPU-readable.
 mod _assert_vulkan_read_view_not_cpu_readable {
     use super::VulkanReadView;
-    use streamlib_adapter_abi::CpuReadable;
+    use streamlib_surface_adapter::CpuReadable;
 
     trait AmbiguousIfImpl<A> {
         fn some_item() {}

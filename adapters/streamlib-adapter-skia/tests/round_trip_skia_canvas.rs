@@ -22,7 +22,7 @@ use skia_safe::{Color, Color4f, Paint, Point};
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::sdk::rhi::TextureFormat;
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
     SurfaceUsage,
 };

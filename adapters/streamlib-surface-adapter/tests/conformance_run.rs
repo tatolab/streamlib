@@ -5,8 +5,8 @@
 //! [`MockAdapter`] — proves the fixture is internally consistent and
 //! gives 3rd-party adapter authors a working template to copy.
 
-use streamlib_adapter_abi::SurfaceAdapter;
-use streamlib_adapter_abi::testing::{MockAdapter, empty_surface, run_conformance};
+use streamlib_surface_adapter::SurfaceAdapter;
+use streamlib_surface_adapter::testing::{MockAdapter, empty_surface, run_conformance};
 
 #[test]
 fn mock_adapter_passes_conformance_suite() {
@@ -38,7 +38,7 @@ fn mock_adapter_surface_not_found_path() {
     adapter.set_fail_with_not_found(true);
     let s = empty_surface(42);
     match adapter.acquire_read(&s) {
-        Err(streamlib_adapter_abi::AdapterError::SurfaceNotFound { surface_id }) => {
+        Err(streamlib_surface_adapter::AdapterError::SurfaceNotFound { surface_id }) => {
             assert_eq!(surface_id, 42);
         }
         other => panic!("expected SurfaceNotFound, got {other:?}"),

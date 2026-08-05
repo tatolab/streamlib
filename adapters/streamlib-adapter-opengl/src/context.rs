@@ -18,14 +18,14 @@
 //! ```
 //!
 //! The context is a thin convenience over [`crate::OpenGlSurfaceAdapter`];
-//! every operation maps to a [`streamlib_adapter_abi::SurfaceAdapter`]
+//! every operation maps to a [`streamlib_surface_adapter::SurfaceAdapter`]
 //! method. Provided here so the customer-facing API matches the
 //! parallel polyglot wrappers (`streamlib.opengl.context()` in Python,
 //! `streamlib.opengl.context()` in Deno).
 
 use std::sync::Arc;
 
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     AdapterError, ReadGuard, StreamlibSurface, SurfaceAdapter, WriteGuard,
 };
 

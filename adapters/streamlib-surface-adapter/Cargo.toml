@@ -1,0 +1,27 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+[package]
+name = "streamlib-surface-adapter"
+description = "In-process surface-adapter contract shared by every adapter core: SurfaceAdapter trait, StreamlibSurface descriptor, scoped acquire/release, capability marker traits, conformance suite."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license-file.workspace = true
+repository.workspace = true
+
+[lib]
+name = "streamlib_surface_adapter"
+path = "src/lib.rs"
+
+[dependencies]
+bitflags.workspace = true
+parking_lot = "0.12"
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+libc.workspace = true
+
+[lints]
+workspace = true

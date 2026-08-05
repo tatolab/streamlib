@@ -9,7 +9,7 @@ use thiserror::Error;
 /// adapter.
 ///
 /// Per-acquire failures travel through the standard
-/// [`streamlib_adapter_abi::AdapterError`]; this enum covers the
+/// [`streamlib_surface_adapter::AdapterError`]; this enum covers the
 /// adapter's setup-time and Skia-binding failure modes.
 #[derive(Debug, Error)]
 pub enum SkiaAdapterError {

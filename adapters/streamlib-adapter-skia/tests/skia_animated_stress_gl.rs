@@ -36,7 +36,7 @@ use skia_safe::{Color4f, Paint, PaintStyle, Path, Point, Rect, TileMode, gradien
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::host_rhi::HostVulkanDevice;
 use streamlib::sdk::rhi::TextureFormat;
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
     SurfaceUsage,
 };

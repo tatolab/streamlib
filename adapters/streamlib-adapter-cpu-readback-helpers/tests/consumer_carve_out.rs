@@ -28,7 +28,7 @@ use serial_test::serial;
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::host_rhi::{HostMarker, HostVulkanBuffer, HostVulkanTimelineSemaphore};
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
     SurfaceUsage,
 };

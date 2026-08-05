@@ -36,7 +36,7 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use streamlib_adapter_abi::{StreamlibSurface, SurfaceAdapter};
+use streamlib_surface_adapter::{StreamlibSurface, SurfaceAdapter};
 use streamlib_adapter_opengl_abi::{
     HostSurfaceRegistrationRepr, OPENGL_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION,
     OpenGlSurfaceAdapterVTable, OpenGlViewRepr,
@@ -408,7 +408,7 @@ where
 }
 
 fn read_guard_to_repr(
-    guard: streamlib_adapter_abi::ReadGuard<'_, OpenGlSurfaceAdapter>,
+    guard: streamlib_surface_adapter::ReadGuard<'_, OpenGlSurfaceAdapter>,
 ) -> OpenGlViewRepr {
     let view = guard.view();
     let view_repr = OpenGlViewRepr {
@@ -424,7 +424,7 @@ fn read_guard_to_repr(
 }
 
 fn write_guard_to_repr(
-    guard: streamlib_adapter_abi::WriteGuard<'_, OpenGlSurfaceAdapter>,
+    guard: streamlib_surface_adapter::WriteGuard<'_, OpenGlSurfaceAdapter>,
 ) -> OpenGlViewRepr {
     let view = guard.view();
     // OpenGlWriteView's target is always GL_TEXTURE_2D by construction

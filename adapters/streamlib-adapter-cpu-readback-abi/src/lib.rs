@@ -204,7 +204,7 @@ impl CpuReadbackPlaneRepr {
 pub struct CpuReadbackViewRepr {
     /// `SurfaceFormat` enumerant value
     /// (`Bgra8 = 0` / `Rgba8 = 1` / `Nv12 = 2`). Mirrors
-    /// `streamlib_adapter_abi::SurfaceFormat`'s `#[repr(u32)]`
+    /// `streamlib_surface_adapter::SurfaceFormat`'s `#[repr(u32)]`
     /// representation byte-for-byte.
     pub format_raw: u32,
     /// Surface width in pixels (= plane 0 width).

@@ -5,8 +5,8 @@
 //! customers who need CPU memory access to a streamlib surface.
 //!
 //! This crate is the canonical implementor of the
-//! [`streamlib_adapter_abi::CpuReadable`] /
-//! [`streamlib_adapter_abi::CpuWritable`] capability marker traits.
+//! [`streamlib_surface_adapter::CpuReadable`] /
+//! [`streamlib_surface_adapter::CpuWritable`] capability marker traits.
 //! GPU adapters (`streamlib-adapter-vulkan`, `-opengl`, `-skia`)
 //! deliberately do not implement these — that asymmetry is the
 //! architectural enforcement of "switch adapter to opt into CPU".

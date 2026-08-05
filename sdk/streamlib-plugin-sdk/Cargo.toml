@@ -29,6 +29,7 @@ streamlib-macros = { path = "../streamlib-macros", version = "0.13.2" }
 # and the five surface adapters; the SDK's processor_vtable thunks route
 # every extern "C" boundary crossing through it. Deps: bitflags / parking_lot
 # / thiserror / tracing / libc — no engine.
+streamlib-surface-adapter = { path = "../../adapters/streamlib-surface-adapter", version = "0.13.2" }
 streamlib-adapter-abi = { path = "../../adapters/streamlib-adapter-abi", version = "0.13.2" }
 
 serde = { workspace = true }

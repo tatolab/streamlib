@@ -83,7 +83,7 @@ pub const VULKAN_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 /// Vulkan `VkImageLayout` enumerant value.
 ///
-/// Mirrors `streamlib_adapter_abi::VkImageLayoutValue` as a
+/// Mirrors `streamlib_surface_adapter::VkImageLayoutValue` as a
 /// dependency-free repeat so this crate stays free of streamlib
 /// deps. `VkImageLayout` is a 32-bit signed enum per the Vulkan
 /// spec; the value is interpreted by the host's `vulkanalia`
@@ -93,7 +93,7 @@ pub const VULKAN_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION: u32 = 1;
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Hash)]
 pub struct VkImageLayoutValueRepr(pub i32);
 
-/// `#[repr(C)]` mirror of `streamlib_adapter_abi::VkImageInfo`.
+/// `#[repr(C)]` mirror of `streamlib_surface_adapter::VkImageInfo`.
 ///
 /// Layout MUST match `VkImageInfo` byte-for-byte — the host
 /// implementation populates this struct directly from the existing
@@ -452,7 +452,7 @@ mod tests {
     use super::*;
     use core::mem::{align_of, offset_of, size_of};
 
-    /// `VkImageInfoRepr` mirrors `streamlib_adapter_abi::VkImageInfo`
+    /// `VkImageInfoRepr` mirrors `streamlib_surface_adapter::VkImageInfo`
     /// byte-for-byte. Locks the contract one of the four plugin ABI
     /// payloads in this crate rides on.
     #[test]

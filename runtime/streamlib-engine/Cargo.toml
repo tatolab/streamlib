@@ -163,6 +163,7 @@ zbus = "5"
 streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.13.2" }
 # Surface adapter ABI types referenced by the host-side CpuReadbackBridge
 # trait (linux-only; the cpu-readback adapter is linux-only).
+streamlib-surface-adapter = { path = "../../adapters/streamlib-surface-adapter", version = "0.13.2" }
 streamlib-adapter-abi = { path = "../../adapters/streamlib-adapter-abi", version = "0.13.2" }
 # Consumer-side carve-out — defines the trait machinery
 # (VulkanRhiDevice, DevicePrivilege, *Like, ConsumerMarker), the

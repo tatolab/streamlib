@@ -25,7 +25,7 @@ use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     StreamlibSurface, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle, SurfaceUsage,
 };
 use streamlib_adapter_opengl::{

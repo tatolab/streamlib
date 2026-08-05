@@ -35,6 +35,7 @@ cuda = []
 # spec's `#[repr(C)]` types, and off-Linux consumers (the wheel's CPU
 # capsule path) need exactly it.
 dlpark.workspace = true
+streamlib-surface-adapter = { path = "../streamlib-surface-adapter", version = "0.13.2" }
 streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.13.2" }
 streamlib-adapter-cuda-abi = { path = "../streamlib-adapter-cuda-abi", version = "0.13.2" }
 thiserror.workspace = true

@@ -18,7 +18,7 @@ use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::host_rhi::HostVulkanTimelineSemaphore;
 use streamlib::sdk::rhi::TextureFormat;
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     AdapterError, StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState,
     SurfaceTransportHandle, SurfaceUsage,
 };

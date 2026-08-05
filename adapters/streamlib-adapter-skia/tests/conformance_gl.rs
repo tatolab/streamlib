@@ -21,8 +21,8 @@ use streamlib::sdk::engine::HostTextureExt;
 
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::rhi::{Texture, TextureFormat};
-use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::testing::{empty_surface, run_conformance};
+use streamlib_surface_adapter::{
     AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId, SurfaceSyncState,
     SurfaceTransportHandle, SurfaceUsage,
 };
@@ -71,7 +71,7 @@ impl<'a> ConformanceFactory<'a> {
     }
 }
 
-impl streamlib_adapter_abi::testing::ConformanceSurfaceFactory for ConformanceFactory<'_> {
+impl streamlib_surface_adapter::testing::ConformanceSurfaceFactory for ConformanceFactory<'_> {
     fn make(&self, id: SurfaceId) -> StreamlibSurface {
         let texture = self
             .gpu

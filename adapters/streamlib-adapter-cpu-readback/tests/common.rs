@@ -24,7 +24,7 @@ use streamlib::sdk::engine::host_rhi::{
 };
 use streamlib::sdk::error::Error;
 use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,
     SurfaceUsage,
 };

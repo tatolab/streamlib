@@ -51,7 +51,7 @@ use streamlib::sdk::engine::host_rhi::{
 };
 use streamlib::sdk::engine::linux_surface_share::{SurfaceShareState, UnixSocketSurfaceService};
 use streamlib::sdk::rhi::PixelFormat;
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
     SurfaceUsage,
 };

@@ -23,8 +23,8 @@ use streamlib::sdk::engine::host_rhi::{
     HostVulkanDevice, HostVulkanTexture, HostVulkanTimelineSemaphore,
 };
 use streamlib::sdk::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
-use streamlib_adapter_abi::testing::{empty_surface, run_conformance};
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::testing::{empty_surface, run_conformance};
+use streamlib_surface_adapter::{
     AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId, SurfaceSyncState,
     SurfaceTransportHandle, SurfaceUsage,
 };
@@ -103,7 +103,7 @@ struct ConformanceFactory<'a> {
     gpu: &'a GpuContext,
 }
 
-impl<'a> streamlib_adapter_abi::testing::ConformanceSurfaceFactory for ConformanceFactory<'a> {
+impl<'a> streamlib_surface_adapter::testing::ConformanceSurfaceFactory for ConformanceFactory<'a> {
     fn make(&self, id: SurfaceId) -> StreamlibSurface {
         register_one(self.inner, self.gpu, id)
     }

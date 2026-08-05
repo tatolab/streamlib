@@ -8,7 +8,7 @@
 //!     only thing destroyed — host-side resources (the original VkImage,
 //!     the timeline semaphore, the registry entry) keep working.
 //!
-//! Uses `streamlib_adapter_abi::testing::SubprocessCrashHarness` which
+//! Uses `streamlib_surface_adapter::testing::SubprocessCrashHarness` which
 //! spawns the helper, waits a configurable delay, SIGKILLs (the helper
 //! also self-aborts but SIGKILL is the harness contract), then polls a
 //! caller-provided observer until cleanup is confirmed or the timeout
@@ -27,7 +27,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 use streamlib::sdk::engine::HostTextureExt;
 
-use streamlib_adapter_abi::testing::{CrashTiming, SubprocessCrashHarness};
+use streamlib_surface_adapter::testing::{CrashTiming, SubprocessCrashHarness};
 
 #[test]
 fn subprocess_crash_mid_write_does_not_break_host_adapter() {

@@ -20,7 +20,8 @@ members = [
     "sdk/streamlib-macros",    # Procedural macros for reducing boilerplate
     "sdk/streamlib-processor-extract", # Shared `#[processor(...)]` grammar + syn source-scan that derives the `processors:` manifest from code (#1411)
     "runtime/streamlib-plugin-abi", # ABI-stable FFI types for dynamic plugins
-    "adapters/streamlib-adapter-abi", # ABI-stable surface adapter contract (in-tree + 3rd-party adapters)
+    "adapters/streamlib-surface-adapter", # In-process surface adapter contract shared by every adapter core
+    "adapters/streamlib-adapter-abi", # Cross-DSO half of the surface adapter contract — extern "C" panic net + ABI version
     "runtime/streamlib-consumer-rhi", # Consumer-side carve-out of the Vulkan RHI — DMA-BUF FD import + bind + map. cdylibs depend on this NOT the full streamlib so the FullAccess capability boundary is type-system enforced (Linux)
     "adapters/streamlib-adapter-vulkan", # Vulkan-native surface adapter — canonical implementor of VulkanWritable / VulkanImageInfoExt (Linux)
     "adapters/streamlib-adapter-vulkan-abi", # Cross-DSO callback table for streamlib-adapter-vulkan — extern "C" vtable consumed by host wiring + cdylib shim (#887)

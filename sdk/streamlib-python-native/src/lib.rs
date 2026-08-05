@@ -3357,7 +3357,7 @@ mod opengl {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
-    use streamlib_adapter_abi::{
+    use streamlib_surface_adapter::{
         StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
         SurfaceTransportHandle, SurfaceUsage,
     };
@@ -3875,7 +3875,7 @@ mod vulkan {
     use std::os::unix::io::RawFd;
     use std::sync::{Arc, Mutex};
 
-    use streamlib_adapter_abi::{
+    use streamlib_surface_adapter::{
         StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
         SurfaceTransportHandle, SurfaceUsage,
     };
@@ -3931,7 +3931,7 @@ mod vulkan {
     }
 
     /// Per-image VkImageInfo descriptor for a registered surface.
-    /// Mirrors `streamlib_adapter_abi::VkImageInfo` field-for-field —
+    /// Mirrors `streamlib_surface_adapter::VkImageInfo` field-for-field —
     /// kept as a separate `#[repr(C)]` here so the cdylib's ABI
     /// surface stays self-contained (the SDK doesn't need to mirror
     /// `streamlib-adapter-abi` to read this).
@@ -4427,7 +4427,7 @@ mod vulkan {
         );
         match kind {
             AcquireKind::Write => {
-                use streamlib_adapter_abi::VulkanWritable;
+                use streamlib_surface_adapter::VulkanWritable;
                 match rt.adapter.acquire_write(&surface) {
                     Ok(g) => {
                         out_view.vk_image = g.view().vk_image().0;
@@ -4444,7 +4444,7 @@ mod vulkan {
                 }
             }
             AcquireKind::Read => {
-                use streamlib_adapter_abi::VulkanWritable;
+                use streamlib_surface_adapter::VulkanWritable;
                 match rt.adapter.acquire_read(&surface) {
                     Ok(g) => {
                         out_view.vk_image = g.view().vk_image().0;
@@ -4492,7 +4492,7 @@ mod cpu_readback {
     use std::os::unix::io::RawFd;
     use std::sync::{Arc, Mutex};
 
-    use streamlib_adapter_abi::{
+    use streamlib_surface_adapter::{
         AdapterError, StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
         SurfaceTransportHandle, SurfaceUsage,
     };
@@ -4540,7 +4540,7 @@ mod cpu_readback {
     pub struct SlpnCpuReadbackView {
         pub width: u32,
         pub height: u32,
-        /// Mirrors `streamlib_adapter_abi::SurfaceFormat as u32`
+        /// Mirrors `streamlib_surface_adapter::SurfaceFormat as u32`
         /// (Bgra8 = 0, Rgba8 = 1, Nv12 = 2).
         pub format: u32,
         pub plane_count: u32,
@@ -5314,7 +5314,7 @@ mod cuda {
 
     use cudarc::runtime::result::external_memory;
     use cudarc::runtime::sys;
-    use streamlib_adapter_abi::{
+    use streamlib_surface_adapter::{
         StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
         SurfaceTransportHandle, SurfaceUsage,
     };

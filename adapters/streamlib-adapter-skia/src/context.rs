@@ -14,14 +14,14 @@
 //! ```
 //!
 //! The context is a thin convenience over [`crate::SkiaSurfaceAdapter`];
-//! every operation maps to a [`streamlib_adapter_abi::SurfaceAdapter`]
+//! every operation maps to a [`streamlib_surface_adapter::SurfaceAdapter`]
 //! method on the inner adapter. Generic over the device flavor `D:
 //! VulkanRhiDevice` so it works against either `HostVulkanDevice` (host
 //! side) or `ConsumerVulkanDevice` (cdylib).
 
 use std::sync::Arc;
 
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     AdapterError, ReadGuard, StreamlibSurface, SurfaceAdapter, WriteGuard,
 };
 use streamlib_adapter_vulkan::VulkanContext;

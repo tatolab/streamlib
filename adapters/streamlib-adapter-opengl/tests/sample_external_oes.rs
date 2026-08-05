@@ -29,7 +29,7 @@ mod common;
 
 use streamlib::sdk::engine::HostGpuDeviceExt;
 use streamlib::sdk::engine::host_rhi::drm_modifier_probe;
-use streamlib_adapter_abi::{AdapterError, SurfaceAdapter};
+use streamlib_surface_adapter::{AdapterError, SurfaceAdapter};
 use streamlib_adapter_opengl::GL_TEXTURE_EXTERNAL_OES;
 
 use common::{HostFixture, RegisteredSurface, host_write_clear_color};

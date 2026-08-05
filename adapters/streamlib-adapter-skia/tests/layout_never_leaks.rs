@@ -23,7 +23,7 @@
 
 #![cfg(target_os = "linux")]
 
-use streamlib_adapter_abi::{VulkanImageInfoExt, VulkanWritable};
+use streamlib_surface_adapter::{VulkanImageInfoExt, VulkanWritable};
 use streamlib_adapter_skia::{SkiaReadView, SkiaWriteView};
 use streamlib_consumer_rhi::ConsumerVulkanDevice;
 

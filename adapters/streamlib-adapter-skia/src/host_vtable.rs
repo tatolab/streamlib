@@ -63,7 +63,7 @@ use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use streamlib_adapter_abi::{AdapterError, StreamlibSurface, SurfaceAdapter};
+use streamlib_surface_adapter::{AdapterError, StreamlibSurface, SurfaceAdapter};
 use streamlib_adapter_skia_abi::{
     SKIA_GL_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION, SKIA_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION,
     SkiaGlSurfaceAdapterVTable, SkiaSurfaceAdapterVTable, SkiaViewRepr,

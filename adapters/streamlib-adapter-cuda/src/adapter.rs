@@ -37,7 +37,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     AdapterError, ReadGuard, Registry, StreamlibSurface, SurfaceAdapter, SurfaceId,
     SurfaceRegistration, WriteGuard,
 };

@@ -18,7 +18,7 @@
 #[path = "common.rs"]
 mod common;
 
-use streamlib_adapter_abi::SurfaceAdapter;
+use streamlib_surface_adapter::SurfaceAdapter;
 
 use crate::common::HostFixture;
 

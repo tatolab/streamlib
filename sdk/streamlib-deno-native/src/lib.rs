@@ -3156,7 +3156,7 @@ mod opengl {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
-    use streamlib_adapter_abi::{
+    use streamlib_surface_adapter::{
         StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
         SurfaceTransportHandle, SurfaceUsage,
     };
@@ -3608,7 +3608,7 @@ mod vulkan {
     use std::os::unix::io::RawFd;
     use std::sync::{Arc, Mutex};
 
-    use streamlib_adapter_abi::{
+    use streamlib_surface_adapter::{
         StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
         SurfaceTransportHandle, SurfaceUsage,
     };
@@ -4026,7 +4026,7 @@ mod vulkan {
         );
         match kind {
             AcquireKind::Write => {
-                use streamlib_adapter_abi::VulkanWritable;
+                use streamlib_surface_adapter::VulkanWritable;
                 match rt.adapter.acquire_write(&surface) {
                     Ok(g) => {
                         out_view.vk_image = g.view().vk_image().0;
@@ -4044,7 +4044,7 @@ mod vulkan {
                 }
             }
             AcquireKind::Read => {
-                use streamlib_adapter_abi::VulkanWritable;
+                use streamlib_surface_adapter::VulkanWritable;
                 match rt.adapter.acquire_read(&surface) {
                     Ok(g) => {
                         out_view.vk_image = g.view().vk_image().0;
@@ -4089,7 +4089,7 @@ mod cpu_readback {
     use std::os::unix::io::RawFd;
     use std::sync::{Arc, Mutex};
 
-    use streamlib_adapter_abi::{
+    use streamlib_surface_adapter::{
         AdapterError, StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
         SurfaceTransportHandle, SurfaceUsage,
     };
@@ -4846,7 +4846,7 @@ mod cuda {
 
     use cudarc::runtime::result::external_memory;
     use cudarc::runtime::sys;
-    use streamlib_adapter_abi::{
+    use streamlib_surface_adapter::{
         StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
         SurfaceTransportHandle, SurfaceUsage,
     };

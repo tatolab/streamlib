@@ -22,7 +22,7 @@
 
 use std::sync::Arc;
 
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     AdapterError, ReadGuard, StreamlibSurface, SurfaceAdapter, WriteGuard,
 };
 use streamlib_consumer_rhi::VulkanRhiDevice;

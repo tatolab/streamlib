@@ -52,7 +52,7 @@ use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     ReadGuard, StreamlibSurface, SurfaceAdapter, SurfaceFormat, WriteGuard,
 };
 use streamlib_adapter_cpu_readback_abi::{

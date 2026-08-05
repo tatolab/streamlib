@@ -26,7 +26,7 @@
 
 use std::sync::Arc;
 
-use streamlib_adapter_abi::{SurfaceId, SurfaceRegistration};
+use streamlib_surface_adapter::{SurfaceId, SurfaceRegistration};
 use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout};
 
 /// Buffer-flavored registration — handed to
@@ -100,12 +100,12 @@ pub struct HostImageSurfaceRegistration<P: DevicePrivilege> {
 /// Resource discriminator stored on every [`SurfaceState`].
 ///
 /// The cuda adapter holds both `Buffer` and `Image` registrations in
-/// the same [`streamlib_adapter_abi::Registry`]; the variant identifies
+/// the same [`streamlib_surface_adapter::Registry`]; the variant identifies
 /// which acquire path (`acquire_read`/`acquire_write` for buffers,
 /// `acquire_texture`/`acquire_surface` for images) is valid for a
 /// given surface_id. Mixing paths (e.g. calling `acquire_read` on an
 /// image surface) returns
-/// [`streamlib_adapter_abi::AdapterError::BackendRejected`] with a
+/// [`streamlib_surface_adapter::AdapterError::BackendRejected`] with a
 /// usage-correction hint, the same shape the OpenGL adapter uses for
 /// its EXTERNAL_OES read-only restriction.
 pub(crate) enum SurfaceResource<P: DevicePrivilege> {

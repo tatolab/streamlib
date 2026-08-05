@@ -140,7 +140,7 @@ pub const CUDA_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION: u32 = 1;
 
 /// Vulkan `VkImageLayout` enumerant value.
 ///
-/// Mirrors `streamlib_adapter_abi::VkImageLayoutValue` as a
+/// Mirrors `streamlib_surface_adapter::VkImageLayoutValue` as a
 /// dependency-free repeat so this crate stays free of streamlib
 /// deps. `VkImageLayout` is a 32-bit signed enum per the Vulkan
 /// spec; the value is interpreted by the host's `vulkanalia`

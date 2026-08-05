@@ -18,7 +18,7 @@
 #[path = "common.rs"]
 mod common;
 
-use streamlib_adapter_abi::SurfaceAdapter;
+use streamlib_surface_adapter::SurfaceAdapter;
 
 use common::{HostFixture, host_write_clear_color};
 

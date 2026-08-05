@@ -30,7 +30,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 use streamlib::sdk::engine::HostTextureExt;
 
-use streamlib_adapter_abi::testing::{CrashTiming, SubprocessCrashHarness};
+use streamlib_surface_adapter::testing::{CrashTiming, SubprocessCrashHarness};
 
 use common::HostFixture;
 

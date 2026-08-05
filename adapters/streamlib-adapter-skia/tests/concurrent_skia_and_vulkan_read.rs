@@ -20,7 +20,7 @@ use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::sdk::rhi::TextureFormat;
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
     SurfaceUsage,
 };
@@ -109,7 +109,7 @@ fn skia_read_and_vulkan_read_share_surface() {
     let vk_view: &VulkanReadView<'_> = vk_guard.view();
     // The raw-Vulkan view exposes the VkImage handle; we just confirm
     // it's reachable while the Skia guard is also alive.
-    let _ = streamlib_adapter_abi::VulkanWritable::vk_image(vk_view);
+    let _ = streamlib_surface_adapter::VulkanWritable::vk_image(vk_view);
 
     drop(skia_guard);
     drop(vk_guard);

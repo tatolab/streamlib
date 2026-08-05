@@ -51,7 +51,7 @@ use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::host_rhi::{
     HostVulkanBuffer, HostVulkanDevice, HostVulkanTimelineSemaphore,
 };
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     StreamlibSurface, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle, SurfaceUsage,
 };
 use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
@@ -164,7 +164,7 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
     // the underlying mapped pointer (the view doesn't expose mapped
     // bytes yet — that's the cuda-typed view work in #589/#590).
     {
-        use streamlib_adapter_abi::SurfaceAdapter as _;
+        use streamlib_surface_adapter::SurfaceAdapter as _;
         let _wguard = adapter.acquire_write(&surface).expect("host acquire_write");
         // SAFETY: `pixel_buffer` is HOST_VISIBLE | HOST_COHERENT and the
         // mapped pointer stays valid for the buffer's lifetime; we hold
@@ -182,7 +182,7 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
     // pattern. The acquire waits on timeline=1 (already signaled)
     // and returns immediately.
     {
-        use streamlib_adapter_abi::SurfaceAdapter as _;
+        use streamlib_surface_adapter::SurfaceAdapter as _;
         let _rguard = adapter
             .acquire_read(&surface)
             .expect("host acquire_read sanity");

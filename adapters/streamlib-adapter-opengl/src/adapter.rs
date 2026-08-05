@@ -8,7 +8,7 @@
 //! - Owns an [`crate::EglRuntime`] (surfaceless EGL display + OpenGL
 //!   context + DMA-BUF import function pointers).
 //! - Holds a registry of [`SurfaceState`] keyed by
-//!   [`streamlib_adapter_abi::SurfaceId`]. Each entry caches the
+//!   [`streamlib_surface_adapter::SurfaceId`]. Each entry caches the
 //!   imported `EGLImage` and the bound `GL_TEXTURE_2D` id — building
 //!   them once per surface, not once per acquire.
 //! - Enforces the trait's typestate (one writer XOR many readers) at
@@ -19,7 +19,7 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 
 use khronos_egl as egl;
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     AdapterError, ReadGuard, Registry, StreamlibSurface, SurfaceAdapter, SurfaceId, WriteGuard,
 };
 use tracing::{instrument, warn};

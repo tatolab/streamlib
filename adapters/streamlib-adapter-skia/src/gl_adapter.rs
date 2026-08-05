@@ -23,7 +23,7 @@ use skia_safe::gpu::{
     surfaces,
 };
 use skia_safe::{AlphaType, ColorSpace, ColorType};
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     AdapterError, GlWritable, ReadGuard, StreamlibSurface, SurfaceAdapter, SurfaceFormat,
     SurfaceId, WriteGuard,
 };

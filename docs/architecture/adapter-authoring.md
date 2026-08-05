@@ -94,7 +94,7 @@ Mechanical steps — work top-to-bottom.
 Create three crates under `adapters/`:
 
 - `streamlib-adapter-<name>/` — the adapter implementation. Runtime
-  dep graph: `streamlib-adapter-abi` + `streamlib-consumer-rhi` +
+  dep graph: `streamlib-surface-adapter` + `streamlib-consumer-rhi` +
   `streamlib-surface-client` + `vulkanalia`. **Never** depend on
   `streamlib` at runtime — that pulls `HostVulkanDevice` into the
   cdylib's dep graph and breaks the FullAccess capability boundary.
@@ -137,11 +137,11 @@ into one of the canonical files.
 
 ### 3. Implement the trait
 
-`<Name>SurfaceAdapter<D>` impls `streamlib_adapter_abi::SurfaceAdapter`.
+`<Name>SurfaceAdapter<D>` impls `streamlib_surface_adapter::SurfaceAdapter`.
 The pattern every in-tree adapter follows:
 
 - Hold a `Registry<SurfaceState<D::Privilege>>` from
-  `streamlib-adapter-abi`. Don't roll your own `Mutex<HashMap<SurfaceId, _>>`
+  `streamlib-surface-adapter`. Don't roll your own `Mutex<HashMap<SurfaceId, _>>`
   — `Registry` already encodes the read/write contention machine.
 - `try_begin_read` / `try_begin_write` snapshot under the registry
   lock and return everything `finalize_*` needs unlocked (the
@@ -167,7 +167,7 @@ Read it before you start.
 ### 4. Implement capability markers
 
 Pick the markers your view exposes from
-`streamlib-adapter-abi::adapter`:
+`streamlib-surface-adapter::adapter`:
 
 | Marker | When to impl | Reference adapter |
 |---|---|---|
@@ -186,7 +186,7 @@ expose the native handle on the view directly.
 Every adapter ships, at minimum:
 
 - `tests/conformance.rs` — calls
-  `streamlib_adapter_abi::testing::run_conformance(adapter, factory)`.
+  `streamlib_surface_adapter::testing::run_conformance(adapter, factory)`.
   Non-negotiable; the suite exercises blocking and non-blocking
   acquires, RW exclusion, contention errors, and surface
   lifetime.
@@ -258,7 +258,7 @@ name = "streamlib_adapter_<name>"
 path = "src/lib.rs"
 
 [dependencies]
-streamlib-adapter-abi = { path = "../streamlib-adapter-abi" }
+streamlib-surface-adapter = { path = "../streamlib-surface-adapter" }
 thiserror.workspace = true
 tracing.workspace = true
 
@@ -326,7 +326,7 @@ pub use view::{<Name>ReadView, <Name>WriteView};
 use std::sync::Arc;
 use std::time::Duration;
 
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     AdapterError, ReadGuard, Registry, StreamlibSurface, SurfaceAdapter,
     SurfaceId, WriteGuard,
 };
@@ -687,13 +687,13 @@ the python/deno scenario binaries dual-register and call
 ## Conformance & tests
 
 Every adapter passes the conformance suite. The entry point is
-`streamlib_adapter_abi::testing::run_conformance(adapter, factory)`
+`streamlib_surface_adapter::testing::run_conformance(adapter, factory)`
 — it takes the adapter and a `Fn(SurfaceId) -> StreamlibSurface`
 factory the suite calls per scenario to mint fresh surface
 descriptors. Wire it as `tests/conformance.rs`:
 
 ```rust
-use streamlib_adapter_abi::testing::run_conformance;
+use streamlib_surface_adapter::testing::run_conformance;
 use streamlib_adapter_<name>::<Name>SurfaceAdapter;
 
 #[test]
@@ -710,7 +710,7 @@ fn conformance() {
 ```
 
 If your adapter only needs the simplest CPU-empty surface
-descriptor, `streamlib_adapter_abi::testing::empty_surface` is the
+descriptor, `streamlib_surface_adapter::testing::empty_surface` is the
 ready-made factory.
 
 Round-trip tests live next to it; the `streamlib-adapter-<name>-helpers`
@@ -804,7 +804,7 @@ Walking the checklist:
    `streamlib-adapter-metal-helpers` (test-only), and (likely) a
    `streamlib-adapter-metal-mtltexture-bridge` crate that holds
    the unsafe Objective-C bridging code. Same dep-graph rules:
-   the runtime adapter crate depends on `streamlib-adapter-abi`
+   the runtime adapter crate depends on `streamlib-surface-adapter`
    + `streamlib-consumer-rhi` + `streamlib-surface-client` +
    `vulkanalia`, but **not** `streamlib`.
 
@@ -824,7 +824,7 @@ Walking the checklist:
 
 4. **Capability marker** — a new `MetalWritable` marker exposing
    `mtl_texture(&self) -> *const MTLTexture` (or analogous Rust-
-   side handle type). Lives in `streamlib-adapter-abi`. Existing
+   side handle type). Lives in `streamlib-surface-adapter`. Existing
    markers (`VulkanWritable`, `GlWritable`) stay untouched — the
    adapter can also impl `VulkanWritable` if customers want to
    issue MoltenVK Vulkan calls against the same image.

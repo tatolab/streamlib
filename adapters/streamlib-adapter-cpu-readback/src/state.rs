@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use streamlib_adapter_abi::{SurfaceFormat, SurfaceId, SurfaceRegistration};
+use streamlib_surface_adapter::{SurfaceFormat, SurfaceId, SurfaceRegistration};
 use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout};
 
 /// Inputs the registration site hands to

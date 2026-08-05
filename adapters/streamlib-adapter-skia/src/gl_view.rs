@@ -22,7 +22,7 @@
 use std::mem::ManuallyDrop;
 use std::sync::{Arc, Mutex};
 
-use streamlib_adapter_abi::{ReadGuard, WriteGuard};
+use streamlib_surface_adapter::{ReadGuard, WriteGuard};
 use streamlib_adapter_opengl::{EglRuntime, OpenGlSurfaceAdapter};
 
 use crate::skia_internal::{

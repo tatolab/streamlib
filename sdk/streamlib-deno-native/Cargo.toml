@@ -35,7 +35,7 @@ streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", ve
 # Subprocess-side OpenGl runtime (#530). Reuses the host adapter crate's
 # EglRuntime + OpenGlSurfaceAdapter so subprocess code never re-derives EGL
 # bring-up or DMA-BUF → GL_TEXTURE_2D import.
-streamlib-adapter-abi = { path = "../../adapters/streamlib-adapter-abi", version = "0.13.2" }
+streamlib-surface-adapter = { path = "../../adapters/streamlib-surface-adapter", version = "0.13.2" }
 streamlib-adapter-opengl = { path = "../../adapters/streamlib-adapter-opengl", version = "0.13.2" }
 # Subprocess-side Vulkan runtime (#531). Same shape as streamlib-python-native
 # — wraps the host `VulkanSurfaceAdapter` against a subprocess-local

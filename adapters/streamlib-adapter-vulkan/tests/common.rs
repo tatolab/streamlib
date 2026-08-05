@@ -39,7 +39,7 @@ pub fn vulkan_adapter_subprocess_helper_path() -> PathBuf {
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::sdk::rhi::{Texture, TextureFormat};
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState, SurfaceTransportHandle,
     SurfaceUsage,
 };

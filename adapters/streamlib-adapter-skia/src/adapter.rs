@@ -28,7 +28,7 @@ use skia_safe::gpu::{
     backend_textures, direct_contexts, images as skia_images, surfaces,
 };
 use skia_safe::{AlphaType, ColorSpace, ColorType};
-use streamlib_adapter_abi::{
+use streamlib_surface_adapter::{
     AdapterError, ReadGuard, StreamlibSurface, SurfaceAdapter, SurfaceId, VulkanImageInfoExt,
     WriteGuard,
 };
