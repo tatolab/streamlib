@@ -56,9 +56,15 @@ jobs:
           # the container needs the same toolchain the test workflows install.
           before-script-linux: |
             set -euo pipefail
+            # No python3-devel: it replaces the image's /usr/bin/python3
+            # (3.12) with AlmaLinux's 3.6, which maturin refuses — and an
+            # extension-module wheel links no libpython, so the headers it
+            # brings are not needed here. The Ubuntu test workflow does need
+            # them; that job builds the crate's unit tests, which link it.
             dnf install -y pkgconfig protobuf-compiler clang-devel \
-              vulkan-headers vulkan-loader-devel python3-devel unzip \
+              vulkan-headers vulkan-loader-devel unzip \
               cmake ninja-build git
+            python3 --version
             curl -sSL https://github.com/jsontypedef/json-typedef-codegen/releases/download/v0.4.1/x86_64-unknown-linux-gnu.zip -o /tmp/jtd-codegen.zip
             unzip -q /tmp/jtd-codegen.zip -d /tmp/jtd-codegen
             install -m 0755 /tmp/jtd-codegen/jtd-codegen /usr/local/bin/jtd-codegen
