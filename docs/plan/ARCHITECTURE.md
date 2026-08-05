@@ -65,7 +65,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   as in-process capabilities (torch/cupy and GL consumers); only their cross-DSO
   `-abi` halves die with the plugin ABI. [importable-python-library]
 
-## Processor model & scheduling — IN-FLIGHT (→ schema-free-ports, processor-class-identity, importable-python-library)
+## Processor model & scheduling — IN-FLIGHT (→ schema-free-ports, processor-class-identity, importable-python-library, in-process-hosting-ripout)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
