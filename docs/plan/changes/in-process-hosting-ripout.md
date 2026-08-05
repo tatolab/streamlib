@@ -4,9 +4,10 @@
 
 **The helper-placement pivot's rip-out — delete the in-process hosting Change A shipped.**
 Implements `[helper-process-placement-only]` (ADR:
-`docs/decisions/helper-process-placement-only.md`, owner 2026-08-04). Executes **inside
-#1714** together with the helper spawn path — never in parallel with it (owner: no
-coexistence window; the ban on parallel old/new shapes applies to our own last ship).
+`docs/decisions/helper-process-placement-only.md`, owner 2026-08-04). Executes
+**inside #1714** together with the helper spawn path — never in parallel with it
+(owner: no coexistence window; the ban on parallel old/new shapes applies to our own
+last ship).
 Also amends Change B (`importable-python-library-ripout.md`) where its REMOVED
 inventory, written when in-process was the destination, would delete helper substrate.
 
@@ -31,9 +32,11 @@ inlined; no API invented here is unverified against the tree.
   `test_no_survivors_are_left_in_the_process_group` runs with a real graph).
 - **Import-path identity, folded from `processor-class-identity.md` (owner
   2026-08-04):** `module:qualname` derivation from the class object (new code — both
-  old derivation sites die with the module loader), the `__main__` wiring error at
-  `rt.add` naming the fix, the identity-stability test, and the registry closure
-  capturing the import path instead of `Py<PyAny>`.
+  old derivation sites die with the module loader), the wiring error at `rt.add`
+  naming the fix for every identity a fresh interpreter cannot import —
+  `__main__`-defined and function-local (`<locals>` in the qualname) classes alike —
+  the identity-stability test, and the registry closure capturing the import path
+  instead of `Py<PyAny>`.
 - **Child-side runtime loop in the wheel** (`python -m` entry): the
   `subprocess_runner.py` structure (handshake → escalate channel → reader thread →
   log install → import class → lifecycle loop) rewritten against the wheel's API;
@@ -55,10 +58,11 @@ inlined; no API invented here is unverified against the tree.
   into `app.py` + the effect class in its own importable module; `release-wheel.yml`'s
   scaffold gate follows.
 - **Behavioural placement gate** (with this change, complementing the vocabulary
-  xtask): a test proving the parent never imports the user's module
-  (`sys.modules` clean after `rt.add` and N bags), the bag-carried pid differs from
-  the app's, two instances of one class get two pids, and a native built-in reports
-  the app's pid (the boundary, discriminated).
+  xtask): a test proving the parent never hosts the class — the app's own
+  registration import is the only parent-side load (`rt.add` and N bags add nothing
+  to the parent's `sys.modules`), the bag-carried pid differs from the app's, two
+  instances of one class get two pids, and a native built-in reports the app's pid
+  (the boundary, discriminated).
 - **Single-processor test harness keeps its API, gains a real transport** (owner,
   2026-08-05): `SingleProcessorTestPipeline`'s feeder/collector become real graph
   endpoints over a parent-owned IPC channel, replacing the module-global queues that
@@ -94,8 +98,9 @@ inlined; no API invented here is unverified against the tree.
   ordinal-0 fallback is silent corruption on multi-GPU).
 - The subprocess protocol-version handshake simplifies to an assertion (one artifact,
   but a stale child on `PATH` is still possible); bump the protocol version once.
-- Format vocabulary deduplicates (`python_processor_context.rs` and
-  `subprocess_escalate.rs` carry byte-identical copies).
+- Format vocabulary deduplicates into one shared definition (today
+  `python_processor_context.rs` and `subprocess_escalate.rs` carry byte-identical
+  copies).
 - Tests: the module-global observation queues rewire to the decided harness
   transport; the two `__main__`-declared fixtures move to importable modules;
   `test_the_scaffolded_app_reaches_a_running_graph` becomes the demo gate with
@@ -143,10 +148,13 @@ sentence no pattern list catches — never deleted; (4) the owner-memory spike m
 rewritten to carry the retraction (done with this change); (5) the
 `check-no-in-process-placement` gate bans the ms-anchored literals and
 `both placements viable` (never bare `both placements`), scans `.md`, skips `~~…~~`
-supersession spans with an odd-count refusal, and carries exactly three allow-file
-pragmas, all on retractions. Residual risk stated plainly: git history and GitHub
-edit-history retain the originals; a paraphrase trips nothing — the plan entry, the
-glossary, and the memory memo are the defence there.
+supersession spans with an odd-count refusal, and carries exactly two allow-file
+pragmas — this change and the ADR, the two documents that must quote the banned
+vocabulary to delete and ban it (each also carries the numbers' retraction; the third
+quoting file, `importable-python-library.md`, is covered by its supersession spans).
+Residual risk stated plainly: git history and GitHub edit-history retain the originals;
+a paraphrase trips nothing — the plan entry, the glossary, and the memory memo are the
+defence there.
 
 ## Out of scope
 

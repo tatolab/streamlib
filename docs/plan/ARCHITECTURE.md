@@ -48,8 +48,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   Python packages and Rust source crates only. [importable-python-library]
 - **DECIDED** — Third-party native code (closed-source included) ships as an ordinary
   Python package whose native internals expose capabilities to Python as handles —
-  frames, FDs, device pointers, buffers — wrapped by a Python processor. It never
-  links the engine and never speaks streamlib internals; the CPython ABI is the only
+  frames, FDs, exportable device allocations, buffers — wrapped by a Python
+  processor. It never links the engine and never speaks streamlib internals; the
+  CPython ABI is the only
   binary boundary, and no process ever holds two streamlib engines — the app process
   runs the one engine, and a helper process imports the same wheel as a processor
   host, never as a second engine. Handles it exposes must be genuinely transferable
@@ -208,7 +209,9 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   hobbyist / video-creator audience when it is scheduled. [importable-python-library]
 - **DECIDED** — The Python SDK carries a GIL-release contract: every native binding
   that can block releases the GIL around the blocking call, and pixels never cross
-  into Python — frames travel as handles / surface ids. The contract exists so a
+  into Python as Python-owned objects — frames travel as handles / surface ids, and
+  pixel memory is reached only through explicitly exported views (DLPack, the CUDA
+  Array Interface, a mapped CPU buffer). The contract exists so a
   blocking native binding never stalls the threads of its own interpreter — the app's
   for the app-side bindings, the helper child's for a processor's. It is never a
   co-tenancy remedy: no two Python processors share an interpreter.

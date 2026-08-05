@@ -77,11 +77,11 @@ for the engine's native built-ins, which stay Rust in the app process, those cal
 ordinary Rust (a Python processor's GPU access crosses a process boundary via the
 escalate/IPC path — the wheel's own transport, not a plugin ABI; clarified 2026-08-04 by
 `helper-process-placement-only.md`). The closed-source-vendor case is served by the
-Python-package path: native internals expose transferable handles (DMA-BUF FD, CUDA device
-pointer, buffers) and a Python processor wraps them — from its helper process, so the handle
-must be genuinely transferable across a process boundary; an address-space-local pointer is
-not a handle. There is exactly one authoring surface, and no process ever holds two streamlib
-engines.
+Python-package path: native internals expose transferable handles (DMA-BUF FD, exportable
+device allocations, buffers) and a Python processor wraps them — from its helper process,
+so the handle must be genuinely transferable across a process boundary; an
+address-space-local pointer is not a handle. There is exactly one authoring surface, and
+no process ever holds two streamlib engines.
 
 **Native built-ins, Python everywhere else — the evidence.** Three independent analyses
 converged: (a) the engine's primitive surface is already handle-shaped — the old media packages

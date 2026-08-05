@@ -79,8 +79,9 @@ handle-shaped surface — GPU memory import/export (DMA-BUF / OPAQUE_FD), the pr
 target, texture rings, codec sessions, the audio clock, color resolution. Built-ins and
 external code compose primitives; they never reimplement them.
 
-**Handle**: a transferable value crossing the native↔Python boundary — a DMA-BUF fd, a
-CUDA device pointer, a surface id, a byte buffer. Pixels never cross as Python objects.
+**Handle**: a transferable value crossing the native↔Python boundary — a DMA-BUF fd, an
+exportable device allocation (OPAQUE_FD), a surface id, a byte buffer. An
+address-space-local pointer is not a handle. Pixels never cross as Python objects.
 
 **Present target**: the engine-owned presentation surface minted from a raw window
 handle; the only way frames reach a window.

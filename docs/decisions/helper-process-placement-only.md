@@ -136,6 +136,7 @@ spec-forbidden).
   `.claude/rules/placement.md` (stop-work shapes and the app-process boundary), hard-fail
   insertions in `review-pr` and `rust-craftsmanship-reviewer`, and the
   `check-no-in-process-placement` xtask gate (vocabulary now; the behavioural
-  parent-never-imports-the-class test lands with #1714). "In-process" is retired as a word
-  for the surviving app-process senses — the glossary now says **app-process** — so the
-  banned term stays unambiguous and greppable.
+  no-hosting-in-the-parent test lands with #1714 — the app's own registration import
+  is parent-side by construction; hosting is what never is). "In-process" is retired as
+  a word for the surviving app-process senses — the glossary now says **app-process** —
+  so the banned term stays unambiguous and greppable.
