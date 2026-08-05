@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.12.0](https://github.com/tatolab/streamlib/compare/v0.11.1...v0.12.0) (2026-08-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **python:** zero-CPU-copy frame exchange — DLPack device tensors, numpy views, DMA-BUF ([#1737](https://github.com/tatolab/streamlib/issues/1737))
+
+### Features
+
+* **python:** zero-CPU-copy frame exchange — DLPack device tensors, numpy views, DMA-BUF ([#1737](https://github.com/tatolab/streamlib/issues/1737)) ([2338966](https://github.com/tatolab/streamlib/commit/2338966064bccef71138039c41db58f2953bcf06))
+
 ## [0.11.1](https://github.com/tatolab/streamlib/compare/v0.11.0...v0.11.1) (2026-08-04)
 
 
