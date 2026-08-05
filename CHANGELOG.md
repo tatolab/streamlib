@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.13.0](https://github.com/tatolab/streamlib/compare/v0.12.0...v0.13.0) (2026-08-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** the dev experience — run/dev/new ship in the wheel's console script ([#1739](https://github.com/tatolab/streamlib/issues/1739))
+
+### Features
+
+* **cli:** the dev experience — run/dev/new ship in the wheel's console script ([#1739](https://github.com/tatolab/streamlib/issues/1739)) ([f4ede76](https://github.com/tatolab/streamlib/commit/f4ede76ba4ddebee4ae8037f744508fb74fcb200))
+
 ## [0.12.0](https://github.com/tatolab/streamlib/compare/v0.11.1...v0.12.0) (2026-08-05)
 
 
