@@ -31,16 +31,16 @@ moq = ["dep:streamlib-moq"]
 # Host-side member: the zone crates resolve by path (this package is never
 # published, so there is no registry closure to satisfy by version).
 [build-dependencies]
-streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.13.1" }
+streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.13.2" }
 
 [dependencies]
 # `default-features = false` drops the SDK's `auto-build` feature. The
 # api-server drives the runtime; it never materializes a module from source, and
 # Cargo unifies features across a graph — leaving it on would link the build
 # orchestrator into the wheel that now hosts this crate.
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.13.1", default-features = false }
-streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.13.1" }
-streamlib-moq = { path = "../../runtime/streamlib-moq", version = "0.13.1", optional = true }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.13.2", default-features = false }
+streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.13.2" }
+streamlib-moq = { path = "../../runtime/streamlib-moq", version = "0.13.2", optional = true }
 
 tower-http = { version = "0.6", features = ["trace"] }
 futures-util = "0.3"
@@ -67,7 +67,7 @@ constant_time_eq = "0.3"
 # Enables the engine's `test-support` in-memory `TapSubscription` constructor
 # for the MCP/REST tap-tool tests. A dev-dep feature: active for tests, absent
 # from the production `cargo build` dependency graph.
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.13.1", features = ["test-support"] }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.13.2", features = ["test-support"] }
 tempfile = "3"
 tower = {version = "0.5", features = ["util"]}
 serial_test = "3.2"
