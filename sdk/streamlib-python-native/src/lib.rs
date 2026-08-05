@@ -619,14 +619,13 @@ pub unsafe extern "C" fn slpn_input_read(
             continue;
         }
         let queue = &mut state.pending;
-        if queue.is_empty() {
-            continue;
-        }
 
         // Grow-and-retry: a publisher under PowerOfTwo growth can deliver a frame
         // larger than the caller's buffer. Peek the frame that would be returned
         // WITHOUT consuming it; if it does not fit, report its length and leave it
-        // in place so the SDK can resize and read again. Nothing is dropped.
+        // in place so the SDK can resize and read again. Nothing is dropped. An
+        // empty queue is this subscriber declining the read — fan-in means the
+        // next one may satisfy it.
         let Some(required) = streamlib_ipc_types::next_read_required_len(
             queue,
             read_mode == READ_MODE_READ_NEXT_IN_ORDER,
