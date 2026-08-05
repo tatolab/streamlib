@@ -46,7 +46,9 @@ artifact + ADR.
   traceback and keeps the last good pipeline running; the MVP edit loop is re-running
   `dev` (reload-on-save is a later nicety, processor-granular per the plan, never
   module machinery); a dev-mode GIL-hold watchdog warns when a callback holds the GIL
-  beyond threshold; `dev` binds loopback. `streamlib new` scaffolds `app.py` +
+  beyond threshold; ~~`dev` binds loopback~~ — superseded 2026-08-04 by
+  `control-plane-bind-posture`: `dev` binds all interfaces, exactly as `run` does.
+  `streamlib new` scaffolds `app.py` +
   `pyproject.toml` + `.python-version` (3.12) with working camera → effect → display
   wiring where the effect touches pixels via the exchange surface.
 - **Packaging + release channel**: the CLI ships as the wheel's console script; wheels
