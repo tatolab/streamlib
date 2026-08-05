@@ -41,8 +41,8 @@ use streamlib::sdk::engine::HostTextureExt;
 
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::rhi::TextureFormat;
-use streamlib_surface_adapter::testing::{CrashTiming, SubprocessCrashHarness};
 use streamlib_adapter_opengl::DRM_FORMAT_ARGB8888;
+use streamlib_surface_adapter::testing::{CrashTiming, SubprocessCrashHarness};
 
 fn try_init_gpu() -> Option<GpuContext> {
     let _ = tracing_subscriber::fmt()

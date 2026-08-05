@@ -33,8 +33,8 @@
 
 use std::marker::PhantomData;
 
-use streamlib_surface_adapter::{SurfaceAdapter, SurfaceId};
 use streamlib_consumer_rhi::{TextureFormat, VulkanRhiDevice};
+use streamlib_surface_adapter::{SurfaceAdapter, SurfaceId};
 use vulkanalia::vk;
 
 use crate::adapter::CudaSurfaceAdapter;

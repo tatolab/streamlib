@@ -22,8 +22,8 @@
 use std::mem::ManuallyDrop;
 use std::sync::{Arc, Mutex};
 
-use streamlib_surface_adapter::{ReadGuard, WriteGuard};
 use streamlib_adapter_opengl::{EglRuntime, OpenGlSurfaceAdapter};
+use streamlib_surface_adapter::{ReadGuard, WriteGuard};
 
 use crate::skia_internal::{
     SyncDirectContext, assert_skia_views_not_cpu_readable, drop_skia_image_under_lock,

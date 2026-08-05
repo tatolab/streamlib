@@ -26,8 +26,8 @@
 
 use std::sync::Arc;
 
-use streamlib_surface_adapter::{SurfaceId, SurfaceRegistration};
 use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout};
+use streamlib_surface_adapter::{SurfaceId, SurfaceRegistration};
 
 /// Buffer-flavored registration — handed to
 /// [`crate::CudaSurfaceAdapter::register_host_surface`].

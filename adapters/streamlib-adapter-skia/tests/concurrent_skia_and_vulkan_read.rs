@@ -20,13 +20,13 @@ use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::host_rhi::{HostVulkanDevice, HostVulkanTimelineSemaphore};
 use streamlib::sdk::rhi::TextureFormat;
-use streamlib_surface_adapter::{
-    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
-    SurfaceUsage,
-};
 use streamlib_adapter_skia::SkiaSurfaceAdapter;
 use streamlib_adapter_vulkan::{
     HostSurfaceRegistration, VulkanLayout, VulkanReadView, VulkanSurfaceAdapter,
+};
+use streamlib_surface_adapter::{
+    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
+    SurfaceUsage,
 };
 
 const W: u32 = 64;

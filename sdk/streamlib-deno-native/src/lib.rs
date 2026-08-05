@@ -3156,13 +3156,13 @@ mod opengl {
     use std::collections::HashMap;
     use std::sync::{Arc, Mutex};
 
-    use streamlib_surface_adapter::{
-        StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
-        SurfaceTransportHandle, SurfaceUsage,
-    };
     use streamlib_adapter_opengl::{
         DRM_FORMAT_ABGR8888, DRM_FORMAT_ARGB8888, EglRuntime, HostSurfaceRegistration,
         OpenGlSurfaceAdapter, OwnedMakeCurrentGuard,
+    };
+    use streamlib_surface_adapter::{
+        StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
+        SurfaceTransportHandle, SurfaceUsage,
     };
 
     use super::gpu_surface::SurfaceHandle;
@@ -3608,16 +3608,16 @@ mod vulkan {
     use std::os::unix::io::RawFd;
     use std::sync::{Arc, Mutex};
 
-    use streamlib_surface_adapter::{
-        StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
-        SurfaceTransportHandle, SurfaceUsage,
-    };
     use streamlib_adapter_vulkan::{
         HostSurfaceRegistration, VulkanLayout, VulkanSurfaceAdapter, raw_handles,
     };
     use streamlib_consumer_rhi::{
         ConsumerMarker, ConsumerVulkanDevice, ConsumerVulkanTexture,
         ConsumerVulkanTimelineSemaphore, TextureFormat,
+    };
+    use streamlib_surface_adapter::{
+        StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
+        SurfaceTransportHandle, SurfaceUsage,
     };
 
     use super::gpu_surface::SurfaceHandle;
@@ -4089,10 +4089,6 @@ mod cpu_readback {
     use std::os::unix::io::RawFd;
     use std::sync::{Arc, Mutex};
 
-    use streamlib_surface_adapter::{
-        AdapterError, StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
-        SurfaceTransportHandle, SurfaceUsage,
-    };
     use streamlib_adapter_cpu_readback::{
         CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter, CpuReadbackTriggerContext,
         HostSurfaceRegistration, VulkanLayout,
@@ -4100,6 +4096,10 @@ mod cpu_readback {
     use streamlib_consumer_rhi::{
         ConsumerMarker, ConsumerVulkanBuffer, ConsumerVulkanDevice,
         ConsumerVulkanTimelineSemaphore, PixelFormat,
+    };
+    use streamlib_surface_adapter::{
+        AdapterError, StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
+        SurfaceTransportHandle, SurfaceUsage,
     };
 
     use super::gpu_surface::SurfaceHandle;
@@ -4846,10 +4846,6 @@ mod cuda {
 
     use cudarc::runtime::result::external_memory;
     use cudarc::runtime::sys;
-    use streamlib_surface_adapter::{
-        StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
-        SurfaceTransportHandle, SurfaceUsage,
-    };
     use streamlib_adapter_cuda::dlpack::{
         self, CapsuleOwner, Device as DlpackDevice, DeviceType as DlpackDeviceType,
         ManagedTensor as DlpackManagedTensor,
@@ -4860,6 +4856,10 @@ mod cuda {
     use streamlib_consumer_rhi::{
         ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTexture,
         ConsumerVulkanTimelineSemaphore, TextureFormat,
+    };
+    use streamlib_surface_adapter::{
+        StreamlibSurface, SurfaceAdapter as _, SurfaceFormat, SurfaceSyncState,
+        SurfaceTransportHandle, SurfaceUsage,
     };
 
     use super::gpu_surface::SurfaceHandle;

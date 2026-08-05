@@ -27,16 +27,16 @@ use serial_test::serial;
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::host_rhi::{HostMarker, HostVulkanBuffer, HostVulkanTimelineSemaphore};
 use streamlib::sdk::rhi::TextureFormat;
-use streamlib_surface_adapter::{
-    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
-    SurfaceUsage,
-};
 use streamlib_adapter_cpu_readback::{
     CpuReadbackCopyTrigger, CpuReadbackSurfaceAdapter, HostSurfaceRegistration,
     InProcessCpuReadbackCopyTrigger, VulkanLayout,
 };
 use streamlib_consumer_rhi::{
     ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTimelineSemaphore,
+};
+use streamlib_surface_adapter::{
+    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
+    SurfaceUsage,
 };
 
 const W: u32 = 32;

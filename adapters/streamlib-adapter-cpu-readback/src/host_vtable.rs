@@ -52,14 +52,14 @@ use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use streamlib_surface_adapter::{
-    ReadGuard, StreamlibSurface, SurfaceAdapter, SurfaceFormat, WriteGuard,
-};
 use streamlib_adapter_cpu_readback_abi::{
     CPU_READBACK_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION, CpuReadbackPlaneRepr,
     CpuReadbackSurfaceAdapterVTable, CpuReadbackViewRepr, HostSurfaceRegistrationRepr, MAX_PLANES,
 };
 use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout, VulkanRhiDevice};
+use streamlib_surface_adapter::{
+    ReadGuard, StreamlibSurface, SurfaceAdapter, SurfaceFormat, WriteGuard,
+};
 
 use crate::adapter::CpuReadbackSurfaceAdapter;
 use crate::state::HostSurfaceRegistration;

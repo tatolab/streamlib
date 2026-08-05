@@ -36,14 +36,14 @@ use skia_safe::{Color4f, Paint, PaintStyle, Path, Point, Rect, TileMode, gradien
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::host_rhi::HostVulkanDevice;
 use streamlib::sdk::rhi::TextureFormat;
-use streamlib_surface_adapter::{
-    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
-    SurfaceUsage,
-};
 use streamlib_adapter_opengl::{
     DRM_FORMAT_ARGB8888, EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter,
 };
 use streamlib_adapter_skia::SkiaGlSurfaceAdapter;
+use streamlib_surface_adapter::{
+    StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle,
+    SurfaceUsage,
+};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 

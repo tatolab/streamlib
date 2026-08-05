@@ -22,11 +22,11 @@ use streamlib::sdk::engine::HostTextureExt;
 
 use streamlib::sdk::engine::host_rhi::{HostMarker, HostVulkanBuffer, HostVulkanTimelineSemaphore};
 use streamlib::sdk::rhi::TextureFormat;
+use streamlib_adapter_cpu_readback::{HostSurfaceRegistration, VulkanLayout};
 use streamlib_surface_adapter::testing::{empty_surface, run_conformance};
 use streamlib_surface_adapter::{
     AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId,
 };
-use streamlib_adapter_cpu_readback::{HostSurfaceRegistration, VulkanLayout};
 
 use common::HostFixture;
 

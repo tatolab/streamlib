@@ -40,12 +40,12 @@ use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use streamlib_surface_adapter::{StreamlibSurface, SurfaceAdapter, VkImageInfo};
 use streamlib_adapter_vulkan_abi::{
     RawVulkanHandlesRepr, VULKAN_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION, VkImageInfoRepr,
     VkImageLayoutValueRepr, VulkanSurfaceAdapterVTable, VulkanViewRepr,
 };
 use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout, VulkanRhiDevice};
+use streamlib_surface_adapter::{StreamlibSurface, SurfaceAdapter, VkImageInfo};
 
 use crate::adapter::VulkanSurfaceAdapter;
 use crate::raw_handles::raw_handles;
@@ -447,9 +447,9 @@ fn read_guard_to_repr<D: VulkanRhiDevice + 'static>(
             streamlib_surface_adapter::VulkanWritable::vk_image_layout(view).0,
         ),
         _padding: 0,
-        info: vk_image_info_to_repr(streamlib_surface_adapter::VulkanImageInfoExt::vk_image_info(
-            view,
-        )),
+        info: vk_image_info_to_repr(
+            streamlib_surface_adapter::VulkanImageInfoExt::vk_image_info(view),
+        ),
     };
     core::mem::forget(guard);
     view_repr
@@ -465,9 +465,9 @@ fn write_guard_to_repr<D: VulkanRhiDevice + 'static>(
             streamlib_surface_adapter::VulkanWritable::vk_image_layout(view).0,
         ),
         _padding: 0,
-        info: vk_image_info_to_repr(streamlib_surface_adapter::VulkanImageInfoExt::vk_image_info(
-            view,
-        )),
+        info: vk_image_info_to_repr(
+            streamlib_surface_adapter::VulkanImageInfoExt::vk_image_info(view),
+        ),
     };
     core::mem::forget(guard);
     view_repr

@@ -36,11 +36,11 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use streamlib_surface_adapter::{StreamlibSurface, SurfaceAdapter};
 use streamlib_adapter_opengl_abi::{
     HostSurfaceRegistrationRepr, OPENGL_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION,
     OpenGlSurfaceAdapterVTable, OpenGlViewRepr,
 };
+use streamlib_surface_adapter::{StreamlibSurface, SurfaceAdapter};
 
 use crate::adapter::OpenGlSurfaceAdapter;
 use crate::state::HostSurfaceRegistration;

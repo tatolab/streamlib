@@ -21,15 +21,15 @@ use streamlib::sdk::engine::HostTextureExt;
 
 use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::rhi::{Texture, TextureFormat};
+use streamlib_adapter_opengl::{
+    DRM_FORMAT_ARGB8888, EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter,
+};
+use streamlib_adapter_skia::SkiaGlSurfaceAdapter;
 use streamlib_surface_adapter::testing::{empty_surface, run_conformance};
 use streamlib_surface_adapter::{
     AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId, SurfaceSyncState,
     SurfaceTransportHandle, SurfaceUsage,
 };
-use streamlib_adapter_opengl::{
-    DRM_FORMAT_ARGB8888, EglRuntime, HostSurfaceRegistration, OpenGlSurfaceAdapter,
-};
-use streamlib_adapter_skia::SkiaGlSurfaceAdapter;
 
 fn try_init() -> Option<(GpuContext, Arc<EglRuntime>)> {
     let _ = tracing_subscriber::fmt()

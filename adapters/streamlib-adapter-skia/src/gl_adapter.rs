@@ -23,11 +23,11 @@ use skia_safe::gpu::{
     surfaces,
 };
 use skia_safe::{AlphaType, ColorSpace, ColorType};
+use streamlib_adapter_opengl::{EglRuntime, GL_TEXTURE_2D, OpenGlSurfaceAdapter};
 use streamlib_surface_adapter::{
     AdapterError, GlWritable, ReadGuard, StreamlibSurface, SurfaceAdapter, SurfaceFormat,
     SurfaceId, WriteGuard,
 };
-use streamlib_adapter_opengl::{EglRuntime, GL_TEXTURE_2D, OpenGlSurfaceAdapter};
 
 use crate::error::SkiaAdapterError;
 use crate::gl_view::{SkiaGlReadView, SkiaGlWriteView};

@@ -33,8 +33,8 @@ use streamlib::sdk::engine::host_rhi::{
     HostVulkanBuffer, HostVulkanDevice, HostVulkanTimelineSemaphore,
 };
 use streamlib::sdk::rhi::TextureFormat;
-use streamlib_surface_adapter::SurfaceId;
 use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
+use streamlib_surface_adapter::SurfaceId;
 
 const W: u32 = 32;
 const H: u32 = 32;

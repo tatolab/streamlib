@@ -51,10 +51,10 @@ use streamlib::sdk::context::GpuContext;
 use streamlib::sdk::engine::host_rhi::{
     HostVulkanBuffer, HostVulkanDevice, HostVulkanTimelineSemaphore,
 };
+use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
 use streamlib_surface_adapter::{
     StreamlibSurface, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle, SurfaceUsage,
 };
-use streamlib_adapter_cuda::{CudaSurfaceAdapter, HostSurfaceRegistration, VulkanLayout};
 
 const W: u32 = 32;
 const H: u32 = 32;

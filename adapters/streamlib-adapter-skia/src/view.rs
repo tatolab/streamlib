@@ -20,9 +20,9 @@
 use std::mem::ManuallyDrop;
 use std::sync::{Arc, Mutex};
 
-use streamlib_surface_adapter::{ReadGuard, WriteGuard};
 use streamlib_adapter_vulkan::VulkanSurfaceAdapter;
 use streamlib_consumer_rhi::VulkanRhiDevice;
+use streamlib_surface_adapter::{ReadGuard, WriteGuard};
 use vulkanalia::vk;
 
 use crate::skia_internal::{

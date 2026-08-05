@@ -28,12 +28,12 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use streamlib_consumer_rhi::{
+    DevicePrivilege, VulkanRhiDevice, VulkanTextureLike, VulkanTimelineSemaphoreLike,
+};
 use streamlib_surface_adapter::{
     AdapterError, ReadGuard, Registry, StreamlibSurface, SurfaceAdapter, SurfaceId,
     SurfaceRegistration, VkImageInfo, WriteGuard,
-};
-use streamlib_consumer_rhi::{
-    DevicePrivilege, VulkanRhiDevice, VulkanTextureLike, VulkanTimelineSemaphoreLike,
 };
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;

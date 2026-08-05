@@ -33,14 +33,14 @@ use streamlib::sdk::engine::host_rhi::{
     HostVulkanBuffer, HostVulkanDevice, HostVulkanTexture, HostVulkanTimelineSemaphore,
 };
 use streamlib::sdk::rhi::{TextureDescriptor, TextureFormat as RhiTextureFormat};
-use streamlib_surface_adapter::{
-    AdapterError, StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState,
-    SurfaceTransportHandle, SurfaceUsage,
-};
 use streamlib_adapter_cuda::{
     CudaSurfaceAdapter, HostImageSurfaceRegistration, HostSurfaceRegistration, VulkanLayout,
 };
 use streamlib_consumer_rhi::TextureFormat as ConsumerTextureFormat;
+use streamlib_surface_adapter::{
+    AdapterError, StreamlibSurface, SurfaceFormat, SurfaceId, SurfaceSyncState,
+    SurfaceTransportHandle, SurfaceUsage,
+};
 
 const W: u32 = 32;
 const H: u32 = 32;

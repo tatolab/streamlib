@@ -22,10 +22,10 @@
 
 use std::sync::Arc;
 
+use streamlib_consumer_rhi::VulkanRhiDevice;
 use streamlib_surface_adapter::{
     AdapterError, ReadGuard, StreamlibSurface, SurfaceAdapter, WriteGuard,
 };
-use streamlib_consumer_rhi::VulkanRhiDevice;
 
 use crate::adapter::CudaSurfaceAdapter;
 use crate::view::{CudaSurfaceGuard, CudaTextureGuard};

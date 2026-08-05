@@ -35,13 +35,13 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use streamlib_surface_adapter::{
-    AdapterError, ReadGuard, Registry, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId,
-    SurfaceRegistration, WriteGuard,
-};
 use streamlib_consumer_rhi::{
     DevicePrivilege, VulkanRhiBuffer, VulkanRhiDevice, VulkanTextureLike,
     VulkanTimelineSemaphoreLike,
+};
+use streamlib_surface_adapter::{
+    AdapterError, ReadGuard, Registry, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId,
+    SurfaceRegistration, WriteGuard,
 };
 use tracing::instrument;
 use vulkanalia::prelude::v1_4::*;

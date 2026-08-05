@@ -21,9 +21,9 @@ mod common;
 
 use streamlib::sdk::engine::HostTextureExt;
 use streamlib::sdk::rhi::TextureFormat;
+use streamlib_adapter_opengl::{DRM_FORMAT_ARGB8888, HostSurfaceRegistration};
 use streamlib_surface_adapter::testing::{empty_surface, run_conformance};
 use streamlib_surface_adapter::{AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceId};
-use streamlib_adapter_opengl::{DRM_FORMAT_ARGB8888, HostSurfaceRegistration};
 
 use common::HostFixture;
 

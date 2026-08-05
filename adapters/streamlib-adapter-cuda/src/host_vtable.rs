@@ -40,12 +40,12 @@ use std::ffi::c_void;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-use streamlib_surface_adapter::{StreamlibSurface, SurfaceAdapter};
 use streamlib_adapter_cuda_abi::{
     CUDA_SURFACE_ADAPTER_VTABLE_LAYOUT_VERSION, CudaBufferViewRepr, CudaImageViewRepr,
     CudaSurfaceAdapterVTable, TextureFormatRepr,
 };
 use streamlib_consumer_rhi::{DevicePrivilege, VulkanLayout, VulkanRhiDevice};
+use streamlib_surface_adapter::{StreamlibSurface, SurfaceAdapter};
 use vulkanalia::vk::Handle;
 
 use crate::adapter::CudaSurfaceAdapter;

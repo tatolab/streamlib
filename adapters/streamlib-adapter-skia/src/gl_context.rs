@@ -20,10 +20,10 @@
 
 use std::sync::Arc;
 
+use streamlib_adapter_opengl::OpenGlContext;
 use streamlib_surface_adapter::{
     AdapterError, ReadGuard, StreamlibSurface, SurfaceAdapter, WriteGuard,
 };
-use streamlib_adapter_opengl::OpenGlContext;
 
 use crate::error::SkiaAdapterError;
 use crate::gl_adapter::SkiaGlSurfaceAdapter;

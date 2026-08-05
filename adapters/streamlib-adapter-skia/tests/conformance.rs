@@ -23,13 +23,13 @@ use streamlib::sdk::engine::host_rhi::{
     HostVulkanDevice, HostVulkanTexture, HostVulkanTimelineSemaphore,
 };
 use streamlib::sdk::rhi::{TextureDescriptor, TextureFormat, TextureUsages};
+use streamlib_adapter_skia::SkiaSurfaceAdapter;
+use streamlib_adapter_vulkan::{HostSurfaceRegistration, VulkanLayout, VulkanSurfaceAdapter};
 use streamlib_surface_adapter::testing::{empty_surface, run_conformance};
 use streamlib_surface_adapter::{
     AdapterError, StreamlibSurface, SurfaceAdapter, SurfaceFormat, SurfaceId, SurfaceSyncState,
     SurfaceTransportHandle, SurfaceUsage,
 };
-use streamlib_adapter_skia::SkiaSurfaceAdapter;
-use streamlib_adapter_vulkan::{HostSurfaceRegistration, VulkanLayout, VulkanSurfaceAdapter};
 
 fn try_init_gpu() -> Option<GpuContext> {
     let _ = tracing_subscriber::fmt()

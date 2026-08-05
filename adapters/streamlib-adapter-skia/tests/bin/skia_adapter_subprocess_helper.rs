@@ -25,13 +25,13 @@ use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use streamlib_surface_adapter::{
-    StreamlibSurface, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle, SurfaceUsage,
-};
 use streamlib_adapter_opengl::{
     EglRuntime, HostSurfaceRegistration, OpenGlContext, OpenGlSurfaceAdapter,
 };
 use streamlib_adapter_skia::SkiaGlContext;
+use streamlib_surface_adapter::{
+    StreamlibSurface, SurfaceFormat, SurfaceSyncState, SurfaceTransportHandle, SurfaceUsage,
+};
 
 const HELPER_SURFACE_ID: u64 = 0xfeed_face;
 
