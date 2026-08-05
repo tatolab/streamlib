@@ -35,14 +35,14 @@ cuda = []
 # spec's `#[repr(C)]` types, and off-Linux consumers (the wheel's CPU
 # capsule path) need exactly it.
 dlpark.workspace = true
-streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.13.0" }
-streamlib-adapter-cuda-abi = { path = "../streamlib-adapter-cuda-abi", version = "0.13.0" }
+streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.13.1" }
+streamlib-adapter-cuda-abi = { path = "../streamlib-adapter-cuda-abi", version = "0.13.1" }
 thiserror.workspace = true
 tracing.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
-streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.13.0" }
-streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.13.0" }
+streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.13.1" }
+streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.13.1" }
 vulkanalia.workspace = true
 libc.workspace = true
 
