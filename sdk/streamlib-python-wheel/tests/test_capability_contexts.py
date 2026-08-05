@@ -417,23 +417,21 @@ def test_a_zero_argument_process_hook_fails_loudly_with_a_type_error(
 class PixelBufferAcquirer:
     def setup(self, ctx: RuntimeContextFullAccess) -> None:
         with ctx.gpu_limited_access.acquire_pixel_buffer(64, 32) as surface_handle:
-            try:
-                surface_handle.as_numpy()
-                pixel_access_outcome = "returned"
-            except NotImplementedError as not_yet_implemented:
-                pixel_access_outcome = str(not_yet_implemented)
+            surface_handle.lock()
+            pixel_access_shape = surface_handle.as_numpy().shape
+            surface_handle.unlock()
             _hook_observations.put(
                 {
                     "observed": "pixel_buffer",
                     "surface_id": surface_handle.surface_id,
                     "width": surface_handle.width,
                     "height": surface_handle.height,
-                    "pixel_access_outcome": pixel_access_outcome,
+                    "pixel_access_shape": pixel_access_shape,
                 }
             )
 
 
-def test_a_hook_acquires_a_pixel_buffer_and_pixel_access_names_its_ticket():
+def test_a_hook_acquires_a_pixel_buffer_and_reaches_its_pixels():
     graph = RunningGraph()
     graph.runtime.add(PixelBufferAcquirer)
     graph.start()
@@ -443,10 +441,9 @@ def test_a_hook_acquires_a_pixel_buffer_and_pixel_access_names_its_ticket():
         graph.shut_down_and_take_run_outcome()
     assert isinstance(observation["surface_id"], str) and observation["surface_id"]
     assert (observation["width"], observation["height"]) == (64, 32)
-    assert "1710" in observation["pixel_access_outcome"], (
-        f"as_numpy should raise NotImplementedError naming ticket #1710, got: "
-        f"{observation['pixel_access_outcome']!r}"
-    )
+    # The exchange surface itself is covered by `test_pixel_exchange.py`;
+    # here it only has to be reachable from a hook.
+    assert observation["pixel_access_shape"] == (32, 64, 4)
 
 
 @processor(execution="manual")

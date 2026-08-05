@@ -416,6 +416,14 @@ pub struct GpuContext {
     /// `resolve_texture_registration_by_surface_id` get the same lifecycle metadata
     /// adapter consumers do.
     texture_cache: Arc<Mutex<HashMap<String, TextureRegistration>>>,
+    /// Device-export stagings keyed by surface_id — sibling of
+    /// `texture_cache`, but spanning registration replacements: a
+    /// rotating producer re-registers per frame, and the staging must
+    /// survive that while its blit source is re-resolved per refill.
+    /// Dropped with the context; evicted by `unregister_texture`.
+    #[cfg(target_os = "linux")]
+    pub(crate) device_export_stagings:
+        Arc<parking_lot::Mutex<HashMap<String, Arc<super::SurfaceDeviceExportStaging>>>>,
     /// Cache of textures backing surface-share-registered pixel buffers
     /// (`escalate_acquire_pixel_buffer` flow). Refreshed on every resolve so
     /// rotating-pool producers don't render stale contents — kept separate
@@ -493,6 +501,8 @@ impl GpuContext {
             surface_store: Arc::new(Mutex::new(None)),
             blitter,
             texture_cache: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(target_os = "linux")]
+            device_export_stagings: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -520,6 +530,8 @@ impl GpuContext {
             surface_store: Arc::new(Mutex::new(None)),
             blitter,
             texture_cache: Arc::new(Mutex::new(HashMap::new())),
+            #[cfg(target_os = "linux")]
+            device_export_stagings: Arc::new(parking_lot::Mutex::new(HashMap::new())),
             buffer_texture_cache: Arc::new(Mutex::new(HashMap::new())),
             #[cfg(target_os = "linux")]
             color_converter_cache: Arc::new(RwLock::new(HashMap::new())),
@@ -731,6 +743,8 @@ impl GpuContext {
     pub fn unregister_texture(&self, id: &str) {
         let mut cache = self.texture_cache.lock().unwrap();
         cache.remove(id);
+        #[cfg(target_os = "linux")]
+        self.evict_device_export_staging(id);
     }
 
     /// Refresh the registration's `current_layout` for a given
@@ -1766,6 +1780,31 @@ impl GpuContext {
         Ok(crate::core::rhi::StorageBuffer::from_host_vulkan_buffer(
             Arc::new(buf),
         ))
+    }
+
+    /// Export a fresh dup'd DMA-BUF FD for `pixel_buffer`, plus its byte
+    /// size. Ownership of the fd transfers to the caller.
+    ///
+    /// The counterpart of [`Self::import_dma_buf_storage_buffer`], and the
+    /// export half of the handle-shaped native-interop surface: external
+    /// code that speaks DMA-BUF (EGL, a V4L2 output device, another
+    /// process) receives the frame in its own dialect without the engine
+    /// exposing any Vulkan.
+    ///
+    /// Only a DMA-BUF-flavoured allocation can answer — pixel-buffer pool
+    /// buffers, which are allocated that way. An OPAQUE_FD allocation
+    /// has no DMA-BUF export path under VMA's per-pool memory
+    /// configuration (and none at all on NVIDIA), so this fails rather
+    /// than returning a handle the importer cannot use.
+    #[cfg(target_os = "linux")]
+    pub fn export_pixel_buffer_dma_buf_fd(
+        &self,
+        pixel_buffer: &crate::core::rhi::PixelBuffer,
+    ) -> Result<(std::os::unix::io::RawFd, u64)> {
+        use crate::host_rhi::HostPixelBufferRefExt as _;
+        let host_buffer = pixel_buffer.buffer_ref().vulkan_inner();
+        let fd = host_buffer.export_dma_buf_fd()?;
+        Ok((fd, host_buffer.size()))
     }
 
     /// Allocate an OPAQUE_FD-exportable `VkBuffer` as a `StorageBuffer`.
@@ -5185,6 +5224,28 @@ impl GpuContextFullAccess {
                     Err(Error::GpuError(msg))
                 }
             }
+        }
+    }
+
+    /// Export a fresh dup'd DMA-BUF FD + byte size for a `PixelBuffer`.
+    /// The fd transfers to the caller.
+    ///
+    /// In-process only, like
+    /// [`Self::create_exportable_timeline_semaphore`]: a cdylib reaching
+    /// for a DMA-BUF handle goes through surface-share, which already
+    /// carries the fd over `SCM_RIGHTS`.
+    #[cfg(target_os = "linux")]
+    pub fn export_pixel_buffer_dma_buf_fd(
+        &self,
+        pixel_buffer: &crate::core::rhi::PixelBuffer,
+    ) -> Result<(std::os::unix::io::RawFd, u64)> {
+        match self.handle_kind {
+            HandleKind::Boxed => self
+                .host_inner()
+                .export_pixel_buffer_dma_buf_fd(pixel_buffer),
+            HandleKind::ScopeToken => Err(Error::GpuError(
+                "export_pixel_buffer_dma_buf_fd: available in-process only".into(),
+            )),
         }
     }
 

@@ -15,7 +15,7 @@ binary no longer exports still reads as complete.
 
 from types import TracebackType
 from collections.abc import Callable, Mapping
-from typing import Any, Literal, NoReturn, TypeVar, final
+from typing import Any, Literal, TypeVar, final
 
 from typing_extensions import disjoint_base
 
@@ -258,11 +258,33 @@ class GpuContextFullAccess:
     def acquire_texture(
         self, width: int, height: int, format: str, usage: list[str]
     ) -> GpuSurfaceHandle: ...
+    def export_dma_buf(self, surface: GpuSurfaceHandle) -> tuple[int, int]:
+        """Export a DMA-BUF file descriptor for `surface`, as `(fd, byte_size)`.
+
+        The caller owns the fd and must close it, or hand it to something that
+        takes ownership. Only an ordinary pixel buffer can answer — a
+        device-exchange buffer is OPAQUE_FD-flavoured.
+        """
+
+    def import_dma_buf(
+        self,
+        fd: int,
+        width: int,
+        height: int,
+        format: str = "bgra",
+        byte_size: int | None = None,
+    ) -> GpuSurfaceHandle:
+        """Import a DMA-BUF file descriptor as a surface this graph can read.
+
+        Takes ownership of `fd` on success — the driver adopts it and it must
+        not be closed afterwards. On failure the fd is still the caller's.
+        """
+
     def wait_device_idle(self) -> None: ...
 
 @final
 class GpuSurfaceHandle:
-    """An owned GPU surface. Pixel access lands with ticket #1710."""
+    """An owned GPU surface, and the pixels behind it."""
 
     @property
     def surface_id(self) -> str: ...
@@ -272,6 +294,14 @@ class GpuSurfaceHandle:
     def height(self) -> int: ...
     @property
     def format(self) -> str: ...
+    @property
+    def bytes_per_row(self) -> int:
+        """Row pitch in bytes, including any padding the allocation carries."""
+
+    @property
+    def base_address(self) -> int | None:
+        """Base address of the host mapping, or None when not locked."""
+
     def close(self) -> None:
         """Release the underlying GPU resource. Idempotent."""
 
@@ -282,11 +312,42 @@ class GpuSurfaceHandle:
         exception: BaseException | None = ...,
         traceback: TracebackType | None = ...,
     ) -> Literal[False]: ...
-    # Raise NotImplementedError until the pixel-exchange surface (#1710) lands.
-    def as_numpy(self) -> NoReturn: ...
-    def __dlpack__(self) -> NoReturn: ...
-    def lock(self) -> NoReturn: ...
-    def unlock(self) -> NoReturn: ...
+    def lock(self, read_only: bool = True) -> None:
+        """Open CPU access, declaring read or write intent.
+
+        Performs no wait — ordering against the producer comes from
+        publication, since a source finishes its GPU work before it sends the
+        frame on. `read_only=False` marks an exported tensor writable.
+        """
+
+    def unlock(self) -> None:
+        """Close CPU access, publishing any pending device-side write back
+        into the surface first. Idempotent.
+        """
+
+    def as_numpy(self) -> Any:
+        """A numpy view sharing memory with the surface. Requires a lock."""
+
+    def __dlpack_device__(self) -> tuple[int, int]: ...
+    def __dlpack__(
+        self,
+        stream: Any | None = ...,
+        max_version: tuple[int, int] | None = ...,
+        dl_device: tuple[int, int] | None = ...,
+        copy: bool | None = ...,
+    ) -> Any:
+        """A DLPack capsule over the pixels. Requires a lock.
+
+        A graph frame's natural side is the device: with a usable CUDA
+        runtime the tensor is GPU-resident (one engine-side blit into an
+        exportable staging buffer — zero CPU copies, never claimed
+        copy-free); otherwise, or with `dl_device=(1, 0)`, it is the host
+        mapping. A writable device tensor's edits publish back to the
+        surface at `unlock()`.
+
+        The tensor may outlive this handle: it holds its own share of the
+        surface, so the pool slot is not reused until the tensor is released.
+        """
 
 @final
 class MonotonicTimer:
