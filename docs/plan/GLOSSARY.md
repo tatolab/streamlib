@@ -19,9 +19,17 @@ expose handles to Python and never speak streamlib internals. _Avoid_: "plugin",
 audio) — instantiated and configured from Python; its per-frame path never enters the
 interpreter.
 
-**Placement**: where the engine runs a processor — in-process, or in a helper process
-spawned from the same interpreter and venv. An engine decision behind a single opt-in,
-never a user-facing runtime definition.
+**Placement**: settled, not an axis — every Python processor runs in its own helper
+process (own interpreter, own GIL), spawned by the engine as an exec of
+`sys.executable` from the app's venv. There is no second placement and no choice:
+in-process hosting of a Python processor does not exist. Native built-ins running in
+the app process ("app-process" code) are not a placement decision. _Avoid_:
+"in-process placement", "both placements", "placement policy", "placement heuristic",
+"transparent move".
+
+**App-process**: the process that runs the entry file, the engine, the control plane,
+and the native built-ins — and hosts no Python processor. Use this word for the
+legitimate in-that-process senses so "in-process" stops doing double duty.
 
 **Bag**: the self-describing msgpack named map a link carries — the schema-free view of
 a payload; consumers cast it to a type at read time. _Avoid_: "message", "envelope".
@@ -36,7 +44,9 @@ on-disk registry. _Avoid_: "instance", "server".
 
 **Processor**: the unit of pipeline computation — a Python class (`@processor`) or a
 Rust type (`#[processor]`) — wired by ports. Its identity is the class itself, named by
-its fully-qualified import path. _Avoid_: an authored `@org/package/Type` name.
+its fully-qualified import path, which requires the class to live in an importable,
+side-effect-safe module; a class defined in the entry file (`__main__:<Type>`) is a
+wiring error. _Avoid_: an authored `@org/package/Type` name.
 
 **Display name**: an instance's human-facing label — passed at `add`, prefixing its log
 records, defaulting to the class's short name. Never an identity. _Avoid_: "processor
@@ -69,8 +79,9 @@ handle-shaped surface — GPU memory import/export (DMA-BUF / OPAQUE_FD), the pr
 target, texture rings, codec sessions, the audio clock, color resolution. Built-ins and
 external code compose primitives; they never reimplement them.
 
-**Handle**: a transferable value crossing the native↔Python boundary — a DMA-BUF fd, a
-CUDA device pointer, a surface id, a byte buffer. Pixels never cross as Python objects.
+**Handle**: a transferable value crossing the native↔Python boundary — a DMA-BUF fd, an
+exportable device allocation (OPAQUE_FD), a surface id, a byte buffer. An
+address-space-local pointer is not a handle. Pixels never cross as Python objects.
 
 **Present target**: the engine-owned presentation surface minted from a raw window
 handle; the only way frames reach a window.
@@ -91,3 +102,9 @@ Retired by the 2026-08-03 schema-free-ports decision (see
 `docs/decisions/schema-free-ports.md`): **Schema**, **SchemaIdent**, **Schema
 agreement**, **Wire tag**, **Flow class** — the engine has no type layer, so these name
 nothing. Type information is the authoring language's and has no project-specific term.
+
+Retired by the 2026-08-04 helper-placement pivot (see
+`docs/decisions/helper-process-placement-only.md`): **In-process placement**,
+**Placement policy**, **Placement heuristic**, **Transparent move** — there is one
+placement, so these name nothing. For the surviving in-that-process Rust senses
+(engine, control plane, built-ins, interop adapters), say **app-process**.

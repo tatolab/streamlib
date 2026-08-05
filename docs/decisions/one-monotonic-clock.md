@@ -31,7 +31,9 @@ clock, so something has to name it — but it is a naming boundary, not a second
 
 - **Process-start-relative epoch** (the Linux `MediaClock` behavior) — destroys
   comparability between a frame's driver stamp and the engine's own, between processes
-  on one host (helper placement makes this routine), and between nodes. It also diverged
+  on one host (helper-only placement, 2026-08-04, makes this *every* data-plane
+  timestamp comparison, not an occasional one — this decision is a hard prerequisite of
+  helper placement, not a cleanup), and between nodes. It also diverged
   from its own macOS twin, which was already machine-wide.
 - **Two exported clock names** (`media_clock_now_ns` alongside `monotonic_now_ns`) — two
   names for one number invite the reader to assume they differ.

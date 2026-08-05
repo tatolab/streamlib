@@ -48,10 +48,14 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   Python packages and Rust source crates only. [importable-python-library]
 - **DECIDED** — Third-party native code (closed-source included) ships as an ordinary
   Python package whose native internals expose capabilities to Python as handles —
-  frames, FDs, device pointers, buffers — wrapped by a Python processor. It never
-  links the engine and never speaks streamlib internals; the CPython ABI is the only
-  binary boundary, and exactly one streamlib engine lives in a process.
-  [importable-python-library]
+  frames, FDs, exportable device allocations, buffers — wrapped by a Python
+  processor. It never links the engine and never speaks streamlib internals; the
+  CPython ABI is the only
+  binary boundary, and no process ever holds two streamlib engines — the app process
+  runs the one engine, and a helper process imports the same wheel as a processor
+  host, never as a second engine. Handles it exposes must be genuinely transferable
+  across a process boundary (an fd, an exportable allocation) — an
+  address-space-local pointer is not a handle. [importable-python-library]
 - **DECIDED** — The engine's handle-shaped primitive surface is the public contract
   for native interop: DMA-BUF / OPAQUE_FD import and export, the present target,
   texture rings, codec byte pumps, the audio clock, color resolution — surfaced to
@@ -62,7 +66,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   as in-process capabilities (torch/cupy and GL consumers); only their cross-DSO
   `-abi` halves die with the plugin ABI. [importable-python-library]
 
-## Processor model & scheduling — IN-FLIGHT (→ schema-free-ports, processor-class-identity, importable-python-library)
+## Processor model & scheduling — IN-FLIGHT (→ schema-free-ports, processor-class-identity, importable-python-library, in-process-hosting-ripout)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -92,31 +96,37 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   OS thread per processor with descriptor-driven priority (realtime / high / normal);
   synchronous lifecycle traits; Full/Limited capability typestate on the phase axis
   (setup/teardown vs process). [execution-model]
-- **DECIDED** — Execution placement is an engine concern, never a user-facing runtime
-  definition. Both placements are first-class: in-process (lowest latency, shares the
-  app's interpreter) and helper processes spawned from that same interpreter and venv
-  (`sys.executable` — each with its own GIL, the isolation model dora-style systems
-  run on). The engine chooses per processor; placement heuristics are engine
-  implementation, not plan-level commitments. Same user code either way — no
-  interpreter zoo, no per-processor environments, no placement configuration surface
-  beyond a single opt-in. Constraints that make transparency true: helper spawn is
-  exec-of-`sys.executable`, never fork (GPU contexts are fork-unsafe); a
-  helper-placeable processor class must be import-addressable from a module whose
-  import is side-effect-safe; the engine equalizes link limits across placements or
-  refuses a transparent move it cannot honor. [importable-python-library]
+- **DECIDED** — Helper-process placement is the only execution placement. Every Python
+  processor runs in its own child process — its own interpreter, its own GIL — spawned
+  by the Rust engine as an exec of `sys.executable` from the app's venv: never fork
+  (GPU contexts are fork-unsafe), never `multiprocessing` or a worker pool (the engine
+  owns the child's lifecycle from its compiler ops and needs no GIL to manage it).
+  In-process hosting of a Python processor does not exist — not as a default, a
+  fallback, an optimisation, or an engine choice. Isolation, not latency, is the
+  optimised axis: no processor may ever block, stall, or degrade another. Same user
+  code, one venv, no per-processor environments, no placement surface of any kind.
+  Helper children import the wheel itself — one native artifact. Every processor class
+  must be import-addressable from a module whose import is side-effect-safe; there is
+  nothing to equalize and nothing to move between, because there is no second
+  placement. [helper-process-placement-only]
 - **DECIDED** — The MVP edit loop is re-running `dev` (warm restart is sub-second by
   construction). Reload-on-save is a nicety, not MVP-gating, and when built it is
-  processor-granular — stop the processor, re-import its class, re-instantiate,
-  rewire its ports — never module-loading machinery. [importable-python-library]
+  processor-granular — stop the processor, respawn its helper (a fresh interpreter
+  re-imports the class), rewire its ports — never module-loading machinery.
+  [importable-python-library]
 - **DECIDED** — A processor's identity is its class, named by its fully-qualified
   import path (`my_app.filters:BlurProcessor` in Python, the type path in Rust) —
   derived mechanically, never authored, and the same string in the registry, in the
-  control plane's type field, and for helper-process placement. A processor defined in
-  the entry file run as `python app.py` identifies as `__main__:<Type>` and is legal
-  in-process; the engine refuses to helper-place it, with an error naming the fix (move
-  the class to an importable module). The `@org/package/Type` identity grammar is deleted along with
+  control plane's type field, and for spawning the processor's helper process — which
+  is how every Python processor runs. A processor defined in the entry file run as
+  `python app.py` identifies as `__main__:<Type>` and is a wiring error at `rt.add`,
+  with an error naming the fix (move the class to an importable module and import it
+  from the entry file — one import line). The entry file itself may still run as
+  `__main__`; only processor classes may not live there.
+  The `@org/package/Type` identity grammar is deleted along with
   the `@app/local` synthesis; `@processor` declares execution, interval, scheduling
-  priority, and description only. [schema-free-ports]
+  priority, and description only. [schema-free-ports; `__main__` clause reversed by
+  helper-process-placement-only]
 - **DECIDED** — An instance's display name is the human-facing label — passed at `add`,
   readable off the returned handle, and the prefix on its log records; it defaults to
   the class's short name and the engine disambiguates duplicates within one graph.
@@ -159,10 +169,12 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — Camera → GPU transport: zero-copy DMA-BUF import when the device
   exports it, transparent CPU-upload fallback otherwise, selected automatically —
   no configuration dial. [media-io-layering]
-- **DECIDED** — Python-authored media processors (vendor or user) are supported where
-  deadlines allow: camera-class sources and block-level audio are viable behind the
-  SDK's GIL-release contract; vsync-paced present loops and device audio callbacks
-  stay native, always. [importable-python-library]
+- **DECIDED** — Python-authored media processors (vendor or user) run in their own
+  helper process like every other Python processor and are supported where deadlines
+  allow: camera-class sources and block-level audio fit within the helper hop's
+  budget; vsync-paced present loops and device audio callbacks stay native, always —
+  a deadline the cross-process hop cannot meet, not a GIL argument.
+  [importable-python-library, helper-process-placement-only]
 - **DECIDED** — One clock on the data plane: every timestamp a processor stamps, reads,
   or compares — frames, bags, audio ticks, `ctx.time` — is the machine's monotonic clock
   (`CLOCK_MONOTONIC` on Linux, `mach_absolute_time` on Apple), the same epoch the V4L2
@@ -197,7 +209,13 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   hobbyist / video-creator audience when it is scheduled. [importable-python-library]
 - **DECIDED** — The Python SDK carries a GIL-release contract: every native binding
   that can block releases the GIL around the blocking call, and pixels never cross
-  into Python — frames travel as handles / surface ids. [importable-python-library]
+  into Python as Python-owned objects — frames travel as handles / surface ids, and
+  pixel memory is reached only through explicitly exported views (DLPack, the CUDA
+  Array Interface, a mapped CPU buffer). The contract exists so a
+  blocking native binding never stalls the threads of its own interpreter — the app's
+  for the app-side bindings, the helper child's for a processor's. It is never a
+  co-tenancy remedy: no two Python processors share an interpreter.
+  [importable-python-library, helper-process-placement-only]
 - **DECIDED** — The wheel carries an interpreter-lifecycle contract: `rt.run()` owns
   SIGINT while it blocks (Ctrl-C returns cleanly and restores CPython's handler), and
   engine teardown strictly precedes interpreter finalization — all engine threads

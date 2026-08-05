@@ -48,31 +48,27 @@ the engine disambiguating duplicates within one graph.
   `concat!(module_path!(), "::", stringify!(Type))` at the expansion site. Resolved by
   reading — the plan says "derived mechanically" and this is the only stable mechanism.
 
-## Processors defined in `__main__` — RESOLVED by owner, 2026-08-03
+## Processors defined in `__main__` — REVERSED by owner, 2026-08-04
 
-**Option (a): legal, in-process only.** A `@processor` class defined in the entry file the
-user runs with `python app.py` registers as `__main__:BlurProcessor` and runs in-process
-like any other. Identity stays mechanical and honest — it is whatever the import system
-says. The constraint lands at helper placement, where it actually bites: the engine
-refuses to helper-place a `__main__`-defined class with an actionable error ("define it
-in an importable module to run it in a helper process"), because a helper importing
-`__main__` gets its own, not the user's entry file.
+The 2026-08-03 ruling ("Option (a): legal, in-process only") is withdrawn by the
+helper-placement pivot (`docs/decisions/helper-process-placement-only.md`): in-process
+hosting of a Python processor is banned, so a `__main__`-defined class has no legal
+host anywhere. A `@processor` class defined in the entry file registers as
+`__main__:<Type>` and is a **wiring error at `rt.add`**, with an actionable error
+naming the fix (move the class to an importable module and import it from the entry
+file — one import line), because a helper importing `__main__` gets its own entry
+file, not the user's.
 
-This keeps `python app.py` working, keeps the scaffold free to put a processor in the
-entry file, and matches the DECIDED entry that a helper-placeable class "must be
-import-addressable from a module whose import is side-effect-safe"
-(ARCHITECTURE.md:104). The plan's identity entry is corrected accordingly — the
-"never executed as `__main__`" clause is replaced.
+The reversal does not retire the `python app.py` harness — the *app* may still run as
+`__main__`; only *processor classes* may not live there. The scaffold puts the effect
+class in its own importable module beside `app.py`. Identity stops being
+per-launch-arrangement: a legal processor always lives in an importable module and
+always has the same name.
 
-Consequence to hold: the same class has a different identity under `python app.py`
-(`__main__:Blur`) than under a loader that imports the entry (`app:Blur`). That is
-accepted — identity is per-launch-arrangement, and the only thing that reads it across
-processes is helper placement, which `__main__` classes are refused from anyway.
-
-Rejected: making `streamlib run`/`dev` the only launcher (contradicts "an importable
-Python library" and retires the harness the lifecycle contract was proven against), and
-rewriting `__main__` to a path-derived module name (path-dependent identity is the exact
-failure the ADR names).
+Still rejected, same reasons: making `streamlib run`/`dev` the only launcher
+(contradicts "an importable Python library" and retires the harness the lifecycle
+contract was proven against), and rewriting `__main__` to a path-derived module name
+(path-dependent identity is the exact failure the ADR names).
 
 ## REMOVED
 
@@ -133,9 +129,11 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   client-side and never round-trips it.
 - ADDED: import-path derivation for Python (`__module__` + `__qualname__`, colon-joined)
   and the macro capture for Rust, each with a unit test.
-- ADDED: the helper-placement refusal for `__main__`-defined classes — an actionable
-  error naming the fix (move the class to an importable module), with a test proving an
-  in-process `__main__` processor runs and the same class is refused a helper placement.
+- ADDED: the `__main__`-identity refusal at `rt.add` — an actionable error naming the
+  fix (move the class to an importable module), with a test proving a `__main__`-defined
+  class is refused and the same class in an importable module is accepted. (Amended
+  2026-08-04: the original bullet mandated a test proving an in-process `__main__`
+  processor runs — a banned capability under helper-only placement.)
 - ADDED: an identity-stability test — a class in an importable module registers under the
   same string however the app was launched.
 
