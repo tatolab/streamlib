@@ -69,13 +69,18 @@ jobs:
             # prebuilt link currently 404s. Pinned so a release build is
             # reproducible; ~4 minutes with ninja.
             git clone --depth 1 --branch v2026.3 https://github.com/google/shaderc /tmp/shaderc
-            cd /tmp/shaderc
-            ./utils/git-sync-deps
-            cmake -GNinja -B build -DCMAKE_BUILD_TYPE=Release \
-              -DSHADERC_SKIP_TESTS=ON -DSHADERC_SKIP_EXAMPLES=ON \
-              -DSHADERC_SKIP_COPYRIGHT_CHECK=ON
-            ninja -C build glslc_exe
-            install -m 0755 build/glslc/glslc /usr/local/bin/glslc
+            # In a subshell: maturin runs in the shell this script leaves
+            # behind, so a bare `cd` here builds the wheel from the shaderc
+            # checkout and fails with "Can't find /tmp/shaderc/Cargo.toml".
+            (
+              cd /tmp/shaderc
+              ./utils/git-sync-deps
+              cmake -GNinja -B build -DCMAKE_BUILD_TYPE=Release \
+                -DSHADERC_SKIP_TESTS=ON -DSHADERC_SKIP_EXAMPLES=ON \
+                -DSHADERC_SKIP_COPYRIGHT_CHECK=ON
+              ninja -C build glslc_exe
+              install -m 0755 build/glslc/glslc /usr/local/bin/glslc
+            )
             glslc --version
 
       # A wheel that cannot be installed and cannot answer `--help` is not a
