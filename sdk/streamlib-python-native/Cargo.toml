@@ -16,7 +16,6 @@ crate-type = ["cdylib"]
 
 [dependencies]
 streamlib-ipc-types = { path = "../../runtime/streamlib-ipc-types", version = "0.13.2" }
-streamlib-plugin-abi = { path = "../../runtime/streamlib-plugin-abi", version = "0.13.2" }
 iceoryx2 = "0.8.1"
 libc.workspace = true
 rmp-serde = "1.3"

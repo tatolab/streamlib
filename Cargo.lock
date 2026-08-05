@@ -5213,7 +5213,6 @@ dependencies = [
  "streamlib-adapter-vulkan",
  "streamlib-consumer-rhi",
  "streamlib-ipc-types",
- "streamlib-plugin-abi",
  "streamlib-surface-client",
  "tracing",
  "tracing-subscriber",
@@ -5335,6 +5334,7 @@ name = "streamlib-ipc-types"
 version = "0.13.2"
 dependencies = [
  "iceoryx2",
+ "tracing",
 ]
 
 [[package]]
@@ -5431,7 +5431,6 @@ dependencies = [
 name = "streamlib-plugin-abi"
 version = "0.13.2"
 dependencies = [
- "streamlib-ipc-types",
  "tracing",
 ]
 
@@ -5504,7 +5503,6 @@ dependencies = [
  "streamlib-adapter-vulkan",
  "streamlib-consumer-rhi",
  "streamlib-ipc-types",
- "streamlib-plugin-abi",
  "streamlib-surface-client",
  "tracing",
  "tracing-subscriber",

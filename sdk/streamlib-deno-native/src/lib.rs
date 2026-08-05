@@ -607,7 +607,7 @@ pub unsafe extern "C" fn sldn_input_read(
         // larger than the caller's buffer. Peek the frame that would be returned
         // WITHOUT consuming it; if it does not fit, report its length and leave it
         // in place so the SDK can resize and read again. Nothing is dropped.
-        let required = streamlib_plugin_abi::next_read_required_len(
+        let required = streamlib_ipc_types::next_read_required_len(
             queue,
             read_mode == READ_MODE_READ_NEXT_IN_ORDER,
         );
@@ -909,7 +909,7 @@ pub unsafe extern "C" fn sldn_output_write(
         &mut state.refused_over_ceiling_count,
         &mut state.current_slot_capacity_bytes,
     );
-    streamlib_plugin_abi::emit_channel_egress_admission_tracing(
+    streamlib_ipc_types::emit_channel_egress_admission_tracing(
         Some(("sldn", &ctx.processor_id)),
         streamlib_ipc_types::ChannelTrustTier::UntrustedSession,
         &state.channel_service_name,
