@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.14.0](https://github.com/tatolab/streamlib/compare/v0.13.2...v0.14.0) (2026-08-05)
+
+
+### ⚠ BREAKING CHANGES
+
+* **adapters:** survivor rewires A — python-native ABI edge cuts, surface-adapter carve-out, cross-process test re-homes ([#1751](https://github.com/tatolab/streamlib/issues/1751))
+
+### Code Refactoring
+
+* **adapters:** survivor rewires A — python-native ABI edge cuts, surface-adapter carve-out, cross-process test re-homes ([#1751](https://github.com/tatolab/streamlib/issues/1751)) ([153f84e](https://github.com/tatolab/streamlib/commit/153f84e488b1626d906c36c55b080a77b9f1f39f))
+
 ## [0.13.2](https://github.com/tatolab/streamlib/compare/v0.13.1...v0.13.2) (2026-08-05)
 
 
