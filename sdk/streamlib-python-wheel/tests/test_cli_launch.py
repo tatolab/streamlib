@@ -29,6 +29,9 @@ pytestmark = pytest.mark.requires_gpu
 # Boot is process start + engine init + GPU context + socket bind.
 NODE_READY_TIMEOUT_SECONDS = 90.0
 CLEAN_EXIT_TIMEOUT_SECONDS = 60.0
+# Many frames at any watchable rate — long enough that a per-frame failure or a
+# per-frame watchdog warning cannot hide inside it.
+SCAFFOLD_OBSERVATION_WINDOW_SECONDS = 6.0
 
 APP_WITH_ONE_NATIVE_SOURCE = '''\
 from streamlib import TestPatternSource
@@ -225,35 +228,37 @@ def test_a_native_block_added_without_config_reaches_a_running_graph(
 def test_the_scaffolded_app_reaches_a_running_graph(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node
 ):
-    """What `streamlib new` writes must actually run, not merely parse.
+    """What `streamlib new` writes must actually run, frame after frame.
 
-    The display is rewired out because a window needs a display server this
-    suite cannot assume; what is under test is that the scaffold's source and
-    its pixel-editing effect compile, wire and start against the real API.
+    Run exactly as scaffolded — window included, which is why this is rig-only.
+    A registry entry alone proves almost nothing here: it appears whether or not
+    `process()` ever succeeds, so the assertions that carry this test are the
+    ones on the child's own output. `process() failed` catches an effect that
+    raises every frame; the slow-callback warning catches an effect that is
+    correct but so slow the demo is a slideshow — which is exactly what editing
+    the write-combined mapping in place through a strided view produced.
     """
     app_directory = tmp_path / "app"
     cli.scaffold_new_app(app_directory, use_test_pattern_source=True)
 
-    entry_source = (app_directory / "app.py").read_text()
-    entry_source = entry_source.replace(
-        '    window = rt.add(DisplayWindow, config={"title": "StreamLib", "scaling": "fit"})\n',
-        "",
-    ).replace(
-        '    rt.connect(effect.output("video_to_downstream"), window.input("video"))\n',
-        "",
-    )
-    assert "rt.add(DisplayWindow" not in entry_source, (
-        "the display rewire must have applied — the scaffold's wiring changed shape"
-    )
-    (app_directory / "app.py").write_text(entry_source)
-
-    node = launch_node("dev", app_directory, free_port())
+    node = launch_node("dev", app_directory, free_port(), capture_output=True)
     entry = await_sole_registry_entry(
         isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS
     )
+    assert entry["pid"] == node.process.pid
 
-    assert entry["pid"] == node.process.pid, (
-        "the scaffolded app must reach a running graph"
+    # Long enough for the source to have driven many frames through the effect.
+    time.sleep(SCAFFOLD_OBSERVATION_WINDOW_SECONDS)
+    node.interrupt()
+    node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS)
+    output = node.captured_output()
+
+    assert "process() failed" not in output, (
+        f"the scaffolded effect raised on a live frame; output was:\n{output}"
+    )
+    assert "slow_callback_watchdog" not in output, (
+        f"the scaffolded effect tripped the dev watchdog — the app `streamlib new` "
+        f"writes must run at a watchable rate; output was:\n{output}"
     )
 
 

@@ -8,14 +8,16 @@
 //! processor and shows up as unrelated processors starving. This names the
 //! candidate.
 //!
-//! What is measured is wall-clock time between attaching to the interpreter and
-//! returning, which is an *upper bound* on the GIL hold, not the hold itself: a
-//! callback that releases the GIL while it blocks (`time.sleep`, socket IO,
-//! most numpy and torch calls, and this wheel's own blocking bindings) stalls
-//! nobody yet spends the same wall time. Measuring the hold itself needs
-//! GIL-ownership instrumentation CPython's stable ABI does not expose, so the
-//! report says what it saw and leaves the inference to the reader rather than
-//! accusing the processor that did the right thing.
+//! Interim, and deliberately so. What is measured is wall-clock time between
+//! attaching to the interpreter and returning, which is an *upper bound* on the
+//! GIL hold, not the hold itself: a callback that releases the GIL while it
+//! blocks (`time.sleep`, socket IO, most numpy and torch calls, and this
+//! wheel's own blocking bindings) stalls nobody yet spends the same wall time.
+//! So the report says what it saw and leaves the inference to the reader rather
+//! than accusing a processor that did the right thing. A successor that
+//! measures GIL ownership — which needs instrumentation CPython's stable ABI
+//! does not expose — replaces this outright; until then a slow callback is
+//! worth surfacing in `dev` whatever made it slow.
 //!
 //! Off unless a launcher turns it on: the cost is a monotonic clock read per
 //! callback, which `run` should not pay.
@@ -68,12 +70,12 @@ pub(crate) fn disarm_slow_callback_watchdog() {
     SLOW_CALLBACK_THRESHOLD_NANOS.store(SLOW_CALLBACK_WATCHDOG_DISARMED, Ordering::Relaxed);
 }
 
-/// Run `call` with the GIL held, reporting a callback that runs past the
-/// threshold.
+/// Time `call`, reporting a run past the armed threshold.
 ///
-/// Timed inside the attach rather than around it: the wait to acquire the GIL
-/// is this thread being a victim, not a holder, and counting it would blame
-/// whichever processor happened to run after the real offender.
+/// Caller contract: time inside your `Python::attach`, never around it. The
+/// wait to acquire the GIL is this thread being a victim rather than a holder,
+/// and charging it here would blame whichever processor happened to run after
+/// the real offender.
 pub(crate) fn call_watching_callback_duration<CallOutcome>(
     processor_display_name: &str,
     hook_name: &str,
@@ -92,7 +94,7 @@ pub(crate) fn call_watching_callback_duration<CallOutcome>(
         tracing::warn!(
             processor = processor_display_name,
             hook = hook_name,
-            callback_ms = callback_ran_for.as_secs_f64() * 1_000.0,
+            callback_ran_for_ms = callback_ran_for.as_secs_f64() * 1_000.0,
             threshold_ms = threshold_nanos / 1_000_000,
             "a processor callback ran past the dev-mode threshold. If it held the GIL for \
              that time, every other Python processor in this process was stalled for it; if \
@@ -116,7 +118,12 @@ mod tests {
     /// at the end of each body is what makes a failing assertion fail only its
     /// own test — a straight-line restore is skipped by the unwind, and the
     /// leaked threshold then fails the next test for a reason of its own.
-    struct ThresholdHeldForOneTest(MutexGuard<'static, ()>);
+    struct ThresholdHeldForOneTest {
+        // Underscore-prefixed: `Drop` does not count as a read, so a plain
+        // field name draws a dead_code warning for a guard whose whole job is
+        // to exist.
+        _exclusive_threshold_access: MutexGuard<'static, ()>,
+    }
 
     impl Drop for ThresholdHeldForOneTest {
         fn drop(&mut self) {
@@ -128,11 +135,11 @@ mod tests {
         static THRESHOLD_IN_USE: Mutex<()> = Mutex::new(());
         // Non-poisoning: a failing test reports its own failure rather than
         // poisoning every later one.
-        ThresholdHeldForOneTest(
-            THRESHOLD_IN_USE
+        ThresholdHeldForOneTest {
+            _exclusive_threshold_access: THRESHOLD_IN_USE
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner()),
-        )
+        }
     }
 
     /// Disarmed is the shipped default, and a disarmed watchdog still runs the

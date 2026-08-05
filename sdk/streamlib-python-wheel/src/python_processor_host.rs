@@ -218,7 +218,6 @@ impl PythonProcessorHost {
                 };
                 Python::attach(|python| {
                     self.call_hook_method_on_processor_instance(
-                        python,
                         processor_instance,
                         hook,
                         context.bind(python).as_any(),
@@ -244,7 +243,6 @@ impl PythonProcessorHost {
                 };
                 Python::attach(|python| {
                     self.call_hook_method_on_processor_instance(
-                        python,
                         processor_instance,
                         hook,
                         context.bind(python).as_any(),
@@ -267,19 +265,18 @@ impl PythonProcessorHost {
     /// The two `dispatch_hook` arms differ only in which context they resolve;
     /// past that point they are the same call, so the phase-typed context is
     /// erased to `PyAny` here rather than duplicating the body per arm.
-    fn call_hook_method_on_processor_instance(
+    fn call_hook_method_on_processor_instance<'py>(
         &self,
-        python: Python<'_>,
         processor_instance: &Py<PyAny>,
         hook: ProcessorLifecycleHook,
-        python_context: &Bound<'_, PyAny>,
+        python_context: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
         crate::python_slow_callback_watchdog::call_watching_callback_duration(
             &self.processor_display_name,
             hook.python_method_name(),
             || {
                 processor_instance
-                    .bind(python)
+                    .bind(python_context.py())
                     .call_method1(hook.python_method_name(), (python_context,))?;
                 Ok(())
             },

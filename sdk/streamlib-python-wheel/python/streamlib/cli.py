@@ -9,13 +9,13 @@ They resolve the app's entry file, execute it as `python app.py` would, call its
 are the same arrangement, not two. `new` writes an app that works before the
 user has written anything.
 
-streamlib:lint-logging:allow-file — a console script's diagnostics are its
-output, and every one of them happens before a logging pipeline exists: `new`
-never builds an engine at all, and a `run` that cannot resolve or execute the
-entry file must say so before there is a Runner to carry a subscriber. This is
-the pragma's stated purpose (see `xtask/src/lint_logging.rs`), not an exemption
-from the logging rule — once the engine is up, everything downstream logs
-through it.
+streamlib:lint-logging:allow-file — a console script's user-facing output is
+not a log event. `new` never builds an engine, and a `run` that cannot resolve
+its entry file reports before a Runner exists to carry a subscriber; the
+remaining sites report a launch that has already failed, where routing the
+user's own error into the engine's log pipeline would bury it. Whether this
+reading of the logging rule should be written into the rule itself rather than
+asserted here is an open question for `/propose-rule`.
 """
 
 from __future__ import annotations
@@ -236,7 +236,10 @@ def _python_distribution_name_for(directory_name: str) -> str:
 
 
 def _scaffolded_app_entry_source(*, source_class_name: str) -> str:
-    return f'''"""A StreamLib app: camera → effect → window.
+    source_description = (
+        "camera" if source_class_name == "CameraSource" else "test pattern"
+    )
+    return f'''"""A StreamLib app: {source_description} → effect → window.
 
 `streamlib dev` finds `setup(rt)` below by convention — there is no manifest and
 no `main()`. Edit `InvertingEffect`, re-run `streamlib dev`, and see the change.
@@ -271,13 +274,19 @@ class InvertingEffect:
         if bag is None:
             return
         frame = VideoFrame.from_bag(bag)
-        # The frame arrives as a surface id, not pixels: resolve it, open CPU
-        # access, and edit the engine's own memory in place.
+        # The frame arrives as a surface id, not pixels: resolve it and open
+        # CPU access to the engine's own memory.
         with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
             surface.lock(read_only=False)
             pixels = surface.as_numpy()
+            # One bulk read out, edit on the host, one bulk write back. The
+            # mapping is write-combined: CPU reads of it run around 175 MB/s,
+            # so editing in place through a strided view re-reads that memory
+            # per channel and costs ~225ms a frame against ~30ms this way.
+            edited = pixels.copy()
             # Color channels only — inverting alpha would erase the picture.
-            numpy.subtract(255, pixels[:, :, :3], out=pixels[:, :, :3])
+            edited[:, :, :3] = 255 - edited[:, :, :3]
+            pixels[...] = edited
             surface.unlock()
         ctx.outputs.write("video_to_downstream", bag)
 
@@ -442,7 +451,26 @@ def build_argument_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# The control-plane verbs the plan gives this CLI, which have not moved into the
+# wheel yet. Naming them beats argparse's bare `invalid choice`, which reads like
+# the verb was a typo rather than one that is still on its way.
+OBSERVATION_VERBS_NOT_YET_IN_THE_WHEEL = ("nodes", "graph", "tap", "logs", "mcp")
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    requested = list(sys.argv[1:] if argv is None else argv)
+    if requested and requested[0] in OBSERVATION_VERBS_NOT_YET_IN_THE_WHEEL:
+        print(
+            f"error: `streamlib {requested[0]}` is not in this wheel yet.\n"
+            f"The observation verbs "
+            f"({', '.join(OBSERVATION_VERBS_NOT_YET_IN_THE_WHEEL)}) still live in "
+            f"the engine's own CLI; they move into the wheel with the api-server "
+            f"relocation. `streamlib dev` already publishes a node entry for them "
+            f"to find.",
+            file=sys.stderr,
+        )
+        return 1
+
     parser = build_argument_parser()
     arguments = parser.parse_args(argv)
 

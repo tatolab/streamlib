@@ -308,11 +308,52 @@ def test_run_leaves_the_slow_callback_watchdog_off(tmp_path: Path, monkeypatch):
     assert armings == [], "`run` must leave the watchdog disarmed"
 
 
+def test_an_app_that_exits_on_purpose_keeps_its_own_exit_code(tmp_path: Path):
+    """`sys.exit()` at module scope is a choice, not a failure to report."""
+    write_app(tmp_path, "app.py", "import sys\nsys.exit(3)\n")
+
+    finished = run_cli("run", "--dir", str(tmp_path))
+
+    assert finished.returncode == 3, f"stderr was:\n{finished.stderr}"
+    assert "error:" not in finished.stderr, (
+        f"a deliberate exit must not be reported as a failure; stderr was:\n{finished.stderr}"
+    )
+
+
+def test_a_setup_that_exits_on_purpose_keeps_its_own_exit_code(tmp_path: Path):
+    """The same on the `setup` path, which builds an engine first."""
+    write_app(tmp_path, "app.py", "import sys\ndef setup(rt):\n    sys.exit(4)\n")
+
+    finished = run_cli("run", "--dir", str(tmp_path))
+
+    assert finished.returncode == 4, f"stderr was:\n{finished.stderr}"
+
+
+def test_an_observation_verb_names_itself_rather_than_looking_like_a_typo(
+    tmp_path: Path,
+):
+    """`nodes` / `graph` / `tap` / `logs` / `mcp` are plan-promised but still
+    live in the engine's own CLI. Argparse's `invalid choice` reads like the
+    user mistyped; this says where the verb actually is."""
+    finished = run_cli("nodes")
+
+    assert finished.returncode == 1
+    assert "not in this wheel yet" in finished.stderr, (
+        f"stderr was:\n{finished.stderr}"
+    )
+    assert "invalid choice" not in finished.stderr
+
+
 def test_the_control_plane_binds_every_interface_by_default():
-    """Owner decision (2026-07-30 #1683, reaffirmed 2026-08-04): every host of
-    the one control plane binds all interfaces so nodes can reach each other
-    across a mesh. The guard lived on the deleted Rust `run`/`dev`; the default
-    now lives here, so the guard does too.
+    """Owner decision, in session, 2026-08-04: `dev` stays network-wide because
+    the system has to reach mesh networks; scoping down comes later.
+
+    This contradicts `ARCHITECTURE.md` §Control plane ("`dev` binds loopback by
+    default") and the ticket's own bullet. The owner's call governs the code;
+    the plan amendment is pending via `/propose-change`, and this test exists so
+    the default cannot drift back silently in the meantime. The behavior is not
+    new — the deleted Rust `run`/`dev` bound all interfaces too — only its home
+    is.
     """
     assert cli.DEFAULT_CONTROL_PLANE_BIND_HOST == "0.0.0.0"
 
