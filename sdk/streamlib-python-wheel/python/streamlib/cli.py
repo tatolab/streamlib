@@ -28,7 +28,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
-from . import Runtime, arm_slow_callback_watchdog
+from . import Runtime
 
 __all__ = ["main"]
 
@@ -186,11 +186,6 @@ def launch_app_node(
     """Boot the app's node and own its run loop until the user interrupts it."""
     anchor_directory = resolve_app_anchor_directory(requested_anchor_directory)
     entry_file = resolve_app_entry_file(verb, anchor_directory, requested_entry_file)
-
-    # What `dev` is: the same launch as `run`, plus the diagnostics an author
-    # iterating wants and a deployed node should not pay for.
-    if verb == "dev":
-        arm_slow_callback_watchdog()
 
     try:
         entry_namespace = execute_app_entry_file(entry_file)

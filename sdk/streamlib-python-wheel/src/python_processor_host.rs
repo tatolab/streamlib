@@ -271,16 +271,10 @@ impl PythonProcessorHost {
         hook: ProcessorLifecycleHook,
         python_context: &Bound<'py, PyAny>,
     ) -> PyResult<()> {
-        crate::python_slow_callback_watchdog::call_watching_callback_duration(
-            &self.processor_display_name,
-            hook.python_method_name(),
-            || {
-                processor_instance
-                    .bind(python_context.py())
-                    .call_method1(hook.python_method_name(), (python_context,))?;
-                Ok(())
-            },
-        )
+        processor_instance
+            .bind(python_context.py())
+            .call_method1(hook.python_method_name(), (python_context,))?;
+        Ok(())
     }
 
     fn link_data_access(&self) -> Option<&PythonProcessorLinkDataAccess> {

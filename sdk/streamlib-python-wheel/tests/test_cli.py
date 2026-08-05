@@ -267,47 +267,6 @@ def test_the_launcher_restores_its_own_argv(tmp_path: Path):
     assert sys.argv == launcher_argv
 
 
-def test_dev_arms_the_slow_callback_watchdog(tmp_path: Path, monkeypatch):
-    """The one behavior `dev` and `run` differ by.
-
-    The entry file raises, so this stops before an engine is built — what is
-    under test is the launcher's wiring, not the diagnostic itself.
-    """
-    write_app(tmp_path, "app.py", "raise ValueError('stop before the engine')\n")
-    armings: "list[bool]" = []
-    monkeypatch.setattr(cli, "arm_slow_callback_watchdog", lambda: armings.append(True))
-
-    exit_code = cli.launch_app_node(
-        "dev",
-        requested_anchor_directory=tmp_path,
-        requested_entry_file=None,
-        bind_host="127.0.0.1",
-        bind_port=0,
-        node_name=None,
-    )
-
-    assert exit_code == 1
-    assert armings == [True], "`dev` must arm the slow-callback watchdog"
-
-
-def test_run_leaves_the_slow_callback_watchdog_off(tmp_path: Path, monkeypatch):
-    """A deployed node pays nothing for a diagnostic it did not ask for."""
-    write_app(tmp_path, "app.py", "raise ValueError('stop before the engine')\n")
-    armings: "list[bool]" = []
-    monkeypatch.setattr(cli, "arm_slow_callback_watchdog", lambda: armings.append(True))
-
-    cli.launch_app_node(
-        "run",
-        requested_anchor_directory=tmp_path,
-        requested_entry_file=None,
-        bind_host="127.0.0.1",
-        bind_port=0,
-        node_name=None,
-    )
-
-    assert armings == [], "`run` must leave the watchdog disarmed"
-
-
 def test_an_app_that_exits_on_purpose_keeps_its_own_exit_code(tmp_path: Path):
     """`sys.exit()` at module scope is a choice, not a failure to report."""
     write_app(tmp_path, "app.py", "import sys\nsys.exit(3)\n")

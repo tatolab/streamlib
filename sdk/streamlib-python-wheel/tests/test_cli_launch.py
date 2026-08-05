@@ -11,6 +11,7 @@ initializes a GPU context, so the whole module needs a device.
 
 import json
 import os
+import re
 import shutil
 import signal
 import socket
@@ -30,8 +31,12 @@ pytestmark = pytest.mark.requires_gpu
 NODE_READY_TIMEOUT_SECONDS = 90.0
 CLEAN_EXIT_TIMEOUT_SECONDS = 60.0
 # Many frames at any watchable rate — long enough that a per-frame failure or a
-# per-frame watchdog warning cannot hide inside it.
+# per-frame slowdown cannot hide inside it.
 SCAFFOLD_OBSERVATION_WINDOW_SECONDS = 6.0
+# The source runs at 30fps, so a healthy effect delivers ~180 frames in the
+# window. The floor sits far below that and far above the ~25 the in-place
+# strided edit managed, so it fails on a regression and not on a slow machine.
+MINIMUM_FRAMES_FOR_LIVE_VIDEO = 60
 
 APP_WITH_ONE_NATIVE_SOURCE = '''\
 from streamlib import TestPatternSource
@@ -234,9 +239,9 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     A registry entry alone proves almost nothing here: it appears whether or not
     `process()` ever succeeds, so the assertions that carry this test are the
     ones on the child's own output. `process() failed` catches an effect that
-    raises every frame; the slow-callback warning catches an effect that is
-    correct but so slow the demo is a slideshow — which is exactly what editing
-    the write-combined mapping in place through a strided view produced.
+    raises every frame; the delivered-frame count catches an effect that is
+    correct but so slow the demo is a slideshow — which is what editing the
+    write-combined mapping in place through a strided view produced (~4fps).
     """
     app_directory = tmp_path / "app"
     cli.scaffold_new_app(app_directory, use_test_pattern_source=True)
@@ -256,9 +261,13 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     assert "process() failed" not in output, (
         f"the scaffolded effect raised on a live frame; output was:\n{output}"
     )
-    assert "slow_callback_watchdog" not in output, (
-        f"the scaffolded effect tripped the dev watchdog — the app `streamlib new` "
-        f"writes must run at a watchable rate; output was:\n{output}"
+    # The window reports what it actually put on screen, which is the honest
+    # measure of "live video" — the in-place effect managed roughly 4 a second.
+    frames_shown = re.search(r"DisplayWindow: stopped \((\d+) frames\)", output)
+    assert frames_shown, f"the window never reported a frame count; output was:\n{output}"
+    assert int(frames_shown.group(1)) >= MINIMUM_FRAMES_FOR_LIVE_VIDEO, (
+        f"the app `streamlib new` writes showed only {frames_shown.group(1)} frames in "
+        f"{SCAFFOLD_OBSERVATION_WINDOW_SECONDS}s — that is a slideshow, not live video"
     )
 
 

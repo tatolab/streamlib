@@ -21,7 +21,6 @@ mod python_processor_host;
 mod python_processor_link_data_access;
 mod python_processor_registration;
 mod python_runtime_lifecycle;
-mod python_slow_callback_watchdog;
 
 pub use python_runtime_lifecycle::PythonRuntimeHandle;
 
@@ -50,13 +49,5 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(python_logging::monotonic_now_ns, module)?)?;
     module.add_function(wrap_pyfunction!(python_logging::log_event, module)?)?;
-    module.add_function(wrap_pyfunction!(
-        python_slow_callback_watchdog::arm_slow_callback_watchdog,
-        module
-    )?)?;
-    module.add_function(wrap_pyfunction!(
-        python_slow_callback_watchdog::disarm_slow_callback_watchdog,
-        module
-    )?)?;
     Ok(())
 }
