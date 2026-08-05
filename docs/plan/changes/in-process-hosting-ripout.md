@@ -59,18 +59,17 @@ inlined; no API invented here is unverified against the tree.
   (`sys.modules` clean after `rt.add` and N bags), the bag-carried pid differs from
   the app's, two instances of one class get two pids, and a native built-in reports
   the app's pid (the boundary, discriminated).
-- `[NEEDS DECISION]` **Single-processor test harness transport.**
-  `SingleProcessorTestPipeline` passes bags through module-global queues — valid only
-  under a shared interpreter, and it is how built-ins are tested. Options:
-  (a) keep the API, feeder/collector become real graph endpoints over a parent-owned
-  IPC channel — recommended: tests keep asserting what they assert today against the
-  real placement; (b) an explicitly exempted in-process test-only path — rejected by
-  recommendation: it makes the banned shape legal somewhere.
-- `[NEEDS DECISION]` **Restart policy for a crashed helper.** Recommendation: MVP
-  ships crash-surfacing only (`Error` state + `health`, pipeline keeps running,
-  at-most-once delivery — a crashed helper's in-flight frame is lost, never silently
-  replayed); bounded auto-restart with `setup()` replay is designed post-MVP in its
-  own align. Isolation is the promise; self-healing is a feature.
+- **Single-processor test harness keeps its API, gains a real transport** (owner,
+  2026-08-05): `SingleProcessorTestPipeline`'s feeder/collector become real graph
+  endpoints over a parent-owned IPC channel, replacing the module-global queues that
+  only a shared interpreter could reach. Tests keep asserting what they assert today,
+  against the real placement. An exempted in-process test-only path was rejected — it
+  would make the banned shape legal somewhere.
+- **Crash policy: surface, keep running** (owner, 2026-08-05): a crashed helper shows
+  as `ProcessorState::Error` in `health`, the rest of the pipeline keeps running, its
+  in-flight frame is lost — at-most-once, never silently replayed. Bounded
+  auto-restart with `setup()` replay is designed post-MVP in its own align. Isolation
+  is the promise; self-healing is a feature.
 
 ## MODIFIED
 
