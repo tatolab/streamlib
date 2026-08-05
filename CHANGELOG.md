@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/tatolab/streamlib/compare/v0.13.0...v0.13.1) (2026-08-05)
+
+
+### Bug Fixes
+
+* **ci:** build glslc from source for the manylinux wheel ([#1746](https://github.com/tatolab/streamlib/issues/1746)) ([6fab130](https://github.com/tatolab/streamlib/commit/6fab13025110b5db1f13c060371b25f69d22ceef))
+
 ## [0.13.0](https://github.com/tatolab/streamlib/compare/v0.12.0...v0.13.0) (2026-08-05)
 
 
