@@ -56,9 +56,15 @@ jobs:
           # the container needs the same toolchain the test workflows install.
           before-script-linux: |
             set -euo pipefail
+            # No python3-devel: it replaces the image's /usr/bin/python3
+            # (3.12) with AlmaLinux's 3.6, which maturin refuses — and an
+            # extension-module wheel links no libpython, so the headers it
+            # brings are not needed here. The Ubuntu test workflow does need
+            # them; that job builds the crate's unit tests, which link it.
             dnf install -y pkgconfig protobuf-compiler clang-devel \
-              vulkan-headers vulkan-loader-devel python3-devel unzip \
+              vulkan-headers vulkan-loader-devel unzip \
               cmake ninja-build git
+            python3 --version
             curl -sSL https://github.com/jsontypedef/json-typedef-codegen/releases/download/v0.4.1/x86_64-unknown-linux-gnu.zip -o /tmp/jtd-codegen.zip
             unzip -q /tmp/jtd-codegen.zip -d /tmp/jtd-codegen
             install -m 0755 /tmp/jtd-codegen/jtd-codegen /usr/local/bin/jtd-codegen
@@ -69,13 +75,18 @@ jobs:
             # prebuilt link currently 404s. Pinned so a release build is
             # reproducible; ~4 minutes with ninja.
             git clone --depth 1 --branch v2026.3 https://github.com/google/shaderc /tmp/shaderc
-            cd /tmp/shaderc
-            ./utils/git-sync-deps
-            cmake -GNinja -B build -DCMAKE_BUILD_TYPE=Release \
-              -DSHADERC_SKIP_TESTS=ON -DSHADERC_SKIP_EXAMPLES=ON \
-              -DSHADERC_SKIP_COPYRIGHT_CHECK=ON
-            ninja -C build glslc_exe
-            install -m 0755 build/glslc/glslc /usr/local/bin/glslc
+            # In a subshell: maturin runs in the shell this script leaves
+            # behind, so a bare `cd` here builds the wheel from the shaderc
+            # checkout and fails with "Can't find /tmp/shaderc/Cargo.toml".
+            (
+              cd /tmp/shaderc
+              ./utils/git-sync-deps
+              cmake -GNinja -B build -DCMAKE_BUILD_TYPE=Release \
+                -DSHADERC_SKIP_TESTS=ON -DSHADERC_SKIP_EXAMPLES=ON \
+                -DSHADERC_SKIP_COPYRIGHT_CHECK=ON
+              ninja -C build glslc_exe
+              install -m 0755 build/glslc/glslc /usr/local/bin/glslc
+            )
             glslc --version
 
       # A wheel that cannot be installed and cannot answer `--help` is not a
@@ -85,6 +96,11 @@ jobs:
         run: |
           python3 -m venv /tmp/wheel-check
           /tmp/wheel-check/bin/pip install --no-index sdk/streamlib-python-wheel/dist/*.whl
+          # The scaffolded effect imports numpy, which the scaffold declares as
+          # its own dependency — installing it here is what `uv sync` does for a
+          # real user, and it makes the import below prove the declared set is
+          # actually sufficient.
+          /tmp/wheel-check/bin/pip install 'numpy>=2.1'
           /tmp/wheel-check/bin/streamlib --help
           /tmp/wheel-check/bin/streamlib new /tmp/scaffold-check --test-pattern
           test -f /tmp/scaffold-check/app.py
