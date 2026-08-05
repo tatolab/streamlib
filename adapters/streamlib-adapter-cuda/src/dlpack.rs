@@ -23,7 +23,8 @@ use std::any::Any;
 use std::ffi::c_void;
 
 pub use dlpark::ffi::{
-    DataType, DataTypeCode, Device, DeviceType, ManagedTensor, ManagedTensorVersioned, Tensor,
+    DataType, DataTypeCode, Device, DeviceType, Flags, ManagedTensor, ManagedTensorVersioned,
+    PackVersion, Tensor,
 };
 
 /// Owner of any heap-allocated state the producer must keep alive
@@ -43,15 +44,64 @@ struct ManagerCtx {
     _strides: Option<Box<[i64]>>,
 }
 
+/// Reclaim the boxed [`ManagerCtx`] a managed tensor's `manager_ctx`
+/// owns — the one subtle half both deleters share.
+///
+/// SAFETY: `manager_ctx` must be the `Box::into_raw(Box<ManagerCtx>)`
+/// stored by [`boxed_manager_ctx_and_tensor`], reclaimed at most once.
+unsafe fn reclaim_manager_ctx(manager_ctx: *mut c_void) {
+    if !manager_ctx.is_null() {
+        drop(unsafe { Box::from_raw(manager_ctx as *mut ManagerCtx) });
+    }
+}
+
+/// Box the shape/strides, park them (with `owner`) in a leaked
+/// [`ManagerCtx`], and assemble the `Tensor` whose raw pointers point
+/// into those boxes — the ownership plumbing both builders share, kept
+/// in one place because a divergence dangles one copy's pointers.
+fn boxed_manager_ctx_and_tensor(
+    device_ptr: u64,
+    shape: Vec<i64>,
+    strides: Option<Vec<i64>>,
+    dtype: DataType,
+    device: Device,
+    owner: CapsuleOwner,
+) -> (*mut c_void, Tensor) {
+    let shape: Box<[i64]> = shape.into_boxed_slice();
+    let shape_ptr = shape.as_ptr() as *mut i64;
+    let ndim = shape.len() as i32;
+
+    let strides: Option<Box<[i64]>> = strides.map(Vec::into_boxed_slice);
+    let strides_ptr: *mut i64 = match &strides {
+        Some(s) => s.as_ptr() as *mut i64,
+        None => std::ptr::null_mut(),
+    };
+
+    let ctx = Box::new(ManagerCtx {
+        _owner: owner,
+        _shape: shape,
+        _strides: strides,
+    });
+    let tensor = Tensor {
+        data: device_ptr as *mut c_void,
+        device,
+        ndim,
+        dtype,
+        shape: shape_ptr,
+        strides: strides_ptr,
+        byte_offset: 0,
+    };
+    (Box::into_raw(ctx) as *mut c_void, tensor)
+}
+
 unsafe extern "C" fn deleter(t: *mut ManagedTensor) {
     if t.is_null() {
         return;
     }
     let mt = unsafe { Box::from_raw(t) };
-    if !mt.manager_ctx.is_null() {
-        let ctx = unsafe { Box::from_raw(mt.manager_ctx as *mut ManagerCtx) };
-        drop(ctx);
-    }
+    // SAFETY: `manager_ctx` came from `boxed_manager_ctx_and_tensor` in
+    // `build_managed_tensor`, reclaimed only here.
+    unsafe { reclaim_manager_ctx(mt.manager_ctx) };
     drop(mt);
 }
 
@@ -75,38 +125,55 @@ pub fn build_managed_tensor(
     device: Device,
     owner: CapsuleOwner,
 ) -> *mut ManagedTensor {
-    let shape: Box<[i64]> = shape.into_boxed_slice();
-    let shape_ptr = shape.as_ptr() as *mut i64;
-    let ndim = shape.len() as i32;
-
-    let strides: Option<Box<[i64]>> = strides.map(Vec::into_boxed_slice);
-    let strides_ptr: *mut i64 = match &strides {
-        Some(s) => s.as_ptr() as *mut i64,
-        None => std::ptr::null_mut(),
-    };
-
-    let ctx = Box::new(ManagerCtx {
-        _owner: owner,
-        _shape: shape,
-        _strides: strides,
-    });
-    let ctx_ptr = Box::into_raw(ctx);
-
-    let dl_tensor = Tensor {
-        data: device_ptr as *mut c_void,
-        device,
-        ndim,
-        dtype,
-        shape: shape_ptr,
-        strides: strides_ptr,
-        byte_offset: 0,
-    };
-    let mt = Box::new(ManagedTensor {
+    let (manager_ctx, dl_tensor) =
+        boxed_manager_ctx_and_tensor(device_ptr, shape, strides, dtype, device, owner);
+    Box::into_raw(Box::new(ManagedTensor {
         dl_tensor,
-        manager_ctx: ctx_ptr as *mut c_void,
+        manager_ctx,
         deleter: Some(deleter),
-    });
-    Box::into_raw(mt)
+    }))
+}
+
+unsafe extern "C" fn versioned_deleter(t: *mut ManagedTensorVersioned) {
+    if t.is_null() {
+        return;
+    }
+    let mt = unsafe { Box::from_raw(t) };
+    // SAFETY: `manager_ctx` came from `boxed_manager_ctx_and_tensor` in
+    // `build_managed_tensor_versioned`, reclaimed only here.
+    unsafe { reclaim_manager_ctx(mt.manager_ctx) };
+    drop(mt);
+}
+
+/// Build a [`ManagedTensorVersioned`] — the DLPack v1.x exchange shape —
+/// over an existing pointer.
+///
+/// The versioned struct is what a consumer negotiates via `__dlpack__`'s
+/// `max_version`, and it is the only shape carrying [`Flags`]: an
+/// unversioned tensor has nowhere to say "this memory is writable", so
+/// consumers assume it is not. Pass `Flags::empty()` for a mutable
+/// export and `Flags::READ_ONLY` for a read-only one.
+///
+/// Ownership matches [`build_managed_tensor`]: the returned pointer is a
+/// `Box::into_raw` the consumer must eventually pass to the `deleter`.
+pub fn build_managed_tensor_versioned(
+    device_ptr: u64,
+    shape: Vec<i64>,
+    strides: Option<Vec<i64>>,
+    dtype: DataType,
+    device: Device,
+    flags: Flags,
+    owner: CapsuleOwner,
+) -> *mut ManagedTensorVersioned {
+    let (manager_ctx, dl_tensor) =
+        boxed_manager_ctx_and_tensor(device_ptr, shape, strides, dtype, device, owner);
+    Box::into_raw(Box::new(ManagedTensorVersioned {
+        version: PackVersion::default(),
+        manager_ctx,
+        deleter: Some(versioned_deleter),
+        flags,
+        dl_tensor,
+    }))
 }
 
 /// Convenience: wrap a flat byte buffer at `device_ptr` as a 1-D
@@ -205,6 +272,86 @@ mod tests {
         assert_eq!(offset_of!(Tensor, strides), 32);
         assert_eq!(offset_of!(Tensor, byte_offset), 40);
         assert_eq!(size_of::<Tensor>(), 48);
+    }
+
+    #[test]
+    fn dlpack_managed_tensor_versioned_layout_matches_spec_64bit() {
+        // typedef struct {
+        //   DLPackVersion version;      // offset 0,  size 8
+        //   void*         manager_ctx;  // offset 8,  size 8
+        //   void (*deleter)(...);       // offset 16, size 8
+        //   uint64_t      flags;        // offset 24, size 8
+        //   DLTensor      dl_tensor;    // offset 32, size 48
+        // } DLManagedTensorVersioned;
+        //
+        // Field order matters beyond the usual ABI reasons: the spec
+        // requires everything up to `flags` stay stable so a consumer
+        // built against an older minor version can still find and call
+        // the deleter on a tensor it does not fully understand.
+        assert_eq!(size_of::<PackVersion>(), 8, "2 × uint32");
+        assert_eq!(offset_of!(ManagedTensorVersioned, version), 0);
+        assert_eq!(offset_of!(ManagedTensorVersioned, manager_ctx), 8);
+        assert_eq!(offset_of!(ManagedTensorVersioned, deleter), 16);
+        assert_eq!(offset_of!(ManagedTensorVersioned, flags), 24);
+        assert_eq!(offset_of!(ManagedTensorVersioned, dl_tensor), 32);
+        assert_eq!(size_of::<ManagedTensorVersioned>(), 80);
+    }
+
+    #[test]
+    fn dlpack_flag_bits_match_spec() {
+        // Part of the wire ABI — a consumer reads these bits directly.
+        assert_eq!(Flags::READ_ONLY.bits(), 1 << 0);
+        assert_eq!(Flags::IS_COPIED.bits(), 1 << 1);
+        assert!(
+            Flags::empty().bits() == 0,
+            "an empty flag set is the spec's writable default"
+        );
+    }
+
+    #[test]
+    fn build_managed_tensor_versioned_carries_shape_flags_and_version() {
+        let drops = Arc::new(AtomicUsize::new(0));
+        struct Counted(Arc<AtomicUsize>);
+        impl Drop for Counted {
+            fn drop(&mut self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+        let owner: CapsuleOwner = Box::new(Counted(Arc::clone(&drops)));
+
+        let mt = build_managed_tensor_versioned(
+            0x2000,
+            vec![32, 64, 4],
+            Some(vec![256, 4, 1]),
+            DataType::U8,
+            Device::cuda(0),
+            Flags::empty(),
+            owner,
+        );
+        unsafe {
+            assert_eq!((*mt).version.major, 1, "v1.x exchange shape");
+            assert_eq!(
+                (*mt).flags,
+                Flags::empty(),
+                "an empty flag set means writable"
+            );
+            assert_eq!((*mt).dl_tensor.ndim, 3);
+            let shape = std::slice::from_raw_parts((*mt).dl_tensor.shape, 3).to_vec();
+            assert_eq!(shape, vec![32, 64, 4]);
+
+            let deleter = (*mt).deleter.expect("deleter must be Some");
+            deleter(mt);
+        }
+        assert_eq!(
+            drops.load(Ordering::SeqCst),
+            1,
+            "owner dropped exactly once"
+        );
+    }
+
+    #[test]
+    fn versioned_deleter_tolerates_null_pointer() {
+        unsafe { versioned_deleter(std::ptr::null_mut()) };
     }
 
     #[test]

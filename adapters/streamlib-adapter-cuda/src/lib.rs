@@ -46,20 +46,35 @@
 //! decision (#588 Stage 8 ships the assertion; the result calibrates
 //! the cdylib default), and the polyglot E2E.
 
-#![cfg(target_os = "linux")]
+// The adapter proper is Linux-only (Vulkan↔CUDA), but `dlpack` is the
+// workspace's home for the DLPack `#[repr(C)]` spec mirrors, which are
+// platform-agnostic by definition — consumers building host-side DLPack
+// capsules off Linux (the wheel's CPU path) depend on exactly that
+// module and nothing else here.
 
+#[cfg(target_os = "linux")]
 mod adapter;
+#[cfg(target_os = "linux")]
 mod context;
 pub mod dlpack;
+#[cfg(target_os = "linux")]
 mod host_vtable;
+#[cfg(target_os = "linux")]
 mod state;
+#[cfg(target_os = "linux")]
 mod view;
 
+#[cfg(target_os = "linux")]
 pub use adapter::CudaSurfaceAdapter;
+#[cfg(target_os = "linux")]
 pub use context::CudaContext;
+#[cfg(target_os = "linux")]
 pub use host_vtable::host_cuda_surface_adapter_vtable;
+#[cfg(target_os = "linux")]
 pub use state::{HostImageSurfaceRegistration, HostSurfaceRegistration};
+#[cfg(target_os = "linux")]
 pub use streamlib_consumer_rhi::VulkanLayout;
+#[cfg(target_os = "linux")]
 pub use view::{
     CudaReadView, CudaSurfaceGuard, CudaSurfaceView, CudaTextureGuard, CudaTextureView,
     CudaWriteView,

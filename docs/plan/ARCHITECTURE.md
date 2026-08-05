@@ -242,7 +242,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   adapter closure excludes skia. Helper processes import the wheel itself — one
   native artifact, no separate helper cdylib. [importable-python-library]
 
-## Control plane & observability — IN-FLIGHT (→ importable-python-library)
+## Control plane & observability — IN-FLIGHT (→ importable-python-library, control-plane-bind-posture)
 
 - **DECIDED** — One control plane: the api-server's HTTP + WebSocket + MCP surface,
   hosted in-process by any runtime that enables it. The MCP tool set is the canonical
@@ -251,7 +251,11 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   Post-pivot the vocabulary is observation-shaped: graph, tap, logs, health, nodes.
   The live-mutation verbs (submit / replace / connect / remove) and their MCP tools
   are removed — code is the source of truth; the edit loop is `dev`, not live
-  mutation. `dev` binds loopback by default. [importable-python-library]
+  mutation. [importable-python-library]
+- **DECIDED** — `dev` and `run` bind the control plane identically: all interfaces
+  (`0.0.0.0`) by default, narrowed per invocation by `--host`. There is no dev-only
+  exposure posture — a node another host can reach is bound wide by definition, so
+  reachability is not the lever that scopes exposure. [control-plane-bind-posture]
 - **DECIDED** — The api-server is engine-side infrastructure and relocates into the
   `runtime/` tree: it is a host — statically linked, never dlopen'd. Its new host is
   the wheel (and the `streamlib` crate for Rust apps); the relocation is a sequencing
@@ -270,4 +274,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
 - **DECIDED** — Observability: the JSONL log schema is a durable contract; tap forwards
   bags verbatim, trading completeness for guaranteed non-interference; graph and health
   inspection ride the same control plane. [control-plane-one-surface]
-- **OPEN** — Auth and remote-access posture.
+- **OPEN** — Auth and remote-access posture: how a node authenticates and authorizes
+  control-plane callers, and what it exposes to a mesh. Scoping exposure down is decided
+  here and only here — it is a question of who may call, never of what the node listens
+  on, so no narrower bind default is set ahead of it. [control-plane-bind-posture]

@@ -8,8 +8,12 @@ use pyo3::prelude::*;
 
 mod python_added_processor;
 mod python_bag_conversion;
+#[cfg(target_os = "linux")]
+mod python_cuda_pixel_exchange;
+mod python_gpu_surface_pixel_exchange;
 mod python_logging;
 mod python_monotonic_timer;
+mod python_native_builtin_blocks;
 mod python_processor_context;
 mod python_processor_declaration;
 mod python_processor_host;
@@ -21,7 +25,11 @@ pub use python_runtime_lifecycle::PythonRuntimeHandle;
 
 #[pymodule]
 fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
+    python_native_builtin_blocks::register_native_builtin_processor_types();
     module.add_class::<PythonRuntimeHandle>()?;
+    module.add_class::<python_native_builtin_blocks::PythonTestPatternSourceBlock>()?;
+    module.add_class::<python_native_builtin_blocks::PythonCameraSourceBlock>()?;
+    module.add_class::<python_native_builtin_blocks::PythonDisplayWindowBlock>()?;
     module.add_class::<python_added_processor::PythonAddedProcessor>()?;
     module.add_class::<python_added_processor::PythonProcessorOutputPortReference>()?;
     module.add_class::<python_added_processor::PythonProcessorInputPortReference>()?;

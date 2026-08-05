@@ -28,6 +28,7 @@ jobs:
           sudo apt-get install -y \
             pkg-config \
             protobuf-compiler \
+            libclang-dev \
             libvulkan-dev \
             glslc \
             python3-dev
@@ -72,7 +73,10 @@ jobs:
         working-directory: sdk/streamlib-python-wheel
         run: |
           uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy
+          # numpy rides along because the exchange-surface tests import it at
+          # module scope — collection needs it even when `requires_gpu`
+          # deselects every test that would use it.
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       # The crate's own unit tests link libpython rather than building as an
@@ -133,7 +137,11 @@ jobs:
         working-directory: sdk/streamlib-python-wheel
         run: |
           uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest numpy
+          # CPU torch: the exchange tests type-check against torch's API, and
+          # pyright reports a missing import as an error. The cpu wheel keeps
+          # the download tractable for a no-build job.
+          VIRTUAL_ENV="$PWD/.venv" uv pip install torch --index-url https://download.pytorch.org/whl/cpu
 
       - name: Type-check the wheel's Python surface
         working-directory: sdk/streamlib-python-wheel

@@ -50,6 +50,11 @@ Avoid the two failure modes:
 - [@docs/learnings/nvidia-opaque-fd-after-swapchain.md](nvidia-opaque-fd-after-swapchain.md) —
   Same NVIDIA cap as DMA-BUF, but for OPAQUE_FD allocations (CUDA / OpenCL
   interop); engine pre-warms every export pool at `HostVulkanDevice` construction
+- [@docs/learnings/nvidia-external-handle-type-exclusivity.md](nvidia-external-handle-type-exclusivity.md) —
+  One allocation cannot export both OPAQUE_FD and DMA-BUF on Linux +
+  NVIDIA (buffer `compatibleHandleTypes` disjoint — measured, RTX 3090 /
+  595.84), and CUDA has no dma-buf import type — crossing flavours costs
+  one GPU blit into a staging allocation of the target flavour
 - [@docs/learnings/nvidia-egl-dmabuf-render-target.md](nvidia-egl-dmabuf-render-target.md) —
   Linear DMA-BUFs on NVIDIA are EGL `external_only=TRUE` (sampler-only); FBO color attachments require a tiled DRM modifier from `eglQueryDmaBufModifiersEXT`
 - [@docs/learnings/headless-nvidia-vulkan-container.md](headless-nvidia-vulkan-container.md) —

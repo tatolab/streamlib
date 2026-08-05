@@ -417,6 +417,29 @@ checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
 
 [[package]]
 name = "bindgen"
+version = "0.65.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cfdf7b466f9a4903edc73f95d6d2bcd5baf8ae620638762244d3f60143643cc5"
+dependencies = [
+ "bitflags 1.3.2",
+ "cexpr",
+ "clang-sys",
+ "lazy_static",
+ "lazycell",
+ "log",
+ "peeking_take_while",
+ "prettyplease",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "rustc-hash 1.1.0",
+ "shlex",
+ "syn",
+ "which",
+]
+
+[[package]]
+name = "bindgen"
 version = "0.71.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f58bf3d7db68cfbac37cfc485a8d711e87e064c3d0fe0435b92f7a407f9d6b3"
@@ -1789,6 +1812,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "home"
+version = "0.5.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "cc627f471c528ff0c4a49e1d5e60450c8f6461dd6d10ba9dcd3a61d3dff7728d"
+dependencies = [
+ "windows-sys 0.61.2",
+]
+
+[[package]]
 name = "hound"
 version = "3.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2453,6 +2485,12 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 dependencies = [
  "spin",
 ]
+
+[[package]]
+name = "lazycell"
+version = "1.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "830d08ce1d1d941e6b30645f1a0eb5643013d835ce3779a5fc208261dbe10f55"
 
 [[package]]
 name = "leb128fmt"
@@ -3468,6 +3506,12 @@ dependencies = [
  "digest",
  "hmac",
 ]
+
+[[package]]
+name = "peeking_take_while"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19b17cddbe7ec3f8bc800887bab5e717348c95ea2ca0b1bf0837fb964dc67099"
 
 [[package]]
 name = "percent-encoding"
@@ -4840,7 +4884,7 @@ checksum = "6ce2be8dc25455e1f91df71bfa12ad37d7af1092ae736f3a6cd0e37bc7810596"
 
 [[package]]
 name = "streamlib"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "iceoryx2",
  "serde",
@@ -4851,7 +4895,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-abi"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "bitflags 2.11.0",
  "libc",
@@ -4862,7 +4906,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-cpu-readback"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "libc",
  "serde",
@@ -4882,11 +4926,11 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-cpu-readback-abi"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "streamlib-adapter-cpu-readback-helpers"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "libc",
  "serde",
@@ -4905,7 +4949,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-cuda"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "dlpark",
  "libc",
@@ -4924,11 +4968,11 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-cuda-abi"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "streamlib-adapter-cuda-helpers"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "cudarc",
  "libc",
@@ -4947,7 +4991,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-opengl"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "gl",
  "khronos-egl",
@@ -4971,11 +5015,11 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-opengl-abi"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "streamlib-adapter-skia"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "libc",
  "libloading 0.8.9",
@@ -4999,11 +5043,11 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-skia-abi"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "streamlib-adapter-vulkan"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "libc",
  "serde",
@@ -5023,11 +5067,11 @@ dependencies = [
 
 [[package]]
 name = "streamlib-adapter-vulkan-abi"
-version = "0.11.0"
+version = "0.12.0"
 
 [[package]]
 name = "streamlib-adapter-vulkan-helpers"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "libc",
  "serde",
@@ -5073,7 +5117,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-build-orchestrator"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "serde_json",
@@ -5096,7 +5140,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-cargo-build"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "serde",
@@ -5111,7 +5155,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-cli"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "chrono",
@@ -5143,7 +5187,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-consumer-rhi"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "libc",
  "streamlib-surface-client",
@@ -5154,7 +5198,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-deno-native"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "cudarc",
  "iceoryx2",
@@ -5177,7 +5221,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-engine"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "ahash",
  "anyhow",
@@ -5258,7 +5302,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-error"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "streamlib-consumer-rhi",
@@ -5268,7 +5312,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-idents"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "flate2",
  "schemars 0.8.22",
@@ -5288,14 +5332,14 @@ dependencies = [
 
 [[package]]
 name = "streamlib-ipc-types"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "iceoryx2",
 ]
 
 [[package]]
 name = "streamlib-jtd-codegen"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5310,7 +5354,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-macros"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "crossbeam-channel",
  "proc-macro-crate",
@@ -5326,8 +5370,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "streamlib-media-builtins"
+version = "0.12.0"
+dependencies = [
+ "libc",
+ "raw-window-handle",
+ "rmp-serde",
+ "rmpv",
+ "serde",
+ "serde_json",
+ "streamlib",
+ "tracing",
+ "uuid",
+ "v4l",
+ "winit",
+]
+
+[[package]]
 name = "streamlib-moq"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "bytes",
  "moq-transport",
@@ -5347,7 +5408,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-pack"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "libc",
@@ -5368,7 +5429,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-plugin-abi"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "streamlib-ipc-types",
  "tracing",
@@ -5376,7 +5437,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-plugin-sdk"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "criterion",
  "iceoryx2-log",
@@ -5396,7 +5457,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-processor-extract"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5414,7 +5475,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-processor-schema"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "rmp-serde",
  "schemars 0.8.22",
@@ -5428,7 +5489,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-python-native"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "cudarc",
  "iceoryx2",
@@ -5451,20 +5512,23 @@ dependencies = [
 
 [[package]]
 name = "streamlib-python-wheel"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
+ "cudarc",
  "libc",
  "parking_lot",
  "pyo3",
  "rmpv",
  "serde_json",
  "streamlib",
+ "streamlib-adapter-cuda",
+ "streamlib-media-builtins",
  "tracing",
 ]
 
 [[package]]
 name = "streamlib-runtime"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -5478,7 +5542,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-surface-client"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "libc",
  "serde_json",
@@ -5486,7 +5550,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-test-fixtures"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "serde",
  "streamlib",
@@ -5498,7 +5562,7 @@ dependencies = [
 
 [[package]]
 name = "streamlib-test-fixtures-abi-mismatch"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "streamlib-plugin-abi",
 ]
@@ -6185,6 +6249,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "v4l"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8fbfea44a46799d62c55323f3c55d06df722fbe577851d848d328a1041c3403"
+dependencies = [
+ "bitflags 1.3.2",
+ "libc",
+ "v4l2-sys-mit",
+]
+
+[[package]]
+name = "v4l2-sys-mit"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6779878362b9bacadc7893eac76abe69612e8837ef746573c4a5239daf11990b"
+dependencies = [
+ "bindgen 0.65.1",
+]
+
+[[package]]
 name = "valuable"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6204,7 +6288,7 @@ checksum = "5c3082ca00d5a5ef149bb8b555a72ae84c9c59f7250f013ac822ac2e49b19c64"
 
 [[package]]
 name = "vulkan-jpeg"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "bytemuck",
  "jpeg-encoder",
@@ -6579,6 +6663,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "52f5ee44c96cf55f1b349600768e3ece3a8f26010c05265ab73f945bb1a2eb9d"
 dependencies = [
  "rustls-pki-types",
+]
+
+[[package]]
+name = "which"
+version = "4.4.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "87ba24419a2078cd2b0f2ede2691b6c66d8e47836da3b6db8265ebad47afbfc7"
+dependencies = [
+ "either",
+ "home",
+ "once_cell",
+ "rustix 0.38.44",
 ]
 
 [[package]]

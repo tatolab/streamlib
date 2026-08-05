@@ -471,6 +471,41 @@ impl RhiCommandRecorderInner {
         Ok(())
     }
 
+    /// Record `vkCmdCopyBuffer` over the first `byte_size` bytes of both
+    /// buffers.
+    pub fn record_copy_buffer_to_buffer(
+        &mut self,
+        src: &(impl VulkanBufferLike + ?Sized),
+        dst: &(impl VulkanBufferLike + ?Sized),
+        byte_size: u64,
+    ) -> Result<()> {
+        self.expect_recording("record_copy_buffer_to_buffer")?;
+        if byte_size > src.vk_buffer_size() || byte_size > dst.vk_buffer_size() {
+            return Err(Error::GpuError(format!(
+                "RhiCommandRecorder '{}': record_copy_buffer_to_buffer: copy of {} bytes exceeds \
+                 src ({}) or dst ({})",
+                self.label,
+                byte_size,
+                src.vk_buffer_size(),
+                dst.vk_buffer_size(),
+            )));
+        }
+        let region = vk::BufferCopy::builder()
+            .src_offset(0)
+            .dst_offset(0)
+            .size(byte_size as vk::DeviceSize)
+            .build();
+        unsafe {
+            self.device.cmd_copy_buffer(
+                self.command_buffer,
+                src.vk_buffer(),
+                dst.vk_buffer(),
+                &[region],
+            );
+        }
+        Ok(())
+    }
+
     /// Record a compute dispatch via [`VulkanComputeKernel::record`]
     /// into the recorder's command buffer.
     ///
@@ -886,8 +921,9 @@ impl RhiCommandRecorderInner {
     /// The begun-but-unsubmitted command buffer is discarded at that
     /// `begin()`'s `reset_command_buffer`. Used when a frame is abandoned
     /// after `begin()` but before submit (e.g. swapchain `OUT_OF_DATE_KHR`
-    /// on acquire), so the recorder slot is reusable next attempt.
-    pub(crate) fn abort_recording(&mut self) {
+    /// on acquire, or a failed per-frame record), so the recorder slot is
+    /// reusable next attempt. Harmless when nothing is recording.
+    pub fn abort_recording(&mut self) {
         self.render_pass_balance.mark_closed();
         *self.state.lock() = RecorderState::Idle;
     }
@@ -1140,14 +1176,13 @@ impl RhiCommandRecorder {
         unsafe { (*(self.handle as *const RhiCommandRecorderInner)).in_render_pass() }
     }
 
-    /// Host-side abandon-recording used by
-    /// [`VulkanPresentTarget::begin_frame`](super::vulkan_present_target::VulkanPresentTarget::begin_frame)
-    /// when a frame is dropped after `begin()` but before submit (swapchain
-    /// `OUT_OF_DATE_KHR` on acquire). Resets the recorder to `Idle` so the
-    /// reused slot begins clean next attempt. See
-    /// [`RhiCommandRecorderInner::abort_recording`]. **Panics if called
-    /// from cdylib code** (present targets are host-only).
-    pub(crate) fn abort_recording(&mut self) {
+    /// Abandon an in-progress recording used when a frame is dropped after
+    /// `begin()` but before submit (swapchain `OUT_OF_DATE_KHR` on acquire,
+    /// or a failed per-frame record). Resets the recorder to `Idle` so the
+    /// reused slot begins clean next attempt; harmless when nothing is
+    /// recording. See [`RhiCommandRecorderInner::abort_recording`].
+    /// **Panics if called from cdylib code** (host-only recorders).
+    pub fn abort_recording(&mut self) {
         self.host_inner_mut().abort_recording();
     }
 
@@ -1281,6 +1316,18 @@ impl RhiCommandRecorder {
     ) -> Result<()> {
         self.host_inner_mut()
             .record_copy_buffer_to_image(src, dst, dst_layout, region)
+    }
+
+    /// Copy buffer → buffer. Host-only until a cdylib consumer
+    /// arrives; cdylib callers panic at [`Self::host_inner_mut`].
+    pub fn record_copy_buffer_to_buffer(
+        &mut self,
+        src: &(impl VulkanBufferLike + ?Sized),
+        dst: &(impl VulkanBufferLike + ?Sized),
+        byte_size: u64,
+    ) -> Result<()> {
+        self.host_inner_mut()
+            .record_copy_buffer_to_buffer(src, dst, byte_size)
     }
 
     /// Compute dispatch.

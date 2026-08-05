@@ -53,9 +53,11 @@ artifact + ADR.
   run boots an empty graph — this is the missing glue); a bad save prints the
   traceback and keeps the last good pipeline running; the MVP edit loop is re-running
   `dev` (reload-on-save is a later nicety, processor-granular per the plan, never
-  module machinery); `dev` binds loopback. (A "dev-mode GIL-hold watchdog" clause was removed
-  here 2026-08-04: it measured shared-GIL starvation, which helper-only placement
-  makes unrepresentable — built on #1711, reverted in `4caaa1fa`, banned by
+  module machinery); ~~`dev` binds loopback~~ — superseded 2026-08-04 by
+  `control-plane-bind-posture`: `dev` binds all interfaces, exactly as `run` does.
+  (A "dev-mode GIL-hold watchdog" clause was removed here 2026-08-04: it measured
+  shared-GIL starvation, which helper-only placement makes unrepresentable — built on
+  #1711, reverted in `4caaa1fa`, banned by
   `docs/decisions/helper-process-placement-only.md`.) `streamlib new` scaffolds
   `app.py` + the effect class in its own importable module (a `__main__`-defined
   processor is a wiring error) +

@@ -13,6 +13,7 @@ members = [
     "tools/streamlib-pack",      # Package-artifact assembly shared between `streamlib pkg publish` (CLI) and `streamlib-build-orchestrator` (runtime) — emits a .slpkg or an extracted staged dir
     "tools/streamlib-build-orchestrator", # Default polyglot BuildOrchestrator impl — runtime materialization of source packages (depends on engine for the trait + cargo-build for the helpers)
     "runtime/streamlib-runtime",   # Standalone runtime binary (spawned by CLI)
+    "runtime/streamlib-media-builtins", # First-party media built-ins (test pattern, camera, display) — native blocks statically linked into the wheel
     "sdk/streamlib-processor-schema", # Processor schema types + YAML parser shared between streamlib runtime and streamlib-macros
     "sdk/streamlib-jtd-codegen", # JTD-codegen pipeline: schema YAML → typed Rust/Python/TypeScript bindings
     "sdk/streamlib-idents",    # Structured schema identifiers, semver, manifest/lockfile types (#399)
@@ -72,7 +73,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.11.0"
+version = "0.12.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["Jonathan Fontanez <fontanezj1@gmail.com>"]
@@ -177,15 +178,15 @@ dlpark = { version = "=0.6.0", default-features = false }
 # `cudarc::runtime::sys::is_culib_present()` lets the adapter fail
 # gracefully on CUDA-less machines.
 #
-# Pin to `cuda-12090` so the build does NOT require `nvcc` (the
-# `cuda-version-from-build-system` alternative errors when nvcc is
-# absent). The `_v2`-suffixed external-resource symbols this binding
-# exposes remain ABI-stable through CUDA 13.x — runtime libcudart
-# continues to export them, so the dlopen path resolves regardless of
-# which CUDA version is installed on the runner. `default-features =
-# false` skips cuBLAS / cuRAND / NVRTC; we only need `runtime` (for
-# external-memory + external-semaphore APIs).
-cudarc = { version = "0.19", default-features = false, features = ["driver", "runtime", "fallback-dynamic-loading", "cuda-12090"] }
+# A fixed `cuda-*` feature (rather than `cuda-version-from-build-system`)
+# keeps the build free of nvcc. The version is the FLOOR of every
+# libcudart the process may dlopen, not the newest available: torch cu126
+# wheels bundle libcudart 12.6 into the venv, and when that copy wins the
+# dlopen race, any symbol newer than 12.6 in cudarc's table panics its
+# loader. The external-memory + external-semaphore APIs we use predate
+# 12.0, so the floor costs nothing. `default-features = false` skips
+# cuBLAS / cuRAND / NVRTC; we only need `runtime`.
+cudarc = { version = "0.19", default-features = false, features = ["driver", "runtime", "fallback-dynamic-loading", "cuda-12060"] }
 
 # Skia bindings for the streamlib-adapter-skia crate.
 #

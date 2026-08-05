@@ -25,6 +25,34 @@ use crate::python_added_processor::{
 use crate::python_bag_conversion::python_object_to_json_value;
 use crate::python_processor_registration::register_processor_class;
 
+/// What kind of thing `Runtime.add` was handed, resolved once up front.
+enum AddedProcessorClassKind {
+    /// A wheel-exported marker for a statically-linked native processor.
+    NativeBuiltin(streamlib::sdk::processors::ProcessorTypeReference),
+    /// A class carrying the `@streamlib.processor` declaration.
+    DeclaredPythonClass,
+}
+
+/// Classify `processor_class`, owning the not-a-processor rejection.
+fn classify_processor_class(
+    python: Python<'_>,
+    processor_class: &Bound<'_, PyAny>,
+) -> PyResult<AddedProcessorClassKind> {
+    if let Some(native_reference) =
+        crate::python_native_builtin_blocks::native_builtin_type_reference(python, processor_class)?
+    {
+        return Ok(AddedProcessorClassKind::NativeBuiltin(native_reference));
+    }
+    if crate::python_processor_declaration::is_declared_processor_class(processor_class) {
+        return Ok(AddedProcessorClassKind::DeclaredPythonClass);
+    }
+    Err(PyRuntimeError::new_err(format!(
+        "{} is not a processor: decorate the class with @streamlib.processor, and pass \
+         the class itself rather than an instance of it",
+        processor_class
+    )))
+}
+
 /// A reference to the engine outlived the handle, so its threads were not
 /// joined and the teardown contract was not kept.
 struct EngineTeardownIncomplete;
@@ -174,20 +202,21 @@ impl PythonRuntimeHandle {
         config: Option<&Bound<'_, PyDict>>,
         display_name: Option<String>,
     ) -> PyResult<PythonAddedProcessor> {
-        if !crate::python_processor_declaration::is_declared_processor_class(processor_class) {
-            return Err(PyRuntimeError::new_err(format!(
-                "{} is not a processor: decorate the class with @streamlib.processor, and pass \
-                 the class itself rather than an instance of it",
-                processor_class
-            )));
-        }
+        let class_kind = classify_processor_class(python, processor_class)?;
 
         // Before registering: registration writes to the process-global
         // registry, and a runtime that can no longer be built should not leave
         // a processor type behind for a node that will never exist.
         let engine = self.engine_being_built("add a processor")?;
 
-        let type_reference = register_processor_class(python, processor_class)?;
+        // Native built-ins were registered at module import; only a Python
+        // class needs registering here.
+        let type_reference = match class_kind {
+            AddedProcessorClassKind::NativeBuiltin(native_reference) => native_reference,
+            AddedProcessorClassKind::DeclaredPythonClass => {
+                register_processor_class(python, processor_class)?
+            }
+        };
         let configuration = match config {
             Some(config) => python_object_to_json_value(config.as_any())?,
             None => serde_json::Value::Null,
