@@ -71,7 +71,7 @@ class VkImageLayout:
 class VulkanImageInfo:
     """Per-image VkImageInfo descriptor for a registered surface.
 
-    Mirrors ``streamlib_adapter_abi::VkImageInfo`` field-for-field —
+    Mirrors ``streamlib_surface_adapter::VkImageInfo`` field-for-field —
     customers wrapping the underlying ``VkImage`` as a framework-native
     handle (Skia's ``GrVkImageInfo``, vulkano's ``Image``, etc.) read
     this once on registration to populate their backend-context state.

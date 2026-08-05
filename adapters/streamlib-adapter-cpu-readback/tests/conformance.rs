@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `streamlib_adapter_cpu_readback::tests::conformance` — runs the
-//! public `run_conformance` suite from `streamlib-adapter-abi` against
+//! public `run_conformance` suite from `streamlib-surface-adapter` against
 //! a real cpu-readback adapter wired to a host-allocated DMA-BUF
 //! `VkImage`, per-plane staging buffers, and an exportable timeline
 //! semaphore.

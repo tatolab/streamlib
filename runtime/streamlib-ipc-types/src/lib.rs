@@ -13,6 +13,13 @@
 //! the `streamlib` host crate (or directly from the Surface 2 IPC envelope
 //! for cdylibs) and call [`SchemaIdentWire::from_segments`] to materialize
 //! the wire bytes.
+//!
+//! Alongside the payload types, this crate owns the channel rules the host
+//! and every language native must agree on byte-for-byte or silently drift:
+//! [`decide_channel_egress_admission`] with its
+//! [`emit_channel_egress_admission_tracing`] diagnostics (so the crate does
+//! emit `tracing`), and [`next_read_required_len`], the peek rule over a
+//! native's local receive queue.
 
 use iceoryx2::prelude::*;
 
@@ -214,17 +221,17 @@ pub fn emit_channel_egress_admission_tracing(
 
 /// Byte length of the frame a read would return next from a native SDK's local
 /// `pending` receive queue, so every native shares one peek rule.
-/// `read_next_in_order` selects the FIFO front (`0`); otherwise the SkipToLatest
-/// newest (`queue.len() - 1`). The caller guarantees `queue` is non-empty (its
-/// `is_empty()` continue runs first) and compares the returned length against
-/// its receive buffer to decide whether to grow before consuming the frame.
-pub fn next_read_required_len(queue: &[(Vec<u8>, i64)], read_next_in_order: bool) -> usize {
-    let next_index = if read_next_in_order {
-        0
+/// `read_next_in_order` selects the FIFO front; otherwise the SkipToLatest
+/// newest. `None` when the queue is empty. The caller compares the returned
+/// length against its receive buffer to decide whether to grow before
+/// consuming the frame.
+pub fn next_read_required_len(queue: &[(Vec<u8>, i64)], read_next_in_order: bool) -> Option<usize> {
+    let next = if read_next_in_order {
+        queue.first()
     } else {
-        queue.len() - 1
+        queue.last()
     };
-    queue[next_index].0.len()
+    next.map(|(frame, _)| frame.len())
 }
 
 /// Default iceoryx2 ring depth (slot count, not bytes) for the data
@@ -823,8 +830,10 @@ mod tests {
             (vec![0u8; 16], 2),
             (vec![0u8; 64], 3),
         ];
-        assert_eq!(next_read_required_len(&queue, true), 4);
-        assert_eq!(next_read_required_len(&queue, false), 64);
+        assert_eq!(next_read_required_len(&queue, true), Some(4));
+        assert_eq!(next_read_required_len(&queue, false), Some(64));
+        assert_eq!(next_read_required_len(&[], true), None);
+        assert_eq!(next_read_required_len(&[], false), None);
     }
 
     #[test]

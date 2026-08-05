@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Surface-adapter contract shared by every in-process adapter core.
+//! Surface-adapter contract shared by every adapter core.
 //!
 //! See `docs/architecture/surface-adapter.md` for the architecture
 //! brief and `docs/architecture/adapter-authoring.md` for the adapter

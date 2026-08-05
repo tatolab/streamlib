@@ -4,7 +4,7 @@
 //! Read and write views handed back to consumers inside an acquire scope.
 //!
 //! The views are short-lived (lifetime-bound to the guard) and implement
-//! the capability traits from `streamlib-adapter-abi` so outer adapters
+//! the capability traits from `streamlib-surface-adapter` so outer adapters
 //! (`streamlib-adapter-skia`, third-party Vulkan-on-Vulkan compositions)
 //! can compose on top without touching DMA-BUF fds or layout state
 //! directly.

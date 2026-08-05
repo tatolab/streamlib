@@ -871,7 +871,7 @@ where
 /// `streamlib-adapter-cpu-readback::adapter::AdapterPersistentSubmitContext`
 /// and `streamlib-adapter-vulkan::adapter::AdapterPersistentSubmitContext`;
 /// fix ALL THREE if you change ANY (issue #620 + #640 AI Agent
-/// Notes — `streamlib-adapter-abi` deliberately does not depend on
+/// Notes — `streamlib-surface-adapter` deliberately does not depend on
 /// `vulkanalia`, so duplication is the project pattern here).
 ///
 /// The fence is created signaled so the first submit doesn't block.

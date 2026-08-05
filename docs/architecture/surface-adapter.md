@@ -174,9 +174,9 @@ is the precedent shape for that check.
 
 ## Where the code lives
 
-- `adapters/streamlib-surface-adapter/` — the in-process contract
-  crate. Trait, descriptor, errors, guards, mock, conformance suite,
-  subprocess crash harness.
+- `adapters/streamlib-surface-adapter/` — the contract crate. Trait,
+  descriptor, errors, guards, mock, conformance suite, subprocess
+  crash harness.
 - `adapters/streamlib-adapter-abi/` — the cross-DSO half: the
   `extern "C"` panic net every host-side adapter vtable shares, and
   the ABI version constant.

@@ -32,7 +32,7 @@
 //! `adapters/streamlib-adapter-cpu-readback/src/`) enumerated:
 //!
 //! 1. `SurfaceAdapter` trait methods (from
-//!    `streamlib-adapter-abi`) implemented on
+//!    `streamlib-surface-adapter`) implemented on
 //!    `CpuReadbackSurfaceAdapter`: `acquire_read`, `acquire_write`,
 //!    `try_acquire_read`, `try_acquire_write`, `end_read_access`,
 //!    `end_write_access`.

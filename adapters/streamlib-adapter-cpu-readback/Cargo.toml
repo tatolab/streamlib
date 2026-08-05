@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-adapter-cpu-readback"
-description = "Explicit GPU→CPU surface adapter (Linux). The single named, opt-in path for customers who need CPU memory access to a streamlib surface — returns numpy.ndarray (Python) / Uint8Array (Deno) / &[u8] (Rust) from a host-side vkCmdCopyImageToBuffer at acquire time. Sole implementor of the CpuReadable / CpuWritable capability traits from streamlib-adapter-abi; GPU adapters do not implement them, by design."
+description = "Explicit GPU→CPU surface adapter (Linux). The single named, opt-in path for customers who need CPU memory access to a streamlib surface — returns numpy.ndarray (Python) / Uint8Array (Deno) / &[u8] (Rust) from a host-side vkCmdCopyImageToBuffer at acquire time. Sole implementor of the CpuReadable / CpuWritable capability traits from streamlib-surface-adapter; GPU adapters do not implement them, by design."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

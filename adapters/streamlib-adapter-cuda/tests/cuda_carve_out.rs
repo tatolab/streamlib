@@ -406,8 +406,9 @@ fn host_buffer_to_cuda_byte_equal_round_trip() {
 
     // The `_v2` suffixed name is the canonical extern in cuda
     // 11.4..12.9 bindings; the unsuffixed `cudaWaitExternalSemaphoresAsync`
-    // is gated on cuda-13xxx. We pin to `cuda-12090` (see helpers
-    // Cargo.toml) so the `_v2` symbol is the right one. The runtime
+    // is gated on cuda-13xxx. `cudarc` is pinned to the `cuda-12060`
+    // floor (see the workspace Cargo.toml) so the `_v2` symbol is the
+    // right one. The runtime
     // libcudart on cuda 13.x continues to export `_v2` for ABI
     // stability, so the dlopen path resolves.
     let wait_result = unsafe {

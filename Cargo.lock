@@ -4938,7 +4938,6 @@ dependencies = [
  "streamlib-adapter-cpu-readback",
  "streamlib-consumer-rhi",
  "streamlib-engine",
- "streamlib-surface-adapter",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
  "tracing",
@@ -5067,7 +5066,6 @@ dependencies = [
  "streamlib-adapter-vulkan",
  "streamlib-consumer-rhi",
  "streamlib-engine",
- "streamlib-surface-adapter",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
  "tracing",
@@ -5438,7 +5436,6 @@ dependencies = [
  "streamlib-macros",
  "streamlib-plugin-abi",
  "streamlib-processor-schema",
- "streamlib-surface-adapter",
  "tracing",
 ]
 

@@ -53,7 +53,7 @@
 //! slot below. The audit (against `adapters/streamlib-adapter-cuda/src/`)
 //! enumerated:
 //!
-//! 1. `SurfaceAdapter` trait methods (from `streamlib-adapter-abi`)
+//! 1. `SurfaceAdapter` trait methods (from `streamlib-surface-adapter`)
 //!    implemented on `CudaSurfaceAdapter` for the buffer flavor:
 //!    `acquire_read`, `acquire_write`, `try_acquire_read`,
 //!    `try_acquire_write`, `end_read_access`, `end_write_access`.

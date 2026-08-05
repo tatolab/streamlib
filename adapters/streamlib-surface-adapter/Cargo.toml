@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-surface-adapter"
-description = "In-process surface-adapter contract shared by every adapter core: SurfaceAdapter trait, StreamlibSurface descriptor, scoped acquire/release, capability marker traits, conformance suite."
+description = "Surface-adapter contract shared by every adapter core: SurfaceAdapter trait, StreamlibSurface descriptor, scoped acquire/release, capability marker traits, conformance suite."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

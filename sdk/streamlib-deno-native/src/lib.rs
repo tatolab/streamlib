@@ -607,10 +607,12 @@ pub unsafe extern "C" fn sldn_input_read(
         // larger than the caller's buffer. Peek the frame that would be returned
         // WITHOUT consuming it; if it does not fit, report its length and leave it
         // in place so the SDK can resize and read again. Nothing is dropped.
-        let required = streamlib_ipc_types::next_read_required_len(
+        let Some(required) = streamlib_ipc_types::next_read_required_len(
             queue,
             read_mode == READ_MODE_READ_NEXT_IN_ORDER,
-        );
+        ) else {
+            continue;
+        };
         if required > buf_len as usize {
             if !out_len.is_null() {
                 unsafe { *out_len = required as u32 };

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `streamlib_adapter_skia::tests::conformance` — runs the public
-//! `run_conformance` suite from `streamlib-adapter-abi` against a real
+//! `run_conformance` suite from `streamlib-surface-adapter` against a real
 //! Skia adapter wired to a host-allocated DMA-BUF render-target image
 //! and an exportable timeline semaphore.
 //!

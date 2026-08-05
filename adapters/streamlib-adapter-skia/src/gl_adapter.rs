@@ -12,7 +12,7 @@
 //!
 //! Mirror-shape of [`crate::SkiaSurfaceAdapter`] but composed on
 //! [`OpenGlSurfaceAdapter`] via the `GlWritable` capability marker
-//! from `streamlib-adapter-abi`. Both backends share the same
+//! from `streamlib-surface-adapter`. Both backends share the same
 //! [`crate::skia_internal::SyncDirectContext`] mutex pattern and
 //! drop-order template — see `skia_internal.rs`.
 

@@ -7,7 +7,7 @@
 //! (write) and `skia::Image` (read) are reachable through the
 //! `SurfaceAdapter` trait.
 //!
-//! The Vulkan layout escape hatch from `streamlib-adapter-abi`
+//! The Vulkan layout escape hatch from `streamlib-surface-adapter`
 //! (`VulkanWritable::vk_image_layout()`, `VulkanImageInfoExt::vk_image_info()`)
 //! is what `SkiaSurfaceAdapter` uses internally to construct
 //! Skia's `GrVkImageInfo`. Customers of `SurfaceAdapter` must NOT be

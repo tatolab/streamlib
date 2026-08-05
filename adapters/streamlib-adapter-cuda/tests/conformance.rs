@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `streamlib_adapter_cuda::tests::conformance` — runs the public
-//! `run_conformance` suite from `streamlib-adapter-abi` against the
+//! `run_conformance` suite from `streamlib-surface-adapter` against the
 //! CUDA adapter, plus a duplicate-registration negative case.
 //!
 //! Exercises the same eight contracts MockAdapter passes (acquire/drop

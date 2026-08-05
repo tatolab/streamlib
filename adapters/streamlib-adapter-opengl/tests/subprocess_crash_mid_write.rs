@@ -3,7 +3,7 @@
 
 //! `streamlib_adapter_opengl::tests::subprocess_crash_mid_write` —
 //! exercises the public `SubprocessCrashHarness` from
-//! `streamlib-adapter-abi::testing` to confirm the OpenGL adapter's
+//! `streamlib-surface-adapter::testing` to confirm the OpenGL adapter's
 //! crash path matches the contract.
 //!
 //! The harness spawns the helper subprocess

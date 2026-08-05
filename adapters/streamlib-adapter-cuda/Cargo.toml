@@ -15,12 +15,14 @@ name = "streamlib_adapter_cuda"
 path = "src/lib.rs"
 
 [features]
-# Default OFF — enabling gates the CUDA type surface (CUDA-typed views,
-# FFI hooks) so non-CUDA customers don't pay for unused API, and pulls
-# `cudarc` in for the CUDA carve-out test. cudarc loads `libcuda.so`
-# lazily via dlopen (`fallback-dynamic-loading`), so toolkit absence is
-# a graceful runtime skip, never a build error — enabling the feature
-# does not demand a CUDA toolkit on the builder.
+# Default OFF. The feature does exactly one thing: pull optional `cudarc`
+# in so the `cuda_carve_out` test (its `required-features`) compiles.
+# Nothing in `src/` is feature-gated. cudarc must stay a regular optional
+# dep rather than a dev-dep because Cargo has no optional dev-dependencies,
+# and `dep:` can only name a real dependency. cudarc loads `libcuda.so`
+# lazily via dlopen (`fallback-dynamic-loading`), so toolkit absence is a
+# graceful runtime skip — enabling the feature never demands a CUDA
+# toolkit on the builder.
 default = []
 cuda = ["dep:cudarc"]
 

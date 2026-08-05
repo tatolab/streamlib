@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! `streamlib_adapter_skia::tests::conformance_gl` — runs the public
-//! `run_conformance` suite from `streamlib-adapter-abi` against the
+//! `run_conformance` suite from `streamlib-surface-adapter` against the
 //! GL-backed Skia adapter wired to a host-allocated DMA-BUF render-
 //! target image and a real surfaceless EGL+GL context.
 //!

@@ -116,7 +116,7 @@ impl<'g> CudaWriteView<'g> {
 /// `cudaExternalMemoryGetMappedMipmappedArray` at registration) and
 /// returns the raw `uint64_t` handle to the customer at the cdylib's
 /// FFI surface. The construction step itself lives in the cdylib
-/// because `cudarc` isn't a dep of this crate.
+/// because `cudarc` is only an optional dep here, behind the `cuda` feature.
 pub struct CudaTextureView<'g> {
     pub(crate) image: vk::Image,
     pub(crate) width: u32,

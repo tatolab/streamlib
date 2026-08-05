@@ -808,11 +808,11 @@ mod tier1_null_handle_tests {
     type D = ConsumerVulkanDevice;
 
     /// `SurfaceFormat` is declared `#[repr(u32)]` in
-    /// `streamlib-adapter-abi`. The vtable wire format mirrors
+    /// `streamlib-surface-adapter`. The vtable wire format mirrors
     /// that representation in `CpuReadbackViewRepr::format_raw`
     /// and `HostSurfaceRegistrationRepr::format_raw`. Locking the
     /// discriminant values here ensures a stealth re-numbering
-    /// in `streamlib-adapter-abi` trips at this layer too.
+    /// in `streamlib-surface-adapter` trips at this layer too.
     #[test]
     fn surface_format_discriminants_match_repr() {
         assert_eq!(SurfaceFormat::Bgra8 as u32, 0);
@@ -832,11 +832,11 @@ mod tier1_null_handle_tests {
     }
 
     /// Cross-crate sanity: the abi crate is dep-light by design
-    /// and can't see `streamlib-adapter-abi`. This crate has both
+    /// and can't see `streamlib-surface-adapter`. This crate has both
     /// in scope, so we lock the size/align consistency between
     /// `CpuReadbackPlaneRepr` and its conceptual source (the
     /// per-plane view shape) here as a witness — there's no
-    /// existing `#[repr(C)]` mirror in `streamlib-adapter-abi` to
+    /// existing `#[repr(C)]` mirror in `streamlib-surface-adapter` to
     /// compare against, but the size/align is the contract the
     /// layout regression test in the abi crate locks. This test
     /// fails loudly if a future refactor accidentally changes

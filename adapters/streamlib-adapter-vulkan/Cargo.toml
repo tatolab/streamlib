@@ -3,7 +3,7 @@
 
 [package]
 name = "streamlib-adapter-vulkan"
-description = "Vulkan-native StreamLib surface adapter (Linux). No-copy passthrough — exposes host-allocated VkImage to consumers that speak Vulkan natively. Canonical implementor of the VulkanWritable / VulkanImageInfoExt capability traits from streamlib-adapter-abi."
+description = "Vulkan-native StreamLib surface adapter (Linux). No-copy passthrough — exposes host-allocated VkImage to consumers that speak Vulkan natively. Canonical implementor of the VulkanWritable / VulkanImageInfoExt capability traits from streamlib-surface-adapter."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

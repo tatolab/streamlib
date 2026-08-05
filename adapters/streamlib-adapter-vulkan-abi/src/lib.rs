@@ -33,7 +33,7 @@
 //! enumerated:
 //!
 //! 1. `SurfaceAdapter` trait methods (from
-//!    `streamlib-adapter-abi`) implemented on `VulkanSurfaceAdapter`:
+//!    `streamlib-surface-adapter`) implemented on `VulkanSurfaceAdapter`:
 //!    `acquire_read`, `acquire_write`, `try_acquire_read`,
 //!    `try_acquire_write`, `end_read_access`, `end_write_access`.
 //! 2. Inherent methods on `VulkanSurfaceAdapter<D>` /
@@ -99,7 +99,7 @@ pub struct VkImageLayoutValueRepr(pub i32);
 /// implementation populates this struct directly from the existing
 /// adapter and the cdylib reads the same offsets through its
 /// PluginAbiObject view payload. Adding fields requires a coordinated bump
-/// in both this crate AND `streamlib-adapter-abi`.
+/// in both this crate AND `streamlib-surface-adapter`.
 #[repr(C)]
 #[derive(Clone, Copy, Debug)]
 pub struct VkImageInfoRepr {

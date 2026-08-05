@@ -3,7 +3,7 @@
 
 //! Cross-DSO half of the surface-adapter contract.
 //!
-//! The in-process contract every adapter core implements lives in
+//! The contract every adapter core implements lives in
 //! `streamlib-surface-adapter`; this crate carries only what the plugin
 //! ABI's dynamic boundary needs. See `docs/architecture/surface-adapter.md`.
 
