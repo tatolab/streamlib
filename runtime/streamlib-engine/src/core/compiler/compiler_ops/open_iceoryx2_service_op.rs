@@ -34,9 +34,6 @@ use crate::iceoryx2::{
     RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, SchemaIdentWire, effective_channel_ceiling_bytes,
 };
 
-use super::spawn_deno_subprocess_op::DenoSubprocessHostProcessor;
-use super::spawn_python_native_subprocess_op::PythonNativeSubprocessHostProcessor;
-
 /// Render a port's structured schema spec as the JSON value embedded in the
 /// subprocess wiring envelope: a structured `SchemaIdentOutput` object for
 /// `Specific(...)`, or `Value::Null` for `Any` (the wildcard MoQ-style port).
@@ -268,11 +265,8 @@ pub fn open_iceoryx2_service(
 pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Result<()> {
     tracing::info!("Closing iceoryx2 service: {}", link_id);
 
-    let Some((source_proc_id, source_port, dest_proc_id)) = graph
-        .traversal_mut()
-        .e(link_id)
-        .first()
-        .map(|link| {
+    let Some((source_proc_id, source_port, dest_proc_id)) =
+        graph.traversal_mut().e(link_id).first().map(|link| {
             (
                 link.from_port().processor_id.clone(),
                 link.from_port().port_name.clone(),
@@ -576,12 +570,7 @@ fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bo
                 .map(|i| i.0.clone())
         })
     {
-        let mut guard = proc_arc.lock();
-        if guard
-            .as_any_mut()
-            .downcast_mut::<PythonNativeSubprocessHostProcessor>()
-            .is_some()
-        {
+        if proc_arc.lock().iceoryx2_transport_lives_out_of_process() {
             return true;
         }
     }
@@ -710,10 +699,10 @@ fn wire_rust_dest(
     Ok(())
 }
 
-/// Record this link's source-side wiring on a subprocess host processor so the
-/// subprocess opens its own channel publisher + destination notifier from the
-/// envelope. One entry per link — the subprocess installs the single publisher
-/// once (keyed by source port) and appends a notifier per entry.
+/// Record this link's source-side wiring on a processor whose transport lives
+/// out of process, so it opens its own channel publisher + destination notifier
+/// from the envelope. One entry per link — the far side installs the single
+/// publisher once (keyed by source port) and appends a notifier per entry.
 #[allow(clippy::too_many_arguments)]
 fn wire_subprocess_source(
     graph: &mut Graph,
@@ -745,24 +734,15 @@ fn wire_subprocess_source(
     });
 
     let source_proc_arc = get_single_processor(graph, source_proc_id)?;
-    let mut source_guard = source_proc_arc.lock();
-    if let Some(deno_host) = source_guard
-        .as_any_mut()
-        .downcast_mut::<DenoSubprocessHostProcessor>()
-    {
-        deno_host.output_port_wiring.push(entry);
-    } else if let Some(python_native_host) = source_guard
-        .as_any_mut()
-        .downcast_mut::<PythonNativeSubprocessHostProcessor>()
-    {
-        python_native_host.output_port_wiring.push(entry);
-    }
+    source_proc_arc
+        .lock()
+        .record_out_of_process_link_wiring(crate::core::PortDirection::Output, entry);
     Ok(())
 }
 
-/// Record this link's dest-side wiring on a subprocess host processor so the
-/// subprocess opens its own channel subscriber (bound to its local input port)
-/// from the envelope.
+/// Record this link's dest-side wiring on a processor whose transport lives out
+/// of process, so it opens its own channel subscriber (bound to its local input
+/// port) from the envelope.
 #[allow(clippy::too_many_arguments)]
 fn wire_subprocess_dest(
     graph: &mut Graph,
@@ -795,18 +775,9 @@ fn wire_subprocess_dest(
     });
 
     let dest_proc_arc = get_single_processor(graph, dest_proc_id)?;
-    let mut dest_guard = dest_proc_arc.lock();
-    if let Some(deno_host) = dest_guard
-        .as_any_mut()
-        .downcast_mut::<DenoSubprocessHostProcessor>()
-    {
-        deno_host.input_port_wiring.push(entry);
-    } else if let Some(python_native_host) = dest_guard
-        .as_any_mut()
-        .downcast_mut::<PythonNativeSubprocessHostProcessor>()
-    {
-        python_native_host.input_port_wiring.push(entry);
-    }
+    dest_proc_arc
+        .lock()
+        .record_out_of_process_link_wiring(crate::core::PortDirection::Input, entry);
     Ok(())
 }
 
@@ -814,8 +785,224 @@ fn wire_subprocess_dest(
 mod tests {
     use super::*;
     use crate::core::descriptors::SchemaIdent;
+    use crate::core::execution::ExecutionConfig;
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
-    use crate::core::processors::ProcessorSpec;
+    use crate::core::processors::{DynGeneratedProcessor, ProcessorSpec};
+    use crate::core::{ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+
+    /// A host whose transport lives out of process and which is neither of the
+    /// engine's own subprocess hosts — the shape the wheel's helper spawn host
+    /// has, from a crate this one cannot name.
+    #[derive(Default)]
+    struct OutOfCrateHelperSpawnHostStub {
+        recorded_output_link_wiring: Vec<serde_json::Value>,
+        recorded_input_link_wiring: Vec<serde_json::Value>,
+    }
+
+    impl DynGeneratedProcessor for OutOfCrateHelperSpawnHostStub {
+        fn __generated_setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn __generated_teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn __generated_on_pause(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn __generated_on_resume(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+            Ok(())
+        }
+        fn name(&self) -> &str {
+            "OutOfCrateHelperSpawnHostStub"
+        }
+        fn descriptor(&self) -> Option<ProcessorDescriptor> {
+            None
+        }
+        fn execution_config(&self) -> ExecutionConfig {
+            ExecutionConfig::new(crate::core::execution::ProcessExecution::Manual)
+        }
+        fn has_iceoryx2_outputs(&self) -> bool {
+            false
+        }
+        fn has_iceoryx2_inputs(&self) -> bool {
+            false
+        }
+        fn set_iceoryx2_resources(
+            &mut self,
+            _output_writer: Option<crate::iceoryx2::OutputWriter>,
+            _input_mailboxes: Option<crate::iceoryx2::InputMailboxes>,
+        ) -> Result<()> {
+            Ok(())
+        }
+        fn iceoryx2_output_writer_inner(&self) -> Option<Arc<crate::iceoryx2::OutputWriterInner>> {
+            None
+        }
+        fn iceoryx2_input_mailboxes_inner(
+            &self,
+        ) -> Option<Arc<crate::iceoryx2::InputMailboxesInner>> {
+            None
+        }
+        fn iceoryx2_transport_lives_out_of_process(&self) -> bool {
+            true
+        }
+        fn record_out_of_process_link_wiring(
+            &mut self,
+            port_direction: crate::core::PortDirection,
+            link_wiring: serde_json::Value,
+        ) {
+            match port_direction {
+                crate::core::PortDirection::Output => {
+                    self.recorded_output_link_wiring.push(link_wiring)
+                }
+                crate::core::PortDirection::Input => {
+                    self.recorded_input_link_wiring.push(link_wiring)
+                }
+            }
+        }
+        fn apply_config_json(&mut self, _config_json: &serde_json::Value) -> Result<()> {
+            Ok(())
+        }
+        fn to_runtime_json(&self) -> serde_json::Value {
+            serde_json::Value::Null
+        }
+        fn config_json(&self) -> serde_json::Value {
+            serde_json::Value::Null
+        }
+        fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+            self
+        }
+    }
+
+    /// Attach `instance` to `proc_id` the way the spawn op does, so the wiring
+    /// path can reach it.
+    fn attach_processor_instance(
+        graph: &mut Graph,
+        proc_id: &str,
+        instance: ProcessorInstance,
+    ) -> Arc<Mutex<ProcessorInstance>> {
+        let instance = Arc::new(Mutex::new(instance));
+        graph
+            .traversal_mut()
+            .v(proc_id)
+            .first_mut()
+            .expect("the node must exist")
+            .insert(ProcessorInstanceComponent(instance.clone()));
+        instance
+    }
+
+    /// The wiring path reaches a host it cannot name — the whole point of the
+    /// seam. Mentally revert `wire_subprocess_source` / `wire_subprocess_dest`
+    /// to downcasting on the two engine-side host types and both vectors stay
+    /// empty, because this host is neither of them.
+    #[test]
+    fn link_wiring_reaches_a_host_the_engine_cannot_downcast_to() {
+        let mut graph = Graph::new();
+        let source_id = add_mock_output_only(&mut graph);
+        let dest_id = add_mock_input_only(&mut graph);
+        let source_instance = attach_processor_instance(
+            &mut graph,
+            &source_id,
+            ProcessorInstance::LegacyDyn(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+        );
+        let dest_instance = attach_processor_instance(
+            &mut graph,
+            &dest_id,
+            ProcessorInstance::LegacyDyn(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+        );
+        let link_id: LinkUniqueId = "L-seam-test".into();
+
+        wire_subprocess_source(
+            &mut graph,
+            &source_id.as_str().into(),
+            "out1",
+            "pabc/out1",
+            "pdef/notify",
+            &PortSchemaSpec::Any,
+            4096,
+            1 << 20,
+            8,
+            2,
+            1,
+            true,
+            &link_id,
+        )
+        .expect("recording source wiring must succeed");
+        wire_subprocess_dest(
+            &mut graph,
+            &dest_id.as_str().into(),
+            "in1",
+            "pabc/out1",
+            "pdef/notify",
+            crate::iceoryx2::ReadMode::SkipToLatest,
+            8,
+            2,
+            1,
+            true,
+            &link_id,
+        )
+        .expect("recording dest wiring must succeed");
+
+        let recorded_source_wiring = {
+            let mut guard = source_instance.lock();
+            let stub = guard
+                .as_any_mut()
+                .downcast_mut::<OutOfCrateHelperSpawnHostStub>()
+                .expect("the stub is what was attached");
+            std::mem::take(&mut stub.recorded_output_link_wiring)
+        };
+        assert_eq!(recorded_source_wiring.len(), 1);
+        assert_eq!(
+            recorded_source_wiring[0]["channel_service_name"],
+            serde_json::json!("pabc/out1"),
+        );
+
+        let recorded_dest_wiring = {
+            let mut guard = dest_instance.lock();
+            let stub = guard
+                .as_any_mut()
+                .downcast_mut::<OutOfCrateHelperSpawnHostStub>()
+                .expect("the stub is what was attached");
+            std::mem::take(&mut stub.recorded_input_link_wiring)
+        };
+        assert_eq!(recorded_dest_wiring.len(), 1);
+        assert_eq!(
+            recorded_dest_wiring[0]["read_mode"],
+            serde_json::json!("skip_to_latest"),
+        );
+    }
+
+    /// The same seam answers the "does the engine wire this one itself?"
+    /// question, so a helper-hosted processor is not handed engine-side
+    /// publishers it could never use.
+    #[test]
+    fn a_host_with_an_out_of_process_transport_is_recognised_as_a_subprocess() {
+        let mut graph = Graph::new();
+        let helper_hosted_id = add_mock_output_only(&mut graph);
+        attach_processor_instance(
+            &mut graph,
+            &helper_hosted_id,
+            ProcessorInstance::LegacyDyn(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+        );
+        assert!(is_subprocess_processor(
+            &mut graph,
+            &helper_hosted_id.as_str().into()
+        ));
+
+        let engine_hosted_id = add_mock_input_only(&mut graph);
+        assert!(!is_subprocess_processor(
+            &mut graph,
+            &engine_hosted_id.as_str().into()
+        ));
+    }
 
     /// Look up a registered mock processor's structured ident by its
     /// PascalCase short name.

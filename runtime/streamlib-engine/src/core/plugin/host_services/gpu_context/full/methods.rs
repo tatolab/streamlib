@@ -904,4 +904,3 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_ch
         1,
     )
 }
-

@@ -114,7 +114,10 @@ pub fn install(
     sink: &dyn BuildEventSink,
     options: &InstallOptions,
 ) -> std::result::Result<InstallReport, InstallError> {
-    let package_source = options.package_source.clone().or_else(PackageSource::from_env);
+    let package_source = options
+        .package_source
+        .clone()
+        .or_else(PackageSource::from_env);
     let resolver_options = ResolverOptions {
         cache_dir: options.resolver_cache_dir.clone(),
         package_source,
@@ -252,4 +255,3 @@ fn provenance_of(source: &streamlib_idents::ResolvedSource) -> PackageSourceProv
         | ResolvedSource::ByVersion { .. } => PackageSourceProvenance::ImmutableManagedExtract,
     }
 }
-

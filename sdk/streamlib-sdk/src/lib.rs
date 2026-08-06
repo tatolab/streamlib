@@ -84,6 +84,7 @@ pub mod sdk {
     pub use streamlib_engine::core::execution;
     pub use streamlib_engine::core::graph;
     pub use streamlib_engine::core::graph_snapshot;
+    pub use streamlib_engine::core::helper_process_transport;
     pub use streamlib_engine::core::json_schema;
     pub use streamlib_engine::core::media_clock;
     /// Plugin-loading host-services payload + cdylib install helper

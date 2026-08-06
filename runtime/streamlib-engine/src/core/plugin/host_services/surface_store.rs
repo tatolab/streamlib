@@ -1173,7 +1173,9 @@ mod surface_store_vtable_tier1_wire_format_tests {
 
         use crate::core::context::GpuContext;
         use crate::core::context::surface_store::SurfaceStoreInner;
-        use crate::core::rhi::{Texture, TextureDescriptor, TextureFormat, TextureUsages, VulkanLayout};
+        use crate::core::rhi::{
+            Texture, TextureDescriptor, TextureFormat, TextureUsages, VulkanLayout,
+        };
         use crate::core::runtime::Runner;
         use crate::host_rhi::HostTextureExt;
         use crate::vulkan::rhi::drm_modifier_probe::fourcc;

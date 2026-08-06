@@ -364,9 +364,9 @@ mod tests {
         let mut subscribers = Vec::with_capacity(max_subscribers);
         for i in 0..max_subscribers {
             subscribers.push(
-                service
-                    .create_subscriber()
-                    .unwrap_or_else(|e| panic!("subscriber {i} (destination or tap) must fit: {e:?}")),
+                service.create_subscriber().unwrap_or_else(|e| {
+                    panic!("subscriber {i} (destination or tap) must fit: {e:?}")
+                }),
             );
         }
         assert!(
@@ -397,7 +397,8 @@ mod tests {
             .open_or_create_service(&bug_name, subs, 4, true)
             .expect("create channel service at depth 4");
         assert!(
-            node.open_or_create_service(&bug_name, subs, 64, true).is_err(),
+            node.open_or_create_service(&bug_name, subs, 64, true)
+                .is_err(),
             "reopening the channel service with a deeper buffer must fail — \
              this is the DoesNotSupportRequestedMinBufferSize crash the \
              channel-depth sizing prevents",
@@ -499,7 +500,12 @@ mod tests {
 
         // Open with overflow disabled — back-pressure on.
         let service_for_main = node
-            .open_or_create_service(&service_name, 2, depth, /* enable_safe_overflow */ false)
+            .open_or_create_service(
+                &service_name,
+                2,
+                depth,
+                /* enable_safe_overflow */ false,
+            )
             .expect("open service");
         // A subscriber must exist before any send — without one, iceoryx2
         // drops samples on the floor at send time and the overflow flag
@@ -1023,7 +1029,11 @@ mod tests {
             .receive()
             .expect("receive")
             .expect("subscriber must transparently remap the grown segment and deliver");
-        assert_eq!(received.payload().len(), oversized, "full payload delivered");
+        assert_eq!(
+            received.payload().len(),
+            oversized,
+            "full payload delivered"
+        );
         assert_eq!(received.payload()[0], 0xAB);
         assert_eq!(received.payload()[oversized - 1], 0xCD);
     }
@@ -1050,8 +1060,8 @@ mod tests {
     #[test]
     fn disconnect_reconnect_cycle_reclaims_notifier_and_data_service() {
         use crate::iceoryx2::{
-            ChannelEgressConfig, ChannelTrustTier, InputMailboxesInner, OutputWriterInner, ReadMode,
-            TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
+            ChannelEgressConfig, ChannelTrustTier, InputMailboxesInner, OutputWriterInner,
+            ReadMode, TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
         };
         use streamlib_ipc_types::{RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, SchemaIdentWire};
 

@@ -15,11 +15,9 @@
 
 use std::path::PathBuf;
 
-use streamlib_idents::{PackageSourceClient, PackageSource};
+use streamlib_idents::{PackageSource, PackageSourceClient};
 
-use super::build_orchestrator::{
-    BuildPolicy, BuildRequest, BuildSource, PackageSourceProvenance,
-};
+use super::build_orchestrator::{BuildPolicy, BuildRequest, BuildSource, PackageSourceProvenance};
 use super::errors::AddModuleError;
 use super::package_archive::extract_package_archive_to_installed_slot;
 use super::processor_registration::host_target_triple;
@@ -552,13 +550,8 @@ fn source_for_dir(
 /// through the shared seam from the package ref and the active app-modules root
 /// — the write side of the write==read invariant a locked run reads back
 /// through the same seam.
-fn staging_slot_for_dir(
-    pkg_ref: &streamlib_idents::PackageRef,
-) -> PathBuf {
-    crate::core::streamlib_home::installed_package_slot_dir(
-        app_modules_root().as_deref(),
-        pkg_ref,
-    )
+fn staging_slot_for_dir(pkg_ref: &streamlib_idents::PackageRef) -> PathBuf {
+    crate::core::streamlib_home::installed_package_slot_dir(app_modules_root().as_deref(), pkg_ref)
 }
 
 /// Decide how to load an already-resolved package directory (an extracted
@@ -678,8 +671,7 @@ fn needs_polyglot_provisioning(dir: &std::path::Path) -> bool {
     use streamlib_processor_schema::ProcessorLanguage;
     // Python: filesystem oracle, aligned with `staged_package_has_python`.
     let has_python = dir.join("python").is_dir() || dir.join("pyproject.toml").is_file();
-    let python_unprovisioned =
-        has_python && !dir.join(".venv").join("bin").join("python").exists();
+    let python_unprovisioned = has_python && !dir.join(".venv").join("bin").join("python").exists();
     // Deno: manifest oracle, aligned with `staged_package_has_deno`.
     let declares_deno = match crate::core::config::ProjectConfig::load(dir) {
         Ok(c) => c
@@ -1114,8 +1106,7 @@ mod tests {
         let triple_dir = slot.join("lib").join(host_target_triple());
         std::fs::create_dir_all(&triple_dir).unwrap();
         std::fs::write(triple_dir.join("librp.so"), b"prebuilt").unwrap();
-        let resolved =
-            resolve_installed_cache_strategy(&pkg_ref(), Some(app_root.path())).unwrap();
+        let resolved = resolve_installed_cache_strategy(&pkg_ref(), Some(app_root.path())).unwrap();
         assert!(matches!(resolved, ResolvedSource::Ready(_)));
     }
 
@@ -1130,8 +1121,7 @@ mod tests {
             "rp",
             "package:\n  org: tatolab\n  name: rp\n  version: 0.1.0\n",
         );
-        let resolved =
-            resolve_installed_cache_strategy(&pkg_ref(), Some(app_root.path())).unwrap();
+        let resolved = resolve_installed_cache_strategy(&pkg_ref(), Some(app_root.path())).unwrap();
         assert!(matches!(resolved, ResolvedSource::Ready(_)));
     }
 

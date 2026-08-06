@@ -69,7 +69,8 @@ struct LiveSubmitLanguage {
     /// `streamlib` SDK dep (Python), a `deno.json` import map (TypeScript).
     /// Without these the orchestrator's provision tail has no project to
     /// resolve the SDK from and hard-fails.
-    dep_artifacts: fn(package_name: &str, version: streamlib_idents::SemVer) -> Vec<(String, String)>,
+    dep_artifacts:
+        fn(package_name: &str, version: streamlib_idents::SemVer) -> Vec<(String, String)>,
 }
 
 /// A submitted-source package staged to disk, ready to load through
@@ -179,7 +180,9 @@ impl Runner {
                 .filter(|v| target.version.matches(*v));
         let Some(loaded_version) = loaded_version else {
             self.remove_module(target.clone()).map_err(Error::from)?;
-            return self.register_processor_from_source(request.replacement).await;
+            return self
+                .register_processor_from_source(request.replacement)
+                .await;
         };
         let old_dir = session_source_staging_root()
             .join(target.name.as_str())
@@ -233,13 +236,13 @@ impl Runner {
                     },
                 );
                 match restore.await {
-                    Ok(_restored) => {
-                        Err(AddModuleError::ReplacementRegistrationFailedPriorRegistrationRestored {
+                    Ok(_restored) => Err(
+                        AddModuleError::ReplacementRegistrationFailedPriorRegistrationRestored {
                             target,
                             cause: cause.to_string(),
                         }
-                        .into())
-                    }
+                        .into(),
+                    ),
                     Err(restore_error) => {
                         tracing::error!(
                             target = %target,
@@ -248,10 +251,12 @@ impl Runner {
                             "replace_processor_from_source: replacement failed and \
                              restoring the prior registration also failed",
                         );
-                        Err(AddModuleError::ReplacementRegistrationFailedRestoreAlsoFailed {
-                            target,
-                        }
-                        .into())
+                        Err(
+                            AddModuleError::ReplacementRegistrationFailedRestoreAlsoFailed {
+                                target,
+                            }
+                            .into(),
+                        )
                     }
                 }
             }
@@ -349,12 +354,8 @@ fn live_submit_language(
         ProcessorLanguage::TypeScript => Ok(LiveSubmitLanguage {
             runtime_key: "deno",
             source_file_extension: "ts",
-            entrypoint_from_source_rel: |source_rel, type_name| {
-                format!("{source_rel}:{type_name}")
-            },
-            dep_artifacts: |_name, _version| {
-                vec![("deno.json".to_string(), session_deno_json())]
-            },
+            entrypoint_from_source_rel: |source_rel, type_name| format!("{source_rel}:{type_name}"),
+            dep_artifacts: |_name, _version| vec![("deno.json".to_string(), session_deno_json())],
         }),
         ProcessorLanguage::Rust => Err(AddModuleError::SourceLanguageUnsupportedForLiveSubmit {
             language: "rust".to_string(),
@@ -776,7 +777,9 @@ mod tests {
         let body = std::fs::read_to_string(&deno_json)
             .unwrap_or_else(|e| panic!("reading {}: {e}", deno_json.display()));
         let manifest: serde_json::Value = serde_json::from_str(&body).unwrap();
-        let manifest_version = manifest["version"].as_str().expect("deno.json has a version");
+        let manifest_version = manifest["version"]
+            .as_str()
+            .expect("deno.json has a version");
         assert_eq!(
             env!("STREAMLIB_DENO_SDK_VERSION"),
             manifest_version,
@@ -983,7 +986,10 @@ mod tests {
             _sink: &dyn BuildEventSink,
         ) -> std::result::Result<StagedArtifact, BuildError> {
             let BuildSource::PackageDir(dir) = &request.source else {
-                return Err(BuildError::UnsupportedSource(format!("{:?}", request.source)));
+                return Err(BuildError::UnsupportedSource(format!(
+                    "{:?}",
+                    request.source
+                )));
             };
             let manifest_path = dir.join(streamlib_idents::Manifest::FILE_NAME);
             let body = std::fs::read_to_string(&manifest_path).map_err(|e| BuildError::Other {
@@ -1038,8 +1044,11 @@ mod tests {
         let runtime = Runner::new().unwrap();
         let name = "fromsrc-no-orch";
 
-        let err = drive(&runtime, runtime.register_processor_from_source(python_named(name)))
-            .expect_err("no orchestrator must fail the build-requiring load");
+        let err = drive(
+            &runtime,
+            runtime.register_processor_from_source(python_named(name)),
+        )
+        .expect_err("no orchestrator must fail the build-requiring load");
         // Wrapped through `Error::from(AddModuleError)`.
         assert!(
             err.to_string().contains("BuildOrchestrator")
@@ -1172,7 +1181,11 @@ mod tests {
         assert_eq!(outputs.len(), 1, "spliced output port must be registered");
         // The v3 receipt reports the SAME committed ports, built engine-side
         // from the descriptors post-commit — no second graph round-trip needed.
-        assert_eq!(ported.processors.len(), 1, "receipt names the installed processor");
+        assert_eq!(
+            ported.processors.len(),
+            1,
+            "receipt names the installed processor"
+        );
         assert_eq!(ported.processors[0].name, "Widget");
         assert_eq!(
             ported.processors[0].inputs.len(),
@@ -1186,7 +1199,9 @@ mod tests {
             "receipt carries the committed output port"
         );
         assert_eq!(ported.processors[0].outputs[0].name, "out0");
-        runtime.remove_module(ported.module).expect("cleanup ported");
+        runtime
+            .remove_module(ported.module)
+            .expect("cleanup ported");
 
         // Regression twin: the placeholder manifest (no splice) → portless.
         let plain_runtime = Runner::new().unwrap();
@@ -1211,7 +1226,9 @@ mod tests {
             plain.processors[0].inputs.is_empty() && plain.processors[0].outputs.is_empty(),
             "the portless receipt must carry no ports"
         );
-        plain_runtime.remove_module(plain.module).expect("cleanup portless");
+        plain_runtime
+            .remove_module(plain.module)
+            .expect("cleanup portless");
     }
 
     #[test]

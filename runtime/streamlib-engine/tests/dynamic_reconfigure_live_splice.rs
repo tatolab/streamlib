@@ -258,8 +258,12 @@ fn live_add_and_remove_processor_on_a_started_runtime() {
         .expect("live remove_processor must succeed on a STARTED runtime");
 
     // The compiler must STOP + TEARDOWN the removed instance live.
-    let spliced_teardown =
-        wait_for_lines(&spliced_path, |l| l == "TEARDOWN", 1, Duration::from_secs(10));
+    let spliced_teardown = wait_for_lines(
+        &spliced_path,
+        |l| l == "TEARDOWN",
+        1,
+        Duration::from_secs(10),
+    );
     assert!(
         spliced_teardown >= 1,
         "live-removed processor must run TEARDOWN; the compiler did not destroy it \

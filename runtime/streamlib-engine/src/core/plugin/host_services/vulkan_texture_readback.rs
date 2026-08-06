@@ -79,7 +79,12 @@ unsafe extern "C" fn host_texture_readback_submit(
         "host_texture_readback_submit",
         || -> i32 {
             if readback_handle.is_null() {
-                write_err("submit: null readback handle", err_buf, err_buf_cap, err_len);
+                write_err(
+                    "submit: null readback handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
                 return 1;
             }
             if texture_handle.is_null() {
@@ -143,7 +148,12 @@ unsafe extern "C" fn host_texture_readback_try_read(
         "host_texture_readback_try_read",
         || -> i32 {
             if readback_handle.is_null() {
-                write_err("try_read: null readback handle", err_buf, err_buf_cap, err_len);
+                write_err(
+                    "try_read: null readback handle",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
                 return 1;
             }
             if out_ready.is_null() || out_bytes_ptr.is_null() || out_len.is_null() {
@@ -212,7 +222,12 @@ unsafe extern "C" fn host_texture_readback_wait_and_read(
                 return 1;
             }
             if out_bytes_ptr.is_null() || out_len.is_null() {
-                write_err("wait_and_read: null out pointer", err_buf, err_buf_cap, err_len);
+                write_err(
+                    "wait_and_read: null out pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
                 return 1;
             }
             let arc = unsafe { readback_arc(readback_handle) };
@@ -267,7 +282,12 @@ unsafe extern "C" fn host_texture_readback_try_read_copy(
                 return 1;
             }
             if out_ready.is_null() || out_len.is_null() {
-                write_err("try_read_copy: null out pointer", err_buf, err_buf_cap, err_len);
+                write_err(
+                    "try_read_copy: null out pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
                 return 1;
             }
             // Null `out_buf` would otherwise pass the size gate below (when
@@ -356,7 +376,12 @@ unsafe extern "C" fn host_texture_readback_wait_and_copy(
                 return 1;
             }
             if out_len.is_null() {
-                write_err("wait_and_copy: null out pointer", err_buf, err_buf_cap, err_len);
+                write_err(
+                    "wait_and_copy: null out pointer",
+                    err_buf,
+                    err_buf_cap,
+                    err_len,
+                );
                 return 1;
             }
             // Null `out_buf` would otherwise pass the size gate below (when
@@ -1054,48 +1079,53 @@ mod tests {
             };
             let texture = make_filled_texture(&gpu, width, height, pattern);
 
-            crate::core::context::GpuContextLimitedAccess::new(gpu.clone()).escalate(|full| -> Result<()> {
-                let readback = full
-                    .create_texture_readback("rt-abi", width, height, TextureFormat::Bgra8Unorm)
-                    .expect("create_texture_readback");
-                assert_eq!(readback.width(), width);
-                assert_eq!(readback.height(), height);
-                assert_eq!(readback.format(), TextureFormat::Bgra8Unorm);
-                assert_eq!(readback.staging_size(), (width * height * 4) as u64);
-                assert!(readback.handle_id() > 0);
+            crate::core::context::GpuContextLimitedAccess::new(gpu.clone())
+                .escalate(|full| -> Result<()> {
+                    let readback = full
+                        .create_texture_readback("rt-abi", width, height, TextureFormat::Bgra8Unorm)
+                        .expect("create_texture_readback");
+                    assert_eq!(readback.width(), width);
+                    assert_eq!(readback.height(), height);
+                    assert_eq!(readback.format(), TextureFormat::Bgra8Unorm);
+                    assert_eq!(readback.staging_size(), (width * height * 4) as u64);
+                    assert!(readback.handle_id() > 0);
 
-                // Borrow path. A successful submit is also the submit-side
-                // make-borrow cached-field regression: if `make_texture_borrow`
-                // returned zeroed width/height/format, submit would trip
-                // DescriptorMismatch and this would fail.
-                let ticket = readback
-                    .submit(&texture, TextureSourceLayout::ShaderReadOnly)
-                    .expect("submit");
-                let bytes = readback.wait_and_read(ticket, u64::MAX).expect("wait");
-                for y in 0..height {
-                    for x in 0..width {
-                        let off = ((y * width + x) * 4) as usize;
-                        assert_eq!(&bytes[off..off + 4], &pattern(x, y), "mismatch at ({x},{y})");
+                    // Borrow path. A successful submit is also the submit-side
+                    // make-borrow cached-field regression: if `make_texture_borrow`
+                    // returned zeroed width/height/format, submit would trip
+                    // DescriptorMismatch and this would fail.
+                    let ticket = readback
+                        .submit(&texture, TextureSourceLayout::ShaderReadOnly)
+                        .expect("submit");
+                    let bytes = readback.wait_and_read(ticket, u64::MAX).expect("wait");
+                    for y in 0..height {
+                        for x in 0..width {
+                            let off = ((y * width + x) * 4) as usize;
+                            assert_eq!(
+                                &bytes[off..off + 4],
+                                &pattern(x, y),
+                                "mismatch at ({x},{y})"
+                            );
+                        }
                     }
-                }
 
-                // Copy path (must outlive the borrow window).
-                let ticket2 = readback
-                    .submit(&texture, TextureSourceLayout::ShaderReadOnly)
-                    .expect("submit 2");
-                let owned = readback
-                    .wait_and_copy(ticket2, u64::MAX)
-                    .expect("wait_and_copy");
-                assert_eq!(owned.len(), (width * height * 4) as usize);
-                for y in 0..height {
-                    for x in 0..width {
-                        let off = ((y * width + x) * 4) as usize;
-                        assert_eq!(&owned[off..off + 4], &pattern(x, y));
+                    // Copy path (must outlive the borrow window).
+                    let ticket2 = readback
+                        .submit(&texture, TextureSourceLayout::ShaderReadOnly)
+                        .expect("submit 2");
+                    let owned = readback
+                        .wait_and_copy(ticket2, u64::MAX)
+                        .expect("wait_and_copy");
+                    assert_eq!(owned.len(), (width * height * 4) as usize);
+                    for y in 0..height {
+                        for x in 0..width {
+                            let off = ((y * width + x) * 4) as usize;
+                            assert_eq!(&owned[off..off + 4], &pattern(x, y));
+                        }
                     }
-                }
-                Ok(())
-            })
-            .expect("escalate");
+                    Ok(())
+                })
+                .expect("escalate");
         }
 
         #[cfg_attr(
@@ -1108,22 +1138,23 @@ mod tests {
                 return;
             };
             let texture = make_filled_texture(&gpu, 16, 16, |_, _| [1, 2, 3, 4]);
-            crate::core::context::GpuContextLimitedAccess::new(gpu.clone()).escalate(|full| -> Result<()> {
-                let readback = full
-                    .create_texture_readback("rt-inflight", 16, 16, TextureFormat::Bgra8Unorm)
-                    .expect("create");
-                let ticket = readback
-                    .submit(&texture, TextureSourceLayout::ShaderReadOnly)
-                    .expect("first");
-                let err = readback
-                    .submit(&texture, TextureSourceLayout::ShaderReadOnly)
-                    .err()
-                    .expect("expected in-flight");
-                assert!(err.to_string().contains("in flight"), "got: {err}");
-                let _ = readback.wait_and_read(ticket, u64::MAX).expect("drain");
-                Ok(())
-            })
-            .expect("escalate");
+            crate::core::context::GpuContextLimitedAccess::new(gpu.clone())
+                .escalate(|full| -> Result<()> {
+                    let readback = full
+                        .create_texture_readback("rt-inflight", 16, 16, TextureFormat::Bgra8Unorm)
+                        .expect("create");
+                    let ticket = readback
+                        .submit(&texture, TextureSourceLayout::ShaderReadOnly)
+                        .expect("first");
+                    let err = readback
+                        .submit(&texture, TextureSourceLayout::ShaderReadOnly)
+                        .err()
+                        .expect("expected in-flight");
+                    assert!(err.to_string().contains("in flight"), "got: {err}");
+                    let _ = readback.wait_and_read(ticket, u64::MAX).expect("drain");
+                    Ok(())
+                })
+                .expect("escalate");
         }
 
         #[cfg_attr(
@@ -1136,22 +1167,23 @@ mod tests {
                 return;
             };
             let texture = make_filled_texture(&gpu, 16, 16, |_, _| [0, 0, 0, 0xFF]);
-            crate::core::context::GpuContextLimitedAccess::new(gpu.clone()).escalate(|full| -> Result<()> {
-                let rb1 = full
-                    .create_texture_readback("rt-foreign-1", 16, 16, TextureFormat::Bgra8Unorm)
-                    .expect("rb1");
-                let rb2 = full
-                    .create_texture_readback("rt-foreign-2", 16, 16, TextureFormat::Bgra8Unorm)
-                    .expect("rb2");
-                let ticket = rb1
-                    .submit(&texture, TextureSourceLayout::ShaderReadOnly)
-                    .expect("submit");
-                let err = rb2.try_read(ticket).err().expect("expected foreign");
-                assert!(err.to_string().contains("foreign handle"), "got: {err}");
-                let _ = rb1.wait_and_read(ticket, u64::MAX).expect("drain");
-                Ok(())
-            })
-            .expect("escalate");
+            crate::core::context::GpuContextLimitedAccess::new(gpu.clone())
+                .escalate(|full| -> Result<()> {
+                    let rb1 = full
+                        .create_texture_readback("rt-foreign-1", 16, 16, TextureFormat::Bgra8Unorm)
+                        .expect("rb1");
+                    let rb2 = full
+                        .create_texture_readback("rt-foreign-2", 16, 16, TextureFormat::Bgra8Unorm)
+                        .expect("rb2");
+                    let ticket = rb1
+                        .submit(&texture, TextureSourceLayout::ShaderReadOnly)
+                        .expect("submit");
+                    let err = rb2.try_read(ticket).err().expect("expected foreign");
+                    assert!(err.to_string().contains("foreign handle"), "got: {err}");
+                    let _ = rb1.wait_and_read(ticket, u64::MAX).expect("drain");
+                    Ok(())
+                })
+                .expect("escalate");
         }
 
         #[cfg_attr(
@@ -1164,29 +1196,30 @@ mod tests {
                 return;
             };
             let texture = make_filled_texture(&gpu, 16, 16, |_, _| [9, 8, 7, 6]);
-            crate::core::context::GpuContextLimitedAccess::new(gpu.clone()).escalate(|full| -> Result<()> {
-                let readback = full
-                    .create_texture_readback("rt-stale", 16, 16, TextureFormat::Bgra8Unorm)
-                    .expect("rb");
-                let ticket = readback
-                    .submit(&texture, TextureSourceLayout::ShaderReadOnly)
-                    .expect("submit");
-                // A ticket with the right handle id but a wrong counter is
-                // stale (the handle is single-in-flight). Fields are
-                // crate-internal — constructible here.
-                let stale = ReadbackTicket {
-                    handle_id: ticket.handle_id,
-                    counter: 999_999,
-                };
-                let err = readback.try_read(stale).err().expect("expected stale");
-                assert!(
-                    err.to_string().contains("does not match in-flight"),
-                    "got: {err}"
-                );
-                let _ = readback.wait_and_read(ticket, u64::MAX).expect("drain");
-                Ok(())
-            })
-            .expect("escalate");
+            crate::core::context::GpuContextLimitedAccess::new(gpu.clone())
+                .escalate(|full| -> Result<()> {
+                    let readback = full
+                        .create_texture_readback("rt-stale", 16, 16, TextureFormat::Bgra8Unorm)
+                        .expect("rb");
+                    let ticket = readback
+                        .submit(&texture, TextureSourceLayout::ShaderReadOnly)
+                        .expect("submit");
+                    // A ticket with the right handle id but a wrong counter is
+                    // stale (the handle is single-in-flight). Fields are
+                    // crate-internal — constructible here.
+                    let stale = ReadbackTicket {
+                        handle_id: ticket.handle_id,
+                        counter: 999_999,
+                    };
+                    let err = readback.try_read(stale).err().expect("expected stale");
+                    assert!(
+                        err.to_string().contains("does not match in-flight"),
+                        "got: {err}"
+                    );
+                    let _ = readback.wait_and_read(ticket, u64::MAX).expect("drain");
+                    Ok(())
+                })
+                .expect("escalate");
         }
     }
 }

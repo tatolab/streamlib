@@ -265,9 +265,9 @@ impl ResolutionMemo {
                     "single-version gate: already in flight on a concurrent \
                      load — skipping locally; outcome verified at end of walk",
                 );
-                Ok(SingleVersionGateOutcome::SkipInFlightWinner(
-                    Arc::clone(completion_signal),
-                ))
+                Ok(SingleVersionGateOutcome::SkipInFlightWinner(Arc::clone(
+                    completion_signal,
+                )))
             }
         }
     }

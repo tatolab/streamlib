@@ -286,8 +286,7 @@ fn run_forwarder(
                     // subscriber stays drained and the source is never
                     // back-pressured by this read-only tap.
                     Err(TrySendError::Full(_dropped_bag)) => {
-                        let total =
-                            signals.dropped_bags.fetch_add(1, Ordering::AcqRel) + 1;
+                        let total = signals.dropped_bags.fetch_add(1, Ordering::AcqRel) + 1;
                         if total == 1 || total % TAP_DROP_WARN_INTERVAL == 0 {
                             tracing::warn!(
                                 channel = %channel,
@@ -393,12 +392,22 @@ mod tests {
             .collect();
 
         // Tap #1 fills the reserved slot.
-        let mut tap = start_channel_tap(node.clone(), channel.clone(), realtime_sizing(max_subscribers), None)
-            .expect("first tap attaches to the reserved slot");
+        let mut tap = start_channel_tap(
+            node.clone(),
+            channel.clone(),
+            realtime_sizing(max_subscribers),
+            None,
+        )
+        .expect("first tap attaches to the reserved slot");
 
         // Tap #2 must be rejected — the single reserved slot is taken.
-        let err = start_channel_tap(node.clone(), channel.clone(), realtime_sizing(max_subscribers), None)
-            .expect_err("a second concurrent tap must be rejected");
+        let err = start_channel_tap(
+            node.clone(),
+            channel.clone(),
+            realtime_sizing(max_subscribers),
+            None,
+        )
+        .expect_err("a second concurrent tap must be rejected");
         assert!(
             matches!(err, Error::TapSlotOccupied(_)),
             "second concurrent tap must fail with TapSlotOccupied; got {err:?}",
@@ -435,8 +444,13 @@ mod tests {
         drop(tap);
 
         // A fresh tap now attaches only because the slot was freed on detach.
-        let tap_again = start_channel_tap(node.clone(), channel.clone(), realtime_sizing(max_subscribers), None)
-            .expect("reserved slot must be free again after the first tap detached");
+        let tap_again = start_channel_tap(
+            node.clone(),
+            channel.clone(),
+            realtime_sizing(max_subscribers),
+            None,
+        )
+        .expect("reserved slot must be free again after the first tap detached");
         drop(tap_again);
     }
 
@@ -451,8 +465,13 @@ mod tests {
         let service = open_channel(&node, &channel, max_subscribers);
         let publisher = service.create_publisher(64).expect("channel publisher");
 
-        let mut tap = start_channel_tap(node.clone(), channel.clone(), realtime_sizing(max_subscribers), Some(2))
-            .expect("bounded tap attaches");
+        let mut tap = start_channel_tap(
+            node.clone(),
+            channel.clone(),
+            realtime_sizing(max_subscribers),
+            Some(2),
+        )
+        .expect("bounded tap attaches");
 
         for marker in 0u8..5 {
             publish_marker(&publisher, marker);
@@ -499,8 +518,13 @@ mod tests {
         let service = open_channel(&node, &channel, max_subscribers);
         let publisher = service.create_publisher(64).expect("channel publisher");
 
-        let mut tap = start_channel_tap(node.clone(), channel.clone(), realtime_sizing(max_subscribers), Some(0))
-            .expect("zero-count tap attaches");
+        let mut tap = start_channel_tap(
+            node.clone(),
+            channel.clone(),
+            realtime_sizing(max_subscribers),
+            Some(0),
+        )
+        .expect("zero-count tap attaches");
 
         for marker in 0u8..5 {
             publish_marker(&publisher, marker);
@@ -553,8 +577,8 @@ mod tests {
         };
         // Never drain this tap: the bounded forward channel (capacity RING_DEPTH)
         // fills and stays full, so every further bag must be dropped.
-        let tap = start_channel_tap(node.clone(), channel.clone(), sizing, None)
-            .expect("tap attaches");
+        let tap =
+            start_channel_tap(node.clone(), channel.clone(), sizing, None).expect("tap attaches");
 
         // Drive far more than the mpsc capacity through the channel until the
         // forwarder reports drops — proving it kept receiving past a full

@@ -549,8 +549,8 @@ mod tests {
             TypeName::new("Nothing").unwrap(),
             SemVer::new(1, 0, 0),
         ));
-        let err =
-            expected_payload_bytes_for_port_spec(&spec).expect_err("registry miss must surface as Err");
+        let err = expected_payload_bytes_for_port_spec(&spec)
+            .expect_err("registry miss must surface as Err");
         let msg = err.to_string();
         assert!(
             msg.contains("@tatolab/does-not-exist-payload/Nothing"),
@@ -645,8 +645,7 @@ mod tests {
             TypeName::new("Nothing").unwrap(),
             SemVer::new(1, 0, 0),
         ));
-        let err =
-            flow_class_for_port_spec(&spec).expect_err("registry miss must surface as Err");
+        let err = flow_class_for_port_spec(&spec).expect_err("registry miss must surface as Err");
         let msg = err.to_string();
         assert!(
             msg.contains("@tatolab/does-not-exist-flowclass/Nothing"),
@@ -806,15 +805,15 @@ mod tests {
         let err = delivery_profile_for_input_port(&processor_type, "video_in")
             .expect_err("unknown delivery_profile must error");
         let msg = err.to_string();
-        assert!(msg.contains("latest"), "error must list valid values: {msg}");
+        assert!(
+            msg.contains("latest"),
+            "error must list valid values: {msg}"
+        );
         assert!(
             msg.contains("every_sample"),
             "error must list valid values: {msg}"
         );
-        assert!(matches!(
-            err,
-            crate::core::error::Error::Configuration(_)
-        ));
+        assert!(matches!(err, crate::core::error::Error::Configuration(_)));
     }
 
     #[test]

@@ -83,7 +83,9 @@ impl HostVideoEncoderSession {
 pub(in crate::core::plugin::host_services) fn encoder_config_from_repr(
     repr: &VideoEncoderSessionDescriptorRepr,
 ) -> Result<SimpleEncoderConfig, String> {
-    use super::shared::video_codec_repr::{codec_from_repr, h273_color_vui_from_repr, preset_from_repr};
+    use super::shared::video_codec_repr::{
+        codec_from_repr, h273_color_vui_from_repr, preset_from_repr,
+    };
 
     let codec = codec_from_repr(repr.codec)?;
     let preset = preset_from_repr(repr.preset)?;
@@ -105,7 +107,8 @@ pub(in crate::core::plugin::host_services) fn encoder_config_from_repr(
         bitrate_bps: (repr.has_bitrate != 0).then_some(repr.bitrate_bps),
         streaming: repr.streaming != 0,
         idr_interval_secs: repr.idr_interval_secs,
-        prepend_header_to_idr: (repr.prepend_header_present != 0).then_some(repr.prepend_header != 0),
+        prepend_header_to_idr: (repr.prepend_header_present != 0)
+            .then_some(repr.prepend_header != 0),
         effort_level: (repr.has_effort_level != 0).then_some(repr.effort_level),
         color_vui,
     })
@@ -163,7 +166,12 @@ unsafe extern "C" fn host_video_encoder_header(
             #[cfg(target_os = "linux")]
             {
                 if out_len.is_null() {
-                    write_err("header: null out_len pointer", err_buf, err_buf_cap, err_len);
+                    write_err(
+                        "header: null out_len pointer",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
                     return 1;
                 }
                 // SAFETY: caller-owned session handle; single-owner.
@@ -181,7 +189,12 @@ unsafe extern "C" fn host_video_encoder_header(
                 }
                 if required > 0 {
                     if out_buf.is_null() {
-                        write_err("header: null out_buf pointer", err_buf, err_buf_cap, err_len);
+                        write_err(
+                            "header: null out_buf pointer",
+                            err_buf,
+                            err_buf_cap,
+                            err_len,
+                        );
                         return 1;
                     }
                     // SAFETY: out_cap >= required > 0 and out_buf non-null.
@@ -218,7 +231,12 @@ unsafe extern "C" fn host_video_encoder_force_idr(
             {
                 // SAFETY: caller-owned session handle; single-owner.
                 let Some(session) = (unsafe { session_mut(session) }) else {
-                    write_err("force_idr: null session handle", err_buf, err_buf_cap, err_len);
+                    write_err(
+                        "force_idr: null session handle",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
                     return 1;
                 };
                 session.encoder.force_idr();
@@ -301,7 +319,14 @@ unsafe extern "C" fn host_video_encoder_submit_frame_nv12(
             }
             #[cfg(not(target_os = "linux"))]
             {
-                let _ = (session, nv12_ptr, nv12_len, has_timestamp, timestamp_ns, out_packet_count);
+                let _ = (
+                    session,
+                    nv12_ptr,
+                    nv12_len,
+                    has_timestamp,
+                    timestamp_ns,
+                    out_packet_count,
+                );
                 write_err(
                     "submit_frame_nv12: not available on this platform",
                     err_buf,
@@ -355,7 +380,8 @@ unsafe extern "C" fn host_video_encoder_submit_texture(
                 // input layout with a typed error rather than silently
                 // encoding from a wrong layout (transitioning from an
                 // arbitrary layout is a follow-up on the encode path).
-                if input_layout != streamlib_consumer_rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL.0 {
+                if input_layout != streamlib_consumer_rhi::VulkanLayout::SHADER_READ_ONLY_OPTIMAL.0
+                {
                     write_err(
                         &format!(
                             "submit_texture: input_layout {input_layout} unsupported \
@@ -497,15 +523,18 @@ unsafe extern "C" fn host_video_encoder_drain_packet(
                 }
                 // SAFETY: caller-owned session handle; single-owner.
                 let Some(session) = (unsafe { session_mut(session) }) else {
-                    write_err("drain_packet: null session handle", err_buf, err_buf_cap, err_len);
+                    write_err(
+                        "drain_packet: null session handle",
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
                     return 1;
                 };
                 let staged = session.staged_packets.len();
                 let Some(packet) = session.staged_packets.get(index as usize) else {
                     write_err(
-                        &format!(
-                            "drain_packet: index {index} out of range (staged {staged})"
-                        ),
+                        &format!("drain_packet: index {index} out of range (staged {staged})"),
                         err_buf,
                         err_buf_cap,
                         err_len,
@@ -554,7 +583,14 @@ unsafe extern "C" fn host_video_encoder_drain_packet(
             }
             #[cfg(not(target_os = "linux"))]
             {
-                let _ = (session, index, out_meta, out_data_buf, out_data_cap, out_data_len);
+                let _ = (
+                    session,
+                    index,
+                    out_meta,
+                    out_data_buf,
+                    out_data_cap,
+                    out_data_len,
+                );
                 write_err(
                     "drain_packet: not available on this platform",
                     err_buf,
@@ -1198,7 +1234,11 @@ mod encoder_session_gpu_gated_tests {
         };
         let texture = crate::core::rhi::Texture::from_vulkan(host_texture);
         let borrow = super::super::shared::borrow::make_texture_borrow(texture.handle);
-        assert_eq!(borrow.width(), 320, "borrow width must mirror the inner, not 0");
+        assert_eq!(
+            borrow.width(),
+            320,
+            "borrow width must mirror the inner, not 0"
+        );
         assert_eq!(
             borrow.height(),
             240,

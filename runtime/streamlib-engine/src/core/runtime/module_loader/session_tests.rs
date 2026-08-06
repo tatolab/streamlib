@@ -222,7 +222,10 @@ fn add_local_refuses_a_duplicate_live_session_name() {
         .add_local_blocking::<SessionLocalBeta::Processor>(serde_json::Value::Null)
         .expect_err("a duplicate live session name must be refused");
     assert!(
-        matches!(err, super::errors::AddModuleError::DuplicateSessionProcessorName { .. }),
+        matches!(
+            err,
+            super::errors::AddModuleError::DuplicateSessionProcessorName { .. }
+        ),
         "expected DuplicateSessionProcessorName, got {err:?}"
     );
 
@@ -287,14 +290,18 @@ fn add_local_shadow_keeps_both_installed_and_session_addressable() {
         SemVer::new(1, 0, 0),
     );
     PROCESSOR_REGISTRY
-        .register_descriptor_only(ProcessorDescriptor::new(installed.clone(), "installed widget"))
+        .register_descriptor_only(ProcessorDescriptor::new(
+            installed.clone(),
+            "installed widget",
+        ))
         .expect("installed Widget registers");
 
     let loaded = runtime
         .add_local_blocking::<SessionShadowWidget::Processor>(serde_json::Value::Null)
         .expect("session Widget registers despite the short-name shadow");
 
-    let session_widget = session_ident_for(&loaded.ident, "Widget").expect("session Widget resolves");
+    let session_widget =
+        session_ident_for(&loaded.ident, "Widget").expect("session Widget resolves");
     assert_ne!(session_widget, installed);
     assert!(
         PROCESSOR_REGISTRY.descriptor(&installed).is_some(),
@@ -322,10 +329,15 @@ fn add_local_shadow_keeps_both_installed_and_session_addressable() {
 fn add_local_rejects_a_config_that_does_not_match_the_type() {
     let runtime = Runner::new().unwrap();
     let err = runtime
-        .add_local_blocking::<SessionConfigured::Processor>(serde_json::json!({ "gain": "not-a-number" }))
+        .add_local_blocking::<SessionConfigured::Processor>(
+            serde_json::json!({ "gain": "not-a-number" }),
+        )
         .expect_err("a config that doesn't fit P::Config must be refused");
     assert!(
-        matches!(err, super::errors::AddModuleError::SessionProcessorConfigInvalid { .. }),
+        matches!(
+            err,
+            super::errors::AddModuleError::SessionProcessorConfigInvalid { .. }
+        ),
         "expected SessionProcessorConfigInvalid, got {err:?}"
     );
 

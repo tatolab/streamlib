@@ -285,7 +285,14 @@ unsafe extern "C" fn host_video_decoder_drain_frame(
             }
             #[cfg(not(target_os = "linux"))]
             {
-                let _ = (session, index, out_meta, out_data_buf, out_data_cap, out_data_len);
+                let _ = (
+                    session,
+                    index,
+                    out_meta,
+                    out_data_buf,
+                    out_data_cap,
+                    out_data_len,
+                );
                 write_err(
                     "drain_frame: not available on this platform",
                     err_buf,

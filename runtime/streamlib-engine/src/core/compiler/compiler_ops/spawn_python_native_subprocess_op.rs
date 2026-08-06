@@ -486,6 +486,21 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
         None
     }
 
+    fn iceoryx2_transport_lives_out_of_process(&self) -> bool {
+        true
+    }
+
+    fn record_out_of_process_link_wiring(
+        &mut self,
+        port_direction: crate::core::PortDirection,
+        link_wiring: serde_json::Value,
+    ) {
+        match port_direction {
+            crate::core::PortDirection::Output => self.output_port_wiring.push(link_wiring),
+            crate::core::PortDirection::Input => self.input_port_wiring.push(link_wiring),
+        }
+    }
+
     fn apply_config_json(&mut self, _config_json: &serde_json::Value) -> Result<()> {
         Ok(())
     }

@@ -66,6 +66,30 @@ pub trait DynGeneratedProcessor: Send + 'static {
         &self,
     ) -> Option<std::sync::Arc<crate::iceoryx2::InputMailboxesInner>>;
 
+    /// Whether this processor's iceoryx2 ports live outside the engine's
+    /// address space.
+    ///
+    /// The engine cannot install a publisher or a subscriber into another
+    /// process, so for these it hands over service names and channel
+    /// parameters through [`Self::record_out_of_process_link_wiring`] and the
+    /// processor opens its own ports on the far side.
+    fn iceoryx2_transport_lives_out_of_process(&self) -> bool {
+        false
+    }
+
+    /// Record one link's wiring so a processor whose transport lives out of
+    /// process can open that port itself.
+    ///
+    /// One call per link, in the direction the port faces. Fan-out sends one
+    /// entry per link out of the same port; the far side installs its single
+    /// publisher once and appends a notifier per entry.
+    fn record_out_of_process_link_wiring(
+        &mut self,
+        _port_direction: crate::core::PortDirection,
+        _link_wiring: serde_json::Value,
+    ) {
+    }
+
     /// Apply a JSON config update at runtime.
     fn apply_config_json(&mut self, config_json: &serde_json::Value) -> crate::core::Result<()>;
 

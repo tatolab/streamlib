@@ -170,10 +170,7 @@ impl ModuleLoadRegistrationStaging {
     ) -> std::result::Result<(), super::errors::AddModuleError> {
         let processors = self.processors.lock();
         for (index, staged) in processors.iter().enumerate() {
-            if !matches!(
-                staged.kind,
-                StagedProcessorRegistrationKind::Dynamic { .. }
-            ) {
+            if !matches!(staged.kind, StagedProcessorRegistrationKind::Dynamic { .. }) {
                 continue;
             }
             let ident = &staged.descriptor.name;
@@ -186,10 +183,12 @@ impl ModuleLoadRegistrationStaging {
                 .take(index)
                 .any(|earlier| earlier.descriptor.name == *ident)
             {
-                return Err(super::errors::AddModuleError::DuplicateProcessorTypeInModule {
-                    package: staged.owner_package.clone(),
-                    processor_type: ident.clone(),
-                });
+                return Err(
+                    super::errors::AddModuleError::DuplicateProcessorTypeInModule {
+                        package: staged.owner_package.clone(),
+                        processor_type: ident.clone(),
+                    },
+                );
             }
             // (b) Already globally registered by non-module-load code. A
             // staged ident is never globally visible mid-walk (staging is
@@ -197,10 +196,12 @@ impl ModuleLoadRegistrationStaging {
             // package's own already-committed idents, so a hit here is a
             // genuine external collision `register_dynamic` would reject.
             if crate::core::processors::PROCESSOR_REGISTRY.is_registered(ident) {
-                return Err(super::errors::AddModuleError::ProcessorTypeAlreadyRegistered {
-                    package: staged.owner_package.clone(),
-                    processor_type: ident.clone(),
-                });
+                return Err(
+                    super::errors::AddModuleError::ProcessorTypeAlreadyRegistered {
+                        package: staged.owner_package.clone(),
+                        processor_type: ident.clone(),
+                    },
+                );
             }
         }
         Ok(())
@@ -548,9 +549,11 @@ pub(super) fn commit_session_processor_registration(
 
     // Live-name collision: an unremoved `@session/<name>` registration.
     if ledger::with_loaded_module_registration_record(&package_ref, |_| ()).is_some() {
-        return Err(super::errors::AddModuleError::DuplicateSessionProcessorName {
-            module: module.clone(),
-        });
+        return Err(
+            super::errors::AddModuleError::DuplicateSessionProcessorName {
+                module: module.clone(),
+            },
+        );
     }
 
     // Short-type-name shadow of an installed processor: warn, keep both.

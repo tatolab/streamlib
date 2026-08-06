@@ -684,10 +684,7 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// token to pass and cannot mint an in-process FullAccess context. The token
     /// is consumed (not stored): it proves authorization at
     /// the minting seam and carries no runtime state.
-    pub(crate) fn new(
-        base: &'a RuntimeContext,
-        _grant: super::isolation::FullAccessGrant,
-    ) -> Self {
+    pub(crate) fn new(base: &'a RuntimeContext, _grant: super::isolation::FullAccessGrant) -> Self {
         Self {
             handle: base as *const RuntimeContext as *const c_void,
             vtable: crate::core::plugin::host_services::host_runtime_context_vtable(),

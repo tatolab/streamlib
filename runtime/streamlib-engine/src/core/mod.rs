@@ -70,3 +70,15 @@ pub use config::ProjectConfig;
 pub use streamlib_home::{
     get_streamlib_data_dir, get_streamlib_home, get_uv_cache_dir, installed_package_slot_dir,
 };
+
+/// The framed-IPC transport a helper process is driven over.
+///
+/// Public because the spawn host that owns a Python helper lives in the wheel,
+/// outside this crate; the transport itself is language-agnostic and is shared
+/// with the engine's own subprocess hosts.
+pub mod helper_process_transport {
+    pub use super::compiler::compiler_ops::subprocess_bridge::{
+        EscalateTransport, PROTOCOL_VERSION_ENV, STREAMLIB_SUBPROCESS_PROTOCOL_VERSION,
+        SubprocessBridge, spawn_fd_line_reader, validate_subprocess_protocol,
+    };
+}
