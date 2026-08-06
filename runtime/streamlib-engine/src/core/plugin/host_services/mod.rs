@@ -1330,9 +1330,7 @@ pub mod runtime_facing {
 mod runtime_shutdown_control_topic_tests {
     use super::host_pubsub_publish;
     use crate::core::pubsub::{Event, EventListener, PUBSUB, RuntimeEvent, topics};
-    use crate::core::runtime::{
-        is_runtime_shutdown_requested, take_runtime_shutdown_request_latch,
-    };
+    use crate::core::runtime::{is_runtime_shutdown_requested, take_runtime_shutdown_request_latch};
     use crate::iceoryx2::Iceoryx2Node;
     use parking_lot::Mutex;
     use serial_test::serial;

@@ -169,21 +169,16 @@ impl RuntimeOpsShim {
                 return Box::pin(async move { err });
             }
         };
-        Box::pin(self.submit(move |handle, vtable, completion, user_data| {
-            dispatch(
-                vtable,
-                handle,
-                bytes.as_ptr(),
-                bytes.len(),
-                completion,
-                user_data,
-            );
-            // `bytes` is moved into the closure and dropped at end-of-call;
-            // the host copies the buffer synchronously before its first
-            // await, per the vtable "valid for the duration of the call"
-            // contract.
-            drop(bytes);
-        }))
+        Box::pin(
+            self.submit(move |handle, vtable, completion, user_data| {
+                dispatch(vtable, handle, bytes.as_ptr(), bytes.len(), completion, user_data);
+                // `bytes` is moved into the closure and dropped at end-of-call;
+                // the host copies the buffer synchronously before its first
+                // await, per the vtable "valid for the duration of the call"
+                // contract.
+                drop(bytes);
+            }),
+        )
     }
 }
 

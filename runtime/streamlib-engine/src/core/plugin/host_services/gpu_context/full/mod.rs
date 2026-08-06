@@ -49,11 +49,12 @@ pub(in crate::core::plugin::host_services) use methods::{
 };
 pub(in crate::core::plugin::host_services) use render_target::host_gpu_full_acquire_render_target_dma_buf_image;
 pub(in crate::core::plugin::host_services) use reserved_m32::{
-    host_gpu_full_copy_texture_to_storage_buffer_and_signal, host_gpu_full_create_decoder_session,
-    host_gpu_full_create_encoder_session, host_gpu_full_create_exportable_timeline_semaphore,
-    host_gpu_full_create_opaque_fd_export_buffer, host_gpu_full_create_present_target,
-    host_gpu_full_drop_decoder_session, host_gpu_full_drop_encoder_session,
-    host_gpu_full_drop_present_target, host_gpu_full_export_storage_buffer_opaque_fd,
+    host_gpu_full_copy_texture_to_storage_buffer_and_signal,
+    host_gpu_full_create_decoder_session, host_gpu_full_create_encoder_session,
+    host_gpu_full_create_exportable_timeline_semaphore, host_gpu_full_create_opaque_fd_export_buffer,
+    host_gpu_full_create_present_target, host_gpu_full_drop_decoder_session,
+    host_gpu_full_drop_encoder_session, host_gpu_full_drop_present_target,
+    host_gpu_full_export_storage_buffer_opaque_fd,
     host_gpu_full_wrap_storage_buffer_as_pixel_buffer,
 };
 pub(in crate::core::plugin::host_services) use texture_readback::{

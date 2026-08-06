@@ -84,10 +84,7 @@ mod tests {
 
         // A valid positive override replaces the tier default.
         unsafe {
-            std::env::set_var(
-                ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_UNTRUSTED_SESSION,
-                "1048576",
-            );
+            std::env::set_var(ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_UNTRUSTED_SESSION, "1048576");
         }
         assert_eq!(
             effective_channel_ceiling_bytes(ChannelTrustTier::UntrustedSession),

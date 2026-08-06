@@ -963,11 +963,7 @@ mod tests {
             .read_raw("in")
             .expect("read_raw must succeed under loose validation")
             .expect("a frame is queued");
-        assert_eq!(
-            read.0,
-            vec![9, 8, 7, 6],
-            "payload delivered despite mismatch"
-        );
+        assert_eq!(read.0, vec![9, 8, 7, 6], "payload delivered despite mismatch");
         assert!(
             mailboxes.schema_mismatch_observed("in"),
             "the disagreeing tag must be observed as a mismatch",
@@ -979,8 +975,8 @@ mod tests {
     /// likewise silent.
     #[test]
     fn read_raw_is_silent_on_matching_or_wildcard_schema() {
-        let matching =
-            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
+        let matching = SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0)
+            .unwrap();
 
         // Exact match → no mismatch.
         let mb_match = InputMailboxesInner::new();
@@ -1227,9 +1223,7 @@ mod tests {
 
         // The staged frame was consumed exactly once — the mailbox is now empty.
         assert!(matches!(
-            inner
-                .read_raw_bounded("in", body.len())
-                .expect("bounded read"),
+            inner.read_raw_bounded("in", body.len()).expect("bounded read"),
             BoundedReadOutcome::Empty
         ));
     }

@@ -7,10 +7,10 @@ mod audio_clock_shim;
 mod compute_kernel_bridge;
 #[cfg(target_os = "linux")]
 mod cpu_readback_bridge;
-#[cfg(target_os = "linux")]
-mod device_export_staging;
 pub(crate) mod escalate_gate;
 pub(crate) mod escalate_scope_registry;
+#[cfg(target_os = "linux")]
+mod device_export_staging;
 mod gpu_context;
 #[cfg(target_os = "linux")]
 mod graphics_kernel_bridge;
@@ -35,9 +35,9 @@ pub use compute_kernel_bridge::ComputeKernelBridge;
 #[cfg(target_os = "linux")]
 pub use cpu_readback_bridge::{CpuReadbackBridge, CpuReadbackCopyDirection};
 #[cfg(target_os = "linux")]
-pub use device_export_staging::SurfaceDeviceExportStaging;
-#[cfg(target_os = "linux")]
 pub use gpu_context::GpuCapabilitiesSnapshot;
+#[cfg(target_os = "linux")]
+pub use device_export_staging::SurfaceDeviceExportStaging;
 pub use gpu_context::{GpuContext, GpuContextFullAccess, GpuContextLimitedAccess};
 #[cfg(target_os = "linux")]
 pub use graphics_kernel_bridge::{
@@ -49,8 +49,6 @@ pub use graphics_kernel_bridge::{
     ScissorRectWire, VertexAttributeFormatWire, VertexInputAttributeDecl, VertexInputBindingDecl,
     VertexInputRateWire, ViewportWire,
 };
-pub(crate) use isolation::FullAccessGrant;
-pub use isolation::IsolationTier;
 #[cfg(target_os = "linux")]
 pub use ray_tracing_kernel_bridge::{
     BlasRegisterDecl, RAY_TRACING_STAGE_INDEX_NONE, RayTracingBindingDecl,
@@ -58,6 +56,8 @@ pub use ray_tracing_kernel_bridge::{
     RayTracingKernelRegisterDecl, RayTracingKernelRunDispatch, RayTracingShaderGroupWire,
     RayTracingShaderStageWire, RayTracingStageDecl, TlasInstanceDeclWire, TlasRegisterDecl,
 };
+pub use isolation::IsolationTier;
+pub(crate) use isolation::FullAccessGrant;
 pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 pub use runtime_ops_shim::RuntimeOpsShim;
 pub use surface_store::SurfaceStore;

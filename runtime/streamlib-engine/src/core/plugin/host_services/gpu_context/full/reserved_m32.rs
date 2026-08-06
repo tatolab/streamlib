@@ -217,22 +217,15 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cr
                 }
             };
 
-            let color_traits = super::super::super::present_target::color_traits_from_repr(color);
+            let color_traits =
+                super::super::super::present_target::color_traits_from_repr(color);
             let result = with_full_scope_or_err(
                 scope_token,
                 "create_present_target",
                 err_buf,
                 err_buf_cap,
                 err_len,
-                |gpu| {
-                    gpu.create_present_target(
-                        &shim,
-                        width,
-                        height,
-                        vsync != 0,
-                        color_traits.as_ref(),
-                    )
-                },
+                |gpu| gpu.create_present_target(&shim, width, height, vsync != 0, color_traits.as_ref()),
             );
             match result {
                 Some(Ok(present_target)) => {
@@ -365,19 +358,20 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cr
             // Decode + validate the descriptor GPU-free, before scope
             // resolution — an unsupported codec/preset is a typed
             // invalid-args error, not a device failure.
-            let config =
-                match super::super::super::video_encoder_session::encoder_config_from_repr(repr) {
-                    Ok(config) => config,
-                    Err(msg) => {
-                        write_err(
-                            &format!("create_encoder_session: {msg}"),
-                            err_buf,
-                            err_buf_cap,
-                            err_len,
-                        );
-                        return 1;
-                    }
-                };
+            let config = match super::super::super::video_encoder_session::encoder_config_from_repr(
+                repr,
+            ) {
+                Ok(config) => config,
+                Err(msg) => {
+                    write_err(
+                        &format!("create_encoder_session: {msg}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
             let prepare_gpu_input = repr.disable_gpu_input_prealloc == 0;
             let result = with_full_scope_or_err(
                 gpu_handle,
@@ -513,19 +507,20 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cr
             // Decode + validate the descriptor GPU-free, before scope
             // resolution — an unsupported codec / DPB output mode is a
             // typed invalid-args error, not a device failure.
-            let config =
-                match super::super::super::video_decoder_session::decoder_config_from_repr(repr) {
-                    Ok(config) => config,
-                    Err(msg) => {
-                        write_err(
-                            &format!("create_decoder_session: {msg}"),
-                            err_buf,
-                            err_buf_cap,
-                            err_len,
-                        );
-                        return 1;
-                    }
-                };
+            let config = match super::super::super::video_decoder_session::decoder_config_from_repr(
+                repr,
+            ) {
+                Ok(config) => config,
+                Err(msg) => {
+                    write_err(
+                        &format!("create_decoder_session: {msg}"),
+                        err_buf,
+                        err_buf_cap,
+                        err_len,
+                    );
+                    return 1;
+                }
+            };
             let result = with_full_scope_or_err(
                 gpu_handle,
                 "create_decoder_session",
@@ -781,14 +776,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cr
 ) -> i32 {
     run_host_extern_c(
         "host_gpu_full_create_opaque_fd_export_buffer",
-        || {
-            write_err_non_linux(
-                "create_opaque_fd_export_buffer",
-                err_buf,
-                err_buf_cap,
-                err_len,
-            )
-        },
+        || write_err_non_linux("create_opaque_fd_export_buffer", err_buf, err_buf_cap, err_len),
         1,
     )
 }
@@ -1172,12 +1160,7 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_co
 /// Shared "not available on this platform" writer for the non-Linux
 /// OPAQUE_FD/CUDA slot stubs (the surface is Linux-only RHI).
 #[cfg(not(target_os = "linux"))]
-fn write_err_non_linux(
-    slot: &str,
-    err_buf: *mut u8,
-    err_buf_cap: usize,
-    err_len: *mut usize,
-) -> i32 {
+fn write_err_non_linux(slot: &str, err_buf: *mut u8, err_buf_cap: usize, err_len: *mut usize) -> i32 {
     super::super::super::shared::wire::write_err(
         &format!("{slot}: not available on this platform"),
         err_buf,
@@ -1455,8 +1438,7 @@ mod reserved_m32_wire_format_tests {
         };
         assert_eq!(rc, 1);
         assert!(
-            err_buf_as_str(&buf, len)
-                .contains("create_encoder_session: not available on this platform")
+            err_buf_as_str(&buf, len).contains("create_encoder_session: not available on this platform")
         );
     }
 
@@ -1798,7 +1780,7 @@ mod reserved_m32_wire_format_tests {
                 64,
                 64,
                 4,
-                0x42475241,           // Bgra32
+                0x42475241, // Bgra32
                 std::ptr::null_mut(), // null out_pixel_buffer
                 buf.as_mut_ptr(),
                 buf.len(),

@@ -314,12 +314,7 @@ unsafe extern "C" fn host_present_target_recreate(
         "host_present_target_recreate",
         || -> i32 {
             let Some(mtx) = (unsafe { handle_as_present_target(present_handle) }) else {
-                write_err(
-                    "recreate: null present_handle",
-                    err_buf,
-                    err_buf_cap,
-                    err_len,
-                );
+                write_err("recreate: null present_handle", err_buf, err_buf_cap, err_len);
                 return 1;
             };
             let mut target = match mtx.try_lock() {

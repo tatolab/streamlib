@@ -991,8 +991,7 @@ fn path_package_version_dep_routes_to_by_version_not_installed_cache() {
     let _modules_root = AppModulesRootOverrideGuard::install(sandbox.path());
     // No ambient package source config, so the routing is observable regardless of
     // the developer / CI shell.
-    let _no_package_source =
-        EnvVarsCleared::new(&["STREAMLIB_PACKAGE_SOURCE", "STREAMLIB_PACKAGE_SOURCE_TOKEN"]);
+    let _no_package_source = EnvVarsCleared::new(&["STREAMLIB_PACKAGE_SOURCE", "STREAMLIB_PACKAGE_SOURCE_TOKEN"]);
 
     // A co-located streamlib_modules slot for @tatolab/b that WOULD satisfy
     // `^0.1.0` — resolved through the seam so it lands at the real layout.
@@ -1331,9 +1330,7 @@ mod add_module_tests {
             unsafe {
                 std::env::set_var("STREAMLIB_HOME", home_root);
             }
-            crate::core::streamlib_home::set_app_modules_root_override(Some(
-                home_root.to_path_buf(),
-            ));
+            crate::core::streamlib_home::set_app_modules_root_override(Some(home_root.to_path_buf()));
             Self { home_prev }
         }
     }
@@ -1410,7 +1407,8 @@ mod add_module_tests {
         let slot = crate::core::installed_package_slot_dir(None, &pkg_ref);
         assert_eq!(
             slot,
-            home.path().join("streamlib_modules/@tatolab/canary-pkg"),
+            home.path()
+                .join("streamlib_modules/@tatolab/canary-pkg"),
             "installed-cache slot layout drifted from the pinned literal",
         );
     }
@@ -1466,9 +1464,7 @@ mod add_module_tests {
                 Package::new("add-module-range").unwrap(),
                 SemVerRange::Caret(SemVer::new(3, 0, 0)),
             ))
-            .expect(
-                "a range no installed version satisfies must warn and load the installed version",
-            );
+            .expect("a range no installed version satisfies must warn and load the installed version");
 
         assert!(
             crate::core::embedded_schemas::get_embedded_schema_definition(&canonical).is_some(),
@@ -1580,17 +1576,12 @@ mod add_module_tests {
         // Unbuilt Rust slot: a Rust-runtime manifest + Cargo.toml, no prebuilt.
         let slot = installed_package_slot_for_test("tatolab", "unbuilt-rust");
         std::fs::create_dir_all(&slot).unwrap();
-        std::fs::write(
-            slot.join("streamlib.yaml"),
-            rust_source_manifest("unbuilt-rust"),
-        )
-        .unwrap();
+        std::fs::write(slot.join("streamlib.yaml"), rust_source_manifest("unbuilt-rust")).unwrap();
         std::fs::write(slot.join("Cargo.toml"), b"[package]\nname='unbuilt-rust'\n").unwrap();
 
-        let counts = Arc::new(parking_lot::Mutex::new(std::collections::HashMap::<
-            std::path::PathBuf,
-            usize,
-        >::new()));
+        let counts = Arc::new(parking_lot::Mutex::new(
+            std::collections::HashMap::<std::path::PathBuf, usize>::new(),
+        ));
         let runtime = Runner::new().expect("Runner::new");
         runtime.set_build_orchestrator(MaterializeCountingOrchestrator {
             counts: Arc::clone(&counts),
@@ -3352,7 +3343,10 @@ processors:
 
         let before = RegistrySnapshot::capture(&runtime.resolution_memo);
         let err = runtime
-            .add_module_with_blocking(tatolab_ident("txn-global"), path_strategy_never_build(&pkg))
+            .add_module_with_blocking(
+                tatolab_ident("txn-global"),
+                path_strategy_never_build(&pkg),
+            )
             .expect_err("a globally-colliding subprocess processor must fail the load");
         assert!(
             matches!(
@@ -4138,9 +4132,7 @@ processors:
         let runtime = Runner::new().unwrap();
         runtime
             .add_modules_from_lockfile_blocking(&report.lockfile_path)
-            .expect(
-                "locked run must load the full graph offline against a poisoned package source",
-            );
+            .expect("locked run must load the full graph offline against a poisoned package source");
 
         assert!(
             crate::core::embedded_schemas::get_embedded_schema_definition(

@@ -23,9 +23,9 @@ use std::ffi::c_void;
 use std::sync::Arc;
 
 use super::super::super::run_host_extern_c;
+use super::super::super::shared::wire::write_err;
 #[cfg(target_os = "linux")]
 use super::super::super::shared::wire::slice_from_raw;
-use super::super::super::shared::wire::write_err;
 #[cfg(target_os = "linux")]
 use super::super::scope_token::with_full_scope_or_err;
 
@@ -119,7 +119,8 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_cr
                     let staging_size = arc.staging_size();
                     // Box-shaped opaque handle: `Box<Arc<VulkanTextureReadback>>`.
                     // `!Clone` — drop_texture_readback reclaims it.
-                    let boxed: Box<Arc<crate::vulkan::rhi::VulkanTextureReadback>> = Box::new(arc);
+                    let boxed: Box<Arc<crate::vulkan::rhi::VulkanTextureReadback>> =
+                        Box::new(arc);
                     let raw = Box::into_raw(boxed) as *const c_void;
                     // SAFETY: out pointers null-checked above.
                     unsafe {
@@ -156,8 +157,9 @@ pub(in crate::core::plugin::host_services) unsafe extern "C" fn host_gpu_full_dr
             // block on the pending timeline, which is sound inside the
             // panic net (a caught panic logs, never converts — void return).
             unsafe {
-                let _ =
-                    Box::from_raw(handle as *mut Arc<crate::vulkan::rhi::VulkanTextureReadback>);
+                let _ = Box::from_raw(
+                    handle as *mut Arc<crate::vulkan::rhi::VulkanTextureReadback>,
+                );
             }
         },
         (),

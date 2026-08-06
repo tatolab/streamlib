@@ -117,7 +117,9 @@ fn extract_marked_region(src: &str, path: &str, begin_marker: &str, end_marker: 
     let begin = lines
         .iter()
         .position(|l| l.contains(begin_marker))
-        .unwrap_or_else(|| panic!("twin-drift guard: `{begin_marker}` marker missing in `{path}`"));
+        .unwrap_or_else(|| {
+            panic!("twin-drift guard: `{begin_marker}` marker missing in `{path}`")
+        });
     let end = lines
         .iter()
         .position(|l| l.contains(end_marker))

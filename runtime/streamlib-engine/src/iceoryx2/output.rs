@@ -301,7 +301,11 @@ impl OutputWriterInner {
         // next send() will wake the listener anyway.
         for (_link_id, notifier) in &egress.notifiers {
             if let Err(e) = notifier.notify() {
-                tracing::trace!("OutputWriter: notify() failed for port '{}': {:?}", port, e);
+                tracing::trace!(
+                    "OutputWriter: notify() failed for port '{}': {:?}",
+                    port,
+                    e
+                );
             }
         }
 
@@ -878,8 +882,7 @@ mod tests {
 
         let inner = Arc::new(OutputWriterInner::new());
         let schema =
-            SchemaIdentWire::from_segments("tatolab", "core", "EncodedVideoFrame", 1, 0, 0)
-                .unwrap();
+            SchemaIdentWire::from_segments("tatolab", "core", "EncodedVideoFrame", 1, 0, 0).unwrap();
         let ceiling = 128 * 1024usize;
         inner.set_channel_publisher(
             "out",
@@ -942,10 +945,7 @@ mod tests {
             .receive()
             .expect("receive")
             .expect("post-refusal frame must be delivered");
-        assert_eq!(
-            got.payload().len(),
-            FRAME_HEADER_SIZE + b"still-alive".len()
-        );
+        assert_eq!(got.payload().len(), FRAME_HEADER_SIZE + b"still-alive".len());
     }
 
     /// Drift guard for the two trust-tier spellings: `ChannelTrustTier::as_str`
@@ -957,10 +957,7 @@ mod tests {
     /// can't silently drift.
     #[test]
     fn trust_tier_label_spellings_do_not_drift() {
-        for tier in [
-            ChannelTrustTier::Trusted,
-            ChannelTrustTier::UntrustedSession,
-        ] {
+        for tier in [ChannelTrustTier::Trusted, ChannelTrustTier::UntrustedSession] {
             let label = trust_tier_label(tier);
             assert_eq!(
                 tier.as_str(),

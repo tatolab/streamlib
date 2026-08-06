@@ -234,9 +234,7 @@ mod tests {
     #[test]
     fn only_the_trusted_tier_grants_full_access() {
         assert!(
-            IsolationTier::TrustedInstalled
-                .grant_full_access()
-                .is_some(),
+            IsolationTier::TrustedInstalled.grant_full_access().is_some(),
             "the trusted tier must mint a FullAccess grant"
         );
         assert!(

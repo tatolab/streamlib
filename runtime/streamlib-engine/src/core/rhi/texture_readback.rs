@@ -616,10 +616,7 @@ mod texture_readback_pluginabiobject_layout_tests {
             TextureSourceLayout::ShaderReadOnly,
         ] {
             let raw = layout.to_vulkan_layout_raw();
-            assert_eq!(
-                TextureSourceLayout::from_vulkan_layout_raw(raw),
-                Some(layout)
-            );
+            assert_eq!(TextureSourceLayout::from_vulkan_layout_raw(raw), Some(layout));
         }
         // UNDEFINED (0) / TRANSFER_SRC_OPTIMAL (6) are outside the
         // supported set — the host maps these to a typed error.

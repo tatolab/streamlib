@@ -119,9 +119,12 @@ impl Runner {
         let events = tx.clone();
         let module_for_task = module.clone();
 
-        let join = self.tokio_runtime_variant.handle().spawn_blocking(move || {
-            run_session_registration(module_for_task, version, outcome, &events)
-        });
+        let join = self
+            .tokio_runtime_variant
+            .handle()
+            .spawn_blocking(move || {
+                run_session_registration(module_for_task, version, outcome, &events)
+            });
 
         AddedModule::new(module, join, tx, initial_rx)
     }

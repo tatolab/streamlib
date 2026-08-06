@@ -3,8 +3,8 @@
 
 use std::path::{Path, PathBuf};
 
-use streamlib_idents::PackageRef;
 use streamlib_idents::app_modules::AppModulesDir;
+use streamlib_idents::PackageRef;
 
 /// The streamlib app root — the install / clone directory, the top level
 /// that holds both the read-only `packages/` source and the generated
@@ -120,7 +120,8 @@ pub(crate) const APP_MODULES_DIR_ENV: &str = "STREAMLIB_MODULES_DIR";
 /// process working directory.
 ///
 /// [`Runner::set_app_modules_dir`]: crate::core::runtime::Runner::set_app_modules_dir
-static APP_MODULES_ROOT_OVERRIDE: std::sync::RwLock<Option<PathBuf>> = std::sync::RwLock::new(None);
+static APP_MODULES_ROOT_OVERRIDE: std::sync::RwLock<Option<PathBuf>> =
+    std::sync::RwLock::new(None);
 
 /// Tell the module loader which directory contains the app's
 /// `streamlib_modules/` folder for lazy discovery, installed-slot derivation,

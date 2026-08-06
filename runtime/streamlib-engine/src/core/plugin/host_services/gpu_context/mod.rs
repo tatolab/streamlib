@@ -50,12 +50,13 @@ use full::{
 };
 // v11 (M32 #1253) reserved-slot stubs.
 use full::{
-    host_gpu_full_copy_texture_to_storage_buffer_and_signal, host_gpu_full_create_decoder_session,
-    host_gpu_full_create_encoder_session, host_gpu_full_create_exportable_timeline_semaphore,
-    host_gpu_full_create_opaque_fd_export_buffer, host_gpu_full_create_present_target,
-    host_gpu_full_create_texture_readback, host_gpu_full_drop_decoder_session,
-    host_gpu_full_drop_encoder_session, host_gpu_full_drop_present_target,
-    host_gpu_full_drop_texture_readback, host_gpu_full_export_storage_buffer_opaque_fd,
+    host_gpu_full_copy_texture_to_storage_buffer_and_signal,
+    host_gpu_full_create_decoder_session, host_gpu_full_create_encoder_session,
+    host_gpu_full_create_exportable_timeline_semaphore, host_gpu_full_create_opaque_fd_export_buffer,
+    host_gpu_full_create_present_target, host_gpu_full_create_texture_readback,
+    host_gpu_full_drop_decoder_session, host_gpu_full_drop_encoder_session,
+    host_gpu_full_drop_present_target, host_gpu_full_drop_texture_readback,
+    host_gpu_full_export_storage_buffer_opaque_fd,
     host_gpu_full_wrap_storage_buffer_as_pixel_buffer,
 };
 use limited::{
@@ -79,11 +80,11 @@ use limited::{
     host_gpu_lim_get_pixel_buffer, host_gpu_lim_plane_base_address_pixel_buffer,
     host_gpu_lim_plane_size_pixel_buffer, host_gpu_lim_register_texture,
     host_gpu_lim_resolve_pixel_buffer_by_surface_id, host_gpu_lim_resolve_texture_by_surface_id,
-    host_gpu_lim_resolve_texture_registration_by_surface_id,
-    host_gpu_lim_strong_count_pixel_buffer, host_gpu_lim_surface_store,
-    host_gpu_lim_texture_native_dma_buf_fd, host_gpu_lim_texture_registration_current_layout,
-    host_gpu_lim_texture_registration_texture, host_gpu_lim_texture_registration_update_layout,
-    host_gpu_lim_unregister_texture, host_gpu_lim_update_texture_registration_layout,
+    host_gpu_lim_resolve_texture_registration_by_surface_id, host_gpu_lim_strong_count_pixel_buffer,
+    host_gpu_lim_surface_store, host_gpu_lim_texture_native_dma_buf_fd,
+    host_gpu_lim_texture_registration_current_layout, host_gpu_lim_texture_registration_texture,
+    host_gpu_lim_texture_registration_update_layout, host_gpu_lim_unregister_texture,
+    host_gpu_lim_update_texture_registration_layout,
 };
 
 // pointers and reading nothing about layout.
