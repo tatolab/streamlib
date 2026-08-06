@@ -937,7 +937,7 @@ impl SurfaceStoreInner {
             "runtime_id": self.runtime_id,
             "width": pixel_buffer.width,
             "height": pixel_buffer.height,
-            "format": format!("{:?}", pixel_buffer.format()),
+            "format": pixel_buffer.format().wire_name(),
             "handle_type": handle_type,
             "plane_sizes": plane_sizes,
             "plane_offsets": plane_offsets,
@@ -1075,14 +1075,28 @@ impl SurfaceStoreInner {
     pub fn register_buffer(&self, pool_id: &str, pixel_buffer: &PixelBuffer) -> Result<()> {
         use crate::core::rhi::RhiPixelBufferExport;
 
-        // Export the buffer's natural handle — DMA-BUF or OPAQUE_FD per
-        // the underlying allocation flavor (see
-        // `HostVulkanBuffer::export_external_handle`).
-        let handle = pixel_buffer.export_handle()?;
-        let (fd, _size, handle_type) = match handle {
-            crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } => (fd, size, "dma_buf"),
-            crate::core::rhi::RhiExternalHandle::OpaqueFd { fd, size } => (fd, size, "opaque_fd"),
-        };
+        // Export every plane's fd — DMA-BUF or OPAQUE_FD per the underlying
+        // allocation flavor (see `HostVulkanBuffer::export_external_handle`).
+        // The plane sizes travel with the registration because a checkout's
+        // importer derives the row pitch from them; a registration without
+        // sizes checks out as an unusable zero-byte plane.
+        let planes = pixel_buffer.export_plane_handles()?;
+        let mut plane_fds: Vec<std::os::unix::io::RawFd> = Vec::with_capacity(planes.len());
+        let mut plane_sizes: Vec<u64> = Vec::with_capacity(planes.len());
+        let mut plane_offsets: Vec<u64> = Vec::with_capacity(planes.len());
+        let mut handle_type = "dma_buf";
+        for handle in planes {
+            let (fd, size) = match handle {
+                crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } => (fd, size),
+                crate::core::rhi::RhiExternalHandle::OpaqueFd { fd, size } => {
+                    handle_type = "opaque_fd";
+                    (fd, size)
+                }
+            };
+            plane_fds.push(fd);
+            plane_sizes.push(size as u64);
+            plane_offsets.push(0);
+        }
 
         let request = serde_json::json!({
             "op": "register",
@@ -1090,9 +1104,11 @@ impl SurfaceStoreInner {
             "runtime_id": self.runtime_id,
             "width": pixel_buffer.width,
             "height": pixel_buffer.height,
-            "format": format!("{:?}", pixel_buffer.format()),
+            "format": pixel_buffer.format().wire_name(),
             "resource_type": "pixel_buffer",
             "handle_type": handle_type,
+            "plane_sizes": plane_sizes,
+            "plane_offsets": plane_offsets,
         });
 
         let connection = self.connection.lock();
@@ -1101,8 +1117,10 @@ impl SurfaceStoreInner {
         })?;
 
         let send_result =
-            streamlib_surface_client::send_request_with_fds(stream, &request, &[fd], 0);
-        unsafe { libc::close(fd) };
+            streamlib_surface_client::send_request_with_fds(stream, &request, &plane_fds, 0);
+        for fd in &plane_fds {
+            unsafe { libc::close(*fd) };
+        }
         let (response, response_fds) = send_result
             .map_err(|e| Error::Configuration(format!("Unix socket register failed: {}", e)))?;
         for f in &response_fds {

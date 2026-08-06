@@ -1291,36 +1291,11 @@ fn mint_pooled_texture_surface_id() -> String {
 /// The same vocabulary the subprocess escalate handler accepted, so a
 /// processor migrated from the old SDK keeps its format strings.
 pub(crate) fn parse_pixel_format_name(name: &str) -> PyResult<PixelFormat> {
-    let normalized = name.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "bgra" | "bgra32" => Ok(PixelFormat::Bgra32),
-        "rgba" | "rgba32" => Ok(PixelFormat::Rgba32),
-        "argb" | "argb32" => Ok(PixelFormat::Argb32),
-        "rgba64" => Ok(PixelFormat::Rgba64),
-        "nv12" | "nv12_video_range" => Ok(PixelFormat::Nv12VideoRange),
-        "nv12_full_range" => Ok(PixelFormat::Nv12FullRange),
-        "uyvy" | "uyvy422" => Ok(PixelFormat::Uyvy422),
-        "yuyv" | "yuyv422" => Ok(PixelFormat::Yuyv422),
-        "gray" | "gray8" => Ok(PixelFormat::Gray8),
-        unknown => Err(PyValueError::new_err(format!(
-            "unknown pixel format {unknown:?}"
-        ))),
-    }
+    PixelFormat::parse_wire_name(name).map_err(PyValueError::new_err)
 }
 
 fn pixel_format_name(format: PixelFormat) -> &'static str {
-    match format {
-        PixelFormat::Bgra32 => "bgra32",
-        PixelFormat::Rgba32 => "rgba32",
-        PixelFormat::Argb32 => "argb32",
-        PixelFormat::Rgba64 => "rgba64",
-        PixelFormat::Nv12VideoRange => "nv12_video_range",
-        PixelFormat::Nv12FullRange => "nv12_full_range",
-        PixelFormat::Uyvy422 => "uyvy422",
-        PixelFormat::Yuyv422 => "yuyv422",
-        PixelFormat::Gray8 => "gray8",
-        PixelFormat::Unknown => "unknown",
-    }
+    format.wire_name()
 }
 
 fn parse_texture_format_name(name: &str) -> PyResult<TextureFormat> {

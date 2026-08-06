@@ -2353,34 +2353,11 @@ pub(crate) fn envelope_response(result: EscalateResponse) -> serde_json::Value {
 /// [`PixelFormat::Bgra32`], matching the existing
 /// `NativeGpu.acquire_surface(format="bgra")` default on the Python side.
 fn parse_pixel_format(s: &str) -> std::result::Result<PixelFormat, String> {
-    let normalized = s.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "bgra" | "bgra32" => Ok(PixelFormat::Bgra32),
-        "rgba" | "rgba32" => Ok(PixelFormat::Rgba32),
-        "argb" | "argb32" => Ok(PixelFormat::Argb32),
-        "rgba64" => Ok(PixelFormat::Rgba64),
-        "nv12" | "nv12_video_range" => Ok(PixelFormat::Nv12VideoRange),
-        "nv12_full_range" => Ok(PixelFormat::Nv12FullRange),
-        "uyvy" | "uyvy422" => Ok(PixelFormat::Uyvy422),
-        "yuyv" | "yuyv422" => Ok(PixelFormat::Yuyv422),
-        "gray" | "gray8" => Ok(PixelFormat::Gray8),
-        other => Err(format!("unknown pixel format '{other}'")),
-    }
+    PixelFormat::parse_wire_name(s)
 }
 
 fn pixel_format_to_wire(fmt: PixelFormat) -> &'static str {
-    match fmt {
-        PixelFormat::Bgra32 => "bgra32",
-        PixelFormat::Rgba32 => "rgba32",
-        PixelFormat::Argb32 => "argb32",
-        PixelFormat::Rgba64 => "rgba64",
-        PixelFormat::Nv12VideoRange => "nv12_video_range",
-        PixelFormat::Nv12FullRange => "nv12_full_range",
-        PixelFormat::Uyvy422 => "uyvy422",
-        PixelFormat::Yuyv422 => "yuyv422",
-        PixelFormat::Gray8 => "gray8",
-        PixelFormat::Unknown => "unknown",
-    }
+    fmt.wire_name()
 }
 
 /// Parse a wire-format texture format string into a [`TextureFormat`].
