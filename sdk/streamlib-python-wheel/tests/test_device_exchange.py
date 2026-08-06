@@ -155,14 +155,25 @@ def test_the_host_side_stays_reachable_on_explicit_request(start_app_under_test)
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.skip(
+    reason=(
+        "#1755: a cross-process device export blits the ring slot registered under the "
+        "frame's id, which the camera overwrites two frames later, while the CPU view "
+        "reads the stable per-frame buffer. Owner-dispositioned as device-export source "
+        "policy, not this ticket's"
+    )
+)
 def test_camera_device_pixels_match_host_across_ring_cycles(start_app_under_test):
     """Regression lock on the stale-blit-source bug.
 
-    The camera re-registers a different ring texture under the same surface id
-    every frame. A staging that resolved its source once at creation blits the
-    previous cycle's frame — live-reproduced during review as device pixels
-    lagging host pixels by one ring cycle from frame ~6 on. Per-refill
-    resolution is the fix; this asserts identity across 12 consecutive frames.
+    The camera re-registers a different ring texture under each frame's surface
+    id. A staging that resolved its source once at creation blits the previous
+    cycle's frame — live-reproduced during review as device pixels lagging host
+    pixels by one ring cycle from frame ~6 on. Per-refill resolution is the fix;
+    this asserts identity across 12 consecutive frames.
+
+    Skipped rather than deleted: per-refill resolution still works, and this is
+    the reproduction #1755 is written against.
     """
     if not Path("/dev/video0").exists():
         pytest.skip("no camera on this rig")

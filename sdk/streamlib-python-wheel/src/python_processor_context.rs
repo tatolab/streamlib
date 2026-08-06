@@ -10,23 +10,16 @@
 //! GIL discipline, kept everywhere in this file: every potentially-blocking
 //! engine or IPC call runs inside a `python.detach(..)` closure.
 
-use std::ptr::NonNull;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use parking_lot::{Mutex, RwLock};
+use parking_lot::Mutex;
 use pyo3::exceptions::{
     PyBufferError, PyNotImplementedError, PyRuntimeError, PyTypeError, PyValueError,
 };
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use streamlib::sdk::context::{
-    GpuContextFullAccess, GpuContextLimitedAccess, PooledTextureHandle, SurfaceStore,
-    TexturePoolDescriptor,
-};
-use streamlib::sdk::rhi::{
-    PixelBuffer, PixelBufferPoolId, PixelFormat, TextureFormat, TextureUsages,
-};
+use streamlib::sdk::rhi::PixelFormat;
 use streamlib_adapter_cuda::dlpack::DeviceType;
 
 use crate::python_bag_conversion::{json_value_to_python_object, python_object_to_json_value};
@@ -114,54 +107,6 @@ impl PythonGpuSurfaceHandle {
         }
     }
 
-    fn from_acquired_pixel_buffer(
-        minted_surface_id: String,
-        surface_store_owing_a_release: Option<SurfaceStore>,
-        pixel_buffer: PixelBuffer,
-        gpu_limited_access: Option<GpuContextLimitedAccess>,
-    ) -> Self {
-        let (width, height, format) = (
-            pixel_buffer.width,
-            pixel_buffer.height,
-            pixel_buffer.format(),
-        );
-        Self::new(
-            Some(minted_surface_id.clone()),
-            width,
-            height,
-            format.wire_name().to_string(),
-            GpuSurfaceOwnedMemory::new(
-                GpuSurfaceOwnedValue::PixelBuffer(pixel_buffer),
-                surface_store_owing_a_release,
-                Some(minted_surface_id),
-                gpu_limited_access,
-            ),
-        )
-    }
-
-    fn from_pooled_texture(
-        pooled_texture: PooledTextureHandle,
-        registered_surface_id: Option<String>,
-        gpu_limited_access: Option<GpuContextLimitedAccess>,
-    ) -> Self {
-        let (width, height, format) = (
-            pooled_texture.width(),
-            pooled_texture.height(),
-            pooled_texture.format(),
-        );
-        Self::new(
-            registered_surface_id.clone(),
-            width,
-            height,
-            texture_format_name(format).to_string(),
-            GpuSurfaceOwnedMemory::new_with_texture_registration_debt(
-                GpuSurfaceOwnedValue::PooledTexture(pooled_texture),
-                registered_surface_id,
-                gpu_limited_access,
-            ),
-        )
-    }
-
     /// A surface a helper process checked out of its parent: consumer-imported
     /// memory behind the same handle surface the engine path mints.
     #[cfg(target_os = "linux")]
@@ -173,14 +118,12 @@ impl PythonGpuSurfaceHandle {
             width,
             height,
             format.wire_name().to_string(),
-            // No store and no engine view: the release an acquired surface
-            // owes rides the debt inside the checked-out value, and device
-            // export is host-direct by design.
+            // The release an acquired surface owes its parent rides the
+            // debt inside the checked-out value, so this holds nothing but
+            // the value and the id it travels under.
             GpuSurfaceOwnedMemory::new(
                 GpuSurfaceOwnedValue::HelperCheckedOut(checked_out),
-                None,
                 Some(surface_id),
-                None,
             ),
         )
     }
@@ -537,19 +480,6 @@ pub(crate) fn gpu_operation_error(failure: impl std::fmt::Display) -> PyErr {
 ///
 /// A check-in comes back with the store that performed it, because it parks a
 /// strong clone of the buffer there — the handle owes that store a release.
-fn mint_pixel_buffer_surface_id(
-    surface_store: Option<SurfaceStore>,
-    pool_id: &PixelBufferPoolId,
-    pixel_buffer: &PixelBuffer,
-) -> PyResult<(String, Option<SurfaceStore>)> {
-    match surface_store {
-        Some(store) => {
-            let minted_surface_id = store.check_in(pixel_buffer).map_err(gpu_operation_error)?;
-            Ok((minted_surface_id, Some(store)))
-        }
-        None => Ok((pool_id.as_str().to_string(), None)),
-    }
-}
 
 /// Non-allocating GPU capability, valid for the whole processor life.
 ///
@@ -632,18 +562,9 @@ impl PythonGpuContextLimitedAccess {
 
     /// Run `privileged_callback` with a temporary full-access GPU capability.
     ///
-    /// One-shot privileged construction against an engine in this process —
-    /// the door the engine-side capability serves. A Python processor's hooks
-    /// run in a helper process, where this refuses by name: the callback
-    /// would need a borrow of the engine's own capability, which lives one
-    /// process away. The engine's escalate gate serializes all escalations
-    /// runtime-wide and waits for device idle afterwards, and it must never
-    /// nest: an escalate inside an escalate on one thread is a same-thread
-    /// gate re-entry, which the engine refuses by construction.
-    ///
-    /// Returns whatever the callback returns. The capability object handed to
-    /// the callback expires when the callback does — stashing it and calling
-    /// it later raises rather than granting privileged access forever.
+    /// Refused, and it is the shape rather than the reach that refuses it —
+    /// the same answer `ctx.gpu_full_access.escalate` gives, because it is
+    /// the same door.
     #[expect(
         clippy::unused_self,
         reason = "the refusal is this capability's whole answer for escalation"
@@ -653,13 +574,10 @@ impl PythonGpuContextLimitedAccess {
         reason = "the Python-visible parameter name is the API; stubtest compares it"
     )]
     fn escalate(&self, privileged_callback: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-        // The callback would be handed a borrow of the engine's own
-        // full-access capability, which exists one process away — there is
-        // nothing here to lease it from.
         Err(PyRuntimeError::new_err(
-            "escalate() hands its callback a same-process engine capability, which a Python \
-             processor's helper process does not have. Acquire through \
-             `ctx.gpu_limited_access.acquire_pixel_buffer` instead",
+            "escalate() gives its callback one atomic privileged scope, which cannot span a \
+             process boundary. The operations it wrapped are methods on this capability and on \
+             `ctx.gpu_full_access` — call them directly; each is privileged on its own",
         ))
     }
 
@@ -1161,76 +1079,11 @@ pub(crate) fn parse_pixel_format_name(name: &str) -> PyResult<PixelFormat> {
     PixelFormat::parse_wire_name(name).map_err(PyValueError::new_err)
 }
 
-fn parse_texture_format_name(name: &str) -> PyResult<TextureFormat> {
-    let normalized = name.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "rgba8_unorm" => Ok(TextureFormat::Rgba8Unorm),
-        "rgba8_unorm_srgb" => Ok(TextureFormat::Rgba8UnormSrgb),
-        "bgra8_unorm" => Ok(TextureFormat::Bgra8Unorm),
-        "bgra8_unorm_srgb" => Ok(TextureFormat::Bgra8UnormSrgb),
-        "rgba16_float" => Ok(TextureFormat::Rgba16Float),
-        "rgba32_float" => Ok(TextureFormat::Rgba32Float),
-        "nv12" => Ok(TextureFormat::Nv12),
-        unknown => Err(PyValueError::new_err(format!(
-            "unknown texture format {unknown:?}"
-        ))),
-    }
-}
-
-fn texture_format_name(format: TextureFormat) -> &'static str {
-    match format {
-        TextureFormat::Rgba8Unorm => "rgba8_unorm",
-        TextureFormat::Rgba8UnormSrgb => "rgba8_unorm_srgb",
-        TextureFormat::Bgra8Unorm => "bgra8_unorm",
-        TextureFormat::Bgra8UnormSrgb => "bgra8_unorm_srgb",
-        TextureFormat::Rgba16Float => "rgba16_float",
-        TextureFormat::Rgba32Float => "rgba32_float",
-        TextureFormat::Nv12 => "nv12",
-    }
-}
-
 /// Bytes per pixel for the formats a device-exchange buffer can carry.
 ///
 /// Restricted to the single-plane formats deliberately: the allocation is a
 /// flat buffer sized `width * height * bytes_per_pixel`, and a multi-plane
 /// format has no single such size.
-fn device_exchange_bytes_per_pixel(format: PixelFormat) -> PyResult<u32> {
-    match format {
-        PixelFormat::Bgra32 | PixelFormat::Rgba32 | PixelFormat::Argb32 => Ok(4),
-        PixelFormat::Rgba64 => Ok(8),
-        PixelFormat::Gray8 => Ok(1),
-        PixelFormat::Yuyv422 | PixelFormat::Uyvy422 => Ok(2),
-        multi_plane_or_unknown => Err(PyValueError::new_err(format!(
-            "pixel format {multi_plane_or_unknown:?} has no flat device-exchange size: a \
-             device-exchange buffer is one linear allocation, which a multi-plane format is not"
-        ))),
-    }
-}
-
-fn parse_texture_usage_names(names: &[String]) -> PyResult<TextureUsages> {
-    if names.is_empty() {
-        return Err(PyValueError::new_err(
-            "texture usage list must not be empty",
-        ));
-    }
-    let mut usages = TextureUsages::NONE;
-    for name in names {
-        let normalized = name.trim().to_ascii_lowercase();
-        usages |= match normalized.as_str() {
-            "copy_src" => TextureUsages::COPY_SRC,
-            "copy_dst" => TextureUsages::COPY_DST,
-            "texture_binding" => TextureUsages::TEXTURE_BINDING,
-            "storage_binding" => TextureUsages::STORAGE_BINDING,
-            "render_attachment" => TextureUsages::RENDER_ATTACHMENT,
-            unknown => {
-                return Err(PyValueError::new_err(format!(
-                    "unknown texture usage {unknown:?}"
-                )));
-            }
-        };
-    }
-    Ok(usages)
-}
 
 #[cfg(test)]
 mod tests {
@@ -1259,35 +1112,5 @@ mod tests {
             "the old SDK's default mnemonic must keep working"
         );
         assert!(parse_pixel_format_name("sepia").is_err());
-    }
-
-    #[test]
-    fn texture_format_names_round_trip() {
-        for format in [
-            TextureFormat::Rgba8Unorm,
-            TextureFormat::Rgba8UnormSrgb,
-            TextureFormat::Bgra8Unorm,
-            TextureFormat::Bgra8UnormSrgb,
-            TextureFormat::Rgba16Float,
-            TextureFormat::Rgba32Float,
-            TextureFormat::Nv12,
-        ] {
-            assert_eq!(
-                parse_texture_format_name(texture_format_name(format)).unwrap(),
-                format
-            );
-        }
-    }
-
-    #[test]
-    fn texture_usage_names_combine_and_refuse_unknowns() {
-        let usages =
-            parse_texture_usage_names(&["copy_src".to_string(), "render_attachment".to_string()])
-                .unwrap();
-        assert!(usages.contains(TextureUsages::COPY_SRC));
-        assert!(usages.contains(TextureUsages::RENDER_ATTACHMENT));
-        assert!(!usages.contains(TextureUsages::COPY_DST));
-        assert!(parse_texture_usage_names(&[]).is_err());
-        assert!(parse_texture_usage_names(&["paint".to_string()]).is_err());
     }
 }

@@ -25,21 +25,10 @@ use std::ffi::{CStr, c_void};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use pyo3::exceptions::{PyBufferError, PyNotImplementedError, PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyBufferError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
-#[cfg(target_os = "linux")]
-use std::collections::HashMap;
-#[cfg(target_os = "linux")]
-use std::os::fd::FromRawFd as _;
-#[cfg(target_os = "linux")]
-use std::sync::LazyLock;
-#[cfg(target_os = "linux")]
-use streamlib::sdk::context::SurfaceDeviceExportStaging;
-use streamlib::sdk::context::{GpuContextLimitedAccess, PooledTextureHandle, SurfaceStore};
-use streamlib::sdk::rhi::{PixelBuffer, PixelFormat};
+use streamlib::sdk::rhi::PixelFormat;
 
-#[cfg(target_os = "linux")]
-use crate::python_cuda_pixel_exchange::{CudaImportedSurface, import_opaque_fd_into_cuda};
 #[cfg(target_os = "linux")]
 use crate::python_helper_process_pixel_exchange::{
     HelperCheckedOutPixelSurface, HelperDeviceExport, HelperProcessGpuExchangeClient,
@@ -59,19 +48,17 @@ const DLPACK_VERSIONED_CAPSULE_NAME: &CStr = c"dltensor_versioned";
 // Owned memory — the lifetime anchor shared by the handle and its capsules
 // =============================================================================
 
-/// The engine resource a [`GpuSurfaceOwnedMemory`] keeps alive.
+/// The resource a [`GpuSurfaceOwnedMemory`] keeps alive.
+///
+/// One shape, because there is one placement: every processor runs in its
+/// own helper process, so every surface it holds came out of the parent's
+/// surface-share service. The engine-side variants this carried while
+/// in-process hosting existed had no constructor left once the privileged
+/// capability started crossing the boundary.
 pub(crate) enum GpuSurfaceOwnedValue {
-    PixelBuffer(PixelBuffer),
-    /// Held to keep the pool slot alive; the device-local export path reads
-    /// it once the texture half of the exchange surface lands.
-    #[expect(
-        dead_code,
-        reason = "lifetime-only until the texture export path reads it"
-    )]
-    PooledTexture(PooledTextureHandle),
-    /// A surface checked out of the parent's surface-share service by a
-    /// helper process: consumer-imported memory, plus the `release_handle`
-    /// debt an acquired surface owes its parent.
+    /// A surface checked out of the parent's surface-share service:
+    /// consumer-imported memory, plus the `release_handle` debt an
+    /// acquired surface owes its parent.
     #[cfg(target_os = "linux")]
     HelperCheckedOut(HelperCheckedOutPixelSurface),
 }
@@ -98,73 +85,18 @@ pub(crate) struct HostVisiblePixelPlaneView {
 /// still holding.
 pub(crate) struct GpuSurfaceOwnedMemory {
     owned_value: GpuSurfaceOwnedValue,
-    /// Present only when the acquire checked the buffer into the store.
-    /// The check-in parks a strong clone there, so the pool slot returns
-    /// only if release evicts it.
-    surface_store_owing_a_release: Option<SurfaceStore>,
     minted_surface_id: Option<String>,
-    /// The engine capability the device-export path refills through —
-    /// the one view the engine documents as stash-safe. `None` on a
-    /// handle minted without one; device export refuses there.
-    gpu_limited_access: Option<GpuContextLimitedAccess>,
-    /// A texture registration this memory minted at acquire and must
-    /// undo on release, so the texture cache doesn't pin pool textures
-    /// past their handles.
-    texture_registration_to_unregister: Option<String>,
 }
 
 impl GpuSurfaceOwnedMemory {
     pub(crate) fn new(
         owned_value: GpuSurfaceOwnedValue,
-        surface_store_owing_a_release: Option<SurfaceStore>,
         minted_surface_id: Option<String>,
-        gpu_limited_access: Option<GpuContextLimitedAccess>,
     ) -> Arc<Self> {
         Arc::new(Self {
             owned_value,
-            surface_store_owing_a_release,
             minted_surface_id,
-            gpu_limited_access,
-            texture_registration_to_unregister: None,
         })
-    }
-
-    /// A pooled texture registered at acquire: the registration is this
-    /// memory's debt, undone when the last holder (handle or tensor)
-    /// releases.
-    pub(crate) fn new_with_texture_registration_debt(
-        owned_value: GpuSurfaceOwnedValue,
-        registered_surface_id: Option<String>,
-        gpu_limited_access: Option<GpuContextLimitedAccess>,
-    ) -> Arc<Self> {
-        Arc::new(Self {
-            owned_value,
-            surface_store_owing_a_release: None,
-            minted_surface_id: registered_surface_id.clone(),
-            gpu_limited_access,
-            texture_registration_to_unregister: registered_surface_id,
-        })
-    }
-
-    /// The pixel buffer a DMA-BUF export can be taken from, or a refusal
-    /// naming why this surface cannot answer.
-    ///
-    /// An allocation carries one external-handle flavour: pool buffers are
-    /// DMA-BUF, exchange buffers are OPAQUE_FD, and neither exports the
-    /// other's handle type under VMA's per-pool memory configuration.
-    pub(crate) fn dma_buf_exportable_pixel_buffer(&self) -> PyResult<&PixelBuffer> {
-        match &self.owned_value {
-            GpuSurfaceOwnedValue::PixelBuffer(pixel_buffer) => Ok(pixel_buffer),
-            GpuSurfaceOwnedValue::PooledTexture(_) => Err(PyNotImplementedError::new_err(
-                "exporting a pooled texture's DMA-BUF goes through the texture export path",
-            )),
-            #[cfg(target_os = "linux")]
-            GpuSurfaceOwnedValue::HelperCheckedOut(_) => Err(PyNotImplementedError::new_err(
-                "this surface is a consumer import: its DMA-BUF was already exported by the \
-                 engine, and re-exporting an import is not a path. Publish the surface id and \
-                 let the consumer check it out instead",
-            )),
-        }
     }
 
     /// A DMA-BUF fd for this surface's first plane, plus its byte size.
@@ -174,13 +106,8 @@ impl GpuSurfaceOwnedMemory {
     /// on the way over, so there is nothing to ask the parent for.
     #[cfg(target_os = "linux")]
     pub(crate) fn export_dma_buf(&self) -> PyResult<(i32, u64)> {
-        match &self.owned_value {
-            GpuSurfaceOwnedValue::HelperCheckedOut(checked_out) => checked_out.export_dma_buf(),
-            _ => Err(PyNotImplementedError::new_err(
-                "this surface has no DMA-BUF to export: only a pixel buffer acquired or \
-                 resolved through the graph carries one",
-            )),
-        }
+        let GpuSurfaceOwnedValue::HelperCheckedOut(checked_out) = &self.owned_value;
+        checked_out.export_dma_buf()
     }
 
     /// The host-mapped pixel view, or a refusal naming why this surface
@@ -188,17 +115,6 @@ impl GpuSurfaceOwnedMemory {
     /// — every host-side accessor routes through it.
     pub(crate) fn host_visible_pixel_plane(&self) -> PyResult<HostVisiblePixelPlaneView> {
         match &self.owned_value {
-            GpuSurfaceOwnedValue::PixelBuffer(pixel_buffer) => Ok(HostVisiblePixelPlaneView {
-                base_address: pixel_buffer.plane_base_address(0),
-                bytes_per_row: pixel_buffer_bytes_per_row(pixel_buffer)?,
-                width: pixel_buffer.width,
-                height: pixel_buffer.height,
-                format: pixel_buffer.format(),
-            }),
-            GpuSurfaceOwnedValue::PooledTexture(_) => Err(PyNotImplementedError::new_err(
-                "this surface is a pooled texture: its pixels are device-local and tiled, so CPU \
-                 access goes through the texture export path rather than a host mapping",
-            )),
             #[cfg(target_os = "linux")]
             GpuSurfaceOwnedValue::HelperCheckedOut(checked_out) => Ok(HostVisiblePixelPlaneView {
                 base_address: checked_out.consumer_buffer.mapped_ptr(),
@@ -207,29 +123,6 @@ impl GpuSurfaceOwnedMemory {
                 height: checked_out.height,
                 format: checked_out.format,
             }),
-        }
-    }
-}
-
-impl Drop for GpuSurfaceOwnedMemory {
-    fn drop(&mut self) {
-        if let (Some(engine_view), Some(registered_id)) = (
-            self.gpu_limited_access.as_ref(),
-            self.texture_registration_to_unregister.as_ref(),
-        ) {
-            // Also evicts the device-export staging engine-side.
-            engine_view.unregister_texture(registered_id);
-        }
-        if let (Some(store), Some(surface_id)) = (
-            self.surface_store_owing_a_release.as_ref(),
-            self.minted_surface_id.as_ref(),
-        ) {
-            // Best-effort, mirroring the subprocess release path: the
-            // store eviction is what frees the pool slot, and the daemon
-            // half already treats a dropped connection as a full release.
-            if let Err(release_failure) = store.release(surface_id) {
-                tracing::debug!(%surface_id, %release_failure, "surface-store release failed");
-            }
         }
     }
 }
@@ -331,26 +224,6 @@ impl PixelExchangeTensorLayout {
 
 /// Row pitch of a pixel buffer's first plane, derived from the
 /// allocation so padding is honoured rather than assumed away.
-pub(crate) fn pixel_buffer_bytes_per_row(pixel_buffer: &PixelBuffer) -> PyResult<u64> {
-    let height = u64::from(pixel_buffer.height);
-    if height == 0 {
-        return Err(PyValueError::new_err(
-            "surface has zero height; no row pitch exists",
-        ));
-    }
-    let plane_size = pixel_buffer.plane_size(0);
-    if plane_size == 0 {
-        return Err(PyRuntimeError::new_err(
-            "surface reports a zero-byte plane; it is not CPU-mappable",
-        ));
-    }
-    if !plane_size.is_multiple_of(height) {
-        return Err(PyRuntimeError::new_err(format!(
-            "plane size {plane_size} is not a whole number of {height} rows"
-        )));
-    }
-    Ok(plane_size / height)
-}
 
 // =============================================================================
 // DLPack capsule
@@ -587,79 +460,24 @@ fn dlpack_capsule_over<'py>(
 // Device export — the same memory, in CUDA's dialect
 // =============================================================================
 
-/// One surface's device-export state, in whichever of the two shapes
-/// this process can have it.
+/// A surface's device export as a helper process holds it: CUDA's import
+/// of the staging buffer the parent owns, the timeline its refills
+/// signal, and the client to ask for the next one.
 ///
-/// The staging buffer is the engine's either way — one allocation per
-/// surface, refilled by a VRAM-side copy. What differs is the distance
-/// to it: a caller holding the engine reaches it by method call, and a
-/// processor in its own helper process reaches it by escalate round
-/// trip, having imported the same memory through the surface-share
-/// check-out. Both arms end at CUDA's import of the one staging.
+/// The staging is the engine's — one allocation per surface, refilled by
+/// a VRAM-side copy. This side holds the consumer half.
 #[cfg(target_os = "linux")]
 #[derive(Clone)]
-pub(crate) enum SurfaceDeviceExport {
-    /// The engine is in this process.
-    EngineOwned {
-        staging: Arc<SurfaceDeviceExportStaging>,
-        cuda_import: Arc<CudaImportedSurface>,
-    },
-    /// The engine is one process away, and the staging with it.
-    ParentOwned {
-        surface_id: String,
-        export: Arc<HelperDeviceExport>,
-        exchange_client: Arc<HelperProcessGpuExchangeClient>,
-    },
+pub(crate) struct SurfaceDeviceExport {
+    surface_id: String,
+    export: Arc<HelperDeviceExport>,
+    exchange_client: Arc<HelperProcessGpuExchangeClient>,
 }
 
-#[cfg(target_os = "linux")]
-impl SurfaceDeviceExport {
-    fn cuda_import(&self) -> &Arc<CudaImportedSurface> {
-        match self {
-            Self::EngineOwned { cuda_import, .. } => cuda_import,
-            Self::ParentOwned { export, .. } => &export.cuda_import,
-        }
-    }
-}
-
-/// CUDA imports memoised per surface id, each validated against the
-/// engine staging it was made for.
+/// This surface's device export, opening it on first ask.
 ///
-/// The engine owns the staging lifecycle (`GpuContext` caches it and
-/// drops it with the context); CUDA is the wheel's runtime, so its
-/// import lives here — a memo, not a lifecycle record. `Weak` is the
-/// validity check: when the engine hands back a different staging (the
-/// old one was evicted, or a new context reused the id), the pointer
-/// mismatch forces a fresh import and the dead entry is replaced, so the
-/// map is bounded by live stagings rather than by process history.
-#[cfg(target_os = "linux")]
-static CUDA_IMPORTS_BY_SURFACE: LazyLock<
-    Mutex<
-        HashMap<
-            String,
-            (
-                std::sync::Weak<SurfaceDeviceExportStaging>,
-                Arc<CudaImportedSurface>,
-            ),
-        >,
-    >,
-> = LazyLock::new(|| Mutex::new(HashMap::new()));
-
-/// The engine capability this owned memory refills through, or the
-/// refusal naming how to get one.
-fn engine_view_for(
-    owned_memory: &Arc<GpuSurfaceOwnedMemory>,
-) -> PyResult<&GpuContextLimitedAccess> {
-    owned_memory.gpu_limited_access.as_ref().ok_or_else(|| {
-        PyRuntimeError::new_err(
-            "this handle was minted without the engine capability the device export refills \
-             through; acquire or resolve it via ctx.gpu_limited_access",
-        )
-    })
-}
-
-/// This surface's device export: engine staging (engine-cached), CUDA
-/// import (memoised here, validated against that staging).
+/// The escalate round trip needs the GIL attached to make the call at all;
+/// its wait releases it.
 #[cfg(target_os = "linux")]
 pub(crate) fn surface_device_export_for(
     python: Python<'_>,
@@ -671,53 +489,13 @@ pub(crate) fn surface_device_export_for(
              tensors come from graph frames (resolve_surface) or published pixel buffers",
         )
     })?;
-    // A helper process has no engine view to refill through; it has the
-    // parent, and the escalate round trip that opens the export needs
-    // the GIL attached (its own wait releases it).
-    if let GpuSurfaceOwnedValue::HelperCheckedOut(checked_out) = &owned_memory.owned_value {
-        return Ok(SurfaceDeviceExport::ParentOwned {
-            surface_id: surface_id.to_string(),
-            export: checked_out
-                .exchange_client
-                .open_device_export(python, surface_id)?,
-            exchange_client: Arc::clone(&checked_out.exchange_client),
-        });
-    }
-    let engine_view = engine_view_for(owned_memory)?;
-    let staging = engine_view
-        .surface_device_export_staging(surface_id)
-        .map_err(|failure| PyRuntimeError::new_err(failure.to_string()))?;
-
-    let mut memo = CUDA_IMPORTS_BY_SURFACE.lock();
-    // Entries whose staging died (context torn down, surface
-    // unregistered) are unreachable by the ptr-eq check below; sweep
-    // them so the memo is bounded by live stagings, not process history.
-    memo.retain(|_, (staging_it_was_made_for, _)| staging_it_was_made_for.strong_count() > 0);
-    if let Some((staging_it_was_made_for, cuda_import)) = memo.get(surface_id)
-        && staging_it_was_made_for
-            .upgrade()
-            .is_some_and(|previous| Arc::ptr_eq(&previous, &staging))
-    {
-        return Ok(SurfaceDeviceExport::EngineOwned {
-            staging,
-            cuda_import: Arc::clone(cuda_import),
-        });
-    }
-    let (raw_fd, byte_size, vulkan_device_uuid) = engine_view
-        .export_device_staging_opaque_fd(&staging)
-        .map_err(|failure| PyRuntimeError::new_err(failure.to_string()))?;
-    // SAFETY: the export hands over a fresh dup'd fd nothing else holds.
-    let opaque_fd = unsafe { std::os::fd::OwnedFd::from_raw_fd(raw_fd) };
-    let cuda_import = import_opaque_fd_into_cuda(opaque_fd, byte_size, vulkan_device_uuid)
-        .map(Arc::new)
-        .map_err(PyRuntimeError::new_err)?;
-    memo.insert(
-        surface_id.to_string(),
-        (Arc::downgrade(&staging), Arc::clone(&cuda_import)),
-    );
-    Ok(SurfaceDeviceExport::EngineOwned {
-        staging,
-        cuda_import,
+    let GpuSurfaceOwnedValue::HelperCheckedOut(checked_out) = &owned_memory.owned_value;
+    Ok(SurfaceDeviceExport {
+        surface_id: surface_id.to_string(),
+        export: checked_out
+            .exchange_client
+            .open_device_export(python, surface_id)?,
+        exchange_client: Arc::clone(&checked_out.exchange_client),
     })
 }
 
@@ -741,52 +519,23 @@ pub(crate) fn prepare_device_export(
     owned_memory: &Arc<GpuSurfaceOwnedMemory>,
 ) -> PyResult<PreparedDeviceExport> {
     let export = surface_device_export_for(python, owned_memory)?;
-    // Geometry comes from the staging alone — the object the byte span
-    // was sized for — never mixed with the handle's own pixel view. The
-    // engine records the pixel shape for both source kinds (a texture
-    // source maps to its 4-byte color shape — BGRA stays BGRA).
-    let (layout, writable) = match &export {
-        SurfaceDeviceExport::EngineOwned { staging, .. } => {
-            python.detach(|| {
-                engine_view_for(owned_memory)?
-                    .refill_device_export_staging(staging)
-                    .map_err(|failure| PyRuntimeError::new_err(failure.to_string()))
-            })?;
-            let pixel_format = staging.pixel_format().ok_or_else(|| {
-                PyRuntimeError::new_err("this staging carries no pixel shape; nothing to lay out")
-            })?;
-            (
-                PixelExchangeTensorLayout::for_pixel_format(
-                    pixel_format,
-                    staging.surface_width(),
-                    staging.surface_height(),
-                    staging.bytes_per_row(),
-                )?,
-                staging.writable(),
-            )
-        }
-        SurfaceDeviceExport::ParentOwned {
-            surface_id,
-            export,
-            exchange_client,
-        } => {
-            exchange_client.run_device_export_copy(
-                python,
-                "refill_device_export_staging",
-                surface_id,
-                export,
-            )?;
-            (
-                PixelExchangeTensorLayout::for_pixel_format(
-                    export.format,
-                    export.width,
-                    export.height,
-                    export.bytes_per_row,
-                )?,
-                export.writable,
-            )
-        }
-    };
+    export.exchange_client.run_device_export_copy(
+        python,
+        "refill_device_export_staging",
+        &export.surface_id,
+        &export.export,
+    )?;
+    // Geometry comes from the staging alone — the object the byte span was
+    // sized for — never mixed with the handle's own pixel view. The engine
+    // records the pixel shape for both source kinds (a texture source maps
+    // to its 4-byte color shape — BGRA stays BGRA).
+    let layout = PixelExchangeTensorLayout::for_pixel_format(
+        export.export.format,
+        export.export.width,
+        export.export.height,
+        export.export.bytes_per_row,
+    )?;
+    let writable = export.export.writable;
     Ok(PreparedDeviceExport {
         export,
         layout,
@@ -805,7 +554,7 @@ pub(crate) fn device_dlpack_capsule<'py>(
     read_only_lock: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
     let read_only = read_only_lock || !prepared.writable;
-    let cuda_import = Arc::clone(prepared.export.cuda_import());
+    let cuda_import = Arc::clone(&prepared.export.export.cuda_import);
     // The capsule outlives the handle, so it holds every layer the
     // pointer depends on: the surface, whatever owns the staging on this
     // side, and CUDA's import of it.
@@ -833,24 +582,13 @@ pub(crate) fn publish_device_write_back_to_surface(
     python: Python<'_>,
     owned_memory: &Arc<GpuSurfaceOwnedMemory>,
 ) -> PyResult<()> {
-    match surface_device_export_for(python, owned_memory)? {
-        SurfaceDeviceExport::EngineOwned { staging, .. } => python.detach(|| {
-            engine_view_for(owned_memory)?
-                .copy_device_export_staging_back_to_surface(&staging)
-                .map_err(|failure| PyRuntimeError::new_err(failure.to_string()))?;
-            Ok(())
-        }),
-        SurfaceDeviceExport::ParentOwned {
-            surface_id,
-            export,
-            exchange_client,
-        } => exchange_client.run_device_export_copy(
-            python,
-            "copy_device_export_staging_back_to_surface",
-            &surface_id,
-            &export,
-        ),
-    }
+    let export = surface_device_export_for(python, owned_memory)?;
+    export.exchange_client.run_device_export_copy(
+        python,
+        "copy_device_export_staging_back_to_surface",
+        &export.surface_id,
+        &export.export,
+    )
 }
 
 /// The DLPack device this surface's tensors would live on, importing on
@@ -862,7 +600,8 @@ pub(crate) fn imported_device_for(
     owned_memory: &Arc<GpuSurfaceOwnedMemory>,
 ) -> PyResult<Device> {
     Ok(surface_device_export_for(python, owned_memory)?
-        .cuda_import()
+        .export
+        .cuda_import
         .dlpack_device())
 }
 
@@ -871,12 +610,7 @@ pub(crate) fn imported_device_for(
 /// this process, or the parent that owns it.
 #[cfg(target_os = "linux")]
 pub(crate) fn device_export_available(owned_memory: &Arc<GpuSurfaceOwnedMemory>) -> bool {
-    let can_reach_the_staging = owned_memory.gpu_limited_access.is_some()
-        || matches!(
-            owned_memory.owned_value,
-            GpuSurfaceOwnedValue::HelperCheckedOut(_)
-        );
-    owned_memory.minted_surface_id.is_some() && can_reach_the_staging
+    owned_memory.minted_surface_id.is_some()
 }
 
 /// Off Linux there is no device export; every surface serves its host side.
