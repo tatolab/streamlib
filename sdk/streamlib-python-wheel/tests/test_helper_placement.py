@@ -171,3 +171,30 @@ def test_no_helper_survives_the_app(start_app_under_test):
     assert not survivors, (
         f"helper processes {survivors} outlived the app that spawned them"
     )
+
+
+def test_a_crashed_helper_is_surfaced_and_the_pipeline_keeps_running(
+    start_app_under_test,
+):
+    """The owner's crash policy: surface, keep running.
+
+    A processor that takes its own process down mid-run is reported in error,
+    and the rest of the graph is unaffected. Nothing polls the child between
+    `run` and teardown, so what notices is the bridge reader seeing EOF — break
+    that and the death goes unreported until shutdown, which is what this locks.
+    """
+    app = start_app_under_test(APP, "a_crashed_helper_leaves_the_pipeline_running")
+    app.await_output_containing(
+        "MARKER:ABOUT_TO_DIE", "the doomed processor to take its process down"
+    )
+    app.await_output_containing(
+        "Processor failed unrecoverably", "the engine to report the dead processor"
+    )
+    # The survivors were already producing before the crash and must still be
+    # producing after it — the pipeline is not brought down with one processor.
+    app.await_output_containing(
+        "MARKER:SINK_PID", "a surviving pair to keep passing bags after the crash"
+    )
+    app.interrupt()
+    app.await_marker("CLEAN_EXIT")
+    app.await_clean_exit()

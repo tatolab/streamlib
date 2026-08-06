@@ -577,7 +577,13 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
     }
 
     fn has_failed_unrecoverably(&self) -> bool {
-        self.child_is_gone
+        // The bridge, not just this host's own flag: between `run` and
+        // teardown the parent sends nothing, so a child that dies mid-run is
+        // never noticed by a failed exchange. What does notice is the bridge's
+        // reader thread, which sees EOF on the socket the moment the child's
+        // last fd closes — with no living process, that is the only signal
+        // there is.
+        self.child_is_gone || self.bridge.as_ref().is_some_and(|bridge| bridge.is_dead())
     }
 
     fn has_iceoryx2_outputs(&self) -> bool {
@@ -674,4 +680,133 @@ pub(crate) fn spawn_host_for_processor_node(
         child_is_gone: false,
         link_wiring: OutOfProcessLinkWiringEnvelope::default(),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsStr;
+
+    /// Read a built command's environment back as pairs, so a test can assert
+    /// what a child would inherit without starting one.
+    fn environment_of(command: &Command) -> Vec<(String, String)> {
+        command
+            .get_envs()
+            .filter_map(|(name, value)| {
+                Some((
+                    name.to_string_lossy().into_owned(),
+                    value?.to_string_lossy().into_owned(),
+                ))
+            })
+            .collect()
+    }
+
+    fn value_of<'a>(environment: &'a [(String, String)], name: &str) -> Option<&'a str> {
+        environment
+            .iter()
+            .find(|(entry_name, _)| entry_name == name)
+            .map(|(_, value)| value.as_str())
+    }
+
+    fn spawn_host_for_test(
+        app_entry_directory: Option<PathBuf>,
+    ) -> PythonHelperProcessSpawnHostProcessor {
+        PythonHelperProcessSpawnHostProcessor {
+            processor_class_import_path: "my_app.filters:BlurProcessor".to_string(),
+            processor_display_name: "BlurProcessor".to_string(),
+            processor_id: "Pblur".to_string(),
+            processor_configuration: None,
+            descriptor: ProcessorDescriptor::new(
+                streamlib::sdk::descriptors::SchemaIdent::new(
+                    streamlib::sdk::descriptors::Org::new("app").unwrap(),
+                    streamlib::sdk::descriptors::Package::new("local").unwrap(),
+                    streamlib::sdk::descriptors::TypeName::new("BlurProcessor").unwrap(),
+                    streamlib::sdk::descriptors::SemVer::new(0, 0, 0),
+                ),
+                "a test double",
+            ),
+            child_execution_config: ExecutionConfig::new(ProcessExecution::Reactive),
+            interpreter_path: PathBuf::from("/venv/bin/python"),
+            app_entry_directory,
+            child: None,
+            bridge: None,
+            child_is_gone: false,
+            link_wiring: OutOfProcessLinkWiringEnvelope::default(),
+        }
+    }
+
+    /// The child is an exec of the app's own interpreter running the helper
+    /// module — never a fork, and never some other Python found on `PATH`.
+    #[test]
+    fn the_child_is_the_apps_own_interpreter_running_the_helper_module() {
+        let command = spawn_host_for_test(None).build_helper_process_command("Rtest", None);
+        assert_eq!(command.get_program(), OsStr::new("/venv/bin/python"));
+        let arguments: Vec<_> = command.get_args().collect();
+        assert_eq!(arguments, ["-m", "streamlib._helper"]);
+    }
+
+    /// The class the child imports, and the identifiers it reports itself by,
+    /// travel in the environment. `STREAMLIB_ENTRYPOINT` *is* the import path
+    /// `rt.add` derived and refused an unimportable class by.
+    #[test]
+    fn the_child_is_told_which_class_to_import_and_who_it_is() {
+        let command = spawn_host_for_test(None).build_helper_process_command("Rtest", None);
+        let environment = environment_of(&command);
+        assert_eq!(
+            value_of(&environment, "STREAMLIB_ENTRYPOINT"),
+            Some("my_app.filters:BlurProcessor")
+        );
+        assert_eq!(
+            value_of(&environment, "STREAMLIB_PROCESSOR_ID"),
+            Some("Pblur")
+        );
+        assert_eq!(
+            value_of(&environment, "STREAMLIB_RUNTIME_ID"),
+            Some("Rtest")
+        );
+    }
+
+    /// The app's import root leads the child's `PYTHONPATH`, which is the only
+    /// reason a processor module sitting beside the entry file is importable
+    /// in a child launched from somewhere else entirely.
+    #[test]
+    fn the_apps_import_root_leads_the_childs_python_path() {
+        let app_entry_directory = std::env::temp_dir();
+        let command = spawn_host_for_test(Some(app_entry_directory.clone()))
+            .build_helper_process_command("Rtest", None);
+        let environment = environment_of(&command);
+        let python_path = value_of(&environment, "PYTHONPATH").expect("PYTHONPATH is set");
+        assert_eq!(
+            python_path.split(':').next(),
+            Some(app_entry_directory.to_string_lossy().as_ref()),
+            "the app's own modules must resolve before anything inherited"
+        );
+    }
+
+    /// An inherited `PYTHONHOME` points at whatever laid out the *parent's*
+    /// install; the child's interpreter was found by absolute path, so keeping
+    /// it would only send the child looking for the wrong standard library.
+    #[test]
+    fn an_inherited_python_home_is_not_passed_to_the_child() {
+        let command = spawn_host_for_test(None).build_helper_process_command("Rtest", None);
+        let cleared: Vec<_> = command
+            .get_envs()
+            .filter(|(name, value)| *name == OsStr::new("PYTHONHOME") && value.is_none())
+            .collect();
+        assert_eq!(cleared.len(), 1, "PYTHONHOME must be explicitly removed");
+    }
+
+    /// `sys.path[0]`, not `sys.argv[0]`: the launcher restores its own argv
+    /// before the `Runtime` is built, so an argv-derived root is the wheel's
+    /// own package directory and the child cannot import the app at all.
+    #[test]
+    fn an_empty_import_root_is_no_root_rather_than_the_filesystem_root() {
+        assert!(app_import_root_directory("").is_none());
+        assert!(app_import_root_directory("/definitely/not/a/real/path").is_none());
+        let real = std::env::temp_dir();
+        assert_eq!(
+            app_import_root_directory(&real.to_string_lossy()),
+            real.canonicalize().ok()
+        );
+    }
 }

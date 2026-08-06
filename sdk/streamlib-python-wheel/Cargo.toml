@@ -1,9 +1,9 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-# The importable wheel: CPython imports this cdylib and drives the engine
-# in-process. The inverted arrangement (a Rust binary embedding CPython) was the
-# #1702 spike's shape and is not what ships.
+# The importable wheel: CPython imports this cdylib and drives the engine from
+# the app's own process. The inverted arrangement (a Rust binary embedding
+# CPython) was the #1702 spike's shape and is not what ships.
 
 [package]
 name = "streamlib-python-wheel"
@@ -15,7 +15,7 @@ authors.workspace = true
 # four levels up. Same license, declared inline.
 license = "BUSL-1.1"
 repository.workspace = true
-description = "streamlib — the importable Python wheel: CPython imports the engine and authors pipelines in-process"
+description = "streamlib — the importable Python wheel: the app imports the engine and authors pipelines against it"
 publish = false
 
 [lib]

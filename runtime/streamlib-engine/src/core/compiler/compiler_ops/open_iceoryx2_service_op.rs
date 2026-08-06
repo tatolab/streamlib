@@ -943,7 +943,10 @@ mod tests {
             .out_of_process_link_wiring()
             .expect("the stub records its own wiring")
             .as_setup_command_ports();
-        assert_eq!(recorded_source_ports["outputs"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            recorded_source_ports["outputs"].as_array().unwrap().len(),
+            1
+        );
         assert_eq!(
             recorded_source_ports["outputs"][0]["channel_service_name"],
             serde_json::json!("pabc/out1"),

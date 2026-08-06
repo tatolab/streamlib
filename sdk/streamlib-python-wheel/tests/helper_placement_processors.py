@@ -37,14 +37,40 @@ class ReportsUpstreamProcessSink:
     """Announces the pid a bag was produced in, alongside its own."""
 
     def __init__(self) -> None:
-        self.announced = False
+        self.bags_seen = 0
 
     @input()
     def frames_from_upstream(self) -> None: ...
 
     def process(self, ctx) -> None:
         bag = ctx.inputs.read("frames_from_upstream")
-        if bag is None or self.announced:
+        if bag is None:
             return
-        log.info(f"MARKER:SINK_PID {os.getpid()} UPSTREAM_PID {bag['produced_in_pid']}")
-        self.announced = True
+        # Announced on every tenth bag rather than once: a test that waits for
+        # this *after* another processor crashed needs evidence of live
+        # traffic, not a marker emitted before the crash.
+        self.bags_seen += 1
+        if self.bags_seen % 10 == 1:
+            log.info(
+                f"MARKER:SINK_PID {os.getpid()} UPSTREAM_PID {bag['produced_in_pid']}"
+            )
+
+
+@processor(execution="continuous", interval_ms=10)
+class DiesAbruptlyProbe:
+    """Takes its own process down mid-run, the way a segfaulting native call
+    inside a user callback would."""
+
+    def __init__(self) -> None:
+        self.frames_before_dying = 3
+
+    @output()
+    def frames_to_downstream(self) -> None: ...
+
+    def process(self, ctx) -> None:
+        self.frames_before_dying -= 1
+        if self.frames_before_dying <= 0:
+            log.info(f"MARKER:ABOUT_TO_DIE {os.getpid()}")
+            # Not an exception: the point is a process that stops existing
+            # without unwinding, which is what a segfaulting native call does.
+            os._exit(1)

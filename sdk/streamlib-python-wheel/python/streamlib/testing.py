@@ -34,9 +34,13 @@ ENGINE_TEARDOWN_TIMEOUT_SECONDS = 60.0
 
 # The queues the feeder and collector processors reach. They cannot travel as
 # configuration — configuration is JSON on the graph node — so the graph carries
-# a channel name and this module holds the queue it names. Safe because the
-# processors run in this same interpreter, which is the whole point of
-# in-process placement.
+# a channel name and this module holds the queue it names.
+#
+# A process-global queue cannot reach the processor that is supposed to read it:
+# every Python processor runs in its own child, and this module's globals are
+# the app's. The feeder and collector become real graph endpoints over a
+# parent-owned IPC channel, which is what makes this harness work against the
+# placement it is testing.
 _fed_bags: "Dict[str, queue.Queue[Any]]" = {}
 _collected_bags: "Dict[str, queue.Queue[Any]]" = {}
 _next_channel_number = itertools.count()

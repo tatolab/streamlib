@@ -13,6 +13,7 @@ import sys
 
 import streamlib
 from helper_placement_processors import (
+    DiesAbruptlyProbe,
     ReportsItsOwnProcessSource,
     ReportsUpstreamProcessSink,
 )
@@ -85,6 +86,26 @@ def scenario_every_child_is_reaped() -> None:
     runtime.connect(
         source.output("frames_to_downstream"), sink.input("frames_from_upstream")
     )
+    runtime.run()
+    marker("CLEAN_EXIT")
+
+
+def scenario_a_crashed_helper_leaves_the_pipeline_running() -> None:
+    """One processor takes its own process down; the others keep going.
+
+    The owner's crash policy is surface-and-keep-running: the graph shows the
+    dead one in error, the rest of the pipeline is unaffected, and the frame it
+    had in flight is lost rather than silently replayed.
+    """
+    runtime = streamlib.Runtime()
+    runtime.add(DiesAbruptlyProbe)
+    survivor_source = runtime.add(ReportsItsOwnProcessSource, config={"label": "survivor"})
+    survivor_sink = runtime.add(ReportsUpstreamProcessSink)
+    runtime.connect(
+        survivor_source.output("frames_to_downstream"),
+        survivor_sink.input("frames_from_upstream"),
+    )
+    marker(f"APP_PID={os.getpid()}")
     runtime.run()
     marker("CLEAN_EXIT")
 

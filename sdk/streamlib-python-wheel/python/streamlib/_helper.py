@@ -72,12 +72,13 @@ class ParentProcessBridge:
     Lifecycle commands and escalate traffic share it in both directions, so a
     frame is classified on its `rpc` tag and never on whether a reply came
     back — fire-and-forget ops (logging) produce none, and treating that as
-    "not escalate" would push every log record into the lifecycle queue.
+    "not escalate" would push every log record into the lifecycle queue and
+    break the setup handshake.
 
-    A single reader thread owns the read half: it hands escalate responses to
-    whichever thread is waiting on that `request_id` and everything else to
-    the lifecycle queue this module's main thread drains. That is what lets a
-    Manual-mode worker thread escalate while the lifecycle loop keeps running.
+    A single reader thread owns the read half and feeds the lifecycle queue the
+    main thread drains. Escalate today is one-way — logging, which the parent
+    never answers — so a response arriving here has no caller to hand it to;
+    the request/response half lands with the ops that need it.
     """
 
     _FRAME_LENGTH_PREFIX = struct.Struct(">I")
@@ -88,8 +89,6 @@ class ParentProcessBridge:
         self._write_stream = parent_socket.makefile("wb", buffering=0)
         self._write_lock = threading.Lock()
         self._lifecycle_commands: "queue.Queue[Optional[dict[str, Any]]]" = queue.Queue()
-        self._escalate_responses: "dict[str, queue.Queue[dict[str, Any]]]" = {}
-        self._escalate_responses_lock = threading.Lock()
         self._reader = threading.Thread(
             target=self._demultiplex_frames_from_parent,
             name="streamlib-parent-bridge",
@@ -155,7 +154,12 @@ class ParentProcessBridge:
                 self._lifecycle_commands.put(None)
                 return
             if frame.get("rpc") == "escalate_response":
-                self._deliver_escalate_response(frame)
+                # Never forwarded to the lifecycle queue: it would be read as
+                # the answer to whatever command is in flight. Nothing here
+                # asked for one, so saying so is all there is to do.
+                log.warn(
+                    "the parent answered an escalate request this helper never sent"
+                )
                 continue
             self._lifecycle_commands.put(frame)
 
@@ -180,16 +184,6 @@ class ParentProcessBridge:
                 return None
             collected.extend(chunk)
         return bytes(collected)
-
-    def _deliver_escalate_response(self, frame: "dict[str, Any]") -> None:
-        request_id = frame.get("request_id")
-        if not isinstance(request_id, str):
-            log.warn("the parent sent an escalate response with no request to match it")
-            return
-        with self._escalate_responses_lock:
-            waiting = self._escalate_responses.pop(request_id, None)
-        if waiting is not None:
-            waiting.put(frame)
 
 
 def _encode_frame_payload(message: "dict[str, Any]") -> bytes:

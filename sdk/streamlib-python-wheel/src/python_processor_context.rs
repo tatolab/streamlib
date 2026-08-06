@@ -47,16 +47,18 @@ use crate::python_gpu_surface_pixel_exchange::{
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 
-fn expired_context_error() -> PyErr {
+/// The refusal a helper process gets for any GPU call.
+///
+/// Named separately from the expiry above because the cause is different and
+/// the old message sent authors looking for a lifecycle bug they do not have:
+/// a helper's GPU calls have to cross to the parent, and that path is not
+/// built. Every Python processor runs in its own child, so this is what the
+/// whole GPU surface answers there.
+fn gpu_unreachable_from_a_helper_process_error() -> PyErr {
     PyRuntimeError::new_err(
-        "this capability is only valid during the lifecycle hook or escalate callback that \
-         received it",
-    )
-}
-
-fn context_not_yet_activated_error() -> PyErr {
-    PyRuntimeError::new_err(
-        "this context becomes usable once the processor's first lifecycle hook runs",
+        "the GPU is not reachable from a Python processor: its work runs in a child process, \
+         and the cross-process pixel path is not wired. Frames still flow — `ctx.inputs` and \
+         `ctx.outputs` carry bags — but acquiring or mapping a surface does not.",
     )
 }
 
@@ -565,7 +567,7 @@ impl PythonGpuContextLimitedAccess {
     fn engine_view(&self) -> PyResult<&GpuContextLimitedAccess> {
         self.owned_engine_view
             .get()
-            .ok_or_else(context_not_yet_activated_error)
+            .ok_or_else(gpu_unreachable_from_a_helper_process_error)
     }
 }
 
@@ -727,7 +729,7 @@ fn read_gpu_full_access<T: Send>(
     python.detach(|| {
         let guard = lease.read();
         let Some(view_pointer) = guard.as_ref() else {
-            return Err(expired_context_error());
+            return Err(gpu_unreachable_from_a_helper_process_error());
         };
         // SAFETY: the pointer is present only for the span of the escalate
         // callback; the revoke's write-lock acquisition blocks on this read
