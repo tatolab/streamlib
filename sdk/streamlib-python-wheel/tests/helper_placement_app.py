@@ -10,7 +10,6 @@ processor's module, and that the pid a bag was produced in is not the app's.
 
 import os
 import sys
-import threading
 
 import streamlib
 from helper_placement_processors import (
@@ -20,17 +19,9 @@ from helper_placement_processors import (
 
 MARKER_PREFIX = "MARKER:"
 
-# Long enough for children to boot a fresh interpreter, import the wheel, open
-# their ports and pass a bag. Short enough that a wedge fails rather than hangs.
-SECONDS_TO_LET_THE_CHILDREN_REPORT = 25.0
-
 
 def marker(name: str) -> None:
     print(f"{MARKER_PREFIX}{name}", flush=True)
-
-
-def stop_after(runtime: streamlib.Runtime, seconds: float) -> None:
-    threading.Timer(seconds, runtime.shutdown).start()
 
 
 def scenario_the_app_never_hosts_the_processor() -> None:
@@ -58,7 +49,9 @@ def scenario_a_bag_is_produced_in_another_process() -> None:
         source.output("frames_to_downstream"), sink.input("frames_from_upstream")
     )
     marker(f"APP_PID={os.getpid()}")
-    stop_after(runtime, SECONDS_TO_LET_THE_CHILDREN_REPORT)
+    # Runs until the test has seen what it came for and interrupts — the
+    # children report in milliseconds, so a timer here would only be a guess
+    # about how slow the machine is.
     runtime.run()
     marker("CLEAN_EXIT")
 
@@ -73,7 +66,9 @@ def scenario_two_instances_of_one_class_get_two_processes() -> None:
             source.output("frames_to_downstream"), sink.input("frames_from_upstream")
         )
     marker(f"APP_PID={os.getpid()}")
-    stop_after(runtime, SECONDS_TO_LET_THE_CHILDREN_REPORT)
+    # Runs until the test has seen what it came for and interrupts — the
+    # children report in milliseconds, so a timer here would only be a guess
+    # about how slow the machine is.
     runtime.run()
     marker("CLEAN_EXIT")
 
@@ -91,7 +86,6 @@ def scenario_every_child_is_reaped() -> None:
         source.output("frames_to_downstream"), sink.input("frames_from_upstream")
     )
     marker(f"APP_PROCESS_GROUP={os.getpgid(0)}")
-    stop_after(runtime, SECONDS_TO_LET_THE_CHILDREN_REPORT)
     runtime.run()
     marker("CLEAN_EXIT")
 
