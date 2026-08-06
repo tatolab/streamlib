@@ -187,6 +187,8 @@ pub fn open_iceoryx2_service(
             max_queued_messages,
             max_subscribers,
             max_notifiers,
+            enable_safe_overflow,
+            link_id,
         )?;
     } else {
         let source_processor = get_single_processor(graph, &source_proc_id)?;
@@ -219,6 +221,8 @@ pub fn open_iceoryx2_service(
             max_queued_messages,
             max_subscribers,
             max_notifiers,
+            enable_safe_overflow,
+            link_id,
         )?;
     } else {
         let dest_processor = get_single_processor(graph, &dest_proc_id)?;
@@ -723,9 +727,13 @@ fn wire_subprocess_source(
     max_queued_messages: usize,
     max_subscribers: usize,
     notify_max_notifiers: usize,
+    enable_safe_overflow: bool,
+    link_id: &LinkUniqueId,
 ) -> Result<()> {
     let entry = serde_json::json!({
         "name": source_port,
+        "link_id": link_id.to_string(),
+        "enable_safe_overflow": enable_safe_overflow,
         "channel_service_name": channel_service_name,
         "dest_notify_service_name": notify_service_name,
         "schema": schema_ident_json(output_schema),
@@ -766,6 +774,8 @@ fn wire_subprocess_dest(
     max_queued_messages: usize,
     max_subscribers: usize,
     notify_max_notifiers: usize,
+    enable_safe_overflow: bool,
+    link_id: &LinkUniqueId,
 ) -> Result<()> {
     // The dest reader no longer carries a payload-size hint: the subprocess read
     // buffer starts at the default and grows to the frame it actually receives
@@ -774,6 +784,8 @@ fn wire_subprocess_dest(
     // subprocess maps the string back to its `*_input_set_read_mode` integer.
     let entry = serde_json::json!({
         "name": dest_port,
+        "link_id": link_id.to_string(),
+        "enable_safe_overflow": enable_safe_overflow,
         "channel_service_name": channel_service_name,
         "notify_service_name": notify_service_name,
         "read_mode": drain_order.as_manifest_str(),
