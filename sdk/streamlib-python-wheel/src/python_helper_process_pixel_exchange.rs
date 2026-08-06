@@ -166,6 +166,26 @@ impl HelperCheckedOutPixelSurface {
     }
 }
 
+/// What the parent answered when asked to open a surface's device export.
+///
+/// A struct rather than eight positional arguments: `staging_byte_size`
+/// and `bytes_per_row` are both `u64` and `width`/`height` are both `u32`,
+/// so a transposition compiles clean and lands as a wrong-sized CUDA
+/// import or a wrong stride.
+#[cfg(target_os = "linux")]
+struct DeviceExportStagingDescription {
+    /// The surface-share id the staging and its timeline are published
+    /// under — what the check-out names, not the source surface's id.
+    staging_share_id: String,
+    staging_byte_size: u64,
+    exporting_device_uuid: [u8; 16],
+    width: u32,
+    height: u32,
+    format: PixelFormat,
+    bytes_per_row: u64,
+    writable: bool,
+}
+
 /// What a helper process holds of a surface's device export: CUDA's
 /// import of the parent's staging buffer, and the timeline every refill
 /// signals.
@@ -366,30 +386,24 @@ impl HelperProcessGpuExchangeClient {
         op.set_item("surface_id", surface_id)?;
         let response =
             escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
-        let staging_share_id: String = response_field(&response, "handle_id")?.extract()?;
-        let width: u32 = response_field(&response, "width")?.extract()?;
-        let height: u32 = response_field(&response, "height")?.extract()?;
         let format_name: String = response_field(&response, "format")?.extract()?;
-        let bytes_per_row = decimal_string_field(&response, "bytes_per_row")?;
-        let staging_byte_size = decimal_string_field(&response, "staging_byte_size")?;
-        let writable: bool = response_field(&response, "writable")?.extract()?;
         let exporting_device_uuid: String =
             response_field(&response, "exporting_device_uuid")?.extract()?;
-        let format = crate::python_processor_context::parse_pixel_format_name(&format_name)?;
-        let device_uuid = parse_device_uuid(&exporting_device_uuid)?;
+        let described = DeviceExportStagingDescription {
+            staging_share_id: response_field(&response, "handle_id")?.extract()?,
+            staging_byte_size: decimal_string_field(&response, "staging_byte_size")?,
+            exporting_device_uuid: parse_device_uuid(&exporting_device_uuid)?,
+            width: response_field(&response, "width")?.extract()?,
+            height: response_field(&response, "height")?.extract()?,
+            format: crate::python_processor_context::parse_pixel_format_name(&format_name)?,
+            bytes_per_row: decimal_string_field(&response, "bytes_per_row")?,
+            writable: response_field(&response, "writable")?.extract()?,
+        };
 
         let opened = python.detach(|| -> PyResult<Arc<HelperDeviceExport>> {
-            let export = self.check_out_and_import_device_export(
-                &staging_share_id,
-                staging_byte_size,
-                device_uuid,
-                width,
-                height,
-                format,
-                bytes_per_row,
-                writable,
-            )?;
-            Ok(Arc::new(export))
+            Ok(Arc::new(
+                self.check_out_and_import_device_export(&described)?,
+            ))
         })?;
         // Published under the *source* surface's id: that is what a
         // handle knows, and what every later refill names.
@@ -437,18 +451,11 @@ impl HelperProcessGpuExchangeClient {
     /// Check the published staging out and import it: the memory into
     /// CUDA, the timeline into this child's Vulkan device.
     #[cfg(target_os = "linux")]
-    #[allow(clippy::too_many_arguments)]
     fn check_out_and_import_device_export(
         &self,
-        staging_share_id: &str,
-        staging_byte_size: u64,
-        exporting_device_uuid: [u8; 16],
-        width: u32,
-        height: u32,
-        format: PixelFormat,
-        bytes_per_row: u64,
-        writable: bool,
+        described: &DeviceExportStagingDescription,
     ) -> PyResult<HelperDeviceExport> {
+        let staging_share_id = described.staging_share_id.as_str();
         let request = serde_json::json!({"op": "check_out", "surface_id": staging_share_id});
         let (response, received_fds) = self.surface_share_request(&request)?;
         if let Some(checkout_error) = response.get("error").and_then(|value| value.as_str()) {
@@ -505,8 +512,8 @@ impl HelperProcessGpuExchangeClient {
         };
         let cuda_import = crate::python_cuda_pixel_exchange::import_opaque_fd_into_cuda(
             staging_fd,
-            staging_byte_size,
-            exporting_device_uuid,
+            described.staging_byte_size,
+            described.exporting_device_uuid,
         )
         .map(Arc::new)
         .map_err(crate::python_processor_context::gpu_operation_error)?;
@@ -514,11 +521,11 @@ impl HelperProcessGpuExchangeClient {
         Ok(HelperDeviceExport {
             cuda_import,
             refill_done,
-            width,
-            height,
-            format,
-            bytes_per_row,
-            writable,
+            width: described.width,
+            height: described.height,
+            format: described.format,
+            bytes_per_row: described.bytes_per_row,
+            writable: described.writable,
         })
     }
 

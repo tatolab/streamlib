@@ -998,13 +998,7 @@ fn handle_open_device_export_staging(
 ) -> EscalateResponse {
     let opened = (|| -> crate::core::error::Result<EscalateResponseOk> {
         let staging = sandbox.surface_device_export_staging(surface_id)?;
-        let shared_id = sandbox.share_device_export_staging(&staging)?;
-        let pixel_format = staging.pixel_format().ok_or_else(|| {
-            crate::core::error::Error::GpuError(format!(
-                "the device-export staging for surface {surface_id} carries no pixel shape; a \
-                 consumer would have no layout to import it under"
-            ))
-        })?;
+        let (shared_id, pixel_format) = sandbox.share_device_export_staging(&staging)?;
         Ok(EscalateResponseOk {
             request_id: rid.clone(),
             handle_id: shared_id,

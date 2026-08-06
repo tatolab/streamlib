@@ -293,14 +293,25 @@ impl GpuContext {
     ///
     /// Registers at most once per staging; later calls answer with the
     /// same id.
+    ///
+    /// Answers with the pixel shape it validated as well as the id, so a
+    /// caller building a consumer-side layout does not re-derive — and
+    /// cannot disagree about — what this already refused without.
     #[cfg(target_os = "linux")]
     pub fn share_device_export_staging(
         &self,
         staging: &SurfaceDeviceExportStaging,
-    ) -> Result<String> {
+    ) -> Result<(String, PixelFormat)> {
+        let pixel_format = staging.pixel_format.ok_or_else(|| {
+            Error::GpuError(format!(
+                "the device-export staging for surface {} carries no pixel shape; a consumer \
+                 would have no layout to import it under",
+                staging.surface_id
+            ))
+        })?;
         let mut registration_id = staging.surface_share_registration_id.lock();
         if let Some(already_registered) = registration_id.as_ref() {
-            return Ok(already_registered.clone());
+            return Ok((already_registered.clone(), pixel_format));
         }
         let surface_store = self.surface_store().ok_or_else(|| {
             Error::GpuError(
@@ -308,13 +319,6 @@ impl GpuContext {
                  another process"
                     .into(),
             )
-        })?;
-        let pixel_format = staging.pixel_format.ok_or_else(|| {
-            Error::GpuError(format!(
-                "the device-export staging for surface {} carries no pixel shape; a consumer \
-                 would have no layout to import it under",
-                staging.surface_id
-            ))
         })?;
         let shared_id = format!("{}-device-export-staging", staging.surface_id);
         // `host_inner`-direct for the same reason the passthroughs below
@@ -330,7 +334,7 @@ impl GpuContext {
             &staging.refill_done_timeline,
         )?;
         *registration_id = Some(shared_id.clone());
-        Ok(shared_id)
+        Ok((shared_id, pixel_format))
     }
 
     /// Drop the cached device-export staging for `surface_id`, if any.
@@ -543,7 +547,7 @@ impl crate::core::context::GpuContextLimitedAccess {
     pub fn share_device_export_staging(
         &self,
         staging: &SurfaceDeviceExportStaging,
-    ) -> Result<String> {
+    ) -> Result<(String, PixelFormat)> {
         self.host_inner().share_device_export_staging(staging)
     }
 

@@ -16,6 +16,9 @@ use std::ffi::c_void;
 
 use parking_lot::Mutex;
 
+#[cfg(target_os = "linux")]
+use std::os::fd::FromRawFd as _;
+
 use crate::core::rhi::PixelBuffer;
 #[cfg(target_os = "linux")]
 use crate::core::rhi::PixelFormat;
@@ -86,6 +89,19 @@ fn exported_plane_wire_handles(pixel_buffer: &PixelBuffer) -> Result<ExportedPla
         plane_offsets,
         handle_type,
     })
+}
+
+/// Adopt freshly-exported fds so they close exactly once, at the end of the
+/// registration that sends them.
+///
+/// SAFETY contract of every caller: each fd came from an export that minted
+/// it for this process and handed it to no one else.
+#[cfg(target_os = "linux")]
+fn adopt_exported_fds(exported_fds: Vec<std::os::unix::io::RawFd>) -> Vec<std::os::fd::OwnedFd> {
+    exported_fds
+        .into_iter()
+        .map(|exported_fd| unsafe { std::os::fd::OwnedFd::from_raw_fd(exported_fd) })
+        .collect()
 }
 
 /// Maximum number of entries in the SurfaceCache before eviction.
@@ -1118,25 +1134,28 @@ impl SurfaceStoreInner {
     /// Send one `register` request over the surface-share socket, passing
     /// `fds` with SCM_RIGHTS under `operation`'s name.
     ///
-    /// Takes the fds by value and closes every one before returning: the
-    /// service dup'd what it needs during the send, and a registration
-    /// path that leaks one leaks it per registered surface.
+    /// Takes the fds by value: the service dup'd what it needs during the
+    /// send, and `OwnedFd` is what closes this side's copies once — a
+    /// registration path that leaks one leaks it per registered surface.
     #[cfg(target_os = "linux")]
     fn send_surface_share_registration(
         &self,
         operation: &str,
         request: &serde_json::Value,
-        fds: Vec<std::os::unix::io::RawFd>,
+        fds: Vec<std::os::fd::OwnedFd>,
     ) -> Result<()> {
+        use std::os::fd::AsRawFd as _;
+
         let connection = self.connection.lock();
         let stream = connection.as_ref().ok_or_else(|| {
             Error::Configuration("SurfaceStore not connected to surface-share service".into())
         })?;
 
-        let send_result = streamlib_surface_client::send_request_with_fds(stream, request, &fds, 0);
-        for fd in &fds {
-            unsafe { libc::close(*fd) };
-        }
+        let raw_fds: Vec<std::os::unix::io::RawFd> =
+            fds.iter().map(std::os::fd::OwnedFd::as_raw_fd).collect();
+        let send_result =
+            streamlib_surface_client::send_request_with_fds(stream, request, &raw_fds, 0);
+        drop(fds);
         let (response, response_fds) = send_result.map_err(|failure| {
             Error::Configuration(format!("Unix socket {operation} failed: {failure}"))
         })?;
@@ -1175,7 +1194,16 @@ impl SurfaceStoreInner {
             "plane_offsets": exported_planes.plane_offsets,
         });
 
-        self.send_surface_share_registration("register", &request, exported_planes.plane_fds)?;
+        self.send_surface_share_registration(
+            "register",
+            &request,
+            // SAFETY: freshly-exported plane fds this process owns.
+            exported_planes
+                .plane_fds
+                .into_iter()
+                .map(|plane_fd| unsafe { std::os::fd::OwnedFd::from_raw_fd(plane_fd) })
+                .collect(),
+        )?;
         tracing::debug!("SurfaceStore: Registered buffer '{}'", pool_id);
         Ok(())
     }
@@ -1208,18 +1236,20 @@ impl SurfaceStoreInner {
         format: PixelFormat,
         refill_done: &crate::vulkan::rhi::HostVulkanTimelineSemaphore,
     ) -> Result<()> {
-        let staging_fd = staging_buffer.export_opaque_fd_memory()?;
-        let refill_done_fd = match refill_done.export_opaque_fd() {
-            Ok(fd) => fd,
-            Err(export_failure) => {
-                // SAFETY: closing an fd this process exported and has not
-                // handed to anyone.
-                unsafe { libc::close(staging_fd) };
-                return Err(Error::Configuration(format!(
-                    "register_device_export_staging: failed to export the refill timeline: \
-                     {export_failure}"
-                )));
-            }
+        // SAFETY: each export mints a fresh fd this process owns and has
+        // handed to no one; adopting it here is what closes it exactly once
+        // — including on the early return the timeline export can take.
+        let staging_fd =
+            unsafe { std::os::fd::OwnedFd::from_raw_fd(staging_buffer.export_opaque_fd_memory()?) };
+        let refill_done_fd = unsafe {
+            std::os::fd::OwnedFd::from_raw_fd(refill_done.export_opaque_fd().map_err(
+                |export_failure| {
+                    Error::Configuration(format!(
+                        "register_device_export_staging: failed to export the refill timeline: \
+                         {export_failure}"
+                    ))
+                },
+            )?)
         };
 
         let request = serde_json::json!({
@@ -1425,7 +1455,11 @@ impl SurfaceStoreInner {
         if let Some(s) = consume_done_fd {
             fds.push(s);
         }
-        self.send_surface_share_registration("register_texture", &request, fds)?;
+        self.send_surface_share_registration(
+            "register_texture",
+            &request,
+            adopt_exported_fds(fds),
+        )?;
 
         tracing::debug!(
             "SurfaceStore: Registered texture '{}' (produce_done={}, consume_done={})",
@@ -1525,7 +1559,11 @@ impl SurfaceStoreInner {
         if let Some(s) = consume_done_fd {
             fds.push(s);
         }
-        self.send_surface_share_registration("register_pixel_buffer_with_timeline", &request, fds)?;
+        self.send_surface_share_registration(
+            "register_pixel_buffer_with_timeline",
+            &request,
+            adopt_exported_fds(fds),
+        )?;
 
         tracing::debug!(
             "SurfaceStore: Registered pixel buffer '{}' ({} plane(s), produce_done={}, consume_done={})",

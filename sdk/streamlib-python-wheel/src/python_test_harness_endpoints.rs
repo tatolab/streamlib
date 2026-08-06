@@ -49,16 +49,21 @@ struct TestHarnessChannelQueues {
 ///
 /// One condvar for all channels rather than one each: a test pipeline runs a
 /// handful of ports, and a spurious wake costs a re-check of an empty queue.
-static TEST_HARNESS_CHANNELS: LazyLock<(
-    Mutex<HashMap<String, TestHarnessChannelQueues>>,
-    Condvar,
-)> = LazyLock::new(|| (Mutex::new(HashMap::new()), Condvar::new()));
+struct TestHarnessChannelRegistry {
+    open_channels: Mutex<HashMap<String, TestHarnessChannelQueues>>,
+    a_channel_collected_a_bag: Condvar,
+}
+
+static TEST_HARNESS_CHANNELS: LazyLock<TestHarnessChannelRegistry> =
+    LazyLock::new(|| TestHarnessChannelRegistry {
+        open_channels: Mutex::new(HashMap::new()),
+        a_channel_collected_a_bag: Condvar::new(),
+    });
 
 /// Open a channel. Answers `false` if the name was already taken, which is a
 /// harness bug rather than something a test can recover from.
 fn open_channel(channel: &str) -> bool {
-    let (channels, _) = &*TEST_HARNESS_CHANNELS;
-    let mut open_channels = channels.lock();
+    let mut open_channels = TEST_HARNESS_CHANNELS.open_channels.lock();
     if open_channels.contains_key(channel) {
         return false;
     }
@@ -68,27 +73,27 @@ fn open_channel(channel: &str) -> bool {
 
 /// Close a channel and drop whatever was still queued on it.
 fn close_channel(channel: &str) {
-    let (channels, _) = &*TEST_HARNESS_CHANNELS;
-    channels.lock().remove(channel);
+    TEST_HARNESS_CHANNELS.open_channels.lock().remove(channel);
 }
 
 /// Queue one bag for the feeder to publish.
 fn push_fed_bag(channel: &str, bag: serde_json::Value) -> bool {
-    let (channels, waiters) = &*TEST_HARNESS_CHANNELS;
-    let mut open_channels = channels.lock();
+    let mut open_channels = TEST_HARNESS_CHANNELS.open_channels.lock();
     let Some(queues) = open_channels.get_mut(channel) else {
         return false;
     };
+    // No notify: nothing waits on the fed queue. Waking a collector waiter
+    // here would restart nothing but its own re-check, and every feed from
+    // a test thread would do it.
     queues.fed_by_the_test.push_back(bag);
-    waiters.notify_all();
     true
 }
 
 /// Take the next bag a test fed, if any. A closed channel reads as empty:
 /// the feeder can still be ticking while its pipeline tears down.
 fn take_fed_bag(channel: &str) -> Option<serde_json::Value> {
-    let (channels, _) = &*TEST_HARNESS_CHANNELS;
-    channels
+    TEST_HARNESS_CHANNELS
+        .open_channels
         .lock()
         .get_mut(channel)?
         .fed_by_the_test
@@ -97,28 +102,46 @@ fn take_fed_bag(channel: &str) -> Option<serde_json::Value> {
 
 /// Record one bag the processor under test produced.
 fn push_collected_bag(channel: &str, bag: serde_json::Value) {
-    let (channels, waiters) = &*TEST_HARNESS_CHANNELS;
-    let mut open_channels = channels.lock();
+    let mut open_channels = TEST_HARNESS_CHANNELS.open_channels.lock();
     if let Some(queues) = open_channels.get_mut(channel) {
         queues.collected_from_the_processor.push_back(bag);
-        waiters.notify_all();
+        TEST_HARNESS_CHANNELS.a_channel_collected_a_bag.notify_all();
     }
 }
 
-/// Wait for the next collected bag, up to `timeout`.
+/// What a wait for a collected bag ended in.
+enum CollectedBagWaitOutcome {
+    Collected(serde_json::Value),
+    /// The deadline passed — the failure a test is looking for.
+    TimedOut,
+    /// The channel was never opened, or its pipeline already closed it.
+    /// Distinguished from a timeout because a mistyped channel name that
+    /// reads as "your processor produced nothing" sends a test author
+    /// looking at the wrong thing.
+    ChannelNotOpen,
+}
+
+/// Wait for the next collected bag until `timeout` has elapsed.
 ///
-/// `None` means the wait ran out — which is the failure a test is looking
-/// for, so it is reported rather than retried forever.
-fn take_collected_bag(channel: &str, timeout: Duration) -> Option<serde_json::Value> {
-    let (channels, waiters) = &*TEST_HARNESS_CHANNELS;
-    let mut open_channels = channels.lock();
+/// The deadline is taken once and waited against absolutely: a condvar wake
+/// that finds no bag must not restart the clock, or the bounded wait a test
+/// relies on to fail is not bounded at all.
+fn take_collected_bag(channel: &str, timeout: Duration) -> CollectedBagWaitOutcome {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut open_channels = TEST_HARNESS_CHANNELS.open_channels.lock();
     loop {
-        let queues = open_channels.get_mut(channel)?;
+        let Some(queues) = open_channels.get_mut(channel) else {
+            return CollectedBagWaitOutcome::ChannelNotOpen;
+        };
         if let Some(bag) = queues.collected_from_the_processor.pop_front() {
-            return Some(bag);
+            return CollectedBagWaitOutcome::Collected(bag);
         }
-        if waiters.wait_for(&mut open_channels, timeout).timed_out() {
-            return None;
+        if TEST_HARNESS_CHANNELS
+            .a_channel_collected_a_bag
+            .wait_until(&mut open_channels, deadline)
+            .timed_out()
+        {
+            return CollectedBagWaitOutcome::TimedOut;
         }
     }
 }
@@ -270,8 +293,14 @@ pub(crate) fn await_test_harness_bag<'py>(
     // Detached: the wait blocks this thread until a native collector running
     // on an engine thread publishes, and holding the GIL through it would
     // stall every other thread in the test's interpreter.
-    let collected = python.detach(|| take_collected_bag(channel, timeout));
-    collected
-        .map(|bag| json_value_to_python_object(python, &bag))
-        .transpose()
+    match python.detach(|| take_collected_bag(channel, timeout)) {
+        CollectedBagWaitOutcome::Collected(bag) => {
+            json_value_to_python_object(python, &bag).map(Some)
+        }
+        CollectedBagWaitOutcome::TimedOut => Ok(None),
+        CollectedBagWaitOutcome::ChannelNotOpen => Err(PyRuntimeError::new_err(format!(
+            "the test harness channel {channel:?} is not open; the pipeline that owned it has \
+             been closed"
+        ))),
+    }
 }

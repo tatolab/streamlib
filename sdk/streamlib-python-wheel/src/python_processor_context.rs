@@ -7,8 +7,10 @@
 //! reads is local, was passed down by the parent, or crosses to it — the
 //! GPU surface through the exchange client, whose escalate wait releases
 //! the GIL so a slow parent parks one thread and never the interpreter.
-//! GIL discipline, kept everywhere in this file: every potentially-blocking
-//! engine or IPC call runs inside a `python.detach(..)` closure.
+//! GIL discipline: a call that crosses to the parent is made attached —
+//! there is no reaching the bridge otherwise — and releases the GIL inside
+//! its own wait. Everything else that can block runs inside a
+//! `python.detach(..)` closure.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -24,8 +26,8 @@ use streamlib_adapter_cuda::dlpack::DeviceType;
 
 use crate::python_bag_conversion::{json_value_to_python_object, python_object_to_json_value};
 use crate::python_gpu_surface_pixel_exchange::{
-    CpuAccessGate, GpuSurfaceOwnedMemory, GpuSurfaceOwnedValue, HOST_VISIBLE_DLPACK_DEVICE,
-    device_export_available, exchange_shape_for_max_version, host_visible_dlpack_capsule,
+    CpuAccessGate, GpuSurfaceOwnedMemory, HOST_VISIBLE_DLPACK_DEVICE, device_export_available,
+    exchange_shape_for_max_version, host_visible_dlpack_capsule,
 };
 #[cfg(target_os = "linux")]
 use crate::python_gpu_surface_pixel_exchange::{
@@ -45,6 +47,21 @@ use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 /// reaching this refusal means the helper was started without its
 /// surface-share channel — a platform without one, or a parent too old to
 /// pass it.
+/// The refusal `escalate` gives on either capability.
+///
+/// `sibling_capability_attribute_name` is the other capability on the same
+/// context, so the message points at the whole surface the callback's
+/// operations moved to rather than half of it.
+fn escalate_scope_cannot_cross_the_process_boundary_error(
+    sibling_capability_attribute_name: &str,
+) -> PyErr {
+    PyRuntimeError::new_err(format!(
+        "escalate() gives its callback one atomic privileged scope, which cannot span a process \
+         boundary. The operations it wrapped are methods on this capability and on \
+         `{sibling_capability_attribute_name}` — call them directly; each is privileged on its own"
+    ))
+}
+
 fn gpu_unreachable_from_a_helper_process_error() -> PyErr {
     PyRuntimeError::new_err(
         "the GPU is not reachable from this Python processor: its helper process was started \
@@ -121,10 +138,7 @@ impl PythonGpuSurfaceHandle {
             // The release an acquired surface owes its parent rides the
             // debt inside the checked-out value, so this holds nothing but
             // the value and the id it travels under.
-            GpuSurfaceOwnedMemory::new(
-                GpuSurfaceOwnedValue::HelperCheckedOut(checked_out),
-                Some(surface_id),
-            ),
+            GpuSurfaceOwnedMemory::new(checked_out, Some(surface_id)),
         )
     }
 
@@ -473,14 +487,6 @@ pub(crate) fn gpu_operation_error(failure: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(failure.to_string())
 }
 
-/// The surface id a freshly-acquired pixel buffer travels under: the
-/// surface-share check-in when the store exists (so any process can resolve
-/// it), the pool id otherwise — the same rule the subprocess escalate
-/// handler applied.
-///
-/// A check-in comes back with the store that performed it, because it parks a
-/// strong clone of the buffer there — the handle owes that store a release.
-
 /// Non-allocating GPU capability, valid for the whole processor life.
 ///
 /// Every call crosses to the parent through the exchange client — the
@@ -574,10 +580,8 @@ impl PythonGpuContextLimitedAccess {
         reason = "the Python-visible parameter name is the API; stubtest compares it"
     )]
     fn escalate(&self, privileged_callback: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-        Err(PyRuntimeError::new_err(
-            "escalate() gives its callback one atomic privileged scope, which cannot span a \
-             process boundary. The operations it wrapped are methods on this capability and on \
-             `ctx.gpu_full_access` — call them directly; each is privileged on its own",
+        Err(escalate_scope_cannot_cross_the_process_boundary_error(
+            "ctx.gpu_full_access",
         ))
     }
 
@@ -692,10 +696,8 @@ impl PythonGpuContextFullAccess {
         reason = "the Python-visible parameter name is the API; stubtest compares it"
     )]
     fn escalate(&self, privileged_callback: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-        Err(PyRuntimeError::new_err(
-            "escalate() gives its callback one atomic privileged scope, which cannot span a \
-             process boundary. The operations it wrapped are methods on this capability and on \
-             `ctx.gpu_limited_access` — call them directly; each is privileged on its own",
+        Err(escalate_scope_cannot_cross_the_process_boundary_error(
+            "ctx.gpu_limited_access",
         ))
     }
 
@@ -703,9 +705,7 @@ impl PythonGpuContextFullAccess {
     /// speaks DMA-BUF — EGL, a V4L2 output device, another process.
     ///
     /// Returns `(fd, byte_size)`. **The caller owns the fd** and must close
-    /// it, or hand it to something that takes ownership. Only a surface from
-    /// the ordinary pixel-buffer pool can answer: a device-exchange buffer is
-    /// OPAQUE_FD-flavoured and has no DMA-BUF export path.
+    /// it, or hand it to something that takes ownership.
     ///
     /// Answered without leaving this process: the fds arrived here over
     /// SCM_RIGHTS when the surface was checked out, and they are the same
@@ -1078,12 +1078,6 @@ impl PythonLinkOutputDataWriter {
 pub(crate) fn parse_pixel_format_name(name: &str) -> PyResult<PixelFormat> {
     PixelFormat::parse_wire_name(name).map_err(PyValueError::new_err)
 }
-
-/// Bytes per pixel for the formats a device-exchange buffer can carry.
-///
-/// Restricted to the single-plane formats deliberately: the allocation is a
-/// flat buffer sized `width * height * bytes_per_pixel`, and a multi-plane
-/// format has no single such size.
 
 #[cfg(test)]
 mod tests {

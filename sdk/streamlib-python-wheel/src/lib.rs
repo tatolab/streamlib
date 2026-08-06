@@ -17,13 +17,13 @@ mod python_helper_process_spawn_host;
 mod python_logging;
 mod python_monotonic_timer;
 mod python_native_builtin_blocks;
-mod python_test_harness_endpoints;
 mod python_processor_context;
 mod python_processor_declaration;
 mod python_processor_import_path;
 mod python_processor_link_data_access;
 mod python_processor_registration;
 mod python_runtime_lifecycle;
+mod python_test_harness_endpoints;
 
 pub use python_runtime_lifecycle::PythonRuntimeHandle;
 
