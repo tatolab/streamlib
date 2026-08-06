@@ -18,6 +18,7 @@ mod python_native_builtin_blocks;
 mod python_processor_context;
 mod python_processor_declaration;
 mod python_processor_host;
+mod python_processor_import_path;
 mod python_processor_link_data_access;
 mod python_processor_registration;
 mod python_runtime_lifecycle;

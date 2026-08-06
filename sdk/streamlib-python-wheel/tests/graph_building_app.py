@@ -12,7 +12,7 @@ import sys
 import threading
 
 import streamlib
-from streamlib import RuntimeContextLimitedAccess, input, output, processor
+from graph_building_processors import GraphBuildingFilter
 
 MARKER_PREFIX = "MARKER:"
 
@@ -21,20 +21,6 @@ MARKER_PREFIX = "MARKER:"
 # few dozen.
 ADDS_PER_THREAD = 200
 GRAPH_BUILDING_THREADS = 2
-
-
-@processor
-class GraphBuildingFilter:
-    @input()
-    def frames_from_upstream(self) -> None: ...
-
-    @output()
-    def frames_to_downstream(self) -> None: ...
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        frame = ctx.inputs.read("frames_from_upstream")
-        if frame is not None:
-            ctx.outputs.write("frames_to_downstream", frame)
 
 
 def marker(name: str) -> None:
