@@ -12,9 +12,14 @@
 //! SCM_RIGHTS, and the consumer-side Vulkan import maps them. The escalate
 //! socket never carries fds.
 //!
-//! Pool allocations are DMA-BUF-flavoured; an `opaque_fd` checkout is
-//! refused here by name because it belongs to the device-export staging
-//! path, which imports through CUDA rather than a host mapping.
+//! Pool allocations are DMA-BUF-flavoured, and external device APIs
+//! import OPAQUE_FD — one allocation cannot export both on NVIDIA. So
+//! the device side goes through the parent's per-surface staging buffer:
+//! `open_device_export_staging` has the parent publish that staging and
+//! its refill timeline, the checkout delivers both fds, CUDA imports the
+//! memory, and each refill is an escalate round trip whose answer is the
+//! timeline value to wait for. The host's own wait after a refill orders
+//! nothing for this process; the timeline does.
 
 use std::path::PathBuf;
 
@@ -24,7 +29,7 @@ use pyo3::types::PyDict;
 #[cfg(target_os = "linux")]
 use pyo3::exceptions::PyRuntimeError;
 #[cfg(target_os = "linux")]
-use std::os::fd::{FromRawFd as _, IntoRawFd as _, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd as _, FromRawFd as _, IntoRawFd as _, OwnedFd, RawFd};
 #[cfg(target_os = "linux")]
 use std::os::unix::net::UnixStream;
 #[cfg(target_os = "linux")]
@@ -33,7 +38,12 @@ use std::sync::Arc;
 #[cfg(target_os = "linux")]
 use parking_lot::Mutex;
 #[cfg(target_os = "linux")]
-use streamlib_consumer_rhi::{ConsumerVulkanBuffer, ConsumerVulkanDevice};
+use streamlib_consumer_rhi::{
+    ConsumerVulkanBuffer, ConsumerVulkanDevice, ConsumerVulkanTimelineSemaphore,
+};
+
+#[cfg(target_os = "linux")]
+use crate::python_cuda_pixel_exchange::CudaImportedSurface;
 
 use streamlib::sdk::rhi::PixelFormat;
 
@@ -58,6 +68,52 @@ fn escalate_round_trip_to_parent<'py>(
         })
 }
 
+/// One field of an escalate response, named in the failure so a parent
+/// that answered a shape this child does not understand says which part.
+#[cfg(target_os = "linux")]
+fn response_field<'py>(response: &Bound<'py, PyAny>, field: &str) -> PyResult<Bound<'py, PyAny>> {
+    response.get_item(field).map_err(|_| {
+        crate::python_processor_context::gpu_operation_error(format!(
+            "the parent's response carried no {field}"
+        ))
+    })
+}
+
+/// A u64 the wire carries as a decimal string, because JTD has no u64.
+#[cfg(target_os = "linux")]
+fn decimal_string_field(response: &Bound<'_, PyAny>, field: &str) -> PyResult<u64> {
+    let as_written: String = response_field(response, field)?.extract()?;
+    as_written.parse().map_err(|_| {
+        crate::python_processor_context::gpu_operation_error(format!(
+            "the parent's {field} was {as_written:?}, which is not a decimal u64"
+        ))
+    })
+}
+
+/// The exporting device's UUID, as 32 hex characters.
+#[cfg(target_os = "linux")]
+fn parse_device_uuid(as_hex: &str) -> PyResult<[u8; 16]> {
+    let mut uuid = [0u8; 16];
+    if as_hex.len() != 32 {
+        return Err(crate::python_processor_context::gpu_operation_error(
+            format!(
+                "the parent reported the exporting device UUID as {as_hex:?}, which is not 32 hex \
+             characters; importing onto the wrong GPU reads the wrong memory rather than failing"
+            ),
+        ));
+    }
+    for (byte, hex_pair) in uuid.iter_mut().zip(as_hex.as_bytes().chunks_exact(2)) {
+        *byte = u8::from_str_radix(std::str::from_utf8(hex_pair).unwrap_or("zz"), 16).map_err(
+            |_| {
+                crate::python_processor_context::gpu_operation_error(format!(
+                    "the parent reported the exporting device UUID as {as_hex:?}, which is not hex"
+                ))
+            },
+        )?;
+    }
+    Ok(uuid)
+}
+
 /// What a checkout turned into once the fds were imported: mapped memory
 /// plus the layout facts every view derives from.
 #[cfg(target_os = "linux")]
@@ -73,6 +129,60 @@ pub(crate) struct HelperCheckedOutPixelSurface {
     /// Present only on an acquired surface — a resolved one belongs to its
     /// acquirer, and releasing it here would evict somebody else's frame.
     pub(crate) release_to_parent: Option<HelperSurfaceReleaseDebt>,
+    /// The plane fds this checkout was delivered, kept so
+    /// `export_dma_buf` can answer from them. They are the same fds a
+    /// host-side export would mint — the check-out is a kernel dup of
+    /// that export — so the child answers locally instead of asking for
+    /// something it already holds.
+    exported_plane_fds: Vec<OwnedFd>,
+    /// The client this surface was checked out through, and the one its
+    /// device export goes back to.
+    pub(crate) exchange_client: Arc<HelperProcessGpuExchangeClient>,
+}
+
+#[cfg(target_os = "linux")]
+impl HelperCheckedOutPixelSurface {
+    /// A DMA-BUF fd for the first plane, and the plane's byte size.
+    ///
+    /// The fd is a `dup` of the one this process was handed at check-out,
+    /// so the caller owns it and closing it does not disturb this
+    /// surface's own mapping.
+    pub(crate) fn export_dma_buf(&self) -> PyResult<(RawFd, u64)> {
+        let first_plane_fd = self.exported_plane_fds.first().ok_or_else(|| {
+            PyRuntimeError::new_err(
+                "this surface was checked out with no plane fd to export; nothing to hand to \
+                 native code",
+            )
+        })?;
+        let exported = first_plane_fd.try_clone().map_err(|duplicate_failure| {
+            PyRuntimeError::new_err(format!(
+                "could not duplicate this surface's DMA-BUF fd: {duplicate_failure}"
+            ))
+        })?;
+        Ok((
+            exported.into_raw_fd(),
+            self.bytes_per_row * u64::from(self.height),
+        ))
+    }
+}
+
+/// What a helper process holds of a surface's device export: CUDA's
+/// import of the parent's staging buffer, and the timeline every refill
+/// signals.
+///
+/// The staging itself belongs to the parent's `GpuContext` and is cached
+/// there per surface. This is the consumer half — one import per surface
+/// per child, memoised on the exchange client, because
+/// `cudaImportExternalMemory` is not a per-frame cost.
+#[cfg(target_os = "linux")]
+pub(crate) struct HelperDeviceExport {
+    pub(crate) cuda_import: Arc<CudaImportedSurface>,
+    refill_done: ConsumerVulkanTimelineSemaphore,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) format: PixelFormat,
+    pub(crate) bytes_per_row: u64,
+    pub(crate) writable: bool,
 }
 
 /// The release an acquired surface owes its parent: one `release_handle`
@@ -132,7 +242,23 @@ pub(crate) struct HelperProcessGpuExchangeClient {
     /// One Vulkan device per child, created at first import.
     #[cfg(target_os = "linux")]
     consumer_vulkan_device: Mutex<Option<Arc<ConsumerVulkanDevice>>>,
+    /// Device exports memoised per surface id: the CUDA import and the
+    /// timeline import are per-surface setup costs, never per-frame ones.
+    ///
+    /// Keyed by the source surface's id and held for this child's
+    /// lifetime. The parent can evict a staging (its surface was
+    /// unregistered), and this side cannot observe that — the next
+    /// refill's escalate round trip fails by name instead, which is the
+    /// honest answer to a surface that is gone.
+    #[cfg(target_os = "linux")]
+    device_exports_by_surface: Mutex<std::collections::HashMap<String, Arc<HelperDeviceExport>>>,
 }
+
+/// Bound on the wait for a refill the parent said it signalled. The copy
+/// is VRAM→VRAM; reaching this bound means the parent's queue is wedged,
+/// not that the copy is slow.
+#[cfg(target_os = "linux")]
+const DEVICE_EXPORT_REFILL_WAIT_TIMEOUT_NS: u64 = 2_000_000_000;
 
 impl HelperProcessGpuExchangeClient {
     pub(crate) fn new(escalate_request_to_parent: Py<PyAny>, surface_socket_path: PathBuf) -> Self {
@@ -143,6 +269,8 @@ impl HelperProcessGpuExchangeClient {
             surface_share_connection: Mutex::new(None),
             #[cfg(target_os = "linux")]
             consumer_vulkan_device: Mutex::new(None),
+            #[cfg(target_os = "linux")]
+            device_exports_by_surface: Mutex::new(std::collections::HashMap::new()),
         }
     }
 
@@ -152,7 +280,7 @@ impl HelperProcessGpuExchangeClient {
     /// and Vulkan import run detached.
     #[cfg(target_os = "linux")]
     pub(crate) fn acquire_pixel_buffer(
-        &self,
+        self: &Arc<Self>,
         python: Python<'_>,
         width: u32,
         height: u32,
@@ -185,7 +313,7 @@ impl HelperProcessGpuExchangeClient {
     /// the surface belongs to its acquirer.
     #[cfg(target_os = "linux")]
     pub(crate) fn resolve_surface(
-        &self,
+        self: &Arc<Self>,
         python: Python<'_>,
         surface_id: &str,
     ) -> PyResult<HelperCheckedOutPixelSurface> {
@@ -194,10 +322,204 @@ impl HelperProcessGpuExchangeClient {
 
     /// `check_out` over the surface-share socket, then the DMA-BUF import.
     #[cfg(target_os = "linux")]
-    fn check_out_and_import(&self, surface_id: &str) -> PyResult<HelperCheckedOutPixelSurface> {
+    fn check_out_and_import(
+        self: &Arc<Self>,
+        surface_id: &str,
+    ) -> PyResult<HelperCheckedOutPixelSurface> {
         let request = serde_json::json!({"op": "check_out", "surface_id": surface_id});
         let (response, received_fds) = self.surface_share_request(&request)?;
         self.import_checked_out_surface(surface_id, &response, received_fds)
+    }
+
+    /// Wait for the parent's GPU device to go idle.
+    ///
+    /// A real wait, not an acknowledgement: the parent runs it inside its
+    /// escalate scope, so the reply means the device was idle on that
+    /// side — which is the only side there is.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn wait_device_idle(&self, python: Python<'_>) -> PyResult<()> {
+        let op = PyDict::new(python);
+        op.set_item("op", "wait_device_idle")?;
+        escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+        Ok(())
+    }
+
+    /// Open this surface's device export, importing the parent's staging
+    /// into CUDA on first ask and memoising it for this child.
+    ///
+    /// Two channels again, same division as the host path: escalate asks
+    /// the parent to allocate and publish the staging, and the
+    /// surface-share check-out carries the memory — the staging's
+    /// OPAQUE_FD and the refill timeline's fd, in that order.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn open_device_export(
+        &self,
+        python: Python<'_>,
+        surface_id: &str,
+    ) -> PyResult<Arc<HelperDeviceExport>> {
+        if let Some(already_open) = self.device_exports_by_surface.lock().get(surface_id) {
+            return Ok(Arc::clone(already_open));
+        }
+
+        let op = PyDict::new(python);
+        op.set_item("op", "open_device_export_staging")?;
+        op.set_item("surface_id", surface_id)?;
+        let response =
+            escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+        let staging_share_id: String = response_field(&response, "handle_id")?.extract()?;
+        let width: u32 = response_field(&response, "width")?.extract()?;
+        let height: u32 = response_field(&response, "height")?.extract()?;
+        let format_name: String = response_field(&response, "format")?.extract()?;
+        let bytes_per_row = decimal_string_field(&response, "bytes_per_row")?;
+        let staging_byte_size = decimal_string_field(&response, "staging_byte_size")?;
+        let writable: bool = response_field(&response, "writable")?.extract()?;
+        let exporting_device_uuid: String =
+            response_field(&response, "exporting_device_uuid")?.extract()?;
+        let format = crate::python_processor_context::parse_pixel_format_name(&format_name)?;
+        let device_uuid = parse_device_uuid(&exporting_device_uuid)?;
+
+        let opened = python.detach(|| -> PyResult<Arc<HelperDeviceExport>> {
+            let export = self.check_out_and_import_device_export(
+                &staging_share_id,
+                staging_byte_size,
+                device_uuid,
+                width,
+                height,
+                format,
+                bytes_per_row,
+                writable,
+            )?;
+            Ok(Arc::new(export))
+        })?;
+        // Published under the *source* surface's id: that is what a
+        // handle knows, and what every later refill names.
+        Ok(Arc::clone(
+            self.device_exports_by_surface
+                .lock()
+                .entry(surface_id.to_string())
+                .or_insert(opened),
+        ))
+    }
+
+    /// Ask the parent to run one device-export copy and wait for the
+    /// timeline value it answers with.
+    ///
+    /// The wait is the whole point of the round trip: the parent's own
+    /// post-submit wait orders nothing for this process, so a read that
+    /// skipped this would race the copy it asked for.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn run_device_export_copy(
+        &self,
+        python: Python<'_>,
+        escalate_op: &str,
+        surface_id: &str,
+        export: &HelperDeviceExport,
+    ) -> PyResult<()> {
+        let op = PyDict::new(python);
+        op.set_item("op", escalate_op)?;
+        op.set_item("surface_id", surface_id)?;
+        let response =
+            escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+        let signalled = decimal_string_field(&response, "timeline_value")?;
+        python.detach(|| {
+            export
+                .refill_done
+                .wait(signalled, DEVICE_EXPORT_REFILL_WAIT_TIMEOUT_NS)
+                .map_err(|wait_failure| {
+                    crate::python_processor_context::gpu_operation_error(format!(
+                        "waiting for {escalate_op} of surface {surface_id:?} to reach timeline \
+                         value {signalled} failed: {wait_failure}"
+                    ))
+                })
+        })
+    }
+
+    /// Check the published staging out and import it: the memory into
+    /// CUDA, the timeline into this child's Vulkan device.
+    #[cfg(target_os = "linux")]
+    #[allow(clippy::too_many_arguments)]
+    fn check_out_and_import_device_export(
+        &self,
+        staging_share_id: &str,
+        staging_byte_size: u64,
+        exporting_device_uuid: [u8; 16],
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+        bytes_per_row: u64,
+        writable: bool,
+    ) -> PyResult<HelperDeviceExport> {
+        let request = serde_json::json!({"op": "check_out", "surface_id": staging_share_id});
+        let (response, received_fds) = self.surface_share_request(&request)?;
+        if let Some(checkout_error) = response.get("error").and_then(|value| value.as_str()) {
+            return Err(crate::python_processor_context::gpu_operation_error(
+                format!(
+                    "the surface-share service refused check_out of the device-export staging \
+                 {staging_share_id:?}: {checkout_error}"
+                ),
+            ));
+        }
+        let handle_type = response
+            .get("handle_type")
+            .and_then(|value| value.as_str())
+            .unwrap_or("dma_buf");
+        if handle_type != "opaque_fd" {
+            return Err(crate::python_processor_context::gpu_operation_error(
+                format!(
+                    "the device-export staging {staging_share_id:?} is registered as \
+                 {handle_type:?}; an external device API imports OPAQUE_FD, and importing one \
+                 flavour through the other hands the driver a handle of the wrong type"
+                ),
+            ));
+        }
+        // The staging's memory fd, then the refill timeline's — the order
+        // the registration published them in.
+        let [staging_fd, refill_done_fd] =
+            <[OwnedFd; 2]>::try_from(received_fds).map_err(|delivered: Vec<OwnedFd>| {
+                crate::python_processor_context::gpu_operation_error(format!(
+                    "check_out of the device-export staging {staging_share_id:?} returned {} \
+                     fds; it carries exactly the staging's memory and its refill timeline",
+                    delivered.len(),
+                ))
+            })?;
+
+        let vulkan_device = self.consumer_vulkan_device()?;
+        // Both imports adopt their fd on success and leave it with the
+        // caller on failure, so each is handed over only at its call.
+        let refill_done = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
+            &vulkan_device,
+            refill_done_fd.as_raw_fd(),
+        ) {
+            Ok(imported_timeline) => {
+                let _adopted_by_vulkan = refill_done_fd.into_raw_fd();
+                imported_timeline
+            }
+            Err(import_failure) => {
+                return Err(crate::python_processor_context::gpu_operation_error(
+                    format!(
+                        "this helper could not import the refill timeline of \
+                     {staging_share_id:?}: {import_failure}"
+                    ),
+                ));
+            }
+        };
+        let cuda_import = crate::python_cuda_pixel_exchange::import_opaque_fd_into_cuda(
+            staging_fd,
+            staging_byte_size,
+            exporting_device_uuid,
+        )
+        .map(Arc::new)
+        .map_err(crate::python_processor_context::gpu_operation_error)?;
+
+        Ok(HelperDeviceExport {
+            cuda_import,
+            refill_done,
+            width,
+            height,
+            format,
+            bytes_per_row,
+            writable,
+        })
     }
 
     /// One request/response over the cached surface-share connection,
@@ -249,7 +571,7 @@ impl HelperProcessGpuExchangeClient {
     /// scope rather than by remembering to.
     #[cfg(target_os = "linux")]
     fn import_checked_out_surface(
-        &self,
+        self: &Arc<Self>,
         surface_id: &str,
         response: &serde_json::Value,
         received_fds: Vec<OwnedFd>,
@@ -389,6 +711,8 @@ impl HelperProcessGpuExchangeClient {
             format,
             bytes_per_row,
             release_to_parent: None,
+            exported_plane_fds: plane_fds,
+            exchange_client: Arc::clone(self),
         })
     }
 

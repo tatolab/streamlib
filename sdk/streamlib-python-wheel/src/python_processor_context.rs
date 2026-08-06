@@ -212,9 +212,14 @@ impl PythonGpuSurfaceHandle {
     /// and import into CUDA. A handle that answered kDLCUDA here never
     /// silently downgrades later; a refill failure after this raises.
     #[cfg(target_os = "linux")]
-    fn natural_side_is_device(&self, owned_memory: &Arc<GpuSurfaceOwnedMemory>) -> bool {
+    fn natural_side_is_device(
+        &self,
+        python: Python<'_>,
+        owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+    ) -> bool {
         *self.natural_dlpack_side_is_device.get_or_init(|| {
-            device_export_available(owned_memory) && imported_device_for(owned_memory).is_ok()
+            device_export_available(owned_memory)
+                && imported_device_for(python, owned_memory).is_ok()
         })
     }
 
@@ -222,13 +227,13 @@ impl PythonGpuSurfaceHandle {
     /// `close` so the context-manager spelling cannot silently drop an
     /// edit.
     #[cfg(target_os = "linux")]
-    fn publish_pending_device_write(&self) -> PyResult<()> {
+    fn publish_pending_device_write(&self, python: Python<'_>) -> PyResult<()> {
         if self
             .device_write_pending
             .swap(false, std::sync::atomic::Ordering::SeqCst)
             && let Some(owned_memory) = self.owned_memory.lock().clone()
         {
-            publish_device_write_back_to_surface(&owned_memory)?;
+            publish_device_write_back_to_surface(python, &owned_memory)?;
         }
         Ok(())
     }
@@ -303,19 +308,19 @@ impl PythonGpuSurfaceHandle {
         // engine call. A pending device write publishes first: the
         // context-manager spelling reaches close without an explicit
         // unlock, and dropping the edit silently there is data loss.
-        python.detach(|| -> PyResult<()> {
-            // A failed publish must not skip the release: the handle would
-            // stay open with its pool slot pinned, in the exact spelling
-            // (`with` → close) users write. Clean up, then surface the
-            // failure.
-            #[cfg(target_os = "linux")]
-            let publish_outcome = self.publish_pending_device_write();
+        // A failed publish must not skip the release: the handle would
+        // stay open with its pool slot pinned, in the exact spelling
+        // (`with` → close) users write. Clean up, then surface the
+        // failure.
+        #[cfg(target_os = "linux")]
+        let publish_outcome = self.publish_pending_device_write(python);
+        python.detach(|| {
             self.cpu_access.unlock();
             self.release_owned_engine_value();
-            #[cfg(target_os = "linux")]
-            publish_outcome?;
-            Ok(())
-        })
+        });
+        #[cfg(target_os = "linux")]
+        publish_outcome?;
+        Ok(())
     }
 
     fn __enter__(python_self: PyRef<'_, Self>) -> PyRef<'_, Self> {
@@ -367,18 +372,16 @@ impl PythonGpuSurfaceHandle {
     /// Close CPU access, publishing any pending device-side write back
     /// into the surface first. Idempotent.
     fn unlock(&self, python: Python<'_>) -> PyResult<()> {
-        python.detach(|| -> PyResult<()> {
-            // The gate opens whether or not the publish succeeded — a
-            // surface left locked after a failed publish would refuse
-            // every later access with a message about locking, hiding
-            // the real failure this raises.
-            #[cfg(target_os = "linux")]
-            let publish_outcome = self.publish_pending_device_write();
-            self.cpu_access.unlock();
-            #[cfg(target_os = "linux")]
-            publish_outcome?;
-            Ok(())
-        })
+        // The gate opens whether or not the publish succeeded — a
+        // surface left locked after a failed publish would refuse
+        // every later access with a message about locking, hiding
+        // the real failure this raises.
+        #[cfg(target_os = "linux")]
+        let publish_outcome = self.publish_pending_device_write(python);
+        python.detach(|| self.cpu_access.unlock());
+        #[cfg(target_os = "linux")]
+        publish_outcome?;
+        Ok(())
     }
 
     /// The DLPack device this surface's tensors live on.
@@ -394,8 +397,8 @@ impl PythonGpuSurfaceHandle {
         // serves, so a probe failure here (answered CPU) cannot be
         // followed by a successful device capsule there.
         #[cfg(target_os = "linux")]
-        if python.detach(|| self.natural_side_is_device(&owned_memory)) {
-            let device = python.detach(|| imported_device_for(&owned_memory))?;
+        if self.natural_side_is_device(python, &owned_memory) {
+            let device = imported_device_for(python, &owned_memory)?;
             return Ok((device.device_type as i32, device.device_id));
         }
         #[cfg(not(target_os = "linux"))]
@@ -448,7 +451,7 @@ impl PythonGpuSurfaceHandle {
         {
             let wants_host = match dl_device {
                 Some((device_type, _)) => device_type == DeviceType::Cpu as i32,
-                None => !python.detach(|| self.natural_side_is_device(&owned_memory)),
+                None => !self.natural_side_is_device(python, &owned_memory),
             };
             if wants_host {
                 return host_visible_dlpack_capsule(
@@ -458,10 +461,11 @@ impl PythonGpuSurfaceHandle {
                     read_only,
                 );
             }
-            // The refill (a GPU submit plus a bounded wait, and on first
-            // call the staging allocation + CUDA import) runs detached;
-            // only the capsule construction needs the GIL.
-            let prepared = python.detach(|| prepare_device_export(&owned_memory))?;
+            // The refill is a GPU submit plus a bounded wait, and on the
+            // first call the staging allocation and CUDA import too. It
+            // detaches around the blocking work itself — a helper's arm
+            // has to stay attached to reach the parent at all.
+            let prepared = prepare_device_export(python, &owned_memory)?;
             let writable_export = !read_only && prepared.writable;
             let capsule =
                 device_dlpack_capsule(python, &owned_memory, prepared, exchange_shape, read_only)?;
@@ -677,40 +681,22 @@ impl PythonGpuContextLimitedAccess {
     }
 }
 
-struct EscalatedGpuFullAccessViewPointer(NonNull<GpuContextFullAccess>);
-
-// SAFETY: same protocol as the runtime-context view pointers — dereferenced
-// only under its lease's read guard, revoked (write-lock, blocking on
-// readers) before the engine borrow it erased ends.
-unsafe impl Send for EscalatedGpuFullAccessViewPointer {}
-unsafe impl Sync for EscalatedGpuFullAccessViewPointer {}
-
-type EscalatedGpuFullAccessViewLease = Arc<RwLock<Option<EscalatedGpuFullAccessViewPointer>>>;
-
-/// Run `use_gpu_full_access` against the escalate closure that scopes this
-/// capability, detached from the GIL.
-fn read_gpu_full_access<T: Send>(
-    python: Python<'_>,
-    lease: &EscalatedGpuFullAccessViewLease,
-    use_gpu_full_access: impl FnOnce(&GpuContextFullAccess) -> PyResult<T> + Send,
-) -> PyResult<T> {
-    python.detach(|| {
-        let guard = lease.read();
-        let Some(view_pointer) = guard.as_ref() else {
-            return Err(gpu_unreachable_from_a_helper_process_error());
-        };
-        // SAFETY: the pointer is present only for the span of the escalate
-        // callback; the revoke's write-lock acquisition blocks on this read
-        // guard, so the borrow is live.
-        use_gpu_full_access(unsafe { view_pointer.0.as_ref() })
-    })
-}
-
-/// Privileged GPU capability, live for the span of the escalate callback that
-/// handed it over.
+/// The privileged GPU capability a `setup` / `teardown` hook receives.
+///
+/// Every method here is one escalate round trip to the parent, which runs
+/// the privileged work against the engine's own capability and answers
+/// with a handle. That is the shape, not a degradation of one: the
+/// engine's escalate gate serializes runtime-wide and waits for device
+/// idle before releasing, so each op arrives back already ordered.
+///
+/// What does not survive the process boundary is a *scope* spanning
+/// several ops — see this capability's `escalate` refusal.
 #[pyclass(name = "GpuContextFullAccess", module = "streamlib", frozen)]
 pub(crate) struct PythonGpuContextFullAccess {
-    escalated_view_lease: EscalatedGpuFullAccessViewLease,
+    /// `None` means this helper was started without its GPU channels, and
+    /// every method refuses by name.
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
+    helper_process_exchange_client: Option<Arc<HelperProcessGpuExchangeClient>>,
 }
 
 #[pymethods]
@@ -725,53 +711,74 @@ impl PythonGpuContextFullAccess {
         format: &str,
     ) -> PyResult<PythonGpuSurfaceHandle> {
         let pixel_format = parse_pixel_format_name(format)?;
-        read_gpu_full_access(python, &self.escalated_view_lease, |gpu_full_access| {
-            let (pool_id, pixel_buffer) = gpu_full_access
-                .acquire_pixel_buffer(width, height, pixel_format)
-                .map_err(gpu_operation_error)?;
-            let (minted_surface_id, surface_store_owing_a_release) = mint_pixel_buffer_surface_id(
-                gpu_full_access.surface_store(),
-                &pool_id,
-                &pixel_buffer,
+        #[cfg(target_os = "linux")]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            let checked_out = exchange_client.acquire_pixel_buffer(
+                python,
+                width,
+                height,
+                pixel_format.wire_name(),
             )?;
-            // The full-access view is lease-bound and cannot be stashed, so a
-            // handle acquired here carries no engine capability for device
-            // export — resolve the published id from the limited view instead.
-            Ok(PythonGpuSurfaceHandle::from_acquired_pixel_buffer(
-                minted_surface_id,
-                surface_store_owing_a_release,
-                pixel_buffer,
-                None,
-            ))
-        })
+            return Ok(PythonGpuSurfaceHandle::from_helper_checked_out_surface(
+                checked_out,
+            ));
+        }
+        let _ = (python, width, height, pixel_format);
+        Err(gpu_unreachable_from_a_helper_process_error())
     }
 
     /// Acquire a pooled texture through the privileged path.
+    ///
+    /// Refused for the same reason the limited capability refuses it: a
+    /// pool texture recycles per frame, and it is not registered for
+    /// cross-process import.
+    #[expect(
+        clippy::unused_self,
+        reason = "the refusal is this capability's whole answer for textures"
+    )]
+    #[expect(
+        unused_variables,
+        reason = "the Python-visible parameter names are the API; stubtest compares them"
+    )]
     fn acquire_texture(
         &self,
-        python: Python<'_>,
         width: u32,
         height: u32,
         format: &str,
         usage: Vec<String>,
     ) -> PyResult<PythonGpuSurfaceHandle> {
-        let texture_format = parse_texture_format_name(format)?;
-        let texture_usages = parse_texture_usage_names(&usage)?;
-        read_gpu_full_access(python, &self.escalated_view_lease, |gpu_full_access| {
-            let descriptor = TexturePoolDescriptor::new(width, height, texture_format)
-                .with_usage(texture_usages);
-            let pooled_texture = gpu_full_access
-                .acquire_texture(&descriptor)
-                .map_err(gpu_operation_error)?;
-            // The full-access view is lease-bound and cannot be stashed, so
-            // no registration and no device export — acquire from the
-            // limited capability for an exportable texture.
-            Ok(PythonGpuSurfaceHandle::from_pooled_texture(
-                pooled_texture,
-                None,
-                None,
-            ))
-        })
+        Err(PyRuntimeError::new_err(
+            "device textures are not reachable from a Python processor: a pool texture is \
+             not registered for cross-process import. `acquire_pixel_buffer` is the \
+             CPU-reachable path; device-side tensors ride the device-export staging path",
+        ))
+    }
+
+    /// Run `privileged_callback` with a temporary full-access GPU capability.
+    ///
+    /// Refused, and it is the shape rather than the reach that refuses it.
+    /// Every method on this capability already escalates on its own, so
+    /// the privileged *operations* are all here. What the callback adds
+    /// is an atomic scope — the engine's escalate gate held across the
+    /// whole closure, nothing else in the runtime escalating meanwhile —
+    /// and that cannot cross a process boundary: emulating it would run
+    /// each statement in its own gate scope with other processors
+    /// interleaving, keeping the spelling and silently dropping the
+    /// guarantee it exists for.
+    #[expect(
+        clippy::unused_self,
+        reason = "the refusal is this capability's whole answer for escalation"
+    )]
+    #[expect(
+        unused_variables,
+        reason = "the Python-visible parameter name is the API; stubtest compares it"
+    )]
+    fn escalate(&self, privileged_callback: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+        Err(PyRuntimeError::new_err(
+            "escalate() gives its callback one atomic privileged scope, which cannot span a \
+             process boundary. The operations it wrapped are methods on this capability and on \
+             `ctx.gpu_limited_access` — call them directly; each is privileged on its own",
+        ))
     }
 
     /// Export a DMA-BUF file descriptor for `surface`, for native code that
@@ -781,83 +788,59 @@ impl PythonGpuContextFullAccess {
     /// it, or hand it to something that takes ownership. Only a surface from
     /// the ordinary pixel-buffer pool can answer: a device-exchange buffer is
     /// OPAQUE_FD-flavoured and has no DMA-BUF export path.
+    ///
+    /// Answered without leaving this process: the fds arrived here over
+    /// SCM_RIGHTS when the surface was checked out, and they are the same
+    /// ones a host-side export would mint.
     #[cfg(target_os = "linux")]
+    #[expect(
+        clippy::unused_self,
+        reason = "the surface carries the fds; the capability is the door"
+    )]
     fn export_dma_buf(
         &self,
         python: Python<'_>,
         surface: &PythonGpuSurfaceHandle,
     ) -> PyResult<(i32, u64)> {
         let owned_memory = surface.owned_memory()?;
-        read_gpu_full_access(python, &self.escalated_view_lease, |gpu_full_access| {
-            let pixel_buffer = owned_memory.dma_buf_exportable_pixel_buffer()?;
-            gpu_full_access
-                .export_pixel_buffer_dma_buf_fd(pixel_buffer)
-                .map_err(gpu_operation_error)
-        })
+        python.detach(|| owned_memory.export_dma_buf())
     }
 
     /// Import a DMA-BUF file descriptor as a surface this graph can read.
-    ///
-    /// **Takes ownership of `fd` on success** — the driver adopts it, and it
-    /// must not be closed afterwards. On failure the fd is still the
-    /// caller's.
     #[cfg(target_os = "linux")]
+    #[expect(
+        clippy::unused_self,
+        reason = "the refusal is this capability's whole answer for imports"
+    )]
+    #[expect(
+        unused_variables,
+        reason = "the Python-visible parameter names are the API; stubtest compares them"
+    )]
     #[pyo3(signature = (fd, width, height, format = "bgra", byte_size = None))]
     fn import_dma_buf(
         &self,
-        python: Python<'_>,
         fd: i32,
         width: u32,
         height: u32,
         format: &str,
         byte_size: Option<u64>,
     ) -> PyResult<PythonGpuSurfaceHandle> {
-        let pixel_format = parse_pixel_format_name(format)?;
-        let bytes_per_pixel = device_exchange_bytes_per_pixel(pixel_format)?;
-        // `export_dma_buf` reports the allocation's real size; passing it
-        // back accepts a padded row pitch the tight product would refuse.
-        let byte_size = byte_size
-            .unwrap_or_else(|| u64::from(width) * u64::from(height) * u64::from(bytes_per_pixel));
-        if byte_size == 0 {
-            return Err(PyValueError::new_err(
-                "width and height must both be greater than zero",
-            ));
-        }
-        read_gpu_full_access(python, &self.escalated_view_lease, |gpu_full_access| {
-            let storage_buffer = gpu_full_access
-                .import_dma_buf_storage_buffer(fd, byte_size)
-                .map_err(gpu_operation_error)?;
-            let pixel_buffer = gpu_full_access
-                .wrap_storage_buffer_as_pixel_buffer(
-                    &storage_buffer,
-                    width,
-                    height,
-                    bytes_per_pixel,
-                    pixel_format,
-                )
-                .map_err(gpu_operation_error)?;
-            Ok(PythonGpuSurfaceHandle::new(
-                None,
-                width,
-                height,
-                pixel_format.wire_name().to_string(),
-                GpuSurfaceOwnedMemory::new(
-                    GpuSurfaceOwnedValue::PixelBuffer(pixel_buffer),
-                    None,
-                    None,
-                    None,
-                ),
-            ))
-        })
+        Err(PyRuntimeError::new_err(
+            "importing a foreign DMA-BUF is not reachable from a Python processor yet: the \
+             surface registry a graph reads lives in the app process, and handing it an fd \
+             needs a wire that carries one. Exporting works — `export_dma_buf` answers from \
+             this process",
+        ))
     }
 
     /// Block until the GPU device is idle.
     fn wait_device_idle(&self, python: Python<'_>) -> PyResult<()> {
-        read_gpu_full_access(python, &self.escalated_view_lease, |gpu_full_access| {
-            gpu_full_access
-                .wait_device_idle()
-                .map_err(gpu_operation_error)
-        })
+        #[cfg(target_os = "linux")]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            return exchange_client.wait_device_idle(python);
+        }
+        let _ = python;
+        Err(gpu_unreachable_from_a_helper_process_error())
     }
 }
 
@@ -934,13 +917,13 @@ impl PythonRuntimeContextFullAccess {
             gpu_limited_access_context: Py::new(
                 python,
                 PythonGpuContextLimitedAccess::new_for_helper_process(
-                    helper_process_exchange_client,
+                    helper_process_exchange_client.clone(),
                 ),
             )?,
             gpu_full_access_context: Py::new(
                 python,
                 PythonGpuContextFullAccess {
-                    escalated_view_lease: Arc::new(RwLock::new(None)),
+                    helper_process_exchange_client,
                 },
             )?,
             pause_state_announced_by_parent: Arc::new(AtomicBool::new(false)),

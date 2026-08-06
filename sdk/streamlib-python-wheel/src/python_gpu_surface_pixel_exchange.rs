@@ -41,7 +41,9 @@ use streamlib::sdk::rhi::{PixelBuffer, PixelFormat};
 #[cfg(target_os = "linux")]
 use crate::python_cuda_pixel_exchange::{CudaImportedSurface, import_opaque_fd_into_cuda};
 #[cfg(target_os = "linux")]
-use crate::python_helper_process_pixel_exchange::HelperCheckedOutPixelSurface;
+use crate::python_helper_process_pixel_exchange::{
+    HelperCheckedOutPixelSurface, HelperDeviceExport, HelperProcessGpuExchangeClient,
+};
 use streamlib_adapter_cuda::dlpack::{
     self, DataType, DataTypeCode, Device, DeviceType, Flags, ManagedTensor, ManagedTensorVersioned,
 };
@@ -161,6 +163,22 @@ impl GpuSurfaceOwnedMemory {
                 "this surface is a consumer import: its DMA-BUF was already exported by the \
                  engine, and re-exporting an import is not a path. Publish the surface id and \
                  let the consumer check it out instead",
+            )),
+        }
+    }
+
+    /// A DMA-BUF fd for this surface's first plane, plus its byte size.
+    ///
+    /// A checked-out surface answers from the fds it was handed at
+    /// check-out — they are the engine's own export, dup'd by the kernel
+    /// on the way over, so there is nothing to ask the parent for.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn export_dma_buf(&self) -> PyResult<(i32, u64)> {
+        match &self.owned_value {
+            GpuSurfaceOwnedValue::HelperCheckedOut(checked_out) => checked_out.export_dma_buf(),
+            _ => Err(PyNotImplementedError::new_err(
+                "this surface has no DMA-BUF to export: only a pixel buffer acquired or \
+                 resolved through the graph carries one",
             )),
         }
     }
@@ -569,13 +587,39 @@ fn dlpack_capsule_over<'py>(
 // Device export — the same memory, in CUDA's dialect
 // =============================================================================
 
-/// One surface's device-export state: the engine staging plus CUDA's
-/// import of it.
+/// One surface's device-export state, in whichever of the two shapes
+/// this process can have it.
+///
+/// The staging buffer is the engine's either way — one allocation per
+/// surface, refilled by a VRAM-side copy. What differs is the distance
+/// to it: a caller holding the engine reaches it by method call, and a
+/// processor in its own helper process reaches it by escalate round
+/// trip, having imported the same memory through the surface-share
+/// check-out. Both arms end at CUDA's import of the one staging.
 #[cfg(target_os = "linux")]
 #[derive(Clone)]
-pub(crate) struct SurfaceDeviceExport {
-    pub(crate) staging: Arc<SurfaceDeviceExportStaging>,
-    pub(crate) cuda_import: Arc<CudaImportedSurface>,
+pub(crate) enum SurfaceDeviceExport {
+    /// The engine is in this process.
+    EngineOwned {
+        staging: Arc<SurfaceDeviceExportStaging>,
+        cuda_import: Arc<CudaImportedSurface>,
+    },
+    /// The engine is one process away, and the staging with it.
+    ParentOwned {
+        surface_id: String,
+        export: Arc<HelperDeviceExport>,
+        exchange_client: Arc<HelperProcessGpuExchangeClient>,
+    },
+}
+
+#[cfg(target_os = "linux")]
+impl SurfaceDeviceExport {
+    fn cuda_import(&self) -> &Arc<CudaImportedSurface> {
+        match self {
+            Self::EngineOwned { cuda_import, .. } => cuda_import,
+            Self::ParentOwned { export, .. } => &export.cuda_import,
+        }
+    }
 }
 
 /// CUDA imports memoised per surface id, each validated against the
@@ -618,6 +662,7 @@ fn engine_view_for(
 /// import (memoised here, validated against that staging).
 #[cfg(target_os = "linux")]
 pub(crate) fn surface_device_export_for(
+    python: Python<'_>,
     owned_memory: &Arc<GpuSurfaceOwnedMemory>,
 ) -> PyResult<SurfaceDeviceExport> {
     let surface_id = owned_memory.minted_surface_id.as_deref().ok_or_else(|| {
@@ -626,6 +671,18 @@ pub(crate) fn surface_device_export_for(
              tensors come from graph frames (resolve_surface) or published pixel buffers",
         )
     })?;
+    // A helper process has no engine view to refill through; it has the
+    // parent, and the escalate round trip that opens the export needs
+    // the GIL attached (its own wait releases it).
+    if let GpuSurfaceOwnedValue::HelperCheckedOut(checked_out) = &owned_memory.owned_value {
+        return Ok(SurfaceDeviceExport::ParentOwned {
+            surface_id: surface_id.to_string(),
+            export: checked_out
+                .exchange_client
+                .open_device_export(python, surface_id)?,
+            exchange_client: Arc::clone(&checked_out.exchange_client),
+        });
+    }
     let engine_view = engine_view_for(owned_memory)?;
     let staging = engine_view
         .surface_device_export_staging(surface_id)
@@ -641,7 +698,7 @@ pub(crate) fn surface_device_export_for(
             .upgrade()
             .is_some_and(|previous| Arc::ptr_eq(&previous, &staging))
     {
-        return Ok(SurfaceDeviceExport {
+        return Ok(SurfaceDeviceExport::EngineOwned {
             staging,
             cuda_import: Arc::clone(cuda_import),
         });
@@ -658,15 +715,17 @@ pub(crate) fn surface_device_export_for(
         surface_id.to_string(),
         (Arc::downgrade(&staging), Arc::clone(&cuda_import)),
     );
-    Ok(SurfaceDeviceExport {
+    Ok(SurfaceDeviceExport::EngineOwned {
         staging,
         cuda_import,
     })
 }
 
-/// Everything a device capsule needs, produced with no GIL attached:
-/// the refill runs a GPU submit and a bounded wait, and the first call
-/// additionally allocates staging and imports into CUDA.
+/// Everything a device capsule needs. The costly parts run detached —
+/// the refill is a GPU submit plus a wait, and the first call also
+/// allocates the staging and imports it into CUDA — but the helper arm
+/// crosses to the parent, which needs the GIL attached to make the call
+/// and releases it inside its own wait.
 #[cfg(target_os = "linux")]
 pub(crate) struct PreparedDeviceExport {
     pub(crate) export: SurfaceDeviceExport,
@@ -675,32 +734,59 @@ pub(crate) struct PreparedDeviceExport {
 }
 
 /// Refill the staging from the surface's current pixels and derive the
-/// tensor layout — the detachable half of a device export. Call inside
-/// `python.detach`.
+/// tensor layout.
 #[cfg(target_os = "linux")]
 pub(crate) fn prepare_device_export(
+    python: Python<'_>,
     owned_memory: &Arc<GpuSurfaceOwnedMemory>,
 ) -> PyResult<PreparedDeviceExport> {
-    let export = surface_device_export_for(owned_memory)?;
-    engine_view_for(owned_memory)?
-        .refill_device_export_staging(&export.staging)
-        .map_err(|failure| PyRuntimeError::new_err(failure.to_string()))?;
-
+    let export = surface_device_export_for(python, owned_memory)?;
     // Geometry comes from the staging alone — the object the byte span
-    // was sized for — never mixed with the handle's own pixel view.
-    let staging = &export.staging;
-    // The engine records the pixel shape for both source kinds (a
-    // texture source maps to its 4-byte color shape — BGRA stays BGRA).
-    let pixel_format = staging.pixel_format().ok_or_else(|| {
-        PyRuntimeError::new_err("this staging carries no pixel shape; nothing to lay out")
-    })?;
-    let layout = PixelExchangeTensorLayout::for_pixel_format(
-        pixel_format,
-        staging.surface_width(),
-        staging.surface_height(),
-        staging.bytes_per_row(),
-    )?;
-    let writable = staging.writable();
+    // was sized for — never mixed with the handle's own pixel view. The
+    // engine records the pixel shape for both source kinds (a texture
+    // source maps to its 4-byte color shape — BGRA stays BGRA).
+    let (layout, writable) = match &export {
+        SurfaceDeviceExport::EngineOwned { staging, .. } => {
+            python.detach(|| {
+                engine_view_for(owned_memory)?
+                    .refill_device_export_staging(staging)
+                    .map_err(|failure| PyRuntimeError::new_err(failure.to_string()))
+            })?;
+            let pixel_format = staging.pixel_format().ok_or_else(|| {
+                PyRuntimeError::new_err("this staging carries no pixel shape; nothing to lay out")
+            })?;
+            (
+                PixelExchangeTensorLayout::for_pixel_format(
+                    pixel_format,
+                    staging.surface_width(),
+                    staging.surface_height(),
+                    staging.bytes_per_row(),
+                )?,
+                staging.writable(),
+            )
+        }
+        SurfaceDeviceExport::ParentOwned {
+            surface_id,
+            export,
+            exchange_client,
+        } => {
+            exchange_client.run_device_export_copy(
+                python,
+                "refill_device_export_staging",
+                surface_id,
+                export,
+            )?;
+            (
+                PixelExchangeTensorLayout::for_pixel_format(
+                    export.format,
+                    export.width,
+                    export.height,
+                    export.bytes_per_row,
+                )?,
+                export.writable,
+            )
+        }
+    };
     Ok(PreparedDeviceExport {
         export,
         layout,
@@ -719,16 +805,20 @@ pub(crate) fn device_dlpack_capsule<'py>(
     read_only_lock: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
     let read_only = read_only_lock || !prepared.writable;
+    let cuda_import = Arc::clone(prepared.export.cuda_import());
+    // The capsule outlives the handle, so it holds every layer the
+    // pointer depends on: the surface, whatever owns the staging on this
+    // side, and CUDA's import of it.
     let owner: dlpack::CapsuleOwner = Box::new((
         Arc::clone(owned_memory),
-        Arc::clone(&prepared.export.staging),
-        Arc::clone(&prepared.export.cuda_import),
+        prepared.export,
+        Arc::clone(&cuda_import),
     ));
     dlpack_capsule_over(
         python,
-        prepared.export.cuda_import.device_pointer(),
+        cuda_import.device_pointer(),
         prepared.layout,
-        prepared.export.cuda_import.dlpack_device(),
+        cuda_import.dlpack_device(),
         exchange_shape,
         read_only,
         owner,
@@ -740,30 +830,53 @@ pub(crate) fn device_dlpack_capsule<'py>(
 /// tensor was taken under the write lock.
 #[cfg(target_os = "linux")]
 pub(crate) fn publish_device_write_back_to_surface(
+    python: Python<'_>,
     owned_memory: &Arc<GpuSurfaceOwnedMemory>,
 ) -> PyResult<()> {
-    let export = surface_device_export_for(owned_memory)?;
-    engine_view_for(owned_memory)?
-        .copy_device_export_staging_back_to_surface(&export.staging)
-        .map_err(|failure| PyRuntimeError::new_err(failure.to_string()))?;
-    Ok(())
+    match surface_device_export_for(python, owned_memory)? {
+        SurfaceDeviceExport::EngineOwned { staging, .. } => python.detach(|| {
+            engine_view_for(owned_memory)?
+                .copy_device_export_staging_back_to_surface(&staging)
+                .map_err(|failure| PyRuntimeError::new_err(failure.to_string()))?;
+            Ok(())
+        }),
+        SurfaceDeviceExport::ParentOwned {
+            surface_id,
+            export,
+            exchange_client,
+        } => exchange_client.run_device_export_copy(
+            python,
+            "copy_device_export_staging_back_to_surface",
+            &surface_id,
+            &export,
+        ),
+    }
 }
 
 /// The DLPack device this surface's tensors would live on, importing on
 /// first ask — the driver's own classification of the mapped pointer is
 /// the only honest answer.
 #[cfg(target_os = "linux")]
-pub(crate) fn imported_device_for(owned_memory: &Arc<GpuSurfaceOwnedMemory>) -> PyResult<Device> {
-    Ok(surface_device_export_for(owned_memory)?
-        .cuda_import
+pub(crate) fn imported_device_for(
+    python: Python<'_>,
+    owned_memory: &Arc<GpuSurfaceOwnedMemory>,
+) -> PyResult<Device> {
+    Ok(surface_device_export_for(python, owned_memory)?
+        .cuda_import()
         .dlpack_device())
 }
 
 /// Whether this surface can even attempt a device export: it has an id
-/// to key on and the engine capability to refill through.
+/// to key on, and a way to reach the staging — the engine capability in
+/// this process, or the parent that owns it.
 #[cfg(target_os = "linux")]
 pub(crate) fn device_export_available(owned_memory: &Arc<GpuSurfaceOwnedMemory>) -> bool {
-    owned_memory.minted_surface_id.is_some() && owned_memory.gpu_limited_access.is_some()
+    let can_reach_the_staging = owned_memory.gpu_limited_access.is_some()
+        || matches!(
+            owned_memory.owned_value,
+            GpuSurfaceOwnedValue::HelperCheckedOut(_)
+        );
+    owned_memory.minted_surface_id.is_some() && can_reach_the_staging
 }
 
 /// Off Linux there is no device export; every surface serves its host side.

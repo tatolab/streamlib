@@ -55,7 +55,7 @@ use crate::_generated_::tatolab__escalate::escalate_request::{
     EscalateRequestRunGraphicsDrawBindingKind, EscalateRequestRunGraphicsDrawDrawKind,
     EscalateRequestRunGraphicsDrawIndexBufferIndexType, EscalateRequestRunRayTracingKernel,
     EscalateRequestRunRayTracingKernelBindingKind, EscalateRequestTryRunCpuReadbackCopy,
-    EscalateRequestTryRunCpuReadbackCopyDirection,
+    EscalateRequestTryRunCpuReadbackCopyDirection, EscalateRequestWaitDeviceIdle,
 };
 use crate::_generated_::tatolab__escalate::escalate_response::{
     EscalateResponseContended, EscalateResponseErr, EscalateResponseOk,
@@ -99,6 +99,7 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::AcquireTexture(p) => Some(&p.request_id),
         EscalateRequest::AcquireImage(p) => Some(&p.request_id),
         EscalateRequest::RunCpuReadbackCopy(p) => Some(&p.request_id),
+        EscalateRequest::WaitDeviceIdle(p) => Some(&p.request_id),
         EscalateRequest::OpenDeviceExportStaging(p) => Some(&p.request_id),
         EscalateRequest::RefillDeviceExportStaging(p) => Some(&p.request_id),
         EscalateRequest::CopyDeviceExportStagingBackToSurface(p) => Some(&p.request_id),
@@ -486,6 +487,19 @@ pub(crate) fn handle_escalate_op(
                     message: "try_run_cpu_readback_copy is only available on Linux".to_string(),
                 }))
             }
+        }
+        EscalateRequest::WaitDeviceIdle(EscalateRequestWaitDeviceIdle { request_id: _ }) => {
+            Some(match sandbox.escalate(|full| full.wait_device_idle()) {
+                Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
+                    request_id: rid,
+                    handle_id: String::new(),
+                    ..Default::default()
+                }),
+                Err(failure) => EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: format!("wait_device_idle failed: {failure}"),
+                }),
+            })
         }
         EscalateRequest::OpenDeviceExportStaging(EscalateRequestOpenDeviceExportStaging {
             request_id: _,

@@ -153,6 +153,15 @@ mapping:
         enum:
           - image_to_buffer
           - buffer_to_image
+  wait_device_idle:
+    properties:
+      request_id:
+        metadata:
+          description: "Correlates request with response. UUID string."
+        type: string
+      # No payload: the host waits on the one device it owns. The reply
+      # is the acknowledgement that the wait completed — a subprocess
+      # that did not wait for it would not have waited at all.
   open_device_export_staging:
     properties:
       request_id:
