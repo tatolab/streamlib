@@ -1169,6 +1169,16 @@ impl SurfaceStoreInner {
         {
             return Err(Error::Configuration(format!("{operation}: {error}")));
         }
+        // A refusal the service reports without an `error` string — a
+        // duplicate surface id is the one that matters, because reading it
+        // as success would leave every consumer checking out the previous
+        // allocation while this one is never refilled.
+        if response.get("success").and_then(serde_json::Value::as_bool) == Some(false) {
+            return Err(Error::Configuration(format!(
+                "{operation}: the surface-share service refused the registration without \
+                 naming a reason; the id is most likely already registered"
+            )));
+        }
         Ok(())
     }
 

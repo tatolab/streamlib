@@ -56,6 +56,28 @@ class ReportsUpstreamProcessSink:
             )
 
 
+@processor
+class ReportsItsOwnProcessVideoSink:
+    """Announces its own process, reading frames a native built-in produced.
+
+    The frames come from `TestPatternSource`, which is native and therefore
+    has no process of its own — so this sink's pid, set against the app's,
+    is what discriminates the two sides of the boundary.
+    """
+
+    def __init__(self) -> None:
+        self.announced = False
+
+    @input(delivery_profile="every_sample")
+    def video_from_upstream(self) -> None: ...
+
+    def process(self, ctx) -> None:
+        if ctx.inputs.read("video_from_upstream") is None or self.announced:
+            return
+        self.announced = True
+        log.info(f"MARKER:VIDEO_SINK_PID {os.getpid()}")
+
+
 @processor(execution="continuous", interval_ms=10)
 class DiesAbruptlyProbe:
     """Takes its own process down mid-run, the way a segfaulting native call

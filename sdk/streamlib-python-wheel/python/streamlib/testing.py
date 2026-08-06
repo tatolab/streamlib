@@ -56,7 +56,16 @@ _running_pipeline_lock = threading.Lock()
 
 
 class SingleProcessorTestPipeline:
-    """One processor, with a feeder on every input and a collector on every output."""
+    """One processor, with a feeder on every input and a collector on every output.
+
+    **Known gap (#1759): bags fed immediately after `__enter__` can be dropped.**
+    A link discards what it publishes before its consumer has attached, and the
+    processor under test attaches when its helper process finishes registering —
+    tens of milliseconds after the graph compiles. Nothing in this API reports
+    that attach yet, so the loss surfaces as `await_bag` reporting that the
+    processor produced nothing. Until #1759 lands, feed after the graph has been
+    running rather than in the first instants of the `with` block.
+    """
 
     def __init__(
         self,
@@ -164,6 +173,10 @@ class SingleProcessorTestPipeline:
         """Queue one bag for delivery to the processor's `port_name` input.
 
         A bag is a named map, same as anything a processor writes.
+
+        Fed in the first instants after `__enter__`, a bag can be dropped before
+        the processor's helper has attached — see this class's docstring and
+        #1759.
         """
         feed_test_harness_bag(
             self._channel_for(self._input_channels, port_name, "input"), bag

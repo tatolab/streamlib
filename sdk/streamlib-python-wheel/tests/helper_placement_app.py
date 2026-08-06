@@ -16,6 +16,7 @@ import streamlib
 from helper_placement_processors import (
     DiesAbruptlyProbe,
     ReportsItsOwnProcessSource,
+    ReportsItsOwnProcessVideoSink,
     ReportsUpstreamProcessSink,
 )
 
@@ -93,6 +94,24 @@ def scenario_two_instances_of_one_class_get_two_processes() -> None:
     # Runs until the test has seen what it came for and interrupts — the
     # children report in milliseconds, so a timer here would only be a guess
     # about how slow the machine is.
+    runtime.run()
+    marker("CLEAN_EXIT")
+
+
+def scenario_a_native_builtin_stays_in_the_app_process() -> None:
+    """A native built-in and a Python processor, so the boundary has two sides.
+
+    The native source is statically linked and runs on an engine thread; the
+    Python sink runs in a child. Nothing spawns for the source, which is the
+    observable form of "it runs in the app's process".
+    """
+    runtime = streamlib.Runtime()
+    pattern = runtime.add(
+        streamlib.TestPatternSource, config={"width": 64, "height": 32}
+    )
+    sink = runtime.add(ReportsItsOwnProcessVideoSink)
+    runtime.connect(pattern.output("video"), sink.input("video_from_upstream"))
+    marker(f"APP_PID={os.getpid()}")
     runtime.run()
     marker("CLEAN_EXIT")
 

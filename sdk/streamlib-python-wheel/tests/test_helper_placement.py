@@ -23,6 +23,7 @@ APP = Path(__file__).parent / "helper_placement_app.py"
 
 SOURCE_PID_MARKER = re.compile(r"MARKER:SOURCE_PID (\S+) (\d+)")
 SINK_PID_MARKER = re.compile(r"MARKER:SINK_PID (\d+) UPSTREAM_PID (\d+)")
+VIDEO_SINK_PID_MARKER = re.compile(r"MARKER:VIDEO_SINK_PID (\d+)")
 APP_PID_MARKER = re.compile(r"MARKER:APP_PID=(\d+)")
 HELPER_STARTED_MARKER = re.compile(r"helper process started: pid=(\d+)")
 
@@ -132,6 +133,42 @@ def test_two_instances_of_one_class_get_two_processes(start_app_under_test):
     )
     app_pid = int(matched_marker(APP_PID_MARKER, app.output).group(1))
     assert app_pid not in reported_pids
+
+
+def test_a_native_builtin_stays_in_the_app_process(start_app_under_test):
+    """The other side of the boundary, discriminated.
+
+    Every Python processor is a child; a native built-in is not. `TestPatternSource`
+    is statically linked and runs on an engine thread, so the frames the Python
+    sink reads were produced in the app's own process — and the way to see that
+    is that nothing was spawned for it. A two-processor graph starts exactly one
+    helper, and it belongs to the sink.
+
+    Mentally move the built-in out of the app process and this fails twice over:
+    a second helper appears, and the sink's pid stops being the only one.
+
+    This is the clause that keeps the ban from reading as "nothing may run in
+    the app process". Native built-ins do, by design — their per-frame path
+    never enters an interpreter.
+    """
+    app = run_scenario_until(
+        start_app_under_test,
+        "a_native_builtin_stays_in_the_app_process",
+        "MARKER:VIDEO_SINK_PID",
+        "the Python sink to report its process",
+    )
+    app_pid = int(matched_marker(APP_PID_MARKER, app.output).group(1))
+    sink_pid = int(matched_marker(VIDEO_SINK_PID_MARKER, app.output).group(1))
+    helper_pids = [int(pid) for pid in HELPER_STARTED_MARKER.findall(app.output)]
+
+    assert helper_pids == [sink_pid], (
+        f"a graph of one native built-in and one Python processor started "
+        f"{helper_pids} — the built-in must not get a process of its own, and "
+        f"the sink must:\n{app.output}"
+    )
+    assert sink_pid != app_pid, (
+        f"the Python sink ran in the app's own process ({app_pid})"
+    )
 
 
 def helper_process_is_still_alive(pid: int) -> bool:

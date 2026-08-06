@@ -351,13 +351,18 @@ class GpuContextFullAccess:
     ) -> GpuSurfaceHandle: ...
     def acquire_texture(
         self, width: int, height: int, format: str, usage: list[str]
-    ) -> GpuSurfaceHandle: ...
+    ) -> GpuSurfaceHandle:
+        """Refuses from a Python processor: a pool texture is not registered for
+        cross-process import. `acquire_pixel_buffer` is the CPU-reachable path;
+        device-side tensors ride the device-export staging path. See #1757."""
+
     def export_dma_buf(self, surface: GpuSurfaceHandle) -> tuple[int, int]:
         """Export a DMA-BUF file descriptor for `surface`, as `(fd, byte_size)`.
 
         The caller owns the fd and must close it, or hand it to something that
-        takes ownership. Only an ordinary pixel buffer can answer — a
-        device-exchange buffer is OPAQUE_FD-flavoured.
+        takes ownership. Answered without leaving this process: the fds arrived
+        over SCM_RIGHTS when the surface was checked out, and they are the same
+        ones a host-side export would mint.
         """
 
     def import_dma_buf(
@@ -368,11 +373,10 @@ class GpuContextFullAccess:
         format: str = "bgra",
         byte_size: int | None = None,
     ) -> GpuSurfaceHandle:
-        """Import a DMA-BUF file descriptor as a surface this graph can read.
-
-        Takes ownership of `fd` on success — the driver adopts it and it must
-        not be closed afterwards. On failure the fd is still the caller's.
-        """
+        """Refuses from a Python processor: the surface registry a graph reads
+        lives in the app process, and handing it an fd needs a wire that carries
+        one. Exporting works — `export_dma_buf` answers from this process. See
+        #1756."""
 
     def wait_device_idle(self) -> None: ...
     def escalate(self, privileged_callback: Callable[[GpuContextFullAccess], _EscalateResult]) -> _EscalateResult:
