@@ -570,7 +570,7 @@ fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bo
                 .map(|i| i.0.clone())
         })
     {
-        if proc_arc.lock().iceoryx2_transport_lives_out_of_process() {
+        if proc_arc.lock().out_of_process_link_wiring().is_some() {
             return true;
         }
     }
@@ -734,9 +734,9 @@ fn wire_subprocess_source(
     });
 
     let source_proc_arc = get_single_processor(graph, source_proc_id)?;
-    source_proc_arc
-        .lock()
-        .record_out_of_process_link_wiring(crate::core::PortDirection::Output, entry);
+    if let Some(link_wiring) = source_proc_arc.lock().out_of_process_link_wiring() {
+        link_wiring.record(crate::core::PortDirection::Output, entry);
+    }
     Ok(())
 }
 
@@ -775,9 +775,9 @@ fn wire_subprocess_dest(
     });
 
     let dest_proc_arc = get_single_processor(graph, dest_proc_id)?;
-    dest_proc_arc
-        .lock()
-        .record_out_of_process_link_wiring(crate::core::PortDirection::Input, entry);
+    if let Some(link_wiring) = dest_proc_arc.lock().out_of_process_link_wiring() {
+        link_wiring.record(crate::core::PortDirection::Input, entry);
+    }
     Ok(())
 }
 
@@ -795,8 +795,7 @@ mod tests {
     /// has, from a crate this one cannot name.
     #[derive(Default)]
     struct OutOfCrateHelperSpawnHostStub {
-        recorded_output_link_wiring: Vec<serde_json::Value>,
-        recorded_input_link_wiring: Vec<serde_json::Value>,
+        link_wiring: crate::core::processors::OutOfProcessLinkWiringEnvelope,
     }
 
     impl DynGeneratedProcessor for OutOfCrateHelperSpawnHostStub {
@@ -851,22 +850,10 @@ mod tests {
         ) -> Option<Arc<crate::iceoryx2::InputMailboxesInner>> {
             None
         }
-        fn iceoryx2_transport_lives_out_of_process(&self) -> bool {
-            true
-        }
-        fn record_out_of_process_link_wiring(
+        fn out_of_process_link_wiring(
             &mut self,
-            port_direction: crate::core::PortDirection,
-            link_wiring: serde_json::Value,
-        ) {
-            match port_direction {
-                crate::core::PortDirection::Output => {
-                    self.recorded_output_link_wiring.push(link_wiring)
-                }
-                crate::core::PortDirection::Input => {
-                    self.recorded_input_link_wiring.push(link_wiring)
-                }
-            }
+        ) -> Option<&mut crate::core::processors::OutOfProcessLinkWiringEnvelope> {
+            Some(&mut self.link_wiring)
         }
         fn apply_config_json(&mut self, _config_json: &serde_json::Value) -> Result<()> {
             Ok(())
@@ -951,31 +938,25 @@ mod tests {
         )
         .expect("recording dest wiring must succeed");
 
-        let recorded_source_wiring = {
-            let mut guard = source_instance.lock();
-            let stub = guard
-                .as_any_mut()
-                .downcast_mut::<OutOfCrateHelperSpawnHostStub>()
-                .expect("the stub is what was attached");
-            std::mem::take(&mut stub.recorded_output_link_wiring)
-        };
-        assert_eq!(recorded_source_wiring.len(), 1);
+        let recorded_source_ports = source_instance
+            .lock()
+            .out_of_process_link_wiring()
+            .expect("the stub records its own wiring")
+            .as_setup_command_ports();
+        assert_eq!(recorded_source_ports["outputs"].as_array().unwrap().len(), 1);
         assert_eq!(
-            recorded_source_wiring[0]["channel_service_name"],
+            recorded_source_ports["outputs"][0]["channel_service_name"],
             serde_json::json!("pabc/out1"),
         );
 
-        let recorded_dest_wiring = {
-            let mut guard = dest_instance.lock();
-            let stub = guard
-                .as_any_mut()
-                .downcast_mut::<OutOfCrateHelperSpawnHostStub>()
-                .expect("the stub is what was attached");
-            std::mem::take(&mut stub.recorded_input_link_wiring)
-        };
-        assert_eq!(recorded_dest_wiring.len(), 1);
+        let recorded_dest_ports = dest_instance
+            .lock()
+            .out_of_process_link_wiring()
+            .expect("the stub records its own wiring")
+            .as_setup_command_ports();
+        assert_eq!(recorded_dest_ports["inputs"].as_array().unwrap().len(), 1);
         assert_eq!(
-            recorded_dest_wiring[0]["read_mode"],
+            recorded_dest_ports["inputs"][0]["read_mode"],
             serde_json::json!("skip_to_latest"),
         );
     }

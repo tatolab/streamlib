@@ -62,8 +62,7 @@ pub(crate) struct PythonNativeSubprocessHostProcessor {
 
     // Port wiring info populated by the compiler's iceoryx2 service wiring phase.
     // Filled BEFORE setup() is called. Passed to the Python subprocess in the setup command.
-    pub(crate) input_port_wiring: Vec<serde_json::Value>,
-    pub(crate) output_port_wiring: Vec<serde_json::Value>,
+    pub(crate) link_wiring: crate::core::processors::OutOfProcessLinkWiringEnvelope,
 }
 
 // ============================================================================
@@ -210,10 +209,7 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
                 "capability": "full",
                 "config": config,
                 "processor_id": self.processor_id,
-                "ports": {
-                    "inputs": self.input_port_wiring,
-                    "outputs": self.output_port_wiring,
-                },
+                "ports": self.link_wiring.as_setup_command_ports(),
             }))?;
 
             // Wait for "ready" response
@@ -486,19 +482,10 @@ impl crate::core::processors::DynGeneratedProcessor for PythonNativeSubprocessHo
         None
     }
 
-    fn iceoryx2_transport_lives_out_of_process(&self) -> bool {
-        true
-    }
-
-    fn record_out_of_process_link_wiring(
+    fn out_of_process_link_wiring(
         &mut self,
-        port_direction: crate::core::PortDirection,
-        link_wiring: serde_json::Value,
-    ) {
-        match port_direction {
-            crate::core::PortDirection::Output => self.output_port_wiring.push(link_wiring),
-            crate::core::PortDirection::Input => self.input_port_wiring.push(link_wiring),
-        }
+    ) -> Option<&mut crate::core::processors::OutOfProcessLinkWiringEnvelope> {
+        Some(&mut self.link_wiring)
     }
 
     fn apply_config_json(&mut self, _config_json: &serde_json::Value) -> Result<()> {
@@ -593,8 +580,7 @@ pub(crate) fn create_python_native_subprocess_host_constructor(
             descriptor_name: descriptor_clone.name.to_string(),
             subprocess_dead: false,
             native_lib_path: native_lib_path.clone(),
-            input_port_wiring: Vec::new(),
-            output_port_wiring: Vec::new(),
+            link_wiring: Default::default(),
         })
             as Box<
                 dyn crate::core::processors::DynGeneratedProcessor + Send,

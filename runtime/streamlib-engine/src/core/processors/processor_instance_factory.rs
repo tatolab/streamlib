@@ -474,31 +474,18 @@ impl ProcessorInstance {
         }
     }
 
-    /// Whether this processor's iceoryx2 ports live outside the engine's
-    /// address space, so the wiring path hands over service names rather than
-    /// installing a publisher or a subscriber itself.
+    /// Where this processor's link wiring goes when its iceoryx2 ports live
+    /// outside the engine's address space, and `None` when the engine wires it
+    /// itself.
     ///
-    /// Only a dyn registration can be one — a cdylib plugin's ports are
-    /// engine-side by construction.
-    pub fn iceoryx2_transport_lives_out_of_process(&self) -> bool {
-        match self {
-            Self::VTable { .. } => false,
-            Self::LegacyDyn(inner) => inner.iceoryx2_transport_lives_out_of_process(),
-        }
-    }
-
-    /// Hand one link's wiring to a processor whose transport lives out of
-    /// process, so it opens that port itself.
-    pub fn record_out_of_process_link_wiring(
+    /// Only a dyn registration can be out of process — a cdylib plugin's ports
+    /// are engine-side by construction.
+    pub fn out_of_process_link_wiring(
         &mut self,
-        port_direction: crate::core::PortDirection,
-        link_wiring: serde_json::Value,
-    ) {
+    ) -> Option<&mut super::OutOfProcessLinkWiringEnvelope> {
         match self {
-            Self::VTable { .. } => {}
-            Self::LegacyDyn(inner) => {
-                inner.record_out_of_process_link_wiring(port_direction, link_wiring)
-            }
+            Self::VTable { .. } => None,
+            Self::LegacyDyn(inner) => inner.out_of_process_link_wiring(),
         }
     }
 

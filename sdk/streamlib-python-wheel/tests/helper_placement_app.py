@@ -76,8 +76,8 @@ def scenario_two_instances_of_one_class_get_two_processes() -> None:
 def scenario_every_child_is_reaped() -> None:
     """`rt.run()` returning means no helper outlived it.
 
-    The app reports its own process group; the test is what checks the group is
-    empty of survivors once the app has exited.
+    The spawn host reports each child's pid as it starts one; the test is what
+    checks those pids are gone once the app has exited.
     """
     runtime = streamlib.Runtime()
     source = runtime.add(ReportsItsOwnProcessSource, config={"label": "reaped"})
@@ -85,7 +85,6 @@ def scenario_every_child_is_reaped() -> None:
     runtime.connect(
         source.output("frames_to_downstream"), sink.input("frames_from_upstream")
     )
-    marker(f"APP_PROCESS_GROUP={os.getpgid(0)}")
     runtime.run()
     marker("CLEAN_EXIT")
 

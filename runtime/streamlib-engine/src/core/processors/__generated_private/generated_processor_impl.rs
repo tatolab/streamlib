@@ -8,6 +8,42 @@ use crate::core::ProcessorDescriptor;
 use crate::core::Result;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::execution::ExecutionConfig;
+use serde_json::Value as JsonValue;
+
+/// One processor's pending link wiring, for a transport the engine cannot
+/// reach into.
+///
+/// The engine fills this as it opens each channel; whoever owns the far side —
+/// a helper process, a Deno subprocess — reads it back as the `ports` payload
+/// of the setup command and opens its own publisher, subscriber and notifier
+/// from the service names inside.
+#[derive(Debug, Default)]
+pub struct OutOfProcessLinkWiringEnvelope {
+    input_links: Vec<serde_json::Value>,
+    output_links: Vec<serde_json::Value>,
+}
+
+impl OutOfProcessLinkWiringEnvelope {
+    /// Record one link, in the direction its port faces.
+    ///
+    /// One call per link. Fan-out out of one port records one entry per link:
+    /// the far side installs its single publisher once and appends a notifier
+    /// per entry, because iceoryx2 admits exactly one publisher per channel.
+    pub fn record(&mut self, port_direction: crate::core::PortDirection, link_wiring: JsonValue) {
+        match port_direction {
+            crate::core::PortDirection::Input => self.input_links.push(link_wiring),
+            crate::core::PortDirection::Output => self.output_links.push(link_wiring),
+        }
+    }
+
+    /// The `ports` payload of the setup command, as the far side reads it.
+    pub fn as_setup_command_ports(&self) -> JsonValue {
+        serde_json::json!({
+            "inputs": self.input_links,
+            "outputs": self.output_links,
+        })
+    }
+}
 
 /// Object-safe version of [`GeneratedProcessor`] for dynamic dispatch.
 ///
@@ -79,28 +115,19 @@ pub trait DynGeneratedProcessor: Send + 'static {
         false
     }
 
-    /// Whether this processor's iceoryx2 ports live outside the engine's
-    /// address space.
+    /// Where to record this processor's link wiring, when its iceoryx2 ports
+    /// live outside the engine's address space.
     ///
-    /// The engine cannot install a publisher or a subscriber into another
-    /// process, so for these it hands over service names and channel
-    /// parameters through [`Self::record_out_of_process_link_wiring`] and the
-    /// processor opens its own ports on the far side.
-    fn iceoryx2_transport_lives_out_of_process(&self) -> bool {
-        false
-    }
-
-    /// Record one link's wiring so a processor whose transport lives out of
-    /// process can open that port itself.
-    ///
-    /// One call per link, in the direction the port faces. Fan-out sends one
-    /// entry per link out of the same port; the far side installs its single
-    /// publisher once and appends a notifier per entry.
-    fn record_out_of_process_link_wiring(
-        &mut self,
-        _port_direction: crate::core::PortDirection,
-        _link_wiring: serde_json::Value,
-    ) {
+    /// `Some` says two things that must never disagree: the engine cannot
+    /// install a publisher or a subscriber for this processor, and this is the
+    /// envelope to hand the service names and channel parameters to instead so
+    /// the far side can open its own. Answering the first without the second
+    /// would produce a processor the engine wires nothing into and that never
+    /// learns what to wire itself — a graph that compiles, comes up, reports
+    /// healthy, and moves no frames. One method, so it cannot be half
+    /// implemented.
+    fn out_of_process_link_wiring(&mut self) -> Option<&mut OutOfProcessLinkWiringEnvelope> {
+        None
     }
 
     /// Apply a JSON config update at runtime.

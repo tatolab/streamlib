@@ -24,7 +24,7 @@ APP = Path(__file__).parent / "helper_placement_app.py"
 SOURCE_PID_MARKER = re.compile(r"MARKER:SOURCE_PID (\S+) (\d+)")
 SINK_PID_MARKER = re.compile(r"MARKER:SINK_PID (\d+) UPSTREAM_PID (\d+)")
 APP_PID_MARKER = re.compile(r"MARKER:APP_PID=(\d+)")
-APP_PROCESS_GROUP_MARKER = re.compile(r"MARKER:APP_PROCESS_GROUP=(\d+)")
+HELPER_STARTED_MARKER = re.compile(r"helper process started: pid=(\d+)")
 
 
 def run_scenario(start_app_under_test, scenario: str):
@@ -130,8 +130,27 @@ def test_two_instances_of_one_class_get_two_processes(start_app_under_test):
     assert app_pid not in reported_pids
 
 
+def helper_process_is_still_alive(pid: int) -> bool:
+    """Whether `pid` is still a live streamlib helper.
+
+    The command line is checked, not just the pid: pids are reused, and a
+    recycled one would otherwise read as a leaked child.
+    """
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as command_line:
+            return b"streamlib._helper" in command_line.read()
+    except (FileNotFoundError, ProcessLookupError, PermissionError):
+        return False
+
+
 def test_no_helper_survives_the_app(start_app_under_test):
     """`rt.run()` returning means every child was reaped.
+
+    Asserted against the children's own pids, which the spawn host reports as
+    it starts each one. The app's process group cannot answer this: the spawn
+    host puts every child in a group of its own — that is what keeps a terminal
+    Ctrl-C from reaching them directly — so the app's group is empty of helpers
+    whether or not they were reaped, and an assertion on it passes over a leak.
 
     A survivor holds this processor's iceoryx2 ports open, and the next run
     fails to open them — which reads as a transport bug rather than a leak.
@@ -142,10 +161,13 @@ def test_no_helper_survives_the_app(start_app_under_test):
         "MARKER:SINK_PID",
         "the graph to reach a bag crossing between two children",
     )
-    process_group = int(
-        matched_marker(APP_PROCESS_GROUP_MARKER, app.output).group(1)
+    helper_pids = [int(pid) for pid in HELPER_STARTED_MARKER.findall(app.output)]
+    assert len(helper_pids) == 2, (
+        f"expected the source and the sink to each report a helper pid, got "
+        f"{helper_pids}:\n{app.output}"
     )
 
-    # Signal 0 tests for the group's existence without delivering anything.
-    with pytest.raises(ProcessLookupError):
-        os.killpg(process_group, 0)
+    survivors = [pid for pid in helper_pids if helper_process_is_still_alive(pid)]
+    assert not survivors, (
+        f"helper processes {survivors} outlived the app that spawned them"
+    )

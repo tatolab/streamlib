@@ -21,7 +21,6 @@ use std::time::{Duration, Instant};
 use pyo3::prelude::*;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib::sdk::descriptors::ProcessorDescriptor;
-use streamlib::sdk::error::PortDirection;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::execution::{ExecutionConfig, ProcessExecution};
 use streamlib::sdk::graph::ProcessorNode;
@@ -29,7 +28,7 @@ use streamlib::sdk::helper_process_transport::{
     EscalateTransport, PROTOCOL_VERSION_ENV, STREAMLIB_SUBPROCESS_PROTOCOL_VERSION,
     SubprocessBridge, spawn_fd_line_reader, validate_subprocess_protocol,
 };
-use streamlib::sdk::processors::DynGeneratedProcessor;
+use streamlib::sdk::processors::{DynGeneratedProcessor, OutOfProcessLinkWiringEnvelope};
 
 /// The module CPython is launched with in a helper process.
 const HELPER_PROCESS_MODULE: &str = "streamlib._helper";
@@ -43,6 +42,14 @@ const REGISTRATION_DEADLINE: Duration = Duration::from_secs(60);
 
 /// How long a child gets to exit on its own after teardown before it is killed.
 const TEARDOWN_EXIT_DEADLINE: Duration = Duration::from_secs(5);
+
+/// How long a child gets to answer a lifecycle command before the parent stops
+/// waiting on it.
+///
+/// This bounds the engine's own thread, not the child's work: the callbacks
+/// behind these commands are expected to return promptly, and a child that
+/// needs longer has already broken the contract.
+const REPLY_DEADLINE: Duration = Duration::from_secs(5);
 
 // =============================================================================
 // Where a child comes from
@@ -75,11 +82,11 @@ pub(crate) fn capture_helper_process_launch_environment(python: Python<'_>) -> P
     let sys = python.import("sys")?;
     let interpreter_path = PathBuf::from(sys.getattr("executable")?.extract::<String>()?);
     let app_entry_directory = sys
-        .getattr("argv")?
+        .getattr("path")?
         .get_item(0)
         .ok()
-        .and_then(|entry| entry.extract::<String>().ok())
-        .and_then(|entry| app_entry_directory_of(Path::new(&entry)));
+        .and_then(|import_root| import_root.extract::<String>().ok())
+        .and_then(|import_root| app_import_root_directory(&import_root));
     let _ = captured_launch_environment().set(HelperProcessLaunchEnvironment {
         interpreter_path,
         app_entry_directory,
@@ -89,15 +96,23 @@ pub(crate) fn capture_helper_process_launch_environment(python: Python<'_>) -> P
 
 /// The directory a child should import the app's own modules from.
 ///
-/// `sys.argv[0]` is the entry file for `python app.py` and the empty string
-/// for `python -c`; an entry with no parent directory means the app was
-/// launched from the working directory, which the child inherits anyway.
-fn app_entry_directory_of(entry_path: &Path) -> Option<PathBuf> {
-    let directory = entry_path.parent()?;
-    if directory.as_os_str().is_empty() {
+/// `sys.path[0]` rather than `sys.argv[0]`'s parent, because it is the one slot
+/// both launch paths agree on: CPython puts the script's directory there for
+/// `python app.py`, and `streamlib run` / `dev` inserts the entry file's
+/// directory there before executing it. `sys.argv` cannot answer this — the
+/// launcher narrows it to the entry file only for the span of that execution
+/// and restores its own argv in a `finally`, and the `Runtime` is constructed
+/// *after* that, by the launcher calling the app's `setup(rt)`. A child would
+/// get the wheel's own package directory and fail to import the app's
+/// processors at all.
+///
+/// Empty is `python -c`'s value for the slot and means the working directory,
+/// which the child inherits anyway.
+fn app_import_root_directory(import_root: &str) -> Option<PathBuf> {
+    if import_root.is_empty() {
         return None;
     }
-    directory.canonicalize().ok()
+    Path::new(import_root).canonicalize().ok()
 }
 
 pub(crate) fn helper_process_launch_environment() -> Result<&'static HelperProcessLaunchEnvironment>
@@ -134,8 +149,7 @@ pub(crate) struct PythonHelperProcessSpawnHostProcessor {
     /// graph shows this processor in error; the frame in flight is lost, and
     /// is never silently replayed.
     child_is_gone: bool,
-    input_port_wiring: Vec<serde_json::Value>,
-    output_port_wiring: Vec<serde_json::Value>,
+    link_wiring: OutOfProcessLinkWiringEnvelope,
 }
 
 impl PythonHelperProcessSpawnHostProcessor {
@@ -213,38 +227,81 @@ impl PythonHelperProcessSpawnHostProcessor {
         })
     }
 
-    /// Send a command and wait for the child's reply, marking the child gone
-    /// if either half fails.
+    /// Send a command, wait a bounded time for the child's reply, and give up
+    /// on the child if either half fails.
     ///
-    /// Every non-fatal command goes through here so one dead child produces
-    /// one error rather than a stream of them from the poll loop.
+    /// Every command that expects a reply goes through here, so one unusable
+    /// child produces one warning rather than a stream of them — and, the
+    /// reason the wait is bounded, so no command can park the engine's thread
+    /// forever. A child that has died disconnects the channel and is noticed at
+    /// once; a child that is *alive but not reading* — a user callback blocked
+    /// on a socket, a wedged `teardown` — would never reply, and this runs on
+    /// the lifecycle thread holding the processor's lock, so waiting forever
+    /// there is a hung `rt.run()`, with the kill that would have resolved it
+    /// sitting unreachable further down teardown.
     fn exchange_with_child(
         &mut self,
         message: &serde_json::Value,
-        what: &str,
+        lifecycle_command_name: &str,
     ) -> Option<serde_json::Value> {
         if self.child_is_gone {
             return None;
         }
         if let Err(send_failure) = self.send_to_child(message) {
             tracing::warn!(
-                "[{}] helper process stopped listening during {what}: {send_failure}",
+                "[{}] helper process stopped listening during {lifecycle_command_name}: \
+                 {send_failure}",
                 self.processor_display_name
             );
             self.child_is_gone = true;
             return None;
         }
-        match self.bridge.as_ref().map(|bridge| bridge.recv_lifecycle()) {
+        let reply = self
+            .bridge
+            .as_ref()
+            .map(|bridge| bridge.recv_lifecycle_timeout(REPLY_DEADLINE));
+        match reply {
             Some(Ok(reply)) => Some(reply),
-            Some(Err(receive_failure)) => {
+            Some(Err(no_reply)) => {
                 tracing::warn!(
-                    "[{}] helper process stopped answering during {what}: {receive_failure}",
-                    self.processor_display_name
+                    "[{}] helper process did not answer {lifecycle_command_name} within {}s \
+                     ({no_reply}); giving up on it",
+                    self.processor_display_name,
+                    REPLY_DEADLINE.as_secs(),
                 );
                 self.child_is_gone = true;
                 None
             }
             None => None,
+        }
+    }
+
+    /// Send a command, wait for its reply, and warn if the child answered with
+    /// something other than the tag this command expects.
+    ///
+    /// A mismatch means the child's lifecycle has desynchronized from the
+    /// parent's — the reply in hand belongs to an earlier command — which is
+    /// worth saying out loud even though there is nothing to do about it here.
+    fn exchange_with_child_expecting(
+        &mut self,
+        message: &serde_json::Value,
+        lifecycle_command_name: &str,
+        expected_reply_tag: &str,
+    ) {
+        let Some(reply) = self.exchange_with_child(message, lifecycle_command_name) else {
+            return;
+        };
+        let reply_tag = reply.get("rpc").and_then(|rpc| rpc.as_str()).unwrap_or("");
+        if reply_tag != expected_reply_tag {
+            let reported = reply
+                .get("error")
+                .and_then(|error| error.as_str())
+                .unwrap_or("it reported no reason");
+            tracing::warn!(
+                "[{}] helper process answered {lifecycle_command_name} with {reply_tag:?} rather \
+                 than {expected_reply_tag:?}: {reported}",
+                self.processor_display_name
+            );
         }
     }
 
@@ -290,7 +347,7 @@ impl PythonHelperProcessSpawnHostProcessor {
                     reply
                         .get("protocol_version")
                         .and_then(|version| version.as_u64())
-                        .map(|version| version as u32),
+                        .and_then(|version| u32::try_from(version).ok()),
                     &self.processor_display_name,
                 )?;
                 Ok(())
@@ -438,10 +495,7 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
                 .clone()
                 .unwrap_or(serde_json::Value::Null),
             "processor_id": self.processor_id,
-            "ports": {
-                "inputs": self.input_port_wiring,
-                "outputs": self.output_port_wiring,
-            },
+            "ports": self.link_wiring.as_setup_command_ports(),
         }))?;
         self.await_child_registration()
     }
@@ -465,17 +519,19 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
     }
 
     fn stop(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        self.exchange_with_child(
+        self.exchange_with_child_expecting(
             &serde_json::json!({"cmd": "stop", "capability": "full"}),
             "stop",
+            "stopped",
         );
         Ok(())
     }
 
     fn __generated_teardown(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        self.exchange_with_child(
+        self.exchange_with_child_expecting(
             &serde_json::json!({"cmd": "teardown", "capability": "full"}),
             "teardown",
+            "done",
         );
         // Dropping the bridge closes this end, so a child still in its loop
         // sees EOF and leaves it even if the teardown command never landed.
@@ -485,17 +541,19 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
     }
 
     fn __generated_on_pause(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        self.exchange_with_child(
+        self.exchange_with_child_expecting(
             &serde_json::json!({"cmd": "on_pause", "capability": "limited"}),
             "on_pause",
+            "ok",
         );
         Ok(())
     }
 
     fn __generated_on_resume(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        self.exchange_with_child(
+        self.exchange_with_child_expecting(
             &serde_json::json!({"cmd": "on_resume", "capability": "limited"}),
             "on_resume",
+            "ok",
         );
         Ok(())
     }
@@ -530,19 +588,8 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
         false
     }
 
-    fn iceoryx2_transport_lives_out_of_process(&self) -> bool {
-        true
-    }
-
-    fn record_out_of_process_link_wiring(
-        &mut self,
-        port_direction: PortDirection,
-        link_wiring: serde_json::Value,
-    ) {
-        match port_direction {
-            PortDirection::Output => self.output_port_wiring.push(link_wiring),
-            PortDirection::Input => self.input_port_wiring.push(link_wiring),
-        }
+    fn out_of_process_link_wiring(&mut self) -> Option<&mut OutOfProcessLinkWiringEnvelope> {
+        Some(&mut self.link_wiring)
     }
 
     fn set_iceoryx2_resources(
@@ -566,9 +613,10 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
     }
 
     fn apply_config_json(&mut self, config_json: &serde_json::Value) -> Result<()> {
-        self.exchange_with_child(
+        self.exchange_with_child_expecting(
             &serde_json::json!({"cmd": "update_config", "config": config_json}),
             "update_config",
+            "ok",
         );
         Ok(())
     }
@@ -624,7 +672,6 @@ pub(crate) fn spawn_host_for_processor_node(
         child: None,
         bridge: None,
         child_is_gone: false,
-        input_port_wiring: Vec::new(),
-        output_port_wiring: Vec::new(),
+        link_wiring: OutOfProcessLinkWiringEnvelope::default(),
     })
 }
