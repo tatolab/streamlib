@@ -45,6 +45,22 @@ pub(crate) fn processor_class_import_path(processor_class: &Bound<'_, PyAny>) ->
             )
         })?;
 
+    // Before the entry-file check: a class defined inside a function is
+    // unimportable wherever it lives, and moving its module would not help.
+    // Checking the module first would answer a class that is both with the
+    // fix for the problem it does not have.
+    if qualname.contains(FUNCTION_LOCAL_MARKER) {
+        return Err(PyValueError::new_err(format!(
+            "processor `{module}:{qualname}` is defined inside a function, so it identifies \
+             as a name no interpreter can import — `{FUNCTION_LOCAL_MARKER}` marks a class \
+             that exists only for the duration of a call. Every Python processor runs in its \
+             own child process, which reaches the class by importing this name.\n\n\
+             Move the class to module scope. If it was parameterised by the enclosing \
+             function's arguments, pass those through `rt.add(..., config={{...}})` instead \
+             — config reaches the child, a closure cannot."
+        )));
+    }
+
     if module == ENTRY_FILE_MODULE {
         return Err(PyValueError::new_err(format!(
             "processor `{qualname}` is defined in the entry file, so it identifies as \
@@ -61,18 +77,6 @@ pub(crate) fn processor_class_import_path(processor_class: &Bound<'_, PyAny>) ->
              The entry file itself may still run as `__main__`; only processor classes may \
              not live in it.",
             module_suggestion = suggested_module_name(&qualname),
-        )));
-    }
-
-    if qualname.contains(FUNCTION_LOCAL_MARKER) {
-        return Err(PyValueError::new_err(format!(
-            "processor `{module}:{qualname}` is defined inside a function, so it identifies \
-             as a name no interpreter can import — `{FUNCTION_LOCAL_MARKER}` marks a class \
-             that exists only for the duration of a call. Every Python processor runs in its \
-             own child process, which reaches the class by importing this name.\n\n\
-             Move the class to module scope. If it was parameterised by the enclosing \
-             function's arguments, pass those through `rt.add(..., config={{...}})` instead \
-             — config reaches the child, a closure cannot."
         )));
     }
 
@@ -206,6 +210,33 @@ mod tests {
             assert!(
                 message.contains("config="),
                 "the refusal must name the way to pass what the closure captured: {message}"
+            );
+        });
+    }
+
+    /// A class can be both, and then only one of the two fixes is real: moving
+    /// the module does nothing for a closure-local class. Mentally put the
+    /// entry-file check first and this answers with the wrong fix — and with a
+    /// suggested class name containing `<locals>`.
+    #[test]
+    fn a_function_local_class_in_the_entry_file_is_refused_for_being_local() {
+        Python::initialize();
+        Python::attach(|python| {
+            let class = class_from_source(
+                python,
+                "__name__ = '__main__'\n\
+                 def build():\n    class BlurProcessor: pass\n    return BlurProcessor\n\
+                 Built = build()\n",
+                "Built",
+            );
+            let message = processor_class_import_path(&class).unwrap_err().to_string();
+            assert!(
+                message.contains("config="),
+                "a class that is both must be answered with the closure fix: {message}"
+            );
+            assert!(
+                !message.contains("importable module"),
+                "moving the module does not help a closure-local class: {message}"
             );
         });
     }

@@ -144,50 +144,57 @@ impl PythonProcessorLinkDataAccess {
     ) -> PyResult<()> {
         let (node, output_writer) = self.helper_process_output_plane()?;
         let schema_ident = match schema {
-            Some((org, package, type_name, major, minor, patch)) => SchemaIdentWire::from_segments(
-                &org, &package, &type_name, major, minor, patch,
-            )
-            .map_err(|schema_failure| {
-                PyValueError::new_err(format!(
-                    "output port {port_name:?} declared a schema the wire cannot carry: \
+            Some((org, package, type_name, major, minor, patch)) => {
+                SchemaIdentWire::from_segments(&org, &package, &type_name, major, minor, patch)
+                    .map_err(|schema_failure| {
+                        PyValueError::new_err(format!(
+                            "output port {port_name:?} declared a schema the wire cannot carry: \
                      {schema_failure:?}"
-                ))
-            })?,
+                        ))
+                    })?
+            }
             None => SchemaIdentWire::default(),
         };
 
-        python.detach(|| -> Result<(), Error> {
-            if !output_writer.has_channel_publisher(port_name) {
-                let channel = node.open_or_create_service(
-                    channel_service_name,
-                    max_subscribers,
-                    max_queued_messages,
-                    enable_safe_overflow,
+        python
+            .detach(|| -> Result<(), Error> {
+                if !output_writer.has_channel_publisher(port_name) {
+                    let channel = node.open_or_create_service(
+                        channel_service_name,
+                        max_subscribers,
+                        max_queued_messages,
+                        enable_safe_overflow,
+                    )?;
+                    let publisher = channel.create_publisher(expected_payload_bytes)?;
+                    output_writer.set_channel_publisher(
+                        port_name,
+                        schema_ident,
+                        publisher,
+                        ChannelEgressConfig {
+                            service_name: channel_service_name.to_string(),
+                            trust_tier: ChannelTrustTier::Trusted,
+                            expected_payload_bytes,
+                            ceiling_bytes: max_payload_bytes_per_channel,
+                        },
+                    );
+                }
+                let notify_service = node.open_or_create_notify_service(
+                    dest_notify_service_name,
+                    notify_max_notifiers,
                 )?;
-                let publisher = channel.create_publisher(expected_payload_bytes)?;
-                output_writer.set_channel_publisher(
+                output_writer.add_channel_notifier(
                     port_name,
-                    schema_ident,
-                    publisher,
-                    ChannelEgressConfig {
-                        service_name: channel_service_name.to_string(),
-                        trust_tier: ChannelTrustTier::Trusted,
-                        expected_payload_bytes,
-                        ceiling_bytes: max_payload_bytes_per_channel,
-                    },
+                    link_id,
+                    notify_service.create_notifier()?,
                 );
-            }
-            let notify_service =
-                node.open_or_create_notify_service(dest_notify_service_name, notify_max_notifiers)?;
-            output_writer.add_channel_notifier(port_name, link_id, notify_service.create_notifier()?);
-            Ok(())
-        })
-        .map_err(|wiring_failure| {
-            PyRuntimeError::new_err(format!(
-                "could not wire output port {port_name:?} onto channel \
+                Ok(())
+            })
+            .map_err(|wiring_failure| {
+                PyRuntimeError::new_err(format!(
+                    "could not wire output port {port_name:?} onto channel \
                  {channel_service_name:?}: {wiring_failure}"
-            ))
-        })
+                ))
+            })
     }
 
     /// Open this processor's subscriber for a link into `port_name`, plus the
@@ -233,30 +240,35 @@ impl PythonProcessorLinkDataAccess {
             }
         };
 
-        python.detach(|| -> Result<(), Error> {
-            if !input_mailboxes.has_port(port_name) {
-                input_mailboxes.add_port(port_name, max_queued_messages, read_mode);
-            }
-            let channel = node.open_or_create_service(
-                channel_service_name,
-                max_subscribers,
-                max_queued_messages,
-                enable_safe_overflow,
-            )?;
-            input_mailboxes.add_channel_subscriber(port_name, link_id, channel.create_subscriber()?);
-            if !input_mailboxes.has_listener() {
-                let notify_service =
-                    node.open_or_create_notify_service(notify_service_name, notify_max_notifiers)?;
-                input_mailboxes.set_listener(notify_service.create_listener()?);
-            }
-            Ok(())
-        })
-        .map_err(|wiring_failure| {
-            PyRuntimeError::new_err(format!(
-                "could not wire input port {port_name:?} onto channel \
+        python
+            .detach(|| -> Result<(), Error> {
+                if !input_mailboxes.has_port(port_name) {
+                    input_mailboxes.add_port(port_name, max_queued_messages, read_mode);
+                }
+                let channel = node.open_or_create_service(
+                    channel_service_name,
+                    max_subscribers,
+                    max_queued_messages,
+                    enable_safe_overflow,
+                )?;
+                input_mailboxes.add_channel_subscriber(
+                    port_name,
+                    link_id,
+                    channel.create_subscriber()?,
+                );
+                if !input_mailboxes.has_listener() {
+                    let notify_service = node
+                        .open_or_create_notify_service(notify_service_name, notify_max_notifiers)?;
+                    input_mailboxes.set_listener(notify_service.create_listener()?);
+                }
+                Ok(())
+            })
+            .map_err(|wiring_failure| {
+                PyRuntimeError::new_err(format!(
+                    "could not wire input port {port_name:?} onto channel \
                  {channel_service_name:?}: {wiring_failure}"
-            ))
-        })
+                ))
+            })
     }
 
     /// The fd that becomes readable when any upstream publishes.
@@ -427,8 +439,18 @@ mod tests {
                 .unwrap();
             source
                 .wire_output_link(
-                    python, "frames_to_downstream", &channel, &notify, 1024, 1 << 20, 8, 2, 1,
-                    true, "link-1", None,
+                    python,
+                    "frames_to_downstream",
+                    &channel,
+                    &notify,
+                    1024,
+                    1 << 20,
+                    8,
+                    2,
+                    1,
+                    true,
+                    "link-1",
+                    None,
                 )
                 .unwrap();
 
@@ -466,8 +488,18 @@ mod tests {
 
             source
                 .wire_output_link(
-                    python, "frames_to_downstream", &channel, &notify, 1024, 1 << 20, 8, 2, 1,
-                    true, "link-1", None,
+                    python,
+                    "frames_to_downstream",
+                    &channel,
+                    &notify,
+                    1024,
+                    1 << 20,
+                    8,
+                    2,
+                    1,
+                    true,
+                    "link-1",
+                    None,
                 )
                 .unwrap();
             source
@@ -500,8 +532,18 @@ mod tests {
             let (channel, notify) = unique_channel_names("engineowned");
             let refusal = engine_wired
                 .wire_output_link(
-                    python, "frames_to_downstream", &channel, &notify, 1024, 1 << 20, 8, 2, 1,
-                    true, "link-1", None,
+                    python,
+                    "frames_to_downstream",
+                    &channel,
+                    &notify,
+                    1024,
+                    1 << 20,
+                    8,
+                    2,
+                    1,
+                    true,
+                    "link-1",
+                    None,
                 )
                 .unwrap_err();
             assert!(

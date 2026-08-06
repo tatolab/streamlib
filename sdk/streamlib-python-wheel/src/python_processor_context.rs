@@ -15,6 +15,7 @@
 //! the GIL.
 
 use std::ptr::NonNull;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use parking_lot::{Mutex, RwLock};
@@ -32,7 +33,7 @@ use streamlib::sdk::rhi::{
 };
 use streamlib_adapter_cuda::dlpack::DeviceType;
 
-use crate::python_bag_conversion::json_value_to_python_object;
+use crate::python_bag_conversion::{json_value_to_python_object, python_object_to_json_value};
 use crate::python_gpu_surface_pixel_exchange::{
     CpuAccessGate, GpuSurfaceOwnedMemory, GpuSurfaceOwnedValue, HOST_VISIBLE_DLPACK_DEVICE,
     device_export_available, exchange_shape_for_max_version, host_visible_dlpack_capsule,
@@ -997,6 +998,9 @@ pub(crate) struct PythonRuntimeContextFullAccess {
     link_output_data_writer: Py<PythonLinkOutputDataWriter>,
     gpu_limited_access_context: Py<PythonGpuContextLimitedAccess>,
     gpu_full_access_context: Py<PythonGpuContextFullAccess>,
+    /// A helper process's own record of what its parent last announced.
+    /// Absent in the parent, where the leased engine view is the authority.
+    helper_process_pause_state: Option<Arc<AtomicBool>>,
 }
 
 impl PythonRuntimeContextFullAccess {
@@ -1007,6 +1011,7 @@ impl PythonRuntimeContextFullAccess {
     ) -> PyResult<Self> {
         let full_access_view_lease: FullAccessRuntimeContextViewLease = Arc::new(RwLock::new(None));
         Ok(Self {
+            helper_process_pause_state: None,
             gpu_full_access_context: Py::new(
                 python,
                 PythonGpuContextFullAccess {
@@ -1058,6 +1063,69 @@ impl PythonRuntimeContextFullAccess {
 
 #[pymethods]
 impl PythonRuntimeContextFullAccess {
+    /// The context a helper process hands its own processor's privileged
+    /// hooks.
+    ///
+    /// There is no engine view to lease in a child, so what the parent's
+    /// hooks read through one is supplied here instead: the identifiers the
+    /// parent passed down, and a pause state the child updates from the
+    /// `on_pause` / `on_resume` commands it is sent.
+    #[staticmethod]
+    fn open_for_helper_process(
+        python: Python<'_>,
+        configuration: &Bound<'_, PyAny>,
+        link_data_access: &Bound<'_, PythonProcessorLinkDataAccess>,
+        runtime_id: String,
+        processor_id: String,
+    ) -> PyResult<Self> {
+        let context = Self::create_for_processor(
+            python,
+            python_object_to_json_value(configuration)?,
+            &link_data_access.clone().unbind(),
+        )?;
+        let _ = context.cached_runtime_id.set(runtime_id);
+        let _ = context.cached_processor_id.set(Some(processor_id));
+        Ok(Self {
+            helper_process_pause_state: Some(Arc::new(AtomicBool::new(false))),
+            ..context
+        })
+    }
+
+    /// The limited-access view of the same processor — same configuration,
+    /// same links, same pause state.
+    ///
+    /// A helper process builds both views once and hands each hook the one
+    /// its phase calls for, the way the parent's host does.
+    fn limited_access_view_for_helper_process(
+        &self,
+        python: Python<'_>,
+    ) -> PyResult<PythonRuntimeContextLimitedAccess> {
+        let Some(pause_state) = self.helper_process_pause_state.as_ref() else {
+            return Err(PyRuntimeError::new_err(
+                "only a helper process's own context can derive its limited-access view; the \
+                 engine hands its hooks views it owns",
+            ));
+        };
+        Ok(PythonRuntimeContextLimitedAccess {
+            limited_access_view_lease: Arc::new(RwLock::new(None)),
+            cached_runtime_id: self.cached_runtime_id.clone(),
+            cached_processor_id: self.cached_processor_id.clone(),
+            configuration: self.configuration.clone(),
+            link_input_data_reader: self.link_input_data_reader.clone_ref(python),
+            link_output_data_writer: self.link_output_data_writer.clone_ref(python),
+            gpu_limited_access_context: self.gpu_limited_access_context.clone_ref(python),
+            helper_process_pause_state: Some(Arc::clone(pause_state)),
+        })
+    }
+
+    /// Record the pause state the parent just announced, so `is_paused` and
+    /// `should_process` answer in a child where no engine view exists.
+    fn note_pause_state_from_parent(&self, paused: bool) {
+        if let Some(pause_state) = self.helper_process_pause_state.as_ref() {
+            pause_state.store(paused, Ordering::Relaxed);
+        }
+    }
+
     /// The processor's configuration, as the dict it was added with.
     #[getter]
     fn config<'py>(&self, python: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
@@ -1108,6 +1176,9 @@ impl PythonRuntimeContextFullAccess {
 
     /// Whether this processor is currently paused.
     fn is_paused(&self, python: Python<'_>) -> PyResult<bool> {
+        if let Some(pause_state) = self.helper_process_pause_state.as_ref() {
+            return Ok(pause_state.load(Ordering::Relaxed));
+        }
         read_full_access_view(python, &self.full_access_view_lease, |view| {
             Ok(view.is_paused())
         })
@@ -1115,6 +1186,9 @@ impl PythonRuntimeContextFullAccess {
 
     /// Whether processing should proceed (not paused).
     fn should_process(&self, python: Python<'_>) -> PyResult<bool> {
+        if let Some(pause_state) = self.helper_process_pause_state.as_ref() {
+            return Ok(!pause_state.load(Ordering::Relaxed));
+        }
         read_full_access_view(python, &self.full_access_view_lease, |view| {
             Ok(view.should_process())
         })
@@ -1134,6 +1208,9 @@ pub(crate) struct PythonRuntimeContextLimitedAccess {
     link_input_data_reader: Py<PythonLinkInputDataReader>,
     link_output_data_writer: Py<PythonLinkOutputDataWriter>,
     gpu_limited_access_context: Py<PythonGpuContextLimitedAccess>,
+    /// Shared with the full-access view this one was derived from; see
+    /// [`PythonRuntimeContextFullAccess::helper_process_pause_state`].
+    helper_process_pause_state: Option<Arc<AtomicBool>>,
 }
 
 impl PythonRuntimeContextLimitedAccess {
@@ -1143,6 +1220,7 @@ impl PythonRuntimeContextLimitedAccess {
         link_data_access: &Py<PythonProcessorLinkDataAccess>,
     ) -> PyResult<Self> {
         Ok(Self {
+            helper_process_pause_state: None,
             limited_access_view_lease: Arc::new(RwLock::new(None)),
             cached_runtime_id: OnceLock::new(),
             cached_processor_id: OnceLock::new(),
@@ -1235,6 +1313,9 @@ impl PythonRuntimeContextLimitedAccess {
 
     /// Whether this processor is currently paused.
     fn is_paused(&self, python: Python<'_>) -> PyResult<bool> {
+        if let Some(pause_state) = self.helper_process_pause_state.as_ref() {
+            return Ok(pause_state.load(Ordering::Relaxed));
+        }
         read_limited_access_view(python, &self.limited_access_view_lease, |view| {
             Ok(view.is_paused())
         })
@@ -1242,6 +1323,9 @@ impl PythonRuntimeContextLimitedAccess {
 
     /// Whether processing should proceed (not paused).
     fn should_process(&self, python: Python<'_>) -> PyResult<bool> {
+        if let Some(pause_state) = self.helper_process_pause_state.as_ref() {
+            return Ok(!pause_state.load(Ordering::Relaxed));
+        }
         read_limited_access_view(python, &self.limited_access_view_lease, |view| {
             Ok(view.should_process())
         })

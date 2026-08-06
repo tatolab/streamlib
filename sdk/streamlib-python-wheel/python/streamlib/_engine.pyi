@@ -159,8 +159,42 @@ class ProcessorInputPortReference:
 
 @final
 class ProcessorLinkDataAccess:
-    """One processor's links. The engine binds it; app code never builds one."""
+    """One processor's links. The engine binds it; app code never builds one.
 
+    Constructing one opens a helper process's own data plane, with its own
+    iceoryx2 node — only `streamlib._helper` does that.
+    """
+
+    def __new__(cls) -> ProcessorLinkDataAccess: ...
+    def wire_output_link(
+        self,
+        port_name: str,
+        channel_service_name: str,
+        dest_notify_service_name: str,
+        expected_payload_bytes: int,
+        max_payload_bytes_per_channel: int,
+        max_queued_messages: int,
+        max_subscribers: int,
+        notify_max_notifiers: int,
+        enable_safe_overflow: bool,
+        link_id: str,
+        schema: tuple[str, str, str, int, int, int] | None = None,
+    ) -> None: ...
+    def wire_input_link(
+        self,
+        port_name: str,
+        channel_service_name: str,
+        notify_service_name: str,
+        read_mode: str,
+        max_queued_messages: int,
+        max_subscribers: int,
+        notify_max_notifiers: int,
+        enable_safe_overflow: bool,
+        link_id: str,
+    ) -> None: ...
+    def input_listener_fd(self) -> int | None: ...
+    def drain_input_listener(self) -> None: ...
+    def any_input_port_has_data(self) -> bool: ...
     def read_from_input_port(self, port_name: str) -> Any | None: ...
     def read_from_input_port_with_timestamp(
         self, port_name: str
@@ -199,6 +233,15 @@ class RuntimeContextFullAccess:
     def processor_id(self) -> str | None: ...
     def is_paused(self) -> bool: ...
     def should_process(self) -> bool: ...
+    @staticmethod
+    def open_for_helper_process(
+        configuration: Mapping[str, Any],
+        link_data_access: ProcessorLinkDataAccess,
+        runtime_id: str,
+        processor_id: str,
+    ) -> RuntimeContextFullAccess: ...
+    def limited_access_view_for_helper_process(self) -> RuntimeContextLimitedAccess: ...
+    def note_pause_state_from_parent(self, paused: bool) -> None: ...
 
 @final
 class RuntimeContextLimitedAccess:
