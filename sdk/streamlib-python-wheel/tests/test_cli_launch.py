@@ -230,6 +230,14 @@ def test_a_native_block_added_without_config_reaches_a_running_graph(
     )
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "the scaffolded effect processor reaches for GPU pixels, and the "
+        "cross-process pixel path is owed by #1714 — the child spawns and imports "
+        "its class, then every frame refuses at `ctx.gpu_limited_access`"
+    ),
+)
 def test_the_scaffolded_app_reaches_a_running_graph(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node
 ):

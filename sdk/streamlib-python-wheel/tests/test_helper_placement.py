@@ -74,6 +74,10 @@ def test_adding_a_processor_loads_nothing_into_the_app(start_app_under_test):
     assert "MODULES_ADDED_BY_ADD=[]" in app.output, (
         f"`rt.add` loaded modules into the app's own interpreter:\n{app.output}"
     )
+    assert "MODULES_ADDED_WHILE_RUNNING=[]" in app.output, (
+        f"running the graph loaded modules into the app's own interpreter — a host "
+        f"constructing the class on its first frame would show here:\n{app.output}"
+    )
     assert "HELPER_MODULE_IN_APP=False" in app.output, (
         f"the app imported the helper runtime, which belongs in the child:\n{app.output}"
     )

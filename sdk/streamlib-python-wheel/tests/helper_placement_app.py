@@ -10,6 +10,7 @@ processor's module, and that the pid a bag was produced in is not the app's.
 
 import os
 import sys
+import threading
 
 import streamlib
 from helper_placement_processors import (
@@ -19,6 +20,11 @@ from helper_placement_processors import (
 )
 
 MARKER_PREFIX = "MARKER:"
+
+# Long enough for both children to boot and pass bags before the app re-reads
+# its own `sys.modules`. The check is about what the *parent* loaded, so it only
+# needs the graph to have been running, not to have run long.
+SECONDS_OF_RUNNING_BEFORE_RECHECK = 4.0
 
 
 def marker(name: str) -> None:
@@ -35,9 +41,26 @@ def scenario_the_app_never_hosts_the_processor() -> None:
     """
     modules_before_add = set(sys.modules)
     runtime = streamlib.Runtime()
-    runtime.add(ReportsItsOwnProcessSource, config={"label": "first"})
+    source = runtime.add(ReportsItsOwnProcessSource, config={"label": "first"})
+    sink = runtime.add(ReportsUpstreamProcessSink)
+    runtime.connect(
+        source.output("frames_to_downstream"), sink.input("frames_from_upstream")
+    )
     marker(f"MODULES_ADDED_BY_ADD={sorted(set(sys.modules) - modules_before_add)}")
-    marker(f"HELPER_MODULE_IN_APP={'streamlib._helper' in sys.modules}")
+
+    # Checked again after bags have actually crossed, not only after `rt.add`:
+    # a host that constructed the class lazily — on the first frame rather than
+    # at graph build — would pass the first check and fail this one.
+    def report_modules_once_bags_are_flowing() -> None:
+        marker(
+            f"MODULES_ADDED_WHILE_RUNNING="
+            f"{sorted(set(sys.modules) - modules_before_add)}"
+        )
+        marker(f"HELPER_MODULE_IN_APP={'streamlib._helper' in sys.modules}")
+        runtime.shutdown()
+
+    threading.Timer(SECONDS_OF_RUNNING_BEFORE_RECHECK, report_modules_once_bags_are_flowing).start()
+    runtime.run()
     marker("CLEAN_EXIT")
 
 
