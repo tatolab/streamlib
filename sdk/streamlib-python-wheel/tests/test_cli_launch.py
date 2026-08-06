@@ -34,8 +34,10 @@ CLEAN_EXIT_TIMEOUT_SECONDS = 60.0
 # per-frame slowdown cannot hide inside it.
 SCAFFOLD_OBSERVATION_WINDOW_SECONDS = 6.0
 # The source runs at 30fps, so a healthy effect delivers ~180 frames in the
-# window. The floor sits far below that and far above the ~25 the in-place
-# strided edit managed, so it fails on a regression and not on a slow machine.
+# window. The floor sits far below that and far above the ~25 a pathologically
+# slow per-frame edit manages, so it fails on a regression and not on a slow
+# machine. Held at re-baselining against the real cross-process pixel path
+# (escalate acquire + surface-share checkout per frame), which clears it.
 MINIMUM_FRAMES_FOR_LIVE_VIDEO = 60
 
 APP_WITH_ONE_NATIVE_SOURCE = '''\
@@ -230,14 +232,6 @@ def test_a_native_block_added_without_config_reaches_a_running_graph(
     )
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "the scaffolded effect processor reaches for GPU pixels, and the "
-        "cross-process pixel path is owed by #1714 — the child spawns and imports "
-        "its class, then every frame refuses at `ctx.gpu_limited_access`"
-    ),
-)
 def test_the_scaffolded_app_reaches_a_running_graph(
     tmp_path: Path, isolated_runtime_directory: Path, launch_node
 ):
