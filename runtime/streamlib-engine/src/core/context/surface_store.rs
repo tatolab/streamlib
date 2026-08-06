@@ -24,6 +24,54 @@ use crate::host_rhi::HostTextureExt;
 /// Maximum number of entries in the SurfaceCache before eviction.
 const MAX_SURFACE_CACHE_SIZE: usize = 512;
 
+/// Wire value for a DMA-BUF-flavoured surface handle. The default: every
+/// surface registered before the flavour was expressible carries no
+/// `handle_type` at all.
+const SURFACE_HANDLE_TYPE_DMA_BUF: &str = "dma_buf";
+
+/// Wire value for an OPAQUE_FD-flavoured surface handle — what a Vulkan-aware
+/// importer registers, including the device-export staging a helper process
+/// reaches.
+const SURFACE_HANDLE_TYPE_OPAQUE_FD: &str = "opaque_fd";
+
+/// Wrap each received fd as the external-handle flavour the surface-share
+/// service registered it under.
+///
+/// The two flavours are distinct Vulkan external-handle types. Importing an
+/// OPAQUE_FD fd through the DMA-BUF type does not fail cleanly — it hands the
+/// driver a handle of the wrong type — so the wire's discriminator is honoured
+/// rather than assumed.
+fn external_plane_handles_for_flavour(
+    handle_type: &str,
+    received_fds: &[std::os::fd::RawFd],
+    plane_sizes: &[u64],
+) -> Result<Vec<crate::core::rhi::RhiExternalHandle>> {
+    use crate::core::rhi::RhiExternalHandle;
+
+    match handle_type {
+        SURFACE_HANDLE_TYPE_DMA_BUF => Ok(received_fds
+            .iter()
+            .zip(plane_sizes.iter())
+            .map(|(fd, size)| RhiExternalHandle::DmaBuf {
+                fd: *fd,
+                size: *size as usize,
+            })
+            .collect()),
+        SURFACE_HANDLE_TYPE_OPAQUE_FD => Ok(received_fds
+            .iter()
+            .zip(plane_sizes.iter())
+            .map(|(fd, size)| RhiExternalHandle::OpaqueFd {
+                fd: *fd,
+                size: *size as usize,
+            })
+            .collect()),
+        unknown => Err(Error::Configuration(format!(
+            "check_out: surface registered with unknown handle type {unknown:?}; the wire \
+             carries {SURFACE_HANDLE_TYPE_DMA_BUF:?} or {SURFACE_HANDLE_TYPE_OPAQUE_FD:?}"
+        ))),
+    }
+}
+
 #[cfg(target_os = "macos")]
 use crate::apple::xpc_ffi::{
     _NSConcreteMallocBlock, BLOCK_FLAGS_NEEDS_FREE, Block, BlockDescriptor, xpc_connection_cancel,
@@ -990,10 +1038,11 @@ impl SurfaceStoreInner {
             ));
         }
 
-        // Import every plane as a `RhiExternalHandle::DmaBuf`. The Rust
-        // importer now tracks the full vec symmetrically with the
-        // polyglot Python / Deno shims — no plane is dropped.
-        use crate::core::rhi::{PixelFormat, RhiExternalHandle, RhiPixelBufferImport};
+        // Import every plane under the flavour the service says it registered.
+        // The two flavours are different Vulkan external-handle types, so
+        // importing an OPAQUE_FD fd as DMA-BUF is a driver-level wrong-import
+        // rather than a clean failure.
+        use crate::core::rhi::{PixelFormat, RhiPixelBufferImport};
 
         let plane_sizes: Vec<u64> = response
             .get("plane_sizes")
@@ -1002,14 +1051,14 @@ impl SurfaceStoreInner {
             .filter(|v: &Vec<u64>| v.len() == received_fds.len())
             .unwrap_or_else(|| vec![0u64; received_fds.len()]);
 
-        let handles: Vec<RhiExternalHandle> = received_fds
-            .iter()
-            .zip(plane_sizes.iter())
-            .map(|(fd, size)| RhiExternalHandle::DmaBuf {
-                fd: *fd,
-                size: *size as usize,
-            })
-            .collect();
+        let handles = external_plane_handles_for_flavour(
+            response
+                .get("handle_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or(SURFACE_HANDLE_TYPE_DMA_BUF),
+            &received_fds,
+            &plane_sizes,
+        )?;
         let pixel_buffer =
             PixelBuffer::from_external_plane_handles(&handles, 0, 0, PixelFormat::default())?;
 
@@ -2367,5 +2416,61 @@ mod layout_tests_ss {
     fn surface_store_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<SurfaceStore>();
+    }
+}
+
+#[cfg(test)]
+mod external_handle_flavour_tests {
+    use super::*;
+    use crate::core::rhi::RhiExternalHandle;
+
+    /// An OPAQUE_FD-registered surface must import as OPAQUE_FD. This path is
+    /// reachable the moment a helper process checks out device-export staging,
+    /// and the failure it prevents is a wrong-type import inside the driver
+    /// rather than an error the caller could see.
+    #[test]
+    fn an_opaque_fd_surface_imports_as_opaque_fd() {
+        let handles =
+            external_plane_handles_for_flavour(SURFACE_HANDLE_TYPE_OPAQUE_FD, &[7, 8], &[64, 128])
+                .unwrap();
+        assert!(matches!(
+            handles.as_slice(),
+            [
+                RhiExternalHandle::OpaqueFd { fd: 7, size: 64 },
+                RhiExternalHandle::OpaqueFd { fd: 8, size: 128 },
+            ]
+        ));
+    }
+
+    #[test]
+    fn a_dma_buf_surface_imports_as_dma_buf() {
+        let handles =
+            external_plane_handles_for_flavour(SURFACE_HANDLE_TYPE_DMA_BUF, &[3], &[4096]).unwrap();
+        assert!(matches!(
+            handles.as_slice(),
+            [RhiExternalHandle::DmaBuf { fd: 3, size: 4096 }]
+        ));
+    }
+
+    /// A surface registered before the flavour was expressible sends no
+    /// `handle_type`; the caller substitutes the DMA-BUF default, so every
+    /// such surface keeps importing exactly as it did.
+    #[test]
+    fn the_absent_flavour_default_is_dma_buf() {
+        let handles =
+            external_plane_handles_for_flavour(SURFACE_HANDLE_TYPE_DMA_BUF, &[3], &[0]).unwrap();
+        assert!(matches!(
+            handles.as_slice(),
+            [RhiExternalHandle::DmaBuf { fd: 3, .. }]
+        ));
+    }
+
+    #[test]
+    fn an_unknown_flavour_is_refused_by_name() {
+        let refusal = external_plane_handles_for_flavour("io_surface", &[3], &[0]).unwrap_err();
+        assert!(
+            refusal.to_string().contains("io_surface"),
+            "the refusal must name what it got: {refusal}"
+        );
     }
 }
