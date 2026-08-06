@@ -12,6 +12,7 @@ mod python_control_plane_hosting;
 #[cfg(target_os = "linux")]
 mod python_cuda_pixel_exchange;
 mod python_gpu_surface_pixel_exchange;
+mod python_helper_process_pixel_exchange;
 mod python_helper_process_spawn_host;
 mod python_logging;
 mod python_monotonic_timer;

@@ -29,6 +29,7 @@ import struct
 import sys
 import threading
 import traceback
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -51,6 +52,11 @@ PROTOCOL_VERSION_ENV = "STREAMLIB_PROTOCOL_VERSION"
 # `streamlib` earlier on the child's `sys.path` is still reachable.
 PROTOCOL_VERSION = 1
 
+# Upper bound on how long an escalate request waits for its correlated
+# response. Generous enough for a cold GPU allocation under load; bounded so
+# a wedged parent surfaces as an error instead of a hung processor callback.
+ESCALATE_REQUEST_TIMEOUT_SECONDS = 60.0
+
 # How long a blocking wait may park before the lifecycle queue is drained
 # again. Teardown latency is bounded by this plus one callback.
 LIFECYCLE_POLL_INTERVAL_SECONDS = 0.1
@@ -59,6 +65,20 @@ LIFECYCLE_POLL_INTERVAL_MILLISECONDS = 100
 
 class HelperProcessProtocolError(Exception):
     """The parent sent something this helper cannot act on."""
+
+
+class EscalateRequestError(RuntimeError):
+    """An escalate request to the parent failed — send, timeout, or refusal."""
+
+
+class _PendingEscalateResponse:
+    """One slot per in-flight escalate request — an event and its landing pad."""
+
+    __slots__ = ("arrived", "message")
+
+    def __init__(self) -> None:
+        self.arrived = threading.Event()
+        self.message: "Optional[dict[str, Any]]" = None
 
 
 # =============================================================================
@@ -75,10 +95,11 @@ class ParentProcessBridge:
     "not escalate" would push every log record into the lifecycle queue and
     break the setup handshake.
 
-    A single reader thread owns the read half and feeds the lifecycle queue the
-    main thread drains. Escalate today is one-way — logging, which the parent
-    never answers — so a response arriving here has no caller to hand it to;
-    the request/response half lands with the ops that need it.
+    A single reader thread owns the read half, routing `escalate_response`
+    frames to their waiting caller by `request_id` and feeding everything
+    else to the lifecycle queue the main thread drains. Requests are safe
+    from any thread, concurrently — each waits on its own slot, so callers
+    cannot steal each other's responses.
     """
 
     _FRAME_LENGTH_PREFIX = struct.Struct(">I")
@@ -89,6 +110,9 @@ class ParentProcessBridge:
         self._write_stream = parent_socket.makefile("wb", buffering=0)
         self._write_lock = threading.Lock()
         self._lifecycle_commands: "queue.Queue[Optional[dict[str, Any]]]" = queue.Queue()
+        self._pending_escalate_responses: "dict[str, _PendingEscalateResponse]" = {}
+        self._pending_lock = threading.Lock()
+        self._channel_closed = False
         self._reader = threading.Thread(
             target=self._demultiplex_frames_from_parent,
             name="streamlib-parent-bridge",
@@ -132,6 +156,49 @@ class ParentProcessBridge:
             except OSError:
                 pass
 
+    def request_from_parent(
+        self,
+        op: "dict[str, Any]",
+        *,
+        timeout_seconds: float = ESCALATE_REQUEST_TIMEOUT_SECONDS,
+    ) -> "dict[str, Any]":
+        """Send one escalate request and block until its correlated response.
+
+        Raises [`EscalateRequestError`] on a send failure, a timeout, a
+        channel that closed mid-flight, or a refusal the parent reported —
+        one exception type, so a caller never has to tell an OS-level
+        failure from a semantic one.
+        """
+        request_id = str(uuid.uuid4())
+        slot = _PendingEscalateResponse()
+        with self._pending_lock:
+            if self._channel_closed:
+                raise EscalateRequestError("the channel to the parent is closed")
+            self._pending_escalate_responses[request_id] = slot
+        try:
+            self.send({"rpc": "escalate_request", "request_id": request_id, **op})
+            arrived = slot.arrived.wait(timeout=timeout_seconds)
+        finally:
+            with self._pending_lock:
+                self._pending_escalate_responses.pop(request_id, None)
+        # `slot.message` rather than the wait result decides: a delivery can
+        # land between the wait timing out and the slot being popped.
+        response = slot.message
+        if response is None:
+            if not arrived:
+                raise EscalateRequestError(
+                    f"the parent did not answer {op.get('op')!r} within "
+                    f"{timeout_seconds}s"
+                )
+            raise EscalateRequestError(
+                "the channel to the parent closed before the response arrived"
+            )
+        if response.get("result") == "ok":
+            return response
+        raise EscalateRequestError(
+            response.get("message") or f"the parent refused {op.get('op')!r}"
+        )
+
     def next_lifecycle_command(self) -> "Optional[dict[str, Any]]":
         """Block until the parent sends one, or `None` once it is gone."""
         return self._lifecycle_commands.get()
@@ -151,17 +218,42 @@ class ParentProcessBridge:
         while True:
             frame = self._read_next_frame()
             if frame is None:
+                self._wake_every_pending_escalate_caller()
                 self._lifecycle_commands.put(None)
                 return
             if frame.get("rpc") == "escalate_response":
                 # Never forwarded to the lifecycle queue: it would be read as
-                # the answer to whatever command is in flight. Nothing here
-                # asked for one, so saying so is all there is to do.
-                log.warn(
-                    "the parent answered an escalate request this helper never sent"
-                )
+                # the answer to whatever command is in flight.
+                if not self._deliver_escalate_response(frame):
+                    log.warn(
+                        "the parent answered an escalate request this helper "
+                        "is no longer waiting on",
+                        request_id=frame.get("request_id"),
+                    )
                 continue
             self._lifecycle_commands.put(frame)
+
+    def _deliver_escalate_response(self, response: "dict[str, Any]") -> bool:
+        request_id = response.get("request_id")
+        if not isinstance(request_id, str):
+            return False
+        with self._pending_lock:
+            slot = self._pending_escalate_responses.get(request_id)
+        if slot is None:
+            return False
+        slot.message = response
+        slot.arrived.set()
+        return True
+
+    def _wake_every_pending_escalate_caller(self) -> None:
+        """A closed channel fails every in-flight request rather than hanging it."""
+        with self._pending_lock:
+            self._channel_closed = True
+            orphaned = list(self._pending_escalate_responses.values())
+            self._pending_escalate_responses.clear()
+        for slot in orphaned:
+            slot.message = None
+            slot.arrived.set()
 
     def _read_next_frame(self) -> "Optional[dict[str, Any]]":
         length_prefix = self._read_exactly(self._FRAME_LENGTH_PREFIX.size)
@@ -402,10 +494,19 @@ def construct_hosted_processor(
     link_data_access: ProcessorLinkDataAccess,
     runtime_id: str,
     processor_id: str,
+    bridge: ParentProcessBridge,
 ) -> HostedProcessor:
-    """Build the user's object and the two contexts its hooks receive."""
+    """Build the user's object and the two contexts its hooks receive.
+
+    The bridge's escalate round trip is what the GPU surface crosses to the
+    parent on — without it, `ctx.gpu_limited_access` refuses by name.
+    """
     full_access_context = RuntimeContextFullAccess.open_for_helper_process(
-        configuration or {}, link_data_access, runtime_id, processor_id
+        configuration or {},
+        link_data_access,
+        runtime_id,
+        processor_id,
+        bridge.request_from_parent,
     )
     return HostedProcessor(
         construct_processor_instance(processor_class, configuration, link_data_access),
@@ -471,6 +572,7 @@ class HelperProcessLifecycle:
                 self._link_data_access,
                 self._runtime_id,
                 self._processor_id,
+                self._bridge,
             )
             self._hosted.call_hook_letting_failure_propagate(
                 "setup", self._hosted.full_access_context

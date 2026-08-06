@@ -37,28 +37,30 @@ use crate::python_bag_conversion::{json_value_to_python_object, python_object_to
 use crate::python_gpu_surface_pixel_exchange::{
     CpuAccessGate, GpuSurfaceOwnedMemory, GpuSurfaceOwnedValue, HOST_VISIBLE_DLPACK_DEVICE,
     device_export_available, exchange_shape_for_max_version, host_visible_dlpack_capsule,
-    pixel_buffer_bytes_per_row,
 };
 #[cfg(target_os = "linux")]
 use crate::python_gpu_surface_pixel_exchange::{
     device_dlpack_capsule, imported_device_for, prepare_device_export,
     publish_device_write_back_to_surface,
 };
+#[cfg(target_os = "linux")]
+use crate::python_helper_process_pixel_exchange::HelperCheckedOutPixelSurface;
+use crate::python_helper_process_pixel_exchange::HelperProcessGpuExchangeClient;
 use crate::python_logging::monotonic_clock_now_ns;
 use crate::python_processor_link_data_access::PythonProcessorLinkDataAccess;
 
-/// The refusal a helper process gets for any GPU call.
+/// The refusal a GPU call gets when this process has neither an engine view
+/// nor a channel to a parent that has one.
 ///
-/// Named separately from the expiry above because the cause is different and
-/// the old message sent authors looking for a lifecycle bug they do not have:
-/// a helper's GPU calls have to cross to the parent, and that path is not
-/// built. Every Python processor runs in its own child, so this is what the
-/// whole GPU surface answers there.
+/// In a helper process the pixel exchange normally crosses to the parent;
+/// reaching this refusal means the helper was started without its
+/// surface-share channel — a platform without one, or a parent too old to
+/// pass it.
 fn gpu_unreachable_from_a_helper_process_error() -> PyErr {
     PyRuntimeError::new_err(
-        "the GPU is not reachable from a Python processor: its work runs in a child process, \
-         and the cross-process pixel path is not wired. Frames still flow — `ctx.inputs` and \
-         `ctx.outputs` carry bags — but acquiring or mapping a surface does not.",
+        "the GPU is not reachable from this Python processor: its helper process was started \
+         without a surface-share channel to the engine. Frames still flow — `ctx.inputs` and \
+         `ctx.outputs` carry bags — but acquiring or mapping a surface cannot.",
     )
 }
 
@@ -191,6 +193,29 @@ impl PythonGpuSurfaceHandle {
         )
     }
 
+    /// A surface a helper process checked out of its parent: consumer-imported
+    /// memory behind the same handle surface the engine path mints.
+    #[cfg(target_os = "linux")]
+    fn from_helper_checked_out_surface(checked_out: HelperCheckedOutPixelSurface) -> Self {
+        let surface_id = checked_out.surface_id.clone();
+        let (width, height, format) = (checked_out.width, checked_out.height, checked_out.format);
+        Self::new(
+            Some(surface_id.clone()),
+            width,
+            height,
+            pixel_format_name(format).to_string(),
+            // No store and no engine view: the release an acquired surface
+            // owes rides the debt inside the checked-out value, and device
+            // export is host-direct by design.
+            GpuSurfaceOwnedMemory::new(
+                GpuSurfaceOwnedValue::HelperCheckedOut(checked_out),
+                None,
+                Some(surface_id),
+                None,
+            ),
+        )
+    }
+
     /// Drop this handle's share of the owned memory. The engine resource goes
     /// away once the last outstanding DLPack capsule does too; idempotent.
     fn release_owned_engine_value(&self) {
@@ -275,7 +300,7 @@ impl PythonGpuSurfaceHandle {
     #[getter]
     fn bytes_per_row(&self, python: Python<'_>) -> PyResult<u64> {
         let owned_memory = self.owned_memory()?;
-        python.detach(|| pixel_buffer_bytes_per_row(owned_memory.host_mapped_pixel_buffer()?))
+        python.detach(|| Ok(owned_memory.host_visible_pixel_plane()?.bytes_per_row))
     }
 
     /// Base address of the host mapping, or `None` when the surface is
@@ -289,9 +314,7 @@ impl PythonGpuSurfaceHandle {
         let owned_memory = self.owned_memory()?;
         python.detach(|| {
             Ok(Some(
-                owned_memory
-                    .host_mapped_pixel_buffer()?
-                    .plane_base_address(0) as usize,
+                owned_memory.host_visible_pixel_plane()?.base_address as usize,
             ))
         })
     }
@@ -345,9 +368,9 @@ impl PythonGpuSurfaceHandle {
             // The gate serves both sides: a device-only surface (a pooled
             // texture) has no host mapping to check, but its device export
             // still rides the same lock.
-            match owned_memory.host_mapped_pixel_buffer() {
-                Ok(pixel_buffer) => {
-                    if pixel_buffer.plane_base_address(0).is_null() {
+            match owned_memory.host_visible_pixel_plane() {
+                Ok(plane_view) => {
+                    if plane_view.base_address.is_null() {
                         return Err(PyBufferError::new_err(
                             "surface has no host mapping; it is a DEVICE_LOCAL allocation",
                         ));
@@ -522,7 +545,7 @@ impl PythonGpuSurfaceHandle {
 // GPU capability views
 // =============================================================================
 
-fn gpu_operation_error(failure: impl std::fmt::Display) -> PyErr {
+pub(crate) fn gpu_operation_error(failure: impl std::fmt::Display) -> PyErr {
     PyRuntimeError::new_err(failure.to_string())
 }
 
@@ -551,16 +574,21 @@ fn mint_pixel_buffer_surface_id(
 ///
 /// Holds an owned clone of the engine's `GpuContextLimitedAccess` — the one
 /// capability the engine documents as stash-safe — populated at the first
-/// lifecycle hook.
+/// lifecycle hook. In a helper process there is no engine view to hold;
+/// the exchange client fulfills the same calls by crossing to the parent.
 #[pyclass(name = "GpuContextLimitedAccess", module = "streamlib", frozen)]
 pub(crate) struct PythonGpuContextLimitedAccess {
     owned_engine_view: OnceLock<GpuContextLimitedAccess>,
+    helper_process_exchange_client: Option<Arc<HelperProcessGpuExchangeClient>>,
 }
 
 impl PythonGpuContextLimitedAccess {
-    fn new_unprimed() -> Self {
+    fn new_for_helper_process(
+        helper_process_exchange_client: Option<Arc<HelperProcessGpuExchangeClient>>,
+    ) -> Self {
         Self {
             owned_engine_view: OnceLock::new(),
+            helper_process_exchange_client,
         }
     }
 
@@ -574,6 +602,10 @@ impl PythonGpuContextLimitedAccess {
 #[pymethods]
 impl PythonGpuContextLimitedAccess {
     /// Acquire a pixel buffer from the pre-reserved pool.
+    ///
+    /// In a helper process the pool lives with the engine: the parent
+    /// allocates and checks the buffer into surface-share, and this process
+    /// checks it out and imports the mapping — same handle, same views.
     #[pyo3(signature = (width, height, format = "bgra"))]
     fn acquire_pixel_buffer(
         &self,
@@ -583,6 +615,18 @@ impl PythonGpuContextLimitedAccess {
         format: &str,
     ) -> PyResult<PythonGpuSurfaceHandle> {
         let pixel_format = parse_pixel_format_name(format)?;
+        #[cfg(target_os = "linux")]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            let checked_out = exchange_client.acquire_pixel_buffer(
+                python,
+                width,
+                height,
+                pixel_format_name(pixel_format),
+            )?;
+            return Ok(PythonGpuSurfaceHandle::from_helper_checked_out_surface(
+                checked_out,
+            ));
+        }
         python.detach(|| {
             let engine_view = self.engine_view()?;
             let (pool_id, pixel_buffer) = engine_view
@@ -608,6 +652,17 @@ impl PythonGpuContextLimitedAccess {
         format: &str,
         usage: Vec<String>,
     ) -> PyResult<PythonGpuSurfaceHandle> {
+        // Refused rather than registered (owner call, 2026-08-06): a pool
+        // texture recycles per frame, and registering each acquire into
+        // surface-share would put a per-frame SCM_RIGHTS round trip and the
+        // service's lifetime bookkeeping on the hot path.
+        if self.helper_process_exchange_client.is_some() {
+            return Err(PyRuntimeError::new_err(
+                "device textures are not reachable from a Python processor: a pool texture is \
+                 not registered for cross-process import. `acquire_pixel_buffer` is the \
+                 CPU-reachable path; device-side tensors ride the device-export staging path",
+            ));
+        }
         let texture_format = parse_texture_format_name(format)?;
         let texture_usages = parse_texture_usage_names(&usage)?;
         python.detach(|| {
@@ -655,6 +710,16 @@ impl PythonGpuContextLimitedAccess {
         python: Python<'_>,
         privileged_callback: &Bound<'_, PyAny>,
     ) -> PyResult<Py<PyAny>> {
+        // The callback is handed a borrow of the engine's own full-access
+        // capability, which exists one process away — there is nothing here
+        // to lease it from.
+        if self.helper_process_exchange_client.is_some() {
+            return Err(PyRuntimeError::new_err(
+                "escalate() hands its callback a same-process engine capability, which a Python \
+                 processor's helper process does not have. Acquire through \
+                 `ctx.gpu_limited_access.acquire_pixel_buffer` instead",
+            ));
+        }
         let engine_view = self.engine_view()?.clone();
         let held_callback = privileged_callback.clone().unbind();
         // Attaching while the escalate gate is held cannot deadlock here:
@@ -695,6 +760,13 @@ impl PythonGpuContextLimitedAccess {
         python: Python<'_>,
         surface_id: &str,
     ) -> PyResult<PythonGpuSurfaceHandle> {
+        #[cfg(target_os = "linux")]
+        if let Some(exchange_client) = &self.helper_process_exchange_client {
+            let checked_out = exchange_client.resolve_surface(python, surface_id)?;
+            return Ok(PythonGpuSurfaceHandle::from_helper_checked_out_surface(
+                checked_out,
+            ));
+        }
         python.detach(|| {
             let engine_view = self.engine_view()?;
             let pixel_buffer = engine_view
@@ -920,15 +992,33 @@ pub(crate) struct PythonRuntimeContextFullAccess {
 impl PythonRuntimeContextFullAccess {
     /// The context a helper process hands its own processor's privileged
     /// hooks.
+    ///
+    /// `escalate_request_to_parent` is the bridge's blocking round trip; with
+    /// it and the surface-share socket the parent's env names, the GPU
+    /// surface works here — without either, GPU calls refuse by name.
     #[staticmethod]
+    #[pyo3(signature = (configuration, link_data_access, runtime_id, processor_id, escalate_request_to_parent = None))]
     fn open_for_helper_process(
         python: Python<'_>,
         configuration: &Bound<'_, PyAny>,
         link_data_access: &Bound<'_, PythonProcessorLinkDataAccess>,
         runtime_id: String,
         processor_id: String,
+        escalate_request_to_parent: Option<&Bound<'_, PyAny>>,
     ) -> PyResult<Self> {
         let link_data_access = link_data_access.clone().unbind();
+        let helper_process_exchange_client = match (
+            escalate_request_to_parent,
+            std::env::var("STREAMLIB_SURFACE_SOCKET").ok(),
+        ) {
+            (Some(requester), Some(surface_socket_path)) => {
+                Some(Arc::new(HelperProcessGpuExchangeClient::new(
+                    requester.clone().unbind(),
+                    surface_socket_path.into(),
+                )))
+            }
+            _ => None,
+        };
         Ok(Self {
             runtime_id,
             processor_id,
@@ -947,7 +1037,9 @@ impl PythonRuntimeContextFullAccess {
             )?,
             gpu_limited_access_context: Py::new(
                 python,
-                PythonGpuContextLimitedAccess::new_unprimed(),
+                PythonGpuContextLimitedAccess::new_for_helper_process(
+                    helper_process_exchange_client,
+                ),
             )?,
             gpu_full_access_context: Py::new(
                 python,
@@ -1198,7 +1290,7 @@ fn mint_pooled_texture_surface_id() -> String {
 
 /// The same vocabulary the subprocess escalate handler accepted, so a
 /// processor migrated from the old SDK keeps its format strings.
-fn parse_pixel_format_name(name: &str) -> PyResult<PixelFormat> {
+pub(crate) fn parse_pixel_format_name(name: &str) -> PyResult<PixelFormat> {
     let normalized = name.trim().to_ascii_lowercase();
     match normalized.as_str() {
         "bgra" | "bgra32" => Ok(PixelFormat::Bgra32),

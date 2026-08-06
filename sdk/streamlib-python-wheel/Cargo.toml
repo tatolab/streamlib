@@ -84,5 +84,13 @@ parking_lot = "0.12"
 [target.'cfg(target_os = "linux")'.dependencies]
 cudarc = { workspace = true }
 
+# The helper child's half of the pixel exchange: the SCM_RIGHTS client that
+# checks a surface out of the parent's surface-share service, and the
+# consumer-side Vulkan import that turns its DMA-BUF plane fds into mapped
+# memory. Both already ride in the binary via the engine; named here so the
+# wheel can call them.
+streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.14.0" }
+streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.14.0" }
+
 [lints]
 workspace = true

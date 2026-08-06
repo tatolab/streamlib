@@ -40,6 +40,8 @@ use streamlib::sdk::rhi::{PixelBuffer, PixelFormat};
 
 #[cfg(target_os = "linux")]
 use crate::python_cuda_pixel_exchange::{CudaImportedSurface, import_opaque_fd_into_cuda};
+#[cfg(target_os = "linux")]
+use crate::python_helper_process_pixel_exchange::HelperCheckedOutPixelSurface;
 use streamlib_adapter_cuda::dlpack::{
     self, DataType, DataTypeCode, Device, DeviceType, Flags, ManagedTensor, ManagedTensorVersioned,
 };
@@ -65,6 +67,23 @@ pub(crate) enum GpuSurfaceOwnedValue {
         reason = "lifetime-only until the texture export path reads it"
     )]
     PooledTexture(PooledTextureHandle),
+    /// A surface checked out of the parent's surface-share service by a
+    /// helper process: consumer-imported memory, plus the `release_handle`
+    /// debt an acquired surface owes its parent.
+    #[cfg(target_os = "linux")]
+    HelperCheckedOut(HelperCheckedOutPixelSurface),
+}
+
+/// One host-visible plane, described the same way whichever process mapped
+/// it — the engine's own allocation or a helper's consumer import. Every
+/// CPU-side accessor (`base_address`, `bytes_per_row`, the DLPack capsule,
+/// the lock's mapping check) derives from this one answer.
+pub(crate) struct HostVisiblePixelPlaneView {
+    pub(crate) base_address: *mut u8,
+    pub(crate) bytes_per_row: u64,
+    pub(crate) width: u32,
+    pub(crate) height: u32,
+    pub(crate) format: PixelFormat,
 }
 
 /// The engine value plus the surface-store release it owes, held behind
@@ -137,19 +156,39 @@ impl GpuSurfaceOwnedMemory {
             GpuSurfaceOwnedValue::PooledTexture(_) => Err(PyNotImplementedError::new_err(
                 "exporting a pooled texture's DMA-BUF goes through the texture export path",
             )),
+            #[cfg(target_os = "linux")]
+            GpuSurfaceOwnedValue::HelperCheckedOut(_) => Err(PyNotImplementedError::new_err(
+                "this surface is a consumer import: its DMA-BUF was already exported by the \
+                 engine, and re-exporting an import is not a path. Publish the surface id and \
+                 let the consumer check it out instead",
+            )),
         }
     }
 
     /// The host-mapped pixel view, or a refusal naming why this surface
     /// has none. The single answer to "can the CPU address these bytes?"
     /// — every host-side accessor routes through it.
-    pub(crate) fn host_mapped_pixel_buffer(&self) -> PyResult<&PixelBuffer> {
+    pub(crate) fn host_visible_pixel_plane(&self) -> PyResult<HostVisiblePixelPlaneView> {
         match &self.owned_value {
-            GpuSurfaceOwnedValue::PixelBuffer(pixel_buffer) => Ok(pixel_buffer),
+            GpuSurfaceOwnedValue::PixelBuffer(pixel_buffer) => Ok(HostVisiblePixelPlaneView {
+                base_address: pixel_buffer.plane_base_address(0),
+                bytes_per_row: pixel_buffer_bytes_per_row(pixel_buffer)?,
+                width: pixel_buffer.width,
+                height: pixel_buffer.height,
+                format: pixel_buffer.format(),
+            }),
             GpuSurfaceOwnedValue::PooledTexture(_) => Err(PyNotImplementedError::new_err(
                 "this surface is a pooled texture: its pixels are device-local and tiled, so CPU \
                  access goes through the texture export path rather than a host mapping",
             )),
+            #[cfg(target_os = "linux")]
+            GpuSurfaceOwnedValue::HelperCheckedOut(checked_out) => Ok(HostVisiblePixelPlaneView {
+                base_address: checked_out.consumer_buffer.mapped_ptr(),
+                bytes_per_row: checked_out.bytes_per_row,
+                width: checked_out.width,
+                height: checked_out.height,
+                format: checked_out.format,
+            }),
         }
     }
 }
@@ -454,26 +493,24 @@ pub(crate) fn host_visible_dlpack_capsule<'py>(
     exchange_shape: DlpackExchangeShape,
     read_only: bool,
 ) -> PyResult<Bound<'py, PyAny>> {
-    let pixel_buffer = owned_memory.host_mapped_pixel_buffer()?;
+    let plane_view = owned_memory.host_visible_pixel_plane()?;
 
-    let base_address = pixel_buffer.plane_base_address(0);
-    if base_address.is_null() {
+    if plane_view.base_address.is_null() {
         return Err(PyBufferError::new_err(
             "surface has no host mapping; a DEVICE_LOCAL allocation reaches the CPU through the \
              texture export path instead",
         ));
     }
 
-    let bytes_per_row = pixel_buffer_bytes_per_row(pixel_buffer)?;
     let layout = PixelExchangeTensorLayout::for_pixel_format(
-        pixel_buffer.format(),
-        pixel_buffer.width,
-        pixel_buffer.height,
-        bytes_per_row,
+        plane_view.format,
+        plane_view.width,
+        plane_view.height,
+        plane_view.bytes_per_row,
     )?;
     dlpack_capsule_over(
         python,
-        base_address as u64,
+        plane_view.base_address as u64,
         layout,
         HOST_VISIBLE_DLPACK_DEVICE,
         exchange_shape,
