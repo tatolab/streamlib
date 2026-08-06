@@ -89,8 +89,10 @@ where a bullet says otherwise)
   and the `auto-build` feature. The strip has no earlier home because **the cdylib
   test corpus asserts exactly the behaviour it removes**: the 22 `load_project_dylib_*`
   / `pack_then_load_smoke` / `cdylib_owns_tokio_runtime` engine tests, the 4
-  `export_plugin_*` plugin-abi tests, `twin_drift_guard` and `check-cdylib-reach`.
-  Those die on this ticket and nowhere earlier, so no earlier stopping point is green.
+  `export_plugin_*` plugin-abi tests, and `twin_drift_guard`. Those die on this ticket
+  and nowhere earlier, so no earlier stopping point is green. (`check-cdylib-reach`
+  asserts the same invariant and retires with the CI/xtask bullet above; its timing is
+  that bullet's to state, not this one's.)
   Stripping dispatch ahead of them is not unsafe — it is untestable, and pointless
   while the code it serves still ships.
   - **One part of the surface must outlive the ABI, not merely follow it**: the
@@ -104,23 +106,23 @@ where a bullet says otherwise)
   - **Owed to `/reconcile-tracker`**: #1715's body, its stack breakdown, and its file
     count all predate this move and name neither the strip nor the `streamlib-sdk`
     clause.
-- **What must survive the strip**: the helper children's privileged-access route —
-  the escalate GPU ops carried over the subprocess IPC path, which is independent of
-  `host_services` and always was. This is distinct from the cdylib's escalate route
-  (`host_services/gpu_context/limited/escalate.rs`), which dies with the ABI; the two
-  share a name and nothing else. #1743 unblocked #1714 without the strip on exactly
-  this basis.
+- **What must survive the strip**: the helper children's privileged-access route — the
+  escalate GPU ops over the subprocess IPC path. Its own machinery names `host_services`
+  nowhere, but it reaches the GPU through the mode-routed
+  `GpuContextLimitedAccess::escalate`; a helper request is serviced in the app process,
+  so it always takes the host arm. The strip removes the other arm — this route is not
+  merely spared, the branch collapses onto the path it already used. Distinct from the
+  cdylib escalate route (`host_services/gpu_context/limited/escalate.rs`), which dies
+  with the ABI. #1743 unblocked #1714 on this basis.
 
 ## REMOVED
 
 Each bullet is a pattern the ship gate verifies is gone from the tree.
 
-Known gate defect, recorded here because it changes what these bullets are worth: the
-gate takes everything after `- REMOVED: ` on one line and greps it as a fixed string,
-so any bullet carrying two `/`-joined items or a parenthetical can never match and
-passes vacuously. Several below are in that state. Splitting them is the fix; it is
-not this change's scope, and until then a passing gate is weaker evidence than it
-looks.
+Known gate defect: it greps everything after the `- REMOVED:` prefix on one line
+verbatim, so any bullet joining two items with `/` or carrying a parenthetical can
+never match and passes vacuously. Several below are in that state. Splitting them is
+the fix, out of scope here; until then a green gate is weak evidence.
 
 `streamlib-adapter-cuda-helpers` is already gone, deleted early by #1743 / PR #1751
 with its three tests re-homed into `streamlib-adapter-cuda`; its bullet's `-cuda-abi`
