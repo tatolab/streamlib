@@ -17,6 +17,8 @@ use std::ffi::c_void;
 use parking_lot::Mutex;
 
 use crate::core::rhi::PixelBuffer;
+#[cfg(target_os = "linux")]
+use crate::core::rhi::PixelFormat;
 use crate::core::{Error, Result};
 #[cfg(target_os = "linux")]
 use crate::host_rhi::HostTextureExt;
@@ -1113,6 +1115,44 @@ impl SurfaceStoreInner {
         Ok(pixel_buffer)
     }
 
+    /// Send one `register` request over the surface-share socket, passing
+    /// `fds` with SCM_RIGHTS under `operation`'s name.
+    ///
+    /// Takes the fds by value and closes every one before returning: the
+    /// service dup'd what it needs during the send, and a registration
+    /// path that leaks one leaks it per registered surface.
+    #[cfg(target_os = "linux")]
+    fn send_surface_share_registration(
+        &self,
+        operation: &str,
+        request: &serde_json::Value,
+        fds: Vec<std::os::unix::io::RawFd>,
+    ) -> Result<()> {
+        let connection = self.connection.lock();
+        let stream = connection.as_ref().ok_or_else(|| {
+            Error::Configuration("SurfaceStore not connected to surface-share service".into())
+        })?;
+
+        let send_result = streamlib_surface_client::send_request_with_fds(stream, request, &fds, 0);
+        for fd in &fds {
+            unsafe { libc::close(*fd) };
+        }
+        let (response, response_fds) = send_result.map_err(|failure| {
+            Error::Configuration(format!("Unix socket {operation} failed: {failure}"))
+        })?;
+        for fd in &response_fds {
+            unsafe { libc::close(*fd) };
+        }
+
+        if let Some(error) = response
+            .get("error")
+            .and_then(|value: &serde_json::Value| value.as_str())
+        {
+            return Err(Error::Configuration(format!("{operation}: {error}")));
+        }
+        Ok(())
+    }
+
     /// Register a buffer with the surface-share service via Unix socket.
     ///
     /// The plane sizes travel with the registration because a checkout's
@@ -1121,7 +1161,6 @@ impl SurfaceStoreInner {
     #[cfg(target_os = "linux")]
     pub fn register_buffer(&self, pool_id: &str, pixel_buffer: &PixelBuffer) -> Result<()> {
         let exported_planes = exported_plane_wire_handles(pixel_buffer)?;
-        let plane_fds = exported_planes.plane_fds;
 
         let request = serde_json::json!({
             "op": "register",
@@ -1136,30 +1175,78 @@ impl SurfaceStoreInner {
             "plane_offsets": exported_planes.plane_offsets,
         });
 
-        let connection = self.connection.lock();
-        let stream = connection.as_ref().ok_or_else(|| {
-            Error::Configuration("SurfaceStore not connected to surface-share service".into())
-        })?;
-
-        let send_result =
-            streamlib_surface_client::send_request_with_fds(stream, &request, &plane_fds, 0);
-        for fd in &plane_fds {
-            unsafe { libc::close(*fd) };
-        }
-        let (response, response_fds) = send_result
-            .map_err(|e| Error::Configuration(format!("Unix socket register failed: {}", e)))?;
-        for f in &response_fds {
-            unsafe { libc::close(*f) };
-        }
-
-        if let Some(error) = response
-            .get("error")
-            .and_then(|v: &serde_json::Value| v.as_str())
-        {
-            return Err(Error::Configuration(format!("register: {}", error)));
-        }
-
+        self.send_surface_share_registration("register", &request, exported_planes.plane_fds)?;
         tracing::debug!("SurfaceStore: Registered buffer '{}'", pool_id);
+        Ok(())
+    }
+
+    /// Register a device-export staging buffer and the timeline its
+    /// refills signal, so a helper process can check the pair out and
+    /// import the staging into an external device API.
+    ///
+    /// The staging is one flat OPAQUE_FD allocation, never a pixel
+    /// buffer: pool allocations are DMA-BUF-flavoured, external device
+    /// APIs import OPAQUE_FD, and on NVIDIA one allocation cannot export
+    /// both. That is why this cannot go through
+    /// [`Self::register_pixel_buffer_with_timeline`], which takes a
+    /// [`PixelBuffer`] and its plane handles.
+    ///
+    /// The refill timeline travels in the `produce_done` slot, and
+    /// `consume_done` stays empty. That is the shape, not a compromise:
+    /// the host produces the staging's contents and the consumer waits
+    /// before reading, which is exactly the `produce_done` edge — and
+    /// there is no consumer-side drain for the host to wait on, because
+    /// each refill overwrites the staging wholesale.
+    #[cfg(target_os = "linux")]
+    pub fn register_device_export_staging(
+        &self,
+        surface_id: &str,
+        staging_buffer: &crate::vulkan::rhi::HostVulkanBuffer,
+        staging_byte_size: u64,
+        width: u32,
+        height: u32,
+        format: PixelFormat,
+        refill_done: &crate::vulkan::rhi::HostVulkanTimelineSemaphore,
+    ) -> Result<()> {
+        let staging_fd = staging_buffer.export_opaque_fd_memory()?;
+        let refill_done_fd = match refill_done.export_opaque_fd() {
+            Ok(fd) => fd,
+            Err(export_failure) => {
+                // SAFETY: closing an fd this process exported and has not
+                // handed to anyone.
+                unsafe { libc::close(staging_fd) };
+                return Err(Error::Configuration(format!(
+                    "register_device_export_staging: failed to export the refill timeline: \
+                     {export_failure}"
+                )));
+            }
+        };
+
+        let request = serde_json::json!({
+            "op": "register",
+            "surface_id": surface_id,
+            "runtime_id": self.runtime_id,
+            "width": width,
+            "height": height,
+            "format": format.wire_name(),
+            "resource_type": "pixel_buffer",
+            "handle_type": SURFACE_HANDLE_TYPE_OPAQUE_FD,
+            "plane_sizes": [staging_byte_size],
+            "plane_offsets": [0],
+            "has_produce_done_fd": true,
+            "has_consume_done_fd": false,
+        });
+
+        self.send_surface_share_registration(
+            "register_device_export_staging",
+            &request,
+            vec![staging_fd, refill_done_fd],
+        )?;
+        tracing::debug!(
+            "SurfaceStore: Registered device-export staging '{}' ({} bytes)",
+            surface_id,
+            staging_byte_size,
+        );
         Ok(())
     }
 
@@ -1331,11 +1418,6 @@ impl SurfaceStoreInner {
             })
         };
 
-        let connection = self.connection.lock();
-        let stream = connection.as_ref().ok_or_else(|| {
-            Error::Configuration("SurfaceStore not connected to surface-share service".into())
-        })?;
-
         let mut fds: Vec<std::os::unix::io::RawFd> = vec![fd];
         if let Some(s) = produce_done_fd {
             fds.push(s);
@@ -1343,24 +1425,7 @@ impl SurfaceStoreInner {
         if let Some(s) = consume_done_fd {
             fds.push(s);
         }
-        let send_result =
-            streamlib_surface_client::send_request_with_fds(stream, &request, &fds, 0);
-        for f in &fds {
-            unsafe { libc::close(*f) };
-        }
-        let (response, response_fds) = send_result.map_err(|e| {
-            Error::Configuration(format!("Unix socket register_texture failed: {}", e))
-        })?;
-        for f in &response_fds {
-            unsafe { libc::close(*f) };
-        }
-
-        if let Some(error) = response
-            .get("error")
-            .and_then(|v: &serde_json::Value| v.as_str())
-        {
-            return Err(Error::Configuration(format!("register_texture: {}", error)));
-        }
+        self.send_surface_share_registration("register_texture", &request, fds)?;
 
         tracing::debug!(
             "SurfaceStore: Registered texture '{}' (produce_done={}, consume_done={})",
@@ -1453,11 +1518,6 @@ impl SurfaceStoreInner {
             "has_consume_done_fd": consume_done_fd.is_some(),
         });
 
-        let connection = self.connection.lock();
-        let stream = connection.as_ref().ok_or_else(|| {
-            Error::Configuration("SurfaceStore not connected to surface-share service".into())
-        })?;
-
         let mut fds: Vec<std::os::unix::io::RawFd> = plane_fds.clone();
         if let Some(s) = produce_done_fd {
             fds.push(s);
@@ -1465,30 +1525,7 @@ impl SurfaceStoreInner {
         if let Some(s) = consume_done_fd {
             fds.push(s);
         }
-        let send_result =
-            streamlib_surface_client::send_request_with_fds(stream, &request, &fds, 0);
-        for f in &fds {
-            unsafe { libc::close(*f) };
-        }
-        let (response, response_fds) = send_result.map_err(|e| {
-            Error::Configuration(format!(
-                "Unix socket register_pixel_buffer_with_timeline failed: {}",
-                e
-            ))
-        })?;
-        for f in &response_fds {
-            unsafe { libc::close(*f) };
-        }
-
-        if let Some(error) = response
-            .get("error")
-            .and_then(|v: &serde_json::Value| v.as_str())
-        {
-            return Err(Error::Configuration(format!(
-                "register_pixel_buffer_with_timeline: {}",
-                error
-            )));
-        }
+        self.send_surface_share_registration("register_pixel_buffer_with_timeline", &request, fds)?;
 
         tracing::debug!(
             "SurfaceStore: Registered pixel buffer '{}' ({} plane(s), produce_done={}, consume_done={})",

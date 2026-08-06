@@ -58,11 +58,51 @@ mapping:
             Decimal-string-encoded u64 timeline value the host signaled on
             the surface's shared timeline semaphore at end-of-submit. Set
             on `run_cpu_readback_copy` and `try_run_cpu_readback_copy`
-            responses. The subprocess waits on its imported
-            `ConsumerVulkanTimelineSemaphore` for this value before
-            reading or writing the staging buffer mapped at registration
-            time. JTD has no native u64 — wire form is decimal-string,
-            parsed back to u64 on the subprocess side.
+            responses, and on `refill_device_export_staging` /
+            `copy_device_export_staging_back_to_surface` responses, where
+            the timeline is the staging's own `refill_done`. The subprocess
+            waits on its imported `ConsumerVulkanTimelineSemaphore` for
+            this value before reading or writing the staging buffer mapped
+            at registration time. JTD has no native u64 — wire form is
+            decimal-string, parsed back to u64 on the subprocess side.
+        type: string
+      staging_byte_size:
+        metadata:
+          description: >
+            Decimal-string-encoded u64 byte size of the device-export
+            staging buffer — the span an imported device pointer covers.
+            Set on `open_device_export_staging` responses. JTD has no
+            native u64; same decimal-string convention as
+            `timeline_value`.
+        type: string
+      bytes_per_row:
+        metadata:
+          description: >
+            Decimal-string-encoded u64 row pitch of the device-export
+            staging, derived from the staging's own geometry rather than
+            from the requesting surface's — the staging is the object the
+            byte span was sized for. Set on `open_device_export_staging`
+            responses.
+        type: string
+      writable:
+        metadata:
+          description: >
+            Whether the host can honour a write-back for this export. Set
+            on `open_device_export_staging` responses. False for
+            texture-backed exports, which are read-only by construction —
+            a subprocess that takes a write lock over one is refused
+            rather than silently dropping the edit at unlock.
+        type: boolean
+      exporting_device_uuid:
+        metadata:
+          description: >
+            Lowercase hex of the exporting Vulkan device's
+            `VkPhysicalDeviceIDProperties::deviceUUID` (32 characters, no
+            separators). Set on `open_device_export_staging` responses.
+            The external device API must import onto the GPU that owns the
+            memory; matching this UUID is the entire device-binding
+            contract, and falling through to device ordinal 0 corrupts
+            silently on a multi-GPU host.
         type: string
   err:
     properties:

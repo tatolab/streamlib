@@ -29,13 +29,14 @@
 //! submissions' writes visible. A multi-queue engine would need the
 //! refill to wait on the producer's timeline instead.
 //!
-//! Shape constraint: this is the surface both placements share.
-//! In-process callers use it directly; the helper-process arrangement
-//! (#1714) registers the same staging + timeline with surface-share once
-//! and triggers refills over the existing timeline protocol — so nothing
-//! here may assume the consumer lives in this process. The bounded host
-//! wait after each submit is the in-process convenience only; the
-//! exportable timeline is the contract.
+//! Nothing here assumes the consumer lives in this process. A processor
+//! reaching this from its own helper process gets the same staging and
+//! the same timeline: [`GpuContext::share_device_export_staging`]
+//! publishes both to the surface-share service once, and the child
+//! triggers refills through the escalate ops that wrap the methods
+//! below. The bounded host wait after each submit is a convenience for
+//! callers already in this process; the exportable timeline is the
+//! contract, and it is what a child waits on.
 
 use std::sync::Arc;
 
@@ -114,6 +115,13 @@ pub struct SurfaceDeviceExportStaging {
     /// Whether [`GpuContext::copy_device_export_staging_back_to_surface`]
     /// can honour a write — true only for buffer-backed sources today.
     writable: bool,
+    /// The surface-share id this staging is published under, once it has
+    /// been. Registration hands the service a dup of the staging fd and
+    /// the timeline fd, so repeating it per frame would leak a pair per
+    /// frame; holding the id here makes the publish once-per-staging and
+    /// still lets a failed attempt be retried.
+    #[cfg(target_os = "linux")]
+    surface_share_registration_id: Mutex<Option<String>>,
 }
 
 impl SurfaceDeviceExportStaging {
@@ -156,6 +164,13 @@ impl SurfaceDeviceExportStaging {
     /// [`GpuContext::refill_device_export_staging`] returns.
     pub fn refill_done_timeline(&self) -> &Arc<HostVulkanTimelineSemaphore> {
         &self.refill_done_timeline
+    }
+
+    /// UUID of the Vulkan device that owns the staging allocation. An
+    /// external device API must import onto this GPU; picking any other
+    /// reads the wrong memory rather than failing.
+    pub fn exporting_device_uuid(&self) -> [u8; 16] {
+        self.staging_buffer.vulkan_device().physical_device_uuid()
     }
 }
 
@@ -248,6 +263,8 @@ impl GpuContext {
             surface_height,
             pixel_format,
             writable,
+            #[cfg(target_os = "linux")]
+            surface_share_registration_id: Mutex::new(None),
         });
         // Double-check under the insert lock: a concurrent asker for the
         // same surface_id may have published one while this thread was
@@ -260,6 +277,60 @@ impl GpuContext {
         }
         stagings.insert(surface_id.to_string(), Arc::clone(&staging));
         Ok(staging)
+    }
+
+    /// Publish this staging and its refill timeline to the surface-share
+    /// service, and answer with the id they are registered under.
+    ///
+    /// This is how a consumer one process away reaches the export: it
+    /// checks the id out, receives the staging's OPAQUE_FD and the
+    /// timeline's fd over SCM_RIGHTS, imports the memory into its own
+    /// device API, and waits on the timeline for the value each refill
+    /// returns. The published id is derived from the source surface's so
+    /// the two never collide — the source is already registered under
+    /// its own id with its DMA-BUF planes, which is a different
+    /// allocation in a different external-handle flavour.
+    ///
+    /// Registers at most once per staging; later calls answer with the
+    /// same id.
+    #[cfg(target_os = "linux")]
+    pub fn share_device_export_staging(
+        &self,
+        staging: &SurfaceDeviceExportStaging,
+    ) -> Result<String> {
+        let mut registration_id = staging.surface_share_registration_id.lock();
+        if let Some(already_registered) = registration_id.as_ref() {
+            return Ok(already_registered.clone());
+        }
+        let surface_store = self.surface_store().ok_or_else(|| {
+            Error::GpuError(
+                "this runtime has no surface-share service, so a device export cannot reach \
+                 another process"
+                    .into(),
+            )
+        })?;
+        let pixel_format = staging.pixel_format.ok_or_else(|| {
+            Error::GpuError(format!(
+                "the device-export staging for surface {} carries no pixel shape; a consumer \
+                 would have no layout to import it under",
+                staging.surface_id
+            ))
+        })?;
+        let shared_id = format!("{}-device-export-staging", staging.surface_id);
+        // `host_inner`-direct for the same reason the passthroughs below
+        // are: the plugin ABI is not grown a vtable slot for a surface
+        // #1715 deletes. A cdylib caller panics at the guard.
+        surface_store.host_inner().register_device_export_staging(
+            &shared_id,
+            &staging.staging_buffer,
+            staging.staging_byte_size,
+            staging.surface_width,
+            staging.surface_height,
+            pixel_format,
+            &staging.refill_done_timeline,
+        )?;
+        *registration_id = Some(shared_id.clone());
+        Ok(shared_id)
     }
 
     /// Drop the cached device-export staging for `surface_id`, if any.
@@ -467,6 +538,15 @@ impl GpuContext {
 // grown for a surface #1715 deletes — a cdylib caller panics at the
 // `host_inner` guard.
 impl crate::core::context::GpuContextLimitedAccess {
+    /// See [`GpuContext::share_device_export_staging`].
+    #[cfg(target_os = "linux")]
+    pub fn share_device_export_staging(
+        &self,
+        staging: &SurfaceDeviceExportStaging,
+    ) -> Result<String> {
+        self.host_inner().share_device_export_staging(staging)
+    }
+
     /// See [`GpuContext::surface_device_export_staging`].
     pub fn surface_device_export_staging(
         &self,

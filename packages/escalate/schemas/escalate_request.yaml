@@ -153,6 +153,70 @@ mapping:
         enum:
           - image_to_buffer
           - buffer_to_image
+  open_device_export_staging:
+    properties:
+      request_id:
+        metadata:
+          description: "Correlates request with response. UUID string."
+        type: string
+      surface_id:
+        metadata:
+          description: >
+            The surface whose pixels the subprocess wants in an external
+            device API's dialect (CUDA today). The host allocates that
+            surface's OPAQUE_FD device-export staging buffer if it has
+            none, registers the staging plus its `refill_done` timeline
+            with the surface-share service, and answers with the id they
+            are registered under. Pool allocations are DMA-BUF-flavoured
+            and external device APIs import OPAQUE_FD; one allocation
+            cannot export both on NVIDIA, which is why the staging exists
+            at all.
+
+            The `ok` response carries `handle_id` (the surface-share id to
+            check out), `width`, `height`, `format`, `staging_byte_size`,
+            `bytes_per_row`, `writable`, and `exporting_device_uuid`. The
+            staging fd and the timeline fd travel over the surface-share
+            socket at check-out, never over this one.
+        type: string
+  refill_device_export_staging:
+    properties:
+      request_id:
+        metadata:
+          description: "Correlates request with response. UUID string."
+        type: string
+      surface_id:
+        metadata:
+          description: >
+            Same surface as `open_device_export_staging.surface_id`. The
+            host resolves the blit source fresh, copies the surface's
+            current pixels into the staging buffer, and signals a new
+            value on the staging's `refill_done` timeline at end-of-submit.
+            The response's `timeline_value` is what the subprocess waits
+            for on its imported `ConsumerVulkanTimelineSemaphore` before
+            reading the staging. No FDs travel on the wire.
+
+            The source is resolved per refill and never cached: rotating
+            producers re-register a different texture under the same
+            surface id every frame, so a cached source blits the previous
+            cycle's pixels.
+        type: string
+  copy_device_export_staging_back_to_surface:
+    properties:
+      request_id:
+        metadata:
+          description: "Correlates request with response. UUID string."
+        type: string
+      surface_id:
+        metadata:
+          description: >
+            Same surface as `open_device_export_staging.surface_id`.
+            Publishes a device-side edit: the host copies the staging
+            buffer back into the surface's own allocation so every other
+            holder observes it, and signals `refill_done` at end-of-submit.
+            Refused when the surface's export is read-only — a
+            texture-backed export has no write-back path. Answers with the
+            signalled `timeline_value`.
+        type: string
   register_compute_kernel:
     properties:
       request_id:

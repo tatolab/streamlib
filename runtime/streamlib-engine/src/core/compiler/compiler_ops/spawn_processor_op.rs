@@ -11,8 +11,7 @@ use parking_lot::{Mutex, RwLock};
 use crate::core::compiler::scheduling::{SchedulingStrategy, scheduling_strategy_for_processor};
 
 use crate::core::context::{
-    FullAccessGrant, GpuContext, GpuContextLimitedAccess, IsolationTier, RuntimeContext,
-    RuntimeContextFullAccess,
+    FullAccessGrant, GpuContext, IsolationTier, RuntimeContext, RuntimeContextFullAccess,
 };
 use crate::core::descriptors::ProcessorRuntime;
 use crate::core::error::{Error, Result};
@@ -507,7 +506,7 @@ fn clone_shutdown_eventfd(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::GpuContext;
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
