@@ -86,6 +86,7 @@ class TestPatternSource:
     # Keeps pytest from collecting the `Test*`-named class in user suites.
     __test__: Literal[False]
 
+@final
 class TestBagFeeder:
     """`streamlib.testing`'s feeder endpoint: publishes bags a test queued.
 
@@ -97,6 +98,7 @@ class TestBagFeeder:
     # Keeps pytest from collecting the `Test*`-named class in user suites.
     __test__: Literal[False]
 
+@final
 class TestBagCollector:
     """`streamlib.testing`'s collector endpoint: records every bag produced."""
 
@@ -332,13 +334,17 @@ class GpuContextLimitedAccess:
         cross-process import. `acquire_pixel_buffer` is the CPU-reachable path."""
     def resolve_surface(self, surface_id: str) -> GpuSurfaceHandle: ...
     def escalate(self, privileged_callback: Callable[[GpuContextFullAccess], _EscalateResult]) -> _EscalateResult:
-        """Refuses from a Python processor: the callback would need a same-process
-        engine capability, which lives one process away. Acquire through
-        `acquire_pixel_buffer` instead."""
+        """Refuses: the callback's one atomic privileged scope cannot span a
+        process boundary. The operations it wrapped are methods on this
+        capability and on `ctx.gpu_full_access` — call them directly."""
 
 @final
 class GpuContextFullAccess:
-    """Privileged GPU capability, valid only while a full-access hook runs."""
+    """The privileged GPU capability a full-access hook receives.
+
+    Each method is its own escalate round trip to the parent, which runs the
+    privileged work against the engine and answers with a handle.
+    """
 
     def acquire_pixel_buffer(
         self, width: int, height: int, format: str = "bgra"
@@ -369,6 +375,10 @@ class GpuContextFullAccess:
         """
 
     def wait_device_idle(self) -> None: ...
+    def escalate(self, privileged_callback: Callable[[GpuContextFullAccess], _EscalateResult]) -> _EscalateResult:
+        """Refuses: the callback's one atomic privileged scope cannot span a
+        process boundary. The operations it wrapped are methods on this
+        capability and on `ctx.gpu_limited_access` — call them directly."""
 
 @final
 class GpuSurfaceHandle:

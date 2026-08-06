@@ -45,7 +45,7 @@ def test_every_fed_bag_comes_back_in_order():
         for value in range(8):
             pipeline.feed("numbers_from_upstream", {"value": value})
         collected = pipeline.await_bags("numbers_to_downstream", 8)
-    assert collected == [{"value": value * 2} for value in range(8)]
+        assert collected == [{"value": value * 2} for value in range(8)]
 
 
 def test_the_processor_under_test_is_constructed_with_the_config():
