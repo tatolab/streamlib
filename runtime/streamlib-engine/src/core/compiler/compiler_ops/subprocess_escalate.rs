@@ -263,7 +263,7 @@ pub(crate) fn handle_escalate_op(
             width,
             height,
             format,
-        }) => Some(match parse_pixel_format(&format) {
+        }) => Some(match PixelFormat::parse_wire_name(&format) {
             Ok(parsed) => {
                 let acquired = sandbox.escalate(|full| {
                     let (pool_id, buffer) = full.acquire_pixel_buffer(width, height, parsed)?;
@@ -278,7 +278,7 @@ pub(crate) fn handle_escalate_op(
                             handle_id,
                             width: Some(width),
                             height: Some(height),
-                            format: Some(pixel_format_to_wire(parsed).to_string()),
+                            format: Some(parsed.wire_name().to_string()),
                             usage: None,
                             timeline_value: None,
                         })
@@ -2347,26 +2347,12 @@ pub(crate) fn envelope_response(result: EscalateResponse) -> serde_json::Value {
 
 /// Parse a wire-format pixel-format string into a [`PixelFormat`] enum.
 ///
-/// The wire format uses lowercase snake-case names (`bgra32`,
-/// `nv12_video_range`, etc.) so Python / Deno callers don't have to know
-/// FourCC codes. Also accepts the mnemonic `"bgra"` for
-/// [`PixelFormat::Bgra32`], matching the existing
-/// `NativeGpu.acquire_surface(format="bgra")` default on the Python side.
-fn parse_pixel_format(s: &str) -> std::result::Result<PixelFormat, String> {
-    PixelFormat::parse_wire_name(s)
-}
-
-fn pixel_format_to_wire(fmt: PixelFormat) -> &'static str {
-    fmt.wire_name()
-}
-
 /// Parse a wire-format texture format string into a [`TextureFormat`].
 ///
-/// Lowercase snake-case matches the variant name. Kept separate from
-/// [`parse_pixel_format`] so the vocabularies can evolve independently —
-/// pixel formats include video-specific YUV variants that textures don't
-/// expose, and texture formats include float variants that pixel buffers
-/// don't.
+/// Lowercase snake-case matches the variant name. A separate vocabulary
+/// from [`PixelFormat::parse_wire_name`] — pixel formats include
+/// video-specific YUV variants that textures don't expose, and texture
+/// formats include float variants that pixel buffers don't.
 fn parse_texture_format(s: &str) -> std::result::Result<TextureFormat, String> {
     let normalized = s.trim().to_ascii_lowercase();
     match normalized.as_str() {
@@ -2522,19 +2508,31 @@ mod tests {
 
     #[test]
     fn parse_pixel_format_accepts_common_aliases() {
-        assert_eq!(parse_pixel_format("bgra"), Ok(PixelFormat::Bgra32));
-        assert_eq!(parse_pixel_format("BGRA32"), Ok(PixelFormat::Bgra32));
-        assert_eq!(parse_pixel_format("nv12"), Ok(PixelFormat::Nv12VideoRange));
         assert_eq!(
-            parse_pixel_format("nv12_full_range"),
+            PixelFormat::parse_wire_name("bgra"),
+            Ok(PixelFormat::Bgra32)
+        );
+        assert_eq!(
+            PixelFormat::parse_wire_name("BGRA32"),
+            Ok(PixelFormat::Bgra32)
+        );
+        assert_eq!(
+            PixelFormat::parse_wire_name("nv12"),
+            Ok(PixelFormat::Nv12VideoRange)
+        );
+        assert_eq!(
+            PixelFormat::parse_wire_name("nv12_full_range"),
             Ok(PixelFormat::Nv12FullRange)
         );
-        assert_eq!(parse_pixel_format("gray8"), Ok(PixelFormat::Gray8));
+        assert_eq!(
+            PixelFormat::parse_wire_name("gray8"),
+            Ok(PixelFormat::Gray8)
+        );
     }
 
     #[test]
     fn parse_pixel_format_rejects_unknown() {
-        assert!(parse_pixel_format("xyz").is_err());
+        assert!(PixelFormat::parse_wire_name("xyz").is_err());
     }
 
     #[test]

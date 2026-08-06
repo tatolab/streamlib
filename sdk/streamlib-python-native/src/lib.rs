@@ -1473,18 +1473,17 @@ mod gpu_surface {
     /// back to `Bgra32` with no warning — the metadata is only used for
     /// pixel-buffer accessor methods, not for the import itself.
     fn pixel_format_from_str(format_str: &str) -> PixelFormat {
-        match format_str {
-            "Bgra32" => PixelFormat::Bgra32,
-            "Rgba32" => PixelFormat::Rgba32,
-            "Argb32" => PixelFormat::Argb32,
-            "Rgba64" => PixelFormat::Rgba64,
-            "Gray8" => PixelFormat::Gray8,
-            "Yuyv422" => PixelFormat::Yuyv422,
-            "Uyvy422" => PixelFormat::Uyvy422,
-            "Nv12VideoRange" => PixelFormat::Nv12VideoRange,
-            "Nv12FullRange" => PixelFormat::Nv12FullRange,
-            _ => PixelFormat::Bgra32,
-        }
+        // The engine emits `PixelFormat::wire_name` spellings; the Debug
+        // spellings ("Nv12VideoRange") cover surfaces registered by an older
+        // engine still on the wire.
+        PixelFormat::parse_wire_name(format_str)
+            .ok()
+            .or_else(|| match format_str {
+                "Nv12VideoRange" => Some(PixelFormat::Nv12VideoRange),
+                "Nv12FullRange" => Some(PixelFormat::Nv12FullRange),
+                _ => None,
+            })
+            .unwrap_or(PixelFormat::Bgra32)
     }
 
     pub struct SurfaceHandle {
@@ -2701,20 +2700,25 @@ mod surface_client {
             .map(|s| s.to_string())
     }
 
-    /// Derive a fallback bytes-per-row for a given format string. The handle
-    /// wire format emits `format!("{:?}", pixel_buffer.format())` which is the
-    /// Debug rendering of the `PixelFormat` enum variant name (e.g.
-    /// `"Bgra32"`). Returns `bytes_per_pixel` to compute the default row
-    /// stride; real driver-reported stride is a follow-up (handle's lookup
-    /// response does not carry it today).
+    /// Derive a fallback bytes-per-row for a given format string — the
+    /// engine's `PixelFormat::wire_name` spelling, with the Debug spelling
+    /// ("Nv12VideoRange") accepted for surfaces an older engine registered.
+    /// Returns `bytes_per_pixel` to compute the default row stride; real
+    /// driver-reported stride is a follow-up (handle's lookup response does
+    /// not carry it today).
     fn bytes_per_pixel_from_format(format_str: &str) -> u32 {
-        match format_str {
-            "Bgra32" | "Rgba32" | "Argb32" => 4,
-            "Rgba64" => 8,
-            "Gray8" => 1,
-            "Yuyv422" | "Uyvy422" => 2,
-            "Nv12VideoRange" | "Nv12FullRange" => 1,
-            _ => 4,
+        use streamlib_consumer_rhi::PixelFormat;
+        let parsed_format = PixelFormat::parse_wire_name(format_str)
+            .ok()
+            .or_else(|| match format_str {
+                "Nv12VideoRange" => Some(PixelFormat::Nv12VideoRange),
+                "Nv12FullRange" => Some(PixelFormat::Nv12FullRange),
+                _ => None,
+            })
+            .unwrap_or(PixelFormat::Bgra32);
+        match parsed_format {
+            PixelFormat::Nv12VideoRange | PixelFormat::Nv12FullRange => 1,
+            single_plane => (single_plane.bits_per_pixel() / 8).max(1),
         }
     }
 
@@ -3785,9 +3789,10 @@ mod opengl {
             "Rgba8Unorm" | "Rgba8UnormSrgb" => Some(DRM_FORMAT_ABGR8888),
             // PixelFormat-derived strings (host-allocated HOST_VISIBLE
             // pixel buffers emit these — camera ring `acquire_pixel_buffer`,
-            // CPU-readback adapter, etc.).
-            "Bgra32" | "Argb32" => Some(DRM_FORMAT_ARGB8888),
-            "Rgba32" => Some(DRM_FORMAT_ABGR8888),
+            // CPU-readback adapter, etc.). Both the engine's wire_name
+            // spelling and the older Debug spelling are accepted.
+            "Bgra32" | "Argb32" | "bgra32" | "argb32" => Some(DRM_FORMAT_ARGB8888),
+            "Rgba32" | "rgba32" => Some(DRM_FORMAT_ABGR8888),
             _ => None,
         }
     }

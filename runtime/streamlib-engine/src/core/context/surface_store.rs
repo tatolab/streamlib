@@ -21,6 +21,70 @@ use crate::core::{Error, Result};
 #[cfg(target_os = "linux")]
 use crate::host_rhi::HostTextureExt;
 
+/// Every plane of a pixel buffer exported for the surface-share wire: the
+/// fds to attach, the metadata arrays describing them, and the one
+/// handle-type discriminator the checkout importer dispatches on.
+#[cfg(target_os = "linux")]
+struct ExportedPlaneWireHandles {
+    plane_fds: Vec<std::os::unix::io::RawFd>,
+    plane_sizes: Vec<u64>,
+    plane_offsets: Vec<u64>,
+    handle_type: &'static str,
+}
+
+/// Export every plane of `pixel_buffer` for a surface-share registration.
+///
+/// Single-plane pixel buffers return a one-element vec; multi-plane
+/// DMA-BUFs (e.g. NV12 under DRM format modifiers) one fd per plane;
+/// OPAQUE_FD-flavored buffers (CUDA targets) a single OPAQUE_FD handle.
+/// One registration carries one flavour — a buffer whose planes export
+/// under two is refused here rather than published under whichever
+/// flavour happened to come last, which would import the other planes
+/// through the wrong Vulkan external-handle type.
+#[cfg(target_os = "linux")]
+fn exported_plane_wire_handles(pixel_buffer: &PixelBuffer) -> Result<ExportedPlaneWireHandles> {
+    use crate::core::rhi::{RhiExternalHandle, RhiPixelBufferExport};
+
+    let planes = pixel_buffer.export_plane_handles()?;
+    let mut plane_fds: Vec<std::os::unix::io::RawFd> = Vec::with_capacity(planes.len());
+    let mut plane_sizes: Vec<u64> = Vec::with_capacity(planes.len());
+    let mut plane_offsets: Vec<u64> = Vec::with_capacity(planes.len());
+    let mut handle_type: Option<&'static str> = None;
+    for handle in planes {
+        let (fd, size, this_plane_flavour) = match handle {
+            RhiExternalHandle::DmaBuf { fd, size } => (fd, size, "dma_buf"),
+            RhiExternalHandle::OpaqueFd { fd, size } => (fd, size, "opaque_fd"),
+        };
+        match handle_type {
+            None => handle_type = Some(this_plane_flavour),
+            Some(first_plane_flavour) if first_plane_flavour != this_plane_flavour => {
+                // SAFETY: closing exported fds this process owns and has not
+                // handed to anyone.
+                unsafe {
+                    for collected_fd in &plane_fds {
+                        libc::close(*collected_fd);
+                    }
+                    libc::close(fd);
+                }
+                return Err(Error::Configuration(format!(
+                    "pixel buffer exports mixed external-handle flavours \
+                     ({first_plane_flavour}, then {this_plane_flavour})"
+                )));
+            }
+            Some(_) => {}
+        }
+        plane_fds.push(fd);
+        plane_sizes.push(size as u64);
+        plane_offsets.push(0);
+    }
+    Ok(ExportedPlaneWireHandles {
+        plane_fds,
+        plane_sizes,
+        plane_offsets,
+        handle_type: handle_type.unwrap_or("dma_buf"),
+    })
+}
+
 /// Maximum number of entries in the SurfaceCache before eviction.
 const MAX_SURFACE_CACHE_SIZE: usize = 512;
 
@@ -907,30 +971,8 @@ impl SurfaceStoreInner {
     /// Check in a pixel buffer via Unix socket, returning a surface ID.
     #[cfg(target_os = "linux")]
     pub fn check_in(&self, pixel_buffer: &PixelBuffer) -> Result<String> {
-        use crate::core::rhi::RhiPixelBufferExport;
-
-        // Export every plane's fd. Single-plane pixel buffers return a
-        // one-element vec; multi-plane DMA-BUFs (e.g. NV12 under DRM format
-        // modifiers) return one fd per plane. OPAQUE_FD-flavored buffers
-        // (CUDA targets) yield a single OPAQUE_FD handle — `handle_type` is
-        // set on the wire per the variant.
-        let planes = pixel_buffer.export_plane_handles()?;
-        let mut plane_fds: Vec<std::os::unix::io::RawFd> = Vec::with_capacity(planes.len());
-        let mut plane_sizes: Vec<u64> = Vec::with_capacity(planes.len());
-        let mut plane_offsets: Vec<u64> = Vec::with_capacity(planes.len());
-        let mut handle_type = "dma_buf";
-        for handle in planes {
-            let (fd, size) = match handle {
-                crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } => (fd, size),
-                crate::core::rhi::RhiExternalHandle::OpaqueFd { fd, size } => {
-                    handle_type = "opaque_fd";
-                    (fd, size)
-                }
-            };
-            plane_fds.push(fd);
-            plane_sizes.push(size as u64);
-            plane_offsets.push(0);
-        }
+        let exported_planes = exported_plane_wire_handles(pixel_buffer)?;
+        let plane_fds = exported_planes.plane_fds;
 
         let request = serde_json::json!({
             "op": "check_in",
@@ -938,9 +980,9 @@ impl SurfaceStoreInner {
             "width": pixel_buffer.width,
             "height": pixel_buffer.height,
             "format": pixel_buffer.format().wire_name(),
-            "handle_type": handle_type,
-            "plane_sizes": plane_sizes,
-            "plane_offsets": plane_offsets,
+            "handle_type": exported_planes.handle_type,
+            "plane_sizes": exported_planes.plane_sizes,
+            "plane_offsets": exported_planes.plane_offsets,
         });
 
         let connection = self.connection.lock();
@@ -1071,32 +1113,14 @@ impl SurfaceStoreInner {
     }
 
     /// Register a buffer with the surface-share service via Unix socket.
+    ///
+    /// The plane sizes travel with the registration because a checkout's
+    /// importer derives the row pitch from them; a registration without
+    /// sizes checks out as an unusable zero-byte plane.
     #[cfg(target_os = "linux")]
     pub fn register_buffer(&self, pool_id: &str, pixel_buffer: &PixelBuffer) -> Result<()> {
-        use crate::core::rhi::RhiPixelBufferExport;
-
-        // Export every plane's fd — DMA-BUF or OPAQUE_FD per the underlying
-        // allocation flavor (see `HostVulkanBuffer::export_external_handle`).
-        // The plane sizes travel with the registration because a checkout's
-        // importer derives the row pitch from them; a registration without
-        // sizes checks out as an unusable zero-byte plane.
-        let planes = pixel_buffer.export_plane_handles()?;
-        let mut plane_fds: Vec<std::os::unix::io::RawFd> = Vec::with_capacity(planes.len());
-        let mut plane_sizes: Vec<u64> = Vec::with_capacity(planes.len());
-        let mut plane_offsets: Vec<u64> = Vec::with_capacity(planes.len());
-        let mut handle_type = "dma_buf";
-        for handle in planes {
-            let (fd, size) = match handle {
-                crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } => (fd, size),
-                crate::core::rhi::RhiExternalHandle::OpaqueFd { fd, size } => {
-                    handle_type = "opaque_fd";
-                    (fd, size)
-                }
-            };
-            plane_fds.push(fd);
-            plane_sizes.push(size as u64);
-            plane_offsets.push(0);
-        }
+        let exported_planes = exported_plane_wire_handles(pixel_buffer)?;
+        let plane_fds = exported_planes.plane_fds;
 
         let request = serde_json::json!({
             "op": "register",
@@ -1106,9 +1130,9 @@ impl SurfaceStoreInner {
             "height": pixel_buffer.height,
             "format": pixel_buffer.format().wire_name(),
             "resource_type": "pixel_buffer",
-            "handle_type": handle_type,
-            "plane_sizes": plane_sizes,
-            "plane_offsets": plane_offsets,
+            "handle_type": exported_planes.handle_type,
+            "plane_sizes": exported_planes.plane_sizes,
+            "plane_offsets": exported_planes.plane_offsets,
         });
 
         let connection = self.connection.lock();
@@ -1371,30 +1395,8 @@ impl SurfaceStoreInner {
         produce_done: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
         consume_done: Option<&crate::vulkan::rhi::HostVulkanTimelineSemaphore>,
     ) -> Result<()> {
-        use crate::core::rhi::RhiPixelBufferExport;
-
-        // Per-plane FDs — DMA-BUF buffers return one fd per plane;
-        // OPAQUE_FD buffers (CUDA target) return a single OPAQUE_FD handle.
-        // Both flavors share the SCM_RIGHTS plumbing; the wire's
-        // `handle_type` discriminator tells the consumer which import API
-        // to use.
-        let planes = pixel_buffer.export_plane_handles()?;
-        let mut plane_fds: Vec<std::os::unix::io::RawFd> = Vec::with_capacity(planes.len());
-        let mut plane_sizes: Vec<u64> = Vec::with_capacity(planes.len());
-        let mut plane_offsets: Vec<u64> = Vec::with_capacity(planes.len());
-        let mut handle_type = "dma_buf";
-        for handle in planes {
-            let (fd, size) = match handle {
-                crate::core::rhi::RhiExternalHandle::DmaBuf { fd, size } => (fd, size),
-                crate::core::rhi::RhiExternalHandle::OpaqueFd { fd, size } => {
-                    handle_type = "opaque_fd";
-                    (fd, size)
-                }
-            };
-            plane_fds.push(fd);
-            plane_sizes.push(size as u64);
-            plane_offsets.push(0);
-        }
+        let exported_planes = exported_plane_wire_handles(pixel_buffer)?;
+        let plane_fds = exported_planes.plane_fds;
 
         // Export `produce_done` + `consume_done` as OPAQUE_FDs (the
         // single-writer-per-edge pair documented in
@@ -1441,11 +1443,11 @@ impl SurfaceStoreInner {
             "runtime_id": self.runtime_id,
             "width": pixel_buffer.width,
             "height": pixel_buffer.height,
-            "format": format!("{:?}", pixel_buffer.format()),
+            "format": pixel_buffer.format().wire_name(),
             "resource_type": "pixel_buffer",
-            "handle_type": handle_type,
-            "plane_sizes": plane_sizes,
-            "plane_offsets": plane_offsets,
+            "handle_type": exported_planes.handle_type,
+            "plane_sizes": exported_planes.plane_sizes,
+            "plane_offsets": exported_planes.plane_offsets,
             "has_produce_done_fd": produce_done_fd.is_some(),
             "has_consume_done_fd": consume_done_fd.is_some(),
         });
@@ -1490,7 +1492,7 @@ impl SurfaceStoreInner {
         tracing::debug!(
             "SurfaceStore: Registered pixel buffer '{}' ({} plane(s), produce_done={}, consume_done={})",
             surface_id,
-            plane_sizes.len(),
+            exported_planes.plane_sizes.len(),
             produce_done.is_some(),
             consume_done.is_some(),
         );

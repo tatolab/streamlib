@@ -24,7 +24,7 @@ use pyo3::types::PyDict;
 #[cfg(target_os = "linux")]
 use pyo3::exceptions::PyRuntimeError;
 #[cfg(target_os = "linux")]
-use std::os::fd::RawFd;
+use std::os::fd::{FromRawFd as _, IntoRawFd as _, OwnedFd, RawFd};
 #[cfg(target_os = "linux")]
 use std::os::unix::net::UnixStream;
 #[cfg(target_os = "linux")]
@@ -42,7 +42,8 @@ use streamlib::sdk::rhi::PixelFormat;
 /// The callable is the bridge's `request_from_parent`, whose wait on the
 /// response releases the GIL — a slow parent parks this thread, never the
 /// interpreter's others.
-fn escalate_round_trip<'py>(
+#[cfg(target_os = "linux")]
+fn escalate_round_trip_to_parent<'py>(
     python: Python<'py>,
     escalate_request_to_parent: &Py<PyAny>,
     op: &Bound<'py, PyDict>,
@@ -92,7 +93,7 @@ impl Drop for HelperSurfaceReleaseDebt {
             let op = PyDict::new(python);
             op.set_item("op", "release_handle")?;
             op.set_item("handle_id", self.handle_id.as_str())?;
-            escalate_round_trip(python, &self.escalate_request_to_parent, &op)?;
+            escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
             Ok(())
         });
         if let Err(release_failure) = outcome {
@@ -109,12 +110,13 @@ impl Drop for HelperSurfaceReleaseDebt {
 /// crossing to the parent: escalate for allocation, surface-share for the
 /// memory, one consumer Vulkan device per child for the import.
 pub(crate) struct HelperProcessGpuExchangeClient {
+    #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     escalate_request_to_parent: Py<PyAny>,
     #[cfg_attr(not(target_os = "linux"), expect(dead_code))]
     surface_socket_path: PathBuf,
-    /// One connection per child, opened at first checkout. Cleared on any
-    /// IO failure so the next call reconnects instead of reusing a stream
-    /// with half a frame in it.
+    /// One connection per child, opened at first checkout. Taken out for
+    /// each exchange and put back only on success, so a stream with half a
+    /// frame in it is dropped rather than reused.
     #[cfg(target_os = "linux")]
     surface_share_connection: Mutex<Option<UnixStream>>,
     /// One Vulkan device per child, created at first import.
@@ -151,7 +153,8 @@ impl HelperProcessGpuExchangeClient {
         op.set_item("width", width)?;
         op.set_item("height", height)?;
         op.set_item("format", wire_format_name)?;
-        let response = escalate_round_trip(python, &self.escalate_request_to_parent, &op)?;
+        let response =
+            escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
         let handle_id: String = response
             .get_item("handle_id")
             .map_err(|_| {
@@ -188,62 +191,60 @@ impl HelperProcessGpuExchangeClient {
     }
 
     /// One request/response over the cached surface-share connection,
-    /// reconnecting lazily and dropping the connection on any IO failure.
+    /// reconnecting lazily. The connection is taken out of the slot for the
+    /// exchange and put back only on success, so a stream with half a frame
+    /// in it is structurally dropped rather than remembered to be.
     #[cfg(target_os = "linux")]
     fn surface_share_request(
         &self,
         request: &serde_json::Value,
-    ) -> PyResult<(serde_json::Value, Vec<RawFd>)> {
+    ) -> PyResult<(serde_json::Value, Vec<OwnedFd>)> {
         let mut connection = self.surface_share_connection.lock();
-        if connection.is_none() {
-            *connection = Some(
-                streamlib_surface_client::connect_to_surface_share_socket(
-                    &self.surface_socket_path,
-                )
-                .map_err(|connect_failure| {
-                    PyRuntimeError::new_err(format!(
-                        "could not reach the surface-share socket at {}: {connect_failure}. The \
-                         parent runtime owns that socket; if it is gone, this helper is orphaned",
-                        self.surface_socket_path.display(),
-                    ))
-                })?,
-            );
-        }
-        let stream = connection.as_ref().expect("connection just populated");
-        match streamlib_surface_client::send_request_with_fds(
-            stream,
+        let stream = match connection.take() {
+            Some(open_stream) => open_stream,
+            None => streamlib_surface_client::connect_to_surface_share_socket(
+                &self.surface_socket_path,
+            )
+            .map_err(|connect_failure| {
+                PyRuntimeError::new_err(format!(
+                    "could not reach the surface-share socket at {}: {connect_failure}. The \
+                     parent runtime owns that socket; if it is gone, this helper is orphaned",
+                    self.surface_socket_path.display(),
+                ))
+            })?,
+        };
+        let (response, received_raw_fds) = streamlib_surface_client::send_request_with_fds(
+            &stream,
             request,
             &[],
             streamlib_surface_client::MAX_SCM_RIGHTS_FDS,
-        ) {
-            Ok(response_and_fds) => Ok(response_and_fds),
-            Err(io_failure) => {
-                *connection = None;
-                Err(PyRuntimeError::new_err(format!(
-                    "the surface-share request failed mid-stream: {io_failure}"
-                )))
-            }
-        }
+        )
+        .map_err(|io_failure| {
+            PyRuntimeError::new_err(format!(
+                "the surface-share request failed mid-stream: {io_failure}"
+            ))
+        })?;
+        *connection = Some(stream);
+        // SAFETY: adopting kernel-delivered fds the recvmsg just placed in
+        // this process's fd table; nothing else holds them.
+        let received_fds = received_raw_fds
+            .into_iter()
+            .map(|raw_fd| unsafe { OwnedFd::from_raw_fd(raw_fd) })
+            .collect();
+        Ok((response, received_fds))
     }
 
     /// Validate the checkout metadata and turn the plane fds into mapped
-    /// memory. Owns the fds from here: every early return closes them.
+    /// memory. The fds are `OwnedFd`s, so every early return closes them by
+    /// scope rather than by remembering to.
     #[cfg(target_os = "linux")]
     fn import_checked_out_surface(
         &self,
         surface_id: &str,
         response: &serde_json::Value,
-        received_fds: Vec<RawFd>,
+        received_fds: Vec<OwnedFd>,
     ) -> PyResult<HelperCheckedOutPixelSurface> {
-        let close_all = |fds: &[RawFd]| {
-            for fd in fds {
-                // SAFETY: kernel-delivered fds this process owns and has not
-                // imported anywhere.
-                unsafe { libc::close(*fd) };
-            }
-        };
         if let Some(checkout_error) = response.get("error").and_then(|value| value.as_str()) {
-            close_all(&received_fds);
             return Err(PyRuntimeError::new_err(format!(
                 "the surface-share service refused check_out of {surface_id:?}: {checkout_error}"
             )));
@@ -251,19 +252,18 @@ impl HelperProcessGpuExchangeClient {
 
         // Trailing timeline-semaphore fds arrive after the plane fds when the
         // registration carried them. A pixel-buffer checkout carries none
-        // today; peeled and closed rather than assumed absent, so a
-        // registration that gains them cannot corrupt the plane list.
+        // today; peeled rather than assumed absent, so a registration that
+        // gains them cannot corrupt the plane list.
         let trailing_timeline_fd_count = ["has_produce_done_fd", "has_consume_done_fd"]
-            .iter()
+            .into_iter()
             .filter(|flag| {
                 response
-                    .get(**flag)
+                    .get(flag)
                     .and_then(|value| value.as_bool())
                     .unwrap_or(false)
             })
             .count();
         if received_fds.len() < trailing_timeline_fd_count + 1 {
-            close_all(&received_fds);
             return Err(PyRuntimeError::new_err(format!(
                 "check_out of {surface_id:?} returned {} fds, fewer than the {} its metadata \
                  promises",
@@ -272,15 +272,13 @@ impl HelperProcessGpuExchangeClient {
             )));
         }
         let mut plane_fds = received_fds;
-        let timeline_fds = plane_fds.split_off(plane_fds.len() - trailing_timeline_fd_count);
-        close_all(&timeline_fds);
+        drop(plane_fds.split_off(plane_fds.len() - trailing_timeline_fd_count));
 
         let handle_type = response
             .get("handle_type")
             .and_then(|value| value.as_str())
             .unwrap_or("dma_buf");
         if handle_type != "dma_buf" {
-            close_all(&plane_fds);
             return Err(PyRuntimeError::new_err(format!(
                 "surface {surface_id:?} is registered as {handle_type:?}, which is not a \
                  host-mappable pixel buffer: an opaque_fd surface belongs to the device-export \
@@ -288,7 +286,7 @@ impl HelperProcessGpuExchangeClient {
             )));
         }
 
-        let metadata_u32 = |field: &str| -> PyResult<u32> {
+        let required_positive_u32_metadata_field = |field: &str| -> PyResult<u32> {
             response
                 .get(field)
                 .and_then(|value| value.as_u64())
@@ -300,21 +298,19 @@ impl HelperProcessGpuExchangeClient {
                     ))
                 })
         };
-        let width = metadata_u32("width").inspect_err(|_| close_all(&plane_fds))?;
-        let height = metadata_u32("height").inspect_err(|_| close_all(&plane_fds))?;
+        let width = required_positive_u32_metadata_field("width")?;
+        let height = required_positive_u32_metadata_field("height")?;
         let format_name = response
             .get("format")
             .and_then(|value| value.as_str())
             .unwrap_or("unknown");
-        let format = crate::python_processor_context::parse_pixel_format_name(format_name)
-            .inspect_err(|_| close_all(&plane_fds))?;
+        let format = crate::python_processor_context::parse_pixel_format_name(format_name)?;
         let plane_sizes: Vec<u64> = response
             .get("plane_sizes")
             .and_then(|value| value.as_array())
             .map(|sizes| sizes.iter().filter_map(|size| size.as_u64()).collect())
             .unwrap_or_default();
         if plane_sizes.len() != plane_fds.len() {
-            close_all(&plane_fds);
             return Err(PyRuntimeError::new_err(format!(
                 "check_out of {surface_id:?} returned {} plane fds but {} plane sizes",
                 plane_fds.len(),
@@ -323,9 +319,8 @@ impl HelperProcessGpuExchangeClient {
         }
         // The allocation's row pitch, padding included — the same derivation
         // the engine-side view uses, so the strides agree across processes.
-        let plane0_size = plane_sizes[0];
+        let plane0_size = plane_sizes.first().copied().unwrap_or(0);
         if plane0_size == 0 || !plane0_size.is_multiple_of(u64::from(height)) {
-            close_all(&plane_fds);
             return Err(PyRuntimeError::new_err(format!(
                 "surface {surface_id:?} reports plane size {plane0_size}, not a whole number of \
                  {height} rows"
@@ -333,37 +328,33 @@ impl HelperProcessGpuExchangeClient {
         }
         let bytes_per_row = plane0_size / u64::from(height);
 
-        let vulkan_device = self
-            .consumer_vulkan_device()
-            .inspect_err(|_| close_all(&plane_fds))?;
+        let vulkan_device = self.consumer_vulkan_device()?;
         // Import from dups: vkAllocateMemory takes ownership of a fd only on
         // success, so handing over the originals would leave their ownership
-        // ambiguous on a partial multi-plane failure. The originals stay ours
-        // and close exactly once; a dup not consumed by a failed import is
-        // the leak we accept on that error path.
-        let mut dup_fds: Vec<RawFd> = Vec::with_capacity(plane_fds.len());
-        for fd in &plane_fds {
-            // SAFETY: duplicating an fd this process owns.
-            let dup_fd = unsafe { libc::dup(*fd) };
-            if dup_fd < 0 {
-                close_all(&dup_fds);
-                close_all(&plane_fds);
-                return Err(PyRuntimeError::new_err(format!(
-                    "could not duplicate a plane fd for import: {}",
-                    std::io::Error::last_os_error()
-                )));
-            }
-            dup_fds.push(dup_fd);
-        }
-        let import_outcome =
-            ConsumerVulkanBuffer::from_dma_buf_fds(&vulkan_device, &dup_fds, &plane_sizes);
-        close_all(&plane_fds);
-        let consumer_buffer = import_outcome.map_err(|import_failure| {
-            PyRuntimeError::new_err(format!(
-                "Vulkan could not import surface {surface_id:?}'s DMA-BUF planes: \
-                 {import_failure}"
-            ))
-        })?;
+        // ambiguous on a partial multi-plane failure. The originals close by
+        // scope; a dup not consumed by a failed import is the leak accepted
+        // on that error path.
+        let dup_fds: Vec<OwnedFd> = plane_fds
+            .iter()
+            .map(|plane_fd| {
+                plane_fd.try_clone().map_err(|duplicate_failure| {
+                    PyRuntimeError::new_err(format!(
+                        "could not duplicate a plane fd for import: {duplicate_failure}"
+                    ))
+                })
+            })
+            .collect::<PyResult<_>>()?;
+        // Ownership hands over here: nothing can fail between the unwrap to
+        // raw fds and the import call that adopts them.
+        let dup_raw_fds: Vec<RawFd> = dup_fds.into_iter().map(OwnedFd::into_raw_fd).collect();
+        let consumer_buffer =
+            ConsumerVulkanBuffer::from_dma_buf_fds(&vulkan_device, &dup_raw_fds, &plane_sizes)
+                .map_err(|import_failure| {
+                    PyRuntimeError::new_err(format!(
+                        "Vulkan could not import surface {surface_id:?}'s DMA-BUF planes: \
+                         {import_failure}"
+                    ))
+                })?;
 
         Ok(HelperCheckedOutPixelSurface {
             surface_id: surface_id.to_string(),

@@ -128,9 +128,11 @@ impl PixelFormat {
         }
     }
 
-    /// The one wire spelling of this format — surface-share registration
-    /// metadata, escalate requests, and the Python-facing format strings all
-    /// speak exactly this vocabulary. Lowercase snake-case of the variant.
+    /// The one wire spelling of this format: pixel-buffer surface-share
+    /// registration metadata, escalate requests, and the Python-facing
+    /// format strings speak exactly this vocabulary. Lowercase snake-case
+    /// of the variant. (Texture registrations carry `TextureFormat`
+    /// spellings, a separate vocabulary.)
     pub const fn wire_name(&self) -> &'static str {
         match self {
             Self::Bgra32 => "bgra32",
