@@ -143,8 +143,8 @@ impl PythonRuntimeHandle {
     /// Drop the engine with the GIL released, joining its threads.
     ///
     /// Releasing the GIL is not an optimization: an engine thread that needs
-    /// the GIL to finish (a Python processor, once those exist) would deadlock
-    /// against a teardown that held it.
+    /// this interpreter's GIL to finish — a control-plane handler, a log
+    /// drain — would deadlock against a teardown that held it.
     fn drop_engine_without_holding_the_gil(
         python: Python<'_>,
         engine: Arc<Runner>,

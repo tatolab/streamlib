@@ -8,9 +8,9 @@ GIL. That is the library's reason to exist, so it is asserted behaviourally
 rather than trusted: the app's own interpreter never loads a second copy of the
 processor's module, and the pid a bag was produced in is not the app's.
 
-`cargo xtask check-no-in-process-placement` gates the vocabulary; this gates
-the behaviour. A change that reintroduces in-process hosting without using any
-of the banned words still turns these red.
+`cargo xtask check-no-in-process-placement` gates the vocabulary once its
+ticket lands; this gates the behaviour. A change that reintroduces in-process
+hosting without using any of the banned words still turns these red.
 """
 
 import os

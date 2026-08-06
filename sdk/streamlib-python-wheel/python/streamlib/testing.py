@@ -38,9 +38,9 @@ ENGINE_TEARDOWN_TIMEOUT_SECONDS = 60.0
 #
 # A process-global queue cannot reach the processor that is supposed to read it:
 # every Python processor runs in its own child, and this module's globals are
-# the app's. The feeder and collector become real graph endpoints over a
-# parent-owned IPC channel, which is what makes this harness work against the
-# placement it is testing.
+# the app's. #1714 still owes this harness a real transport — the feeder and
+# collector becoming graph endpoints over a parent-owned IPC channel — and
+# until it lands, the suites built on this harness are xfail(strict=True).
 _fed_bags: "Dict[str, queue.Queue[Any]]" = {}
 _collected_bags: "Dict[str, queue.Queue[Any]]" = {}
 _next_channel_number = itertools.count()

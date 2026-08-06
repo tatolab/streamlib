@@ -1,12 +1,14 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Logging and timekeeping for Python processors.
+//! Logging and timekeeping for the app's own Python code.
 //!
-//! In-process, a log line goes straight into the engine's unified JSONL
-//! pipeline — the same drain the engine's own records go through, so a
-//! processor's output interleaves with the engine's in one ordered stream
-//! instead of arriving as captured stdout.
+//! In the app process, a log line goes straight into the engine's unified
+//! JSONL pipeline — the same drain the engine's own records go through, so
+//! the app's output interleaves with the engine's in one ordered stream
+//! instead of arriving as captured stdout. A processor's records take the
+//! other route: its helper process forwards them over the escalate `Log` op,
+//! and the parent stamps and enqueues them into this same pipeline.
 
 use std::collections::BTreeMap;
 

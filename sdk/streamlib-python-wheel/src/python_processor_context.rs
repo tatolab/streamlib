@@ -3,16 +3,12 @@
 
 //! The capability-typed runtime contexts handed to Python lifecycle hooks.
 //!
-//! The engine hands hooks lifetime-bound views (`&RuntimeContextFullAccess`)
-//! that a Python object cannot hold. The bridge is a lease: the host erases
-//! the borrow behind a pointer, installs it before invoking the hook, and
-//! revokes it after — the revoke's write-lock acquisition blocks until every
-//! in-flight reader finishes, so the pointer provably never outlives the
-//! engine borrow. Lock/GIL discipline, kept everywhere in this file: lease
-//! installs and revokes happen with no GIL attached, and every reader takes
-//! the guard inside a `python.detach(..)` closure and releases it before
-//! re-attaching — never hold a lease guard while attached to or waiting for
-//! the GIL.
+//! Built in the helper process the processor runs in: everything a hook
+//! reads is local, was passed down by the parent, or crosses to it — the
+//! GPU surface through the exchange client, whose escalate wait releases
+//! the GIL so a slow parent parks one thread and never the interpreter.
+//! GIL discipline, kept everywhere in this file: every potentially-blocking
+//! engine or IPC call runs inside a `python.detach(..)` closure.
 
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -692,15 +688,14 @@ impl PythonGpuContextLimitedAccess {
 
     /// Run `privileged_callback` with a temporary full-access GPU capability.
     ///
-    /// The in-process door for one-shot privileged construction from a worker
-    /// thread — the pattern every native capture processor uses: stash this
-    /// object in `setup`, spawn a thread in `start`, escalate exactly once for
-    /// resource construction, run per-frame work on the limited surface. The
-    /// engine's escalate gate serializes all escalations runtime-wide and
-    /// waits for device idle afterwards, so this is for setup-shaped moments,
-    /// never per-frame — and it must never nest: an escalate inside an
-    /// escalate on one thread is a same-thread gate re-entry, which the
-    /// engine refuses by construction.
+    /// One-shot privileged construction against an engine in this process —
+    /// the door the engine-side capability serves. A Python processor's hooks
+    /// run in a helper process, where this refuses by name: the callback
+    /// would need a borrow of the engine's own capability, which lives one
+    /// process away. The engine's escalate gate serializes all escalations
+    /// runtime-wide and waits for device idle afterwards, and it must never
+    /// nest: an escalate inside an escalate on one thread is a same-thread
+    /// gate re-entry, which the engine refuses by construction.
     ///
     /// Returns whatever the callback returns. The capability object handed to
     /// the callback expires when the callback does — stashing it and calling
