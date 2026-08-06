@@ -600,12 +600,16 @@ impl PythonGpuContextLimitedAccess {
         clippy::unused_self,
         reason = "the refusal is this capability's whole answer for textures"
     )]
+    #[expect(
+        unused_variables,
+        reason = "the Python-visible parameter names are the API; stubtest compares them"
+    )]
     fn acquire_texture(
         &self,
-        _width: u32,
-        _height: u32,
-        _format: &str,
-        _usage: Vec<String>,
+        width: u32,
+        height: u32,
+        format: &str,
+        usage: Vec<String>,
     ) -> PyResult<PythonGpuSurfaceHandle> {
         Err(PyRuntimeError::new_err(
             "device textures are not reachable from a Python processor: a pool texture is \
@@ -632,7 +636,11 @@ impl PythonGpuContextLimitedAccess {
         clippy::unused_self,
         reason = "the refusal is this capability's whole answer for escalation"
     )]
-    fn escalate(&self, _privileged_callback: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+    #[expect(
+        unused_variables,
+        reason = "the Python-visible parameter name is the API; stubtest compares it"
+    )]
+    fn escalate(&self, privileged_callback: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
         // The callback would be handed a borrow of the engine's own
         // full-access capability, which exists one process away — there is
         // nothing here to lease it from.
