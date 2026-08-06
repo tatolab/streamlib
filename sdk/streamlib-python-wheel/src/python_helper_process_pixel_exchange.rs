@@ -89,20 +89,30 @@ impl Drop for HelperSurfaceReleaseDebt {
     /// Best-effort: a parent that is already gone has released everything
     /// with the connection, so a failure here is logged, never raised.
     fn drop(&mut self) {
-        let outcome = Python::attach(|python| -> PyResult<()> {
-            let op = PyDict::new(python);
-            op.set_item("op", "release_handle")?;
-            op.set_item("handle_id", self.handle_id.as_str())?;
-            escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
-            Ok(())
+        Python::attach(|python| {
+            let release_outcome: PyResult<()> = (|| {
+                let op = PyDict::new(python);
+                op.set_item("op", "release_handle")?;
+                op.set_item("handle_id", self.handle_id.as_str())?;
+                escalate_round_trip_to_parent(python, &self.escalate_request_to_parent, &op)?;
+                Ok(())
+            })();
+            if let Err(release_failure) = release_outcome {
+                // This process installs no tracing subscriber; the one
+                // observable route is the child's own log module, which
+                // rides the escalate `Log` op into the unified JSONL.
+                let _ = python.import("streamlib.log").and_then(|log_module| {
+                    log_module.call_method1(
+                        "warn",
+                        (format!(
+                            "releasing surface {} to the parent failed ({release_failure}); \
+                             its pool slot returns at teardown",
+                            self.handle_id
+                        ),),
+                    )
+                });
+            }
         });
-        if let Err(release_failure) = outcome {
-            tracing::warn!(
-                handle_id = %self.handle_id,
-                %release_failure,
-                "releasing a surface to the parent failed; its pool slot returns at teardown"
-            );
-        }
     }
 }
 
@@ -347,14 +357,29 @@ impl HelperProcessGpuExchangeClient {
         // Ownership hands over here: nothing can fail between the unwrap to
         // raw fds and the import call that adopts them.
         let dup_raw_fds: Vec<RawFd> = dup_fds.into_iter().map(OwnedFd::into_raw_fd).collect();
-        let consumer_buffer =
-            ConsumerVulkanBuffer::from_dma_buf_fds(&vulkan_device, &dup_raw_fds, &plane_sizes)
-                .map_err(|import_failure| {
-                    PyRuntimeError::new_err(format!(
-                        "Vulkan could not import surface {surface_id:?}'s DMA-BUF planes: \
-                         {import_failure}"
-                    ))
-                })?;
+        let consumer_buffer = match ConsumerVulkanBuffer::from_dma_buf_fds(
+            &vulkan_device,
+            &dup_raw_fds,
+            &plane_sizes,
+        ) {
+            Ok(imported_buffer) => imported_buffer,
+            Err(import_failure) => {
+                // Vulkan takes fd ownership only on success, so a refused
+                // single-plane fd is ours to close — and this path can run
+                // per frame. A multi-plane failure leaves the tail's
+                // ownership ambiguous (already-imported planes were freed by
+                // the callee's teardown) and those dups leak, bounded by
+                // plane count; no multi-plane pool surface exists today.
+                if let [only_plane_fd] = dup_raw_fds[..] {
+                    // SAFETY: an fd Vulkan refused ownership of; ours alone.
+                    unsafe { libc::close(only_plane_fd) };
+                }
+                return Err(PyRuntimeError::new_err(format!(
+                    "Vulkan could not import surface {surface_id:?}'s DMA-BUF planes: \
+                     {import_failure}"
+                )));
+            }
+        };
 
         Ok(HelperCheckedOutPixelSurface {
             surface_id: surface_id.to_string(),

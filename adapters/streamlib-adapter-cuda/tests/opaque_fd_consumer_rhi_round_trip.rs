@@ -171,7 +171,7 @@ fn opaque_fd_chain_host_export_to_consumer_import_to_adapter_acquire() {
         "runtime_id": RUNTIME_ID,
         "width": W,
         "height": H,
-        "format": "Bgra32",
+        "format": "bgra32",
         "resource_type": "pixel_buffer",
         "handle_type": "opaque_fd",
         "plane_sizes": [buffer_size as u64],

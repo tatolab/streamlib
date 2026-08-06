@@ -49,39 +49,40 @@ fn exported_plane_wire_handles(pixel_buffer: &PixelBuffer) -> Result<ExportedPla
     let mut plane_fds: Vec<std::os::unix::io::RawFd> = Vec::with_capacity(planes.len());
     let mut plane_sizes: Vec<u64> = Vec::with_capacity(planes.len());
     let mut plane_offsets: Vec<u64> = Vec::with_capacity(planes.len());
-    let mut handle_type: Option<&'static str> = None;
+    let mut plane_flavours: Vec<&'static str> = Vec::with_capacity(planes.len());
     for handle in planes {
         let (fd, size, this_plane_flavour) = match handle {
             RhiExternalHandle::DmaBuf { fd, size } => (fd, size, "dma_buf"),
             RhiExternalHandle::OpaqueFd { fd, size } => (fd, size, "opaque_fd"),
         };
-        match handle_type {
-            None => handle_type = Some(this_plane_flavour),
-            Some(first_plane_flavour) if first_plane_flavour != this_plane_flavour => {
-                // SAFETY: closing exported fds this process owns and has not
-                // handed to anyone.
-                unsafe {
-                    for collected_fd in &plane_fds {
-                        libc::close(*collected_fd);
-                    }
-                    libc::close(fd);
-                }
-                return Err(Error::Configuration(format!(
-                    "pixel buffer exports mixed external-handle flavours \
-                     ({first_plane_flavour}, then {this_plane_flavour})"
-                )));
-            }
-            Some(_) => {}
-        }
         plane_fds.push(fd);
         plane_sizes.push(size as u64);
         plane_offsets.push(0);
+        plane_flavours.push(this_plane_flavour);
+    }
+    // Validated after every fd is collected, so the refusal closes all of
+    // them rather than only the ones iterated so far.
+    let handle_type = plane_flavours.first().copied().unwrap_or("dma_buf");
+    if plane_flavours
+        .iter()
+        .any(|plane_flavour| *plane_flavour != handle_type)
+    {
+        // SAFETY: closing exported fds this process owns and has not handed
+        // to anyone.
+        unsafe {
+            for collected_fd in &plane_fds {
+                libc::close(*collected_fd);
+            }
+        }
+        return Err(Error::Configuration(format!(
+            "pixel buffer exports mixed external-handle flavours ({plane_flavours:?})"
+        )));
     }
     Ok(ExportedPlaneWireHandles {
         plane_fds,
         plane_sizes,
         plane_offsets,
-        handle_type: handle_type.unwrap_or("dma_buf"),
+        handle_type,
     })
 }
 

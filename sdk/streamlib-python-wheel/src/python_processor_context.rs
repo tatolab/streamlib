@@ -185,10 +185,17 @@ impl PythonGpuSurfaceHandle {
         )
     }
 
-    /// Drop this handle's share of the owned memory. The engine resource goes
-    /// away once the last outstanding DLPack capsule does too; idempotent.
+    /// Drop this handle's share of the owned memory. The resource goes away
+    /// once the last outstanding DLPack capsule does too; idempotent.
+    ///
+    /// The take is hoisted out of the drop expression so the mutex guard is
+    /// released before the value drops: a helper-checked-out surface's drop
+    /// re-attaches to the GIL for its `release_handle` round trip, and a
+    /// thread holding this mutex while waiting for the GIL deadlocks against
+    /// any GIL-holding thread reading the handle.
     fn release_owned_engine_value(&self) {
-        drop(self.owned_memory.lock().take());
+        let released_share = self.owned_memory.lock().take();
+        drop(released_share);
     }
 
     /// Borrow the shared memory anchor, or fail if the handle is closed.
@@ -229,8 +236,9 @@ impl PythonGpuSurfaceHandle {
 
 impl Drop for PythonGpuSurfaceHandle {
     /// Covers a handle the author never closed. Runs attached (pyclass
-    /// deallocation) — acceptable because the engine takes no GIL, so the
-    /// release cannot deadlock; `close()` remains the detached fast path.
+    /// deallocation) — acceptable because the release path attaches with
+    /// `Python::attach` where it needs Python, which is re-entrant from an
+    /// attached thread; `close()` remains the detached fast path.
     fn drop(&mut self) {
         self.release_owned_engine_value();
     }

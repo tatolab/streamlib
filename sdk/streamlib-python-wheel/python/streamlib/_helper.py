@@ -164,10 +164,11 @@ class ParentProcessBridge:
     ) -> "dict[str, Any]":
         """Send one escalate request and block until its correlated response.
 
-        Raises [`EscalateRequestError`] on a send failure, a timeout, a
-        channel that closed mid-flight, or a refusal the parent reported —
-        one exception type, so a caller never has to tell an OS-level
-        failure from a semantic one.
+        Raises [`EscalateRequestError`] on a timeout, a channel that closed
+        mid-flight, or a refusal the parent reported — one exception type,
+        so a caller never has to tell an OS-level failure from a semantic
+        one. A broken write surfaces the same way: `send` never raises, but
+        the reader sees the socket's EOF and fails every in-flight request.
         """
         request_id = str(uuid.uuid4())
         slot = _PendingEscalateResponse()

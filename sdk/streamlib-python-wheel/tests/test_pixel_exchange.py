@@ -190,6 +190,15 @@ def test_a_processor_edits_a_synthetic_frames_pixels_in_place(start_app_under_te
     """
     observation = run_probe(start_app_under_test, "inverting_effect")
     assert observation["frame_size"] == [320, 180]
+    # The pattern's leftmost SMPTE bar is white, written by the native fill
+    # through the engine's own view of the allocation. Reading it back at a
+    # known coordinate through the child's independently-derived strides is
+    # what catches the two derivations disagreeing — a systematic stride
+    # divergence passes every self-consistent assertion below.
+    assert observation["before"] == [255, 255, 255, 255], (
+        f"pixel (10, 10) should be the white SMPTE bar the native source wrote; "
+        f"the child's view read {observation['before']}"
+    )
     assert observation["after_through_this_view"] == [
         255 - channel for channel in observation["before"]
     ]

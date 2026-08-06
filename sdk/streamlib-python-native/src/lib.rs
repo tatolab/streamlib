@@ -1468,22 +1468,15 @@ mod gpu_surface {
     pub const SURFACE_BACKEND_NONE: u32 = 0;
     pub const SURFACE_BACKEND_VULKAN: u32 = 2;
 
-    /// Map a surface-share wire format string (the Debug rendering of
-    /// `PixelFormat`, e.g. `"Bgra32"`) back to the enum variant. Falls
-    /// back to `Bgra32` with no warning — the metadata is only used for
-    /// pixel-buffer accessor methods, not for the import itself.
+    /// Map a surface-share wire format string (`PixelFormat::wire_name`,
+    /// e.g. `"bgra32"`) back to the enum variant. Falls back to `Bgra32`
+    /// with no warning — the metadata is only used for pixel-buffer
+    /// accessor methods, not for the import itself.
     fn pixel_format_from_str(format_str: &str) -> PixelFormat {
-        // The engine emits `PixelFormat::wire_name` spellings; the Debug
-        // spellings ("Nv12VideoRange") cover surfaces registered by an older
-        // engine still on the wire.
-        PixelFormat::parse_wire_name(format_str)
-            .ok()
-            .or_else(|| match format_str {
-                "Nv12VideoRange" => Some(PixelFormat::Nv12VideoRange),
-                "Nv12FullRange" => Some(PixelFormat::Nv12FullRange),
-                _ => None,
-            })
-            .unwrap_or(PixelFormat::Bgra32)
+        // Pixel-buffer registrations speak `PixelFormat::wire_name`, the one
+        // wire vocabulary; the fallback keeps this a metadata convenience
+        // rather than a hard failure.
+        PixelFormat::parse_wire_name(format_str).unwrap_or(PixelFormat::Bgra32)
     }
 
     pub struct SurfaceHandle {
@@ -2701,21 +2694,12 @@ mod surface_client {
     }
 
     /// Derive a fallback bytes-per-row for a given format string — the
-    /// engine's `PixelFormat::wire_name` spelling, with the Debug spelling
-    /// ("Nv12VideoRange") accepted for surfaces an older engine registered.
-    /// Returns `bytes_per_pixel` to compute the default row stride; real
-    /// driver-reported stride is a follow-up (handle's lookup response does
-    /// not carry it today).
+    /// engine's `PixelFormat::wire_name` spelling. Returns `bytes_per_pixel`
+    /// to compute the default row stride; real driver-reported stride is a
+    /// follow-up (handle's lookup response does not carry it today).
     fn bytes_per_pixel_from_format(format_str: &str) -> u32 {
         use streamlib_consumer_rhi::PixelFormat;
-        let parsed_format = PixelFormat::parse_wire_name(format_str)
-            .ok()
-            .or_else(|| match format_str {
-                "Nv12VideoRange" => Some(PixelFormat::Nv12VideoRange),
-                "Nv12FullRange" => Some(PixelFormat::Nv12FullRange),
-                _ => None,
-            })
-            .unwrap_or(PixelFormat::Bgra32);
+        let parsed_format = PixelFormat::parse_wire_name(format_str).unwrap_or(PixelFormat::Bgra32);
         match parsed_format {
             PixelFormat::Nv12VideoRange | PixelFormat::Nv12FullRange => 1,
             single_plane => (single_plane.bits_per_pixel() / 8).max(1),
@@ -3787,12 +3771,11 @@ mod opengl {
             // surfaces emit these in the surface-share wire format).
             "Bgra8Unorm" | "Bgra8UnormSrgb" => Some(DRM_FORMAT_ARGB8888),
             "Rgba8Unorm" | "Rgba8UnormSrgb" => Some(DRM_FORMAT_ABGR8888),
-            // PixelFormat-derived strings (host-allocated HOST_VISIBLE
+            // PixelFormat wire spellings (host-allocated HOST_VISIBLE
             // pixel buffers emit these — camera ring `acquire_pixel_buffer`,
-            // CPU-readback adapter, etc.). Both the engine's wire_name
-            // spelling and the older Debug spelling are accepted.
-            "Bgra32" | "Argb32" | "bgra32" | "argb32" => Some(DRM_FORMAT_ARGB8888),
-            "Rgba32" | "rgba32" => Some(DRM_FORMAT_ABGR8888),
+            // CPU-readback adapter, etc.).
+            "bgra32" | "argb32" => Some(DRM_FORMAT_ARGB8888),
+            "rgba32" => Some(DRM_FORMAT_ABGR8888),
             _ => None,
         }
     }

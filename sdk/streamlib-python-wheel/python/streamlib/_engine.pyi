@@ -304,10 +304,14 @@ class GpuContextLimitedAccess:
     ) -> GpuSurfaceHandle: ...
     def acquire_texture(
         self, width: int, height: int, format: str, usage: list[str]
-    ) -> GpuSurfaceHandle: ...
+    ) -> GpuSurfaceHandle:
+        """Refuses from a Python processor: a pool texture is not registered for
+        cross-process import. `acquire_pixel_buffer` is the CPU-reachable path."""
     def resolve_surface(self, surface_id: str) -> GpuSurfaceHandle: ...
     def escalate(self, privileged_callback: Callable[[GpuContextFullAccess], _EscalateResult]) -> _EscalateResult:
-        """Run the callback with a temporary full-access capability, camera-pattern style."""
+        """Refuses from a Python processor: the callback would need a same-process
+        engine capability, which lives one process away. Acquire through
+        `acquire_pixel_buffer` instead."""
 
 @final
 class GpuContextFullAccess:

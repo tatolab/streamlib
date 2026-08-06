@@ -2345,8 +2345,6 @@ pub(crate) fn envelope_response(result: EscalateResponse) -> serde_json::Value {
     obj
 }
 
-/// Parse a wire-format pixel-format string into a [`PixelFormat`] enum.
-///
 /// Parse a wire-format texture format string into a [`TextureFormat`].
 ///
 /// Lowercase snake-case matches the variant name. A separate vocabulary
