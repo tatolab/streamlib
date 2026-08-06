@@ -12,12 +12,12 @@ mod python_control_plane_hosting;
 #[cfg(target_os = "linux")]
 mod python_cuda_pixel_exchange;
 mod python_gpu_surface_pixel_exchange;
+mod python_helper_process_spawn_host;
 mod python_logging;
 mod python_monotonic_timer;
 mod python_native_builtin_blocks;
 mod python_processor_context;
 mod python_processor_declaration;
-mod python_processor_host;
 mod python_processor_import_path;
 mod python_processor_link_data_access;
 mod python_processor_registration;

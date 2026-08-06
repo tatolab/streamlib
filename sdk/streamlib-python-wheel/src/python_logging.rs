@@ -8,14 +8,12 @@
 //! processor's output interleaves with the engine's in one ordered stream
 //! instead of arriving as captured stdout.
 
-use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::sync::Arc;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use streamlib::sdk::logging::{LogLevel, emit_python_processor_log_record};
+use streamlib::sdk::logging::{LogLevel, emit_app_process_python_log_record};
 use streamlib::sdk::media_clock::MediaClock;
 
 use crate::python_bag_conversion::python_object_to_json_value;
@@ -59,35 +57,11 @@ pub(crate) fn monotonic_clock_now_ns() -> u64 {
         .saturating_add(timespec.tv_nsec as u64)
 }
 
-/// Which processor's hook is running on this thread, for log attribution.
-///
-/// Set by the host around every lifecycle hook; a `log_event` outside any
-/// hook (module import time, a worker thread) carries no attribution.
-pub(crate) struct PythonProcessorLogAttribution {
-    pub(crate) processor_id: Option<String>,
-    pub(crate) processor_display_name: String,
-}
-
-thread_local! {
-    static CURRENT_PYTHON_PROCESSOR_LOG_ATTRIBUTION:
-        RefCell<Option<Arc<PythonProcessorLogAttribution>>> = const { RefCell::new(None) };
-}
-
-pub(crate) fn set_current_python_processor_log_attribution(
-    attribution: Option<Arc<PythonProcessorLogAttribution>>,
-) {
-    CURRENT_PYTHON_PROCESSOR_LOG_ATTRIBUTION.with(|current| *current.borrow_mut() = attribution);
-}
-
-fn current_python_processor_log_attribution() -> Option<Arc<PythonProcessorLogAttribution>> {
-    CURRENT_PYTHON_PROCESSOR_LOG_ATTRIBUTION.with(|current| current.borrow().clone())
-}
-
 /// Emit one record on the engine's log pipeline, with structured attrs.
 ///
-/// The processor attribution comes from the host's per-thread marker rather
-/// than a parameter, so a helper deep inside user code attributes correctly
-/// without threading a context through.
+/// This is the app process's own Python logging. A processor's records never
+/// come through here — it runs in its own child, whose `streamlib.log` routes
+/// to the parent over the escalate `Log` op.
 #[pyfunction]
 #[pyo3(signature = (level, message, attrs = None))]
 pub(crate) fn log_event(
@@ -105,13 +79,7 @@ pub(crate) fn log_event(
             attribute_map.insert(key, python_object_to_json_value(&value)?);
         }
     }
-    let processor_id = current_python_processor_log_attribution().map(|attribution| {
-        attribution
-            .processor_id
-            .clone()
-            .unwrap_or_else(|| attribution.processor_display_name.clone())
-    });
-    emit_python_processor_log_record(level, message.to_string(), processor_id, attribute_map);
+    emit_app_process_python_log_record(level, message.to_string(), attribute_map);
     Ok(())
 }
 

@@ -66,6 +66,19 @@ pub trait DynGeneratedProcessor: Send + 'static {
         &self,
     ) -> Option<std::sync::Arc<crate::iceoryx2::InputMailboxesInner>>;
 
+    /// Whether this processor has failed in a way it cannot recover from, so
+    /// the graph shows it in error while the rest of the pipeline keeps
+    /// running.
+    ///
+    /// Polled by the Manual-mode lifecycle loop, which is the only place a
+    /// processor doing its work elsewhere — on a callback thread the engine
+    /// never enters, or in a helper process — can report a failure that never
+    /// comes back from a callback. Reactive and continuous processors report
+    /// by returning `Err` from the callback that failed.
+    fn has_failed_unrecoverably(&self) -> bool {
+        false
+    }
+
     /// Whether this processor's iceoryx2 ports live outside the engine's
     /// address space.
     ///

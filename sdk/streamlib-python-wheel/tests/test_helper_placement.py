@@ -1,0 +1,116 @@
+# Copyright (c) 2025 Jonathan Fontanez
+# SPDX-License-Identifier: BUSL-1.1
+
+"""The behavioural gate on where a Python processor runs.
+
+Every `@processor` class runs in its own child process — own interpreter, own
+GIL. That is the library's reason to exist, so it is asserted behaviourally
+rather than trusted: the app's own interpreter never loads a second copy of the
+processor's module, and the pid a bag was produced in is not the app's.
+
+`cargo xtask check-no-in-process-placement` gates the vocabulary; this gates
+the behaviour. A change that reintroduces in-process hosting without using any
+of the banned words still turns these red.
+"""
+
+import os
+import re
+from pathlib import Path
+
+import pytest
+
+APP = Path(__file__).parent / "helper_placement_app.py"
+
+SOURCE_PID_MARKER = re.compile(r"MARKER:SOURCE_PID (\S+) (\d+)")
+SINK_PID_MARKER = re.compile(r"MARKER:SINK_PID (\d+) UPSTREAM_PID (\d+)")
+APP_PID_MARKER = re.compile(r"MARKER:APP_PID=(\d+)")
+APP_PROCESS_GROUP_MARKER = re.compile(r"MARKER:APP_PROCESS_GROUP=(\d+)")
+
+
+def run_scenario(start_app_under_test, scenario: str):
+    app = start_app_under_test(APP, scenario)
+    app.await_marker("CLEAN_EXIT")
+    app.await_clean_exit()
+    return app
+
+
+def matched_marker(pattern: "re.Pattern[str]", output: str) -> "re.Match[str]":
+    """The marker `pattern` names, or a failure naming what was missing.
+
+    A marker that never arrived means the scenario did not get where it was
+    going, which is a more useful failure than an attribute error on `None`.
+    """
+    match = pattern.search(output)
+    assert match is not None, (
+        f"the app never reported {pattern.pattern!r}:\n{output}"
+    )
+    return match
+
+
+def test_adding_a_processor_loads_nothing_into_the_app(start_app_under_test):
+    """The registration import is the only parent-side load.
+
+    Mentally restore an in-process host and this fails on the first line: the
+    engine would import `streamlib._processor_hosting` to construct the class
+    in this interpreter.
+    """
+    app = run_scenario(start_app_under_test, "the_app_never_hosts_the_processor")
+    assert "MODULES_ADDED_BY_ADD=[]" in app.output, (
+        f"`rt.add` loaded modules into the app's own interpreter:\n{app.output}"
+    )
+    assert "HELPER_MODULE_IN_APP=False" in app.output, (
+        f"the app imported the helper runtime, which belongs in the child:\n{app.output}"
+    )
+
+
+def test_a_bag_is_produced_in_a_process_that_is_not_the_apps(start_app_under_test):
+    """The pid rides in the bag, so the claim is about where `process` ran —
+    not about what the engine logged it was going to do."""
+    app = run_scenario(start_app_under_test, "a_bag_is_produced_in_another_process")
+
+    app_pid = int(matched_marker(APP_PID_MARKER, app.output).group(1))
+    sink_pid, upstream_pid = (
+        int(group) for group in matched_marker(SINK_PID_MARKER, app.output).groups()
+    )
+
+    assert upstream_pid != app_pid, (
+        f"the source produced its bag in the app's own process ({app_pid})"
+    )
+    assert sink_pid != app_pid, (
+        f"the sink consumed the bag in the app's own process ({app_pid})"
+    )
+    assert sink_pid != upstream_pid, (
+        f"both processors shared one process ({sink_pid}) — one processor, one helper"
+    )
+
+
+def test_two_instances_of_one_class_get_two_processes(start_app_under_test):
+    """Registration is per class; placement is per instance."""
+    app = run_scenario(
+        start_app_under_test, "two_instances_of_one_class_get_two_processes"
+    )
+    reported_pids = {
+        int(pid) for _, pid in SOURCE_PID_MARKER.findall(app.output)
+    }
+    assert len(reported_pids) == 2, (
+        f"two instances of one class reported {reported_pids} — expected two "
+        f"distinct pids:\n{app.output}"
+    )
+    app_pid = int(matched_marker(APP_PID_MARKER, app.output).group(1))
+    assert app_pid not in reported_pids
+
+
+def test_no_helper_survives_the_app(start_app_under_test):
+    """`rt.run()` returning means every child was reaped.
+
+    A survivor holds this processor's iceoryx2 ports open, and the next run
+    fails to open them — which reads as a transport bug rather than a leak.
+    """
+    app = run_scenario(start_app_under_test, "every_child_is_reaped")
+    process_group = int(
+        matched_marker(APP_PROCESS_GROUP_MARKER, app.output).group(1)
+    )
+
+    # Signal 0 tests for the group's existence without delivering anything.
+    with pytest.raises(ProcessLookupError):
+        os.killpg(process_group, 0)

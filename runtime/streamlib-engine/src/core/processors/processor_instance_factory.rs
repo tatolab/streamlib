@@ -465,6 +465,15 @@ impl ProcessorInstance {
         }
     }
 
+    /// Whether this processor has failed unrecoverably. Always `false` for a
+    /// cdylib plugin — the plugin ABI has no slot for it.
+    pub fn has_failed_unrecoverably(&self) -> bool {
+        match self {
+            Self::VTable { .. } => false,
+            Self::LegacyDyn(inner) => inner.has_failed_unrecoverably(),
+        }
+    }
+
     /// Whether this processor's iceoryx2 ports live outside the engine's
     /// address space, so the wiring path hands over service names rather than
     /// installing a publisher or a subscriber itself.

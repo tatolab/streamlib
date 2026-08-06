@@ -72,6 +72,7 @@ pub fn run_processor_loop(
                 &id,
                 &processor,
                 &shutdown_rx,
+                &state,
                 &pause_gate,
                 &runtime_ctx,
                 isolation_tier,
@@ -420,6 +421,7 @@ fn run_manual_mode(
     id: &ProcessorUniqueId,
     processor: &Arc<Mutex<ProcessorInstance>>,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
+    state: &Arc<Mutex<ProcessorState>>,
     pause_gate: &Arc<AtomicBool>,
     runtime_ctx: &RuntimeContext,
     isolation_tier: IsolationTier,
@@ -456,6 +458,7 @@ fn run_manual_mode(
     // Wait for shutdown signal - this thread is just a lifecycle manager
     // Real work happens on OS-managed callback threads
     let mut was_paused = false;
+    let mut already_reported_failure = false;
 
     loop {
         // Check for shutdown
@@ -473,6 +476,16 @@ fn run_manual_mode(
         } else if !is_paused && was_paused {
             dispatch_on_resume(id, processor, runtime_ctx);
             was_paused = false;
+        }
+
+        // A processor whose work happens elsewhere reports a failure here or
+        // nowhere. The loop keeps running rather than breaking: the rest of
+        // the pipeline is unaffected, and breaking would run teardown and
+        // then overwrite the state with `Stopped`, hiding what happened.
+        if !already_reported_failure && processor.lock().has_failed_unrecoverably() {
+            tracing::error!("[{}] Processor failed unrecoverably", id);
+            *state.lock() = ProcessorState::Error;
+            already_reported_failure = true;
         }
 
         std::thread::sleep(std::time::Duration::from_millis(100));

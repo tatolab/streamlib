@@ -909,6 +909,16 @@ impl<'a> RuntimeContextFullAccess<'a> {
     pub(crate) fn host_audio_clock(&self) -> &SharedAudioClock {
         self.host_base().audio_clock()
     }
+
+    /// Per-runtime surface-sharing socket, for a spawn host to hand its child.
+    ///
+    /// The one part of the host base a spawn host outside this crate needs:
+    /// the child's `streamlib-surface-client` dials it to import a surface
+    /// this runtime exported. Everything else on the base stays internal.
+    #[cfg(target_os = "linux")]
+    pub fn surface_socket_path(&self) -> &std::path::Path {
+        self.host_base().surface_socket_path()
+    }
 }
 
 impl<'a> RuntimeContextLimitedAccess<'a> {

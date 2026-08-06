@@ -24,10 +24,9 @@ pub(crate) use worker::now_ns;
 /// `source: python` honest in the JSONL columns (same reasoning as the
 /// subprocess log relay in `polyglot_sink`). Silently no-ops before
 /// [`init`] runs, matching `tracing::*!()` behaviour.
-pub fn emit_python_processor_log_record(
+pub fn emit_app_process_python_log_record(
     level: LogLevel,
     message: String,
-    processor_id: Option<String>,
     attrs: std::collections::BTreeMap<String, serde_json::Value>,
 ) {
     push_polyglot_record(LogRecord {
@@ -36,7 +35,9 @@ pub fn emit_python_processor_log_record(
         target: "streamlib::python".to_string(),
         message,
         pipeline_id: None,
-        processor_id,
+        // No processor: every Python processor runs in its own child, and a
+        // child's records arrive attributed through the escalate `Log` op.
+        processor_id: None,
         rhi_op: None,
         intercepted: false,
         channel: None,

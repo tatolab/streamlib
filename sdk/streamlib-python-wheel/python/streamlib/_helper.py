@@ -117,12 +117,21 @@ class ParentProcessBridge:
         self._reader.start()
 
     def send(self, message: "dict[str, Any]") -> None:
-        """Write one length-prefixed frame, whole."""
+        """Write one length-prefixed frame, whole.
+
+        A parent that has already closed its end is not an error to report —
+        there is nowhere left to report it. Teardown races here by design: the
+        parent drops the bridge as soon as it has the reply it waited for, and
+        a child still on its way out may have a record or a `done` in hand.
+        """
         payload = _encode_frame_payload(message)
         with self._write_lock:
-            self._write_stream.write(self._FRAME_LENGTH_PREFIX.pack(len(payload)))
-            self._write_stream.write(payload)
-            self._write_stream.flush()
+            try:
+                self._write_stream.write(self._FRAME_LENGTH_PREFIX.pack(len(payload)))
+                self._write_stream.write(payload)
+                self._write_stream.flush()
+            except OSError:
+                pass
 
     def next_lifecycle_command(self) -> "Optional[dict[str, Any]]":
         """Block until the parent sends one, or `None` once it is gone."""

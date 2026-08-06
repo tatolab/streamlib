@@ -52,25 +52,6 @@ impl PythonProcessorLinkDataAccess {
         }
     }
 
-    pub(crate) fn install_input_mailboxes(&self, input_mailboxes: Arc<InputMailboxesInner>) {
-        let _ = self.input_mailboxes.set(input_mailboxes);
-    }
-
-    pub(crate) fn install_output_writer(&self, output_writer: Arc<OutputWriterInner>) {
-        let _ = self.output_writer.set(output_writer);
-    }
-
-    /// The wiring path's reach into this processor's outputs — how the compiler
-    /// attaches a link's publisher after the processor exists.
-    pub(crate) fn output_writer_inner(&self) -> Option<Arc<OutputWriterInner>> {
-        self.output_writer.get().cloned()
-    }
-
-    /// The wiring path's reach into this processor's inputs.
-    pub(crate) fn input_mailboxes_inner(&self) -> Option<Arc<InputMailboxesInner>> {
-        self.input_mailboxes.get().cloned()
-    }
-
     fn helper_process_output_plane(&self) -> PyResult<(&Iceoryx2Node, &Arc<OutputWriterInner>)> {
         match (self.iceoryx2_node.get(), self.output_writer.get()) {
             (Some(node), Some(output_writer)) => Ok((node, output_writer)),

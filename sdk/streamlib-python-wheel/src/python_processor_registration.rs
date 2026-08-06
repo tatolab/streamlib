@@ -15,8 +15,8 @@ use pyo3::prelude::*;
 use streamlib::sdk::descriptors::SchemaIdent;
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorTypeReference};
 
+use crate::python_helper_process_spawn_host::spawn_host_for_processor_node;
 use crate::python_processor_declaration::PythonProcessorDeclaration;
-use crate::python_processor_host::PythonProcessorHost;
 
 /// Which Python class each registered identity was registered from.
 ///
@@ -69,14 +69,32 @@ pub(crate) fn register_processor_class(
     let type_reference = declaration.type_reference.clone();
     let descriptor = declaration.descriptor.clone();
     let held_processor_class = processor_class.clone().unbind();
-    let constructor_class = held_processor_class.clone_ref(python);
+
+    // The closure captures the class's import path, never the class object:
+    // the object lives in this interpreter, and the processor does not. Every
+    // instance the engine constructs is a child that imports the class for
+    // itself, which is the same string `rt.add` already refused an
+    // unimportable class by.
+    let processor_class_import_path = declaration
+        .descriptor
+        .entrypoint
+        .clone()
+        .ok_or_else(|| PyValueError::new_err("a Python processor must carry an import path"))?;
+    let child_execution_config = declaration.execution_config;
+    let descriptor_for_constructor = declaration.descriptor.clone();
 
     PROCESSOR_REGISTRY
         .register_dynamic(
             descriptor,
             Box::new(move |node| {
-                PythonProcessorHost::construct(&declaration, &constructor_class, node).map(|host| {
-                    Box::new(host)
+                spawn_host_for_processor_node(
+                    &processor_class_import_path,
+                    &descriptor_for_constructor,
+                    child_execution_config,
+                    node,
+                )
+                .map(|spawn_host| {
+                    Box::new(spawn_host)
                         as Box<dyn streamlib::sdk::processors::DynGeneratedProcessor + Send>
                 })
             }),

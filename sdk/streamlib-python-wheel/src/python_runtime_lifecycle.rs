@@ -177,6 +177,11 @@ impl PythonRuntimeHandle {
     /// Boot the engine.
     #[new]
     fn new(python: Python<'_>) -> PyResult<Self> {
+        // Before the engine, so a processor added to its graph always has an
+        // interpreter to be an exec of. This reads the app's own
+        // `sys.executable`, which is the promise: one venv, and a processor's
+        // child is the same Python the app is.
+        crate::python_helper_process_spawn_host::capture_helper_process_launch_environment(python)?;
         let engine = python
             .detach(Runner::new)
             .map_err(|engine_failure| PyRuntimeError::new_err(engine_failure.to_string()))?;
