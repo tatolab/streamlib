@@ -38,9 +38,15 @@ __all__ = [
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
     "TestPatternSource",
+    "TestBagCollector",
+    "TestBagFeeder",
+    "await_test_harness_bag",
+    "close_test_harness_channel",
+    "feed_test_harness_bag",
     "log_event",
     "media_clock_now_ns",
     "monotonic_now_ns",
+    "open_test_harness_channel",
 ]
 
 @final
@@ -76,6 +82,23 @@ class TestPatternSource:
     it is never instantiated and its per-frame path never enters the
     interpreter.
     """
+
+    # Keeps pytest from collecting the `Test*`-named class in user suites.
+    __test__: Literal[False]
+
+class TestBagFeeder:
+    """`streamlib.testing`'s feeder endpoint: publishes bags a test queued.
+
+    A marker type, like the media built-ins — never instantiated, resolved by
+    `Runtime.add`. Native so that its queue lives in the app process, where the
+    test reading it does.
+    """
+
+    # Keeps pytest from collecting the `Test*`-named class in user suites.
+    __test__: Literal[False]
+
+class TestBagCollector:
+    """`streamlib.testing`'s collector endpoint: records every bag produced."""
 
     # Keeps pytest from collecting the `Test*`-named class in user suites.
     __test__: Literal[False]
@@ -452,6 +475,18 @@ def media_clock_now_ns() -> int:
     Not the system-wide `CLOCK_MONOTONIC` epoch — the origin is this process's
     engine start, so a value from one process means nothing in another.
     """
+
+def open_test_harness_channel(channel: str) -> None:
+    """Open a test-harness channel; raises if the name is already in use."""
+
+def close_test_harness_channel(channel: str) -> None:
+    """Close a test-harness channel, dropping anything still queued on it."""
+
+def feed_test_harness_bag(channel: str, bag: Any) -> None:
+    """Queue one bag for delivery through `channel`'s feeder."""
+
+def await_test_harness_bag(channel: str, timeout_seconds: float) -> Any | None:
+    """The next bag collected on `channel`, or `None` if the wait ran out."""
 
 def log_event(
     level: str, message: str, attrs: dict[str, Any] | None = None

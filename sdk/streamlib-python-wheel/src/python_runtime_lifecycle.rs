@@ -43,6 +43,11 @@ fn classify_processor_class(
     {
         return Ok(AddedProcessorClassKind::NativeBuiltin(native_reference));
     }
+    if let Some(harness_reference) =
+        crate::python_test_harness_endpoints::test_harness_type_reference(python, processor_class)
+    {
+        return Ok(AddedProcessorClassKind::NativeBuiltin(harness_reference));
+    }
     if crate::python_processor_declaration::is_declared_processor_class(processor_class) {
         return Ok(AddedProcessorClassKind::DeclaredPythonClass);
     }

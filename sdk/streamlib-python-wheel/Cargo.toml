@@ -64,7 +64,10 @@ streamlib-adapter-cuda = { path = "../../adapters/streamlib-adapter-cuda", versi
 # `rmpv`'s native `bin` variant is what keeps a byte payload from decoding as
 # text on the way through.
 rmpv = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+# The bag wire format the harness endpoints decode.
+rmp-serde = { workspace = true }
 tracing = { workspace = true }
 
 # Raw CLOCK_MONOTONIC + timerfd: the wheel's clock contract is the kernel's
