@@ -707,6 +707,7 @@ fn wire_rust_source(
         );
     }
 
+    output_inner.add_channel_link(source_port, link_id.as_str());
     if let Some(notify_service) = notify_service {
         let notifier = notify_service.create_notifier()?;
         output_inner.add_channel_notifier(source_port, link_id.as_str(), notifier);

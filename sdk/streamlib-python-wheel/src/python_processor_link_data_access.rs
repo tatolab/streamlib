@@ -159,6 +159,7 @@ impl PythonProcessorLinkDataAccess {
                         },
                     );
                 }
+                output_writer.add_channel_link(port_name, link_id);
                 // An empty name is the engine saying this destination never
                 // drains a listener, so there is nothing to wake and the link
                 // is wired for data only.
