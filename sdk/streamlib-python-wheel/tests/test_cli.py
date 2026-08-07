@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from app_under_test import ENGINE_STARTING_LOG_LINE
 
 from streamlib import Runtime, cli
 
@@ -226,7 +227,7 @@ def test_a_bad_save_in_the_effect_module_names_that_module_not_the_entry_file(
         f"the traceback must name the module the user edited; stderr was:\n"
         f"{finished.stderr}"
     )
-    assert "Initializing GPU context" not in finished.stdout + finished.stderr, (
+    assert ENGINE_STARTING_LOG_LINE not in finished.stdout + finished.stderr, (
         "a module that cannot be imported must not cost an engine boot"
     )
 

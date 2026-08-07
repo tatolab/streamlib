@@ -38,10 +38,11 @@ NODE_READY_TIMEOUT_SECONDS = 90.0
 CLEAN_EXIT_TIMEOUT_SECONDS = 60.0
 # Long enough that a per-frame failure or slowdown cannot hide inside it — and
 # long enough to outlast a warm-up. A window that ends before steady state
-# proves less than its length suggests: #1764 is a per-frame defect that takes
-# ~280 delivered frames to appear at all, which the 6s this ran at could not
-# have seen however many times it was run.
+# proves less than its length suggests: #1764 is a per-frame defect that needs
+# ~280 delivered frames, nine seconds of them, before it appears at all.
 SCAFFOLD_OBSERVATION_WINDOW_SECONDS = 12.0
+# The save has to land on a node that is already running, not one still booting.
+SECONDS_OF_LIVE_VIDEO_BEFORE_THE_BAD_SAVE_LANDS = SCAFFOLD_OBSERVATION_WINDOW_SECONDS / 2
 # Measured through the window below, effect in its own interpreter: 360 frames
 # in 12.0s — 30fps, the source's full rate, so the helper hop (escalate acquire
 # + surface-share checkout per frame) costs the demo no frames at all. The
@@ -58,56 +59,41 @@ def setup(rt):
     rt.add(TestPatternSource, config={"width": 320, "height": 180})
 '''
 
-# Enough helpers that a serialized spawn, or a per-child stall, separates from
-# a parallel one by more than measurement noise.
+# Enough helpers that a serialized spawn separates from a parallel one by far
+# more than measurement noise: six sequential interpreter startups cost six
+# times one, while six parallel ones cost about as much as one.
 HELPER_PLACED_PROCESSOR_COUNT = 6
-# The MVP sentence gives a minute for install, scaffold and run. Booting is the
-# only part of that this test can measure, so the budget is the half of the
-# minute the other parts do not need — a ceiling the measurement must fit
-# inside, not the measurement itself. Measured on the rig: 6 helpers go live
-# 0.80s after launch, 16 in 1.03s, so spawn is parallel and the margin is wide
-# on purpose. What this fails on is a regression that makes it serial.
+# The MVP sentence gives a minute for install, scaffold and run, and booting is
+# the only part of that this test can measure — so the budget is the half of
+# the minute the other parts do not need. It is a ceiling, and on its own a
+# generous one: measured on the rig, one helper goes live 0.65s after launch,
+# six in 0.60s and sixteen in 0.71s, so even a fully serialized spawn of six
+# would slip under it. The ceiling is why the assertion below charges the fleet
+# against a measured single helper as well.
 MAXIMUM_SECONDS_FOR_EVERY_HELPER_TO_GO_LIVE = 30.0
 
-FIRST_FRAME_REPORTER_MODULE = '''\
-import os
+FIRST_FRAME_REPORTER_MODULE = Path(__file__).parent / "first_frame_reporter.py"
 
-from streamlib import input, log, processor  # noqa: A004
-
-
-@processor
-class ReportsItsProcessOnFirstFrame:
-    """Announces its own process the first time a frame reaches it."""
-
-    def __init__(self) -> None:
-        self.announced = False
-
-    @input(delivery_profile="latest")
-    def video_from_upstream(self) -> None: ...
-
-    def process(self, ctx) -> None:
-        if self.announced or ctx.inputs.read("video_from_upstream") is None:
-            return
-        self.announced = True
-        log.info(f"MARKER:LIVE {os.getpid()}")
-'''
-
-# The reporter module sits beside the entry file rather than in a package: that
+# The reporter is copied beside the entry file rather than into a package: that
 # is the other import shape the child's `PYTHONPATH` has to resolve, and the
 # scaffold suite already covers the packaged one.
-APP_WITH_A_FLEET_OF_HELPER_PLACED_PROCESSORS = f'''\
+APP_WITH_HELPER_PLACED_PROCESSORS_TEMPLATE = '''\
 from first_frame_reporter import ReportsItsProcessOnFirstFrame
 from streamlib import TestPatternSource
 
 
 def setup(rt):
-    source = rt.add(TestPatternSource, config={{"width": 320, "height": 180}})
-    for _ in range({HELPER_PLACED_PROCESSOR_COUNT}):
+    source = rt.add(TestPatternSource, config={"width": 320, "height": 180})
+    for _ in range(%d):
         reporter = rt.add(ReportsItsProcessOnFirstFrame)
         rt.connect(source.output("video"), reporter.input("video_from_upstream"))
 '''
 
 LIVE_HELPER_MARKER = re.compile(r"MARKER:LIVE (\d+)")
+DISPLAY_WINDOW_FRAME_COUNT = re.compile(r"DisplayWindow: stopped \((\d+) frames\)")
+
+# Enough tail to carry a traceback and the lines around it.
+RECENT_OUTPUT_CHARACTERS = 4000
 
 
 def free_port() -> int:
@@ -158,11 +144,30 @@ class LaunchedNode:
         assert self.output_file is not None, "this node was launched without capture"
         return self.output_file.read_text(errors="replace")
 
-    def await_output_satisfying(
-        self, satisfied: "Callable[[str], bool]", what: str, timeout: float
+    def recent_output(self) -> str:
+        """The tail of the capture, plus where to read the rest.
+
+        Whole captures stopped being printable: a window long enough to outlast
+        a warm-up is also long enough for #1764 to put most of a megabyte of
+        iceoryx2 warnings between a failure and the line that explains it.
+        """
+        captured = self.captured_output()
+        if len(captured) <= RECENT_OUTPUT_CHARACTERS:
+            return captured
+        return (
+            f"[first {len(captured) - RECENT_OUTPUT_CHARACTERS} characters elided — "
+            f"the whole capture is at {self.output_file}]\n"
+            f"{captured[-RECENT_OUTPUT_CHARACTERS:]}"
+        )
+
+    def await_captured_output_satisfying(
+        self,
+        captured_output_satisfies: "Callable[[str], bool]",
+        awaited_description: str,
+        timeout: float,
     ) -> float:
-        """Wait until the captured output satisfies `satisfied`, and return the
-        seconds since launch that took.
+        """Wait for the capture to satisfy the predicate; return the seconds
+        since launch that took.
 
         Polled off the capture file rather than read off a pipe: the launcher
         writes to a file precisely because nothing drains the child while it
@@ -171,22 +176,22 @@ class LaunchedNode:
         """
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
-            if satisfied(self.captured_output()):
+            if captured_output_satisfies(self.captured_output()):
                 return time.monotonic() - self.launched_at
             if self.process.poll() is not None:
                 raise AssertionError(
-                    f"the node exited before {what}; output was:\n"
-                    f"{self.captured_output()}"
+                    f"the node exited before {awaited_description}; output ended:\n"
+                    f"{self.recent_output()}"
                 )
             time.sleep(0.1)
         raise AssertionError(
-            f"timed out after {timeout}s waiting for {what}; output was:\n"
-            f"{self.captured_output()}"
+            f"timed out after {timeout}s waiting for {awaited_description}; "
+            f"output ended:\n{self.recent_output()}"
         )
 
-    def await_output_containing(self, awaited: str, timeout: float) -> float:
-        return self.await_output_satisfying(
-            lambda output: awaited in output, f"`{awaited}`", timeout
+    def await_captured_output_containing(self, awaited: str, timeout: float) -> float:
+        return self.await_captured_output_satisfying(
+            lambda captured: awaited in captured, f"`{awaited}`", timeout
         )
 
     def interrupt(self) -> None:
@@ -353,16 +358,55 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS)
     output = node.captured_output()
 
+    assert_the_window_showed_live_video(node, "the app `streamlib new` writes")
+
+
+def assert_the_window_showed_live_video(node: LaunchedNode, what_ran: str) -> None:
+    """Require an interrupted node to have shown live video, not a slideshow.
+
+    The window reports what it actually put on screen, which is the honest
+    measure — an effect can be correct and still leave the demo at roughly 4
+    frames a second, which is what editing the write-combined mapping in place
+    through a strided view produced.
+    """
+    output = node.captured_output()
     assert "process() failed" not in output, (
-        f"the scaffolded effect raised on a live frame; output was:\n{output}"
+        f"{what_ran}: the effect raised on a live frame; output ended:\n"
+        f"{node.recent_output()}"
     )
-    # The window reports what it actually put on screen, which is the honest
-    # measure of "live video" — the in-place effect managed roughly 4 a second.
-    frames_shown = re.search(r"DisplayWindow: stopped \((\d+) frames\)", output)
-    assert frames_shown, f"the window never reported a frame count; output was:\n{output}"
+    frames_shown = DISPLAY_WINDOW_FRAME_COUNT.search(output)
+    assert frames_shown, (
+        f"{what_ran}: the window never reported a frame count; output ended:\n"
+        f"{node.recent_output()}"
+    )
     assert int(frames_shown.group(1)) >= MINIMUM_FRAMES_FOR_LIVE_VIDEO, (
-        f"the app `streamlib new` writes showed only {frames_shown.group(1)} frames in "
+        f"{what_ran} showed only {frames_shown.group(1)} frames in "
         f"{SCAFFOLD_OBSERVATION_WINDOW_SECONDS}s — that is a slideshow, not live video"
+    )
+
+
+def write_app_with_helper_placed_processors(
+    app_directory: Path, helper_count: int
+) -> None:
+    """An app wiring `helper_count` copies of the reporter to one native source."""
+    app_directory.mkdir(parents=True, exist_ok=True)
+    (app_directory / "app.py").write_text(
+        APP_WITH_HELPER_PLACED_PROCESSORS_TEMPLATE % helper_count
+    )
+    shutil.copy(FIRST_FRAME_REPORTER_MODULE, app_directory / FIRST_FRAME_REPORTER_MODULE.name)
+
+
+def seconds_until_every_helper_reports(node: LaunchedNode, helper_count: int) -> float:
+    """Seconds from launch until `helper_count` distinct processes each saw a frame.
+
+    Waited for on a bound far above the budget rather than on the budget
+    itself: a wait that expires exactly at the ceiling can only ever report a
+    timeout, and what a blown budget should say is how long it actually took.
+    """
+    return node.await_captured_output_satisfying(
+        lambda captured: len(set(LIVE_HELPER_MARKER.findall(captured))) >= helper_count,
+        f"all {helper_count} helpers to report a frame",
+        NODE_READY_TIMEOUT_SECONDS,
     )
 
 
@@ -372,40 +416,56 @@ def test_every_helper_interpreter_goes_live_inside_the_startup_budget(
     """The N-child-interpreter startup budget the MVP minute has to pay.
 
     Every Python processor is its own child interpreter, so a graph's boot cost
-    now grows with its processor count. What this pins is that the growth is
-    parallel rather than serial, and that it is the *pipeline* that went live —
-    each helper reports only once a frame has actually reached it, so a child
-    that started but never received traffic does not count.
+    now grows with its processor count — and the sentence gives that growth a
+    minute to disappear into. Two things carry that here. The budget is a flat
+    ceiling on the whole fleet. Charging the fleet against a single helper
+    measured on the same machine is what makes the ceiling discriminating: a
+    spawn that lost its parallelism costs one interpreter's startup per child,
+    which a fixed ceiling this generous would never catch.
 
-    The distinct-pid assertion is the placement half: N processors must be N
-    processes, so a spawn path that quietly reused one would fail here instead
-    of passing on the timing alone.
+    Both halves are about live traffic, not liveness — a helper reports only
+    once a frame has reached it, so a child that started and received nothing
+    does not count. The distinct-pid assertion is the placement half: N
+    processors must be N processes.
     """
-    app_directory = tmp_path / "app"
-    app_directory.mkdir()
-    (app_directory / "app.py").write_text(APP_WITH_A_FLEET_OF_HELPER_PLACED_PROCESSORS)
-    (app_directory / "first_frame_reporter.py").write_text(FIRST_FRAME_REPORTER_MODULE)
+    one_helper_app = tmp_path / "one-helper"
+    write_app_with_helper_placed_processors(one_helper_app, 1)
+    baseline_node = launch_node("dev", one_helper_app, free_port(), capture_output=True)
+    seconds_for_one_helper = seconds_until_every_helper_reports(baseline_node, 1)
+    baseline_node.interrupt()
+    assert baseline_node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0
 
-    node = launch_node("dev", app_directory, free_port(), capture_output=True)
-    seconds_to_live = node.await_output_satisfying(
-        lambda output: len(set(LIVE_HELPER_MARKER.findall(output)))
-        >= HELPER_PLACED_PROCESSOR_COUNT,
-        f"all {HELPER_PLACED_PROCESSOR_COUNT} helpers to report a frame",
-        MAXIMUM_SECONDS_FOR_EVERY_HELPER_TO_GO_LIVE,
+    fleet_app = tmp_path / "fleet"
+    write_app_with_helper_placed_processors(fleet_app, HELPER_PLACED_PROCESSOR_COUNT)
+    fleet_node = launch_node("dev", fleet_app, free_port(), capture_output=True)
+    seconds_for_every_helper = seconds_until_every_helper_reports(
+        fleet_node, HELPER_PLACED_PROCESSOR_COUNT
     )
 
-    reporting_pids = set(LIVE_HELPER_MARKER.findall(node.captured_output()))
+    reporting_pids = set(LIVE_HELPER_MARKER.findall(fleet_node.captured_output()))
     assert len(reporting_pids) == HELPER_PLACED_PROCESSOR_COUNT, (
         f"{HELPER_PLACED_PROCESSOR_COUNT} processors reported from "
         f"{len(reporting_pids)} processes — every Python processor gets its own"
     )
-    assert str(node.process.pid) not in reporting_pids, (
+    assert str(fleet_node.process.pid) not in reporting_pids, (
         "a processor reported from the app's own process"
     )
-    assert seconds_to_live < MAXIMUM_SECONDS_FOR_EVERY_HELPER_TO_GO_LIVE
+    assert seconds_for_every_helper < MAXIMUM_SECONDS_FOR_EVERY_HELPER_TO_GO_LIVE, (
+        f"{HELPER_PLACED_PROCESSOR_COUNT} helper interpreters took "
+        f"{seconds_for_every_helper:.2f}s to reach live traffic — the minute does "
+        f"not absorb that"
+    )
+    # Half, not the whole: parallel spawn costs about what one helper costs, so
+    # the line sits far below a serial spawn and far above the measurement.
+    serialized_spawn_would_cost = seconds_for_one_helper * HELPER_PLACED_PROCESSOR_COUNT
+    assert seconds_for_every_helper < serialized_spawn_would_cost / 2, (
+        f"{HELPER_PLACED_PROCESSOR_COUNT} helpers took {seconds_for_every_helper:.2f}s "
+        f"against {seconds_for_one_helper:.2f}s for one — that is the shape of a spawn "
+        f"path that starts its children one after another"
+    )
 
-    node.interrupt()
-    assert node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
+    fleet_node.interrupt()
+    assert fleet_node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
         f"a graph of {HELPER_PLACED_PROCESSOR_COUNT} helpers must still tear down cleanly"
     )
 
@@ -418,26 +478,29 @@ def edit_the_scaffolded_effect(app_directory: Path) -> None:
     proving something about a module `new` no longer writes.
     """
     effect_module = app_directory / "processors" / "inverting_effect.py"
-    scaffolded = effect_module.read_text()
-    edited = (
-        scaffolded.replace("    input,\n", "    input,\n    log,\n")
-        .replace(
+    edited = effect_module.read_text()
+    for anchor, replacement in (
+        ("    input,\n", "    input,\n    log,\n"),
+        (
             '    @input(delivery_profile="latest")',
             '    announced = False\n\n    @input(delivery_profile="latest")',
-        )
-        .replace(
+        ),
+        (
             '        ctx.outputs.write("video_to_downstream", bag)',
             "        if not self.announced:\n"
             "            self.announced = True\n"
             '            log.info("MARKER:EDITED_EFFECT")\n'
             '        ctx.outputs.write("video_to_downstream", bag)',
+        ),
+    ):
+        # Named one at a time, and required to be unique: a scaffold that grew
+        # a second copy of an anchor would take the edit twice, and a scaffold
+        # that dropped one would otherwise fail somewhere downstream of here.
+        assert edited.count(anchor) == 1, (
+            f"the scaffolded effect module carries {edited.count(anchor)} copies of "
+            f"the anchor {anchor!r} this edit needs exactly one of"
         )
-    )
-    assert (
-        "    log,\n" in edited
-        and "announced = False" in edited
-        and "MARKER:EDITED_EFFECT" in edited
-    ), "the scaffolded effect module no longer carries the anchors this edit needs"
+        edited = edited.replace(anchor, replacement, 1)
     effect_module.write_text(edited)
 
 
@@ -462,30 +525,27 @@ def test_the_edit_loop_survives_a_bad_save_and_shows_a_good_one(
     surviving_node = launch_node("dev", app_directory, free_port(), capture_output=True)
     await_sole_registry_entry(isolated_runtime_directory, NODE_READY_TIMEOUT_SECONDS)
 
-    time.sleep(SCAFFOLD_OBSERVATION_WINDOW_SECONDS / 2)
+    time.sleep(SECONDS_OF_LIVE_VIDEO_BEFORE_THE_BAD_SAVE_LANDS)
     effect_module.write_text("def process(self ctx:\n    this does not parse\n")
-    time.sleep(SCAFFOLD_OBSERVATION_WINDOW_SECONDS / 2)
+    time.sleep(
+        SCAFFOLD_OBSERVATION_WINDOW_SECONDS - SECONDS_OF_LIVE_VIDEO_BEFORE_THE_BAD_SAVE_LANDS
+    )
 
     surviving_node.interrupt()
     assert surviving_node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
         "a bad save must not take the running node down"
     )
-    survived_output = surviving_node.captured_output()
-    assert "process() failed" not in survived_output, (
-        f"the running effect must not have noticed the save; output was:\n{survived_output}"
-    )
-    frames_shown = re.search(r"DisplayWindow: stopped \((\d+) frames\)", survived_output)
-    assert frames_shown, f"the window never reported a frame count:\n{survived_output}"
-    assert int(frames_shown.group(1)) >= MINIMUM_FRAMES_FOR_LIVE_VIDEO, (
-        f"the pipeline delivered only {frames_shown.group(1)} frames across a save "
-        f"that never touched it"
+    assert_the_window_showed_live_video(
+        surviving_node, "the pipeline running when the bad save landed"
     )
 
     effect_module.write_text(last_good_effect_source)
     edit_the_scaffolded_effect(app_directory)
 
     edited_node = launch_node("dev", app_directory, free_port(), capture_output=True)
-    edited_node.await_output_containing("MARKER:EDITED_EFFECT", NODE_READY_TIMEOUT_SECONDS)
+    edited_node.await_captured_output_containing(
+        "MARKER:EDITED_EFFECT", NODE_READY_TIMEOUT_SECONDS
+    )
 
     edited_node.interrupt()
     assert edited_node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0
