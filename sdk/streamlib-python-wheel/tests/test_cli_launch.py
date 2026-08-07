@@ -59,17 +59,20 @@ def setup(rt):
     rt.add(TestPatternSource, config={"width": 320, "height": 180})
 '''
 
-# Enough helpers that a serialized spawn separates from a parallel one by far
-# more than measurement noise: six sequential interpreter startups cost six
-# times one, while six parallel ones cost about as much as one.
+# A fleet rather than a pair, and few enough that the rig pays for it in
+# seconds.
 HELPER_PLACED_PROCESSOR_COUNT = 6
 # The MVP sentence gives a minute for install, scaffold and run, and booting is
 # the only part of that this test can measure — so the budget is the half of
-# the minute the other parts do not need. It is a ceiling, and on its own a
-# generous one: measured on the rig, one helper goes live 0.65s after launch,
-# six in 0.60s and sixteen in 0.71s, so even a fully serialized spawn of six
-# would slip under it. The ceiling is why the assertion below charges the fleet
-# against a measured single helper as well.
+# the minute the other parts do not need.
+#
+# It is a ceiling and nothing subtler. An app boot is ~520ms of GPU context
+# init and a child interpreter adds ~56ms at the margin, so six helpers reach
+# live traffic 0.6s after launch and even starting them one after another
+# would land near 1s. What this catches is a helper that stopped starting, or
+# a per-child cost that grew by an order of magnitude — not the difference
+# between a parallel spawn and a serial one, which lives inside the noise at
+# this count. The distinct-pid assertions are what pin placement.
 MAXIMUM_SECONDS_FOR_EVERY_HELPER_TO_GO_LIVE = 30.0
 
 FIRST_FRAME_REPORTER_MODULE = Path(__file__).parent / "first_frame_reporter.py"
@@ -356,7 +359,6 @@ def test_the_scaffolded_app_reaches_a_running_graph(
     time.sleep(SCAFFOLD_OBSERVATION_WINDOW_SECONDS)
     node.interrupt()
     node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS)
-    output = node.captured_output()
 
     assert_the_window_showed_live_video(node, "the app `streamlib new` writes")
 
@@ -416,25 +418,16 @@ def test_every_helper_interpreter_goes_live_inside_the_startup_budget(
     """The N-child-interpreter startup budget the MVP minute has to pay.
 
     Every Python processor is its own child interpreter, so a graph's boot cost
-    now grows with its processor count — and the sentence gives that growth a
-    minute to disappear into. Two things carry that here. The budget is a flat
-    ceiling on the whole fleet. Charging the fleet against a single helper
-    measured on the same machine is what makes the ceiling discriminating: a
-    spawn that lost its parallelism costs one interpreter's startup per child,
-    which a fixed ceiling this generous would never catch.
+    now grows with its processor count, and the sentence gives that growth a
+    minute to disappear into. The budget is a flat ceiling on the whole fleet —
+    see the constant for what a ceiling this generous can and cannot catch.
 
-    Both halves are about live traffic, not liveness — a helper reports only
-    once a frame has reached it, so a child that started and received nothing
-    does not count. The distinct-pid assertion is the placement half: N
-    processors must be N processes.
+    What it measures is live traffic, not liveness: a helper reports only once
+    a frame has reached it, so a child that started and received nothing does
+    not count. The distinct-pid assertions are the placement half — N
+    processors must be N processes, so a spawn path that quietly reused one
+    fails here rather than passing on the timing alone.
     """
-    one_helper_app = tmp_path / "one-helper"
-    write_app_with_helper_placed_processors(one_helper_app, 1)
-    baseline_node = launch_node("dev", one_helper_app, free_port(), capture_output=True)
-    seconds_for_one_helper = seconds_until_every_helper_reports(baseline_node, 1)
-    baseline_node.interrupt()
-    assert baseline_node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0
-
     fleet_app = tmp_path / "fleet"
     write_app_with_helper_placed_processors(fleet_app, HELPER_PLACED_PROCESSOR_COUNT)
     fleet_node = launch_node("dev", fleet_app, free_port(), capture_output=True)
@@ -455,15 +448,6 @@ def test_every_helper_interpreter_goes_live_inside_the_startup_budget(
         f"{seconds_for_every_helper:.2f}s to reach live traffic — the minute does "
         f"not absorb that"
     )
-    # Half, not the whole: parallel spawn costs about what one helper costs, so
-    # the line sits far below a serial spawn and far above the measurement.
-    serialized_spawn_would_cost = seconds_for_one_helper * HELPER_PLACED_PROCESSOR_COUNT
-    assert seconds_for_every_helper < serialized_spawn_would_cost / 2, (
-        f"{HELPER_PLACED_PROCESSOR_COUNT} helpers took {seconds_for_every_helper:.2f}s "
-        f"against {seconds_for_one_helper:.2f}s for one — that is the shape of a spawn "
-        f"path that starts its children one after another"
-    )
-
     fleet_node.interrupt()
     assert fleet_node.await_exit(CLEAN_EXIT_TIMEOUT_SECONDS) == 0, (
         f"a graph of {HELPER_PLACED_PROCESSOR_COUNT} helpers must still tear down cleanly"
