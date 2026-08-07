@@ -43,15 +43,14 @@
 //! - This is vocabulary, not behaviour. A watchdog renamed to avoid these
 //!   patterns passes. The behavioural proof that the parent never hosts a
 //!   processor class is `sdk/streamlib-python-wheel/tests/test_helper_placement.py`.
-//! - **The pattern set is a chosen subset of the rule's STOP-WORK vocabulary,
+//! - **The pattern set is still a subset of the rule's STOP-WORK vocabulary,
 //!   not the whole of it.** `.claude/rules/placement.md` names shapes this gate
 //!   does not match — `share a GIL`, `own interpreter` beside a processor, the
-//!   runtime described as "one process", `either placement`, `placement
-//!   heuristics`, in-process called "lowest latency", a per-callback duration
-//!   monitor naming another processor, and bare `both placements`. The subset is
-//!   what the commissioning change file specified; widening it is a plan edit,
-//!   not a gate edit. A green run means these patterns are absent, never that
-//!   the rule is satisfied — the reviewers are the coverage for the rest.
+//!   runtime described as "one process" or "one big process", in-process called
+//!   "lowest latency", a per-callback duration monitor naming another processor,
+//!   and co-hosting described as shortening an escalate hop. A green run means
+//!   these patterns are absent, never that the rule is satisfied — the reviewers
+//!   are the coverage for the rest.
 //! - `.claude/` and `.github/` are not scanned. The rules and reviewer
 //!   definitions quote the banned shapes to forbid them and change through their
 //!   own dedicated PRs; `.github/` is CI configuration, and this gate's own
@@ -173,6 +172,18 @@ const EXEMPT_PROHIBITION_LINES: &[(&str, &str)] = &[
         "docs/decisions/importable-python-library.md",
         "the other way and killed in-process hosting instead. The surviving insight is this entry's",
     ),
+    (
+        "docs/decisions/importable-python-library.md",
+        "- **Both placements, engine-chosen** — rejected 2026-08-04",
+    ),
+    (
+        "docs/plan/GLOSSARY.md",
+        "\"transparent move\".",
+    ),
+    (
+        "docs/plan/GLOSSARY.md",
+        "**Placement policy**, **Placement heuristic**, **Transparent move** — there is one",
+    ),
 ];
 
 /// A banned shape. `all_of` terms must every one appear on the line;
@@ -233,8 +244,8 @@ const BANNED_SHAPES: &[BannedShape] = &[
         guidance: DIAGNOSTIC_GUIDANCE,
     },
     BannedShape {
-        all_of: &["both placements viable"],
-        any_of: &[],
+        all_of: &[],
+        any_of: RETIRED_PLACEMENT_TERMS,
         also_requires_any_of: &[],
         guidance: PLACEMENT_GUIDANCE,
     },
@@ -255,6 +266,18 @@ const BANNED_SHAPES: &[BannedShape] = &[
 /// The watchdog family needs its diagnostic name *and* a monitor noun, or
 /// every `GIL-holding thread` doc comment trips it.
 const WATCHDOG_NOUNS: &[&str] = &["watchdog", "monitor", "detector"];
+
+/// The glossary's retired-terms list for the 2026-08-04 ruling — there is one
+/// placement, so each of these names nothing. Banned bare: `both placements
+/// are first-class` is the sentence the ADR blames for the #1711 incident, and
+/// the narrower `both placements viable` would have read straight past it.
+const RETIRED_PLACEMENT_TERMS: &[&str] = &[
+    "both placements",
+    "either placement",
+    "placement policy",
+    "placement heuristic",
+    "transparent move",
+];
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct LintViolation {
@@ -718,22 +741,37 @@ mod tests {
         assert!(lint(tmp.path()).is_empty());
     }
 
+    /// The sentence the ADR blames for the #1711 incident, which the narrower
+    /// `both placements viable` pattern would have read straight past.
     #[test]
-    fn flags_both_placements_viable_but_not_the_bare_phrase() {
+    fn flags_the_retired_placement_terms_bare() {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
-            "docs/architecture/foo.md",
-            "The measured gap makes both placements viable.\n",
+            "docs/architecture/a.md",
+            "Both placements are first-class.\n",
         );
         write(
             tmp.path(),
-            "docs/architecture/bar.md",
-            "Rejected alternative: both placements, engine-chosen.\n",
+            "docs/architecture/b.md",
+            "Either placement is acceptable for a Python processor.\n",
         );
-        let violations = lint(tmp.path());
-        assert_eq!(violations.len(), 1, "got {violations:?}");
-        assert_eq!(violations[0].matched, "both placements viable");
+        write(
+            tmp.path(),
+            "docs/architecture/c.md",
+            "The engine applies placement heuristics per processor.\n",
+        );
+        write(
+            tmp.path(),
+            "docs/architecture/d.md",
+            "Placement policy is an engine concern.\n",
+        );
+        write(
+            tmp.path(),
+            "docs/architecture/e.md",
+            "A transparent move between placements.\n",
+        );
+        assert_eq!(lint(tmp.path()).len(), 5);
     }
 
     #[test]
