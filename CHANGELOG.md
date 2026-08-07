@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.2](https://github.com/tatolab/streamlib/compare/v0.14.1...v0.14.2) (2026-08-07)
+
+
+### Features
+
+* **ci:** check-no-in-process-placement — the placement-vocabulary gate ([#1762](https://github.com/tatolab/streamlib/issues/1762)) ([b7882ed](https://github.com/tatolab/streamlib/commit/b7882ede11674a8c4b3293166fdab3fa5dde2e8c))
+
 ## [0.14.1](https://github.com/tatolab/streamlib/compare/v0.14.0...v0.14.1) (2026-08-07)
 
 
