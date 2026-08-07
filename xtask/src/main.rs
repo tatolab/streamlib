@@ -18,6 +18,7 @@ pub mod check_cdylib_reach;
 pub mod check_consumer_rhi_repr;
 pub mod check_device_wait_idle;
 pub mod check_no_escalate_in_lifecycle;
+pub mod check_no_in_process_placement;
 pub mod check_no_inventory_submit;
 pub mod check_no_reverse_dns;
 pub mod check_no_streamlib_metadata;
@@ -138,6 +139,15 @@ enum Commands {
     /// `tests/`, `*_test{s}.rs`), and Rust comments are allowed. See
     /// `docs/architecture/schema-identity-and-packaging.md`.
     CheckNoReverseDns,
+
+    /// CI gate for the helper-process-placement-only ruling (owner
+    /// 2026-08-04). Fails on the vocabulary of the banned model anywhere in
+    /// the engine tree or `docs/`; the banned patterns and the two escape
+    /// hatches are enumerated in
+    /// [`check_no_in_process_placement`]. Markdown and Rust doc comments are
+    /// scanned on purpose — the shipped violation announced itself in a `//!`
+    /// line. See `docs/decisions/helper-process-placement-only.md`.
+    CheckNoInProcessPlacement,
 
     /// CI gate for #793's all-dynamic registration rule. Fails on any
     /// `inventory::submit!(FactoryRegistration { ... })` in live code —
@@ -329,6 +339,9 @@ fn main() -> Result<()> {
         Commands::CheckSchemaVersions => check_schema_versions::run(&workspace_root()?)?,
         Commands::CheckNoStreamlibMetadata => check_no_streamlib_metadata::run(&workspace_root()?)?,
         Commands::CheckNoReverseDns => check_no_reverse_dns::run(&workspace_root()?)?,
+        Commands::CheckNoInProcessPlacement => {
+            check_no_in_process_placement::run(&workspace_root()?)?
+        }
         Commands::CheckNoInventorySubmit => check_no_inventory_submit::run(&workspace_root()?)?,
         Commands::CheckProcessorSpecNew => check_processor_spec_new::run(&workspace_root()?)?,
         Commands::CheckProcessorSourceReachability => {
