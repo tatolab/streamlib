@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.1](https://github.com/tatolab/streamlib/compare/v0.14.0...v0.14.1) (2026-08-07)
+
+
+### Features
+
+* **python:** helper-process placement — spawn host, rip-out, identity, cross-process pixels and the privileged capability ([#1754](https://github.com/tatolab/streamlib/issues/1754)) ([19cbfdb](https://github.com/tatolab/streamlib/commit/19cbfdb40397c8e9b168458752db2a8543740749))
+
 ## [0.14.0](https://github.com/tatolab/streamlib/compare/v0.13.2...v0.14.0) (2026-08-05)
 
 
