@@ -110,11 +110,13 @@ const MAX_SURFACE_CACHE_SIZE: usize = 512;
 /// Wire value for a DMA-BUF-flavoured surface handle. The default: every
 /// surface registered before the flavour was expressible carries no
 /// `handle_type` at all.
+#[cfg(target_os = "linux")]
 const SURFACE_HANDLE_TYPE_DMA_BUF: &str = "dma_buf";
 
 /// Wire value for an OPAQUE_FD-flavoured surface handle — what a Vulkan-aware
 /// importer registers, including the device-export staging a helper process
 /// reaches.
+#[cfg(target_os = "linux")]
 const SURFACE_HANDLE_TYPE_OPAQUE_FD: &str = "opaque_fd";
 
 /// Wrap each received fd as the external-handle flavour the surface-share
@@ -124,6 +126,7 @@ const SURFACE_HANDLE_TYPE_OPAQUE_FD: &str = "opaque_fd";
 /// OPAQUE_FD fd through the DMA-BUF type does not fail cleanly — it hands the
 /// driver a handle of the wrong type — so the wire's discriminator is honoured
 /// rather than assumed.
+#[cfg(target_os = "linux")]
 fn external_plane_handles_for_flavour(
     handle_type: &str,
     received_fds: &[std::os::fd::RawFd],
@@ -1112,14 +1115,25 @@ impl SurfaceStoreInner {
             .filter(|v: &Vec<u64>| v.len() == received_fds.len())
             .unwrap_or_else(|| vec![0u64; received_fds.len()]);
 
-        let handles = external_plane_handles_for_flavour(
+        let handles = match external_plane_handles_for_flavour(
             response
                 .get("handle_type")
                 .and_then(|v| v.as_str())
                 .unwrap_or(SURFACE_HANDLE_TYPE_DMA_BUF),
             &received_fds,
             &plane_sizes,
-        )?;
+        ) {
+            Ok(handles) => handles,
+            Err(unknown_flavour) => {
+                // SAFETY: fds the kernel delivered to this process; the
+                // refused import adopted none of them, and nothing else
+                // closes them.
+                for fd in &received_fds {
+                    unsafe { libc::close(*fd) };
+                }
+                return Err(unknown_flavour);
+            }
+        };
         let pixel_buffer =
             PixelBuffer::from_external_plane_handles(&handles, 0, 0, PixelFormat::default())?;
 
@@ -2525,7 +2539,7 @@ mod layout_tests_ss {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod external_handle_flavour_tests {
     use super::*;
     use crate::core::rhi::RhiExternalHandle;

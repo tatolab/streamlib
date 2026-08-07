@@ -185,11 +185,18 @@ impl PythonGpuSurfaceHandle {
     /// edit.
     #[cfg(target_os = "linux")]
     fn publish_pending_device_write(&self, python: Python<'_>) -> PyResult<()> {
-        if self
+        if !self
             .device_write_pending
             .swap(false, std::sync::atomic::Ordering::SeqCst)
-            && let Some(owned_memory) = self.owned_memory.lock().clone()
         {
+            return Ok(());
+        }
+        // Bound before the `if let`, so the guard drops here: inside a
+        // condition chain the guard temporary lives to the end of the whole
+        // statement, and the publish crosses to the parent — the same
+        // mutex-across-the-GIL hazard `release_owned_engine_value` documents.
+        let owned_memory = self.owned_memory.lock().clone();
+        if let Some(owned_memory) = owned_memory {
             publish_device_write_back_to_surface(python, &owned_memory)?;
         }
         Ok(())

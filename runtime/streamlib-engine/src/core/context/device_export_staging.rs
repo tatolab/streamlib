@@ -339,8 +339,32 @@ impl GpuContext {
 
     /// Drop the cached device-export staging for `surface_id`, if any.
     /// Outstanding consumers keep theirs alive through their own `Arc`s.
+    ///
+    /// A staging that was published to the surface-share service is released
+    /// from it here too: the service refuses duplicate ids, so leaving the
+    /// dead entry behind would permanently block a later staging for a reused
+    /// surface id from ever being shared — and the service would keep holding
+    /// dups of an fd pair nothing refills.
     pub(crate) fn evict_device_export_staging(&self, surface_id: &str) {
-        self.device_export_stagings.lock().remove(surface_id);
+        let evicted_staging = self.device_export_stagings.lock().remove(surface_id);
+        #[cfg(target_os = "linux")]
+        if let Some(staging) = evicted_staging
+            && let Some(shared_id) = staging.surface_share_registration_id.lock().take()
+            && let Some(surface_store) = self.surface_store()
+        {
+            // Best-effort: the service also releases everything with the
+            // connection, so a failure here is deferred cleanup, not a leak
+            // for the life of the process.
+            if let Err(release_failure) = surface_store.host_inner().release(&shared_id) {
+                tracing::debug!(
+                    %shared_id,
+                    %release_failure,
+                    "releasing an evicted device-export staging from surface-share failed"
+                );
+            }
+        }
+        #[cfg(not(target_os = "linux"))]
+        drop(evicted_staging);
     }
 
     /// Record + submit one staging copy and wait (bounded) for it to

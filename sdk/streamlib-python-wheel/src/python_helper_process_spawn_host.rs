@@ -619,11 +619,32 @@ impl DynGeneratedProcessor for PythonHelperProcessSpawnHostProcessor {
     }
 
     fn apply_config_json(&mut self, config_json: &serde_json::Value) -> Result<()> {
-        self.exchange_with_child_expecting(
-            &serde_json::json!({"cmd": "update_config", "config": config_json}),
-            "update_config",
-            "ok",
-        );
+        // Unlike the lifecycle hooks, which swallow a lost child because
+        // teardown must proceed regardless, a config update has no such
+        // constraint — reporting success while the child runs the old
+        // configuration would be a lie the control plane passes on.
+        let reply = self
+            .exchange_with_child(
+                &serde_json::json!({"cmd": "update_config", "config": config_json}),
+                "update_config",
+            )
+            .ok_or_else(|| {
+                Error::Runtime(format!(
+                    "[{}] its helper process did not answer update_config",
+                    self.processor_display_name
+                ))
+            })?;
+        let reply_tag = reply.get("rpc").and_then(|rpc| rpc.as_str()).unwrap_or("");
+        if reply_tag != "ok" {
+            let reported = reply
+                .get("error")
+                .and_then(|error| error.as_str())
+                .unwrap_or("it reported no reason");
+            return Err(Error::Runtime(format!(
+                "[{}] its helper process refused update_config: {reported}",
+                self.processor_display_name
+            )));
+        }
         Ok(())
     }
 

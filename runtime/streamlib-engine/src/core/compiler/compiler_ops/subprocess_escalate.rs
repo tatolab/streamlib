@@ -993,14 +993,14 @@ impl DeviceExportCopyDirection {
 #[cfg(target_os = "linux")]
 fn handle_open_device_export_staging(
     sandbox: &GpuContextLimitedAccess,
-    rid: String,
+    request_id: String,
     surface_id: &str,
 ) -> EscalateResponse {
     let opened = (|| -> crate::core::error::Result<EscalateResponseOk> {
         let staging = sandbox.surface_device_export_staging(surface_id)?;
         let (shared_id, pixel_format) = sandbox.share_device_export_staging(&staging)?;
         Ok(EscalateResponseOk {
-            request_id: rid.clone(),
+            request_id: request_id.clone(),
             handle_id: shared_id,
             width: Some(staging.surface_width()),
             height: Some(staging.surface_height()),
@@ -1021,7 +1021,7 @@ fn handle_open_device_export_staging(
     match opened {
         Ok(response) => EscalateResponse::Ok(response),
         Err(failure) => EscalateResponse::Err(EscalateResponseErr {
-            request_id: rid,
+            request_id,
             message: format!("open_device_export_staging failed: {failure}"),
         }),
     }
@@ -1037,7 +1037,7 @@ fn handle_open_device_export_staging(
 #[cfg(target_os = "linux")]
 fn handle_device_export_staging_copy(
     sandbox: &GpuContextLimitedAccess,
-    rid: String,
+    request_id: String,
     surface_id: &str,
     direction: DeviceExportCopyDirection,
 ) -> EscalateResponse {
@@ -1053,13 +1053,13 @@ fn handle_device_export_staging_copy(
         });
     match copied {
         Ok(signalled) => EscalateResponse::Ok(EscalateResponseOk {
-            request_id: rid,
+            request_id,
             handle_id: surface_id.to_string(),
             timeline_value: Some(signalled.to_string()),
             ..Default::default()
         }),
         Err(failure) => EscalateResponse::Err(EscalateResponseErr {
-            request_id: rid,
+            request_id,
             message: format!("{} failed: {failure}", direction.escalate_op_name()),
         }),
     }

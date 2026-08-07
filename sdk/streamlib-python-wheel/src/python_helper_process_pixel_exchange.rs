@@ -321,11 +321,16 @@ impl HelperProcessGpuExchangeClient {
                 )
             })?
             .extract()?;
-        let mut checked_out = python.detach(|| self.check_out_and_import(&handle_id))?;
-        checked_out.release_to_parent = Some(HelperSurfaceReleaseDebt {
+        // The debt exists from the moment the parent allocated: if the
+        // checkout or the Vulkan import below fails, this drops on the error
+        // path and pays the `release_handle`, instead of stranding the
+        // parent's pool slot and surface-share entry until teardown.
+        let release_to_parent = HelperSurfaceReleaseDebt {
             escalate_request_to_parent: self.escalate_request_to_parent.clone_ref(python),
-            handle_id,
-        });
+            handle_id: handle_id.clone(),
+        };
+        let mut checked_out = python.detach(|| self.check_out_and_import(&handle_id))?;
+        checked_out.release_to_parent = Some(release_to_parent);
         Ok(checked_out)
     }
 

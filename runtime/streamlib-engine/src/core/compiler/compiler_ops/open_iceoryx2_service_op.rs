@@ -734,9 +734,18 @@ fn wire_subprocess_source(
     });
 
     let source_proc_arc = get_single_processor(graph, source_proc_id)?;
-    if let Some(link_wiring) = source_proc_arc.lock().out_of_process_link_wiring() {
-        link_wiring.record(crate::core::PortDirection::Output, entry);
-    }
+    let mut source_processor = source_proc_arc.lock();
+    let Some(link_wiring) = source_processor.out_of_process_link_wiring() else {
+        // Classification and capability must agree: a processor reaches here
+        // because `is_subprocess_processor` said so, and an instance that then
+        // exposes no envelope would leave the link marked wired with nothing
+        // ever recorded — no frames, no error, nothing to debug from.
+        return Err(Error::Configuration(format!(
+            "processor '{source_proc_id}' is classified as out-of-process but exposes no \
+             link-wiring envelope; its output port '{source_port}' would never be wired"
+        )));
+    };
+    link_wiring.record(crate::core::PortDirection::Output, entry);
     Ok(())
 }
 
@@ -775,9 +784,14 @@ fn wire_subprocess_dest(
     });
 
     let dest_proc_arc = get_single_processor(graph, dest_proc_id)?;
-    if let Some(link_wiring) = dest_proc_arc.lock().out_of_process_link_wiring() {
-        link_wiring.record(crate::core::PortDirection::Input, entry);
-    }
+    let mut dest_processor = dest_proc_arc.lock();
+    let Some(link_wiring) = dest_processor.out_of_process_link_wiring() else {
+        return Err(Error::Configuration(format!(
+            "processor '{dest_proc_id}' is classified as out-of-process but exposes no \
+             link-wiring envelope; its input port '{dest_port}' would never be wired"
+        )));
+    };
+    link_wiring.record(crate::core::PortDirection::Input, entry);
     Ok(())
 }
 

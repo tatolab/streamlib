@@ -25,7 +25,9 @@ use std::ffi::{CStr, c_void};
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use pyo3::exceptions::{PyBufferError, PyNotImplementedError, PyRuntimeError, PyValueError};
+#[cfg(not(target_os = "linux"))]
+use pyo3::exceptions::PyNotImplementedError;
+use pyo3::exceptions::{PyBufferError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use streamlib::sdk::rhi::PixelFormat;
 
