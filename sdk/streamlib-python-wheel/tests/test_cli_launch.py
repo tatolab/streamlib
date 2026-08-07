@@ -389,9 +389,16 @@ def assert_the_window_showed_live_video(node: LaunchedNode, what_ran: str) -> No
     # itself and polls its mailboxes, so it drains no listener; a notifier
     # pointed at it fills that listener and then fails delivery on every frame,
     # each failure a kilobytes-wide iceoryx2 dump. Measured at 303 warnings and
-    # 2.4MB over this graph before #1764. The observation window above is what
-    # makes this assertable — the onset is ~280 notifications in, 9.4s at 30fps,
-    # so a window any shorter than 12s would pass on the broken engine too.
+    # 2.4MB over this graph before #1764.
+    #
+    # The observation window is what makes this assertable: saturation takes
+    # ~280 notifications, and one notification rides every frame the SOURCE
+    # publishes. `TestPatternSource` is `continuous(interval_ms = 33)` on its
+    # own thread, so it publishes ~30/s whatever the display manages —
+    # ~360 by 12s, comfortably past the onset. That rate is independent of
+    # MINIMUM_FRAMES_FOR_LIVE_VIDEO above, which measures what the window drew;
+    # a slow display shortens neither the source's output nor this margin.
+    # Shorten the window below ~9.4s and this assertion stops discriminating.
     undeliverable_notifications = output.count("FailedToDeliverSignal")
     assert undeliverable_notifications == 0, (
         f"{what_ran}: {undeliverable_notifications} undeliverable link notifications in "

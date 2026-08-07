@@ -497,11 +497,20 @@ fn destination_fanin(graph: &mut Graph, dest_proc_id: &ProcessorUniqueId) -> usi
 /// Continuous and Manual drive themselves and poll their mailboxes, so a
 /// notifier pointed at them fills the listener's queue and then stops being
 /// delivered for the rest of the run, one iceoryx2 warning per frame (#1764).
-/// A destination out of process always drains: its runner selects on the fd
-/// whatever mode the class declares.
 ///
 /// The answer is a property of the destination's class, so it is the same for
 /// every inbound link and the incremental `open_or_create` calls agree.
+///
+/// A destination out of process is assumed to drain, and that assumption is
+/// only true of a reactive one. Every subprocess host reports `Manual` here —
+/// that is the host thread's own mode, not the child's — and the child's
+/// declared mode reaches no wiring-time surface, so this cannot yet ask. A
+/// helper destination explicitly declared `continuous` or `manual` therefore
+/// still gets a notifier its runner never drains, which is #1764 unfixed for
+/// that one shape. Reaching it takes an author writing a non-reactive
+/// execution mode onto a class that has input ports: Python defaults such a
+/// class to `reactive`, which is what every scaffolded and in-tree helper
+/// processor is.
 fn destination_consumes_notifications(
     graph: &mut Graph,
     dest_proc_id: &ProcessorUniqueId,
