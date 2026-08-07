@@ -13,31 +13,52 @@ automatic inside lifecycle hooks; nothing needs to be threaded through.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable, Optional
 
 from ._engine import log_event
 
 __all__ = ["debug", "error", "info", "trace", "warn", "warning"]
 
+HelperProcessLogSink = Callable[[str, str, "Optional[dict[str, Any]]"], None]
+
+# A helper process has no engine in it, so its records travel to the parent's
+# pipeline instead of being handed straight to one. Installed by
+# `streamlib._helper` at startup and never by app code.
+_helper_process_sink: "Optional[HelperProcessLogSink]" = None
+
+
+def install_helper_process_sink(sink: HelperProcessLogSink) -> None:
+    """Route this process's records to its parent. Called only by the helper."""
+    global _helper_process_sink
+    _helper_process_sink = sink
+
+
+def _emit(level: str, message: str, attrs: "Optional[dict[str, Any]]") -> None:
+    sink = _helper_process_sink
+    if sink is not None:
+        sink(level, message, attrs)
+        return
+    log_event(level, message, attrs)
+
 
 def trace(message: str, **attrs: Any) -> None:
     """Emit a TRACE record."""
-    log_event("trace", message, attrs or None)
+    _emit("trace", message, attrs or None)
 
 
 def debug(message: str, **attrs: Any) -> None:
     """Emit a DEBUG record."""
-    log_event("debug", message, attrs or None)
+    _emit("debug", message, attrs or None)
 
 
 def info(message: str, **attrs: Any) -> None:
     """Emit an INFO record."""
-    log_event("info", message, attrs or None)
+    _emit("info", message, attrs or None)
 
 
 def warn(message: str, **attrs: Any) -> None:
     """Emit a WARN record."""
-    log_event("warn", message, attrs or None)
+    _emit("warn", message, attrs or None)
 
 
 warning = warn
@@ -45,4 +66,4 @@ warning = warn
 
 def error(message: str, **attrs: Any) -> None:
     """Emit an ERROR record."""
-    log_event("error", message, attrs or None)
+    _emit("error", message, attrs or None)

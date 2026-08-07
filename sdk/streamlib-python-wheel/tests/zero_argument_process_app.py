@@ -10,14 +10,7 @@ sees nothing once another test booted an engine first.
 """
 
 import streamlib
-from streamlib import processor
-
-
-@processor(execution="continuous", interval_ms=1)
-class ZeroArgumentProcess:
-    def process(self) -> None:  # deliberately missing the ctx parameter
-        print("MARKER:HOOK_BODY_RAN", flush=True)
-
+from zero_argument_process_processor import ZeroArgumentProcess
 
 if __name__ == "__main__":
     runtime = streamlib.Runtime()

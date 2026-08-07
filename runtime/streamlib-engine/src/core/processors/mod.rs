@@ -23,7 +23,9 @@ pub use traits::{ContinuousProcessor, ManualProcessor, ReactiveProcessor};
 
 // Re-export internal traits (doc-hidden but needed by macro and runtime)
 #[doc(hidden)]
-pub use __generated_private::{DynGeneratedProcessor, GeneratedProcessor};
+pub use __generated_private::{
+    DynGeneratedProcessor, GeneratedProcessor, OutOfProcessLinkWiringEnvelope,
+};
 
 pub use processor_instance_factory::{
     DynamicProcessorConstructorFn, PROCESSOR_REGISTRY, ProcessorInstance, ProcessorInstanceFactory,

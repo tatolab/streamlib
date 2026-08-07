@@ -17,6 +17,8 @@ use streamlib::sdk::descriptors::{
 use streamlib::sdk::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
 use streamlib::sdk::processors::ProcessorTypeReference;
 
+use crate::python_processor_import_path::processor_class_import_path;
+
 /// The version every code-declared identity carries. A processor reference is
 /// version-free — the engine resolves types version-blind — so this is inert
 /// filler for the one struct that still has the field.
@@ -45,9 +47,11 @@ impl PythonProcessorDeclaration {
             ),
             read_string_attribute(processor_class, "__streamlib_processor_description__")?,
         )
-        // Python here means "authored in Python and hosted in this
-        // interpreter", not the retired subprocess placement.
         .with_runtime(ProcessorRuntime::Python)
+        // The class's own import path: what the child interpreter imports to
+        // reach the class, and what refusing an unimportable class here rather
+        // than at spawn buys — the author names the class, not a pid.
+        .with_entrypoint(processor_class_import_path(processor_class)?)
         .with_scheduling(ProcessorScheduling {
             priority: read_thread_priority(processor_class)?,
         });

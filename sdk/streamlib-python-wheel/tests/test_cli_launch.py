@@ -34,8 +34,10 @@ CLEAN_EXIT_TIMEOUT_SECONDS = 60.0
 # per-frame slowdown cannot hide inside it.
 SCAFFOLD_OBSERVATION_WINDOW_SECONDS = 6.0
 # The source runs at 30fps, so a healthy effect delivers ~180 frames in the
-# window. The floor sits far below that and far above the ~25 the in-place
-# strided edit managed, so it fails on a regression and not on a slow machine.
+# window. The floor sits far below that and far above the ~25 a pathologically
+# slow per-frame edit manages, so it fails on a regression and not on a slow
+# machine. Held at re-baselining against the real cross-process pixel path
+# (escalate acquire + surface-share checkout per frame), which clears it.
 MINIMUM_FRAMES_FOR_LIVE_VIDEO = 60
 
 APP_WITH_ONE_NATIVE_SOURCE = '''\

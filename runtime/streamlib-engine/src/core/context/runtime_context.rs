@@ -684,10 +684,7 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// token to pass and cannot mint an in-process FullAccess context. The token
     /// is consumed (not stored): it proves authorization at
     /// the minting seam and carries no runtime state.
-    pub(crate) fn new(
-        base: &'a RuntimeContext,
-        _grant: super::isolation::FullAccessGrant,
-    ) -> Self {
+    pub(crate) fn new(base: &'a RuntimeContext, _grant: super::isolation::FullAccessGrant) -> Self {
         Self {
             handle: base as *const RuntimeContext as *const c_void,
             vtable: crate::core::plugin::host_services::host_runtime_context_vtable(),
@@ -911,6 +908,16 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// callback when the call site is already in host code.
     pub(crate) fn host_audio_clock(&self) -> &SharedAudioClock {
         self.host_base().audio_clock()
+    }
+
+    /// Per-runtime surface-sharing socket, for a spawn host to hand its child.
+    ///
+    /// The one part of the host base a spawn host outside this crate needs:
+    /// the child's `streamlib-surface-client` dials it to import a surface
+    /// this runtime exported. Everything else on the base stays internal.
+    #[cfg(target_os = "linux")]
+    pub fn surface_socket_path(&self) -> &std::path::Path {
+        self.host_base().surface_socket_path()
     }
 }
 

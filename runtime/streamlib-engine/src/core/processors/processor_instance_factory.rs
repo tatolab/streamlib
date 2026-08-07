@@ -465,6 +465,30 @@ impl ProcessorInstance {
         }
     }
 
+    /// Whether this processor has failed unrecoverably. Always `false` for a
+    /// cdylib plugin — the plugin ABI has no slot for it.
+    pub fn has_failed_unrecoverably(&self) -> bool {
+        match self {
+            Self::VTable { .. } => false,
+            Self::LegacyDyn(inner) => inner.has_failed_unrecoverably(),
+        }
+    }
+
+    /// Where this processor's link wiring goes when its iceoryx2 ports live
+    /// outside the engine's address space, and `None` when the engine wires it
+    /// itself.
+    ///
+    /// Only a dyn registration can be out of process — a cdylib plugin's ports
+    /// are engine-side by construction.
+    pub fn out_of_process_link_wiring(
+        &mut self,
+    ) -> Option<&mut super::OutOfProcessLinkWiringEnvelope> {
+        match self {
+            Self::VTable { .. } => None,
+            Self::LegacyDyn(inner) => inner.out_of_process_link_wiring(),
+        }
+    }
+
     /// Borrow the host-side `OutputWriterInner` Arc this processor
     /// instance is wired to. Returns `None` if the processor has no
     /// output ports.

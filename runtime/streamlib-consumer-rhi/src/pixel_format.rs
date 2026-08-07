@@ -128,6 +128,44 @@ impl PixelFormat {
         }
     }
 
+    /// The one wire spelling of this format: pixel-buffer surface-share
+    /// registration metadata, escalate requests, and the Python-facing
+    /// format strings speak exactly this vocabulary. Lowercase snake-case
+    /// of the variant. (Texture registrations carry `TextureFormat`
+    /// spellings, a separate vocabulary.)
+    pub const fn wire_name(&self) -> &'static str {
+        match self {
+            Self::Bgra32 => "bgra32",
+            Self::Rgba32 => "rgba32",
+            Self::Argb32 => "argb32",
+            Self::Rgba64 => "rgba64",
+            Self::Nv12VideoRange => "nv12_video_range",
+            Self::Nv12FullRange => "nv12_full_range",
+            Self::Uyvy422 => "uyvy422",
+            Self::Yuyv422 => "yuyv422",
+            Self::Gray8 => "gray8",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Parse the wire spelling, plus the shorthand aliases the authoring
+    /// surfaces accept (`"bgra"`, `"nv12"`, …). Case-insensitive.
+    pub fn parse_wire_name(name: &str) -> Result<Self, String> {
+        let normalized = name.trim().to_ascii_lowercase();
+        match normalized.as_str() {
+            "bgra" | "bgra32" => Ok(Self::Bgra32),
+            "rgba" | "rgba32" => Ok(Self::Rgba32),
+            "argb" | "argb32" => Ok(Self::Argb32),
+            "rgba64" => Ok(Self::Rgba64),
+            "nv12" | "nv12_video_range" => Ok(Self::Nv12VideoRange),
+            "nv12_full_range" => Ok(Self::Nv12FullRange),
+            "uyvy" | "uyvy422" => Ok(Self::Uyvy422),
+            "yuyv" | "yuyv422" => Ok(Self::Yuyv422),
+            "gray" | "gray8" => Ok(Self::Gray8),
+            unknown => Err(format!("unknown pixel format '{unknown}'")),
+        }
+    }
+
     /// FourCC string representation for debugging.
     pub fn fourcc_string(&self) -> String {
         let code = *self as u32;
@@ -186,5 +224,27 @@ mod layout_tests {
         // The `Default` impl IS part of the wire contract for FFI
         // payloads that default-initialize a buffer of `PixelFormat`.
         assert_eq!(PixelFormat::default() as u32, PixelFormat::Bgra32 as u32);
+    }
+
+    #[test]
+    fn every_wire_name_parses_back_to_its_format() {
+        // The wire vocabulary is one definition used on both sides of the
+        // surface-share and escalate protocols; a name that does not round
+        // trip would import a checked-out surface under the wrong format.
+        for format in [
+            PixelFormat::Bgra32,
+            PixelFormat::Rgba32,
+            PixelFormat::Argb32,
+            PixelFormat::Rgba64,
+            PixelFormat::Nv12VideoRange,
+            PixelFormat::Nv12FullRange,
+            PixelFormat::Uyvy422,
+            PixelFormat::Yuyv422,
+            PixelFormat::Gray8,
+        ] {
+            assert_eq!(PixelFormat::parse_wire_name(format.wire_name()), Ok(format));
+        }
+        assert!(PixelFormat::parse_wire_name("unknown").is_err());
+        assert!(PixelFormat::parse_wire_name("not-a-format").is_err());
     }
 }

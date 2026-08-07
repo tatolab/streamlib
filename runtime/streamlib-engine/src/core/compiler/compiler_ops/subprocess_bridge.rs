@@ -60,7 +60,7 @@ pub(crate) const ESCALATE_FD_ENV: &str = "STREAMLIB_ESCALATE_FD";
 /// engine satisfies a monotonic *range* (`MIN..=CURRENT`, the Cloudflare
 /// `compatibility_date` shape), not strict equality, so a newer engine keeps
 /// accepting SDKs that speak an older-but-still-supported protocol.
-pub(crate) const STREAMLIB_SUBPROCESS_PROTOCOL_VERSION: u32 = 1;
+pub const STREAMLIB_SUBPROCESS_PROTOCOL_VERSION: u32 = 1;
 
 /// Oldest subprocess-SDK protocol version this engine still accepts. Raise it
 /// only when dropping support for an old SDK protocol.
@@ -69,16 +69,13 @@ pub(crate) const MIN_SUPPORTED_SUBPROCESS_PROTOCOL: u32 = 1;
 /// Env var the engine sets to advertise [`STREAMLIB_SUBPROCESS_PROTOCOL_VERSION`]
 /// to the subprocess. The SDK reads it at startup and refuses to run if it
 /// can't speak the engine's protocol (the engine → SDK handshake direction).
-pub(crate) const PROTOCOL_VERSION_ENV: &str = "STREAMLIB_PROTOCOL_VERSION";
+pub const PROTOCOL_VERSION_ENV: &str = "STREAMLIB_PROTOCOL_VERSION";
 
 /// Validate the protocol version an SDK reported (in its `ready` response)
 /// against the engine's supported range — the SDK → engine handshake
 /// direction. Fails loud with an actionable named error so an incompatible
 /// installed SDK is caught at setup, never as a deep FFI/escalate crash.
-pub(crate) fn validate_subprocess_protocol(
-    sdk_version: Option<u32>,
-    processor_id: &str,
-) -> Result<()> {
+pub fn validate_subprocess_protocol(sdk_version: Option<u32>, processor_id: &str) -> Result<()> {
     let sdk_version = sdk_version.ok_or_else(|| {
         Error::Runtime(format!(
             "[{processor_id}] subprocess protocol handshake failed: the SDK did \
@@ -104,7 +101,7 @@ pub(crate) fn validate_subprocess_protocol(
 
 /// Socketpair-backed escalate IPC transport. The parent holds one half
 /// and the subprocess inherits the other via [`ESCALATE_FD_ENV`].
-pub(crate) struct EscalateTransport {
+pub struct EscalateTransport {
     parent_end: UnixStream,
     /// Kept alive so the child fd stays open across `Command::spawn`. The
     /// caller drops this after spawn so only the subprocess holds the
@@ -119,7 +116,7 @@ impl EscalateTransport {
     ///
     /// After `command.spawn()`, call [`Self::release_child_end`] so only
     /// the subprocess retains the child-side fd.
-    pub(crate) fn attach(command: &mut Command) -> Result<Self> {
+    pub fn attach(command: &mut Command) -> Result<Self> {
         let (parent_end, child_end) = UnixStream::pair()
             .map_err(|e| Error::Runtime(format!("failed to create escalate socketpair: {e}")))?;
 
@@ -152,12 +149,12 @@ impl EscalateTransport {
 
     /// Drop the parent's reference to the child-end fd. Call this after
     /// `command.spawn()` succeeds so only the subprocess keeps it open.
-    pub(crate) fn release_child_end(&mut self) {
+    pub fn release_child_end(&mut self) {
         self.child_end.take();
     }
 
     /// Consume the transport and return the parent-side [`UnixStream`].
-    pub(crate) fn into_parent_stream(mut self) -> UnixStream {
+    pub fn into_parent_stream(mut self) -> UnixStream {
         self.child_end.take();
         self.parent_end
     }
@@ -170,7 +167,7 @@ type SharedWriter = Arc<Mutex<BufWriter<UnixStream>>>;
 /// Bridge for one subprocess. Drop the value to tear the reader thread
 /// down cleanly (shutdown the parent-side socket read half; reader
 /// thread exits on EOF).
-pub(crate) struct SubprocessBridge {
+pub struct SubprocessBridge {
     processor_id: String,
     writer: SharedWriter,
     lifecycle_rx: Receiver<serde_json::Value>,
@@ -185,7 +182,7 @@ impl SubprocessBridge {
     /// `sandbox` is cloned into the reader thread so escalate requests
     /// can be dispatched without blocking the main thread. `processor_id`
     /// is used for thread naming and tracing.
-    pub(crate) fn new(
+    pub fn new(
         stream: UnixStream,
         sandbox: GpuContextLimitedAccess,
         processor_id: String,
@@ -232,7 +229,7 @@ impl SubprocessBridge {
     }
 
     /// Write a length-prefixed JSON message to the subprocess.
-    pub(crate) fn send(&self, msg: &serde_json::Value) -> Result<()> {
+    pub fn send(&self, msg: &serde_json::Value) -> Result<()> {
         if self.is_dead() {
             return Err(Error::Runtime(format!(
                 "[{}] bridge marked dead, cannot send",
@@ -250,7 +247,7 @@ impl SubprocessBridge {
     }
 
     /// Block until the next lifecycle-tagged message arrives.
-    pub(crate) fn recv_lifecycle(&self) -> Result<serde_json::Value> {
+    pub fn recv_lifecycle(&self) -> Result<serde_json::Value> {
         self.lifecycle_rx.recv().map_err(|_| {
             self.mark_dead();
             Error::Runtime(format!(
@@ -261,7 +258,7 @@ impl SubprocessBridge {
     }
 
     /// Block up to `timeout` for the next lifecycle-tagged message.
-    pub(crate) fn recv_lifecycle_timeout(
+    pub fn recv_lifecycle_timeout(
         &self,
         timeout: Duration,
     ) -> std::result::Result<serde_json::Value, RecvTimeoutError> {
@@ -269,13 +266,13 @@ impl SubprocessBridge {
     }
 
     /// Mark the bridge dead; subsequent sends return immediately.
-    pub(crate) fn mark_dead(&self) {
+    pub fn mark_dead(&self) {
         if let Ok(mut dead) = self.dead.lock() {
             *dead = true;
         }
     }
 
-    pub(crate) fn is_dead(&self) -> bool {
+    pub fn is_dead(&self) -> bool {
         self.dead.lock().map(|g| *g).unwrap_or(true)
     }
 
@@ -392,7 +389,7 @@ fn reader_loop(
 /// as the reader thread's default, so events route through whatever
 /// subscriber the owning runtime installed (global for production,
 /// thread-local for `init_for_tests`).
-pub(crate) fn spawn_fd_line_reader<R>(
+pub fn spawn_fd_line_reader<R>(
     reader: R,
     thread_prefix: &str,
     channel: &'static str,

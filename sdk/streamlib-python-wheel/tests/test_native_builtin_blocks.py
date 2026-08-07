@@ -8,24 +8,21 @@ The graph tests boot a real engine (GPU required); the marker and
 `VideoFrame` cast tests are pure Python.
 """
 
-import queue
-import threading
+import json
+import re
+from pathlib import Path
 
 import pytest
 
 import streamlib
-# `input` is streamlib's port decorator — the test reads like user code,
-# which spells it exactly this way.
-from streamlib import (  # noqa: A004
-    RuntimeContextLimitedAccess,
-    TestPatternSource,
-    VideoFrame,
-    input,
-    processor,
-)
+from streamlib import TestPatternSource, VideoFrame
 
 PIPELINE_TIMEOUT_SECONDS = 30.0
 ENGINE_TEARDOWN_TIMEOUT_SECONDS = 60.0
+
+NATIVE_BUILTIN_APP = Path(__file__).parent / "native_builtin_app.py"
+
+FRAMES_SEEN = re.compile(r"MARKER:FRAMES_SEEN (\[.*\])")
 
 
 # ---- marker semantics (no GPU) ---------------------------------------------
@@ -117,44 +114,23 @@ def test_video_frame_wraps_malformed_nested_metadata_in_the_same_error():
 
 # ---- the native block in a real graph (GPU) --------------------------------
 
-_received_bags: "queue.Queue[dict]" = queue.Queue()
-
-
-@processor
-class VideoFrameProbe:
-    """Collects every video-frame bag the native source publishes."""
-
-    @input(delivery_profile="every_sample")
-    def video_from_upstream(self) -> None: ...
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        bag = ctx.inputs.read("video_from_upstream")
-        if bag is not None:
-            _received_bags.put(bag)
-
 
 @pytest.mark.requires_gpu
-def test_the_test_pattern_source_produces_frames_a_python_processor_reads():
+def test_the_test_pattern_source_produces_frames_a_python_processor_reads(
+    start_app_under_test,
+):
     """The whole built-in mechanism, end to end: marker class → native
-    registration → native production → bag read by an in-process Python
-    processor — no camera, no window."""
-    while not _received_bags.empty():
-        _received_bags.get_nowait()
+    registration → native production in the app process → bag read by a
+    Python processor in its own helper process — no camera, no window."""
+    app = start_app_under_test(NATIVE_BUILTIN_APP)
+    app.await_output_containing("MARKER:FRAMES_SEEN", "the probe's first two frames")
+    app.interrupt()
+    app.await_marker("CLEAN_EXIT")
+    app.await_clean_exit()
 
-    runtime = streamlib.Runtime()
-    pattern = runtime.add(TestPatternSource, config={"width": 320, "height": 180})
-    probe = runtime.add(VideoFrameProbe)
-    runtime.connect(pattern.output("video"), probe.input("video_from_upstream"))
-
-    run_thread = threading.Thread(target=runtime.run, name="engine-run")
-    run_thread.start()
-    try:
-        first_bag = _received_bags.get(timeout=PIPELINE_TIMEOUT_SECONDS)
-        second_bag = _received_bags.get(timeout=PIPELINE_TIMEOUT_SECONDS)
-    finally:
-        runtime.shutdown()
-        run_thread.join(timeout=ENGINE_TEARDOWN_TIMEOUT_SECONDS)
-        assert not run_thread.is_alive(), "engine did not tear down in time"
+    match = FRAMES_SEEN.search(app.output)
+    assert match is not None, f"no parseable frame report:\n{app.output}"
+    first_bag, second_bag = json.loads(match.group(1))
 
     frame = VideoFrame.from_bag(first_bag)
     assert (frame.width, frame.height) == (320, 180)

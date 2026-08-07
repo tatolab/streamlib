@@ -26,8 +26,9 @@ use crate::host_rhi::HostSurfaceStoreExt;
 
 use crate::_generated_::tatolab__escalate::escalate_request::{
     EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
-    EscalateRequestLog, EscalateRequestLogLevel, EscalateRequestLogSource,
-    EscalateRequestRegisterAccelerationStructureBlas,
+    EscalateRequestCopyDeviceExportStagingBackToSurface, EscalateRequestLog,
+    EscalateRequestLogLevel, EscalateRequestLogSource, EscalateRequestOpenDeviceExportStaging,
+    EscalateRequestRefillDeviceExportStaging, EscalateRequestRegisterAccelerationStructureBlas,
     EscalateRequestRegisterAccelerationStructureTlas, EscalateRequestRegisterComputeKernel,
     EscalateRequestRegisterGraphicsKernel, EscalateRequestRegisterGraphicsKernelBindingKind,
     EscalateRequestRegisterGraphicsKernelPipelineState,
@@ -54,7 +55,7 @@ use crate::_generated_::tatolab__escalate::escalate_request::{
     EscalateRequestRunGraphicsDrawBindingKind, EscalateRequestRunGraphicsDrawDrawKind,
     EscalateRequestRunGraphicsDrawIndexBufferIndexType, EscalateRequestRunRayTracingKernel,
     EscalateRequestRunRayTracingKernelBindingKind, EscalateRequestTryRunCpuReadbackCopy,
-    EscalateRequestTryRunCpuReadbackCopyDirection,
+    EscalateRequestTryRunCpuReadbackCopyDirection, EscalateRequestWaitDeviceIdle,
 };
 use crate::_generated_::tatolab__escalate::escalate_response::{
     EscalateResponseContended, EscalateResponseErr, EscalateResponseOk,
@@ -98,6 +99,10 @@ fn request_id(op: &EscalateRequest) -> Option<&str> {
         EscalateRequest::AcquireTexture(p) => Some(&p.request_id),
         EscalateRequest::AcquireImage(p) => Some(&p.request_id),
         EscalateRequest::RunCpuReadbackCopy(p) => Some(&p.request_id),
+        EscalateRequest::WaitDeviceIdle(p) => Some(&p.request_id),
+        EscalateRequest::OpenDeviceExportStaging(p) => Some(&p.request_id),
+        EscalateRequest::RefillDeviceExportStaging(p) => Some(&p.request_id),
+        EscalateRequest::CopyDeviceExportStagingBackToSurface(p) => Some(&p.request_id),
         EscalateRequest::TryRunCpuReadbackCopy(p) => Some(&p.request_id),
         EscalateRequest::RegisterComputeKernel(p) => Some(&p.request_id),
         EscalateRequest::RunComputeKernel(p) => Some(&p.request_id),
@@ -263,7 +268,7 @@ pub(crate) fn handle_escalate_op(
             width,
             height,
             format,
-        }) => Some(match parse_pixel_format(&format) {
+        }) => Some(match PixelFormat::parse_wire_name(&format) {
             Ok(parsed) => {
                 let acquired = sandbox.escalate(|full| {
                     let (pool_id, buffer) = full.acquire_pixel_buffer(width, height, parsed)?;
@@ -278,9 +283,8 @@ pub(crate) fn handle_escalate_op(
                             handle_id,
                             width: Some(width),
                             height: Some(height),
-                            format: Some(pixel_format_to_wire(parsed).to_string()),
-                            usage: None,
-                            timeline_value: None,
+                            format: Some(parsed.wire_name().to_string()),
+                            ..Default::default()
                         })
                     }
                     Err(e) => EscalateResponse::Err(EscalateResponseErr {
@@ -345,7 +349,7 @@ pub(crate) fn handle_escalate_op(
                         height: Some(height),
                         format: Some(texture_format_to_wire(parsed_format).to_string()),
                         usage: Some(texture_usages_to_wire(parsed_usage)),
-                        timeline_value: None,
+                        ..Default::default()
                     })
                 }
                 #[cfg(not(target_os = "linux"))]
@@ -358,7 +362,7 @@ pub(crate) fn handle_escalate_op(
                         height: Some(height),
                         format: Some(texture_format_to_wire(parsed_format).to_string()),
                         usage: Some(texture_usages_to_wire(parsed_usage)),
-                        timeline_value: None,
+                        ..Default::default()
                     })
                 }
                 Err(e) => EscalateResponse::Err(EscalateResponseErr {
@@ -418,7 +422,7 @@ pub(crate) fn handle_escalate_op(
                                 "texture_binding".to_string(),
                                 "copy_src".to_string(),
                             ]),
-                            timeline_value: None,
+                            ..Default::default()
                         })
                     }
                     Err(e) => EscalateResponse::Err(EscalateResponseErr {
@@ -481,6 +485,84 @@ pub(crate) fn handle_escalate_op(
                 Some(EscalateResponse::Err(EscalateResponseErr {
                     request_id: rid,
                     message: "try_run_cpu_readback_copy is only available on Linux".to_string(),
+                }))
+            }
+        }
+        EscalateRequest::WaitDeviceIdle(EscalateRequestWaitDeviceIdle { request_id: _ }) => {
+            Some(match sandbox.escalate(|full| full.wait_device_idle()) {
+                Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
+                    request_id: rid,
+                    handle_id: String::new(),
+                    ..Default::default()
+                }),
+                Err(failure) => EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: format!("wait_device_idle failed: {failure}"),
+                }),
+            })
+        }
+        EscalateRequest::OpenDeviceExportStaging(EscalateRequestOpenDeviceExportStaging {
+            request_id: _,
+            surface_id,
+        }) => {
+            #[cfg(target_os = "linux")]
+            {
+                Some(handle_open_device_export_staging(sandbox, rid, &surface_id))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = surface_id;
+                Some(EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: "open_device_export_staging is only available on Linux".to_string(),
+                }))
+            }
+        }
+        EscalateRequest::RefillDeviceExportStaging(EscalateRequestRefillDeviceExportStaging {
+            request_id: _,
+            surface_id,
+        }) => {
+            #[cfg(target_os = "linux")]
+            {
+                Some(handle_device_export_staging_copy(
+                    sandbox,
+                    rid,
+                    &surface_id,
+                    DeviceExportCopyDirection::SurfaceIntoStaging,
+                ))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = surface_id;
+                Some(EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: "refill_device_export_staging is only available on Linux".to_string(),
+                }))
+            }
+        }
+        EscalateRequest::CopyDeviceExportStagingBackToSurface(
+            EscalateRequestCopyDeviceExportStagingBackToSurface {
+                request_id: _,
+                surface_id,
+            },
+        ) => {
+            #[cfg(target_os = "linux")]
+            {
+                Some(handle_device_export_staging_copy(
+                    sandbox,
+                    rid,
+                    &surface_id,
+                    DeviceExportCopyDirection::StagingBackIntoSurface,
+                ))
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = surface_id;
+                Some(EscalateResponse::Err(EscalateResponseErr {
+                    request_id: rid,
+                    message: "copy_device_export_staging_back_to_surface is only available on \
+                              Linux"
+                        .to_string(),
                 }))
             }
         }
@@ -649,11 +731,7 @@ pub(crate) fn handle_escalate_op(
                 EscalateResponse::Ok(EscalateResponseOk {
                     request_id: rid,
                     handle_id,
-                    width: None,
-                    height: None,
-                    format: None,
-                    usage: None,
-                    timeline_value: None,
+                    ..Default::default()
                 })
             } else {
                 EscalateResponse::Err(EscalateResponseErr {
@@ -878,6 +956,115 @@ fn assign_image_handle_id(
     Ok((handle_id, produce_done, consume_done))
 }
 
+/// Which way one device-export staging copy runs.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy)]
+enum DeviceExportCopyDirection {
+    /// A refill: the surface's current pixels into the staging, so the
+    /// consumer's next read sees this frame.
+    SurfaceIntoStaging,
+    /// A publish: the consumer's device-side edit back into the
+    /// surface's own allocation, so every other holder observes it.
+    StagingBackIntoSurface,
+}
+
+#[cfg(target_os = "linux")]
+impl DeviceExportCopyDirection {
+    /// The wire op name, for error messages that have to say which
+    /// request failed.
+    fn escalate_op_name(self) -> &'static str {
+        match self {
+            Self::SurfaceIntoStaging => "refill_device_export_staging",
+            Self::StagingBackIntoSurface => "copy_device_export_staging_back_to_surface",
+        }
+    }
+}
+
+/// Open the device-export staging for `surface_id` on behalf of a
+/// helper process: allocate it if the surface has none, publish it and
+/// its refill timeline to the surface-share service, and answer with
+/// everything the child needs to import the memory — the id to check
+/// out, the geometry the staging was sized for, whether a write-back is
+/// possible, and the UUID of the GPU that owns it.
+///
+/// No fd travels on this socket. The staging's OPAQUE_FD and the
+/// timeline's fd reach the child through the surface-share check-out it
+/// makes with the returned id.
+#[cfg(target_os = "linux")]
+fn handle_open_device_export_staging(
+    sandbox: &GpuContextLimitedAccess,
+    request_id: String,
+    surface_id: &str,
+) -> EscalateResponse {
+    let opened = (|| -> crate::core::error::Result<EscalateResponseOk> {
+        let staging = sandbox.surface_device_export_staging(surface_id)?;
+        let (shared_id, pixel_format) = sandbox.share_device_export_staging(&staging)?;
+        Ok(EscalateResponseOk {
+            request_id: request_id.clone(),
+            handle_id: shared_id,
+            width: Some(staging.surface_width()),
+            height: Some(staging.surface_height()),
+            format: Some(pixel_format.wire_name().to_string()),
+            staging_byte_size: Some(staging.staging_byte_size().to_string()),
+            bytes_per_row: Some(staging.bytes_per_row().to_string()),
+            writable: Some(staging.writable()),
+            exporting_device_uuid: Some(
+                staging
+                    .exporting_device_uuid()
+                    .iter()
+                    .map(|byte| format!("{byte:02x}"))
+                    .collect(),
+            ),
+            ..Default::default()
+        })
+    })();
+    match opened {
+        Ok(response) => EscalateResponse::Ok(response),
+        Err(failure) => EscalateResponse::Err(EscalateResponseErr {
+            request_id,
+            message: format!("open_device_export_staging failed: {failure}"),
+        }),
+    }
+}
+
+/// Run one device-export staging copy on behalf of a helper process and
+/// answer with the timeline value it signalled.
+///
+/// The child waits for that value on its imported copy of the staging's
+/// `refill_done` timeline before touching the memory — the host's own
+/// bounded wait orders the submit for callers in this process, but it
+/// says nothing to a consumer one process away.
+#[cfg(target_os = "linux")]
+fn handle_device_export_staging_copy(
+    sandbox: &GpuContextLimitedAccess,
+    request_id: String,
+    surface_id: &str,
+    direction: DeviceExportCopyDirection,
+) -> EscalateResponse {
+    let copied = sandbox
+        .surface_device_export_staging(surface_id)
+        .and_then(|staging| match direction {
+            DeviceExportCopyDirection::SurfaceIntoStaging => {
+                sandbox.refill_device_export_staging(&staging)
+            }
+            DeviceExportCopyDirection::StagingBackIntoSurface => {
+                sandbox.copy_device_export_staging_back_to_surface(&staging)
+            }
+        });
+    match copied {
+        Ok(signalled) => EscalateResponse::Ok(EscalateResponseOk {
+            request_id,
+            handle_id: surface_id.to_string(),
+            timeline_value: Some(signalled.to_string()),
+            ..Default::default()
+        }),
+        Err(failure) => EscalateResponse::Err(EscalateResponseErr {
+            request_id,
+            message: format!("{} failed: {failure}", direction.escalate_op_name()),
+        }),
+    }
+}
+
 /// Map a wire-format `run_cpu_readback_copy` request through the
 /// registered [`CpuReadbackBridge`].
 ///
@@ -1023,11 +1210,8 @@ where
         // populated with the surface_id for symmetry, but the
         // subprocess never has anything to release for cpu-readback.
         handle_id: surface_id_str.to_string(),
-        width: None,
-        height: None,
-        format: None,
-        usage: None,
         timeline_value: Some(signaled.to_string()),
+        ..Default::default()
     })
 }
 
@@ -1087,11 +1271,7 @@ fn handle_register_compute_kernel(
         Ok(kernel_id) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
             handle_id: kernel_id,
-            width: None,
-            height: None,
-            format: None,
-            usage: None,
-            timeline_value: None,
+            ..Default::default()
         }),
         Err(msg) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
@@ -1168,11 +1348,7 @@ fn handle_run_compute_kernel(
             // Echo the kernel_id back — compute is sync host-side, no
             // separate handle is allocated per dispatch.
             handle_id: kernel_id.to_string(),
-            width: None,
-            height: None,
-            format: None,
-            usage: None,
-            timeline_value: None,
+            ..Default::default()
         }),
         Err(msg) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
@@ -1279,11 +1455,7 @@ fn handle_register_graphics_kernel(
         Ok(kernel_id) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
             handle_id: kernel_id,
-            width: None,
-            height: None,
-            format: None,
-            usage: None,
-            timeline_value: None,
+            ..Default::default()
         }),
         Err(msg) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
@@ -1450,11 +1622,7 @@ fn handle_run_graphics_draw(
         Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
             handle_id: kernel_id,
-            width: None,
-            height: None,
-            format: None,
-            usage: None,
-            timeline_value: None,
+            ..Default::default()
         }),
         Err(msg) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
@@ -1564,11 +1732,7 @@ fn handle_register_acceleration_structure_blas(
         Ok(as_id) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
             handle_id: as_id,
-            width: None,
-            height: None,
-            format: None,
-            usage: None,
-            timeline_value: None,
+            ..Default::default()
         }),
         Err(msg) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
@@ -1672,11 +1836,7 @@ fn handle_register_acceleration_structure_tlas(
         Ok(as_id) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
             handle_id: as_id,
-            width: None,
-            height: None,
-            format: None,
-            usage: None,
-            timeline_value: None,
+            ..Default::default()
         }),
         Err(msg) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
@@ -1807,11 +1967,7 @@ fn handle_register_ray_tracing_kernel(
         Ok(kernel_id) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
             handle_id: kernel_id,
-            width: None,
-            height: None,
-            format: None,
-            usage: None,
-            timeline_value: None,
+            ..Default::default()
         }),
         Err(msg) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
@@ -1897,11 +2053,7 @@ fn handle_run_ray_tracing_kernel(
         Ok(()) => EscalateResponse::Ok(EscalateResponseOk {
             request_id: rid,
             handle_id: kernel_id,
-            width: None,
-            height: None,
-            format: None,
-            usage: None,
-            timeline_value: None,
+            ..Default::default()
         }),
         Err(msg) => EscalateResponse::Err(EscalateResponseErr {
             request_id: rid,
@@ -2345,51 +2497,12 @@ pub(crate) fn envelope_response(result: EscalateResponse) -> serde_json::Value {
     obj
 }
 
-/// Parse a wire-format pixel-format string into a [`PixelFormat`] enum.
-///
-/// The wire format uses lowercase snake-case names (`bgra32`,
-/// `nv12_video_range`, etc.) so Python / Deno callers don't have to know
-/// FourCC codes. Also accepts the mnemonic `"bgra"` for
-/// [`PixelFormat::Bgra32`], matching the existing
-/// `NativeGpu.acquire_surface(format="bgra")` default on the Python side.
-fn parse_pixel_format(s: &str) -> std::result::Result<PixelFormat, String> {
-    let normalized = s.trim().to_ascii_lowercase();
-    match normalized.as_str() {
-        "bgra" | "bgra32" => Ok(PixelFormat::Bgra32),
-        "rgba" | "rgba32" => Ok(PixelFormat::Rgba32),
-        "argb" | "argb32" => Ok(PixelFormat::Argb32),
-        "rgba64" => Ok(PixelFormat::Rgba64),
-        "nv12" | "nv12_video_range" => Ok(PixelFormat::Nv12VideoRange),
-        "nv12_full_range" => Ok(PixelFormat::Nv12FullRange),
-        "uyvy" | "uyvy422" => Ok(PixelFormat::Uyvy422),
-        "yuyv" | "yuyv422" => Ok(PixelFormat::Yuyv422),
-        "gray" | "gray8" => Ok(PixelFormat::Gray8),
-        other => Err(format!("unknown pixel format '{other}'")),
-    }
-}
-
-fn pixel_format_to_wire(fmt: PixelFormat) -> &'static str {
-    match fmt {
-        PixelFormat::Bgra32 => "bgra32",
-        PixelFormat::Rgba32 => "rgba32",
-        PixelFormat::Argb32 => "argb32",
-        PixelFormat::Rgba64 => "rgba64",
-        PixelFormat::Nv12VideoRange => "nv12_video_range",
-        PixelFormat::Nv12FullRange => "nv12_full_range",
-        PixelFormat::Uyvy422 => "uyvy422",
-        PixelFormat::Yuyv422 => "yuyv422",
-        PixelFormat::Gray8 => "gray8",
-        PixelFormat::Unknown => "unknown",
-    }
-}
-
 /// Parse a wire-format texture format string into a [`TextureFormat`].
 ///
-/// Lowercase snake-case matches the variant name. Kept separate from
-/// [`parse_pixel_format`] so the vocabularies can evolve independently —
-/// pixel formats include video-specific YUV variants that textures don't
-/// expose, and texture formats include float variants that pixel buffers
-/// don't.
+/// Lowercase snake-case matches the variant name. A separate vocabulary
+/// from [`PixelFormat::parse_wire_name`] — pixel formats include
+/// video-specific YUV variants that textures don't expose, and texture
+/// formats include float variants that pixel buffers don't.
 fn parse_texture_format(s: &str) -> std::result::Result<TextureFormat, String> {
     let normalized = s.trim().to_ascii_lowercase();
     match normalized.as_str() {
@@ -2545,19 +2658,31 @@ mod tests {
 
     #[test]
     fn parse_pixel_format_accepts_common_aliases() {
-        assert_eq!(parse_pixel_format("bgra"), Ok(PixelFormat::Bgra32));
-        assert_eq!(parse_pixel_format("BGRA32"), Ok(PixelFormat::Bgra32));
-        assert_eq!(parse_pixel_format("nv12"), Ok(PixelFormat::Nv12VideoRange));
         assert_eq!(
-            parse_pixel_format("nv12_full_range"),
+            PixelFormat::parse_wire_name("bgra"),
+            Ok(PixelFormat::Bgra32)
+        );
+        assert_eq!(
+            PixelFormat::parse_wire_name("BGRA32"),
+            Ok(PixelFormat::Bgra32)
+        );
+        assert_eq!(
+            PixelFormat::parse_wire_name("nv12"),
+            Ok(PixelFormat::Nv12VideoRange)
+        );
+        assert_eq!(
+            PixelFormat::parse_wire_name("nv12_full_range"),
             Ok(PixelFormat::Nv12FullRange)
         );
-        assert_eq!(parse_pixel_format("gray8"), Ok(PixelFormat::Gray8));
+        assert_eq!(
+            PixelFormat::parse_wire_name("gray8"),
+            Ok(PixelFormat::Gray8)
+        );
     }
 
     #[test]
     fn parse_pixel_format_rejects_unknown() {
-        assert!(parse_pixel_format("xyz").is_err());
+        assert!(PixelFormat::parse_wire_name("xyz").is_err());
     }
 
     #[test]
@@ -2612,6 +2737,43 @@ mod tests {
                 assert_eq!(p.format, "bgra");
             }
             _ => panic!("wrong variant"),
+        }
+    }
+
+    #[test]
+    fn try_parse_accepts_the_device_export_staging_ops() {
+        for (op_name, expected_variant) in [
+            ("open_device_export_staging", "open"),
+            ("refill_device_export_staging", "refill"),
+            ("copy_device_export_staging_back_to_surface", "publish"),
+        ] {
+            let msg = serde_json::json!({
+                "rpc": "escalate_request",
+                "op": op_name,
+                "request_id": "r-device",
+                "surface_id": "surface-7",
+            });
+            let op = parse_op_for_tests(&msg)
+                .unwrap_or_else(|failure| panic!("{op_name} decodes: {failure}"));
+            let seen = match &op {
+                EscalateRequest::OpenDeviceExportStaging(p) => {
+                    assert_eq!(p.surface_id, "surface-7");
+                    "open"
+                }
+                EscalateRequest::RefillDeviceExportStaging(p) => {
+                    assert_eq!(p.surface_id, "surface-7");
+                    "refill"
+                }
+                EscalateRequest::CopyDeviceExportStagingBackToSurface(p) => {
+                    assert_eq!(p.surface_id, "surface-7");
+                    "publish"
+                }
+                _ => panic!("{op_name} decoded as the wrong variant"),
+            };
+            assert_eq!(seen, expected_variant);
+            // Every one is request/response: a device export that lost
+            // its reply would leave the child waiting on a deadline.
+            assert_eq!(request_id(&op), Some("r-device"));
         }
     }
 
@@ -2689,8 +2851,7 @@ mod tests {
             width: Some(16),
             height: Some(16),
             format: Some("bgra32".into()),
-            usage: None,
-            timeline_value: None,
+            ..Default::default()
         });
         let env = envelope_response(resp);
         assert_eq!(

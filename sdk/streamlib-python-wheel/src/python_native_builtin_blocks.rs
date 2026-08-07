@@ -8,6 +8,9 @@
 //! object itself and resolves it to the statically-linked native processor —
 //! per-frame paths never enter the interpreter.
 
+// Only the unsupported-platform arms below raise, and they compile away on
+// Linux — where both built-ins resolve.
+#[cfg(not(target_os = "linux"))]
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
 use streamlib::sdk::processors::ProcessorTypeReference;

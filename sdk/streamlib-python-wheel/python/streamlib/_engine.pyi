@@ -38,9 +38,15 @@ __all__ = [
     "RuntimeContextFullAccess",
     "RuntimeContextLimitedAccess",
     "TestPatternSource",
+    "TestBagCollector",
+    "TestBagFeeder",
+    "await_test_harness_bag",
+    "close_test_harness_channel",
+    "feed_test_harness_bag",
     "log_event",
     "media_clock_now_ns",
     "monotonic_now_ns",
+    "open_test_harness_channel",
 ]
 
 @final
@@ -76,6 +82,25 @@ class TestPatternSource:
     it is never instantiated and its per-frame path never enters the
     interpreter.
     """
+
+    # Keeps pytest from collecting the `Test*`-named class in user suites.
+    __test__: Literal[False]
+
+@final
+class TestBagFeeder:
+    """`streamlib.testing`'s feeder endpoint: publishes bags a test queued.
+
+    A marker type, like the media built-ins — never instantiated, resolved by
+    `Runtime.add`. Native so that its queue lives in the app process, where the
+    test reading it does.
+    """
+
+    # Keeps pytest from collecting the `Test*`-named class in user suites.
+    __test__: Literal[False]
+
+@final
+class TestBagCollector:
+    """`streamlib.testing`'s collector endpoint: records every bag produced."""
 
     # Keeps pytest from collecting the `Test*`-named class in user suites.
     __test__: Literal[False]
@@ -159,8 +184,42 @@ class ProcessorInputPortReference:
 
 @final
 class ProcessorLinkDataAccess:
-    """One processor's links. The engine binds it; app code never builds one."""
+    """One processor's links. The engine binds it; app code never builds one.
 
+    Constructing one opens a helper process's own data plane, with its own
+    iceoryx2 node — only `streamlib._helper` does that.
+    """
+
+    def __new__(cls) -> ProcessorLinkDataAccess: ...
+    def wire_output_link(
+        self,
+        port_name: str,
+        channel_service_name: str,
+        dest_notify_service_name: str,
+        expected_payload_bytes: int,
+        max_payload_bytes_per_channel: int,
+        max_queued_messages: int,
+        max_subscribers: int,
+        notify_max_notifiers: int,
+        enable_safe_overflow: bool,
+        link_id: str,
+        schema: tuple[str, str, str, int, int, int] | None = None,
+    ) -> None: ...
+    def wire_input_link(
+        self,
+        port_name: str,
+        channel_service_name: str,
+        notify_service_name: str,
+        read_mode: str,
+        max_queued_messages: int,
+        max_subscribers: int,
+        notify_max_notifiers: int,
+        enable_safe_overflow: bool,
+        link_id: str,
+    ) -> None: ...
+    def input_listener_fd(self) -> int | None: ...
+    def drain_input_listener(self) -> None: ...
+    def any_input_port_has_data(self) -> bool: ...
     def read_from_input_port(self, port_name: str) -> Any | None: ...
     def read_from_input_port_with_timestamp(
         self, port_name: str
@@ -177,8 +236,8 @@ class ProcessorLinkDataAccess:
 class RuntimeContextFullAccess:
     """Privileged runtime context handed to `setup` / `teardown` / `start` / `stop`.
 
-    Lease-bound members are only valid during the hook that received the
-    context; touching them afterwards raises `RuntimeError`.
+    Built in the helper process the processor runs in; app code never
+    constructs one.
     """
 
     @property
@@ -196,9 +255,19 @@ class RuntimeContextFullAccess:
     @property
     def runtime_id(self) -> str: ...
     @property
-    def processor_id(self) -> str | None: ...
+    def processor_id(self) -> str: ...
     def is_paused(self) -> bool: ...
     def should_process(self) -> bool: ...
+    @staticmethod
+    def open_for_helper_process(
+        configuration: Mapping[str, Any],
+        link_data_access: ProcessorLinkDataAccess,
+        runtime_id: str,
+        processor_id: str,
+        escalate_request_to_parent: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+    ) -> RuntimeContextFullAccess: ...
+    def limited_access_view_for_helper_process(self) -> RuntimeContextLimitedAccess: ...
+    def note_pause_state_from_parent(self, paused: bool) -> None: ...
 
 @final
 class RuntimeContextLimitedAccess:
@@ -221,7 +290,7 @@ class RuntimeContextLimitedAccess:
     @property
     def runtime_id(self) -> str: ...
     @property
-    def processor_id(self) -> str | None: ...
+    def processor_id(self) -> str: ...
     def is_paused(self) -> bool: ...
     def should_process(self) -> bool: ...
 
@@ -260,27 +329,40 @@ class GpuContextLimitedAccess:
     ) -> GpuSurfaceHandle: ...
     def acquire_texture(
         self, width: int, height: int, format: str, usage: list[str]
-    ) -> GpuSurfaceHandle: ...
+    ) -> GpuSurfaceHandle:
+        """Refuses from a Python processor: a pool texture is not registered for
+        cross-process import. `acquire_pixel_buffer` is the CPU-reachable path."""
     def resolve_surface(self, surface_id: str) -> GpuSurfaceHandle: ...
     def escalate(self, privileged_callback: Callable[[GpuContextFullAccess], _EscalateResult]) -> _EscalateResult:
-        """Run the callback with a temporary full-access capability, camera-pattern style."""
+        """Refuses: the callback's one atomic privileged scope cannot span a
+        process boundary. The operations it wrapped are methods on this
+        capability and on `ctx.gpu_full_access` — call them directly."""
 
 @final
 class GpuContextFullAccess:
-    """Privileged GPU capability, valid only while a full-access hook runs."""
+    """The privileged GPU capability a full-access hook receives.
+
+    Each method is its own escalate round trip to the parent, which runs the
+    privileged work against the engine and answers with a handle.
+    """
 
     def acquire_pixel_buffer(
         self, width: int, height: int, format: str = "bgra"
     ) -> GpuSurfaceHandle: ...
     def acquire_texture(
         self, width: int, height: int, format: str, usage: list[str]
-    ) -> GpuSurfaceHandle: ...
+    ) -> GpuSurfaceHandle:
+        """Refuses from a Python processor: a pool texture is not registered for
+        cross-process import. `acquire_pixel_buffer` is the CPU-reachable path;
+        device-side tensors ride the device-export staging path. See #1757."""
+
     def export_dma_buf(self, surface: GpuSurfaceHandle) -> tuple[int, int]:
         """Export a DMA-BUF file descriptor for `surface`, as `(fd, byte_size)`.
 
         The caller owns the fd and must close it, or hand it to something that
-        takes ownership. Only an ordinary pixel buffer can answer — a
-        device-exchange buffer is OPAQUE_FD-flavoured.
+        takes ownership. Answered without leaving this process: the fds arrived
+        over SCM_RIGHTS when the surface was checked out, and they are the same
+        ones a host-side export would mint.
         """
 
     def import_dma_buf(
@@ -291,13 +373,16 @@ class GpuContextFullAccess:
         format: str = "bgra",
         byte_size: int | None = None,
     ) -> GpuSurfaceHandle:
-        """Import a DMA-BUF file descriptor as a surface this graph can read.
-
-        Takes ownership of `fd` on success — the driver adopts it and it must
-        not be closed afterwards. On failure the fd is still the caller's.
-        """
+        """Refuses from a Python processor: the surface registry a graph reads
+        lives in the app process, and handing it an fd needs a wire that carries
+        one. Exporting works — `export_dma_buf` answers from this process. See
+        #1756."""
 
     def wait_device_idle(self) -> None: ...
+    def escalate(self, privileged_callback: Callable[[GpuContextFullAccess], _EscalateResult]) -> _EscalateResult:
+        """Refuses: the callback's one atomic privileged scope cannot span a
+        process boundary. The operations it wrapped are methods on this
+        capability and on `ctx.gpu_limited_access` — call them directly."""
 
 @final
 class GpuSurfaceHandle:
@@ -404,6 +489,18 @@ def media_clock_now_ns() -> int:
     Not the system-wide `CLOCK_MONOTONIC` epoch — the origin is this process's
     engine start, so a value from one process means nothing in another.
     """
+
+def open_test_harness_channel(channel: str) -> None:
+    """Open a test-harness channel; raises if the name is already in use."""
+
+def close_test_harness_channel(channel: str) -> None:
+    """Close a test-harness channel, dropping anything still queued on it."""
+
+def feed_test_harness_bag(channel: str, bag: Any) -> None:
+    """Queue one bag for delivery through `channel`'s feeder."""
+
+def await_test_harness_bag(channel: str, timeout_seconds: float) -> Any | None:
+    """The next bag collected on `channel`, or `None` if the wait ran out."""
 
 def log_event(
     level: str, message: str, attrs: dict[str, Any] | None = None

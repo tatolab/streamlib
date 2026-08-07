@@ -1,9 +1,9 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-# The importable wheel: CPython imports this cdylib and drives the engine
-# in-process. The inverted arrangement (a Rust binary embedding CPython) was the
-# #1702 spike's shape and is not what ships.
+# The importable wheel: CPython imports this cdylib and drives the engine from
+# the app's own process. The inverted arrangement (a Rust binary embedding
+# CPython) was the #1702 spike's shape and is not what ships.
 
 [package]
 name = "streamlib-python-wheel"
@@ -15,7 +15,7 @@ authors.workspace = true
 # four levels up. Same license, declared inline.
 license = "BUSL-1.1"
 repository.workspace = true
-description = "streamlib — the importable Python wheel: CPython imports the engine and authors pipelines in-process"
+description = "streamlib — the importable Python wheel: the app imports the engine and authors pipelines against it"
 publish = false
 
 [lib]
@@ -64,7 +64,10 @@ streamlib-adapter-cuda = { path = "../../adapters/streamlib-adapter-cuda", versi
 # `rmpv`'s native `bin` variant is what keeps a byte payload from decoding as
 # text on the way through.
 rmpv = { workspace = true }
+serde = { workspace = true }
 serde_json = { workspace = true }
+# The bag wire format the harness endpoints decode.
+rmp-serde = { workspace = true }
 tracing = { workspace = true }
 
 # Raw CLOCK_MONOTONIC + timerfd: the wheel's clock contract is the kernel's
@@ -83,6 +86,14 @@ parking_lot = "0.12"
 # `streamlib-python-native` already ships.
 [target.'cfg(target_os = "linux")'.dependencies]
 cudarc = { workspace = true }
+
+# The helper child's half of the pixel exchange: the SCM_RIGHTS client that
+# checks a surface out of the parent's surface-share service, and the
+# consumer-side Vulkan import that turns its DMA-BUF plane fds into mapped
+# memory. Both already ride in the binary via the engine; named here so the
+# wheel can call them.
+streamlib-surface-client = { path = "../../runtime/streamlib-surface-client", version = "0.14.0" }
+streamlib-consumer-rhi = { path = "../../runtime/streamlib-consumer-rhi", version = "0.14.0" }
 
 [lints]
 workspace = true

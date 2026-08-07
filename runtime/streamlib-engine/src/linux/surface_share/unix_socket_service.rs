@@ -1005,7 +1005,7 @@ mod tests {
             "runtime_id": "test-runtime",
             "width": 640,
             "height": 480,
-            "format": "Bgra32",
+            "format": "bgra32",
             "resource_type": "pixel_buffer",
         });
         let (check_in_resp, check_in_fds) =
@@ -1036,7 +1036,7 @@ mod tests {
         );
         assert_eq!(
             check_out_resp.get("format").and_then(|v| v.as_str()),
-            Some("Bgra32")
+            Some("bgra32")
         );
         assert_eq!(check_out_fds.len(), 1, "single-plane: exactly one fd");
         let received_fd = check_out_fds[0];
@@ -1101,7 +1101,7 @@ mod tests {
             "runtime_id": "test-runtime",
             "width": 1920,
             "height": 1080,
-            "format": "Nv12VideoRange",
+            "format": "nv12_video_range",
             "resource_type": "pixel_buffer",
             "plane_sizes": [pattern_y.len() as u64, pattern_uv.len() as u64],
             "plane_offsets": [0u64, 0u64],
@@ -1401,7 +1401,7 @@ mod tests {
                 "runtime_id": runtime_id,
                 "width": 16,
                 "height": 16,
-                "format": "Bgra32",
+                "format": "bgra32",
                 "resource_type": "pixel_buffer",
             }),
             &[send_fd],
@@ -1461,7 +1461,7 @@ mod tests {
                     plane_strides: vec![0],
                     width: 1,
                     height: 1,
-                    format: "Bgra32",
+                    format: "bgra32",
                     resource_type: "pixel_buffer",
                     handle_type: "dma_buf",
                     drm_format_modifier: 0,

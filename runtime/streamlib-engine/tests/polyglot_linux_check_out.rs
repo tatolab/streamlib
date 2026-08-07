@@ -248,7 +248,7 @@ fn python_subprocess_resolves_and_vulkan_imports_host_published_surface() {
         "runtime_id": runtime_id,
         "width": width,
         "height": height,
-        "format": "Bgra32",
+        "format": "bgra32",
         "resource_type": "pixel_buffer",
     });
     let (resp, _) =

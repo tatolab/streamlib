@@ -11,8 +11,7 @@ use parking_lot::{Mutex, RwLock};
 use crate::core::compiler::scheduling::{SchedulingStrategy, scheduling_strategy_for_processor};
 
 use crate::core::context::{
-    FullAccessGrant, GpuContext, GpuContextLimitedAccess, IsolationTier, RuntimeContext,
-    RuntimeContextFullAccess,
+    FullAccessGrant, GpuContext, IsolationTier, RuntimeContext, RuntimeContextFullAccess,
 };
 use crate::core::descriptors::ProcessorRuntime;
 use crate::core::error::{Error, Result};
@@ -105,9 +104,10 @@ pub(crate) fn spawn_processor(
         scheduling_strategy_for_processor(node)
     };
 
-    // Names the authoring language, not a placement: a Python processor runs in
-    // the app's own interpreter, so calling it a subprocess host would describe
-    // every in-process one wrongly.
+    // Names the authoring language, not a placement. What the engine spawns
+    // here is the thread that drives the processor's host; for Python that host
+    // owns a child process, and the label says which language authored the
+    // class rather than restating where it runs.
     let runtime_label = match runtime {
         ProcessorRuntime::Rust => "Rust processor",
         ProcessorRuntime::Python => "Python processor",
@@ -506,7 +506,7 @@ fn clone_shutdown_eventfd(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::context::GpuContext;
+    use crate::core::context::{GpuContext, GpuContextLimitedAccess};
     use std::sync::mpsc;
     use std::thread;
     use std::time::Duration;
@@ -520,11 +520,8 @@ mod tests {
     fn untrusted_tier_gate_refuses_and_marks_error() {
         let state = Arc::new(Mutex::new(ProcessorState::Idle));
         let proc_id = ProcessorUniqueId::from("test.untrusted");
-        let grant = full_access_grant_or_mark_untrusted_error(
-            IsolationTier::Untrusted,
-            &state,
-            &proc_id,
-        );
+        let grant =
+            full_access_grant_or_mark_untrusted_error(IsolationTier::Untrusted, &state, &proc_id);
         assert!(
             grant.is_none(),
             "untrusted tier must not yield a FullAccess grant"

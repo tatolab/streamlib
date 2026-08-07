@@ -12,25 +12,31 @@ mod python_control_plane_hosting;
 #[cfg(target_os = "linux")]
 mod python_cuda_pixel_exchange;
 mod python_gpu_surface_pixel_exchange;
+mod python_helper_process_pixel_exchange;
+mod python_helper_process_spawn_host;
 mod python_logging;
 mod python_monotonic_timer;
 mod python_native_builtin_blocks;
 mod python_processor_context;
 mod python_processor_declaration;
-mod python_processor_host;
+mod python_processor_import_path;
 mod python_processor_link_data_access;
 mod python_processor_registration;
 mod python_runtime_lifecycle;
+mod python_test_harness_endpoints;
 
 pub use python_runtime_lifecycle::PythonRuntimeHandle;
 
 #[pymodule]
 fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     python_native_builtin_blocks::register_native_builtin_processor_types();
+    python_test_harness_endpoints::register_test_harness_processor_types();
     module.add_class::<PythonRuntimeHandle>()?;
     module.add_class::<python_native_builtin_blocks::PythonTestPatternSourceBlock>()?;
     module.add_class::<python_native_builtin_blocks::PythonCameraSourceBlock>()?;
     module.add_class::<python_native_builtin_blocks::PythonDisplayWindowBlock>()?;
+    module.add_class::<python_test_harness_endpoints::PythonTestBagFeederBlock>()?;
+    module.add_class::<python_test_harness_endpoints::PythonTestBagCollectorBlock>()?;
     module.add_class::<python_added_processor::PythonAddedProcessor>()?;
     module.add_class::<python_added_processor::PythonProcessorOutputPortReference>()?;
     module.add_class::<python_added_processor::PythonProcessorInputPortReference>()?;
@@ -49,5 +55,21 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     )?)?;
     module.add_function(wrap_pyfunction!(python_logging::monotonic_now_ns, module)?)?;
     module.add_function(wrap_pyfunction!(python_logging::log_event, module)?)?;
+    module.add_function(wrap_pyfunction!(
+        python_test_harness_endpoints::open_test_harness_channel,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_test_harness_endpoints::close_test_harness_channel,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_test_harness_endpoints::feed_test_harness_bag,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
+        python_test_harness_endpoints::await_test_harness_bag,
+        module
+    )?)?;
     Ok(())
 }

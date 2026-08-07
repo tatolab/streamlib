@@ -3,11 +3,17 @@
 
 """Drive one processor from a test: feed its inputs, assert on its outputs.
 
-The processor under test runs in a real graph on a real engine thread, so what
-a test exercises is what production runs — the same construction, the same
-lifecycle hooks, the same links. What it does not need is hardware: the frames
-come from this module's own feeder processor rather than a camera, and the
-output lands in a queue rather than a window.
+The processor under test runs in a real graph on a real engine — in its own
+helper process, like every Python processor — so what a test exercises is what
+production runs: the same construction, the same lifecycle hooks, the same
+links. What it does not need is hardware: the frames come from this module's
+feeder rather than a camera, and the output lands in a queue rather than a
+window.
+
+The feeder and the collector are native endpoints, and that is the load-bearing
+part. A test asserts from the app process, and a queue this module could reach
+is the app's — one process away from any child that tried to read it. Native
+endpoints run where the queues are.
 """
 
 from __future__ import annotations
@@ -18,8 +24,14 @@ import threading
 from typing import Any, Dict, Mapping, Optional
 
 from . import Runtime
-from ._engine import RuntimeContextLimitedAccess
-from ._processor_declaration import input, output, processor
+from ._engine import (
+    TestBagCollector,
+    TestBagFeeder,
+    await_test_harness_bag,
+    close_test_harness_channel,
+    feed_test_harness_bag,
+    open_test_harness_channel,
+)
 
 __all__ = ["SingleProcessorTestPipeline"]
 
@@ -32,13 +44,8 @@ DEFAULT_BAG_TIMEOUT_SECONDS = 30.0
 # diagnostic rather than a wedged test run.
 ENGINE_TEARDOWN_TIMEOUT_SECONDS = 60.0
 
-# The queues the feeder and collector processors reach. They cannot travel as
-# configuration — configuration is JSON on the graph node — so the graph carries
-# a channel name and this module holds the queue it names. Safe because the
-# processors run in this same interpreter, which is the whole point of
-# in-process placement.
-_fed_bags: "Dict[str, queue.Queue[Any]]" = {}
-_collected_bags: "Dict[str, queue.Queue[Any]]" = {}
+# Channel names are minted here and travel to the endpoints as configuration —
+# a queue cannot travel through `config`, but the name of one can.
 _next_channel_number = itertools.count()
 _channel_lock = threading.Lock()
 
@@ -48,46 +55,17 @@ _channel_lock = threading.Lock()
 _running_pipeline_lock = threading.Lock()
 
 
-@processor("@streamlib/testing/TestBagFeeder", execution="continuous", interval_ms=1)
-class TestBagFeeder:
-    """Publishes whatever a test hands it, in order."""
-
-    def __init__(self, channel: str) -> None:
-        self.channel = channel
-
-    @output()
-    def bags_to_downstream(self) -> None: ...
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        try:
-            bag = _fed_bags[self.channel].get_nowait()
-        except queue.Empty:
-            return
-        ctx.outputs.write("bags_to_downstream", bag)
-
-
-@processor("@streamlib/testing/TestBagCollector", execution="reactive")
-class TestBagCollector:
-    """Collects everything the processor under test produces.
-
-    `every_sample` rather than the default: a test asserts on what was produced,
-    so dropping a bag under a burst would make the assertion lie.
-    """
-
-    def __init__(self, channel: str) -> None:
-        self.channel = channel
-
-    @input(delivery_profile="every_sample")
-    def bags_from_upstream(self) -> None: ...
-
-    def process(self, ctx: RuntimeContextLimitedAccess) -> None:
-        bag = ctx.inputs.read("bags_from_upstream")
-        if bag is not None:
-            _collected_bags[self.channel].put(bag)
-
-
 class SingleProcessorTestPipeline:
-    """One processor, with a feeder on every input and a collector on every output."""
+    """One processor, with a feeder on every input and a collector on every output.
+
+    **Known gap (#1759): bags fed immediately after `__enter__` can be dropped.**
+    A link discards what it publishes before its consumer has attached, and the
+    processor under test attaches when its helper process finishes registering —
+    tens of milliseconds after the graph compiles. Nothing in this API reports
+    that attach yet, so the loss surfaces as `await_bag` reporting that the
+    processor produced nothing. Until #1759 lands, feed after the graph has been
+    running rather than in the first instants of the `with` block.
+    """
 
     def __init__(
         self,
@@ -126,7 +104,7 @@ class SingleProcessorTestPipeline:
         processor_under_test = runtime.add(self._processor_class, config=self._config)
 
         for port in _declared_port_names(self._processor_class, "input"):
-            channel = _claim_channel(_fed_bags)
+            channel = _claim_channel()
             self._input_channels[port] = channel
             feeder = runtime.add(
                 TestBagFeeder,
@@ -138,7 +116,7 @@ class SingleProcessorTestPipeline:
             )
 
         for port in _declared_port_names(self._processor_class, "output"):
-            channel = _claim_channel(_collected_bags)
+            channel = _claim_channel()
             self._output_channels[port] = channel
             collector = runtime.add(
                 TestBagCollector,
@@ -179,9 +157,9 @@ class SingleProcessorTestPipeline:
                         f"running, or teardown is blocked on one"
                     )
             for channel in self._input_channels.values():
-                _fed_bags.pop(channel, None)
+                close_test_harness_channel(channel)
             for channel in self._output_channels.values():
-                _collected_bags.pop(channel, None)
+                close_test_harness_channel(channel)
 
             try:
                 raise self._run_failure.get_nowait()
@@ -195,8 +173,14 @@ class SingleProcessorTestPipeline:
         """Queue one bag for delivery to the processor's `port_name` input.
 
         A bag is a named map, same as anything a processor writes.
+
+        Fed in the first instants after `__enter__`, a bag can be dropped before
+        the processor's helper has attached — see this class's docstring and
+        #1759.
         """
-        _fed_bags[self._channel_for(self._input_channels, port_name, "input")].put(bag)
+        feed_test_harness_bag(
+            self._channel_for(self._input_channels, port_name, "input"), bag
+        )
 
     def await_bag(
         self, port_name: str, *, timeout: float = DEFAULT_BAG_TIMEOUT_SECONDS
@@ -207,13 +191,13 @@ class SingleProcessorTestPipeline:
         the failure a test is looking for.
         """
         channel = self._channel_for(self._output_channels, port_name, "output")
-        try:
-            return _collected_bags[channel].get(timeout=timeout)
-        except queue.Empty:
+        bag = await_test_harness_bag(channel, timeout)
+        if bag is None:
             raise AssertionError(
                 f"{self._processor_class.__name__} produced nothing on {port_name!r} "
                 f"within {timeout}s"
-            ) from None
+            )
+        return bag
 
     def await_bags(
         self, port_name: str, count: int, *, timeout: float = DEFAULT_BAG_TIMEOUT_SECONDS
@@ -245,8 +229,9 @@ def _declared_port_names(processor_class: type, direction: str) -> "list[str]":
     return [port["name"] for port in declared]
 
 
-def _claim_channel(channels: "Dict[str, queue.Queue[Any]]") -> str:
+def _claim_channel() -> str:
+    """A fresh channel name, opened on the engine side before anything names it."""
     with _channel_lock:
         channel = f"channel-{next(_next_channel_number)}"
-    channels[channel] = queue.Queue()
+    open_test_harness_channel(channel)
     return channel

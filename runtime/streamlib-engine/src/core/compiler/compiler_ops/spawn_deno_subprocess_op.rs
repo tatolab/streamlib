@@ -55,8 +55,7 @@ pub(crate) struct DenoSubprocessHostProcessor {
 
     // Port wiring info populated by the compiler's iceoryx2 service wiring phase.
     // Filled BEFORE setup() is called. Passed to the Deno subprocess in the setup command.
-    pub(crate) input_port_wiring: Vec<serde_json::Value>,
-    pub(crate) output_port_wiring: Vec<serde_json::Value>,
+    pub(crate) link_wiring: crate::core::processors::OutOfProcessLinkWiringEnvelope,
 }
 
 // ============================================================================
@@ -236,10 +235,7 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
                 "capability": "full",
                 "config": config,
                 "processor_id": self.processor_id,
-                "ports": {
-                    "inputs": self.input_port_wiring,
-                    "outputs": self.output_port_wiring,
-                },
+                "ports": self.link_wiring.as_setup_command_ports(),
             }))?;
 
             // Wait for "ready" response
@@ -509,6 +505,12 @@ impl crate::core::processors::DynGeneratedProcessor for DenoSubprocessHostProces
         None
     }
 
+    fn out_of_process_link_wiring(
+        &mut self,
+    ) -> Option<&mut crate::core::processors::OutOfProcessLinkWiringEnvelope> {
+        Some(&mut self.link_wiring)
+    }
+
     fn apply_config_json(&mut self, _config_json: &serde_json::Value) -> Result<()> {
         Ok(())
     }
@@ -597,8 +599,7 @@ pub(crate) fn create_deno_subprocess_host_constructor(
             descriptor_name: descriptor_clone.name.to_string(),
             subprocess_dead: false,
             native_lib_path: String::new(),
-            input_port_wiring: Vec::new(),
-            output_port_wiring: Vec::new(),
+            link_wiring: Default::default(),
         })
             as Box<
                 dyn crate::core::processors::DynGeneratedProcessor + Send,

@@ -43,6 +43,11 @@ fn classify_processor_class(
     {
         return Ok(AddedProcessorClassKind::NativeBuiltin(native_reference));
     }
+    if let Some(harness_reference) =
+        crate::python_test_harness_endpoints::test_harness_type_reference(python, processor_class)
+    {
+        return Ok(AddedProcessorClassKind::NativeBuiltin(harness_reference));
+    }
     if crate::python_processor_declaration::is_declared_processor_class(processor_class) {
         return Ok(AddedProcessorClassKind::DeclaredPythonClass);
     }
@@ -143,8 +148,8 @@ impl PythonRuntimeHandle {
     /// Drop the engine with the GIL released, joining its threads.
     ///
     /// Releasing the GIL is not an optimization: an engine thread that needs
-    /// the GIL to finish (a Python processor, once those exist) would deadlock
-    /// against a teardown that held it.
+    /// this interpreter's GIL to finish — a control-plane handler, a log
+    /// drain — would deadlock against a teardown that held it.
     fn drop_engine_without_holding_the_gil(
         python: Python<'_>,
         engine: Arc<Runner>,
@@ -177,6 +182,11 @@ impl PythonRuntimeHandle {
     /// Boot the engine.
     #[new]
     fn new(python: Python<'_>) -> PyResult<Self> {
+        // Before the engine, so a processor added to its graph always has an
+        // interpreter to be an exec of. This reads the app's own
+        // `sys.executable`, which is the promise: one venv, and a processor's
+        // child is the same Python the app is.
+        crate::python_helper_process_spawn_host::capture_helper_process_launch_environment(python)?;
         let engine = python
             .detach(Runner::new)
             .map_err(|engine_failure| PyRuntimeError::new_err(engine_failure.to_string()))?;
