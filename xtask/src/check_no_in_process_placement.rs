@@ -38,6 +38,13 @@
 //! Markdown supersession spans (`~~…~~`) are skipped, because the docs policy
 //! requires a retraction to quote what it retracts.
 //!
+//! Part of the pattern set is sourced from the projects the ADR itself cites,
+//! rather than invented here — an author looking for words for the banned shape
+//! borrows theirs. dora-rs calls it an *operator* "linked into a runtime
+//! process" sharing "a single address space"; CPython calls the pre-3.12
+//! behaviour a *shared* or *process-wide GIL*, and the alternative the ADR
+//! rejects a *subinterpreter* with a *per-interpreter GIL*.
+//!
 //! Honest limits, so nobody reads a green run as more than it is:
 //!
 //! - This is vocabulary, not behaviour. A watchdog renamed to avoid these
@@ -51,7 +58,9 @@
 //!   another processor, a per-processor "placement decision" or "placement
 //!   choice", `in-process` beside a Python processor (tried as a shape and
 //!   removed — it fires on the boundary, where built-ins and in-process Rust
-//!   are discussed alongside processors), and any paraphrase of the retracted
+//!   are discussed alongside processors), PEP 703 free-threading (the wheel
+//!   legitimately discusses its own build support), and any paraphrase of the
+//!   retracted
 //!   numbers — "roughly half the subprocess latency", "0.6% of a frame budget"
 //!   — which no literal list catches. A green run means these patterns are
 //!   absent, never that the rule is satisfied; the reviewers are the coverage
@@ -258,6 +267,7 @@ const CO_TENANCY_GUIDANCE: &str = "processors never share an interpreter or a GI
 const DIAGNOSTIC_GUIDANCE: &str = "a diagnostic premised on shared-GIL contention measures something that cannot happen under helper-process placement";
 const PLACEMENT_GUIDANCE: &str =
     "there is one placement; say `app-process` for the legitimate in-that-process senses";
+const REJECTED_ALTERNATIVE_GUIDANCE: &str = "subinterpreters and a per-interpreter GIL are a rejected alternative — a private interpreter is not a private process, and one C-extension segfault still takes down every processor";
 const RETRACTED_NUMBERS_GUIDANCE: &str = "the #1702 spike's latency numbers are retracted as placement evidence — the two arms ran different CPython builds and were never re-measured";
 
 /// The paired-term rules exist because the bare words are legitimate: the
@@ -316,9 +326,39 @@ const BANNED_SHAPES: &[BannedShape] = &[
         also_requires_any_of: &[],
         guidance: PLACEMENT_GUIDANCE,
     },
+    // Sourced from the ecosystem, not invented here: an author reaching for a
+    // way to say "co-locate the processors" borrows the vocabulary of the
+    // projects the ADR itself cites. dora-rs — the process-per-node model
+    // StreamLib adopts — calls its in-process variant an *operator* "linked
+    // into a runtime process", sharing "a single address space"; CPython's
+    // PEP 684 calls the pre-3.12 behaviour a *shared GIL* and the alternative
+    // it rejects a *subinterpreter* with a *per-interpreter GIL*.
+    BannedShape {
+        all_of: &["processor"],
+        any_of: &["same address space", "single address space", "shared address space", "one address space"],
+        also_requires_any_of: &[],
+        guidance: CO_TENANCY_GUIDANCE,
+    },
+    BannedShape {
+        all_of: &["processor"],
+        any_of: &["subinterpreter", "sub-interpreter", "per-interpreter gil", "concurrent.interpreters"],
+        also_requires_any_of: &[],
+        guidance: REJECTED_ALTERNATIVE_GUIDANCE,
+    },
+    // `global interpreter lock` spelled out contains no `gil`, so it bypasses
+    // every shape above it.
+    BannedShape {
+        all_of: &["processor", "global interpreter lock"],
+        any_of: &[],
+        also_requires_any_of: &["share", "shares", "sharing", "shared", "same", "one", "single", "contend"],
+        guidance: CO_TENANCY_GUIDANCE,
+    },
     BannedShape {
         all_of: &[],
         any_of: &[
+            "process-wide gil",
+            "single gil",
+            "share a single gil",
             "gil contention",
             "gil-contention",
             "contend for the gil",
@@ -1180,6 +1220,64 @@ mod tests {
             tmp.path(),
             "docs/architecture/a.md",
             "Running in-process is the lowest latency option.\n",
+        );
+        assert_eq!(lint(tmp.path()).len(), 1);
+    }
+
+    /// dora-rs is the process-per-node model the ADR adopts, and it ships the
+    /// banned shape under its own name: an *operator* "linked into a runtime
+    /// process", sharing "a single address space". Someone who reads the ADR
+    /// goes and reads dora, so dora's words are the ones they will reach for.
+    #[test]
+    fn flags_co_location_in_doras_vocabulary() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "docs/architecture/a.md",
+            "Run the processors as operators sharing a single address space.\n",
+        );
+        assert_eq!(lint(tmp.path()).len(), 1);
+    }
+
+    /// CPython's own words for what PEP 684 rejects and replaces.
+    #[test]
+    fn flags_the_cpython_shared_gil_vocabulary() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "docs/architecture/a.md",
+            "Every processor runs under the process-wide GIL.\n",
+        );
+        write(
+            tmp.path(),
+            "docs/architecture/b.md",
+            "The interpreters share a single GIL, so a processor can block another.\n",
+        );
+        assert_eq!(lint(tmp.path()).len(), 2);
+    }
+
+    /// PEP 684 / PEP 734 are a rejected alternative in the ADR: a private
+    /// interpreter is not a private process.
+    #[test]
+    fn flags_subinterpreters_as_a_rejected_alternative() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "docs/architecture/a.md",
+            "Host each processor in a subinterpreter with a per-interpreter GIL.\n",
+        );
+        assert_eq!(lint(tmp.path()).len(), 1);
+    }
+
+    /// `global interpreter lock` spelled out contains no `gil` substring, so it
+    /// slips past every shape keyed on the acronym.
+    #[test]
+    fn flags_the_spelled_out_global_interpreter_lock() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "docs/architecture/a.md",
+            "Two processors share one global interpreter lock.\n",
         );
         assert_eq!(lint(tmp.path()).len(), 1);
     }
