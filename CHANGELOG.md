@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.4](https://github.com/tatolab/streamlib/compare/v0.14.3...v0.14.4) (2026-08-07)
+
+
+### Features
+
+* **engine:** expose a graph-readiness signal the app process can poll after run() ([#1768](https://github.com/tatolab/streamlib/issues/1768)) ([78e47a3](https://github.com/tatolab/streamlib/commit/78e47a3799c4b1507b86813a5953eaea0f24ace6))
+
 ## [0.14.3](https://github.com/tatolab/streamlib/compare/v0.14.2...v0.14.3) (2026-08-07)
 
 
