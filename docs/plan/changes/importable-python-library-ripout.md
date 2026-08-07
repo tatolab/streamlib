@@ -142,8 +142,19 @@ half still belongs to this ticket.
 - REMOVED: `runtime/streamlib-engine/src/core/runtime/module_loader/`
 - REMOVED: `runtime/streamlib-engine/src/core/runtime/install.rs` / `add_modules_from_lockfile`
 - REMOVED: `native_lib_resolver`
-- REMOVED: set_iceoryx2_resources
+- REMOVED: `spawn_python_native_subprocess_op`
 - REMOVED: STREAMLIB_PYTHON_NATIVE_LIB
+  (Added 2026-08-07 when in-process-hosting-ripout shipped: that change did not remove the
+  env var, but every file naming it is this change's scope. Carriers and their coverage —
+  the gate proves zero only once each is gone: `native_lib_resolver` and
+  `module_loader/from_source.rs` [REMOVED bullets above]; `spawn_python_native_subprocess_op`
+  [bullet just added]; and the pre-wheel `sdk/streamlib-python/`'s `subprocess_runner.py` +
+  its `test_clock.py` / `test_subprocess_runner_cleanup.py`, superseded by the wheel's
+  `python -m streamlib._helper`. **Align to confirm** the last three ride this change's
+  old-`sdk/streamlib-python` removal, or add them as bullets — they are not yet enumerated.
+  `set_iceoryx2_resources` was **not** reassigned here: it is a live `GeneratedProcessor`
+  trait method that survives this change, and only its cdylib vtable slot dies, under the
+  `ProcessorVTable` / `core/plugin/` / plugin-abi / plugin-sdk removals above.)
 - REMOVED: `load_project_dylib` (engine dylib-load test corpus) / `pack_then_load_smoke` /
   `cdylib_owns_tokio_runtime` / `polyglot_linux_check_out_deno` / `folder_backed_package_build`
 - REMOVED: `tools/streamlib-build-orchestrator` / `BuildOrchestrator`

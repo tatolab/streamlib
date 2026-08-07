@@ -142,16 +142,24 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
 - REMOVED: LimitedAccessRuntimeContextViewPointer
 - REMOVED: install_view_lease_and_prime_caches
 - REMOVED: revoke_view_lease
-- ~~REMOVED: set_iceoryx2_resources~~ — Reassigned 2026-08-07 at ship: live plugin-ABI
-  surface (the #894 `GeneratedProcessor` seam); every carrier (`processor_vtable.rs`,
-  `core/plugin/`, the generated-processor pair, the subprocess spawn ops) is on Change B's
-  REMOVED inventory, and it dies there with them.
+- ~~REMOVED: set_iceoryx2_resources~~ — Struck 2026-08-07 at ship as a list defect, not
+  reassigned: this is a **live** method on the `GeneratedProcessor` trait (the #894
+  host-allocates seam), emitted by `streamlib-macros`, called by
+  `processor_instance_factory`, and implemented by every processor including the native
+  built-ins and #1714's own helper spawn host. It survives both this change and Change B —
+  only the cdylib **vtable slot** dies, and that dies as collateral of Change B's
+  `ProcessorVTable` / `core/plugin/` / `runtime/streamlib-plugin-abi` /
+  `sdk/streamlib-plugin-sdk` removals, which name it there. A bare `set_iceoryx2_resources`
+  REMOVED bullet on any change would fail that change's gate on the surviving carriers.
 - REMOVED: test_in_process_authoring
 - REMOVED: test_a_write_blocked_by_backpressure_stalls_no_other_python_processor
-- ~~REMOVED: STREAMLIB_PYTHON_NATIVE_LIB~~ — Reassigned 2026-08-07 at ship: every
-  remaining carrier (`native_lib_resolver`, `spawn_python_native_subprocess_op`, the
-  module loader, old `sdk/streamlib-python`) is Change B's deletion scope; the env var
-  dies with the machinery that reads it.
+- ~~REMOVED: STREAMLIB_PYTHON_NATIVE_LIB~~ — Reassigned 2026-08-07 at ship: the env var
+  genuinely dies with the old python-native subprocess machinery, which is Change B's
+  scope. Its carriers are `native_lib_resolver` and `module_loader/from_source.rs` (both
+  already Change B REMOVED bullets), plus `spawn_python_native_subprocess_op` and
+  `sdk/streamlib-python/subprocess_runner.py` (+ its two tests) — the last two were not yet
+  enumerated on Change B's list, so this ship adds explicit REMOVED bullets for them there
+  rather than rely on prose, so Change B's gate can prove the symbol reaches zero.
 - REMOVED: streamlib-pyembed-spike
 
 The spike deletion is one clause of a five-part disposition (miscitation research,
