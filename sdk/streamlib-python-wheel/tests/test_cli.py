@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import cast
 
 import pytest
+from app_under_test import ENGINE_STARTING_LOG_LINE
 
 from streamlib import Runtime, cli
 
@@ -197,6 +198,37 @@ def test_a_syntax_error_prints_the_apps_traceback_and_builds_no_engine(tmp_path:
     assert "app.py" in finished.stderr, "the traceback must name the file"
     assert "Initializing GPU context" not in finished.stdout + finished.stderr, (
         "a file that cannot be executed must not cost an engine boot"
+    )
+
+
+def test_a_bad_save_in_the_effect_module_names_that_module_not_the_entry_file(
+    tmp_path: Path,
+):
+    """The bad save the scaffold actually invites.
+
+    `app.py` holds wiring the user rarely touches; the file they edit is the
+    processor module, which reaches the launcher only as an import from the
+    entry file. So the traceback has to walk through `app.py` and land in the
+    module — naming only the entry file would point at the wrong file.
+    """
+    app_directory = tmp_path / "demo"
+    cli.scaffold_new_app(app_directory, use_test_pattern_source=True)
+    (app_directory / "processors" / "inverting_effect.py").write_text(
+        "def process(self ctx:\n    this does not parse\n"
+    )
+
+    finished = run_cli("dev", "--dir", str(app_directory))
+
+    assert finished.returncode == 1, f"stderr was:\n{finished.stderr}"
+    assert "SyntaxError" in finished.stderr, (
+        f"the user's own error must be the headline; stderr was:\n{finished.stderr}"
+    )
+    assert "inverting_effect.py" in finished.stderr, (
+        f"the traceback must name the module the user edited; stderr was:\n"
+        f"{finished.stderr}"
+    )
+    assert ENGINE_STARTING_LOG_LINE not in finished.stdout + finished.stderr, (
+        "a module that cannot be imported must not cost an engine boot"
     )
 
 
