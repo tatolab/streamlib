@@ -51,11 +51,10 @@
 // patterns and so must contain them literally.
 
 use anyhow::{Context, Result};
+use std::borrow::Cow;
 use std::fs;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
-
-use crate::ensure_source_walking_gate_read_source;
 
 const SCAN_PARENTS: &[&str] = &[
     "runtime", "sdk", "adapters", "tools", "packages", "examples", "xtask", "docs",
@@ -83,7 +82,7 @@ const ALLOW_FILE_PRAGMA: &str = "check-no-in-process-placement:allow-file";
 /// banned vocabulary at length to retract and ban it. Pinned so a fifth
 /// exemption is a deliberate, reviewed edit rather than a comment someone
 /// pasted to get CI green.
-pub const EXPECTED_ALLOW_FILE_PATHS: &[&str] = &[
+const EXPECTED_ALLOW_FILE_PATHS: &[&str] = &[
     "docs/decisions/helper-process-placement-only.md",
     "docs/decisions/importable-python-library.md",
     "docs/plan/changes/archive/2026-08-07-in-process-hosting-ripout.md",
@@ -97,7 +96,7 @@ pub const EXPECTED_ALLOW_FILE_PATHS: &[&str] = &[
 ///
 /// This list only shrinks. A line that leaves its document is a stale entry and
 /// [`exempt_prohibition_lines_are_all_live`] fails until it is deleted here.
-pub const EXEMPT_PROHIBITION_LINES: &[(&str, &str)] = &[
+const EXEMPT_PROHIBITION_LINES: &[(&str, &str)] = &[
     (
         "docs/plan/ARCHITECTURE.md",
         "In-process hosting of a Python processor does not exist — not as a default, a",
@@ -125,11 +124,18 @@ pub const EXEMPT_PROHIBITION_LINES: &[(&str, &str)] = &[
 ];
 
 /// A banned shape. `all_of` terms must every one appear on the line;
-/// `any_of` — when non-empty — needs one hit. All matching is
-/// ASCII-case-insensitive on a lowercased copy of the line.
+/// `any_of` and `also_requires_any_of` — when non-empty — each need one hit.
+/// All matching is ASCII-case-insensitive on a lowercased copy of the line.
 struct BannedShape {
     all_of: &'static [&'static str],
     any_of: &'static [&'static str],
+    also_requires_any_of: &'static [&'static str],
+    guidance: &'static str,
+}
+
+/// What matched, and what to tell the author about it.
+struct BannedShapeMatch {
+    matched: Cow<'static, str>,
     guidance: &'static str,
 }
 
@@ -147,41 +153,49 @@ const BANNED_SHAPES: &[BannedShape] = &[
     BannedShape {
         all_of: &["interpreter", "processor"],
         any_of: &["shared interpreter", "one interpreter", "same interpreter"],
+        also_requires_any_of: &[],
         guidance: CO_TENANCY_GUIDANCE,
     },
     BannedShape {
         all_of: &["gil", "contention"],
         any_of: &[],
+        also_requires_any_of: &[],
         guidance: DIAGNOSTIC_GUIDANCE,
     },
     BannedShape {
         all_of: &["gil", "stall", "processor"],
         any_of: &[],
+        also_requires_any_of: &[],
         guidance: CO_TENANCY_GUIDANCE,
     },
     BannedShape {
         all_of: &["gil", "every other"],
         any_of: &[],
+        also_requires_any_of: &[],
         guidance: CO_TENANCY_GUIDANCE,
     },
     BannedShape {
         all_of: &[],
         any_of: &["gil-hold", "gil hold", "slow-callback", "slow callback", "stall-attribution", "stall attribution"],
+        also_requires_any_of: WATCHDOG_NOUNS,
         guidance: DIAGNOSTIC_GUIDANCE,
     },
     BannedShape {
         all_of: &["both placements viable"],
         any_of: &[],
+        also_requires_any_of: &[],
         guidance: PLACEMENT_GUIDANCE,
     },
     BannedShape {
         all_of: &[],
         any_of: &["in-process placement", "in-process hosting", "in-process authoring"],
+        also_requires_any_of: &[],
         guidance: PLACEMENT_GUIDANCE,
     },
     BannedShape {
         all_of: &[],
         any_of: &["0.085ms", "0.085 ms", "0.161ms", "0.161 ms", "0.089ms", "0.089 ms", "0.180ms", "0.180 ms"],
+        also_requires_any_of: &[],
         guidance: RETRACTED_NUMBERS_GUIDANCE,
     },
 ];
@@ -189,10 +203,6 @@ const BANNED_SHAPES: &[BannedShape] = &[
 /// The watchdog family needs its diagnostic name *and* a monitor noun, or
 /// every `GIL-holding thread` doc comment trips it.
 const WATCHDOG_NOUNS: &[&str] = &["watchdog", "monitor", "detector"];
-
-/// Index of the watchdog-family shape in [`BANNED_SHAPES`], which alone carries
-/// the [`WATCHDOG_NOUNS`] requirement.
-const WATCHDOG_SHAPE_INDEX: usize = 4;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct LintViolation {
@@ -203,7 +213,7 @@ pub struct LintViolation {
 }
 
 #[derive(Debug, Default)]
-pub struct LintOutcome {
+pub struct InProcessPlacementScanReport {
     pub violations: Vec<LintViolation>,
     pub files_scanned: usize,
     pub allow_filed: Vec<PathBuf>,
@@ -212,29 +222,30 @@ pub struct LintOutcome {
 
 pub fn run(workspace_root: &Path) -> Result<()> {
     ensure_forbidden_tree_absent(workspace_root)?;
-    let outcome = lint_workspace(workspace_root)?;
-    ensure_source_walking_gate_read_source(
+    let report = lint_workspace(workspace_root)?;
+    ensure_allow_file_set_is_pinned(workspace_root, &report)?;
+    crate::ensure_source_walking_gate_read_source(
         "check-no-in-process-placement",
-        &format!("{}/", SCAN_PARENTS.join("/, ")),
-        outcome.files_scanned,
+        &format!("{SCAN_PARENTS:?}"),
+        report.files_scanned,
         "in-process placement vocabulary re-enter the tree",
     )?;
 
-    if outcome.violations.is_empty() {
+    if report.violations.is_empty() {
         println!(
             "✓ check-no-in-process-placement: {} files scanned, {} allow-file'd, {} exempt prohibition line(s) matched",
-            outcome.files_scanned,
-            outcome.allow_filed.len(),
-            outcome.exempt_lines_hit,
+            report.files_scanned,
+            report.allow_filed.len(),
+            report.exempt_lines_hit,
         );
         return Ok(());
     }
 
     eprintln!(
         "✗ check-no-in-process-placement: {} violation(s)",
-        outcome.violations.len()
+        report.violations.len()
     );
-    for v in &outcome.violations {
+    for v in &report.violations {
         eprintln!(
             "  {}:{}: banned placement vocabulary `{}` — {}. See docs/decisions/helper-process-placement-only.md",
             v.file.display(),
@@ -245,8 +256,36 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     }
     anyhow::bail!(
         "in-process placement lint failed: {} violation(s)",
-        outcome.violations.len()
+        report.violations.len()
     );
+}
+
+/// A pragma pasted onto a fifth file would silently exempt it, so the set is
+/// pinned here rather than only in the tests — the gate refuses a tree whose
+/// allow-file set is not exactly [`EXPECTED_ALLOW_FILE_PATHS`].
+fn ensure_allow_file_set_is_pinned(
+    workspace_root: &Path,
+    report: &InProcessPlacementScanReport,
+) -> Result<()> {
+    let mut found: Vec<String> = report
+        .allow_filed
+        .iter()
+        .map(|path| {
+            path.strip_prefix(workspace_root)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/")
+        })
+        .collect();
+    found.sort();
+    let mut expected: Vec<String> = EXPECTED_ALLOW_FILE_PATHS.iter().map(|p| p.to_string()).collect();
+    expected.sort();
+    anyhow::ensure!(
+        found == expected,
+        "the `{ALLOW_FILE_PRAGMA}` set is {found:?}, pinned as {expected:?} — every member must be \
+         a document that quotes the banned vocabulary in order to retract it"
+    );
+    Ok(())
 }
 
 /// The retracted spike tree must stay deleted: a green vocabulary scan over a
@@ -262,19 +301,19 @@ fn ensure_forbidden_tree_absent(workspace_root: &Path) -> Result<()> {
     Ok(())
 }
 
-pub fn lint_workspace(workspace_root: &Path) -> Result<LintOutcome> {
-    let mut outcome = LintOutcome::default();
+pub fn lint_workspace(workspace_root: &Path) -> Result<InProcessPlacementScanReport> {
+    let mut report = InProcessPlacementScanReport::default();
     for parent in SCAN_PARENTS {
         let dir = workspace_root.join(parent);
         if !dir.exists() {
             continue;
         }
-        scan_dir(workspace_root, &dir, &mut outcome)?;
+        scan_dir(workspace_root, &dir, &mut report)?;
     }
-    Ok(outcome)
+    Ok(report)
 }
 
-fn scan_dir(workspace_root: &Path, dir: &Path, outcome: &mut LintOutcome) -> Result<()> {
+fn scan_dir(workspace_root: &Path, dir: &Path, report: &mut InProcessPlacementScanReport) -> Result<()> {
     for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
         if !path.is_file() {
@@ -288,7 +327,7 @@ fn scan_dir(workspace_root: &Path, dir: &Path, outcome: &mut LintOutcome) -> Res
         if !SCAN_EXTENSIONS.contains(&extension) {
             continue;
         }
-        scan_file(workspace_root, path, extension, outcome)?;
+        scan_file(workspace_root, path, extension, report)?;
     }
     Ok(())
 }
@@ -297,13 +336,13 @@ fn scan_file(
     workspace_root: &Path,
     path: &Path,
     extension: &str,
-    outcome: &mut LintOutcome,
+    report: &mut InProcessPlacementScanReport,
 ) -> Result<()> {
     let body =
         fs::read_to_string(path).with_context(|| format!("Failed to read {}", path.display()))?;
-    outcome.files_scanned += 1;
+    report.files_scanned += 1;
     if body.contains(ALLOW_FILE_PRAGMA) {
-        outcome.allow_filed.push(path.to_path_buf());
+        report.allow_filed.push(path.to_path_buf());
         return Ok(());
     }
 
@@ -314,32 +353,32 @@ fn scan_file(
         .replace('\\', "/");
 
     // Supersession spans are a markdown convention; a stray `~~` in Rust or YAML
-    // is not one, so only markdown gets the state machine and the odd-count refusal.
+    // is not one, so only markdown gets the state machine and the unclosed-span refusal.
     let is_markdown = extension == "md";
     if is_markdown {
         ensure_supersession_spans_balanced(path, &body)?;
     }
 
-    let mut inside_span = false;
+    let mut spans = SupersessionSpanState::default();
     for (idx, line) in body.lines().enumerate() {
         let scanned = if is_markdown {
-            strip_supersession_spans(line, &mut inside_span)
+            spans.outside_spans(line)
         } else {
-            line.to_string()
+            Cow::Borrowed(line)
         };
         if scanned.trim().is_empty() {
             continue;
         }
         if is_exempt_prohibition_line(&relative, line) {
-            outcome.exempt_lines_hit += 1;
+            report.exempt_lines_hit += 1;
             continue;
         }
-        if let Some((matched, guidance)) = first_banned_shape(&scanned) {
-            outcome.violations.push(LintViolation {
+        if let Some(hit) = first_banned_shape(&scanned) {
+            report.violations.push(LintViolation {
                 file: path.to_path_buf(),
                 line: idx + 1,
-                matched,
-                guidance,
+                matched: hit.matched.into_owned(),
+                guidance: hit.guidance,
             });
         }
     }
@@ -355,65 +394,90 @@ fn is_exempt_prohibition_line(relative_path: &str, line: &str) -> bool {
 /// An unterminated `~~` would silently swallow the whole rest of the file, so a
 /// file whose spans do not close is refused rather than scanned.
 fn ensure_supersession_spans_balanced(path: &Path, body: &str) -> Result<()> {
-    let markers = body.matches("~~").count();
+    let mut spans = SupersessionSpanState::default();
+    for line in body.lines() {
+        spans.outside_spans(line);
+    }
     anyhow::ensure!(
-        markers.is_multiple_of(2),
-        "{}: {} `~~` marker(s) — an unterminated supersession span would hide every line after it \
+        !spans.inside_span,
+        "{}: unterminated supersession span — the unclosed `~~` would hide every line after it \
          from check-no-in-process-placement. Close the span.",
         path.display(),
-        markers
     );
     Ok(())
 }
 
-/// Return the portion of `line` outside `~~…~~`, carrying span state across
-/// lines. Handles a span opening on one line and closing on a later one, and
-/// two complete spans on a single line.
-fn strip_supersession_spans(line: &str, inside_span: &mut bool) -> String {
-    let mut outside = String::new();
-    let mut rest = line;
-    loop {
-        match rest.find("~~") {
-            Some(pos) => {
-                if !*inside_span {
-                    outside.push_str(&rest[..pos]);
+/// Markdown span tracking across a file's lines: a `~~…~~` supersession span
+/// that opens on one line and closes on a later one, and a `~~~` fenced code
+/// block, whose fence delimiters are not span markers.
+#[derive(Default)]
+struct SupersessionSpanState {
+    inside_span: bool,
+    inside_code_fence: bool,
+}
+
+impl SupersessionSpanState {
+    /// The portion of `line` outside any supersession span. Fence delimiters
+    /// and the lines they enclose are returned whole — fenced code is still
+    /// scanned for banned vocabulary, it just cannot open or close a span.
+    fn outside_spans<'a>(&mut self, line: &'a str) -> Cow<'a, str> {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            self.inside_code_fence = !self.inside_code_fence;
+            return Cow::Borrowed(line);
+        }
+        if self.inside_code_fence || (!self.inside_span && !line.contains("~~")) {
+            return Cow::Borrowed(line);
+        }
+
+        let mut outside = String::new();
+        let mut rest = line;
+        loop {
+            match rest.find("~~") {
+                Some(pos) => {
+                    if !self.inside_span {
+                        outside.push_str(&rest[..pos]);
+                    }
+                    self.inside_span = !self.inside_span;
+                    rest = &rest[pos + 2..];
                 }
-                *inside_span = !*inside_span;
-                rest = &rest[pos + 2..];
-            }
-            None => {
-                if !*inside_span {
-                    outside.push_str(rest);
+                None => {
+                    if !self.inside_span {
+                        outside.push_str(rest);
+                    }
+                    return Cow::Owned(outside);
                 }
-                return outside;
             }
         }
     }
 }
 
-fn first_banned_shape(line: &str) -> Option<(String, &'static str)> {
+fn first_banned_shape(line: &str) -> Option<BannedShapeMatch> {
     let haystack = line.to_ascii_lowercase();
-    for (index, shape) in BANNED_SHAPES.iter().enumerate() {
-        if index == WATCHDOG_SHAPE_INDEX
-            && !WATCHDOG_NOUNS.iter().any(|noun| haystack.contains(noun))
-        {
-            continue;
-        }
+    for shape in BANNED_SHAPES {
         if !shape.all_of.iter().all(|term| haystack.contains(term)) {
             continue;
         }
-        let any_hit = if shape.any_of.is_empty() {
-            None
+        if !shape.also_requires_any_of.is_empty()
+            && !shape
+                .also_requires_any_of
+                .iter()
+                .any(|term| haystack.contains(term))
+        {
+            continue;
+        }
+        let matched = if shape.any_of.is_empty() {
+            Cow::Owned(shape.all_of.join(" + "))
         } else {
-            match shape.any_of.iter().find(|term| haystack.contains(**term)) {
-                Some(term) => Some(*term),
+            match shape.any_of.iter().copied().find(|t| haystack.contains(t)) {
+                Some(term) => Cow::Borrowed(term),
                 None => continue,
             }
         };
-        let matched = any_hit
-            .map(str::to_string)
-            .unwrap_or_else(|| shape.all_of.join(" + "));
-        return Some((matched, shape.guidance));
+        return Some(BannedShapeMatch {
+            matched,
+            guidance: shape.guidance,
+        });
     }
     None
 }
@@ -628,6 +692,30 @@ mod tests {
         assert!(lint(tmp.path()).is_empty());
     }
 
+    /// `~~~` is a legal code fence, not half a supersession span — counting
+    /// `~~` body-wide would refuse the file for an unclosed span that isn't there.
+    #[test]
+    fn a_tilde_code_fence_is_not_a_span_marker() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "docs/architecture/a.md",
+            "~~~rust\nlet x = 1;\n~~~\nHelper-process placement is the only placement.\n",
+        );
+        assert!(lint(tmp.path()).is_empty());
+    }
+
+    #[test]
+    fn fenced_code_is_still_scanned() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "docs/architecture/a.md",
+            "```rust\n// In-process hosting is the fast path.\n```\n",
+        );
+        assert_eq!(lint(tmp.path()).len(), 1);
+    }
+
     #[test]
     fn refuses_a_file_with_an_unterminated_span() {
         let tmp = TempDir::new().unwrap();
@@ -648,9 +736,9 @@ mod tests {
             "docs/decisions/a.md",
             "<!-- check-no-in-process-placement:allow-file -->\nIn-process hosting is banned.\n",
         );
-        let outcome = lint_workspace(tmp.path()).unwrap();
-        assert!(outcome.violations.is_empty());
-        assert_eq!(outcome.allow_filed.len(), 1);
+        let report = lint_workspace(tmp.path()).unwrap();
+        assert!(report.violations.is_empty());
+        assert_eq!(report.allow_filed.len(), 1);
     }
 
     #[test]
@@ -662,10 +750,10 @@ mod tests {
             path,
             &format!("{text}\n  In-process hosting is the fast path.\n"),
         );
-        let outcome = lint_workspace(tmp.path()).unwrap();
-        assert_eq!(outcome.exempt_lines_hit, 1);
-        assert_eq!(outcome.violations.len(), 1, "got {:?}", outcome.violations);
-        assert_eq!(outcome.violations[0].line, 2);
+        let report = lint_workspace(tmp.path()).unwrap();
+        assert_eq!(report.exempt_lines_hit, 1);
+        assert_eq!(report.violations.len(), 1, "got {:?}", report.violations);
+        assert_eq!(report.violations[0].line, 2);
     }
 
     /// Exact-text matching is the point: an edited prohibition line loses its
@@ -697,11 +785,11 @@ mod tests {
     #[test]
     fn refuses_a_run_that_read_no_source() {
         let tmp = TempDir::new().unwrap();
-        let outcome = lint_workspace(tmp.path()).unwrap();
-        let err = ensure_source_walking_gate_read_source(
+        let report = lint_workspace(tmp.path()).unwrap();
+        let err = crate::ensure_source_walking_gate_read_source(
             "check-no-in-process-placement",
             "the scan roots",
-            outcome.files_scanned,
+            report.files_scanned,
             "in-process placement vocabulary re-enter the tree",
         )
         .unwrap_err()
@@ -729,40 +817,36 @@ mod tests {
     }
 
     #[test]
-    fn the_workspace_is_clean() {
-        let outcome = lint_workspace(&workspace()).unwrap();
+    fn the_real_workspace_has_no_banned_placement_vocabulary() {
+        let report = lint_workspace(&workspace()).unwrap();
         assert!(
-            outcome.violations.is_empty(),
+            report.violations.is_empty(),
             "got {:?}",
-            outcome.violations
+            report.violations
         );
     }
 
     #[test]
     fn the_allow_file_set_is_exactly_the_expected_documents() {
         let root = workspace();
-        let mut found: Vec<String> = lint_workspace(&root)
-            .unwrap()
-            .allow_filed
-            .iter()
-            .map(|p| {
-                p.strip_prefix(&root)
-                    .unwrap_or(p)
-                    .to_string_lossy()
-                    .replace('\\', "/")
-            })
-            .collect();
-        found.sort();
-        let mut expected: Vec<String> = EXPECTED_ALLOW_FILE_PATHS
-            .iter()
-            .map(|p| p.to_string())
-            .collect();
-        expected.sort();
-        assert_eq!(
-            found, expected,
-            "the allow-file set changed — every member must be a document that quotes the banned \
-             vocabulary in order to retract it"
+        let report = lint_workspace(&root).unwrap();
+        ensure_allow_file_set_is_pinned(&root, &report).unwrap();
+        assert_eq!(report.allow_filed.len(), EXPECTED_ALLOW_FILE_PATHS.len());
+    }
+
+    #[test]
+    fn a_fifth_allow_file_pragma_fails_the_gate() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "runtime/foo/src/lib.rs",
+            "// check-no-in-process-placement:allow-file\n//! In-process hosting is the fast path.\n",
         );
+        let report = lint_workspace(tmp.path()).unwrap();
+        let err = ensure_allow_file_set_is_pinned(tmp.path(), &report)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("runtime/foo/src/lib.rs"), "got {err}");
     }
 
     /// The list only shrinks: a stale entry means the prohibition it exempted is
