@@ -639,6 +639,73 @@ mod tests {
         );
     }
 
+    /// Why a notifier aimed at a destination that never drains is a defect and
+    /// not merely waste: iceoryx2 posts to the listener's signal mechanism on
+    /// every `notify()`, so an undrained listener's queue fills after a bounded
+    /// number of sends and every send after that fails to deliver —
+    /// permanently, since nothing will ever drain it. Drain the same listener
+    /// and the same send count delivers every time.
+    ///
+    /// The observable is `notify()`'s `Ok(usize)` — the number of listeners it
+    /// actually triggered. A failed delivery does not surface as `Err`:
+    /// iceoryx2 logs its own per-connection warning (a `{:?}` of the whole
+    /// `Notifier`, kilobytes wide) and returns a count that excludes the
+    /// listener it could not reach. That swallowed count is why the flood in
+    /// #1764 ran for the life of the process with the engine none the wiser.
+    #[test]
+    fn an_undrained_listener_stops_being_delivered_to_a_drained_one_never_does() {
+        // Well past any plausible queue depth — the ticket measured the onset
+        // at ~280 notifications against the default socket buffer.
+        const SENDS: usize = 8192;
+
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+
+        let open_notify_service = |name: &str| {
+            node.service_builder(&ServiceName::new(name).unwrap())
+                .event()
+                .max_notifiers(1)
+                .max_listeners(1)
+                .open_or_create()
+                .unwrap()
+        };
+
+        let undrained = open_notify_service(&unique_suffix("saturation/undrained"));
+        let undrained_notifier = undrained.notifier_builder().create().unwrap();
+        let _undrained_listener = undrained.listener_builder().create().unwrap();
+
+        let mut sends_until_undeliverable = None;
+        for send in 0..SENDS {
+            if undrained_notifier.notify().unwrap() == 0 {
+                sends_until_undeliverable = Some(send);
+                break;
+            }
+        }
+        let saturated_at = sends_until_undeliverable.unwrap_or_else(|| {
+            panic!("an undrained listener absorbed {SENDS} notifications and still took more")
+        });
+
+        // Once full it stays full: this is what turns a one-off warning into a
+        // per-frame flood for the rest of the run.
+        assert_eq!(
+            undrained_notifier.notify().unwrap(),
+            0,
+            "delivery recovered after saturating at send {saturated_at} with nothing draining"
+        );
+
+        let drained = open_notify_service(&unique_suffix("saturation/drained"));
+        let drained_notifier = drained.notifier_builder().create().unwrap();
+        let drained_listener = drained.listener_builder().create().unwrap();
+
+        for send in 0..SENDS {
+            assert_eq!(
+                drained_notifier.notify().unwrap(),
+                1,
+                "send {send} reached no listener despite the listener being drained every time"
+            );
+            drained_listener.try_wait_all(|_| {}).unwrap();
+        }
+    }
+
     /// 1→N fan-out DELIVERY lock (#1419): a single `write_raw` publishes ONE
     /// frame that reaches EVERY subscriber on the channel through one zero-copy
     /// loan + one send. Three subscribers each receive exactly one copy of the
