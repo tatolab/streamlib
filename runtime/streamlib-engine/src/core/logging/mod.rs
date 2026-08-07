@@ -16,8 +16,8 @@ pub(crate) use record::LogRecord;
 pub use worker::format_event_pretty;
 pub(crate) use worker::now_ns;
 
-/// Emit one record from an in-process Python processor into the unified
-/// JSONL pipeline, carrying caller-supplied dynamic attrs.
+/// Emit one record from the app's own interpreter into the unified JSONL
+/// pipeline, carrying caller-supplied dynamic attrs.
 ///
 /// Bypasses `tracing::event!` deliberately: the macro cannot carry a
 /// runtime-shaped attr map, and routing through the polyglot sink keeps

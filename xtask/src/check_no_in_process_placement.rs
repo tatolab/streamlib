@@ -43,19 +43,29 @@
 //! - This is vocabulary, not behaviour. A watchdog renamed to avoid these
 //!   patterns passes. The behavioural proof that the parent never hosts a
 //!   processor class is `sdk/streamlib-python-wheel/tests/test_helper_placement.py`.
-//! - **The pattern set is still a subset of the rule's STOP-WORK vocabulary,
-//!   not the whole of it.** `.claude/rules/placement.md` names shapes this gate
-//!   does not match — `share a GIL`, `own interpreter` beside a processor, the
-//!   runtime described as "one process" or "one big process", in-process called
-//!   "lowest latency", a per-callback duration monitor naming another processor,
-//!   and co-hosting described as shortening an escalate hop. A green run means
-//!   these patterns are absent, never that the rule is satisfied — the reviewers
-//!   are the coverage for the rest.
+//! - **The pattern set is a subset of the rule's STOP-WORK vocabulary, not the
+//!   whole of it**, and the list below is not exhaustive either. Probed misses:
+//!   `share a GIL`, the runtime described as "one process" or "one big process",
+//!   in-process called "lowest latency", a per-callback duration monitor naming
+//!   another processor, co-hosting described as shortening an escalate hop,
+//!   registering the class "in the parent process", a per-processor "placement
+//!   decision" or "placement choice", and any paraphrase of the retracted
+//!   numbers — "roughly half the subprocess latency", "0.6% of a frame budget"
+//!   — which no literal list catches. A green run means these patterns are
+//!   absent, never that the rule is satisfied; the reviewers are the coverage
+//!   for the rest.
+//! - **Matching is per line, and this repo's prose hard-wraps.** A banned
+//!   sentence that wraps between two of its terms passes, and so does a denial
+//!   that wraps away from what it denies — which is why
+//!   [`EXEMPT_PROHIBITION_LINES`] carries wrapped halves of prohibitions that
+//!   read as claims on their own. A two-line window was tried and reverted: it
+//!   caught three wrapped violations and invented four false positives on the
+//!   rule's protected boundary, which is the trade the rule explicitly forbids.
 //! - `.claude/` and `.github/` are not scanned. The rules and reviewer
 //!   definitions quote the banned shapes to forbid them and change through their
 //!   own dedicated PRs; `.github/` is CI configuration, and this gate's own
 //!   workflow is named after what it bans.
-//! - The repo-root `CHANGELOG.md` is not scanned: it is release-please-generated
+//! - `CHANGELOG.md` is not scanned at any depth: it is release-please-generated
 //!   history of what shipped, not a claim about what the runtime is. `README.md`
 //!   and `CLAUDE.md` are.
 
@@ -86,10 +96,14 @@ const SKIP_PATH_FRAGMENTS: &[&str] = &[
 
 /// Release-please-generated history of what shipped, including the release that
 /// shipped the model this gate now bans. History is not a claim about what the
-/// runtime is, and it is not ours to rewrite.
+/// runtime is, and it is not ours to rewrite. Skipped at every depth — the
+/// per-crate changelogs a future release config emits are the same artifact.
 const SKIP_FILE_NAMES: &[&str] = &["CHANGELOG.md"];
 
-const SCAN_EXTENSIONS: &[&str] = &["rs", "md", "py", "pyi", "ts", "toml", "yaml", "yml"];
+/// `mmd` is here because `ARCHITECTURE.md` declares the plan to be the document
+/// *plus* its diagrams, moving together — half the plan being unscanned would
+/// leave the ruling's named drift vector half-covered.
+const SCAN_EXTENSIONS: &[&str] = &["rs", "md", "mmd", "py", "pyi", "ts", "toml", "yaml", "yml"];
 
 /// Marker comment that exempts an entire file. See the module doc — the set is
 /// pinned by [`EXPECTED_ALLOW_FILE_PATHS`] and every member is a retraction.
@@ -145,6 +159,12 @@ const EXEMPT_PROHIBITION_LINES: &[(&str, &str)] = &[
         "docs/plan/changes/importable-python-library.md",
         "(A \"dev-mode GIL-hold watchdog\" clause was removed here 2026-08-04: it measured",
     ),
+    // "…never a co-tenancy test, since no two Python / processors share an
+    // interpreter" — the denial wrapped away from what it denies.
+    (
+        "docs/plan/changes/importable-python-library.md",
+        "processors share an interpreter. Generated `.pyi` stubs ship in the wheel (IDE",
+    ),
     // The 2026-08-02 pivot ADR, whose placement clauses the ruling retracts in
     // place. Its `~~…~~` spans cover the retracted claims; these six lines are
     // the retraction prose that follows each span close.
@@ -186,13 +206,14 @@ const EXEMPT_PROHIBITION_LINES: &[(&str, &str)] = &[
     ),
 ];
 
-/// A banned shape. `all_of` terms must every one appear on the line;
-/// `any_of` and `also_requires_any_of` — when non-empty — each need one hit.
-/// All matching is ASCII-case-insensitive on a lowercased copy of the line.
+/// A banned shape. `all_of` terms must every one appear; `any_of` and
+/// `also_requires_any_of` — when non-empty — each need one hit; a hit on
+/// `unless_any_of` clears the shape. All matching is ASCII-case-insensitive.
 struct BannedShape {
     all_of: &'static [&'static str],
     any_of: &'static [&'static str],
     also_requires_any_of: &'static [&'static str],
+    unless_any_of: &'static [&'static str],
     guidance: &'static str,
 }
 
@@ -209,59 +230,99 @@ const PLACEMENT_GUIDANCE: &str =
 const RETRACTED_NUMBERS_GUIDANCE: &str = "the #1702 spike's latency numbers are retracted as placement evidence — the two arms ran different CPython builds and were never re-measured";
 
 /// The paired-term rules exist because the bare words are legitimate: the
-/// engine has an EPOLLHUP watchdog, `rt.run()` documents a GIL-release
-/// contract about its own interpreter's threads, and `both placements` appears
-/// in the very sentences that retire it.
+/// engine has an EPOLLHUP watchdog, `rt.run()` documents a GIL-release contract
+/// about a processor's own threads, and `both placements` appears in the very
+/// sentences that retire it. `unless_any_of` carries the rule's "these are NOT
+/// the ban" boundary — a helper's own interpreter, and a processor's own
+/// threads, are the shipped model, not a violation of it.
 const BANNED_SHAPES: &[BannedShape] = &[
     BannedShape {
-        all_of: &["interpreter", "processor"],
-        any_of: &["shared interpreter", "one interpreter", "same interpreter"],
+        all_of: &["processor"],
+        any_of: &[
+            "shared interpreter",
+            "one interpreter",
+            "same interpreter",
+            "single interpreter",
+            "share an interpreter",
+            "shares an interpreter",
+            "sharing an interpreter",
+            "app's interpreter",
+            "parent's interpreter",
+            "parent interpreter",
+        ],
         also_requires_any_of: &[],
+        unless_any_of: CO_TENANCY_BOUNDARY,
         guidance: CO_TENANCY_GUIDANCE,
     },
     BannedShape {
-        all_of: &["gil", "contention"],
-        any_of: &[],
+        all_of: &[],
+        any_of: &[
+            "gil contention",
+            "gil-contention",
+            "contend for the gil",
+            "contending for the gil",
+            "contend for one",
+        ],
         also_requires_any_of: &[],
+        unless_any_of: &[],
         guidance: DIAGNOSTIC_GUIDANCE,
     },
     BannedShape {
-        all_of: &["gil", "stall", "processor"],
-        any_of: &[],
-        also_requires_any_of: &[],
-        guidance: CO_TENANCY_GUIDANCE,
-    },
-    BannedShape {
-        all_of: &["gil", "every other"],
-        any_of: &[],
-        also_requires_any_of: &[],
+        all_of: &["gil"],
+        any_of: &["stall", "block", "starve", "degrade"],
+        also_requires_any_of: &["other processor", "another processor", "other python processor"],
+        unless_any_of: &[],
         guidance: CO_TENANCY_GUIDANCE,
     },
     BannedShape {
         all_of: &[],
         any_of: &["gil-hold", "gil hold", "slow-callback", "slow callback", "stall-attribution", "stall attribution"],
         also_requires_any_of: WATCHDOG_NOUNS,
+        unless_any_of: &[],
         guidance: DIAGNOSTIC_GUIDANCE,
     },
     BannedShape {
         all_of: &[],
         any_of: RETIRED_PLACEMENT_TERMS,
         also_requires_any_of: &[],
+        unless_any_of: &[],
         guidance: PLACEMENT_GUIDANCE,
     },
     BannedShape {
         all_of: &[],
-        any_of: &["in-process placement", "in-process hosting", "in-process authoring"],
+        any_of: &[
+            "in-process placement",
+            "in-process hosting",
+            "in-process authoring",
+            "in process placement",
+            "in process hosting",
+            "in process authoring",
+        ],
         also_requires_any_of: &[],
+        unless_any_of: &[],
+        guidance: PLACEMENT_GUIDANCE,
+    },
+    BannedShape {
+        all_of: &["in-process", "python processor"],
+        any_of: &[],
+        also_requires_any_of: &[],
+        unless_any_of: &[],
         guidance: PLACEMENT_GUIDANCE,
     },
     BannedShape {
         all_of: &[],
         any_of: &["0.085ms", "0.085 ms", "0.161ms", "0.161 ms", "0.089ms", "0.089 ms", "0.180ms", "0.180 ms"],
         also_requires_any_of: &[],
+        unless_any_of: &[],
         guidance: RETRACTED_NUMBERS_GUIDANCE,
     },
 ];
+
+/// The rule's protected boundary for the co-tenancy shape. A helper's or
+/// child's own interpreter is the shipped model; `its own interpreter` is what
+/// every Python processor has.
+const CO_TENANCY_BOUNDARY: &[&str] =
+    &["helper", "child", "own interpreter", "its own", "their own", "no two"];
 
 /// The watchdog family needs its diagnostic name *and* a monitor noun, or
 /// every `GIL-holding thread` doc comment trips it.
@@ -273,6 +334,7 @@ const WATCHDOG_NOUNS: &[&str] = &["watchdog", "monitor", "detector"];
 /// the narrower `both placements viable` would have read straight past it.
 const RETIRED_PLACEMENT_TERMS: &[&str] = &[
     "both placements",
+    "two placements",
     "either placement",
     "placement policy",
     "placement heuristic",
@@ -469,6 +531,9 @@ fn scan_dir(workspace_root: &Path, dir: &Path, report: &mut InProcessPlacementSc
         if SKIP_PATH_FRAGMENTS.iter().any(|frag| path_str.contains(frag)) {
             continue;
         }
+        if is_skipped_file_name(path) {
+            continue;
+        }
         let extension = path.extension().and_then(|e| e.to_str()).unwrap_or("");
         if !SCAN_EXTENSIONS.contains(&extension) {
             continue;
@@ -602,6 +667,9 @@ fn first_banned_shape(line: &str) -> Option<BannedShapeMatch> {
     let haystack = line.to_ascii_lowercase();
     for shape in BANNED_SHAPES {
         if !shape.all_of.iter().all(|term| haystack.contains(term)) {
+            continue;
+        }
+        if shape.unless_any_of.iter().any(|term| haystack.contains(term)) {
             continue;
         }
         if !shape.also_requires_any_of.is_empty()
@@ -743,6 +811,136 @@ mod tests {
 
     /// The sentence the ADR blames for the #1711 incident, which the narrower
     /// `both placements viable` pattern would have read straight past.
+    #[test]
+    fn flags_hosting_a_processor_in_the_apps_interpreter() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "docs/architecture/a.md",
+            "Hosting a Python processor in the app's interpreter is the fast path.\n",
+        );
+        assert_eq!(lint(tmp.path()).len(), 1);
+    }
+
+    #[test]
+    fn flags_the_interpreter_sharing_synonyms() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "docs/architecture/a.md",
+            "All Python processors execute in a single interpreter.\n",
+        );
+        write(
+            tmp.path(),
+            "docs/architecture/b.md",
+            "Processors share an interpreter with the app.\n",
+        );
+        write(
+            tmp.path(),
+            "docs/architecture/c.md",
+            "The processor class runs in the parent interpreter.\n",
+        );
+        assert_eq!(lint(tmp.path()).len(), 3);
+    }
+
+    /// A helper's own interpreter is the shipped model, not a violation of it —
+    /// the rule's "these are NOT the ban" boundary, which a bare
+    /// `same interpreter` + `processor` rule flagged.
+    #[test]
+    fn allows_a_helper_running_the_class_in_its_own_interpreter() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "docs/architecture/a.md",
+            "The helper imports the wheel into the same interpreter that runs the processor class.\n",
+        );
+        write(
+            tmp.path(),
+            "docs/architecture/b.md",
+            "Every Python processor gets its own interpreter in its own child process.\n",
+        );
+        assert!(lint(tmp.path()).is_empty());
+    }
+
+    #[test]
+    fn flags_a_gil_block_attributed_to_other_processors() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "docs/architecture/a.md",
+            "A callback holding the GIL blocks all other Python processors.\n",
+        );
+        assert_eq!(lint(tmp.path()).len(), 1);
+    }
+
+    /// The GIL-release contract names the processor's own threads. Requiring
+    /// `gil` + `stall` + `processor` alone flagged it; the ban is a stall
+    /// attributed to *another* processor.
+    #[test]
+    fn allows_a_stall_of_the_processors_own_threads() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "sdk/foo/src/a.rs",
+            "//! Holding the GIL would stall the processor's own worker threads.\n",
+        );
+        assert!(lint(tmp.path()).is_empty());
+    }
+
+    /// `gil` + `contention` anywhere on a line flagged legitimate prose about
+    /// one processor's own threads; the diagnostic is named by adjacency.
+    #[test]
+    fn allows_contention_that_is_not_gil_contention() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "sdk/foo/src/a.rs",
+            "//! Release the GIL in native calls to reduce contention among a processor's own threads.\n",
+        );
+        assert!(lint(tmp.path()).is_empty());
+    }
+
+    #[test]
+    fn flags_in_process_beside_a_python_processor() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "docs/architecture/a.md",
+            "Python processors run in-process when latency matters.\n",
+        );
+        assert_eq!(lint(tmp.path()).len(), 1);
+    }
+
+    #[test]
+    fn flags_unhyphenated_in_process_hosting() {
+        let tmp = TempDir::new().unwrap();
+        write(tmp.path(), "docs/architecture/a.md", "In process hosting is back.\n");
+        assert_eq!(lint(tmp.path()).len(), 1);
+    }
+
+    /// The plan is the document plus its diagrams, moving together.
+    #[test]
+    fn scans_mermaid_plan_diagrams() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "docs/plan/diagrams/system.mmd",
+            "  A[App] --> B[In-process hosting]\n",
+        );
+        assert_eq!(lint(tmp.path()).len(), 1);
+    }
+
+    #[test]
+    fn skips_a_per_crate_changelog_too() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "sdk/streamlib-python-wheel/CHANGELOG.md",
+            "* **python:** in-process authoring\n",
+        );
+        assert!(lint(tmp.path()).is_empty());
+    }
+
     #[test]
     fn flags_the_retired_placement_terms_bare() {
         let tmp = TempDir::new().unwrap();
