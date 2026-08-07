@@ -1,10 +1,6 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::sync::Arc;
-
-use parking_lot::Mutex;
-
 use crate::core::graph::{
     GraphNodeWithComponents, ProcessorNode, ProcessorTraversalMut, StateComponent,
     TraversalSourceMut,
@@ -16,8 +12,10 @@ use crate::core::processors::{
 impl<'a> TraversalSourceMut<'a> {
     /// Add a new processor node to the graph.
     ///
-    /// On registry miss, the node is still added with empty ports and its
-    /// `StateComponent` initialized to `ProcessorState::Error`. The caller
+    /// The node carries a [`StateComponent`] from here on — `Pending`, or
+    /// `Error` on a registry miss.
+    ///
+    /// On registry miss, the node is still added with empty ports. The caller
     /// (typically `add_processor_impl`) should detect this and surface
     /// `Error::UnknownProcessorType`. Leaving the failed node in the graph
     /// gives API consumers (`GET /api/graph`) visibility of what failed and
@@ -64,10 +62,16 @@ impl<'a> TraversalSourceMut<'a> {
 
         let node_idx = self.graph.add_node(node);
 
-        if registry_miss {
-            if let Some(node_mut) = self.graph.node_weight_mut(node_idx) {
-                node_mut.insert(StateComponent(Arc::new(Mutex::new(ProcessorState::Error))));
-            }
+        // Attached here rather than when the compiler prepares the node, so a
+        // processor has an observable state for its whole life in the graph:
+        // a reader waiting for the graph to come up can hold every processor's
+        // state before `start()` has prepared any of them.
+        if let Some(node_mut) = self.graph.node_weight_mut(node_idx) {
+            node_mut.insert(StateComponent::new(if registry_miss {
+                ProcessorState::Error
+            } else {
+                ProcessorState::Pending
+            }));
         }
 
         ProcessorTraversalMut {

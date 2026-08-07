@@ -17,9 +17,9 @@ use crate::core::descriptors::ProcessorRuntime;
 use crate::core::error::{Error, Result};
 use crate::core::execution::run_processor_loop;
 use crate::core::graph::{
-    Graph, GraphNodeWithComponents, ProcessorInstanceComponent, ProcessorPauseGateComponent,
-    ProcessorReadyBarrierComponent, ProcessorUniqueId, ShutdownChannelComponent, StateComponent,
-    SubprocessHandleComponent, ThreadHandleComponent,
+    Graph, GraphNodeWithComponents, ObservableProcessorState, ProcessorInstanceComponent,
+    ProcessorPauseGateComponent, ProcessorReadyBarrierComponent, ProcessorUniqueId,
+    ShutdownChannelComponent, StateComponent, SubprocessHandleComponent, ThreadHandleComponent,
 };
 use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorInstanceFactory, ProcessorState};
 
@@ -287,7 +287,7 @@ fn spawn_dedicated_thread(
                 };
 
                 let state = match node.get::<StateComponent>() {
-                    Some(s) => s.0.clone(),
+                    Some(s) => s.clone_inner(),
                     None => {
                         tracing::error!("[{}] No StateComponent", proc_id_clone);
                         return;
@@ -373,7 +373,7 @@ fn spawn_dedicated_thread(
                 });
                 if let Err(e) = setup_result {
                     tracing::error!("[{}] Setup failed: {}", proc_id_clone, e);
-                    *state_arc.lock() = ProcessorState::Error;
+                    state_arc.transition_to(ProcessorState::Error);
                     return;
                 }
 
@@ -381,7 +381,7 @@ fn spawn_dedicated_thread(
             }
 
             // Update state to Running
-            *state_arc.lock() = ProcessorState::Running;
+            state_arc.transition_to(ProcessorState::Running);
 
             // === PHASE 5: Process loop ===
             tracing::trace!(
@@ -426,7 +426,7 @@ fn spawn_dedicated_thread(
 /// enforcement) — and yield `None` so the caller skips setup and the loop.
 fn full_access_grant_or_mark_untrusted_error(
     isolation_tier: IsolationTier,
-    state_arc: &Arc<Mutex<ProcessorState>>,
+    state_arc: &Arc<ObservableProcessorState>,
     processor_id: &ProcessorUniqueId,
 ) -> Option<FullAccessGrant> {
     match isolation_tier.grant_full_access() {
@@ -439,7 +439,7 @@ fn full_access_grant_or_mark_untrusted_error(
                 processor_id,
                 isolation_tier.as_str(),
             );
-            *state_arc.lock() = ProcessorState::Error;
+            state_arc.transition_to(ProcessorState::Error);
             None
         }
     }
@@ -518,7 +518,7 @@ mod tests {
     /// grant-absence and the `Error` state both flip.
     #[test]
     fn untrusted_tier_gate_refuses_and_marks_error() {
-        let state = Arc::new(Mutex::new(ProcessorState::Idle));
+        let state = Arc::new(ObservableProcessorState::new(ProcessorState::Idle));
         let proc_id = ProcessorUniqueId::from("test.untrusted");
         let grant =
             full_access_grant_or_mark_untrusted_error(IsolationTier::Untrusted, &state, &proc_id);
@@ -527,7 +527,7 @@ mod tests {
             "untrusted tier must not yield a FullAccess grant"
         );
         assert_eq!(
-            *state.lock(),
+            state.current(),
             ProcessorState::Error,
             "the refused untrusted setup must mark the processor Error"
         );
@@ -537,7 +537,7 @@ mod tests {
     /// never touches processor state (setup proceeds normally).
     #[test]
     fn trusted_tier_gate_yields_grant_and_leaves_state() {
-        let state = Arc::new(Mutex::new(ProcessorState::Idle));
+        let state = Arc::new(ObservableProcessorState::new(ProcessorState::Idle));
         let proc_id = ProcessorUniqueId::from("test.trusted");
         let grant = full_access_grant_or_mark_untrusted_error(
             IsolationTier::TrustedInstalled,
@@ -549,7 +549,7 @@ mod tests {
             "trusted tier must yield a FullAccess grant"
         );
         assert_eq!(
-            *state.lock(),
+            state.current(),
             ProcessorState::Idle,
             "the trusted path must not touch processor state"
         );
