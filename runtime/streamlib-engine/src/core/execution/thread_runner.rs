@@ -222,24 +222,24 @@ fn run_reactive_mode(
             was_paused = false;
         }
 
+        // Every path that is not waking on the listener fd still owns that
+        // listener, and upstream still notifies it on every frame — so each
+        // one drains. Skip a drain here and the listener's queue fills, after
+        // which iceoryx2 warns per frame for the rest of the run (#1764).
         if is_paused {
             // While paused we deliberately poll: the pause_gate is an
             // AtomicBool with no fd, so on_resume can't fire from epoll.
             std::thread::sleep(PAUSE_CHECK_INTERVAL);
+            drain_input_listener(processor);
             continue;
         }
 
-        // Block until an upstream notify, a shutdown signal, or (only in
-        // the no-waiter fallback) the next channel-poll tick.
+        // Block until an upstream notify, a shutdown signal, or (in the
+        // no-waiter and epoll-error fallbacks) the next channel-poll tick.
         #[cfg(target_os = "linux")]
         match waiter.as_ref() {
             Some(w) => match w.wait() {
-                ReactiveLoopWakeOutcome::Notified => {
-                    let guard = processor.lock();
-                    if let Some(inner) = guard.iceoryx2_input_mailboxes_inner() {
-                        inner.drain_listener();
-                    }
-                }
+                ReactiveLoopWakeOutcome::Notified => drain_input_listener(processor),
                 ReactiveLoopWakeOutcome::Shutdown => {
                     tracing::info!("[{}] Received shutdown via eventfd", id);
                     break;
@@ -247,12 +247,19 @@ fn run_reactive_mode(
                 ReactiveLoopWakeOutcome::Interrupted => continue,
                 ReactiveLoopWakeOutcome::Error => {
                     std::thread::sleep(NO_WAITER_FALLBACK_SLEEP);
+                    drain_input_listener(processor);
                 }
             },
-            None => sleep_then_drain_listener(processor, NO_WAITER_FALLBACK_SLEEP),
+            None => {
+                std::thread::sleep(NO_WAITER_FALLBACK_SLEEP);
+                drain_input_listener(processor);
+            }
         }
         #[cfg(not(target_os = "linux"))]
-        sleep_then_drain_listener(processor, NO_WAITER_FALLBACK_SLEEP);
+        {
+            std::thread::sleep(NO_WAITER_FALLBACK_SLEEP);
+            drain_input_listener(processor);
+        }
 
         // Drain-loop dispatch: iceoryx2's Event service coalesces
         // multiple notify()s on the same EventId into one fd-readable
@@ -301,18 +308,11 @@ fn run_reactive_mode(
     }
 }
 
-/// The poll-loop tick a reactive runner falls back to when it has no fd waiter
-/// — every tick off Linux, and on Linux when epoll setup failed.
+/// Clear the pending events on this processor's listener, so its fd goes
+/// not-readable and the queue upstream keeps filling has room again.
 ///
-/// The listener still exists and every upstream still notifies it, so the drain
-/// is not optional: without it the queue fills and iceoryx2 warns on every
-/// frame for the rest of the run (#1764). Waking on the fd is what this loop
-/// gave up, not owning the listener.
-fn sleep_then_drain_listener(
-    processor: &Arc<Mutex<ProcessorInstance>>,
-    sleep_duration: std::time::Duration,
-) {
-    std::thread::sleep(sleep_duration);
+/// No-op for a processor with no input mailboxes (a manual source).
+fn drain_input_listener(processor: &Arc<Mutex<ProcessorInstance>>) {
     let guard = processor.lock();
     if let Some(inner) = guard.iceoryx2_input_mailboxes_inner() {
         inner.drain_listener();
@@ -606,6 +606,64 @@ mod tests {
             n == buf.len() as isize,
             "eventfd write failed: n={n}, err={}",
             std::io::Error::last_os_error()
+        );
+    }
+
+    /// Every reactive tick that is not an fd wake still has to drain, because
+    /// the listener stays subscribed and upstream keeps notifying it. This is
+    /// the primitive those ticks call: a listener saturated to the point of
+    /// undeliverable notifications takes them again straight after.
+    ///
+    /// Fail-without-fix: drop the `drain_input_listener` call from the paused
+    /// branch, the no-waiter arm, or the epoll-error arm and that path is back
+    /// to #1764 — an fd nobody clears, warned about once per frame. Those arms
+    /// are unreachable from the two waiter-backed tests in this module (the
+    /// no-waiter arm is every tick of every reactive processor off Linux), so
+    /// this is what covers them.
+    #[test]
+    fn draining_a_saturated_listener_lets_it_be_notified_again() {
+        use crate::core::test_support::MockInputOnlyProcessor;
+
+        let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
+        let service = node
+            .service_builder(&ServiceName::new(&unique_suffix("saturated-drain")).unwrap())
+            .event()
+            .max_notifiers(1)
+            .max_listeners(1)
+            .open_or_create()
+            .unwrap();
+        let notifier = service.notifier_builder().create().unwrap();
+
+        let mut instance = ProcessorInstance::LegacyDyn(Box::new(
+            <MockInputOnlyProcessor::Processor as crate::core::GeneratedProcessor>::from_config(
+                Default::default(),
+            )
+            .expect("the mock constructs from its default config"),
+        ));
+        instance
+            .install_iceoryx2_resources()
+            .expect("the mock accepts its iceoryx2 resources");
+        instance
+            .iceoryx2_input_mailboxes_inner()
+            .expect("an input-only mock holds input mailboxes")
+            .set_listener(service.listener_builder().create().unwrap());
+        let processor = Arc::new(Mutex::new(instance));
+
+        // Well past any plausible queue depth; the ticket measured the onset at
+        // ~280 notifications against the default socket buffer.
+        const SENDS: usize = 8192;
+        let saturated = (0..SENDS).any(|_| notifier.notify().unwrap() == 0);
+        assert!(
+            saturated,
+            "an undrained listener absorbed {SENDS} notifications and still took more"
+        );
+
+        drain_input_listener(&processor);
+
+        assert_eq!(
+            notifier.notify().unwrap(),
+            1,
+            "the listener must take notifications again once the runner drains it"
         );
     }
 

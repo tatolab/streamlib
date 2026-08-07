@@ -139,7 +139,7 @@ fn fixture_frame_traverses_the_inline_forward_processor() {
             ceiling_bytes: TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
         },
     );
-    output_writer_inner.add_channel_notifier("video_out", "L-video-forward", notifier);
+    output_writer_inner.add_channel_link("video_out", "L-video-forward", Some(notifier));
 
     // Sink: an input mailbox subscribed to the same channel, bound to its local
     // `video_in` port. `read_raw` drains the subscriber and hands back the

@@ -27,7 +27,7 @@
 //! installing a channel publisher + destination notifiers at wiring
 //! time) operates on `Arc<OutputWriterInner>` directly via
 //! [`OutputWriterInner::set_channel_publisher`] and
-//! [`OutputWriterInner::add_channel_notifier`] — no PluginAbiObject, no
+//! [`OutputWriterInner::add_channel_link`] — no PluginAbiObject, no
 //! plugin ABI hop.
 //! The cdylib's per-frame `write` calls cross extern "C" exactly
 //! once per emit (sub-microsecond on amd64; see the PR microbench
@@ -72,17 +72,11 @@ fn trust_tier_label(trust_tier: ChannelTrustTier) -> ChannelTrustTierLabel {
 struct ChannelEgress {
     schema_ident: SchemaIdentWire,
     publisher: Publisher<ipc::Service, [u8], ()>,
-    /// Every outbound `connect()` link from this source port. This — not
-    /// [`Self::notifiers`] — is what decides when the last link went away and
+    /// Every outbound `connect()` link from this source port. Its length — not
+    /// the notifier count — is what decides when the last link went away and
     /// the publisher can be released, because a link whose destination never
     /// drains a listener carries no notifier at all.
-    link_ids: Vec<String>,
-    /// One `(link_id, notifier)` per outbound link whose destination waits on a
-    /// listener, so a subset of [`Self::link_ids`]. The link id tags each
-    /// notifier so a per-link `disconnect` reclaims exactly its own (see
-    /// [`OutputWriterInner::remove_channel_link`]) rather than the whole
-    /// fan-out — a source feeding N destinations must keep the other N-1 alive.
-    notifiers: Vec<(String, Notifier<ipc::Service>)>,
+    links: Vec<ChannelEgressLink>,
     /// iceoryx2 service name for this channel (`{source}/{output_port}`) —
     /// carried only for the growth / ceiling tracing fields.
     channel_service_name: String,
@@ -100,6 +94,21 @@ struct ChannelEgress {
     current_slot_capacity_bytes: usize,
     /// Count of samples refused for crossing [`Self::ceiling_bytes`].
     refused_over_ceiling_count: u64,
+}
+
+/// One outbound `connect()` link from a source output port, and the notifier
+/// that wakes its destination.
+///
+/// The notifier is `None` when that destination never drains a listener — a
+/// self-driven sink that polls its mailboxes — because a notification nobody
+/// collects fills the listener's queue and then fails delivery on every frame
+/// for the rest of the run. The link id tags the entry so a per-link
+/// `disconnect` reclaims exactly its own (see
+/// [`OutputWriterInner::remove_channel_link`]) rather than the whole fan-out —
+/// a source feeding N destinations must keep the other N-1 alive.
+struct ChannelEgressLink {
+    link_id: String,
+    notifier: Option<Notifier<ipc::Service>>,
 }
 
 /// The channel-egress primitives that prime an output port's channel
@@ -181,8 +190,7 @@ impl OutputWriterInner {
             ChannelEgress {
                 schema_ident,
                 publisher,
-                link_ids: Vec::new(),
-                notifiers: Vec::new(),
+                links: Vec::new(),
                 channel_service_name: service_name,
                 trust_tier,
                 ceiling_bytes,
@@ -202,37 +210,24 @@ impl OutputWriterInner {
             .unwrap_or(0)
     }
 
-    /// Record one outbound `connect()` link from this output port.
+    /// Record one outbound `connect()` link from this output port, with the
+    /// notifier that wakes its destination.
     ///
-    /// Called for every link, notifier or not — this is the set
-    /// [`Self::remove_channel_link`] counts down to decide the publisher's
-    /// release. No-op if the channel publisher has not been installed yet,
-    /// which the wiring op never does.
-    pub fn add_channel_link(&self, output_port: &str, link_id: &str) {
-        if let Some(egress) = self.channels.lock().get_mut(output_port) {
-            egress.link_ids.push(link_id.to_string());
-        }
-    }
-
-    /// Append a destination notifier to an output port's channel, tagged with
-    /// the `link_id` of the `connect()` link it serves.
-    ///
-    /// One notifier per outbound link whose destination waits on a listener —
-    /// each wakes a distinct destination's listener fd. A destination that
-    /// never drains one gets no notifier, so this is a subset of the links
-    /// [`Self::add_channel_link`] recorded. The `link_id` tag lets a later
-    /// per-link `disconnect` reclaim exactly this notifier via
-    /// [`Self::remove_channel_link`]. No-op (the notifier is dropped) if the
-    /// channel publisher has not been installed yet, which the wiring op never
-    /// does.
-    pub fn add_channel_notifier(
+    /// Pass `None` when the destination never drains a listener; the link is
+    /// then carried for reclaim bookkeeping and notified on no frame. No-op
+    /// (the notifier is dropped) if the channel publisher has not been
+    /// installed yet, which the wiring op never does.
+    pub fn add_channel_link(
         &self,
         output_port: &str,
         link_id: &str,
-        notifier: Notifier<ipc::Service>,
+        notifier: Option<Notifier<ipc::Service>>,
     ) {
         if let Some(egress) = self.channels.lock().get_mut(output_port) {
-            egress.notifiers.push((link_id.to_string(), notifier));
+            egress.links.push(ChannelEgressLink {
+                link_id: link_id.to_string(),
+                notifier,
+            });
         }
     }
 
@@ -243,7 +238,7 @@ impl OutputWriterInner {
         self.channels
             .lock()
             .get(output_port)
-            .map(|egress| egress.notifiers.len())
+            .map(|egress| egress.links.iter().filter(|l| l.notifier.is_some()).count())
             .unwrap_or(0)
     }
 
@@ -261,13 +256,12 @@ impl OutputWriterInner {
         let Some(egress) = channels.get_mut(output_port) else {
             return false;
         };
-        egress.link_ids.retain(|id| id != link_id);
-        egress.notifiers.retain(|(id, _)| id != link_id);
         // Keyed on the links, not the notifiers: a fan-out mixing destinations
         // that wait with destinations that poll holds fewer notifiers than
         // links, and releasing the publisher on the last *notifier* would cut
         // off the polling destinations still connected.
-        if egress.link_ids.is_empty() {
+        egress.links.retain(|link| link.link_id != link_id);
+        if egress.links.is_empty() {
             channels.remove(output_port);
             true
         } else {
@@ -335,7 +329,7 @@ impl OutputWriterInner {
         // (e.g. a listener not yet created) — log and continue rather than
         // failing the publish; the data is already in shared memory and the
         // next send() will wake the listener anyway.
-        for (_link_id, notifier) in &egress.notifiers {
+        for notifier in egress.links.iter().filter_map(|link| link.notifier.as_ref()) {
             if let Err(e) = notifier.notify() {
                 tracing::trace!(
                     "OutputWriter: notify() failed for port '{}': {:?}",
@@ -646,7 +640,7 @@ mod tests {
                 ceiling_bytes: crate::iceoryx2::TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
             },
         );
-        inner.add_channel_notifier("out", "L-test-notify", notifier);
+        inner.add_channel_link("out", "L-test-notify", Some(notifier));
 
         // Pre-flight: the listener has no events queued.
         let mut count: usize = 0;
@@ -718,9 +712,12 @@ mod tests {
         );
 
         // The waiting destination brings a notifier; the polling one does not.
-        inner.add_channel_link("out", "L-waits");
-        inner.add_channel_notifier("out", "L-waits", notify.notifier_builder().create().unwrap());
-        inner.add_channel_link("out", "L-polls");
+        inner.add_channel_link(
+            "out",
+            "L-waits",
+            Some(notify.notifier_builder().create().unwrap()),
+        );
+        inner.add_channel_link("out", "L-polls", None);
 
         assert!(
             !inner.remove_channel_link("out", "L-waits"),
@@ -867,10 +864,10 @@ mod tests {
                 .max_listeners(1)
                 .open_or_create()
                 .unwrap();
-            inner.add_channel_notifier(
+            inner.add_channel_link(
                 "out",
                 &format!("L-test-fanout-{i}"),
-                notify.notifier_builder().create().unwrap(),
+                Some(notify.notifier_builder().create().unwrap()),
             );
             listeners.push(notify.listener_builder().create().unwrap());
         }
@@ -955,10 +952,8 @@ mod tests {
                 .create()
                 .unwrap()
         };
-        inner.add_channel_link("out", "L-link-a");
-        inner.add_channel_notifier("out", "L-link-a", notify("reclaim/notify/a"));
-        inner.add_channel_link("out", "L-link-b");
-        inner.add_channel_notifier("out", "L-link-b", notify("reclaim/notify/b"));
+        inner.add_channel_link("out", "L-link-a", Some(notify("reclaim/notify/a")));
+        inner.add_channel_link("out", "L-link-b", Some(notify("reclaim/notify/b")));
         assert!(inner.has_channel_publisher("out"));
 
         // Disconnect one of two links: the channel (and publisher) survive.

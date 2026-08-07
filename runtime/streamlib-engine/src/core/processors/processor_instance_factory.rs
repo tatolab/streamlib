@@ -496,7 +496,7 @@ impl ProcessorInstance {
     /// Used by the host's connection-wiring path (compiler ops) to
     /// mutate the inner directly via
     /// [`crate::iceoryx2::OutputWriterInner::set_channel_publisher`]
-    /// and [`crate::iceoryx2::OutputWriterInner::add_channel_notifier`]
+    /// and [`crate::iceoryx2::OutputWriterInner::add_channel_link`]
     /// — no plugin ABI hop to the cdylib.
     pub fn iceoryx2_output_writer_inner(&self) -> Option<Arc<crate::iceoryx2::OutputWriterInner>> {
         match self {

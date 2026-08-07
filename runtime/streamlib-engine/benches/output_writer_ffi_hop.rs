@@ -135,7 +135,7 @@ fn build_inner_with_connection(tag: &str) -> BenchFixture {
             ceiling_bytes: TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
         },
     );
-    inner.add_channel_notifier("out", "L-bench-ffi-hop", notifier);
+    inner.add_channel_link("out", "L-bench-ffi-hop", Some(notifier));
 
     BenchFixture {
         inner,
@@ -225,7 +225,7 @@ struct FanoutFixture {
 
 /// Build an `OutputWriterInner` whose single "out" channel feeds
 /// `subscriber_count` subscribers, mirroring the compiler op's 1→N wiring: ONE
-/// `set_channel_publisher` + N `add_channel_notifier`, N subscribers on the one
+/// `set_channel_publisher` + N `add_channel_link`, N subscribers on the one
 /// pubsub service.
 fn build_inner_with_fanout(tag: &str, subscriber_count: usize) -> FanoutFixture {
     let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
@@ -275,7 +275,7 @@ fn build_inner_with_fanout(tag: &str, subscriber_count: usize) -> FanoutFixture 
             .unwrap();
         let notifier = notify.notifier_builder().create().unwrap();
         let listener = notify.listener_builder().create().unwrap();
-        inner.add_channel_notifier("out", &format!("L-bench-fanout-{i}"), notifier);
+        inner.add_channel_link("out", &format!("L-bench-fanout-{i}"), Some(notifier));
         listeners.push(listener);
     }
 
