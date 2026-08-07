@@ -92,8 +92,10 @@ impl PythonProcessorLinkDataAccess {
     /// out of `port_name`.
     ///
     /// One call per link. The publisher is installed once — the first link out
-    /// of a port creates it and every later link only appends its notifier —
-    /// because iceoryx2 admits exactly one publisher per channel.
+    /// of a port creates it and every later link only appends itself — because
+    /// iceoryx2 admits exactly one publisher per channel. An empty
+    /// `dest_notify_service_name` means the destination never drains a
+    /// listener, so the link opens no notifier and carries data only.
     #[pyo3(signature = (
         port_name,
         channel_service_name,
@@ -159,15 +161,19 @@ impl PythonProcessorLinkDataAccess {
                         },
                     );
                 }
-                let notify_service = node.open_or_create_notify_service(
-                    dest_notify_service_name,
-                    notify_max_notifiers,
-                )?;
-                output_writer.add_channel_notifier(
-                    port_name,
-                    link_id,
-                    notify_service.create_notifier()?,
-                );
+                // An empty name is the engine saying this destination never
+                // drains a listener, so there is nothing to wake and the link
+                // is wired for data only.
+                let notifier = if dest_notify_service_name.is_empty() {
+                    None
+                } else {
+                    let notify_service = node.open_or_create_notify_service(
+                        dest_notify_service_name,
+                        notify_max_notifiers,
+                    )?;
+                    Some(notify_service.create_notifier()?)
+                };
+                output_writer.add_channel_link(port_name, link_id, notifier);
                 Ok(())
             })
             .map_err(|wiring_failure| {
@@ -180,6 +186,11 @@ impl PythonProcessorLinkDataAccess {
 
     /// Open this processor's subscriber for a link into `port_name`, plus the
     /// one listener every input shares.
+    ///
+    /// `notify_service_name` is always a real name here, unlike the output
+    /// side's: a helper-hosted destination drains its own listener whatever
+    /// execution mode the class declares, so the engine never tells one to
+    /// skip it.
     ///
     /// One call per link. The mailbox and the destination-keyed listener are
     /// installed once — fan-in appends subscribers to the same port, and

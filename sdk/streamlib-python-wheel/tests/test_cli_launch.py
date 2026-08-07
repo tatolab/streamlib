@@ -385,6 +385,26 @@ def assert_the_window_showed_live_video(node: LaunchedNode, what_ran: str) -> No
         f"{what_ran} showed only {frames_shown.group(1)} frames in "
         f"{SCAFFOLD_OBSERVATION_WINDOW_SECONDS}s — that is a slideshow, not live video"
     )
+    # The MVP minute is a terminal as well as a window. `DisplayWindow` drives
+    # itself and polls its mailboxes, so it drains no listener; a notifier
+    # pointed at it fills that listener and then fails delivery on every frame,
+    # each failure a kilobytes-wide iceoryx2 dump. Measured at 303 warnings and
+    # 2.4MB over this graph before #1764.
+    #
+    # The observation window is what makes this assertable: saturation takes
+    # ~280 notifications, and one notification rides every frame the SOURCE
+    # publishes. `TestPatternSource` is `continuous(interval_ms = 33)` on its
+    # own thread, so it publishes ~30/s whatever the display manages —
+    # ~360 by 12s, comfortably past the onset. That rate is independent of
+    # MINIMUM_FRAMES_FOR_LIVE_VIDEO above, which measures what the window drew;
+    # a slow display shortens neither the source's output nor this margin.
+    # Shorten the window below ~9.4s and this assertion stops discriminating.
+    undeliverable_notifications = output.count("FailedToDeliverSignal")
+    assert undeliverable_notifications == 0, (
+        f"{what_ran}: {undeliverable_notifications} undeliverable link notifications in "
+        f"{SCAFFOLD_OBSERVATION_WINDOW_SECONDS}s — something is notifying a destination "
+        f"that never drains its listener; output ended:\n{node.recent_output()}"
+    )
 
 
 def write_app_with_helper_placed_processors(
