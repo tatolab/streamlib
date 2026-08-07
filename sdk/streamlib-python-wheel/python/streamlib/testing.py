@@ -154,7 +154,7 @@ class SingleProcessorTestPipeline:
             except queue.Empty:
                 run_failure = None
             if run_failure is not None:
-                raise run_failure
+                raise run_failure from None
             raise
 
     def _run_until_shut_down(self) -> None:

@@ -41,6 +41,22 @@ impl ObservableProcessorState {
         self.changed.notify_all();
     }
 
+    /// Move the processor to `state`, unless it has already failed.
+    ///
+    /// A thread that unwinds after `Error` would otherwise report the state it
+    /// unwound *into* — `Stopped`, indistinguishable from a clean shutdown —
+    /// and lose the only record that anything went wrong. Checked under the
+    /// same lock as the write, so a failure landing concurrently is not
+    /// overwritten either.
+    pub fn transition_to_unless_already_failed(&self, state: ProcessorState) {
+        let mut current = self.current.lock();
+        if *current == ProcessorState::Error {
+            return;
+        }
+        *current = state;
+        self.changed.notify_all();
+    }
+
     /// Block until the processor's `setup` has resolved, one way or the other,
     /// giving up at `deadline`. Returns the state it settled on.
     ///
@@ -162,6 +178,21 @@ mod tests {
             state.wait_until_setup_resolved(Instant::now() + UNREACHABLE_DEADLINE),
             ProcessorState::Running
         );
+    }
+
+    /// The thread that unwinds after a failure reports `Stopped` on its way
+    /// out. It must not bury the failure, or a processor whose `start()` failed
+    /// becomes indistinguishable from one that shut down cleanly.
+    #[test]
+    fn stopping_a_processor_does_not_bury_why_it_stopped() {
+        let failed = ObservableProcessorState::new(ProcessorState::Running);
+        failed.transition_to(ProcessorState::Error);
+        failed.transition_to_unless_already_failed(ProcessorState::Stopped);
+        assert_eq!(failed.current(), ProcessorState::Error);
+
+        let clean = ObservableProcessorState::new(ProcessorState::Running);
+        clean.transition_to_unless_already_failed(ProcessorState::Stopped);
+        assert_eq!(clean.current(), ProcessorState::Stopped);
     }
 
     /// A processor that never starts gives the caller back the state it is

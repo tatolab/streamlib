@@ -107,7 +107,7 @@ pub fn run_processor_loop(
         }
     }
 
-    state.transition_to(ProcessorState::Stopped);
+    state.transition_to_unless_already_failed(ProcessorState::Stopped);
     tracing::info!("[{}] Thread stopped", id);
 }
 
@@ -458,6 +458,7 @@ fn run_manual_mode(
             id,
             isolation_tier.as_str(),
         );
+        state.transition_to(ProcessorState::Error);
         return;
     };
     tracing::info!("[{}] Invoking start()...", id);
@@ -467,7 +468,12 @@ fn run_manual_mode(
         match guard.start(&full_ctx) {
             Ok(()) => tracing::info!("[{}] start() completed successfully", id),
             Err(e) => {
-                tracing::warn!("[{}] start() failed: {}", id, e);
+                // Marked here or nowhere: this thread goes straight to
+                // teardown, and a processor whose `start()` failed is not
+                // running — a reader that saw `Running` between `setup` and
+                // here must be able to find out it was wrong.
+                tracing::error!("[{}] start() failed: {}", id, e);
+                state.transition_to(ProcessorState::Error);
                 return;
             }
         }
