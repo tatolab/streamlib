@@ -28,6 +28,26 @@ MINIMAL_APP_SOURCE = "def setup(rt):\n    pass\n"
 RESOLUTION_FAILURE_TIMEOUT_SECONDS = 60.0
 
 
+@pytest.fixture(autouse=True)
+def restore_the_launchers_import_path():
+    """Undo what `execute_app_entry_file` leaves on `sys.path`.
+
+    The launcher leads `sys.path` with the entry file's directory and keeps it
+    there on purpose — the app imports its own modules for as long as it runs,
+    so restoring it the way `sys.argv` is restored would break the app. In a
+    real launch that lasts until the process exits; here it lasts until the end
+    of the pytest session, and each test that launches an app leaves another
+    `tmp_path` in front. The first slot is what a helper process is told to
+    import the app's processors from, so a leaked one sends every later
+    suite's children looking in an empty temporary directory.
+    """
+    launcher_import_path = list(sys.path)
+    try:
+        yield
+    finally:
+        sys.path[:] = launcher_import_path
+
+
 def write_app(directory: Path, file_name: str, source: str = MINIMAL_APP_SOURCE) -> Path:
     entry_file = directory / file_name
     entry_file.parent.mkdir(parents=True, exist_ok=True)
