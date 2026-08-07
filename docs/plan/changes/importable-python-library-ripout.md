@@ -143,11 +143,14 @@ half still belongs to this ticket.
 - REMOVED: `runtime/streamlib-engine/src/core/runtime/install.rs` / `add_modules_from_lockfile`
 - REMOVED: `native_lib_resolver`
 - REMOVED: `spawn_python_native_subprocess_op`
-- REMOVED: `sdk/streamlib-python/python/streamlib/subprocess_runner.py` /
-  `tests/test_clock.py` / `tests/test_subprocess_runner_cleanup.py` — the old SDK's
-  subprocess-polyglot runner and its tests, part of this change's `sdk/streamlib-python`
-  removal (§Language SDKs: the subprocess-polyglot machinery is deleted with the module
-  system); the wheel's `python -m streamlib._helper` is the successor.
+- REMOVED: `sdk/streamlib-python/python/streamlib/subprocess_runner.py`
+- REMOVED: `tests/test_clock.py`
+- REMOVED: `tests/test_subprocess_runner_cleanup.py`
+
+  The old SDK's subprocess-polyglot runner and its tests, part of this change's
+  `sdk/streamlib-python` removal (§Language SDKs: the subprocess-polyglot machinery is
+  deleted with the module system); the wheel's `python -m streamlib._helper` is the
+  successor.
 - REMOVED: STREAMLIB_PYTHON_NATIVE_LIB
   (Added 2026-08-07 when in-process-hosting-ripout shipped: that change did not remove the
   env var, but every file naming it is this change's scope, each covered by a REMOVED
