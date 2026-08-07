@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.14.3](https://github.com/tatolab/streamlib/compare/v0.14.2...v0.14.3) (2026-08-07)
+
+
+### Bug Fixes
+
+* **engine:** open no link notifier for a destination that never drains one ([#1766](https://github.com/tatolab/streamlib/issues/1766)) ([0b7ee42](https://github.com/tatolab/streamlib/commit/0b7ee42064a6f62d91403eea471278fe52535b39))
+
 ## [0.14.2](https://github.com/tatolab/streamlib/compare/v0.14.1...v0.14.2) (2026-08-07)
 
 
