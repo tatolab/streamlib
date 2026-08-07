@@ -1,5 +1,8 @@
 # Importable Python library — the SDK-shape pivot
 
+<!-- check-no-in-process-placement:allow-file — this ADR's placement clauses are retracted in
+     place, so it must quote the banned model and the retracted numbers to supersede them -->
+
 Rationale for the `[importable-python-library]` entries across `docs/plan/ARCHITECTURE.md`,
 decided by the owner 2026-08-01, direction confirmed verbatim 2026-08-02. Supersedes parts of
 `single-binary-launch.md`, `media-io-layering.md`, and `product-mvp-sentence.md` (annotated
