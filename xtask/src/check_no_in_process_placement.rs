@@ -27,11 +27,13 @@
 //!   have to quote the banned vocabulary at length in order to retract and ban
 //!   it; [`EXPECTED_ALLOW_FILE_PATHS`] pins the set.
 //! - [`EXEMPT_PROHIBITION_LINES`] exempts individual lines that state the
-//!   prohibition itself in `docs/plan/**` — files a source session cannot edit,
-//!   since plan edits are gated to the plan skills. Exempting those files whole
-//!   would blind the lint at the one place the ADR blames for the original
-//!   drift, so the exemption is per line and matched on exact text: a new banned
-//!   line in `ARCHITECTURE.md` still fails.
+//!   prohibition itself, in the decision records under
+//!   [`EXEMPT_PROHIBITION_LINE_ROOTS`]. `ARCHITECTURE.md`, `GLOSSARY.md` and the
+//!   2026-08-02 pivot ADR are the documents the ruling names as the drift
+//!   vector, so exempting them whole would blind the lint at the worst possible
+//!   place. Per line, matched on exact text: a new banned line in
+//!   `ARCHITECTURE.md` still fails, and editing an exempted one forces
+//!   re-review.
 //!
 //! Markdown supersession spans (`~~…~~`) are skipped, because the docs policy
 //! requires a retraction to quote what it retracts.
@@ -41,11 +43,22 @@
 //! - This is vocabulary, not behaviour. A watchdog renamed to avoid these
 //!   patterns passes. The behavioural proof that the parent never hosts a
 //!   processor class is `sdk/streamlib-python-wheel/tests/test_helper_placement.py`.
-//! - `.claude/` is not scanned — the rules and reviewer definitions quote the
-//!   banned shapes to forbid them, and they change through their own dedicated
-//!   PRs.
+//! - **The pattern set is a chosen subset of the rule's STOP-WORK vocabulary,
+//!   not the whole of it.** `.claude/rules/placement.md` names shapes this gate
+//!   does not match — `share a GIL`, `own interpreter` beside a processor, the
+//!   runtime described as "one process", `either placement`, `placement
+//!   heuristics`, in-process called "lowest latency", a per-callback duration
+//!   monitor naming another processor, and bare `both placements`. The subset is
+//!   what the commissioning change file specified; widening it is a plan edit,
+//!   not a gate edit. A green run means these patterns are absent, never that
+//!   the rule is satisfied — the reviewers are the coverage for the rest.
+//! - `.claude/` and `.github/` are not scanned. The rules and reviewer
+//!   definitions quote the banned shapes to forbid them and change through their
+//!   own dedicated PRs; `.github/` is CI configuration, and this gate's own
+//!   workflow is named after what it bans.
 //! - The repo-root `CHANGELOG.md` is not scanned: it is release-please-generated
-//!   history of what shipped, not a claim about what the runtime is.
+//!   history of what shipped, not a claim about what the runtime is. `README.md`
+//!   and `CLAUDE.md` are.
 
 // check-no-in-process-placement:allow-file — this file defines the banned
 // patterns and so must contain them literally.
@@ -72,6 +85,11 @@ const SKIP_PATH_FRAGMENTS: &[&str] = &[
     "/.venv/",
 ];
 
+/// Release-please-generated history of what shipped, including the release that
+/// shipped the model this gate now bans. History is not a claim about what the
+/// runtime is, and it is not ours to rewrite.
+const SKIP_FILE_NAMES: &[&str] = &["CHANGELOG.md"];
+
 const SCAN_EXTENSIONS: &[&str] = &["rs", "md", "py", "pyi", "ts", "toml", "yaml", "yml"];
 
 /// Marker comment that exempts an entire file. See the module doc — the set is
@@ -84,15 +102,22 @@ const ALLOW_FILE_PRAGMA: &str = "check-no-in-process-placement:allow-file";
 /// pasted to get CI green.
 const EXPECTED_ALLOW_FILE_PATHS: &[&str] = &[
     "docs/decisions/helper-process-placement-only.md",
-    "docs/decisions/importable-python-library.md",
     "docs/plan/changes/archive/2026-08-07-in-process-hosting-ripout.md",
     "xtask/src/check_no_in_process_placement.rs",
 ];
 
-/// Lines that state the prohibition, in plan documents a source session cannot
-/// edit. Matched on exact trimmed text, so editing one of these lines fails the
-/// lint and forces the edit through review, and a *new* banned line in the same
-/// file still fails.
+/// The two decision-record trees a prohibition may be stated in. A per-line
+/// exemption anywhere else would be a hole in source a session can edit.
+const EXEMPT_PROHIBITION_LINE_ROOTS: &[&str] = &["docs/plan/", "docs/decisions/"];
+
+/// Lines that state the prohibition itself, in the decision records that must
+/// name the banned model to forbid it. Matched on exact trimmed text, so editing
+/// one of these lines fails the lint and forces the edit through review, and a
+/// *new* banned line in the same file still fails.
+///
+/// Per line rather than per file on purpose: `ARCHITECTURE.md`, `GLOSSARY.md`
+/// and the 2026-08-02 pivot ADR are the documents the ruling names as the drift
+/// vector, so blinding them wholesale would be the worst place to do it.
 ///
 /// This list only shrinks. A line that leaves its document is a stale entry and
 /// [`exempt_prohibition_lines_are_all_live`] fails until it is deleted here.
@@ -120,6 +145,33 @@ const EXEMPT_PROHIBITION_LINES: &[(&str, &str)] = &[
     (
         "docs/plan/changes/importable-python-library.md",
         "(A \"dev-mode GIL-hold watchdog\" clause was removed here 2026-08-04: it measured",
+    ),
+    // The 2026-08-02 pivot ADR, whose placement clauses the ruling retracts in
+    // place. Its `~~…~~` spans cover the retracted claims; these six lines are
+    // the retraction prose that follows each span close.
+    (
+        "docs/decisions/importable-python-library.md",
+        "placement; in-process hosting of a Python processor is banned. The distribution decision —",
+    ),
+    (
+        "docs/decisions/importable-python-library.md",
+        "> from the app's venv. In-process hosting of a Python processor is banned outright — not a",
+    ),
+    (
+        "docs/decisions/importable-python-library.md",
+        "> latency, is the optimised axis — the relevant ratio is 0.161ms against the 16.67ms frame",
+    ),
+    (
+        "docs/decisions/importable-python-library.md",
+        "> budget (~1%, zero drops), not against 0.085ms — and the pair itself was never validly",
+    ),
+    (
+        "docs/decisions/importable-python-library.md",
+        "> shared-GIL contention cannot appear). These numbers are never again cited for any",
+    ),
+    (
+        "docs/decisions/importable-python-library.md",
+        "the other way and killed in-process hosting instead. The surviving insight is this entry's",
     ),
 ];
 
@@ -216,6 +268,7 @@ pub struct LintViolation {
 pub struct InProcessPlacementScanReport {
     pub violations: Vec<LintViolation>,
     pub files_scanned: usize,
+    pub files_scanned_per_root: Vec<(&'static str, usize)>,
     pub allow_filed: Vec<PathBuf>,
     pub exempt_lines_hit: usize,
 }
@@ -223,6 +276,7 @@ pub struct InProcessPlacementScanReport {
 pub fn run(workspace_root: &Path) -> Result<()> {
     ensure_forbidden_tree_absent(workspace_root)?;
     let report = lint_workspace(workspace_root)?;
+    ensure_exempt_prohibition_lines_are_in_decision_records()?;
     ensure_allow_file_set_is_pinned(workspace_root, &report)?;
     crate::ensure_source_walking_gate_read_source(
         "check-no-in-process-placement",
@@ -230,6 +284,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
         report.files_scanned,
         "in-process placement vocabulary re-enter the tree",
     )?;
+    ensure_every_scan_root_contributed(&report)?;
 
     if report.violations.is_empty() {
         println!(
@@ -258,6 +313,21 @@ pub fn run(workspace_root: &Path) -> Result<()> {
         "in-process placement lint failed: {} violation(s)",
         report.violations.len()
     );
+}
+
+/// The per-line hatch must never reach source a session can edit, so the roots
+/// are enforced by the gate rather than only by its tests.
+fn ensure_exempt_prohibition_lines_are_in_decision_records() -> Result<()> {
+    for (rel, _) in EXEMPT_PROHIBITION_LINES {
+        anyhow::ensure!(
+            EXEMPT_PROHIBITION_LINE_ROOTS
+                .iter()
+                .any(|root| rel.starts_with(root)),
+            "{rel} is not a decision record ({EXEMPT_PROHIBITION_LINE_ROOTS:?}) — a per-line \
+             exemption there would be a hole in source a session can edit"
+        );
+    }
+    Ok(())
 }
 
 /// A pragma pasted onto a fifth file would silently exempt it, so the set is
@@ -308,9 +378,62 @@ pub fn lint_workspace(workspace_root: &Path) -> Result<InProcessPlacementScanRep
         if !dir.exists() {
             continue;
         }
+        let before = report.files_scanned;
         scan_dir(workspace_root, &dir, &mut report)?;
+        report.files_scanned_per_root.push((parent, report.files_scanned - before));
     }
+    scan_workspace_root_markdown(workspace_root, &mut report)?;
     Ok(report)
+}
+
+/// `README.md` and `CLAUDE.md` sit at the workspace root, outside every scan
+/// parent. `CLAUDE.md` in particular is read as instruction by every session,
+/// which is the exact surface the ruling blames for the original drift.
+fn scan_workspace_root_markdown(
+    workspace_root: &Path,
+    report: &mut InProcessPlacementScanReport,
+) -> Result<()> {
+    let entries = match fs::read_dir(workspace_root) {
+        Ok(entries) => entries,
+        Err(_) => return Ok(()),
+    };
+    for entry in entries.filter_map(|e| e.ok()) {
+        let path = entry.path();
+        if !path.is_file() || path.extension().and_then(|e| e.to_str()) != Some("md") {
+            continue;
+        }
+        if is_skipped_file_name(&path) {
+            continue;
+        }
+        scan_file(workspace_root, &path, "md", report)?;
+    }
+    Ok(())
+}
+
+fn is_skipped_file_name(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|name| SKIP_FILE_NAMES.contains(&name))
+}
+
+/// A total `files_scanned > 0` check is satisfied by `runtime/` alone, so losing
+/// `docs/` — the root this gate deliberately added — would leave it green. Every
+/// declared root must exist and must have contributed at least one file.
+fn ensure_every_scan_root_contributed(report: &InProcessPlacementScanReport) -> Result<()> {
+    for parent in SCAN_PARENTS {
+        let scanned = report
+            .files_scanned_per_root
+            .iter()
+            .find(|(root, _)| root == parent)
+            .map(|(_, count)| *count)
+            .unwrap_or(0);
+        anyhow::ensure!(
+            scanned > 0,
+            "check-no-in-process-placement scanned 0 files under {parent}/ — the root moved out \
+             from under the gate, which would let banned placement vocabulary re-enter it unnoticed"
+        );
+    }
+    Ok(())
 }
 
 fn scan_dir(workspace_root: &Path, dir: &Path, report: &mut InProcessPlacementScanReport) -> Result<()> {
@@ -866,12 +989,40 @@ mod tests {
     }
 
     #[test]
-    fn every_exempt_prohibition_line_is_under_the_plan_directory() {
-        for (rel, _) in EXEMPT_PROHIBITION_LINES {
-            assert!(
-                rel.starts_with("docs/plan/"),
-                "{rel} is editable by a source session — give it the allow-file pragma instead"
-            );
-        }
+    fn every_exempt_prohibition_line_is_in_a_decision_record() {
+        ensure_exempt_prohibition_lines_are_in_decision_records().unwrap();
+    }
+
+    #[test]
+    fn every_scan_root_contributes_files_in_the_real_tree() {
+        let report = lint_workspace(&workspace()).unwrap();
+        ensure_every_scan_root_contributed(&report).unwrap();
+    }
+
+    #[test]
+    fn a_scan_root_that_moved_out_from_under_the_gate_fails_the_run() {
+        let tmp = TempDir::new().unwrap();
+        write(tmp.path(), "runtime/foo/src/lib.rs", "pub fn ok() {}\n");
+        let report = lint_workspace(tmp.path()).unwrap();
+        let err = ensure_every_scan_root_contributed(&report)
+            .unwrap_err()
+            .to_string();
+        assert!(err.contains("scanned 0 files under"), "got {err}");
+    }
+
+    #[test]
+    fn scans_workspace_root_markdown_but_not_the_changelog() {
+        let tmp = TempDir::new().unwrap();
+        write(tmp.path(), "CLAUDE.md", "In-process hosting is the fast path.\n");
+        write(tmp.path(), "README.md", "In-process hosting is supported.\n");
+        write(tmp.path(), "CHANGELOG.md", "* **python:** in-process authoring\n");
+        let violations = lint(tmp.path());
+        assert_eq!(violations.len(), 2, "got {violations:?}");
+        assert!(
+            violations
+                .iter()
+                .all(|v| !v.file.ends_with("CHANGELOG.md")),
+            "got {violations:?}"
+        );
     }
 }
