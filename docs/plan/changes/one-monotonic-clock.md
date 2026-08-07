@@ -118,8 +118,10 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
 - MODIFIED: the pin comment at `python_logging.rs:144-145` ("not a process-local origin
   like the media clock's") and the flag comment at
   `python_processor_link_data_access.rs:133-136` — both are falsified by this change.
-- MODIFIED: `spikes/streamlib-pyembed-spike/src/monotonic_clock.rs:6-7` carries a stale
-  line-referenced claim about `media_clock.rs:12-17` that this change falsifies.
+- ~~MODIFIED: `spikes/streamlib-pyembed-spike/src/monotonic_clock.rs:6-7` carries a stale
+  line-referenced claim about `media_clock.rs:12-17` that this change falsifies.~~ —
+  Retired 2026-08-07: the spike tree was deleted whole by in-process-hosting-ripout
+  (#1714, commit `7ce66f59`); there is no file left to modify.
 
 ## ADDED
 
