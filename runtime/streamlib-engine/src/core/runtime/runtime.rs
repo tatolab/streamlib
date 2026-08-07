@@ -4,6 +4,7 @@
 use std::ops::ControlFlow;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use parking_lot::Mutex;
 use serde::Serialize;
@@ -19,8 +20,8 @@ use crate::core::context::{
     AudioClockConfig, GpuContext, RuntimeContext, SharedAudioClock, TimeContext,
 };
 use crate::core::graph::{
-    GraphNodeWithComponents, GraphState, LinkUniqueId, ProcessorPauseGateComponent,
-    ProcessorUniqueId,
+    GraphNodeWithComponents, GraphState, LinkUniqueId, ObservableGraphReadiness,
+    ProcessorPauseGateComponent, ProcessorUniqueId, StateComponent,
 };
 use crate::core::processors::ProcessorSpec;
 use crate::core::processors::ProcessorState;
@@ -740,7 +741,7 @@ impl Runner {
 
             // Update processor state
             if let Some(state) = node.get::<crate::core::graph::StateComponent>() {
-                *state.0.lock() = ProcessorState::Paused;
+                state.transition_to(ProcessorState::Paused);
             }
 
             // Publish event
@@ -781,7 +782,7 @@ impl Runner {
 
             // Update processor state
             if let Some(state) = node.get::<crate::core::graph::StateComponent>() {
-                *state.0.lock() = ProcessorState::Running;
+                state.transition_to(ProcessorState::Running);
             }
 
             // Publish event
@@ -808,6 +809,40 @@ impl Runner {
 
             Ok(pause_gate.is_paused())
         })
+    }
+
+    // =========================================================================
+    // Graph readiness
+    // =========================================================================
+
+    /// Take hold of every processor's state, to wait on without the graph.
+    ///
+    /// The graph lock is released before anything blocks on what it hands
+    /// back, which is the whole point: the transitions being waited for are
+    /// made by processor threads that need that lock.
+    pub fn observable_graph_readiness(&self) -> ObservableGraphReadiness {
+        ObservableGraphReadiness::new(self.compiler.scope(|graph, _tx| {
+            graph
+                .traversal()
+                .v(())
+                .iter()
+                .filter_map(|node| {
+                    Some((node.id.clone(), node.get::<StateComponent>()?.clone_inner()))
+                })
+                .collect()
+        }))
+    }
+
+    /// Block until every processor in the graph has finished `setup` and
+    /// reached `Running`, giving up after `timeout`.
+    ///
+    /// This is what "the graph is up" means for a processor in a helper
+    /// process: its `setup` is the call that waits for the child to register
+    /// and wire its ports, so a publisher that starts only after this returns
+    /// cannot lose bags to a link nobody has attached to yet.
+    pub fn wait_until_every_processor_is_running(&self, timeout: Duration) -> Result<()> {
+        self.observable_graph_readiness()
+            .wait_until_every_processor_is_running(timeout)
     }
 
     // =========================================================================

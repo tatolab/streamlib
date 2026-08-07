@@ -144,6 +144,19 @@ class Runtime:
     def run(self) -> None:
         """Run the pipeline until Ctrl-C, SIGTERM or `shutdown()`, then tear down."""
 
+    def wait_until_every_processor_is_running(self, *, timeout: float = 30.0) -> None:
+        """Block until every processor in the graph is running.
+
+        Call it before `run()` or from another thread while `run()` blocks — a
+        graph that has not started yet is waited through, not refused. A Python
+        processor is running once its helper process has registered and wired
+        its ports; anything published into the graph before that is dropped by
+        the link. Raises `RuntimeError` if a processor failed instead of
+        starting, if `timeout` elapses, or if this runtime has already been
+        shut down; and `ValueError` for a `timeout` that is negative, NaN, or
+        too large to be a duration.
+        """
+
     def shutdown(self) -> None:
         """Ask the pipeline to stop. Safe from any thread; idempotent."""
 

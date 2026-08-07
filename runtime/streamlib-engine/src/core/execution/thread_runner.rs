@@ -16,7 +16,7 @@ use parking_lot::Mutex;
 use crate::core::RuntimeContext;
 use crate::core::context::{IsolationTier, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use crate::core::execution::{ExecutionConfig, ProcessExecution};
-use crate::core::graph::ProcessorUniqueId;
+use crate::core::graph::{ObservableProcessorState, ProcessorUniqueId};
 use crate::core::processors::{ProcessorInstance, ProcessorState};
 /// Duration to sleep when paused (avoids busy-waiting).
 const PAUSE_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_millis(10);
@@ -33,7 +33,7 @@ pub fn run_processor_loop(
     processor: Arc<Mutex<ProcessorInstance>>,
     shutdown_rx: crossbeam_channel::Receiver<()>,
     #[cfg(unix)] shutdown_eventfd: Option<OwnedFd>,
-    state: Arc<Mutex<ProcessorState>>,
+    state: Arc<ObservableProcessorState>,
     pause_gate: Arc<AtomicBool>,
     exec_config: ExecutionConfig,
     runtime_ctx: RuntimeContext,
@@ -107,7 +107,7 @@ pub fn run_processor_loop(
         }
     }
 
-    *state.lock() = ProcessorState::Stopped;
+    state.transition_to_unless_already_failed(ProcessorState::Stopped);
     tracing::info!("[{}] Thread stopped", id);
 }
 
@@ -439,7 +439,7 @@ fn run_manual_mode(
     id: &ProcessorUniqueId,
     processor: &Arc<Mutex<ProcessorInstance>>,
     shutdown_rx: &crossbeam_channel::Receiver<()>,
-    state: &Arc<Mutex<ProcessorState>>,
+    state: &Arc<ObservableProcessorState>,
     pause_gate: &Arc<AtomicBool>,
     runtime_ctx: &RuntimeContext,
     isolation_tier: IsolationTier,
@@ -458,6 +458,7 @@ fn run_manual_mode(
             id,
             isolation_tier.as_str(),
         );
+        state.transition_to(ProcessorState::Error);
         return;
     };
     tracing::info!("[{}] Invoking start()...", id);
@@ -467,7 +468,12 @@ fn run_manual_mode(
         match guard.start(&full_ctx) {
             Ok(()) => tracing::info!("[{}] start() completed successfully", id),
             Err(e) => {
-                tracing::warn!("[{}] start() failed: {}", id, e);
+                // Marked here or nowhere: this thread goes straight to
+                // teardown, and a processor whose `start()` failed is not
+                // running — a reader that saw `Running` between `setup` and
+                // here must be able to find out it was wrong.
+                tracing::error!("[{}] start() failed: {}", id, e);
+                state.transition_to(ProcessorState::Error);
                 return;
             }
         }
@@ -502,7 +508,7 @@ fn run_manual_mode(
         // then overwrite the state with `Stopped`, hiding what happened.
         if !already_reported_failure && processor.lock().has_failed_unrecoverably() {
             tracing::error!("[{}] Processor failed unrecoverably", id);
-            *state.lock() = ProcessorState::Error;
+            state.transition_to(ProcessorState::Error);
             already_reported_failure = true;
         }
 

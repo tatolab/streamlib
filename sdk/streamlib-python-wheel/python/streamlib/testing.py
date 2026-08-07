@@ -44,6 +44,11 @@ DEFAULT_BAG_TIMEOUT_SECONDS = 30.0
 # diagnostic rather than a wedged test run.
 ENGINE_TEARDOWN_TIMEOUT_SECONDS = 60.0
 
+# How long `__enter__` waits for every processor's helper process to attach.
+# Generous because a cold first spawn pays for a child interpreter's startup and
+# imports; a graph that has not come up by now is broken, not slow.
+GRAPH_READY_TIMEOUT_SECONDS = 60.0
+
 # Channel names are minted here and travel to the endpoints as configuration —
 # a queue cannot travel through `config`, but the name of one can.
 _next_channel_number = itertools.count()
@@ -58,13 +63,10 @@ _running_pipeline_lock = threading.Lock()
 class SingleProcessorTestPipeline:
     """One processor, with a feeder on every input and a collector on every output.
 
-    **Known gap (#1759): bags fed immediately after `__enter__` can be dropped.**
-    A link discards what it publishes before its consumer has attached, and the
-    processor under test attaches when its helper process finishes registering —
-    tens of milliseconds after the graph compiles. Nothing in this API reports
-    that attach yet, so the loss surfaces as `await_bag` reporting that the
-    processor produced nothing. Until #1759 lands, feed after the graph has been
-    running rather than in the first instants of the `with` block.
+    `__enter__` returns only once every processor is running — which for the
+    processor under test means its helper process has registered and wired its
+    ports — so the first `feed` on the next line cannot be dropped by a link
+    whose consumer has not attached.
     """
 
     def __init__(
@@ -136,6 +138,24 @@ class SingleProcessorTestPipeline:
             target=self._run_until_shut_down, name="streamlib-test-pipeline", daemon=True
         )
         self._run_loop.start()
+        self._await_every_processor_running(runtime)
+
+    def _await_every_processor_running(self, runtime: Runtime) -> None:
+        try:
+            runtime.wait_until_every_processor_is_running(
+                timeout=GRAPH_READY_TIMEOUT_SECONDS
+            )
+        except BaseException:
+            # A graph that never came up usually never started: the run loop
+            # raised on another thread and left every processor where it was.
+            # That failure is the cause; this one is the symptom.
+            try:
+                run_failure = self._run_failure.get_nowait()
+            except queue.Empty:
+                run_failure = None
+            if run_failure is not None:
+                raise run_failure from None
+            raise
 
     def _run_until_shut_down(self) -> None:
         try:
@@ -174,9 +194,8 @@ class SingleProcessorTestPipeline:
 
         A bag is a named map, same as anything a processor writes.
 
-        Fed in the first instants after `__enter__`, a bag can be dropped before
-        the processor's helper has attached — see this class's docstring and
-        #1759.
+        Safe from the first line of the `with` block: `__enter__` already
+        waited for the processor's helper to attach.
         """
         feed_test_harness_bag(
             self._channel_for(self._input_channels, port_name, "input"), bag

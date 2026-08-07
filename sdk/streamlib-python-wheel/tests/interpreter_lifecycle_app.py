@@ -167,6 +167,30 @@ def scenario_shutdown_from_another_thread() -> None:
         marker("STOPPED_FROM_ANOTHER_THREAD")
 
 
+def scenario_readiness_wait_across_teardown() -> None:
+    """A readiness wait taken while `run()` blocks must not break teardown.
+
+    The wait reaches the engine the run loop owns, and the contract says every
+    engine thread is joined before `run()` returns. A reference left behind by
+    the wait makes that join find the engine still borrowed, and `run()` raises
+    instead of returning — a non-zero exit the driver sees.
+    """
+    runtime = streamlib.Runtime()
+
+    def wait_then_stop() -> None:
+        # The same stdin handshake the cross-thread shutdown scenario uses:
+        # until the driver closes it, `run()` may not yet hold the engine.
+        sys.stdin.read()
+        runtime.wait_until_every_processor_is_running(timeout=30.0)
+        marker("GRAPH_READY")
+        runtime.shutdown()
+
+    threading.Thread(target=wait_then_stop, daemon=True).start()
+    runtime.run()
+
+    marker("RUN_RETURNED")
+
+
 def scenario_shutdown_spun_across_the_run_loop_exit() -> None:
     """Hammer `shutdown()` from a worker across the first run loop's exit.
 
@@ -236,6 +260,7 @@ SCENARIOS = {
     "held_by_a_live_thread_at_exit": scenario_held_by_a_live_thread_at_exit,
     "second_run_refused": scenario_second_run_is_refused,
     "shutdown_from_another_thread": scenario_shutdown_from_another_thread,
+    "readiness_wait_across_teardown": scenario_readiness_wait_across_teardown,
     "two_pipelines_in_one_process": scenario_two_pipelines_in_one_process,
     "shutdown_spun_across_the_run_loop_exit": scenario_shutdown_spun_across_the_run_loop_exit,
 }

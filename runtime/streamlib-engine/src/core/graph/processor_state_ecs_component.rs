@@ -11,7 +11,7 @@ pub enum ProcessorState {
     /// Waiting to be started (registered but not yet running).
     #[default]
     Pending,
-    /// Setup complete, ready to process but not yet active.
+    /// Prepared by the compiler, but its thread has not run `setup` yet.
     Idle,
     /// Actively processing frames.
     Running,
@@ -23,6 +23,21 @@ pub enum ProcessorState {
     Stopped,
     /// Error state (processing failed).
     Error,
+}
+
+impl ProcessorState {
+    /// Whether the processor has yet to finish `setup`.
+    ///
+    /// The two states a processor passes through before its thread runs
+    /// `setup`: `Pending` from the moment it is added to the graph, `Idle` once
+    /// the compiler has prepared it. Every later state means setup resolved —
+    /// `Running` if it returned, `Error` if it raised — which is what makes
+    /// this the readiness predicate: for a processor in a helper process,
+    /// `setup` is the call that waits for the child to register and wire its
+    /// ports.
+    pub fn is_before_setup_completed(self) -> bool {
+        matches!(self, Self::Pending | Self::Idle)
+    }
 }
 
 impl std::fmt::Display for ProcessorState {

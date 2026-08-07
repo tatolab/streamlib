@@ -278,6 +278,36 @@ def test_a_second_run_is_refused(app_under_test):
 
 
 @pytest.mark.requires_gpu
+def test_a_readiness_wait_does_not_break_the_teardown_contract(app_under_test):
+    """The readiness wait is reachable while `run()` blocks, and `run()` still
+    returns clean afterwards.
+
+    The wait has to reach the engine the run loop owns, which is the shape the
+    teardown contract forbids outliving the run. What keeps it legal is that
+    the binding upgrades its reference only long enough to take the processor
+    states and drops it before waiting. Mentally hold that `Arc` across the
+    wait instead and the hazard is back: teardown's `Arc::into_inner` can find
+    the engine still borrowed and `run()` raises rather than returning. This
+    test does not reproduce that interleaving — it pins the everyday path,
+    that reaching the engine mid-run leaves teardown intact.
+    """
+    app = app_under_test("readiness_wait_across_teardown")
+    app.await_engine_ready()
+
+    # The readiness wait cannot begin until `run()` holds the engine, so the
+    # driver opens the gate only once the engine reports itself up.
+    app.process.stdin.close()
+
+    app.await_clean_exit()
+    assert "GRAPH_READY" in app.markers(), (
+        f"the readiness wait must return while run() blocks; output:\n{app.output}"
+    )
+    assert "RUN_RETURNED" in app.markers(), (
+        f"run() must return normally after a readiness wait; output:\n{app.output}"
+    )
+
+
+@pytest.mark.requires_gpu
 def test_shutdown_from_another_thread_ends_a_blocking_run(app_under_test):
     """`shutdown()` must end a running pipeline, from any thread.
 

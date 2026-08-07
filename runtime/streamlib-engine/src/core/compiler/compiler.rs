@@ -272,7 +272,7 @@ impl Compiler {
                     if let Some(node) = graph.traversal_mut().v(proc_id).first_mut() {
                         // Set state to stopping
                         if let Some(state) = node.get::<StateComponent>() {
-                            *state.0.lock() = ProcessorState::Stopping;
+                            state.transition_to(ProcessorState::Stopping);
                         }
                         // Send shutdown signal — eventfd wakes reactive
                         // mode's epoll, channel send wakes continuous/manual.
@@ -357,7 +357,7 @@ impl Compiler {
                     let mut graph = graph_arc.write();
                     if let Some(node) = graph.traversal_mut().v(proc_id).first_mut() {
                         if let Some(state) = node.get::<StateComponent>() {
-                            *state.0.lock() = ProcessorState::Stopped;
+                            state.transition_to(ProcessorState::Stopped);
                         }
                     }
                     // Remove from graph

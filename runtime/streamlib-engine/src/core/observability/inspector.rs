@@ -39,7 +39,7 @@ impl GraphInspector {
         // Get state from node's component storage if available
         let state = node
             .get::<StateComponent>()
-            .map(|s| *s.0.lock())
+            .map(StateComponent::current)
             .unwrap_or_default();
 
         // Get metrics from node's component storage if available

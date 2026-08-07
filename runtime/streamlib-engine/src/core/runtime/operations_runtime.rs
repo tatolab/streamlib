@@ -81,7 +81,7 @@ async fn add_processor_impl(
             .v(&node_id)
             .first()
             .and_then(|node| node.get::<StateComponent>())
-            .map(|state_component| matches!(*state_component.0.lock(), ProcessorState::Error))
+            .map(|state_component| state_component.current() == ProcessorState::Error)
             .unwrap_or(false);
 
         if registry_miss {
