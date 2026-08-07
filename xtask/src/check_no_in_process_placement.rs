@@ -49,10 +49,21 @@
 //!   words state the correct model — one process *per* processor), registering
 //!   the class "in the parent process", a per-callback duration monitor naming
 //!   another processor, a per-processor "placement decision" or "placement
-//!   choice", and any paraphrase of the retracted numbers — "roughly half the
-//!   subprocess latency", "0.6% of a frame budget" — which no literal list
-//!   catches. A green run means these patterns are absent, never that the rule
-//!   is satisfied; the reviewers are the coverage for the rest.
+//!   choice", `in-process` beside a Python processor (tried as a shape and
+//!   removed — it fires on the boundary, where built-ins and in-process Rust
+//!   are discussed alongside processors), and any paraphrase of the retracted
+//!   numbers — "roughly half the subprocess latency", "0.6% of a frame budget"
+//!   — which no literal list catches. A green run means these patterns are
+//!   absent, never that the rule is satisfied; the reviewers are the coverage
+//!   for the rest.
+//! - **Matching is by fixed substring, so one interposed adjective defeats a
+//!   determiner form.** `same interpreter` is caught; `same Python interpreter`
+//!   is not, and neither are `one CPython interpreter`, `app's embedded
+//!   interpreter`, or `app's own interpreter`. Closing that family properly
+//!   needs token-proximity matching rather than substring matching — a
+//!   different matcher than this gate was commissioned with, and one whose
+//!   false-positive cost against `one interpreter per processor` (the correct
+//!   model, stated in the banned shape's own words) has not been measured.
 //! - **A banned phrase split by a line wrap is caught; a paired-term rule whose
 //!   terms land on different lines is not.** [`wrapped_banned_phrase`] explains
 //!   why the second half is deliberate rather than missing.
@@ -266,6 +277,11 @@ const BANNED_SHAPES: &[BannedShape] = &[
             "share an interpreter",
             "shares an interpreter",
             "sharing an interpreter",
+            "share the interpreter",
+            "shares the interpreter",
+            "sharing the interpreter",
+            "share interpreters",
+            "shares interpreters",
             "app's interpreter",
             "parent's interpreter",
             "parent interpreter",
@@ -275,7 +291,16 @@ const BANNED_SHAPES: &[BannedShape] = &[
     },
     BannedShape {
         all_of: &["processor"],
-        any_of: &["share a gil", "shares a gil", "sharing a gil", "share the gil", "share one gil", "shared gil"],
+        any_of: &[
+            "share a gil",
+            "shares a gil",
+            "sharing a gil",
+            "share the gil",
+            "share one gil",
+            "shared gil",
+            "share a python gil",
+            "share the python gil",
+        ],
         also_requires_any_of: &[],
         guidance: CO_TENANCY_GUIDANCE,
     },
@@ -332,12 +357,6 @@ const BANNED_SHAPES: &[BannedShape] = &[
             "in process hosting",
             "in process authoring",
         ],
-        also_requires_any_of: &[],
-        guidance: PLACEMENT_GUIDANCE,
-    },
-    BannedShape {
-        all_of: &["in-process", "python processor"],
-        any_of: &[],
         also_requires_any_of: &[],
         guidance: PLACEMENT_GUIDANCE,
     },
@@ -720,12 +739,16 @@ fn first_banned_shape(line: &str) -> Option<BannedShapeMatch> {
 /// prose hard-wraps, so `in-process` / `hosting` and `one shared` /
 /// `interpreter` happen with no intent to evade.
 ///
-/// Deliberately narrower than joining the two lines and re-running everything.
-/// A whole-window scan also pairs terms that merely landed on adjacent lines,
-/// and adjacent prose lines routinely share a word — that trade cost four false
-/// positives on the rule's protected boundary, which is exactly what
-/// `.claude/rules/placement.md` says must not happen. A multi-word term absent
-/// from both lines but present across the seam is the real phrase, every time.
+/// Narrower than joining every pair of lines and re-running everything: the
+/// seam is evaluated only when a multi-word term is itself split by the break,
+/// which is strong evidence of the real phrase. A bare whole-window scan pairs
+/// terms that merely landed on adjacent lines, and adjacent prose lines
+/// routinely share a word — that cost four false positives on the rule's
+/// protected boundary, which `.claude/rules/placement.md` says must not happen.
+///
+/// Note what this still is: once a term straddles, the shape's *remaining*
+/// terms are matched over the joined window, so they may come from either line.
+/// The straddle is the admission ticket, not a per-term constraint.
 fn wrapped_banned_phrase(previous: &str, current: &str) -> Option<BannedShapeMatch> {
     if previous.is_empty() {
         return None;
@@ -994,13 +1017,57 @@ mod tests {
         assert!(lint(tmp.path()).is_empty());
     }
 
+    /// `in-process` beside `python processor` was tried as a shape and removed:
+    /// it fires on the rule's protected boundary, where native built-ins and
+    /// in-process Rust are discussed alongside Python processors — including in
+    /// the sentences that state the ban. Disclosed as a miss instead.
     #[test]
-    fn flags_in_process_beside_a_python_processor() {
+    fn allows_the_boundary_discussing_in_process_rust_beside_a_processor() {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
             "docs/architecture/a.md",
-            "Python processors run in-process when latency matters.\n",
+            "The RHI mints an in-process FullAccess context; the Python processor reaches it \
+             only through the escalate hop.\n",
+        );
+        write(
+            tmp.path(),
+            "docs/architecture/b.md",
+            "Native built-ins run in-process; a Python processor never does.\n",
+        );
+        assert!(lint(tmp.path()).is_empty(), "{:?}", lint(tmp.path()));
+    }
+
+    #[test]
+    fn flags_the_interpreter_sharing_determiners() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "docs/architecture/a.md",
+            "Two Python processors share the interpreter.\n",
+        );
+        write(
+            tmp.path(),
+            "docs/architecture/b.md",
+            "The processors share interpreters.\n",
+        );
+        write(
+            tmp.path(),
+            "docs/architecture/c.md",
+            "Two Python processors share a Python GIL.\n",
+        );
+        assert_eq!(lint(tmp.path()).len(), 3);
+    }
+
+    /// A straddling term admits the seam, and the shape's other terms are then
+    /// matched across both lines. Locked so the behaviour is deliberate.
+    #[test]
+    fn a_straddling_phrase_pairs_the_shapes_other_terms_across_the_seam() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "docs/architecture/a.md",
+            "Every Python processor is served by one shared\ninterpreter.\n",
         );
         assert_eq!(lint(tmp.path()).len(), 1);
     }
