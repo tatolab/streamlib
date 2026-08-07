@@ -45,22 +45,22 @@
 //!   processor class is `sdk/streamlib-python-wheel/tests/test_helper_placement.py`.
 //! - **The pattern set is a subset of the rule's STOP-WORK vocabulary, not the
 //!   whole of it**, and the list below is not exhaustive either. Probed misses:
-//!   `share a GIL`, the runtime described as "one process" or "one big process",
-//!   in-process called "lowest latency", a per-callback duration monitor naming
-//!   another processor, co-hosting described as shortening an escalate hop,
-//!   registering the class "in the parent process", a per-processor "placement
-//!   decision" or "placement choice", and any paraphrase of the retracted
-//!   numbers — "roughly half the subprocess latency", "0.6% of a frame budget"
-//!   — which no literal list catches. A green run means these patterns are
-//!   absent, never that the rule is satisfied; the reviewers are the coverage
-//!   for the rest.
-//! - **Matching is per line, and this repo's prose hard-wraps.** A banned
-//!   sentence that wraps between two of its terms passes, and so does a denial
-//!   that wraps away from what it denies — which is why
-//!   [`EXEMPT_PROHIBITION_LINES`] carries wrapped halves of prohibitions that
-//!   read as claims on their own. A two-line window was tried and reverted: it
-//!   caught three wrapped violations and invented four false positives on the
-//!   rule's protected boundary, which is the trade the rule explicitly forbids.
+//!   the runtime described as "one process" or "one big process" (the same two
+//!   words state the correct model — one process *per* processor), registering
+//!   the class "in the parent process", a per-callback duration monitor naming
+//!   another processor, a per-processor "placement decision" or "placement
+//!   choice", and any paraphrase of the retracted numbers — "roughly half the
+//!   subprocess latency", "0.6% of a frame budget" — which no literal list
+//!   catches. A green run means these patterns are absent, never that the rule
+//!   is satisfied; the reviewers are the coverage for the rest.
+//! - **A banned phrase split by a line wrap is caught; a paired-term rule whose
+//!   terms land on different lines is not.** [`wrapped_banned_phrase`] explains
+//!   why the second half is deliberate rather than missing.
+//! - The contention shape is anchored to the word `GIL`, so a non-adjacent
+//!   phrasing — "reduces contention between processors", "the lock is contended
+//!   by both" — does not reach it. Bare `contention` flagged a processor's own
+//!   threads and bare `contended` flagged the surface adapter's lock prose;
+//!   anchoring is what keeps the shape from crying wolf.
 //! - `.claude/` and `.github/` are not scanned. The rules and reviewer
 //!   definitions quote the banned shapes to forbid them and change through their
 //!   own dedicated PRs; `.github/` is CI configuration, and this gate's own
@@ -140,6 +140,10 @@ const EXEMPT_PROHIBITION_LINES: &[(&str, &str)] = &[
         "In-process hosting of a Python processor does not exist — not as a default, a",
     ),
     (
+        "docs/plan/ARCHITECTURE.md",
+        "co-tenancy remedy: no two Python processors share an interpreter.",
+    ),
+    (
         "docs/plan/GLOSSARY.md",
         "in-process hosting of a Python processor does not exist. Native built-ins running in",
     ),
@@ -158,6 +162,16 @@ const EXEMPT_PROHIBITION_LINES: &[(&str, &str)] = &[
     (
         "docs/plan/changes/importable-python-library.md",
         "(A \"dev-mode GIL-hold watchdog\" clause was removed here 2026-08-04: it measured",
+    ),
+    // Wrapped halves: the phrase splits across the line break, so the line the
+    // violation reports on carries only the tail of a prohibition.
+    (
+        "docs/plan/changes/processor-class-identity.md",
+        "hosting of a Python processor is banned, so a `__main__`-defined class has no legal",
+    ),
+    (
+        "docs/decisions/importable-python-library.md",
+        "interpreter — it is the performance bar, never a placement precedent). Dogfooding",
     ),
     // "…never a co-tenancy test, since no two Python / processors share an
     // interpreter" — the denial wrapped away from what it denies.
@@ -207,13 +221,19 @@ const EXEMPT_PROHIBITION_LINES: &[(&str, &str)] = &[
 ];
 
 /// A banned shape. `all_of` terms must every one appear; `any_of` and
-/// `also_requires_any_of` — when non-empty — each need one hit; a hit on
-/// `unless_any_of` clears the shape. All matching is ASCII-case-insensitive.
+/// `also_requires_any_of` — when non-empty — each need one hit. All matching is
+/// case-insensitive over a [`normalize`]d line.
+///
+/// There is deliberately no negative term. A "unless the line also says
+/// `helper`" clause was tried and removed: it cleared the whole shape on a
+/// substring hit anywhere on the line, so `When no helper is available the
+/// app's interpreter hosts the processor class` — the ADR's named `not a
+/// fallback` shape — passed green. A prohibition that needs quarter is a line
+/// in [`EXEMPT_PROHIBITION_LINES`], which names the file and the exact text.
 struct BannedShape {
     all_of: &'static [&'static str],
     any_of: &'static [&'static str],
     also_requires_any_of: &'static [&'static str],
-    unless_any_of: &'static [&'static str],
     guidance: &'static str,
 }
 
@@ -251,8 +271,25 @@ const BANNED_SHAPES: &[BannedShape] = &[
             "parent interpreter",
         ],
         also_requires_any_of: &[],
-        unless_any_of: CO_TENANCY_BOUNDARY,
         guidance: CO_TENANCY_GUIDANCE,
+    },
+    BannedShape {
+        all_of: &["processor"],
+        any_of: &["share a gil", "shares a gil", "sharing a gil", "share the gil", "share one gil", "shared gil"],
+        also_requires_any_of: &[],
+        guidance: CO_TENANCY_GUIDANCE,
+    },
+    BannedShape {
+        all_of: &["processor"],
+        any_of: &["co-host", "cohost"],
+        also_requires_any_of: &[],
+        guidance: PLACEMENT_GUIDANCE,
+    },
+    BannedShape {
+        all_of: &["in-process", "lowest latency"],
+        any_of: &[],
+        also_requires_any_of: &[],
+        guidance: PLACEMENT_GUIDANCE,
     },
     BannedShape {
         all_of: &[],
@@ -261,31 +298,28 @@ const BANNED_SHAPES: &[BannedShape] = &[
             "gil-contention",
             "contend for the gil",
             "contending for the gil",
-            "contend for one",
+            "gil is contended",
+            "contended gil",
         ],
         also_requires_any_of: &[],
-        unless_any_of: &[],
         guidance: DIAGNOSTIC_GUIDANCE,
     },
     BannedShape {
         all_of: &["gil"],
         any_of: &["stall", "block", "starve", "degrade"],
         also_requires_any_of: &["other processor", "another processor", "other python processor"],
-        unless_any_of: &[],
         guidance: CO_TENANCY_GUIDANCE,
     },
     BannedShape {
         all_of: &[],
         any_of: &["gil-hold", "gil hold", "slow-callback", "slow callback", "stall-attribution", "stall attribution"],
         also_requires_any_of: WATCHDOG_NOUNS,
-        unless_any_of: &[],
         guidance: DIAGNOSTIC_GUIDANCE,
     },
     BannedShape {
         all_of: &[],
         any_of: RETIRED_PLACEMENT_TERMS,
         also_requires_any_of: &[],
-        unless_any_of: &[],
         guidance: PLACEMENT_GUIDANCE,
     },
     BannedShape {
@@ -299,30 +333,22 @@ const BANNED_SHAPES: &[BannedShape] = &[
             "in process authoring",
         ],
         also_requires_any_of: &[],
-        unless_any_of: &[],
         guidance: PLACEMENT_GUIDANCE,
     },
     BannedShape {
         all_of: &["in-process", "python processor"],
         any_of: &[],
         also_requires_any_of: &[],
-        unless_any_of: &[],
         guidance: PLACEMENT_GUIDANCE,
     },
     BannedShape {
         all_of: &[],
         any_of: &["0.085ms", "0.085 ms", "0.161ms", "0.161 ms", "0.089ms", "0.089 ms", "0.180ms", "0.180 ms"],
         also_requires_any_of: &[],
-        unless_any_of: &[],
         guidance: RETRACTED_NUMBERS_GUIDANCE,
     },
 ];
 
-/// The rule's protected boundary for the co-tenancy shape. A helper's or
-/// child's own interpreter is the shipped model; `its own interpreter` is what
-/// every Python processor has.
-const CO_TENANCY_BOUNDARY: &[&str] =
-    &["helper", "child", "own interpreter", "its own", "their own", "no two"];
 
 /// The watchdog family needs its diagnostic name *and* a monitor noun, or
 /// every `GIL-holding thread` doc comment trips it.
@@ -571,6 +597,7 @@ fn scan_file(
     }
 
     let mut spans = SupersessionSpanState::default();
+    let mut previous = String::new();
     for (idx, line) in body.lines().enumerate() {
         let scanned = if is_markdown {
             spans.outside_spans(line)
@@ -578,13 +605,17 @@ fn scan_file(
             Cow::Borrowed(line)
         };
         if scanned.trim().is_empty() {
+            previous.clear();
             continue;
         }
         if is_exempt_prohibition_line(&relative, line) {
             report.exempt_lines_hit += 1;
+            previous.clear();
             continue;
         }
-        if let Some(hit) = first_banned_shape(&scanned) {
+        let hit = first_banned_shape(&scanned)
+            .or_else(|| wrapped_banned_phrase(&previous, &scanned));
+        if let Some(hit) = hit {
             report.violations.push(LintViolation {
                 file: path.to_path_buf(),
                 line: idx + 1,
@@ -592,6 +623,7 @@ fn scan_file(
                 guidance: hit.guidance,
             });
         }
+        previous = scanned.into_owned();
     }
     Ok(())
 }
@@ -663,37 +695,82 @@ impl SupersessionSpanState {
     }
 }
 
+/// Fold the prose spellings that differ from the pattern literals only by a
+/// character an editor substituted: the hyphen family (a non-breaking hyphen in
+/// `in‑process` is invisible in a diff) and the curly apostrophe in
+/// `app's interpreter`.
+fn normalize(line: &str) -> String {
+    line.chars()
+        .map(|c| match c {
+            '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}' => '-',
+            '\u{2018}' | '\u{2019}' => '\'',
+            other => other.to_ascii_lowercase(),
+        })
+        .collect()
+}
+
 fn first_banned_shape(line: &str) -> Option<BannedShapeMatch> {
-    let haystack = line.to_ascii_lowercase();
-    for shape in BANNED_SHAPES {
-        if !shape.all_of.iter().all(|term| haystack.contains(term)) {
-            continue;
+    let haystack = normalize(line);
+    BANNED_SHAPES
+        .iter()
+        .find_map(|shape| shape.match_in(&haystack))
+}
+
+/// The wrap case: a banned *phrase* split across a line break. This repo's
+/// prose hard-wraps, so `in-process` / `hosting` and `one shared` /
+/// `interpreter` happen with no intent to evade.
+///
+/// Deliberately narrower than joining the two lines and re-running everything.
+/// A whole-window scan also pairs terms that merely landed on adjacent lines,
+/// and adjacent prose lines routinely share a word — that trade cost four false
+/// positives on the rule's protected boundary, which is exactly what
+/// `.claude/rules/placement.md` says must not happen. A multi-word term absent
+/// from both lines but present across the seam is the real phrase, every time.
+fn wrapped_banned_phrase(previous: &str, current: &str) -> Option<BannedShapeMatch> {
+    if previous.is_empty() {
+        return None;
+    }
+    let before = normalize(previous);
+    let after = normalize(current);
+    let seam = format!("{before} {after}");
+    BANNED_SHAPES.iter().find_map(|shape| {
+        let splits_the_seam = shape
+            .all_of
+            .iter()
+            .chain(shape.any_of.iter())
+            .filter(|term| term.contains(' '))
+            .any(|term| seam.contains(term) && !before.contains(term) && !after.contains(term));
+        if !splits_the_seam {
+            return None;
         }
-        if shape.unless_any_of.iter().any(|term| haystack.contains(term)) {
-            continue;
+        shape.match_in(&seam)
+    })
+}
+
+impl BannedShape {
+    /// `haystack` must already be [`normalize`]d.
+    fn match_in(&self, haystack: &str) -> Option<BannedShapeMatch> {
+        if !self.all_of.iter().all(|term| haystack.contains(term)) {
+            return None;
         }
-        if !shape.also_requires_any_of.is_empty()
-            && !shape
+        if !self.also_requires_any_of.is_empty()
+            && !self
                 .also_requires_any_of
                 .iter()
                 .any(|term| haystack.contains(term))
         {
-            continue;
+            return None;
         }
-        let matched = if shape.any_of.is_empty() {
-            Cow::Owned(shape.all_of.join(" + "))
+        let matched = if self.any_of.is_empty() {
+            Cow::Owned(self.all_of.join(" + "))
         } else {
-            match shape.any_of.iter().copied().find(|t| haystack.contains(t)) {
-                Some(term) => Cow::Borrowed(term),
-                None => continue,
-            }
+            Cow::Borrowed(self.any_of.iter().copied().find(|t| haystack.contains(t))?)
         };
-        return Some(BannedShapeMatch {
+        Some(BannedShapeMatch {
             matched,
-            guidance: shape.guidance,
-        });
+            guidance: self.guidance,
+        })
     }
-    None
 }
 
 #[cfg(test)]
@@ -843,23 +920,40 @@ mod tests {
         assert_eq!(lint(tmp.path()).len(), 3);
     }
 
-    /// A helper's own interpreter is the shipped model, not a violation of it —
-    /// the rule's "these are NOT the ban" boundary, which a bare
-    /// `same interpreter` + `processor` rule flagged.
+    /// Each processor having *its own* interpreter is the shipped model, and it
+    /// matches no pattern — the co-tenancy shape names sharing, not ownership.
+    /// No negative term is needed, and none exists.
     #[test]
-    fn allows_a_helper_running_the_class_in_its_own_interpreter() {
+    fn allows_a_processor_owning_its_interpreter() {
         let tmp = TempDir::new().unwrap();
         write(
             tmp.path(),
             "docs/architecture/a.md",
-            "The helper imports the wheel into the same interpreter that runs the processor class.\n",
-        );
-        write(
-            tmp.path(),
-            "docs/architecture/b.md",
             "Every Python processor gets its own interpreter in its own child process.\n",
         );
-        assert!(lint(tmp.path()).is_empty());
+        assert!(lint(tmp.path()).is_empty(), "{:?}", lint(tmp.path()));
+    }
+
+    /// Naming the helper, the child, or a processor's own anything must not buy
+    /// a sentence clemency. An `unless_any_of` boundary let all seven of these
+    /// through — including the ADR's named "not a fallback" shape — for the sake
+    /// of one plan line that `EXEMPT_PROHIBITION_LINES` now carries by name.
+    #[test]
+    fn boundary_words_do_not_excuse_a_co_tenancy_claim() {
+        let sentences = [
+            "When no helper is available the app's interpreter hosts the processor class.",
+            "The helper pool runs several Python processors in one interpreter.",
+            "Two Python processors share an interpreter inside the child process.",
+            "The processor class is imported into the parent interpreter whenever the helper spawn fails.",
+            "A processor may run in the same interpreter as the app if it declares its own low-latency mode.",
+            "No two processors share an interpreter unless the helper opts them in.",
+            "Several processors share one interpreter and their own GIL is shared between them.",
+        ];
+        for (index, sentence) in sentences.iter().enumerate() {
+            let tmp = TempDir::new().unwrap();
+            write(tmp.path(), "docs/architecture/a.md", &format!("{sentence}\n"));
+            assert_eq!(lint(tmp.path()).len(), 1, "sentence {index} passed: {sentence}");
+        }
     }
 
     #[test]
@@ -939,6 +1033,88 @@ mod tests {
             "* **python:** in-process authoring\n",
         );
         assert!(lint(tmp.path()).is_empty());
+    }
+
+    /// This repo's prose hard-wraps; a banned phrase splitting across the break
+    /// is the phrase, not a coincidence.
+    #[test]
+    fn flags_a_banned_phrase_split_by_a_line_wrap() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "docs/architecture/a.md",
+            "A change that reintroduces in-process\nhosting is a regression.\n",
+        );
+        write(
+            tmp.path(),
+            "docs/architecture/b.md",
+            "Holoscan acquires the GIL in one shared\ninterpreter for every processor.\n",
+        );
+        let violations = lint(tmp.path());
+        assert_eq!(violations.len(), 2, "got {violations:?}");
+        assert!(violations.iter().all(|v| v.line == 2), "got {violations:?}");
+    }
+
+    /// The reason the wrap check is phrase-only: adjacent prose lines routinely
+    /// share a word, and pairing across the break flagged the rule's protected
+    /// boundary — here, a true sentence about what the app's interpreter never
+    /// loaded.
+    #[test]
+    fn does_not_pair_terms_that_merely_landed_on_adjacent_lines() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "sdk/foo/tests/a.py",
+            "# Only a parent can see that the app's interpreter never loaded a second copy\n             # of the processor's module.\n",
+        );
+        assert!(lint(tmp.path()).is_empty(), "{:?}", lint(tmp.path()));
+    }
+
+    /// An editor's non-breaking hyphen and curly apostrophe are invisible in a
+    /// diff and would otherwise walk straight past the pattern literals.
+    #[test]
+    fn flags_prose_spelled_with_unicode_punctuation() {
+        let tmp = TempDir::new().unwrap();
+        write(tmp.path(), "docs/architecture/a.md", "In\u{2011}process hosting is back.\n");
+        write(
+            tmp.path(),
+            "docs/architecture/b.md",
+            "Hosting a Python processor in the app\u{2019}s interpreter is the fast path.\n",
+        );
+        assert_eq!(lint(tmp.path()).len(), 2);
+    }
+
+    #[test]
+    fn flags_processors_sharing_a_gil() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "docs/architecture/a.md",
+            "Two Python processors share a GIL, so one can block the other.\n",
+        );
+        assert_eq!(lint(tmp.path()).len(), 1);
+    }
+
+    #[test]
+    fn flags_co_hosting_a_processor() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "docs/architecture/a.md",
+            "The processor is co-hosted in the parent to shorten the escalate hop.\n",
+        );
+        assert_eq!(lint(tmp.path()).len(), 1);
+    }
+
+    #[test]
+    fn flags_in_process_called_lowest_latency() {
+        let tmp = TempDir::new().unwrap();
+        write(
+            tmp.path(),
+            "docs/architecture/a.md",
+            "Running in-process is the lowest latency option.\n",
+        );
+        assert_eq!(lint(tmp.path()).len(), 1);
     }
 
     #[test]
