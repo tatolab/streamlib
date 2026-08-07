@@ -66,7 +66,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   as in-process capabilities (torch/cupy and GL consumers); only their cross-DSO
   `-abi` halves die with the plugin ABI. [importable-python-library]
 
-## Processor model & scheduling — IN-FLIGHT (→ schema-free-ports, processor-class-identity, importable-python-library, in-process-hosting-ripout)
+## Processor model & scheduling — IN-FLIGHT (→ schema-free-ports, processor-class-identity, importable-python-library)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
@@ -108,7 +108,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   Helper children import the wheel itself — one native artifact. Every processor class
   must be import-addressable from a module whose import is side-effect-safe; there is
   nothing to equalize and nothing to move between, because there is no second
-  placement. [helper-process-placement-only]
+  placement. [helper-process-placement-only — SHIPPED #1714]
+  <!-- verify: sdk/streamlib-python-wheel/tests/test_helper_placement.py -->
 - **DECIDED** — The MVP edit loop is re-running `dev` (warm restart is sub-second by
   construction). Reload-on-save is a nicety, not MVP-gating, and when built it is
   processor-granular — stop the processor, respawn its helper (a fresh interpreter

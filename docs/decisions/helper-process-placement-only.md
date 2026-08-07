@@ -114,7 +114,7 @@ spec-forbidden).
 
 ## Consequences
 
-- #1720's in-process hosting (`PythonProcessorHost`, the context-lease machinery, the
+- #1720's in-process hosting (the in-process host type, the context-lease machinery, the
   in-process link data plane) is deleted inside #1714 — never run in parallel with the
   helper path. #1714 also absorbs import-path identity derivation (the unbuilt prerequisite
   `STREAMLIB_ENTRYPOINT` consumes), the `rt.add` `__main__` refusal, the scaffold split,

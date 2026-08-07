@@ -142,6 +142,8 @@ half still belongs to this ticket.
 - REMOVED: `runtime/streamlib-engine/src/core/runtime/module_loader/`
 - REMOVED: `runtime/streamlib-engine/src/core/runtime/install.rs` / `add_modules_from_lockfile`
 - REMOVED: `native_lib_resolver`
+- REMOVED: set_iceoryx2_resources
+- REMOVED: STREAMLIB_PYTHON_NATIVE_LIB
 - REMOVED: `load_project_dylib` (engine dylib-load test corpus) / `pack_then_load_smoke` /
   `cdylib_owns_tokio_runtime` / `polyglot_linux_check_out_deno` / `folder_backed_package_build`
 - REMOVED: `tools/streamlib-build-orchestrator` / `BuildOrchestrator`

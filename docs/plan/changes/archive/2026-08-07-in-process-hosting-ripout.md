@@ -49,8 +49,12 @@ inlined; no API invented here is unverified against the tree.
   `plane_base_address` for `ConsumerVulkanBuffer::mapped_ptr` (live precedent:
   `examples/camera-python-subprocess`); three new escalate ops for device-export
   staging on the `run_cpu_readback_copy` template + surface-share registration of the
-  staging buffer (the one machinery gap); `CpuAccessGate` wired to the
-  `produce_done`/`consume_done` OPAQUE_FD timeline pair; `acquire_texture` either
+  staging buffer (the one machinery gap); ~~`CpuAccessGate` wired to the
+  `produce_done`/`consume_done` OPAQUE_FD timeline pair~~ — Corrected 2026-08-07 at ship
+  (flagged during #1714's second session): that pair is the cpu-readback adapter's
+  single-writer contract and never touches this path; what shipped synchronizes on the
+  staging's single `refill_done` timeline, which travels in the `produce_done` wire slot
+  with `consume_done` empty; `acquire_texture` either
   registers pool textures into surface-share or refuses from a child with a named
   error (implementer's call from transport cost, both acceptable).
 - **Child log forwarding as a hard deliverable**: records ride the escalate `Log` op
@@ -138,10 +142,16 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
 - REMOVED: LimitedAccessRuntimeContextViewPointer
 - REMOVED: install_view_lease_and_prime_caches
 - REMOVED: revoke_view_lease
-- REMOVED: set_iceoryx2_resources
+- ~~REMOVED: set_iceoryx2_resources~~ — Reassigned 2026-08-07 at ship: live plugin-ABI
+  surface (the #894 `GeneratedProcessor` seam); every carrier (`processor_vtable.rs`,
+  `core/plugin/`, the generated-processor pair, the subprocess spawn ops) is on Change B's
+  REMOVED inventory, and it dies there with them.
 - REMOVED: test_in_process_authoring
 - REMOVED: test_a_write_blocked_by_backpressure_stalls_no_other_python_processor
-- REMOVED: STREAMLIB_PYTHON_NATIVE_LIB
+- ~~REMOVED: STREAMLIB_PYTHON_NATIVE_LIB~~ — Reassigned 2026-08-07 at ship: every
+  remaining carrier (`native_lib_resolver`, `spawn_python_native_subprocess_op`, the
+  module loader, old `sdk/streamlib-python`) is Change B's deletion scope; the env var
+  dies with the machinery that reads it.
 - REMOVED: streamlib-pyembed-spike
 
 The spike deletion is one clause of a five-part disposition (miscitation research,
