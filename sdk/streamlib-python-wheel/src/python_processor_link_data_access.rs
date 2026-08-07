@@ -159,15 +159,20 @@ impl PythonProcessorLinkDataAccess {
                         },
                     );
                 }
-                let notify_service = node.open_or_create_notify_service(
-                    dest_notify_service_name,
-                    notify_max_notifiers,
-                )?;
-                output_writer.add_channel_notifier(
-                    port_name,
-                    link_id,
-                    notify_service.create_notifier()?,
-                );
+                // An empty name is the engine saying this destination never
+                // drains a listener, so there is nothing to wake and the link
+                // is wired for data only.
+                if !dest_notify_service_name.is_empty() {
+                    let notify_service = node.open_or_create_notify_service(
+                        dest_notify_service_name,
+                        notify_max_notifiers,
+                    )?;
+                    output_writer.add_channel_notifier(
+                        port_name,
+                        link_id,
+                        notify_service.create_notifier()?,
+                    );
+                }
                 Ok(())
             })
             .map_err(|wiring_failure| {

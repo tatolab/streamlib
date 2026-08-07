@@ -66,6 +66,17 @@ processors:
         schema: any
         description: Test input port 2
 
+  - name: TestMockReactiveInputOnlyProcessor
+    description: "Mock processor with only input ports, woken by upstream writes, for testing"
+    execution: reactive
+    inputs:
+      - name: in1
+        schema: any
+        description: Test input port 1
+      - name: in2
+        schema: any
+        description: Test input port 2
+
   - name: TestMockOutputOnlyProcessor
     description: "Mock processor with only output ports for testing"
     execution: manual

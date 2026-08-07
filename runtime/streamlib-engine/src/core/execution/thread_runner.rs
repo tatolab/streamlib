@@ -249,10 +249,10 @@ fn run_reactive_mode(
                     std::thread::sleep(NO_WAITER_FALLBACK_SLEEP);
                 }
             },
-            None => std::thread::sleep(NO_WAITER_FALLBACK_SLEEP),
+            None => sleep_then_drain_listener(processor, NO_WAITER_FALLBACK_SLEEP),
         }
         #[cfg(not(target_os = "linux"))]
-        std::thread::sleep(NO_WAITER_FALLBACK_SLEEP);
+        sleep_then_drain_listener(processor, NO_WAITER_FALLBACK_SLEEP);
 
         // Drain-loop dispatch: iceoryx2's Event service coalesces
         // multiple notify()s on the same EventId into one fd-readable
@@ -298,6 +298,24 @@ fn run_reactive_mode(
                 break;
             }
         }
+    }
+}
+
+/// The poll-loop tick a reactive runner falls back to when it has no fd waiter
+/// — every tick off Linux, and on Linux when epoll setup failed.
+///
+/// The listener still exists and every upstream still notifies it, so the drain
+/// is not optional: without it the queue fills and iceoryx2 warns on every
+/// frame for the rest of the run (#1764). Waking on the fd is what this loop
+/// gave up, not owning the listener.
+fn sleep_then_drain_listener(
+    processor: &Arc<Mutex<ProcessorInstance>>,
+    sleep_duration: std::time::Duration,
+) {
+    std::thread::sleep(sleep_duration);
+    let guard = processor.lock();
+    if let Some(inner) = guard.iceoryx2_input_mailboxes_inner() {
+        inner.drain_listener();
     }
 }
 

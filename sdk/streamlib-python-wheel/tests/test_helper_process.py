@@ -205,6 +205,39 @@ def test_a_helper_opens_its_own_ports_from_the_envelope_the_engine_sends():
     }
 
 
+def test_a_helper_publishes_to_a_destination_that_wants_no_notification():
+    """An empty `dest_notify_service_name` is the engine saying this
+    destination never drains a listener — a self-driven sink like
+    `DisplayWindow`, which polls its mailboxes from its own render thread.
+
+    The helper must wire the link for data only. Before #1764 it opened a
+    notify service unconditionally, so the empty name failed the child's whole
+    `setup` on an invalid iceoryx2 service name — reached through the MVP
+    graph's own `helper -> DisplayWindow` link.
+    """
+    from streamlib import ProcessorLinkDataAccess
+
+    link_id = "L-no-notify"
+    destination = ProcessorLinkDataAccess()
+    _helper.wire_link_data_access(
+        destination, {"inputs": [engine_shaped_link_wiring("input", link_id)]}
+    )
+
+    source = ProcessorLinkDataAccess()
+    source_wiring = engine_shaped_link_wiring("output", link_id)
+    source_wiring["dest_notify_service_name"] = ""
+    _helper.wire_link_data_access(source, {"outputs": [source_wiring]})
+
+    source.write_to_output_port("frames_to_downstream", {"frame_index": 12})
+
+    assert destination.any_input_port_has_data(), (
+        "dropping the notifier must not touch data delivery"
+    )
+    assert destination.read_from_input_port("frames_from_upstream") == {
+        "frame_index": 12
+    }
+
+
 # =============================================================================
 # The framed socket
 # =============================================================================

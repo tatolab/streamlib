@@ -216,6 +216,17 @@ impl OutputWriterInner {
         }
     }
 
+    /// Number of destination notifiers this output port's channel holds — one
+    /// per `connect()` link whose destination waits on a listener. Observation
+    /// surface for tests and diagnostics.
+    pub fn channel_notifier_count(&self, output_port: &str) -> usize {
+        self.channels
+            .lock()
+            .get(output_port)
+            .map(|egress| egress.notifiers.len())
+            .unwrap_or(0)
+    }
+
     /// Reclaim the source-side egress for one disconnected `connect()` link.
     ///
     /// When the dropped `link_id` notifier was the port's last outbound link, the

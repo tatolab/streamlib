@@ -104,6 +104,26 @@ impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {
     }
 }
 
+/// Mock processor with only input ports, waking on upstream writes rather
+/// than driving itself — the one execution mode that consumes the link
+/// notifications its listener receives.
+#[crate::processor(
+    "@tatolab/streamlib-engine/TestMockReactiveInputOnlyProcessor",
+    execution = reactive,
+    input("in1", any),
+    input("in2", any),
+)]
+pub(crate) struct MockReactiveInputOnlyProcessor;
+
+impl crate::core::ReactiveProcessor for MockReactiveInputOnlyProcessor::Processor {
+    fn process(
+        &mut self,
+        _ctx: &crate::core::context::RuntimeContextLimitedAccess<'_>,
+    ) -> crate::core::error::Result<()> {
+        Ok(())
+    }
+}
+
 /// Register all engine-internal test mock processors with the global
 /// `PROCESSOR_REGISTRY`. Idempotent — safe to call from every test
 /// fixture that builds a graph against `lookup_registered_ident` or
@@ -114,5 +134,6 @@ pub(crate) fn ensure_test_mocks_registered() {
         PROCESSOR_REGISTRY.register::<MockProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockOutputOnlyProcessor::Processor>();
         PROCESSOR_REGISTRY.register::<MockInputOnlyProcessor::Processor>();
+        PROCESSOR_REGISTRY.register::<MockReactiveInputOnlyProcessor::Processor>();
     });
 }
