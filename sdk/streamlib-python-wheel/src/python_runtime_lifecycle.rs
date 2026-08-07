@@ -8,9 +8,10 @@
 //! not merely stopped — before [`PythonRuntimeHandle::run`] returns, so no
 //! engine thread can still be alive when CPython finalizes.
 
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard, Weak};
+use std::time::Duration;
 
-use pyo3::exceptions::PyRuntimeError;
+use pyo3::exceptions::{PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
@@ -86,7 +87,10 @@ impl From<EngineTeardownIncomplete> for PyErr {
 /// run loop in the interpreter, which then returns having run nothing.
 enum PythonRuntimeLifecycleState {
     EngineConstructedNotYetRun(Arc<Runner>),
-    RunLoopBlockedUntilShutdownRequested,
+    /// Weak, never strong: the run loop owns the only strong reference, and a
+    /// second one here would make teardown's `Arc::into_inner` find the engine
+    /// still borrowed and report that its threads were never joined.
+    RunLoopBlockedUntilShutdownRequested(Weak<Runner>),
     EngineTornDownAndThreadsJoined,
 }
 
@@ -131,11 +135,43 @@ impl PythonRuntimeHandle {
     fn engine_being_built(&self, what: &str) -> PyResult<Arc<Runner>> {
         match &*self.lifecycle() {
             PythonRuntimeLifecycleState::EngineConstructedNotYetRun(engine) => Ok(engine.clone()),
-            PythonRuntimeLifecycleState::RunLoopBlockedUntilShutdownRequested => {
+            PythonRuntimeLifecycleState::RunLoopBlockedUntilShutdownRequested(_) => {
                 Err(PyRuntimeError::new_err(format!(
                     "cannot {what}: this Runtime is already running. Build the whole graph \
                      before calling run()."
                 )))
+            }
+            PythonRuntimeLifecycleState::EngineTornDownAndThreadsJoined => {
+                Err(PyRuntimeError::new_err(format!(
+                    "cannot {what}: this Runtime has been shut down. Construct a new one."
+                )))
+            }
+        }
+    }
+
+    /// Take a reference to the engine to read the graph's readiness from.
+    ///
+    /// Answers in both live states, not just the running one. A processor
+    /// carries its state from the moment it is added and the compiler
+    /// transitions that same state rather than replacing it, so a wait started
+    /// against a graph that has not been run yet is already watching the states
+    /// `run()` will move. That is what lets a caller start the run loop on one
+    /// thread and wait on another without sequencing the two — there is no
+    /// window in which the wait arrives too early.
+    ///
+    /// The caller must drop this before waiting on what it reads. The run loop
+    /// has to hold the only strong reference for teardown to join the engine's
+    /// threads, and one kept alive across the wait would make `Arc::into_inner`
+    /// report that it could not.
+    fn engine_to_read_graph_readiness_from(&self, what: &str) -> PyResult<Arc<Runner>> {
+        match &*self.lifecycle() {
+            PythonRuntimeLifecycleState::EngineConstructedNotYetRun(engine) => Ok(engine.clone()),
+            PythonRuntimeLifecycleState::RunLoopBlockedUntilShutdownRequested(engine) => {
+                engine.upgrade().ok_or_else(|| {
+                    PyRuntimeError::new_err(format!(
+                        "cannot {what}: this Runtime's engine is being torn down."
+                    ))
+                })
             }
             PythonRuntimeLifecycleState::EngineTornDownAndThreadsJoined => {
                 Err(PyRuntimeError::new_err(format!(
@@ -310,11 +346,18 @@ impl PythonRuntimeHandle {
     fn run(&self, python: Python<'_>) -> PyResult<()> {
         let engine = {
             let mut lifecycle = self.lifecycle();
+            // Replaced with the terminal state first because the running state
+            // needs the engine to point at, which is what is being taken here.
             match std::mem::replace(
                 &mut *lifecycle,
-                PythonRuntimeLifecycleState::RunLoopBlockedUntilShutdownRequested,
+                PythonRuntimeLifecycleState::EngineTornDownAndThreadsJoined,
             ) {
-                PythonRuntimeLifecycleState::EngineConstructedNotYetRun(engine) => engine,
+                PythonRuntimeLifecycleState::EngineConstructedNotYetRun(engine) => {
+                    *lifecycle = PythonRuntimeLifecycleState::RunLoopBlockedUntilShutdownRequested(
+                        Arc::downgrade(&engine),
+                    );
+                    engine
+                }
                 already_run => {
                     *lifecycle = already_run;
                     return Err(PyRuntimeError::new_err(
@@ -373,7 +416,7 @@ impl PythonRuntimeHandle {
                 drop(lifecycle);
                 Ok(Self::drop_engine_without_holding_the_gil(python, engine)?)
             }
-            PythonRuntimeLifecycleState::RunLoopBlockedUntilShutdownRequested => {
+            PythonRuntimeLifecycleState::RunLoopBlockedUntilShutdownRequested(_) => {
                 // Issued while still holding the lock: `run()` takes it to move
                 // to the torn-down state and clears the latch there, so this
                 // request cannot outlive the run loop it is meant for.
@@ -382,6 +425,49 @@ impl PythonRuntimeHandle {
             }
             PythonRuntimeLifecycleState::EngineTornDownAndThreadsJoined => Ok(()),
         }
+    }
+
+    /// Block until every processor in the graph is running, then return.
+    ///
+    /// Call it around `run()` — before it, or from another thread while it
+    /// blocks; a graph that has not started yet is waited through rather than
+    /// refused. A processor runs once its `setup` has returned, and for a
+    /// Python processor `setup` is what waits for its helper process to
+    /// register and wire its ports. Publishing into the graph before that
+    /// point loses bags: a link drops what it carries while its consumer is
+    /// not yet attached.
+    ///
+    /// Raises if a processor failed instead of starting, or if `timeout`
+    /// elapses first; the message names the processor and the state it was
+    /// left in, so forgetting `run()` altogether reads as every processor
+    /// still `Pending`.
+    #[pyo3(signature = (*, timeout = 30.0))]
+    fn wait_until_every_processor_is_running(
+        &self,
+        python: Python<'_>,
+        timeout: f64,
+    ) -> PyResult<()> {
+        // Checked rather than `from_secs_f64`, which panics on a negative, a
+        // NaN, or a value too large for a `Duration` — all reachable from
+        // Python, none of them a reason to abort the interpreter.
+        let timeout = Duration::try_from_secs_f64(timeout).map_err(|_| {
+            PyValueError::new_err(format!(
+                "timeout must be a finite, non-negative number of seconds, not {timeout}"
+            ))
+        })?;
+        let engine = self.engine_to_read_graph_readiness_from("wait for the graph to come up")?;
+        // Two detached steps rather than one, so the engine reference is gone
+        // before the long one begins: reading the states needs the engine,
+        // waiting on them does not. Detached because both take the graph lock,
+        // which an engine thread can hold while it needs this interpreter's GIL.
+        let graph_readiness = python.detach(|| {
+            let graph_readiness = engine.observable_graph_readiness();
+            drop(engine);
+            graph_readiness
+        });
+        python
+            .detach(|| graph_readiness.wait_until_every_processor_is_running(timeout))
+            .map_err(|wait_failure| PyRuntimeError::new_err(wait_failure.to_string()))
     }
 
     fn __enter__(python_self: PyRef<'_, Self>) -> PyRef<'_, Self> {

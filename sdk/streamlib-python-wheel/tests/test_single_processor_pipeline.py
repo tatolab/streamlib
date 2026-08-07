@@ -15,16 +15,7 @@ import pytest
 from single_processor_under_test import ConfiguredScaler, DoublingFilter
 from streamlib.testing import SingleProcessorTestPipeline
 
-pytestmark = [
-    pytest.mark.requires_gpu,
-    pytest.mark.skip(
-        reason=(
-            "#1759: the harness has no way to know the processor under test's helper has "
-            "attached, so bags fed before it does are dropped by the link. The transport "
-            "itself works — the same graph round-trips with a settle before the first feed"
-        )
-    ),
-]
+pytestmark = [pytest.mark.requires_gpu]
 
 
 def test_a_fed_bag_reaches_the_processor_and_its_output_comes_back():
@@ -32,6 +23,12 @@ def test_a_fed_bag_reaches_the_processor_and_its_output_comes_back():
 
     The feeder and collector are native endpoints in the app process; the
     processor under test is a child interpreter. A bag crosses out and back.
+
+    Feeding on the first line of the `with` block is the assertion, not a
+    shortcut: `__enter__` has to have waited for the processor's helper to
+    attach. Mentally remove that wait and this fails on nearly every run — the
+    feeder publishes into a link the helper attaches to tens of milliseconds
+    later, and the link drops what it carries in the meantime.
     """
     with SingleProcessorTestPipeline(DoublingFilter) as pipeline:
         pipeline.feed("numbers_from_upstream", {"value": 21})
@@ -56,8 +53,12 @@ def test_the_processor_under_test_is_constructed_with_the_config():
 
 
 def test_a_port_the_processor_does_not_declare_is_named_in_the_error():
+    """A typo'd port name has to come back as the typo plus the real names —
+    `feed` names inputs, so the output port is not among them."""
     with SingleProcessorTestPipeline(DoublingFilter) as pipeline:
-        with pytest.raises(KeyError, match="numbers_to_downstream"):
+        with pytest.raises(KeyError, match="no_such_port"):
+            pipeline.feed("no_such_port", {"value": 1})
+        with pytest.raises(KeyError, match="numbers_from_upstream"):
             pipeline.feed("no_such_port", {"value": 1})
 
 
