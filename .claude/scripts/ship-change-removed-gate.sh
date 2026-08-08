@@ -41,7 +41,7 @@ trap 'rm -f "$hits"' EXIT
 #                     ARCHITECTURE.md at step 3, so a change whose own plan text names
 #                     what it removes could never reach the step that retires that text.
 #   examples/**       consumers, lagging by design (CLAUDE.md); moving out-of-repo (#1672).
-#   packages/**       the distributable entries, same doctrine — never contract sources.
+#   packages/<dist>   the *distributable* entries only, same doctrine — see below.
 #   vendor/**         the vendored vulkanalia fork, never ours to edit.
 # The path check inherits none of these: a file existing at a named path is residue
 # wherever it lives, so a bullet naming e.g. packages/test-fixtures-abi-mismatch or a
@@ -52,9 +52,22 @@ content_excludes=(
   ':!docs/decisions/**'
   ':!docs/learnings/**'
   ':!examples/**'
-  ':!packages/**'
   ':!CHANGELOG.md'
 )
+
+# packages/ is split, and the split is load-bearing (CLAUDE.md): these entries are
+# engine-side — not downstream consumers — so they stay in the sweep and their residue is
+# real work. Everything else under packages/ is a distributable that lags by design and is
+# excluded. Derived from the tree rather than hard-listed, so a package added later is
+# excluded by default and this list stays the only thing to maintain.
+engine_side_packages=" escalate core api-server test-fixtures test-fixtures-abi-mismatch "
+for pkg_dir in packages/*/; do
+  [ -d "$pkg_dir" ] || continue
+  pkg_name="${pkg_dir#packages/}"
+  pkg_name="${pkg_name%/}"
+  case "$engine_side_packages" in *" $pkg_name "*) continue ;; esac
+  content_excludes+=(":!$pkg_dir**")
+done
 
 reject() {
   echo "MALFORMED BULLET: ${1:-(empty)}"

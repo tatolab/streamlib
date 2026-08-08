@@ -198,9 +198,21 @@ expect_pass "an example that still uses the artifact is not residue"
 new_repo <<'EOF'
 - REMOVED: .slpkg
 EOF
-plant packages/api-server/src/lib.rs "// resolves a .slpkg from the store"
+plant packages/h264/src/lib.rs "// resolves a .slpkg from the store"
 run_gate
 expect_pass "a distributable package is not residue"
+
+# packages/ is split and the split is load-bearing (CLAUDE.md): these five are engine-side,
+# not downstream consumers, so their residue is real work and must still be reported.
+for engine_pkg in escalate core api-server test-fixtures test-fixtures-abi-mismatch; do
+  new_repo <<'EOF'
+- REMOVED: .slpkg
+EOF
+  plant "packages/$engine_pkg/src/lib.rs" "// resolves a .slpkg from the store"
+  run_gate
+  expect_fail "packages/$engine_pkg is engine-side and stays in the sweep" \
+    "STILL PRESENT (referenced): .slpkg"
+done
 
 # ...but the path check inherits none of those exclusions. A bullet naming a path inside
 # an excluded tree still fails while that path is tracked — otherwise this change's own
