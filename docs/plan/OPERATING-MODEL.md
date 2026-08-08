@@ -268,11 +268,10 @@ PR — never accreted mid-session because something annoyed an agent once.
 
 ## Numeric caps (hard numbers survive agent interpretation; prose doesn't)
 
-- Change proposal ≤ 350 lines (raised from 200, owner decision 2026-08-07: sessions were
-  meeting 200 by deleting file:line citations and worked API examples, inverting the cap's
-  purpose — the number bounds the proposal, it never buys room by dropping evidence).
-  Ticket count per change is guidance, not a cap (owner decision 2026-08-02): as few
-  tracer bullets as the change honestly needs.
+- Change proposal ≤ 350 lines (owner decision 2026-08-07, raised from 200); the number is
+  never met by dropping file:line citations or worked API spelling. Ticket count per change
+  is guidance, not a cap (owner decision 2026-08-02): as few tracer bullets as the change
+  honestly needs.
 - Scale gate, decided at entry: bug fix / refactor / test work → **no change artifact at
   all** (the default path); new behavior or changed contract → delta change; anything
   touching the RHI, the IPC wire format, the processor model, or the Python API's
