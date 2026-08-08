@@ -1,10 +1,23 @@
 #!/usr/bin/env bash
-# ship-change gate: every `- REMOVED: <pattern>` bullet in a change file must no longer
-# match anywhere in the tree (the change files themselves, their archive, and vendor/
-# are excluded). Run from the repo root.
+# ship-change gate: every `- REMOVED: <pattern>` bullet in a change file must name
+# something that no longer exists in the tree. Run from the repo root.
 #
 # Usage: ship-change-removed-gate.sh docs/plan/changes/<name>.md
-# Exit 0 = clean; exit 1 = something REMOVED still exists (locations printed).
+# Exit 0 = clean; 1 = residue still present, or a bullet that cannot prove anything;
+# 2 = usage / not a repo.
+#
+# A bullet is checked two independent ways, because neither alone is a removal proof:
+#
+#   contents  git grep -F over tracked files — "nothing references this any more".
+#   path      git ls-files over the same pattern read as a literal path — "the file or
+#             directory is gone". git grep never matches a filename, so an unreferenced
+#             leaf file is invisible to the content sweep; a path-shaped bullet without
+#             this check certifies only that nothing mentions it.
+#
+# Bullet grammar, enforced below — one pattern per bullet, first physical line, plain
+# text. A pattern that carries markdown decoration or joins several items can never
+# match a definition site, so it would pass green forever; those are rejected rather
+# than searched. Continuation lines are prose and are not searched.
 set -euo pipefail
 
 change="${1:?usage: ship-change-removed-gate.sh <change-file>}"
@@ -15,15 +28,64 @@ fail=0
 hits="$(mktemp)"
 trap 'rm -f "$hits"' EXIT
 
+# Excluded from the content sweep only — each is a surface that names a removed
+# artifact forever, by policy, so a hit there is not residue:
+#   CHANGELOG.md      release-please generates it from merged commit subjects; the
+#                     entry announcing a removal is unscrubbable.
+#   docs/decisions/** annotate-don't-overwrite (.claude/rules/docs-policy.md): a
+#                     superseded ADR keeps naming what it retired.
+#   docs/plan/changes/**  the change files' own inventories, including this one.
+#   vendor/**         the vendored vulkanalia fork, never ours to edit.
+# The path check does not inherit these: a file existing at the named path is residue
+# wherever it lives.
+content_excludes=(':!vendor/**' ':!docs/plan/changes/**' ':!CHANGELOG.md' ':!docs/decisions/**')
+
+reject() {
+  echo "MALFORMED BULLET: $1"
+  echo "  $2"
+  fail=1
+}
+
 count=0
 while IFS= read -r pat; do
   [ -n "$pat" ] || continue
   count=$((count + 1))
-  # git grep: tracked files only (build scratch and caches can't fake a pass), no
-  # dependence on a ripgrep binary. Judge by captured matches, not the exit code.
-  git grep -InF -- "$pat" -- ':!vendor/**' ':!docs/plan/changes/**' >"$hits" 2>/dev/null || true
+
+  case "$pat" in
+    *'`'*)
+      reject "$pat" "backticked — backticks appear only in markdown and rustdoc prose, never in a definition. Write the pattern as plain text."
+      continue ;;
+    *' / '*)
+      reject "$pat" "joins several items — the whole line is searched as one literal. Split it into one bullet per item."
+      continue ;;
+    *'{'*)
+      reject "$pat" "shell brace expansion is not expanded — it is searched literally and can never hit. Write one bullet per expanded name."
+      continue ;;
+    *' ('*)
+      reject "$pat" "trailing parenthetical is part of the searched literal. Move the note to a continuation line."
+      continue ;;
+    .|./|/|..)
+      reject "$pat" "degenerate pattern — it would match the whole tree."
+      continue ;;
+  esac
+
+  # Tracked files only: build scratch and caches must not be able to fake a pass or a
+  # failure. Judge by captured matches, not by the exit code.
+  git grep -InF -- "$pat" -- "${content_excludes[@]}" >"$hits" 2>/dev/null || true
   if [ -s "$hits" ]; then
-    echo "STILL PRESENT: $pat"
+    echo "STILL PRESENT (referenced): $pat"
+    head -20 "$hits" | sed 's/^/  /'
+    fail=1
+  fi
+
+  # `:(literal)` so a pattern containing glob metacharacters is read as the path it
+  # names, not as a wildcard. A symbol-shaped pattern names no path and matches nothing.
+  # vendor/ is dropped afterwards, not as a `:!` pathspec: git (2.43) silently drops an
+  # exact-file positive match the moment any exclude pathspec joins the list, which
+  # would make every leaf-file bullet — the one case this check exists for — pass green.
+  git ls-files -- ":(literal)$pat" 2>/dev/null | grep -v '^vendor/' >"$hits" || true
+  if [ -s "$hits" ]; then
+    echo "STILL PRESENT (on disk): $pat"
     head -20 "$hits" | sed 's/^/  /'
     fail=1
   fi
@@ -31,6 +93,8 @@ done < <(sed -n 's/^[-*][[:space:]]*REMOVED:[[:space:]]*//p' "$change")
 
 if [ "$count" -eq 0 ]; then
   echo "note: $change declares no '- REMOVED:' bullets — nothing to verify."
+elif [ "$fail" -eq 0 ]; then
+  echo "clean: $count REMOVED bullets, none referenced and none on disk."
 fi
 
 exit "$fail"
