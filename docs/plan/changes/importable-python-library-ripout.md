@@ -123,40 +123,71 @@ where a bullet says otherwise)
 
 ## REMOVED
 
-Each bullet is a pattern the ship gate verifies is gone from the tree.
+Each bullet is a pattern the ship gate verifies is gone from the tree: **one artifact per
+bullet, plain text, on the bullet's first line.** Continuation lines are prose the gate
+does not search. Grammar: `changes/README.md`.
 
-Known gate defect: it greps everything after the `- REMOVED:` prefix on one line
-verbatim, so any bullet joining two items with `/` or carrying a parenthetical can
-never match and passes vacuously. Several below are in that state. Splitting them is
-the fix, out of scope here; until then a green gate is weak evidence.
+> ~~Known gate defect: it greps everything after the `- REMOVED:` prefix on one line
+> verbatim, so any bullet joining two items with `/` or carrying a parenthetical can
+> never match and passes vacuously. Several below are in that state. Splitting them is
+> the fix, out of scope here; until then a green gate is weak evidence.~~ — Superseded
+> 2026-08-08 by PR #1788. The gate now rejects those bullet shapes instead of searching
+> them, and checks path existence as well as content — which no bullet shape could fix,
+> because `git grep` never matches a filename. The inventory below is rewritten to the
+> grammar. Measured against the pre-#1788 gate with each artifact planted and tracked:
+> 35 of the 36 bullets it could be measured against passed green with the artifact
+> present.
 
 `streamlib-adapter-cuda-helpers` is already gone, deleted early by #1743 / PR #1751
 with its three tests re-homed into `streamlib-adapter-cuda`; its bullet's `-cuda-abi`
 half still belongs to this ticket.
 
-- REMOVED: `runtime/streamlib-plugin-abi`
-- REMOVED: `sdk/streamlib-plugin-sdk`
-- REMOVED: `export_plugin!` / `install_host_services` / `HostServices` / `ProcessorVTable` / `PluginAbiObject`
-- REMOVED: `adapters/streamlib-adapter-abi`
-- REMOVED: `streamlib-adapter-vulkan-abi` / `streamlib-adapter-vulkan-helpers`
-- REMOVED: `streamlib-adapter-opengl-abi`
-- REMOVED: `streamlib-adapter-cpu-readback-abi` / `streamlib-adapter-cpu-readback-helpers`
-- REMOVED: `streamlib-adapter-cuda-abi` / `streamlib-adapter-cuda-helpers`
-- REMOVED: `streamlib-adapter-skia-abi`
-- REMOVED: `runtime/streamlib-engine/src/core/plugin/` (vtable backings,
-  `build_fingerprint`, `twin_drift_guard`, load handshake)
-- REMOVED: `runtime/streamlib-engine/src/core/runtime/module_loader/`
-- REMOVED: `runtime/streamlib-engine/src/core/runtime/install.rs` / `add_modules_from_lockfile`
-- REMOVED: `native_lib_resolver`
-- REMOVED: `spawn_python_native_subprocess_op`
-- REMOVED: `sdk/streamlib-python/python/streamlib/subprocess_runner.py`
-- REMOVED: `tests/test_clock.py`
-- REMOVED: `tests/test_subprocess_runner_cleanup.py`
+- REMOVED: runtime/streamlib-plugin-abi
+- REMOVED: sdk/streamlib-plugin-sdk
+- REMOVED: export_plugin!
+- REMOVED: install_host_services
+- REMOVED: HostServices
+- REMOVED: ProcessorVTable
+- REMOVED: PluginAbiObject
+- REMOVED: adapters/streamlib-adapter-abi
+- REMOVED: streamlib-adapter-vulkan-abi
+- REMOVED: streamlib-adapter-vulkan-helpers
+- REMOVED: streamlib-adapter-opengl-abi
+- REMOVED: streamlib-adapter-cpu-readback-abi
+- REMOVED: streamlib-adapter-cpu-readback-helpers
+- REMOVED: streamlib-adapter-cuda-abi
+- REMOVED: streamlib-adapter-cuda-helpers
+- REMOVED: streamlib-adapter-skia-abi
+- REMOVED: runtime/streamlib-engine/src/core/plugin/
+- REMOVED: build_fingerprint
+- REMOVED: twin_drift_guard
+
+  Vtable backings, the two named trip-wires, and the load handshake. Both symbols get
+  their own bullet because both are reached from outside the directory, where the path
+  bullet cannot see them: `build_fingerprint` from
+  `module_loader/processor_registration.rs:96,:673` and a comment in
+  `runtime/streamlib-engine/build.rs:24`; `twin_drift_guard` from comments in
+  `core/processors/mod.rs:48` and `xtask/src/check_vendored_vulkanalia.rs`, which cite it
+  as a trip-wire style. `build.rs`, `core/processors/`, and the vendored-vulkanalia check
+  all survive this change, so those citations are scrubbed with it.
+- REMOVED: runtime/streamlib-engine/src/core/runtime/module_loader/
+- REMOVED: runtime/streamlib-engine/src/core/runtime/install.rs
+- REMOVED: add_modules_from_lockfile
+- REMOVED: native_lib_resolver
+- REMOVED: spawn_python_native_subprocess_op
+- REMOVED: sdk/streamlib-python/python/streamlib/subprocess_runner.py
+- REMOVED: sdk/streamlib-python/python/streamlib/tests/test_clock.py
+- REMOVED: sdk/streamlib-python/python/streamlib/tests/test_subprocess_runner_cleanup.py
 
   The old SDK's subprocess-polyglot runner and its tests, part of this change's
   `sdk/streamlib-python` removal (§Language SDKs: the subprocess-polyglot machinery is
   deleted with the module system); the wheel's `python -m streamlib._helper` is the
   successor.
+
+  > ~~`tests/test_clock.py`~~ / ~~`tests/test_subprocess_runner_cleanup.py`~~ —
+  > Corrected 2026-08-08: both were written as repo-relative suffixes, which name no path
+  > from the repo root and reference nothing, so they were unprovable in either
+  > direction. Spelled in full above.
 - REMOVED: STREAMLIB_PYTHON_NATIVE_LIB
   (Added 2026-08-07 when in-process-hosting-ripout shipped: that change did not remove the
   env var, but every file naming it is this change's scope, each covered by a REMOVED
@@ -166,31 +197,94 @@ half still belongs to this ticket.
   `set_iceoryx2_resources` was **not** reassigned here: it is a live `GeneratedProcessor`
   trait method that survives this change, and only its cdylib vtable slot dies, under the
   `ProcessorVTable` / `core/plugin/` / plugin-abi / plugin-sdk removals above.)
-- REMOVED: `load_project_dylib` (engine dylib-load test corpus) / `pack_then_load_smoke` /
-  `cdylib_owns_tokio_runtime` / `polyglot_linux_check_out_deno` / `folder_backed_package_build`
-- REMOVED: `tools/streamlib-build-orchestrator` / `BuildOrchestrator`
-- REMOVED: `tools/streamlib-cargo-build`
-- REMOVED: `tools/streamlib-pack`
-- REMOVED: `tools/streamlib-cross-rustc-fixture`
-- REMOVED: `.slpkg`
-- REMOVED: `streamlib_modules`
-- REMOVED: `tools/streamlib-cli/src/commands/{add,install,link,pkg,build_on_place,generate,schema,setup}.rs`
-  (+ `commands/link/`; mutation verbs trimmed from `control.rs` and `mcp.rs`; doomed
-  CLI tests `add_remove`/`install_from_lock`/`link_unlink`/`pkg_publish_catalog`)
-- REMOVED: `RunnerAutoBuild` and the sdk `auto-build` feature
-- REMOVED: `runtime/streamlib-runtime`
-- REMOVED: `sdk/streamlib-deno` / `sdk/streamlib-deno-native`
-- REMOVED: `spawn_deno_subprocess_op`
-- REMOVED: `sdk/streamlib-processor-extract`
-- REMOVED: `sdk/streamlib-python/python/streamlib/_processor_registry.py` /
-  `extract_processors.py` / `setup.py` / `cgl_context.py`
-- REMOVED: `schemas/streamlib.schema.json`
-- REMOVED: `scripts/sync-inter-crate-versions.py`
-- REMOVED: `packages/test-fixtures-abi-mismatch`
-- REMOVED: `docs/architecture/{plugin-abi,package-development-model,package-source,package-staging-layout,runtime-module-materialization,schema-identity-and-packaging,subprocess-rhi-parity,cdylib-reachability,zero-ceremony-authoring}.md`
-  (plus ABI-half edits in `adapter-authoring`, `adapter-runtime-integration`,
+- REMOVED: load_project_dylib
+- REMOVED: pack_then_load_smoke
+- REMOVED: cdylib_owns_tokio_runtime
+- REMOVED: polyglot_linux_check_out_deno
+- REMOVED: folder_backed_package_build
+
+  The engine dylib-load test corpus. `cdylib_owns_tokio_runtime` already reaches zero —
+  it exists nowhere in the tree but this file (confirmed 2026-08-08); the other four are
+  live.
+- REMOVED: tools/streamlib-build-orchestrator
+- REMOVED: BuildOrchestrator
+- REMOVED: tools/streamlib-cargo-build
+- REMOVED: tools/streamlib-pack
+- REMOVED: tools/streamlib-cross-rustc-fixture
+- REMOVED: .slpkg
+
+  **[NEEDS DECISION]** This bullet cannot reach zero as written. After every deletion in
+  this change, `.slpkg` still appears in `.claude/agent-knowledge/`, `.claude/agents/`,
+  `.claude/rules/rhi.md`, `.gitignore`, `.dockerignore`, `docker/README.md`, `Cargo.toml`,
+  `.github/workflows/`, and `docs/learnings/slpkg-raw-device-rhi-construction.md`. The
+  `.claude/**` half belongs to the companion operating-model PR below; the rest does not.
+  Options: (a) exclude `docs/learnings/**` from the gate's content sweep the way
+  `docs/decisions/**` is excluded, and scrub the remaining few by hand; (b) scrub every
+  surface including the learning; (c) replace the bullet with a narrower symbol.
+  Recommendation: (a) — a learning about an NVIDIA double-free is empirical driver
+  behaviour, not residue of a packaging format. Owner call; not resolved here.
+- REMOVED: streamlib_modules
+
+  **[NEEDS DECISION]** 485 occurrences, the large majority in `examples/**`, which this
+  change explicitly does not delete (§Dispositions defers example re-authoring) and which
+  are moving to `tatolab/streamlib-packages` (#1672). The bullet cannot reach zero while
+  the gate searches trees that lag by design. Options: (a) exclude `examples/**` and the
+  distributable `packages/**` from the gate's content sweep, matching the packages-lag
+  doctrine in CLAUDE.md; (b) narrow the bullet to the engine-side resolver symbol.
+  Recommendation: (a), as a follow-up to PR #1788 — it fixes the same class for every
+  change file at once. Owner call; not resolved here.
+- REMOVED: tools/streamlib-cli/src/commands/add.rs
+- REMOVED: tools/streamlib-cli/src/commands/install.rs
+- REMOVED: tools/streamlib-cli/src/commands/link.rs
+- REMOVED: tools/streamlib-cli/src/commands/link/
+- REMOVED: tools/streamlib-cli/src/commands/pkg.rs
+- REMOVED: tools/streamlib-cli/src/commands/build_on_place.rs
+- REMOVED: tools/streamlib-cli/src/commands/generate.rs
+- REMOVED: tools/streamlib-cli/src/commands/schema.rs
+- REMOVED: tools/streamlib-cli/src/commands/setup.rs
+- REMOVED: tools/streamlib-cli/tests/add_remove.rs
+- REMOVED: tools/streamlib-cli/tests/install_from_lock.rs
+- REMOVED: tools/streamlib-cli/tests/link_unlink.rs
+- REMOVED: tools/streamlib-cli/tests/pkg_publish_catalog.rs
+
+  > ~~mutation verbs trimmed from `control.rs` and `mcp.rs`~~ — Superseded 2026-08-08:
+  > both files are already gone. `control.rs` went with the observation-only control
+  > plane (#1782) and `mcp.rs` with the CLI `mcp` verb (#1785, per
+  > `mcp-served-with-the-node.md`). Nothing is left to trim.
+- REMOVED: RunnerAutoBuild
+- REMOVED: auto-build
+
+  The sdk feature. Survivors that still name it — the api-server and wheel manifests,
+  `runtime.rs`, `check_boundaries.rs` — are de-referenced with it.
+- REMOVED: runtime/streamlib-runtime
+- REMOVED: sdk/streamlib-deno
+- REMOVED: sdk/streamlib-deno-native
+- REMOVED: spawn_deno_subprocess_op
+- REMOVED: sdk/streamlib-processor-extract
+- REMOVED: sdk/streamlib-python/python/streamlib/_processor_registry.py
+- REMOVED: sdk/streamlib-python/python/streamlib/extract_processors.py
+- REMOVED: sdk/streamlib-python/setup.py
+- REMOVED: sdk/streamlib-python/python/streamlib/cgl_context.py
+
+  > ~~`setup.py`~~ — Corrected 2026-08-08: it is at `sdk/streamlib-python/setup.py`, not
+  > under `python/streamlib/`. The bullet named a path that does not exist, so it would
+  > have passed green whatever the gate checked.
+- REMOVED: schemas/streamlib.schema.json
+- REMOVED: scripts/sync-inter-crate-versions.py
+- REMOVED: packages/test-fixtures-abi-mismatch
+- REMOVED: docs/architecture/plugin-abi.md
+- REMOVED: docs/architecture/package-development-model.md
+- REMOVED: docs/architecture/package-source.md
+- REMOVED: docs/architecture/package-staging-layout.md
+- REMOVED: docs/architecture/runtime-module-materialization.md
+- REMOVED: docs/architecture/schema-identity-and-packaging.md
+- REMOVED: docs/architecture/subprocess-rhi-parity.md
+- REMOVED: docs/architecture/cdylib-reachability.md
+- REMOVED: docs/architecture/zero-ceremony-authoring.md
+
+  Plus ABI-half edits in `adapter-authoring`, `adapter-runtime-integration`,
   `surface-adapter`, `texture-registration`, `compute-kernel`, `ray-tracing-kernel`,
-  `third-party-gpu-backends`; historical notes on the two cdylib/slpkg learnings)
+  `third-party-gpu-backends`; historical notes on the two cdylib/slpkg learnings.
 
 ## Companion operating-model PR (dedicated, per the flow rule)
 

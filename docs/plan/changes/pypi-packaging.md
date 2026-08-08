@@ -85,10 +85,22 @@ resolve from the installed distribution, never from `target/` and never from the
 
 ## REMOVED
 
-- REMOVED: `static-package-source emit` (scoped `sdk/streamlib-python/pyproject.toml` —
-  the stale version-authority comment; the xtask command itself stays).
-- REMOVED: `version = "0.4.30"` (scoped `sdk/streamlib-python/pyproject.toml` — the
-  independent Python version line; the distribution version becomes workspace-derived).
+Each bullet is a pattern the ship gate verifies is gone: **one artifact per bullet, plain
+text, on the bullet's first line.** Continuation lines are prose the gate does not search.
+
+> ~~REMOVED: `static-package-source emit`~~ — Deleted 2026-08-08 as provably wrong, not
+> merely unprovable. The bullet asserted a tree-wide removal, but this change explicitly
+> keeps the xtask command, which is named in `tools/streamlib-cli/src/commands/pkg.rs`,
+> `docs/architecture/package-source.md` (×3) and
+> `docs/architecture/package-development-model.md` — so it could never reach zero. What it
+> actually described, deleting the stale version-authority comment from a surviving file,
+> is a modification and is already stated by the MODIFIED bullet above (`:10-14`). No
+> inventory is lost.
+
+- REMOVED: version = "0.4.30"
+
+  Scoped `sdk/streamlib-python/pyproject.toml` — the independent Python version line; the
+  distribution version becomes workspace-derived.
 
 ## Wheel composition — RESOLVED by owner, 2026-07-30
 
