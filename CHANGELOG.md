@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.15.0](https://github.com/tatolab/streamlib/compare/v0.14.4...v0.15.0) (2026-08-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **runtime:** relocate the api-server and trim the control plane to observation-only verbs ([#1782](https://github.com/tatolab/streamlib/issues/1782))
+
+### Features
+
+* **runtime:** relocate the api-server and trim the control plane to observation-only verbs ([#1782](https://github.com/tatolab/streamlib/issues/1782)) ([e9c4f13](https://github.com/tatolab/streamlib/commit/e9c4f13712c3775ee55de80b3f6ddf3980c8c7f8))
+
 ## [0.14.4](https://github.com/tatolab/streamlib/compare/v0.14.3...v0.14.4) (2026-08-07)
 
 
