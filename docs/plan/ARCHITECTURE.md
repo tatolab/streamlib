@@ -136,7 +136,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   green-thread style): intended, do not build until designed; hard constraint — no new
   configuration dials. [execution-model]
 
-## Graphics (RHI / GPU)
+## Graphics (RHI / GPU) — IN-FLIGHT (→ python-kernel-surface)
 
 - **DECIDED** — All Vulkan lives in the RHI (`vulkan/rhi/` + `streamlib-consumer-rhi`); one
   kernel abstraction per pipeline kind; consumers go through `GpuContext` only.
@@ -166,10 +166,12 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   traits and their installation step are deleted: no kernel capability can be absent at
   runtime, and no application glue supplies one. [python-kernel-api]
 - **DECIDED** — GLSL is the shader source contract: Python passes GLSL text and the
-  engine compiles it at kernel construction, cached by source hash; pre-compiled SPIR-V
-  stays accepted as an escape hatch. Authoring a kernel requires no toolchain beyond the
-  installed wheel, for every kernel kind. The wheel carries a C++ GLSL compiler
-  (shaderc / glslang). [python-kernel-api]
+  engine compiles it at kernel construction, and re-creating an identical kernel is free —
+  compilation is cached under a key covering everything that changes the output (source,
+  stage, entry point, target environment, compiler version), never source alone.
+  Pre-compiled SPIR-V stays accepted as an escape hatch. Authoring a kernel requires no
+  toolchain beyond the installed wheel, for every kernel kind. The wheel carries a C++
+  GLSL compiler (shaderc / glslang). [python-kernel-api]
 - **DECIDED** — Dispatch is synchronous: it returns when the GPU work has retired and
   the writes are visible, and no fence or timeline vocabulary reaches Python. Several
   dispatches batch into one submission with barriers between them and a single fence at
