@@ -56,6 +56,10 @@ fn _engine(module: &Bound<'_, PyModule>) -> PyResult<()> {
     module.add_function(wrap_pyfunction!(python_logging::monotonic_now_ns, module)?)?;
     module.add_function(wrap_pyfunction!(python_logging::log_event, module)?)?;
     module.add_function(wrap_pyfunction!(
+        python_logging::runtime_log_directory,
+        module
+    )?)?;
+    module.add_function(wrap_pyfunction!(
         python_test_harness_endpoints::open_test_harness_channel,
         module
     )?)?;

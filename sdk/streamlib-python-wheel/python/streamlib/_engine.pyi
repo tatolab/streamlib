@@ -46,6 +46,7 @@ __all__ = [
     "log_event",
     "media_clock_now_ns",
     "monotonic_now_ns",
+    "runtime_log_directory",
     "open_test_harness_channel",
 ]
 
@@ -495,6 +496,9 @@ class MonotonicTimer:
 
 def monotonic_now_ns() -> int:
     """Current monotonic time in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`."""
+
+def runtime_log_directory() -> str:
+    """The directory the engine writes its per-runtime JSONL logs into."""
 
 def media_clock_now_ns() -> int:
     """The clock the engine stamps bags with, in nanoseconds.
