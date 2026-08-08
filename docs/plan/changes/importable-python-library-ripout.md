@@ -212,27 +212,37 @@ half still belongs to this ticket.
 - REMOVED: tools/streamlib-pack
 - REMOVED: tools/streamlib-cross-rustc-fixture
 - REMOVED: .slpkg
-
-  **[NEEDS DECISION]** This bullet cannot reach zero as written. After every deletion in
-  this change, `.slpkg` still appears in `.claude/agent-knowledge/`, `.claude/agents/`,
-  `.claude/rules/rhi.md`, `.gitignore`, `.dockerignore`, `docker/README.md`, `Cargo.toml`,
-  `.github/workflows/`, and `docs/learnings/slpkg-raw-device-rhi-construction.md`. The
-  `.claude/**` half belongs to the companion operating-model PR below; the rest does not.
-  Options: (a) exclude `docs/learnings/**` from the gate's content sweep the way
-  `docs/decisions/**` is excluded, and scrub the remaining few by hand; (b) scrub every
-  surface including the learning; (c) replace the bullet with a narrower symbol.
-  Recommendation: (a) — a learning about an NVIDIA double-free is empirical driver
-  behaviour, not residue of a packaging format. Owner call; not resolved here.
 - REMOVED: streamlib_modules
 
-  **[NEEDS DECISION]** 485 occurrences, the large majority in `examples/**`, which this
-  change explicitly does not delete (§Dispositions defers example re-authoring) and which
-  are moving to `tatolab/streamlib-packages` (#1672). The bullet cannot reach zero while
-  the gate searches trees that lag by design. Options: (a) exclude `examples/**` and the
-  distributable `packages/**` from the gate's content sweep, matching the packages-lag
-  doctrine in CLAUDE.md; (b) narrow the bullet to the engine-side resolver symbol.
-  Recommendation: (a), as a follow-up to PR #1788 — it fixes the same class for every
-  change file at once. Owner call; not resolved here.
+  Both reach zero. The format and the module directory die outright: distribution moves to
+  Python's own mechanism (§Distribution — the wheel is the artifact), which is what
+  `ARCHITECTURE.md`'s "deleted in full: `streamlib_modules/`, the `.slpkg` format,
+  `streamlib.lock`" already states. Residue after this change's deletions is 27 files for
+  `.slpkg` and 9 for `streamlib_modules`, all engine-tree scrubbing this change already
+  implies — `core/streamlib_home.rs`'s walk, `operations_runtime.rs`, `streamlib-sdk`,
+  `streamlib-macros`, `streamlib-error`, the CLI entrypoint, `xtask`, `Cargo.toml`,
+  `.gitignore`/`.dockerignore`, `docker/README.md`, `sdk/vulkan-jpeg`, and
+  `packages/test-fixtures/Cargo.toml:19`.
+
+  Note for the implementer: `sdk/streamlib-jtd-codegen` and `sdk/streamlib-processor-schema`
+  are among the `.slpkg` survivors but are deleted outright by `schema-free-ports.md` /
+  `processor-class-identity.md`. Scrub the mention; do not invest in reshaping either.
+
+  > ~~**[NEEDS DECISION]** …`.slpkg` cannot reach zero as written…~~ /
+  > ~~**[NEEDS DECISION]** …485 occurrences, the large majority in `examples/**`…~~ —
+  > Resolved by owner 2026-08-08. Neither bullet needed narrowing; the gate's *scope* was
+  > wrong. PR #1791 drops `examples/**`, the distributable `packages/` entries,
+  > `docs/learnings/**` and `docs/plan/**` from the content sweep — consumers that lag by
+  > design, an empirical driver record that outlives the format, and the plan itself, which
+  > states what we agreed rather than what the tree holds.
+  >
+  > The `docs/plan/**` half was a deadlock, not a preference: `ARCHITECTURE.md:41` names
+  > both artifacts as things this change deletes, and `/ship-change` gates at step 1 but
+  > folds `ARCHITECTURE.md` at step 3 — so #1715 could never pass the gate, and the only
+  > legal place to retire that sentence was a step it could never reach.
+  >
+  > The `streamlib_modules` block also overstated the problem: 151 of its 161 tracked files
+  > were `examples/**`. The bullet was satisfiable all along.
 - REMOVED: tools/streamlib-cli/src/commands/add.rs
 - REMOVED: tools/streamlib-cli/src/commands/install.rs
 - REMOVED: tools/streamlib-cli/src/commands/link.rs
