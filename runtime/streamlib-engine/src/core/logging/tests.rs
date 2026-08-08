@@ -17,6 +17,7 @@ use crate::core::logging::{
     event::{LogLevel, RuntimeLogEvent, SCHEMA_VERSION, Source},
     init::init_for_tests,
     paths::{log_dir, runtime_log_path},
+    worker::format_event_pretty,
 };
 use crate::core::runtime::RuntimeUniqueId;
 
@@ -876,4 +877,43 @@ fn burst_surfaces_dropped_counter_record() {
     );
 
     clear_streamlib_home();
+}
+
+/// The pretty rendering is a cross-language contract: the wheel's `streamlib
+/// logs` replays a JSONL record and must produce the same bytes this mirror
+/// wrote live, or one record reads as two different records.
+///
+/// The literal below is asserted character-for-character by
+/// `sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py`'s
+/// `test_a_record_renders_exactly_as_the_runtime_mirrored_it`. Changing
+/// [`format_event_pretty`] without changing that test — or the reverse — is
+/// what this pair exists to turn red.
+#[test]
+fn the_pretty_rendering_matches_the_golden_the_python_reader_asserts() {
+    let event = RuntimeLogEvent {
+        schema_version: 1,
+        host_ts: 1_786_136_667_573_387_556,
+        runtime_id: "Rabc".to_string(),
+        source: Source::Rust,
+        level: LogLevel::Info,
+        message: "Creating Runner".to_string(),
+        target: "streamlib_engine::core::runtime".to_string(),
+        pipeline_id: None,
+        processor_id: None,
+        rhi_op: None,
+        source_ts: None,
+        source_seq: None,
+        intercepted: false,
+        channel: None,
+        attrs: Default::default(),
+    };
+
+    let mut rendered = String::new();
+    format_event_pretty(&event, &mut rendered);
+
+    assert_eq!(
+        rendered,
+        "21:04:27.573 [ INFO] [Rabc/rust] streamlib_engine::core::runtime — \
+         Creating Runner\n"
+    );
 }

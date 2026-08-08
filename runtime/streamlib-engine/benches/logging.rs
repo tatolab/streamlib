@@ -34,8 +34,8 @@ use tracing::subscriber::{DefaultGuard, NoSubscriber};
 
 use streamlib_engine::core::runtime::RuntimeUniqueId;
 use streamlib_engine::logging::{
-    LogLevel, LoggingTunables, RuntimeLogEvent, StreamlibLoggingConfig,
-    StreamlibLoggingGuard, init_for_tests,
+    LogLevel, LoggingTunables, RuntimeLogEvent, StreamlibLoggingConfig, StreamlibLoggingGuard,
+    init_for_tests,
 };
 
 fn install_pathway(tmp: &TempDir, runtime_id: &str) -> StreamlibLoggingGuard {

@@ -31,10 +31,13 @@ import runpy
 import sys
 import traceback
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
 
 from . import Runtime
 from ._control_plane_client import ControlPlaneError, call_tool, resolve_control_url
+
+if TYPE_CHECKING:
+    from ._runtime_log_reader import LogRecordFilters
 
 __all__ = ["main"]
 
@@ -401,11 +404,11 @@ def scaffold_new_app(target_directory: Path, *, use_test_pattern_source: bool) -
 # ─── Observation verbs ───────────────────────────────────────────────────────
 
 
-def print_discovered_nodes(output: "Any" = None) -> int:
+def print_discovered_nodes() -> int:
     """`streamlib nodes`: the running control planes, as an aligned table."""
     from ._node_registry import registry_directory, scan_check_and_prune
 
-    stream = output if output is not None else sys.stdout
+    stream = sys.stdout
     nodes = scan_check_and_prune()
     if not nodes:
         print(f"No running nodes found in {registry_directory()}.", file=stream)
@@ -460,14 +463,17 @@ def read_runtime_log_file(
     runtime_id: "Optional[str]",
     list_runtimes: bool,
     follow: bool,
-    filters: "Any",
+    filters: "LogRecordFilters",
 ) -> int:
     """`streamlib logs` in on-disk mode: enumerate, or render one runtime's file."""
     from ._runtime_log_reader import (
         enumerate_runtime_log_files,
+        format_size,
+        format_started_at,
         newest_log_file_for_runtime,
         read_log_file,
         runtime_log_directory_path,
+        wait_for_runtime_log_file,
     )
 
     log_directory = runtime_log_directory_path()
@@ -481,11 +487,12 @@ def read_runtime_log_file(
         if not log_files:
             print(f"(no runtime log files in {log_directory})")
             return 0
-        print(f"{'RUNTIME_ID':<24}  {'STARTED_AT_MILLIS':<20}  SIZE")
+        print(f"{'RUNTIME_ID':<24}  {'STARTED_AT':<24}  SIZE")
         for log_file in log_files:
             print(
-                f"{log_file.runtime_id:<24}  {log_file.started_at_millis:<20}  "
-                f"{log_file.size_bytes} B"
+                f"{log_file.runtime_id:<24}  "
+                f"{format_started_at(log_file.started_at_millis):<24}  "
+                f"{format_size(log_file.size_bytes)}"
             )
         return 0
 
@@ -498,14 +505,23 @@ def read_runtime_log_file(
 
     log_file = newest_log_file_for_runtime(log_directory, runtime_id)
     if log_file is None:
-        raise AppLaunchError(
-            f"no log file for runtime `{runtime_id}` in {log_directory}.\n"
-            f"Use `streamlib logs --list` to see the runtimes that have one."
-        )
+        if not follow:
+            raise AppLaunchError(
+                f"no log file for runtime `{runtime_id}` in {log_directory}.\n"
+                f"Use `streamlib logs --list` to see the runtimes that have one."
+            )
+        try:
+            log_file = wait_for_runtime_log_file(log_directory, runtime_id, sys.stderr)
+        except KeyboardInterrupt:
+            return 0
 
     try:
         for rendered in read_log_file(
-            log_file.path, filters, follow=follow, errors=sys.stderr
+            log_file,
+            filters,
+            follow=follow,
+            errors=sys.stderr,
+            log_directory=log_directory,
         ):
             print(rendered)
     except KeyboardInterrupt:

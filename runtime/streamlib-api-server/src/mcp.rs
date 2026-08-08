@@ -497,9 +497,6 @@ mod tests {
     struct ControlPlaneMcpDispatchStubRuntime {
         tap_plan: Option<StubTapPlan>,
         recorded_shutdown_reasons: Arc<Mutex<Vec<String>>>,
-        /// Stands in for the host's observation of the shutdown request: the
-        /// real loop owner polls the engine's latch, this fires on the call.
-        shutdown_observed_notifier: Arc<tokio::sync::Notify>,
     }
 
     impl ControlPlaneMcpDispatchStubRuntime {
@@ -507,7 +504,6 @@ mod tests {
             Self {
                 tap_plan: None,
                 recorded_shutdown_reasons: Arc::new(Mutex::new(Vec::new())),
-                shutdown_observed_notifier: Arc::new(tokio::sync::Notify::new()),
             }
         }
 
@@ -575,7 +571,6 @@ mod tests {
             self.recorded_shutdown_reasons
                 .lock()
                 .push(reason.to_string());
-            self.shutdown_observed_notifier.notify_one();
             Ok(())
         }
         fn to_json(&self) -> Result<Value> {

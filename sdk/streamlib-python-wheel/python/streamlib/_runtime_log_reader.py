@@ -18,11 +18,15 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, NamedTuple, Optional, TextIO
+from typing import Any, Generator, NamedTuple, Optional, TextIO
 
 __all__ = [
     "LogRecordFilters",
+    "wait_for_runtime_log_file",
+    "format_started_at",
+    "format_size",
     "RuntimeLogFile",
     "runtime_log_directory_path",
     "enumerate_runtime_log_files",
@@ -49,6 +53,24 @@ _LEVEL_COLUMN = {
 _FOLLOW_POLL_SECONDS = 0.1
 
 
+def format_started_at(started_at_millis: int) -> str:
+    """A log file's start time as an ISO-8601 UTC stamp.
+
+    `--list` exists so a human can pick a runtime_id; raw epoch millis defeats
+    that, which is why the engine's own listing rendered a date.
+    """
+    stamped = datetime.fromtimestamp(started_at_millis / 1000, tz=timezone.utc)
+    return stamped.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def format_size(size_bytes: int) -> str:
+    """A byte count in the binary units the engine's listing used."""
+    for unit, scale in (("GiB", 1024**3), ("MiB", 1024**2), ("KiB", 1024)):
+        if size_bytes >= scale:
+            return f"{size_bytes / scale:.1f} {unit}"
+    return f"{size_bytes} B"
+
+
 def runtime_log_directory_path() -> Path:
     """The directory the engine writes per-runtime JSONL logs into.
 
@@ -58,7 +80,7 @@ def runtime_log_directory_path() -> Path:
     """
     from ._engine import runtime_log_directory
 
-    return Path(runtime_log_directory())
+    return runtime_log_directory()
 
 
 class RuntimeLogFile(NamedTuple):
@@ -158,12 +180,35 @@ def _format_wall_clock_time(host_ts_nanoseconds: int) -> str:
     return f"{hours:02}:{minutes:02}:{seconds:02}.{milliseconds:03}"
 
 
+def _render_attribute_value(value: Any) -> str:
+    """One `attrs` value as `serde_json::Value`'s `Display` writes it.
+
+    Two places where the obvious `json.dumps` call diverges from serde_json:
+
+    - `ensure_ascii` escapes non-ASCII, where serde passes UTF-8 through raw
+      (its escape table marks 0x80-0xFF as no-escape), so a `café` in an attr
+      would render `caf\u00e9` here and `café` in the runtime's own mirror.
+    - Python spells an exponent `1e+20` / `1e-07`; serde uses ryu, which emits
+      the shortest round-trip form `1e20` / `1e-7`. Normalised below rather than
+      left to differ, since only the exponent spelling differs — both are the
+      shortest representation that round-trips.
+    """
+    if isinstance(value, float) and not isinstance(value, bool):
+        rendered = json.dumps(value)
+        mantissa, exponent_marker, exponent = rendered.partition("e")
+        if not exponent_marker:
+            return rendered
+        sign = "-" if exponent.startswith("-") else ""
+        return f"{mantissa}e{sign}{exponent.lstrip('+-').lstrip('0') or '0'}"
+    return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+
+
 def format_record_pretty(record: "dict[str, Any]") -> str:
     """Render one JSONL record exactly as the engine's stdout mirror does.
 
-    Field order and separators are the contract — `attrs` values are rendered as
-    compact JSON because the engine writes them through `serde_json::Value`'s
-    `Display`, which quotes strings and leaves numbers bare.
+    Field order and separators are the contract. `attrs` values go through
+    [`_render_attribute_value`], which matches `serde_json::Value`'s `Display` —
+    strings keep their quotes, numbers stay bare.
     """
     level = record.get("level", "info")
     rendered = (
@@ -178,7 +223,7 @@ def format_record_pretty(record: "dict[str, Any]") -> str:
             rendered += f" {optional_column}={value}"
     for attribute_name in sorted(record.get("attrs", {})):
         attribute_value = record["attrs"][attribute_name]
-        rendered += f" {attribute_name}={json.dumps(attribute_value, separators=(',', ':'))}"
+        rendered += f" {attribute_name}={_render_attribute_value(attribute_value)}"
     return rendered
 
 
@@ -199,27 +244,66 @@ def _decode_line(line: str, errors: TextIO) -> "Optional[dict[str, Any]]":
     return decoded if isinstance(decoded, dict) else None
 
 
+def wait_for_runtime_log_file(
+    log_directory: Path, runtime_id: str, errors: TextIO
+) -> RuntimeLogFile:
+    """Block until `runtime_id` has a log file, for `--follow` before a boot.
+
+    Following a node you are about to start is the point of `--follow`; failing
+    because the file does not exist yet would refuse the one case the flag is
+    for.
+    """
+    print(
+        f"note: no log file yet for runtime '{runtime_id}', waiting in --follow mode...",
+        file=errors,
+    )
+    while True:
+        log_file = newest_log_file_for_runtime(log_directory, runtime_id)
+        if log_file is not None:
+            return log_file
+        time.sleep(_FOLLOW_POLL_SECONDS)
+
+
 def read_log_file(
-    path: Path,
+    log_file: RuntimeLogFile,
     filters: LogRecordFilters,
     *,
     follow: bool,
     errors: TextIO,
-) -> "Iterator[str]":
-    """Yield rendered lines from `path`, optionally tailing it forever.
+    log_directory: "Optional[Path]" = None,
+) -> "Generator[str, None, None]":
+    """Yield rendered lines from `log_file`, optionally tailing it forever.
 
     Drains what is already there, then — with `follow` — polls for appended
-    bytes. The caller owns the loop, so a `KeyboardInterrupt` stops the tail
-    without unwinding through file handling.
+    bytes. A restart under a pinned `STREAMLIB_RUNTIME_ID` writes a SECOND file
+    for the same runtime, so the tail switches to it and says so; without that
+    the tail sits on a file that will never grow again and goes silently quiet.
+    The caller owns the loop, so a `KeyboardInterrupt` stops the tail without
+    unwinding through file handling.
     """
-    with path.open("r", encoding="utf-8", errors="replace") as log_file:
-        while True:
-            line = log_file.readline()
-            if line:
-                record = _decode_line(line, errors)
-                if record is not None and filters.matches(record):
-                    yield format_record_pretty(record)
-                continue
-            if not follow:
-                return
-            time.sleep(_FOLLOW_POLL_SECONDS)
+    current = log_file
+    while True:
+        with current.path.open("r", encoding="utf-8", errors="replace") as opened:
+            while True:
+                line = opened.readline()
+                if line:
+                    record = _decode_line(line, errors)
+                    if record is not None and filters.matches(record):
+                        yield format_record_pretty(record)
+                    continue
+                if not follow:
+                    return
+                if log_directory is not None:
+                    newer = newest_log_file_for_runtime(log_directory, current.runtime_id)
+                    if (
+                        newer is not None
+                        and newer.started_at_millis > current.started_at_millis
+                    ):
+                        print(
+                            f"note: runtime '{current.runtime_id}' rotated to a newer "
+                            f"log file; switching.",
+                            file=errors,
+                        )
+                        current = newer
+                        break
+                time.sleep(_FOLLOW_POLL_SECONDS)

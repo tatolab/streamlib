@@ -111,7 +111,6 @@ impl StreamlibLoggingConfig {
         }
     }
 
-
     /// Full config for a long-lived runtime: stdout + JSONL to disk,
     /// with fd-level stdio interception on by default so raw
     /// `println!` / `printf` output lands in the JSONL flagged as

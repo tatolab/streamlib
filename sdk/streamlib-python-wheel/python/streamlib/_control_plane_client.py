@@ -19,7 +19,10 @@ import json
 import os
 import urllib.error
 import urllib.request
-from typing import Any, Optional
+from typing import TYPE_CHECKING, Any, Optional
+
+if TYPE_CHECKING:
+    from ._node_registry import NodeRegistryEntry
 
 __all__ = [
     "ControlPlaneError",
@@ -152,7 +155,7 @@ def resolve_control_url(
     )
 
 
-def _live_node_hint(nodes: "list[Any]") -> str:
+def _live_node_hint(nodes: "list[NodeRegistryEntry]") -> str:
     """A trailing ` Live nodes: ...` fragment for a resolver error message."""
     if not nodes:
         return ""

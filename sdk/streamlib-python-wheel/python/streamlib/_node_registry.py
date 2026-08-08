@@ -70,9 +70,15 @@ def _read_entry_file(path: Path) -> "Optional[NodeRegistryEntry]":
     A half-written or hand-edited file is skipped rather than raised on: the
     registry is a directory of independent files, and one bad entry must not
     make every other node undiscoverable.
+
+    An entry whose `schema_version` this reader does not know is skipped for the
+    same reason the field exists — and skipping it here is what keeps it OUT of
+    the prune path, so a reader never deletes a record it cannot parse.
     """
     try:
         record = json.loads(path.read_text(encoding="utf-8"))
+        if int(record["schema_version"]) != NODE_REGISTRY_SCHEMA_VERSION:
+            return None
         return NodeRegistryEntry(
             schema_version=int(record["schema_version"]),
             runtime_id=str(record["runtime_id"]),

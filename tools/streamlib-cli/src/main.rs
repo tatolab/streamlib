@@ -257,15 +257,10 @@ enum PkgCommands {
 fn main() -> Result<()> {
     let _ = dotenvy::dotenv();
 
-    let cli = Cli::parse();
-
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?
-        .block_on(async_main(cli))
+    run(Cli::parse())
 }
 
-async fn async_main(cli: Cli) -> Result<()> {
+fn run(cli: Cli) -> Result<()> {
     let _logging_guard = streamlib::sdk::logging::init(
         streamlib::sdk::logging::StreamlibLoggingConfig::for_cli("streamlib-cli"),
     )?;
@@ -373,16 +368,32 @@ async fn async_main(cli: Cli) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// Assert `verb` is absent from the command tree.
+    ///
+    /// Reads the tree rather than checking that `try_parse_from` errors: a
+    /// subcommand with an unsatisfied required argument also fails to parse, so
+    /// a parse-failure proxy would sleep through the reintroduction of `tap`
+    /// (required `<CHANNEL>`) or `logs` (`required_unless_present_any`).
+    fn assert_is_not_a_subcommand(verb: &str, why: &str) {
+        use clap::CommandFactory;
+
+        let served: Vec<String> = Cli::command()
+            .get_subcommands()
+            .map(|subcommand| subcommand.get_name().to_string())
+            .collect();
+        assert!(
+            !served.contains(&verb.to_string()),
+            "`streamlib {verb}` {why}; served verbs are {served:?}"
+        );
+    }
+
     /// The observation verbs live in the wheel's console script now. A Rust
     /// `graph` / `tap` / `logs` / `nodes` / `mcp` reappearing here is a second
     /// client answering to the same name against the same control plane.
     #[test]
     fn the_rust_cli_owns_no_observation_verb() {
         for verb in ["nodes", "graph", "tap", "logs", "mcp", "shutdown"] {
-            assert!(
-                Cli::try_parse_from(["streamlib", verb]).is_err(),
-                "`streamlib {verb}` must not be a Rust CLI subcommand"
-            );
+            assert_is_not_a_subcommand(verb, "must not be a Rust CLI subcommand");
         }
     }
 
@@ -392,9 +403,9 @@ mod tests {
     #[test]
     fn the_rust_cli_owns_no_app_launch_verb() {
         for verb in ["run", "dev"] {
-            assert!(
-                Cli::try_parse_from(["streamlib", verb]).is_err(),
-                "`streamlib {verb}` belongs to the wheel's console script, not this binary"
+            assert_is_not_a_subcommand(
+                verb,
+                "belongs to the wheel's console script, not this binary",
             );
         }
     }

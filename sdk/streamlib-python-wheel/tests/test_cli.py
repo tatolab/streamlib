@@ -340,14 +340,21 @@ def test_a_setup_that_exits_on_purpose_keeps_its_own_exit_code(tmp_path: Path):
     assert finished.returncode == 4, f"stderr was:\n{finished.stderr}"
 
 
-def test_the_observation_verbs_are_served_by_this_wheel(tmp_path: Path):
+def test_the_observation_verbs_are_served_by_this_wheel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     """`nodes` / `graph` / `tap` / `logs` are this CLI's, not another binary's.
 
     This replaces the stopgap that used to name where the verbs "actually
     lived": they live here now. `nodes` is the one that answers without a
     running node to talk to, so it proves the verb is wired end to end rather
     than merely present in the parser.
+
+    `XDG_RUNTIME_DIR` is redirected first: `nodes` liveness-checks and prunes
+    every entry it finds, and this test must not reach a real node on a
+    developer's machine, let alone delete its registry entry.
     """
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(tmp_path))
     finished = run_cli("nodes")
 
     assert finished.returncode == 0, f"stderr was:\n{finished.stderr}"

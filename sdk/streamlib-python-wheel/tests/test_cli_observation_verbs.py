@@ -37,8 +37,11 @@ from streamlib._control_plane_client import (
 from streamlib._node_registry import registry_directory, scan_check_and_prune
 from streamlib._runtime_log_reader import (
     LogRecordFilters,
+    RuntimeLogFile,
     enumerate_runtime_log_files,
     format_record_pretty,
+    format_size,
+    format_started_at,
     newest_log_file_for_runtime,
     read_log_file,
 )
@@ -368,13 +371,20 @@ def a_log_record(**overrides: Any) -> "dict[str, Any]":
     return record
 
 
-def write_log_file(directory: Path, runtime_id: str, millis: int, records) -> Path:
+def write_log_file(
+    directory: Path, runtime_id: str, millis: int, records
+) -> RuntimeLogFile:
     directory.mkdir(parents=True, exist_ok=True)
     path = directory / f"{runtime_id}-{millis}.jsonl"
     path.write_text(
         "".join(json.dumps(record) + "\n" for record in records), encoding="utf-8"
     )
-    return path
+    return RuntimeLogFile(
+        runtime_id=runtime_id,
+        started_at_millis=millis,
+        path=path,
+        size_bytes=path.stat().st_size,
+    )
 
 
 def test_a_record_renders_exactly_as_the_runtime_mirrored_it():
@@ -413,6 +423,37 @@ def test_attrs_render_as_compact_json_in_sorted_order():
     assert rendered.endswith(' origin="Config::global_config()" width=1920')
 
 
+def test_non_ascii_attrs_survive_unescaped():
+    # `json.dumps` escapes non-ASCII by default; serde_json's escape table marks
+    # 0x80-0xFF as no-escape, so the runtime's own mirror writes raw UTF-8. An
+    # escaped rendering here makes one record read as two different records.
+    rendered = format_record_pretty(a_log_record(attrs={"device": "Logitech Café"}))
+
+    assert rendered.endswith(' device="Logitech Café"')
+
+
+def test_a_float_attr_uses_the_shortest_round_trip_exponent():
+    # Python spells the exponent `1e+20` / `1e-07`; serde uses ryu, which emits
+    # `1e20` / `1e-7`. Same value, and both are shortest-round-trip — only the
+    # spelling differed.
+    rendered = format_record_pretty(a_log_record(attrs={"big": 1e20, "small": 1e-7}))
+
+    assert rendered.endswith(" big=1e20 small=1e-7")
+
+
+def test_a_started_at_stamp_reads_as_a_date_not_epoch_millis():
+    # `--list` exists so a human can pick a runtime_id out of it.
+    assert format_started_at(1_786_136_667_573) == "2026-08-07T21:04:27Z"
+
+
+@pytest.mark.parametrize(
+    "size_bytes,expected",
+    [(512, "512 B"), (2048, "2.0 KiB"), (5 * 1024**2, "5.0 MiB"), (3 * 1024**3, "3.0 GiB")],
+)
+def test_a_size_reads_in_binary_units(size_bytes, expected):
+    assert format_size(size_bytes) == expected
+
+
 def test_the_newest_file_for_a_runtime_wins(tmp_path):
     write_log_file(tmp_path, "Rabc", 1000, [a_log_record(message="old")])
     write_log_file(tmp_path, "Rabc", 2000, [a_log_record(message="new")])
@@ -448,7 +489,7 @@ def test_a_runtime_id_containing_dashes_still_parses(tmp_path):
 def test_each_filter_narrows_to_the_records_it_names(
     tmp_path, filters, expected_messages
 ):
-    path = write_log_file(
+    log_file = write_log_file(
         tmp_path,
         "Rabc",
         1000,
@@ -461,7 +502,7 @@ def test_each_filter_narrows_to_the_records_it_names(
     )
 
     rendered = list(
-        read_log_file(path, filters, follow=False, errors=io.StringIO())
+        read_log_file(log_file, filters, follow=False, errors=io.StringIO())
     )
 
     assert [line.split(" — ", 1)[1].split(" ")[0] for line in rendered] == expected_messages
@@ -474,14 +515,74 @@ def test_a_malformed_line_is_reported_and_skipped_not_fatal(tmp_path):
         "{ truncated\n" + json.dumps(a_log_record(message="after")) + "\n",
         encoding="utf-8",
     )
+    log_file = RuntimeLogFile("Rabc", 1000, path, path.stat().st_size)
     errors = io.StringIO()
 
     rendered = list(
-        read_log_file(path, LogRecordFilters(), follow=False, errors=errors)
+        read_log_file(log_file, LogRecordFilters(), follow=False, errors=errors)
     )
 
     assert [line.split(" — ", 1)[1].split(" ")[0] for line in rendered] == ["before", "after"]
     assert "malformed" in errors.getvalue()
+
+
+def test_follow_yields_lines_appended_after_the_drain(tmp_path):
+    log_file = write_log_file(tmp_path, "Rabc", 1000, [a_log_record(message="first")])
+    lines = read_log_file(
+        log_file, LogRecordFilters(), follow=True, errors=io.StringIO(),
+        log_directory=tmp_path,
+    )
+
+    assert next(lines).endswith("first")
+
+    with log_file.path.open("a", encoding="utf-8") as appending:
+        appending.write(json.dumps(a_log_record(message="second")) + "\n")
+
+    assert next(lines).endswith("second")
+    lines.close()
+
+
+def test_follow_switches_to_a_newer_file_when_the_runtime_restarts(tmp_path):
+    # A restart under a pinned STREAMLIB_RUNTIME_ID writes a SECOND file for the
+    # same runtime. Without the switch the tail sits on a file that will never
+    # grow again and goes silently quiet.
+    first = write_log_file(tmp_path, "Rabc", 1000, [a_log_record(message="before")])
+    errors = io.StringIO()
+    lines = read_log_file(
+        first, LogRecordFilters(), follow=True, errors=errors, log_directory=tmp_path
+    )
+
+    assert next(lines).endswith("before")
+
+    write_log_file(tmp_path, "Rabc", 2000, [a_log_record(message="after-restart")])
+
+    assert next(lines).endswith("after-restart")
+    assert "rotated to a newer log file" in errors.getvalue()
+    lines.close()
+
+
+def test_an_entry_whose_schema_version_is_unknown_is_neither_listed_nor_deleted(
+    isolated_registry,
+):
+    # The version field exists so a reader rejects what it cannot parse. Parsing
+    # it far enough to prune it would delete a record written by a newer engine.
+    isolated_registry.mkdir(parents=True, exist_ok=True)
+    entry_path = isolated_registry / "Rfuture.json"
+    entry_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 2,
+                "runtime_id": "Rfuture",
+                "control_url": "http://127.0.0.1:1",
+                "pid": UNUSED_PID,
+                "hint": "written by a newer engine",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    assert scan_check_and_prune() == []
+    assert entry_path.exists(), "a reader must not delete a record it cannot parse"
 
 
 # ─── The CLI surface ─────────────────────────────────────────────────────────
