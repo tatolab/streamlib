@@ -17,17 +17,13 @@ use serde::Deserialize;
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
 use std::sync::Arc;
-use streamlib::sdk::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::json_schema::{
-    ProcessorDescriptorOutput, RegistryResponse, SchemaDescriptorOutput, SchemaIdentOutput,
-    SemanticVersionOutput,
+    ProcessorDescriptorOutput, RegistryResponse, SchemaDescriptorOutput, SemanticVersionOutput,
 };
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
-use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
-use streamlib::sdk::runtime::{RuntimeOperations, SubmittedProcessorSource};
+use streamlib::sdk::runtime::RuntimeOperations;
 use tower_http::trace::{DefaultMakeSpan, DefaultOnRequest, DefaultOnResponse, TraceLayer};
 use tracing::Level;
 use utoipa::OpenApi;
@@ -35,16 +31,8 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::auth::{ApiServerBearerToken, ForbiddenResponse, UnauthorizedResponse};
 use crate::state::{
-    ApiDoc, AppState, CreateConnectionRequest, CreateProcessorRequest, ErrorResponse, IdResponse,
-    ProcessorNotFoundResponse, ProcessorPortNotFoundResponse, RegisterProcessorSourceResponse,
-    ReplaceProcessorSourceRequest, RuntimeShutdownAcceptedResponse, RuntimeShutdownRequest,
-    SubmittedProcessorSourceRequest, UnknownProcessorTypeResponse,
+    ApiDoc, AppState, ErrorResponse, RuntimeShutdownAcceptedResponse, RuntimeShutdownRequest,
 };
-
-/// The relative WebSocket URL carrying this runtime's live event stream — the
-/// route registered in [`build_router`]. Returned in the source-submit
-/// response so a client learns where to observe the new instance's live state.
-const RUNTIME_EVENTS_URL: &str = "/ws/events";
 
 // ============================================================================
 // Router Construction
@@ -52,17 +40,13 @@ const RUNTIME_EVENTS_URL: &str = "/ws/events";
 
 /// Build the full router with shared state and trace layer attached.
 ///
-/// The mutating routes (`POST /api/processor`, `POST /api/processor/source`,
-/// `POST /api/processor/source/replace`, `DELETE /api/processors/{id}`, `POST
-/// /api/connections`, `DELETE /api/connections/{id}`, `POST
-/// /api/runtime/shutdown`) sit behind the bearer-token auth middleware only
+/// The route surface is observation-shaped: a node's graph is defined by its
+/// code, so nothing here creates, replaces, connects, or removes a processor.
+/// `POST /api/runtime/shutdown` is the one route that acts on the node rather
+/// than reporting on it, and it sits behind the bearer-token auth middleware
 /// when `auth_token` is `Some` (auth opted in); with `None` — the
-/// zero-ceremony default — they are open like every other route. The two
-/// source-submit routes are RCE-capable (they execute submitted source), so
-/// they join this gated group; so does the shutdown request, which stops a
-/// node no more destructively than deleting all of its processors. The GET
-/// routes, health check, WebSocket event stream, and OpenAPI spec are always
-/// open.
+/// zero-ceremony default — it is open like every other route. The GET routes,
+/// health check, WebSocket event stream, and OpenAPI spec are always open.
 /// `route_layer` binds the auth layer to exactly the routes already on the
 /// protected sub-router, so a later `merge` leaves the open routes ungated.
 pub(crate) fn build_router(
@@ -70,24 +54,17 @@ pub(crate) fn build_router(
     auth_token: Option<ApiServerBearerToken>,
     #[cfg(feature = "moq")] runtime_id: String,
 ) -> Router {
-    // The read-only tap WebSocket is gated exactly like the mutating routes WHEN
+    // The read-only tap WebSocket is gated exactly like the shutdown route WHEN
     // auth is opted in — same bearer middleware, same route_layer binding; the
     // default (auth off) leaves it open like every other route. This is
     // mechanism parity, not a trust boundary the tap itself imposes. Clone the
-    // token before it is moved into the mutating-route middleware below.
+    // token before it is moved into the protected-route middleware below.
     let tap_auth_token = auth_token.clone();
-    // The MCP endpoint exposes the same mutating ops as tools, so it is gated
-    // exactly like the mutating routes when auth is opted in.
+    // The MCP endpoint fronts the same shutdown op as a tool, so it is gated
+    // the same way when auth is opted in.
     let mcp_auth_token = auth_token.clone();
 
-    let mut protected = OpenApiRouter::new()
-        .routes(routes!(create_processor))
-        .routes(routes!(create_processor_source))
-        .routes(routes!(replace_processor_source))
-        .routes(routes!(delete_processor))
-        .routes(routes!(create_connection))
-        .routes(routes!(delete_connection))
-        .routes(routes!(request_runtime_shutdown));
+    let mut protected = OpenApiRouter::new().routes(routes!(request_runtime_shutdown));
     if let Some(auth_token) = auth_token {
         protected = protected.route_layer(axum::middleware::from_fn_with_state(
             auth_token,
@@ -179,335 +156,6 @@ pub(crate) async fn get_graph(
         .await
         .map(Json)
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/processor",
-    tag = "processors",
-    request_body = CreateProcessorRequest,
-    responses(
-        (status = 200, description = "Processor created successfully", body = IdResponse),
-        (status = 400, description = "Malformed request (invalid org / package / type / version segment)", body = ErrorResponse),
-        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
-        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
-        (status = 422, description = "Processor type is structurally valid but not registered in the runtime; the failed node is left in the graph in `Error` state", body = UnknownProcessorTypeResponse)
-    )
-)]
-pub(crate) async fn create_processor(
-    State(state): State<AppState>,
-    Json(body): Json<CreateProcessorRequest>,
-) -> axum::response::Response {
-    // Convert SchemaIdentOutput → SchemaIdent through the typed segment
-    // validators (Org::new / Package::new / TypeName::new / SemVer::new).
-    // This is typed conversion, not parsing — there is no `SchemaIdent::parse`.
-    let SchemaIdentOutput {
-        org,
-        package,
-        type_name,
-        version,
-    } = body.processor_type.clone();
-    let ident = match (
-        Org::new(org),
-        Package::new(package),
-        TypeName::new(type_name),
-    ) {
-        (Ok(org), Ok(package), Ok(type_name)) => SchemaIdent::new(
-            org,
-            package,
-            type_name,
-            SemVer::new(version.major, version.minor, version.patch),
-        ),
-        _ => {
-            return (
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse {
-                    error: "Malformed processor identifier — one of org / package / type failed validation".into(),
-                }),
-            )
-                .into_response();
-        }
-    };
-    let spec = ProcessorSpec::new(ident, body.config);
-
-    match state.runtime.add_processor_async(spec).await {
-        Ok(id) => (StatusCode::OK, Json(IdResponse { id: id.to_string() })).into_response(),
-        Err(Error::UnknownProcessorType { ident: _ }) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(UnknownProcessorTypeResponse {
-                error: "UnknownProcessorType",
-                ident: body.processor_type,
-            }),
-        )
-            .into_response(),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: e.to_string(),
-            }),
-        )
-            .into_response(),
-    }
-}
-
-/// Map a register/replace-from-source [`Error`] onto an HTTP response. The
-/// source-submit refusals (unsupported language, missing name, un-mintable
-/// name, build failure, replace-target mismatch) surface as
-/// [`Error::Configuration`] — the JSON request was well-formed but the
-/// submitted source could not be registered — so they map to 422; a runtime
-/// failure (including a catastrophic replace where restoring the prior
-/// registration also failed) maps to 500.
-fn source_submit_error_response(error: Error) -> axum::response::Response {
-    let status = match error {
-        Error::Configuration(_) => StatusCode::UNPROCESSABLE_ENTITY,
-        Error::Runtime(_) => StatusCode::INTERNAL_SERVER_ERROR,
-        _ => StatusCode::BAD_REQUEST,
-    };
-    (
-        status,
-        Json(ErrorResponse {
-            error: error.to_string(),
-        }),
-    )
-        .into_response()
-}
-
-/// Map a `connect`/link [`Error`] onto an HTTP response, shared by
-/// [`create_connection`] and the source-submit composite wiring loop so both
-/// endpoints answer connect failures identically: a missing peer processor →
-/// 404 ([`ProcessorNotFoundResponse`]), a missing port on an existing processor
-/// → 422 ([`ProcessorPortNotFoundResponse`]), anything else → 400.
-fn connect_error_response(error: Error) -> axum::response::Response {
-    match error {
-        Error::ProcessorNotFound(processor_id) => (
-            StatusCode::NOT_FOUND,
-            Json(ProcessorNotFoundResponse {
-                error: "ProcessorNotFound",
-                processor_id,
-            }),
-        )
-            .into_response(),
-        Error::ProcessorPortNotFound {
-            processor_id,
-            port_name,
-            direction,
-        } => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ProcessorPortNotFoundResponse {
-                error: "ProcessorPortNotFound",
-                processor_id,
-                port_name,
-                direction: match direction {
-                    streamlib::sdk::error::PortDirection::Input => "input",
-                    streamlib::sdk::error::PortDirection::Output => "output",
-                },
-            }),
-        )
-            .into_response(),
-        other => (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse {
-                error: other.to_string(),
-            }),
-        )
-            .into_response(),
-    }
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/processor/source",
-    tag = "processors",
-    request_body = SubmittedProcessorSourceRequest,
-    responses(
-        (status = 200, description = "Source registered, first discovered processor instantiated, and optional connections wired; body carries the minted registration ident, discovered ports, instance id, and connection ids", body = RegisterProcessorSourceResponse),
-        (status = 400, description = "A `connect` wiring failed for a generic graph reason (neither a missing peer processor nor a missing peer port). On any wiring failure the whole submit is rolled back — the instantiated processor and any links created earlier in the call are removed", body = ErrorResponse),
-        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
-        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
-        (status = 404, description = "A `connect` wiring references a peer processor not in the graph (same shape as POST /api/connections)", body = ProcessorNotFoundResponse),
-        (status = 422, description = "The submitted source could not be registered or instantiated (unsupported language, missing name, build failure, unknown processor type); OR a `connect` wiring references a port that doesn't exist on an existing peer processor — the latter carries a ProcessorPortNotFoundResponse body, same shape as POST /api/connections", body = ErrorResponse),
-        (status = 500, description = "Runtime failure while registering the source", body = ErrorResponse)
-    )
-)]
-pub(crate) async fn create_processor_source(
-    State(state): State<AppState>,
-    Json(body): Json<SubmittedProcessorSourceRequest>,
-) -> axum::response::Response {
-    let submitted = SubmittedProcessorSource {
-        source_text: body.source,
-        language: body.language.into(),
-        requested_name: body.requested_name,
-        processor_type_name: body.processor_type_name,
-    };
-    let config = body.config.unwrap_or_else(|| serde_json::json!({}));
-
-    match crate::ops::submit_processor_source(&state.runtime, submitted, config, body.connect).await
-    {
-        Ok(outcome) => submitted_source_ok_response(outcome).into_response(),
-        Err(error) => submit_source_error_response(error),
-    }
-}
-
-/// Render a successful [`crate::ops::SubmittedSourceOutcome`] as the shared
-/// `200` body, stamping in the HTTP-only `events_url`.
-fn submitted_source_ok_response(
-    outcome: crate::ops::SubmittedSourceOutcome,
-) -> (StatusCode, Json<RegisterProcessorSourceResponse>) {
-    (
-        StatusCode::OK,
-        Json(RegisterProcessorSourceResponse {
-            module: outcome.module,
-            processors: outcome.processors,
-            processor_id: outcome.processor_id,
-            state: outcome.state,
-            connections: outcome.connections,
-            events_url: RUNTIME_EVENTS_URL,
-        }),
-    )
-}
-
-/// Map a staged source-submit failure onto its HTTP response, preserving the
-/// per-stage status codes: register / instantiate runtime errors route through
-/// [`source_submit_error_response`] (422 / 500 / 400), the pre-composed
-/// unprocessable messages are 422, and a connect failure routes through
-/// [`connect_error_response`] (404 / 422 / 400).
-fn submit_source_error_response(error: crate::ops::SubmitSourceError) -> axum::response::Response {
-    use crate::ops::SubmitSourceError;
-    match error {
-        SubmitSourceError::Register(error) | SubmitSourceError::Instantiate(error) => {
-            source_submit_error_response(error)
-        }
-        SubmitSourceError::Unprocessable(message) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(ErrorResponse { error: message }),
-        )
-            .into_response(),
-        SubmitSourceError::Connect(error) => connect_error_response(error),
-    }
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/processor/source/replace",
-    tag = "processors",
-    request_body = ReplaceProcessorSourceRequest,
-    responses(
-        (status = 200, description = "Prior `@session/<name>` registration replaced; body carries the new registration ident and discovered ports (type-level replacement — running graph instances are not swapped)", body = RegisterProcessorSourceResponse),
-        (status = 400, description = "`target_session_module` is not a valid `@org/name@<range>` module ident", body = ErrorResponse),
-        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
-        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
-        (status = 422, description = "The replacement source could not be registered, or its name does not resolve to the target's `@session/<name>`", body = ErrorResponse),
-        (status = 500, description = "Runtime failure while replacing (including a replacement that failed and could not restore the prior registration)", body = ErrorResponse)
-    )
-)]
-pub(crate) async fn replace_processor_source(
-    State(state): State<AppState>,
-    Json(body): Json<ReplaceProcessorSourceRequest>,
-) -> axum::response::Response {
-    let replacement = SubmittedProcessorSource {
-        source_text: body.source,
-        language: body.language.into(),
-        requested_name: body.requested_name,
-        processor_type_name: body.processor_type_name,
-    };
-
-    match crate::ops::replace_processor_source(
-        &state.runtime,
-        &body.target_session_module,
-        replacement,
-    )
-    .await
-    {
-        Ok(outcome) => submitted_source_ok_response(outcome).into_response(),
-        Err(crate::ops::ReplaceSourceError::MalformedTargetModule(message)) => (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse { error: message }),
-        )
-            .into_response(),
-        Err(crate::ops::ReplaceSourceError::Replace(error)) => source_submit_error_response(error),
-    }
-}
-
-#[utoipa::path(
-    delete,
-    path = "/api/processors/{id}",
-    tag = "processors",
-    params(
-        ("id" = String, Path, description = "Processor ID to delete")
-    ),
-    responses(
-        (status = 204, description = "Processor deleted successfully"),
-        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
-        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
-        (status = 404, description = "Processor not found")
-    )
-)]
-pub(crate) async fn delete_processor(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> std::result::Result<axum::http::StatusCode, axum::http::StatusCode> {
-    let processor_id = id.into();
-    state
-        .runtime
-        .remove_processor_async(processor_id)
-        .await
-        .map(|_| axum::http::StatusCode::NO_CONTENT)
-        .map_err(|_| axum::http::StatusCode::NOT_FOUND)
-}
-
-#[utoipa::path(
-    post,
-    path = "/api/connections",
-    tag = "connections",
-    request_body = CreateConnectionRequest,
-    responses(
-        (status = 200, description = "Connection created successfully", body = IdResponse),
-        (status = 400, description = "Malformed request or generic graph error", body = ErrorResponse),
-        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
-        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
-        (status = 404, description = "One of the referenced processors isn't in the graph", body = ProcessorNotFoundResponse),
-        (status = 422, description = "Referenced processor exists but has no port with that name and direction", body = ProcessorPortNotFoundResponse)
-    )
-)]
-pub(crate) async fn create_connection(
-    State(state): State<AppState>,
-    Json(body): Json<CreateConnectionRequest>,
-) -> axum::response::Response {
-    let from = OutputLinkPortRef::new(body.from_processor, body.from_port);
-    let to = InputLinkPortRef::new(body.to_processor, body.to_port);
-
-    match state.runtime.connect_async(from, to).await {
-        Ok(id) => (StatusCode::OK, Json(IdResponse { id: id.to_string() })).into_response(),
-        Err(error) => connect_error_response(error),
-    }
-}
-
-#[utoipa::path(
-    delete,
-    path = "/api/connections/{id}",
-    tag = "connections",
-    params(
-        ("id" = String, Path, description = "Connection ID to delete")
-    ),
-    responses(
-        (status = 204, description = "Connection deleted successfully"),
-        (status = 401, description = "Missing or malformed bearer token", body = UnauthorizedResponse),
-        (status = 403, description = "Invalid bearer token", body = ForbiddenResponse),
-        (status = 404, description = "Connection not found")
-    )
-)]
-pub(crate) async fn delete_connection(
-    State(state): State<AppState>,
-    Path(id): Path<String>,
-) -> std::result::Result<axum::http::StatusCode, axum::http::StatusCode> {
-    let link_id = id.into();
-
-    state
-        .runtime
-        .disconnect_async(link_id)
-        .await
-        .map(|_| axum::http::StatusCode::NO_CONTENT)
-        .map_err(|_| axum::http::StatusCode::NOT_FOUND)
 }
 
 #[utoipa::path(
@@ -859,95 +507,52 @@ fn truncate_on_char_boundary(mut text: String, max_bytes: usize) -> String {
 }
 
 #[cfg(test)]
-mod router_auth_gate_tests {
+mod router_surface_and_auth_gate_tests {
+    //! What [`build_router`] exposes, and how the bearer gate binds to it.
+    //!
+    //! Two things are under test. First, the route *surface*: the control plane
+    //! is observation-shaped, so the router must expose no route that mutates
+    //! the graph — a node's graph comes from its code. Second, the auth gate:
+    //! `POST /api/runtime/shutdown` is the one route that acts on the node, and
+    //! it carries the bearer middleware when auth is opted in.
+    //!
+    //! The router is the real one; only the `RuntimeOperations` backend is a
+    //! stub.
+
     use super::*;
     use axum::body::Body;
     use axum::http::{
         Request, StatusCode,
         header::{AUTHORIZATION, CONTENT_TYPE},
     };
-    use streamlib::sdk::descriptors::{ModuleIdent, SemVerRange};
-    use streamlib::sdk::graph::{LinkUniqueId, ProcessorUniqueId};
-    use streamlib::sdk::processors::PortSchemaSpec;
+    use streamlib::sdk::graph::{InputLinkPortRef, LinkUniqueId, OutputLinkPortRef};
+    use streamlib::sdk::graph::ProcessorUniqueId;
+    use streamlib::sdk::processors::ProcessorSpec;
     use streamlib::sdk::runtime::{
-        BoxFuture, RegisterProcessorReceipt, RegisteredPortReceipt, RegisteredProcessorReceipt,
-        ReplaceProcessorFromSource, SubmittedProcessorSource,
+        BoxFuture, RegisterProcessorReceipt, ReplaceProcessorFromSource, SubmittedProcessorSource,
     };
     use tower::ServiceExt;
 
-    /// Stub runtime whose graph mutations all succeed, so the REAL
-    /// [`build_router`] auth gate can be exercised end-to-end. With auth
-    /// enabled, a mutating handler reaches its `Ok` result (200 / 204) only
-    /// once the bearer-token middleware has admitted the request — deleting the
-    /// `route_layer` gate flips the missing-token cases from 401 to those
-    /// success codes, so the enabled-mode tests go red on that regression. With
-    /// auth off (the default), the same handlers must be reachable with no
-    /// token at all.
+    /// Stub runtime backing the router tests: it answers the observation ops
+    /// and records every shutdown reason it is handed, so a route test can
+    /// prove the request reached the runtime rather than merely producing a
+    /// 202.
     ///
-    /// `recorded_shutdown_reasons` records every `request_runtime_shutdown`
-    /// the stub receives, so a route test can prove the request reached the
-    /// runtime handle rather than merely producing a 202.
+    /// Every graph-mutating op is `unreachable!`. `RuntimeOperations` still
+    /// declares them — the runtime API is not what changed — but no route may
+    /// reach one, so a route that regrows here fails loudly instead of quietly
+    /// succeeding against a permissive stub.
     #[derive(Default)]
-    struct AlwaysOkStubRuntime {
+    struct ControlPlaneRouterStubRuntime {
         recorded_shutdown_reasons: Arc<Mutex<Vec<String>>>,
     }
 
-    impl RuntimeOperations for AlwaysOkStubRuntime {
-        fn add_processor_async(
-            &self,
-            _spec: ProcessorSpec,
-        ) -> BoxFuture<'_, Result<ProcessorUniqueId>> {
-            Box::pin(async { Ok(ProcessorUniqueId::new()) })
-        }
-        fn remove_processor_async(
-            &self,
-            _processor_id: ProcessorUniqueId,
-        ) -> BoxFuture<'_, Result<()>> {
-            Box::pin(async { Ok(()) })
-        }
-        fn connect_async(
-            &self,
-            _from: OutputLinkPortRef,
-            _to: InputLinkPortRef,
-        ) -> BoxFuture<'_, Result<LinkUniqueId>> {
-            Box::pin(async { Ok(LinkUniqueId::new()) })
-        }
-        fn disconnect_async(&self, _link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
-            Box::pin(async { Ok(()) })
-        }
+    impl RuntimeOperations for ControlPlaneRouterStubRuntime {
         fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
             Box::pin(async { Ok(serde_json::json!({})) })
         }
-        fn register_processor_source_async(
-            &self,
-            _request: SubmittedProcessorSource,
-        ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
-            Box::pin(async { Ok(stub_register_receipt()) })
-        }
-        fn replace_processor_async(
-            &self,
-            _request: ReplaceProcessorFromSource,
-        ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
-            Box::pin(async { Ok(stub_register_receipt()) })
-        }
-        fn tap_async(
-            &self,
-            channel: String,
-            _count: Option<usize>,
-        ) -> BoxFuture<'_, Result<streamlib::sdk::runtime::TapSubscription>> {
-            Box::pin(async move { Err(Error::TapChannelNotFound(channel)) })
-        }
-        fn add_processor(&self, _spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
-            Ok(ProcessorUniqueId::new())
-        }
-        fn remove_processor(&self, _processor_id: &ProcessorUniqueId) -> Result<()> {
-            Ok(())
-        }
-        fn connect(&self, _from: OutputLinkPortRef, _to: InputLinkPortRef) -> Result<LinkUniqueId> {
-            Ok(LinkUniqueId::new())
-        }
-        fn disconnect(&self, _link_id: &LinkUniqueId) -> Result<()> {
-            Ok(())
+        fn to_json(&self) -> Result<serde_json::Value> {
+            Ok(serde_json::json!({}))
         }
         fn request_runtime_shutdown(&self, reason: &str) -> Result<()> {
             self.recorded_shutdown_reasons
@@ -955,73 +560,6 @@ mod router_auth_gate_tests {
                 .push(reason.to_string());
             Ok(())
         }
-        fn to_json(&self) -> Result<serde_json::Value> {
-            Ok(serde_json::json!({}))
-        }
-    }
-
-    /// Stub runtime that instantiates one fixed processor, admits the first
-    /// `connect` and fails the second with [`Error::ProcessorNotFound`], and
-    /// records every `remove_processor` / `disconnect` it receives — so a
-    /// source-submit rollback can be observed: the just-instantiated processor
-    /// leaves no orphan, and links created earlier in the same call are undone.
-    struct RollbackObservingStubRuntime {
-        instance_id: ProcessorUniqueId,
-        first_link_id: LinkUniqueId,
-        connect_calls: std::sync::atomic::AtomicUsize,
-        removed_processors: Arc<Mutex<Vec<ProcessorUniqueId>>>,
-        disconnected_links: Arc<Mutex<Vec<LinkUniqueId>>>,
-    }
-
-    impl RuntimeOperations for RollbackObservingStubRuntime {
-        fn add_processor_async(
-            &self,
-            _spec: ProcessorSpec,
-        ) -> BoxFuture<'_, Result<ProcessorUniqueId>> {
-            let id = self.instance_id.clone();
-            Box::pin(async move { Ok(id) })
-        }
-        fn remove_processor_async(
-            &self,
-            processor_id: ProcessorUniqueId,
-        ) -> BoxFuture<'_, Result<()>> {
-            self.removed_processors.lock().push(processor_id);
-            Box::pin(async { Ok(()) })
-        }
-        fn connect_async(
-            &self,
-            _from: OutputLinkPortRef,
-            _to: InputLinkPortRef,
-        ) -> BoxFuture<'_, Result<LinkUniqueId>> {
-            let call = self
-                .connect_calls
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-            if call == 0 {
-                let id = self.first_link_id.clone();
-                Box::pin(async move { Ok(id) })
-            } else {
-                Box::pin(async { Err(Error::ProcessorNotFound("missing-peer".to_string())) })
-            }
-        }
-        fn disconnect_async(&self, link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
-            self.disconnected_links.lock().push(link_id);
-            Box::pin(async { Ok(()) })
-        }
-        fn to_json_async(&self) -> BoxFuture<'_, Result<serde_json::Value>> {
-            Box::pin(async { Ok(serde_json::json!({})) })
-        }
-        fn register_processor_source_async(
-            &self,
-            _request: SubmittedProcessorSource,
-        ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
-            Box::pin(async { Ok(stub_register_receipt()) })
-        }
-        fn replace_processor_async(
-            &self,
-            _request: ReplaceProcessorFromSource,
-        ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
-            Box::pin(async { Ok(stub_register_receipt()) })
-        }
         fn tap_async(
             &self,
             channel: String,
@@ -1029,78 +567,82 @@ mod router_auth_gate_tests {
         ) -> BoxFuture<'_, Result<streamlib::sdk::runtime::TapSubscription>> {
             Box::pin(async move { Err(Error::TapChannelNotFound(channel)) })
         }
+
+        fn add_processor_async(
+            &self,
+            _spec: ProcessorSpec,
+        ) -> BoxFuture<'_, Result<ProcessorUniqueId>> {
+            unreachable!("the control plane exposes no processor-creation route")
+        }
+        fn remove_processor_async(
+            &self,
+            _processor_id: ProcessorUniqueId,
+        ) -> BoxFuture<'_, Result<()>> {
+            unreachable!("the control plane exposes no processor-removal route")
+        }
+        fn connect_async(
+            &self,
+            _from: OutputLinkPortRef,
+            _to: InputLinkPortRef,
+        ) -> BoxFuture<'_, Result<LinkUniqueId>> {
+            unreachable!("the control plane exposes no connect route")
+        }
+        fn disconnect_async(&self, _link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
+            unreachable!("the control plane exposes no disconnect route")
+        }
+        fn register_processor_source_async(
+            &self,
+            _request: SubmittedProcessorSource,
+        ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
+            unreachable!("the control plane exposes no source-submit route")
+        }
+        fn replace_processor_async(
+            &self,
+            _request: ReplaceProcessorFromSource,
+        ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
+            unreachable!("the control plane exposes no source-replace route")
+        }
         fn add_processor(&self, _spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
-            Ok(self.instance_id.clone())
+            unreachable!("the control plane exposes no processor-creation route")
         }
         fn remove_processor(&self, _processor_id: &ProcessorUniqueId) -> Result<()> {
-            Ok(())
+            unreachable!("the control plane exposes no processor-removal route")
         }
         fn connect(&self, _from: OutputLinkPortRef, _to: InputLinkPortRef) -> Result<LinkUniqueId> {
-            Ok(self.first_link_id.clone())
+            unreachable!("the control plane exposes no connect route")
         }
         fn disconnect(&self, _link_id: &LinkUniqueId) -> Result<()> {
-            Ok(())
+            unreachable!("the control plane exposes no disconnect route")
         }
-        fn request_runtime_shutdown(&self, _reason: &str) -> Result<()> {
-            Ok(())
-        }
-        fn to_json(&self) -> Result<serde_json::Value> {
-            Ok(serde_json::json!({}))
-        }
-    }
-
-    /// An always-succeeds register/replace receipt for [`AlwaysOkStubRuntime`]:
-    /// a `@session/stub@0.0.0` registration installing one `Widget` processor
-    /// with a `video` input (`any`) and a `frame` output (a specific
-    /// `@tatolab/core/VideoFrame@1.0.0`). Non-empty so the source-submit
-    /// composite reaches its instantiate step and the port projection is
-    /// exercised; the auth-gate tests ignore the body.
-    fn stub_register_receipt() -> RegisterProcessorReceipt {
-        RegisterProcessorReceipt::new(
-            ModuleIdent::new(
-                Org::new("session").expect("session org passes the org grammar"),
-                Package::new("stub").expect("stub package passes the package grammar"),
-                SemVerRange::Exact(SemVer::new(0, 0, 0)),
-            ),
-            vec![RegisteredProcessorReceipt {
-                name: "Widget".to_string(),
-                inputs: vec![RegisteredPortReceipt {
-                    name: "video".to_string(),
-                    schema: PortSchemaSpec::Any,
-                    delivery_profile: Some("latest".to_string()),
-                }],
-                outputs: vec![RegisteredPortReceipt {
-                    name: "frame".to_string(),
-                    schema: PortSchemaSpec::Specific(SchemaIdent::new(
-                        Org::new("tatolab").expect("tatolab org passes the grammar"),
-                        Package::new("core").expect("core package passes the grammar"),
-                        TypeName::new("VideoFrame").expect("VideoFrame type name is valid"),
-                        SemVer::new(1, 0, 0),
-                    )),
-                    delivery_profile: None,
-                }],
-            }],
-        )
     }
 
     const TEST_TOKEN: &str = "test-bearer-secret";
 
-    /// Router with bearer auth explicitly enabled — the mutating routes are
-    /// gated behind [`TEST_TOKEN`].
+    /// The routes this control plane deliberately does not have: every graph
+    /// mutation the pre-pivot api-server served. Method + path exactly as they
+    /// were, so this reads as the inventory it is.
+    const DELETED_GRAPH_MUTATION_ROUTES: &[(&str, &str)] = &[
+        ("POST", "/api/processor"),
+        ("POST", "/api/processor/source"),
+        ("POST", "/api/processor/source/replace"),
+        ("DELETE", "/api/processors/some-id"),
+        ("POST", "/api/connections"),
+        ("DELETE", "/api/connections/some-id"),
+    ];
+
     fn auth_enabled_router() -> Router {
         build_router(
-            Arc::new(AlwaysOkStubRuntime::default()),
+            Arc::new(ControlPlaneRouterStubRuntime::default()),
             Some(ApiServerBearerToken::from_secret(TEST_TOKEN)),
             #[cfg(feature = "moq")]
             "test-runtime-id".to_string(),
         )
     }
 
-    /// Router in the default (auth-off) mode — every route, including the
-    /// mutating ones, is open with no token.
+    /// Router in the default (auth-off) mode — every route is open with no token.
     fn auth_disabled_router() -> Router {
         build_router(
-            Arc::new(AlwaysOkStubRuntime::default()),
+            Arc::new(ControlPlaneRouterStubRuntime::default()),
             None,
             #[cfg(feature = "moq")]
             "test-runtime-id".to_string(),
@@ -1113,56 +655,6 @@ mod router_auth_gate_tests {
 
     async fn status_of(request: Request<Body>) -> StatusCode {
         status_on(auth_enabled_router(), request).await
-    }
-
-    fn create_processor_body() -> Body {
-        Body::from(
-            serde_json::json!({
-                "processor_type": {
-                    "org": "tatolab",
-                    "package": "debug-utilities",
-                    "type": "SimplePassthroughProcessor",
-                    "version": { "major": 1, "minor": 0, "patch": 0 }
-                },
-                "config": {}
-            })
-            .to_string(),
-        )
-    }
-
-    fn create_connection_body() -> Body {
-        Body::from(
-            serde_json::json!({
-                "from_processor": "p1",
-                "from_port": "output",
-                "to_processor": "p2",
-                "to_port": "input"
-            })
-            .to_string(),
-        )
-    }
-
-    fn create_processor_source_body() -> Body {
-        Body::from(
-            serde_json::json!({
-                "language": "python",
-                "source": "class Widget:\n    pass\n",
-                "requested_name": "widget"
-            })
-            .to_string(),
-        )
-    }
-
-    fn replace_processor_source_body() -> Body {
-        Body::from(
-            serde_json::json!({
-                "target_session_module": "@session/widget@*",
-                "language": "python",
-                "source": "class Widget:\n    pass\n",
-                "requested_name": "widget"
-            })
-            .to_string(),
-        )
     }
 
     fn runtime_shutdown_body() -> Body {
@@ -1181,253 +673,31 @@ mod router_auth_gate_tests {
         serde_json::from_slice(&bytes).unwrap()
     }
 
+    /// The load-bearing surface assertion: no graph-mutation route is served.
+    /// Checked with auth OFF so a 401 from the bearer gate can never be
+    /// mistaken for the route's absence — with the gate out of the way, only a
+    /// genuinely unrouted path answers 404/405.
     #[tokio::test]
-    async fn mutating_routes_reject_missing_token_with_401() {
-        let unauthenticated = [
-            Request::builder()
-                .method("POST")
-                .uri("/api/processor")
+    async fn the_router_serves_no_graph_mutation_route() {
+        for (method, uri) in DELETED_GRAPH_MUTATION_ROUTES {
+            let request = Request::builder()
+                .method(*method)
+                .uri(*uri)
                 .header(CONTENT_TYPE, "application/json")
-                .body(create_processor_body())
-                .unwrap(),
-            Request::builder()
-                .method("POST")
-                .uri("/api/processor/source")
-                .header(CONTENT_TYPE, "application/json")
-                .body(create_processor_source_body())
-                .unwrap(),
-            Request::builder()
-                .method("POST")
-                .uri("/api/processor/source/replace")
-                .header(CONTENT_TYPE, "application/json")
-                .body(replace_processor_source_body())
-                .unwrap(),
-            Request::builder()
-                .method("POST")
-                .uri("/api/connections")
-                .header(CONTENT_TYPE, "application/json")
-                .body(create_connection_body())
-                .unwrap(),
-            Request::builder()
-                .method("DELETE")
-                .uri("/api/processors/some-id")
-                .body(Body::empty())
-                .unwrap(),
-            Request::builder()
-                .method("DELETE")
-                .uri("/api/connections/some-id")
-                .body(Body::empty())
-                .unwrap(),
-            Request::builder()
-                .method("POST")
-                .uri("/api/runtime/shutdown")
-                .header(CONTENT_TYPE, "application/json")
-                .body(runtime_shutdown_body())
-                .unwrap(),
-        ];
-        for request in unauthenticated {
-            assert_eq!(status_of(request).await, StatusCode::UNAUTHORIZED);
-        }
-    }
-
-    #[tokio::test]
-    async fn create_processor_with_token_is_200() {
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/processor")
-            .header(AUTHORIZATION, bearer(TEST_TOKEN))
-            .header(CONTENT_TYPE, "application/json")
-            .body(create_processor_body())
-            .unwrap();
-        assert_eq!(status_of(request).await, StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn create_processor_source_returns_discovered_ports_and_instance() {
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/processor/source")
-            .header(AUTHORIZATION, bearer(TEST_TOKEN))
-            .header(CONTENT_TYPE, "application/json")
-            .body(create_processor_source_body())
-            .unwrap();
-        let body = json_body_on(auth_enabled_router(), request).await;
-
-        assert_eq!(body["module"], "@session/stub@=0.0.0");
-        assert_eq!(body["state"], "added");
-        assert!(
-            body["processor_id"].is_string(),
-            "the composite must instantiate the first discovered processor and return its id"
-        );
-        assert_eq!(body["events_url"], "/ws/events");
-
-        let processors = body["processors"].as_array().expect("processors array");
-        assert_eq!(processors.len(), 1);
-        assert_eq!(processors[0]["name"], "Widget");
-        assert_eq!(processors[0]["inputs"][0]["name"], "video");
-        assert_eq!(processors[0]["inputs"][0]["schema"], "any");
-        assert_eq!(processors[0]["inputs"][0]["delivery_profile"], "latest");
-        assert_eq!(processors[0]["outputs"][0]["name"], "frame");
-        assert_eq!(
-            processors[0]["outputs"][0]["schema"],
-            "@tatolab/core/VideoFrame@1.0.0"
-        );
-    }
-
-    #[tokio::test]
-    async fn create_processor_source_wires_optional_connections() {
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/processor/source")
-            .header(AUTHORIZATION, bearer(TEST_TOKEN))
-            .header(CONTENT_TYPE, "application/json")
-            .body(Body::from(
-                serde_json::json!({
-                    "language": "python",
-                    "source": "class Widget:\n    pass\n",
-                    "requested_name": "widget",
-                    "connect": [{
-                        "local_port": "frame",
-                        "role": "output",
-                        "peer_processor": "display-1",
-                        "peer_port": "video"
-                    }]
-                })
-                .to_string(),
-            ))
-            .unwrap();
-        let body = json_body_on(auth_enabled_router(), request).await;
-
-        let connections = body["connections"].as_array().expect("connections array");
-        assert_eq!(
-            connections.len(),
-            1,
-            "the single requested wiring must produce one link id"
-        );
-        assert!(connections[0].is_string());
-    }
-
-    #[tokio::test]
-    async fn create_processor_source_rolls_back_on_connect_failure() {
-        let removed_processors = Arc::new(Mutex::new(Vec::new()));
-        let disconnected_links = Arc::new(Mutex::new(Vec::new()));
-        let instance_id: ProcessorUniqueId = "orphan-instance".to_string().into();
-        let first_link_id: LinkUniqueId = "link-a".to_string().into();
-        let runtime = Arc::new(RollbackObservingStubRuntime {
-            instance_id: instance_id.clone(),
-            first_link_id: first_link_id.clone(),
-            connect_calls: std::sync::atomic::AtomicUsize::new(0),
-            removed_processors: removed_processors.clone(),
-            disconnected_links: disconnected_links.clone(),
-        });
-        let router = build_router(
-            runtime,
-            None,
-            #[cfg(feature = "moq")]
-            "test-runtime-id".to_string(),
-        );
-        // The first wiring connects; the second targets a missing peer and
-        // fails — the whole submit must roll back.
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/processor/source")
-            .header(CONTENT_TYPE, "application/json")
-            .body(Body::from(
-                serde_json::json!({
-                    "language": "python",
-                    "source": "class Widget:\n    pass\n",
-                    "requested_name": "widget",
-                    "connect": [
-                        {
-                            "local_port": "frame",
-                            "role": "output",
-                            "peer_processor": "peer-a",
-                            "peer_port": "video"
-                        },
-                        {
-                            "local_port": "frame",
-                            "role": "output",
-                            "peer_processor": "missing-peer",
-                            "peer_port": "video"
-                        }
-                    ]
-                })
-                .to_string(),
-            ))
-            .unwrap();
-
-        let status = router.oneshot(request).await.unwrap().status();
-        assert_eq!(
-            status,
-            StatusCode::NOT_FOUND,
-            "a connect to a missing peer must surface as 404"
-        );
-        assert_eq!(
-            *removed_processors.lock(),
-            vec![instance_id],
-            "rollback must remove the just-instantiated processor so no orphan is left in the graph"
-        );
-        assert_eq!(
-            *disconnected_links.lock(),
-            vec![first_link_id],
-            "rollback must disconnect links created earlier in the same submit"
-        );
-    }
-
-    #[tokio::test]
-    async fn processor_language_schema_advertises_deno_alias() {
-        let request = Request::builder()
-            .method("GET")
-            .uri("/api/openapi.json")
-            .body(Body::empty())
-            .unwrap();
-        let spec = json_body_on(auth_enabled_router(), request).await;
-        let enum_values = spec["components"]["schemas"]["ProcessorLanguageDto"]["enum"]
-            .as_array()
-            .expect("ProcessorLanguageDto must be a documented enum schema");
-        let langs: Vec<&str> = enum_values.iter().filter_map(|v| v.as_str()).collect();
-        for expected in ["rust", "python", "typescript", "deno"] {
+                .body(Body::from("{}"))
+                .unwrap();
+            let status = status_on(auth_disabled_router(), request).await;
             assert!(
-                langs.contains(&expected),
-                "OpenAPI ProcessorLanguageDto enum must advertise `{expected}`, got {langs:?}"
+                status == StatusCode::NOT_FOUND || status == StatusCode::METHOD_NOT_ALLOWED,
+                "{method} {uri} must not be routed; got {status}"
             );
         }
     }
 
+    /// The spec is the contract a generated client is built from, so a mutation
+    /// route must be absent from it too — not merely unrouted at runtime.
     #[tokio::test]
-    async fn replace_processor_source_with_token_is_200() {
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/processor/source/replace")
-            .header(AUTHORIZATION, bearer(TEST_TOKEN))
-            .header(CONTENT_TYPE, "application/json")
-            .body(replace_processor_source_body())
-            .unwrap();
-        assert_eq!(status_of(request).await, StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn replace_processor_source_rejects_malformed_target_module_with_400() {
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/processor/source/replace")
-            .header(AUTHORIZATION, bearer(TEST_TOKEN))
-            .header(CONTENT_TYPE, "application/json")
-            .body(Body::from(
-                serde_json::json!({
-                    "target_session_module": "not-a-module-ident",
-                    "language": "python",
-                    "source": "class Widget:\n    pass\n",
-                    "requested_name": "widget"
-                })
-                .to_string(),
-            ))
-            .unwrap();
-        assert_eq!(status_of(request).await, StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn source_routes_are_documented_in_the_openapi_spec() {
+    async fn the_openapi_spec_documents_no_graph_mutation_route() {
         let request = Request::builder()
             .method("GET")
             .uri("/api/openapi.json")
@@ -1435,48 +705,17 @@ mod router_auth_gate_tests {
             .unwrap();
         let spec = json_body_on(auth_enabled_router(), request).await;
         let paths = &spec["paths"];
-        assert!(
-            paths["/api/processor/source"]["post"].is_object(),
-            "POST /api/processor/source must appear in the OpenAPI spec"
-        );
-        assert!(
-            paths["/api/processor/source/replace"]["post"].is_object(),
-            "POST /api/processor/source/replace must appear in the OpenAPI spec"
-        );
-    }
-
-    #[tokio::test]
-    async fn create_connection_with_token_is_200() {
-        let request = Request::builder()
-            .method("POST")
-            .uri("/api/connections")
-            .header(AUTHORIZATION, bearer(TEST_TOKEN))
-            .header(CONTENT_TYPE, "application/json")
-            .body(create_connection_body())
-            .unwrap();
-        assert_eq!(status_of(request).await, StatusCode::OK);
-    }
-
-    #[tokio::test]
-    async fn delete_processor_with_token_is_204() {
-        let request = Request::builder()
-            .method("DELETE")
-            .uri("/api/processors/some-id")
-            .header(AUTHORIZATION, bearer(TEST_TOKEN))
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(status_of(request).await, StatusCode::NO_CONTENT);
-    }
-
-    #[tokio::test]
-    async fn delete_connection_with_token_is_204() {
-        let request = Request::builder()
-            .method("DELETE")
-            .uri("/api/connections/some-id")
-            .header(AUTHORIZATION, bearer(TEST_TOKEN))
-            .body(Body::empty())
-            .unwrap();
-        assert_eq!(status_of(request).await, StatusCode::NO_CONTENT);
+        for (_, uri) in DELETED_GRAPH_MUTATION_ROUTES {
+            // The path-templated routes are documented under their template,
+            // not the concrete id the runtime check uses.
+            let documented = uri
+                .replace("/some-id", "/{id}")
+                .replace("/some-id", "/{link_id}");
+            assert!(
+                paths[&documented].is_null() && paths[*uri].is_null(),
+                "{documented} must not appear in the OpenAPI spec"
+            );
+        }
     }
 
     #[tokio::test]
@@ -1497,44 +736,24 @@ mod router_auth_gate_tests {
     }
 
     #[tokio::test]
-    async fn auth_off_lets_create_routes_through_without_a_token() {
-        // The zero-ceremony default: with auth off, the mutating POST routes
-        // reach their handlers (200) with no `Authorization` header. Reapplying
-        // the gate unconditionally in `build_router` flips these to 401.
-        let posts = [
-            ("/api/processor", create_processor_body()),
-            ("/api/connections", create_connection_body()),
-        ];
-        for (uri, body) in posts {
-            let request = Request::builder()
-                .method("POST")
-                .uri(uri)
-                .header(CONTENT_TYPE, "application/json")
-                .body(body)
-                .unwrap();
-            assert_eq!(
-                status_on(auth_disabled_router(), request).await,
-                StatusCode::OK,
-                "POST {uri} must be open with auth off (no token)"
-            );
-        }
+    async fn graph_is_open_and_reaches_the_runtime() {
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/graph")
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(status_of(request).await, StatusCode::OK);
     }
 
     #[tokio::test]
-    async fn auth_off_lets_delete_routes_through_without_a_token() {
-        let deletes = ["/api/processors/some-id", "/api/connections/some-id"];
-        for uri in deletes {
-            let request = Request::builder()
-                .method("DELETE")
-                .uri(uri)
-                .body(Body::empty())
-                .unwrap();
-            assert_eq!(
-                status_on(auth_disabled_router(), request).await,
-                StatusCode::NO_CONTENT,
-                "DELETE {uri} must be open with auth off (no token)"
-            );
-        }
+    async fn runtime_shutdown_rejects_a_missing_token_with_401() {
+        let request = Request::builder()
+            .method("POST")
+            .uri("/api/runtime/shutdown")
+            .header(CONTENT_TYPE, "application/json")
+            .body(runtime_shutdown_body())
+            .unwrap();
+        assert_eq!(status_of(request).await, StatusCode::UNAUTHORIZED);
     }
 
     /// The shutdown request must reach the runtime handle — a 202 alone would
@@ -1543,7 +762,7 @@ mod router_auth_gate_tests {
     /// awaited.
     #[tokio::test]
     async fn runtime_shutdown_with_token_is_202_and_reaches_the_runtime() {
-        let runtime = Arc::new(AlwaysOkStubRuntime::default());
+        let runtime = Arc::new(ControlPlaneRouterStubRuntime::default());
         let recorded = runtime.recorded_shutdown_reasons.clone();
         let router = build_router(
             runtime,
@@ -1575,7 +794,7 @@ mod router_auth_gate_tests {
     }
 
     /// A wrong token is a 403 (present but invalid), distinct from the 401 a
-    /// missing token earns — the same gate the other mutating routes carry.
+    /// missing token earns.
     #[tokio::test]
     async fn runtime_shutdown_with_a_wrong_token_is_403() {
         let request = Request::builder()
@@ -1588,8 +807,7 @@ mod router_auth_gate_tests {
         assert_eq!(status_of(request).await, StatusCode::FORBIDDEN);
     }
 
-    /// The zero-ceremony default: auth off leaves the shutdown route open, the
-    /// same posture every other mutating route has.
+    /// The zero-ceremony default: auth off leaves the shutdown route open.
     #[tokio::test]
     async fn runtime_shutdown_is_open_with_auth_off() {
         let request = Request::builder()
@@ -1609,7 +827,7 @@ mod router_auth_gate_tests {
     /// point, the attribution is a courtesy.
     #[tokio::test]
     async fn runtime_shutdown_without_a_reason_is_accepted_as_unspecified() {
-        let runtime = Arc::new(AlwaysOkStubRuntime::default());
+        let runtime = Arc::new(ControlPlaneRouterStubRuntime::default());
         let recorded = runtime.recorded_shutdown_reasons.clone();
         let router = build_router(
             runtime,
@@ -1644,7 +862,7 @@ mod router_auth_gate_tests {
     #[tokio::test]
     async fn tap_ws_rejects_missing_token_with_401_when_auth_on() {
         // With auth opted in, the read-only tap is gated exactly like the
-        // mutating routes — mechanism parity, not a trust boundary the tap
+        // shutdown route — mechanism parity, not a trust boundary the tap
         // imposes. Deleting the tap_router `.route_layer(...)` flips this from
         // 401 to the WS extractor's own (non-401) rejection, going red here.
         assert_eq!(status_of(tap_ws_request()).await, StatusCode::UNAUTHORIZED);

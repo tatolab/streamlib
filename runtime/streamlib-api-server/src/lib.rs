@@ -11,7 +11,6 @@ pub mod control_plane_host;
 mod handlers;
 mod mcp;
 pub mod node_registry;
-mod ops;
 mod state;
 
 // `processors/` is the one processor-discovery root for every language and
