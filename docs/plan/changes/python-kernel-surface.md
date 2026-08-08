@@ -32,6 +32,7 @@ def setup(self, ctx):
 def process(self, ctx):
     frame = ctx.inputs.read("video_in")
     with ctx.gpu_limited_access.resolve_surface(frame["surface_id"]) as source:
+        width, height = source.width, source.height
         output = ctx.gpu_limited_access.acquire_texture(width, height, "rgba16f", ["storage"])
         self.blur.dispatch(
             bindings={"source_image": source, "output_image": output},
@@ -178,9 +179,25 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   `bindings` array of `{name: string, kind: enum, target_id: string}`; `run_graphics_draw`
   (`:610-628`) and `run_ray_tracing_kernel` (`:1015-1038`) swap `binding: uint32` for
   `name: string`; the register-time declarations (`:352-377`, `:952-978`) do the same, and
-  `register_compute_kernel` grows the declaration array it lacks today.
+  `register_compute_kernel` grows the declaration array it lacks today. `color_target_uuids`
+  (`:646-654`) is untouched, exactly-one-entry rule included — it is not a descriptor binding
+  and renaming the binding array must not sweep it up.
+- MODIFIED: the reflected binding name stops being discarded engine-side.
+  `ComputeBindingSpec` (`core/rhi/compute_kernel.rs:38`), the graphics equivalent and
+  `RayTracingBindingSpec` (`core/rhi/ray_tracing_kernel.rs:148`) carry the name alongside
+  the binding number, and all three reflection paths keep it —
+  `derive_bindings_from_spirv` (`compute_kernel.rs:108`),
+  `derive_bindings_from_spirv_multistage` (`graphics_kernel.rs:565`) and the ray-tracing
+  stage validator. The numeric binding survives as what the descriptor set is actually built
+  from; the name is what dispatch resolves against. Nothing propagates through a plugin-ABI
+  path — §Packages deleted that surface.
 - MODIFIED: the three register ops accept GLSL `source` + `stage` + `entry_point`; `spv_hex`
   survives as the escape hatch. Compilation happens in the engine at kernel construction.
+- MODIFIED: `PROTOCOL_VERSION` bumps to 2 (`sdk/streamlib-python-wheel/python/streamlib/_helper.py:53`,
+  advertised at `:589` and checked at `:713-716`). The escalate ops change shape, and a
+  stale helper must fail its ready handshake with the existing clear error rather than
+  mis-parse a changed op. No compatibility branch is added — pre-1.0, and parent and helper
+  ship in one wheel, so the only skew this can catch is a stale process or a broken install.
 - MODIFIED: `GpuContext` gains the kernel compilation cache the example bridges kept. The key
   covers everything that changes the output — source bytes, stage, entry point, target
   environment, compiler version — never source alone.
@@ -218,13 +235,19 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   (`__enter__` returns self, `__exit__` annotated `-> Literal[False]`).
 - ADDED: a read-one-write-another compute conformance test — a GLSL kernel sampling an input
   surface and writing a second one, proving the lifted binding array end to end.
-- ADDED: one test per named-binding error case above, each asserting it raises before any
-  submission and that the message names the shader's declared bindings.
+- ADDED: one test per named-binding error case above, each asserting the message names the
+  shader's declared bindings — at the layer the case is representable at. Unknown, missing
+  and kind-mismatch are Python-level dispatch tests. **Duplicate is not expressible in a
+  Python mapping** and is tested against the escalate binding array directly. Stage-mismatch
+  and name-stripped SPIR-V are construction-time, so they assert on `create_*_kernel`, not on
+  dispatch.
 - ADDED: a discard-on-exception test for **both** scopes — a write raising mid-block leaves
   the engine's surface holding its pre-scope content, the exception propagates unsuppressed,
   and the surface is still usable on the next frame.
 - ADDED: a batching test proving N dispatches cost one submission and one fence wait, and an
-  identical-kernel-recreation test proving construction is free the second time.
+  identical-kernel-recreation test asserting the second `create_*_kernel` for the same key on
+  the same `GpuContext` is a cache hit — counted compiler invocations, never elapsed time.
+  Re-creation is free of *compilation*; it may still allocate handles.
 
 ## Notes (not tickets)
 
