@@ -348,6 +348,34 @@ def test_a_non_2xx_status_is_raised_with_its_code(stub_control_plane):
         call_tool(server.url, "graph", {})
 
 
+@pytest.mark.parametrize("url", ["file:///etc/passwd", "ftp://example.invalid/x"])
+def test_a_non_http_url_is_refused_before_any_request(url):
+    # `urlopen` dispatches on the scheme, so an unchecked URL selects a handler
+    # that is not HTTP at all — from `--url`, or from a corrupt `control_url`
+    # read out of a registry entry.
+    with pytest.raises(ControlPlaneError, match="http or https"):
+        call_tool(url, "graph", {})
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        '"a bare string"',
+        "[1, 2, 3]",
+        '{"jsonrpc":"2.0","id":1,"error":"not an object"}',
+        '{"jsonrpc":"2.0","id":1,"result":"not an object"}',
+        '{"jsonrpc":"2.0","id":1,"result":{"content":"not a list"}}',
+    ],
+)
+def test_a_misshapen_200_surfaces_as_a_control_plane_error(stub_control_plane, body):
+    # A server answering 200 with an unexpected shape must fail as itself, not
+    # as an AttributeError traceback out of the parsing path.
+    server = stub_control_plane(body=body)
+
+    with pytest.raises(ControlPlaneError):
+        call_tool(server.url, "graph", {})
+
+
 def test_an_unreachable_node_names_the_url():
     with pytest.raises(ControlPlaneError, match="127.0.0.1:1"):
         call_tool("http://127.0.0.1:1", "graph", {})
@@ -533,6 +561,40 @@ def test_each_filter_narrows_to_the_records_it_names(
     )
 
     assert [line.split(" — ", 1)[1].split(" ")[0] for line in rendered] == expected_messages
+
+
+@pytest.mark.parametrize(
+    "bad_record",
+    [
+        {"host_ts": None, "level": "info"},
+        {"host_ts": 1, "level": 7},
+        {"host_ts": 1, "level": "info", "attrs": "not a mapping"},
+        ["not", "an", "object"],
+    ],
+)
+def test_a_schema_invalid_record_is_skipped_like_a_malformed_line(tmp_path, bad_record):
+    # It decodes as JSON but is not shaped like a record; carrying it into the
+    # renderer would end the whole read over one bad line.
+    path = tmp_path / "Rabc-1000.jsonl"
+    path.write_text(
+        json.dumps(bad_record) + "\n" + json.dumps(a_log_record(message="good")) + "\n",
+        encoding="utf-8",
+    )
+    log_file = RuntimeLogFile("Rabc", 1000, path, path.stat().st_size)
+    errors = io.StringIO()
+
+    rendered = list(
+        read_log_file(
+            log_file,
+            LogRecordFilters(),
+            follow=False,
+            errors=errors,
+            log_directory=tmp_path,
+        )
+    )
+
+    assert [line.split(" — ", 1)[1] for line in rendered] == ["good"]
+    assert "skipping" in errors.getvalue()
 
 
 def test_a_malformed_line_is_reported_and_skipped_not_fatal(tmp_path):
@@ -729,6 +791,15 @@ def test_a_control_target_with_on_disk_filters_is_refused(
     server = stub_control_plane()
 
     assert cli.main(["logs", "--url", server.url, "--level", "warn"]) == 1
+
+    assert "--level" in capsys.readouterr().err
+
+
+def test_list_refuses_the_flags_it_would_otherwise_ignore(isolated_registry, capsys):
+    # `--list` reads no log file, so it returns before these are consulted. The
+    # control-target path already calls a silently-dropped flag a wiring error;
+    # both modes should agree on that.
+    assert cli.main(["logs", "--list", "--level", "warn"]) == 1
 
     assert "--level" in capsys.readouterr().err
 

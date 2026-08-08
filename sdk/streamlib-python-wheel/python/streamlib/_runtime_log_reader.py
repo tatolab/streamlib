@@ -24,15 +24,15 @@ from typing import Any, Generator, NamedTuple, Optional, TextIO
 
 __all__ = [
     "LogRecordFilters",
-    "wait_for_runtime_log_file",
-    "format_started_at",
-    "format_size",
     "RuntimeLogFile",
-    "runtime_log_directory_path",
     "enumerate_runtime_log_files",
-    "newest_log_file_for_runtime",
     "format_record_pretty",
+    "format_size",
+    "format_started_at",
+    "newest_log_file_for_runtime",
     "read_log_file",
+    "runtime_log_directory_path",
+    "wait_for_runtime_log_file",
 ]
 
 #: Severity order, lowest first — a `--level` floor admits everything at or
@@ -257,7 +257,24 @@ def _decode_line(line: str, errors: TextIO) -> "Optional[dict[str, Any]]":
     except ValueError as decode_failure:
         print(f"warning: skipping malformed JSONL line: {decode_failure}", file=errors)
         return None
-    return decoded if isinstance(decoded, dict) else None
+    if not isinstance(decoded, dict):
+        print("warning: skipping JSONL line that is not a record object", file=errors)
+        return None
+    # Shape, not just JSON-validity: a record carrying `host_ts: null` or a
+    # non-object `attrs` decodes fine and then takes the renderer down, which
+    # would end the whole read over one bad line — the opposite of what
+    # skipping a malformed line is for.
+    if (
+        not isinstance(decoded.get("host_ts"), int)
+        or not isinstance(decoded.get("level"), str)
+        or not isinstance(decoded.get("attrs", {}), dict)
+    ):
+        print(
+            "warning: skipping JSONL line whose fields do not match the record schema",
+            file=errors,
+        )
+        return None
+    return decoded
 
 
 def wait_for_runtime_log_file(

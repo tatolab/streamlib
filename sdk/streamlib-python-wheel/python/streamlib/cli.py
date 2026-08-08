@@ -51,6 +51,15 @@ SCAFFOLD_PYTHON_VERSION = "3.12"
 STREAMLIB_SIMPLE_INDEX_URL = "https://tatolab.github.io/streamlib/simple/"
 
 
+class ObservationVerbUsageError(Exception):
+    """An observation verb invoked with flags that contradict each other.
+
+    Distinct from [`AppLaunchError`], which names the `run` / `dev` path: these
+    are argument mistakes on `nodes` / `graph` / `tap` / `logs`, and the two
+    surfaces are free to diverge in how they report.
+    """
+
+
 class AppLaunchError(Exception):
     """A launch that failed before any engine was built.
 
@@ -458,14 +467,14 @@ def call_observation_tool(
     return 0
 
 
-def read_runtime_log_file(
+def render_runtime_logs(
     *,
     runtime_id: "Optional[str]",
     list_runtimes: bool,
     follow: bool,
     filters: "LogRecordFilters",
 ) -> int:
-    """`streamlib logs` in on-disk mode: enumerate, or render one runtime's file."""
+    """`streamlib logs` in on-disk mode: enumerate runtimes, or render one's file."""
     from ._runtime_log_reader import (
         enumerate_runtime_log_files,
         format_size,
@@ -479,6 +488,25 @@ def read_runtime_log_file(
     log_directory = runtime_log_directory_path()
 
     if list_runtimes:
+        ignored_alongside_list = [
+            name
+            for name, value in (
+                ("RUNTIME_ID", runtime_id),
+                ("--follow", follow),
+                ("--processor", filters.processor),
+                ("--pipeline", filters.pipeline),
+                ("--rhi", filters.rhi_only),
+                ("--level", filters.minimum_level),
+                ("--source", filters.source),
+                ("--intercepted-only", filters.intercepted_only),
+            )
+            if value
+        ]
+        if ignored_alongside_list:
+            raise ObservationVerbUsageError(
+                f"`--list` enumerates the runtimes that have log files and reads "
+                f"none of them, so it takes no {', '.join(ignored_alongside_list)}."
+            )
         log_files = sorted(
             enumerate_runtime_log_files(log_directory),
             key=lambda log_file: log_file.started_at_millis,
@@ -497,7 +525,7 @@ def read_runtime_log_file(
         return 0
 
     if runtime_id is None:
-        raise AppLaunchError(
+        raise ObservationVerbUsageError(
             "missing RUNTIME_ID.\n"
             "`streamlib logs --list` enumerates the runtimes that have log files, "
             "and `--url` / `--node` reads a running node's live event stream instead."
@@ -764,7 +792,7 @@ def _run_logs_verb(arguments: argparse.Namespace) -> int:
             if value
         ]
         if conflicting:
-            raise AppLaunchError(
+            raise ObservationVerbUsageError(
                 f"`--url` / `--node` reads a running node's live event stream, which "
                 f"takes no {', '.join(conflicting)}. Drop the control target to read "
                 f"an on-disk log file instead."
@@ -777,11 +805,11 @@ def _run_logs_verb(arguments: argparse.Namespace) -> int:
         )
 
     if arguments.count is not None:
-        raise AppLaunchError(
+        raise ObservationVerbUsageError(
             "`--count` bounds a live event-stream sample; it has no meaning for an "
             "on-disk log file. Use `--url` / `--node`, or drop `--count`."
         )
-    return read_runtime_log_file(
+    return render_runtime_logs(
         runtime_id=arguments.runtime_id,
         list_runtimes=arguments.list_runtimes,
         follow=arguments.follow,
@@ -833,7 +861,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             bind_port=arguments.bind_port,
             node_name=arguments.node_name,
         )
-    except (AppLaunchError, ControlPlaneError) as failure:
+    except (AppLaunchError, ObservationVerbUsageError, ControlPlaneError) as failure:
         print(f"error: {failure}", file=sys.stderr)
         return 1
 

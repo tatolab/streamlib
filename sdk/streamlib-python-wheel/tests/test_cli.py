@@ -361,8 +361,8 @@ def test_the_observation_verbs_are_served_by_this_wheel(
     assert "invalid choice" not in finished.stderr
     assert "not in this wheel yet" not in finished.stderr
 
+    listed = run_cli("--help")
     for verb in ("graph", "tap", "logs"):
-        listed = run_cli("--help")
         assert verb in listed.stdout, f"`streamlib {verb}` must be a served verb"
 
 

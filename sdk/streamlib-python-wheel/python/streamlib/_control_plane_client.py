@@ -18,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -66,6 +67,15 @@ def _post_jsonrpc(url: str, body: str, timeout_seconds: float) -> str:
     Raises [`ControlPlaneError`] on a transport failure or a non-2xx status. A
     `202` (a notification ack) yields an empty string.
     """
+    # `urlopen` dispatches on the scheme, so an unchecked URL — a `--url
+    # file:///etc/passwd`, or a corrupt `control_url` read out of a registry
+    # entry — would select a handler that is not HTTP at all.
+    scheme = urllib.parse.urlparse(url).scheme
+    if scheme not in ("http", "https"):
+        raise ControlPlaneError(
+            f"control-plane URL must be http or https; got `{url}`"
+        )
+
     request = urllib.request.Request(
         _mcp_endpoint(url),
         data=body.encode("utf-8"),
@@ -188,18 +198,40 @@ def call_tool(url: str, tool_name: str, arguments: "dict[str, Any]") -> str:
             f"control plane returned a non-JSON response: {response_body}"
         ) from decode_failure
 
+    # Every member below is checked for shape, not just presence: a server that
+    # answers 200 with a differently-shaped body would otherwise surface as an
+    # AttributeError traceback rather than as the failure it is.
+    if not isinstance(response, dict):
+        raise ControlPlaneError(
+            f"control plane returned a non-object JSON-RPC response: {response_body}"
+        )
+
     if "error" in response:
-        message = response["error"].get("message", "unknown JSON-RPC error")
+        error = response["error"]
+        message = (
+            error.get("message", "unknown JSON-RPC error")
+            if isinstance(error, dict)
+            else error
+        )
         raise ControlPlaneError(f"{tool_name} failed: {message}")
 
     result = response.get("result")
-    if result is None:
+    if not isinstance(result, dict):
         raise ControlPlaneError(
-            f"control plane response missing `result`: {response_body}"
+            f"control plane response missing a `result` object: {response_body}"
         )
 
-    content = result.get("content") or [{}]
-    text = content[0].get("text", "")
+    content = result.get("content")
+    first_block = content[0] if isinstance(content, list) and content else None
+    text = first_block.get("text") if isinstance(first_block, dict) else None
+
     if result.get("isError", False):
-        raise ControlPlaneError(f"{tool_name} failed: {text}")
+        raise ControlPlaneError(f"{tool_name} failed: {text or 'no detail given'}")
+    if not isinstance(text, str):
+        # Succeeded, but carries nothing readable. Returning "" here would print
+        # a blank line and exit 0, which reads as "the node has nothing" rather
+        # than "this response made no sense".
+        raise ControlPlaneError(
+            f"{tool_name} returned no text content: {response_body}"
+        )
     return text
