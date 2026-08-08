@@ -149,7 +149,18 @@ new_repo <<'EOF'
 EOF
 plant vendor/tatolab-vulkanalia/src/lib.rs "// streamlib-pack"
 run_gate
-expect_pass "the vendored tree is out of scope"
+expect_pass "the vendored tree is out of scope for the content sweep"
+
+# ...but only the content sweep. The path check has no exclusions at all: a file at the
+# named path is residue wherever it lives, and a bullet that retires the vendored fork
+# must not pass while the fork is still checked in.
+new_repo <<'EOF'
+- REMOVED: vendor/tatolab-vulkanalia
+EOF
+plant vendor/tatolab-vulkanalia/src/lib.rs "pub fn vk_create() {}"
+run_gate
+expect_fail "a vendored path that still exists is residue" \
+  "STILL PRESENT (on disk): vendor/tatolab-vulkanalia"
 
 new_repo <<'EOF'
 - REMOVED: streamlib-pack
@@ -206,6 +217,26 @@ new_repo <<'EOF'
 EOF
 run_gate
 expect_fail "a degenerate whole-tree pattern is rejected" "degenerate pattern"
+
+new_repo <<'EOF'
+- REMOVED:
+EOF
+run_gate
+expect_fail "a bullet with no pattern is rejected, not skipped" "no pattern after 'REMOVED:'"
+
+# An empty bullet must not vanish from the count either — a summary that says "2 bullets"
+# for a file declaring 3 vouches for a bullet it never read.
+new_repo <<'EOF'
+- REMOVED: Alpha
+- REMOVED:
+- REMOVED: Beta
+EOF
+run_gate
+if [ "$status" -eq 1 ] && printf '%s' "$out" | grep -qF "MALFORMED BULLET: (empty)"; then
+  ok "an empty bullet among good ones fails the file"
+else
+  bad "an empty bullet among good ones fails the file (got $status)"
+fi
 
 # The rejections must not fire on legitimate patterns.
 new_repo <<'EOF'

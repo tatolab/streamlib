@@ -26,6 +26,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # The job runs bash tests over throwaway repos it creates itself — no
+          # authenticated git operation, so the checkout token has no business in
+          # the local git config.
+          persist-credentials: false
 
       - name: bash .claude/scripts/tests/ship-change-removed-gate.test.sh
         run: bash .claude/scripts/tests/ship-change-removed-gate.test.sh

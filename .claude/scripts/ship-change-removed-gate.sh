@@ -41,15 +41,22 @@ trap 'rm -f "$hits"' EXIT
 content_excludes=(':!vendor/**' ':!docs/plan/changes/**' ':!CHANGELOG.md' ':!docs/decisions/**')
 
 reject() {
-  echo "MALFORMED BULLET: $1"
+  echo "MALFORMED BULLET: ${1:-(empty)}"
   echo "  $2"
   fail=1
 }
 
 count=0
 while IFS= read -r pat; do
-  [ -n "$pat" ] || continue
   count=$((count + 1))
+
+  # An empty pattern is a declared removal that searches for nothing. Counted and
+  # rejected, never skipped: skipping it would also under-report the bullet total, so
+  # the summary line would vouch for a file it had not fully read.
+  if [ -z "$pat" ]; then
+    reject "$pat" "no pattern after 'REMOVED:' — write the artifact on the bullet's own line."
+    continue
+  fi
 
   case "$pat" in
     *'`'*)
@@ -80,10 +87,12 @@ while IFS= read -r pat; do
 
   # `:(literal)` so a pattern containing glob metacharacters is read as the path it
   # names, not as a wildcard. A symbol-shaped pattern names no path and matches nothing.
-  # vendor/ is dropped afterwards, not as a `:!` pathspec: git (2.43) silently drops an
-  # exact-file positive match the moment any exclude pathspec joins the list, which
-  # would make every leaf-file bullet — the one case this check exists for — pass green.
-  git ls-files -- ":(literal)$pat" 2>/dev/null | grep -v '^vendor/' >"$hits" || true
+  # No exclusions here, by design — a file sitting at the named path is residue wherever
+  # it lives, vendor/ included. Never add a `:!` pathspec to this call either: git (2.43)
+  # silently drops an exact-file positive match the moment any exclude joins the list,
+  # which would make every leaf-file bullet — the one case this check exists for — pass
+  # green.
+  git ls-files -- ":(literal)$pat" >"$hits" 2>/dev/null || true
   if [ -s "$hits" ]; then
     echo "STILL PRESENT (on disk): $pat"
     head -20 "$hits" | sed 's/^/  /'
