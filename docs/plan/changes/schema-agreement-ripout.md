@@ -43,7 +43,7 @@ text, on the bullet's first line.** Continuation lines are prose the gate does n
 > and a backticked or parenthesised pattern is now rejected rather than searched. All
 > nine bullets below were backticked, so none of them ever searched for anything that
 > appears in Rust source.
-
+>
 > **Five of the nine already landed.** PR #1687 deleted the strict/loose posture ahead of
 > this change: `SchemaValidationPosture`, `ConnectOptions`, `connect_with` /
 > `connect_with_async`, `enforce_connect_schema_agreement`,
@@ -55,9 +55,11 @@ text, on the bullet's first line.** Continuation lines are prose the gate does n
 > change's substance, not this grammar repair. Noted 2026-08-08.
 
 - REMOVED: schema_agreement
+- REMOVED: runtime/streamlib-engine/src/core/schema_agreement.rs
 
-  The whole module `runtime/streamlib-engine/src/core/schema_agreement.rs` (386 lines
-  incl. its 10 unit tests) and every reference; declaration `core/mod.rs:18`.
+  The whole module (386 lines incl. its 10 unit tests) and every reference; declaration
+  `core/mod.rs:18`. The symbol bullet proves nothing references it; the path bullet proves
+  the file is gone.
 - REMOVED: SchemaValidationPosture
 
   Defined `schema_agreement.rs:48`; re-exports `operations.rs:20`,
@@ -115,12 +117,24 @@ text, on the bullet's first line.** Continuation lines are prose the gate does n
   `is_unset` bullet plus review. Recommendation: (a). Owner call; not resolved here.
 - REMOVED: connect_schema_agreement_tests
 - REMOVED: app_connect_with_forwards_strict_posture_to_runner
+- REMOVED: read_raw_observes_schema_tag_mismatch_but_still_delivers
+- REMOVED: read_raw_is_silent_on_matching_or_wildcard_schema
+- REMOVED: read_raw_is_silent_across_the_version_free_sentinel_asymmetry
 
   The agreement test suites — `connect_schema_agreement_tests`
   (`operations_runtime.rs:632-1050`, incl. its test-only registry scaffolding),
-  `app_connect_with_forwards_strict_posture_to_runner` + helper
+  `app_connect_with_forwards_strict_posture_to_runner`
   (`sdk/streamlib-sdk/tests/app_sugar_test.rs:166,:207`), and the three per-read mismatch
-  tests (`iceoryx2/input.rs:950,:977,:1005`).
+  tests, now named one per bullet above (`iceoryx2/input.rs:950,:977,:1005` — the
+  citations still resolve exactly).
+
+  > ~~and the three per-read mismatch tests~~ / ~~+ helper~~ — Corrected 2026-08-08.
+  > The three tests were named only by line number in prose, so no bullet searched for
+  > them and all three are live: exactly the defect this repair exists to remove,
+  > reproduced inside it. They are bulleted above. The unnamed `+ helper` is dropped
+  > rather than guessed: `app_connect_with_forwards_strict_posture_to_runner` and its
+  > helper are already at zero (deleted by #1687 — `app_sugar_test.rs` survives, the
+  > symbols do not), so there is no name left in the tree to write.
 
 ## MODIFIED
 

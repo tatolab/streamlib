@@ -159,8 +159,17 @@ half still belongs to this ticket.
 - REMOVED: streamlib-adapter-cuda-helpers
 - REMOVED: streamlib-adapter-skia-abi
 - REMOVED: runtime/streamlib-engine/src/core/plugin/
+- REMOVED: build_fingerprint
+- REMOVED: twin_drift_guard
 
-  Vtable backings, `build_fingerprint`, `twin_drift_guard`, the load handshake.
+  Vtable backings, the two named trip-wires, and the load handshake. Both symbols get
+  their own bullet because both are reached from outside the directory, where the path
+  bullet cannot see them: `build_fingerprint` from
+  `module_loader/processor_registration.rs:96,:673` and a comment in
+  `runtime/streamlib-engine/build.rs:24`; `twin_drift_guard` from comments in
+  `core/processors/mod.rs:48` and `xtask/src/check_vendored_vulkanalia.rs`, which cite it
+  as a trip-wire style. `build.rs`, `core/processors/`, and the vendored-vulkanalia check
+  all survive this change, so those citations are scrubbed with it.
 - REMOVED: runtime/streamlib-engine/src/core/runtime/module_loader/
 - REMOVED: runtime/streamlib-engine/src/core/runtime/install.rs
 - REMOVED: add_modules_from_lockfile

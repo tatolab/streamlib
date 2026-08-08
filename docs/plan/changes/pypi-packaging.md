@@ -88,20 +88,15 @@ resolve from the installed distribution, never from `target/` and never from the
 Each bullet is a pattern the ship gate verifies is gone: **one artifact per bullet, plain
 text, on the bullet's first line.** Continuation lines are prose the gate does not search.
 
-- REMOVED: static-package-source emit
+> ~~REMOVED: `static-package-source emit`~~ — Deleted 2026-08-08 as provably wrong, not
+> merely unprovable. The bullet asserted a tree-wide removal, but this change explicitly
+> keeps the xtask command, which is named in `tools/streamlib-cli/src/commands/pkg.rs`,
+> `docs/architecture/package-source.md` (×3) and
+> `docs/architecture/package-development-model.md` — so it could never reach zero. What it
+> actually described, deleting the stale version-authority comment from a surviving file,
+> is a modification and is already stated by the MODIFIED bullet above (`:10-14`). No
+> inventory is lost.
 
-  Scoped `sdk/streamlib-python/pyproject.toml` — the stale version-authority comment; the
-  xtask command itself stays.
-
-  > Over-broad as written, and unfixable by grammar alone: the gate has no per-bullet
-  > path scope, so the surviving `cargo xtask static-package-source emit` command —
-  > named in `tools/streamlib-cli/src/commands/pkg.rs`,
-  > `docs/architecture/package-source.md` (×3) and
-  > `docs/architecture/package-development-model.md` — holds it above zero forever. Moot
-  > while this file is superseded and never gated. If it is ever revived, the fix is to
-  > drop this bullet: the same deletion is already stated as a MODIFIED bullet above
-  > (`:10-14`), and a comment removed from a surviving file is a modification, not a
-  > removal. Noted 2026-08-08.
 - REMOVED: version = "0.4.30"
 
   Scoped `sdk/streamlib-python/pyproject.toml` — the independent Python version line; the
