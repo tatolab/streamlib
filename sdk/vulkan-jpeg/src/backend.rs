@@ -23,7 +23,7 @@
 //! [`SimpleJpegDecoder`]: crate::simple_decoder::SimpleJpegDecoder
 //! [`VulkanComputeBackend`]: crate::vulkan_compute_backend::VulkanComputeBackend
 
-use streamlib_plugin_sdk::sdk::error::Result;
+use streamlib::sdk::error::Result;
 
 use crate::simple_decoder::JpegDecodeOutput;
 
@@ -58,7 +58,7 @@ impl JpegBackendKind {
 /// Limited-safe — no `vkAllocateMemory`, no pipeline / fence creation in
 /// steady state.
 ///
-/// [`TextureRing`]: streamlib_plugin_sdk::sdk::rhi::TextureRing
+/// [`TextureRing`]: streamlib::sdk::context::TextureRing
 pub trait JpegDecodeBackend: Send + std::fmt::Debug {
     /// Decode `jpeg_bytes` into the backend's next output slot. Returns
     /// the slot's [`JpegDecodeOutput`] (texture + surface_id + dimensions
@@ -66,11 +66,11 @@ pub trait JpegDecodeBackend: Send + std::fmt::Debug {
     /// through the normal `surface_id` contract.
     ///
     /// Errors:
-    /// - [`streamlib_plugin_sdk::sdk::error::Error::GpuError`] for parser /
+    /// - [`streamlib::sdk::error::Error::GpuError`] for parser /
     ///   Huffman failures, dimension overflows past the backend's declared
     ///   maxima, colorimetry-resolution failures, and backend-specific GPU
     ///   failures.
-    /// - [`streamlib_plugin_sdk::sdk::error::Error::NotSupported`] for inputs
+    /// - [`streamlib::sdk::error::Error::NotSupported`] for inputs
     ///   the backend cannot handle (e.g. non-4:2:0 sampling on the
     ///   Vulkan-compute backend).
     fn decode(&mut self, jpeg_bytes: &[u8]) -> Result<JpegDecodeOutput>;

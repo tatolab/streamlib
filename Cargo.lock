@@ -6287,7 +6287,7 @@ version = "0.16.0"
 dependencies = [
  "bytemuck",
  "jpeg-encoder",
- "streamlib-plugin-sdk",
+ "streamlib",
  "thiserror 2.0.18",
  "tracing",
  "zune-jpeg",
