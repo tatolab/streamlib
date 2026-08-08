@@ -26,6 +26,7 @@ flowchart LR
   app --> wheel
   wheel --> engine
   engine --> helper
+  helper -->|kernels + texture handles| engine
   ctl --> registry
   rustapp --> crate
   crate --> engine

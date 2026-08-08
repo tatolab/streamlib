@@ -142,8 +142,43 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   kernel abstraction per pipeline kind; consumers go through `GpuContext` only.
 - **DECIDED** — The engine's kernel primitives are exposable to Python as configured
   blocks: shader/compute source and binding config passed from Python, compiled and
-  executed by the engine on its device — no user-side Vulkan, ever. Shape only; the
-  Python-facing API design is its own session. [importable-python-library]
+  executed by the engine on its device — no user-side Vulkan, ever.
+  [importable-python-library]
+- **DECIDED** — Python reaches every GPU capability Rust authoring reaches: compute,
+  graphics and ray-tracing kernels, acceleration structures, and CPU readback. Python
+  names and drives; the engine allocates, compiles, binds, and dispatches. No kernel
+  capability is Rust-only. [python-kernel-api]
+- **DECIDED** — A kernel's output is an engine-owned texture that Python names by
+  surface id and passes downstream in a bag, and that a third-party GPU library in its
+  own Python package reaches through a scope: entering blits the texture to a linear
+  view (DLPack over DMA-BUF / OPAQUE_FD), leaving blits any write back and orders it on
+  the surface's timeline ahead of the engine's next read. The engine owns that
+  ordering — no fence or timeline vocabulary reaches Python. Cross-process texture
+  import is part of the capability. [python-kernel-api]
+- **DECIDED** — Python spells a kernel as an object: constructed in `setup()` where the
+  capability typestate is Full, dispatched per frame in `process()`. Construction is
+  registration and dispatch is a method call; no kernel handle string reaches Python.
+  Compute takes a general N-binding array like graphics and ray tracing — a Python
+  compute kernel reads one surface and writes another, at parity with Rust.
+  [python-kernel-api]
+- **DECIDED** — Compute, graphics, ray tracing, and CPU readback are always-present
+  capabilities of `GpuContext`, reached the same way by every caller. The four bridge
+  traits and their installation step are deleted: no kernel capability can be absent at
+  runtime, and no application glue supplies one. [python-kernel-api]
+- **DECIDED** — GLSL is the shader source contract: Python passes GLSL text and the
+  engine compiles it at kernel construction, cached by source hash; pre-compiled SPIR-V
+  stays accepted as an escape hatch. Authoring a kernel requires no toolchain beyond the
+  installed wheel, for every kernel kind. The wheel carries a C++ GLSL compiler
+  (shaderc / glslang). [python-kernel-api]
+- **DECIDED** — Dispatch is synchronous: it returns when the GPU work has retired and
+  the writes are visible, and no fence or timeline vocabulary reaches Python. Several
+  dispatches batch into one submission with barriers between them and a single fence at
+  the end — the Python equivalent of the command-recorder flow. [python-kernel-api]
+- **DECIDED** — One kernel spelling in both languages: bindings are passed at dispatch,
+  by name, and never persist on the kernel object. Rust's stateful numeric-slot setters
+  go; the command-recorder flow keeps its seam by carrying bindings to the recorder
+  rather than stashing them on the kernel. The Rust convergence is its own change,
+  sequenced after the Python surface. [python-kernel-api]
 - **OPEN** — Everything else.
 
 ## Media I/O — camera, display, audio — IN-FLIGHT (→ importable-python-library, one-monotonic-clock)
@@ -239,8 +274,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   system, libcuda) are dlopen'd at runtime, never linked — the wgpu/opencv-python
   manylinux shape; "baked in" means our Rust is compiled in, not that system deps
   are static. abi3 across a small range of GIL-enabled CPython builds only
-  (free-threaded builds wait for the stable ABI to exist for them). The wheel's
-  adapter closure excludes skia. Helper processes import the wheel itself — one
+  (free-threaded builds wait for the stable ABI to exist for them). "Our code" includes
+  vendored C/C++ we compile and link statically, not only our Rust: the wheel carries a
+  C++ GLSL shader compiler so a kernel author needs no system shader toolchain. The
+  wheel's adapter closure excludes skia. Helper processes import the wheel itself — one
   native artifact, no separate helper cdylib. [importable-python-library]
 
 ## Control plane & observability — IN-FLIGHT (→ importable-python-library, control-plane-bind-posture)

@@ -86,6 +86,12 @@ address-space-local pointer is not a handle. Pixels never cross as Python object
 **Present target**: the engine-owned presentation surface minted from a raw window
 handle; the only way frames reach a window.
 
+**Kernel**: a GPU program the engine compiles and runs on its device — compute,
+graphics, or ray-tracing. Constructed once from source, dispatched many times, spelled
+the same way in Python and Rust, and never executed by user-side Vulkan. _Avoid_:
+"shader" for the whole object (that is its source text), "pipeline" (the Vulkan-internal
+object it builds).
+
 **The plan**: `docs/plan/ARCHITECTURE.md` plus `docs/plan/diagrams/` — the single source
 of architectural decisions.
 
