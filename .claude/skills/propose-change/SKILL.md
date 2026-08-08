@@ -15,7 +15,7 @@ this skill — route to `/align` first.
    - New behavior or a changed contract → this skill.
    - Anything touching the plugin ABI, RHI, IPC wire format, or the processor model →
      this skill **plus** an ADR.
-   - Too fuzzy or too broad to state as a ≤200-line delta with few unknowns →
+   - Too fuzzy or too broad to state as a ≤350-line delta with few unknowns →
      `/explore-idea` first; come back when the shape is crisp.
 2. **Recon, read-only.** Spawn the relevant domain experts to map current state before
    writing a word — proposals invented without reading the tree reference APIs that
@@ -25,7 +25,8 @@ this skill — route to `/align` first.
    - Sections typed `ADDED:` / `MODIFIED:` / `REMOVED:` against ARCHITECTURE.md.
      Every `- REMOVED: <pattern>` bullet is a grep pattern the ship gate will verify is
      gone.
-   - **≤200 lines.** Longer means the change should split.
+   - **≤350 lines.** Never reach it by dropping file:line citations or the worked API
+     spelling — those are the delta's evidence, not its padding.
    - A factual gap you can resolve by reading the repo: resolve it. An architectural
      choice the plan doesn't state: write `[NEEDS DECISION]` with the options and your
      recommendation. **You may never resolve one yourself.**

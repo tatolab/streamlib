@@ -27,7 +27,7 @@ Design constraints this must satisfy, from evidence in this repo:
 docs/plan/PRODUCT & ARCHITECTURE  (ARCHITECTURE.md)   ONE doc. The agreed system.
 docs/plan/GLOSSARY.md                                 Ubiquitous language. Terms only.
 docs/plan/diagrams/*.mmd                              Mermaid sources → generated .excalidraw
-docs/plan/changes/<name>.md                           In-flight deltas (≤200 lines each)
+docs/plan/changes/<name>.md                           In-flight deltas (≤350 lines each)
 docs/plan/changes/archive/YYYY-MM-DD-<name>/          Shipped deltas, folded in
 docs/decisions/                                       ADRs, append-only (kept as-is)
 docs/learnings/                                       Empirical cache (kept as-is)
@@ -89,7 +89,7 @@ dangle silently, unreviewable PR diffs). The pipeline instead:
 ### Changes — typed deltas, archived on merge
 
 A change proposal (`changes/<name>.md`) is written as a **delta against the plan**, never
-a restatement: sections marked `ADDED` / `MODIFIED` / `REMOVED`, ≤200 lines, deriving
+a restatement: sections marked `ADDED` / `MODIFIED` / `REMOVED`, ≤350 lines, deriving
 as few tracer-bullet tickets as it honestly needs (count is guidance, not a cap —
 owner decision 2026-08-02). Two markers with different powers:
 
@@ -268,8 +268,10 @@ PR — never accreted mid-session because something annoyed an agent once.
 
 ## Numeric caps (hard numbers survive agent interpretation; prose doesn't)
 
-- Change proposal ≤ 200 lines. Ticket count per change is guidance, not a cap (owner
-  decision 2026-08-02): as few tracer bullets as the change honestly needs.
+- Change proposal ≤ 350 lines (owner decision 2026-08-07, raised from 200); the number is
+  never met by dropping file:line citations or worked API spelling. Ticket count per change
+  is guidance, not a cap (owner decision 2026-08-02): as few tracer bullets as the change
+  honestly needs.
 - Scale gate, decided at entry: bug fix / refactor / test work → **no change artifact at
   all** (the default path); new behavior or changed contract → delta change; anything
   touching the RHI, the IPC wire format, the processor model, or the Python API's
