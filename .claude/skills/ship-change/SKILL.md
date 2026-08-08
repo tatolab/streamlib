@@ -10,9 +10,11 @@ Precondition: every ticket of the change is merged (check the milestone). Exact
 sequence — no improvisation:
 
 1. `bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/<name>.md` —
-   **exit 0 required.** Nonzero output lists what still exists in the tree; that residue
-   is finished first (a follow-up ticket in the same milestone), and this skill re-runs
-   after. Never archive with residue.
+   **exit 0 required.** `STILL PRESENT` lists what remains in the tree, referenced or on
+   disk; that residue is finished first (a follow-up ticket in the same milestone), and
+   this skill re-runs after. Never archive with residue. `MALFORMED BULLET` is not
+   residue and never becomes a ticket — the bullet cannot prove anything as written, so
+   the change file is corrected in place (grammar: `docs/plan/changes/README.md`).
 2. `mkdir -p .claude/state && touch .claude/state/plan-session`
 3. Fold each `ADDED`/`MODIFIED` section into `docs/plan/ARCHITECTURE.md`; flip the
    affected sections `IN-FLIGHT` → `SHIPPED`, each with a `<!-- verify: <glob or
