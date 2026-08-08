@@ -282,7 +282,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   wheel's adapter closure excludes skia. Helper processes import the wheel itself — one
   native artifact, no separate helper cdylib. [importable-python-library]
 
-## Control plane & observability — IN-FLIGHT (→ importable-python-library, control-plane-bind-posture)
+## Control plane & observability — IN-FLIGHT (→ importable-python-library, control-plane-bind-posture, mcp-served-with-the-node)
 
 - **DECIDED** — One control plane: the api-server's HTTP + WebSocket + MCP surface,
   hosted in-process by any runtime that enables it. The MCP tool set is the canonical

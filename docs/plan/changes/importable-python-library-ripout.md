@@ -15,6 +15,12 @@ where a bullet says otherwise)
   vocabulary is observation-shaped (graph, tap, logs, health, nodes). The CLI `mcp`
   verb and `Dockerfile`/`docker/` re-point at the wheel-hosted runtime (or the Docker
   packaging story is deleted with a note — decide in-ticket from what CI uses).
+
+  > ~~The CLI `mcp` verb … re-point[s] at the wheel-hosted runtime.~~ — Superseded
+  > 2026-08-08 by `mcp-served-with-the-node.md` (owner ruling). The verb is deleted, not
+  > re-pointed: MCP is served by the node's own control plane at `POST /mcp`, with no CLI
+  > verb, stdio transport, or attach bridge. The `Dockerfile`/`docker/` half of this
+  > clause stands unchanged.
 - **`sdk/vulkan-jpeg`** rewires its pervasive `streamlib_plugin_sdk::sdk::*` imports
   to `streamlib-sdk`; the cdylib-safety constraint drops.
 - **`sdk/streamlib-macros`**: the `#[processor]` attribute grammar relocates out of
