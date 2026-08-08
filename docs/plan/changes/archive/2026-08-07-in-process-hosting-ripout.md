@@ -162,6 +162,18 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   rather than rely on prose, so Change B's gate can prove the symbol reaches zero.
 - REMOVED: streamlib-pyembed-spike
 
+  > This bullet no longer passes its own gate, and will not again.
+  > `xtask/src/check_no_in_process_placement.rs` names `streamlib-pyembed-spike` in its
+  > module doc and in a fixture test. That file is the check written to enforce this very
+  > removal, so the collision is the ban working, not residue — the spike tree itself is
+  > gone. Chasing it to green would mean deleting the enforcement's own vocabulary.
+  > Annotated 2026-08-08 rather than chased.
+  >
+  > The general shape, for every ripout that ships alongside a new checker: **a ban's
+  > enforcement code must name the thing it bans**, so a removal proven by a new gate will
+  > always re-trip that gate. Such a bullet needs either a pattern narrower than the banned
+  > name, or an exclusion for the checker that owns it.
+
 The spike deletion is one clause of a five-part disposition (miscitation research,
 2026-08-05; invariant: *every search that surfaces the retracted numbers returns a
 retraction, no search returns a claim*): (1) delete the tree — its README is the last
