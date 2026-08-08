@@ -35,12 +35,6 @@ streamlib-pack = { path = "../streamlib-pack", version = "0.14.4" }
 # same build-output unit the pack strip list and the orchestrator gitignore do.
 streamlib-processor-extract = { path = "../../sdk/streamlib-processor-extract", version = "0.14.4" }
 
-# Host-side control plane: the CLI's `mcp` subcommand hosts the api-server's
-# transport-free MCP dispatch (`serve_stdio_jsonrpc`) over stdio, reusing the
-# one dispatch surface `POST /mcp` uses. Path-only (api-server is `publish =
-# false`, never in the registry closure).
-streamlib-api-server = { path = "../../runtime/streamlib-api-server" }
-
 # JTD-codegen pipeline (drives `streamlib generate`)
 streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.14.4" }
 

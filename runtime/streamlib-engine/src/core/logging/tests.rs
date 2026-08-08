@@ -13,7 +13,7 @@ use serial_test::serial;
 use tempfile::TempDir;
 
 use crate::core::logging::{
-    LoggingTunables, PrettyMirrorStream, StreamlibLoggingConfig,
+    LoggingTunables, StreamlibLoggingConfig,
     event::{LogLevel, RuntimeLogEvent, SCHEMA_VERSION, Source},
     init::init_for_tests,
     paths::{log_dir, runtime_log_path},
@@ -154,7 +154,6 @@ fn time_triggered_flush_writes_without_size_trigger() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
@@ -262,7 +261,6 @@ fn panic_hook_best_effort_flush() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
@@ -308,7 +306,6 @@ fn hot_path_is_not_blocked_on_io() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
@@ -366,7 +363,6 @@ fn rust_println_captured_via_fd_redirect() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
@@ -415,7 +411,6 @@ fn rust_c_printf_via_libc_captured() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
@@ -466,7 +461,6 @@ fn intercept_stdio_off_in_tests() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables::default(),
@@ -513,7 +507,6 @@ fn intercepted_fd2_uses_channel_fd2() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
@@ -566,7 +559,6 @@ fn no_redirect_loop_when_mirror_enabled() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: true,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
@@ -617,7 +609,6 @@ fn reader_thread_shuts_down_on_runtime_drop() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
@@ -854,7 +845,6 @@ fn burst_surfaces_dropped_counter_record() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {

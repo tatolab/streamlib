@@ -34,7 +34,7 @@ use tracing::subscriber::{DefaultGuard, NoSubscriber};
 
 use streamlib_engine::core::runtime::RuntimeUniqueId;
 use streamlib_engine::logging::{
-    LogLevel, LoggingTunables, PrettyMirrorStream, RuntimeLogEvent, StreamlibLoggingConfig,
+    LogLevel, LoggingTunables, RuntimeLogEvent, StreamlibLoggingConfig,
     StreamlibLoggingGuard, init_for_tests,
 };
 
@@ -49,7 +49,6 @@ fn install_pathway(tmp: &TempDir, runtime_id: &str) -> StreamlibLoggingGuard {
         service_name: "bench".into(),
         runtime_id: Some(runtime_id),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
@@ -192,7 +191,6 @@ fn bench_burst_drops_surface(c: &mut Criterion) {
                     service_name: "bench".into(),
                     runtime_id: Some(Arc::clone(&runtime_id)),
                     stdout: false,
-                    pretty_mirror_stream: PrettyMirrorStream::Stdout,
                     jsonl: true,
                     intercept_stdio: false,
                     tunables: LoggingTunables {

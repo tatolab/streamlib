@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use streamlib_engine::core::runtime::RuntimeUniqueId;
 use streamlib_engine::logging::{
-    LoggingTunables, PrettyMirrorStream, StreamlibLoggingConfig, init_for_tests,
+    LoggingTunables, StreamlibLoggingConfig, init_for_tests,
 };
 
 fn raw_write_stdout(bytes: &[u8]) {
@@ -59,7 +59,6 @@ fn main() {
         service_name: "log_emit_1000".into(),
         runtime_id: Some(runtime_id),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
