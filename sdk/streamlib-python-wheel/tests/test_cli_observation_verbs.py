@@ -16,6 +16,7 @@ byte-identical to what the runtime mirrored to its own stdout.
 
 from __future__ import annotations
 
+import argparse
 import io
 import json
 import os
@@ -81,7 +82,7 @@ class StubControlPlane:
                 self.end_headers()
                 self.wfile.write(payload)
 
-            def log_message(self, *_: Any) -> None:
+            def log_message(self, format: str, *args: Any) -> None:  # noqa: A002
                 """Silence the default stderr access log."""
 
         self._server = HTTPServer(("127.0.0.1", 0), Handler)
@@ -486,12 +487,18 @@ def test_a_malformed_line_is_reported_and_skipped_not_fatal(tmp_path):
 # ─── The CLI surface ─────────────────────────────────────────────────────────
 
 
-def test_every_observation_verb_is_a_subcommand():
+def served_verbs() -> "list[str]":
+    """Every subcommand `streamlib` parses, read off the built parser."""
     parser = cli.build_argument_parser()
-    subcommands = parser._subparsers._group_actions[0].choices  # type: ignore[union-attr]
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return list(action.choices)
+    raise AssertionError("the parser must carry a subcommand group")
 
+
+def test_every_observation_verb_is_a_subcommand():
     for verb in ("nodes", "graph", "tap", "logs"):
-        assert verb in subcommands, f"`streamlib {verb}` must be a real subcommand"
+        assert verb in served_verbs(), f"`streamlib {verb}` must be a real subcommand"
 
 
 def test_the_not_yet_in_the_wheel_stopgap_is_gone():
@@ -503,10 +510,7 @@ def test_the_not_yet_in_the_wheel_stopgap_is_gone():
 def test_the_wheel_serves_no_mcp_verb():
     # MCP is served by the node's own control plane at POST /mcp, on the node's
     # lifecycle — there is no CLI verb to start or attach one.
-    parser = cli.build_argument_parser()
-    subcommands = parser._subparsers._group_actions[0].choices  # type: ignore[union-attr]
-
-    assert "mcp" not in subcommands
+    assert "mcp" not in served_verbs()
 
 
 def test_nodes_reports_an_empty_registry_without_failing(isolated_registry, capsys):
