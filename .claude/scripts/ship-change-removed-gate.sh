@@ -29,16 +29,45 @@ hits="$(mktemp)"
 trap 'rm -f "$hits"' EXIT
 
 # Excluded from the content sweep only — each is a surface that names a removed
-# artifact forever, by policy, so a hit there is not residue:
+# artifact by policy or by design, so a hit there is not residue the engine can act on:
 #   CHANGELOG.md      release-please generates it from merged commit subjects; the
 #                     entry announcing a removal is unscrubbable.
 #   docs/decisions/** annotate-don't-overwrite (.claude/rules/docs-policy.md): a
 #                     superseded ADR keeps naming what it retired.
-#   docs/plan/changes/**  the change files' own inventories, including this one.
+#   docs/learnings/** empirical-only (same rule): a learning records driver or library
+#                     behaviour that stays true after the thing that surfaced it is gone.
+#   docs/plan/**      the plan states what we agreed, not what the tree holds. It also
+#                     breaks a deadlock: /ship-change gates at step 1 but folds
+#                     ARCHITECTURE.md at step 3, so a change whose own plan text names
+#                     what it removes could never reach the step that retires that text.
+#   examples/**       consumers, lagging by design (CLAUDE.md); moving out-of-repo (#1672).
+#   packages/<dist>   the *distributable* entries only, same doctrine — see below.
 #   vendor/**         the vendored vulkanalia fork, never ours to edit.
-# The path check does not inherit these: a file existing at the named path is residue
-# wherever it lives.
-content_excludes=(':!vendor/**' ':!docs/plan/changes/**' ':!CHANGELOG.md' ':!docs/decisions/**')
+# The path check inherits none of these: a file existing at a named path is residue
+# wherever it lives, so a bullet naming e.g. packages/test-fixtures-abi-mismatch or a
+# docs/plan file still fails while that path is tracked.
+content_excludes=(
+  ':!vendor/**'
+  ':!docs/plan/**'
+  ':!docs/decisions/**'
+  ':!docs/learnings/**'
+  ':!examples/**'
+  ':!CHANGELOG.md'
+)
+
+# packages/ is split, and the split is load-bearing (CLAUDE.md): these entries are
+# engine-side — not downstream consumers — so they stay in the sweep and their residue is
+# real work. Everything else under packages/ is a distributable that lags by design and is
+# excluded. Derived from the tree rather than hard-listed, so a package added later is
+# excluded by default and this list stays the only thing to maintain.
+engine_side_packages=" escalate core api-server test-fixtures test-fixtures-abi-mismatch "
+for pkg_dir in packages/*/; do
+  [ -d "$pkg_dir" ] || continue
+  pkg_name="${pkg_dir#packages/}"
+  pkg_name="${pkg_name%/}"
+  case "$engine_side_packages" in *" $pkg_name "*) continue ;; esac
+  content_excludes+=(":!$pkg_dir**")
+done
 
 reject() {
   echo "MALFORMED BULLET: ${1:-(empty)}"
