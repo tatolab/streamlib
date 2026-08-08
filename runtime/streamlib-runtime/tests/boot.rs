@@ -351,8 +351,12 @@ fn websocket_streams_runtime_events_end_to_end() {
     std::thread::sleep(SUBSCRIBER_SERVICE_STARTUP_BUDGET);
 
     let shutdown_request = r#"{"reason":"ws event-stream regression lock"}"#;
-    assert!(
-        http_post_json(port, "/api/runtime/shutdown", shutdown_request).is_some(),
+    // 202 specifically, not merely a response: a deleted route would answer
+    // `Some(404)`, satisfy a looser assert, and then present as a 30s read
+    // timeout — which is the failure mode this assert exists to rule out.
+    assert_eq!(
+        http_post_json(port, "/api/runtime/shutdown", shutdown_request),
+        Some(202),
         "the shutdown route must accept the trigger; without it there is no event to catch"
     );
     let received = ws.read_text(Instant::now() + Duration::from_secs(30));
