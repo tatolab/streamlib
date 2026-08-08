@@ -67,15 +67,18 @@ plane exists to observe and drive *running* nodes, not to embed."
 
 ## REMOVED
 
-One bare pattern per bullet — the ship gate greps the whole line verbatim, so no bullet
-here carries a slash, a parenthetical, or a second item.
+One bare pattern per bullet. The ship gate fixed-string-greps everything after the
+`- REMOVED:` prefix, so a bullet carrying a slash, a parenthetical, a second item — or
+surrounding backticks — can never match code and passes vacuously. The backticks are
+omitted deliberately: rustdoc writes them in doc comments, so a backticked pattern
+matches prose while a surviving definition goes unnoticed.
 
-- REMOVED: `serve_stdio_jsonrpc`
-- REMOVED: `tools/streamlib-cli/src/commands/mcp.rs`
-- REMOVED: `Commands::Mcp`
-- REMOVED: `for_stdio_protocol`
-- REMOVED: `PrettyMirrorStream`
-- REMOVED: `pretty_mirror_stream`
+- REMOVED: serve_stdio_jsonrpc
+- REMOVED: tools/streamlib-cli/src/commands/mcp.rs
+- REMOVED: Commands::Mcp
+- REMOVED: for_stdio_protocol
+- REMOVED: PrettyMirrorStream
+- REMOVED: pretty_mirror_stream
 
 ### What the last three bullets are
 
