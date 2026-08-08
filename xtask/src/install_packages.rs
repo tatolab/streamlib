@@ -285,15 +285,16 @@ mod tests {
         // reverting to "compile every packages/* dir" would push the path-dep
         // package into the distributable list; this asserts against that.
         let root = tempfile::tempdir().unwrap();
-        let dist = write_package(root.path(), "camera", false);
-        let skip = write_package(root.path(), "path-dep-package", true);
+        let distributable_package = write_package(root.path(), "camera", false);
+        let skipped_path_dependency_package =
+            write_package(root.path(), "path-dep-package", true);
 
         let (distributable, skipped) =
             partition_packages(&root.path().join("packages")).unwrap();
 
-        assert_eq!(distributable, vec![dist]);
+        assert_eq!(distributable, vec![distributable_package]);
         assert_eq!(skipped.len(), 1);
-        assert_eq!(skipped[0].0, skip);
+        assert_eq!(skipped[0].0, skipped_path_dependency_package);
         assert!(
             !skipped[0].1.is_empty(),
             "a skipped package must name its offenders"

@@ -1,7 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-#![allow(clippy::disallowed_macros)] // codegen binary: stdout is the output channel
+// A build-time codegen binary run by hand or by `schemas.yml`, never inside a
+// runtime: it has no `tracing` subscriber to emit through, and its one line of
+// output tells the operator where the artifact landed. The engine's
+// `lint-logging` gate honours this attribute as its sanctioned allowance.
+#![allow(clippy::disallowed_macros)]
 
 //! Writes the control plane's OpenAPI spec to `dist/schemas/openapi.json`.
 //!
@@ -18,10 +22,7 @@ use std::path::Path;
 
 fn main() {
     let schema_dir = Path::new("dist/schemas");
-    if !schema_dir.exists() {
-        fs::create_dir_all(schema_dir).expect("Failed to create schema directory");
-        println!("Created directory: {}", schema_dir.display());
-    }
+    fs::create_dir_all(schema_dir).expect("Failed to create schema directory");
 
     let openapi = streamlib_api_server::control_plane_openapi_spec();
     let openapi_json =

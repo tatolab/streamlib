@@ -70,7 +70,10 @@ jobs:
         run: mkdir -p dist/streamlib-client/src
 
       - name: Install the OpenAPI type generator
-        run: npm install -g openapi-typescript
+        # Pinned: this job publishes a package, so an upstream release must not
+        # silently change the generated output between two dispatches of the
+        # same commit.
+        run: npm install -g openapi-typescript@7.9.1
 
       - name: Generate API client from OpenAPI
         run: |
