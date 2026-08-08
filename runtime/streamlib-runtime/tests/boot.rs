@@ -323,11 +323,8 @@ fn websocket_streams_runtime_events_end_to_end() {
     // Trigger: a shutdown request. `request_runtime_shutdown` publishes
     // RuntimeEvent::RuntimeShutdown to topics::RUNTIME_GLOBAL (fanned out to
     // topics::ALL) before the run loop observes its latch, and the route
-    // answers 202 without awaiting teardown — so the event is on the bus while
-    // the node is still serving. It is idempotent, which is what lets this
-    // retry: the subscriber thread takes a beat to come up and iceoryx2 does
-    // not replay pre-subscription samples, so re-trigger within a deadline
-    // until a frame lands.
+    // answers 202 without awaiting teardown, so the event is on the bus while
+    // the node is still serving.
     //
     // This used to POST an unregistered processor type to `/api/processor` and
     // read the resulting RuntimeDidAddProcessor. That route is gone — the
@@ -335,14 +332,30 @@ fn websocket_streams_runtime_events_end_to_end() {
     // the one route that still acts on the node. The invariant under test is
     // unchanged: an event published on the host's PUBSUB reaches a WebSocket
     // client, which is only true because the api-server is statically linked.
-    let shutdown_request = r#"{"reason":"ws event-stream regression lock"}"#;
+    //
+    // The swap costs this test its retries, which is why the wait below is not
+    // optional. The old trigger was side-effect-free and endlessly repeatable,
+    // so a loop could paper over the subscriber's startup. This one is
+    // one-shot: the run loop observes the latch and the node stops answering
+    // within ~50 ms, so a re-POST reaches a dying node and every later read
+    // sees a closed socket. There is exactly one published event to catch.
+    //
+    // `PUBSUB.subscribe` returning does NOT mean the subscription is live — it
+    // spawns a thread that opens its iceoryx2 service with up to 10 retries at
+    // 20 ms (`pubsub/bus.rs`), and iceoryx2 does not replay pre-subscription
+    // samples. So the subscriber gets an order of magnitude more than that
+    // documented budget before the one event fires. A readiness frame from the
+    // handler would not substitute: it could only report that `subscribe`
+    // returned, which is the thing that isn't sufficient.
+    const SUBSCRIBER_SERVICE_STARTUP_BUDGET: Duration = Duration::from_secs(2);
+    std::thread::sleep(SUBSCRIBER_SERVICE_STARTUP_BUDGET);
 
-    let deadline = Instant::now() + Duration::from_secs(30);
-    let mut received: Option<String> = None;
-    while received.is_none() && Instant::now() < deadline {
-        let _ = http_post_json(port, "/api/runtime/shutdown", shutdown_request);
-        received = ws.read_text(Instant::now() + Duration::from_secs(2));
-    }
+    let shutdown_request = r#"{"reason":"ws event-stream regression lock"}"#;
+    assert!(
+        http_post_json(port, "/api/runtime/shutdown", shutdown_request).is_some(),
+        "the shutdown route must accept the trigger; without it there is no event to catch"
+    );
+    let received = ws.read_text(Instant::now() + Duration::from_secs(30));
 
     let _ = std::fs::remove_dir_all(&temp_home);
 

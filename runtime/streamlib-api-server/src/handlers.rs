@@ -54,7 +54,7 @@ fn bearer_gated_routes() -> OpenApiRouter<AppState> {
 }
 
 /// The OpenAPI document for the REST surface, built from the same two route
-/// registrations [`build_router`] installs.
+/// registrations `build_router` installs.
 ///
 /// The codegen binary reads the spec through here rather than declaring its own
 /// paths: a second inventory drifts silently, and its drift ships in the

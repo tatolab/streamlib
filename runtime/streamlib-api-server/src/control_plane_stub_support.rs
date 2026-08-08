@@ -17,10 +17,10 @@ macro_rules! graph_mutation_ops_are_unreachable {
     ($surface:literal) => {
         fn add_processor_async(
             &self,
-            _spec: streamlib::sdk::processors::ProcessorSpec,
-        ) -> streamlib::sdk::runtime::BoxFuture<
+            _spec: ::streamlib::sdk::processors::ProcessorSpec,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<
             '_,
-            streamlib::sdk::error::Result<streamlib::sdk::graph::ProcessorUniqueId>,
+            ::streamlib::sdk::error::Result<::streamlib::sdk::graph::ProcessorUniqueId>,
         > {
             unreachable!(concat!(
                 "the control plane serves no processor-creation ",
@@ -29,8 +29,8 @@ macro_rules! graph_mutation_ops_are_unreachable {
         }
         fn remove_processor_async(
             &self,
-            _processor_id: streamlib::sdk::graph::ProcessorUniqueId,
-        ) -> streamlib::sdk::runtime::BoxFuture<'_, streamlib::sdk::error::Result<()>> {
+            _processor_id: ::streamlib::sdk::graph::ProcessorUniqueId,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
             unreachable!(concat!(
                 "the control plane serves no processor-removal ",
                 $surface
@@ -38,26 +38,26 @@ macro_rules! graph_mutation_ops_are_unreachable {
         }
         fn connect_async(
             &self,
-            _from: streamlib::sdk::graph::OutputLinkPortRef,
-            _to: streamlib::sdk::graph::InputLinkPortRef,
-        ) -> streamlib::sdk::runtime::BoxFuture<
+            _from: ::streamlib::sdk::graph::OutputLinkPortRef,
+            _to: ::streamlib::sdk::graph::InputLinkPortRef,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<
             '_,
-            streamlib::sdk::error::Result<streamlib::sdk::graph::LinkUniqueId>,
+            ::streamlib::sdk::error::Result<::streamlib::sdk::graph::LinkUniqueId>,
         > {
             unreachable!(concat!("the control plane serves no connect ", $surface))
         }
         fn disconnect_async(
             &self,
-            _link_id: streamlib::sdk::graph::LinkUniqueId,
-        ) -> streamlib::sdk::runtime::BoxFuture<'_, streamlib::sdk::error::Result<()>> {
+            _link_id: ::streamlib::sdk::graph::LinkUniqueId,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
             unreachable!(concat!("the control plane serves no disconnect ", $surface))
         }
         fn register_processor_source_async(
             &self,
-            _request: streamlib::sdk::runtime::SubmittedProcessorSource,
-        ) -> streamlib::sdk::runtime::BoxFuture<
+            _request: ::streamlib::sdk::runtime::SubmittedProcessorSource,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<
             '_,
-            streamlib::sdk::error::Result<streamlib::sdk::runtime::RegisterProcessorReceipt>,
+            ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::RegisterProcessorReceipt>,
         > {
             unreachable!(concat!(
                 "the control plane serves no source-submit ",
@@ -66,10 +66,10 @@ macro_rules! graph_mutation_ops_are_unreachable {
         }
         fn replace_processor_async(
             &self,
-            _request: streamlib::sdk::runtime::ReplaceProcessorFromSource,
-        ) -> streamlib::sdk::runtime::BoxFuture<
+            _request: ::streamlib::sdk::runtime::ReplaceProcessorFromSource,
+        ) -> ::streamlib::sdk::runtime::BoxFuture<
             '_,
-            streamlib::sdk::error::Result<streamlib::sdk::runtime::RegisterProcessorReceipt>,
+            ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::RegisterProcessorReceipt>,
         > {
             unreachable!(concat!(
                 "the control plane serves no source-replace ",
@@ -78,8 +78,8 @@ macro_rules! graph_mutation_ops_are_unreachable {
         }
         fn add_processor(
             &self,
-            _spec: streamlib::sdk::processors::ProcessorSpec,
-        ) -> streamlib::sdk::error::Result<streamlib::sdk::graph::ProcessorUniqueId> {
+            _spec: ::streamlib::sdk::processors::ProcessorSpec,
+        ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::graph::ProcessorUniqueId> {
             unreachable!(concat!(
                 "the control plane serves no processor-creation ",
                 $surface
@@ -87,8 +87,8 @@ macro_rules! graph_mutation_ops_are_unreachable {
         }
         fn remove_processor(
             &self,
-            _processor_id: &streamlib::sdk::graph::ProcessorUniqueId,
-        ) -> streamlib::sdk::error::Result<()> {
+            _processor_id: &::streamlib::sdk::graph::ProcessorUniqueId,
+        ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!(concat!(
                 "the control plane serves no processor-removal ",
                 $surface
@@ -96,15 +96,15 @@ macro_rules! graph_mutation_ops_are_unreachable {
         }
         fn connect(
             &self,
-            _from: streamlib::sdk::graph::OutputLinkPortRef,
-            _to: streamlib::sdk::graph::InputLinkPortRef,
-        ) -> streamlib::sdk::error::Result<streamlib::sdk::graph::LinkUniqueId> {
+            _from: ::streamlib::sdk::graph::OutputLinkPortRef,
+            _to: ::streamlib::sdk::graph::InputLinkPortRef,
+        ) -> ::streamlib::sdk::error::Result<::streamlib::sdk::graph::LinkUniqueId> {
             unreachable!(concat!("the control plane serves no connect ", $surface))
         }
         fn disconnect(
             &self,
-            _link_id: &streamlib::sdk::graph::LinkUniqueId,
-        ) -> streamlib::sdk::error::Result<()> {
+            _link_id: &::streamlib::sdk::graph::LinkUniqueId,
+        ) -> ::streamlib::sdk::error::Result<()> {
             unreachable!(concat!("the control plane serves no disconnect ", $surface))
         }
     };

@@ -168,7 +168,8 @@ pub(crate) struct ForbiddenResponse {
     pub error: &'static str,
 }
 
-/// Auth middleware gating those routes: rejects a missing / malformed
+/// Auth middleware gating `POST /api/runtime/shutdown`, the tap WebSocket,
+/// and `POST /mcp`: rejects a missing / malformed
 /// `Authorization` header with `401`, a wrong token with `403`, and otherwise
 /// runs the inner handler. Its state (the expected token) is supplied by
 /// [`axum::middleware::from_fn_with_state`], independent of the router's
