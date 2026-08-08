@@ -109,14 +109,17 @@ where a bullet says otherwise)
   to internal-only, which `[schema-free-ports]` supersedes). Do not invest in reshaping
   either; carry them unchanged and let the successor changes delete them.
 
-  > ~~manifest/lockfile modules die~~ **as a survivor rewire** — Re-sequenced 2026-08-08
-  > (owner ruling, #1713 plan gate). All nine still have live consumers, and every one of
-  > those consumers is deleted by the contract-deletion ticket, so the trim lands there:
-  > `module_loader/` (`Manifest`, `Lockfile`, `ResolvedPackages`, `fetch_git`,
-  > `mint_session_module_ident`), `core/runtime/install.rs` (`PackageSource`),
-  > `streamlib-pack` (`PackageCatalog`, `ReleaseManifest`, `path_artifact_guard`), the CLI
-  > `add` / `install` / `link` / `pkg` verbs, `streamlib-build-orchestrator`, and
-  > `streamlib-jtd-codegen`. Nothing about the trim itself changes — only its ticket.
+  > ~~manifest/lockfile modules die~~ **as a survivor rewire, and the trim splits** —
+  > Re-sequenced and corrected 2026-08-08 (owner ruling, #1713 plan gate). Two crates
+  > survive #1715 and reach past the ident core into these modules: `streamlib-jtd-codegen`
+  > (`resolver`, `package_source`, `lockfile`) and `streamlib-processor-schema` (`manifest`).
+  > #1715 carries both unchanged (per the bullet above — it neither deletes nor reshapes
+  > either), so those four modules defer with them to the successors: `schema-free-ports`
+  > drops jtd-codegen and strips processor-schema, then `processor-class-identity` deletes
+  > `streamlib-idents` whole. #1715 trims only the modules whose every consumer it deletes
+  > (`app_modules`, `archive`, `catalog`, `path_artifact_guard`, `release` — from
+  > `module_loader/`, `core/runtime/install.rs`, `streamlib-pack`, the CLI package verbs,
+  > `streamlib-build-orchestrator`).
 - **`packages/test-fixtures`** loses its plugin/cdylib arm (the in-process
   attribute-macro tests keep it alive); `test-fixtures-abi-mismatch` dies whole.
 
@@ -141,7 +144,7 @@ where a bullet says otherwise)
   blast radius is unreviewable as one diff. **Four more stack levels joined it 2026-08-08**
   (owner ruling, #1713 plan gate), each for the same reason the host-services strip moved:
   the code they depend on is still shipping, so no earlier stopping point is green. They are
-  the `streamlib-idents` manifest/lockfile trim, `packages/test-fixtures`' plugin/cdylib arm,
+  the partial `streamlib-idents` manifest/lockfile trim, `packages/test-fixtures`' plugin/cdylib arm,
   the `streamlib_modules` half of the `core/streamlib_home.rs` re-scope, and the
   `#[processor]` grammar's move into `sdk/streamlib-macros`. Their bullets above state each
   case. **The engine host-services strip is one of
