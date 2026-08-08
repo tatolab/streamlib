@@ -25,7 +25,11 @@ V4L2_NODES="${V4L2_NODES:-}"
 V4L2_LABEL="${V4L2_LABEL:-streamlib-cam}"
 
 log()  { printf '[host-prereqs] %s\n' "$*"; }
-warn() { printf '[host-prereqs] WARN: %s\n' "$*" >&2; }
+# Every check that can degrade rather than abort routes through `warn`, so the
+# closing message can tell the truth: this script exits 0 after warnings, and a
+# container launched against a half-prepared host fails later and further away.
+WARNINGS=0
+warn() { WARNINGS=$((WARNINGS + 1)); printf '[host-prereqs] WARN: %s\n' "$*" >&2; }
 fail() { printf '[host-prereqs] ERROR: %s\n' "$*" >&2; exit 1; }
 have() { command -v "$1" >/dev/null 2>&1; }
 SUDO=""; [ "$(id -u)" -ne 0 ] && SUDO="sudo"
@@ -86,4 +90,9 @@ else
   warn "GPU passthrough check failed — confirm the toolkit is wired and docker was restarted"
 fi
 
-log "done. Build + run:  docker compose up --build   (or see docker/README.md)"
+if [ "$WARNINGS" -eq 0 ]; then
+  log "done. The host is ready to run a GPU container; see docker/README.md"
+else
+  warn "done, with $WARNINGS warning(s) — the host is NOT fully prepared; \
+re-read the warnings above before launching a container. See docker/README.md"
+fi

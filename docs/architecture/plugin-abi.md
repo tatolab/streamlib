@@ -66,7 +66,7 @@ as a package, so each path-deps the zone crates and carries
 `publish = false` (which also keeps it out of the release closure). They fall
 into two classes.
 
-**Host-side (`packages/api-server`).** A **host-side package** is statically
+**Host-side (`runtime/streamlib-api-server`).** A **host-side crate** is statically
 linked into the host binary and registered in-process on `PROCESSOR_REGISTRY`,
 rather than built as a `cdylib` and loaded through the plugin ABI. It is a
 host, not a plugin: it ships no `cdylib`, and nothing it does crosses the ABI.

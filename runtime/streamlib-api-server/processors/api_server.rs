@@ -21,7 +21,7 @@ struct StashedHandles {
     tokio_handle: tokio::runtime::Handle,
     runtime_id: String,
     /// `Some` only when the config opted into bearer auth; `None` leaves the
-    /// mutating routes open (the zero-ceremony default).
+    /// shutdown route and the tap WebSocket open (the zero-ceremony default).
     auth_token: Option<crate::auth::ApiServerBearerToken>,
 }
 
@@ -144,9 +144,10 @@ impl ManualProcessor for ApiServerProcessor::Processor {
         self.tokio_runtime = Some(runtime);
 
         // Bearer auth is opt-in (default off): a node runs locally with full
-        // permission, so the mutating routes stay open unless the config asks
-        // for a token. When enabled, auto-generate + 0600-persist the secret on
-        // first setup (reused across restarts) and gate every mutating route.
+        // permission, so the gated routes stay open unless the config asks for
+        // a token. When enabled, auto-generate + 0600-persist the secret on
+        // first setup (reused across restarts) and gate `POST
+        // /api/runtime/shutdown`, the tap WebSocket, and `POST /mcp`.
         let auth_token = if self.config.require_auth == Some(true) {
             let token = crate::auth::ApiServerBearerToken::load_or_create_under_data_dir()?;
             tracing::info!(

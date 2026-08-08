@@ -10,10 +10,13 @@
 //! axum stack with its [`crate::auth`] bearer middleware, and the
 //! newline-delimited stdio server ([`serve_stdio_jsonrpc`]) an MCP host spawns
 //! over a pipe. Sharing the one dispatch means the two transports can never
-//! diverge. It exposes the runtime graph as MCP *tools* so an LLM agent can
-//! inspect and mutate the live graph the same way the REST client does; the tool
-//! handlers call the shared [`crate::ops`] layer, so the MCP surface and the REST
-//! surface can never drift.
+//! diverge. It exposes the runtime as MCP *tools* so an LLM agent observes the
+//! live graph the same way the REST client does.
+//!
+//! The vocabulary is observation-shaped — graph, tap, logs, shutdown. Live
+//! graph mutation is not part of it: code is the source of truth and the edit
+//! loop is `dev`, so there is no tool that submits, replaces, connects, or
+//! removes.
 //!
 //! Two of the tools (`tap`, `logs`) front WebSocket *streams* in the REST API.
 //! MCP tools are request/response, so each bridges its stream to a **bounded
@@ -34,15 +37,10 @@ use parking_lot::Mutex;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use streamlib::sdk::error::Result;
-use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
-use streamlib::sdk::runtime::{RuntimeOperations, SubmittedProcessorSource};
+use streamlib::sdk::runtime::RuntimeOperations;
 
-use crate::ops::{ReplaceSourceError, SubmitSourceError, SubmittedSourceOutcome};
-use crate::state::{
-    AppState, CreateConnectionRequest, ReplaceProcessorSourceRequest, RuntimeShutdownRequest,
-    SubmittedProcessorSourceRequest,
-};
+use crate::state::{AppState, RuntimeShutdownRequest};
 
 /// MCP protocol revision this server implements (the date-stamped spec version
 /// echoed back on `initialize`). Advertised verbatim; a client that requested a
@@ -265,7 +263,7 @@ fn initialize_result() -> Value {
         "protocolVersion": MCP_PROTOCOL_VERSION,
         "capabilities": { "tools": { "listChanged": false } },
         "serverInfo": { "name": MCP_SERVER_NAME, "version": MCP_SERVER_VERSION },
-        "instructions": "StreamLib runtime control plane. Tools inspect and mutate the live processor graph and observe its channels and event stream.",
+        "instructions": "StreamLib runtime control plane. Tools observe a running node: its processor graph, its channels, and its event stream. The graph is defined by the node's code, not by this surface — there is no tool that mutates it.",
     })
 }
 
@@ -282,75 +280,6 @@ fn tool_definitions() -> Vec<Value> {
             "name": "graph",
             "description": "Export the current runtime graph (processors, links, states, metrics) as JSON.",
             "inputSchema": { "type": "object", "properties": {}, "additionalProperties": false },
-        }),
-        json!({
-            "name": "submit_processor",
-            "description": "Register a processor from source text, instantiate the first discovered processor, and optionally wire it to existing graph ports. Transactional: a failed wiring rolls the whole submit back.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "language": { "type": "string", "enum": ["rust", "python", "typescript", "deno"], "description": "Source language. `deno` is an alias for `typescript`. `rust` is present for wire-form parity with the SDK enum but is rejected for live source submission (a full cargo build, not a live graph mutation) — use `python`/`typescript`/`deno` for live submit." },
-                    "source": { "type": "string", "description": "The processor module source text." },
-                    "requested_name": { "type": "string", "description": "The @session/<name> package segment to mint under. Omit to derive from processor_type_name." },
-                    "processor_type_name": { "type": "string", "description": "The PascalCase processor type name the source defines. Omit to derive from requested_name." },
-                    "config": { "type": "object", "description": "Config applied when the processor is instantiated. Defaults to {}." },
-                    "connect": {
-                        "type": "array",
-                        "description": "Optional wirings applied after instantiation.",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "local_port": { "type": "string" },
-                                "role": { "type": "string", "enum": ["output", "input"] },
-                                "peer_processor": { "type": "string" },
-                                "peer_port": { "type": "string" }
-                            },
-                            "required": ["local_port", "role", "peer_processor", "peer_port"]
-                        }
-                    }
-                },
-                "required": ["language", "source"]
-            },
-        }),
-        json!({
-            "name": "replace_processor",
-            "description": "Swap a live @session/<name> source registration for a replacement (type-level; running instances are not swapped). Transactional: a failed replacement restores the prior registration.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "target_session_module": { "type": "string", "description": "The @session/<name>@<range> module to replace, e.g. @session/widget@*." },
-                    "language": { "type": "string", "enum": ["rust", "python", "typescript", "deno"], "description": "Replacement source language. `deno` is an alias for `typescript`. `rust` is present for wire-form parity with the SDK enum but is rejected for live source submission (a full cargo build, not a live graph mutation) — use `python`/`typescript`/`deno` for live submit." },
-                    "source": { "type": "string" },
-                    "requested_name": { "type": "string" },
-                    "processor_type_name": { "type": "string" }
-                },
-                "required": ["target_session_module", "language", "source"]
-            },
-        }),
-        json!({
-            "name": "remove_processor",
-            "description": "Remove a processor instance from the graph by id.",
-            "inputSchema": {
-                "type": "object",
-                "properties": { "processor_id": { "type": "string" } },
-                "required": ["processor_id"],
-                "additionalProperties": false
-            },
-        }),
-        json!({
-            "name": "connect",
-            "description": "Connect an output port to an input port between two existing processors.",
-            "inputSchema": {
-                "type": "object",
-                "properties": {
-                    "from_processor": { "type": "string" },
-                    "from_port": { "type": "string" },
-                    "to_processor": { "type": "string" },
-                    "to_port": { "type": "string" }
-                },
-                "required": ["from_processor", "from_port", "to_processor", "to_port"],
-                "additionalProperties": false
-            },
         }),
         json!({
             "name": "tap",
@@ -414,10 +343,6 @@ async fn tools_call(
 
     let result = match name.as_str() {
         "graph" => call_graph(runtime).await,
-        "submit_processor" => call_submit_processor(runtime, arguments).await,
-        "replace_processor" => call_replace_processor(runtime, arguments).await,
-        "remove_processor" => call_remove_processor(runtime, arguments).await,
-        "connect" => call_connect(runtime, arguments).await,
         "tap" => call_tap(runtime, arguments).await,
         "logs" => call_logs(runtime, arguments).await,
         "shutdown" => call_shutdown(runtime, arguments),
@@ -430,75 +355,6 @@ async fn call_graph(runtime: &Arc<dyn RuntimeOperations>) -> Value {
     match runtime.to_json_async().await {
         Ok(graph) => tool_ok(graph),
         Err(e) => tool_error(format!("graph export failed: {e}")),
-    }
-}
-
-async fn call_submit_processor(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
-    let request: SubmittedProcessorSourceRequest = match serde_json::from_value(arguments) {
-        Ok(request) => request,
-        Err(e) => return tool_error(format!("submit_processor arguments: {e}")),
-    };
-    let submitted = SubmittedProcessorSource {
-        source_text: request.source,
-        language: request.language.into(),
-        requested_name: request.requested_name,
-        processor_type_name: request.processor_type_name,
-    };
-    let config = request.config.unwrap_or_else(|| json!({}));
-    match crate::ops::submit_processor_source(runtime, submitted, config, request.connect).await {
-        Ok(outcome) => tool_ok(submitted_source_json(outcome)),
-        Err(error) => tool_error(submit_source_error_message(error)),
-    }
-}
-
-async fn call_replace_processor(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
-    let request: ReplaceProcessorSourceRequest = match serde_json::from_value(arguments) {
-        Ok(request) => request,
-        Err(e) => return tool_error(format!("replace_processor arguments: {e}")),
-    };
-    let replacement = SubmittedProcessorSource {
-        source_text: request.source,
-        language: request.language.into(),
-        requested_name: request.requested_name,
-        processor_type_name: request.processor_type_name,
-    };
-    match crate::ops::replace_processor_source(runtime, &request.target_session_module, replacement)
-        .await
-    {
-        Ok(outcome) => tool_ok(submitted_source_json(outcome)),
-        Err(ReplaceSourceError::MalformedTargetModule(message)) => tool_error(message),
-        Err(ReplaceSourceError::Replace(error)) => tool_error(error.to_string()),
-    }
-}
-
-async fn call_remove_processor(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
-    #[derive(Deserialize)]
-    struct RemoveArgs {
-        processor_id: String,
-    }
-    let RemoveArgs { processor_id } = match serde_json::from_value(arguments) {
-        Ok(args) => args,
-        Err(e) => return tool_error(format!("remove_processor arguments: {e}")),
-    };
-    match runtime
-        .remove_processor_async(processor_id.clone().into())
-        .await
-    {
-        Ok(()) => tool_ok(json!({ "removed": processor_id })),
-        Err(e) => tool_error(format!("remove_processor failed: {e}")),
-    }
-}
-
-async fn call_connect(runtime: &Arc<dyn RuntimeOperations>, arguments: Value) -> Value {
-    let request: CreateConnectionRequest = match serde_json::from_value(arguments) {
-        Ok(request) => request,
-        Err(e) => return tool_error(format!("connect arguments: {e}")),
-    };
-    let from = OutputLinkPortRef::new(request.from_processor, request.from_port);
-    let to = InputLinkPortRef::new(request.to_processor, request.to_port);
-    match runtime.connect_async(from, to).await {
-        Ok(link_id) => tool_ok(json!({ "link_id": link_id.to_string() })),
-        Err(e) => tool_error(format!("connect failed: {e}")),
     }
 }
 
@@ -627,25 +483,6 @@ fn tool_error(message: impl Into<String>) -> Value {
     })
 }
 
-fn submitted_source_json(outcome: SubmittedSourceOutcome) -> Value {
-    json!({
-        "module": outcome.module,
-        "processors": outcome.processors,
-        "processor_id": outcome.processor_id,
-        "state": outcome.state,
-        "connections": outcome.connections,
-    })
-}
-
-fn submit_source_error_message(error: SubmitSourceError) -> String {
-    match error {
-        SubmitSourceError::Register(e)
-        | SubmitSourceError::Instantiate(e)
-        | SubmitSourceError::Connect(e) => e.to_string(),
-        SubmitSourceError::Unprocessable(message) => message,
-    }
-}
-
 /// Clamp a requested sample count into `[1, MAX_SAMPLE_COUNT]`, defaulting when
 /// the caller left it unset.
 fn bounded_sample_count(requested: Option<usize>, default: usize) -> usize {
@@ -697,27 +534,18 @@ impl EventListener for McpEventForwarder {
 mod tests {
     //! MCP-veneer wire tests: drive the real `POST /mcp` endpoint that
     //! [`crate::handlers::build_router`] wires in, exercising the JSON-RPC
-    //! handshake, the tool catalog, and a processor submit through to the
-    //! runtime — the #1429 acceptance path ("an MCP client lists tools and
-    //! submits a processor end-to-end"). The router is the real one; only the
-    //! `RuntimeOperations` backend is a stub, so the MCP → [`crate::ops`] →
-    //! runtime seam is what's under test.
+    //! handshake, the tool catalog, and each observation tool through to the
+    //! runtime. The router is the real one; only the `RuntimeOperations`
+    //! backend is a stub, so the MCP → runtime seam is what's under test.
+    //!
+    //! The catalog assertions are two-sided on purpose — what is advertised,
+    //! and what must never be again.
 
     use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode, header::CONTENT_TYPE};
-    use streamlib::sdk::descriptors::{
-        ModuleIdent, Org, Package, SchemaIdent, SemVer, SemVerRange, TypeName,
-    };
     use streamlib::sdk::error::Error;
-    use streamlib::sdk::graph::{
-        InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId,
-    };
-    use streamlib::sdk::processors::{PortSchemaSpec, ProcessorSpec};
-    use streamlib::sdk::runtime::{
-        BoxFuture, RegisterProcessorReceipt, RegisteredPortReceipt, RegisteredProcessorReceipt,
-        ReplaceProcessorFromSource, RuntimeOperations, SubmittedProcessorSource, TapSubscription,
-    };
+    use streamlib::sdk::runtime::{BoxFuture, RuntimeOperations, TapSubscription};
     use tower::ServiceExt;
 
     use super::*;
@@ -727,11 +555,6 @@ mod tests {
     /// fixed `dropped_bags` count. `keep_sender_open` retains the forward
     /// sender so `recv()` pends after the bags drain — modelling a quiet channel
     /// so the tap tool's monotonic sample window is what ends the collection.
-    /// One recorded `connect` call: `(from_processor, from_port, to_processor,
-    /// to_port)`, so a dispatch test can confirm the tool reached the runtime op
-    /// with the right endpoints.
-    type RecordedConnections = Arc<Mutex<Vec<(String, String, String, String)>>>;
-
     #[derive(Clone)]
     struct StubTapPlan {
         bags: Vec<Vec<u8>>,
@@ -740,32 +563,26 @@ mod tests {
         sender_keepalive: Arc<Mutex<Option<tokio::sync::mpsc::Sender<Vec<u8>>>>>,
     }
 
-    /// Stub runtime that records the last submitted source and answers every op
-    /// with a fixed success, so the MCP tool → ops → runtime path can be
-    /// observed end-to-end without a live engine. The `recorded_*` handles let a
-    /// dispatch test confirm a tool reached the matching runtime op.
-    struct RecordingStubRuntime {
-        last_submitted_source: Arc<Mutex<Option<String>>>,
-        instance_id: ProcessorUniqueId,
+    /// Stub runtime answering the observation ops without a live engine, and
+    /// recording every shutdown reason so a dispatch test can confirm the tool
+    /// reached the matching runtime op.
+    ///
+    /// Every graph-mutating op is `unreachable!`. `RuntimeOperations` still
+    /// declares them — the runtime API is not what changed — but no tool may
+    /// reach one, so a dispatch arm that regrows here fails loudly instead of
+    /// quietly succeeding against a permissive stub.
+    struct ControlPlaneMcpDispatchStubRuntime {
         tap_plan: Option<StubTapPlan>,
-        recorded_removed_processors: Arc<Mutex<Vec<String>>>,
-        recorded_connections: RecordedConnections,
-        recorded_replaced_modules: Arc<Mutex<Vec<String>>>,
         recorded_shutdown_reasons: Arc<Mutex<Vec<String>>>,
         /// Stands in for the host's observation of the shutdown request: the
         /// real loop owner polls the engine's latch, this fires on the call.
         shutdown_observed_notifier: Arc<tokio::sync::Notify>,
     }
 
-    impl RecordingStubRuntime {
+    impl ControlPlaneMcpDispatchStubRuntime {
         fn new() -> Self {
             Self {
-                last_submitted_source: Arc::new(Mutex::new(None)),
-                instance_id: "mcp-instance".to_string().into(),
                 tap_plan: None,
-                recorded_removed_processors: Arc::new(Mutex::new(Vec::new())),
-                recorded_connections: Arc::new(Mutex::new(Vec::new())),
-                recorded_replaced_modules: Arc::new(Mutex::new(Vec::new())),
                 recorded_shutdown_reasons: Arc::new(Mutex::new(Vec::new())),
                 shutdown_observed_notifier: Arc::new(tokio::sync::Notify::new()),
             }
@@ -802,80 +619,9 @@ mod tests {
         }
     }
 
-    fn stub_register_receipt() -> RegisterProcessorReceipt {
-        RegisterProcessorReceipt::new(
-            ModuleIdent::new(
-                Org::new("session").unwrap(),
-                Package::new("widget").unwrap(),
-                SemVerRange::Exact(SemVer::new(0, 0, 0)),
-            ),
-            vec![RegisteredProcessorReceipt {
-                name: "Widget".to_string(),
-                inputs: vec![RegisteredPortReceipt {
-                    name: "video".to_string(),
-                    schema: PortSchemaSpec::Any,
-                    delivery_profile: Some("latest".to_string()),
-                }],
-                outputs: vec![RegisteredPortReceipt {
-                    name: "frame".to_string(),
-                    schema: PortSchemaSpec::Specific(SchemaIdent::new(
-                        Org::new("tatolab").unwrap(),
-                        Package::new("core").unwrap(),
-                        TypeName::new("VideoFrame").unwrap(),
-                        SemVer::new(1, 0, 0),
-                    )),
-                    delivery_profile: None,
-                }],
-            }],
-        )
-    }
-
-    impl RuntimeOperations for RecordingStubRuntime {
-        fn add_processor_async(
-            &self,
-            _spec: ProcessorSpec,
-        ) -> BoxFuture<'_, Result<ProcessorUniqueId>> {
-            let id = self.instance_id.clone();
-            Box::pin(async move { Ok(id) })
-        }
-        fn remove_processor_async(&self, id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>> {
-            self.recorded_removed_processors.lock().push(id.to_string());
-            Box::pin(async { Ok(()) })
-        }
-        fn connect_async(
-            &self,
-            from: OutputLinkPortRef,
-            to: InputLinkPortRef,
-        ) -> BoxFuture<'_, Result<LinkUniqueId>> {
-            self.recorded_connections.lock().push((
-                from.processor_id.to_string(),
-                from.port_name,
-                to.processor_id.to_string(),
-                to.port_name,
-            ));
-            Box::pin(async { Ok("mcp-link".to_string().into()) })
-        }
-        fn disconnect_async(&self, _link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
-            Box::pin(async { Ok(()) })
-        }
+    impl RuntimeOperations for ControlPlaneMcpDispatchStubRuntime {
         fn to_json_async(&self) -> BoxFuture<'_, Result<Value>> {
             Box::pin(async { Ok(json!({ "processors": [], "links": [] })) })
-        }
-        fn register_processor_source_async(
-            &self,
-            request: SubmittedProcessorSource,
-        ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
-            *self.last_submitted_source.lock() = Some(request.source_text);
-            Box::pin(async { Ok(stub_register_receipt()) })
-        }
-        fn replace_processor_async(
-            &self,
-            request: ReplaceProcessorFromSource,
-        ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
-            self.recorded_replaced_modules
-                .lock()
-                .push(request.target_session_module.to_string());
-            Box::pin(async { Ok(stub_register_receipt()) })
         }
         fn tap_async(
             &self,
@@ -901,18 +647,7 @@ mod tests {
                 ))
             })
         }
-        fn add_processor(&self, _spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
-            Ok(self.instance_id.clone())
-        }
-        fn remove_processor(&self, _id: &ProcessorUniqueId) -> Result<()> {
-            Ok(())
-        }
-        fn connect(&self, _from: OutputLinkPortRef, _to: InputLinkPortRef) -> Result<LinkUniqueId> {
-            Ok("mcp-link".to_string().into())
-        }
-        fn disconnect(&self, _link_id: &LinkUniqueId) -> Result<()> {
-            Ok(())
-        }
+        crate::control_plane_stub_support::graph_mutation_ops_are_unreachable!("tool");
         fn request_runtime_shutdown(&self, reason: &str) -> Result<()> {
             self.recorded_shutdown_reasons
                 .lock()
@@ -924,6 +659,19 @@ mod tests {
             Ok(json!({}))
         }
     }
+
+    /// The control vocabulary, in catalog order. This is the whole of it —
+    /// `tools/list` is asserted equal to this, not merely a superset.
+    const OBSERVATION_TOOL_NAMES: &[&str] = &["graph", "tap", "logs", "shutdown"];
+
+    /// The tools this control plane deliberately does not serve: every graph
+    /// mutation the pre-pivot MCP veneer exposed.
+    const DELETED_GRAPH_MUTATION_TOOL_NAMES: &[&str] = &[
+        "submit_processor",
+        "replace_processor",
+        "remove_processor",
+        "connect",
+    ];
 
     fn mcp_router(runtime: Arc<dyn RuntimeOperations>) -> Router {
         crate::handlers::build_router(
@@ -959,7 +707,7 @@ mod tests {
     #[tokio::test]
     async fn initialize_handshake_reports_tools_capability() {
         let (status, body) = mcp_call(
-            Arc::new(RecordingStubRuntime::new()),
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
             json!({
                 "jsonrpc": "2.0", "id": 1, "method": "initialize",
                 "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
@@ -980,7 +728,7 @@ mod tests {
     #[tokio::test]
     async fn notifications_are_acked_with_202_and_no_body() {
         let (status, body) = mcp_call(
-            Arc::new(RecordingStubRuntime::new()),
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
             json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
         )
         .await;
@@ -989,9 +737,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_list_advertises_every_veneer_tool() {
+    async fn tools_list_advertises_exactly_the_observation_vocabulary() {
         let (status, body) = mcp_call(
-            Arc::new(RecordingStubRuntime::new()),
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
             json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
         )
         .await;
@@ -1002,21 +750,14 @@ mod tests {
             .iter()
             .filter_map(|tool| tool["name"].as_str())
             .collect();
-        for expected in [
-            "graph",
-            "submit_processor",
-            "replace_processor",
-            "remove_processor",
-            "connect",
-            "tap",
-            "logs",
-            "shutdown",
-        ] {
-            assert!(
-                names.contains(&expected),
-                "tools/list must advertise `{expected}`, got {names:?}"
-            );
-        }
+
+        // Exact, not a superset: the catalog IS the control vocabulary, so a
+        // tool appearing here that is not in this list is a surface the plan
+        // does not grant.
+        assert_eq!(
+            names, OBSERVATION_TOOL_NAMES,
+            "tools/list must advertise exactly the observation vocabulary"
+        );
         for tool in tools {
             assert_eq!(
                 tool["inputSchema"]["type"], "object",
@@ -1026,54 +767,39 @@ mod tests {
         }
     }
 
+    /// Every deleted tool must answer as an unknown tool rather than reaching
+    /// the runtime — the dispatch arm is gone, not merely undocumented.
     #[tokio::test]
-    async fn tools_call_submit_processor_reaches_the_runtime() {
-        let runtime = Arc::new(RecordingStubRuntime::new());
-        let recorded = runtime.last_submitted_source.clone();
+    async fn tools_call_rejects_every_graph_mutation_tool_as_unknown() {
+        for absent in DELETED_GRAPH_MUTATION_TOOL_NAMES {
+            let (status, body) = mcp_call(
+                Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
+                json!({
+                    "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                    "params": { "name": absent, "arguments": {} }
+                }),
+            )
+            .await;
 
-        let (status, body) = mcp_call(
-            runtime,
-            json!({
-                "jsonrpc": "2.0", "id": 3, "method": "tools/call",
-                "params": {
-                    "name": "submit_processor",
-                    "arguments": {
-                        "language": "python",
-                        "source": "class Widget:\n    pass\n",
-                        "requested_name": "widget"
-                    }
-                }
-            }),
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::OK);
-        let result = &body["result"];
-        assert_eq!(
-            result["isError"], false,
-            "a successful submit must not be flagged isError; body={body}"
-        );
-
-        let text = result["content"][0]["text"]
-            .as_str()
-            .expect("tool result text content block");
-        let outcome: Value = serde_json::from_str(text).expect("tool text is JSON");
-        assert_eq!(outcome["module"], "@session/widget@=0.0.0");
-        assert_eq!(outcome["state"], "added");
-        assert_eq!(outcome["processor_id"], "mcp-instance");
-        assert_eq!(outcome["processors"][0]["name"], "Widget");
-
-        assert_eq!(
-            recorded.lock().as_deref(),
-            Some("class Widget:\n    pass\n"),
-            "the submitted source text must have reached register_processor_source_async"
-        );
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(
+                body["result"]["isError"], true,
+                "`{absent}` must be an in-band tool error; got {body}"
+            );
+            let text = body["result"]["content"][0]["text"]
+                .as_str()
+                .expect("text content block");
+            assert!(
+                text.contains("unknown tool"),
+                "`{absent}` must be rejected as an unknown tool; got {text}"
+            );
+        }
     }
 
     #[tokio::test]
     async fn tools_call_graph_returns_the_runtime_json() {
         let (status, body) = mcp_call(
-            Arc::new(RecordingStubRuntime::new()),
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
             json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": { "name": "graph", "arguments": {} } }),
         )
         .await;
@@ -1088,7 +814,7 @@ mod tests {
     #[tokio::test]
     async fn tools_call_unknown_tool_is_an_in_band_tool_error() {
         let (status, body) = mcp_call(
-            Arc::new(RecordingStubRuntime::new()),
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
             json!({ "jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": { "name": "does_not_exist", "arguments": {} } }),
         )
         .await;
@@ -1107,7 +833,7 @@ mod tests {
 
         let auth_router = || {
             crate::handlers::build_router(
-                Arc::new(RecordingStubRuntime::new()),
+                Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
                 Some(crate::auth::ApiServerBearerToken::from_secret(TOKEN)),
                 #[cfg(feature = "moq")]
                 "test-runtime-id".to_string(),
@@ -1115,8 +841,8 @@ mod tests {
         };
         let message = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string();
 
-        // No bearer token → the mutating-parity gate rejects with 401 before the
-        // JSON-RPC handler runs. Deleting the mcp_router `.route_layer(...)`
+        // No bearer token → the gate rejects with 401 before the JSON-RPC
+        // handler runs. Deleting the mcp_router `.route_layer(...)`
         // flips this to 200, going red here.
         let unauthenticated = Request::builder()
             .method("POST")
@@ -1146,7 +872,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_jsonrpc_method_is_a_method_not_found_error() {
         let (status, body) = mcp_call(
-            Arc::new(RecordingStubRuntime::new()),
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
             json!({ "jsonrpc": "2.0", "id": 6, "method": "no_such_method" }),
         )
         .await;
@@ -1159,7 +885,7 @@ mod tests {
     async fn tools_call_tap_shapes_bags_and_reports_dropped_count() {
         let big_bag = vec![0xABu8; MAX_TAP_BAG_PREVIEW_BYTES + 512];
         let small_bag = vec![0x01u8, 0x02, 0x03];
-        let runtime = Arc::new(RecordingStubRuntime::with_tap_bags(
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::with_tap_bags(
             vec![big_bag.clone(), small_bag.clone()],
             7,
         ));
@@ -1209,7 +935,9 @@ mod tests {
         // open) so `recv()` pends; the request asks for four. Without the
         // monotonic sample window this tool call would block until three more
         // bags arrive — the hang this fix closes.
-        let runtime = Arc::new(RecordingStubRuntime::with_quiet_tap(vec![vec![0xAA, 0xBB]]));
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::with_quiet_tap(vec![
+            vec![0xAA, 0xBB],
+        ]));
 
         let started = tokio::time::Instant::now();
         let (status, body) = mcp_call(
@@ -1245,7 +973,7 @@ mod tests {
         // and is exercised by the engine's pubsub integration tests, not here.
         let started = tokio::time::Instant::now();
         let (status, body) = mcp_call(
-            Arc::new(RecordingStubRuntime::new()),
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
             json!({
                 "jsonrpc": "2.0", "id": 12, "method": "tools/call",
                 "params": { "name": "logs", "arguments": { "count": 4 } }
@@ -1271,60 +999,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn tools_call_remove_processor_reaches_the_runtime() {
-        let runtime = Arc::new(RecordingStubRuntime::new());
-        let recorded_removed = runtime.recorded_removed_processors.clone();
-
-        let (status, body) = mcp_call(
-            runtime,
-            json!({
-                "jsonrpc": "2.0", "id": 13, "method": "tools/call",
-                "params": { "name": "remove_processor", "arguments": { "processor_id": "cam-1" } }
-            }),
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["result"]["isError"], false, "body={body}");
-        assert_eq!(*recorded_removed.lock(), vec!["cam-1".to_string()]);
-    }
-
-    #[tokio::test]
-    async fn tools_call_connect_reaches_the_runtime() {
-        let runtime = Arc::new(RecordingStubRuntime::new());
-        let recorded_connections = runtime.recorded_connections.clone();
-
-        let (status, body) = mcp_call(
-            runtime,
-            json!({
-                "jsonrpc": "2.0", "id": 14, "method": "tools/call",
-                "params": { "name": "connect", "arguments": {
-                    "from_processor": "cam", "from_port": "frame",
-                    "to_processor": "enc", "to_port": "video"
-                } }
-            }),
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["result"]["isError"], false, "body={body}");
-        let text = body["result"]["content"][0]["text"].as_str().unwrap();
-        let outcome: Value = serde_json::from_str(text).unwrap();
-        assert_eq!(outcome["link_id"], "mcp-link");
-        assert_eq!(
-            *recorded_connections.lock(),
-            vec![(
-                "cam".to_string(),
-                "frame".to_string(),
-                "enc".to_string(),
-                "video".to_string()
-            )]
-        );
-    }
-
-    #[tokio::test]
     async fn tools_call_shutdown_reaches_the_runtime() {
-        let runtime = Arc::new(RecordingStubRuntime::new());
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded_shutdowns = runtime.recorded_shutdown_reasons.clone();
 
         let (status, body) = mcp_call(
@@ -1354,7 +1030,7 @@ mod tests {
     /// see why its call did nothing.
     #[tokio::test]
     async fn tools_call_shutdown_with_malformed_arguments_is_an_in_band_tool_error() {
-        let runtime = Arc::new(RecordingStubRuntime::new());
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded_shutdowns = runtime.recorded_shutdown_reasons.clone();
 
         let (status, body) = mcp_call(
@@ -1382,51 +1058,17 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn tools_call_replace_processor_reaches_the_runtime() {
-        let runtime = Arc::new(RecordingStubRuntime::new());
-        let recorded_replaced = runtime.recorded_replaced_modules.clone();
-
-        let (status, body) = mcp_call(
-            runtime,
-            json!({
-                "jsonrpc": "2.0", "id": 15, "method": "tools/call",
-                "params": { "name": "replace_processor", "arguments": {
-                    "target_session_module": "@session/widget@*",
-                    "language": "python",
-                    "source": "class Widget:\n    pass\n"
-                } }
-            }),
-        )
-        .await;
-
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(body["result"]["isError"], false, "body={body}");
-        let recorded = recorded_replaced.lock();
-        assert_eq!(
-            recorded.len(),
-            1,
-            "replace_processor must reach replace_processor_async exactly once"
-        );
-        assert!(
-            recorded[0].contains("widget"),
-            "recorded target module = {}",
-            recorded[0]
-        );
-    }
-
     /// Drive [`serve_stdio_jsonrpc`] over an in-memory pipe — the same
     /// transport-free surface the `streamlib mcp` CLI hosts over the process's
     /// stdio — feeding newline-delimited request lines and collecting the
-    /// response lines. Reuses [`RecordingStubRuntime`], so it is hermetic (no
+    /// response lines. Reuses [`ControlPlaneMcpDispatchStubRuntime`], so it is hermetic (no
     /// live engine / rig) and runs in CI. Returns the responses in arrival
-    /// order plus the stub's recorded-source handle for a submit assertion.
-    async fn drive_stdio(request_lines: &[Value]) -> (Vec<Value>, Arc<Mutex<Option<String>>>) {
+    /// order.
+    async fn drive_stdio(request_lines: &[Value]) -> Vec<Value> {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-        let runtime = Arc::new(RecordingStubRuntime::new());
-        let recorded_source = runtime.last_submitted_source.clone();
-        let runtime: Arc<dyn RuntimeOperations> = runtime;
+        let runtime: Arc<dyn RuntimeOperations> =
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
 
         // One duplex carries request lines client→server, the other carries
         // response lines server→client; each duplex is a one-way byte pipe.
@@ -1465,12 +1107,12 @@ mod tests {
             responses.push(serde_json::from_str::<Value>(&line).expect("response line is JSON"));
         }
         server.await.expect("stdio server task");
-        (responses, recorded_source)
+        responses
     }
 
     #[tokio::test]
-    async fn stdio_server_handshakes_lists_all_tools_and_submits_over_a_pipe() {
-        let (responses, recorded_source) = drive_stdio(&[
+    async fn stdio_server_handshakes_lists_tools_and_answers_graph_over_a_pipe() {
+        let responses = drive_stdio(&[
             json!({
                 "jsonrpc": "2.0", "id": 1, "method": "initialize",
                 "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
@@ -1480,14 +1122,7 @@ mod tests {
             json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
             json!({
                 "jsonrpc": "2.0", "id": 3, "method": "tools/call",
-                "params": {
-                    "name": "submit_processor",
-                    "arguments": {
-                        "language": "python",
-                        "source": "class Widget:\n    pass\n",
-                        "requested_name": "widget"
-                    }
-                }
+                "params": { "name": "graph", "arguments": {} }
             }),
         ])
         .await;
@@ -1514,35 +1149,23 @@ mod tests {
             .iter()
             .filter_map(|tool| tool["name"].as_str())
             .collect();
-        for expected in [
-            "graph",
-            "submit_processor",
-            "replace_processor",
-            "remove_processor",
-            "connect",
-            "tap",
-            "logs",
-            "shutdown",
-        ] {
-            assert!(
-                names.contains(&expected),
-                "stdio tools/list must advertise `{expected}`, got {names:?}"
-            );
-        }
-
-        let submit = &responses[2];
-        assert_eq!(submit["id"], 3);
-        assert_eq!(submit["result"]["isError"], false, "submit={submit}");
-        let text = submit["result"]["content"][0]["text"]
-            .as_str()
-            .expect("submit result text content block");
-        let outcome: Value = serde_json::from_str(text).expect("submit text is JSON");
-        assert_eq!(outcome["module"], "@session/widget@=0.0.0");
-        assert_eq!(outcome["processor_id"], "mcp-instance");
+        // The two transports share one dispatch, so the stdio catalog must be
+        // the same vocabulary the HTTP one advertises — mutation tools absent
+        // on both or the transports have diverged.
         assert_eq!(
-            recorded_source.lock().as_deref(),
-            Some("class Widget:\n    pass\n"),
-            "the submitted source must have reached the stub through the stdio dispatch"
+            names, OBSERVATION_TOOL_NAMES,
+            "stdio tools/list must advertise exactly the observation vocabulary"
+        );
+
+        let graph = &responses[2];
+        assert_eq!(graph["id"], 3);
+        assert_eq!(graph["result"]["isError"], false, "graph={graph}");
+        let text = graph["result"]["content"][0]["text"]
+            .as_str()
+            .expect("graph result text content block");
+        assert!(
+            serde_json::from_str::<Value>(text).is_ok(),
+            "the graph export must reach the stub through the stdio dispatch as JSON; got {text}"
         );
     }
 
@@ -1556,7 +1179,7 @@ mod tests {
     async fn stdio_serve_loop_ends_on_an_observed_shutdown_request_without_eof() {
         use tokio::io::{AsyncWriteExt, BufReader};
 
-        let runtime = Arc::new(RecordingStubRuntime::new());
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded_shutdowns = runtime.recorded_shutdown_reasons.clone();
         let shutdown_observed = runtime.shutdown_observed_notifier.clone();
         let runtime: Arc<dyn RuntimeOperations> = runtime;
@@ -1601,7 +1224,8 @@ mod tests {
     async fn stdio_server_answers_a_malformed_line_with_a_parse_error() {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-        let runtime: Arc<dyn RuntimeOperations> = Arc::new(RecordingStubRuntime::new());
+        let runtime: Arc<dyn RuntimeOperations> =
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let (mut client_writer, server_reader) = tokio::io::duplex(4096);
         let (server_writer, client_reader) = tokio::io::duplex(4096);
         let server = tokio::spawn(async move {

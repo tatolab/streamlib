@@ -954,10 +954,10 @@ fn dep_is_workspace_inherited(value: &toml::Value) -> bool {
 // A distributable `.slpkg` is built engine-free against the plugin-authoring
 // SDK; carrying the full `streamlib` facade as a runtime dep pulls the
 // FullAccess engine surface into a crate that ships as a source-only package.
-// The facade is host-by-design only for the `api-server` (a host application
-// package) and `test-fixtures` (host-side `cargo test`) packages; every other
-// facade linker is the shrinking conversion backlog and drops off this
-// allowlist as its package converts to the engine-free authoring SDK.
+// The facade is host-by-design only for `test-fixtures` (host-side `cargo
+// test`); every other facade linker is the shrinking conversion backlog and
+// drops off this allowlist as its package converts to the engine-free
+// authoring SDK.
 //
 // This is a per-entry-rationale ratchet seeded to the exact current violating
 // set: any NEW `packages/*` crate that adds a non-dev `streamlib` dep fails.
@@ -966,19 +966,14 @@ fn dep_is_workspace_inherited(value: &toml::Value) -> bool {
 
 const CHECK_PACKAGES_FACADE_DEP: &str = "packages-no-facade-runtime-dep";
 
-const PACKAGES_FACADE_DEP_RATIONALE: &str = "a packages/* crate must not carry the full `streamlib` facade as a runtime dep — a distributable .slpkg builds engine-free against the plugin-authoring SDK; the facade is host-by-design only for api-server + test-fixtures. Move it to [dev-dependencies] or convert the package to the engine-free authoring SDK";
+const PACKAGES_FACADE_DEP_RATIONALE: &str = "a packages/* crate must not carry the full `streamlib` facade as a runtime dep — a distributable .slpkg builds engine-free against the plugin-authoring SDK; the facade is host-by-design only for test-fixtures. Move it to [dev-dependencies] or convert the package to the engine-free authoring SDK";
 
 /// The `packages/*` crates that link the `streamlib` facade as a non-dev
-/// runtime dep. `api-server` + `test-fixtures` are the only permitted linkers
-/// (host-by-design); every distributable package builds engine-free against
-/// the plugin-authoring SDK. A newly-carved package is NOT added here — it
-/// converts to the engine-free SDK instead.
+/// runtime dep. `test-fixtures` is the only permitted linker (host-by-design);
+/// every distributable package builds engine-free against the plugin-authoring
+/// SDK. A newly-carved package is NOT added here — it converts to the
+/// engine-free SDK instead.
 const PACKAGES_FACADE_DEP_ALLOWLIST: &[AllowEntry] = &[
-    AllowEntry {
-        path: "packages/api-server/Cargo.toml",
-        kind: AllowKind::ExactFile,
-        rationale: "permanent, host-by-design: api-server is a host application package that hosts processors and legitimately links the full facade",
-    },
     AllowEntry {
         path: "packages/test-fixtures/Cargo.toml",
         kind: AllowKind::ExactFile,
@@ -2540,13 +2535,13 @@ streamlib = { version = "0.6.0" }
     #[test]
     fn allows_facade_dep_in_allowlisted_package() {
         let dir = empty_workspace();
-        // packages/api-server is a permanent host-by-design linker — its facade
-        // dep must NOT trip the ratchet.
+        // packages/test-fixtures is a permanent host-by-design linker — its
+        // facade dep must NOT trip the ratchet.
         write_fixture(
             dir.path(),
-            "packages/api-server/Cargo.toml",
+            "packages/test-fixtures/Cargo.toml",
             r#"[package]
-name = "streamlib-api-server"
+name = "streamlib-test-fixtures"
 version = "0.1.0"
 edition = "2021"
 

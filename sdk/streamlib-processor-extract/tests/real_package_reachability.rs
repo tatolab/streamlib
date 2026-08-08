@@ -40,11 +40,22 @@ fn workspace_root() -> PathBuf {
 }
 
 fn package_dir(name: &str) -> PathBuf {
-    let dir = workspace_root().join("packages").join(name);
+    crate_dir_under("packages", name)
+}
+
+/// A crate that authors processors but does not live under `packages/`. The
+/// api-server is the case: it is engine-side host infrastructure in `runtime/`,
+/// not a distributable package, and `processors/` is still its discovery root.
+fn engine_crate_dir(name: &str) -> PathBuf {
+    crate_dir_under("runtime", name)
+}
+
+fn crate_dir_under(tree: &str, name: &str) -> PathBuf {
+    let dir = workspace_root().join(tree).join(name);
     assert!(
         dir.join("processors").is_dir(),
-        "packages/{name} must author its processor modules under `processors/` — \
-         folder-backed discovery scans no other root, so a moved package would \
+        "{tree}/{name} must author its processor modules under `processors/` — \
+         folder-backed discovery scans no other root, so a moved crate would \
          derive the empty set"
     );
     dir
@@ -306,14 +317,16 @@ fn display_refuses_an_apple_build_with_a_reason_rather_than_an_empty_plugin() {
     }
 }
 
-/// `packages/api-server` is the one in-tree Rust package that is a statically
-/// linked host rlib rather than a distributable cdylib, so it keeps a committed
-/// `src/lib.rs` crate root. It still authors its processor under `processors/`
-/// — `processors/` is the one discovery root for every crate-type — so its
-/// committed `processors:` stays backed by code rather than deriving empty.
+/// `runtime/streamlib-api-server` is the one in-tree Rust crate that is a
+/// statically linked host rlib rather than a distributable cdylib, so it keeps
+/// a committed `src/lib.rs` crate root. It still authors its processor under
+/// `processors/` — `processors/` is the one discovery root for every crate-type
+/// — so its committed `processors:` stays backed by code rather than deriving
+/// empty. It lives in the engine tree, not `packages/`: it is infrastructure a
+/// host links, never something the package source distributes.
 #[test]
-fn the_host_rlib_package_still_derives_its_processor_from_the_shared_root() {
-    let dir = package_dir("api-server");
+fn the_host_rlib_crate_still_derives_its_processor_from_the_shared_root() {
+    let dir = engine_crate_dir("streamlib-api-server");
     assert!(
         !RustCrateRootGenerationRequest::for_package_dir(&dir)
             .unwrap()

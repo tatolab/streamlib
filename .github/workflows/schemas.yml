@@ -1,15 +1,17 @@
-name: Schemas & Client
+name: Control-plane client
 
+# Generates the TypeScript client for the control plane's REST surface from the
+# api-server's OpenAPI spec. Not called on release: nothing consumes what it
+# publishes today, so it stays dispatch-only until a consumer exists.
 on:
-  workflow_call:  # Called by release-please after version bump
-  workflow_dispatch:  # Manual trigger
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
 
 jobs:
   generate-and-publish:
-    name: Generate & Publish Client Package
+    name: Generate & Publish Control-plane Client
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -19,9 +21,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install system dependencies
-        # generate_schemas builds streamlib-engine, whose build.rs compiles GLSL
-        # with glslc and links Vulkan; the audio path links opus. Mirrors test.yml's
-        # Linux engine dep set (+ libopus-dev for the opus link brew previously gave).
+        # generate_openapi links the api-server, which pulls in streamlib-engine;
+        # its build.rs compiles GLSL with glslc and links Vulkan, and the audio path
+        # links opus. Mirrors test.yml's Linux engine dep set.
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -30,16 +32,6 @@ jobs:
             libvulkan-dev \
             glslc \
             libopus-dev
-
-      - name: Install jtd-codegen
-        # The engine build.rs invokes the upstream jtd-codegen binary (v0.4.1) to
-        # generate JTD bindings; without it the build fails with "jtd-codegen not
-        # found". Same install as test.yml / check-pack-load.yml.
-        run: |
-          curl -sSL https://github.com/jsontypedef/json-typedef-codegen/releases/download/v0.4.1/x86_64-unknown-linux-gnu.zip -o /tmp/jtd-codegen.zip
-          unzip -q /tmp/jtd-codegen.zip -d /tmp/jtd-codegen
-          sudo install -m 0755 /tmp/jtd-codegen/jtd-codegen /usr/local/bin/jtd-codegen
-          jtd-codegen --version
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -69,16 +61,6 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Detected version: $VERSION"
 
-      - name: Generate JSON schemas
-        run: |
-          cargo run --bin generate_schemas
-          echo "=== Generated schema files ==="
-          ls -la dist/schemas/
-          echo "=== Validating JSON ==="
-          for f in dist/schemas/*.json; do
-            python3 -m json.tool "$f" > /dev/null && echo "✓ $f is valid JSON" || { echo "✗ $f is INVALID"; exit 1; }
-          done
-
       - name: Generate OpenAPI spec
         run: |
           cargo run --bin generate_openapi
@@ -87,39 +69,11 @@ jobs:
       - name: Create package directory
         run: mkdir -p dist/streamlib-client/src
 
-      - name: Install TypeScript generators
-        run: npm install -g json-schema-to-typescript json-schema-to-zod openapi-typescript
-
-      - name: Generate TypeScript types from JSON Schema
-        run: |
-          # Generate TypeScript interfaces from JSON schemas
-          echo "// Auto-generated from JSON Schema - DO NOT EDIT" > dist/streamlib-client/src/schema-types.ts
-          echo "// Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> dist/streamlib-client/src/schema-types.ts
-          echo "// Version: ${{ steps.version.outputs.version }}" >> dist/streamlib-client/src/schema-types.ts
-          echo "" >> dist/streamlib-client/src/schema-types.ts
-
-          for schema in dist/schemas/*.schema.json; do
-            echo "Generating TypeScript from $schema..."
-            json2ts "$schema" >> dist/streamlib-client/src/schema-types.ts
-            echo "" >> dist/streamlib-client/src/schema-types.ts
-          done
-
-      - name: Generate Zod validation schemas
-        run: |
-          echo "// Auto-generated Zod schemas - DO NOT EDIT" > dist/streamlib-client/src/schema-validators.ts
-          echo "// Generated at: $(date -u +"%Y-%m-%dT%H:%M:%SZ")" >> dist/streamlib-client/src/schema-validators.ts
-          echo "// Version: ${{ steps.version.outputs.version }}" >> dist/streamlib-client/src/schema-validators.ts
-          echo "" >> dist/streamlib-client/src/schema-validators.ts
-          echo 'import { z } from "zod";' >> dist/streamlib-client/src/schema-validators.ts
-          echo "" >> dist/streamlib-client/src/schema-validators.ts
-
-          for schema in dist/schemas/*.schema.json; do
-            name=$(basename "$schema" .schema.json | sed 's/-/_/g' | sed 's/\b\(.\)/\u\1/g' | sed 's/_//g')
-            echo "Generating Zod schema for $name..."
-            echo "// Schema: $name" >> dist/streamlib-client/src/schema-validators.ts
-            json-schema-to-zod -i "$schema" -n "${name}Schema" --noImport >> dist/streamlib-client/src/schema-validators.ts
-            echo "" >> dist/streamlib-client/src/schema-validators.ts
-          done
+      - name: Install the OpenAPI type generator
+        # Pinned: this job publishes a package, so an upstream release must not
+        # silently change the generated output between two dispatches of the
+        # same commit.
+        run: npm install -g openapi-typescript@7.9.1
 
       - name: Generate API client from OpenAPI
         run: |
@@ -136,12 +90,6 @@ jobs:
           // Auto-generated TypeScript client for StreamLib Runtime API
           // DO NOT EDIT - This file is auto-generated
 
-          // JSON Schema types (GraphResponse, RegistryResponse, etc.)
-          export * from './schema-types';
-
-          // Zod validation schemas
-          export * from './schema-validators';
-
           // OpenAPI-generated API types
           export type * from './api-types';
 
@@ -155,7 +103,7 @@ jobs:
           {
             "name": "@tatolab/streamlib-client",
             "version": "${{ steps.version.outputs.version }}",
-            "description": "TypeScript client for StreamLib Runtime API with types and Zod validation",
+            "description": "TypeScript client for the StreamLib Runtime control-plane API, generated from its OpenAPI spec",
             "main": "dist/index.js",
             "module": "dist/index.mjs",
             "types": "dist/index.d.ts",
@@ -164,16 +112,6 @@ jobs:
                 "import": "./dist/index.mjs",
                 "require": "./dist/index.js",
                 "types": "./dist/index.d.ts"
-              },
-              "./schema-types": {
-                "import": "./dist/schema-types.mjs",
-                "require": "./dist/schema-types.js",
-                "types": "./dist/schema-types.d.ts"
-              },
-              "./schema-validators": {
-                "import": "./dist/schema-validators.mjs",
-                "require": "./dist/schema-validators.js",
-                "types": "./dist/schema-validators.d.ts"
               },
               "./api-types": {
                 "import": "./dist/api-types.mjs",
@@ -197,23 +135,13 @@ jobs:
               "streamlib",
               "typescript",
               "api-client",
-              "zod",
               "openapi"
             ],
             "author": "Jonathan Fontanez",
             "license": "BUSL-1.1",
-            "peerDependencies": {
-              "zod": "^3.0.0"
-            },
-            "peerDependenciesMeta": {
-              "zod": {
-                "optional": true
-              }
-            },
             "devDependencies": {
               "typescript": "^5.0.0",
-              "tsup": "^8.0.0",
-              "zod": "^3.0.0"
+              "tsup": "^8.0.0"
             }
           }
           EOF
@@ -244,12 +172,7 @@ jobs:
           import { defineConfig } from 'tsup';
 
           export default defineConfig({
-            entry: [
-              'src/index.ts',
-              'src/schema-types.ts',
-              'src/schema-validators.ts',
-              'src/api-types.ts'
-            ],
+            entry: ['src/index.ts', 'src/api-types.ts'],
             format: ['cjs', 'esm'],
             dts: true,
             splitting: false,
@@ -268,9 +191,6 @@ jobs:
         run: |
           echo "=== Package structure ==="
           find dist/streamlib-client -type f | head -30
-          echo ""
-          echo "=== schema-types.ts preview ==="
-          head -50 dist/streamlib-client/src/schema-types.ts
           echo ""
           echo "=== api-types.ts preview ==="
           head -50 dist/streamlib-client/src/api-types.ts

@@ -134,17 +134,12 @@ jobs:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 
-  # `trigger-schemas` is deliberately not called. The job builds the whole
-  # engine and then fails generating TypeScript from the JTD schema layer —
-  # `TS2374: Duplicate index signature` in `schema-types.ts` — and it has failed
-  # on every release since its last successful publish on 2026-01-08. Nothing in
-  # the tree consumes the `@tatolab/streamlib-client` package it would publish.
-  #
-  # Not repaired, because the half that fails is being deleted: §Processor model
-  # decides "no JTD, no schema registry, no embedded schemas, no codegen and no
-  # generated type classes". `schemas.yml` is kept, with its `workflow_dispatch`,
-  # so the surviving OpenAPI/client question can be settled where the ripout
-  # re-scopes it (#1715 / #1712) rather than by deleting it here.
+  # `trigger-schemas` is deliberately not called, and `schemas.yml` no longer
+  # offers a `workflow_call` to call. The half that failed on every release since
+  # 2026-01-08 — TypeScript and Zod generated off the JTD schema layer — is gone;
+  # the OpenAPI client survives, dispatch-only, because nothing in the tree
+  # consumes the `@tatolab/streamlib-client` package it publishes. Restoring it
+  # to the release path is a decision for whenever a consumer exists.
 
   # Build the wheel onto the release just cut and republish the simple index.
   # Called in-run for the same reason trigger-schemas is: the release was

@@ -22,7 +22,7 @@ streamlib = { path = "../../sdk/streamlib-sdk", version = "0.14.4" }
 # The API server is the control plane — a host, not a loadable plugin — so
 # it is statically linked and registered in-process on `PROCESSOR_REGISTRY`
 # rather than dlopen'd. It is a host-side, non-distributable package.
-streamlib-api-server = { path = "../../packages/api-server", version = "1.0.0" }
+streamlib-api-server = { path = "../streamlib-api-server", version = "1.0.0" }
 
 # CLI argument parsing
 clap = { version = "4.5", features = ["derive"] }
