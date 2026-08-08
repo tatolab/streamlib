@@ -286,7 +286,7 @@ mod tests {
         // package into the distributable list; this asserts against that.
         let root = tempfile::tempdir().unwrap();
         let dist = write_package(root.path(), "camera", false);
-        let skip = write_package(root.path(), "api-server", true);
+        let skip = write_package(root.path(), "path-dep-package", true);
 
         let (distributable, skipped) =
             partition_packages(&root.path().join("packages")).unwrap();

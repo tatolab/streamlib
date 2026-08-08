@@ -46,7 +46,7 @@ streamlib = { path = "../streamlib-sdk", version = "0.14.4", default-features = 
 # (`rt.host_control_plane(...)`) — what makes a Python-launched app show up in
 # `streamlib nodes` and answer `graph` / `tap`. Path-only: the api-server is
 # `publish = false` and never enters the registry closure.
-streamlib-api-server = { path = "../../packages/api-server" }
+streamlib-api-server = { path = "../../runtime/streamlib-api-server" }
 
 # The native media built-ins the wheel exports as pre-built named blocks
 # (`rt.add(TestPatternSource)`), statically linked so they are current by

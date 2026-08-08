@@ -39,7 +39,7 @@ streamlib-processor-extract = { path = "../../sdk/streamlib-processor-extract", 
 # transport-free MCP dispatch (`serve_stdio_jsonrpc`) over stdio, reusing the
 # one dispatch surface `POST /mcp` uses. Path-only (api-server is `publish =
 # false`, never in the registry closure).
-streamlib-api-server = { path = "../../packages/api-server" }
+streamlib-api-server = { path = "../../runtime/streamlib-api-server" }
 
 # JTD-codegen pipeline (drives `streamlib generate`)
 streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.14.4" }
