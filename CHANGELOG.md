@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.16.0](https://github.com/tatolab/streamlib/compare/v0.15.0...v0.16.0) (2026-08-08)
+
+
+### ⚠ BREAKING CHANGES
+
+* **cli:** the observation verbs ship in the wheel, and MCP loses its second transport ([#1785](https://github.com/tatolab/streamlib/issues/1785))
+
+### Features
+
+* **cli:** the observation verbs ship in the wheel, and MCP loses its second transport ([#1785](https://github.com/tatolab/streamlib/issues/1785)) ([1158f20](https://github.com/tatolab/streamlib/commit/1158f2010f7db222df9ee6c498f085f80f3eb73a))
+
 ## [0.15.0](https://github.com/tatolab/streamlib/compare/v0.14.4...v0.15.0) (2026-08-08)
 
 
