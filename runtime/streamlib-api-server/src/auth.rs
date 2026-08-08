@@ -1,16 +1,21 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Bearer-token authentication for the api-server's mutating routes.
+//! Bearer-token authentication for the api-server's gated routes.
 //!
-//! An endpoint that mutates the runtime graph is remote code execution by
-//! design. Auth is an opt-in hardening layer for exposed / fleet deployments,
-//! not a default: a node runs locally with full permission, so the mutating
-//! routes are open unless the config sets `require_auth`. When opted in, every
-//! mutating route is gated behind a shared secret the client presents as
+//! The gate covers what acts on a node rather than reports on it — `POST
+//! /api/runtime/shutdown`, the tap WebSocket, and the `POST /mcp` dispatch that
+//! fronts the same shutdown op as a tool. Everything else is observation and is
+//! always open. Auth is an opt-in hardening layer for exposed / fleet
+//! deployments, not a default: a node runs locally with full permission, so
+//! even the gated routes are open unless the config sets `require_auth`. When
+//! opted in, each is gated behind a shared secret the client presents as
 //! `Authorization: Bearer <token>`; the token is auto-generated on first
 //! `setup()` and persisted at `0600` under the streamlib data dir, so it
 //! survives restarts without being re-issued.
+//!
+//! The tap's gate is mechanism parity, not a trust boundary the tap imposes —
+//! it is a read-only stream.
 
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
@@ -39,7 +44,7 @@ const AUTH_TOKEN_FILE: &str = "auth-token";
 const TOKEN_RANDOM_BYTES: usize = 32;
 
 /// The api-server's bearer token: the shared secret a client presents on
-/// every mutating route. Cheap to clone (the secret sits behind an [`Arc`]),
+/// every gated route. Cheap to clone (the secret sits behind an [`Arc`]),
 /// so it doubles as the auth middleware's state.
 #[derive(Clone)]
 pub(crate) struct ApiServerBearerToken {
@@ -163,7 +168,7 @@ pub(crate) struct ForbiddenResponse {
     pub error: &'static str,
 }
 
-/// Auth middleware gating the mutating routes: rejects a missing / malformed
+/// Auth middleware gating those routes: rejects a missing / malformed
 /// `Authorization` header with `401`, a wrong token with `403`, and otherwise
 /// runs the inner handler. Its state (the expected token) is supplied by
 /// [`axum::middleware::from_fn_with_state`], independent of the router's

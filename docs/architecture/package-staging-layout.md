@@ -96,9 +96,9 @@ directory is a module boundary, not a platform mechanism.
 
 Generation is opt-in per package, keyed on that declared `[lib] path`
 (`RustCrateRootGenerationRequest::for_package_dir_if_generation_is_declared`,
-the entry point every generation site calls), so a host **rlib** package that is
-statically linked rather than distributed — `packages/api-server`, whose crate
-is also a `[[bin]]` host with a `src/` tree — keeps its committed `src/lib.rs`
+the entry point every generation site calls), so a host **rlib** crate that is
+statically linked rather than distributed — `runtime/streamlib-api-server`,
+which also carries a `[[bin]]` with a `src/` tree — keeps its committed `src/lib.rs`
 crate root. It still authors its processor under `processors/`, reached from
 that root by a `#[path]` declaration: `processors/` is the one discovery root
 for every language and every crate-type, and only the crate root's *authorship*

@@ -13,9 +13,9 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
 };
-use serde::Deserialize;
 use futures_util::{SinkExt, StreamExt};
 use parking_lot::Mutex;
+use serde::Deserialize;
 use std::sync::Arc;
 use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::json_schema::{
@@ -37,6 +37,35 @@ use crate::state::{
 // ============================================================================
 // Router Construction
 // ============================================================================
+
+/// The REST routes that are open regardless of the auth posture.
+fn always_open_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new()
+        .routes(routes!(health))
+        .routes(routes!(get_graph))
+        .routes(routes!(get_registry))
+        .routes(routes!(list_schema_definitions))
+        .routes(routes!(get_schema_definition))
+}
+
+/// The REST routes the bearer middleware covers when auth is opted in.
+fn bearer_gated_routes() -> OpenApiRouter<AppState> {
+    OpenApiRouter::new().routes(routes!(request_runtime_shutdown))
+}
+
+/// The OpenAPI document for the REST surface, built from the same two route
+/// registrations [`build_router`] installs.
+///
+/// The codegen binary reads the spec through here rather than declaring its own
+/// paths: a second inventory drifts silently, and its drift ships in the
+/// generated client rather than failing a build.
+pub fn control_plane_openapi_spec() -> utoipa::openapi::OpenApi {
+    OpenApiRouter::with_openapi(ApiDoc::openapi())
+        .merge(always_open_routes())
+        .merge(bearer_gated_routes())
+        .split_for_parts()
+        .1
+}
 
 /// Build the full router with shared state and trace layer attached.
 ///
@@ -64,7 +93,7 @@ pub(crate) fn build_router(
     // the same way when auth is opted in.
     let mcp_auth_token = auth_token.clone();
 
-    let mut protected = OpenApiRouter::new().routes(routes!(request_runtime_shutdown));
+    let mut protected = bearer_gated_routes();
     if let Some(auth_token) = auth_token {
         protected = protected.route_layer(axum::middleware::from_fn_with_state(
             auth_token,
@@ -73,11 +102,7 @@ pub(crate) fn build_router(
     }
 
     let (router, openapi) = OpenApiRouter::with_openapi(ApiDoc::openapi())
-        .routes(routes!(health))
-        .routes(routes!(get_graph))
-        .routes(routes!(get_registry))
-        .routes(routes!(list_schema_definitions))
-        .routes(routes!(get_schema_definition))
+        .merge(always_open_routes())
         .merge(protected)
         .split_for_parts();
 
@@ -478,18 +503,17 @@ const MAX_WS_CLOSE_REASON_BYTES: usize = 123;
 /// reads off the close frame. App codes live in the 4000–4999 private range.
 fn tap_error_close_frame(error: &Error) -> (u16, String) {
     let (code, reason) = match error {
-        Error::TapChannelNotFound(channel) => {
-            (4404, format!("tap channel not found: {channel}"))
-        }
-        Error::TapSlotOccupied(channel) => {
-            (4409, format!("tap slot already occupied: {channel}"))
-        }
+        Error::TapChannelNotFound(channel) => (4404, format!("tap channel not found: {channel}")),
+        Error::TapSlotOccupied(channel) => (4409, format!("tap slot already occupied: {channel}")),
         other => (
             axum::extract::ws::close_code::ERROR,
             format!("tap attach failed: {other}"),
         ),
     };
-    (code, truncate_on_char_boundary(reason, MAX_WS_CLOSE_REASON_BYTES))
+    (
+        code,
+        truncate_on_char_boundary(reason, MAX_WS_CLOSE_REASON_BYTES),
+    )
 }
 
 /// Truncate `text` to at most `max_bytes`, cutting on a UTF-8 char boundary so
@@ -525,12 +549,7 @@ mod router_surface_and_auth_gate_tests {
         Request, StatusCode,
         header::{AUTHORIZATION, CONTENT_TYPE},
     };
-    use streamlib::sdk::graph::{InputLinkPortRef, LinkUniqueId, OutputLinkPortRef};
-    use streamlib::sdk::graph::ProcessorUniqueId;
-    use streamlib::sdk::processors::ProcessorSpec;
-    use streamlib::sdk::runtime::{
-        BoxFuture, RegisterProcessorReceipt, ReplaceProcessorFromSource, SubmittedProcessorSource,
-    };
+    use streamlib::sdk::runtime::BoxFuture;
     use tower::ServiceExt;
 
     /// Stub runtime backing the router tests: it answers the observation ops
@@ -568,52 +587,7 @@ mod router_surface_and_auth_gate_tests {
             Box::pin(async move { Err(Error::TapChannelNotFound(channel)) })
         }
 
-        fn add_processor_async(
-            &self,
-            _spec: ProcessorSpec,
-        ) -> BoxFuture<'_, Result<ProcessorUniqueId>> {
-            unreachable!("the control plane exposes no processor-creation route")
-        }
-        fn remove_processor_async(
-            &self,
-            _processor_id: ProcessorUniqueId,
-        ) -> BoxFuture<'_, Result<()>> {
-            unreachable!("the control plane exposes no processor-removal route")
-        }
-        fn connect_async(
-            &self,
-            _from: OutputLinkPortRef,
-            _to: InputLinkPortRef,
-        ) -> BoxFuture<'_, Result<LinkUniqueId>> {
-            unreachable!("the control plane exposes no connect route")
-        }
-        fn disconnect_async(&self, _link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
-            unreachable!("the control plane exposes no disconnect route")
-        }
-        fn register_processor_source_async(
-            &self,
-            _request: SubmittedProcessorSource,
-        ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
-            unreachable!("the control plane exposes no source-submit route")
-        }
-        fn replace_processor_async(
-            &self,
-            _request: ReplaceProcessorFromSource,
-        ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
-            unreachable!("the control plane exposes no source-replace route")
-        }
-        fn add_processor(&self, _spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
-            unreachable!("the control plane exposes no processor-creation route")
-        }
-        fn remove_processor(&self, _processor_id: &ProcessorUniqueId) -> Result<()> {
-            unreachable!("the control plane exposes no processor-removal route")
-        }
-        fn connect(&self, _from: OutputLinkPortRef, _to: InputLinkPortRef) -> Result<LinkUniqueId> {
-            unreachable!("the control plane exposes no connect route")
-        }
-        fn disconnect(&self, _link_id: &LinkUniqueId) -> Result<()> {
-            unreachable!("the control plane exposes no disconnect route")
-        }
+        crate::control_plane_stub_support::graph_mutation_ops_are_unreachable!("route");
     }
 
     const TEST_TOKEN: &str = "test-bearer-secret";
@@ -705,17 +679,44 @@ mod router_surface_and_auth_gate_tests {
             .unwrap();
         let spec = json_body_on(auth_enabled_router(), request).await;
         let paths = &spec["paths"];
+
+        // Positive control. Indexing a `Value` yields `Null` for a missing key
+        // AND for indexing a non-object, so the absence assertions below would
+        // pass vacuously against an empty or malformed spec.
+        assert!(
+            paths["/api/graph"]["get"].is_object(),
+            "the spec must still document the observation routes: {spec}"
+        );
+
         for (_, uri) in DELETED_GRAPH_MUTATION_ROUTES {
             // The path-templated routes are documented under their template,
             // not the concrete id the runtime check uses.
-            let documented = uri
-                .replace("/some-id", "/{id}")
-                .replace("/some-id", "/{link_id}");
+            let documented = uri.replace("/some-id", "/{id}");
             assert!(
-                paths[&documented].is_null() && paths[*uri].is_null(),
+                paths[documented.as_str()].is_null() && paths[*uri].is_null(),
                 "{documented} must not appear in the OpenAPI spec"
             );
         }
+    }
+
+    /// The spec a client is generated from and the spec the node serves must be
+    /// one document. They were two hand-maintained declarations once; the copy
+    /// drifted, kept publishing routes the server had dropped, and nothing went
+    /// red because each test read its own side.
+    #[tokio::test]
+    async fn the_generated_spec_and_the_served_spec_are_the_same_document() {
+        let request = Request::builder()
+            .method("GET")
+            .uri("/api/openapi.json")
+            .body(Body::empty())
+            .unwrap();
+        let served = json_body_on(auth_enabled_router(), request).await;
+        let generated = serde_json::to_value(control_plane_openapi_spec())
+            .expect("the generated spec serializes");
+        assert_eq!(
+            served, generated,
+            "`generate_openapi` and the served `/api/openapi.json` must not diverge"
+        );
     }
 
     #[tokio::test]

@@ -988,7 +988,7 @@ mod tests {
         write(root, "examples/demo/plugin/Cargo.toml", opted_in);
         write(
             root,
-            "packages/api-server/Cargo.toml",
+            "packages/host-rlib/Cargo.toml",
             "[package]\nname = \"h\"\nversion = \"0.1.0\"\n",
         );
         write(root, "target/debug/build/stale/Cargo.toml", opted_in);

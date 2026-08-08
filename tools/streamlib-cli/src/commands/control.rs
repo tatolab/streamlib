@@ -1,16 +1,16 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! `streamlib graph | submit | replace | remove | connect | tap | logs |
-//! shutdown` — thin JSON-RPC control clients over a running node's
-//! `POST {url}/mcp`.
+//! `streamlib graph | tap | logs | shutdown` — thin JSON-RPC control clients
+//! over a running node's `POST {url}/mcp`.
 //!
-//! Each verb marshals its args into a `tools/call` for one of the 8 api-server
-//! MCP tools ([`streamlib_api_server`]'s `tool_definitions`) and POSTs it over
-//! the same `ureq` seam the `mcp --attach` bridge uses ([`post_mcp_request`],
-//! shared with [`super::mcp`]). There is no local runtime and no fourth
-//! dispatch: the tool set is exactly those 8, and the arg shapes mirror each
-//! tool's `inputSchema` 1:1.
+//! Each verb marshals its args into a `tools/call` for one api-server MCP tool
+//! ([`streamlib_api_server`]'s `tool_definitions`) and POSTs it over the same
+//! `ureq` seam the `mcp --attach` bridge uses ([`post_mcp_request`], shared
+//! with [`super::mcp`]). There is no local runtime and no second dispatch: the
+//! verbs are exactly the api-server's tool catalog, and the arg shapes mirror
+//! each tool's `inputSchema` 1:1. The catalog is observation-shaped, so there
+//! is no verb here that mutates a graph.
 //!
 //! The optional `STREAMLIB_MCP_TOKEN` rides as an `authorization: Bearer`
 //! header, matching the `--attach` bridge. Result handling covers four
@@ -477,6 +477,9 @@ mod tests {
         ));
     }
 
+    /// The `shutdown` verb must marshal into the `shutdown` tool with the
+    /// caller's `--reason` in the arguments — a verb that named a different
+    /// tool, or dropped the reason, would still print a result and exit 0.
     #[test]
     fn shutdown_marshals_the_reason_into_a_shutdown_tools_call() {
         let (url, recorded, server) = spawn_mock_mcp_server(vec![tool_ok_reply(
@@ -555,6 +558,9 @@ mod tests {
     use serial_test::serial;
     use streamlib_api_server::node_registry::{self, NodeRegistryEntry};
 
+    /// Point `XDG_RUNTIME_DIR` at a fresh tempdir for the closure so the node
+    /// registry the resolver reads is hermetic; restore the prior value after.
+    /// Guarded `#[serial]` at every call site — the env var is process-global.
     fn with_isolated_node_registry<F: FnOnce() -> R, R>(f: F) -> R {
         let prev = std::env::var_os("XDG_RUNTIME_DIR");
         let tmp = tempfile::tempdir().expect("tempdir");

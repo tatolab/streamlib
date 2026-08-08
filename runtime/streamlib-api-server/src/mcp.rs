@@ -534,24 +534,18 @@ impl EventListener for McpEventForwarder {
 mod tests {
     //! MCP-veneer wire tests: drive the real `POST /mcp` endpoint that
     //! [`crate::handlers::build_router`] wires in, exercising the JSON-RPC
-    //! handshake, the tool catalog, and a processor submit through to the
-    //! runtime — the #1429 acceptance path ("an MCP client lists tools and
-    //! submits a processor end-to-end"). The router is the real one; only the
-    //! `RuntimeOperations` backend is a stub, so the MCP → [`crate::ops`] →
-    //! runtime seam is what's under test.
+    //! handshake, the tool catalog, and each observation tool through to the
+    //! runtime. The router is the real one; only the `RuntimeOperations`
+    //! backend is a stub, so the MCP → runtime seam is what's under test.
+    //!
+    //! The catalog assertions are two-sided on purpose — what is advertised,
+    //! and what must never be again.
 
     use axum::Router;
     use axum::body::Body;
     use axum::http::{Request, StatusCode, header::CONTENT_TYPE};
     use streamlib::sdk::error::Error;
-    use streamlib::sdk::graph::{
-        InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId,
-    };
-    use streamlib::sdk::processors::ProcessorSpec;
-    use streamlib::sdk::runtime::{
-        BoxFuture, RegisterProcessorReceipt, ReplaceProcessorFromSource, RuntimeOperations,
-        SubmittedProcessorSource, TapSubscription,
-    };
+    use streamlib::sdk::runtime::{BoxFuture, RuntimeOperations, TapSubscription};
     use tower::ServiceExt;
 
     use super::*;
@@ -577,7 +571,7 @@ mod tests {
     /// declares them — the runtime API is not what changed — but no tool may
     /// reach one, so a dispatch arm that regrows here fails loudly instead of
     /// quietly succeeding against a permissive stub.
-    struct RecordingStubRuntime {
+    struct ControlPlaneMcpDispatchStubRuntime {
         tap_plan: Option<StubTapPlan>,
         recorded_shutdown_reasons: Arc<Mutex<Vec<String>>>,
         /// Stands in for the host's observation of the shutdown request: the
@@ -585,7 +579,7 @@ mod tests {
         shutdown_observed_notifier: Arc<tokio::sync::Notify>,
     }
 
-    impl RecordingStubRuntime {
+    impl ControlPlaneMcpDispatchStubRuntime {
         fn new() -> Self {
             Self {
                 tap_plan: None,
@@ -625,7 +619,7 @@ mod tests {
         }
     }
 
-    impl RuntimeOperations for RecordingStubRuntime {
+    impl RuntimeOperations for ControlPlaneMcpDispatchStubRuntime {
         fn to_json_async(&self) -> BoxFuture<'_, Result<Value>> {
             Box::pin(async { Ok(json!({ "processors": [], "links": [] })) })
         }
@@ -653,49 +647,7 @@ mod tests {
                 ))
             })
         }
-        fn add_processor_async(
-            &self,
-            _spec: ProcessorSpec,
-        ) -> BoxFuture<'_, Result<ProcessorUniqueId>> {
-            unreachable!("the MCP veneer serves no processor-creation tool")
-        }
-        fn remove_processor_async(&self, _id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>> {
-            unreachable!("the MCP veneer serves no processor-removal tool")
-        }
-        fn connect_async(
-            &self,
-            _from: OutputLinkPortRef,
-            _to: InputLinkPortRef,
-        ) -> BoxFuture<'_, Result<LinkUniqueId>> {
-            unreachable!("the MCP veneer serves no connect tool")
-        }
-        fn disconnect_async(&self, _link_id: LinkUniqueId) -> BoxFuture<'_, Result<()>> {
-            unreachable!("the MCP veneer serves no disconnect tool")
-        }
-        fn register_processor_source_async(
-            &self,
-            _request: SubmittedProcessorSource,
-        ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
-            unreachable!("the MCP veneer serves no source-submit tool")
-        }
-        fn replace_processor_async(
-            &self,
-            _request: ReplaceProcessorFromSource,
-        ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
-            unreachable!("the MCP veneer serves no source-replace tool")
-        }
-        fn add_processor(&self, _spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
-            unreachable!("the MCP veneer serves no processor-creation tool")
-        }
-        fn remove_processor(&self, _id: &ProcessorUniqueId) -> Result<()> {
-            unreachable!("the MCP veneer serves no processor-removal tool")
-        }
-        fn connect(&self, _from: OutputLinkPortRef, _to: InputLinkPortRef) -> Result<LinkUniqueId> {
-            unreachable!("the MCP veneer serves no connect tool")
-        }
-        fn disconnect(&self, _link_id: &LinkUniqueId) -> Result<()> {
-            unreachable!("the MCP veneer serves no disconnect tool")
-        }
+        crate::control_plane_stub_support::graph_mutation_ops_are_unreachable!("tool");
         fn request_runtime_shutdown(&self, reason: &str) -> Result<()> {
             self.recorded_shutdown_reasons
                 .lock()
@@ -755,7 +707,7 @@ mod tests {
     #[tokio::test]
     async fn initialize_handshake_reports_tools_capability() {
         let (status, body) = mcp_call(
-            Arc::new(RecordingStubRuntime::new()),
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
             json!({
                 "jsonrpc": "2.0", "id": 1, "method": "initialize",
                 "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "test", "version": "0" } }
@@ -776,7 +728,7 @@ mod tests {
     #[tokio::test]
     async fn notifications_are_acked_with_202_and_no_body() {
         let (status, body) = mcp_call(
-            Arc::new(RecordingStubRuntime::new()),
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
             json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
         )
         .await;
@@ -787,7 +739,7 @@ mod tests {
     #[tokio::test]
     async fn tools_list_advertises_exactly_the_observation_vocabulary() {
         let (status, body) = mcp_call(
-            Arc::new(RecordingStubRuntime::new()),
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
             json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
         )
         .await;
@@ -806,12 +758,6 @@ mod tests {
             names, OBSERVATION_TOOL_NAMES,
             "tools/list must advertise exactly the observation vocabulary"
         );
-        for absent in DELETED_GRAPH_MUTATION_TOOL_NAMES {
-            assert!(
-                !names.contains(absent),
-                "`{absent}` mutates the graph and must not be advertised; got {names:?}"
-            );
-        }
         for tool in tools {
             assert_eq!(
                 tool["inputSchema"]["type"], "object",
@@ -827,7 +773,7 @@ mod tests {
     async fn tools_call_rejects_every_graph_mutation_tool_as_unknown() {
         for absent in DELETED_GRAPH_MUTATION_TOOL_NAMES {
             let (status, body) = mcp_call(
-                Arc::new(RecordingStubRuntime::new()),
+                Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
                 json!({
                     "jsonrpc": "2.0", "id": 2, "method": "tools/call",
                     "params": { "name": absent, "arguments": {} }
@@ -853,7 +799,7 @@ mod tests {
     #[tokio::test]
     async fn tools_call_graph_returns_the_runtime_json() {
         let (status, body) = mcp_call(
-            Arc::new(RecordingStubRuntime::new()),
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
             json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": { "name": "graph", "arguments": {} } }),
         )
         .await;
@@ -868,7 +814,7 @@ mod tests {
     #[tokio::test]
     async fn tools_call_unknown_tool_is_an_in_band_tool_error() {
         let (status, body) = mcp_call(
-            Arc::new(RecordingStubRuntime::new()),
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
             json!({ "jsonrpc": "2.0", "id": 5, "method": "tools/call", "params": { "name": "does_not_exist", "arguments": {} } }),
         )
         .await;
@@ -887,7 +833,7 @@ mod tests {
 
         let auth_router = || {
             crate::handlers::build_router(
-                Arc::new(RecordingStubRuntime::new()),
+                Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
                 Some(crate::auth::ApiServerBearerToken::from_secret(TOKEN)),
                 #[cfg(feature = "moq")]
                 "test-runtime-id".to_string(),
@@ -895,8 +841,8 @@ mod tests {
         };
         let message = json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" }).to_string();
 
-        // No bearer token → the mutating-parity gate rejects with 401 before the
-        // JSON-RPC handler runs. Deleting the mcp_router `.route_layer(...)`
+        // No bearer token → the gate rejects with 401 before the JSON-RPC
+        // handler runs. Deleting the mcp_router `.route_layer(...)`
         // flips this to 200, going red here.
         let unauthenticated = Request::builder()
             .method("POST")
@@ -926,7 +872,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_jsonrpc_method_is_a_method_not_found_error() {
         let (status, body) = mcp_call(
-            Arc::new(RecordingStubRuntime::new()),
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
             json!({ "jsonrpc": "2.0", "id": 6, "method": "no_such_method" }),
         )
         .await;
@@ -939,7 +885,7 @@ mod tests {
     async fn tools_call_tap_shapes_bags_and_reports_dropped_count() {
         let big_bag = vec![0xABu8; MAX_TAP_BAG_PREVIEW_BYTES + 512];
         let small_bag = vec![0x01u8, 0x02, 0x03];
-        let runtime = Arc::new(RecordingStubRuntime::with_tap_bags(
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::with_tap_bags(
             vec![big_bag.clone(), small_bag.clone()],
             7,
         ));
@@ -989,7 +935,9 @@ mod tests {
         // open) so `recv()` pends; the request asks for four. Without the
         // monotonic sample window this tool call would block until three more
         // bags arrive — the hang this fix closes.
-        let runtime = Arc::new(RecordingStubRuntime::with_quiet_tap(vec![vec![0xAA, 0xBB]]));
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::with_quiet_tap(vec![
+            vec![0xAA, 0xBB],
+        ]));
 
         let started = tokio::time::Instant::now();
         let (status, body) = mcp_call(
@@ -1025,7 +973,7 @@ mod tests {
         // and is exercised by the engine's pubsub integration tests, not here.
         let started = tokio::time::Instant::now();
         let (status, body) = mcp_call(
-            Arc::new(RecordingStubRuntime::new()),
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new()),
             json!({
                 "jsonrpc": "2.0", "id": 12, "method": "tools/call",
                 "params": { "name": "logs", "arguments": { "count": 4 } }
@@ -1052,7 +1000,7 @@ mod tests {
 
     #[tokio::test]
     async fn tools_call_shutdown_reaches_the_runtime() {
-        let runtime = Arc::new(RecordingStubRuntime::new());
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded_shutdowns = runtime.recorded_shutdown_reasons.clone();
 
         let (status, body) = mcp_call(
@@ -1082,7 +1030,7 @@ mod tests {
     /// see why its call did nothing.
     #[tokio::test]
     async fn tools_call_shutdown_with_malformed_arguments_is_an_in_band_tool_error() {
-        let runtime = Arc::new(RecordingStubRuntime::new());
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded_shutdowns = runtime.recorded_shutdown_reasons.clone();
 
         let (status, body) = mcp_call(
@@ -1113,13 +1061,14 @@ mod tests {
     /// Drive [`serve_stdio_jsonrpc`] over an in-memory pipe — the same
     /// transport-free surface the `streamlib mcp` CLI hosts over the process's
     /// stdio — feeding newline-delimited request lines and collecting the
-    /// response lines. Reuses [`RecordingStubRuntime`], so it is hermetic (no
+    /// response lines. Reuses [`ControlPlaneMcpDispatchStubRuntime`], so it is hermetic (no
     /// live engine / rig) and runs in CI. Returns the responses in arrival
-    /// order plus the stub's recorded-source handle for a submit assertion.
+    /// order.
     async fn drive_stdio(request_lines: &[Value]) -> Vec<Value> {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-        let runtime: Arc<dyn RuntimeOperations> = Arc::new(RecordingStubRuntime::new());
+        let runtime: Arc<dyn RuntimeOperations> =
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
 
         // One duplex carries request lines client→server, the other carries
         // response lines server→client; each duplex is a one-way byte pipe.
@@ -1230,7 +1179,7 @@ mod tests {
     async fn stdio_serve_loop_ends_on_an_observed_shutdown_request_without_eof() {
         use tokio::io::{AsyncWriteExt, BufReader};
 
-        let runtime = Arc::new(RecordingStubRuntime::new());
+        let runtime = Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let recorded_shutdowns = runtime.recorded_shutdown_reasons.clone();
         let shutdown_observed = runtime.shutdown_observed_notifier.clone();
         let runtime: Arc<dyn RuntimeOperations> = runtime;
@@ -1275,7 +1224,8 @@ mod tests {
     async fn stdio_server_answers_a_malformed_line_with_a_parse_error() {
         use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 
-        let runtime: Arc<dyn RuntimeOperations> = Arc::new(RecordingStubRuntime::new());
+        let runtime: Arc<dyn RuntimeOperations> =
+            Arc::new(ControlPlaneMcpDispatchStubRuntime::new());
         let (mut client_writer, server_reader) = tokio::io::duplex(4096);
         let (server_writer, client_reader) = tokio::io::duplex(4096);
         let server = tokio::spawn(async move {

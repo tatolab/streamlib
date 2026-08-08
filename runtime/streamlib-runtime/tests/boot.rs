@@ -320,28 +320,37 @@ fn websocket_streams_runtime_events_end_to_end() {
     // frame ever arrived (only `publish` was ABI-bridged) — this asserts a
     // runtime event now reaches a WebSocket client end to end.
     //
-    // Trigger: adding an unregistered processor type is side-effect-free —
-    // the graph mutation publishes RuntimeWillAddProcessor /
-    // RuntimeDidAddProcessor to topics::RUNTIME_GLOBAL (fanned out to
-    // topics::ALL) and returns 422, leaving only an Error-state node. The
-    // subscriber thread takes a beat to come up and iceoryx2 does not replay
-    // pre-subscription samples, so re-trigger within a deadline until a
-    // frame lands.
-    let probe = r#"{"processor_type":{"org":"tatolab","package":"regression-probe","type":"WsProbe","version":{"major":1,"minor":0,"patch":0}},"config":{}}"#;
+    // Trigger: a shutdown request. `request_runtime_shutdown` publishes
+    // RuntimeEvent::RuntimeShutdown to topics::RUNTIME_GLOBAL (fanned out to
+    // topics::ALL) before the run loop observes its latch, and the route
+    // answers 202 without awaiting teardown — so the event is on the bus while
+    // the node is still serving. It is idempotent, which is what lets this
+    // retry: the subscriber thread takes a beat to come up and iceoryx2 does
+    // not replay pre-subscription samples, so re-trigger within a deadline
+    // until a frame lands.
+    //
+    // This used to POST an unregistered processor type to `/api/processor` and
+    // read the resulting RuntimeDidAddProcessor. That route is gone — the
+    // control plane serves no graph mutation — so the event has to come from
+    // the one route that still acts on the node. The invariant under test is
+    // unchanged: an event published on the host's PUBSUB reaches a WebSocket
+    // client, which is only true because the api-server is statically linked.
+    let shutdown_request = r#"{"reason":"ws event-stream regression lock"}"#;
 
     let deadline = Instant::now() + Duration::from_secs(30);
     let mut received: Option<String> = None;
     while received.is_none() && Instant::now() < deadline {
-        let _ = http_post_json(port, "/api/processor", probe);
+        let _ = http_post_json(port, "/api/runtime/shutdown", shutdown_request);
         received = ws.read_text(Instant::now() + Duration::from_secs(2));
     }
 
     let _ = std::fs::remove_dir_all(&temp_home);
 
     let event_json = received.expect(
-        "a runtime event must reach the WebSocket client — the in-process \
-         api-server subscribes on the host's initialized PUBSUB; a dlopen'd \
-         plugin's bus is never init()ed, so subscribe would buffer forever",
+        "a runtime event must reach the WebSocket client — the statically \
+         linked api-server subscribes on the host's initialized PUBSUB; a \
+         dlopen'd plugin's bus is never init()ed, so subscribe would buffer \
+         forever",
     );
     // The frame is a serialized `Event`. Assert it decodes as JSON without
     // pinning a specific variant, so the lock survives event-schema churn.
