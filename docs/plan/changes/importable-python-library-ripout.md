@@ -26,6 +26,16 @@ where a bullet says otherwise)
 - **`sdk/streamlib-macros`**: the `#[processor]` attribute grammar relocates out of
   doomed `streamlib-processor-extract` into a surviving home (per the superseded
   manifest-extraction ADR: exactly one parser, still true).
+
+  > ~~into a surviving home~~ — Named, and re-sequenced, 2026-08-08 (owner ruling, #1713
+  > plan gate). The home is `sdk/streamlib-macros` itself, as a private module, and the
+  > move rides the PR that deletes `streamlib-processor-extract`. It has **no earlier
+  > home**: `streamlib-macros` is `proc-macro = true`, so it cannot export the grammar as
+  > a library module while `streamlib-processor-extract` still parses through it
+  > (`src/lib.rs:461`, `:597` — reached from `streamlib-pack`, `streamlib-cli`, and
+  > `xtask`). Parking it in a third crate would move it twice, since
+  > `processor-class-identity.md` then edits `grammar.rs` in place. One parser at every
+  > point in time, no intermediate crate. See the stacked-PR bullet.
 - **Adapter capability traits** (`VulkanWritable`, `GlWritable`, `CpuReadable`, …)
   relocate out of doomed `adapters/streamlib-adapter-abi` into the surviving adapter
   cores' shared home; the cores' dev-deps on doomed `-helpers` crates drop with their
@@ -52,22 +62,44 @@ where a bullet says otherwise)
   > the #1743 implementation audit (PR #1751, `153f84e4`); the re-sequencing is an
   > owner ruling of the same day.
   >
-  > **Scale.** The retained surface is materially larger than eight files and spans
-  > the whole RHI — the Vulkan kernel and command-recorder files alone are denser than
-  > anything on the list. It resists enumeration because the coupling has two distinct
-  > shapes that no single pattern catches: a runtime branch on `host_callbacks()`, and
-  > a direct `host_services::host_*_vtable()` call with no `host_callbacks()` mention
-  > at all. Three of the eight named — `iceoryx2/input`, `vulkan_present_target`,
-  > `processor_instance_factory` — are the second shape only. This change states no
-  > file count deliberately: two successive audits produced numbers that measured
-  > different predicates. **The inventory belongs to #1715, derived by reading the RHI
-  > at implementation time.**
+  > **Scale.** The retained surface is materially larger than eight files and spans the
+  > whole RHI — the Vulkan kernel and command-recorder files alone are denser than
+  > anything on the list. It resists enumeration because the coupling takes two shapes no
+  > single pattern catches: a runtime branch on `host_callbacks()`, and a direct
+  > `host_services::host_*_vtable()` call that never mentions `host_callbacks()` at all
+  > (`iceoryx2/input`, `vulkan_present_target`, `processor_instance_factory` are the second
+  > shape only). This change states no file count deliberately — two successive audits
+  > produced numbers measuring different predicates. **The inventory belongs to #1715,
+  > derived by reading the RHI at implementation time.**
   >
   > **Sequencing.** The strip does not precede the deletions; see the stacked-PR
   > bullet. The clause moving `streamlib-sdk` off its `core::plugin` re-exports and
   > the `auto-build` feature moves there with it, unchanged.
 - **`core/streamlib_home.rs`** re-scopes: the `streamlib_modules`/`packages/` walk
   dies; logging paths and the node registry keep a home-dir resolver.
+
+  > ~~the `streamlib_modules`/`packages/` walk dies~~ — Split across two tickets
+  > 2026-08-08 (owner ruling, #1713 plan gate); the halves have different blockers.
+  >
+  > The **`packages/` walk-up** (`find_app_root` / `app_root_from`, reachable only from
+  > `get_streamlib_home`) dies on the survivor-rewire ticket, and `get_streamlib_home()`
+  > becomes `STREAMLIB_HOME` → the process working directory → `.` — logs land
+  > project-local at `./.streamlib/logs`. "Never the user home directory"
+  > (`streamlib_home.rs:24`) is **reaffirmed, not reversed**; an XDG data dir was the
+  > rejected option. The `current_exe()` fallback goes with the walk rather than surviving
+  > it: under the wheel `current_exe()` is `.venv/bin/python`. Five helpers with zero
+  > in-tree callers go too — `ensure_streamlib_home`, `get_runtime_dir`,
+  > `get_processor_dir`, `get_processor_data_dir`, `get_processor_venv_dir`.
+  >
+  > The **`streamlib_modules` half** — `app_modules_root`, `installed_package_slot_dir`,
+  > `resolved_app_modules_dir`, `set_app_modules_root_override`, `APP_MODULES_DIR_ENV` —
+  > is reachable only from `module_loader/` and `core/runtime/install.rs`, so it
+  > re-sequences to #1715 with them.
+  >
+  > The node registry needs nothing here — it already resolves through `XDG_RUNTIME_DIR`
+  > (`streamlib-api-server/src/node_registry.rs:122`). Surviving consumers:
+  > `core/logging/paths.rs:17`, `streamlib-api-server/src/auth.rs:66`, two shader-dump
+  > paths under `vulkan/rhi/`, and `core/runtime/runtime.rs:229`.
 - **`sdk/streamlib-idents` / `sdk/streamlib-processor-schema`**: manifest/lockfile
   modules die (`app_modules`, `archive`, `catalog`, `lockfile`, `manifest`,
   `package_source`, `path_artifact_guard`, `release`, `resolver`). The schema-ident core
@@ -76,8 +108,28 @@ where a bullet says otherwise)
   previously preserved the ident core behind the JTD seam and demoted the codegen crate
   to internal-only, which `[schema-free-ports]` supersedes). Do not invest in reshaping
   either; carry them unchanged and let the successor changes delete them.
+
+  > ~~manifest/lockfile modules die~~ **as a survivor rewire, and the trim splits** —
+  > Re-sequenced and corrected 2026-08-08 (owner ruling, #1713 plan gate). Two crates
+  > survive #1715 and reach past the ident core into these modules: `streamlib-jtd-codegen`
+  > (`resolver`, `package_source`, `lockfile`) and `streamlib-processor-schema` (`manifest`).
+  > #1715 carries both unchanged (per the bullet above — it neither deletes nor reshapes
+  > either), so those four modules defer with them to the successors: `schema-free-ports`
+  > drops jtd-codegen and strips processor-schema, then `processor-class-identity` deletes
+  > `streamlib-idents` whole. #1715 trims only the modules whose every consumer it deletes
+  > (`app_modules`, `archive`, `catalog`, `path_artifact_guard`, `release` — from
+  > `module_loader/`, `core/runtime/install.rs`, `streamlib-pack`, the CLI package verbs,
+  > `streamlib-build-orchestrator`).
 - **`packages/test-fixtures`** loses its plugin/cdylib arm (the in-process
   attribute-macro tests keep it alive); `test-fixtures-abi-mismatch` dies whole.
+
+  > ~~loses its plugin/cdylib arm~~ **as a survivor rewire** — Re-sequenced 2026-08-08
+  > (owner ruling, #1713 plan gate), by this file's own stacked-PR argument. There is no
+  > `plugin` feature to drop: `crate-type = ["rlib", "cdylib"]` is unconditional and the
+  > generated crate root emits `streamlib_plugin_abi::export_plugin!` unconditionally, and
+  > that cdylib is exactly what the `load_project_dylib_*` corpus and `pack_then_load_smoke`
+  > dlopen. Those tests die on the contract-deletion ticket "and nowhere earlier, so no
+  > earlier stopping point is green" — the arm cannot precede them.
 - **CI/xtask**: die — `check-cdylib-reach`, `check-pack-load`,
   `check-package-version-drift`, `check-manifest-schema`,
   `check-no-streamlib-metadata`, `check-schema-versions`,
@@ -89,7 +141,13 @@ where a bullet says otherwise)
   `schemas.yml`. Keep — device-wait-idle, no-escalate-in-lifecycle,
   vendored-vulkanalia, license-check, pr-title, release-please.
 - The contract-deletion ticket lands as a **pre-approved stacked-PR structure** — its
-  blast radius is unreviewable as one diff. **The engine host-services strip is one of
+  blast radius is unreviewable as one diff. **Four more stack levels joined it 2026-08-08**
+  (owner ruling, #1713 plan gate), each for the same reason the host-services strip moved:
+  the code they depend on is still shipping, so no earlier stopping point is green. They are
+  the partial `streamlib-idents` manifest/lockfile trim, `packages/test-fixtures`' plugin/cdylib arm,
+  the `streamlib_modules` half of the `core/streamlib_home.rs` re-scope, and the
+  `#[processor]` grammar's move into `sdk/streamlib-macros`. Their bullets above state each
+  case. **The engine host-services strip is one of
   its stack levels** (moved here 2026-08-05, owner-ruled), alongside the
   `core/plugin/` deletion, carrying `streamlib-sdk` off its `core::plugin` re-exports
   and the `auto-build` feature. The strip has no earlier home because **the cdylib
@@ -111,7 +169,11 @@ where a bullet says otherwise)
     them out ahead of `core/plugin/`.
   - **Owed to `/reconcile-tracker`**: #1715's body, its stack breakdown, and its file
     count all predate this move and name neither the strip nor the `streamlib-sdk`
-    clause.
+    clause — nor, since 2026-08-08, the four levels that joined them. #1713's body owes
+    the mirror edit: it still lists all four as its own deliverables, and what remains to
+    it is the `sdk/vulkan-jpeg` rewire plus the `packages/` walk-up half of
+    `core/streamlib_home.rs`. That residue is small enough that whether #1713 stays
+    standalone or folds into the stack is a tracker call, not a plan one.
 - **What must survive the strip**: the helper children's privileged-access route — the
   escalate GPU ops over the subprocess IPC path. Its own machinery names `host_services`
   nowhere, but it reaches the GPU through the mode-routed
@@ -127,16 +189,11 @@ Each bullet is a pattern the ship gate verifies is gone from the tree: **one art
 bullet, plain text, on the bullet's first line.** Continuation lines are prose the gate
 does not search. Grammar: `changes/README.md`.
 
-> ~~Known gate defect: it greps everything after the `- REMOVED:` prefix on one line
-> verbatim, so any bullet joining two items with `/` or carrying a parenthetical can
-> never match and passes vacuously. Several below are in that state. Splitting them is
-> the fix, out of scope here; until then a green gate is weak evidence.~~ — Superseded
-> 2026-08-08 by PR #1788. The gate now rejects those bullet shapes instead of searching
-> them, and checks path existence as well as content — which no bullet shape could fix,
-> because `git grep` never matches a filename. The inventory below is rewritten to the
-> grammar. Measured against the pre-#1788 gate with each artifact planted and tracked:
-> 35 of the 36 bullets it could be measured against passed green with the artifact
-> present.
+> ~~Known gate defect: bullets joining two items or carrying a parenthetical can never
+> match and pass vacuously, so a green gate is weak evidence.~~ — Superseded 2026-08-08 by
+> PR #1788: the gate now rejects those shapes rather than searching them, and checks path
+> existence as well as content. The inventory below is rewritten to the grammar and was
+> measured bullet-by-bullet against the pre-#1788 gate; see #1788 for the run.
 
 `streamlib-adapter-cuda-helpers` is already gone, deleted early by #1743 / PR #1751
 with its three tests re-homed into `streamlib-adapter-cuda`; its bullet's `-cuda-abi`
@@ -224,25 +281,20 @@ half still belongs to this ticket.
   `.gitignore`/`.dockerignore`, `docker/README.md`, `sdk/vulkan-jpeg`, and
   `packages/test-fixtures/Cargo.toml:19`.
 
-  Note for the implementer: `sdk/streamlib-jtd-codegen` and `sdk/streamlib-processor-schema`
-  are among the `.slpkg` survivors but are deleted outright by `schema-free-ports.md` /
-  `processor-class-identity.md`. Scrub the mention; do not invest in reshaping either.
+  `sdk/streamlib-jtd-codegen` and `sdk/streamlib-processor-schema` are among the `.slpkg`
+  survivors: scrub the mention, but do not reshape either — the successor changes delete
+  them.
 
   > ~~**[NEEDS DECISION]** …`.slpkg` cannot reach zero as written…~~ /
   > ~~**[NEEDS DECISION]** …485 occurrences, the large majority in `examples/**`…~~ —
   > Resolved by owner 2026-08-08. Neither bullet needed narrowing; the gate's *scope* was
   > wrong. PR #1791 drops `examples/**`, the distributable `packages/` entries,
   > `docs/learnings/**` and `docs/plan/**` from the content sweep — consumers that lag by
-  > design, an empirical driver record that outlives the format, and the plan itself, which
-  > states what we agreed rather than what the tree holds.
-  >
-  > The `docs/plan/**` half was a deadlock, not a preference: `ARCHITECTURE.md:41` names
-  > both artifacts as things this change deletes, and `/ship-change` gates at step 1 but
-  > folds `ARCHITECTURE.md` at step 3 — so #1715 could never pass the gate, and the only
-  > legal place to retire that sentence was a step it could never reach.
-  >
-  > The `streamlib_modules` block also overstated the problem: 151 of its 161 tracked files
-  > were `examples/**`. The bullet was satisfiable all along.
+  > design, an empirical driver record that outlives the format, and the plan itself. The
+  > `docs/plan/**` half was a deadlock rather than a preference (`ARCHITECTURE.md:41` names
+  > both artifacts, and `/ship-change` gates at step 1 but folds `ARCHITECTURE.md` at step
+  > 3); and 151 of `streamlib_modules`' 161 tracked files were `examples/**`, so both
+  > bullets were satisfiable all along. Full reasoning in #1791.
 - REMOVED: tools/streamlib-cli/src/commands/add.rs
 - REMOVED: tools/streamlib-cli/src/commands/install.rs
 - REMOVED: tools/streamlib-cli/src/commands/link.rs
