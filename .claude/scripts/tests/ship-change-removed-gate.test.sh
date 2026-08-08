@@ -169,6 +169,58 @@ plant docs/plan/changes/archive/2026-01-01-other.md "- REMOVED: streamlib-pack"
 run_gate
 expect_pass "another change file's own inventory is not residue"
 
+# The plan states what we agreed, not what the tree holds. This also breaks a deadlock:
+# /ship-change gates at step 1 but folds ARCHITECTURE.md at step 3, so a change whose own
+# plan text names what it removes could never reach the step that retires that text.
+new_repo <<'EOF'
+- REMOVED: streamlib_modules
+EOF
+plant docs/plan/ARCHITECTURE.md "deleted in full: \`streamlib_modules/\`, the .slpkg format, streamlib.lock"
+run_gate
+expect_pass "the plan's own description of a removal is not residue"
+
+# Empirical records outlive the thing that surfaced them.
+new_repo <<'EOF'
+- REMOVED: .slpkg
+EOF
+plant docs/learnings/slpkg-raw-device-rhi-construction.md "A separately-built .slpkg double-frees in vkCreatePipelineLayout."
+run_gate
+expect_pass "a learning that records driver behaviour is not residue"
+
+# Consumers lag by design (CLAUDE.md) and are moving out-of-repo (#1672).
+new_repo <<'EOF'
+- REMOVED: streamlib_modules
+EOF
+plant examples/camera-display/src/main.rs "let dir = home.join(\"streamlib_modules\");"
+run_gate
+expect_pass "an example that still uses the artifact is not residue"
+
+new_repo <<'EOF'
+- REMOVED: .slpkg
+EOF
+plant packages/api-server/src/lib.rs "// resolves a .slpkg from the store"
+run_gate
+expect_pass "a distributable package is not residue"
+
+# ...but the path check inherits none of those exclusions. A bullet naming a path inside
+# an excluded tree still fails while that path is tracked — otherwise this change's own
+# `packages/test-fixtures-abi-mismatch` bullet would pass green forever.
+new_repo <<'EOF'
+- REMOVED: packages/test-fixtures-abi-mismatch
+EOF
+plant packages/test-fixtures-abi-mismatch/Cargo.toml "[package]"
+run_gate
+expect_fail "a path inside a content-excluded tree is still checked for existence" \
+  "STILL PRESENT (on disk): packages/test-fixtures-abi-mismatch"
+
+new_repo <<'EOF'
+- REMOVED: docs/plan/changes/dead-change.md
+EOF
+plant docs/plan/changes/dead-change.md "# Change: dead"
+run_gate
+expect_fail "a plan path that still exists is residue" \
+  "STILL PRESENT (on disk): docs/plan/changes/dead-change.md"
+
 # A file that lives at the excluded path is still residue when the bullet names the
 # path itself — the content exclusions must not leak into the path check.
 new_repo <<'EOF'

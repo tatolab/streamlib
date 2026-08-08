@@ -29,16 +29,32 @@ hits="$(mktemp)"
 trap 'rm -f "$hits"' EXIT
 
 # Excluded from the content sweep only — each is a surface that names a removed
-# artifact forever, by policy, so a hit there is not residue:
+# artifact by policy or by design, so a hit there is not residue the engine can act on:
 #   CHANGELOG.md      release-please generates it from merged commit subjects; the
 #                     entry announcing a removal is unscrubbable.
 #   docs/decisions/** annotate-don't-overwrite (.claude/rules/docs-policy.md): a
 #                     superseded ADR keeps naming what it retired.
-#   docs/plan/changes/**  the change files' own inventories, including this one.
+#   docs/learnings/** empirical-only (same rule): a learning records driver or library
+#                     behaviour that stays true after the thing that surfaced it is gone.
+#   docs/plan/**      the plan states what we agreed, not what the tree holds. It also
+#                     breaks a deadlock: /ship-change gates at step 1 but folds
+#                     ARCHITECTURE.md at step 3, so a change whose own plan text names
+#                     what it removes could never reach the step that retires that text.
+#   examples/**       consumers, lagging by design (CLAUDE.md); moving out-of-repo (#1672).
+#   packages/**       the distributable entries, same doctrine — never contract sources.
 #   vendor/**         the vendored vulkanalia fork, never ours to edit.
-# The path check does not inherit these: a file existing at the named path is residue
-# wherever it lives.
-content_excludes=(':!vendor/**' ':!docs/plan/changes/**' ':!CHANGELOG.md' ':!docs/decisions/**')
+# The path check inherits none of these: a file existing at a named path is residue
+# wherever it lives, so a bullet naming e.g. packages/test-fixtures-abi-mismatch or a
+# docs/plan file still fails while that path is tracked.
+content_excludes=(
+  ':!vendor/**'
+  ':!docs/plan/**'
+  ':!docs/decisions/**'
+  ':!docs/learnings/**'
+  ':!examples/**'
+  ':!packages/**'
+  ':!CHANGELOG.md'
+)
 
 reject() {
   echo "MALFORMED BULLET: ${1:-(empty)}"
