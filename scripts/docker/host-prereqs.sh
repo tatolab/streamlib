@@ -86,4 +86,4 @@ else
   warn "GPU passthrough check failed — confirm the toolkit is wired and docker was restarted"
 fi
 
-log "done. Build + run:  docker compose up --build   (or see docker/README.md)"
+log "done. The host is ready to run a GPU container; see docker/README.md"

@@ -83,7 +83,9 @@ is the bug. Requires `--gpus all` and `NVIDIA_DRIVER_CAPABILITIES=all` (the
   base (`nvidia/cuda:*-runtime-ubuntu24.04`) or `ubuntu:24.04`, plus the GLVND
   set above. Sibling EGL-modifier learning:
   [`nvidia-egl-dmabuf-render-target.md`](nvidia-egl-dmabuf-render-target.md).
-- Applied in [`Dockerfile`](../../Dockerfile); see [`docker/README.md`](../../docker/README.md).
+- The package set above is the whole of the fix; it is deliberately stated here rather
+  than by reference, because the repo carries no image to point at. See
+  [`docker/README.md`](../../docker/README.md).
 
 ## Part 2 — PipeWire in a container for an ALSA/cpal app
 
@@ -127,7 +129,8 @@ userspace PipeWire stack with the ALSA→PipeWire bridge, so cpal's ALSA
 
 ### Reference
 
-- Applied in [`docker/entrypoint.sh`](../../docker/entrypoint.sh) +
-  [`docker/pipewire/10-virtual.conf`](../../docker/pipewire/10-virtual.conf).
-  Genuine low-latency (drone) audio is opt-in via `--cap-add SYS_NICE
-  --ulimit rtprio=95`; it degrades gracefully to non-RT without them.
+- The virtual-device declaration is
+  [`docker/pipewire/10-virtual.conf`](../../docker/pipewire/10-virtual.conf). The
+  entrypoint order above is stated here rather than by reference — the repo carries no
+  image entrypoint to point at. Genuine low-latency (drone) audio is opt-in via
+  `--cap-add SYS_NICE --ulimit rtprio=95`; it degrades gracefully to non-RT without them.
