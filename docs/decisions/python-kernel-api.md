@@ -75,9 +75,14 @@ statically is ours, not the system's.
 
 **A C++ compiler over a pure-Rust one.** naga would have kept the wheel's compiled-in code
 entirely Rust and left §Distribution's wording untouched, which is the tidier outcome. It was
-rejected because its GLSL front end does not cover ray tracing, and ray-tracing kernels are a
-decided Python capability: a GLSL contract that silently excludes one kernel kind is not the
-contract stated, and an author would discover the hole only on writing a raygen shader. The
+rejected because its GLSL front end does not cover the ray-tracing *pipeline stages* — raygen,
+miss, closest-hit, any-hit, intersection — that a ray-tracing kernel is built from; whatever
+inline ray-query support it carries addresses a different shape, a query issued from within a
+compute shader. Ray-tracing kernels are a decided Python capability, so a GLSL contract that
+silently excluded one kernel kind would not be the contract stated, and an author would
+discover the hole only on writing a raygen shader. Front-end coverage is a checkable claim
+that moves with releases; if it ever covers the pipeline stages, this rejection is worth
+revisiting on its own terms. The
 cost accepted is a statically linked C++ toolchain inside an abi3 manylinux wheel, which
 widens "our Rust is compiled in" to "our code is compiled in" — vendored C/C++ included.
 
