@@ -23,156 +23,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Stream a runtime's on-disk JSONL log file in pretty format, or — with
-    /// `--url` — collect a bounded sample of a running node's live event stream
-    /// via its control plane.
-    #[command(group(clap::ArgGroup::new("logs_control_target").args(["url", "node"])))]
-    Logs {
-        /// Runtime ID to read logs for. Omit when using `--list`, `--url`, or
-        /// `--node`.
-        #[arg(value_name = "RUNTIME_ID", required_unless_present_any = ["list", "url", "node"])]
-        runtime_id: Option<String>,
-
-        /// Control-plane URL: collect a bounded sample of the running node's
-        /// live event stream (all topics) via its `POST /mcp` instead of
-        /// reading an on-disk JSONL log file.
-        #[arg(long, value_name = "URL", conflicts_with_all = ["runtime_id", "list", "follow", "processor", "pipeline", "rhi", "level", "source", "intercepted_only", "since"])]
-        url: Option<String>,
-
-        /// Control-plane mode by registered runtime_id (resolved via the node
-        /// registry) instead of `--url`.
-        #[arg(long, value_name = "RUNTIME_ID", conflicts_with_all = ["runtime_id", "url", "list", "follow", "processor", "pipeline", "rhi", "level", "source", "intercepted_only", "since"])]
-        node: Option<String>,
-
-        /// (control-plane mode) Max events to collect before returning. Requires
-        /// a control target (`--url` or `--node`); it has no meaning for an
-        /// on-disk log read.
-        #[arg(long, value_name = "COUNT", requires = "logs_control_target")]
-        count: Option<usize>,
-
-        /// Enumerate available runtime log files instead of streaming one.
-        #[arg(long, conflicts_with_all = ["runtime_id", "follow"])]
-        list: bool,
-
-        /// Follow the log file as new records land (like `tail -F`).
-        #[arg(short = 'f', long)]
-        follow: bool,
-
-        /// Filter by processor ID.
-        #[arg(long, value_name = "ID")]
-        processor: Option<String>,
-
-        /// Filter by pipeline ID.
-        #[arg(long, value_name = "ID")]
-        pipeline: Option<String>,
-
-        /// Show only RHI operations (records with `rhi_op` set).
-        #[arg(long)]
-        rhi: bool,
-
-        /// Filter by minimum severity level.
-        #[arg(long, value_name = "LEVEL", value_parser = ["trace", "debug", "info", "warn", "error"])]
-        level: Option<String>,
-
-        /// Filter by source runtime.
-        #[arg(long, value_name = "SOURCE", value_parser = ["rust", "python", "deno"])]
-        source: Option<String>,
-
-        /// Show only intercepted records (captured stdout/stderr/print/console.log).
-        #[arg(long = "intercepted-only")]
-        intercepted_only: bool,
-
-        /// (Orchestrator-only) Show logs since a duration ago. Not supported in offline mode.
-        #[arg(long, value_name = "DURATION")]
-        since: Option<String>,
-    },
-
-    /// Speak the Model Context Protocol over stdio so any MCP host can spawn
-    /// StreamLib's agent-operable tools (`claude mcp add streamlib -- streamlib
-    /// mcp`).
-    ///
-    /// Default (no `--attach`): host a fresh in-process runtime and serve its
-    /// MCP over stdio — zero-config; the host gets an operable runtime, torn
-    /// down when it closes stdin or calls the `shutdown` tool. `--attach <url>`
-    /// instead bridges stdio to a running runtime's `POST {url}/mcp` to operate
-    /// an existing live pipeline.
-    /// Exposes the same tools as `POST /mcp`: graph / tap / logs / shutdown.
-    /// Auth is off by construction on the in-process path; `--attach` forwards
-    /// a token from `STREAMLIB_MCP_TOKEN` when set.
-    Mcp {
-        /// Bridge stdio to this running runtime's `POST {url}/mcp` instead of
-        /// hosting an in-process runtime.
-        #[arg(long, value_name = "URL")]
-        attach: Option<String>,
-    },
-
-    /// List running StreamLib nodes discovered from the node registry
-    /// (`$XDG_RUNTIME_DIR/streamlib/nodes/`).
-    ///
-    /// Scans every entry, liveness-checks it (control-plane round-trip plus host
-    /// pid), prunes the ones that are gone, and prints runtime_id, control_url,
-    /// pid, hint, and alive?. Only runtimes hosting an ApiServer control plane
-    /// register here — a runtime without a control endpoint is not listed (and
-    /// is not missing).
-    Nodes,
-
-    /// Export a running node's live graph (processors, links, states, metrics)
-    /// as JSON via its control plane.
-    ///
-    /// Target selection (shared by every control verb): `--url` pins an explicit
-    /// endpoint; `--node <runtime_id>` resolves one from the registry; with
-    /// neither, the sole live node is used (an error lists candidates when zero
-    /// or more than one is live).
-    Graph {
-        /// Control-plane base URL of the target node (its `POST /mcp` host).
-        #[arg(long, value_name = "URL")]
-        url: Option<String>,
-
-        /// Registered runtime_id to target instead of `--url` (resolved via the
-        /// node registry).
-        #[arg(long, value_name = "RUNTIME_ID", conflicts_with = "url")]
-        node: Option<String>,
-    },
-
-    /// Attach a read-only tap to a running node's channel and collect a bounded
-    /// sample of raw bags (a hex preview plus byte length per bag).
-    Tap {
-        /// Control-plane base URL of the target node (its `POST /mcp` host).
-        #[arg(long, value_name = "URL")]
-        url: Option<String>,
-
-        /// Registered runtime_id to target instead of `--url`.
-        #[arg(long, value_name = "RUNTIME_ID", conflicts_with = "url")]
-        node: Option<String>,
-
-        /// Channel data-service name, e.g. `{source_processor}/{source_output_port}`.
-        #[arg(value_name = "CHANNEL")]
-        channel: String,
-
-        /// Number of bags to collect before returning.
-        #[arg(long, value_name = "COUNT")]
-        count: Option<usize>,
-    },
-
-    /// Ask a running node to shut down.
-    ///
-    /// A request the node's run loop observes and answers with a normal
-    /// teardown — not a kill. Returns as soon as the node accepts it;
-    /// teardown is not awaited. Requesting twice is not an error.
-    Shutdown {
-        /// Control-plane base URL of the target node (its `POST /mcp` host).
-        #[arg(long, value_name = "URL")]
-        url: Option<String>,
-
-        /// Registered runtime_id to target instead of `--url`.
-        #[arg(long, value_name = "RUNTIME_ID", conflicts_with = "url")]
-        node: Option<String>,
-
-        /// Human-readable attribution the node logs with the request.
-        #[arg(long, value_name = "TEXT")]
-        reason: Option<String>,
-    },
-
     /// Setup commands
     Setup {
         #[command(subcommand)]
@@ -407,86 +257,15 @@ enum PkgCommands {
 fn main() -> Result<()> {
     let _ = dotenvy::dotenv();
 
-    let cli = Cli::parse();
-
-    tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?
-        .block_on(async_main(cli))
+    run(Cli::parse())
 }
 
-/// The short-lived-CLI logging config for `command`.
-///
-/// Every subcommand mirrors pretty logs to stdout except `mcp`, which speaks a
-/// byte protocol on stdout and so routes its mirror to stderr to keep fd 1
-/// carrying only MCP JSON-RPC frames.
-fn logging_config_for(
-    command: &Option<Commands>,
-) -> streamlib::sdk::logging::StreamlibLoggingConfig {
-    match command {
-        Some(Commands::Mcp { .. }) => {
-            streamlib::sdk::logging::StreamlibLoggingConfig::for_stdio_protocol("streamlib-cli")
-        }
-        _ => streamlib::sdk::logging::StreamlibLoggingConfig::for_cli("streamlib-cli"),
-    }
-}
-
-async fn async_main(cli: Cli) -> Result<()> {
-    let _logging_guard = streamlib::sdk::logging::init(logging_config_for(&cli.command))?;
+fn run(cli: Cli) -> Result<()> {
+    let _logging_guard = streamlib::sdk::logging::init(
+        streamlib::sdk::logging::StreamlibLoggingConfig::for_cli("streamlib-cli"),
+    )?;
 
     match cli.command {
-        Some(Commands::Logs {
-            runtime_id,
-            url,
-            node,
-            count,
-            list,
-            follow,
-            processor,
-            pipeline,
-            rhi,
-            level,
-            source,
-            intercepted_only,
-            since,
-        }) => {
-            if url.is_some() || node.is_some() {
-                let url = commands::control::resolve_control_url(url, node)?;
-                return commands::control::logs(&url, count);
-            }
-            commands::logs::run(commands::logs::LogsArgs {
-                runtime_id: runtime_id.as_deref(),
-                list,
-                follow,
-                processor: processor.as_deref(),
-                pipeline: pipeline.as_deref(),
-                rhi,
-                level: level.as_deref(),
-                source: source.as_deref(),
-                intercepted_only,
-                since: since.as_deref(),
-            })
-            .await?
-        }
-        Some(Commands::Mcp { attach }) => commands::mcp::run(attach).await?,
-        Some(Commands::Nodes) => commands::nodes::run()?,
-        Some(Commands::Graph { url, node }) => {
-            let url = commands::control::resolve_control_url(url, node)?;
-            commands::control::graph(&url)?
-        }
-        Some(Commands::Tap {
-            url,
-            node,
-            channel,
-            count,
-        }) => {
-            let url = commands::control::resolve_control_url(url, node)?;
-            commands::control::tap(&url, &channel, count)?
-        }
-        Some(Commands::Shutdown { url, node, reason }) => {
-            let url = commands::control::resolve_control_url(url, node)?;
-            commands::control::shutdown(&url, reason.as_deref())?
-        }
         Some(Commands::Setup { action }) => match action {
             SetupCommands::Shell { shell } => commands::setup::shell(shell.as_deref())?,
         },
@@ -588,28 +367,34 @@ async fn async_main(cli: Cli) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use streamlib::sdk::logging::PrettyMirrorStream;
 
-    /// The `mcp` subcommand's stdio transport requires fd 1 carry only MCP
-    /// JSON-RPC frames — its pretty log mirror MUST route to stderr. Reverting
-    /// the mcp branch of [`logging_config_for`] (mirror back to stdout) goes red
-    /// here, catching a regression that would re-pollute the protocol stream.
-    #[test]
-    fn mcp_subcommand_mirrors_logs_to_stderr_not_stdout() {
-        let mcp = logging_config_for(&Some(Commands::Mcp { attach: None }));
-        assert_eq!(
-            mcp.pretty_mirror_stream,
-            PrettyMirrorStream::Stderr,
-            "mcp stdout is a protocol channel — the pretty mirror must go to stderr"
+    /// Assert `verb` is absent from the command tree.
+    ///
+    /// Reads the tree rather than checking that `try_parse_from` errors: a
+    /// subcommand with an unsatisfied required argument also fails to parse, so
+    /// a parse-failure proxy would sleep through the reintroduction of `tap`
+    /// (required `<CHANNEL>`) or `logs` (`required_unless_present_any`).
+    fn assert_is_not_a_subcommand(verb: &str, why: &str) {
+        use clap::CommandFactory;
+
+        let served: Vec<String> = Cli::command()
+            .get_subcommands()
+            .map(|subcommand| subcommand.get_name().to_string())
+            .collect();
+        assert!(
+            !served.contains(&verb.to_string()),
+            "`streamlib {verb}` {why}; served verbs are {served:?}"
         );
     }
 
-    /// Every short-lived path other than `mcp` keeps the human-facing stdout
-    /// mirror.
+    /// The observation verbs live in the wheel's console script now. A Rust
+    /// `graph` / `tap` / `logs` / `nodes` / `mcp` reappearing here is a second
+    /// client answering to the same name against the same control plane.
     #[test]
-    fn non_mcp_invocation_mirrors_logs_to_stdout() {
-        let config = logging_config_for(&None);
-        assert_eq!(config.pretty_mirror_stream, PrettyMirrorStream::Stdout);
+    fn the_rust_cli_owns_no_observation_verb() {
+        for verb in ["nodes", "graph", "tap", "logs", "mcp", "shutdown"] {
+            assert_is_not_a_subcommand(verb, "must not be a Rust CLI subcommand");
+        }
     }
 
     /// The app-launch verbs live in the wheel's console script, which is the
@@ -618,40 +403,10 @@ mod tests {
     #[test]
     fn the_rust_cli_owns_no_app_launch_verb() {
         for verb in ["run", "dev"] {
-            assert!(
-                Cli::try_parse_from(["streamlib", verb]).is_err(),
-                "`streamlib {verb}` belongs to the wheel's console script, not this binary"
+            assert_is_not_a_subcommand(
+                verb,
+                "belongs to the wheel's console script, not this binary",
             );
         }
-    }
-
-    /// `--count` is control-plane-only: `logs <runtime_id> --count N` (local
-    /// mode, no `--url`/`--node`) has no field to land in and must be rejected at
-    /// the clap layer rather than silently ignored. Dropping the `requires =
-    /// "logs_control_target"` on `count` goes green here.
-    #[test]
-    fn logs_count_without_a_control_target_is_rejected() {
-        let result = Cli::try_parse_from(["streamlib", "logs", "Rnode", "--count", "5"]);
-        assert!(
-            result.is_err(),
-            "`logs <id> --count N` in local mode must be rejected: count needs `--url` or `--node`"
-        );
-    }
-
-    /// `--count` parses once a control target pins the mode via `--url` or
-    /// `--node`.
-    #[test]
-    fn logs_count_with_a_control_target_parses() {
-        Cli::try_parse_from([
-            "streamlib",
-            "logs",
-            "--url",
-            "http://127.0.0.1:9000",
-            "--count",
-            "5",
-        ])
-        .expect("`logs --url ... --count N` must parse");
-        Cli::try_parse_from(["streamlib", "logs", "--node", "Rnode", "--count", "5"])
-            .expect("`logs --node ... --count N` must parse");
     }
 }

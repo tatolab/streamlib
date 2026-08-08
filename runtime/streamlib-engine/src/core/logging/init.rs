@@ -16,7 +16,7 @@ use tracing::Dispatch;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::{EnvFilter, Registry};
 
-use crate::core::logging::config::{PrettyMirrorStream, ResolvedTunables, StreamlibLoggingConfig};
+use crate::core::logging::config::{ResolvedTunables, StreamlibLoggingConfig};
 use crate::core::logging::event::Source;
 use crate::core::logging::layer::JsonlSinkLayer;
 use crate::core::logging::paths::runtime_log_path;
@@ -219,7 +219,7 @@ fn build_components(config: StreamlibLoggingConfig) -> Result<(Dispatch, Streaml
     // built so the intercepted events route through the right
     // subscriber.
     #[cfg(unix)]
-    let (pending_interceptor, mut real_stdout_file) = if config.intercept_stdio {
+    let (pending_interceptor, real_stdout_file) = if config.intercept_stdio {
         match stdio_interceptor::install_redirects() {
             Ok((pending, files)) => {
                 // stderr mirror not wired today — dropping the file
@@ -243,22 +243,17 @@ fn build_components(config: StreamlibLoggingConfig) -> Result<(Dispatch, Streaml
         (None, None)
     };
     #[cfg(not(unix))]
-    let mut real_stdout_file: Option<std::fs::File> = None;
+    let real_stdout_file: Option<std::fs::File> = None;
 
-    let stdout_sink: Option<Box<dyn std::io::Write + Send>> = if !stdout_enabled {
-        None
-    } else {
-        match config.pretty_mirror_stream {
-            // fd 2 keeps fd 1 a pure protocol channel (the `streamlib mcp`
-            // stdio transport). The dup'd real-stdout handle from the
-            // interceptor is never claimed here, so it drops and closes cleanly.
-            PrettyMirrorStream::Stderr => Some(Box::new(std::io::stderr())),
-            PrettyMirrorStream::Stdout => match real_stdout_file.take() {
-                Some(file) => Some(Box::new(file)),
-                None => Some(Box::new(std::io::stdout())),
-            },
-        }
-    };
+    // Mirror through the interceptor's dup'd real-stdout handle when there is
+    // one, so the mirror writes past the redirect instead of feeding the
+    // interception it would otherwise be captured by. With the mirror off, the
+    // handle is never claimed and drops here, closing the dup'd fd.
+    let stdout_sink: Option<Box<dyn std::io::Write + Send>> =
+        stdout_enabled.then(|| match real_stdout_file {
+            Some(file) => Box::new(file) as Box<dyn std::io::Write + Send>,
+            None => Box::new(std::io::stdout()),
+        });
 
     let worker = spawn_worker(WorkerConfig {
         runtime_id: config.runtime_id.clone(),

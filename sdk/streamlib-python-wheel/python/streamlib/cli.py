@@ -1,7 +1,12 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `streamlib` console script: `new`, `run`, and `dev`.
+"""The `streamlib` console script: `new`, `run`, `dev`, and the observation verbs.
+
+`nodes`, `graph`, `tap`, and `logs` observe nodes that are already running —
+`nodes` off the on-disk registry, the rest as JSON-RPC clients of a node's
+control plane. None of them mutates a graph: a node's graph is defined by its
+code, and the edit loop is re-running `dev`.
 
 `run` and `dev` are a thin runner over the engine this wheel already exposes.
 They resolve the app's entry file, execute it as `python app.py` would, call its
@@ -26,9 +31,13 @@ import runpy
 import sys
 import traceback
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Optional, Sequence
 
 from . import Runtime
+from ._control_plane_client import ControlPlaneError, call_tool, resolve_control_url
+
+if TYPE_CHECKING:
+    from ._runtime_log_reader import LogRecordFilters
 
 __all__ = ["main"]
 
@@ -40,6 +49,15 @@ DEFAULT_CONTROL_PLANE_BIND_PORT = 9000
 
 SCAFFOLD_PYTHON_VERSION = "3.12"
 STREAMLIB_SIMPLE_INDEX_URL = "https://tatolab.github.io/streamlib/simple/"
+
+
+class ObservationVerbUsageError(Exception):
+    """An observation verb invoked with flags that contradict each other.
+
+    Distinct from [`AppLaunchError`], which names the `run` / `dev` path: these
+    are argument mistakes on `nodes` / `graph` / `tap` / `logs`, and the two
+    surfaces are free to diverge in how they report.
+    """
 
 
 class AppLaunchError(Exception):
@@ -391,6 +409,155 @@ def scaffold_new_app(target_directory: Path, *, use_test_pattern_source: bool) -
     return 0
 
 
+
+# ─── Observation verbs ───────────────────────────────────────────────────────
+
+
+def print_discovered_nodes() -> int:
+    """`streamlib nodes`: the running control planes, as an aligned table."""
+    from ._node_registry import registry_directory, scan_check_and_prune
+
+    stream = sys.stdout
+    nodes = scan_check_and_prune()
+    if not nodes:
+        print(f"No running nodes found in {registry_directory()}.", file=stream)
+        print(
+            "(Only runtimes hosting a control plane appear here.)",
+            file=stream,
+        )
+        return 0
+
+    runtime_id_width = max(
+        [len(node.entry.runtime_id) for node in nodes] + [len("RUNTIME_ID")]
+    )
+    control_url_width = max(
+        [len(node.entry.control_url) for node in nodes] + [len("CONTROL_URL")]
+    )
+    print(
+        f"{'RUNTIME_ID':<{runtime_id_width}}  {'CONTROL_URL':<{control_url_width}}  "
+        f"{'PID':>7}  {'ALIVE?':<6}  HINT",
+        file=stream,
+    )
+    for node in nodes:
+        print(
+            f"{node.entry.runtime_id:<{runtime_id_width}}  "
+            f"{node.entry.control_url:<{control_url_width}}  "
+            f"{node.entry.pid:>7}  {'yes' if node.reachable else 'no':<6}  "
+            f"{node.entry.hint}",
+            file=stream,
+        )
+    print(
+        "\nOnly runtimes hosting a control plane appear here; a runtime without "
+        "a control endpoint is not listed (and is not missing).",
+        file=stream,
+    )
+    return 0
+
+
+def call_observation_tool(
+    tool_name: str,
+    *,
+    requested_url: "Optional[str]",
+    requested_node: "Optional[str]",
+    arguments: "Optional[dict[str, Any]]" = None,
+) -> int:
+    """Resolve the target node, drive one tool, print its result."""
+    url = resolve_control_url(requested_url, requested_node)
+    print(call_tool(url, tool_name, arguments or {}))
+    return 0
+
+
+def render_runtime_logs(
+    *,
+    runtime_id: "Optional[str]",
+    list_runtimes: bool,
+    follow: bool,
+    filters: "LogRecordFilters",
+) -> int:
+    """`streamlib logs` in on-disk mode: enumerate runtimes, or render one's file."""
+    from ._runtime_log_reader import (
+        enumerate_runtime_log_files,
+        format_size,
+        format_started_at,
+        newest_log_file_for_runtime,
+        read_log_file,
+        runtime_log_directory_path,
+        wait_for_runtime_log_file,
+    )
+
+    log_directory = runtime_log_directory_path()
+
+    if list_runtimes:
+        ignored_alongside_list = [
+            name
+            for name, value in (
+                ("RUNTIME_ID", runtime_id),
+                ("--follow", follow),
+                ("--processor", filters.processor),
+                ("--pipeline", filters.pipeline),
+                ("--rhi", filters.rhi_only),
+                ("--level", filters.minimum_level),
+                ("--source", filters.source),
+                ("--intercepted-only", filters.intercepted_only),
+            )
+            if value
+        ]
+        if ignored_alongside_list:
+            raise ObservationVerbUsageError(
+                f"`--list` enumerates the runtimes that have log files and reads "
+                f"none of them, so it takes no {', '.join(ignored_alongside_list)}."
+            )
+        log_files = sorted(
+            enumerate_runtime_log_files(log_directory),
+            key=lambda log_file: log_file.started_at_millis,
+            reverse=True,
+        )
+        if not log_files:
+            print(f"(no runtime log files in {log_directory})")
+            return 0
+        print(f"{'RUNTIME_ID':<24}  {'STARTED_AT':<24}  SIZE")
+        for log_file in log_files:
+            print(
+                f"{log_file.runtime_id:<24}  "
+                f"{format_started_at(log_file.started_at_millis):<24}  "
+                f"{format_size(log_file.size_bytes)}"
+            )
+        return 0
+
+    if runtime_id is None:
+        raise ObservationVerbUsageError(
+            "missing RUNTIME_ID.\n"
+            "`streamlib logs --list` enumerates the runtimes that have log files, "
+            "and `--url` / `--node` reads a running node's live event stream instead."
+        )
+
+    log_file = newest_log_file_for_runtime(log_directory, runtime_id)
+    if log_file is None:
+        if not follow:
+            raise AppLaunchError(
+                f"no log file for runtime `{runtime_id}` in {log_directory}.\n"
+                f"Use `streamlib logs --list` to see the runtimes that have one."
+            )
+        try:
+            log_file = wait_for_runtime_log_file(log_directory, runtime_id, sys.stderr)
+        except KeyboardInterrupt:
+            return 0
+
+    try:
+        for rendered in read_log_file(
+            log_file,
+            filters,
+            follow=follow,
+            errors=sys.stderr,
+            log_directory=log_directory,
+        ):
+            print(rendered)
+    except KeyboardInterrupt:
+        # Ctrl-C out of a `--follow` tail is how it ends, not a failure.
+        pass
+    return 0
+
+
 def build_argument_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="streamlib",
@@ -473,29 +640,191 @@ def build_argument_parser() -> argparse.ArgumentParser:
             help="Node name published to the registry (auto-generated when omitted).",
         )
 
+    def add_control_target_flags(command: argparse.ArgumentParser) -> None:
+        """`--url` / `--node`: the two ways to pin which node a verb drives.
+
+        Mutually exclusive by construction. With neither, the verb resolves the
+        sole live node, which is the whole ceremony for the common case of one
+        node on the machine.
+        """
+        target = command.add_mutually_exclusive_group()
+        target.add_argument(
+            "--url",
+            dest="requested_url",
+            metavar="URL",
+            help="Control-plane base URL of the target node.",
+        )
+        target.add_argument(
+            "--node",
+            dest="requested_node",
+            metavar="RUNTIME_ID",
+            help="Registered runtime_id to target (resolved via the node registry).",
+        )
+
+    subcommands.add_parser(
+        "nodes",
+        help="List the running StreamLib nodes on this machine.",
+        description=(
+            "Scans the node registry, liveness-checks every entry, prunes the "
+            "ones that are gone, and prints runtime_id, control_url, pid, "
+            "alive? and hint. Only runtimes hosting a control plane register."
+        ),
+    )
+
+    graph_command = subcommands.add_parser(
+        "graph",
+        help="Export a running node's live graph as JSON.",
+        description=(
+            "Processors, ports, links, channel names, states and metrics, as the "
+            "node reports them right now."
+        ),
+    )
+    add_control_target_flags(graph_command)
+
+    tap_command = subcommands.add_parser(
+        "tap",
+        help="Collect a bounded sample of raw bags from one channel.",
+        description=(
+            "Attaches a read-only tap to CHANNEL and collects a bounded sample. "
+            "The tap forwards bags verbatim and never blocks the producer, so a "
+            "quiet channel returns a partial sample rather than hanging."
+        ),
+    )
+    tap_command.add_argument(
+        "channel",
+        help="Channel data-service name, e.g. {source_processor}/{output_port}.",
+    )
+    tap_command.add_argument(
+        "--count",
+        type=int,
+        metavar="N",
+        help="Bags to collect before returning (default: a small sample).",
+    )
+    add_control_target_flags(tap_command)
+
+    logs_command = subcommands.add_parser(
+        "logs",
+        help="Read a runtime's JSONL log file, or a running node's event stream.",
+        description=(
+            "With RUNTIME_ID, renders that runtime's on-disk JSONL log exactly as "
+            "the runtime mirrored it. With --url / --node, collects a bounded "
+            "sample of a running node's live event stream instead."
+        ),
+    )
+    logs_command.add_argument(
+        "runtime_id",
+        nargs="?",
+        metavar="RUNTIME_ID",
+        help="Runtime to read logs for. Omit with --list, --url or --node.",
+    )
+    logs_command.add_argument(
+        "--list",
+        dest="list_runtimes",
+        action="store_true",
+        help="Enumerate the runtimes that have log files instead of reading one.",
+    )
+    logs_command.add_argument(
+        "-f",
+        "--follow",
+        action="store_true",
+        help="Follow the log file as new records land (like `tail -F`).",
+    )
+    logs_command.add_argument(
+        "--processor", metavar="ID", help="Only records from this processor id."
+    )
+    logs_command.add_argument(
+        "--pipeline", metavar="ID", help="Only records from this pipeline id."
+    )
+    logs_command.add_argument(
+        "--rhi", action="store_true", help="Only RHI operations (records with rhi_op)."
+    )
+    logs_command.add_argument(
+        "--level",
+        choices=["trace", "debug", "info", "warn", "error"],
+        help="Minimum severity to show.",
+    )
+    logs_command.add_argument(
+        "--source",
+        choices=["rust", "python"],
+        help="Only records emitted by this runtime language.",
+    )
+    logs_command.add_argument(
+        "--intercepted-only",
+        dest="intercepted_only",
+        action="store_true",
+        help="Only intercepted records (captured stdout/stderr/print).",
+    )
+    logs_command.add_argument(
+        "--count",
+        type=int,
+        metavar="N",
+        help="(--url / --node only) Max events to collect before returning.",
+    )
+    add_control_target_flags(logs_command)
+
     return parser
 
 
-# The control-plane verbs the plan gives this CLI, which have not moved into the
-# wheel yet. Naming them beats argparse's bare `invalid choice`, which reads like
-# the verb was a typo rather than one that is still on its way.
-OBSERVATION_VERBS_NOT_YET_IN_THE_WHEEL = ("nodes", "graph", "tap", "logs", "mcp")
+def _run_logs_verb(arguments: argparse.Namespace) -> int:
+    """`logs` has two modes; a control target picks the live one.
+
+    The on-disk filters have no meaning against a live event stream (the tool
+    takes a count and nothing else), so asking for both is a wiring error rather
+    than a silently-ignored flag.
+    """
+    from ._runtime_log_reader import LogRecordFilters
+
+    targets_a_running_node = bool(arguments.requested_url or arguments.requested_node)
+    if targets_a_running_node:
+        conflicting = [
+            name
+            for name, value in (
+                ("RUNTIME_ID", arguments.runtime_id),
+                ("--list", arguments.list_runtimes),
+                ("--follow", arguments.follow),
+                ("--processor", arguments.processor),
+                ("--pipeline", arguments.pipeline),
+                ("--rhi", arguments.rhi),
+                ("--level", arguments.level),
+                ("--source", arguments.source),
+                ("--intercepted-only", arguments.intercepted_only),
+            )
+            if value
+        ]
+        if conflicting:
+            raise ObservationVerbUsageError(
+                f"`--url` / `--node` reads a running node's live event stream, which "
+                f"takes no {', '.join(conflicting)}. Drop the control target to read "
+                f"an on-disk log file instead."
+            )
+        return call_observation_tool(
+            "logs",
+            requested_url=arguments.requested_url,
+            requested_node=arguments.requested_node,
+            arguments={"count": arguments.count} if arguments.count else {},
+        )
+
+    if arguments.count is not None:
+        raise ObservationVerbUsageError(
+            "`--count` bounds a live event-stream sample; it has no meaning for an "
+            "on-disk log file. Use `--url` / `--node`, or drop `--count`."
+        )
+    return render_runtime_logs(
+        runtime_id=arguments.runtime_id,
+        list_runtimes=arguments.list_runtimes,
+        follow=arguments.follow,
+        filters=LogRecordFilters(
+            processor=arguments.processor,
+            pipeline=arguments.pipeline,
+            rhi_only=arguments.rhi,
+            minimum_level=arguments.level,
+            source=arguments.source,
+            intercepted_only=arguments.intercepted_only,
+        ),
+    )
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    requested = list(sys.argv[1:] if argv is None else argv)
-    if requested and requested[0] in OBSERVATION_VERBS_NOT_YET_IN_THE_WHEEL:
-        print(
-            f"error: `streamlib {requested[0]}` is not in this wheel yet.\n"
-            f"The observation verbs "
-            f"({', '.join(OBSERVATION_VERBS_NOT_YET_IN_THE_WHEEL)}) still live in "
-            f"the engine's own CLI; they move into the wheel with the api-server "
-            f"relocation. `streamlib dev` already publishes a node entry for them "
-            f"to find.",
-            file=sys.stderr,
-        )
-        return 1
-
     parser = build_argument_parser()
     arguments = parser.parse_args(argv)
 
@@ -504,6 +833,26 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             return scaffold_new_app(
                 arguments.directory, use_test_pattern_source=arguments.test_pattern
             )
+        if arguments.verb == "nodes":
+            return print_discovered_nodes()
+        if arguments.verb == "graph":
+            return call_observation_tool(
+                "graph",
+                requested_url=arguments.requested_url,
+                requested_node=arguments.requested_node,
+            )
+        if arguments.verb == "tap":
+            tap_arguments: "dict[str, Any]" = {"channel": arguments.channel}
+            if arguments.count is not None:
+                tap_arguments["count"] = arguments.count
+            return call_observation_tool(
+                "tap",
+                requested_url=arguments.requested_url,
+                requested_node=arguments.requested_node,
+                arguments=tap_arguments,
+            )
+        if arguments.verb == "logs":
+            return _run_logs_verb(arguments)
         return launch_app_node(
             arguments.verb,
             requested_anchor_directory=arguments.anchor_directory,
@@ -512,8 +861,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             bind_port=arguments.bind_port,
             node_name=arguments.node_name,
         )
-    except AppLaunchError as launch_failure:
-        print(f"error: {launch_failure}", file=sys.stderr)
+    except (AppLaunchError, ObservationVerbUsageError, ControlPlaneError) as failure:
+        print(f"error: {failure}", file=sys.stderr)
         return 1
 
 

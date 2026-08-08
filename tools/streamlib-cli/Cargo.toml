@@ -35,20 +35,11 @@ streamlib-pack = { path = "../streamlib-pack", version = "0.15.0" }
 # same build-output unit the pack strip list and the orchestrator gitignore do.
 streamlib-processor-extract = { path = "../../sdk/streamlib-processor-extract", version = "0.15.0" }
 
-# Host-side control plane: the CLI's `mcp` subcommand hosts the api-server's
-# transport-free MCP dispatch (`serve_stdio_jsonrpc`) over stdio, reusing the
-# one dispatch surface `POST /mcp` uses. Path-only (api-server is `publish =
-# false`, never in the registry closure).
-streamlib-api-server = { path = "../../runtime/streamlib-api-server" }
-
 # JTD-codegen pipeline (drives `streamlib generate`)
 streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.15.0" }
 
 # CLI framework
 clap = { version = "4.5", features = ["derive"] }
-
-# Async runtime
-tokio.workspace = true
 
 # Serialization
 serde.workspace = true
@@ -70,15 +61,10 @@ thiserror.workspace = true
 # Load .env files for development environment
 dotenvy = "0.15"
 
-# Blocking HTTP client for `streamlib mcp --attach <url>`: forwards each stdio
-# JSON-RPC line to a running runtime's `POST /mcp`. Blocking by design — the
-# attach loop runs on `spawn_blocking`, off the tokio runtime.
-ureq.workspace = true
-
 # Logging
 tracing.workspace = true
 
-# Timestamp parsing for log filtering
+# RFC-3339 stamps in the link bookkeeping `streamlib link` writes
 chrono = "0.4"
 
 # Home directory detection
@@ -87,13 +73,7 @@ dirs = "6.0"
 # Temporary directory for `uv build --wheel` output staging inside the package assembler
 tempfile = "3.14"
 
-# Process-liveness check (`kill(pid, 0)`) for `streamlib nodes` pruning of stale
-# node-registry entries whose host process is gone.
-[target.'cfg(unix)'.dependencies]
-libc.workspace = true
-
 [dev-dependencies]
-tokio = { workspace = true, features = ["full"] }
 # Serialize tests that mutate process-global env — the node-registry resolver
 # branch (`XDG_RUNTIME_DIR`) and the #1343 summary-read link tests
 # (`STREAMLIB_PACKAGE_SOURCE` / `STREAMLIB_LINK_CHECKOUT`).

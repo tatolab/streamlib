@@ -314,9 +314,13 @@ fn write_one(
 }
 
 /// Format one [`RuntimeLogEvent`] in the human-readable layout used by the
-/// runtime's stdout mirror. `streamlib-cli logs` reuses this so the
-/// replayed JSONL output is byte-for-byte identical to the live tail.
-pub fn format_event_pretty(event: &RuntimeLogEvent, out: &mut String) {
+/// runtime's stdout mirror.
+///
+/// The wheel's `streamlib logs` renders replayed JSONL to match this byte for
+/// byte. It reimplements the layout in Python rather than calling this, so the
+/// two are held together by a golden literal both sides assert — see
+/// `the_pretty_rendering_matches_the_golden_the_python_reader_asserts`.
+pub(crate) fn format_event_pretty(event: &RuntimeLogEvent, out: &mut String) {
     use std::fmt::Write;
     let level = match event.level {
         LogLevel::Trace => "TRACE",

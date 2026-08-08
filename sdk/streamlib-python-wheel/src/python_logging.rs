@@ -15,7 +15,7 @@ use std::collections::BTreeMap;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
-use streamlib::sdk::logging::{LogLevel, emit_app_process_python_log_record};
+use streamlib::sdk::logging::{LogLevel, emit_app_process_python_log_record, log_dir};
 use streamlib::sdk::media_clock::MediaClock;
 
 use crate::python_bag_conversion::python_object_to_json_value;
@@ -41,6 +41,15 @@ pub(crate) fn media_clock_now_ns() -> u64 {
 #[pyfunction]
 pub(crate) fn monotonic_now_ns() -> u64 {
     monotonic_clock_now_ns()
+}
+
+/// The directory the engine writes its per-runtime JSONL logs into.
+//
+// `PathBuf`, not `String`: pyo3 encodes it with surrogateescape, so a path that
+// is not valid UTF-8 round-trips back through `open()`.
+#[pyfunction]
+pub(crate) fn runtime_log_directory() -> std::path::PathBuf {
+    log_dir()
 }
 
 /// Raw `CLOCK_MONOTONIC` in nanoseconds, shared by the clock binding, the

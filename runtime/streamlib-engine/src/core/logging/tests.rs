@@ -13,10 +13,11 @@ use serial_test::serial;
 use tempfile::TempDir;
 
 use crate::core::logging::{
-    LoggingTunables, PrettyMirrorStream, StreamlibLoggingConfig,
+    LoggingTunables, StreamlibLoggingConfig,
     event::{LogLevel, RuntimeLogEvent, SCHEMA_VERSION, Source},
     init::init_for_tests,
     paths::{log_dir, runtime_log_path},
+    worker::format_event_pretty,
 };
 use crate::core::runtime::RuntimeUniqueId;
 
@@ -154,7 +155,6 @@ fn time_triggered_flush_writes_without_size_trigger() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
@@ -262,7 +262,6 @@ fn panic_hook_best_effort_flush() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
@@ -308,7 +307,6 @@ fn hot_path_is_not_blocked_on_io() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
@@ -366,7 +364,6 @@ fn rust_println_captured_via_fd_redirect() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
@@ -415,7 +412,6 @@ fn rust_c_printf_via_libc_captured() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
@@ -466,7 +462,6 @@ fn intercept_stdio_off_in_tests() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables::default(),
@@ -513,7 +508,6 @@ fn intercepted_fd2_uses_channel_fd2() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
@@ -566,7 +560,6 @@ fn no_redirect_loop_when_mirror_enabled() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: true,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
@@ -617,7 +610,6 @@ fn reader_thread_shuts_down_on_runtime_drop() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: true,
         tunables: LoggingTunables::default(),
@@ -854,7 +846,6 @@ fn burst_surfaces_dropped_counter_record() {
         service_name: "test".into(),
         runtime_id: Some(Arc::clone(&runtime_id)),
         stdout: false,
-        pretty_mirror_stream: PrettyMirrorStream::Stdout,
         jsonl: true,
         intercept_stdio: false,
         tunables: LoggingTunables {
@@ -886,4 +877,43 @@ fn burst_surfaces_dropped_counter_record() {
     );
 
     clear_streamlib_home();
+}
+
+/// The pretty rendering is a cross-language contract: the wheel's `streamlib
+/// logs` replays a JSONL record and must produce the same bytes this mirror
+/// wrote live, or one record reads as two different records.
+///
+/// The literal below is asserted character-for-character by
+/// `sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py`'s
+/// `test_a_record_renders_exactly_as_the_runtime_mirrored_it`. Changing
+/// [`format_event_pretty`] without changing that test — or the reverse — is
+/// what this pair exists to turn red.
+#[test]
+fn the_pretty_rendering_matches_the_golden_the_python_reader_asserts() {
+    let event = RuntimeLogEvent {
+        schema_version: 1,
+        host_ts: 1_786_136_667_573_387_556,
+        runtime_id: "Rabc".to_string(),
+        source: Source::Rust,
+        level: LogLevel::Info,
+        message: "Creating Runner".to_string(),
+        target: "streamlib_engine::core::runtime".to_string(),
+        pipeline_id: None,
+        processor_id: None,
+        rhi_op: None,
+        source_ts: None,
+        source_seq: None,
+        intercepted: false,
+        channel: None,
+        attrs: Default::default(),
+    };
+
+    let mut rendered = String::new();
+    format_event_pretty(&event, &mut rendered);
+
+    assert_eq!(
+        rendered,
+        "21:04:27.573 [ INFO] [Rabc/rust] streamlib_engine::core::runtime — \
+         Creating Runner\n"
+    );
 }

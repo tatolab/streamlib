@@ -26,7 +26,6 @@ pub mod api_server;
 pub use _generated_::ApiServerConfig;
 pub use api_server::ApiServerProcessor;
 pub use handlers::control_plane_openapi_spec;
-pub use mcp::serve_stdio_jsonrpc;
 pub use node_registry::{
     NODE_REGISTRY_SCHEMA_VERSION, NodeRegistryEntry, NodeRegistryError, read_entry, registry_dir,
     remove_entry, scan_entries, write_entry,

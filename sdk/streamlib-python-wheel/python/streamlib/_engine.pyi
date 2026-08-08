@@ -13,6 +13,7 @@ catch that: it scores annotation completeness, so a stub describing a method the
 binary no longer exports still reads as complete.
 """
 
+from pathlib import Path
 from types import TracebackType
 from collections.abc import Callable, Mapping
 from typing import Any, Literal, TypeVar, final
@@ -47,6 +48,7 @@ __all__ = [
     "media_clock_now_ns",
     "monotonic_now_ns",
     "open_test_harness_channel",
+    "runtime_log_directory",
 ]
 
 @final
@@ -495,6 +497,9 @@ class MonotonicTimer:
 
 def monotonic_now_ns() -> int:
     """Current monotonic time in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`."""
+
+def runtime_log_directory() -> Path:
+    """The directory the engine writes its per-runtime JSONL logs into."""
 
 def media_clock_now_ns() -> int:
     """The clock the engine stamps bags with, in nanoseconds.
