@@ -19,7 +19,7 @@
 //! three exit non-zero with the error text, the last prints the tool result's
 //! already-pretty text content.
 
-use std::io::{Read, Write};
+use std::io::Write;
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -157,107 +157,6 @@ pub fn graph(url: &str) -> Result<()> {
     call_tool_to_stdout(url, "graph", json!({}))
 }
 
-/// Arguments for the `submit` verb, mirroring the `submit_processor`
-/// `inputSchema`. `source` is a `--source` value (`@file`, a plain path, `-`,
-/// or absent → stdin); `config` is a JSON string (absent → `{}`); each
-/// `connect` entry is a `local_port:role:peer_processor:peer_port` spec.
-pub struct SubmitArgs {
-    pub url: String,
-    pub language: String,
-    pub source: Option<String>,
-    pub requested_name: Option<String>,
-    pub processor_type_name: Option<String>,
-    pub config: Option<String>,
-    pub connect: Vec<String>,
-}
-
-/// Register a processor from source and optionally wire it (`submit_processor`).
-pub fn submit(args: SubmitArgs) -> Result<()> {
-    let source = read_source(args.source.as_deref())?;
-    let config = parse_config(args.config.as_deref())?;
-    let connect = args
-        .connect
-        .iter()
-        .map(|spec| parse_connect_spec(spec))
-        .collect::<Result<Vec<_>>>()?;
-
-    let mut arguments = Map::new();
-    arguments.insert("language".into(), Value::String(args.language));
-    arguments.insert("source".into(), Value::String(source));
-    arguments.insert("config".into(), config);
-    insert_optional_naming(
-        &mut arguments,
-        args.requested_name,
-        args.processor_type_name,
-    );
-    if !connect.is_empty() {
-        arguments.insert("connect".into(), Value::Array(connect));
-    }
-
-    call_tool_to_stdout(&args.url, "submit_processor", Value::Object(arguments))
-}
-
-/// Arguments for the `replace` verb, mirroring the `replace_processor`
-/// `inputSchema`.
-pub struct ReplaceArgs {
-    pub url: String,
-    pub target_session_module: String,
-    pub language: String,
-    pub source: Option<String>,
-    pub requested_name: Option<String>,
-    pub processor_type_name: Option<String>,
-}
-
-/// Swap a live `@session/<name>` source registration for a replacement
-/// (`replace_processor`). Type-level: already-running instances are not swapped
-/// in place.
-pub fn replace(args: ReplaceArgs) -> Result<()> {
-    let source = read_source(args.source.as_deref())?;
-    let mut arguments = Map::new();
-    arguments.insert(
-        "target_session_module".into(),
-        Value::String(args.target_session_module),
-    );
-    arguments.insert("language".into(), Value::String(args.language));
-    arguments.insert("source".into(), Value::String(source));
-    insert_optional_naming(
-        &mut arguments,
-        args.requested_name,
-        args.processor_type_name,
-    );
-    call_tool_to_stdout(&args.url, "replace_processor", Value::Object(arguments))
-}
-
-/// Remove a processor instance from the graph by id (`remove_processor`).
-pub fn remove(url: &str, processor_id: &str) -> Result<()> {
-    call_tool_to_stdout(
-        url,
-        "remove_processor",
-        json!({ "processor_id": processor_id }),
-    )
-}
-
-/// Connect an output port to an input port between two existing processors
-/// (`connect`).
-pub fn connect(
-    url: &str,
-    from_processor: &str,
-    from_port: &str,
-    to_processor: &str,
-    to_port: &str,
-) -> Result<()> {
-    call_tool_to_stdout(
-        url,
-        "connect",
-        json!({
-            "from_processor": from_processor,
-            "from_port": from_port,
-            "to_processor": to_processor,
-            "to_port": to_port,
-        }),
-    )
-}
-
 /// Attach a read-only tap to `channel` and collect a bounded sample (`tap`).
 pub fn tap(url: &str, channel: &str, count: Option<usize>) -> Result<()> {
     let mut arguments = Map::new();
@@ -289,24 +188,6 @@ fn shutdown_arguments(reason: Option<&str>) -> Value {
         arguments.insert("reason".into(), Value::String(reason.to_string()));
     }
     Value::Object(arguments)
-}
-
-/// Insert the optional `requested_name` / `processor_type_name` pair the
-/// `submit_processor` and `replace_processor` `inputSchema`s share.
-fn insert_optional_naming(
-    arguments: &mut Map<String, Value>,
-    requested_name: Option<String>,
-    processor_type_name: Option<String>,
-) {
-    if let Some(requested_name) = requested_name {
-        arguments.insert("requested_name".into(), Value::String(requested_name));
-    }
-    if let Some(processor_type_name) = processor_type_name {
-        arguments.insert(
-            "processor_type_name".into(),
-            Value::String(processor_type_name),
-        );
-    }
 }
 
 /// Insert the optional `count` cap the `tap` and `logs` `inputSchema`s share.
@@ -379,60 +260,6 @@ fn call_tool(
 
     writeln!(writer, "{text}")?;
     Ok(())
-}
-
-/// Resolve a `--source` value to processor source text: `@<path>` or a plain
-/// `<path>` reads the file; `-` or an absent value reads stdin.
-fn read_source(source_arg: Option<&str>) -> Result<String> {
-    let path = match source_arg {
-        None => return read_stdin(),
-        Some(value) => value.strip_prefix('@').unwrap_or(value),
-    };
-    if path == "-" {
-        return read_stdin();
-    }
-    std::fs::read_to_string(path).with_context(|| format!("reading --source file `{path}`"))
-}
-
-/// Read all of stdin as UTF-8 source text.
-fn read_stdin() -> Result<String> {
-    let mut buffer = String::new();
-    std::io::stdin()
-        .read_to_string(&mut buffer)
-        .context("reading --source from stdin")?;
-    Ok(buffer)
-}
-
-/// Parse a `--config` value as JSON; an absent value defaults to `{}`.
-fn parse_config(config_arg: Option<&str>) -> Result<Value> {
-    match config_arg {
-        None => Ok(json!({})),
-        Some(text) => serde_json::from_str(text)
-            .with_context(|| format!("--config is not valid JSON: {text}")),
-    }
-}
-
-/// Parse one `--connect` spec (`local_port:role:peer_processor:peer_port`) into
-/// the `connect[]` item shape the `submit_processor` `inputSchema` requires.
-fn parse_connect_spec(spec: &str) -> Result<Value> {
-    let fields: Vec<&str> = spec.split(':').collect();
-    if fields.len() != 4 {
-        bail!(
-            "--connect must be `local_port:role:peer_processor:peer_port`; got `{spec}` \
-             ({} field(s))",
-            fields.len()
-        );
-    }
-    let role = fields[1];
-    if role != "output" && role != "input" {
-        bail!("--connect role must be `output` or `input`; got `{role}` in `{spec}`");
-    }
-    Ok(json!({
-        "local_port": fields[0],
-        "role": role,
-        "peer_processor": fields[2],
-        "peer_port": fields[3],
-    }))
 }
 
 #[cfg(test)]
@@ -651,35 +478,6 @@ mod tests {
     }
 
     #[test]
-    fn submit_arguments_carry_config_and_connect_wirings() {
-        let (url, recorded, server) =
-            spawn_mock_mcp_server(vec![tool_ok_reply(1, json!({ "processors": [] }))]);
-
-        let arguments = json!({
-            "language": "python",
-            "source": "class Widget: pass\n",
-            "config": { "gain": 2 },
-            "connect": [parse_connect_spec("out:output:sink:in").unwrap()],
-        });
-        let mut output = Vec::new();
-        call_tool(&url, None, "submit_processor", arguments, &mut output).expect("submit call");
-        server.join().unwrap();
-
-        let recorded = recorded.lock().unwrap();
-        let request: Value = serde_json::from_str(&recorded[0].body).unwrap();
-        let args = &request["params"]["arguments"];
-        assert_eq!(args["language"], "python");
-        assert_eq!(args["config"]["gain"], 2);
-        assert_eq!(args["connect"][0]["local_port"], "out");
-        assert_eq!(args["connect"][0]["role"], "output");
-        assert_eq!(args["connect"][0]["peer_processor"], "sink");
-        assert_eq!(args["connect"][0]["peer_port"], "in");
-    }
-
-    /// The `shutdown` verb must marshal into the `shutdown` tool with the
-    /// caller's `--reason` in the arguments — a verb that named a different
-    /// tool, or dropped the reason, would still print a result and exit 0.
-    #[test]
     fn shutdown_marshals_the_reason_into_a_shutdown_tools_call() {
         let (url, recorded, server) = spawn_mock_mcp_server(vec![tool_ok_reply(
             1,
@@ -754,33 +552,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn parse_connect_spec_rejects_a_bad_arity_and_role() {
-        assert!(
-            parse_connect_spec("a:output:b").is_err(),
-            "3 fields must fail"
-        );
-        assert!(
-            parse_connect_spec("a:sideways:b:c").is_err(),
-            "an unknown role must fail"
-        );
-        let ok = parse_connect_spec("a:input:b:c").expect("valid spec");
-        assert_eq!(ok["role"], "input");
-    }
-
-    #[test]
-    fn parse_config_defaults_to_empty_object() {
-        assert_eq!(parse_config(None).unwrap(), json!({}));
-        assert_eq!(parse_config(Some(r#"{"x":1}"#)).unwrap(), json!({ "x": 1 }));
-        assert!(parse_config(Some("not json")).is_err());
-    }
-
     use serial_test::serial;
     use streamlib_api_server::node_registry::{self, NodeRegistryEntry};
 
-    /// Point `XDG_RUNTIME_DIR` at a fresh tempdir for the closure so the node
-    /// registry the resolver reads is hermetic; restore the prior value after.
-    /// Guarded `#[serial]` at every call site — the env var is process-global.
     fn with_isolated_node_registry<F: FnOnce() -> R, R>(f: F) -> R {
         let prev = std::env::var_os("XDG_RUNTIME_DIR");
         let tmp = tempfile::tempdir().expect("tempdir");
@@ -879,22 +653,5 @@ mod tests {
         });
         server_a.join().unwrap();
         server_b.join().unwrap();
-    }
-
-    #[test]
-    fn read_source_reads_an_at_file_and_a_plain_path() {
-        let mut file = tempfile::NamedTempFile::new().expect("temp file");
-        write!(file, "source text\n").unwrap();
-        let path = file.path().to_str().unwrap();
-
-        assert_eq!(
-            read_source(Some(&format!("@{path}"))).unwrap(),
-            "source text\n"
-        );
-        assert_eq!(read_source(Some(path)).unwrap(), "source text\n");
-        assert!(
-            read_source(Some("@/no/such/file/here")).is_err(),
-            "a missing file must error"
-        );
     }
 }

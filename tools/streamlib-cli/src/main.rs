@@ -96,8 +96,7 @@ enum Commands {
     /// down when it closes stdin or calls the `shutdown` tool. `--attach <url>`
     /// instead bridges stdio to a running runtime's `POST {url}/mcp` to operate
     /// an existing live pipeline.
-    /// Exposes the same 8 tools as `POST /mcp`: graph / submit_processor /
-    /// replace_processor / remove_processor / connect / tap / logs / shutdown.
+    /// Exposes the same tools as `POST /mcp`: graph / tap / logs / shutdown.
     /// Auth is off by construction on the in-process path; `--attach` forwards
     /// a token from `STREAMLIB_MCP_TOKEN` when set.
     Mcp {
@@ -133,112 +132,6 @@ enum Commands {
         /// node registry).
         #[arg(long, value_name = "RUNTIME_ID", conflicts_with = "url")]
         node: Option<String>,
-    },
-
-    /// Author a processor from source and submit it into a running node's graph.
-    ///
-    /// Transactional: registers the source, instantiates the first discovered
-    /// processor, and optionally wires it to existing graph ports; a failed
-    /// wiring rolls the whole submit back.
-    Submit {
-        /// Control-plane base URL of the target node (its `POST /mcp` host).
-        #[arg(long, value_name = "URL")]
-        url: Option<String>,
-
-        /// Registered runtime_id to target instead of `--url`.
-        #[arg(long, value_name = "RUNTIME_ID", conflicts_with = "url")]
-        node: Option<String>,
-
-        /// Source language. `rust` is rejected for live submit — it's a full
-        /// cargo build, not a live graph mutation.
-        #[arg(long, value_parser = ["python", "typescript", "deno"])]
-        language: String,
-
-        /// Processor module source: `@<file>` or a plain path reads the file;
-        /// `-` or an omitted flag reads stdin.
-        #[arg(long, value_name = "SOURCE")]
-        source: Option<String>,
-
-        /// The `@session/<name>` segment to mint under (derived from the
-        /// processor type name if omitted).
-        #[arg(long, value_name = "NAME")]
-        requested_name: Option<String>,
-
-        /// The PascalCase processor type the source defines (derived from the
-        /// requested name if omitted).
-        #[arg(long, value_name = "TYPE")]
-        processor_type_name: Option<String>,
-
-        /// Config JSON applied when the processor is instantiated (default `{}`).
-        #[arg(long, value_name = "JSON")]
-        config: Option<String>,
-
-        /// Wire the new processor after instantiation. Repeatable:
-        /// `local_port:role:peer_processor:peer_port` (role ∈ `output`|`input`).
-        #[arg(long, value_name = "SPEC")]
-        connect: Vec<String>,
-    },
-
-    /// Swap a running node's `@session/<name>` source registration for a
-    /// replacement.
-    ///
-    /// Type-level: this swaps the SOURCE REGISTRATION only — already-running
-    /// instances are NOT swapped in place; they keep running the prior source
-    /// until removed and re-instantiated. Transactional: a failed replacement
-    /// restores the prior registration.
-    Replace {
-        /// Control-plane base URL of the target node (its `POST /mcp` host).
-        #[arg(long, value_name = "URL")]
-        url: Option<String>,
-
-        /// Registered runtime_id to target instead of `--url`.
-        #[arg(long, value_name = "RUNTIME_ID", conflicts_with = "url")]
-        node: Option<String>,
-
-        /// The `@session/<name>@<range>` module to replace, e.g.
-        /// `@session/widget@*`.
-        #[arg(long, value_name = "MODULE")]
-        target_session_module: String,
-
-        /// Replacement source language. `rust` is rejected for live submit.
-        #[arg(long, value_parser = ["python", "typescript", "deno"])]
-        language: String,
-
-        /// Replacement source: `@<file>` or a plain path reads the file; `-` or
-        /// an omitted flag reads stdin.
-        #[arg(long, value_name = "SOURCE")]
-        source: Option<String>,
-
-        /// The `@session/<name>` segment to mint under.
-        #[arg(long, value_name = "NAME")]
-        requested_name: Option<String>,
-
-        /// The PascalCase processor type the replacement source defines.
-        #[arg(long, value_name = "TYPE")]
-        processor_type_name: Option<String>,
-    },
-
-    /// Connect an output port to an input port between two running processors.
-    Connect {
-        /// Control-plane base URL of the target node (its `POST /mcp` host).
-        #[arg(long, value_name = "URL")]
-        url: Option<String>,
-
-        /// Registered runtime_id to target instead of `--url`.
-        #[arg(long, value_name = "RUNTIME_ID", conflicts_with = "url")]
-        node: Option<String>,
-
-        #[arg(long, value_name = "PROCESSOR")]
-        from_processor: String,
-
-        #[arg(long, value_name = "PORT")]
-        from_port: String,
-
-        #[arg(long, value_name = "PROCESSOR")]
-        to_processor: String,
-
-        #[arg(long, value_name = "PORT")]
-        to_port: String,
     },
 
     /// Attach a read-only tap to a running node's channel and collect a bounded
@@ -350,38 +243,18 @@ enum Commands {
         no_build: bool,
     },
 
-    /// Remove a package from this app's streamlib_modules/ folder, or — with
-    /// `--url` — remove a processor instance from a running node's graph via
-    /// its control plane.
+    /// Remove a package from this app's streamlib_modules/ folder.
     ///
-    /// Local mode deletes `streamlib_modules/@org/name/` and drops the
-    /// package's entry from the app's `streamlib.lock`. Control-plane mode
-    /// (`--url` + `--processor-id`) removes a live processor instance by id.
+    /// Deletes `streamlib_modules/@org/name/` and drops the package's entry
+    /// from the app's `streamlib.lock`.
     Remove {
-        /// Canonical `@org/name` reference to remove (local mode). Omit with
-        /// `--url` / `--node`.
-        #[arg(required_unless_present_any = ["url", "node"], conflicts_with_all = ["url", "node"])]
-        name: Option<String>,
+        /// Canonical `@org/name` reference to remove.
+        name: String,
 
         /// App root to anchor streamlib_modules/ + streamlib.lock at
         /// (default: current working directory, no walk-up).
         #[arg(long)]
         dir: Option<PathBuf>,
-
-        /// Control-plane URL: remove a processor instance from the running node
-        /// at this URL (its `POST /mcp` host) instead of a package.
-        #[arg(long, value_name = "URL")]
-        url: Option<String>,
-
-        /// Control-plane mode by registered runtime_id (resolved via the node
-        /// registry) instead of `--url`.
-        #[arg(long, value_name = "RUNTIME_ID", conflicts_with = "url")]
-        node: Option<String>,
-
-        /// Processor instance id to remove (control-plane mode; requires `--url`
-        /// or `--node`).
-        #[arg(long, value_name = "ID")]
-        processor_id: Option<String>,
     },
 
     /// Manage installed packages
@@ -601,57 +474,6 @@ async fn async_main(cli: Cli) -> Result<()> {
             let url = commands::control::resolve_control_url(url, node)?;
             commands::control::graph(&url)?
         }
-        Some(Commands::Submit {
-            url,
-            node,
-            language,
-            source,
-            requested_name,
-            processor_type_name,
-            config,
-            connect,
-        }) => {
-            let url = commands::control::resolve_control_url(url, node)?;
-            commands::control::submit(commands::control::SubmitArgs {
-                url,
-                language,
-                source,
-                requested_name,
-                processor_type_name,
-                config,
-                connect,
-            })?
-        }
-        Some(Commands::Replace {
-            url,
-            node,
-            target_session_module,
-            language,
-            source,
-            requested_name,
-            processor_type_name,
-        }) => {
-            let url = commands::control::resolve_control_url(url, node)?;
-            commands::control::replace(commands::control::ReplaceArgs {
-                url,
-                target_session_module,
-                language,
-                source,
-                requested_name,
-                processor_type_name,
-            })?
-        }
-        Some(Commands::Connect {
-            url,
-            node,
-            from_processor,
-            from_port,
-            to_processor,
-            to_port,
-        }) => {
-            let url = commands::control::resolve_control_url(url, node)?;
-            commands::control::connect(&url, &from_processor, &from_port, &to_processor, &to_port)?
-        }
         Some(Commands::Tap {
             url,
             node,
@@ -682,32 +504,7 @@ async fn async_main(cli: Cli) -> Result<()> {
             expect_sha256,
             no_build,
         }) => commands::add::add(&spec, dir.as_deref(), expect_sha256.as_deref(), no_build)?,
-        Some(Commands::Remove {
-            name,
-            dir,
-            url,
-            node,
-            processor_id,
-        }) => {
-            if url.is_some() || node.is_some() {
-                let processor_id = processor_id.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "`remove` control-plane mode (`--url` / `--node`) requires \
-                         `--processor-id <id>`"
-                    )
-                })?;
-                let url = commands::control::resolve_control_url(url, node)?;
-                commands::control::remove(&url, &processor_id)?
-            } else {
-                let name = name.ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "`remove` requires either `<name>` (local mode) or `--url` / \
-                         `--node` (control-plane mode)"
-                    )
-                })?;
-                commands::add::remove(&name, dir.as_deref())?
-            }
-        }
+        Some(Commands::Remove { name, dir }) => commands::add::remove(&name, dir.as_deref())?,
         Some(Commands::Pkg { action }) => match action {
             PkgCommands::Publish => commands::pkg::publish()?,
             PkgCommands::Clean => commands::pkg::clean()?,
