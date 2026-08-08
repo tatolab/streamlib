@@ -432,13 +432,34 @@ def test_non_ascii_attrs_survive_unescaped():
     assert rendered.endswith(' device="Logitech Café"')
 
 
-def test_a_float_attr_uses_the_shortest_round_trip_exponent():
-    # Python spells the exponent `1e+20` / `1e-07`; serde uses ryu, which emits
-    # `1e20` / `1e-7`. Same value, and both are shortest-round-trip — only the
-    # spelling differed.
-    rendered = format_record_pretty(a_log_record(attrs={"big": 1e20, "small": 1e-7}))
+def test_an_out_of_range_stamp_degrades_instead_of_taking_the_listing_down():
+    # The file name is parsed with an unbounded `int()`, so one stray file in
+    # the log directory reaches this. Raising here would hide every healthy
+    # runtime in the same listing.
+    assert format_started_at(99999999999999999999) == "99999999999999999999"
+    assert format_started_at(253402300800000) == "253402300800000"
 
-    assert rendered.endswith(" big=1e20 small=1e-7")
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (1e20, "1e20"),
+        (1e-7, "1e-7"),
+        (1e-6, "1e-6"),
+        # ryu switches to decimal one decade earlier than Python at the small
+        # end (its rule is decimal when -5 < kk <= 0), so this band is the one
+        # place exponent-rewriting alone would still have diverged.
+        (1e-5, "0.00001"),
+        (2.5e-5, "0.000025"),
+        (-1e-5, "-0.00001"),
+        (1e-4, "0.0001"),
+        (29.97, "29.97"),
+    ],
+)
+def test_a_float_attr_matches_ryu_s_shortest_form(value, expected):
+    rendered = format_record_pretty(a_log_record(attrs={"v": value}))
+
+    assert rendered.endswith(f" v={expected}")
 
 
 def test_a_started_at_stamp_reads_as_a_date_not_epoch_millis():
@@ -502,7 +523,13 @@ def test_each_filter_narrows_to_the_records_it_names(
     )
 
     rendered = list(
-        read_log_file(log_file, filters, follow=False, errors=io.StringIO())
+        read_log_file(
+            log_file,
+            filters,
+            follow=False,
+            errors=io.StringIO(),
+            log_directory=tmp_path,
+        )
     )
 
     assert [line.split(" — ", 1)[1].split(" ")[0] for line in rendered] == expected_messages
@@ -519,26 +546,61 @@ def test_a_malformed_line_is_reported_and_skipped_not_fatal(tmp_path):
     errors = io.StringIO()
 
     rendered = list(
-        read_log_file(log_file, LogRecordFilters(), follow=False, errors=errors)
+        read_log_file(
+            log_file,
+            LogRecordFilters(),
+            follow=False,
+            errors=errors,
+            log_directory=tmp_path,
+        )
     )
 
     assert [line.split(" — ", 1)[1].split(" ")[0] for line in rendered] == ["before", "after"]
     assert "malformed" in errors.getvalue()
 
 
+#: A follow assertion that is red rather than hung when the branch it locks is
+#: reverted. The suite configures no pytest-timeout, so an unbounded `next()`
+#: on a parked generator blocks CI instead of failing it.
+FOLLOW_LINE_TIMEOUT_SECONDS = 15.0
+
+
+def next_line_within_timeout(lines: "Any", what: str) -> str:
+    """The generator's next line, or a failure — never an unbounded wait."""
+    collected: "list[str]" = []
+
+    def pull() -> None:
+        try:
+            collected.append(next(lines))
+        except StopIteration:
+            pass
+
+    puller = threading.Thread(target=pull, daemon=True)
+    puller.start()
+    puller.join(FOLLOW_LINE_TIMEOUT_SECONDS)
+    assert collected, (
+        f"expected {what} within {FOLLOW_LINE_TIMEOUT_SECONDS}s; the follow loop "
+        f"is parked, which is what a reverted rotation/append branch looks like"
+    )
+    return collected[0]
+
+
 def test_follow_yields_lines_appended_after_the_drain(tmp_path):
     log_file = write_log_file(tmp_path, "Rabc", 1000, [a_log_record(message="first")])
     lines = read_log_file(
-        log_file, LogRecordFilters(), follow=True, errors=io.StringIO(),
+        log_file,
+        LogRecordFilters(),
+        follow=True,
+        errors=io.StringIO(),
         log_directory=tmp_path,
     )
 
-    assert next(lines).endswith("first")
+    assert next_line_within_timeout(lines, "the drained line").endswith("first")
 
     with log_file.path.open("a", encoding="utf-8") as appending:
         appending.write(json.dumps(a_log_record(message="second")) + "\n")
 
-    assert next(lines).endswith("second")
+    assert next_line_within_timeout(lines, "the appended line").endswith("second")
     lines.close()
 
 
@@ -552,11 +614,13 @@ def test_follow_switches_to_a_newer_file_when_the_runtime_restarts(tmp_path):
         first, LogRecordFilters(), follow=True, errors=errors, log_directory=tmp_path
     )
 
-    assert next(lines).endswith("before")
+    assert next_line_within_timeout(lines, "the pre-restart line").endswith("before")
 
     write_log_file(tmp_path, "Rabc", 2000, [a_log_record(message="after-restart")])
 
-    assert next(lines).endswith("after-restart")
+    assert next_line_within_timeout(lines, "the post-restart line").endswith(
+        "after-restart"
+    )
     assert "rotated to a newer log file" in errors.getvalue()
     lines.close()
 

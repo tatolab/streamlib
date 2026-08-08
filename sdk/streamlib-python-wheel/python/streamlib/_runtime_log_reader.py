@@ -58,8 +58,16 @@ def format_started_at(started_at_millis: int) -> str:
 
     `--list` exists so a human can pick a runtime_id; raw epoch millis defeats
     that, which is why the engine's own listing rendered a date.
+
+    A stamp outside the representable range degrades to the raw number rather
+    than raising — the file name is parsed with an unbounded `int()`, so one
+    stray file in the directory would otherwise take the whole listing down and
+    hide every healthy runtime with it.
     """
-    stamped = datetime.fromtimestamp(started_at_millis / 1000, tz=timezone.utc)
+    try:
+        stamped = datetime.fromtimestamp(started_at_millis / 1000, tz=timezone.utc)
+    except (ValueError, OSError, OverflowError):
+        return str(started_at_millis)
     return stamped.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
@@ -188,18 +196,26 @@ def _render_attribute_value(value: Any) -> str:
     - `ensure_ascii` escapes non-ASCII, where serde passes UTF-8 through raw
       (its escape table marks 0x80-0xFF as no-escape), so a `café` in an attr
       would render `caf\u00e9` here and `café` in the runtime's own mirror.
-    - Python spells an exponent `1e+20` / `1e-07`; serde uses ryu, which emits
-      the shortest round-trip form `1e20` / `1e-7`. Normalised below rather than
-      left to differ, since only the exponent spelling differs — both are the
-      shortest representation that round-trips.
+    - Python spells an exponent `1e+20` / `1e-07`; ryu emits the shortest
+      round-trip form `1e20` / `1e-7`. Same value, different spelling.
+    - ryu switches to decimal one decade earlier than Python does at the small
+      end: its rule is decimal when `-5 < kk <= 0`, so `1e-5` is written
+      `0.00001` where Python still writes `1e-05`. That is exactly one band —
+      `1e-6` and below are exponential on both sides, `1e-4` and above decimal
+      on both — so it is expanded here rather than left as a divergence.
     """
     if isinstance(value, float) and not isinstance(value, bool):
         rendered = json.dumps(value)
         mantissa, exponent_marker, exponent = rendered.partition("e")
         if not exponent_marker:
             return rendered
-        sign = "-" if exponent.startswith("-") else ""
-        return f"{mantissa}e{sign}{exponent.lstrip('+-').lstrip('0') or '0'}"
+        negative_exponent = exponent.startswith("-")
+        magnitude = exponent.lstrip("+-").lstrip("0") or "0"
+        if negative_exponent and magnitude == "5":
+            sign = "-" if mantissa.startswith("-") else ""
+            digits = mantissa.lstrip("-").replace(".", "")
+            return f"{sign}0.0000{digits}"
+        return f"{mantissa}e{'-' if negative_exponent else ''}{magnitude}"
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
@@ -270,7 +286,7 @@ def read_log_file(
     *,
     follow: bool,
     errors: TextIO,
-    log_directory: "Optional[Path]" = None,
+    log_directory: Path,
 ) -> "Generator[str, None, None]":
     """Yield rendered lines from `log_file`, optionally tailing it forever.
 
@@ -293,17 +309,13 @@ def read_log_file(
                     continue
                 if not follow:
                     return
-                if log_directory is not None:
-                    newer = newest_log_file_for_runtime(log_directory, current.runtime_id)
-                    if (
-                        newer is not None
-                        and newer.started_at_millis > current.started_at_millis
-                    ):
-                        print(
-                            f"note: runtime '{current.runtime_id}' rotated to a newer "
-                            f"log file; switching.",
-                            file=errors,
-                        )
-                        current = newer
-                        break
+                newer = newest_log_file_for_runtime(log_directory, current.runtime_id)
+                if newer is not None and newer.started_at_millis > current.started_at_millis:
+                    print(
+                        f"note: runtime '{current.runtime_id}' rotated to a newer "
+                        f"log file; switching.",
+                        file=errors,
+                    )
+                    current = newer
+                    break
                 time.sleep(_FOLLOW_POLL_SECONDS)
