@@ -23,7 +23,7 @@ import os
 import threading
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Generator, Optional
 
 import pytest
 
@@ -565,7 +565,9 @@ def test_a_malformed_line_is_reported_and_skipped_not_fatal(tmp_path):
 FOLLOW_LINE_TIMEOUT_SECONDS = 15.0
 
 
-def next_line_within_timeout(lines: "Any", what: str) -> str:
+def next_line_within_timeout(
+    lines: "Generator[str, None, None]", what: str
+) -> str:
     """The generator's next line, or a failure — never an unbounded wait."""
     collected: "list[str]" = []
 
