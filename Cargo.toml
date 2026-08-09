@@ -26,17 +26,21 @@ members = [
     "vendor/tatolab-vulkanalia",     # Vendored vulkanalia fork (Apache-2.0) — see docs/architecture/vendored-vulkanalia.md
     "vendor/tatolab-vulkanalia-sys", # Vendored vulkanalia-sys fork (Apache-2.0) — see docs/architecture/vendored-vulkanalia.md
     "vendor/tatolab-vulkanalia-vma", # Vendored vulkanalia-vma fork (Apache-2.0, VMA 3.3.0 + Vulkan-Headers 1.4.309) — see docs/architecture/vendored-vulkanalia.md
-    # `examples/*` and most `packages/*` are NOT workspace members. They are
-    # standalone units, each with its own `[workspace]` self-root, headed to
-    # `tatolab/streamlib-packages` (#1672). They are downstream consumers, not
-    # contract sources — deny-ruled against editing, and an engine change that
-    # breaks one is upgrade backlog, not a defect. Only the zone crates
-    # (`runtime/*`, `sdk/*`, `adapters/*`, `vendor/*`) and `xtask` form this
-    # workspace. Build one with `cd <dir> && cargo build`.
+    # `examples/*` and most `packages/*` are NOT workspace members. Only the
+    # zone crates (`runtime/*`, `sdk/*`, `adapters/*`, `vendor/*`) and `xtask`
+    # form this workspace. Build a non-member with `cd <dir> && cargo build`.
     #
-    # The exception below is INTERNAL test infrastructure: it path-deps the
-    # zone crates and stays a workspace member (`publish = false`, which also
-    # keeps it out of the release closure).
+    # The non-members split, and the split is the one CLAUDE.md states:
+    # everything except `escalate`, `core` and `test-fixtures` is a downstream
+    # CONSUMER — standalone, its own `[workspace]` self-root, headed to
+    # `tatolab/streamlib-packages` (#1672), deny-ruled against editing, and an
+    # engine change that breaks one is upgrade backlog rather than a defect.
+    # Those three are engine-side, and read as contract sources: `escalate`
+    # holds the escalate wire schemas, `core` the core schemas and their
+    # crate, and `test-fixtures` below is INTERNAL test infrastructure — it
+    # path-deps the zone crates and is the one package that stays a workspace
+    # member (`publish = false`, which also keeps it out of the release
+    # closure).
     "packages/test-fixtures",    # Attribute-macro test fixtures (TestConfiguredProcessor)
 ]
 
