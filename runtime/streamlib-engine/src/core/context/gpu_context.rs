@@ -2352,12 +2352,6 @@ pub struct GpuContextLimitedAccess {
     /// by host-compiled code; cdylib code treats it as opaque and
     /// passes it through to vtable callbacks unchanged.
     pub(crate) handle: *const std::ffi::c_void,
-    /// Dispatch table. Set at construction from
-    /// [`crate::core::plugin::host_services::host_gpu_context_limited_access_vtable`];
-    /// host mode resolves to the `&HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`
-    /// static, cdylib mode resolves to the host-installed pointer
-    /// cached on [`HostServices::gpu_context_limited_access_vtable`].
-    pub(crate) vtable: *const streamlib_plugin_abi::GpuContextLimitedAccessVTable,
 }
 
 // SAFETY: `handle` points at a host-owned `Box<Arc<GpuContext>>` that
@@ -2375,19 +2369,17 @@ impl Clone for GpuContextLimitedAccess {
     /// [`GpuContextLimitedAccessVTable::clone_handle`] to bump the
     /// host's `Arc<GpuContext>` refcount.
     fn clone(&self) -> Self {
-        let new_handle = if !self.handle.is_null() && !self.vtable.is_null() {
-            // SAFETY: handle + vtable were paired at construction
-            // and the host's `clone_handle` callback contractually
-            // returns a fresh `Box::into_raw(Box::new(Arc::clone(...)))`-
-            // shaped pointer the matching `drop_handle` releases.
-            unsafe { ((*self.vtable).clone_handle)(self.handle) }
+        let new_handle = if !self.handle.is_null() {
+            // SAFETY: `handle` is `Box::into_raw(Box<Arc<GpuContext>>)`;
+            // clone the Arc, re-box, and leak — released by the matching Drop.
+            unsafe {
+                let arc = &*(self.handle as *const std::sync::Arc<GpuContext>);
+                Box::into_raw(Box::new(std::sync::Arc::clone(arc))) as *const std::ffi::c_void
+            }
         } else {
             std::ptr::null()
         };
-        Self {
-            handle: new_handle,
-            vtable: self.vtable,
-        }
+        Self { handle: new_handle }
     }
 }
 
@@ -2395,13 +2387,12 @@ impl Drop for GpuContextLimitedAccess {
     /// Releases the host-owned handle via
     /// [`GpuContextLimitedAccessVTable::drop_handle`].
     fn drop(&mut self) {
-        if !self.handle.is_null() && !self.vtable.is_null() {
-            // SAFETY: handle was produced by either `new()` (which
-            // calls `Box::into_raw(Box::new(Arc::new(...)))`) or by
-            // `clone_handle` (which produces the same shape). The
-            // matching `drop_handle` callback runs
-            // `Box::from_raw + drop` on the host side.
-            unsafe { ((*self.vtable).drop_handle)(self.handle) };
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Box::into_raw(Box<Arc<GpuContext>>)`,
+            // from `new()` or `Clone`; reclaim it.
+            unsafe {
+                drop(Box::from_raw(self.handle as *mut std::sync::Arc<GpuContext>));
+            }
         }
     }
 }
@@ -2458,74 +2449,10 @@ impl Drop for GpuContextLimitedAccess {
 ///
 /// [`GpuContextFullAccessVTable`]: streamlib_plugin_abi::GpuContextFullAccessVTable
 /// [`GpuContextLimitedAccessVTable`]: streamlib_plugin_abi::GpuContextLimitedAccessVTable
-#[repr(C)]
 pub struct GpuContextFullAccess {
     pub(crate) handle: *const std::ffi::c_void,
-    pub(crate) vtable: *const streamlib_plugin_abi::GpuContextFullAccessVTable,
-    /// Discriminator for [`Drop`]:
-    /// - [`HandleKind::Boxed`] (in-process dispatch shape): Drop
-    ///   runs `Box::from_raw` on the boxed `Arc<GpuContext>`.
-    /// - [`HandleKind::ScopeToken`] (vtable-dispatched shape): Drop
-    ///   is a no-op; the cdylib's escalate wrapper handles cleanup
-    ///   via the LimitedAccess vtable's `escalate_end` callback.
-    ///
-    /// Set by the constructor ([`Self::new`] vs
-    /// [`Self::from_scope_token`]).
-    pub(crate) handle_kind: HandleKind,
-    /// Inherited LimitedAccess handle (scope-token mode only).
-    ///
-    /// Phase D — Option B (Limited-handle inheritance): the
-    /// FullAccess wrappers for the LimitedAccess-mirror methods
-    /// (`acquire_pixel_buffer`, `register_texture_with_layout`,
-    /// `surface_store`, etc.) dispatch through the **inherited**
-    /// LimitedAccess vtable using this handle, rather than through a
-    /// parallel FullAccess vtable slot. Reuses the C1-proven
-    /// LimitedAccess dispatch surface instead of mirroring it on
-    /// FullAccess. The LimitedAccess that originated the escalate
-    /// scope outlives the FullAccess (closure scope), so borrowing
-    /// the handle without bumping its refcount is sound.
-    ///
-    /// `null` in [`HandleKind::Boxed`] (in-process) mode — engine
-    /// callers use `host_inner()` directly and don't need this.
-    pub(crate) inherited_lim_handle: *const std::ffi::c_void,
-    /// Inherited LimitedAccess vtable pointer paired with
-    /// [`Self::inherited_lim_handle`]. See its doc for the role.
-    ///
-    /// `null` in [`HandleKind::Boxed`] (in-process) mode.
-    pub(crate) inherited_lim_vtable: *const streamlib_plugin_abi::GpuContextLimitedAccessVTable,
 }
 
-/// Discriminator for [`GpuContextFullAccess`]'s `handle` field. The
-/// engine-internal in-process constructor sets [`Self::Boxed`]; the
-/// cdylib vtable-dispatched constructor sets [`Self::ScopeToken`].
-/// [`GpuContextFullAccess::drop`] dispatches on this kind.
-#[repr(u8)]
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum HandleKind {
-    /// Handle is a host-allocated `Box<Arc<GpuContext>>` from
-    /// [`GpuContextFullAccess::new`]. Methods on the cdylib-facing
-    /// `GpuContextFullAccess` surface dispatch through `host_inner`
-    /// directly (no plugin ABI hop). Used by engine-internal escalate
-    /// scopes.
-    Boxed = 0,
-    /// Handle is an opaque scope token from the host's
-    /// `GpuContextLimitedAccessVTable::escalate_begin` callback.
-    /// Methods dispatch through the FullAccess vtable; the host
-    /// validates the token against the scope registry before
-    /// dispatch. Used by cdylib escalate scopes.
-    ScopeToken = 1,
-}
-
-// SAFETY: same shape as `GpuContextLimitedAccess`. The handle points
-// at a host-owned `Box<Arc<GpuContext>>` (in-process dispatch shape)
-// or an opaque scope token (vtable-dispatched shape); both are
-// `Send + Sync` (the scope token is a u64 reinterpreted as
-// `*const c_void`; the boxed Arc<GpuContext> is Send + Sync). The
-// vtable pointer is `&'static`. The inherited LimitedAccess fields
-// either point at the same host-owned `Box<Arc<GpuContext>>` the
-// originating LimitedAccess holds (scope-token mode) — borrowed for
-// the closure's lifetime, no refcount bump — or are null (Boxed
-// mode); both are `Send + Sync` for the same reason as `handle`.
 unsafe impl Send for GpuContextFullAccess {}
 unsafe impl Sync for GpuContextFullAccess {}
 
@@ -2574,8 +2501,7 @@ impl GpuContextLimitedAccess {
         let arc: std::sync::Arc<GpuContext> = std::sync::Arc::new(inner);
         let boxed: Box<std::sync::Arc<GpuContext>> = Box::new(arc);
         let handle = Box::into_raw(boxed) as *const std::ffi::c_void;
-        let vtable = crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
-        Self { handle, vtable }
+        Self { handle }
     }
 
     /// Engine-internal borrow of the host's [`GpuContext`] (read
@@ -2768,17 +2694,7 @@ impl GpuContextFullAccess {
         let arc: std::sync::Arc<GpuContext> = std::sync::Arc::new(inner);
         let boxed: Box<std::sync::Arc<GpuContext>> = Box::new(arc);
         let handle = Box::into_raw(boxed) as *const std::ffi::c_void;
-        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
-        Self {
-            handle,
-            vtable,
-            handle_kind: HandleKind::Boxed,
-            // In-process Boxed mode never consults the inherited
-            // LimitedAccess vtable — `host_inner()` is the direct path.
-            // Null sentinels match the field doc on the struct.
-            inherited_lim_handle: std::ptr::null(),
-            inherited_lim_vtable: std::ptr::null(),
-        }
+        Self { handle }
     }
 
     /// Lobby constructor. Wraps an opaque scope token (issued by the
@@ -2803,21 +2719,7 @@ impl GpuContextFullAccess {
     /// borrows these to dispatch through the C1-proven LimitedAccess
     /// vtable, avoiding ~20 duplicate slot entries on the FullAccess
     /// vtable. See the struct doc for the inheritance rationale.
-    pub(in crate::core::context) fn from_scope_token(
-        scope_token: *const std::ffi::c_void,
-        inherited_lim_handle: *const std::ffi::c_void,
-        inherited_lim_vtable: *const streamlib_plugin_abi::GpuContextLimitedAccessVTable,
-    ) -> Self {
-        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
-        Self {
-            handle: scope_token,
-            vtable,
-            handle_kind: HandleKind::ScopeToken,
-            inherited_lim_handle,
-            inherited_lim_vtable,
-        }
-    }
-
+ 
     /// Engine-internal borrow of the host's [`GpuContext`] (read
     /// through the handle's `Box<Arc<GpuContext>>`).
     ///
@@ -2858,15 +2760,7 @@ impl GpuContextFullAccess {
     /// site** so the borrowed handle isn't double-released — the
     /// originating LimitedAccess outlives the FullAccess scope and
     /// owns the only Drop responsibility for the handle.
-    pub(crate) fn inherited_limited_unchecked(
-        &self,
-    ) -> std::mem::ManuallyDrop<GpuContextLimitedAccess> {
-        std::mem::ManuallyDrop::new(GpuContextLimitedAccess {
-            handle: self.inherited_lim_handle,
-            vtable: self.inherited_lim_vtable,
-        })
-    }
-
+ 
     /// Produce a [`GpuContextLimitedAccess`] view of the same
     /// underlying context.
     pub(crate) fn to_limited_access(&self) -> GpuContextLimitedAccess {
@@ -2874,64 +2768,8 @@ impl GpuContextFullAccess {
     }
 }
 
-// -----------------------------------------------------------------------------
-// Vtable-dispatch helper for the 4 acquire_*_buffer methods.
-// Each Linux-only buffer type follows the same out-param + err_buf
-// convention, so a single generic helper covers all 4 callsites
-// without per-call boilerplate.
-// -----------------------------------------------------------------------------
 
-#[cfg(target_os = "linux")]
-type AcquireBufferCallback = unsafe extern "C" fn(
-    handle: *const std::ffi::c_void,
-    byte_size: u64,
-    out_buffer: *mut std::ffi::c_void,
-    err_buf: *mut u8,
-    err_buf_cap: usize,
-    err_len: *mut usize,
-) -> i32;
 
-#[cfg(target_os = "linux")]
-fn acquire_buffer_via_vtable<B, F>(
-    lim: &GpuContextLimitedAccess,
-    byte_size: u64,
-    label: &'static str,
-    get_cb: F,
-) -> Result<B>
-where
-    F: FnOnce(&streamlib_plugin_abi::GpuContextLimitedAccessVTable) -> AcquireBufferCallback,
-{
-    if lim.handle.is_null() || lim.vtable.is_null() {
-        return Err(Error::GpuError(format!(
-            "{label}: GpuContextLimitedAccess has null handle/vtable"
-        )));
-    }
-    let mut out: std::mem::MaybeUninit<B> = std::mem::MaybeUninit::uninit();
-    let mut err_buf = [0u8; 512];
-    let mut err_len: usize = 0;
-    // SAFETY: vtable + handle were paired at construction; `get_cb`
-    // selects a fn pointer that adheres to the standard
-    // `acquire_*_buffer` shape. `out` points at uninitialized stack
-    // storage the host writes a valid `B` into on success.
-    let cb: AcquireBufferCallback = unsafe { get_cb(&*lim.vtable) };
-    let status = unsafe {
-        cb(
-            lim.handle,
-            byte_size,
-            out.as_mut_ptr() as *mut std::ffi::c_void,
-            err_buf.as_mut_ptr(),
-            err_buf.len(),
-            &mut err_len as *mut usize,
-        )
-    };
-    if status == 0 {
-        // SAFETY: host signaled success and wrote a valid `B`.
-        Ok(unsafe { out.assume_init() })
-    } else {
-        let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-        Err(Error::GpuError(msg))
-    }
-}
 
 // -----------------------------------------------------------------------------
 // Capability-split API surface.
@@ -2966,42 +2804,7 @@ impl GpuContextLimitedAccess {
         height: u32,
         format: PixelFormat,
     ) -> Result<(PixelBufferPoolId, PixelBuffer)> {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return Err(Error::GpuError(
-                "acquire_pixel_buffer: GpuContextLimitedAccess has null handle/vtable".into(),
-            ));
-        }
-        let mut pool_id_buf = [0u8; 1024];
-        let mut pool_id_len: usize = 0;
-        let mut out_pb: std::mem::MaybeUninit<PixelBuffer> = std::mem::MaybeUninit::uninit();
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.vtable).acquire_pixel_buffer)(
-                self.handle,
-                width,
-                height,
-                format as u32,
-                pool_id_buf.as_mut_ptr(),
-                pool_id_buf.len(),
-                &mut pool_id_len as *mut usize,
-                out_pb.as_mut_ptr() as *mut std::ffi::c_void,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            let id_str =
-                String::from_utf8_lossy(&pool_id_buf[..pool_id_len.min(pool_id_buf.len())])
-                    .into_owned();
-            let pool_id = PixelBufferPoolId::from_string(id_str);
-            let pb = unsafe { out_pb.assume_init() };
-            Ok((pool_id, pb))
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
+        self.host_inner().acquire_pixel_buffer(width, height, format)
     }
 
     /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
@@ -3014,9 +2817,7 @@ impl GpuContextLimitedAccess {
         &self,
         byte_size: u64,
     ) -> Result<crate::core::rhi::StorageBuffer> {
-        acquire_buffer_via_vtable(self, byte_size, "acquire_storage_buffer", |vt| {
-            vt.acquire_storage_buffer
-        })
+        self.host_inner().acquire_storage_buffer(byte_size)
     }
 
     /// Acquire a HOST_VISIBLE uniform buffer.
@@ -3029,9 +2830,7 @@ impl GpuContextLimitedAccess {
         &self,
         byte_size: u64,
     ) -> Result<crate::core::rhi::UniformBuffer> {
-        acquire_buffer_via_vtable(self, byte_size, "acquire_uniform_buffer", |vt| {
-            vt.acquire_uniform_buffer
-        })
+        self.host_inner().acquire_uniform_buffer(byte_size)
     }
 
     /// Acquire a HOST_VISIBLE vertex buffer.
@@ -3041,9 +2840,7 @@ impl GpuContextLimitedAccess {
     /// `acquire_vertex_buffer` callback.
     #[cfg(target_os = "linux")]
     pub fn acquire_vertex_buffer(&self, byte_size: u64) -> Result<crate::core::rhi::VertexBuffer> {
-        acquire_buffer_via_vtable(self, byte_size, "acquire_vertex_buffer", |vt| {
-            vt.acquire_vertex_buffer
-        })
+        self.host_inner().acquire_vertex_buffer(byte_size)
     }
 
     /// Acquire a HOST_VISIBLE index buffer.
@@ -3053,9 +2850,7 @@ impl GpuContextLimitedAccess {
     /// `acquire_index_buffer` callback.
     #[cfg(target_os = "linux")]
     pub fn acquire_index_buffer(&self, byte_size: u64) -> Result<crate::core::rhi::IndexBuffer> {
-        acquire_buffer_via_vtable(self, byte_size, "acquire_index_buffer", |vt| {
-            vt.acquire_index_buffer
-        })
+        self.host_inner().acquire_index_buffer(byte_size)
     }
 
     /// Get a pixel buffer by its pool id (Split: local cache).
@@ -3063,32 +2858,7 @@ impl GpuContextLimitedAccess {
     /// Dispatches through the plugin ABI vtable's `get_pixel_buffer`
     /// callback.
     pub fn get_pixel_buffer(&self, pool_id: &PixelBufferPoolId) -> Result<PixelBuffer> {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return Err(Error::GpuError(
-                "get_pixel_buffer: GpuContextLimitedAccess has null handle/vtable".into(),
-            ));
-        }
-        let id_str = pool_id.as_str();
-        let mut out_pb: std::mem::MaybeUninit<PixelBuffer> = std::mem::MaybeUninit::uninit();
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.vtable).get_pixel_buffer)(
-                self.handle,
-                id_str.as_ptr(),
-                id_str.len(),
-                out_pb.as_mut_ptr() as *mut std::ffi::c_void,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(unsafe { out_pb.assume_init() })
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
+        self.host_inner().get_pixel_buffer(pool_id)
     }
 
     /// Resolve a VideoFrame's buffer from its surface_id.
@@ -3096,31 +2866,7 @@ impl GpuContextLimitedAccess {
     /// Dispatches through the plugin ABI vtable's
     /// `resolve_pixel_buffer_by_surface_id` callback.
     pub fn resolve_pixel_buffer_by_surface_id(&self, surface_id: &str) -> Result<PixelBuffer> {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return Err(Error::GpuError(
-                "resolve_pixel_buffer_by_surface_id: GpuContextLimitedAccess has null handle/vtable".into(),
-            ));
-        }
-        let mut out_pb: std::mem::MaybeUninit<PixelBuffer> = std::mem::MaybeUninit::uninit();
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.vtable).resolve_pixel_buffer_by_surface_id)(
-                self.handle,
-                surface_id.as_ptr(),
-                surface_id.len(),
-                out_pb.as_mut_ptr() as *mut std::ffi::c_void,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(unsafe { out_pb.assume_init() })
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
+        self.host_inner().resolve_pixel_buffer_by_surface_id(surface_id)
     }
 
     /// Register a texture in the same-process texture cache.
@@ -3132,20 +2878,7 @@ impl GpuContextLimitedAccess {
     /// cache, so dropping the caller's `texture` here releases
     /// exactly the caller's owned ref.
     pub fn register_texture(&self, id: &str, texture: Texture) {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return;
-        }
-        // SAFETY: handle + vtable were paired at construction.
-        unsafe {
-            ((*self.vtable).register_texture)(
-                self.handle,
-                id.as_ptr(),
-                id.len(),
-                texture.handle,
-                0, // VulkanLayout::UNDEFINED.0 == 0
-            );
-        }
-        drop(texture);
+        self.host_inner().register_texture(id, texture)
     }
 
     /// Register a texture with a declared initial Vulkan image layout.
@@ -3160,20 +2893,7 @@ impl GpuContextLimitedAccess {
         texture: Texture,
         initial_layout: VulkanLayout,
     ) {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return;
-        }
-        // SAFETY: handle + vtable were paired at construction.
-        unsafe {
-            ((*self.vtable).register_texture)(
-                self.handle,
-                id.as_ptr(),
-                id.len(),
-                texture.handle,
-                initial_layout.0,
-            );
-        }
-        drop(texture);
+        self.host_inner().register_texture_with_layout(id, texture, initial_layout)
     }
 
     /// Update a registered texture's tracked layout after a transition.
@@ -3183,18 +2903,7 @@ impl GpuContextLimitedAccess {
     /// `update_texture_registration_layout` callback.
     #[cfg(target_os = "linux")]
     pub fn update_texture_registration_layout(&self, id: &str, layout: VulkanLayout) {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return;
-        }
-        // SAFETY: handle + vtable were paired at construction.
-        unsafe {
-            ((*self.vtable).update_texture_registration_layout)(
-                self.handle,
-                id.as_ptr(),
-                id.len(),
-                layout.0,
-            );
-        }
+        self.host_inner().update_texture_registration_layout(id, layout)
     }
 
     /// Resolve a VideoFrame's full registration record (texture + layout).
@@ -3211,45 +2920,7 @@ impl GpuContextLimitedAccess {
         width: u32,
         height: u32,
     ) -> Result<TextureRegistration> {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return Err(Error::GpuError(
-                "resolve_texture_registration_by_surface_id: GpuContextLimitedAccess has null handle/vtable".into(),
-            ));
-        }
-        let mut out_reg: std::mem::MaybeUninit<TextureRegistration> =
-            std::mem::MaybeUninit::uninit();
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        let (has_layout, layout_raw) = match texture_layout {
-            Some(v) => (1i32, v),
-            None => (0i32, 0i32),
-        };
-        // SAFETY: handle + vtable were paired at construction.
-        // `out_reg` is uninitialized stack storage; the host writes a
-        // valid TextureRegistration on success (status == 0) and
-        // nothing on failure.
-        let status = unsafe {
-            ((*self.vtable).resolve_texture_registration_by_surface_id)(
-                self.handle,
-                surface_id.as_ptr(),
-                surface_id.len(),
-                has_layout,
-                layout_raw,
-                width,
-                height,
-                out_reg.as_mut_ptr() as *mut std::ffi::c_void,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            // SAFETY: host signaled success and wrote a valid TextureRegistration.
-            Ok(unsafe { out_reg.assume_init() })
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
+        self.host_inner().resolve_texture_registration_by_surface_id(surface_id, texture_layout, width, height)
     }
 
     /// Resolve a VideoFrame's texture (Split: cache hit).
@@ -3263,46 +2934,7 @@ impl GpuContextLimitedAccess {
         width: u32,
         height: u32,
     ) -> Result<Texture> {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return Err(Error::GpuError(
-                "resolve_texture_by_surface_id: GpuContextLimitedAccess has null handle/vtable"
-                    .into(),
-            ));
-        }
-        let mut out_texture: std::mem::MaybeUninit<Texture> = std::mem::MaybeUninit::uninit();
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        let (has_layout, layout_raw) = match texture_layout {
-            Some(v) => (1i32, v),
-            None => (0i32, 0i32),
-        };
-        // SAFETY: handle + vtable were paired at construction. `out_texture`
-        // points at uninitialized stack storage that the host writes a
-        // valid `Texture` into on success (return code 0). On failure the
-        // host writes nothing into `out_texture` so we leave it
-        // `MaybeUninit` and never assume_init it.
-        let status = unsafe {
-            ((*self.vtable).resolve_texture_by_surface_id)(
-                self.handle,
-                surface_id.as_ptr(),
-                surface_id.len(),
-                has_layout,
-                layout_raw,
-                width,
-                height,
-                out_texture.as_mut_ptr() as *mut std::ffi::c_void,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            // SAFETY: host signaled success and wrote a valid Texture.
-            Ok(unsafe { out_texture.assume_init() })
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
+        self.host_inner().resolve_texture_by_surface_id(surface_id, texture_layout, width, height)
     }
 
     /// Acquire a pooled texture from a pre-reserved pool (Split: fast path).
@@ -3317,38 +2949,7 @@ impl GpuContextLimitedAccess {
     /// callback. The descriptor's `label` field is currently dropped
     /// on the wire (debugging-only, never load-bearing).
     pub fn acquire_texture(&self, desc: &TexturePoolDescriptor) -> Result<PooledTextureHandle> {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return Err(Error::GpuError(
-                "acquire_texture: GpuContextLimitedAccess has null handle/vtable".into(),
-            ));
-        }
-        let mut out_pooled: std::mem::MaybeUninit<PooledTextureHandle> =
-            std::mem::MaybeUninit::uninit();
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        // SAFETY: handle + vtable were paired at construction. `out_pooled`
-        // points at uninitialized stack storage; the host writes a valid
-        // PooledTextureHandle on success.
-        let status = unsafe {
-            ((*self.vtable).acquire_texture)(
-                self.handle,
-                desc.width,
-                desc.height,
-                desc.format as u32,
-                desc.usage.bits(),
-                out_pooled.as_mut_ptr() as *mut std::ffi::c_void,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            // SAFETY: host signaled success and wrote a valid PooledTextureHandle.
-            Ok(unsafe { out_pooled.assume_init() })
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
+        self.host_inner().acquire_texture(desc)
     }
 
     /// Copy a host-visible pixel buffer's contents into a pre-allocated
@@ -3371,34 +2972,7 @@ impl GpuContextLimitedAccess {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return Err(Error::GpuError(
-                "copy_pixel_buffer_to_texture: GpuContextLimitedAccess has null handle/vtable"
-                    .into(),
-            ));
-        }
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.vtable).copy_pixel_buffer_to_texture)(
-                self.handle,
-                pixel_buffer as *const PixelBuffer as *const std::ffi::c_void,
-                texture as *const Texture as *const std::ffi::c_void,
-                surface_id.as_ptr(),
-                surface_id.len(),
-                width,
-                height,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
+        self.host_inner().copy_pixel_buffer_to_texture(pixel_buffer, texture, surface_id, width, height)
     }
 
     /// See [`GpuContext::unregister_texture`].
@@ -3406,13 +2980,7 @@ impl GpuContextLimitedAccess {
     /// Dispatches through the plugin ABI vtable's `unregister_texture`
     /// callback.
     pub fn unregister_texture(&self, id: &str) {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return;
-        }
-        // SAFETY: handle + vtable were paired at construction.
-        unsafe {
-            ((*self.vtable).unregister_texture)(self.handle, id.as_ptr(), id.len());
-        }
+        self.host_inner().unregister_texture(id)
     }
 
     /// Get the shared command queue.
@@ -3425,40 +2993,7 @@ impl GpuContextLimitedAccess {
     /// callback. Returns an owned [`RhiCommandQueue`] PluginAbiObject with the
     /// host's `Arc<RhiCommandQueueInner>` refcount bumped.
     pub fn command_queue(&self) -> RhiCommandQueue {
-        if self.handle.is_null() || self.vtable.is_null() {
-            // Construct a null-handle PluginAbiObject that's safe to Drop
-            // (Drop short-circuits on null). Caller's subsequent
-            // method calls on the queue will fail cleanly.
-            return RhiCommandQueue {
-                handle: std::ptr::null(),
-                vtable: std::ptr::null(),
-            };
-        }
-        let mut out_q: std::mem::MaybeUninit<RhiCommandQueue> = std::mem::MaybeUninit::uninit();
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        // SAFETY: handle + vtable were paired at construction. The
-        // host writes a valid RhiCommandQueue into `out_q` on success.
-        // On failure we still produce a null-handle PluginAbiObject so the
-        // method's signature stays infallible.
-        let status = unsafe {
-            ((*self.vtable).command_queue)(
-                self.handle,
-                out_q.as_mut_ptr() as *mut std::ffi::c_void,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            // SAFETY: host signaled success and wrote a valid value.
-            unsafe { out_q.assume_init() }
-        } else {
-            RhiCommandQueue {
-                handle: std::ptr::null(),
-                vtable: std::ptr::null(),
-            }
-        }
+        self.host_inner().command_queue().clone()
     }
 
     /// Create a CPU-side command buffer from the shared queue.
@@ -3466,58 +3001,14 @@ impl GpuContextLimitedAccess {
     /// Dispatches through the plugin ABI vtable's
     /// `create_command_buffer` callback.
     pub fn create_command_buffer(&self) -> Result<CommandBuffer> {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return Err(Error::GpuError(
-                "create_command_buffer: GpuContextLimitedAccess has null handle/vtable".into(),
-            ));
-        }
-        let mut out_cb: std::mem::MaybeUninit<CommandBuffer> = std::mem::MaybeUninit::uninit();
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.vtable).create_command_buffer)(
-                self.handle,
-                out_cb.as_mut_ptr() as *mut std::ffi::c_void,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(unsafe { out_cb.assume_init() })
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
+        self.host_inner().create_command_buffer()
     }
 
     /// Copy pixels between same-format, same-size buffers (Split: cache hit).
     ///
     /// Dispatches through the plugin ABI vtable's `blit_copy` callback.
     pub fn blit_copy(&self, src: &PixelBuffer, dest: &PixelBuffer) -> Result<()> {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return Err(Error::GpuError(
-                "blit_copy: GpuContextLimitedAccess has null handle/vtable".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.vtable).blit_copy)(
-                self.handle,
-                src as *const PixelBuffer as *const std::ffi::c_void,
-                dest as *const PixelBuffer as *const std::ffi::c_void,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
+        self.host_inner().blit_copy(src, dest)
     }
 
     /// Copy from raw IOSurface to a pixel buffer (Split: cache hit).
@@ -3573,31 +3064,7 @@ impl GpuContextLimitedAccess {
     /// [`streamlib_plugin_abi::SurfaceStoreVTable`] reached via
     /// [`HostServices::surface_store_vtable`].
     pub fn surface_store(&self) -> Option<SurfaceStore> {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return None;
-        }
-        let mut out_store: std::mem::MaybeUninit<SurfaceStore> = std::mem::MaybeUninit::uninit();
-        // SAFETY: handle + vtable were paired at construction. The
-        // callback always writes a SurfaceStore — either a real
-        // PluginAbiObject (Some) or a null-handle PluginAbiObject (None sentinel).
-        unsafe {
-            ((*self.vtable).surface_store)(
-                self.handle,
-                out_store.as_mut_ptr() as *mut std::ffi::c_void,
-            );
-        }
-        // SAFETY: the callback wrote either a real PluginAbiObject or a
-        // null-handle PluginAbiObject; either way `out_store` is initialized.
-        let store = unsafe { out_store.assume_init() };
-        if store.is_none() {
-            // Null-handle PluginAbiObject — Drop is a no-op (short-circuits
-            // on null), so we can safely drop here without affecting
-            // any Arc refcount.
-            drop(store);
-            None
-        } else {
-            Some(store)
-        }
+        self.host_inner().surface_store()
     }
 
     /// Check out a surface by ID (Split: cache hit).
@@ -3605,31 +3072,7 @@ impl GpuContextLimitedAccess {
     /// Dispatches through the plugin ABI vtable's `check_out_surface`
     /// callback.
     pub fn check_out_surface(&self, surface_id: &str) -> Result<PixelBuffer> {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return Err(Error::GpuError(
-                "check_out_surface: GpuContextLimitedAccess has null handle/vtable".into(),
-            ));
-        }
-        let mut out_pb: std::mem::MaybeUninit<PixelBuffer> = std::mem::MaybeUninit::uninit();
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.vtable).check_out_surface)(
-                self.handle,
-                surface_id.as_ptr(),
-                surface_id.len(),
-                out_pb.as_mut_ptr() as *mut std::ffi::c_void,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(unsafe { out_pb.assume_init() })
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
+        self.host_inner().check_out_surface(surface_id)
     }
 }
 
@@ -3927,13 +3370,8 @@ impl GpuContextFullAccess {
         let cached_staging_size = arc.staging_size();
         // Box-shaped opaque handle: `Box<Arc<VulkanTextureReadback>>`.
         let handle = Box::into_raw(Box::new(arc)) as *const std::ffi::c_void;
-        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
-        let methods_vtable =
-            crate::core::plugin::host_services::host_vulkan_texture_readback_methods_vtable();
         Ok(crate::core::rhi::TextureReadback {
             handle,
-            vtable,
-            methods_vtable,
             cached_handle_id,
             cached_staging_size,
             cached_width: width,
@@ -4407,12 +3845,8 @@ impl GpuContextFullAccess {
 
 impl std::fmt::Debug for GpuContextLimitedAccess {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // The underlying GpuContext is host-private and not safely
-        // formattable from cdylib code; print the (handle, vtable)
-        // shape instead.
         f.debug_struct("GpuContextLimitedAccess")
             .field("handle", &self.handle)
-            .field("vtable", &self.vtable)
             .finish()
     }
 }
@@ -4421,7 +3855,6 @@ impl std::fmt::Debug for GpuContextFullAccess {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("GpuContextFullAccess")
             .field("handle", &self.handle)
-            .field("vtable", &self.vtable)
             .finish()
     }
 }
