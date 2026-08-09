@@ -115,13 +115,9 @@ pub(crate) struct VulkanAccelerationStructureInner {
 /// `drop_acceleration_structure` callbacks, which run
 /// `Arc::increment_strong_count` / `Arc::decrement_strong_count` in
 /// host-compiled code where the Inner layout is known.
-#[repr(C)]
 pub struct VulkanAccelerationStructure {
     /// Opaque handle to the host's `Arc<VulkanAccelerationStructureInner>`.
     pub(crate) handle: *const c_void,
-    /// Per-type vtable for plugin ABI method dispatch (#907 Phase E).
-    pub(crate) methods_vtable:
-        *const streamlib_plugin_abi::VulkanAccelerationStructureMethodsVTable,
     /// Cached AS kind discriminant (0 = BottomLevel, 1 = TopLevel).
     /// Matches `AccelerationStructureKind`'s ordering.
     pub(crate) cached_kind: u32,
@@ -680,8 +676,6 @@ impl VulkanAccelerationStructure {
         let cached_device_address = arc.device_address();
         let cached_storage_size = arc.storage_size();
         let handle = Arc::into_raw(arc) as *const c_void;
-        let methods_vtable =
-            crate::core::plugin::host_services::host_vulkan_acceleration_structure_methods_vtable();
         Self {
             handle,
             cached_kind,
@@ -813,48 +807,6 @@ impl std::fmt::Debug for VulkanAccelerationStructure {
     }
 }
 
-#[cfg(all(test, target_pointer_width = "64"))]
-mod layout_tests {
-    use super::*;
-    use core::mem::{align_of, offset_of, size_of};
-
-    #[test]
-    fn vulkan_acceleration_structure_layout() {
-        // PluginAbiObject struct as of #907 PR 5/5:
-        //   handle                @ 0  (8 bytes, *const c_void)
-        //   vtable                @ 8  (8 bytes, *const GpuContextFullAccessVTable)
-        //   methods_vtable        @ 16 (8 bytes, *const VulkanAccelerationStructureMethodsVTable)
-        //   cached_kind           @ 24 (4 bytes, u32)
-        //   _reserved_padding     @ 28 (4 bytes, u32)
-        //   cached_device_address @ 32 (8 bytes, u64)
-        //   cached_storage_size   @ 40 (8 bytes, u64)
-        // Total = 48, align = 8.
-        assert_eq!(size_of::<VulkanAccelerationStructure>(), 48);
-        assert_eq!(align_of::<VulkanAccelerationStructure>(), 8);
-        assert_eq!(offset_of!(VulkanAccelerationStructure, handle), 0);
-        assert_eq!(offset_of!(VulkanAccelerationStructure, vtable), 8);
-        assert_eq!(offset_of!(VulkanAccelerationStructure, methods_vtable), 16);
-        assert_eq!(offset_of!(VulkanAccelerationStructure, cached_kind), 24);
-        assert_eq!(
-            offset_of!(VulkanAccelerationStructure, _reserved_padding),
-            28
-        );
-        assert_eq!(
-            offset_of!(VulkanAccelerationStructure, cached_device_address),
-            32
-        );
-        assert_eq!(
-            offset_of!(VulkanAccelerationStructure, cached_storage_size),
-            40
-        );
-    }
-
-    #[test]
-    fn vulkan_acceleration_structure_is_send_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<VulkanAccelerationStructure>();
-    }
-}
 
 // ---- Internal buffer helper -------------------------------------------------
 

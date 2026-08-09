@@ -744,24 +744,7 @@ impl VulkanPresentTarget {
     /// host-side (the RHI boundary keeps `vulkanalia` inside this crate),
     /// then dispatches [`Self::end_frame`]. The plugin-ABI `end_frame`
     /// slot body calls this so it never names a `vk::*` type.
-    pub fn end_frame_from_wire(
-        &mut self,
-        extra_waits: &[streamlib_plugin_abi::SemaphoreSubmitInfoRepr],
-    ) -> Result<bool> {
-        let vk_waits: Vec<vk::SemaphoreSubmitInfo> = extra_waits
-            .iter()
-            .map(|r| {
-                vk::SemaphoreSubmitInfo::builder()
-                    .semaphore(vk::Semaphore::from_raw(r.semaphore))
-                    .value(r.value)
-                    .stage_mask(vk::PipelineStageFlags2::from_bits_truncate(r.stage_mask))
-                    .device_index(r.device_index)
-                    .build()
-            })
-            .collect();
-        self.end_frame(&vk_waits)
-    }
-
+ 
     /// Raw `Box<RhiCommandRecorderInner>` pointer of the in-flight frame's
     /// recorder, or null when no frame is in flight. Borrowed, NON-OWNING
     /// — the present target owns the recorder across the begin/end split;
@@ -976,8 +959,6 @@ impl PresentTarget {
     pub fn from_target(target: VulkanPresentTarget) -> Self {
         let color_format_raw = target.color_format() as u32;
         let handle = Box::into_raw(Box::new(Mutex::new(target))) as *const c_void;
-        let methods_vtable =
-            crate::core::plugin::host_services::host_present_target_methods_vtable();
         Self {
             handle,
             color_format_raw,
@@ -1003,12 +984,10 @@ impl PresentTarget {
 
 impl Drop for PresentTarget {
     fn drop(&mut self) {
-        if !self.handle.is_null() && !self.vtable.is_null() {
-            // SAFETY: matched with `Box::into_raw` in `from_target`; the
-            // vtable's `drop_present_target` runs `Box::from_raw` + drop
-            // host-side.
+        if !self.handle.is_null() {
+            // SAFETY: matched with `Box::into_raw` in `from_target`.
             unsafe {
-                ((*self.vtable).drop_present_target)(self.handle);
+                drop(Box::from_raw(self.handle as *mut PresentTargetInner));
             }
         }
     }

@@ -974,36 +974,7 @@ impl RhiCommandRecorderInner {
     }
 
     /// Wire-format companion to [`Self::submit_with_semaphores`].
-    pub(crate) fn submit_with_semaphores_from_wire(
-        &mut self,
-        waits_repr: &[streamlib_plugin_abi::SemaphoreSubmitInfoRepr],
-        signals_repr: &[streamlib_plugin_abi::SemaphoreSubmitInfoRepr],
-    ) -> Result<()> {
-        let waits: Vec<vk::SemaphoreSubmitInfo> = waits_repr
-            .iter()
-            .map(|r| {
-                vk::SemaphoreSubmitInfo::builder()
-                    .semaphore(vk::Semaphore::from_raw(r.semaphore))
-                    .value(r.value)
-                    .stage_mask(vk::PipelineStageFlags2::from_bits_truncate(r.stage_mask))
-                    .device_index(r.device_index)
-                    .build()
-            })
-            .collect();
-        let signals: Vec<vk::SemaphoreSubmitInfo> = signals_repr
-            .iter()
-            .map(|r| {
-                vk::SemaphoreSubmitInfo::builder()
-                    .semaphore(vk::Semaphore::from_raw(r.semaphore))
-                    .value(r.value)
-                    .stage_mask(vk::PipelineStageFlags2::from_bits_truncate(r.stage_mask))
-                    .device_index(r.device_index)
-                    .build()
-            })
-            .collect();
-        self.submit_with_semaphores(&waits, &signals)
-    }
-
+ 
     fn expect_recording(&self, op: &'static str) -> Result<()> {
         let state = self.state.lock();
         if *state != RecorderState::Recording {
@@ -1097,7 +1068,6 @@ impl std::fmt::Debug for RhiCommandRecorderInner {
 ///   `submit`, `submit_and_wait`) keep their cdylib-mode panic via
 ///   [`Self::host_inner_mut`]; a follow-up slice lifts each as a
 ///   consumer arrives.
-#[repr(C)]
 pub struct RhiCommandRecorder {
     /// Opaque handle to the host's `Box<RhiCommandRecorderInner>`.
     pub(crate) handle: *const c_void,
@@ -1117,15 +1087,10 @@ impl RhiCommandRecorder {
     }
 
     /// Internal helper: leak a `Box<RhiCommandRecorderInner>` as the
-    /// opaque handle and resolve the host-mode FullAccess + per-type
-    /// methods vtables.
+    /// opaque handle.
     pub(crate) fn from_inner(inner: RhiCommandRecorderInner) -> Self {
         let handle = Box::into_raw(Box::new(inner)) as *const c_void;
-        let methods_vtable =
-            crate::core::plugin::host_services::host_rhi_command_recorder_methods_vtable();
-        Self {
-            handle,
-        }
+        Self { handle }
     }
 
     /// Raw `Box<RhiCommandRecorderInner>` handle backing this recorder.
@@ -1438,10 +1403,10 @@ impl RhiCommandRecorder {
 
 impl Drop for RhiCommandRecorder {
     fn drop(&mut self) {
-        if !self.handle.is_null() && !self.vtable.is_null() {
+        if !self.handle.is_null() {
             // SAFETY: matched with `Box::into_raw` in `from_inner`.
             unsafe {
-                ((*self.vtable).drop_command_recorder)(self.handle);
+                drop(Box::from_raw(self.handle as *mut RhiCommandRecorderInner));
             }
         }
     }

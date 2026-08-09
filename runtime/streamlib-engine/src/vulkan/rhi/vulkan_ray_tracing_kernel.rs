@@ -940,8 +940,6 @@ impl VulkanRayTracingKernel {
     pub(crate) fn from_arc_into_raw(arc: Arc<VulkanRayTracingKernelInner>) -> Self {
         let cached_push_constant_size = arc.push_constant_size();
         let handle = Arc::into_raw(arc) as *const c_void;
-        let methods_vtable =
-            crate::core::plugin::host_services::host_vulkan_ray_tracing_kernel_methods_vtable();
         Self {
             handle,
             cached_push_constant_size,
