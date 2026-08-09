@@ -27,8 +27,7 @@ use crate::core::error::{Error, Result};
 use crate::core::graph::{LinkUniqueId, ProcessorUniqueId};
 use crate::core::processors::ProcessorSpec;
 use crate::core::runtime::{
-    BoxFuture, RegisterProcessorReceipt, ReplaceProcessorFromSource, RuntimeOperations,
-    SubmittedProcessorSource,
+    BoxFuture, RuntimeOperations,
 };
 use crate::core::{InputLinkPortRef, OutputLinkPortRef};
 
@@ -292,31 +291,6 @@ impl RuntimeOperations for RuntimeOpsShim {
         }))
     }
 
-    fn register_processor_source_async(
-        &self,
-        request: SubmittedProcessorSource,
-    ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
-        self.submit_msgpack(
-            "register_processor_source_async",
-            request,
-            |vtable, handle, ptr, len, completion, user_data| unsafe {
-                ((*vtable).register_processor_source)(handle, ptr, len, completion, user_data)
-            },
-        )
-    }
-
-    fn replace_processor_async(
-        &self,
-        request: ReplaceProcessorFromSource,
-    ) -> BoxFuture<'_, Result<RegisterProcessorReceipt>> {
-        self.submit_msgpack(
-            "replace_processor_async",
-            request,
-            |vtable, handle, ptr, len, completion, user_data| unsafe {
-                ((*vtable).replace_processor)(handle, ptr, len, completion, user_data)
-            },
-        )
-    }
 
     fn tap_async(
         &self,

@@ -28,7 +28,6 @@ pub mod check_schema_versions;
 pub mod check_vendored_vulkanalia;
 pub mod generate_crate_roots;
 pub mod lint_logging;
-pub mod manifest_schema;
 pub mod normal_build_dep_graph;
 
 /// Rust source roots a workspace crate may hold: the classic `src/` and the
@@ -207,17 +206,6 @@ enum Commands {
     /// reports `UNASSIGNED-Threading-Info`).
     CheckDeviceWaitIdle,
 
-    /// Regenerate `schemas/streamlib.schema.json` from the Rust
-    /// [`StreamlibYaml`](streamlib_processor_schema::StreamlibYaml) source of
-    /// truth (#714). Editors with `yaml-language-server` consume this schema
-    /// for autocomplete + lint on every `streamlib.yaml`.
-    EmitManifestSchema,
-
-    /// CI gate for the streamlib.yaml schema (#714). Three assertions:
-    /// (1) committed schema matches what Rust currently emits, (2) every
-    /// `streamlib.yaml` carries the `# yaml-language-server: $schema=...`
-    /// header, (3) every `streamlib.yaml` validates against the schema.
-    CheckManifestSchema,
 
 
     /// Drift trip-wire for the vendored vulkanalia fork trees
@@ -289,8 +277,6 @@ fn main() -> Result<()> {
         Commands::CheckConsumerRhiRepr => check_consumer_rhi_repr::run(&workspace_root()?)?,
         Commands::CheckDeviceWaitIdle => check_device_wait_idle::run(&workspace_root()?)?,
         Commands::CheckVendoredVulkanalia => check_vendored_vulkanalia::run(&workspace_root()?)?,
-        Commands::EmitManifestSchema => manifest_schema::emit(&workspace_root()?)?,
-        Commands::CheckManifestSchema => manifest_schema::check(&workspace_root()?)?,
     }
 
     Ok(())

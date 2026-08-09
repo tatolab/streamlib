@@ -348,42 +348,6 @@ unsafe extern "C" fn host_rov_to_json(
     )
 }
 
-unsafe extern "C" fn host_rov_register_processor_source(
-    handle: *const c_void,
-    request_msgpack_ptr: *const u8,
-    request_msgpack_len: usize,
-    completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
-    user_data: *mut c_void,
-) {
-    host_rov_submit_single_msgpack::<crate::core::runtime::SubmittedProcessorSource, _, _>(
-        "register_processor_source",
-        handle,
-        request_msgpack_ptr,
-        request_msgpack_len,
-        completion,
-        user_data,
-        |ops, request| async move { ops.register_processor_source_async(request).await },
-    )
-}
-
-unsafe extern "C" fn host_rov_replace_processor(
-    handle: *const c_void,
-    request_msgpack_ptr: *const u8,
-    request_msgpack_len: usize,
-    completion: streamlib_plugin_abi::RuntimeOpCompletionCallback,
-    user_data: *mut c_void,
-) {
-    host_rov_submit_single_msgpack::<crate::core::runtime::ReplaceProcessorFromSource, _, _>(
-        "replace_processor",
-        handle,
-        request_msgpack_ptr,
-        request_msgpack_len,
-        completion,
-        user_data,
-        |ops, request| async move { ops.replace_processor_async(request).await },
-    )
-}
-
 /// Take a (borrowed) handle returned from
 /// `RuntimeContextVTable::runtime_ops_handle` (a `*const Arc<dyn
 /// RuntimeOperations>` pointing into `RuntimeContext`-owned storage)
@@ -438,8 +402,6 @@ pub static HOST_RUNTIME_OPS_VTABLE: RuntimeOpsVTable = RuntimeOpsVTable {
     to_json: host_rov_to_json,
     clone_handle: host_rov_clone_handle,
     drop_handle: host_rov_drop_handle,
-    register_processor_source: host_rov_register_processor_source,
-    replace_processor: host_rov_replace_processor,
 };
 
 /// Pointer to the [`RuntimeOpsVTable`] this DSO should dispatch
@@ -610,37 +572,6 @@ mod runtime_ops_vtable_null_handle_guards {
         unsafe { reclaim_sink(user_data) };
     }
 
-    #[test]
-    fn register_processor_source_fires_error_completion_on_null_handle() {
-        let (user_data, sink) = install_sink_user_data();
-        unsafe {
-            (HOST_RUNTIME_OPS_VTABLE.register_processor_source)(
-                std::ptr::null(),
-                std::ptr::null(),
-                0,
-                record_completion,
-                user_data,
-            );
-        }
-        assert_single_err_completion(&sink, "register_processor_source: null handle");
-        unsafe { reclaim_sink(user_data) };
-    }
-
-    #[test]
-    fn replace_processor_fires_error_completion_on_null_handle() {
-        let (user_data, sink) = install_sink_user_data();
-        unsafe {
-            (HOST_RUNTIME_OPS_VTABLE.replace_processor)(
-                std::ptr::null(),
-                std::ptr::null(),
-                0,
-                record_completion,
-                user_data,
-            );
-        }
-        assert_single_err_completion(&sink, "replace_processor: null handle");
-        unsafe { reclaim_sink(user_data) };
-    }
 }
 
 #[cfg(test)]
@@ -649,8 +580,7 @@ mod runtime_ops_vtable_tier1_wire_format_tests {
     //!
     //! Per-callback null-handle coverage for the submit-with-completion
     //! ops (`add_processor`, `remove_processor`, `connect`,
-    //! `disconnect`, `to_json`, and the v3 `register_processor_source`
-    //! / `replace_processor`) lives in
+    //! `disconnect`, `to_json`) lives in
     //! [`runtime_ops_vtable_null_handle_guards`] above. This module adds:
     //!
     //! - `layout_version_matches_constant` — locks the v3 layout
