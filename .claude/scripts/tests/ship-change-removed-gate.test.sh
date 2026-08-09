@@ -200,11 +200,11 @@ new_repo <<'EOF'
 EOF
 plant packages/h264/src/lib.rs "// resolves a .slpkg from the store"
 run_gate
-expect_pass "a distributable package is not residue"
+expect_pass "a consumer package is not residue"
 
-# packages/ is split and the split is load-bearing (CLAUDE.md): these five are engine-side,
+# packages/ is split and the split is load-bearing (CLAUDE.md): these three are engine-side,
 # not downstream consumers, so their residue is real work and must still be reported.
-for engine_pkg in escalate core api-server test-fixtures test-fixtures-abi-mismatch; do
+for engine_pkg in escalate core test-fixtures; do
   new_repo <<'EOF'
 - REMOVED: .slpkg
 EOF

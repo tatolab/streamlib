@@ -1,6 +1,6 @@
 ---
 name: inspect-live-graph
-description: Dump a running StreamLib node's live processor graph — processors, ports, links, channel names, states, and metrics — as JSON, to use as ground truth before mutating or tapping it. Use when you need the current topology of a running app: to find a channel name for `tap-live-channel`, to learn the exact port names before a `connect`, to confirm a `submit`/`replace` landed, or to diff before/after a hot-swap. Wraps `streamlib graph`.
+description: Dump a running StreamLib node's live processor graph — processors, ports, links, channel names, states, and metrics — as JSON, to use as ground truth before tapping it. Use when you need the current topology of a running app: to find a channel name for `tap-live-channel`, to learn the exact port names a processor publishes on, or to diff the graph across an app-code change. Wraps `streamlib graph`.
 ---
 
 # inspect-live-graph
@@ -21,8 +21,8 @@ streamlib graph
 The result is the `graph` MCP tool's JSON (pretty-printed): processors, links, states, metrics.
 
 ### 2. Read what you need out of it
-- **Processor ids** — the `--processor-id` for `remove`, and the `from_processor` / `to_processor` for `connect`.
-- **Port names** — the `from_port` / `to_port` for `connect`, and the `local_port` in a `submit --connect` spec.
+- **Processor ids** — which instances the node actually stood up, and under which type.
+- **Port names** — the exact input / output port names each processor declares, as the node reports them rather than as the source reads.
 - **Channel names** — form the tap target `{source_processor}/{source_output_port}` from the source processor and its output port; feed it to `tap-live-channel`.
 - **States / metrics** — confirm a processor is running and moving data (non-zero counters) rather than merely instantiated.
 

@@ -33,6 +33,7 @@ Conventions:
 - Errors via the core `Error` enum + `Result<T>`; `?` over `.unwrap()` in library code.
 - Logging is `tracing` only — no `println!` / `eprintln!` (CI enforces).
 - All timekeeping uses monotonic clocks (Rust and Python alike), never wall-clock or sleep-based.
+- Every `#[repr(C)]` type crossing the IPC wire has a layout regression test.
 - Git deps pinned by `rev = "<sha>"` or `tag`; never bare `git` / `branch`, including
   `[patch.crates-io]`.
 - Rustdoc: public items get a one-line doc; no `# Example` / `# Usage` sections or ASCII diagrams
