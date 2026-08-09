@@ -8,7 +8,7 @@
 //! The crate re-exports `dlpark::ffi`'s `#[repr(C)]` ABI mirrors as the
 //! canonical types — every consumer that speaks DLPack v0.8 or later
 //! agrees on this struct layout, so layout-stability across the FFI
-//! boundary that `streamlib-python-native` / `streamlib-deno-native`
+//! boundary that the wheel's helper-process surface client
 //! cdylibs cross is guaranteed by the spec, pinned at our end by the
 //! `=0.6.0` workspace lockfile and the layout regression test below.
 //!

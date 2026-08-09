@@ -598,8 +598,7 @@ fn build_slot(
 /// CUDA work. Returns `None` when CUDA can't be queried — caller
 /// falls back to ordinal 0 (single-GPU behavior) with a warn log.
 ///
-/// Duplicated in `streamlib-python-native::cuda` and
-/// `streamlib-deno-native::cuda` — keep the three in sync. A future
+/// A future
 /// refactor lifts this to a shared utility crate; today's
 /// duplication is cheap enough that the engine/library/cdylib dep
 /// graph doesn't need to grow yet.

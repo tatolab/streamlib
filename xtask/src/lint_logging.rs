@@ -52,8 +52,7 @@ const fn python_logging_lint_target(name: &'static str, root_relative: &'static 
 }
 
 pub const TARGETS: &[LintTarget] = &[
-    python_logging_lint_target("python", "sdk/streamlib-python"),
-    python_logging_lint_target("python-wheel", "sdk/streamlib-python-wheel/python"),
+    python_logging_lint_target("python", "sdk/streamlib-python-wheel/python"),
 ];
 
 #[derive(Debug)]

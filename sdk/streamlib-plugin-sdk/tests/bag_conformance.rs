@@ -8,7 +8,7 @@
 //! runtimes decode the *identical* bytes and assert the same logical values:
 //!
 //! - Rust: this file.
-//! - Python: `sdk/streamlib-python/python/streamlib/tests/test_bag_conformance.py`.
+//! - Python: the wheel's bag-conformance tests.
 //! - Deno: `sdk/streamlib-deno/bag_conformance_test.ts`.
 //!
 //! All three read the same file, so a wire disagreement between the runtimes

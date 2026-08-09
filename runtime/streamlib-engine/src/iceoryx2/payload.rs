@@ -4,7 +4,7 @@
 //! Frame payload types for iceoryx2 IPC communication.
 //!
 //! Re-exports from [`streamlib_ipc_types`] so both `streamlib` and
-//! `streamlib-deno-native` share the same wire-compatible types.
+//! the wheel's helper-process transport share the same wire-compatible types.
 
 pub use streamlib_ipc_types::{
     ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, DEFAULT_MAX_QUEUED_MESSAGES, EventPayload,

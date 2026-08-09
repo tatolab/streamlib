@@ -490,10 +490,8 @@ const CDYLIB_DEP_RATIONALE: &str = "cdylibs and adapter crates must depend on st
 /// Crates whose runtime dep graph must not include `streamlib`. `streamlib`
 /// is allowed only in `[dev-dependencies]` (or `[target.*.dev-dependencies]`).
 const NO_STREAMLIB_RUNTIME_DEP: &[&str] = &[
-    "sdk/streamlib-python-native/Cargo.toml",
-    "sdk/streamlib-deno-native/Cargo.toml",
-    // Both sit directly beneath every adapter core below, so a `streamlib`
-    // dep in either would reach all of their runtime graphs at once.
+    // These sit directly beneath every adapter core below, so a `streamlib`
+    // dep in any would reach all of their runtime graphs at once.
     "adapters/streamlib-surface-adapter/Cargo.toml",
     "adapters/streamlib-adapter-abi/Cargo.toml",
     "adapters/streamlib-adapter-vulkan/Cargo.toml",
@@ -2177,9 +2175,9 @@ vulkanalia.workspace = true
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "sdk/streamlib-python-native/Cargo.toml",
+            "adapters/streamlib-adapter-vulkan/Cargo.toml",
             r#"[package]
-name = "streamlib-python-native"
+name = "streamlib-adapter-vulkan"
 version = "0.1.0"
 edition = "2021"
 
@@ -2339,15 +2337,14 @@ streamlib = { path = "../streamlib" }
     // Post-#550/#553, neither cdylib needs raw `vulkanalia` access. These
     // tests prove the path-prefix exemption is gone — any reintroduction
     // of `use vulkanalia`, a `vulkanalia` Cargo dep, or a privileged-vk
-    // call inside `sdk/streamlib-{python,deno}-native/` trips a
-    // violation rather than slipping through.
+    // call inside the wheel trips a violation rather than slipping through.
 
     #[test]
-    fn rejects_use_vulkanalia_in_python_native_cdylib() {
+    fn rejects_use_vulkanalia_in_the_wheel() {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "sdk/streamlib-python-native/src/lib.rs",
+            "sdk/streamlib-python-wheel/src/lib.rs",
             "use vulkanalia::vk;\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -2356,38 +2353,20 @@ streamlib = { path = "../streamlib" }
                 .violations
                 .iter()
                 .any(|v| v.check == CHECK_VULKANALIA),
-            "expected vulkanalia confinement violation in python-native cdylib, got {:?}",
+            "expected vulkanalia confinement violation in the wheel, got {:?}",
             report.violations,
         );
     }
 
-    #[test]
-    fn rejects_use_vulkanalia_in_deno_native_cdylib() {
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "sdk/streamlib-deno-native/src/lib.rs",
-            "use vulkanalia::vk;\n",
-        );
-        let report = scan_all(dir.path()).unwrap();
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.check == CHECK_VULKANALIA),
-            "expected vulkanalia confinement violation in deno-native cdylib, got {:?}",
-            report.violations,
-        );
-    }
 
     #[test]
-    fn rejects_vulkanalia_cargo_dep_in_python_native_cdylib() {
+    fn rejects_vulkanalia_cargo_dep_in_the_wheel() {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "sdk/streamlib-python-native/Cargo.toml",
+            "sdk/streamlib-python-wheel/Cargo.toml",
             r#"[package]
-name = "streamlib-python-native"
+name = "streamlib-python-wheel"
 version = "0.1.0"
 edition = "2021"
 

@@ -361,7 +361,7 @@ mod tests {
     //! Layout regression suite for the descriptor types.
     //!
     //! These numbers are copied verbatim into the Python ctypes mirror
-    //! (`sdk/streamlib-python/python/streamlib/surface_adapter.py`) and
+    //! (the wheel's surface-adapter surface) and
     //! the Deno UnsafePointerView reader (`sdk/streamlib-deno/
     //! surface_adapter.ts`). When this file changes, both polyglot
     //! mirrors must be updated in the same commit; their twin tests
