@@ -5526,13 +5526,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "streamlib-test-fixtures-abi-mismatch"
-version = "0.16.0"
-dependencies = [
- "streamlib-plugin-abi",
-]
-
-[[package]]
 name = "strict-num"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

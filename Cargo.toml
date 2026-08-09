@@ -52,14 +52,11 @@ members = [
     # Build a package/example with `cd <dir> && cargo build`, or via
     # `streamlib add` / runtime `Strategy::ByVersion` for packages.
     #
-    # The exceptions below are INTERNAL test infrastructure, not shipped through
-    # the package source: they path-dep the zone crates and stay workspace
-    # members (each carries `publish = false`, which also keeps it out of the
-    # release closure). The engine integration tests build them in-place
-    # (`cargo build -p streamlib-test-fixtures --features plugin`) and load the
-    # resulting cdylib.
+    # The exception below is INTERNAL test infrastructure, not shipped through
+    # the package source: it path-deps the zone crates and stays a workspace
+    # member (`publish = false`, which also keeps it out of the release
+    # closure).
     "packages/test-fixtures",    # @tatolab/test-fixtures — attribute-macro test fixtures (TestConfiguredProcessor)
-    "packages/test-fixtures-abi-mismatch", # @tatolab/test-fixtures-abi-mismatch — hand-crafted STREAMLIB_PLUGIN with tampered abi_version for the load_project rejection test
 ]
 
 [workspace.package]

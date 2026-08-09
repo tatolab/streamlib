@@ -76,9 +76,7 @@ const ALLOWLIST: &[(&str, &str)] = &[
     // `concurrent_escalate_test_processor`'s purpose is testing
     // gate serialization across N concurrent worker threads. Its
     // spawn-then-join shape deadlocks under the with_cdylib_scope
-    // wrap (workers block on gate held by start). The integration
-    // test that drives it (`load_project_dylib_concurrent_escalate.rs`)
-    // is `#[ignore]`d as a result. Restructure to Reactive
+    // wrap (workers block on gate held by start). Restructure to Reactive
     // `process()` driven by external trigger frames is the
     // documented follow-up; until then this fixture knowingly
     // ships the pattern the lint exists to ban, with the runtime
