@@ -89,10 +89,10 @@ rmpv = { version = "1.3", features = ["with-serde"] }
 sha2 = "0.10"
 tempfile = "3.14"
 
-# Blocking HTTP client — streamlib-idents fetches schema packages from a
-# static generic registry. Blocking (not async) by design: the fetch runs
-# on `spawn_blocking`, where a runtime-aware client (reqwest::blocking)
-# would panic on the ambient tokio context.
+# Blocking HTTP client — streamlib-idents reads schema packages off a
+# package source (a static tree over `file://` or a dumb HTTP mount).
+# Blocking by design: the callers are a build script and a synchronous
+# config load, neither of which has an async runtime to await on.
 ureq = "2"
 
 # Typed bitflags (used by streamlib-surface-adapter)
@@ -132,17 +132,16 @@ rspirv-reflect = "0.9.0"
 # change upstream is an API-break here, not a silent minor bump.
 # `default-features = false` keeps the dep surface to `bitflags` +
 # `snafu`; the optional `pyo3` / `ndarray` / `cudarc` features stay off
-# so the cdylib boundary doesn't pick up Python or ML transitive deps.
+# so a consumer of this crate doesn't pick up Python or ML transitive deps.
 dlpark = { version = "=0.6.0", default-features = false }
 
-# CUDA bindings — used by `streamlib-adapter-cuda` (test-only,
-# behind its `cuda` Cargo feature) and by the polyglot cdylib runtimes
-# (`streamlib-python-native`, `streamlib-deno-native`) to import OPAQUE_FD
-# Vulkan memory + timeline semaphores into CUDA via
-# `cudaImportExternalMemory` / `cudaImportExternalSemaphore`. The cdylibs
-# depend on cudarc unconditionally (Linux-only) but `fallback-dynamic-loading`
-# means libcuda.so is only required at runtime — build hosts without a
-# CUDA toolkit still compile the cdylib, and runtime detection via
+# CUDA bindings — used by `streamlib-adapter-cuda` (optional, behind its
+# `cuda` Cargo feature) and by `streamlib-python-wheel` (unconditional,
+# Linux-only) to import OPAQUE_FD Vulkan memory + timeline semaphores
+# into CUDA via `cudaImportExternalMemory` /
+# `cudaImportExternalSemaphore`. `fallback-dynamic-loading` means
+# libcuda.so is only required at runtime — build hosts without a CUDA
+# toolkit still compile, and runtime detection via
 # `cudarc::runtime::sys::is_culib_present()` lets the adapter fail
 # gracefully on CUDA-less machines.
 #

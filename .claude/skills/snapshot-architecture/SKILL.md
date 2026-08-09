@@ -12,7 +12,7 @@ the plan — and its whole value is showing where the two disagree so the owner 
 which one moves. This skill never edits the plan, the docs, or the code.
 
 1. **Survey, read-only.** Fan out Explore/domain-expert subagents across `runtime/`,
-   `sdk/`, `tools/`, `adapters/`, `xtask/` — what subsystems exist, how they connect,
+   `sdk/`, `adapters/`, `xtask/` — what subsystems exist, how they connect,
    what the real boundaries and data flows are. Every claim needs a source
    (`file:line` or path); anything not verified in the tree is labeled INFERRED.
 2. **Load the `artifact-design` skill**, then build one HTML page:
