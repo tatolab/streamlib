@@ -160,7 +160,6 @@ pub enum ProcessorRuntimeOutput {
     #[default]
     Rust,
     Python,
-    TypeScript,
 }
 
 /// Descriptor for a processor type.
@@ -396,7 +395,6 @@ impl From<&crate::core::ProcessorRuntime> for ProcessorRuntimeOutput {
         match runtime {
             crate::core::ProcessorRuntime::Rust => ProcessorRuntimeOutput::Rust,
             crate::core::ProcessorRuntime::Python => ProcessorRuntimeOutput::Python,
-            crate::core::ProcessorRuntime::TypeScript => ProcessorRuntimeOutput::TypeScript,
         }
     }
 }

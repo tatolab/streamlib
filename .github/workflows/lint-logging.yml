@@ -9,7 +9,6 @@ name: Lint Logging
 #   gates exactly as clippy would on `ubuntu-latest`.
 # - Python: banned `print()`/`sys.stdout`/`logging.basicConfig` in
 #   sdk/streamlib-python and sdk/streamlib-python-wheel/python.
-# - TypeScript: banned `console.*`/`Deno.stdout.write` in sdk/streamlib-deno.
 #
 # Rationale for not using `cargo clippy --workspace`: it transitively compiles
 # `libs/vulkan-video`, whose build.rs requires `glslc`. Keeping the lockout
@@ -26,7 +25,7 @@ env:
 
 jobs:
   xtask-lint-logging:
-    name: xtask lint-logging (Rust + Python + TypeScript)
+    name: xtask lint-logging (Rust + Python)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -1071,12 +1071,11 @@ mapping:
       source:
         metadata:
           description: >
-            Origin runtime of the record. Always "python" or "deno" on the
-            wire — Rust never routes through escalate; Rust call sites hit
+            Origin runtime of the record. Always "python" on the wire — Rust
+            never routes through escalate; Rust call sites hit
             `tracing::*!()` directly on the host.
         enum:
           - python
-          - deno
       source_seq:
         metadata:
           description: >

@@ -65,7 +65,6 @@ impl PackageLanguage {
         match schema.runtime.language {
             ProcessorLanguage::Rust => PackageLanguage::Rust,
             ProcessorLanguage::Python => PackageLanguage::Python,
-            ProcessorLanguage::TypeScript => PackageLanguage::TypeScript,
         }
     }
 }

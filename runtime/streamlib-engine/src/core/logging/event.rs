@@ -22,7 +22,6 @@ pub const SCHEMA_VERSION: u32 = 1;
 pub enum Source {
     Rust,
     Python,
-    Deno,
 }
 
 impl Source {
@@ -30,7 +29,6 @@ impl Source {
         match self {
             Source::Rust => "rust",
             Source::Python => "python",
-            Source::Deno => "deno",
         }
     }
 }
@@ -182,7 +180,6 @@ mod tests {
             serde_json::to_string(&Source::Python).unwrap(),
             "\"python\""
         );
-        assert_eq!(serde_json::to_string(&Source::Deno).unwrap(), "\"deno\"");
         assert_eq!(serde_json::to_string(&LogLevel::Warn).unwrap(), "\"warn\"");
     }
 

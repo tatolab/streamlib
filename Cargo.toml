@@ -30,7 +30,6 @@ members = [
     "adapters/streamlib-adapter-cuda-abi", # Cross-DSO callback table for streamlib-adapter-cuda — extern "C" vtable consumed by host wiring + cdylib shim (#891)
     "adapters/streamlib-adapter-skia", # Skia surface adapter — composes on streamlib-adapter-vulkan; customer sees skia::Surface directly, never GrVkImageInfo / VkImageLayout (Linux)
     "adapters/streamlib-adapter-skia-abi", # Cross-DSO callback table for streamlib-adapter-skia — extern "C" vtable consumed by host wiring + cdylib shim (#889)
-    "sdk/streamlib-deno-native", # FFI cdylib for Deno subprocess iceoryx2 access
     "sdk/streamlib-python-native", # FFI cdylib for Python subprocess iceoryx2 access
     "sdk/streamlib-python-wheel", # The importable Python wheel — CPython imports the engine and authors pipelines in-process
     "runtime/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC

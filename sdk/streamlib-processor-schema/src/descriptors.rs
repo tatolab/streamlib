@@ -116,8 +116,6 @@ pub enum ProcessorRuntime {
     #[default]
     Rust,
     Python,
-    #[serde(alias = "deno")]
-    TypeScript,
 }
 
 /// Describes an input or output port.
@@ -243,7 +241,7 @@ pub struct ProcessorDescriptor {
     pub description: String,
     pub version: String,
     pub repository: String,
-    /// Runtime environment (Rust, Python, TypeScript).
+    /// Runtime environment (Rust, Python).
     #[serde(default)]
     pub runtime: ProcessorRuntime,
     /// Entrypoint for non-Rust runtimes (e.g., "src.blur:BlurProcessor").
