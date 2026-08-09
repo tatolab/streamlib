@@ -8,9 +8,7 @@
 //! by typed YAML/JSON deserialization. There is no public `parse` API and
 //! none should be added — see `docs/architecture/schema-identity-and-packaging.md`.
 
-pub mod app_modules;
 pub mod archive;
-mod catalog;
 mod channel;
 mod error;
 mod git;
@@ -19,17 +17,11 @@ pub mod link_marker;
 mod lockfile;
 mod manifest;
 mod package_source;
-pub mod path_artifact_guard;
 mod release;
 mod resolver;
 mod semver;
 mod session;
 
-pub use catalog::{
-    CATALOG_INDEX_PATH, CatalogClient, CatalogConfig, CatalogIndexLine, CatalogPort,
-    CatalogProcessor, CatalogRuntime, CatalogSchemaRef, PackageCatalog, package_catalog_file_name,
-    parse_catalog_index_ndjson, render_catalog_index_ndjson, schema_jtd_file_name,
-};
 
 pub use channel::{
     CHANNEL_CHUNK_SEPARATOR, ChannelName, MAX_CHANNEL_NAME_BYTES, source_channel_name,
@@ -50,11 +42,11 @@ pub use manifest::{
     DependencySpec, GitDependency, Manifest, PACKAGE_PROCESSOR_SOURCE_DIR_NAME, PackageMetadata,
     PathDependency, SchemaEntry, VersionDependency,
 };
+pub use release::{RELEASE_MANIFEST_FORMAT, ReleaseManifest, ReleaseManifestMember};
 pub use package_source::{
     LINK_CHECKOUT_ENV, PACKAGE_SOURCE_ENV, PackageSource, PackageSourceClient,
     RELEASE_MANIFEST_CHANNEL, RELEASE_MANIFEST_FILE, select_version,
 };
-pub use release::{RELEASE_MANIFEST_FORMAT, ReleaseManifest, ReleaseManifestMember};
 pub use resolver::{
     ResolvedPackage, ResolvedPackages, ResolvedSource, ResolverOptions,
     content_hash_for_package_dir, resolve, resolve_bare_schema_name, resolve_with,

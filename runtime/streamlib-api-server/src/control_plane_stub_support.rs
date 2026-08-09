@@ -52,30 +52,6 @@ macro_rules! graph_mutation_ops_are_unreachable {
         ) -> ::streamlib::sdk::runtime::BoxFuture<'_, ::streamlib::sdk::error::Result<()>> {
             unreachable!(concat!("the control plane serves no disconnect ", $surface))
         }
-        fn register_processor_source_async(
-            &self,
-            _request: ::streamlib::sdk::runtime::SubmittedProcessorSource,
-        ) -> ::streamlib::sdk::runtime::BoxFuture<
-            '_,
-            ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::RegisterProcessorReceipt>,
-        > {
-            unreachable!(concat!(
-                "the control plane serves no source-submit ",
-                $surface
-            ))
-        }
-        fn replace_processor_async(
-            &self,
-            _request: ::streamlib::sdk::runtime::ReplaceProcessorFromSource,
-        ) -> ::streamlib::sdk::runtime::BoxFuture<
-            '_,
-            ::streamlib::sdk::error::Result<::streamlib::sdk::runtime::RegisterProcessorReceipt>,
-        > {
-            unreachable!(concat!(
-                "the control plane serves no source-replace ",
-                $surface
-            ))
-        }
         fn add_processor(
             &self,
             _spec: ::streamlib::sdk::processors::ProcessorSpec,

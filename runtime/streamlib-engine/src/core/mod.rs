@@ -65,10 +65,10 @@ pub use utils::*;
 // external consumers. Each line below is a deliberate boundary
 // crossing — items not listed here stay engine-internal.
 //
-// CLI tooling (`streamlib-cli`):
+// Home / data-dir resolution:
 pub use config::ProjectConfig;
 pub use streamlib_home::{
-    get_streamlib_data_dir, get_streamlib_home, get_uv_cache_dir, installed_package_slot_dir,
+    get_streamlib_data_dir, get_streamlib_home, get_uv_cache_dir,
 };
 
 /// The framed-IPC transport a helper process is driven over.

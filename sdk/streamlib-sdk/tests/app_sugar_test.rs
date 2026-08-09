@@ -58,20 +58,18 @@ manual_fixture!(
     "@tatolab/app-sugar-test/IgnoredConnectNode"
 );
 
-/// Register a `#[processor]` host type live under `@session/<name>` and derive
-/// the version-free reference that resolves it — the same reference shape
-/// `App::add_local` builds internally, but without instantiating, so both an
-/// `App` graph and a `Runner` graph can reference the one registered type.
+/// Register a `#[processor]` host type on the processor registry and return
+/// the reference that resolves it — what `App::add_local` builds internally,
+/// but without instantiating, so both an `App` graph and a `Runner` graph can
+/// reference the one registered type.
 fn register_session_reference<P>(registrar: &Runner) -> ProcessorTypeReference
 where
     P: GeneratedProcessor + 'static,
     P::Config: Config,
 {
-    let loaded = registrar
-        .add_local_blocking::<P>(serde_json::Value::Null)
-        .expect("session registration must succeed");
-    let descriptor = P::descriptor().expect("fixture exposes a descriptor");
-    ProcessorTypeReference::new(loaded.ident.org, loaded.ident.name, descriptor.name.r#type)
+    registrar
+        .add_local::<P>(serde_json::Value::Null)
+        .expect("registration must succeed")
 }
 
 /// Replace each captured concrete id with its positional token so two graphs

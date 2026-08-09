@@ -114,50 +114,6 @@ pub struct Runner {
     /// can be re-saved with the same `name` without caller bookkeeping.
     /// `None` when the graph was built imperatively without a name.
     pipeline_name: Arc<Mutex<Option<String>>>,
-    /// Injected build seam. `None` by construction
-    /// ([`Runner::new`]) — the engine never shells out to a toolchain.
-    /// A [`BuildPolicy`] requiring a (re)build fails loud when this is
-    /// absent. Wired via [`Runner::new_with_orchestrator`] /
-    /// [`Runner::set_build_orchestrator`]. Mirrors the [`setup_hooks`]
-    /// injection shape.
-    ///
-    /// [`BuildPolicy`]: crate::core::runtime::module_loader::BuildPolicy
-    /// [`setup_hooks`]: Self::setup_hooks
-    pub(crate) build_orchestrator:
-        Arc<Mutex<Option<Arc<dyn crate::core::runtime::module_loader::BuildOrchestrator>>>>,
-    /// Modules whose loads have not yet settled, keyed by canonical
-    /// `@org/name` with the owning load's id. Inserted when
-    /// [`Runner::add_module`] spawns a load; removed when that same
-    /// load's task finishes (id-guarded so an earlier load's completion
-    /// can't untrack a later load of the same package ref).
-    /// [`Runner::start`] refuses to run the graph while any entry remains.
-    pub(crate) loading_modules: Arc<
-        Mutex<
-            std::collections::HashMap<
-                streamlib_idents::PackageRef,
-                (u64, streamlib_idents::ModuleIdent),
-            >,
-        >,
-    >,
-    /// Runtime-lifetime single-version-per-package resolution memo, keyed
-    /// by `@org/name`. Populated by the live module walker on every
-    /// [`Runner::add_module`] call; persists across calls so a diamond
-    /// version divergence — or two successive / concurrent `add_module`s
-    /// resolving different concrete versions of the same package —
-    /// dedupes to the first-resolved winner (single-version model: a later
-    /// encounter at a different version warns and reuses the winner rather
-    /// than double-registering; if the two are incompatible it surfaces at
-    /// compile-on-install for source packages, or at runtime for prebuilt
-    /// slots). Lives for the runtime's lifetime; [`Runner::remove_module`]
-    /// clears a removed package's entry so a later `add_module` re-resolves
-    /// it from scratch.
-    /// The memo is Runner-scoped while the schema / processor registries
-    /// it protects are process-global statics — a second [`Runner`] in
-    /// the same process carries its own memo and does not see this one's
-    /// resolutions (pre-existing registry topology, unchanged here).
-    ///
-    /// [`Runner::add_module`]: Self::add_module
-    pub(crate) resolution_memo: Arc<crate::core::runtime::module_loader::ResolutionMemo>,
 }
 
 impl Runner {
@@ -296,40 +252,7 @@ impl Runner {
             _logging_guard,
             setup_hooks: Arc::new(Mutex::new(Vec::new())),
             pipeline_name: Arc::new(Mutex::new(None)),
-            build_orchestrator: Arc::new(Mutex::new(None)),
-            loading_modules: Arc::new(Mutex::new(std::collections::HashMap::new())),
-            resolution_memo: Arc::new(crate::core::runtime::module_loader::ResolutionMemo::new()),
         }))
-    }
-
-    /// Construct a runtime with a [`BuildOrchestrator`] wired so that
-    /// build-requiring module loads ([`Strategy::Path`] /
-    /// [`Strategy::Git`] with a non-`NeverBuild` [`BuildPolicy`]) can
-    /// materialize from source. No orchestrator ships in-tree; a host
-    /// that wants one supplies its own.
-    ///
-    /// [`BuildOrchestrator`]: crate::core::runtime::module_loader::BuildOrchestrator
-    /// [`Strategy::Path`]: crate::core::runtime::module_loader::Strategy::Path
-    /// [`Strategy::Git`]: crate::core::runtime::module_loader::Strategy::Git
-    /// [`BuildPolicy`]: crate::core::runtime::module_loader::BuildPolicy
-    pub fn new_with_orchestrator(
-        orchestrator: impl crate::core::runtime::module_loader::BuildOrchestrator,
-    ) -> Result<Arc<Self>> {
-        let runner = Self::new()?;
-        runner.set_build_orchestrator(orchestrator);
-        Ok(runner)
-    }
-
-    /// Wire (or replace) the [`BuildOrchestrator`] after construction.
-    /// Frozen `.slpkg`-only deployments never call this and are
-    /// therefore compiler-free by construction.
-    ///
-    /// [`BuildOrchestrator`]: crate::core::runtime::module_loader::BuildOrchestrator
-    pub fn set_build_orchestrator(
-        &self,
-        orchestrator: impl crate::core::runtime::module_loader::BuildOrchestrator,
-    ) {
-        *self.build_orchestrator.lock() = Some(Arc::new(orchestrator));
     }
 
     /// Register a one-shot hook to run during [`Self::start`], after the
@@ -422,9 +345,6 @@ impl Runner {
     }
 
     // =========================================================================
-    // Module Loading — see `core/runtime/module_loader/` for the impl.
-    // =========================================================================
-    // =========================================================================
     // Lifecycle
     // =========================================================================
 
@@ -434,19 +354,6 @@ impl Runner {
     /// Processors can then call runtime operations directly without indirection.
     #[tracing::instrument(name = "runtime.start", skip_all)]
     pub fn start(self: &Arc<Self>) -> Result<()> {
-        // Hard barrier: refuse to run the graph while any module load is
-        // still in flight (its processor types may not be registered
-        // yet). Await pending loads — e.g. via `await_modules` — first.
-        let pending = self.pending_module_loads();
-        if !pending.is_empty() {
-            return Err(
-                crate::core::runtime::module_loader::AddModuleError::ModulesStillLoading {
-                    idents: pending,
-                }
-                .into(),
-            );
-        }
-
         *self.status.lock() = RuntimeStatus::Starting;
         tracing::info!("[start] Starting runtime");
         PUBSUB.publish(
@@ -1153,7 +1060,6 @@ impl Runner {
     /// Assumes every referenced processor type is already registered (it
     /// validates and fails on an unregistered type). For the turnkey case —
     /// resolve and build referenced packages by version first — use
-    /// [`Self::load_graph_snapshot_with_resolving`].
     pub fn load_graph_snapshot(
         &self,
         snapshot: &crate::core::graph_snapshot::GraphSnapshot,
@@ -1219,7 +1125,6 @@ impl Runner {
     ///
     /// Assumes referenced processor types are already registered; for the
     /// turnkey path that resolves missing modules by version, use
-    /// [`Self::load_graph_snapshot_from_path_with_resolving`].
     pub fn load_graph_snapshot_from_path(&self, path: &std::path::Path) -> Result<()> {
         let snapshot = crate::core::graph_snapshot::GraphSnapshot::from_json_file(path)?;
 
@@ -1230,94 +1135,6 @@ impl Runner {
         }
 
         self.load_graph_snapshot(&snapshot)
-    }
-
-    /// Like [`Runner::load_graph_snapshot`], but first resolves and loads —
-    /// by version from the configured package source — any module referenced by
-    /// the snapshot whose processor type isn't registered yet, so a graph
-    /// snapshot is self-contained: `streamlib-runtime --snapshot graph.json`
-    /// brings up a full pipeline turnkey instead of failing on the first
-    /// unregistered processor type (the bare runtime only registers the
-    /// api-server in-process at boot).
-    ///
-    /// One `add_module` per referenced package (deduped), resolved by version at
-    /// its highest published version and built on the host — requires a
-    /// wired [`BuildOrchestrator`](crate::core::runtime::module_loader::BuildOrchestrator).
-    /// Fails loud, naming the package, if a referenced module can't resolve.
-    pub async fn load_graph_snapshot_with_resolving(
-        &self,
-        snapshot: &crate::core::graph_snapshot::GraphSnapshot,
-    ) -> Result<()> {
-        use crate::core::processors::PROCESSOR_REGISTRY;
-        use crate::core::runtime::module_loader::{BuildPolicy, Strategy};
-        use streamlib_idents::{ModuleIdent, SemVerRange};
-
-        // NB: do NOT validate() here — validate() rejects unregistered processor
-        // types, which is exactly what this pass resolves. Reading the structured
-        // processor_type fields needs no validation; load_graph_snapshot below
-        // validates (structure + registration) once the modules are loaded.
-
-        // The unique packages whose processor types aren't already registered
-        // (e.g. the api-server type is registered in-process at boot). One
-        // add_module per package — a snapshot may reference several
-        // processors from the same package.
-        let mut seen: std::collections::HashSet<streamlib_idents::PackageRef> =
-            std::collections::HashSet::new();
-        let mut to_load: Vec<ModuleIdent> = Vec::new();
-        for proc_def in &snapshot.processors {
-            let ty = &proc_def.processor_type;
-            if PROCESSOR_REGISTRY.port_info(ty).is_some() {
-                continue;
-            }
-            let module = ModuleIdent::new(ty.org.clone(), ty.package.clone(), SemVerRange::Any);
-            if seen.insert(module.package_ref()) {
-                to_load.push(module);
-            }
-        }
-
-        for module in to_load {
-            tracing::info!(
-                "Snapshot: resolving module '{}' by version (linked checkout if a streamlib link is active, else the configured package source)",
-                module.package_ref()
-            );
-            self.add_module_with(
-                module.clone(),
-                Strategy::ByVersion {
-                    version_req: SemVerRange::Any,
-                    build: BuildPolicy::IfStale,
-                },
-            )
-            .await
-            .map_err(|e| {
-                Error::GraphError(format!(
-                    "snapshot module resolution failed for '{}': {e}",
-                    module.package_ref()
-                ))
-            })?;
-        }
-
-        self.load_graph_snapshot(snapshot)
-    }
-
-    /// Path variant of [`Runner::load_graph_snapshot_with_resolving`].
-    pub async fn load_graph_snapshot_from_path_with_resolving(
-        &self,
-        path: &std::path::Path,
-    ) -> Result<()> {
-        let snapshot = crate::core::graph_snapshot::GraphSnapshot::from_json_file(path)?;
-        if let Some(name) = &snapshot.name {
-            tracing::info!(
-                "Loading pipeline '{}' (resolving modules) from {}",
-                name,
-                path.display()
-            );
-        } else {
-            tracing::info!(
-                "Loading pipeline (resolving modules) from {}",
-                path.display()
-            );
-        }
-        self.load_graph_snapshot_with_resolving(&snapshot).await
     }
 
     /// Snapshot the live graph as a [`GraphSnapshot`].

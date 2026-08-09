@@ -54,33 +54,17 @@ impl App {
             .add_processor(ProcessorSpec::new(processor_ref, config))
     }
 
-    /// Register a `#[processor]`-annotated host type `P` live (no package on
-    /// disk — the [`Runner::add_local_blocking`](crate::sdk::runtime::Runner)
-    /// path) and immediately instantiate it, returning the connectable
-    /// [`ProcessorUniqueId`]. `config` is validated against `P::Config` at
-    /// registration and used as the instance config.
+    /// Register a `#[processor]`-annotated host type `P` on the processor
+    /// registry (no package on disk) and immediately instantiate it,
+    /// returning the connectable [`ProcessorUniqueId`]. `config` is validated
+    /// against `P::Config` at registration and used as the instance config.
     pub fn add_local<P>(&self, config: impl Serialize) -> Result<ProcessorUniqueId>
     where
         P: GeneratedProcessor + 'static,
         P::Config: Config,
     {
         let config = to_config_value(config)?;
-        let loaded = self.runner.add_local_blocking::<P>(config.clone())?;
-        // The minted module is `@session/<name>@0.0.N`; its one processor's
-        // short type name comes from the type's own descriptor. Resolve it as
-        // an installed `(org, package, type)` triple — the session processor is
-        // already registered, so this hits the fast path with no disk load.
-        let descriptor = P::descriptor().ok_or_else(|| {
-            Error::Configuration(format!(
-                "add_local::<{}>() registered a session module but the type exposes no descriptor",
-                std::any::type_name::<P>()
-            ))
-        })?;
-        let reference = ProcessorTypeReference::new(
-            loaded.ident.org,
-            loaded.ident.name,
-            descriptor.name.r#type,
-        );
+        let reference = self.runner.add_local::<P>(config.clone())?;
         self.runner
             .add_processor(ProcessorSpec::new(reference, config))
     }
