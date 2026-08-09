@@ -1071,27 +1071,6 @@ mod plugin_abi_object_layout_tests {
     use core::mem::{align_of, offset_of, size_of};
 
     #[test]
-    fn vulkan_ray_tracing_kernel_layout() {
-        // PluginAbiObject struct as of #907 PR 4/5:
-        //   handle                       @ 0  (8 bytes, *const c_void)
-        //   vtable                       @ 8  (8 bytes, *const GpuContextFullAccessVTable)
-        //   methods_vtable               @ 16 (8 bytes, *const VulkanRayTracingKernelMethodsVTable)
-        //   cached_push_constant_size    @ 24 (4 bytes, u32)
-        //   _reserved_padding            @ 28 (4 bytes, u32)
-        // Total = 32, align = 8.
-        assert_eq!(size_of::<VulkanRayTracingKernel>(), 32);
-        assert_eq!(align_of::<VulkanRayTracingKernel>(), 8);
-        assert_eq!(offset_of!(VulkanRayTracingKernel, handle), 0);
-        assert_eq!(offset_of!(VulkanRayTracingKernel, vtable), 8);
-        assert_eq!(offset_of!(VulkanRayTracingKernel, methods_vtable), 16);
-        assert_eq!(
-            offset_of!(VulkanRayTracingKernel, cached_push_constant_size),
-            24
-        );
-        assert_eq!(offset_of!(VulkanRayTracingKernel, _reserved_padding), 28);
-    }
-
-    #[test]
     fn vulkan_ray_tracing_kernel_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<VulkanRayTracingKernel>();

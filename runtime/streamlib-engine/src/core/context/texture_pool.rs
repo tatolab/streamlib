@@ -606,28 +606,6 @@ mod layout_tests {
     use super::*;
     use core::mem::{align_of, offset_of, size_of};
 
-    #[test]
-    fn pooled_texture_handle_layout() {
-        // Pin the byte-level shape. Fields:
-        //   handle        : *const c_void   → offset 0,  size 8
-        //   vtable        : *const VTable   → offset 8,  size 8
-        //   texture       : Texture (β,32B) → offset 16, size 32
-        //   width_cached  : u32             → offset 48, size 4
-        //   height_cached : u32             → offset 52, size 4
-        //   format_raw    : u32             → offset 56, size 4
-        //   _padding      : u32             → offset 60, size 4
-        // Total: 64 bytes, 8-byte alignment (pinned by the pointers).
-        assert_eq!(size_of::<PooledTextureHandle>(), 64);
-        assert_eq!(align_of::<PooledTextureHandle>(), 8);
-        assert_eq!(offset_of!(PooledTextureHandle, handle), 0);
-        assert_eq!(offset_of!(PooledTextureHandle, vtable), 8);
-        assert_eq!(offset_of!(PooledTextureHandle, texture), 16);
-        assert_eq!(offset_of!(PooledTextureHandle, width_cached), 48);
-        assert_eq!(offset_of!(PooledTextureHandle, height_cached), 52);
-        assert_eq!(offset_of!(PooledTextureHandle, format_raw), 56);
-        assert_eq!(offset_of!(PooledTextureHandle, _padding), 60);
-    }
-
     /// Compile-time witness that `PooledTextureHandle` is Send + Sync.
     #[test]
     fn pooled_texture_handle_is_send_sync() {

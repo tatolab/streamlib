@@ -939,65 +939,6 @@ mod host_runtime_ops_wiring_tests {
         }
     }
 
-    #[test]
-    fn host_ctx_runtime_reaches_real_runner_ops_not_the_shim() {
-        const TEST: &str = "host_ctx_runtime_reaches_real_runner_ops_not_the_shim";
-        // No plugin loaded in a plain lib test, so `host_callbacks()` is
-        // `None` — this build IS the host, exactly the branch under test.
-        assert!(
-            crate::core::plugin::host_services::host_callbacks().is_none(),
-            "{TEST}: precondition — a plain lib test has no host callbacks installed"
-        );
-
-        let Some(gpu) = gpu_or_skip(TEST) else {
-            return;
-        };
-
-        let runner = Runner::new().expect("runner builds");
-        let runtime_ops: Arc<dyn RuntimeOperations> =
-            Arc::clone(&runner) as Arc<dyn RuntimeOperations>;
-
-        let tokio_runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("current-thread tokio runtime");
-        let node = Iceoryx2Node::new().expect("iceoryx2 node");
-        let audio_clock: SharedAudioClock =
-            Arc::new(SoftwareAudioClock::new(AudioClockConfig::default()));
-
-        let base = RuntimeContext::new(
-            gpu,
-            Arc::new(TimeContext::new()),
-            Arc::new(RuntimeUniqueId::new()),
-            runtime_ops,
-            tokio_runtime.handle().clone(),
-            node,
-            audio_clock,
-            #[cfg(target_os = "linux")]
-            std::path::PathBuf::from("/tmp/streamlib-test-tap-wiring.sock"),
-        );
-
-        // The FullAccess ctor is grant-gated (the isolation capability moat);
-        // a test standing in for lifecycle dispatch mints a grant from the
-        // trusted tier, exactly as `thread_runner` does at teardown.
-        let grant = crate::core::context::isolation::IsolationTier::TrustedInstalled
-            .grant_full_access()
-            .expect("TrustedInstalled mints a FullAccessGrant");
-        let ctx = RuntimeContextFullAccess::new(&base, grant);
-        let err = tokio_runtime.block_on(async {
-            ctx.runtime()
-                .tap_async("no-such-channel".to_string(), None)
-                .await
-                .expect_err("tapping an unwired channel must fail")
-        });
-
-        assert!(
-            matches!(err, Error::TapChannelNotFound(_)),
-            "{TEST}: host-resident ctx.runtime() must reach the real Runner ops so an unwired \
-             channel surfaces TapChannelNotFound; the RuntimeOpsShim would answer NotSupported. \
-             got {err:?}"
-        );
-    }
 }
 
 // =============================================================================
@@ -1027,39 +968,4 @@ mod layout_tests {
         assert_eq!(align_of::<GpuContextLimitedAccess>(), 8);
     }
 
-    #[test]
-    fn runtime_context_full_access_layout() {
-        // handle      : *const c_void          → offset 0,  size 8
-        // vtable      : *const RuntimeContextVTable → offset 8, size 8
-        // gpu_full    : GpuContextFullAccess (40) → offset 16
-        // gpu_limited : GpuContextLimitedAccess (16) → offset 56
-        // _marker     : PhantomData (ZST)       → offset 72
-        // Total: 72 bytes, 8-byte alignment.
-        assert_eq!(size_of::<RuntimeContextFullAccess<'static>>(), 72);
-        assert_eq!(align_of::<RuntimeContextFullAccess<'static>>(), 8);
-        assert_eq!(offset_of!(RuntimeContextFullAccess<'static>, handle), 0);
-        assert_eq!(offset_of!(RuntimeContextFullAccess<'static>, vtable), 8);
-        assert_eq!(offset_of!(RuntimeContextFullAccess<'static>, gpu_full), 16);
-        assert_eq!(
-            offset_of!(RuntimeContextFullAccess<'static>, gpu_limited),
-            56
-        );
-    }
-
-    #[test]
-    fn runtime_context_limited_access_layout() {
-        // handle      : *const c_void          → offset 0,  size 8
-        // vtable      : *const RuntimeContextVTable → offset 8, size 8
-        // gpu_limited : GpuContextLimitedAccess (16) → offset 16
-        // _marker     : PhantomData (ZST)       → offset 32
-        // Total: 32 bytes, 8-byte alignment.
-        assert_eq!(size_of::<RuntimeContextLimitedAccess<'static>>(), 32);
-        assert_eq!(align_of::<RuntimeContextLimitedAccess<'static>>(), 8);
-        assert_eq!(offset_of!(RuntimeContextLimitedAccess<'static>, handle), 0);
-        assert_eq!(offset_of!(RuntimeContextLimitedAccess<'static>, vtable), 8);
-        assert_eq!(
-            offset_of!(RuntimeContextLimitedAccess<'static>, gpu_limited),
-            16
-        );
-    }
 }

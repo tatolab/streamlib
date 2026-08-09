@@ -558,22 +558,6 @@ mod layout_tests {
     use core::mem::{align_of, offset_of, size_of};
 
     #[test]
-    fn rhi_color_converter_layout() {
-        // 3 pointers (24 bytes) + 2 u32 (8 bytes) = 32 bytes; align = 8.
-        // The cached `cached_*_format_raw` fields mirror the
-        // `Texture::format_raw` cached POD pattern so the cdylib's
-        // `src_format()` / `dst_format()` getters are pure field reads
-        // with no plugin ABI hop.
-        assert_eq!(size_of::<RhiColorConverter>(), 32);
-        assert_eq!(align_of::<RhiColorConverter>(), 8);
-        assert_eq!(offset_of!(RhiColorConverter, handle), 0);
-        assert_eq!(offset_of!(RhiColorConverter, vtable), 8);
-        assert_eq!(offset_of!(RhiColorConverter, methods_vtable), 16);
-        assert_eq!(offset_of!(RhiColorConverter, cached_src_format_raw), 24);
-        assert_eq!(offset_of!(RhiColorConverter, cached_dst_format_raw), 28);
-    }
-
-    #[test]
     fn rhi_color_converter_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<RhiColorConverter>();

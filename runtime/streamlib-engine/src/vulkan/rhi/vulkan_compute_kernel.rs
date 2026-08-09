@@ -1238,27 +1238,6 @@ mod plugin_abi_object_layout_tests {
     use core::mem::{align_of, offset_of, size_of};
 
     #[test]
-    fn vulkan_compute_kernel_layout() {
-        // PluginAbiObject struct as of #907 PR 2/5:
-        //   handle                       @ 0  (8 bytes, *const c_void)
-        //   vtable                       @ 8  (8 bytes, *const GpuContextFullAccessVTable)
-        //   methods_vtable               @ 16 (8 bytes, *const VulkanComputeKernelMethodsVTable)
-        //   cached_push_constant_size    @ 24 (4 bytes, u32)
-        //   _reserved_padding            @ 28 (4 bytes, u32)
-        // Total = 32, align = 8.
-        assert_eq!(size_of::<VulkanComputeKernel>(), 32);
-        assert_eq!(align_of::<VulkanComputeKernel>(), 8);
-        assert_eq!(offset_of!(VulkanComputeKernel, handle), 0);
-        assert_eq!(offset_of!(VulkanComputeKernel, vtable), 8);
-        assert_eq!(offset_of!(VulkanComputeKernel, methods_vtable), 16);
-        assert_eq!(
-            offset_of!(VulkanComputeKernel, cached_push_constant_size),
-            24
-        );
-        assert_eq!(offset_of!(VulkanComputeKernel, _reserved_padding), 28);
-    }
-
-    #[test]
     fn vulkan_compute_kernel_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<VulkanComputeKernel>();

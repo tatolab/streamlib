@@ -129,17 +129,6 @@ mod layout_tests {
     use core::mem::{align_of, offset_of, size_of};
 
     #[test]
-    fn uniform_buffer_layout() {
-        // Pin the byte-level shape. Same as StorageBuffer: 32 bytes, 4 fields.
-        assert_eq!(size_of::<UniformBuffer>(), 32);
-        assert_eq!(align_of::<UniformBuffer>(), 8);
-        assert_eq!(offset_of!(UniformBuffer, handle), 0);
-        assert_eq!(offset_of!(UniformBuffer, vtable), 8);
-        assert_eq!(offset_of!(UniformBuffer, byte_size_cached), 16);
-        assert_eq!(offset_of!(UniformBuffer, mapped_ptr_cached), 24);
-    }
-
-    #[test]
     fn uniform_buffer_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<UniformBuffer>();

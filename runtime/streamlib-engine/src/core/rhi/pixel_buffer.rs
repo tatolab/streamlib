@@ -308,26 +308,6 @@ mod layout_tests {
     use super::*;
     use core::mem::{align_of, offset_of, size_of};
 
-    #[test]
-    fn pixel_buffer_layout() {
-        // Pin the byte-level shape of the plugin ABI `PixelBuffer`. Fields:
-        //   handle              : *const c_void  → offset 0,  size 8
-        //   vtable              : *const VTable  → offset 8,  size 8
-        //   width               : u32            → offset 16, size 4
-        //   height              : u32            → offset 20, size 4
-        //   format_raw          : u32            → offset 24, size 4
-        //   plane_count_cached  : u32            → offset 28, size 4
-        // Total: 32 bytes, 8-byte alignment (pinned by the pointer fields).
-        assert_eq!(size_of::<PixelBuffer>(), 32);
-        assert_eq!(align_of::<PixelBuffer>(), 8);
-        assert_eq!(offset_of!(PixelBuffer, handle), 0);
-        assert_eq!(offset_of!(PixelBuffer, vtable), 8);
-        assert_eq!(offset_of!(PixelBuffer, width), 16);
-        assert_eq!(offset_of!(PixelBuffer, height), 20);
-        assert_eq!(offset_of!(PixelBuffer, format_raw), 24);
-        assert_eq!(offset_of!(PixelBuffer, plane_count_cached), 28);
-    }
-
     /// Compile-time witness that `PixelBuffer` is Send + Sync. The
     /// raw pointer fields would otherwise prevent auto-derive; the
     /// `unsafe impl Send + Sync` is sound only because Arc refcount

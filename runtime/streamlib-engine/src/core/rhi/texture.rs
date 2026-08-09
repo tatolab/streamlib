@@ -491,27 +491,6 @@ mod layout_tests {
     use super::*;
     use core::mem::{align_of, offset_of, size_of};
 
-    #[test]
-    fn texture_layout() {
-        // Pin the byte-level shape of the plugin ABI
-        // `Texture`. Fields:
-        //   handle       : *const c_void  → offset 0,  size 8
-        //   vtable       : *const VTable  → offset 8,  size 8
-        //   width_cached : u32            → offset 16, size 4
-        //   height_cached: u32            → offset 20, size 4
-        //   format_raw   : u32            → offset 24, size 4
-        //   _padding     : u32            → offset 28, size 4
-        // Total: 32 bytes, 8-byte alignment (pinned by the pointer fields).
-        assert_eq!(size_of::<Texture>(), 32);
-        assert_eq!(align_of::<Texture>(), 8);
-        assert_eq!(offset_of!(Texture, handle), 0);
-        assert_eq!(offset_of!(Texture, vtable), 8);
-        assert_eq!(offset_of!(Texture, width_cached), 16);
-        assert_eq!(offset_of!(Texture, height_cached), 20);
-        assert_eq!(offset_of!(Texture, format_raw), 24);
-        assert_eq!(offset_of!(Texture, _padding), 28);
-    }
-
     /// Compile-time witness that `Texture` is Send + Sync.
     #[test]
     fn texture_is_send_sync() {

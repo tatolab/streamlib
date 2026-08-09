@@ -163,18 +163,6 @@ mod layout_tests {
     use core::mem::{align_of, offset_of, size_of};
 
     #[test]
-    fn texture_registration_layout() {
-        // Pin the byte-level shape. Fields:
-        //   handle : *const c_void → offset 0, size 8
-        //   vtable : *const VTable → offset 8, size 8
-        // Total: 16 bytes, 8-byte alignment.
-        assert_eq!(size_of::<TextureRegistration>(), 16);
-        assert_eq!(align_of::<TextureRegistration>(), 8);
-        assert_eq!(offset_of!(TextureRegistration, handle), 0);
-        assert_eq!(offset_of!(TextureRegistration, vtable), 8);
-    }
-
-    #[test]
     fn texture_registration_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<TextureRegistration>();

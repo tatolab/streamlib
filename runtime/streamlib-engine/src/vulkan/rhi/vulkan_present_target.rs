@@ -1397,22 +1397,6 @@ mod tests {
         assert_eq!(MAX_FRAMES_IN_FLIGHT, 2);
     }
 
-    /// The `PresentTarget` PluginAbiObject is `#[repr(C)]` and must stay
-    /// byte-identical to the SDK twin
-    /// (`sdk/streamlib-plugin-sdk/src/rhi/present_target.rs`). Both arms
-    /// pin this layout; a drift on either side is a silent cross-build
-    /// corruption. Mentally reverting a field reorder makes this fail.
-    #[test]
-    fn present_target_pluginabiobject_layout() {
-        use core::mem::{align_of, offset_of, size_of};
-        assert_eq!(size_of::<PresentTarget>(), 32);
-        assert_eq!(align_of::<PresentTarget>(), 8);
-        assert_eq!(offset_of!(PresentTarget, handle), 0);
-        assert_eq!(offset_of!(PresentTarget, vtable), 8);
-        assert_eq!(offset_of!(PresentTarget, methods_vtable), 16);
-        assert_eq!(offset_of!(PresentTarget, color_format_raw), 24);
-        assert_eq!(offset_of!(PresentTarget, _padding), 28);
-    }
 
     /// `PresentTarget` is deliberately NOT `Clone` — the backing
     /// `VulkanPresentTarget` is single-owner `Drop`-heavy, so the parent

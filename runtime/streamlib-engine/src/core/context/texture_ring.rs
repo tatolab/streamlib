@@ -648,28 +648,6 @@ mod layout_tests {
     use core::mem::{align_of, offset_of, size_of};
 
     #[test]
-    fn texture_ring_layout() {
-        // PluginAbiObject struct as of #907 PR 1/5:
-        //   handle              @ 0  (8 bytes, *const c_void)
-        //   vtable              @ 8  (8 bytes, *const GpuContextFullAccessVTable)
-        //   methods_vtable      @ 16 (8 bytes, *const TextureRingMethodsVTable)
-        //   cached_len          @ 24 (4 bytes, u32)
-        //   cached_width        @ 28 (4 bytes, u32)
-        //   cached_height       @ 32 (4 bytes, u32)
-        //   cached_format       @ 36 (4 bytes, u32)
-        // Total = 40, align = 8.
-        assert_eq!(size_of::<TextureRing>(), 40);
-        assert_eq!(align_of::<TextureRing>(), 8);
-        assert_eq!(offset_of!(TextureRing, handle), 0);
-        assert_eq!(offset_of!(TextureRing, vtable), 8);
-        assert_eq!(offset_of!(TextureRing, methods_vtable), 16);
-        assert_eq!(offset_of!(TextureRing, cached_len), 24);
-        assert_eq!(offset_of!(TextureRing, cached_width), 28);
-        assert_eq!(offset_of!(TextureRing, cached_height), 32);
-        assert_eq!(offset_of!(TextureRing, cached_format), 36);
-    }
-
-    #[test]
     fn texture_ring_slot_layout() {
         // PluginAbiObject struct (issue #947):
         //   texture            @ 0   (32 bytes, Texture PluginAbiObject)

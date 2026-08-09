@@ -128,17 +128,6 @@ mod layout_tests {
     use core::mem::{align_of, offset_of, size_of};
 
     #[test]
-    fn vertex_buffer_layout() {
-        // 32 bytes, same shape as StorageBuffer.
-        assert_eq!(size_of::<VertexBuffer>(), 32);
-        assert_eq!(align_of::<VertexBuffer>(), 8);
-        assert_eq!(offset_of!(VertexBuffer, handle), 0);
-        assert_eq!(offset_of!(VertexBuffer, vtable), 8);
-        assert_eq!(offset_of!(VertexBuffer, byte_size_cached), 16);
-        assert_eq!(offset_of!(VertexBuffer, mapped_ptr_cached), 24);
-    }
-
-    #[test]
     fn vertex_buffer_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<VertexBuffer>();

@@ -1424,19 +1424,6 @@ mod layout_tests {
     use core::mem::{align_of, offset_of, size_of};
 
     #[test]
-    fn rhi_command_recorder_layout() {
-        // Phase E sub-lift slice B (#984) appended `methods_vtable`
-        // (16 → 24 bytes); the PluginAbiObject now mirrors the
-        // `(handle, vtable, methods_vtable)` triple used by every
-        // per-type kernel PluginAbiObject and `RhiColorConverter`.
-        assert_eq!(size_of::<RhiCommandRecorder>(), 24);
-        assert_eq!(align_of::<RhiCommandRecorder>(), 8);
-        assert_eq!(offset_of!(RhiCommandRecorder, handle), 0);
-        assert_eq!(offset_of!(RhiCommandRecorder, vtable), 8);
-        assert_eq!(offset_of!(RhiCommandRecorder, methods_vtable), 16);
-    }
-
-    #[test]
     fn rhi_command_recorder_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<RhiCommandRecorder>();

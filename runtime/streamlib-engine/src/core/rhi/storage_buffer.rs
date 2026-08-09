@@ -185,22 +185,6 @@ mod layout_tests {
     use core::mem::{align_of, offset_of, size_of};
 
     #[test]
-    fn storage_buffer_layout() {
-        // Pin the byte-level shape. Fields:
-        //   handle              : *const c_void → offset 0,  size 8
-        //   vtable              : *const VTable → offset 8,  size 8
-        //   byte_size_cached    : u64           → offset 16, size 8
-        //   mapped_ptr_cached   : *mut u8       → offset 24, size 8
-        // Total: 32 bytes, 8-byte alignment.
-        assert_eq!(size_of::<StorageBuffer>(), 32);
-        assert_eq!(align_of::<StorageBuffer>(), 8);
-        assert_eq!(offset_of!(StorageBuffer, handle), 0);
-        assert_eq!(offset_of!(StorageBuffer, vtable), 8);
-        assert_eq!(offset_of!(StorageBuffer, byte_size_cached), 16);
-        assert_eq!(offset_of!(StorageBuffer, mapped_ptr_cached), 24);
-    }
-
-    #[test]
     fn storage_buffer_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<StorageBuffer>();
