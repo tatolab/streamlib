@@ -21,11 +21,12 @@ ONE core system per concern — extend the existing system, never build a parall
 
 - All work enters through `/plan` — it reads the plan statuses and the tracker and says
   which skill is next.
-- Source edits (`runtime/ sdk/ tools/ adapters/ xtask/`) happen only inside `/implement`
+- Source edits (`runtime/ sdk/ adapters/ xtask/`) happen only inside `/implement`
   with an owner-confirmed ticket — hook-enforced via `.claude/state/active-ticket.json`.
 - Plan edits (`docs/plan/**`) happen only inside `/align`, `/propose-change`,
   `/ship-change`, or `/pivot` — hook- and ask-rule-enforced.
-- Lifecycle: `/align` (decide) → `/propose-change` (delta) → `/derive-tickets` (≤5) →
+- Lifecycle: `/align` (decide) → `/propose-change` (delta) → `/derive-tickets` (as few
+  tracer bullets as the change honestly needs) →
   `/implement` (build) → `/ship-change` (fold + prove removals). `/pivot` for direction
   changes, `/diagnose` for bugs, `/research` for questions, `/reconcile-tracker` keeps
   GitHub a projection of the plan, `/propose-rule` is the only way rules change.
@@ -42,12 +43,12 @@ framework repo first, holohub/examples follow releases). Architecture lives in O
 `docs/plan/ARCHITECTURE.md` plus `docs/plan/architecture.excalidraw` — agreed with the owner
 before implementation. Sessions implement the plan; they never make architecture.
 
-- `examples/` and the distributable entries in `packages/` (everything except `escalate`, `core`,
-  `api-server`, `test-fixtures`, `test-fixtures-abi-mismatch`) are downstream consumers, **not
-  contract sources**. Never read them to infer what the engine guarantees; never edit them to make
-  an engine change pass; never bend a runtime design to fit their existing patterns. Contracts are
-  stated in the engine and proven by engine tests and fixtures.
-- An engine change that breaks a distributable package or example is **expected, not a defect** —
+- `examples/` and the consumer entries in `packages/` (everything except `escalate`, `core`,
+  `test-fixtures`) are downstream consumers, **not contract sources**. Never read them to infer
+  what the engine guarantees; never edit them to make an engine change pass; never bend a runtime
+  design to fit their existing patterns. Contracts are stated in the engine and proven by engine
+  tests and fixtures.
+- An engine change that breaks a package or example is **expected, not a defect** —
   it is upgrade backlog for a later consumer-upgrade session run inside that consumer, not work
   for this session. Do not file tickets for it.
 - File an issue only when something blocks the current milestone. Non-blocking findings go in the
@@ -63,14 +64,13 @@ from code at need — do not create summary docs of what code already shows.
 ## Non-negotiables
 - All Vulkan calls live in the RHI (`runtime/streamlib-engine/src/vulkan/rhi/` +
   `runtime/streamlib-consumer-rhi/`). Nothing else touches `vulkanalia`. CI enforces.
-- Everything crossing the plugin ABI is `#[repr(C)]` with a layout regression test.
 - Logging is `tracing` only — no `println!`/`eprintln!` (CI enforces).
 - No `todo!()`/`unimplemented!()` in library code; no back-compat shims (pre-1.0).
 - New Rust files carry the BUSL header. Never touch `vendor/tatolab-vulkanalia*` or license files.
 - Names pass the zero-context test: `LinkOutputDataWriter`, never `Writer`. Explicit beats short.
 - Engine-wide defects get fixed at the engine layer, never bandaided in the consumer that
-  surfaced them. Pattern migrations cover the engine tree only — distributable packages and
-  examples lag by design.
+  surfaced them. Pattern migrations cover the engine tree only — `packages/` and `examples/`
+  lag by design.
 - Architecture is decided in `docs/plan/`, never per-ticket. A missing decision stops work and
   goes to the owner; it is never inferred from existing code.
 - Tests are always in scope and never need approval. Code drives tests, never the reverse.

@@ -21,9 +21,8 @@ StreamLib is a game-engine-shaped substrate: one core system per concern, many c
   Extend the existing one; a parallel abstraction is the default-wrong move.
 - **Engine-wide defects get fixed at the engine layer**, never bandaided in the consumer that
   surfaced them.
-- **Pattern migrations cover the engine tree only** — runtime, SDKs, tools, engine plugins,
-  engine tests, docs. Distributable packages and examples lag by design and are never in scope.
-- **Engine purity.** The engine's own `streamlib.yaml` declares no domain packages as deps.
+- **Pattern migrations cover the engine tree only** — runtime, SDK, adapters, engine tests,
+  docs. `packages/` and `examples/` lag by design and are never in scope.
 
 Prohibited in library code (tests/examples exempt):
 - `todo!()` / `unimplemented!()`, no-op methods, back-compat shims (pre-1.0 — rename cleanly).
@@ -33,8 +32,7 @@ Prohibited in library code (tests/examples exempt):
 Conventions:
 - Errors via the core `Error` enum + `Result<T>`; `?` over `.unwrap()` in library code.
 - Logging is `tracing` only — no `println!` / `eprintln!` (CI enforces).
-- All timekeeping uses monotonic clocks (Rust / Python / Deno), never wall-clock or sleep-based.
-- Every `#[repr(C)]` type crossing the plugin ABI has a layout regression test.
+- All timekeeping uses monotonic clocks (Rust and Python alike), never wall-clock or sleep-based.
 - Git deps pinned by `rev = "<sha>"` or `tag`; never bare `git` / `branch`, including
   `[patch.crates-io]`.
 - Rustdoc: public items get a one-line doc; no `# Example` / `# Usage` sections or ASCII diagrams
