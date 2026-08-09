@@ -113,7 +113,6 @@ _generated_/
 # package's processors/ directory, rewritten before every cargo invocation.
 # Kept out of _generated_/ so it is not mistaken for the Deno wire vocabulary,
 # whose directory presence is a provisioning oracle.
-_generated_rust_crate_root_/
 
 # Local-only operator override files (scripts + runbooks): machine-specific
 # values, private deployment targets, secrets. Convention is <name>.local.<ext>

@@ -22,11 +22,9 @@ pub mod check_no_in_process_placement;
 pub mod check_no_inventory_submit;
 pub mod check_no_reverse_dns;
 pub mod check_no_streamlib_metadata;
-pub mod check_processor_source_reachability;
 pub mod check_processor_spec_new;
 pub mod check_schema_versions;
 pub mod check_vendored_vulkanalia;
-pub mod generate_crate_roots;
 pub mod lint_logging;
 pub mod normal_build_dep_graph;
 
@@ -99,13 +97,6 @@ enum Commands {
         schema_dir: Option<PathBuf>,
     },
 
-    /// Write every in-tree folder-backed package's generated Rust crate root
-    /// (`_generated_rust_crate_root_/lib.rs`) from its `processors/` directory.
-    ///
-    /// Cargo resolves `[lib] path` at target resolution, before any build
-    /// script runs, so this cannot live in a `build.rs`. Run it before any
-    /// in-tree `cargo build` / `cargo test` that touches a package crate.
-    GenerateCrateRoots,
 
     /// Ban ad-hoc logging in polyglot SDK library code (Python + TypeScript).
     /// Paired with the workspace clippy.toml `disallowed-macros` rule for Rust.
@@ -163,11 +154,6 @@ enum Commands {
     /// `<Module>::schema_ident()`).
     CheckProcessorSpecNew,
 
-    /// CI gate reporting `.rs` files under a folder-backed package's
-    /// `processors/` directory that no `mod` chain in the generated module
-    /// tree names. Cargo and clippy both ignore such a file — it is absent
-    /// from the build, not excluded from it — so nothing else says a word.
-    CheckProcessorSourceReachability,
 
     /// CI gate for the cdylib-reachability invariant on engine `Host*`
     /// constructors. Fails when any constructor-class method
@@ -256,7 +242,6 @@ fn main() -> Result<()> {
                 link_checkout,
             })?
         }
-        Commands::GenerateCrateRoots => generate_crate_roots::run(&workspace_root()?)?,
         Commands::LintLogging => lint_logging::run(&workspace_root()?)?,
         Commands::CheckBoundaries => check_boundaries::run(&workspace_root()?)?,
         Commands::CheckSchemaVersions => check_schema_versions::run(&workspace_root()?)?,
@@ -267,9 +252,6 @@ fn main() -> Result<()> {
         }
         Commands::CheckNoInventorySubmit => check_no_inventory_submit::run(&workspace_root()?)?,
         Commands::CheckProcessorSpecNew => check_processor_spec_new::run(&workspace_root()?)?,
-        Commands::CheckProcessorSourceReachability => {
-            check_processor_source_reachability::run(&workspace_root()?)?
-        }
         Commands::CheckCdylibReach => check_cdylib_reach::run(&workspace_root()?)?,
         Commands::CheckNoEscalateInLifecycle => {
             check_no_escalate_in_lifecycle::run(&workspace_root()?)?
