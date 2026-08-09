@@ -7,10 +7,10 @@
 //!
 //! [`VulkanComputeBackend`]: crate::vulkan_compute_backend::VulkanComputeBackend
 
-use streamlib_plugin_sdk::sdk::color::ResolvedColorInfo;
-use streamlib_plugin_sdk::sdk::context::GpuContextFullAccess;
-use streamlib_plugin_sdk::sdk::error::Result;
-use streamlib_plugin_sdk::sdk::rhi::Texture;
+use streamlib::sdk::color::ResolvedColorInfo;
+use streamlib::sdk::context::GpuContextFullAccess;
+use streamlib::sdk::error::Result;
+use streamlib::sdk::rhi::Texture;
 
 use crate::backend::{JpegBackendKind, JpegDecodeBackend};
 use crate::color::JpegColorSource;
@@ -22,7 +22,7 @@ pub const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 /// Output produced by [`SimpleJpegDecoder::decode`]: the GPU texture the
 /// decode wrote into, its `surface_id` (registered in
-/// [`streamlib_plugin_sdk::sdk::context::GpuContextFullAccess`]'s texture
+/// [`streamlib::sdk::context::GpuContextFullAccess`]'s texture
 /// cache so downstream in-process consumers can resolve it), and the
 /// decoded frame's actual pixel dimensions.
 #[derive(Debug, Clone)]
@@ -77,7 +77,7 @@ impl SimpleJpegDecoder {
     /// `(max_width, max_height)` pixels.
     ///
     /// Must be called inside a
-    /// [`streamlib_plugin_sdk::sdk::context::GpuContextFullAccess`] scope
+    /// [`streamlib::sdk::context::GpuContextFullAccess`] scope
     /// (the only way crate-external code obtains a `&GpuContextFullAccess`).
     /// The processor-setup mutex is held for the duration of `new`,
     /// serializing this work against any other concurrent
