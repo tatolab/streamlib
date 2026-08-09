@@ -1068,7 +1068,7 @@ impl std::fmt::Debug for VulkanRayTracingKernel {
 #[cfg(all(test, target_pointer_width = "64"))]
 mod plugin_abi_object_layout_tests {
     use super::*;
-    use core::mem::{align_of, offset_of, size_of};
+    
 
     #[test]
     fn vulkan_ray_tracing_kernel_is_send_sync() {

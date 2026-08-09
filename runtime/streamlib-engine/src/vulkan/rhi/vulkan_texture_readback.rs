@@ -743,7 +743,7 @@ mod tests {
         let bpp = format.bytes_per_pixel();
         // Allocate staging via the export-capable pool — fine for fill:
         // we only need HOST_VISIBLE + TRANSFER_SRC.
-        let pix_format = match format {
+        let _pix_format = match format {
             TextureFormat::Bgra8Unorm | TextureFormat::Bgra8UnormSrgb => PixelFormat::Bgra32,
             TextureFormat::Rgba8Unorm | TextureFormat::Rgba8UnormSrgb => PixelFormat::Bgra32,
             other => panic!("test fixture only supports 8-bit RGBA/BGRA, got {other:?}"),

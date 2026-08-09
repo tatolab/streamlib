@@ -158,7 +158,7 @@ impl std::fmt::Debug for RhiCommandQueue {
 #[cfg(all(test, target_pointer_width = "64"))]
 mod layout_tests {
     use super::*;
-    use core::mem::{align_of, offset_of, size_of};
+    
 
     #[test]
     fn rhi_command_queue_is_send_sync() {

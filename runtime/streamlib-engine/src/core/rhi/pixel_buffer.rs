@@ -306,7 +306,7 @@ impl std::fmt::Debug for PixelBuffer {
 #[cfg(all(test, target_pointer_width = "64"))]
 mod layout_tests {
     use super::*;
-    use core::mem::{align_of, offset_of, size_of};
+    
 
     /// Compile-time witness that `PixelBuffer` is Send + Sync. The
     /// raw pointer fields would otherwise prevent auto-derive; the

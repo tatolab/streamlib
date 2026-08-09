@@ -16,7 +16,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 
-use crate::core::error::{Error, Result};
+use crate::core::error::Result;
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent};
 
 /// Latched by [`request_runtime_shutdown`], read by the run

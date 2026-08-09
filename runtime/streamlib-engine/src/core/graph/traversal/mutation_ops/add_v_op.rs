@@ -6,7 +6,7 @@ use crate::core::graph::{
     TraversalSourceMut,
 };
 use crate::core::processors::{
-    PROCESSOR_REGISTRY, ProcessorSpec, ProcessorState, ProcessorTypeReference,
+    PROCESSOR_REGISTRY, ProcessorSpec, ProcessorState,
 };
 
 impl<'a> TraversalSourceMut<'a> {

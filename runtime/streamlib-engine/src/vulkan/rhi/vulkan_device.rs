@@ -500,7 +500,7 @@ impl HostVulkanDevice {
             .api_version(vk::make_version(1, 4, 0))
             .build();
 
-        let mut instance_create_flags = vk::InstanceCreateFlags::empty();
+        let instance_create_flags = vk::InstanceCreateFlags::empty();
 
         // On macOS/iOS, enable portability enumeration flag
         #[cfg(any(target_os = "macos", target_os = "ios"))]

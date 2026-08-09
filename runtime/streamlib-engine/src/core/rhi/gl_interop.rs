@@ -13,7 +13,6 @@
 
 use crate::core::rhi::PixelBuffer;
 use crate::core::{Error, Result};
-use std::ffi::c_void;
 
 /// OpenGL texture target constants.
 pub mod gl_constants {

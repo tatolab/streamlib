@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use std::collections::{HashMap, HashSet};
-use std::ffi::c_void;
 use std::sync::{Arc, LazyLock};
 
 use parking_lot::RwLock;

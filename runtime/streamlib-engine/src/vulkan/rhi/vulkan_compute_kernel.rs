@@ -1235,7 +1235,7 @@ impl std::fmt::Debug for VulkanComputeKernel {
 #[cfg(all(test, target_pointer_width = "64"))]
 mod plugin_abi_object_layout_tests {
     use super::*;
-    use core::mem::{align_of, offset_of, size_of};
+    
 
     #[test]
     fn vulkan_compute_kernel_is_send_sync() {
@@ -1701,7 +1701,7 @@ fn vk_image_view_for(texture: &Texture) -> Result<vk::ImageView> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::rhi::{PixelBuffer, PixelFormat};
+    use crate::core::rhi::PixelBuffer;
     use crate::vulkan::rhi::HostVulkanBuffer;
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
@@ -2594,7 +2594,7 @@ mod tests {
         unsafe {
             device_handle.destroy_image_view(in_view, None);
             device_handle.destroy_image_view(out_view, None);
-            use vulkanalia_vma::Alloc;
+            
             allocator.destroy_image(in_image, in_alloc);
             allocator.destroy_image(out_image, out_alloc);
         }

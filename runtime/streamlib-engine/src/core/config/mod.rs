@@ -5,4 +5,4 @@
 
 mod project_config;
 
-pub use project_config::{PackageMetadata, ProjectConfig};
+pub use project_config::ProjectConfig;

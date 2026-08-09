@@ -604,7 +604,7 @@ impl std::fmt::Debug for TexturePool {
 #[cfg(all(test, target_pointer_width = "64"))]
 mod layout_tests {
     use super::*;
-    use core::mem::{align_of, offset_of, size_of};
+    
 
     /// Compile-time witness that `PooledTextureHandle` is Send + Sync.
     #[test]
