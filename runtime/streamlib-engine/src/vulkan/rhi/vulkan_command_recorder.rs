@@ -10,7 +10,7 @@ use parking_lot::Mutex;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::core::rhi::{DrawCall, DrawIndexedCall, ScissorRect, Texture, Viewport, VulkanLayout};
+use crate::core::rhi::{DrawCall, DrawIndexedCall, Texture, VulkanLayout};
 use crate::core::{Error, Result};
 
 use super::{
@@ -936,45 +936,6 @@ impl RhiCommandRecorderInner {
     // inside `vulkan/rhi/`.
     // -------------------------------------------------------------------------
 
-    /// Wire-format companion to
-    /// [`Self::record_swapchain_image_barrier`].
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn record_swapchain_image_barrier_from_wire(
-        &mut self,
-        image_raw: u64,
-        from_layout_raw: i32,
-        to_layout_raw: i32,
-        from_stage_raw: i64,
-        to_stage_raw: i64,
-        from_access_raw: i64,
-        to_access_raw: i64,
-    ) -> Result<()> {
-        let image = vk::Image::from_raw(image_raw);
-        let old_layout = vk::ImageLayout::from_raw(from_layout_raw);
-        let new_layout = vk::ImageLayout::from_raw(to_layout_raw);
-        let src_stage = vk::PipelineStageFlags2::from_bits_truncate(from_stage_raw as u64);
-        let src_access = vk::AccessFlags2::from_bits_truncate(from_access_raw as u64);
-        let dst_stage = vk::PipelineStageFlags2::from_bits_truncate(to_stage_raw as u64);
-        let dst_access = vk::AccessFlags2::from_bits_truncate(to_access_raw as u64);
-        self.record_swapchain_image_barrier(
-            image, old_layout, new_layout, src_stage, src_access, dst_stage, dst_access,
-        )
-    }
-
-    /// Wire-format companion to [`Self::cmd_begin_dynamic_rendering`].
-    pub(crate) fn cmd_begin_dynamic_rendering_from_wire(
-        &mut self,
-        image_view_raw: u64,
-        extent_w: u32,
-        extent_h: u32,
-        clear_color: Option<[f32; 4]>,
-    ) -> Result<()> {
-        let image_view = vk::ImageView::from_raw(image_view_raw);
-        self.cmd_begin_dynamic_rendering(image_view, (extent_w, extent_h), clear_color)
-    }
-
-    /// Wire-format companion to [`Self::submit_with_semaphores`].
- 
     fn expect_recording(&self, op: &'static str) -> Result<()> {
         let state = self.state.lock();
         if *state != RecorderState::Recording {

@@ -3,35 +3,22 @@
 
 //! Output writer for sending frames to downstream processors.
 //!
-//! # Two-type split: PluginAbiObject vs. inner
-//!
-//! Issue #894 retires the last shared-Rust-type plugin ABI crossing
-//! by splitting this module's public surface into two types:
+//! # Two-type split: handle vs. inner
 //!
 //! - [`OutputWriterInner`] holds the actual state — the
-//!   `Mutex<HashMap<port, Vec<DownstreamConnection>>>` and the
-//!   iceoryx2 publish + notify logic. It runs entirely in the
-//!   host; cdylib code never references this type directly.
-//! - [`OutputWriter`] is the public `#[repr(C)] { handle, vtable }`
-//!   PluginAbiObject that processor structs hold via the macro-emitted
-//!   `outputs: OutputWriter` field. In host mode the vtable
-//!   resolves to the host's static
-//!   `HOST_OUTPUT_WRITER_VTABLE`; in cdylib mode it points at the
-//!   host-installed pointer from
-//!   `HostServices::output_writer_vtable`. Either way the methods
-//!   on the PluginAbiObject (`write`, `write_raw`, `has_port`, `clone`,
-//!   `drop`) dispatch through the vtable to the host-allocated
-//!   inner.
+//!   `Mutex<HashMap<port, ChannelEgress>>` and the iceoryx2 publish +
+//!   notify logic. All per-frame publish + notify work runs here.
+//! - [`OutputWriter`] is the public handle that processor structs hold
+//!   via the macro-emitted `outputs: OutputWriter` field. It wraps an
+//!   `Arc<OutputWriterInner>` behind an opaque handle; its methods
+//!   (`write`, `write_raw`, `has_port`, `clone`, `drop`) borrow the
+//!   inner and invoke it directly.
 //!
-//! Host-side code that needs to mutate the inner (e.g. compiler ops
-//! installing a channel publisher + destination notifiers at wiring
-//! time) operates on `Arc<OutputWriterInner>` directly via
+//! Host-side code that mutates the inner (e.g. compiler ops installing
+//! a channel publisher + destination notifiers at wiring time) operates
+//! on `Arc<OutputWriterInner>` directly via
 //! [`OutputWriterInner::set_channel_publisher`] and
-//! [`OutputWriterInner::add_channel_link`] — no PluginAbiObject, no
-//! plugin ABI hop.
-//! The cdylib's per-frame `write` calls cross extern "C" exactly
-//! once per emit (sub-microsecond on amd64; see the PR microbench
-//! for issue #894).
+//! [`OutputWriterInner::add_channel_link`].
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -328,13 +315,13 @@ impl OutputWriterInner {
         // (e.g. a listener not yet created) — log and continue rather than
         // failing the publish; the data is already in shared memory and the
         // next send() will wake the listener anyway.
-        for notifier in egress.links.iter().filter_map(|link| link.notifier.as_ref()) {
+        for notifier in egress
+            .links
+            .iter()
+            .filter_map(|link| link.notifier.as_ref())
+        {
             if let Err(e) = notifier.notify() {
-                tracing::trace!(
-                    "OutputWriter: notify() failed for port '{}': {:?}",
-                    port,
-                    e
-                );
+                tracing::trace!("OutputWriter: notify() failed for port '{}': {:?}", port, e);
             }
         }
 
@@ -448,13 +435,11 @@ impl OutputWriter {
         // SAFETY: handle came from Arc::into_raw; bumping the
         // strong count via the vtable's clone_arc gives us a fresh
         // owning reference we can reconstruct as Arc::from_raw.
-        // SAFETY: `handle` is `Arc::into_raw(Arc<OutputWriterInner>)`;
-        // reconstruct, clone (bumping the count), and re-leak the original.
+        // SAFETY: `handle` is `Arc::into_raw(Arc<OutputWriterInner>)`; bump
+        // the strong count and reconstruct an owning `Arc` from the raw handle.
         unsafe {
-            let arc = Arc::from_raw(self.handle as *const OutputWriterInner);
-            let cloned = Arc::clone(&arc);
-            let _ = Arc::into_raw(arc);
-            Some(cloned)
+            Arc::increment_strong_count(self.handle as *const OutputWriterInner);
+            Some(Arc::from_raw(self.handle as *const OutputWriterInner))
         }
     }
 
@@ -483,17 +468,14 @@ impl OutputWriter {
 
     /// Write raw msgpack-encoded bytes to the specified output port.
     pub fn write_raw(&self, port: &str, data: &[u8], timestamp_ns: i64) -> Result<()> {
-        if !self.is_configured() {
+        let Some(inner) = self.host_inner() else {
             return Err(Error::Link(format!(
                 "OutputWriter not wired (port='{}'): host has not yet \
                  installed iceoryx2 resources on this processor instance",
                 port
             )));
-        }
-        // `is_configured()` guaranteed a non-null handle above.
-        self.host_inner()
-            .expect("write_raw: configured but null handle")
-            .write_raw(port, data, timestamp_ns)
+        };
+        inner.write_raw(port, data, timestamp_ns)
     }
 
     /// Check if a port is configured.
@@ -516,15 +498,14 @@ impl Clone for OutputWriter {
         if !self.is_configured() {
             return Self::empty();
         }
-        // SAFETY: `handle` is `Arc::into_raw(Arc<OutputWriterInner>)`;
-        // bump the strong count and re-leak both.
-        let cloned_handle = unsafe {
-            let arc = Arc::from_raw(self.handle as *const OutputWriterInner);
-            let cloned = Arc::clone(&arc);
-            let _ = Arc::into_raw(arc);
-            Arc::into_raw(cloned) as *const c_void
-        };
-        Self { handle: cloned_handle }
+        // SAFETY: `handle` is `Arc::into_raw(Arc<OutputWriterInner>)`; bump
+        // the strong count so both handles own one reference.
+        unsafe {
+            Arc::increment_strong_count(self.handle as *const OutputWriterInner);
+        }
+        Self {
+            handle: self.handle,
+        }
     }
 }
 
@@ -1012,7 +993,8 @@ mod tests {
 
         let inner = Arc::new(OutputWriterInner::new());
         let schema =
-            SchemaIdentWire::from_segments("tatolab", "core", "EncodedVideoFrame", 1, 0, 0).unwrap();
+            SchemaIdentWire::from_segments("tatolab", "core", "EncodedVideoFrame", 1, 0, 0)
+                .unwrap();
         let ceiling = 128 * 1024usize;
         inner.set_channel_publisher(
             "out",
@@ -1075,7 +1057,10 @@ mod tests {
             .receive()
             .expect("receive")
             .expect("post-refusal frame must be delivered");
-        assert_eq!(got.payload().len(), FRAME_HEADER_SIZE + b"still-alive".len());
+        assert_eq!(
+            got.payload().len(),
+            FRAME_HEADER_SIZE + b"still-alive".len()
+        );
     }
 
     /// Drift guard for the two trust-tier spellings: `ChannelTrustTier::as_str`
@@ -1087,7 +1072,10 @@ mod tests {
     /// can't silently drift.
     #[test]
     fn trust_tier_label_spellings_do_not_drift() {
-        for tier in [ChannelTrustTier::Trusted, ChannelTrustTier::UntrustedSession] {
+        for tier in [
+            ChannelTrustTier::Trusted,
+            ChannelTrustTier::UntrustedSession,
+        ] {
             let label = trust_tier_label(tier);
             assert_eq!(
                 tier.as_str(),

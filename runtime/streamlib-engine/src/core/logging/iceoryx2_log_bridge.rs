@@ -65,11 +65,8 @@ impl Log for IceoryxLogBridge {
     }
 }
 
-/// Process-wide bridge value. Lives in `.rodata` (zero-sized) per
-/// loaded artifact; the host's copy is the one shared with plugin cdylibs via
-/// [`crate::core::plugin::HostServices::iceoryx2_logger`]. Both
-/// host's and cdylib's copies impl `Log` against the same workspace-
-/// pinned `iceoryx2-log-types::Log` vtable.
+/// Process-wide bridge value. Lives in `.rodata` (zero-sized); impls `Log`
+/// against the workspace-pinned `iceoryx2-log-types::Log` vtable.
 pub static HOST_BRIDGE: IceoryxLogBridge = IceoryxLogBridge;
 
 /// Install [`HOST_BRIDGE`] as this artifact's iceoryx2 process-wide
@@ -77,17 +74,4 @@ pub static HOST_BRIDGE: IceoryxLogBridge = IceoryxLogBridge;
 /// and returns false on subsequent calls, which we treat as success.
 pub fn install_iceoryx2_log_bridge_for_self() {
     let _ = iceoryx2_log::set_logger(&HOST_BRIDGE);
-}
-
-/// Install a foreign `&'static dyn Log` into this plugin's iceoryx2
-/// process-wide logger. Used by plugin cdylibs receiving the host's
-/// bridge pointer through `HostServices`.
-///
-/// # Safety
-///
-/// `logger` must remain valid for the lifetime of this plugin. The
-/// host's [`HOST_BRIDGE`] is `'static` by construction, so passing
-/// `&HOST_BRIDGE` from the host satisfies this.
-pub unsafe fn install_foreign_iceoryx2_logger(logger: &'static dyn Log) {
-    let _ = iceoryx2_log::set_logger(logger);
 }

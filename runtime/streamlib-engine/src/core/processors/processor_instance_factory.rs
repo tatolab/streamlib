@@ -16,7 +16,6 @@ use crate::core::processors::{Config, DynGeneratedProcessor, GeneratedProcessor}
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
 use streamlib_processor_schema::PortSchemaSpec;
 
-/// Scratch buffer the vtable's error-out-params write into. 512 B is
 /// A created processor instance for runtime use.
 ///
 /// Every processor — host-compiled Rust types registered through
@@ -36,18 +35,12 @@ pub enum ProcessorInstance {
     LegacyDyn(Box<dyn DynGeneratedProcessor + Send>),
 }
 
-// Safety: the boxed `dyn DynGeneratedProcessor + Send` is already Send.
-unsafe impl Send for ProcessorInstance {}
-
 impl ProcessorInstance {
-    /// Whether this instance's code lives in a separately-built cdylib loaded
-    /// via `STREAMLIB_PLUGIN` (`true`), versus host-binary-compiled code
-    /// (`register::<P>()` in-process VTable, or a `LegacyDyn` subprocess host)
-    /// (`false`). Feeds the isolation-tier derivation: a cdylib-resident
-    /// `@session` module is ELIGIBLE for Untrusted when the operator opts into
-    /// isolation — default is trusted (same as installed), and host-compiled
-    /// `@session` code (`add_local::<P>()`) is the host's own code and stays
-    /// trusted.
+    /// Isolation-tier seam: whether this instance's code is separately built
+    /// and untrusted. Always `false` now that every processor is host-compiled
+    /// (`register::<P>()` / `add_local::<P>()`) or a subprocess host wrapper —
+    /// both the host's own code. Retained as the isolation-tier input; when an
+    /// untrusted-code path returns, this is where it reports.
     pub(crate) fn is_cdylib_resident(&self) -> bool {
         false
     }
@@ -60,10 +53,6 @@ impl ProcessorInstance {
     }
 
     /// Run the processor's `teardown` lifecycle.
-    ///
-    /// Mirrors [`Self::setup`]'s variant-aware dispatch — see that
-    /// doc for the cdylib-resident vs in-process VTable vs
-    /// LegacyDyn shape rationale.
     pub fn teardown(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         match self {
             Self::LegacyDyn(inner) => inner.__generated_teardown(ctx),
@@ -91,44 +80,23 @@ impl ProcessorInstance {
         }
     }
 
-    /// Start a Manual-mode processor.
-    ///
-    /// Variant-aware dispatch matching the historical "FullAccess
-    /// in signature → direct access in body" contract for every
-    /// runtime variant:
-    /// - **`VTable { cdylib_resident: true }`**: wraps in
-    ///   [`RuntimeContextFullAccess::with_cdylib_scope`] so cdylib
-    ///   bodies see a `ScopeToken` FullAccess (direct access
-    ///   becomes vtable dispatch — no `host_inner()` panic).
-    /// - **`VTable { cdylib_resident: false }`** (in-process
-    ///   `register::<P>()`) and **`LegacyDyn`** (subprocess hosts):
-    ///   pure passthrough. Historical: start/stop were never
-    ///   gate-wrapped (thread_runner calls them directly), so adding
-    ///   a wrap here would change semantics for in-process bodies
-    ///   that legitimately escalate or do their own thread spawning.
-    ///   In-process bodies use `ctx.gpu_full_access()` directly
-    ///   (Boxed deref, host-only); subprocess host bodies do their
-    ///   own per-call gate management via the bridge handlers (#867
-    ///   contract).
+    /// Start a Manual-mode processor. Pure passthrough — `start`/`stop` are
+    /// never gate-wrapped (thread_runner calls them directly); a body that
+    /// escalates or spawns threads does its own per-call gate management.
     pub fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         match self {
             Self::LegacyDyn(inner) => inner.start(ctx),
         }
     }
 
-    /// Stop a Manual-mode processor.
-    ///
-    /// Mirrors [`Self::start`]'s variant-aware dispatch — see that
-    /// doc for the rationale.
+    /// Stop a Manual-mode processor. Pure passthrough — see [`Self::start`].
     pub fn stop(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         match self {
             Self::LegacyDyn(inner) => inner.stop(ctx),
         }
     }
 
-    /// Read the processor's execution config. For VTable variants
-    /// the call crosses extern "C" once; for LegacyDyn it dispatches
-    /// through the trait object.
+    /// Read the processor's execution config.
     pub fn execution_config(&self) -> ExecutionConfig {
         match self {
             Self::LegacyDyn(inner) => inner.execution_config(),
@@ -147,8 +115,7 @@ impl ProcessorInstance {
         }
     }
 
-    /// Whether this processor has failed unrecoverably. Always `false` for a
-    /// cdylib plugin — the plugin ABI has no slot for it.
+    /// Whether this processor has failed unrecoverably.
     pub fn has_failed_unrecoverably(&self) -> bool {
         match self {
             Self::LegacyDyn(inner) => inner.has_failed_unrecoverably(),
@@ -159,8 +126,7 @@ impl ProcessorInstance {
     /// outside the engine's address space, and `None` when the engine wires it
     /// itself.
     ///
-    /// Only a dyn registration can be out of process — a cdylib plugin's ports
-    /// are engine-side by construction.
+    /// Only a subprocess-host registration can be out of process.
     pub fn out_of_process_link_wiring(
         &mut self,
     ) -> Option<&mut super::OutOfProcessLinkWiringEnvelope> {
@@ -176,8 +142,7 @@ impl ProcessorInstance {
     /// Used by the host's connection-wiring path (compiler ops) to
     /// mutate the inner directly via
     /// [`crate::iceoryx2::OutputWriterInner::set_channel_publisher`]
-    /// and [`crate::iceoryx2::OutputWriterInner::add_channel_link`]
-    /// — no plugin ABI hop to the cdylib.
+    /// and [`crate::iceoryx2::OutputWriterInner::add_channel_link`].
     pub fn iceoryx2_output_writer_inner(&self) -> Option<Arc<crate::iceoryx2::OutputWriterInner>> {
         match self {
             Self::LegacyDyn(inner) => inner.iceoryx2_output_writer_inner(),
@@ -290,7 +255,7 @@ enum RegistrationKind {
     /// (and other `host_inner()`-only) calls through an opaque
     /// scope token whose memory layout doesn't match `Box<Arc<…>>`
     /// — UB.
-     /// Box<dyn Fn> closure constructor — used for subprocess host
+    /// Box<dyn Fn> closure constructor — used for subprocess host
     /// wrappers via `register_dynamic`.
     LegacyDyn {
         constructor: DynamicProcessorConstructorFn,
@@ -373,8 +338,8 @@ impl ProcessorInstanceFactory {
         // register through the same trait-object path as subprocess
         // hosts: a constructor closure boxes `P` as a
         // `DynGeneratedProcessor`.
-        let constructor: DynamicProcessorConstructorFn =
-            Box::new(|node: &ProcessorNode| -> Result<Box<dyn DynGeneratedProcessor + Send>> {
+        let constructor: DynamicProcessorConstructorFn = Box::new(
+            |node: &ProcessorNode| -> Result<Box<dyn DynGeneratedProcessor + Send>> {
                 let config: P::Config = match &node.config {
                     Some(json) => serde_json::from_value(json.clone()).map_err(|e| {
                         Error::Configuration(format!(
@@ -385,7 +350,8 @@ impl ProcessorInstanceFactory {
                     None => P::Config::default(),
                 };
                 Ok(Box::new(P::from_config(config)?))
-            });
+            },
+        );
         if let Err(e) = self.register_dynamic(descriptor, constructor) {
             tracing::warn!(
                 "Processor registration for {} failed: {}",
@@ -413,7 +379,7 @@ impl ProcessorInstanceFactory {
     /// - The cdylib-bridge `processor_register` callback in
     ///   `core::plugin::host_services` — passes the cdylib's
     ///   `&'static ProcessorVTable` with `cdylib_resident: true`.
- 
+
     /// Register a processor dynamically at runtime with a non-generic
     /// `Box<dyn Fn>` constructor. Used for subprocess host wrappers
     /// (Python / Deno) where the constructor isn't expressible as a
@@ -658,11 +624,9 @@ impl ProcessorInstanceFactory {
         })?;
 
         let RegistrationKind::LegacyDyn { constructor } = registration;
-            let mut instance = ProcessorInstance::LegacyDyn(constructor(node)?);
-            instance.install_iceoryx2_resources()?;
-            Ok(instance)
-        
-
+        let mut instance = ProcessorInstance::LegacyDyn(constructor(node)?);
+        instance.install_iceoryx2_resources()?;
+        Ok(instance)
     }
 
     pub fn port_info(

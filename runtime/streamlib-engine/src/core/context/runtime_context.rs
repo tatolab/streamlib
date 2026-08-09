@@ -6,10 +6,8 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-
 use super::{
-    GpuContext, GpuContextFullAccess, GpuContextLimitedAccess,
-    SharedAudioClock, TimeContext,
+    GpuContext, GpuContextFullAccess, GpuContextLimitedAccess, SharedAudioClock, TimeContext,
 };
 use crate::core::graph::ProcessorUniqueId;
 use crate::core::runtime::{RuntimeOperations, RuntimeUniqueId};
@@ -761,7 +759,6 @@ impl<'a> RuntimeContextFullAccess<'a> {
         self.host_base().runtime()
     }
 
-
     // ------------ Engine-internal host accessors ------------
 
     /// Direct reference to the underlying [`RuntimeContext`]. **Host-only**:
@@ -897,7 +894,6 @@ mod capability_view_tests {
     }
 }
 
-
 #[cfg(test)]
 mod host_runtime_ops_wiring_tests {
     //! Lock-in for the #1426 wiring fix: a host-resident processor's
@@ -922,21 +918,7 @@ mod host_runtime_ops_wiring_tests {
     //! GPU-gated because a `RuntimeContext` embeds a `GpuContext` by value;
     //! the assertion itself needs no GPU work, only the context shell.
 
-    
     use crate::core::context::GpuContext;
-    
-    
-
-    fn gpu_or_skip(test_name: &str) -> Option<GpuContext> {
-        match GpuContext::init_for_platform_sync() {
-            Ok(gpu) => Some(gpu),
-            Err(e) => {
-                tracing::warn!("{test_name}: no GPU device ({e}) — skipping");
-                None
-            }
-        }
-    }
-
 }
 
 // =============================================================================
@@ -952,9 +934,4 @@ mod host_runtime_ops_wiring_tests {
 // the SDK twin asserts the SAME numbers, so a field added to one side but not
 // the other trips a test rather than corrupting field reads at runtime.
 #[cfg(all(test, target_pointer_width = "64"))]
-mod layout_tests {
-    use super::*;
-    use core::mem::{align_of, size_of};
-
-
-}
+mod layout_tests {}

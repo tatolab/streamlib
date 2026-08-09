@@ -3,28 +3,22 @@
 
 //! Input mailboxes for receiving frames from upstream processors.
 //!
-//! # Two-type split: PluginAbiObject vs. inner
-//!
-//! Issue #894 retires the last shared-Rust-type plugin ABI crossing
-//! by splitting this module's public surface into two types:
+//! # Two-type split: handle vs. inner
 //!
 //! - [`InputMailboxesInner`] holds the actual state — the
 //!   `HashMap<port, PortConfig>` of per-port mailboxes plus the
 //!   thread-local `Subscriber` and `Listener` wrappers. All
-//!   per-frame `receive_pending` + mailbox push/pop work runs
-//!   here; only the host references this type directly.
-//! - [`InputMailboxes`] is the public `#[repr(C)] { handle, vtable }`
-//!   PluginAbiObject that processor structs hold via the macro-emitted
-//!   `inputs: InputMailboxes` field. From inside `process()` the
-//!   cdylib reaches input data exclusively through `read` /
-//!   `read_raw` / `has_data` on this PluginAbiObject; the vtable dispatches
-//!   to the host-allocated inner.
+//!   per-frame `receive_pending` + mailbox push/pop work runs here.
+//! - [`InputMailboxes`] is the public handle that processor structs
+//!   hold via the macro-emitted `inputs: InputMailboxes` field. It
+//!   wraps an `Arc<InputMailboxesInner>` behind an opaque handle;
+//!   `process()` reaches input data through `read` / `read_raw` /
+//!   `has_data`, which borrow the inner and invoke it directly.
 //!
-//! Host-side wiring code that needs to mutate the inner
-//! (`add_port`, `add_channel_subscriber`, `set_listener`, `listener_fd`,
+//! Host-side wiring code that mutates the inner (`add_port`,
+//! `add_channel_subscriber`, `set_listener`, `listener_fd`,
 //! `drain_listener`, etc.) operates on `Arc<InputMailboxesInner>`
-//! directly via the methods declared on the inner type — no
-//! PluginAbiObject, no plugin ABI hop.
+//! directly via the methods declared on the inner type.
 
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
@@ -663,13 +657,11 @@ impl InputMailboxes {
         // SAFETY: handle came from Arc::into_raw; bumping the
         // strong count via the vtable's clone_arc gives us a fresh
         // owning reference we can reconstruct as Arc::from_raw.
-        // SAFETY: `handle` is `Arc::into_raw(Arc<InputMailboxesInner>)`;
-        // reconstruct, clone (bumping the count), and re-leak the original.
+        // SAFETY: `handle` is `Arc::into_raw(Arc<InputMailboxesInner>)`; bump
+        // the strong count and reconstruct an owning `Arc` from the raw handle.
         unsafe {
-            let arc = Arc::from_raw(self.handle as *const InputMailboxesInner);
-            let cloned = Arc::clone(&arc);
-            let _ = Arc::into_raw(arc);
-            Some(cloned)
+            Arc::increment_strong_count(self.handle as *const InputMailboxesInner);
+            Some(Arc::from_raw(self.handle as *const InputMailboxesInner))
         }
     }
 
@@ -702,12 +694,9 @@ impl InputMailboxes {
     /// the pre-#1421 `max_payload_for_port` up-front sizing that dropped every
     /// frame past the authored budget.
     pub fn read_raw(&self, port: &str) -> Result<Option<(Vec<u8>, i64)>> {
-        use streamlib_ipc_types::DEFAULT_EXPECTED_PAYLOAD_BYTES;
-
         let Some(inner) = self.host_inner() else {
             return Ok(None);
         };
-        let _ = DEFAULT_EXPECTED_PAYLOAD_BYTES;
         inner.read_raw(port)
     }
 
@@ -731,15 +720,14 @@ impl Clone for InputMailboxes {
         if !self.is_configured() {
             return Self::empty();
         }
-        // SAFETY: `handle` is `Arc::into_raw(Arc<InputMailboxesInner>)`;
-        // bump the strong count and re-leak both.
-        let cloned_handle = unsafe {
-            let arc = Arc::from_raw(self.handle as *const InputMailboxesInner);
-            let cloned = Arc::clone(&arc);
-            let _ = Arc::into_raw(arc);
-            Arc::into_raw(cloned) as *const c_void
-        };
-        Self { handle: cloned_handle }
+        // SAFETY: `handle` is `Arc::into_raw(Arc<InputMailboxesInner>)`; bump
+        // the strong count so both handles own one reference.
+        unsafe {
+            Arc::increment_strong_count(self.handle as *const InputMailboxesInner);
+        }
+        Self {
+            handle: self.handle,
+        }
     }
 }
 
@@ -940,7 +928,11 @@ mod tests {
             .read_raw("in")
             .expect("read_raw must succeed under loose validation")
             .expect("a frame is queued");
-        assert_eq!(read.0, vec![9, 8, 7, 6], "payload delivered despite mismatch");
+        assert_eq!(
+            read.0,
+            vec![9, 8, 7, 6],
+            "payload delivered despite mismatch"
+        );
         assert!(
             mailboxes.schema_mismatch_observed("in"),
             "the disagreeing tag must be observed as a mismatch",
@@ -952,8 +944,8 @@ mod tests {
     /// likewise silent.
     #[test]
     fn read_raw_is_silent_on_matching_or_wildcard_schema() {
-        let matching = SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0)
-            .unwrap();
+        let matching =
+            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
 
         // Exact match → no mismatch.
         let mb_match = InputMailboxesInner::new();
@@ -1200,7 +1192,9 @@ mod tests {
 
         // The staged frame was consumed exactly once — the mailbox is now empty.
         assert!(matches!(
-            inner.read_raw_bounded("in", body.len()).expect("bounded read"),
+            inner
+                .read_raw_bounded("in", body.len())
+                .expect("bounded read"),
             BoundedReadOutcome::Empty
         ));
     }

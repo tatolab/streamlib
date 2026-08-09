@@ -17,8 +17,7 @@ use super::{PixelBufferRef, PixelFormat};
 /// Layout-stable: every field is either a primitive or an opaque
 /// pointer. The platform-specific `PixelBufferRef` is hidden behind
 /// the opaque `handle`; engine-internal callers reach it through
-/// [`PixelBuffer::buffer_ref`], cdylib callers route through the
-/// vtable.
+/// [`PixelBuffer::buffer_ref`].
 ///
 /// Clone only increments the host's `Arc<PixelBufferRef>` strong
 /// count via [`GpuContextLimitedAccessVTable::clone_pixel_buffer`] —
@@ -33,8 +32,7 @@ use super::{PixelBufferRef, PixelFormat};
 pub struct PixelBuffer {
     /// Opaque handle to the host's `Arc<PixelBufferRef>` (produced
     /// by `Arc::into_raw`). Engine-internal callers downcast to
-    /// `*const PixelBufferRef` via [`PixelBuffer::buffer_ref`];
-    /// cdylib callers treat it as opaque.
+    /// `*const PixelBufferRef` via [`PixelBuffer::buffer_ref`].
     pub(crate) handle: *const c_void,
     /// Cached width (queried once at construction).
     pub width: u32,
@@ -280,33 +278,11 @@ impl std::fmt::Debug for PixelBuffer {
     }
 }
 
-// =============================================================================
-// Layout regression tests
-// =============================================================================
-//
-// `PixelBuffer` is the load-bearing β-reshape type that crosses the
-// plugin ABI. A drift in its `#[repr(C)]` layout would
-// silently corrupt every `acquire_pixel_buffer` / `release_pixel_buffer`
-// / `resolve_pixel_buffer_by_surface_id` round-trip — the host's
-// pixel-buffer accessors would read the cdylib's stale field offsets.
-// The vtable layout-version constant
-// (`GPU_CONTEXT_LIMITED_ACCESS_VTABLE_LAYOUT_VERSION`) catches drift
-// in the dispatch table; this test catches drift in the value type
-// itself.
-//
-// Sister tests at `runtime/streamlib-plugin-abi/src/lib.rs::layout_tests`
-// pin the vtable structs the same way.
-
-#[cfg(all(test, target_pointer_width = "64"))]
-mod layout_tests {
+#[cfg(test)]
+mod tests {
     use super::*;
-    
 
-    /// Compile-time witness that `PixelBuffer` is Send + Sync. The
-    /// raw pointer fields would otherwise prevent auto-derive; the
-    /// `unsafe impl Send + Sync` is sound only because Arc refcount
-    /// management runs in host-compiled code via the vtable
-    /// callbacks.
+    /// Compile-time witness that `PixelBuffer` is Send + Sync.
     #[test]
     fn pixel_buffer_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}

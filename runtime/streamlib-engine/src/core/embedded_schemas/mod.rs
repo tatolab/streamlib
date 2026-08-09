@@ -20,7 +20,6 @@
 
 use parking_lot::RwLock;
 use std::collections::HashMap;
-use std::ffi::c_void;
 use std::sync::{Arc, LazyLock};
 
 #[cfg(test)]

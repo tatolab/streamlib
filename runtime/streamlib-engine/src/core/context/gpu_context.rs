@@ -2391,7 +2391,9 @@ impl Drop for GpuContextLimitedAccess {
             // SAFETY: `handle` is `Box::into_raw(Box<Arc<GpuContext>>)`,
             // from `new()` or `Clone`; reclaim it.
             unsafe {
-                drop(Box::from_raw(self.handle as *mut std::sync::Arc<GpuContext>));
+                drop(Box::from_raw(
+                    self.handle as *mut std::sync::Arc<GpuContext>,
+                ));
             }
         }
     }
@@ -2697,79 +2699,19 @@ impl GpuContextFullAccess {
         Self { handle }
     }
 
-    /// Lobby constructor. Wraps an opaque scope token (issued by the
-    /// host's
-    /// [`GpuContextLimitedAccessVTable`](streamlib_plugin_abi::GpuContextLimitedAccessVTable)'s
-    /// `escalate_begin` callback) as a full-access capability whose
-    /// methods route through the
-    /// [`GpuContextFullAccessVTable`](streamlib_plugin_abi::GpuContextFullAccessVTable)
-    /// for plugin ABI dispatch.
-    ///
-    /// Used by the cdylib-mode path of
-    /// [`GpuContextLimitedAccess::escalate`]; the matching cleanup
-    /// (release the escalate gate + `wait_device_idle`) runs inside
-    /// `escalate_end` rather than [`Drop`], so the FullAccess's
-    /// [`Drop`] short-circuits.
-    ///
-    /// `inherited_lim_handle` / `inherited_lim_vtable` are the
-    /// originating `GpuContextLimitedAccess`'s handle + vtable. Phase
-    /// D's Option-B dispatch shape for the LimitedAccess-mirror
-    /// methods (e.g. [`Self::acquire_pixel_buffer`],
-    /// [`Self::register_texture_with_layout`], [`Self::surface_store`])
-    /// borrows these to dispatch through the C1-proven LimitedAccess
-    /// vtable, avoiding ~20 duplicate slot entries on the FullAccess
-    /// vtable. See the struct doc for the inheritance rationale.
- 
     /// Engine-internal borrow of the host's [`GpuContext`] (read
     /// through the handle's `Box<Arc<GpuContext>>`).
-    ///
-    /// **Panics if called from cdylib code.** Mirrors
-    /// [`GpuContextLimitedAccess::host_inner`]'s contract: cdylib code
-    /// must dispatch through the
-    /// [`GpuContextFullAccessVTable`](streamlib_plugin_abi::GpuContextFullAccessVTable)
-    /// instead. The panic is caught by `run_host_extern_c` at the plugin ABI
-    /// boundary.
     pub(crate) fn host_inner(&self) -> &GpuContext {
         // SAFETY: `self.handle` was produced by `Self::new`, which
         // calls `Box::into_raw(Box::new(Arc::new(GpuContext)))`. The
-        // matching `host_gpu_full_drop_handle` runs on Drop, so the
-        // `Arc<GpuContext>` is alive for the duration of `&self`.
+        // matching Drop reclaims it, so the `Arc<GpuContext>` is alive
+        // for the duration of `&self`.
         unsafe {
             let arc = &*(self.handle as *const std::sync::Arc<GpuContext>);
             &**arc
         }
     }
-
-    /// Borrow the inner [`GpuContext`]. Crate-internal — call sites
-    /// migrate to capability-typed methods as the privilege split
-    /// lands.
-    pub(crate) fn inner(&self) -> &GpuContext {
-        self.host_inner()
-    }
-
-    /// Phase D Option B helper — construct a non-dropping view of
-    /// the originating [`GpuContextLimitedAccess`] for cdylib
-    /// dispatch through the inherited vtable.
-    ///
-    /// Used by the FullAccess mirror methods (`acquire_pixel_buffer`,
-    /// `register_texture_with_layout`, `surface_store`, etc.) to
-    /// dispatch through the C1-proven LimitedAccess vtable instead
-    /// of mirroring those slots on the FullAccess vtable.
-    ///
-    /// **Must be wrapped in [`std::mem::ManuallyDrop`] at the call
-    /// site** so the borrowed handle isn't double-released — the
-    /// originating LimitedAccess outlives the FullAccess scope and
-    /// owns the only Drop responsibility for the handle.
- 
-    /// Produce a [`GpuContextLimitedAccess`] view of the same
-    /// underlying context.
-    pub(crate) fn to_limited_access(&self) -> GpuContextLimitedAccess {
-        GpuContextLimitedAccess::new(self.host_inner().clone())
-    }
 }
-
-
-
 
 // -----------------------------------------------------------------------------
 // Capability-split API surface.
@@ -2804,7 +2746,8 @@ impl GpuContextLimitedAccess {
         height: u32,
         format: PixelFormat,
     ) -> Result<(PixelBufferPoolId, PixelBuffer)> {
-        self.host_inner().acquire_pixel_buffer(width, height, format)
+        self.host_inner()
+            .acquire_pixel_buffer(width, height, format)
     }
 
     /// Acquire a HOST_VISIBLE storage buffer for CPU→GPU SSBO upload.
@@ -2866,7 +2809,8 @@ impl GpuContextLimitedAccess {
     /// Dispatches through the plugin ABI vtable's
     /// `resolve_pixel_buffer_by_surface_id` callback.
     pub fn resolve_pixel_buffer_by_surface_id(&self, surface_id: &str) -> Result<PixelBuffer> {
-        self.host_inner().resolve_pixel_buffer_by_surface_id(surface_id)
+        self.host_inner()
+            .resolve_pixel_buffer_by_surface_id(surface_id)
     }
 
     /// Register a texture in the same-process texture cache.
@@ -2893,7 +2837,8 @@ impl GpuContextLimitedAccess {
         texture: Texture,
         initial_layout: VulkanLayout,
     ) {
-        self.host_inner().register_texture_with_layout(id, texture, initial_layout)
+        self.host_inner()
+            .register_texture_with_layout(id, texture, initial_layout)
     }
 
     /// Update a registered texture's tracked layout after a transition.
@@ -2903,7 +2848,8 @@ impl GpuContextLimitedAccess {
     /// `update_texture_registration_layout` callback.
     #[cfg(target_os = "linux")]
     pub fn update_texture_registration_layout(&self, id: &str, layout: VulkanLayout) {
-        self.host_inner().update_texture_registration_layout(id, layout)
+        self.host_inner()
+            .update_texture_registration_layout(id, layout)
     }
 
     /// Resolve a VideoFrame's full registration record (texture + layout).
@@ -2920,7 +2866,8 @@ impl GpuContextLimitedAccess {
         width: u32,
         height: u32,
     ) -> Result<TextureRegistration> {
-        self.host_inner().resolve_texture_registration_by_surface_id(surface_id, texture_layout, width, height)
+        self.host_inner()
+            .resolve_texture_registration_by_surface_id(surface_id, texture_layout, width, height)
     }
 
     /// Resolve a VideoFrame's texture (Split: cache hit).
@@ -2934,7 +2881,8 @@ impl GpuContextLimitedAccess {
         width: u32,
         height: u32,
     ) -> Result<Texture> {
-        self.host_inner().resolve_texture_by_surface_id(surface_id, texture_layout, width, height)
+        self.host_inner()
+            .resolve_texture_by_surface_id(surface_id, texture_layout, width, height)
     }
 
     /// Acquire a pooled texture from a pre-reserved pool (Split: fast path).
@@ -2972,7 +2920,13 @@ impl GpuContextLimitedAccess {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        self.host_inner().copy_pixel_buffer_to_texture(pixel_buffer, texture, surface_id, width, height)
+        self.host_inner().copy_pixel_buffer_to_texture(
+            pixel_buffer,
+            texture,
+            surface_id,
+            width,
+            height,
+        )
     }
 
     /// See [`GpuContext::unregister_texture`].
@@ -4030,7 +3984,7 @@ mod tests {
     /// this test catches. GPU-gated: skips cleanly with no device (CI is
     /// GPU-free), so it does not run in the sandbox — it is a
     /// /verify-live regression.
- 
+
     /// A privileged FullAccess plugin passing oversized dimensions (or a
     /// source buffer smaller than width*height*4) must get a typed
     /// `Error::GpuError` from `upload_pixel_buffer_as_texture` BEFORE any
