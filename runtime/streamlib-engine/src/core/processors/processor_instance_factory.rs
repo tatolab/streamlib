@@ -234,19 +234,6 @@ impl ProcessorInstance {
             Self::VTable {
                 instance_ptr,
                 vtable,
-                cdylib_resident: true,
-                ..
-            } => {
-                let instance_ptr = *instance_ptr;
-                let setup_fn = vtable.setup;
-                ctx.with_cdylib_scope(|cdylib_ctx| {
-                    Self::vtable_call_full(instance_ptr, setup_fn, cdylib_ctx, "setup")
-                })
-            }
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                cdylib_resident: false,
                 ..
             } => {
                 let instance_ptr = *instance_ptr;
@@ -269,19 +256,6 @@ impl ProcessorInstance {
             Self::VTable {
                 instance_ptr,
                 vtable,
-                cdylib_resident: true,
-                ..
-            } => {
-                let instance_ptr = *instance_ptr;
-                let teardown_fn = vtable.teardown;
-                ctx.with_cdylib_scope(|cdylib_ctx| {
-                    Self::vtable_call_full(instance_ptr, teardown_fn, cdylib_ctx, "teardown")
-                })
-            }
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                cdylib_resident: false,
                 ..
             } => {
                 let instance_ptr = *instance_ptr;
@@ -355,19 +329,6 @@ impl ProcessorInstance {
             Self::VTable {
                 instance_ptr,
                 vtable,
-                cdylib_resident: true,
-                ..
-            } => {
-                let instance_ptr = *instance_ptr;
-                let start_fn = vtable.start;
-                ctx.with_cdylib_scope(|cdylib_ctx| {
-                    Self::vtable_call_full(instance_ptr, start_fn, cdylib_ctx, "start")
-                })
-            }
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                cdylib_resident: false,
                 ..
             } => Self::vtable_call_full(*instance_ptr, vtable.start, ctx, "start"),
             Self::LegacyDyn(inner) => inner.start(ctx),
@@ -383,19 +344,6 @@ impl ProcessorInstance {
             Self::VTable {
                 instance_ptr,
                 vtable,
-                cdylib_resident: true,
-                ..
-            } => {
-                let instance_ptr = *instance_ptr;
-                let stop_fn = vtable.stop;
-                ctx.with_cdylib_scope(|cdylib_ctx| {
-                    Self::vtable_call_full(instance_ptr, stop_fn, cdylib_ctx, "stop")
-                })
-            }
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                cdylib_resident: false,
                 ..
             } => Self::vtable_call_full(*instance_ptr, vtable.stop, ctx, "stop"),
             Self::LegacyDyn(inner) => inner.stop(ctx),

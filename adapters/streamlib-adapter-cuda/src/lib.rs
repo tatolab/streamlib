@@ -68,7 +68,6 @@ pub use adapter::CudaSurfaceAdapter;
 #[cfg(target_os = "linux")]
 pub use context::CudaContext;
 #[cfg(target_os = "linux")]
-pub use host_vtable::host_cuda_surface_adapter_vtable;
 #[cfg(target_os = "linux")]
 pub use state::{HostImageSurfaceRegistration, HostSurfaceRegistration};
 #[cfg(target_os = "linux")]

@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use streamlib_plugin_abi::RuntimeContextVTable;
 
 use super::{
-    AudioClockShim, GpuContext, GpuContextFullAccess, GpuContextLimitedAccess, RuntimeOpsShim,
+    GpuContext, GpuContextFullAccess, GpuContextLimitedAccess,
     SharedAudioClock, TimeContext,
 };
 use crate::core::graph::ProcessorUniqueId;
@@ -739,16 +739,8 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// host's [`AudioClockVTable`](streamlib_plugin_abi::AudioClockVTable)
     /// from `HostServices`. Borrow-scoped to the ctx; cannot outlive
     /// the lifecycle call.
-    pub fn audio_clock(&self) -> AudioClockShim<'a> {
-        let handle = unsafe { ((*self.vtable).audio_clock_handle)(self.handle) };
-        // SAFETY: in the host-engine build path the shim was
-        // constructed with a vtable produced by
-        // `host_runtime_context_vtable()`; the audio-clock vtable is
-        // accessed via the side-channel below. In a cdylib build the
-        // analogous vtable pointer comes from `HostServices`. Both
-        // sides receive the same pointer the host installed.
-        let acv = crate::core::plugin::host_services::host_audio_clock_vtable();
-        AudioClockShim::from_ffi(handle, acv)
+    pub fn audio_clock(&self) -> &SharedAudioClock {
+        self.host_base().audio_clock()
     }
 
     /// Host-owned runtime operations. Implements [`RuntimeOperations`]
@@ -773,118 +765,9 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// the [`RuntimeOpsVTable::clone_handle`](streamlib_plugin_abi::RuntimeOpsVTable)
     /// callback, so it too is sound to stash past `Runner::stop()`.
     pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
-        if crate::core::plugin::host_services::host_callbacks().is_none() {
-            return self.host_base().runtime();
-        }
-        let borrowed_handle = unsafe { ((*self.vtable).runtime_ops_handle)(self.handle) };
-        let rov = crate::core::plugin::host_services::host_runtime_ops_vtable();
-        // SAFETY: rov + borrowed_handle come from the engine's host
-        // services; clone_handle is contractually required (v2 ABI)
-        // and returns an owned handle the shim's Drop releases.
-        let owned_handle = unsafe { ((*rov).clone_handle)(borrowed_handle) };
-        RuntimeOpsShim::from_ffi(owned_handle, rov) as Arc<dyn RuntimeOperations>
+        self.host_base().runtime()
     }
 
-    /// Run `f` against a cdylib-shaped sibling
-    /// `RuntimeContextFullAccess` whose `gpu_full` is a `ScopeToken`-
-    /// flavored [`GpuContextFullAccess`] (instead of the `Boxed`
-    /// shape this struct holds by default).
-    ///
-    /// The cdylib-shaped sibling's
-    /// [`GpuContextFullAccess`] methods dispatch through the
-    /// FullAccess vtable (plugin ABI via fn pointers in cdylib
-    /// address space, direct via host callbacks in host address
-    /// space) instead of the host-only direct-deref `host_inner`
-    /// path the Boxed shape uses. That makes `ctx.gpu_full_access()`
-    /// methods (e.g. `host_vulkan_device_arc`) usable from cdylib-
-    /// resident processor `setup()` / `teardown()` bodies without
-    /// tripping the `host_inner` panic guard.
-    ///
-    /// Engine-internal lifecycle dispatch (see
-    /// [`crate::core::processors::ProcessorInstance::setup`]) uses
-    /// this to wrap each cdylib lifecycle callback. The scope
-    /// management mirrors the cdylib-mode path of
-    /// [`GpuContextLimitedAccess::escalate`]:
-    ///
-    /// 1. Acquire the escalate gate + register the scope (via
-    ///    [`crate::core::context::escalate_scope_registry::begin_escalate_scope`]).
-    /// 2. Build the `ScopeToken`-shaped sibling.
-    /// 3. Run `f` against it under `catch_unwind` so a panic from
-    ///    the closure still releases the gate.
-    /// 4. End the scope (releases gate) and run `wait_device_idle`
-    ///    on the sibling Arc — matching `escalate_in_process`'s
-    ///    post-closure semantics.
-    /// 5. Re-raise the closure panic (if any).
-    ///
-    /// The historical sandbox contract serialized privileged
-    /// setup() work via the same escalate gate, so this helper
-    /// preserves that serialization invariant. Same-thread re-entry
-    /// (a `setup()` body that itself calls `escalate(...)`) is
-    /// rejected at the gate level — see
-    /// [`crate::core::context::escalate_gate::EscalateGate`].
-    pub(crate) fn with_cdylib_scope<F, T>(&self, f: F) -> crate::core::error::Result<T>
-    where
-        F: FnOnce(&RuntimeContextFullAccess<'_>) -> crate::core::error::Result<T>,
-    {
-        use super::escalate_scope_registry::{begin_escalate_scope, end_escalate_scope_draining};
-        use std::panic::{AssertUnwindSafe, catch_unwind};
-
-        // Build the Arc<GpuContext> that backs the scope. The
-        // LimitedAccess's `host_inner` deref reaches the boxed
-        // `Arc<GpuContext>` that backs this context; the value
-        // clone here produces a fresh `GpuContext` whose Arc-
-        // wrapped fields (notably `escalate_gate`) share state
-        // with the original, so gate semantics still serialize
-        // across all clones.
-        let host_lim = &self.gpu_limited;
-        let host_gpu = host_lim.host_inner();
-        let gpu_arc = Arc::new(host_gpu.clone());
-
-        // begin_escalate_scope acquires the gate. If the caller
-        // somehow already holds the gate on this thread (the
-        // historical "escalate-from-setup" footgun), the gate
-        // panics with an actionable message before this returns.
-        let scope_token = begin_escalate_scope(gpu_arc);
-        let scope_full = GpuContextFullAccess::from_scope_token(
-            scope_token as *const c_void,
-            host_lim.handle,
-            host_lim.vtable,
-        );
-
-        // Sibling ctx — same RuntimeContext handle / vtable; same
-        // host-side gpu_limited (cloned via the LimitedAccess
-        // vtable's `clone_handle`); ScopeToken-shaped gpu_full.
-        // PhantomData reuses 'a so the sibling can't outlive the
-        // original.
-        let cdylib_ctx: RuntimeContextFullAccess<'_> = RuntimeContextFullAccess {
-            handle: self.handle,
-            vtable: self.vtable,
-            gpu_full: scope_full,
-            gpu_limited: host_lim.clone(),
-            _marker: PhantomData,
-        };
-
-        let call_result = catch_unwind(AssertUnwindSafe(|| f(&cdylib_ctx)));
-
-        // End the scope: drain the device (`wait_device_idle`) WHILE
-        // the escalate gate is still held, then release it. Running the
-        // wait after releasing the gate (the prior shape) raced another
-        // processor thread's gated `vkCreateComputePipelines` and
-        // corrupted the NVIDIA driver during the concurrent setup
-        // fan-out — see `end_escalate_scope_draining` and
-        // `docs/learnings/concurrent-vkdevicewaitidle-threading.md`.
-        let wait_result = match end_escalate_scope_draining(scope_token) {
-            Some(r) => r,
-            None => Ok(()),
-        };
-
-        match (call_result, wait_result) {
-            (Ok(Ok(value)), Ok(())) => Ok(value),
-            (Ok(Err(e)), _) => Err(e),
-            (Ok(Ok(_)), Err(e)) => Err(e),
-            (Err(payload), _) => std::panic::resume_unwind(payload),
-        }
-    }
 
     // ------------ Engine-internal host accessors ------------
 
@@ -964,22 +847,14 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
 
     /// Host-owned audio clock as a typed plugin ABI shim. See
     /// [`RuntimeContextFullAccess::audio_clock`].
-    pub fn audio_clock(&self) -> AudioClockShim<'a> {
-        let handle = unsafe { ((*self.vtable).audio_clock_handle)(self.handle) };
-        let acv = crate::core::plugin::host_services::host_audio_clock_vtable();
-        AudioClockShim::from_ffi(handle, acv)
+    pub fn audio_clock(&self) -> &SharedAudioClock {
+        self.host_base().audio_clock()
     }
 
     /// Host-owned runtime operations. See
     /// [`RuntimeContextFullAccess::runtime`].
     pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
-        if crate::core::plugin::host_services::host_callbacks().is_none() {
-            return self.host_base().runtime();
-        }
-        let borrowed_handle = unsafe { ((*self.vtable).runtime_ops_handle)(self.handle) };
-        let rov = crate::core::plugin::host_services::host_runtime_ops_vtable();
-        let owned_handle = unsafe { ((*rov).clone_handle)(borrowed_handle) };
-        RuntimeOpsShim::from_ffi(owned_handle, rov) as Arc<dyn RuntimeOperations>
+        self.host_base().runtime()
     }
 
     // ------------ Engine-internal host accessors ------------

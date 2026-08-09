@@ -24,7 +24,6 @@ mod view;
 
 pub use adapter::VulkanSurfaceAdapter;
 pub use context::VulkanContext;
-pub use host_vtable::host_vulkan_surface_adapter_vtable;
 pub use raw_handles::{RawVulkanHandles, raw_handles};
 pub use state::HostSurfaceRegistration;
 pub use streamlib_consumer_rhi::VulkanLayout;
