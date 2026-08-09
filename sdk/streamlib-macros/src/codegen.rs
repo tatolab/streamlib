@@ -462,42 +462,6 @@ fn generate_processor_impl_from_schema(
             /// Use [`Processor::schema_ident`] for the full structured identity.
             pub const NAME: &'static str = #processor_name;
 
-            /// Build-fingerprint handshake constants read by
-            /// `export_plugin!` when it emits the `STREAMLIB_PLUGIN`
-            /// declaration. Resolved against the detected SDK crate —
-            /// the facade `streamlib` or the engine-free
-            /// `streamlib-plugin-sdk`.
-            #[doc(hidden)]
-            pub const __STREAMLIB_ABI_LAYOUT_FINGERPRINT: u64 =
-                __streamlib_sdk::plugin::PLUGIN_ABI_LAYOUT_FINGERPRINT;
-            #[doc(hidden)]
-            pub const __STREAMLIB_BUILD_IDENTITY: &'static str =
-                __streamlib_sdk::plugin::BUILD_IDENTITY;
-
-            /// Install the host's services into this plugin and return the
-            /// registration helper. Called by `export_plugin!` so the plugin
-            /// ABI entry point never names an SDK path — all SDK-crate
-            /// resolution is centralized in the `#[processor]` macro's
-            /// auto-detected `__streamlib_sdk` alias.
-            ///
-            /// # Safety
-            /// `host_services` must point at a layout-compatible
-            /// `HostServices` payload, per the plugin ABI register contract.
-            #[doc(hidden)]
-            pub unsafe fn __streamlib_install_host_services(
-                host_services: *const ::core::ffi::c_void,
-            ) -> ::core::option::Option<__streamlib_sdk::plugin::RegisterHelper> {
-                unsafe { __streamlib_sdk::plugin::install_host_services(host_services) }
-            }
-
-            /// Register this processor with the host via a helper obtained from
-            /// [`Processor::__streamlib_install_host_services`]. Called by
-            /// `export_plugin!`.
-            #[doc(hidden)]
-            pub fn __streamlib_register(helper: &__streamlib_sdk::plugin::RegisterHelper) {
-                helper.register::<Processor>();
-            }
-
             /// Returns the structured wire identity for this processor —
             /// the version-free `@<org>/<package>/<Type>` declared in the
             /// `#[processor(...)]` attribute (carrying the `0.0.0`
