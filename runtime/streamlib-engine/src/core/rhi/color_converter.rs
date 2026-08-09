@@ -367,14 +367,11 @@ unsafe impl Sync for RhiColorConverter {}
 
 impl RhiColorConverter {
     /// Internal helper: leak an initial Arc strong count via
-    /// `Arc::into_raw`, resolve the host-mode FullAccess vtable +
-    /// per-type methods vtable, and assemble the plugin ABI shape.
+    /// `Arc::into_raw` and wrap it as the opaque handle.
     pub(crate) fn from_arc_into_raw(arc: std::sync::Arc<RhiColorConverterInner>) -> Self {
         let cached_src_format_raw = arc.src_format() as u32;
         let cached_dst_format_raw = arc.dst_format() as u32;
         let handle = std::sync::Arc::into_raw(arc) as *const std::ffi::c_void;
-        let methods_vtable =
-            crate::core::plugin::host_services::host_rhi_color_converter_methods_vtable();
         Self {
             handle,
             cached_src_format_raw,
@@ -510,7 +507,7 @@ impl Clone for RhiColorConverter {
             // SAFETY: `handle` is `Arc::into_raw(Arc<RhiColorConverterInner>)`;
             // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                Arc::increment_strong_count(self.handle as *const RhiColorConverterInner);
+                std::sync::Arc::increment_strong_count(self.handle as *const RhiColorConverterInner);
             }
         }
         Self {
@@ -527,7 +524,7 @@ impl Drop for RhiColorConverter {
             // SAFETY: `handle` is `Arc::into_raw(Arc<RhiColorConverterInner>)`;
             // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                Arc::decrement_strong_count(self.handle as *const RhiColorConverterInner);
+                std::sync::Arc::decrement_strong_count(self.handle as *const RhiColorConverterInner);
             }
         }
     }

@@ -2019,21 +2019,16 @@ impl std::fmt::Debug for SurfaceStoreInner {
 // PluginAbiObject `SurfaceStore`
 // =============================================================================
 //
-// Cdylib-facing layout-stable wrapper around
-// `Arc<SurfaceStoreInner>`. Every public method dispatches through the
-// `SurfaceStoreVTable` callback table; host-side callbacks deref the
-// handle as `&SurfaceStoreInner` and invoke the inner method directly.
+// Public handle wrapping `Arc<SurfaceStoreInner>`. Every method
+// borrows the inner and invokes it directly.
 
 use std::ffi::c_void as ss_c_void;
 
 /// Cross-process surface sharing handle.
 ///
-/// Layout-stable: `#[repr(C)] (handle, vtable)`. Cheap to clone — the
-/// vtable's `clone_handle` callback runs `Arc::increment_strong_count`
-/// on the host's `Arc<SurfaceStoreInner>`. Both XPC (macOS) and Unix
-/// socket (Linux) variants are exposed through the same public method
-/// surface; platform-specific behaviour lives behind the vtable.
-#[repr(C)]
+/// Cheap to clone — increments the strong count on the host's
+/// `Arc<SurfaceStoreInner>`. Both XPC (macOS) and Unix socket (Linux)
+/// variants are exposed through the same method surface.
 pub struct SurfaceStore {
     /// Opaque handle to the host's `Arc<SurfaceStoreInner>`.
     pub(crate) handle: *const ss_c_void,
@@ -2041,16 +2036,14 @@ pub struct SurfaceStore {
 
 // SAFETY: `handle` points at an `Arc<SurfaceStoreInner>` whose
 // interior is Send+Sync (Mutex-protected state, plus String fields).
-// Refcount management crosses the cdylib boundary through the vtable
-// but runs in host-compiled code regardless.
 unsafe impl Send for SurfaceStore {}
 unsafe impl Sync for SurfaceStore {}
 
 impl SurfaceStore {
     /// Create a new SurfaceStore PluginAbiObject (not yet connected). The
     /// underlying [`SurfaceStoreInner`] is allocated as an
-    /// `Arc<SurfaceStoreInner>` and wrapped in the PluginAbiObject with a
-    /// freshly-resolved host-mode vtable. Engine and integration
+    /// `Arc<SurfaceStoreInner>` and wrapped behind the opaque handle.
+    /// Engine and integration
     /// tests use this; the runtime's `start()` path uses the
     /// `from_arc_into_raw` helper directly so it can share the Arc
     /// with `GpuContext::set_surface_store`.
@@ -2059,28 +2052,26 @@ impl SurfaceStore {
     }
 
     /// Internal helper: leak an initial Arc strong count via
-    /// `Arc::into_raw`, resolve the host-mode vtable, and assemble
-    /// the plugin ABI shape.
+    /// `Arc::into_raw` and wrap it as the opaque handle.
     pub(crate) fn from_arc_into_raw(arc: Arc<SurfaceStoreInner>) -> Self {
         let handle = Arc::into_raw(arc) as *const ss_c_void;
-        Self { handle, vtable }
+        Self { handle }
     }
 
-    /// Build a null-handle PluginAbiObject ("None" sentinel) for the
+    /// Build a null-handle "None" sentinel for the
     /// `GpuContext::surface_store()` API's `Option<SurfaceStore>`
-    /// shape. The cdylib's `SurfaceStore::is_none()` returns `true`
-    /// for such a value and `Drop` short-circuits on null handle.
+    /// shape. `SurfaceStore::is_none()` returns `true` for such a
+    /// value and `Drop` short-circuits on null handle.
     pub(crate) fn null() -> Self {
         Self {
             handle: std::ptr::null(),
-            vtable: std::ptr::null(),
         }
     }
 
     /// Whether this is a null-handle PluginAbiObject (the "None" branch of
     /// the `Option<SurfaceStore>` return shape).
     pub(crate) fn is_none(&self) -> bool {
-        self.handle.is_null() || self.vtable.is_null()
+        self.handle.is_null()
     }
 
     /// Engine-internal borrow of the host-owned `SurfaceStoreInner`.
@@ -2097,24 +2088,7 @@ impl SurfaceStore {
                 "SurfaceStore::connect: null handle".into(),
             ));
         }
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        // SAFETY: handle + vtable were paired at construction.
-        let status = unsafe {
-            ((*self.vtable).connect)(
-                self.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(Error::Configuration(
-                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
-            ))
-        }
+        self.host_inner().connect()
     }
 
     /// Disconnect from the surface-share service.
@@ -2124,23 +2098,7 @@ impl SurfaceStore {
                 "SurfaceStore::disconnect: null handle".into(),
             ));
         }
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.vtable).disconnect)(
-                self.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(Error::Configuration(
-                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
-            ))
-        }
+        self.host_inner().disconnect()
     }
 
     /// Check in a pixel buffer for cross-process sharing.
@@ -2150,29 +2108,7 @@ impl SurfaceStore {
                 "SurfaceStore::check_in: null handle".into(),
             ));
         }
-        let mut id_buf = [0u8; 256];
-        let mut id_len: usize = 0;
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.vtable).check_in)(
-                self.handle,
-                pixel_buffer as *const PixelBuffer as *const ss_c_void,
-                id_buf.as_mut_ptr(),
-                id_buf.len(),
-                &mut id_len as *mut usize,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(String::from_utf8_lossy(&id_buf[..id_len.min(id_buf.len())]).into_owned())
-        } else {
-            Err(Error::Configuration(
-                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
-            ))
-        }
+        self.host_inner().check_in(pixel_buffer)
     }
 
     /// Check out a surface by its surface_id.
@@ -2182,27 +2118,7 @@ impl SurfaceStore {
                 "SurfaceStore::check_out: null handle".into(),
             ));
         }
-        let mut out_pb: std::mem::MaybeUninit<PixelBuffer> = std::mem::MaybeUninit::uninit();
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.vtable).check_out)(
-                self.handle,
-                surface_id.as_ptr(),
-                surface_id.len(),
-                out_pb.as_mut_ptr() as *mut ss_c_void,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(unsafe { out_pb.assume_init() })
-        } else {
-            Err(Error::Configuration(
-                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
-            ))
-        }
+        self.host_inner().check_out(surface_id)
     }
 
     /// Register a pre-allocated buffer under the given pool id.
@@ -2212,26 +2128,7 @@ impl SurfaceStore {
                 "SurfaceStore::register_buffer: null handle".into(),
             ));
         }
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.vtable).register_buffer)(
-                self.handle,
-                pool_id.as_ptr(),
-                pool_id.len(),
-                pixel_buffer as *const PixelBuffer as *const ss_c_void,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(Error::Configuration(
-                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
-            ))
-        }
+        self.host_inner().register_buffer(pool_id, pixel_buffer)
     }
 
     /// Look up a previously-registered buffer by its pool id.
@@ -2241,27 +2138,7 @@ impl SurfaceStore {
                 "SurfaceStore::lookup_buffer: null handle".into(),
             ));
         }
-        let mut out_pb: std::mem::MaybeUninit<PixelBuffer> = std::mem::MaybeUninit::uninit();
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.vtable).lookup_buffer)(
-                self.handle,
-                pool_id.as_ptr(),
-                pool_id.len(),
-                out_pb.as_mut_ptr() as *mut ss_c_void,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(unsafe { out_pb.assume_init() })
-        } else {
-            Err(Error::Configuration(
-                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
-            ))
-        }
+        self.host_inner().lookup_buffer(pool_id)
     }
 
     /// Release a checked-out surface by its surface_id.
@@ -2271,25 +2148,7 @@ impl SurfaceStore {
                 "SurfaceStore::release: null handle".into(),
             ));
         }
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.vtable).release)(
-                self.handle,
-                surface_id.as_ptr(),
-                surface_id.len(),
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(Error::Configuration(
-                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
-            ))
-        }
+        self.host_inner().release(surface_id)
     }
 
     /// **Engine-only** — public surface lives on the
@@ -2315,38 +2174,7 @@ impl SurfaceStore {
                 "SurfaceStore::register_texture: null handle".into(),
             ));
         }
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        // produce_done / consume_done are engine-only references; we
-        // pass raw pointers to the underlying type. The host-side
-        // callback re-borrows them.
-        let produce_done_ptr: *const ss_c_void = produce_done
-            .map(|t| t as *const _ as *const ss_c_void)
-            .unwrap_or(std::ptr::null());
-        let consume_done_ptr: *const ss_c_void = consume_done
-            .map(|t| t as *const _ as *const ss_c_void)
-            .unwrap_or(std::ptr::null());
-        let status = unsafe {
-            ((*self.vtable).register_texture)(
-                self.handle,
-                surface_id.as_ptr(),
-                surface_id.len(),
-                texture as *const crate::core::rhi::Texture as *const ss_c_void,
-                produce_done_ptr,
-                consume_done_ptr,
-                current_image_layout.0,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(Error::Configuration(
-                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
-            ))
-        }
+        self.host_inner().register_texture(surface_id, texture, produce_done, consume_done, current_image_layout)
     }
 
     /// **Engine-only** — public surface lives on the
@@ -2366,34 +2194,7 @@ impl SurfaceStore {
                 "SurfaceStore::register_pixel_buffer_with_timeline: null handle".into(),
             ));
         }
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        let produce_done_ptr: *const ss_c_void = produce_done
-            .map(|t| t as *const _ as *const ss_c_void)
-            .unwrap_or(std::ptr::null());
-        let consume_done_ptr: *const ss_c_void = consume_done
-            .map(|t| t as *const _ as *const ss_c_void)
-            .unwrap_or(std::ptr::null());
-        let status = unsafe {
-            ((*self.vtable).register_pixel_buffer_with_timeline)(
-                self.handle,
-                surface_id.as_ptr(),
-                surface_id.len(),
-                pixel_buffer as *const PixelBuffer as *const ss_c_void,
-                produce_done_ptr,
-                consume_done_ptr,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(Error::Configuration(
-                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
-            ))
-        }
+        self.host_inner().register_pixel_buffer_with_timeline(surface_id, pixel_buffer, produce_done, consume_done)
     }
 
     /// Look up a registered texture by surface_id (Linux).
@@ -2410,31 +2211,7 @@ impl SurfaceStore {
                 "SurfaceStore::lookup_texture: null handle".into(),
             ));
         }
-        let mut out_tex: std::mem::MaybeUninit<crate::core::rhi::Texture> =
-            std::mem::MaybeUninit::uninit();
-        let mut out_layout: i32 = 0;
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.vtable).lookup_texture)(
-                self.handle,
-                surface_id.as_ptr(),
-                surface_id.len(),
-                out_tex.as_mut_ptr() as *mut ss_c_void,
-                &mut out_layout as *mut i32,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            let texture = unsafe { out_tex.assume_init() };
-            Ok((texture, streamlib_consumer_rhi::VulkanLayout(out_layout)))
-        } else {
-            Err(Error::Configuration(
-                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
-            ))
-        }
+        self.host_inner().lookup_texture(surface_id)
     }
 
     /// Update the published `VkImageLayout` for a registered texture (Linux).
@@ -2449,35 +2226,17 @@ impl SurfaceStore {
                 "SurfaceStore::update_image_layout: null handle".into(),
             ));
         }
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.vtable).update_image_layout)(
-                self.handle,
-                surface_id.as_ptr(),
-                surface_id.len(),
-                layout.0,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            Err(Error::Configuration(
-                String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned(),
-            ))
-        }
+        self.host_inner().update_image_layout(surface_id, layout)
     }
 }
 
 impl Clone for SurfaceStore {
     fn clone(&self) -> Self {
         if !self.is_none() {
-            // SAFETY: vtable + handle paired at construction.
+            // SAFETY: `handle` is `Arc::into_raw(Arc<SurfaceStoreInner>)`
+            // (see `from_arc_into_raw`); balanced by the Drop impl below.
             unsafe {
-                ((*self.vtable).clone_handle)(self.handle);
+                Arc::increment_strong_count(self.handle as *const SurfaceStoreInner);
             }
         }
         Self {
@@ -2489,9 +2248,10 @@ impl Clone for SurfaceStore {
 impl Drop for SurfaceStore {
     fn drop(&mut self) {
         if !self.is_none() {
-            // SAFETY: matched with `Arc::into_raw` in `from_arc_into_raw`.
+            // SAFETY: matched with `Arc::into_raw` in `from_arc_into_raw`
+            // and any `Clone` increment.
             unsafe {
-                ((*self.vtable).drop_handle)(self.handle);
+                Arc::decrement_strong_count(self.handle as *const SurfaceStoreInner);
             }
         }
     }
@@ -2501,7 +2261,6 @@ impl std::fmt::Debug for SurfaceStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("SurfaceStore")
             .field("handle", &self.handle)
-            .field("vtable", &self.vtable)
             .finish()
     }
 }
@@ -2509,16 +2268,6 @@ impl std::fmt::Debug for SurfaceStore {
 #[cfg(all(test, target_pointer_width = "64"))]
 mod layout_tests_ss {
     use super::*;
-    use core::mem::{align_of, offset_of, size_of};
-
-    #[test]
-    fn surface_store_layout() {
-        // 16 bytes — handle + vtable.
-        assert_eq!(size_of::<SurfaceStore>(), 16);
-        assert_eq!(align_of::<SurfaceStore>(), 8);
-        assert_eq!(offset_of!(SurfaceStore, handle), 0);
-        assert_eq!(offset_of!(SurfaceStore, vtable), 8);
-    }
 
     #[test]
     fn surface_store_is_send_sync() {

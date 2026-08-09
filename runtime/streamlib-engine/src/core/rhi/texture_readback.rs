@@ -280,6 +280,13 @@ impl TextureReadback {
         }
     }
 
+    /// Engine-internal borrow of the owned `VulkanTextureReadback`.
+    #[cfg(target_os = "linux")]
+    fn host_inner(&self) -> &crate::vulkan::rhi::VulkanTextureReadback {
+        // SAFETY: `handle` is `Box::into_raw(Box<Arc<VulkanTextureReadback>>)`.
+        unsafe { &**(self.handle as *const std::sync::Arc<crate::vulkan::rhi::VulkanTextureReadback>) }
+    }
+
     /// Schedule a GPU→CPU copy of `texture` (at its current
     /// `source_layout`) into the readback's staging buffer, returning a
     /// [`ReadbackTicket`]. Single-in-flight: a second `submit` before
@@ -290,39 +297,7 @@ impl TextureReadback {
         texture: &Texture,
         source_layout: TextureSourceLayout,
     ) -> Result<ReadbackTicket> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "submit: texture-readback methods vtable is null".into(),
-            ));
-        }
-        let mut out_handle_id: u64 = 0;
-        let mut out_counter: u64 = 0;
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        // SAFETY: methods_vtable non-null per the guard; handle paired
-        // with it at mint time. `texture.handle` is the borrowed
-        // `Texture` PluginAbiObject handle (make-borrow convention); the
-        // host reads its cached dimensions for descriptor validation.
-        let status = unsafe {
-            ((*self.methods_vtable).submit)(
-                self.handle,
-                texture.handle,
-                source_layout.to_vulkan_layout_raw(),
-                &mut out_handle_id as *mut u64,
-                &mut out_counter as *mut u64,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status != 0 {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            return Err(Error::GpuError(msg));
-        }
-        Ok(ReadbackTicket {
-            handle_id: out_handle_id,
-            counter: out_counter,
-        })
+        self.host_inner().submit(texture, source_layout).map_err(Error::from)
     }
 
     /// Non-blocking poll. `Ok(Some(bytes))` once the copy completes
@@ -331,43 +306,7 @@ impl TextureReadback {
     /// the next `submit` on this handle), `Ok(None)` while in flight.
     /// Dispatches through the methods vtable's `try_read` slot.
     pub fn try_read(&self, ticket: ReadbackTicket) -> Result<Option<&[u8]>> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "try_read: texture-readback methods vtable is null".into(),
-            ));
-        }
-        let mut out_ready: u32 = 0;
-        let mut out_bytes_ptr: *const u8 = std::ptr::null();
-        let mut out_len: usize = 0;
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        // SAFETY: methods_vtable non-null per the guard; out-params point
-        // at owned stack storage the host writes on success.
-        let status = unsafe {
-            ((*self.methods_vtable).try_read)(
-                self.handle,
-                ticket.handle_id,
-                ticket.counter,
-                &mut out_ready as *mut u32,
-                &mut out_bytes_ptr as *mut *const u8,
-                &mut out_len as *mut usize,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status != 0 {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            return Err(Error::GpuError(msg));
-        }
-        if out_ready == 0 {
-            return Ok(None);
-        }
-        // SAFETY: on ready, `out_bytes_ptr` borrows the host's
-        // persistent-mapped staging; the borrow's lifetime ties to
-        // `&self` (valid until the next `submit`, per the slot contract).
-        let bytes = unsafe { std::slice::from_raw_parts(out_bytes_ptr, out_len) };
-        Ok(Some(bytes))
+        self.host_inner().try_read(ticket).map_err(Error::from)
     }
 
     /// Block until the copy completes (`timeout_ns == u64::MAX` = no
@@ -375,38 +314,9 @@ impl TextureReadback {
     /// contract as [`Self::try_read`]. Dispatches through the methods
     /// vtable's `wait_and_read` slot.
     pub fn wait_and_read(&self, ticket: ReadbackTicket, timeout_ns: u64) -> Result<&[u8]> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "wait_and_read: texture-readback methods vtable is null".into(),
-            ));
-        }
-        let mut out_bytes_ptr: *const u8 = std::ptr::null();
-        let mut out_len: usize = 0;
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        // SAFETY: methods_vtable non-null per the guard; out-params point
-        // at owned stack storage the host writes on success.
-        let status = unsafe {
-            ((*self.methods_vtable).wait_and_read)(
-                self.handle,
-                ticket.handle_id,
-                ticket.counter,
-                timeout_ns,
-                &mut out_bytes_ptr as *mut *const u8,
-                &mut out_len as *mut usize,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status != 0 {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            return Err(Error::GpuError(msg));
-        }
-        // SAFETY: `out_bytes_ptr` borrows the host persistent-mapped
-        // staging; lifetime tied to `&self` (valid until next `submit`).
-        let bytes = unsafe { std::slice::from_raw_parts(out_bytes_ptr, out_len) };
-        Ok(bytes)
+        self.host_inner()
+            .wait_and_read(ticket, timeout_ns)
+            .map_err(Error::from)
     }
 
     /// Non-blocking poll that COPIES the staging bytes into an owned
@@ -416,66 +326,11 @@ impl TextureReadback {
     /// slot; a `status 2` (`out_buf` too small) grows the buffer to the
     /// host-reported length and retries once.
     pub fn try_read_copy(&self, ticket: ReadbackTicket) -> Result<Option<Vec<u8>>> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "try_read_copy: texture-readback methods vtable is null".into(),
-            ));
-        }
-        let mut out = vec![0u8; self.cached_staging_size as usize];
-        let mut out_ready: u32 = 0;
-        let mut out_len: usize = 0;
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        // SAFETY: methods_vtable non-null per the guard; `out` owns
-        // `out.len()` writable bytes the host copies into on ready.
-        let status = unsafe {
-            ((*self.methods_vtable).try_read_copy)(
-                self.handle,
-                ticket.handle_id,
-                ticket.counter,
-                &mut out_ready as *mut u32,
-                out.as_mut_ptr(),
-                out.len(),
-                &mut out_len as *mut usize,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 2 {
-            // out_buf too small — grow to the host-reported required
-            // length (in out_len) and retry once.
-            out = vec![0u8; out_len];
-            out_ready = 0;
-            out_len = 0;
-            let retry = unsafe {
-                ((*self.methods_vtable).try_read_copy)(
-                    self.handle,
-                    ticket.handle_id,
-                    ticket.counter,
-                    &mut out_ready as *mut u32,
-                    out.as_mut_ptr(),
-                    out.len(),
-                    &mut out_len as *mut usize,
-                    err_buf.as_mut_ptr(),
-                    err_buf.len(),
-                    &mut err_len as *mut usize,
-                )
-            };
-            if retry != 0 {
-                let msg =
-                    String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-                return Err(Error::GpuError(msg));
-            }
-        } else if status != 0 {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            return Err(Error::GpuError(msg));
-        }
-        if out_ready == 0 {
-            return Ok(None);
-        }
-        out.truncate(out_len);
-        Ok(Some(out))
+        Ok(self
+            .host_inner()
+            .try_read(ticket)
+            .map_err(Error::from)?
+            .map(|bytes| bytes.to_vec()))
     }
 
     /// Block until the copy completes, then COPY the staging bytes into
@@ -483,70 +338,24 @@ impl TextureReadback {
     /// `wait_and_copy` slot; `status 2` grows + retries as in
     /// [`Self::try_read_copy`].
     pub fn wait_and_copy(&self, ticket: ReadbackTicket, timeout_ns: u64) -> Result<Vec<u8>> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "wait_and_copy: texture-readback methods vtable is null".into(),
-            ));
-        }
-        let mut out = vec![0u8; self.cached_staging_size as usize];
-        let mut out_len: usize = 0;
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        // SAFETY: methods_vtable non-null per the guard; `out` owns
-        // `out.len()` writable bytes the host copies into on success.
-        let status = unsafe {
-            ((*self.methods_vtable).wait_and_copy)(
-                self.handle,
-                ticket.handle_id,
-                ticket.counter,
-                timeout_ns,
-                out.as_mut_ptr(),
-                out.len(),
-                &mut out_len as *mut usize,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 2 {
-            out = vec![0u8; out_len];
-            out_len = 0;
-            let retry = unsafe {
-                ((*self.methods_vtable).wait_and_copy)(
-                    self.handle,
-                    ticket.handle_id,
-                    ticket.counter,
-                    timeout_ns,
-                    out.as_mut_ptr(),
-                    out.len(),
-                    &mut out_len as *mut usize,
-                    err_buf.as_mut_ptr(),
-                    err_buf.len(),
-                    &mut err_len as *mut usize,
-                )
-            };
-            if retry != 0 {
-                let msg =
-                    String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-                return Err(Error::GpuError(msg));
-            }
-        } else if status != 0 {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            return Err(Error::GpuError(msg));
-        }
-        out.truncate(out_len);
-        Ok(out)
+        Ok(self
+            .host_inner()
+            .wait_and_read(ticket, timeout_ns)
+            .map_err(Error::from)?
+            .to_vec())
     }
 }
 
 impl Drop for TextureReadback {
     fn drop(&mut self) {
-        if !self.handle.is_null() && !self.vtable.is_null() {
-            // SAFETY: matched with the host's `Box::into_raw` at mint
-            // time. `!Clone`, so no clone bumps to balance — a single
-            // drop reclaims the boxed `Arc<VulkanTextureReadback>`.
+        if !self.handle.is_null() {
+            // SAFETY: matched with the `Box::into_raw` at mint time.
+            // `!Clone`, so a single drop reclaims the boxed
+            // `Arc<VulkanTextureReadback>`.
             unsafe {
-                ((*self.vtable).drop_texture_readback)(self.handle);
+                drop(Box::from_raw(
+                    self.handle as *mut std::sync::Arc<crate::vulkan::rhi::VulkanTextureReadback>,
+                ));
             }
         }
     }
@@ -564,101 +373,3 @@ impl std::fmt::Debug for TextureReadback {
     }
 }
 
-#[cfg(all(test, target_pointer_width = "64"))]
-mod texture_readback_pluginabiobject_layout_tests {
-    use super::*;
-    use core::mem::{align_of, offset_of, size_of};
-
-    #[test]
-    fn texture_readback_layout() {
-        // PluginAbiObject struct — the engine↔SDK twin (both arms carry
-        // a byte-identical `#[repr(C)]` copy; this test + the SDK's
-        // matching one are the drift lock):
-        //   handle              @ 0  (8 bytes, *const c_void)
-        //   vtable              @ 8  (8 bytes, *const GpuContextFullAccessVTable)
-        //   methods_vtable      @ 16 (8 bytes, *const VulkanTextureReadbackMethodsVTable)
-        //   cached_handle_id    @ 24 (8 bytes, u64)
-        //   cached_staging_size @ 32 (8 bytes, u64)
-        //   cached_width        @ 40 (4 bytes, u32)
-        //   cached_height       @ 44 (4 bytes, u32)
-        //   cached_format_raw   @ 48 (4 bytes, u32)
-        //   _reserved_padding   @ 52 (4 bytes, u32)
-        // Total = 56, align = 8.
-        assert_eq!(size_of::<TextureReadback>(), 56);
-        assert_eq!(align_of::<TextureReadback>(), 8);
-        assert_eq!(offset_of!(TextureReadback, handle), 0);
-        assert_eq!(offset_of!(TextureReadback, vtable), 8);
-        assert_eq!(offset_of!(TextureReadback, methods_vtable), 16);
-        assert_eq!(offset_of!(TextureReadback, cached_handle_id), 24);
-        assert_eq!(offset_of!(TextureReadback, cached_staging_size), 32);
-        assert_eq!(offset_of!(TextureReadback, cached_width), 40);
-        assert_eq!(offset_of!(TextureReadback, cached_height), 44);
-        assert_eq!(offset_of!(TextureReadback, cached_format_raw), 48);
-        assert_eq!(offset_of!(TextureReadback, _reserved_padding), 52);
-    }
-
-    #[test]
-    fn texture_readback_is_send_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<TextureReadback>();
-    }
-
-    #[test]
-    fn texture_source_layout_raw_round_trips() {
-        for layout in [
-            TextureSourceLayout::General,
-            TextureSourceLayout::ColorAttachment,
-            TextureSourceLayout::ShaderReadOnly,
-        ] {
-            let raw = layout.to_vulkan_layout_raw();
-            assert_eq!(TextureSourceLayout::from_vulkan_layout_raw(raw), Some(layout));
-        }
-        // UNDEFINED (0) / TRANSFER_SRC_OPTIMAL (6) are outside the
-        // supported set — the host maps these to a typed error.
-        assert_eq!(TextureSourceLayout::from_vulkan_layout_raw(0), None);
-        assert_eq!(TextureSourceLayout::from_vulkan_layout_raw(9999), None);
-    }
-
-    #[test]
-    fn cached_format_raw_round_trips_every_texture_format() {
-        // The mint writes `format as u32` (the `#[repr(u32)]`
-        // discriminant) into `cached_format_raw`; the twin `format()`
-        // decodes it back through a hardcoded `0..N` match table. The same
-        // discriminant contract is decoded by the SDK twin `format()` and
-        // the host `create_texture_readback` slot. A renumber/insert in
-        // `TextureFormat` would drift the mint integer away from all three
-        // hardcoded tables silently — this locks it.
-        //
-        // Mental-revert: renumber any variant (e.g. `Bgra8Unorm = 9`) and
-        // the round-trip below returns the wrong variant.
-        for format in [
-            TextureFormat::Rgba8Unorm,
-            TextureFormat::Rgba8UnormSrgb,
-            TextureFormat::Bgra8Unorm,
-            TextureFormat::Bgra8UnormSrgb,
-            TextureFormat::Rgba16Float,
-            TextureFormat::Rgba32Float,
-            TextureFormat::Nv12,
-        ] {
-            let raw = format as u32;
-            // Only `cached_format_raw` is read by `format()`; the handle /
-            // vtable pointers are never dereferenced here.
-            let twin = TextureReadback {
-                handle: std::ptr::null(),
-                vtable: std::ptr::null(),
-                methods_vtable: std::ptr::null(),
-                cached_handle_id: 0,
-                cached_staging_size: 0,
-                cached_width: 0,
-                cached_height: 0,
-                cached_format_raw: raw,
-                _reserved_padding: 0,
-            };
-            assert_eq!(
-                twin.format(),
-                format,
-                "engine twin round-trip failed for {format:?} (raw {raw})"
-            );
-        }
-    }
-}
