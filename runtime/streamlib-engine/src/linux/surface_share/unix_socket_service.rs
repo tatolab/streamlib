@@ -1377,9 +1377,8 @@ mod tests {
     }
 
     /// Same-process wire connections (the host runtime opening a diagnostic
-    /// connection to its own surface-share socket — used by tests like
-    /// `polyglot_linux_check_out` to publish surfaces) must NOT trigger the
-    /// watchdog. SO_PEERCRED reports the same pid, so the disconnect
+    /// connection to its own surface-share socket to publish surfaces) must NOT
+    /// trigger the watchdog. SO_PEERCRED reports the same pid, so the disconnect
     /// classification rejects it as a subprocess and cleanup is skipped.
     /// Wire-level coverage of the actual subprocess-crash path lives in the
     /// `surface_share_subprocess_crash` integration test.
