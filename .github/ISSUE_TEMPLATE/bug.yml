@@ -13,7 +13,7 @@ body:
     id: where-it-bit
     attributes:
       label: Where it bit
-      description: "the crate / package / example / scenario where it surfaced"
+      description: "the crate / scenario where it surfaced"
     validations:
       required: true
   - type: textarea
