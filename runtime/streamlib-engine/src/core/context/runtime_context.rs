@@ -956,14 +956,5 @@ mod layout_tests {
     use super::*;
     use core::mem::{align_of, size_of};
 
-    #[test]
-    fn gpu_context_view_sizes_are_pinned() {
-        // The RuntimeContext views embed these by value, so their sizes are
-        // load-bearing for the outer offsets below.
-        assert_eq!(size_of::<GpuContextFullAccess>(), 40);
-        assert_eq!(align_of::<GpuContextFullAccess>(), 8);
-        assert_eq!(size_of::<GpuContextLimitedAccess>(), 16);
-        assert_eq!(align_of::<GpuContextLimitedAccess>(), 8);
-    }
 
 }

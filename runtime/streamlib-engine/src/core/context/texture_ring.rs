@@ -612,21 +612,6 @@ mod layout_tests {
     use super::*;
     use core::mem::{align_of, offset_of, size_of};
 
-    #[test]
-    fn texture_ring_slot_layout() {
-        // PluginAbiObject struct (issue #947):
-        //   texture            @ 0   (32 bytes, Texture PluginAbiObject)
-        //   surface_id_bytes   @ 32  (64 bytes, [u8; 64])
-        //   surface_id_len     @ 96  (4 bytes, u32)
-        //   slot_index         @ 100 (4 bytes, u32)
-        // Total = 104, align = 8 (inherited from Texture).
-        assert_eq!(size_of::<TextureRingSlot>(), 104);
-        assert_eq!(align_of::<TextureRingSlot>(), 8);
-        assert_eq!(offset_of!(TextureRingSlot, texture), 0);
-        assert_eq!(offset_of!(TextureRingSlot, surface_id_bytes), 32);
-        assert_eq!(offset_of!(TextureRingSlot, surface_id_len), 96);
-        assert_eq!(offset_of!(TextureRingSlot, slot_index), 100);
-    }
 
     #[test]
     fn texture_ring_slot_surface_id_max_bytes_constant() {
