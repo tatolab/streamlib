@@ -169,8 +169,6 @@ pub enum ProcessorLanguage {
     #[default]
     Rust,
     Python,
-    #[serde(alias = "deno")]
-    TypeScript,
 }
 
 impl JsonSchema for ProcessorLanguage {

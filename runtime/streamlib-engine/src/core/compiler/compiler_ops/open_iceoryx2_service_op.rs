@@ -28,7 +28,7 @@ use crate::core::graph::{
     LinkUniqueId, ProcessorInstanceComponent, SubprocessHandleComponent,
 };
 use crate::core::json_schema::SchemaIdentOutput;
-use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorInstance};
+use crate::core::processors::ProcessorInstance;
 use crate::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, Iceoryx2NotifyService, Iceoryx2Service,
     RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, SchemaIdentWire, effective_channel_ceiling_bytes,
@@ -587,7 +587,7 @@ fn channel_delivery_profile(
     Ok(agreed.unwrap_or(crate::iceoryx2::DeliveryProfile::Latest))
 }
 
-/// Check if a processor is a subprocess (Python-native, TypeScript, etc.).
+/// Check if a processor is a subprocess.
 fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bool {
     let has_component = graph
         .traversal_mut()
@@ -597,23 +597,6 @@ fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bo
         .unwrap_or(false);
     if has_component {
         return true;
-    }
-
-    let proc_type = graph
-        .traversal_mut()
-        .v(proc_id)
-        .first()
-        .map(|n| n.processor_type().clone());
-
-    if let Some(proc_type) = proc_type.as_ref() {
-        if let Some(descriptor) = PROCESSOR_REGISTRY.descriptor(proc_type) {
-            if matches!(
-                descriptor.runtime,
-                crate::core::descriptors::ProcessorRuntime::TypeScript
-            ) {
-                return true;
-            }
-        }
     }
 
     if let Some(proc_arc) = graph
@@ -870,7 +853,7 @@ mod tests {
     use crate::core::descriptors::SchemaIdent;
     use crate::core::execution::ExecutionConfig;
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
-    use crate::core::processors::{DynGeneratedProcessor, ProcessorSpec};
+    use crate::core::processors::{DynGeneratedProcessor, PROCESSOR_REGISTRY, ProcessorSpec};
     use crate::core::{ProcessorDescriptor, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 
     /// A host whose transport lives out of process and which is neither of the

@@ -2,10 +2,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Lints ad-hoc logging patterns in the Rust workspace and in the Python /
-//! TypeScript polyglot SDKs. The only sanctioned pathway is `tracing::*` /
+//! Python polyglot SDKs. The only sanctioned pathway is `tracing::*` /
 //! `streamlib.log.*` — see `docs/logging.md`.
 //!
-//! Python and TypeScript use a ripgrep-style substring scan. Rust uses a `syn`
+//! Python uses a ripgrep-style substring scan. Rust uses a `syn`
 //! AST walk so that `#[cfg(test)]`, `#[allow(clippy::disallowed_macros)]`, and
 //! file-level `#![allow(...)]` are honored exactly as clippy would — without
 //! having to compile the workspace (which would pull in `glslc` via
@@ -54,24 +54,6 @@ const fn python_logging_lint_target(name: &'static str, root_relative: &'static 
 pub const TARGETS: &[LintTarget] = &[
     python_logging_lint_target("python", "sdk/streamlib-python"),
     python_logging_lint_target("python-wheel", "sdk/streamlib-python-wheel/python"),
-    LintTarget {
-        name: "typescript",
-        root_relative: "sdk/streamlib-deno",
-        extension: "ts",
-        exclude_path_segments: &["_generated_", "tests", "node_modules"],
-        exclude_file_suffixes: &["_test.ts", ".test.ts"],
-        comment_prefix: "//",
-        banned_substrings: &[
-            "console.log",
-            "console.warn",
-            "console.error",
-            "console.info",
-            "console.debug",
-            "Deno.stdout.write",
-            "Deno.stderr.write",
-        ],
-        allow_substring: "streamlib.log.",
-    },
 ];
 
 #[derive(Debug)]
@@ -86,9 +68,9 @@ pub struct Violation {
 /// How many files one scan root contributed to a lint run.
 ///
 /// Per-root rather than one workspace-wide total: this lint reads three
-/// independent trees (the Python SDK, the Deno SDK, and every opted-in Rust
-/// crate's source roots), and a single sum lets one tree going to zero hide
-/// behind the others' surviving files.
+/// independent trees (the Python SDKs and every opted-in Rust crate's source
+/// roots), and a single sum lets one tree going to zero hide behind the
+/// others' surviving files.
 #[derive(Debug)]
 pub struct LintLoggingScanRootFileCount {
     pub scan_root_description: String,
@@ -1017,36 +999,8 @@ mod tests {
         assert_eq!(v[0].matched_pattern, "logging.basicConfig");
     }
 
-    #[test]
-    fn rejects_console_log_in_ts_library() {
-        let v = scan_fixture_tree(
-            lint_target_named("typescript"),
-            "console.log(\"hello\");\n",
-            "src/app.ts",
-        );
-        assert_eq!(v.len(), 1);
-        assert_eq!(v[0].matched_pattern, "console.log");
-    }
 
-    #[test]
-    fn rejects_deno_stdout_write_in_ts() {
-        let v = scan_fixture_tree(
-            lint_target_named("typescript"),
-            "await Deno.stdout.write(new TextEncoder().encode(\"x\"));\n",
-            "src/app.ts",
-        );
-        assert_eq!(v.len(), 1);
-        assert_eq!(v[0].matched_pattern, "Deno.stdout.write");
-    }
 
-    #[test]
-    fn rejects_every_console_method_variant() {
-        for method in ["log", "warn", "error", "info", "debug"] {
-            let src = format!("console.{}(\"x\");\n", method);
-            let v = scan_fixture_tree(lint_target_named("typescript"), &src, "src/app.ts");
-            assert_eq!(v.len(), 1, "console.{} should be rejected", method);
-        }
-    }
 
     #[test]
     fn accepts_streamlib_log_python() {
@@ -1058,15 +1012,6 @@ mod tests {
         assert!(v.is_empty(), "streamlib.log.* should pass: {:?}", v);
     }
 
-    #[test]
-    fn accepts_streamlib_log_ts() {
-        let v = scan_fixture_tree(
-            lint_target_named("typescript"),
-            "import * as streamlib from \"./mod.ts\";\nstreamlib.log.info(\"hi\");\n",
-            "src/app.ts",
-        );
-        assert!(v.is_empty(), "streamlib.log.* should pass: {:?}", v);
-    }
 
     #[test]
     fn skips_comment_lines_python() {
@@ -1078,19 +1023,6 @@ mod tests {
         assert!(v.is_empty(), "commented-out print should not flag: {:?}", v);
     }
 
-    #[test]
-    fn skips_comment_lines_ts() {
-        let v = scan_fixture_tree(
-            lint_target_named("typescript"),
-            "// don't use console.log here\nstreamlib.log.info(\"ok\");\n",
-            "src/app.ts",
-        );
-        assert!(
-            v.is_empty(),
-            "commented-out console.log should not flag: {:?}",
-            v
-        );
-    }
 
     #[test]
     fn excludes_tests_directory_python() {
@@ -1128,19 +1060,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn allow_file_pragma_skips_entire_file_ts() {
-        let v = scan_fixture_tree(
-            lint_target_named("typescript"),
-            "// streamlib:lint-logging:allow-file — interceptor installer\nDeno.stdout.write(new Uint8Array());\n",
-            "src/_log_interceptors.ts",
-        );
-        assert!(
-            v.is_empty(),
-            "allow-file pragma should suppress entire file: {:?}",
-            v
-        );
-    }
 
     #[test]
     fn allow_line_pragma_skips_single_line_python() {
@@ -1153,27 +1072,6 @@ mod tests {
         assert_eq!(v[0].matched_pattern, "print(");
     }
 
-    #[test]
-    fn excludes_test_suffix_ts() {
-        let tmp = TempDir::new().unwrap();
-        let root = tmp.path().to_path_buf();
-        write_fixture(&root, "src/app_test.ts", "console.log(\"hi\");\n");
-        write_fixture(&root, "src/app.ts", "streamlib.log.info(\"ok\");\n");
-        let mut violations = Vec::new();
-        let mut files_scanned = 0usize;
-        scan_target(
-            &root,
-            lint_target_named("typescript"),
-            &mut violations,
-            &mut files_scanned,
-        )
-        .unwrap();
-        assert!(
-            violations.is_empty(),
-            "*_test.ts should be excluded: {:?}",
-            violations
-        );
-    }
 
     // ----- Rust target -------------------------------------------------------
 
@@ -1440,8 +1338,8 @@ mod tests {
 
     /// One workspace-wide total cannot express this gate's contract: the
     /// polyglot scan and the Rust scan read independent trees, so the Rust half
-    /// going to zero stays hidden behind the Python / TypeScript files that
-    /// still scan. A tree holding only polyglot source must be refused.
+    /// going to zero stays hidden behind the Python files that still scan. A
+    /// tree holding only polyglot source must be refused.
     #[test]
     fn a_tree_whose_rust_source_roots_read_nothing_is_refused_despite_surviving_polyglot_files() {
         let tmp = TempDir::new().unwrap();
@@ -1450,11 +1348,6 @@ mod tests {
             &root.join(lint_target_named("python").root_relative),
             "streamlib/app.py",
             "streamlib.log.info(\"ok\")\n",
-        );
-        write_fixture(
-            &root.join(lint_target_named("typescript").root_relative),
-            "mod.ts",
-            "streamlib.log.info(\"ok\");\n",
         );
 
         let report = scan_all(root).unwrap();

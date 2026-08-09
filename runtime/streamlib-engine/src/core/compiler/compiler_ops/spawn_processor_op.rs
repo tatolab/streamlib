@@ -111,7 +111,6 @@ pub(crate) fn spawn_processor(
     let runtime_label = match runtime {
         ProcessorRuntime::Rust => "Rust processor",
         ProcessorRuntime::Python => "Python processor",
-        ProcessorRuntime::TypeScript => "Deno subprocess host",
     };
     tracing::info!(
         "[{}] Spawning {} with strategy: {}",
@@ -470,9 +469,7 @@ where
 {
     let _ = gpu;
     match runtime {
-        ProcessorRuntime::Rust | ProcessorRuntime::Python | ProcessorRuntime::TypeScript => {
-            setup_body()
-        }
+        ProcessorRuntime::Rust | ProcessorRuntime::Python => setup_body(),
     }
 }
 
@@ -585,7 +582,7 @@ mod tests {
             return;
         };
 
-        for runtime in [ProcessorRuntime::Python, ProcessorRuntime::TypeScript] {
+        for runtime in [ProcessorRuntime::Python] {
             let gpu_handle = gpu.clone();
             let result = run_setup_phase(runtime.clone(), &gpu, || {
                 let sandbox = GpuContextLimitedAccess::new(gpu_handle);

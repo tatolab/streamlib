@@ -5108,28 +5108,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "streamlib-deno-native"
-version = "0.16.0"
-dependencies = [
- "cudarc",
- "iceoryx2",
- "libc",
- "rmp-serde",
- "serde",
- "serde_json",
- "streamlib-adapter-cpu-readback",
- "streamlib-adapter-cuda",
- "streamlib-adapter-opengl",
- "streamlib-adapter-vulkan",
- "streamlib-consumer-rhi",
- "streamlib-ipc-types",
- "streamlib-surface-adapter",
- "streamlib-surface-client",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "streamlib-engine"
 version = "0.16.0"
 dependencies = [

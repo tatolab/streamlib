@@ -131,7 +131,6 @@ impl Capture {
                 self.source = match value.as_str() {
                     "rust" => Some(Source::Rust),
                     "python" => Some(Source::Python),
-                    "deno" => Some(Source::Deno),
                     _ => None,
                 };
                 self.source.is_some()
