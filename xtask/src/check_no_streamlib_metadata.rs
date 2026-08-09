@@ -22,7 +22,7 @@ use walkdir::WalkDir;
 /// skipped explicitly below — adding more crates doesn't require updating
 /// the list, only adding more skip prefixes when a new vendored tree shows
 /// up.
-const SCAN_PARENTS: &[&str] = &["runtime", "sdk", "adapters", "tools", "vendor", "packages", "examples", "xtask"];
+const SCAN_PARENTS: &[&str] = &["runtime", "sdk", "adapters", "vendor", "packages", "examples", "xtask"];
 
 /// Path components that should never be walked (build outputs, dependency
 /// caches, generated bindings).

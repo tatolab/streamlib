@@ -34,11 +34,7 @@ moq = ["dep:streamlib-moq"]
 streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.16.0" }
 
 [dependencies]
-# `default-features = false` drops the SDK's `auto-build` feature. The
-# api-server drives the runtime; it never materializes a module from source, and
-# Cargo unifies features across a graph — leaving it on would link the build
-# orchestrator into the wheel that now hosts this crate.
-streamlib = { path = "../../sdk/streamlib-sdk", version = "0.16.0", default-features = false }
+streamlib = { path = "../../sdk/streamlib-sdk", version = "0.16.0" }
 streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.16.0" }
 streamlib-moq = { path = "../../runtime/streamlib-moq", version = "0.16.0", optional = true }
 

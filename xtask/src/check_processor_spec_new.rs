@@ -35,7 +35,7 @@ use walkdir::WalkDir;
 /// `libs/` together; flat coverage means no consumer can reintroduce the
 /// pattern in a forgotten tree.
 pub const SCAN_DIR_PARENTS: &[&str] = &[
-    "runtime", "sdk", "adapters", "tools", "vendor", "examples", "packages",
+    "runtime", "sdk", "adapters", "vendor", "examples", "packages",
 ];
 
 #[derive(Debug, PartialEq, Eq)]

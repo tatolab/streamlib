@@ -22,7 +22,6 @@ pub mod check_no_in_process_placement;
 pub mod check_no_inventory_submit;
 pub mod check_no_reverse_dns;
 pub mod check_no_streamlib_metadata;
-pub mod check_package_version_drift;
 pub mod check_processor_source_reachability;
 pub mod check_processor_spec_new;
 pub mod check_schema_versions;
@@ -30,6 +29,7 @@ pub mod check_vendored_vulkanalia;
 pub mod generate_crate_roots;
 pub mod lint_logging;
 pub mod manifest_schema;
+pub mod normal_build_dep_graph;
 
 /// Rust source roots a workspace crate may hold: the classic `src/` and the
 /// folder-backed `processors/` a generated crate root declares its module arms
@@ -219,31 +219,6 @@ enum Commands {
     /// header, (3) every `streamlib.yaml` validates against the schema.
     CheckManifestSchema,
 
-    /// CI gate that every publishable package's `Cargo.toml`
-    /// `[package].version` matches its `streamlib.yaml` `package.version`
-    /// (the `.slpkg` semver — the single source of truth). Packages with no
-    /// `Cargo.toml` (schema-only) and workspace-inherited versions are
-    /// skipped. `--fix` rewrites each drifting `Cargo.toml` from its
-    /// `streamlib.yaml`, so the bump workflow is "edit streamlib.yaml, run
-    /// `--fix`" — never hand-edit `Cargo.toml`.
-    CheckPackageVersionDrift {
-        /// Rewrite each drifting `Cargo.toml` from its `streamlib.yaml`.
-        #[arg(long)]
-        fix: bool,
-    },
-
-    /// Strip dev-time path-flavor `patch:` entries from a crate's
-    /// `streamlib.yaml` so the published manifest is path-free. Intended to
-    /// run against a scratch copy of the crate before `cargo publish` (cargo
-    /// bundles `streamlib.yaml` verbatim with no file-rewrite hook). The
-    /// publish-side half of the static package-source distribution; the resolver
-    /// resolves the now-path-free dep from the package source. See
-    /// `docs/architecture/package-source.md`.
-    StripPublishManifest {
-        /// Directory containing the `streamlib.yaml` to strip in place.
-        #[arg(long)]
-        dir: PathBuf,
-    },
 
     /// Drift trip-wire for the vendored vulkanalia fork trees
     /// (`vendor/tatolab-vulkanalia{,-sys,-vma}`): hashes each vendored crate
@@ -254,30 +229,8 @@ enum Commands {
     /// `docs/architecture/vendored-vulkanalia.md`.
     CheckVendoredVulkanalia,
 
-    /// Emit a daemon-free STATIC `.slpkg` package-source tree (generic store +
-    /// catalog + release manifest) for the current workspace's `packages/*`
-    /// into a directory served over `file://` or a dumb static HTTP mount. No
-    /// daemon, no token. See `docs/architecture/package-source.md`.
-    #[command(subcommand)]
-    StaticPackageSource(StaticPackageSourceAction),
 }
 
-#[derive(Subcommand)]
-enum StaticPackageSourceAction {
-    /// Emit the `.slpkg` store + catalog + release manifest into `--out`,
-    /// flipped in atomically once the release manifest lands.
-    Emit {
-        /// Target directory for the served tree (built in a staging sibling
-        /// and moved in atomically).
-        #[arg(long)]
-        out: PathBuf,
-        /// `-dev.N` prerelease suffix for the release manifest. A dev emit
-        /// expects the workspace / package manifests already bumped (the
-        /// publish scripts' bump/restore convention).
-        #[arg(long)]
-        dev: Option<u32>,
-    },
-}
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()
@@ -336,24 +289,8 @@ fn main() -> Result<()> {
         Commands::CheckConsumerRhiRepr => check_consumer_rhi_repr::run(&workspace_root()?)?,
         Commands::CheckDeviceWaitIdle => check_device_wait_idle::run(&workspace_root()?)?,
         Commands::CheckVendoredVulkanalia => check_vendored_vulkanalia::run(&workspace_root()?)?,
-        Commands::CheckPackageVersionDrift { fix } => {
-            check_package_version_drift::run(&workspace_root()?, fix)?
-        }
         Commands::EmitManifestSchema => manifest_schema::emit(&workspace_root()?)?,
         Commands::CheckManifestSchema => manifest_schema::check(&workspace_root()?)?,
-        Commands::StripPublishManifest { dir } => {
-            streamlib_pack::strip_path_patches_in_dir(&dir)
-                .with_context(|| format!("stripping path patches from {}", dir.display()))?;
-            tracing::info!(dir = %dir.display(), "stripped path-flavor patch entries from streamlib.yaml");
-        }
-        Commands::StaticPackageSource(StaticPackageSourceAction::Emit { out, dev }) => {
-            use streamlib_pack::static_package_source::{EmitOptions, emit_static_package_source};
-            emit_static_package_source(&EmitOptions {
-                workspace_root: workspace_root()?,
-                out,
-                dev,
-            })?
-        }
     }
 
     Ok(())

@@ -4887,7 +4887,6 @@ dependencies = [
  "iceoryx2",
  "serde",
  "serde_json",
- "streamlib-build-orchestrator",
  "streamlib-engine",
 ]
 
@@ -5098,44 +5097,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "streamlib-build-orchestrator"
-version = "0.16.0"
-dependencies = [
- "anyhow",
- "serde_json",
- "serde_yaml",
- "serial_test",
- "streamlib-cargo-build",
- "streamlib-engine",
- "streamlib-idents",
- "streamlib-jtd-codegen",
- "streamlib-pack",
- "streamlib-plugin-abi",
- "streamlib-processor-extract",
- "streamlib-processor-schema",
- "tempfile",
- "thiserror 2.0.18",
- "toml_edit 0.22.27",
- "tracing",
- "ureq",
-]
-
-[[package]]
-name = "streamlib-cargo-build"
-version = "0.16.0"
-dependencies = [
- "anyhow",
- "serde",
- "serde_json",
- "serde_yaml",
- "streamlib-idents",
- "streamlib-processor-schema",
- "tempfile",
- "toml 0.8.23",
- "tracing",
-]
-
-[[package]]
 name = "streamlib-consumer-rhi"
 version = "0.16.0"
 dependencies = [
@@ -5228,7 +5189,6 @@ dependencies = [
  "streamlib-ipc-types",
  "streamlib-jtd-codegen",
  "streamlib-macros",
- "streamlib-pack",
  "streamlib-plugin-abi",
  "streamlib-processor-extract",
  "streamlib-processor-schema",
@@ -5358,27 +5318,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "streamlib-pack"
-version = "0.16.0"
-dependencies = [
- "anyhow",
- "libc",
- "serde",
- "serde_json",
- "serde_yaml",
- "streamlib-cargo-build",
- "streamlib-idents",
- "streamlib-processor-extract",
- "streamlib-processor-schema",
- "tempfile",
- "thiserror 2.0.18",
- "toml 0.8.23",
- "toml_edit 0.22.27",
- "tracing",
- "zip",
-]
-
-[[package]]
 name = "streamlib-plugin-abi"
 version = "0.16.0"
 dependencies = [
@@ -5477,20 +5416,6 @@ dependencies = [
  "streamlib-consumer-rhi",
  "streamlib-media-builtins",
  "streamlib-surface-client",
- "tracing",
-]
-
-[[package]]
-name = "streamlib-runtime"
-version = "0.16.0"
-dependencies = [
- "anyhow",
- "clap",
- "cuid2",
- "serde_json",
- "streamlib",
- "streamlib-api-server",
- "tokio",
  "tracing",
 ]
 
@@ -7168,7 +7093,6 @@ dependencies = [
  "serde_yaml",
  "streamlib-idents",
  "streamlib-jtd-codegen",
- "streamlib-pack",
  "streamlib-processor-extract",
  "streamlib-processor-schema",
  "syn",

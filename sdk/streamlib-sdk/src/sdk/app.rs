@@ -12,7 +12,6 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
-use crate::sdk::RunnerAutoBuild;
 use crate::sdk::error::{Error, Result};
 use crate::sdk::graph::{InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId};
 use crate::sdk::processors::{Config, GeneratedProcessor, ProcessorSpec, ProcessorTypeReference};
@@ -34,13 +33,10 @@ pub struct App {
 }
 
 impl App {
-    /// Build an `App` over a `Runner` with the default polyglot build
-    /// orchestrator wired (the [`RunnerAutoBuild::with_auto_build`] path), so a
-    /// version-free [`add`](Self::add) reference to a not-yet-built package
-    /// materializes from source on demand.
+    /// Build an `App` over a fresh [`Runner`].
     pub fn new() -> Result<Self> {
         Ok(Self {
-            runner: Runner::with_auto_build()?,
+            runner: Runner::new()?,
         })
     }
 

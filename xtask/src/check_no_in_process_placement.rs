@@ -99,7 +99,7 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 const SCAN_PARENTS: &[&str] = &[
-    "runtime", "sdk", "adapters", "tools", "packages", "examples", "xtask", "docs",
+    "runtime", "sdk", "adapters", "packages", "examples", "xtask", "docs",
 ];
 
 /// The retracted spike tree. Its README was the last place in the tree where a

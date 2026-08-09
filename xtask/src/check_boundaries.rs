@@ -28,7 +28,7 @@
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use streamlib_pack::NormalBuildDepGraph;
+use crate::normal_build_dep_graph::NormalBuildDepGraph;
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
@@ -169,7 +169,7 @@ fn matches_allow(rel_path: &Path, allow: &[AllowEntry]) -> bool {
 /// `target/`, `.git/`, vendored node_modules, etc. by construction. `xtask`
 /// is intentionally excluded — it is build tooling with no Vulkan deps, and
 /// the fixture-test strings in this very file would otherwise self-flag.
-const SCAN_ROOTS: &[&str] = &["runtime", "sdk", "adapters", "tools", "vendor", "examples", "packages"];
+const SCAN_ROOTS: &[&str] = &["runtime", "sdk", "adapters", "vendor", "examples", "packages"];
 
 fn walk_rs(project_root: &Path) -> impl Iterator<Item = PathBuf> + '_ {
     SCAN_ROOTS
@@ -777,11 +777,6 @@ const STREAMLIB_ENGINE_ALLOWLIST: &[AllowEntry] = &[
         path: "sdk/streamlib-sdk/src/lib.rs",
         kind: AllowKind::ExactFile,
         rationale: "SDK facade — pub uses items from engine to expose via streamlib::*",
-    },
-    AllowEntry {
-        path: "tools/streamlib-build-orchestrator/",
-        kind: AllowKind::PathPrefix,
-        rationale: "default BuildOrchestrator impl — implements the engine's BuildOrchestrator trait and calls engine data-dir APIs (get_streamlib_data_dir); it is engine-tier infrastructure, not consumer code, and CANNOT route through the streamlib::* SDK facade because the SDK depends on it (the auto-build feature) — that would be a dependency cycle. Direct streamlib_engine::* is unavoidable here",
     },
 ];
 

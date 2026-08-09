@@ -17,14 +17,6 @@ name = "streamlib"
 crate-type = ["rlib"]
 
 [features]
-# `auto-build` is on by default: it pulls in `PolyglotBuildOrchestrator`
-# so build-requiring module loads (`Strategy::Path`/`Git` +
-# `IfStale`/`AlwaysBuild`) can materialize from source at runtime — the
-# dev / runtime-authoring posture. A frozen `.slpkg`-only deployment
-# builds with `--no-default-features`, which physically excludes the
-# build tooling from the dependency graph (provably compiler-free).
-default = ["auto-build"]
-auto-build = ["dep:streamlib-build-orchestrator"]
 # Forwarded engine features. Customer apps that need a non-default engine
 # configuration enable the matching SDK feature; the SDK forwards it to
 # the engine dep.
@@ -36,7 +28,6 @@ test-support = ["streamlib-engine/test-support"]
 
 [dependencies]
 streamlib-engine = { path = "../../runtime/streamlib-engine", version = "0.16.0" }
-streamlib-build-orchestrator = { path = "../../tools/streamlib-build-orchestrator", version = "0.16.0", optional = true }
 # `App` sugar takes `impl Serialize` configs and encodes them to the JSON the
 # runtime carries.
 serde = { workspace = true }

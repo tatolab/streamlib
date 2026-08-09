@@ -19,7 +19,7 @@ use walkdir::WalkDir;
 /// Directory globs to walk for schema YAMLs. New layout (`packages/*/schemas`)
 /// is included alongside the legacy `libs/*/schemas` so the lint stays
 /// effective during the milestone-10 migration.
-pub const SCHEMA_DIR_PARENTS: &[&str] = &["runtime", "sdk", "adapters", "tools", "vendor", "packages", "examples"];
+pub const SCHEMA_DIR_PARENTS: &[&str] = &["runtime", "sdk", "adapters", "vendor", "packages", "examples"];
 
 /// Files that look like schema YAMLs but are NOT (e.g. `streamlib.yaml`,
 /// `Cargo.toml.orig`). The lint runs only on files matching `*.yaml` /
