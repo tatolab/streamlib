@@ -129,8 +129,7 @@ impl PixelBuffer {
         }
     }
 
-    /// Cached pixel format. Captured at construction; pure field
-    /// read with no plugin ABI dispatch.
+    /// Cached pixel format. Captured at construction; pure field read.
     pub fn format(&self) -> PixelFormat {
         // SAFETY: `format_raw` is the `#[repr(u32)]` discriminant of
         // a `PixelFormat` value that was alive at construction time
@@ -178,8 +177,7 @@ impl PixelBuffer {
 
     /// Number of DMA-BUF planes backing this pixel buffer. Always `>= 1`.
     /// Mirror of `slpn_gpu_surface_plane_count` on the polyglot shims.
-    /// Cached at construction; pure field read with no plugin ABI
-    /// dispatch.
+    /// Cached at construction; pure field read.
     pub fn plane_count(&self) -> u32 {
         self.plane_count_cached
     }

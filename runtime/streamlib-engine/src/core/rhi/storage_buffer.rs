@@ -91,14 +91,13 @@ impl StorageBuffer {
     }
 
     /// Total buffer size in bytes. Cached at construction; pure POD
-    /// read with no plugin ABI dispatch.
+    /// read.
     pub fn byte_size(&self) -> u64 {
         self.byte_size_cached
     }
 
     /// Persistently mapped CPU pointer for HOST_VISIBLE allocations.
-    /// Cached at construction; pure POD read with no plugin ABI
-    /// dispatch. Returns null for DEVICE_LOCAL imports (DMA-BUF
+    /// Cached at construction; pure POD read. Returns null for DEVICE_LOCAL imports (DMA-BUF
     /// without HOST_VISIBLE).
     pub fn mapped_ptr(&self) -> *mut u8 {
         self.mapped_ptr_cached

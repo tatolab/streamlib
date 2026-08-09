@@ -213,7 +213,7 @@ impl TextureReadbackDescriptor<'_> {
 /// `try_read_copy` / `wait_and_copy`) is reached through the per-type
 /// [`VulkanTextureReadbackMethodsVTable`] pointed at by `methods_vtable`.
 /// The five POD getters (`width` / `height` / `format` / `handle_id` /
-/// `staging_size`) read cached fields directly — no plugin ABI hop.
+/// `staging_size`) read cached fields directly .
 #[repr(C)]
 pub struct TextureReadback {
     /// Opaque handle to the host's
@@ -245,22 +245,22 @@ unsafe impl Send for TextureReadback {}
 unsafe impl Sync for TextureReadback {}
 
 impl TextureReadback {
-    /// Process-unique readback handle id. Cached POD — no plugin ABI hop.
+    /// Process-unique readback handle id. Cached POD.
     pub fn handle_id(&self) -> u64 {
         self.cached_handle_id
     }
 
-    /// Total staging-buffer size in bytes. Cached POD — no plugin ABI hop.
+    /// Total staging-buffer size in bytes. Cached POD.
     pub fn staging_size(&self) -> u64 {
         self.cached_staging_size
     }
 
-    /// Pixel width the readback is bound to. Cached POD — no plugin ABI hop.
+    /// Pixel width the readback is bound to. Cached POD.
     pub fn width(&self) -> u32 {
         self.cached_width
     }
 
-    /// Pixel height the readback is bound to. Cached POD — no plugin ABI hop.
+    /// Pixel height the readback is bound to. Cached POD.
     pub fn height(&self) -> u32 {
         self.cached_height
     }

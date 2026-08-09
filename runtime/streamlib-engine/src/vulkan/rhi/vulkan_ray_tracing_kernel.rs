@@ -1024,7 +1024,7 @@ impl VulkanRayTracingKernel {
         self.host_inner().bindings().to_vec()
     }
 
-    /// Push-constant range size in bytes. Cached POD — no plugin ABI hop.
+    /// Push-constant range size in bytes. Cached POD.
     pub fn push_constant_size(&self) -> u32 {
         self.cached_push_constant_size
     }

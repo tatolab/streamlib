@@ -437,7 +437,7 @@ impl Drop for TextureRingInner {
 /// caller-provided POD out-parameters.
 ///
 /// The four POD getters (`len`, `width`, `height`, `format`) read
-/// directly from cached fields on this struct — no plugin ABI hop. The
+/// directly from cached fields on this struct . The
 /// values are captured by [`Self::from_arc_into_raw`] at construction
 /// and never mutate over the ring's lifetime.
 #[repr(C)]
@@ -518,13 +518,13 @@ impl TextureRing {
             .copy_pixel_buffer_to_slot(slot, pixel_buffer, width, height)
     }
 
-    /// Number of slots in the ring. Cached POD — no plugin ABI hop.
+    /// Number of slots in the ring. Cached POD.
     pub fn len(&self) -> usize {
         self.cached_len as usize
     }
 
     /// Ring is always non-empty in practice (construction rejects 0).
-    /// Cached POD — no plugin ABI hop.
+    /// Cached POD.
     pub fn is_empty(&self) -> bool {
         self.cached_len == 0
     }

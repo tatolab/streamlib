@@ -982,7 +982,7 @@ impl std::fmt::Debug for VulkanComputeKernelInner {
 /// test.
 ///
 /// The `push_constant_size()` POD getter reads from the cached
-/// field — no plugin ABI hop. The value is captured by
+/// field . The value is captured by
 /// [`Self::from_arc_into_raw`] at construction and never mutates
 /// over the kernel's lifetime.
 #[repr(C)]
@@ -1191,7 +1191,7 @@ impl VulkanComputeKernel {
         self.host_inner().bindings().to_vec()
     }
 
-    /// Push-constant range size in bytes. Cached POD — no plugin ABI hop.
+    /// Push-constant range size in bytes. Cached POD.
     pub fn push_constant_size(&self) -> u32 {
         self.cached_push_constant_size
     }

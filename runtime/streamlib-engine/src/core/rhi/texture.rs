@@ -83,9 +83,7 @@ impl<'a> TextureDescriptor<'a> {
     }
 }
 
-/// Host-only rich data backing a [`Texture`]. Cdylib code never sees
-/// this type; it reaches the public [`Texture`] surface through the
-/// `(handle, vtable, POD)` PluginAbiObject.
+/// Rich data backing a [`Texture`], held behind the opaque handle.
 ///
 /// Holds the platform-specific Arc(s) the engine RHI and surface
 /// adapters need (raw `VkImage`, `MTLTexture`, IOSurface, etc.).
@@ -146,17 +144,10 @@ impl TextureInner {
 
 /// Platform-agnostic texture wrapper.
 ///
-/// Layout-stable: every field is either a primitive or an opaque
-/// pointer. The platform-specific [`TextureInner`] is hidden behind
-/// the opaque `handle`; engine-internal callers reach it through the
-/// [`crate::host_rhi::HostTextureExt`] extension trait, cdylib callers
-/// route through the vtable.
-///
-/// Clone bumps the host's `Arc<TextureInner>` strong count via
-/// [`GpuContextLimitedAccessVTable::clone_texture`]; Drop decrements
-/// via [`GpuContextLimitedAccessVTable::drop_texture`]. Both run in
-/// host-compiled code regardless of the calling plugin.
-#[repr(C)]
+/// The platform-specific [`TextureInner`] is hidden behind the opaque
+/// `handle`; engine-internal callers reach it through the
+/// [`crate::host_rhi::HostTextureExt`] extension trait. Clone bumps the
+/// `Arc<TextureInner>` strong count and Drop decrements it.
 pub struct Texture {
     /// Opaque handle to the host's `Arc<TextureInner>` (produced by
     /// `Arc::into_raw`).
@@ -176,9 +167,7 @@ pub struct Texture {
 
 // SAFETY: `handle` points at an `Arc<TextureInner>` whose interior is
 // Send+Sync (platform-specific texture types — `HostVulkanTexture`,
-// `MetalTexture`, `DX12Texture` — are themselves Send+Sync). Refcount
-// management crosses the cdylib boundary through the vtable, but the
-// underlying Arc bookkeeping runs in host-compiled code regardless.
+// `MetalTexture`, `DX12Texture` — are themselves Send+Sync).
 unsafe impl Send for Texture {}
 unsafe impl Sync for Texture {}
 
@@ -222,14 +211,12 @@ impl Texture {
         unsafe { &*(self.handle as *const TextureInner) }
     }
 
-    /// Texture width in pixels. Cached at construction; pure field
-    /// read with no plugin ABI dispatch.
+    /// Texture width in pixels. Cached at construction; pure field read.
     pub fn width(&self) -> u32 {
         self.width_cached
     }
 
-    /// Texture height in pixels. Cached at construction; pure field
-    /// read with no plugin ABI dispatch.
+    /// Texture height in pixels. Cached at construction; pure field read.
     pub fn height(&self) -> u32 {
         self.height_cached
     }

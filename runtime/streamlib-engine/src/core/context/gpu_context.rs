@@ -2430,7 +2430,7 @@ impl Drop for GpuContextLimitedAccess {
 ///   can construct it). `handle` is a host-allocated
 ///   `Box<Arc<GpuContext>>` and `handle_kind` is
 ///   [`HandleKind::Boxed`]. Every method routes through
-///   [`Self::host_inner`] for direct dispatch — no plugin ABI hop, no
+///   [`Self::host_inner`] for direct dispatch , no
 ///   scope-registry lookup. Drop runs
 ///   [`std::boxed::Box::from_raw`] on the boxed Arc.
 /// - **Vtable dispatch** ([`Self::from_scope_token`], reached from
