@@ -707,10 +707,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c673075a2e0e5f4a1dde27ce9dee1ea4558c7ffe648f576438a20ca1d2acc4b0"
 dependencies = [
  "iana-time-zone",
- "js-sys",
  "num-traits",
  "serde",
- "wasm-bindgen",
  "windows-link",
 ]
 
@@ -5134,34 +5132,6 @@ dependencies = [
  "streamlib-processor-schema",
  "tempfile",
  "toml 0.8.23",
- "tracing",
-]
-
-[[package]]
-name = "streamlib-cli"
-version = "0.16.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "dirs",
- "dotenvy",
- "serde",
- "serde_json",
- "serde_yaml",
- "serial_test",
- "sha2",
- "streamlib",
- "streamlib-cargo-build",
- "streamlib-idents",
- "streamlib-jtd-codegen",
- "streamlib-pack",
- "streamlib-processor-extract",
- "streamlib-processor-schema",
- "tempfile",
- "thiserror 2.0.18",
- "toml 0.8.23",
- "toml_edit 0.22.27",
  "tracing",
 ]
 

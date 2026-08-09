@@ -10,6 +10,7 @@ context and a stack dump. The launch-to-a-live-node half needs a device and
 lives in `test_cli_launch.py`.
 """
 
+import argparse
 import ast
 import subprocess
 import sys
@@ -364,6 +365,29 @@ def test_the_observation_verbs_are_served_by_this_wheel(
     listed = run_cli("--help")
     for verb in ("graph", "tap", "logs"):
         assert verb in listed.stdout, f"`streamlib {verb}` must be a served verb"
+
+
+def test_this_wheel_is_the_only_streamlib_cli():
+    """The served verb set is exactly the decided one — nothing missing, nothing extra.
+
+    Successor to the two guards the Rust `streamlib-cli` binary carried before
+    it was deleted: they asserted that binary owned no observation verb and no
+    app-launch verb, which is unprovable once the binary is gone. The invariant
+    they protected — one CLI answering to `streamlib`, not two clients racing
+    for the same name against the same control plane — is asserted here
+    instead, against the CLI that actually exists. Pinning the set exactly is
+    what makes it a guard: a verb reappearing here is as much a regression as
+    one going missing.
+    """
+    subcommand_actions = [
+        action
+        for action in cli.build_argument_parser()._actions  # noqa: SLF001
+        if isinstance(action, argparse._SubParsersAction)  # noqa: SLF001
+    ]
+    assert len(subcommand_actions) == 1
+    served = set(subcommand_actions[0].choices)
+
+    assert served == {"new", "run", "dev", "nodes", "graph", "tap", "logs"}
 
 
 def test_the_wheel_serves_no_mcp_verb(tmp_path: Path):
