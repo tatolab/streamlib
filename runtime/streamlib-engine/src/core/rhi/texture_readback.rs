@@ -12,7 +12,6 @@
 
 use std::ffi::c_void;
 
-use streamlib_plugin_abi::{GpuContextFullAccessVTable, VulkanTextureReadbackMethodsVTable};
 
 use crate::core::rhi::{Texture, TextureFormat};
 use crate::core::{Error, Result};
@@ -220,10 +219,6 @@ pub struct TextureReadback {
     /// Opaque handle to the host's
     /// `Box<Arc<crate::vulkan::rhi::VulkanTextureReadback>>`.
     pub(crate) handle: *const c_void,
-    /// Parent vtable for plugin ABI drop dispatch (`drop_texture_readback`).
-    pub(crate) vtable: *const GpuContextFullAccessVTable,
-    /// Per-type vtable for plugin ABI method dispatch.
-    pub(crate) methods_vtable: *const VulkanTextureReadbackMethodsVTable,
     /// Cached process-unique readback handle id. Foreign-ticket checks
     /// run host-side; this is exposed for diagnostics/logging only.
     pub(crate) cached_handle_id: u64,

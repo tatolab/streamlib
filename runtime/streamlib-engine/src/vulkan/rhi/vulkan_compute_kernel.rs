@@ -26,7 +26,6 @@ use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
 use std::ffi::c_void;
 
-use streamlib_plugin_abi::GpuContextFullAccessVTable;
 
 use crate::core::rhi::{ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, Texture};
 use crate::core::{Error, Result};
@@ -990,10 +989,6 @@ impl std::fmt::Debug for VulkanComputeKernelInner {
 pub struct VulkanComputeKernel {
     /// Opaque handle to the host's `Arc<VulkanComputeKernelInner>`.
     pub(crate) handle: *const c_void,
-    /// Parent vtable for plugin ABI Clone/Drop dispatch (#918 Phase D).
-    pub(crate) vtable: *const GpuContextFullAccessVTable,
-    /// Per-type vtable for plugin ABI method dispatch (#907 Phase E).
-    pub(crate) methods_vtable: *const streamlib_plugin_abi::VulkanComputeKernelMethodsVTable,
     /// Cached push-constant size in bytes. Set at construction; fixed
     /// for the kernel's lifetime.
     pub(crate) cached_push_constant_size: u32,
@@ -1035,13 +1030,10 @@ impl VulkanComputeKernel {
     pub(crate) fn from_arc_into_raw(arc: Arc<VulkanComputeKernelInner>) -> Self {
         let cached_push_constant_size = arc.push_constant_size();
         let handle = Arc::into_raw(arc) as *const c_void;
-        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
         let methods_vtable =
             crate::core::plugin::host_services::host_vulkan_compute_kernel_methods_vtable();
         Self {
             handle,
-            vtable,
-            methods_vtable,
             cached_push_constant_size,
             _reserved_padding: 0,
         }
@@ -1209,15 +1201,15 @@ impl VulkanComputeKernel {
 
 impl Clone for VulkanComputeKernel {
     fn clone(&self) -> Self {
-        if !self.handle.is_null() && !self.vtable.is_null() {
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Arc::into_raw(Arc<VulkanComputeKernelInner>)`;
+            // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                ((*self.vtable).clone_compute_kernel)(self.handle);
+                Arc::increment_strong_count(self.handle as *const VulkanComputeKernelInner);
             }
         }
         Self {
             handle: self.handle,
-            vtable: self.vtable,
-            methods_vtable: self.methods_vtable,
             cached_push_constant_size: self.cached_push_constant_size,
             _reserved_padding: self._reserved_padding,
         }
@@ -1226,9 +1218,11 @@ impl Clone for VulkanComputeKernel {
 
 impl Drop for VulkanComputeKernel {
     fn drop(&mut self) {
-        if !self.handle.is_null() && !self.vtable.is_null() {
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Arc::into_raw(Arc<VulkanComputeKernelInner>)`;
+            // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                ((*self.vtable).drop_compute_kernel)(self.handle);
+                Arc::decrement_strong_count(self.handle as *const VulkanComputeKernelInner);
             }
         }
     }

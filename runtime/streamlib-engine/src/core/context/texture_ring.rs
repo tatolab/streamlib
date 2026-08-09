@@ -14,7 +14,6 @@ use std::ffi::c_void;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use streamlib_plugin_abi::GpuContextFullAccessVTable;
 
 use crate::core::context::GpuContext;
 use crate::core::rhi::{Texture, TextureFormat};
@@ -445,10 +444,6 @@ impl Drop for TextureRingInner {
 pub struct TextureRing {
     /// Opaque handle to the host's `Arc<TextureRingInner>`.
     pub(crate) handle: *const c_void,
-    /// Parent vtable for plugin ABI Clone/Drop dispatch (#918 Phase D).
-    pub(crate) vtable: *const GpuContextFullAccessVTable,
-    /// Per-type vtable for plugin ABI method dispatch (#907 Phase E).
-    pub(crate) methods_vtable: *const streamlib_plugin_abi::TextureRingMethodsVTable,
     /// Cached slot count. Set at construction; ring depth is fixed.
     pub(crate) cached_len: u32,
     /// Cached pixel width every slot's texture was allocated with.
@@ -479,12 +474,8 @@ impl TextureRing {
         let cached_height = arc.height();
         let cached_format = arc.format() as u32;
         let handle = Arc::into_raw(arc) as *const c_void;
-        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
-        let methods_vtable = crate::core::plugin::host_services::host_texture_ring_methods_vtable();
         Self {
             handle,
-            vtable,
-            methods_vtable,
             cached_len,
             cached_width,
             cached_height,
@@ -493,7 +484,6 @@ impl TextureRing {
     }
 
     /// Engine-internal borrow of the host-owned `TextureRingInner`.
-    /// **Panics if called from cdylib code.**
     pub(crate) fn host_inner(&self) -> &TextureRingInner {
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<TextureRingInner>)`.
         unsafe { &*(self.handle as *const TextureRingInner) }
@@ -617,18 +607,15 @@ fn slot_from_out_params(
 
 impl Clone for TextureRing {
     fn clone(&self) -> Self {
-        if !self.handle.is_null() && !self.vtable.is_null() {
-            // SAFETY: vtable + handle paired at construction; the
-            // vtable's `clone_texture_ring` contract is
-            // `Arc::increment_strong_count(handle)` host-side.
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Arc::into_raw(Arc<TextureRingInner>)`;
+            // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                ((*self.vtable).clone_texture_ring)(self.handle);
+                Arc::increment_strong_count(self.handle as *const TextureRingInner);
             }
         }
         Self {
             handle: self.handle,
-            vtable: self.vtable,
-            methods_vtable: self.methods_vtable,
             cached_len: self.cached_len,
             cached_width: self.cached_width,
             cached_height: self.cached_height,
@@ -639,11 +626,11 @@ impl Clone for TextureRing {
 
 impl Drop for TextureRing {
     fn drop(&mut self) {
-        if !self.handle.is_null() && !self.vtable.is_null() {
-            // SAFETY: matched with the `Arc::into_raw` in
-            // `from_arc_into_raw` and any `clone_texture_ring` bumps.
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Arc::into_raw(Arc<TextureRingInner>)`;
+            // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                ((*self.vtable).drop_texture_ring)(self.handle);
+                Arc::decrement_strong_count(self.handle as *const TextureRingInner);
             }
         }
     }

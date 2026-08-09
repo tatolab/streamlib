@@ -30,7 +30,6 @@
 
 mod adapter;
 mod context;
-mod host_vtable;
 mod state;
 mod view;
 

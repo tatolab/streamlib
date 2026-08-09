@@ -16,7 +16,6 @@ use std::ffi::c_void;
 use std::mem;
 use std::sync::Arc;
 
-use streamlib_plugin_abi::GpuContextFullAccessVTable;
 use vma::Alloc as _;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -120,8 +119,6 @@ pub(crate) struct VulkanAccelerationStructureInner {
 pub struct VulkanAccelerationStructure {
     /// Opaque handle to the host's `Arc<VulkanAccelerationStructureInner>`.
     pub(crate) handle: *const c_void,
-    /// Parent vtable for plugin ABI Clone/Drop dispatch (#918 Phase D).
-    pub(crate) vtable: *const GpuContextFullAccessVTable,
     /// Per-type vtable for plugin ABI method dispatch (#907 Phase E).
     pub(crate) methods_vtable:
         *const streamlib_plugin_abi::VulkanAccelerationStructureMethodsVTable,
@@ -683,13 +680,10 @@ impl VulkanAccelerationStructure {
         let cached_device_address = arc.device_address();
         let cached_storage_size = arc.storage_size();
         let handle = Arc::into_raw(arc) as *const c_void;
-        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
         let methods_vtable =
             crate::core::plugin::host_services::host_vulkan_acceleration_structure_methods_vtable();
         Self {
             handle,
-            vtable,
-            methods_vtable,
             cached_kind,
             _reserved_padding: 0,
             cached_device_address,
@@ -784,18 +778,15 @@ impl VulkanAccelerationStructure {
 
 impl Clone for VulkanAccelerationStructure {
     fn clone(&self) -> Self {
-        if !self.handle.is_null() && !self.vtable.is_null() {
-            // SAFETY: vtable + handle were paired at construction; the
-            // vtable's `clone_acceleration_structure` contract is
-            // `Arc::increment_strong_count(handle)` host-side.
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Arc::into_raw(Arc<VulkanAccelerationStructureInner>)`;
+            // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                ((*self.vtable).clone_acceleration_structure)(self.handle);
+                Arc::increment_strong_count(self.handle as *const VulkanAccelerationStructureInner);
             }
         }
         Self {
             handle: self.handle,
-            vtable: self.vtable,
-            methods_vtable: self.methods_vtable,
             cached_kind: self.cached_kind,
             _reserved_padding: self._reserved_padding,
             cached_device_address: self.cached_device_address,
@@ -806,12 +797,11 @@ impl Clone for VulkanAccelerationStructure {
 
 impl Drop for VulkanAccelerationStructure {
     fn drop(&mut self) {
-        if !self.handle.is_null() && !self.vtable.is_null() {
-            // SAFETY: matched with the `Arc::into_raw` in
-            // `from_arc_into_raw` and any `clone_acceleration_structure`
-            // bumps.
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Arc::into_raw(Arc<VulkanAccelerationStructureInner>)`;
+            // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                ((*self.vtable).drop_acceleration_structure)(self.handle);
+                Arc::decrement_strong_count(self.handle as *const VulkanAccelerationStructureInner);
             }
         }
     }

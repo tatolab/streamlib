@@ -16,8 +16,6 @@ path = "src/lib.rs"
 
 [dependencies]
 streamlib-surface-adapter = { path = "../streamlib-surface-adapter", version = "0.16.0" }
-streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.16.0" }
-streamlib-adapter-cpu-readback-abi = { path = "../streamlib-adapter-cpu-readback-abi", version = "0.16.0" }
 thiserror.workspace = true
 tracing.workspace = true
 

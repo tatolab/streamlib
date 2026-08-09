@@ -8,7 +8,6 @@ mod compute_kernel_bridge;
 #[cfg(target_os = "linux")]
 mod cpu_readback_bridge;
 pub(crate) mod escalate_gate;
-pub(crate) mod escalate_scope_registry;
 #[cfg(target_os = "linux")]
 mod device_export_staging;
 mod gpu_context;

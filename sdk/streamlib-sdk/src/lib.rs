@@ -87,10 +87,6 @@ pub mod sdk {
     pub use streamlib_engine::core::helper_process_transport;
     pub use streamlib_engine::core::json_schema;
     pub use streamlib_engine::core::media_clock;
-    /// Plugin-loading host-services payload + cdylib install helper
-    /// — referenced from `streamlib_plugin_abi::export_plugin!`
-    /// macro expansion.
-    pub use streamlib_engine::core::plugin;
     pub use streamlib_engine::core::prelude;
     pub use streamlib_engine::core::pubsub;
     pub use streamlib_engine::core::rhi;
@@ -130,12 +126,7 @@ pub mod sdk {
 
     // ---- Runtime-control requests ----
     /// `request_runtime_shutdown` — ask whoever owns the run loop to stop the
-    /// runtime. Call-shape-identical to
-    /// `streamlib_plugin_sdk::sdk::runtime_control`, so a facade-built package
-    /// and an engine-free package author the same call. The failure surface
-    /// differs: this copy has no `PluginHostUnavailable` arm, because a facade
-    /// build cannot distinguish "I am the host" from "I am a cdylib whose
-    /// `install_host_services` never ran" — both read as the host arm.
+    /// runtime.
     pub mod runtime_control {
         pub use streamlib_engine::core::runtime::request_runtime_shutdown;
     }

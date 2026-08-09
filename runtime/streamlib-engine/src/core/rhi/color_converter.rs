@@ -349,10 +349,6 @@ impl std::fmt::Debug for RhiColorConverterInner {
 pub struct RhiColorConverter {
     /// Opaque handle to the host's `Arc<RhiColorConverterInner>`.
     pub(crate) handle: *const std::ffi::c_void,
-    /// Parent vtable for plugin ABI Clone/Drop dispatch.
-    pub(crate) vtable: *const streamlib_plugin_abi::GpuContextFullAccessVTable,
-    /// Per-type vtable for plugin ABI method dispatch.
-    pub(crate) methods_vtable: *const streamlib_plugin_abi::RhiColorConverterMethodsVTable,
     /// Cached `#[repr(u32)]` `PixelFormat` discriminant for the source
     /// format. Set at construction; fixed for the converter's lifetime.
     /// Mirrors `Texture::format_raw` so the cdylib's `src_format()`
@@ -377,20 +373,16 @@ impl RhiColorConverter {
         let cached_src_format_raw = arc.src_format() as u32;
         let cached_dst_format_raw = arc.dst_format() as u32;
         let handle = std::sync::Arc::into_raw(arc) as *const std::ffi::c_void;
-        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
         let methods_vtable =
             crate::core::plugin::host_services::host_rhi_color_converter_methods_vtable();
         Self {
             handle,
-            vtable,
-            methods_vtable,
             cached_src_format_raw,
             cached_dst_format_raw,
         }
     }
 
     /// Engine-internal borrow of the host-owned `RhiColorConverterInner`.
-    /// **Panics if called from cdylib code.**
     pub(crate) fn host_inner(&self) -> &RhiColorConverterInner {
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<RhiColorConverterInner>)`.
         unsafe { &*(self.handle as *const RhiColorConverterInner) }
@@ -514,18 +506,15 @@ fn pixel_format_from_raw(raw: u32) -> PixelFormat {
 
 impl Clone for RhiColorConverter {
     fn clone(&self) -> Self {
-        if !self.handle.is_null() && !self.vtable.is_null() {
-            // SAFETY: vtable + handle were paired at construction; the
-            // vtable's `clone_color_converter` contract is
-            // `Arc::increment_strong_count(handle)` host-side.
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Arc::into_raw(Arc<RhiColorConverterInner>)`;
+            // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                ((*self.vtable).clone_color_converter)(self.handle);
+                Arc::increment_strong_count(self.handle as *const RhiColorConverterInner);
             }
         }
         Self {
             handle: self.handle,
-            vtable: self.vtable,
-            methods_vtable: self.methods_vtable,
             cached_src_format_raw: self.cached_src_format_raw,
             cached_dst_format_raw: self.cached_dst_format_raw,
         }
@@ -534,11 +523,11 @@ impl Clone for RhiColorConverter {
 
 impl Drop for RhiColorConverter {
     fn drop(&mut self) {
-        if !self.handle.is_null() && !self.vtable.is_null() {
-            // SAFETY: matched with the `Arc::into_raw` in
-            // `from_arc_into_raw` and any `clone_color_converter` bumps.
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Arc::into_raw(Arc<RhiColorConverterInner>)`;
+            // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                ((*self.vtable).drop_color_converter)(self.handle);
+                Arc::decrement_strong_count(self.handle as *const RhiColorConverterInner);
             }
         }
     }

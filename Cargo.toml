@@ -2,7 +2,6 @@
 resolver = "2"
 members = [
     "sdk/streamlib-error", # engine-free: canonical Error + Result
-    "sdk/streamlib-plugin-sdk", # engine-free authoring SDK (cdylib arm of the dual-mode views + glue)
     "sdk/vulkan-jpeg", # engine-free JPEG decoder — CPU parser + Huffman entropy decode + fused Vulkan-compute kernel (cdylib-safe; nvJPEG backend parked in the engine)
     "xtask",                    # Development tasks (cargo xtask <command>)
     "sdk/streamlib-sdk",       # Public authoring API surface — customer apps depend on this (Cargo name `streamlib`)
@@ -13,22 +12,15 @@ members = [
     "sdk/streamlib-jtd-codegen", # JTD-codegen pipeline: schema YAML → typed Rust/Python/TypeScript bindings
     "sdk/streamlib-idents",    # Structured schema identifiers, semver, manifest/lockfile types (#399)
     "sdk/streamlib-macros",    # Procedural macros for reducing boilerplate
-    "runtime/streamlib-plugin-abi", # ABI-stable FFI types for dynamic plugins
     "adapters/streamlib-surface-adapter", # Surface adapter contract shared by every adapter core
-    "adapters/streamlib-adapter-abi", # Cross-DSO half of the surface adapter contract — extern "C" panic net + ABI version
     "runtime/streamlib-consumer-rhi", # Consumer-side carve-out of the Vulkan RHI — DMA-BUF FD import + bind + map. cdylibs depend on this NOT the full streamlib so the FullAccess capability boundary is type-system enforced (Linux)
     "adapters/streamlib-adapter-vulkan", # Vulkan-native surface adapter — canonical implementor of VulkanWritable / VulkanImageInfoExt (Linux)
-    "adapters/streamlib-adapter-vulkan-abi", # Cross-DSO callback table for streamlib-adapter-vulkan — extern "C" vtable consumed by host wiring + cdylib shim (#887)
     "adapters/streamlib-adapter-vulkan-helpers", # Test-helper binaries for streamlib-adapter-vulkan — held in a dedicated crate so streamlib doesn't leak into adapter-vulkan's runtime dep graph (Linux)
     "adapters/streamlib-adapter-opengl", # OpenGL/EGL surface adapter — canonical implementor of GlWritable; DMA-BUF + DRM modifier import (Linux)
-    "adapters/streamlib-adapter-opengl-abi", # Cross-DSO callback table for streamlib-adapter-opengl — extern "C" vtable consumed by host wiring + cdylib shim (#888)
     "adapters/streamlib-adapter-cpu-readback", # Explicit GPU→CPU surface adapter — sole implementor of CpuReadable / CpuWritable (Linux)
-    "adapters/streamlib-adapter-cpu-readback-abi", # Cross-DSO callback table for streamlib-adapter-cpu-readback — extern "C" vtable consumed by host wiring + cdylib shim (#890)
     "adapters/streamlib-adapter-cpu-readback-helpers", # Test-helper binaries for streamlib-adapter-cpu-readback — held in a dedicated crate so streamlib doesn't leak into adapter-cpu-readback's runtime dep graph (Linux)
     "adapters/streamlib-adapter-cuda", # CUDA surface adapter — Vulkan↔CUDA OPAQUE_FD interop foundation for GPU-resident AI inference (Linux, #587)
-    "adapters/streamlib-adapter-cuda-abi", # Cross-DSO callback table for streamlib-adapter-cuda — extern "C" vtable consumed by host wiring + cdylib shim (#891)
     "adapters/streamlib-adapter-skia", # Skia surface adapter — composes on streamlib-adapter-vulkan; customer sees skia::Surface directly, never GrVkImageInfo / VkImageLayout (Linux)
-    "adapters/streamlib-adapter-skia-abi", # Cross-DSO callback table for streamlib-adapter-skia — extern "C" vtable consumed by host wiring + cdylib shim (#889)
     "sdk/streamlib-python-wheel", # The importable Python wheel — CPython imports the engine and authors pipelines in-process
     "runtime/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
     "runtime/streamlib-api-server", # The one control plane — HTTP + WebSocket + MCP. A host, not a loadable plugin: crate-type rlib, statically linked into the wheel and the streamlib crate

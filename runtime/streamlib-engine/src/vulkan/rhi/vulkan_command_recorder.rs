@@ -7,7 +7,6 @@ use std::ffi::c_void;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use streamlib_plugin_abi::GpuContextFullAccessVTable;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
@@ -1102,13 +1101,6 @@ impl std::fmt::Debug for RhiCommandRecorderInner {
 pub struct RhiCommandRecorder {
     /// Opaque handle to the host's `Box<RhiCommandRecorderInner>`.
     pub(crate) handle: *const c_void,
-    /// Parent vtable for plugin ABI Drop dispatch.
-    pub(crate) vtable: *const GpuContextFullAccessVTable,
-    /// Per-type vtable for plugin ABI method dispatch (Phase E
-    /// sub-lift slice B — #984). Null in host mode; populated by
-    /// [`Self::from_inner`] via
-    /// [`crate::core::plugin::host_services::host_rhi_command_recorder_methods_vtable`].
-    pub(crate) methods_vtable: *const streamlib_plugin_abi::RhiCommandRecorderMethodsVTable,
 }
 
 // SAFETY: handle points at a `Box<RhiCommandRecorderInner>`; Inner
@@ -1129,13 +1121,10 @@ impl RhiCommandRecorder {
     /// methods vtables.
     pub(crate) fn from_inner(inner: RhiCommandRecorderInner) -> Self {
         let handle = Box::into_raw(Box::new(inner)) as *const c_void;
-        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
         let methods_vtable =
             crate::core::plugin::host_services::host_rhi_command_recorder_methods_vtable();
         Self {
             handle,
-            vtable,
-            methods_vtable,
         }
     }
 

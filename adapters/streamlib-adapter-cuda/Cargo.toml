@@ -34,8 +34,6 @@ cuda = ["dep:cudarc"]
 # capsule path) need exactly it.
 dlpark.workspace = true
 streamlib-surface-adapter = { path = "../streamlib-surface-adapter", version = "0.16.0" }
-streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.16.0" }
-streamlib-adapter-cuda-abi = { path = "../streamlib-adapter-cuda-abi", version = "0.16.0" }
 thiserror.workspace = true
 tracing.workspace = true
 

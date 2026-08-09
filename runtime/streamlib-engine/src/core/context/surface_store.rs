@@ -2025,7 +2025,6 @@ impl std::fmt::Debug for SurfaceStoreInner {
 // handle as `&SurfaceStoreInner` and invoke the inner method directly.
 
 use std::ffi::c_void as ss_c_void;
-use streamlib_plugin_abi::SurfaceStoreVTable;
 
 /// Cross-process surface sharing handle.
 ///
@@ -2038,8 +2037,6 @@ use streamlib_plugin_abi::SurfaceStoreVTable;
 pub struct SurfaceStore {
     /// Opaque handle to the host's `Arc<SurfaceStoreInner>`.
     pub(crate) handle: *const ss_c_void,
-    /// Vtable for plugin ABI Clone/Drop and method dispatch.
-    pub(crate) vtable: *const SurfaceStoreVTable,
 }
 
 // SAFETY: `handle` points at an `Arc<SurfaceStoreInner>` whose
@@ -2066,7 +2063,6 @@ impl SurfaceStore {
     /// the plugin ABI shape.
     pub(crate) fn from_arc_into_raw(arc: Arc<SurfaceStoreInner>) -> Self {
         let handle = Arc::into_raw(arc) as *const ss_c_void;
-        let vtable = crate::core::plugin::host_services::host_surface_store_vtable();
         Self { handle, vtable }
     }
 
@@ -2088,7 +2084,6 @@ impl SurfaceStore {
     }
 
     /// Engine-internal borrow of the host-owned `SurfaceStoreInner`.
-    /// **Panics if called from cdylib code.**
     pub(crate) fn host_inner(&self) -> &SurfaceStoreInner {
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<SurfaceStoreInner>)`.
         unsafe { &*(self.handle as *const SurfaceStoreInner) }
@@ -2487,7 +2482,6 @@ impl Clone for SurfaceStore {
         }
         Self {
             handle: self.handle,
-            vtable: self.vtable,
         }
     }
 }

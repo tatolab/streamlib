@@ -34,7 +34,6 @@ mod error;
 mod gl_adapter;
 mod gl_context;
 mod gl_view;
-mod host_vtable;
 mod skia_internal;
 mod view;
 

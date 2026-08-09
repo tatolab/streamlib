@@ -18,7 +18,6 @@
 
 mod adapter;
 mod context;
-mod host_vtable;
 mod raw_handles;
 mod state;
 mod view;

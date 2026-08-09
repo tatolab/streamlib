@@ -27,7 +27,6 @@ use std::ffi::c_void;
 use std::sync::Arc;
 
 use streamlib_consumer_rhi::{TextureFormat, TextureUsages};
-use streamlib_plugin_abi::GpuContextLimitedAccessVTable;
 
 /// Platform-specific native handle for cross-framework texture sharing.
 ///
@@ -167,12 +166,6 @@ pub struct Texture {
     /// Opaque handle to the host's `Arc<TextureInner>` (produced by
     /// `Arc::into_raw`).
     pub(crate) handle: *const c_void,
-    /// Vtable for plugin ABI Clone/Drop dispatch. Resolved through the
-    /// plugin-ABI-routed accessor at construction; host mode points at
-    /// `&HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`, cdylib mode at the
-    /// host-installed pointer from
-    /// `HostServices::gpu_context_limited_access_vtable`.
-    pub(crate) vtable: *const GpuContextLimitedAccessVTable,
     /// Cached width (queried once at construction).
     pub(crate) width_cached: u32,
     /// Cached height (queried once at construction).
@@ -217,10 +210,8 @@ impl Texture {
         format: TextureFormat,
     ) -> Self {
         let handle = Arc::into_raw(arc) as *const c_void;
-        let vtable = crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
         Self {
             handle,
-            vtable,
             width_cached: width,
             height_cached: height,
             format_raw: format as u32,
@@ -259,10 +250,8 @@ impl Texture {
         height: u32,
         format_raw: u32,
     ) -> Self {
-        let vtable = crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
         Self {
             handle,
-            vtable,
             width_cached: width,
             height_cached: height,
             format_raw,
@@ -475,18 +464,15 @@ impl Texture {
 
 impl Clone for Texture {
     fn clone(&self) -> Self {
-        if !self.handle.is_null() && !self.vtable.is_null() {
-            // SAFETY: vtable + handle were paired at construction by
-            // `from_arc_into_raw`; the vtable's `clone_texture` contract
-            // is `Arc::increment_strong_count(handle)` on the host side.
-            // Balanced by the Drop impl below.
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Arc::into_raw(Arc<TextureInner>)`
+            // (see `from_arc_into_raw`); balanced by the Drop impl below.
             unsafe {
-                ((*self.vtable).clone_texture)(self.handle);
+                Arc::increment_strong_count(self.handle as *const TextureInner);
             }
         }
         Self {
             handle: self.handle,
-            vtable: self.vtable,
             width_cached: self.width_cached,
             height_cached: self.height_cached,
             format_raw: self.format_raw,
@@ -497,14 +483,11 @@ impl Clone for Texture {
 
 impl Drop for Texture {
     fn drop(&mut self) {
-        if !self.handle.is_null() && !self.vtable.is_null() {
+        if !self.handle.is_null() {
             // SAFETY: matched with the `Arc::into_raw` in
-            // `from_arc_into_raw` and any `clone_texture` bumps.
-            // `drop_texture` decrements the host-side Arc; when refcount
-            // hits zero the underlying `TextureInner` is freed in
-            // host-compiled code.
+            // `from_arc_into_raw` and any `Clone` increment.
             unsafe {
-                ((*self.vtable).drop_texture)(self.handle);
+                Arc::decrement_strong_count(self.handle as *const TextureInner);
             }
         }
     }

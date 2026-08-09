@@ -44,7 +44,6 @@ use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
 use std::ffi::c_void;
 
-use streamlib_plugin_abi::GpuContextFullAccessVTable;
 
 use crate::core::rhi::{
     BlendFactor, BlendOp, ColorBlendState, ColorWriteMask, CullMode, DepthCompareOp, DepthFormat,
@@ -1273,10 +1272,6 @@ impl std::fmt::Debug for VulkanGraphicsKernelInner {
 pub struct VulkanGraphicsKernel {
     /// Opaque handle to the host's `Arc<VulkanGraphicsKernelInner>`.
     pub(crate) handle: *const c_void,
-    /// Parent vtable for plugin ABI Clone/Drop dispatch (#918 Phase D).
-    pub(crate) vtable: *const GpuContextFullAccessVTable,
-    /// Per-type vtable for plugin ABI method dispatch (#907 Phase E).
-    pub(crate) methods_vtable: *const streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable,
     /// Cached push-constant size in bytes. Set at construction.
     pub(crate) cached_push_constant_size: u32,
     /// Cached descriptor-set ring depth. Set at construction.
@@ -1299,13 +1294,10 @@ impl VulkanGraphicsKernel {
         let cached_push_constant_size = arc.push_constant_size();
         let cached_descriptor_sets_in_flight = arc.descriptor_sets_in_flight();
         let handle = Arc::into_raw(arc) as *const c_void;
-        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
         let methods_vtable =
             crate::core::plugin::host_services::host_vulkan_graphics_kernel_methods_vtable();
         Self {
             handle,
-            vtable,
-            methods_vtable,
             cached_push_constant_size,
             cached_descriptor_sets_in_flight,
         }
@@ -1654,15 +1646,15 @@ fn encode_offscreen_draw_repr(
 
 impl Clone for VulkanGraphicsKernel {
     fn clone(&self) -> Self {
-        if !self.handle.is_null() && !self.vtable.is_null() {
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Arc::into_raw(Arc<VulkanGraphicsKernelInner>)`;
+            // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                ((*self.vtable).clone_graphics_kernel)(self.handle);
+                Arc::increment_strong_count(self.handle as *const VulkanGraphicsKernelInner);
             }
         }
         Self {
             handle: self.handle,
-            vtable: self.vtable,
-            methods_vtable: self.methods_vtable,
             cached_push_constant_size: self.cached_push_constant_size,
             cached_descriptor_sets_in_flight: self.cached_descriptor_sets_in_flight,
         }
@@ -1671,9 +1663,11 @@ impl Clone for VulkanGraphicsKernel {
 
 impl Drop for VulkanGraphicsKernel {
     fn drop(&mut self) {
-        if !self.handle.is_null() && !self.vtable.is_null() {
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Arc::into_raw(Arc<VulkanGraphicsKernelInner>)`;
+            // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                ((*self.vtable).drop_graphics_kernel)(self.handle);
+                Arc::decrement_strong_count(self.handle as *const VulkanGraphicsKernelInner);
             }
         }
     }

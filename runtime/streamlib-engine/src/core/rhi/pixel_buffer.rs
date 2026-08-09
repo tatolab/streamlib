@@ -15,7 +15,6 @@
 use std::ffi::c_void;
 use std::sync::Arc;
 
-use streamlib_plugin_abi::GpuContextLimitedAccessVTable;
 
 use super::{PixelBufferRef, PixelFormat};
 
@@ -43,11 +42,6 @@ pub struct PixelBuffer {
     /// `*const PixelBufferRef` via [`PixelBuffer::buffer_ref`];
     /// cdylib callers treat it as opaque.
     pub(crate) handle: *const c_void,
-    /// Vtable for plugin ABI Clone/Drop dispatch. In host mode this
-    /// points at `&HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`; in
-    /// cdylib mode it's the host-installed pointer from
-    /// `HostServices::gpu_context_limited_access_vtable`.
-    pub(crate) vtable: *const GpuContextLimitedAccessVTable,
     /// Cached width (queried once at construction).
     pub width: u32,
     /// Cached height (queried once at construction).
@@ -134,10 +128,8 @@ impl PixelBuffer {
         plane_count: u32,
     ) -> Self {
         let handle = Arc::into_raw(arc) as *const c_void;
-        let vtable = crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
         Self {
             handle,
-            vtable,
             width,
             height,
             format_raw: format as u32,
@@ -205,31 +197,19 @@ impl PixelBuffer {
     /// at the same bytes as [`mapped_ptr`](PixelBufferRef::plane_base_address)
     /// with index 0.
     ///
-    /// Dispatches through the vtable's
-    /// [`plane_base_address_pixel_buffer`](GpuContextLimitedAccessVTable::plane_base_address_pixel_buffer)
-    /// callback so the host's `PixelBufferRef` layout is never touched
-    /// cdylib-side.
     pub fn plane_base_address(&self, plane_index: u32) -> *mut u8 {
-        if self.handle.is_null() || self.vtable.is_null() {
+        if self.handle.is_null() {
             return core::ptr::null_mut();
         }
-        // SAFETY: vtable + handle were paired at construction by
-        // `from_arc_into_raw`; the callback's contract is documented
-        // on the vtable field.
-        unsafe { ((*self.vtable).plane_base_address_pixel_buffer)(self.handle, plane_index) }
+        self.buffer_ref().plane_base_address(plane_index)
     }
 
-    /// Byte size of the given plane, or `0` if out of range. Dispatches
-    /// through the vtable's
-    /// [`plane_size_pixel_buffer`](GpuContextLimitedAccessVTable::plane_size_pixel_buffer)
-    /// callback.
+    /// Byte size of the given plane, or `0` if out of range.
     pub fn plane_size(&self, plane_index: u32) -> u64 {
-        if self.handle.is_null() || self.vtable.is_null() {
+        if self.handle.is_null() {
             return 0;
         }
-        // SAFETY: vtable + handle were paired at construction by
-        // `from_arc_into_raw`.
-        unsafe { ((*self.vtable).plane_size_pixel_buffer)(self.handle, plane_index) }
+        self.buffer_ref().plane_size(plane_index)
     }
 
     /// Get the raw platform pointer (CVPixelBufferRef on macOS).
@@ -247,35 +227,34 @@ impl PixelBuffer {
     /// buffer referenced by one `PixelBuffer` returns `strong_count
     /// == 1` even if the platform's own refcount is higher.
     ///
-    /// Dispatches through the vtable's
-    /// [`strong_count_pixel_buffer`](GpuContextLimitedAccessVTable::strong_count_pixel_buffer)
-    /// callback so the host's `Arc<PixelBufferRef>` accounting runs
-    /// in host-compiled code regardless of caller plugin.
     pub(crate) fn strong_count(&self) -> usize {
-        if self.handle.is_null() || self.vtable.is_null() {
+        if self.handle.is_null() {
             return 0;
         }
-        // SAFETY: vtable + handle were paired at construction by
-        // `from_arc_into_raw`; the callback's contract is documented
-        // on the vtable field.
-        unsafe { ((*self.vtable).strong_count_pixel_buffer)(self.handle) }
+        // SAFETY: `handle` is `Arc::into_raw(Arc<PixelBufferRef>)` (see
+        // `from_arc_into_raw`). The Arc is reconstructed to read the count
+        // and immediately re-leaked, so the strong count returns to its
+        // pre-call value — `Arc::strong_count_from_raw` is not stable.
+        unsafe {
+            let arc = Arc::from_raw(self.handle as *const PixelBufferRef);
+            let count = Arc::strong_count(&arc);
+            let _ = Arc::into_raw(arc);
+            count
+        }
     }
 }
 
 impl Clone for PixelBuffer {
     fn clone(&self) -> Self {
-        if !self.handle.is_null() && !self.vtable.is_null() {
-            // SAFETY: vtable + handle were paired at construction by
-            // `from_arc_into_raw`; the vtable's `clone_pixel_buffer`
-            // contract is `Arc::increment_strong_count(handle)` on
-            // the host side. Balanced by the Drop impl below.
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Arc::into_raw(Arc<PixelBufferRef>)`
+            // (see `from_arc_into_raw`); balanced by the Drop impl below.
             unsafe {
-                ((*self.vtable).clone_pixel_buffer)(self.handle);
+                Arc::increment_strong_count(self.handle as *const PixelBufferRef);
             }
         }
         Self {
             handle: self.handle,
-            vtable: self.vtable,
             width: self.width,
             height: self.height,
             format_raw: self.format_raw,
@@ -286,14 +265,12 @@ impl Clone for PixelBuffer {
 
 impl Drop for PixelBuffer {
     fn drop(&mut self) {
-        if !self.handle.is_null() && !self.vtable.is_null() {
+        if !self.handle.is_null() {
             // SAFETY: matched with the `Arc::into_raw` in
-            // `from_arc_into_raw` and any `clone_pixel_buffer` bumps.
-            // `drop_pixel_buffer` decrements the host-side Arc; when
-            // refcount hits zero the underlying `PixelBufferRef` is
-            // freed in host-compiled code.
+            // `from_arc_into_raw` and any `Clone` increment. When the
+            // refcount hits zero the `PixelBufferRef` is freed.
             unsafe {
-                ((*self.vtable).drop_pixel_buffer)(self.handle);
+                Arc::decrement_strong_count(self.handle as *const PixelBufferRef);
             }
         }
     }

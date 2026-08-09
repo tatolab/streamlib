@@ -954,12 +954,6 @@ pub type PresentTargetInner = Mutex<VulkanPresentTarget>;
 pub struct PresentTarget {
     /// Opaque handle to the host's `Box<PresentTargetInner>`.
     pub(crate) handle: *const c_void,
-    /// Parent vtable for plugin-ABI Drop dispatch (`drop_present_target`).
-    pub(crate) vtable: *const streamlib_plugin_abi::GpuContextFullAccessVTable,
-    /// Per-type vtable for plugin-ABI method dispatch. Null in a
-    /// vtable-less host-mode construction; populated by
-    /// [`Self::from_target`].
-    pub(crate) methods_vtable: *const streamlib_plugin_abi::PresentTargetMethodsVTable,
     /// Cached swapchain-image `TextureFormat` `#[repr(u32)]` discriminant.
     /// Refreshed from the `recreate` slot's `out_color_format_raw` so a
     /// format flip (SDR BGRA8 → HDR10 FP16) never leaves a stale getter.
@@ -982,13 +976,10 @@ impl PresentTarget {
     pub fn from_target(target: VulkanPresentTarget) -> Self {
         let color_format_raw = target.color_format() as u32;
         let handle = Box::into_raw(Box::new(Mutex::new(target))) as *const c_void;
-        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
         let methods_vtable =
             crate::core::plugin::host_services::host_present_target_methods_vtable();
         Self {
             handle,
-            vtable,
-            methods_vtable,
             color_format_raw,
             _padding: 0,
         }

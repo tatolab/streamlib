@@ -58,7 +58,6 @@ mod adapter;
 mod context;
 pub mod dlpack;
 #[cfg(target_os = "linux")]
-mod host_vtable;
 #[cfg(target_os = "linux")]
 mod state;
 #[cfg(target_os = "linux")]
