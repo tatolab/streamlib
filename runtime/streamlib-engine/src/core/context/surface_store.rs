@@ -2090,12 +2090,6 @@ impl SurfaceStore {
     /// Engine-internal borrow of the host-owned `SurfaceStoreInner`.
     /// **Panics if called from cdylib code.**
     pub(crate) fn host_inner(&self) -> &SurfaceStoreInner {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "SurfaceStore::host_inner() reached from cdylib code; this method \
-                 must dispatch through the SurfaceStoreVTable."
-            );
-        }
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<SurfaceStoreInner>)`.
         unsafe { &*(self.handle as *const SurfaceStoreInner) }
     }

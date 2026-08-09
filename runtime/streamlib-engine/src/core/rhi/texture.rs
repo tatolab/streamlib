@@ -283,13 +283,6 @@ impl Texture {
     /// so a misconfigured cdylib reaching this method gets a clean
     /// "callback panicked" log entry instead of UB.
     pub(crate) fn host_inner(&self) -> &TextureInner {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "Texture::host_inner() reached from cdylib code; this method must \
-                 dispatch through the GpuContextLimitedAccessVTable. The panic is \
-                 caught by run_host_extern_c at the plugin ABI."
-            );
-        }
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<TextureInner>)`
         // (see `from_arc_into_raw`). The leaked strong count keeps the
         // `TextureInner` alive at least until `Drop` runs.

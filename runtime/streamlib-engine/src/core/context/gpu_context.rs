@@ -2606,13 +2606,6 @@ impl GpuContextLimitedAccess {
     pub(crate) fn host_inner(&self) -> &GpuContext {
         // `host_callbacks()` is `Some` in cdylib mode (set by
         // `install_host_services`) and `None` in host mode.
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "GpuContextLimitedAccess::host_inner() reached from cdylib code; \
-                 this method must dispatch through the GpuContextLimitedAccessVTable. \
-                 The panic is caught by run_host_extern_c at the plugin ABI."
-            );
-        }
         // SAFETY: `self.handle` was produced by `Self::new` or
         // `host_gpu_lim_clone_handle` — both produce
         // `Box::into_raw(Box::new(Arc::new(GpuContext)))`. The
@@ -2675,11 +2668,7 @@ impl GpuContextLimitedAccess {
     where
         F: FnOnce(&GpuContextFullAccess) -> Result<T>,
     {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            self.escalate_via_vtable(f)
-        } else {
-            self.escalate_in_process(f)
-        }
+        self.escalate_in_process(f)
     }
 
     /// Engine-internal escalate path. Direct in-process dispatch —
@@ -2719,113 +2708,6 @@ impl GpuContextLimitedAccess {
             (Ok(value), Ok(())) => Ok(value),
             (Err(e), _) => Err(e),
             (Ok(_), Err(e)) => Err(e),
-        }
-    }
-
-    /// Cdylib escalate path. Dispatches through the LimitedAccess
-    /// vtable's `escalate_begin` / `escalate_end` pair; constructs
-    /// `GpuContextFullAccess::from_scope_token` so the closure's
-    /// FullAccess method calls cross the plugin ABI through the
-    /// FullAccess vtable. See [`Self::escalate`] for the mode router.
-    fn escalate_via_vtable<F, T>(&self, f: F) -> Result<T>
-    where
-        F: FnOnce(&GpuContextFullAccess) -> Result<T>,
-    {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return Err(Error::GpuError(
-                "escalate (vtable): GpuContextLimitedAccess has null handle/vtable".into(),
-            ));
-        }
-        // SAFETY: vtable + handle were paired at construction; vtable
-        // is `&'static`.
-        let vt = unsafe { &*self.vtable };
-
-        let lock_start = std::time::Instant::now();
-        let mut scope_token: *const std::ffi::c_void = std::ptr::null();
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        let begin_rc = unsafe {
-            (vt.escalate_begin)(
-                self.handle,
-                &mut scope_token,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        let mutex_wait_ns = lock_start.elapsed().as_nanos() as u64;
-        if begin_rc != 0 {
-            // The host refused escalate_begin — the actionable cause (a
-            // nested escalate, or an escalate inside a FullAccess lifecycle
-            // body, both same-thread gate re-entry caught at the boundary)
-            // is in the host's err_buf. Surfaced as a typed variant the
-            // caller can match, sibling to `InvalidEscalateScope`.
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            return Err(Error::EscalateBeginRejected(msg));
-        }
-
-        let closure_start = std::time::Instant::now();
-        // Pass through the originating LimitedAccess (handle, vtable)
-        // so the FullAccess wrappers for the LimitedAccess-mirror
-        // methods (Phase D Option B) can dispatch through the C1-
-        // proven LimitedAccess vtable. The originating LimitedAccess
-        // owns the handle for the lifetime of this scope (we hold
-        // `&self` across the closure), so borrowing without bumping
-        // the refcount is sound.
-        let full = GpuContextFullAccess::from_scope_token(scope_token, self.handle, self.vtable);
-        // catch_unwind so a closure panic still fires escalate_end —
-        // otherwise the host's escalate gate would leak. We lean on
-        // AssertUnwindSafe because `escalate`'s public signature
-        // doesn't add an `UnwindSafe` bound on `F` (the in-process
-        // path doesn't need it; only this path catches the unwind to
-        // pair with `escalate_end`).
-        let closure_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| f(&full)));
-        drop(full);
-        let closure_duration_ns = closure_start.elapsed().as_nanos() as u64;
-
-        let wait_start = std::time::Instant::now();
-        let mut end_err_buf = [0u8; 512];
-        let mut end_err_len: usize = 0;
-        let end_rc = unsafe {
-            (vt.escalate_end)(
-                self.handle,
-                scope_token,
-                end_err_buf.as_mut_ptr(),
-                end_err_buf.len(),
-                &mut end_err_len as *mut usize,
-            )
-        };
-        let wait_idle_ns = wait_start.elapsed().as_nanos() as u64;
-
-        tracing::trace!(
-            target: "streamlib::gpu_context::escalate",
-            dispatch = "vtable",
-            mutex_wait_ns,
-            closure_duration_ns,
-            wait_idle_ns,
-            closure_ok = closure_result.is_ok(),
-            "GpuContextLimitedAccess::escalate completed"
-        );
-
-        check_sustained_escalation_rate();
-
-        let wait_result: Result<()> = if end_rc != 0 {
-            let msg = String::from_utf8_lossy(&end_err_buf[..end_err_len.min(end_err_buf.len())])
-                .into_owned();
-            Err(Error::GpuError(format!(
-                "escalate (vtable): escalate_end failed: {msg}"
-            )))
-        } else {
-            Ok(())
-        };
-
-        match closure_result {
-            Ok(Ok(value)) => match wait_result {
-                Ok(()) => Ok(value),
-                Err(e) => Err(e),
-            },
-            Ok(Err(e)) => Err(e),
-            Err(panic) => std::panic::resume_unwind(panic),
         }
     }
 }
@@ -2953,22 +2835,6 @@ impl GpuContextFullAccess {
     /// instead. The panic is caught by `run_host_extern_c` at the plugin ABI
     /// boundary.
     pub(crate) fn host_inner(&self) -> &GpuContext {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "GpuContextFullAccess::host_inner() reached from cdylib code; \
-                 this method must dispatch through the GpuContextFullAccessVTable. \
-                 The panic is caught by run_host_extern_c at the plugin ABI. \
-                 \
-                 Read docs/architecture/cdylib-reachability.md before workarounds — \
-                 the right pattern depends on the lifecycle stage and the type \
-                 shape. For setup()/teardown() bodies, ctx.gpu_full_access() now \
-                 dispatches through the vtable (Pattern 1, #1072). For accessor \
-                 returns, see PluginAbiObject Arc-transit slots (Pattern 2). For per- \
-                 method binding work, see per-method vtable slots (Pattern 3). \
-                 DO NOT call gpu_limited_access().escalate(...) from setup() / \
-                 teardown() — the gate is already held and re-entry panics."
-            );
-        }
         // SAFETY: `self.handle` was produced by `Self::new`, which
         // calls `Box::into_raw(Box::new(Arc::new(GpuContext)))`. The
         // matching `host_gpu_full_drop_handle` runs on Drop, so the
@@ -4479,18 +4345,6 @@ impl GpuContextFullAccess {
     /// allocation, etc.) which dispatch through the vtable. Calling
     /// from a cdylib panics at the explicit guard below.
     pub fn device(&self) -> &Arc<GpuDevice> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "GpuContextFullAccess::device(): return type `&Arc<GpuDevice>` \
-                 borrows into host-private state and cannot cross the plugin ABI \
-                 boundary; engine-only. Cdylib code that needs GPU device \
-                 capabilities must use higher-level FullAccess methods (kernel \
-                 construction, buffer/texture allocation) which dispatch \
-                 through the FullAccess vtable. To construct a host-flavor \
-                 surface adapter from an in-process workspace plugin cdylib \
-                 use `host_vulkan_device_arc()` instead."
-            );
-        }
         self.host_inner().device()
     }
 
@@ -4524,15 +4378,6 @@ impl GpuContextFullAccess {
     /// host-private state. Cdylib code uses [`Self::acquire_texture`]
     /// instead. Calling from a cdylib panics at the explicit guard below.
     pub fn texture_pool(&self) -> &TexturePool {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "GpuContextFullAccess::texture_pool(): return type \
-                 `&TexturePool` borrows into host-private state and cannot \
-                 cross the plugin ABI; engine-only. Cdylib code uses \
-                 acquire_texture() which dispatches through the FullAccess \
-                 vtable."
-            );
-        }
         self.host_inner().texture_pool()
     }
 
@@ -5570,13 +5415,6 @@ impl GpuContextFullAccess {
     /// path needs to invoke it. Calling from a cdylib panics at the
     /// explicit guard below.
     pub fn clear_blitter_cache(&self) {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "GpuContextFullAccess::clear_blitter_cache(): engine setup-time \
-                 housekeeping that operates on host-internal blitter cache; \
-                 engine-only — cdylib code must not call it."
-            );
-        }
         self.host_inner().clear_blitter_cache();
     }
 
@@ -5651,14 +5489,6 @@ impl GpuContextFullAccess {
     /// cdylib panics at the explicit guard below.
     #[cfg(target_os = "linux")]
     pub fn cpu_readback_bridge(&self) -> Option<Arc<dyn CpuReadbackBridge>> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "GpuContextFullAccess::cpu_readback_bridge(): return type \
-                 `Option<Arc<dyn CpuReadbackBridge>>` is a trait object whose \
-                 vtable layout is rustc-private and cannot cross the plugin ABI \
-                 boundary; engine-only — cdylib code must not call it."
-            );
-        }
         self.host_inner().cpu_readback_bridge()
     }
 
@@ -5669,14 +5499,6 @@ impl GpuContextFullAccess {
     /// [`Self::cpu_readback_bridge`].
     #[cfg(target_os = "linux")]
     pub fn compute_kernel_bridge(&self) -> Option<Arc<dyn ComputeKernelBridge>> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "GpuContextFullAccess::compute_kernel_bridge(): return type \
-                 `Option<Arc<dyn ComputeKernelBridge>>` is a trait object whose \
-                 vtable layout is rustc-private and cannot cross the plugin ABI \
-                 boundary; engine-only — cdylib code must not call it."
-            );
-        }
         self.host_inner().compute_kernel_bridge()
     }
 
@@ -5687,14 +5509,6 @@ impl GpuContextFullAccess {
     /// [`Self::cpu_readback_bridge`].
     #[cfg(target_os = "linux")]
     pub fn graphics_kernel_bridge(&self) -> Option<Arc<dyn GraphicsKernelBridge>> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "GpuContextFullAccess::graphics_kernel_bridge(): return type \
-                 `Option<Arc<dyn GraphicsKernelBridge>>` is a trait object \
-                 whose vtable layout is rustc-private and cannot cross the plugin ABI \
-                 boundary; engine-only — cdylib code must not call it."
-            );
-        }
         self.host_inner().graphics_kernel_bridge()
     }
 
@@ -5705,14 +5519,6 @@ impl GpuContextFullAccess {
     /// [`Self::cpu_readback_bridge`].
     #[cfg(target_os = "linux")]
     pub fn ray_tracing_kernel_bridge(&self) -> Option<Arc<dyn RayTracingKernelBridge>> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "GpuContextFullAccess::ray_tracing_kernel_bridge(): return type \
-                 `Option<Arc<dyn RayTracingKernelBridge>>` is a trait object \
-                 whose vtable layout is rustc-private and cannot cross the plugin ABI \
-                 boundary; engine-only — cdylib code must not call it."
-            );
-        }
         self.host_inner().ray_tracing_kernel_bridge()
     }
 }

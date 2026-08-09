@@ -958,12 +958,6 @@ impl VulkanRayTracingKernel {
     }
 
     pub(crate) fn host_inner(&self) -> &VulkanRayTracingKernelInner {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "VulkanRayTracingKernel::host_inner() reached from cdylib code; \
-                 this method must dispatch through the GpuContextFullAccessVTable."
-            );
-        }
         unsafe { &*(self.handle as *const VulkanRayTracingKernelInner) }
     }
 
@@ -972,9 +966,6 @@ impl VulkanRayTracingKernel {
         binding: u32,
         tlas: &VulkanAccelerationStructure,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_acceleration_structure_via_vtable(binding, tlas);
-        }
         self.host_inner().set_acceleration_structure(binding, tlas)
     }
 
@@ -989,9 +980,6 @@ impl VulkanRayTracingKernel {
         binding: u32,
         buffer: &crate::core::rhi::PixelBuffer,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_storage_buffer_pixel_via_vtable(binding, buffer);
-        }
         self.host_inner().set_storage_buffer(binding, buffer)
     }
 
@@ -1003,9 +991,6 @@ impl VulkanRayTracingKernel {
         binding: u32,
         buffer: &crate::core::rhi::StorageBuffer,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_storage_buffer_storage_via_vtable(binding, buffer);
-        }
         self.host_inner().set_storage_buffer(binding, buffer)
     }
 
@@ -1017,49 +1002,26 @@ impl VulkanRayTracingKernel {
         binding: u32,
         buffer: &crate::core::rhi::UniformBuffer,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_uniform_buffer_via_vtable(binding, buffer);
-        }
         self.host_inner().set_uniform_buffer(binding, buffer)
     }
 
     pub fn set_sampled_texture(&self, binding: u32, texture: &Texture) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_sampled_texture_via_vtable(binding, texture);
-        }
         self.host_inner().set_sampled_texture(binding, texture)
     }
 
     pub fn set_storage_image(&self, binding: u32, texture: &Texture) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_storage_image_via_vtable(binding, texture);
-        }
         self.host_inner().set_storage_image(binding, texture)
     }
 
     pub fn set_push_constants(&self, bytes: &[u8]) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_push_constants_via_vtable(bytes);
-        }
         self.host_inner().set_push_constants(bytes)
     }
 
     pub fn set_push_constants_value<T: Copy>(&self, value: &T) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            // SAFETY: T is Copy + Sized so its layout is stable; the
-            // byte view is read-only and consumed inside the plugin ABI call.
-            let bytes = unsafe {
-                std::slice::from_raw_parts(value as *const T as *const u8, std::mem::size_of::<T>())
-            };
-            return self.dispatch_set_push_constants_via_vtable(bytes);
-        }
         self.host_inner().set_push_constants_value(value)
     }
 
     pub fn trace_rays(&self, width: u32, height: u32, depth: u32) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_trace_rays_via_vtable(width, height, depth);
-        }
         self.host_inner().trace_rays(width, height, depth)
     }
 
@@ -1069,328 +1031,12 @@ impl VulkanRayTracingKernel {
     /// side plugin ABI errors the method emits a `tracing::warn` and returns
     /// an empty Vec.
     pub fn bindings(&self) -> Vec<RayTracingBindingSpec> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_bindings_via_vtable().unwrap_or_else(|e| {
-                tracing::warn!(
-                    error = %e,
-                    "VulkanRayTracingKernel::bindings cdylib dispatch failed; returning empty",
-                );
-                Vec::new()
-            });
-        }
         self.host_inner().bindings().to_vec()
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_bindings_via_vtable(&self) -> Result<Vec<RayTracingBindingSpec>> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "bindings: ray-tracing kernel methods vtable is null".into(),
-            ));
-        }
-        let mut buf = [streamlib_plugin_abi::RayTracingBindingSpecRepr {
-            binding: 0,
-            kind: 0,
-            stages: 0,
-            _reserved_padding: 0,
-        }; 16];
-        let mut out_len: usize = 0;
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).bindings)(
-                self.handle,
-                buf.as_mut_ptr(),
-                buf.len(),
-                &mut out_len as *mut usize,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 2 {
-            let mut heap: Vec<streamlib_plugin_abi::RayTracingBindingSpecRepr> = vec![
-                streamlib_plugin_abi::RayTracingBindingSpecRepr {
-                    binding: 0,
-                    kind: 0,
-                    stages: 0,
-                    _reserved_padding: 0,
-                };
-                out_len
-            ];
-            let mut out_len2: usize = 0;
-            let status2 = unsafe {
-                ((*self.methods_vtable).bindings)(
-                    self.handle,
-                    heap.as_mut_ptr(),
-                    heap.len(),
-                    &mut out_len2 as *mut usize,
-                    err_buf.as_mut_ptr(),
-                    err_buf.len(),
-                    &mut err_len as *mut usize,
-                )
-            };
-            if status2 != 0 {
-                let msg =
-                    String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-                return Err(Error::GpuError(msg));
-            }
-            return heap
-                .iter()
-                .take(out_len2)
-                .map(crate::core::rhi::plugin_abi_bridge::ray_tracing_binding_spec_from_repr)
-                .collect();
-        }
-        if status != 0 {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            return Err(Error::GpuError(msg));
-        }
-        buf.iter()
-            .take(out_len)
-            .map(crate::core::rhi::plugin_abi_bridge::ray_tracing_binding_spec_from_repr)
-            .collect()
     }
 
     /// Push-constant range size in bytes. Cached POD — no plugin ABI hop.
     pub fn push_constant_size(&self) -> u32 {
         self.cached_push_constant_size
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_acceleration_structure_via_vtable(
-        &self,
-        binding: u32,
-        tlas: &VulkanAccelerationStructure,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_acceleration_structure: ray-tracing kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_acceleration_structure)(
-                self.handle,
-                binding,
-                tlas.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_storage_buffer_pixel_via_vtable(
-        &self,
-        binding: u32,
-        buffer: &crate::core::rhi::PixelBuffer,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_storage_buffer_pixel: ray-tracing kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_storage_buffer_pixel)(
-                self.handle,
-                binding,
-                buffer.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_storage_buffer_storage_via_vtable(
-        &self,
-        binding: u32,
-        buffer: &crate::core::rhi::StorageBuffer,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_storage_buffer_storage: ray-tracing kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_storage_buffer_storage)(
-                self.handle,
-                binding,
-                buffer.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_uniform_buffer_via_vtable(
-        &self,
-        binding: u32,
-        buffer: &crate::core::rhi::UniformBuffer,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_uniform_buffer: ray-tracing kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_uniform_buffer)(
-                self.handle,
-                binding,
-                buffer.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_sampled_texture_via_vtable(
-        &self,
-        binding: u32,
-        texture: &Texture,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_sampled_texture: ray-tracing kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_sampled_texture)(
-                self.handle,
-                binding,
-                texture.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_storage_image_via_vtable(&self, binding: u32, texture: &Texture) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_storage_image: ray-tracing kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_storage_image)(
-                self.handle,
-                binding,
-                texture.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_push_constants_via_vtable(&self, bytes: &[u8]) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_push_constants: ray-tracing kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_push_constants)(
-                self.handle,
-                bytes.as_ptr(),
-                bytes.len(),
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_trace_rays_via_vtable(&self, width: u32, height: u32, depth: u32) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "trace_rays: ray-tracing kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).trace_rays)(
-                self.handle,
-                width,
-                height,
-                depth,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
     }
 }
 

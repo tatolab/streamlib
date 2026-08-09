@@ -88,12 +88,6 @@ impl RhiCommandQueue {
     /// Engine-internal borrow of the host-owned `RhiCommandQueueInner`.
     /// **Panics if called from cdylib code.**
     pub(crate) fn host_inner(&self) -> &RhiCommandQueueInner {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "RhiCommandQueue::host_inner() reached from cdylib code; this method \
-                 must dispatch through the GpuContextLimitedAccessVTable."
-            );
-        }
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<RhiCommandQueueInner>)`.
         // The leaked strong count keeps the inner alive at least until Drop.
         unsafe { &*(self.handle as *const RhiCommandQueueInner) }

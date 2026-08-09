@@ -365,13 +365,6 @@ impl PooledTextureHandle {
     /// **Panics if called from cdylib code** for the same reason
     /// [`Texture::host_inner`] does.
     pub fn slot_id(&self) -> PoolSlotId {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "PooledTextureHandle::slot_id() reached from cdylib code; \
-                 the pool slot id is host-internal and not exposed via \
-                 the GpuContextLimitedAccessVTable."
-            );
-        }
         // SAFETY: `self.handle` is `Box::into_raw(Box<PooledTextureHandleInner>)`
         // (see `from_parts`); the Box keeps the inner alive until Drop runs.
         unsafe { (*(self.handle as *const PooledTextureHandleInner)).slot_id }

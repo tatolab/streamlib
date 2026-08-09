@@ -183,15 +183,6 @@ impl PixelBuffer {
     /// undefined behavior. The panic guard turns the UB into a
     /// clean abort.
     pub fn buffer_ref(&self) -> &PixelBufferRef {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "PixelBuffer::buffer_ref() reached from cdylib code; \
-                 PixelBufferRef is a host-internal type and its layout \
-                 is not plugin ABI safe. Cdylibs reach platform-specific \
-                 data through vtable callbacks (plane_base_address, \
-                 plane_size, plane_count, format)."
-            );
-        }
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<PixelBufferRef>)`
         // (see `from_arc_into_raw`). The leaked strong count keeps
         // the `PixelBufferRef` alive at least until `Drop` runs. The

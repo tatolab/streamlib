@@ -91,12 +91,6 @@ impl CommandBuffer {
     /// Engine-internal mutable borrow of the host-owned
     /// `CommandBufferInner`. **Panics if called from cdylib code.**
     pub(crate) fn host_inner_mut(&mut self) -> &mut CommandBufferInner {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "CommandBuffer::host_inner_mut() reached from cdylib code; this method \
-                 must dispatch through the GpuContextLimitedAccessVTable."
-            );
-        }
         // SAFETY: `self.handle` is `Box::into_raw(Box<CommandBufferInner>)`
         // and `&mut self` guarantees no other reference exists.
         unsafe { &mut *(self.handle as *mut CommandBufferInner) }
@@ -177,9 +171,6 @@ impl CommandBuffer {
     ))]
     pub fn as_metal_command_buffer(&self) -> &crate::metal::rhi::MetalCommandBuffer {
         // SAFETY: see `host_inner_mut` — same shape, immutable borrow.
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!("CommandBuffer::as_metal_command_buffer() reached from cdylib code");
-        }
         unsafe { &(*(self.handle as *const CommandBufferInner)).inner }
     }
 }

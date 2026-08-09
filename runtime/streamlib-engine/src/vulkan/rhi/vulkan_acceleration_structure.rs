@@ -701,12 +701,6 @@ impl VulkanAccelerationStructure {
     /// `VulkanAccelerationStructureInner`. **Panics if called from
     /// cdylib code.**
     pub(crate) fn host_inner(&self) -> &VulkanAccelerationStructureInner {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "VulkanAccelerationStructure::host_inner() reached from cdylib code; \
-                 this method must dispatch through the GpuContextFullAccessVTable."
-            );
-        }
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<VulkanAccelerationStructureInner>)`.
         unsafe { &*(self.handle as *const VulkanAccelerationStructureInner) }
     }
@@ -778,42 +772,7 @@ impl VulkanAccelerationStructure {
     /// the buffer are silently truncated (diagnostic strings, not
     /// load-bearing).
     pub fn label(&self) -> String {
-        if crate::core::plugin::host_services::host_callbacks().is_some()
-            && !self.methods_vtable.is_null()
-            && !self.handle.is_null()
-        {
-            // Cdylib mode — dispatch through the methods vtable.
-            // 256 bytes covers every realistic AS label (callers in
-            // tree use names like "rt-smoke-blas", "drone-racer-tlas").
-            let mut out_buf = [0u8; 256];
-            let mut out_len: usize = 0;
-            let mut err_buf = [0u8; 256];
-            let mut err_len: usize = 0;
-            let status = unsafe {
-                ((*self.methods_vtable).label)(
-                    self.handle,
-                    out_buf.as_mut_ptr(),
-                    out_buf.len(),
-                    &mut out_len as *mut usize,
-                    err_buf.as_mut_ptr(),
-                    err_buf.len(),
-                    &mut err_len as *mut usize,
-                )
-            };
-            if status == 0 {
-                let bytes = &out_buf[..out_len.min(out_buf.len())];
-                String::from_utf8_lossy(bytes).into_owned()
-            } else {
-                // Best-effort: surface the error string as the
-                // label so log lines reading `.label()` still make
-                // sense, rather than panic. Labels are diagnostic.
-                let msg =
-                    String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-                format!("<label dispatch failed: {msg}>")
-            }
-        } else {
-            self.host_inner().label().to_string()
-        }
+        self.host_inner().label().to_string()
     }
 
     /// Storage size in bytes. Reads the cached POD value populated

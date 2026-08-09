@@ -495,12 +495,6 @@ impl TextureRing {
     /// Engine-internal borrow of the host-owned `TextureRingInner`.
     /// **Panics if called from cdylib code.**
     pub(crate) fn host_inner(&self) -> &TextureRingInner {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "TextureRing::host_inner() reached from cdylib code; this method \
-                 must dispatch through the GpuContextFullAccessVTable."
-            );
-        }
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<TextureRingInner>)`.
         unsafe { &*(self.handle as *const TextureRingInner) }
     }
@@ -513,11 +507,6 @@ impl TextureRing {
     /// the slot's POD bytes into a caller-provided buffer that
     /// becomes the returned [`TextureRingSlot`].
     pub fn acquire_next(&self) -> TextureRingSlot {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self
-                .dispatch_acquire_next_via_vtable()
-                .expect("acquire_next vtable dispatch failed");
-        }
         self.host_inner().acquire_next()
     }
 
@@ -535,14 +524,6 @@ impl TextureRing {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_copy_pixel_buffer_to_slot_via_vtable(
-                slot,
-                pixel_buffer,
-                width,
-                height,
-            );
-        }
         self.host_inner()
             .copy_pixel_buffer_to_slot(slot, pixel_buffer, width, height)
     }
@@ -595,155 +576,7 @@ impl TextureRing {
     /// vtable's `slot` slot.
     #[doc(hidden)]
     pub fn slot(&self, index: usize) -> Option<TextureRingSlot> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_slot_via_vtable(index);
-        }
         self.host_inner().slot(index).cloned()
-    }
-
-    /// Cdylib path: dispatch `acquire_next` through the per-type
-    /// methods vtable. The host wrapper writes the slot's POD bytes
-    /// into the caller-provided out-parameter buffers; we then
-    /// assemble a [`TextureRingSlot`] from those bytes. The
-    /// `out_texture_handle` is a freshly-cloned Arc (the host
-    /// wrapper bumps the texture's Arc through its limited-access
-    /// vtable); the returned `TextureRingSlot`'s `Texture::Drop`
-    /// balances when the slot drops.
-    #[doc(hidden)]
-    fn dispatch_acquire_next_via_vtable(&self) -> Result<TextureRingSlot> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "acquire_next: ring methods vtable is null".into(),
-            ));
-        }
-        let mut out_texture_handle: *const c_void = std::ptr::null();
-        let mut out_texture_width: u32 = 0;
-        let mut out_texture_height: u32 = 0;
-        let mut out_texture_format_raw: u32 = 0;
-        let mut out_surface_id_bytes = [0u8; TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES];
-        let mut out_surface_id_len: u32 = 0;
-        let mut out_slot_index: u32 = 0;
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).acquire_next)(
-                self.handle,
-                &mut out_texture_handle as *mut *const c_void,
-                &mut out_texture_width as *mut u32,
-                &mut out_texture_height as *mut u32,
-                &mut out_texture_format_raw as *mut u32,
-                &mut out_surface_id_bytes as *mut [u8; TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES],
-                &mut out_surface_id_len as *mut u32,
-                &mut out_slot_index as *mut u32,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status != 0 {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            return Err(Error::GpuError(msg));
-        }
-        Ok(slot_from_out_params(
-            out_texture_handle,
-            out_texture_width,
-            out_texture_height,
-            out_texture_format_raw,
-            out_surface_id_bytes,
-            out_surface_id_len,
-            out_slot_index,
-        ))
-    }
-
-    /// Cdylib path: dispatch `slot(index)` through the per-type
-    /// methods vtable. Status code `-1` is the "index out of range"
-    /// signal (no err_buf write); `0` is success; any other non-zero
-    /// is a hard error.
-    #[doc(hidden)]
-    fn dispatch_slot_via_vtable(&self, index: usize) -> Option<TextureRingSlot> {
-        if self.methods_vtable.is_null() {
-            return None;
-        }
-        let mut out_texture_handle: *const c_void = std::ptr::null();
-        let mut out_texture_width: u32 = 0;
-        let mut out_texture_height: u32 = 0;
-        let mut out_texture_format_raw: u32 = 0;
-        let mut out_surface_id_bytes = [0u8; TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES];
-        let mut out_surface_id_len: u32 = 0;
-        let mut out_slot_index: u32 = 0;
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).slot)(
-                self.handle,
-                index,
-                &mut out_texture_handle as *mut *const c_void,
-                &mut out_texture_width as *mut u32,
-                &mut out_texture_height as *mut u32,
-                &mut out_texture_format_raw as *mut u32,
-                &mut out_surface_id_bytes as *mut [u8; TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES],
-                &mut out_surface_id_len as *mut u32,
-                &mut out_slot_index as *mut u32,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status != 0 {
-            return None;
-        }
-        Some(slot_from_out_params(
-            out_texture_handle,
-            out_texture_width,
-            out_texture_height,
-            out_texture_format_raw,
-            out_surface_id_bytes,
-            out_surface_id_len,
-            out_slot_index,
-        ))
-    }
-
-    /// Cdylib path: dispatch `copy_pixel_buffer_to_slot` through the
-    /// per-type methods vtable. Slot identity travels as
-    /// `(slot_index, surface_id_bytes, surface_id_len)`; the host
-    /// looks up upload_resources by `slot_index` and refreshes the
-    /// registration layout by `surface_id`.
-    #[cfg(target_os = "linux")]
-    #[doc(hidden)]
-    fn dispatch_copy_pixel_buffer_to_slot_via_vtable(
-        &self,
-        slot: &TextureRingSlot,
-        pixel_buffer: &crate::core::rhi::PixelBuffer,
-        width: u32,
-        height: u32,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "copy_pixel_buffer_to_slot: ring methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).copy_pixel_buffer_to_slot)(
-                self.handle,
-                slot.slot_index,
-                slot.surface_id_bytes.as_ptr(),
-                slot.surface_id_len,
-                pixel_buffer.handle,
-                width,
-                height,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
     }
 }
 

@@ -392,12 +392,6 @@ impl RhiColorConverter {
     /// Engine-internal borrow of the host-owned `RhiColorConverterInner`.
     /// **Panics if called from cdylib code.**
     pub(crate) fn host_inner(&self) -> &RhiColorConverterInner {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "RhiColorConverter::host_inner() reached from cdylib code; this method \
-                 must dispatch through the GpuContextFullAccessVTable."
-            );
-        }
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<RhiColorConverterInner>)`.
         unsafe { &*(self.handle as *const RhiColorConverterInner) }
     }
@@ -414,10 +408,6 @@ impl RhiColorConverter {
         dst: &Texture,
         info: &ResolvedColorInfo,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self
-                .dispatch_convert_buffer_to_image_storage_via_vtable(src, src_layout, dst, info);
-        }
         self.host_inner()
             .convert_buffer_to_image_storage(src, src_layout, dst, info)
     }
@@ -433,10 +423,6 @@ impl RhiColorConverter {
         dst: &Texture,
         info: &ResolvedColorInfo,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self
-                .dispatch_convert_buffer_to_image_pixel_via_vtable(src, src_layout, dst, info);
-        }
         self.host_inner()
             .convert_buffer_to_image_pixel(src, src_layout, dst, info)
     }
@@ -460,282 +446,8 @@ impl RhiColorConverter {
         info: &ResolvedColorInfo,
         dst_transfer: TransferId,
     ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_prepare_buffer_to_image_storage_via_vtable(
-                src,
-                src_layout,
-                dst,
-                info,
-                dst_transfer,
-            );
-        }
         self.host_inner()
             .prepare_buffer_to_image_storage(src, src_layout, dst, info, dst_transfer)
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_prepare_buffer_to_image_storage_via_vtable(
-        &self,
-        src: &crate::core::rhi::StorageBuffer,
-        src_layout: SourceLayoutInfo,
-        dst: &Texture,
-        info: &ResolvedColorInfo,
-        dst_transfer: TransferId,
-    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
-        use crate::core::Error;
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "prepare_buffer_to_image_storage: color converter methods vtable is null".into(),
-            ));
-        }
-        // The cdylib needs the parent FullAccess vtable and the per-
-        // type VulkanComputeKernel methods vtable to assemble its own
-        // PluginAbiObject from the host-returned inner handle. Both come from
-        // `host_callbacks()` — populated at plugin install time.
-        let callbacks = crate::core::plugin::host_services::host_callbacks().ok_or_else(|| {
-            Error::GpuError("prepare_buffer_to_image_storage: host callbacks not installed".into())
-        })?;
-        let parent_vtable = callbacks.gpu_context_full_access_vtable;
-        let kernel_methods_vtable = callbacks.vulkan_compute_kernel_methods_vtable;
-        if parent_vtable.is_null() {
-            return Err(Error::GpuError(
-                "prepare_buffer_to_image_storage: GpuContextFullAccess vtable is null".into(),
-            ));
-        }
-
-        let layout_repr = streamlib_plugin_abi::SourceLayoutInfoRepr {
-            plane0_stride_bytes: src_layout.plane0_stride_bytes,
-            plane1_stride_bytes: src_layout.plane1_stride_bytes,
-            plane1_offset_bytes: src_layout.plane1_offset_bytes,
-            _reserved_padding: 0,
-        };
-        let info_repr = streamlib_plugin_abi::ResolvedColorInfoRepr {
-            primaries_raw: info.primaries as u32,
-            transfer_raw: info.transfer as u32,
-            matrix_raw: info.matrix as u32,
-            range_raw: info.range as u32,
-        };
-
-        let mut out_kernel: *const std::ffi::c_void = std::ptr::null();
-        let mut out_cached_push_constant_size: u32 = 0;
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).prepare_buffer_to_image_storage)(
-                self.handle,
-                src.handle,
-                &layout_repr,
-                dst.handle,
-                &info_repr,
-                dst_transfer as u32,
-                &mut out_kernel,
-                &mut out_cached_push_constant_size,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status != 0 {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            return Err(Error::GpuError(msg));
-        }
-        if out_kernel.is_null() {
-            return Err(Error::GpuError(
-                "prepare_buffer_to_image_storage: host signaled success but \
-                 out_kernel is null"
-                    .into(),
-            ));
-        }
-        // PluginAbiObject: bundle the raw handle (an
-        // `Arc::into_raw(Arc<VulkanComputeKernelInner>)` pointer host-
-        // side, opaque to the cdylib) with the parent vtable + per-
-        // type methods vtable + cached `push_constant_size` POD. The
-        // cdylib owns the inner Arc strong count the host bumped
-        // before returning; the PluginAbiObject's Drop releases it via
-        // `drop_compute_kernel`.
-        let kernel = crate::vulkan::rhi::VulkanComputeKernel {
-            handle: out_kernel,
-            vtable: parent_vtable,
-            methods_vtable: kernel_methods_vtable,
-            cached_push_constant_size: out_cached_push_constant_size,
-            _reserved_padding: 0,
-        };
-        Ok(std::sync::Arc::new(kernel))
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_prepare_buffer_to_image_pixel_via_vtable(
-        &self,
-        src: &crate::core::rhi::PixelBuffer,
-        src_layout: SourceLayoutInfo,
-        dst: &Texture,
-        info: &ResolvedColorInfo,
-        dst_transfer: TransferId,
-    ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
-        use crate::core::Error;
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "prepare_buffer_to_image_pixel: color converter methods vtable is null".into(),
-            ));
-        }
-        let callbacks = crate::core::plugin::host_services::host_callbacks().ok_or_else(|| {
-            Error::GpuError("prepare_buffer_to_image_pixel: host callbacks not installed".into())
-        })?;
-        let parent_vtable = callbacks.gpu_context_full_access_vtable;
-        let kernel_methods_vtable = callbacks.vulkan_compute_kernel_methods_vtable;
-        if parent_vtable.is_null() {
-            return Err(Error::GpuError(
-                "prepare_buffer_to_image_pixel: GpuContextFullAccess vtable is null".into(),
-            ));
-        }
-
-        let layout_repr = streamlib_plugin_abi::SourceLayoutInfoRepr {
-            plane0_stride_bytes: src_layout.plane0_stride_bytes,
-            plane1_stride_bytes: src_layout.plane1_stride_bytes,
-            plane1_offset_bytes: src_layout.plane1_offset_bytes,
-            _reserved_padding: 0,
-        };
-        let info_repr = streamlib_plugin_abi::ResolvedColorInfoRepr {
-            primaries_raw: info.primaries as u32,
-            transfer_raw: info.transfer as u32,
-            matrix_raw: info.matrix as u32,
-            range_raw: info.range as u32,
-        };
-
-        let mut out_kernel: *const std::ffi::c_void = std::ptr::null();
-        let mut out_cached_push_constant_size: u32 = 0;
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).prepare_buffer_to_image_pixel)(
-                self.handle,
-                src.handle,
-                &layout_repr,
-                dst.handle,
-                &info_repr,
-                dst_transfer as u32,
-                &mut out_kernel,
-                &mut out_cached_push_constant_size,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status != 0 {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            return Err(Error::GpuError(msg));
-        }
-        if out_kernel.is_null() {
-            return Err(Error::GpuError(
-                "prepare_buffer_to_image_pixel: host signaled success but \
-                 out_kernel is null"
-                    .into(),
-            ));
-        }
-        let kernel = crate::vulkan::rhi::VulkanComputeKernel {
-            handle: out_kernel,
-            vtable: parent_vtable,
-            methods_vtable: kernel_methods_vtable,
-            cached_push_constant_size: out_cached_push_constant_size,
-            _reserved_padding: 0,
-        };
-        Ok(std::sync::Arc::new(kernel))
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_convert_buffer_to_image_storage_via_vtable(
-        &self,
-        src: &crate::core::rhi::StorageBuffer,
-        src_layout: SourceLayoutInfo,
-        dst: &Texture,
-        info: &ResolvedColorInfo,
-    ) -> Result<()> {
-        use crate::core::Error;
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "convert_buffer_to_image_storage: color converter methods vtable is null".into(),
-            ));
-        }
-        let layout_repr = streamlib_plugin_abi::SourceLayoutInfoRepr {
-            plane0_stride_bytes: src_layout.plane0_stride_bytes,
-            plane1_stride_bytes: src_layout.plane1_stride_bytes,
-            plane1_offset_bytes: src_layout.plane1_offset_bytes,
-            _reserved_padding: 0,
-        };
-        let info_repr = streamlib_plugin_abi::ResolvedColorInfoRepr {
-            primaries_raw: info.primaries as u32,
-            transfer_raw: info.transfer as u32,
-            matrix_raw: info.matrix as u32,
-            range_raw: info.range as u32,
-        };
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).convert_buffer_to_image_storage)(
-                self.handle,
-                src.handle,
-                &layout_repr,
-                dst.handle,
-                &info_repr,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_convert_buffer_to_image_pixel_via_vtable(
-        &self,
-        src: &crate::core::rhi::PixelBuffer,
-        src_layout: SourceLayoutInfo,
-        dst: &Texture,
-        info: &ResolvedColorInfo,
-    ) -> Result<()> {
-        use crate::core::Error;
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "convert_buffer_to_image_pixel: color converter methods vtable is null".into(),
-            ));
-        }
-        let layout_repr = streamlib_plugin_abi::SourceLayoutInfoRepr {
-            plane0_stride_bytes: src_layout.plane0_stride_bytes,
-            plane1_stride_bytes: src_layout.plane1_stride_bytes,
-            plane1_offset_bytes: src_layout.plane1_offset_bytes,
-            _reserved_padding: 0,
-        };
-        let info_repr = streamlib_plugin_abi::ResolvedColorInfoRepr {
-            primaries_raw: info.primaries as u32,
-            transfer_raw: info.transfer as u32,
-            matrix_raw: info.matrix as u32,
-            range_raw: info.range as u32,
-        };
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).convert_buffer_to_image_pixel)(
-                self.handle,
-                src.handle,
-                &layout_repr,
-                dst.handle,
-                &info_repr,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
     }
 
     /// [`crate::core::rhi::PixelBuffer`]-shape source variant of
@@ -750,15 +462,6 @@ impl RhiColorConverter {
         info: &ResolvedColorInfo,
         dst_transfer: TransferId,
     ) -> Result<std::sync::Arc<crate::vulkan::rhi::VulkanComputeKernel>> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_prepare_buffer_to_image_pixel_via_vtable(
-                src,
-                src_layout,
-                dst,
-                info,
-                dst_transfer,
-            );
-        }
         self.host_inner()
             .prepare_buffer_to_image_pixel(src, src_layout, dst, info, dst_transfer)
     }

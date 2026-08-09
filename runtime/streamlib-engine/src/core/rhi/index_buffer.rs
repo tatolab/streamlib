@@ -73,12 +73,6 @@ impl IndexBuffer {
     /// Engine-internal borrow of the host-owned `HostVulkanBuffer`.
     /// **Panics if called from cdylib code.**
     pub(crate) fn host_inner(&self) -> &crate::vulkan::rhi::HostVulkanBuffer {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "IndexBuffer::host_inner() reached from cdylib code; this method \
-                 must dispatch through the GpuContextLimitedAccessVTable."
-            );
-        }
         // SAFETY: see StorageBuffer::host_inner.
         unsafe { &*(self.handle as *const crate::vulkan::rhi::HostVulkanBuffer) }
     }

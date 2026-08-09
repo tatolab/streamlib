@@ -110,13 +110,6 @@ impl TextureRegistration {
     /// Engine-internal borrow of the host-owned `TextureRegistrationInner`.
     /// **Panics if called from cdylib code.**
     pub(crate) fn host_inner(&self) -> &TextureRegistrationInner {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "TextureRegistration::host_inner() reached from cdylib code; this \
-                 method must dispatch through the GpuContextLimitedAccessVTable. \
-                 The panic is caught by run_host_extern_c at the plugin ABI."
-            );
-        }
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<TextureRegistrationInner>)`.
         // The leaked strong count keeps the inner alive at least until Drop.
         unsafe { &*(self.handle as *const TextureRegistrationInner) }

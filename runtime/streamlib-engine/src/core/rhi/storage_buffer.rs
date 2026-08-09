@@ -91,13 +91,6 @@ impl StorageBuffer {
     /// **Panics if called from cdylib code** for the same reason
     /// [`super::Texture::host_inner`] does.
     pub(crate) fn host_inner(&self) -> &crate::vulkan::rhi::HostVulkanBuffer {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "StorageBuffer::host_inner() reached from cdylib code; this method \
-                 must dispatch through the GpuContextLimitedAccessVTable. The panic \
-                 is caught by run_host_extern_c at the plugin ABI."
-            );
-        }
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<HostVulkanBuffer>)`
         // (see `from_arc_into_raw`). The leaked strong count keeps the
         // `HostVulkanBuffer` alive at least until `Drop` runs.
@@ -129,13 +122,6 @@ impl StorageBuffer {
     /// [`Self::host_inner`] does — the handle is only dereferenceable in
     /// host-compiled code.
     pub(crate) fn host_inner_arc(&self) -> Arc<crate::vulkan::rhi::HostVulkanBuffer> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "StorageBuffer::host_inner_arc() reached from cdylib code; this method \
-                 must run host-side. The panic is caught by run_host_extern_c at the \
-                 plugin ABI."
-            );
-        }
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<HostVulkanBuffer>)`
         // (see `from_arc_into_raw`). Incrementing the strong count and
         // reconstructing the `Arc` yields an owned clone whose `Drop`
