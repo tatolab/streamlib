@@ -331,7 +331,13 @@ half still belongs to this ticket.
   > ~~`setup.py`~~ — Corrected 2026-08-08: it is at `sdk/streamlib-python/setup.py`, not
   > under `python/streamlib/`. The bullet named a path that does not exist, so it would
   > have passed green whatever the gate checked.
-- REMOVED: schemas/streamlib.schema.json
+> ~~- REMOVED: schemas/streamlib.schema.json~~ — Superseded 2026-08-09 (owner
+> ratification at the #1715 `/ship-change` gate). This JSON Schema validates
+> `streamlib.yaml`, the package manifest that **survives #1715** (the schema-ident /
+> package surface dies in `schema-free-ports` / `processor-class-identity`, not here).
+> Deleting it in #1715 was premature and left dangling `$schema` refs in the surviving
+> `streamlib.yaml` files. It moves to the successor changes, which retire the manifest
+> and its schema together. Not #1715's residue.
 - REMOVED: scripts/sync-inter-crate-versions.py
 - REMOVED: packages/test-fixtures-abi-mismatch
 - REMOVED: docs/architecture/plugin-abi.md
@@ -339,8 +345,18 @@ half still belongs to this ticket.
 - REMOVED: docs/architecture/package-source.md
 - REMOVED: docs/architecture/package-staging-layout.md
 - REMOVED: docs/architecture/runtime-module-materialization.md
-- REMOVED: docs/architecture/schema-identity-and-packaging.md
-- REMOVED: docs/architecture/subprocess-rhi-parity.md
+> ~~- REMOVED: docs/architecture/schema-identity-and-packaging.md~~ — Superseded
+> 2026-08-09 (owner ratification at the #1715 `/ship-change` gate). This doc describes
+> the schema-ident core in `streamlib-idents` / `streamlib-jtd-codegen`, which this
+> change **carries through unchanged** (see the survivor-rewire bullet: both die in
+> `schema-free-ports` / `processor-class-identity`). 15+ surviving crates link it; per
+> docs-policy an architecture doc describes current shipped state, so it stays until its
+> subject dies in the successor changes.
+> ~~- REMOVED: docs/architecture/subprocess-rhi-parity.md~~ — Superseded 2026-08-09
+> (owner ratification at the #1715 `/ship-change` gate). Its cross-process
+> DMA-BUF / OPAQUE_FD subject lives on in the surviving `streamlib-consumer-rhi`
+> carve-out (6+ surviving-code links, including `check-boundaries`); the cdylib framing
+> is rewritten, not the doc deleted. Per docs-policy it describes current shipped state.
 - REMOVED: docs/architecture/cdylib-reachability.md
 - REMOVED: docs/architecture/zero-ceremony-authoring.md
 
