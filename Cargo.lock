@@ -4984,31 +4984,12 @@ dependencies = [
  "serde_json",
  "serial_test",
  "streamlib",
- "streamlib-adapter-vulkan-helpers",
  "streamlib-consumer-rhi",
  "streamlib-engine",
  "streamlib-surface-adapter",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
  "thiserror 2.0.18",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "streamlib-adapter-vulkan-helpers"
-version = "0.16.0"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
- "serial_test",
- "streamlib",
- "streamlib-adapter-vulkan",
- "streamlib-consumer-rhi",
- "streamlib-engine",
- "streamlib-surface-client",
- "tatolab-vulkanalia",
  "tracing",
  "tracing-subscriber",
 ]

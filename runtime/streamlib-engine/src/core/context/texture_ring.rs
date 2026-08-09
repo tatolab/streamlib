@@ -570,7 +570,6 @@ impl TextureRing {
     }
 }
 
-/
 impl Clone for TextureRing {
     fn clone(&self) -> Self {
         if !self.handle.is_null() {

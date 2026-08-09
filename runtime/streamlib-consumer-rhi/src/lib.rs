@@ -116,8 +116,9 @@ pub use device_capability::private;
 ///   returning 0 (documented in `.claude/rules/polyglot.md`).
 /// - The polyglot adapter crates (`streamlib-adapter-vulkan`,
 ///   `streamlib-adapter-opengl`) holding `streamlib` in
-///   `[dev-dependencies]` only, with the helper-bin moved to
-///   `streamlib-adapter-vulkan-helpers`.
+///   `[dev-dependencies]` only, with the subprocess helper bin built
+///   through the `streamlib-consumer-rhi` carve-out so it needs no
+///   `streamlib` runtime dep at all.
 ///
 /// Together those two checks plus the doctests below give the full
 /// boundary; this module is one piece of three.

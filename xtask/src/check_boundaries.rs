@@ -594,13 +594,6 @@ const PRIVILEGED_VK_ALLOWLIST: &[AllowEntry] = &[
         kind: AllowKind::PathSegment,
         rationale: "tests bring up real Vulkan devices for end-to-end validation",
     },
-    // Adapter test-helper bin lives outside the test/ tree but is
-    // test-only by purpose.
-    AllowEntry {
-        path: "adapters/streamlib-adapter-vulkan-helpers/",
-        kind: AllowKind::PathPrefix,
-        rationale: "test-helper crate isolated so streamlib doesn't leak into adapter-vulkan runtime deps",
-    },
 ];
 
 fn check_privileged_vk_calls(

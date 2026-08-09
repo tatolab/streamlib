@@ -14,26 +14,11 @@ use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
 use streamlib::sdk::engine::{HostGpuDeviceExt, HostTextureExt};
 
-/// Locate the `vulkan_adapter_subprocess_helper` binary built by the
-/// `streamlib-adapter-vulkan-helpers` dev-dependency. Cargo doesn't
-/// surface `CARGO_BIN_EXE_<name>` for cross-package binaries, so we
-/// resolve it relative to the test binary's own location: tests run
-/// from `<target>/<profile>/deps/<test>` and helper bins live at
-/// `<target>/<profile>/<bin>`.
+/// The in-crate `vulkan_adapter_subprocess_helper` `[[bin]]` target,
+/// surfaced by Cargo as `CARGO_BIN_EXE_<name>` because it lives in
+/// this crate.
 pub fn vulkan_adapter_subprocess_helper_path() -> PathBuf {
-    let exe = std::env::current_exe().expect("test exe");
-    let profile_dir = exe
-        .parent()
-        .and_then(|p| p.parent())
-        .expect("test exe parent");
-    let helper = profile_dir.join("vulkan_adapter_subprocess_helper");
-    assert!(
-        helper.exists(),
-        "vulkan_adapter_subprocess_helper not found at {} — \
-         is `streamlib-adapter-vulkan-helpers` listed in dev-dependencies?",
-        helper.display()
-    );
-    helper
+    PathBuf::from(env!("CARGO_BIN_EXE_vulkan_adapter_subprocess_helper"))
 }
 
 use streamlib::sdk::context::GpuContext;

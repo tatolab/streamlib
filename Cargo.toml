@@ -15,7 +15,6 @@ members = [
     "adapters/streamlib-surface-adapter", # Surface adapter contract shared by every adapter core
     "runtime/streamlib-consumer-rhi", # Consumer-side carve-out of the Vulkan RHI — DMA-BUF FD import + bind + map. cdylibs depend on this NOT the full streamlib so the FullAccess capability boundary is type-system enforced (Linux)
     "adapters/streamlib-adapter-vulkan", # Vulkan-native surface adapter — canonical implementor of VulkanWritable / VulkanImageInfoExt (Linux)
-    "adapters/streamlib-adapter-vulkan-helpers", # Test-helper binaries for streamlib-adapter-vulkan — held in a dedicated crate so streamlib doesn't leak into adapter-vulkan's runtime dep graph (Linux)
     "adapters/streamlib-adapter-opengl", # OpenGL/EGL surface adapter — canonical implementor of GlWritable; DMA-BUF + DRM modifier import (Linux)
     "adapters/streamlib-adapter-cpu-readback", # Explicit GPU→CPU surface adapter — sole implementor of CpuReadable / CpuWritable (Linux)
     "adapters/streamlib-adapter-cuda", # CUDA surface adapter — Vulkan↔CUDA OPAQUE_FD interop foundation for GPU-resident AI inference (Linux, #587)

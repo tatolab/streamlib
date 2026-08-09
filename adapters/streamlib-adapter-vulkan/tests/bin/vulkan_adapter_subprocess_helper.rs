@@ -9,7 +9,9 @@
 //! `docs/architecture/adapter-timeline-single-writer.md`) via
 //! SCM_RIGHTS over a socketpair the parent passed in
 //! `STREAMLIB_HELPER_SOCKET_FD`. Imports both into a fresh `VkDevice`
-//! (this process's own — sidestepping the dual-VkDevice crash because
+//! (this process's own `ConsumerVulkanDevice` — the same carve-out the
+//! wheel's helper children import through — sidestepping the dual-VkDevice
+//! crash because
 //! no GPU work is active in the parent when the subprocess starts),
 //! then performs the role specified in argv[1].
 //!
@@ -43,10 +45,9 @@ use std::os::unix::net::UnixStream;
 use std::process::ExitCode;
 use std::sync::Arc;
 
-use streamlib::sdk::engine::host_rhi::{
-    HostVulkanDevice, HostVulkanTexture, HostVulkanTimelineSemaphore,
+use streamlib_consumer_rhi::{
+    ConsumerVulkanDevice, ConsumerVulkanTexture, ConsumerVulkanTimelineSemaphore, TextureFormat,
 };
-use streamlib::sdk::rhi::TextureFormat;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
@@ -158,13 +159,13 @@ fn run() -> ExitCode {
 
     // Build our own VkDevice. The parent has no GPU work in flight when
     // it spawns us, so the dual-VkDevice crash on NVIDIA does not apply.
-    let device = match HostVulkanDevice::new() {
-        Ok(d) => d,
-        Err(e) => return die(Some(&socket), format!("HostVulkanDevice::new: {e}")),
+    let device = match ConsumerVulkanDevice::new() {
+        Ok(d) => Arc::new(d),
+        Err(e) => return die(Some(&socket), format!("ConsumerVulkanDevice::new: {e}")),
     };
 
     // Import VkImage with the host-chosen DRM modifier.
-    let texture = match HostVulkanTexture::import_render_target_dma_buf(
+    let texture = match ConsumerVulkanTexture::import_render_target_dma_buf(
         &device,
         &dma_buf_fds,
         &req.plane_offsets,
@@ -181,8 +182,8 @@ fn run() -> ExitCode {
 
     // Import both timeline semaphores. Vulkan takes ownership of each
     // fd on success; we close every other fd ourselves.
-    let produce_done = match HostVulkanTimelineSemaphore::from_imported_opaque_fd(
-        device.device(),
+    let produce_done = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
+        &device,
         produce_done_fd,
     ) {
         Ok(t) => t,
@@ -194,8 +195,8 @@ fn run() -> ExitCode {
             return die(Some(&socket), format!("import produce_done_fd: {e}"));
         }
     };
-    let consume_done = match HostVulkanTimelineSemaphore::from_imported_opaque_fd(
-        device.device(),
+    let consume_done = match ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd(
+        &device,
         consume_done_fd,
     ) {
         Ok(t) => t,
@@ -209,7 +210,7 @@ fn run() -> ExitCode {
 
     // dma_buf_fds were dup'd by the kernel during SCM_RIGHTS; the
     // VkImage import does NOT take ownership in our import path (the
-    // memory_fd helper inside HostVulkanDevice dups internally). Close our
+    // memory_fd helper inside ConsumerVulkanDevice dups internally). Close our
     // copies — without this they leak across the helper's lifetime.
     for f in &dma_buf_fds {
         unsafe { libc::close(*f) };
@@ -257,7 +258,7 @@ fn run() -> ExitCode {
             }
             let color = req.clear_color.unwrap_or([1.0, 0.5, 0.25, 1.0]);
             if let Err(e) =
-                subprocess_clear_image(&device, texture.image().expect("imported image"), color)
+                subprocess_clear_image(&device, texture.image(), color)
             {
                 return die(Some(&socket), format!("subprocess_clear_image: {e}"));
             }
@@ -289,7 +290,7 @@ fn run() -> ExitCode {
             }
             let bytes = match subprocess_readback_image(
                 &device,
-                texture.image().expect("imported image"),
+                texture.image(),
                 req.width,
                 req.height,
             ) {
@@ -332,11 +333,11 @@ fn run() -> ExitCode {
 
 /// Subprocess `vkCmdClearColorImage` — equivalent to a plain GPU write.
 fn subprocess_clear_image(
-    device: &Arc<HostVulkanDevice>,
+    device: &Arc<ConsumerVulkanDevice>,
     image: vk::Image,
     color: [f32; 4],
-) -> streamlib::sdk::error::Result<()> {
-    use streamlib::sdk::error::Error;
+) -> streamlib_consumer_rhi::Result<()> {
+    use streamlib_consumer_rhi::ConsumerRhiError as Error;
     let dev = device.device();
     let queue = device.queue();
     let qf = device.queue_family_index();
@@ -350,7 +351,7 @@ fn subprocess_clear_image(
             None,
         )
     }
-    .map_err(|e| Error::GpuError(format!("create_command_pool: {e}")))?;
+    .map_err(|e| Error::Gpu(format!("create_command_pool: {e}")))?;
 
     let cmd = unsafe {
         dev.allocate_command_buffers(
@@ -361,7 +362,7 @@ fn subprocess_clear_image(
                 .build(),
         )
     }
-    .map_err(|e| Error::GpuError(format!("allocate_command_buffers: {e}")))?[0];
+    .map_err(|e| Error::Gpu(format!("allocate_command_buffers: {e}")))?[0];
 
     unsafe {
         dev.begin_command_buffer(
@@ -371,7 +372,7 @@ fn subprocess_clear_image(
                 .build(),
         )
     }
-    .map_err(|e| Error::GpuError(format!("begin_command_buffer: {e}")))?;
+    .map_err(|e| Error::Gpu(format!("begin_command_buffer: {e}")))?;
 
     // UNDEFINED → TRANSFER_DST_OPTIMAL barrier so vkCmdClearColorImage
     // sees a known layout.
@@ -417,7 +418,7 @@ fn subprocess_clear_image(
     };
 
     unsafe { dev.end_command_buffer(cmd) }
-        .map_err(|e| Error::GpuError(format!("end_command_buffer: {e}")))?;
+        .map_err(|e| Error::Gpu(format!("end_command_buffer: {e}")))?;
 
     let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
         .command_buffer(cmd)
@@ -427,7 +428,7 @@ fn subprocess_clear_image(
         .build()];
     unsafe { device.submit_to_queue(queue, &submits, vk::Fence::null()) }?;
     unsafe { dev.queue_wait_idle(queue) }
-        .map_err(|e| Error::GpuError(format!("queue_wait_idle: {e}")))?;
+        .map_err(|e| Error::Gpu(format!("queue_wait_idle: {e}")))?;
     unsafe { dev.destroy_command_pool(pool, None) };
     Ok(())
 }
@@ -435,12 +436,12 @@ fn subprocess_clear_image(
 /// Subprocess readback — `vkCmdCopyImageToBuffer` into a staging buffer,
 /// then map and read.
 fn subprocess_readback_image(
-    device: &Arc<HostVulkanDevice>,
+    device: &Arc<ConsumerVulkanDevice>,
     image: vk::Image,
     width: u32,
     height: u32,
-) -> streamlib::sdk::error::Result<Vec<u8>> {
-    use streamlib::sdk::error::Error;
+) -> streamlib_consumer_rhi::Result<Vec<u8>> {
+    use streamlib_consumer_rhi::ConsumerRhiError as Error;
     let dev = device.device();
     let queue = device.queue();
     let qf = device.queue_family_index();
@@ -454,7 +455,7 @@ fn subprocess_readback_image(
         .sharing_mode(vk::SharingMode::EXCLUSIVE)
         .build();
     let buffer = unsafe { dev.create_buffer(&buffer_info, None) }
-        .map_err(|e| Error::GpuError(format!("create_buffer: {e}")))?;
+        .map_err(|e| Error::Gpu(format!("create_buffer: {e}")))?;
     let mem_req = unsafe { dev.get_buffer_memory_requirements(buffer) };
 
     // Find a host-visible memory type from the device's physical
@@ -471,7 +472,7 @@ fn subprocess_readback_image(
                     .property_flags
                     .contains(needed)
         })
-        .ok_or_else(|| Error::GpuError("no host-visible memory type".into()))?;
+        .ok_or_else(|| Error::Gpu("no host-visible memory type".into()))?;
 
     let alloc_info = vk::MemoryAllocateInfo::builder()
         .allocation_size(mem_req.size)
@@ -479,12 +480,12 @@ fn subprocess_readback_image(
         .build();
     let mem = unsafe { dev.allocate_memory(&alloc_info, None) }.map_err(|e| {
         unsafe { dev.destroy_buffer(buffer, None) };
-        Error::GpuError(format!("allocate_memory: {e}"))
+        Error::Gpu(format!("allocate_memory: {e}"))
     })?;
     unsafe { dev.bind_buffer_memory(buffer, mem, 0) }.map_err(|e| {
         unsafe { dev.free_memory(mem, None) };
         unsafe { dev.destroy_buffer(buffer, None) };
-        Error::GpuError(format!("bind_buffer_memory: {e}"))
+        Error::Gpu(format!("bind_buffer_memory: {e}"))
     })?;
 
     // Command buffer: transition image to TRANSFER_SRC, copy to buffer.
@@ -497,7 +498,7 @@ fn subprocess_readback_image(
             None,
         )
     }
-    .map_err(|e| Error::GpuError(format!("create_command_pool: {e}")))?;
+    .map_err(|e| Error::Gpu(format!("create_command_pool: {e}")))?;
     let cmd = unsafe {
         dev.allocate_command_buffers(
             &vk::CommandBufferAllocateInfo::builder()
@@ -507,7 +508,7 @@ fn subprocess_readback_image(
                 .build(),
         )
     }
-    .map_err(|e| Error::GpuError(format!("allocate_command_buffers: {e}")))?[0];
+    .map_err(|e| Error::Gpu(format!("allocate_command_buffers: {e}")))?[0];
 
     unsafe {
         dev.begin_command_buffer(
@@ -517,7 +518,7 @@ fn subprocess_readback_image(
                 .build(),
         )
     }
-    .map_err(|e| Error::GpuError(format!("begin_command_buffer: {e}")))?;
+    .map_err(|e| Error::Gpu(format!("begin_command_buffer: {e}")))?;
 
     // GENERAL is what the parent's adapter left it in; transition to
     // TRANSFER_SRC_OPTIMAL.
@@ -574,7 +575,7 @@ fn subprocess_readback_image(
     };
 
     unsafe { dev.end_command_buffer(cmd) }
-        .map_err(|e| Error::GpuError(format!("end_command_buffer: {e}")))?;
+        .map_err(|e| Error::Gpu(format!("end_command_buffer: {e}")))?;
 
     let cmd_infos = [vk::CommandBufferSubmitInfo::builder()
         .command_buffer(cmd)
@@ -584,10 +585,10 @@ fn subprocess_readback_image(
         .build()];
     unsafe { device.submit_to_queue(queue, &submits, vk::Fence::null()) }?;
     unsafe { dev.queue_wait_idle(queue) }
-        .map_err(|e| Error::GpuError(format!("queue_wait_idle: {e}")))?;
+        .map_err(|e| Error::Gpu(format!("queue_wait_idle: {e}")))?;
 
     let mapped = unsafe { dev.map_memory(mem, 0, bytes, vk::MemoryMapFlags::empty()) }
-        .map_err(|e| Error::GpuError(format!("map_memory: {e}")))?;
+        .map_err(|e| Error::Gpu(format!("map_memory: {e}")))?;
     let slice = unsafe { std::slice::from_raw_parts(mapped as *const u8, bytes as usize) };
     let out = slice.to_vec();
     unsafe { dev.unmap_memory(mem) };
@@ -598,11 +599,5 @@ fn subprocess_readback_image(
 }
 
 fn main() -> ExitCode {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .init();
     run()
 }
