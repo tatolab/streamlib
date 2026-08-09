@@ -183,7 +183,6 @@ core-graphics = "0.24"
 # Folder-backed crate-root generation — an integration test that shells out to
 # `cargo build -p <package>` writes the package's generated `[lib] path` target
 # first, through the one generator `cargo xtask generate-crate-roots` also runs.
-streamlib-processor-extract = { path = "../../sdk/streamlib-processor-extract" }
 
 # Self-alias via the SDK so engine tests / benches that use
 # `#[streamlib::processor(...)]` resolve macro-emitted `::streamlib::*`

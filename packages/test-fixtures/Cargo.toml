@@ -13,13 +13,8 @@ keywords = ["streamlib", "test-fixtures", "macros"]
 categories = ["development-tools::testing"]
 
 [lib]
-# The crate root is generated from `processors/` before every cargo
-# invocation (`cargo xtask generate-crate-roots` in-tree; the build
-# orchestrator's pre-cargo staging step everywhere else). It is a build
-# artifact — gitignored, and excluded from the packed `.slpkg`.
-path = "_generated_rust_crate_root_/lib.rs"
 name = "streamlib_test_fixtures"
-crate-type = ["rlib", "cdylib"]
+crate-type = ["rlib"]
 
 [build-dependencies]
 streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.16.0" }
@@ -33,18 +28,10 @@ streamlib = { path = "../../sdk/streamlib-sdk", version = "0.16.0" }
 # crate's own `streamlib.yaml` at `CARGO_MANIFEST_DIR`.
 streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.16.0" }
 
-# Plugin ABI — `export_plugin!` emits the `STREAMLIB_PLUGIN` symbol the
-# runtime dlopens at load time.
-streamlib-plugin-abi = { path = "../../runtime/streamlib-plugin-abi", version = "0.16.0" }
 
 # Serialization (config dataclass ships as serde-derived).
 serde.workspace = true
 
-# `TcpBindTestProcessor` uses the plugin's own tokio runtime to verify
-# the dlopen-owns-tokio claim from #885 — the cdylib statically links
-# its own tokio crate so `tokio::net::*` has working TLS slots inside
-# the plugin's runtime even when the host has its own separate tokio.
-tokio = { workspace = true, features = ["rt", "net", "macros"] }
 
 [lints]
 workspace = true

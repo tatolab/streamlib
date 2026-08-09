@@ -5168,7 +5168,6 @@ dependencies = [
  "streamlib-jtd-codegen",
  "streamlib-macros",
  "streamlib-plugin-abi",
- "streamlib-processor-extract",
  "streamlib-processor-schema",
  "streamlib-surface-adapter",
  "streamlib-surface-client",
@@ -5253,7 +5252,6 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "streamlib-idents",
- "streamlib-processor-extract",
  "streamlib-processor-schema",
  "syn",
 ]
@@ -5323,24 +5321,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "streamlib-processor-extract"
-version = "0.16.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "serde",
- "serde_json",
- "serde_yaml",
- "streamlib-idents",
- "streamlib-processor-schema",
- "syn",
- "thiserror 2.0.18",
- "toml 0.8.23",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
 name = "streamlib-processor-schema"
 version = "0.16.0"
 dependencies = [
@@ -5402,8 +5382,6 @@ dependencies = [
  "streamlib",
  "streamlib-jtd-codegen",
  "streamlib-macros",
- "streamlib-plugin-abi",
- "tokio",
 ]
 
 [[package]]
@@ -7049,7 +7027,6 @@ dependencies = [
  "serde_yaml",
  "streamlib-idents",
  "streamlib-jtd-codegen",
- "streamlib-processor-extract",
  "streamlib-processor-schema",
  "syn",
  "tempfile",

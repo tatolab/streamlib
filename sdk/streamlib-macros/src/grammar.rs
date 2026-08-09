@@ -127,7 +127,7 @@ impl ParsedProcessorAttr {
 /// This is the single, shared grammar entrypoint: the proc-macro calls it with
 /// the attribute tokens it receives at expansion (converting its
 /// `proc_macro::TokenStream` via `.into()`), and the source-scan
-/// [`crate::extract_rust_processors`] calls it with the tokens a `syn`-parsed
+/// The attribute macro calls it with the tokens a `syn`-parsed
 /// `#[processor(...)]` attribute carries. There is deliberately no second
 /// parser — code is the
 /// source of truth, so both readers of that truth share one grammar.

@@ -342,25 +342,14 @@ fn is_parked_pending_segment(segment: &str) -> bool {
 /// caught too.
 ///
 /// A crate that commits `src/lib.rs` is walked from there. A folder-backed
-/// crate commits no crate root at all — its module arms are the top-level
-/// entries under `processors/`, each declaring its own gate as a file-level
-/// `#![cfg(...)]` — so each arm is a walk root.
+/// A folder-backed crate reaches its `processors/` files through `#[path]`
+/// arms in its committed `src/lib.rs`, which [`resolve_mod_candidates`]
+/// honours, so one walk from the crate root covers both shapes.
 fn collect_cfg_excluded_mod_paths(crate_root: &Path) -> Vec<PathBuf> {
     let mut excluded = Vec::new();
     let lib_rs = crate_root.join("src/lib.rs");
     if lib_rs.exists() {
         walk_mods_for_exclusions(&lib_rs, &mut excluded);
-    }
-    // "What is an arm" is owned by the extract crate's enumerator, so a change
-    // to the arm rule cannot leave this walker with a stale second definition.
-    // A crate whose `processors/` cannot be enumerated contributes no
-    // exclusions, matching the best-effort shape of the rest of this walk.
-    if let Ok(arms) =
-        streamlib_processor_extract::enumerate_processor_source_module_arms(crate_root)
-    {
-        for arm in &arms {
-            walk_mods_for_exclusions(&arm.module_file, &mut excluded);
-        }
     }
     excluded
 }
