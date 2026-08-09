@@ -36,7 +36,6 @@ use iceoryx2::port::listener::Listener;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
 use serde::de::DeserializeOwned;
-use streamlib_plugin_abi::InputMailboxesVTable;
 
 use super::mailbox::PortMailbox;
 use super::read_mode::ReadMode;
@@ -603,25 +602,13 @@ impl Default for InputMailboxesInner {
 /// pointer, so the cdylib's view of this type does not couple to
 /// the host's [`InputMailboxesInner`] source layout.
 ///
-/// `Clone` bumps the host-side `Arc<InputMailboxesInner>` strong
-/// count via [`InputMailboxesVTable::clone_arc`]; `Drop` decrements
-/// via [`InputMailboxesVTable::drop_arc`]. Both run in host-
-/// compiled code regardless of which artifact holds this PluginAbiObject.
-#[repr(C)]
+/// `Clone` bumps the `Arc<InputMailboxesInner>` strong count; `Drop`
+/// decrements it.
 pub struct InputMailboxes {
-    /// Opaque handle. In host mode: `Arc::into_raw(Arc<InputMailboxesInner>)`.
-    /// In cdylib mode: whatever the host hands via
-    /// `ProcessorVTable::set_iceoryx2_resources`. Null on a
-    /// freshly-constructed processor before
+    /// Opaque handle: `Arc::into_raw(Arc<InputMailboxesInner>)`. Null
+    /// on a freshly-constructed processor before
     /// `set_iceoryx2_resources` fires.
     pub(crate) handle: *const c_void,
-    /// Static dispatch table. Host mode points at
-    /// `&HOST_INPUT_MAILBOXES_VTABLE`; cdylib mode points at the
-    /// host-installed pointer from
-    /// `HostServices::input_mailboxes_vtable`. Null on
-    /// freshly-constructed pre-wiring instances; methods short-
-    /// circuit cleanly when the vtable is null.
-    pub(crate) vtable: *const InputMailboxesVTable,
 }
 
 // SAFETY: `handle` points at an `Arc<InputMailboxesInner>` whose
@@ -639,33 +626,30 @@ impl InputMailboxes {
     /// its lifetime and releases on Drop.
     pub fn from_inner_arc(inner: Arc<InputMailboxesInner>) -> Self {
         let handle = Arc::into_raw(inner) as *const c_void;
-        let vtable = crate::core::plugin::host_services::host_input_mailboxes_vtable();
-        Self { handle, vtable }
+        Self { handle }
     }
 
-    /// Build an empty pre-wiring PluginAbiObject with null handle and
-    /// null vtable. The host patches in real values via
-    /// `ProcessorVTable::set_iceoryx2_resources`.
+    /// Engine-internal borrow of the `InputMailboxesInner`, or `None`
+    /// when unwired.
+    fn host_inner(&self) -> Option<&InputMailboxesInner> {
+        if self.handle.is_null() {
+            return None;
+        }
+        // SAFETY: `handle` is `Arc::into_raw(Arc<InputMailboxesInner>)`.
+        Some(unsafe { &*(self.handle as *const InputMailboxesInner) })
+    }
+
+    /// Build an empty pre-wiring handle (null). The host patches in
+    /// the real `Arc` via `set_iceoryx2_resources`.
     pub fn empty() -> Self {
         Self {
             handle: std::ptr::null(),
-            vtable: std::ptr::null(),
         }
     }
 
-    /// Raw-pointer construction used by
-    /// `ProcessorVTable::set_iceoryx2_resources` host wiring.
-    pub(crate) fn from_raw_parts(
-        handle: *const c_void,
-        vtable: *const InputMailboxesVTable,
-    ) -> Self {
-        Self { handle, vtable }
-    }
-
-    /// Returns true iff this PluginAbiObject has been wired to a real
-    /// host-allocated inner.
+    /// Returns true iff this has been wired to a real inner.
     pub fn is_configured(&self) -> bool {
-        !self.handle.is_null() && !self.vtable.is_null()
+        !self.handle.is_null()
     }
 
     /// Borrow the host-side `Arc<InputMailboxesInner>` this
@@ -679,12 +663,13 @@ impl InputMailboxes {
         // SAFETY: handle came from Arc::into_raw; bumping the
         // strong count via the vtable's clone_arc gives us a fresh
         // owning reference we can reconstruct as Arc::from_raw.
+        // SAFETY: `handle` is `Arc::into_raw(Arc<InputMailboxesInner>)`;
+        // reconstruct, clone (bumping the count), and re-leak the original.
         unsafe {
-            let cloned_handle = ((*self.vtable).clone_arc)(self.handle);
-            if cloned_handle.is_null() {
-                return None;
-            }
-            Some(Arc::from_raw(cloned_handle as *const InputMailboxesInner))
+            let arc = Arc::from_raw(self.handle as *const InputMailboxesInner);
+            let cloned = Arc::clone(&arc);
+            let _ = Arc::into_raw(arc);
+            Some(cloned)
         }
     }
 
@@ -719,29 +704,19 @@ impl InputMailboxes {
     pub fn read_raw(&self, port: &str) -> Result<Option<(Vec<u8>, i64)>> {
         use streamlib_ipc_types::DEFAULT_EXPECTED_PAYLOAD_BYTES;
 
-        if !self.is_configured() {
+        let Some(inner) = self.host_inner() else {
             return Ok(None);
-        }
-
-        // SAFETY: vtable + handle are non-null per is_configured().
-        unsafe {
-            streamlib_plugin_abi::grow_and_retry_read(
-                self.vtable,
-                self.handle,
-                port,
-                DEFAULT_EXPECTED_PAYLOAD_BYTES,
-            )
-        }
-        .map_err(Error::Link)
+        };
+        let _ = DEFAULT_EXPECTED_PAYLOAD_BYTES;
+        inner.read_raw(port)
     }
 
     /// Check if a port has any payloads available.
     pub fn has_data(&self, port: &str) -> bool {
-        if !self.is_configured() {
-            return false;
+        match self.host_inner() {
+            Some(inner) => inner.has_data(port),
+            None => false,
         }
-        // SAFETY: vtable + handle are non-null per is_configured().
-        unsafe { ((*self.vtable).has_data)(self.handle, port.as_ptr(), port.len()) }
     }
 }
 
@@ -756,12 +731,15 @@ impl Clone for InputMailboxes {
         if !self.is_configured() {
             return Self::empty();
         }
-        // SAFETY: vtable + handle are non-null per is_configured().
-        let cloned_handle = unsafe { ((*self.vtable).clone_arc)(self.handle) };
-        Self {
-            handle: cloned_handle,
-            vtable: self.vtable,
-        }
+        // SAFETY: `handle` is `Arc::into_raw(Arc<InputMailboxesInner>)`;
+        // bump the strong count and re-leak both.
+        let cloned_handle = unsafe {
+            let arc = Arc::from_raw(self.handle as *const InputMailboxesInner);
+            let cloned = Arc::clone(&arc);
+            let _ = Arc::into_raw(arc);
+            Arc::into_raw(cloned) as *const c_void
+        };
+        Self { handle: cloned_handle }
     }
 }
 
@@ -770,12 +748,11 @@ impl Drop for InputMailboxes {
         if !self.is_configured() {
             return;
         }
-        // SAFETY: vtable + handle are non-null per is_configured().
+        // SAFETY: `handle` is `Arc::into_raw(Arc<InputMailboxesInner>)`.
         unsafe {
-            ((*self.vtable).drop_arc)(self.handle);
+            drop(Arc::from_raw(self.handle as *const InputMailboxesInner));
         }
         self.handle = std::ptr::null();
-        self.vtable = std::ptr::null();
     }
 }
 

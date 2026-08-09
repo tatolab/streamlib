@@ -366,34 +366,13 @@ impl Texture {
         }
         #[cfg(target_os = "linux")]
         {
-            // Linux DMA-BUF export is plugin ABI safe: the slot returns
-            // the FD as a primitive `i64` (sentinel `-1` encodes
-            // `None`), which never crosses an Arc<TextureInner>
-            // layout boundary. Host mode resolves the slot pointer
-            // to `&HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`'s callback
-            // (which in turn calls `HostVulkanTexture::export_dma_buf_fd`);
-            // cdylib mode resolves to the host-installed pointer
-            // routed through `HostServices::gpu_context_limited_access_vtable`.
-            if self.handle.is_null() || self.vtable.is_null() {
+            if self.handle.is_null() {
                 return None;
             }
-            // SAFETY: `vtable` and `handle` were paired at construction
-            // by `from_arc_into_raw` / `from_raw_handle_for_cdylib`;
-            // the `texture_native_dma_buf_fd` slot accepts the texture
-            // handle directly and returns `-1` (no FD) or a non-
-            // negative `RawFd` widened to `i64`.
-            let fd_i64 = unsafe { ((*self.vtable).texture_native_dma_buf_fd)(self.handle) };
-            if fd_i64 < 0 {
-                None
-            } else {
-                // `get_memory_fd_khr` returns standard kernel FDs
-                // which always fit in i32; the i64 widening is purely
-                // forward-compat. A truncating cast here would
-                // silently corrupt the FD, so reject and treat as
-                // `None` rather than hand back garbage.
-                i32::try_from(fd_i64)
-                    .ok()
-                    .map(|fd| NativeTextureHandle::DmaBuf { fd })
+            use crate::host_rhi::HostTextureExt;
+            match self.vulkan_inner().export_dma_buf_fd() {
+                Ok(fd) => Some(NativeTextureHandle::DmaBuf { fd }),
+                Err(_) => None,
             }
         }
         #[cfg(target_os = "windows")]

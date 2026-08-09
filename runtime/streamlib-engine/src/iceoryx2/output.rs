@@ -42,7 +42,6 @@ use iceoryx2::port::publisher::Publisher;
 use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 use serde::Serialize;
-use streamlib_plugin_abi::OutputWriterVTable;
 
 use super::{ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader, SchemaIdentWire};
 use crate::core::error::{ChannelTrustTierLabel, Error, Result};
@@ -375,22 +374,11 @@ impl Default for OutputWriterInner {
 /// count via [`OutputWriterVTable::clone_arc`]; `Drop` decrements
 /// via [`OutputWriterVTable::drop_arc`]. Both run in host-compiled
 /// code regardless of which artifact holds this PluginAbiObject.
-#[repr(C)]
 pub struct OutputWriter {
-    /// Opaque handle. In host mode: `Arc::into_raw(Arc<OutputWriterInner>)`.
-    /// In cdylib mode: whatever the host hands via
-    /// `ProcessorVTable::set_iceoryx2_resources` (which is also
-    /// `Arc::into_raw`-shaped, so the wire contract is the same).
-    /// Null on a freshly-constructed processor before
+    /// Opaque handle: `Arc::into_raw(Arc<OutputWriterInner>)`. Null
+    /// on a freshly-constructed processor before
     /// `set_iceoryx2_resources` fires.
     pub(crate) handle: *const c_void,
-    /// Static dispatch table. Host mode points at
-    /// `&HOST_OUTPUT_WRITER_VTABLE`; cdylib mode points at the
-    /// host-installed pointer from
-    /// `HostServices::output_writer_vtable`. Null on
-    /// freshly-constructed pre-wiring instances; methods short-
-    /// circuit to errors when the vtable is null.
-    pub(crate) vtable: *const OutputWriterVTable,
 }
 
 // SAFETY: `handle` points at an `Arc<OutputWriterInner>` whose
@@ -412,8 +400,17 @@ impl OutputWriter {
     /// outputs are declared (an empty inner is used).
     pub fn from_inner_arc(inner: Arc<OutputWriterInner>) -> Self {
         let handle = Arc::into_raw(inner) as *const c_void;
-        let vtable = crate::core::plugin::host_services::host_output_writer_vtable();
-        Self { handle, vtable }
+        Self { handle }
+    }
+
+    /// Engine-internal borrow of the `OutputWriterInner`, or `None`
+    /// when unwired.
+    fn host_inner(&self) -> Option<&OutputWriterInner> {
+        if self.handle.is_null() {
+            return None;
+        }
+        // SAFETY: `handle` is `Arc::into_raw(Arc<OutputWriterInner>)`.
+        Some(unsafe { &*(self.handle as *const OutputWriterInner) })
     }
 
     /// Build an empty pre-wiring PluginAbiObject with null handle and
@@ -426,22 +423,12 @@ impl OutputWriter {
     pub fn empty() -> Self {
         Self {
             handle: std::ptr::null(),
-            vtable: std::ptr::null(),
         }
     }
 
-    /// Raw-pointer construction used by
-    /// `ProcessorVTable::set_iceoryx2_resources` host wiring to
-    /// patch an existing PluginAbiObject's fields without owning a typed
-    /// `Arc<OutputWriterInner>`.
-    pub(crate) fn from_raw_parts(handle: *const c_void, vtable: *const OutputWriterVTable) -> Self {
-        Self { handle, vtable }
-    }
-
-    /// Returns true iff this PluginAbiObject has been wired to a real
-    /// host-allocated inner.
+    /// Returns true iff this has been wired to a real inner.
     pub fn is_configured(&self) -> bool {
-        !self.handle.is_null() && !self.vtable.is_null()
+        !self.handle.is_null()
     }
 
     /// Borrow the host-side `Arc<OutputWriterInner>` this PluginAbiObject
@@ -461,12 +448,13 @@ impl OutputWriter {
         // SAFETY: handle came from Arc::into_raw; bumping the
         // strong count via the vtable's clone_arc gives us a fresh
         // owning reference we can reconstruct as Arc::from_raw.
+        // SAFETY: `handle` is `Arc::into_raw(Arc<OutputWriterInner>)`;
+        // reconstruct, clone (bumping the count), and re-leak the original.
         unsafe {
-            let cloned_handle = ((*self.vtable).clone_arc)(self.handle);
-            if cloned_handle.is_null() {
-                return None;
-            }
-            Some(Arc::from_raw(cloned_handle as *const OutputWriterInner))
+            let arc = Arc::from_raw(self.handle as *const OutputWriterInner);
+            let cloned = Arc::clone(&arc);
+            let _ = Arc::into_raw(arc);
+            Some(cloned)
         }
     }
 
@@ -502,43 +490,18 @@ impl OutputWriter {
                 port
             )));
         }
-        let mut err_buf = [0u8; 256];
-        let mut err_len = 0usize;
-        // SAFETY: vtable + handle are non-null per is_configured().
-        // The fn pointer's lifetime is tied to the host's process
-        // (the vtable lives in static memory). The err_buf is a
-        // local stack allocation we own.
-        let rc = unsafe {
-            ((*self.vtable).write_raw)(
-                self.handle,
-                port.as_ptr(),
-                port.len(),
-                data.as_ptr(),
-                data.len(),
-                timestamp_ns,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if rc == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::Link(format!(
-                "OutputWriter::write_raw(port='{}') failed: {}",
-                port, msg
-            )))
-        }
+        // `is_configured()` guaranteed a non-null handle above.
+        self.host_inner()
+            .expect("write_raw: configured but null handle")
+            .write_raw(port, data, timestamp_ns)
     }
 
     /// Check if a port is configured.
     pub fn has_port(&self, port: &str) -> bool {
-        if !self.is_configured() {
-            return false;
+        match self.host_inner() {
+            Some(inner) => inner.has_port(port),
+            None => false,
         }
-        // SAFETY: vtable + handle are non-null per is_configured().
-        unsafe { ((*self.vtable).has_port)(self.handle, port.as_ptr(), port.len()) }
     }
 }
 
@@ -553,12 +516,15 @@ impl Clone for OutputWriter {
         if !self.is_configured() {
             return Self::empty();
         }
-        // SAFETY: vtable + handle are non-null per is_configured().
-        let cloned_handle = unsafe { ((*self.vtable).clone_arc)(self.handle) };
-        Self {
-            handle: cloned_handle,
-            vtable: self.vtable,
-        }
+        // SAFETY: `handle` is `Arc::into_raw(Arc<OutputWriterInner>)`;
+        // bump the strong count and re-leak both.
+        let cloned_handle = unsafe {
+            let arc = Arc::from_raw(self.handle as *const OutputWriterInner);
+            let cloned = Arc::clone(&arc);
+            let _ = Arc::into_raw(arc);
+            Arc::into_raw(cloned) as *const c_void
+        };
+        Self { handle: cloned_handle }
     }
 }
 
@@ -567,15 +533,11 @@ impl Drop for OutputWriter {
         if !self.is_configured() {
             return;
         }
-        // SAFETY: vtable + handle are non-null per is_configured().
-        // After dispatch, null out the local fields so a double-
-        // drop becomes a no-op (mirrors the Texture / PixelBuffer
-        // PluginAbiObject pattern).
+        // SAFETY: `handle` is `Arc::into_raw(Arc<OutputWriterInner>)`.
         unsafe {
-            ((*self.vtable).drop_arc)(self.handle);
+            drop(Arc::from_raw(self.handle as *const OutputWriterInner));
         }
         self.handle = std::ptr::null();
-        self.vtable = std::ptr::null();
     }
 }
 
