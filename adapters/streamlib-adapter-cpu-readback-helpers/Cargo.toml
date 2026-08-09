@@ -4,7 +4,7 @@
 # Test-helper binaries for `streamlib-adapter-cpu-readback`. Held in a
 # dedicated crate so the `streamlib` runtime dep these helpers need
 # does NOT propagate into the adapter's runtime dep graph (and from
-# there into `streamlib-python-native` / `-deno-native`, which must
+# there into the wheel's helper-process surface client, which must
 # stay `streamlib`-free per #560 / #562).
 #
 # `streamlib-adapter-cpu-readback/tests/*` reach the bin via

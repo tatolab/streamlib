@@ -805,7 +805,7 @@ fn now_ns() -> u64 {
 /// subprocess shim can later `check_out` the DMA-BUF FD; the surface-share service-assigned
 /// `surface_id` becomes the handle_id. On other platforms the pool id stays
 /// as-is (macOS uses its own XPC `check_in_surface` path via the native lib
-/// directly; see `streamlib-python-native/src/lib.rs` surface-share service_macos).
+/// directly).
 #[allow(unused_variables)]
 fn assign_buffer_handle_id(
     full: &crate::core::context::GpuContextFullAccess,

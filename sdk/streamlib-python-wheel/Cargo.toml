@@ -81,7 +81,7 @@ parking_lot = "0.12"
 # `libcuda.so` is dlopen'd at first use, never linked, so a machine without an
 # NVIDIA driver gets a clean "no CUDA driver" refusal instead of a wheel that
 # fails to load. That is the plan's portability model, and the shape
-# `streamlib-python-native` already ships.
+# the wheel already ships.
 [target.'cfg(target_os = "linux")'.dependencies]
 cudarc = { workspace = true }
 

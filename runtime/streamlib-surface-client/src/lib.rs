@@ -8,7 +8,7 @@
 //! `connect_to_surface_share_socket` / `send_request_with_fds` /
 //! `send_message_with_fds` / `recv_message_with_fds` trio. It is deliberately
 //! tiny — `libc` + `serde_json` only — so the two polyglot cdylibs
-//! (`streamlib-python-native`, `streamlib-deno-native`) can depend on it
+//! (the wheel's helper-process surface client) can depend on it
 //! without dragging the runtime's transitive closure (vulkanalia, tokio,
 //! winit, …) into their dep graphs. The runtime-internal service in
 //! `streamlib::linux::surface_share` consumes the same helpers on its
