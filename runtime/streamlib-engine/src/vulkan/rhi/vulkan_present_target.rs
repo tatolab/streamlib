@@ -738,18 +738,10 @@ impl VulkanPresentTarget {
         Ok(!out_of_date)
     }
 
-    /// Wire-format companion to [`Self::end_frame`]: materializes the
-    /// `vk::SemaphoreSubmitInfo` extra-waits from their `#[repr(C)]`
-    /// [`streamlib_plugin_abi::SemaphoreSubmitInfoRepr`] projections
-    /// host-side (the RHI boundary keeps `vulkanalia` inside this crate),
-    /// then dispatches [`Self::end_frame`]. The plugin-ABI `end_frame`
-    /// slot body calls this so it never names a `vk::*` type.
- 
     /// Raw `Box<RhiCommandRecorderInner>` pointer of the in-flight frame's
     /// recorder, or null when no frame is in flight. Borrowed, NON-OWNING
     /// — the present target owns the recorder across the begin/end split;
-    /// a caller must never release it. Used by the plugin-ABI `begin_frame`
-    /// return (recorder handle) + `end_frame` recorder-identity check.
+    /// a caller must never release it.
     pub fn in_flight_recorder_handle(&self) -> *const std::ffi::c_void {
         match &self.in_flight {
             Some(f) => self.recorders[f.frame_index].raw_handle(),

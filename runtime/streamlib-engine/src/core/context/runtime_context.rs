@@ -921,17 +921,3 @@ mod host_runtime_ops_wiring_tests {
     use crate::core::context::GpuContext;
 }
 
-// =============================================================================
-// Layout regression tests
-// =============================================================================
-//
-// `RuntimeContextFullAccess` / `RuntimeContextLimitedAccess` cross the plugin
-// ABI by raw-pointer reinterpret — the host builds the struct
-// (`processor_instance_factory.rs`) and a cdylib reads its fields directly
-// (`processor_vtable.rs`). They are `#[repr(C)]` so that layout is identical
-// across the host build and a separately-built plugin (`streamlib-plugin-sdk`),
-// which compiles a layout-matched twin. These assertions pin the byte shape;
-// the SDK twin asserts the SAME numbers, so a field added to one side but not
-// the other trips a test rather than corrupting field reads at runtime.
-#[cfg(all(test, target_pointer_width = "64"))]
-mod layout_tests {}

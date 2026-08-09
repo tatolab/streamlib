@@ -242,7 +242,7 @@ Three dependency source flavors are supported:
   Resolved by `@org/name` + version range against the configured
   package source — any location serving versioned `.slpkg` files
   (`file://` tree, HTTP mount, later a mesh peer or offline cache),
-  read like another filesystem. There is no
+  is treated like another filesystem. There is no
   central registry.
 - **Path** (`{ path: ../foo }`). Local-filesystem dependency, used
   inside the streamlib monorepo for pre-publish work.

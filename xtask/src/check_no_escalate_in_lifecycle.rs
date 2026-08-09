@@ -55,7 +55,6 @@
 //!   `GpuContextLimitedAccess`, but the check is name-based so a
 //!   future renamed escalate variant still trips it.
 //!
-//! See `docs/architecture/cdylib-reachability.md` (anti-pattern #1)
 //! for the rationale and the right pattern.
 
 use anyhow::{Context, Result};
@@ -157,7 +156,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     for v in &report.violations {
         eprintln!(
             "  {}:{}: fn {} reaches `.escalate(...)` — see \
-             docs/architecture/cdylib-reachability.md anti-pattern #1",
+             the escalate-from-lifecycle anti-pattern",
             v.file.display(),
             v.line,
             v.function,
@@ -174,7 +173,7 @@ pub fn run(workspace_root: &Path) -> Result<()> {
          and trips the gate's same-thread re-entry panic in\n  \
          runtime/streamlib-engine/src/core/context/escalate_gate.rs.\n  \
          \n  \
-         See docs/architecture/cdylib-reachability.md, anti-pattern #1.\n  \
+         The lifecycle dispatch already holds the escalate gate.\n  \
          The historical sandbox contract — pre-#322 setup() got\n  \
          `RuntimeContext` by value (full access); post-#322 it gets\n  \
          `&RuntimeContextFullAccess` whose `gpu_full_access()` is\n  \

@@ -30,12 +30,14 @@ use streamlib_processor_schema::PortSchemaSpec;
 /// the processor `OutputWriter` / `InputMailboxes` handles over those
 /// Arcs via `set_iceoryx2_resources`; connection-wiring code operates
 /// on the inner Arc directly.
-pub enum ProcessorInstance {
-    /// A processor dispatched through a boxed trait object.
-    LegacyDyn(Box<dyn DynGeneratedProcessor + Send>),
-}
+pub struct ProcessorInstance(Box<dyn DynGeneratedProcessor + Send>);
 
 impl ProcessorInstance {
+    /// Wrap a boxed generated processor for runtime dispatch.
+    pub(crate) fn new(processor: Box<dyn DynGeneratedProcessor + Send>) -> Self {
+        Self(processor)
+    }
+
     /// Isolation-tier seam: whether this instance's code is separately built
     /// and untrusted. Always `false` now that every processor is host-compiled
     /// (`register::<P>()` / `add_local::<P>()`) or a subprocess host wrapper —
@@ -47,79 +49,57 @@ impl ProcessorInstance {
 
     /// Run the processor's `setup` lifecycle.
     pub fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        match self {
-            Self::LegacyDyn(inner) => inner.__generated_setup(ctx),
-        }
+        self.0.__generated_setup(ctx)
     }
 
     /// Run the processor's `teardown` lifecycle.
     pub fn teardown(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        match self {
-            Self::LegacyDyn(inner) => inner.__generated_teardown(ctx),
-        }
+        self.0.__generated_teardown(ctx)
     }
 
     /// Run the processor's `on_pause` hook.
     pub fn on_pause(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        match self {
-            Self::LegacyDyn(inner) => inner.__generated_on_pause(ctx),
-        }
+        self.0.__generated_on_pause(ctx)
     }
 
     /// Run the processor's `on_resume` hook.
     pub fn on_resume(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        match self {
-            Self::LegacyDyn(inner) => inner.__generated_on_resume(ctx),
-        }
+        self.0.__generated_on_resume(ctx)
     }
 
     /// Run one tick of the processor's `process` body.
     pub fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        match self {
-            Self::LegacyDyn(inner) => inner.process(ctx),
-        }
+        self.0.process(ctx)
     }
 
     /// Start a Manual-mode processor. Pure passthrough — `start`/`stop` are
     /// never gate-wrapped (thread_runner calls them directly); a body that
     /// escalates or spawns threads does its own per-call gate management.
     pub fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        match self {
-            Self::LegacyDyn(inner) => inner.start(ctx),
-        }
+        self.0.start(ctx)
     }
 
     /// Stop a Manual-mode processor. Pure passthrough — see [`Self::start`].
     pub fn stop(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        match self {
-            Self::LegacyDyn(inner) => inner.stop(ctx),
-        }
+        self.0.stop(ctx)
     }
 
     /// Read the processor's execution config.
     pub fn execution_config(&self) -> ExecutionConfig {
-        match self {
-            Self::LegacyDyn(inner) => inner.execution_config(),
-        }
+        self.0.execution_config()
     }
 
     pub fn has_iceoryx2_outputs(&self) -> bool {
-        match self {
-            Self::LegacyDyn(inner) => inner.has_iceoryx2_outputs(),
-        }
+        self.0.has_iceoryx2_outputs()
     }
 
     pub fn has_iceoryx2_inputs(&self) -> bool {
-        match self {
-            Self::LegacyDyn(inner) => inner.has_iceoryx2_inputs(),
-        }
+        self.0.has_iceoryx2_inputs()
     }
 
     /// Whether this processor has failed unrecoverably.
     pub fn has_failed_unrecoverably(&self) -> bool {
-        match self {
-            Self::LegacyDyn(inner) => inner.has_failed_unrecoverably(),
-        }
+        self.0.has_failed_unrecoverably()
     }
 
     /// Where this processor's link wiring goes when its iceoryx2 ports live
@@ -130,9 +110,7 @@ impl ProcessorInstance {
     pub fn out_of_process_link_wiring(
         &mut self,
     ) -> Option<&mut super::OutOfProcessLinkWiringEnvelope> {
-        match self {
-            Self::LegacyDyn(inner) => inner.out_of_process_link_wiring(),
-        }
+        self.0.out_of_process_link_wiring()
     }
 
     /// Borrow the host-side `OutputWriterInner` Arc this processor
@@ -144,9 +122,7 @@ impl ProcessorInstance {
     /// [`crate::iceoryx2::OutputWriterInner::set_channel_publisher`]
     /// and [`crate::iceoryx2::OutputWriterInner::add_channel_link`].
     pub fn iceoryx2_output_writer_inner(&self) -> Option<Arc<crate::iceoryx2::OutputWriterInner>> {
-        match self {
-            Self::LegacyDyn(inner) => inner.iceoryx2_output_writer_inner(),
-        }
+        self.0.iceoryx2_output_writer_inner()
     }
 
     /// Borrow the host-side `InputMailboxesInner` Arc this
@@ -160,9 +136,7 @@ impl ProcessorInstance {
     pub fn iceoryx2_input_mailboxes_inner(
         &self,
     ) -> Option<Arc<crate::iceoryx2::InputMailboxesInner>> {
-        match self {
-            Self::LegacyDyn(inner) => inner.iceoryx2_input_mailboxes_inner(),
-        }
+        self.0.iceoryx2_input_mailboxes_inner()
     }
 
     /// Install host-allocated iceoryx2 inner Arcs into this
@@ -183,47 +157,33 @@ impl ProcessorInstance {
         let input_inner =
             needs_inputs.then(|| Arc::new(crate::iceoryx2::InputMailboxesInner::new()));
 
-        match self {
-            Self::LegacyDyn(inner) => {
-                let ow = output_inner
-                    .clone()
-                    .map(crate::iceoryx2::OutputWriter::from_inner_arc);
-                let im = input_inner
-                    .clone()
-                    .map(crate::iceoryx2::InputMailboxes::from_inner_arc);
-                inner.set_iceoryx2_resources(ow, im)
-            }
+        {
+            let ow = output_inner
+                .clone()
+                .map(crate::iceoryx2::OutputWriter::from_inner_arc);
+            let im = input_inner
+                .clone()
+                .map(crate::iceoryx2::InputMailboxes::from_inner_arc);
+            self.0.set_iceoryx2_resources(ow, im)
         }
     }
 
     pub fn apply_config_json(&mut self, config_json: &serde_json::Value) -> Result<()> {
-        match self {
-            Self::LegacyDyn(inner) => inner.apply_config_json(config_json),
-        }
+        self.0.apply_config_json(config_json)
     }
 
     pub fn to_runtime_json(&self) -> serde_json::Value {
-        match self {
-            Self::LegacyDyn(inner) => inner.to_runtime_json(),
-        }
+        self.0.to_runtime_json()
     }
 
     pub fn config_json(&self) -> serde_json::Value {
-        match self {
-            Self::LegacyDyn(inner) => inner.config_json(),
-        }
+        self.0.config_json()
     }
 
-    /// Downcast handle. Only meaningful for the LegacyDyn variant —
-    /// cdylib-registered processors return a placeholder reference
-    /// that downcasts to nothing. Used by the host's compiler ops to
-    /// reach host-only subprocess host wrappers
-    /// (`PythonNativeSubprocessHostProcessor`, `DenoSubprocessHostProcessor`)
-    /// which only register via the legacy path.
+    /// Downcast handle. Used by the host's compiler ops to reach
+    /// host-only subprocess host wrappers.
     pub fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        match self {
-            Self::LegacyDyn(inner) => inner.as_any_mut(),
-        }
+        self.0.as_any_mut()
     }
 }
 
@@ -624,7 +584,7 @@ impl ProcessorInstanceFactory {
         })?;
 
         let RegistrationKind::LegacyDyn { constructor } = registration;
-        let mut instance = ProcessorInstance::LegacyDyn(constructor(node)?);
+        let mut instance = ProcessorInstance::new(constructor(node)?);
         instance.install_iceoryx2_resources()?;
         Ok(instance)
     }
