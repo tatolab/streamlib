@@ -44,8 +44,25 @@ impl Runner {
         })?;
 
         let identity = descriptor.name.clone();
-        let vtable = crate::core::plugin::processor_vtable::vtable_for::<P>();
-        PROCESSOR_REGISTRY.register_via_vtable(descriptor, vtable, /* cdylib_resident */ false)?;
+        // Host-compiled Rust types register through the same
+        // trait-object path as subprocess hosts.
+        let constructor: crate::core::processors::DynamicProcessorConstructorFn = Box::new(
+            |node: &crate::core::graph::ProcessorNode| -> Result<
+                Box<dyn crate::core::processors::DynGeneratedProcessor + Send>,
+            > {
+                let config: P::Config = match &node.config {
+                    Some(json) => serde_json::from_value(json.clone()).map_err(|e| {
+                        Error::Configuration(format!(
+                            "config does not match {}'s Config type: {e}",
+                            std::any::type_name::<P>()
+                        ))
+                    })?,
+                    None => P::Config::default(),
+                };
+                Ok(Box::new(P::from_config(config)?))
+            },
+        );
+        PROCESSOR_REGISTRY.register_dynamic(descriptor, constructor)?;
 
         Ok(ProcessorTypeReference::new(
             identity.org,

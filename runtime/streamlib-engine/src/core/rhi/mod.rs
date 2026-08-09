@@ -18,7 +18,6 @@ mod index_buffer;
 mod pixel_buffer;
 mod pixel_buffer_pool;
 mod pixel_buffer_ref;
-pub(crate) mod plugin_abi_bridge;
 mod ray_tracing_kernel;
 mod storage_buffer;
 pub(crate) mod texture;

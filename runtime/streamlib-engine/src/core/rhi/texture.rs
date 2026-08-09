@@ -3,19 +3,14 @@
 
 //! RHI texture abstraction.
 //!
-//! Layout-stable `(handle, vtable, cached POD)` shape: every field
-//! is either a primitive or an opaque pointer, so the type
-//! round-trips across the plugin ABI unchanged. The
-//! handle is `Arc::into_raw(Arc<TextureInner>)` produced by host
-//! code; the vtable's `clone_texture` / `drop_texture` callbacks
-//! manage the Arc refcount in host-compiled code, so Clone/Drop
-//! work correctly regardless of the cdylib's compiled `Arc` layout.
+//! `(handle, cached POD)` shape: the handle is
+//! `Arc::into_raw(Arc<TextureInner>)`; Clone/Drop refcount it directly.
 //!
 //! Platform-specific Arcs (`HostVulkanTexture` on Linux,
 //! `MetalTexture` on macOS, `DX12Texture` on Windows) live on the
 //! private [`TextureInner`] type behind the opaque handle. Engine code
 //! reaches them via the [`crate::host_rhi::HostTextureExt`] extension
-//! trait; cdylib code never sees them.
+//! trait.
 //!
 //! `TextureFormat` and `TextureUsages` are defined in
 //! [`streamlib_consumer_rhi`] so subprocess-shape dep graphs can name
@@ -27,7 +22,6 @@ use std::ffi::c_void;
 use std::sync::Arc;
 
 use streamlib_consumer_rhi::{TextureFormat, TextureUsages};
-use streamlib_plugin_abi::GpuContextLimitedAccessVTable;
 
 /// Platform-specific native handle for cross-framework texture sharing.
 ///
@@ -89,9 +83,7 @@ impl<'a> TextureDescriptor<'a> {
     }
 }
 
-/// Host-only rich data backing a [`Texture`]. Cdylib code never sees
-/// this type; it reaches the public [`Texture`] surface through the
-/// `(handle, vtable, POD)` PluginAbiObject.
+/// Rich data backing a [`Texture`], held behind the opaque handle.
 ///
 /// Holds the platform-specific Arc(s) the engine RHI and surface
 /// adapters need (raw `VkImage`, `MTLTexture`, IOSurface, etc.).
@@ -152,27 +144,14 @@ impl TextureInner {
 
 /// Platform-agnostic texture wrapper.
 ///
-/// Layout-stable: every field is either a primitive or an opaque
-/// pointer. The platform-specific [`TextureInner`] is hidden behind
-/// the opaque `handle`; engine-internal callers reach it through the
-/// [`crate::host_rhi::HostTextureExt`] extension trait, cdylib callers
-/// route through the vtable.
-///
-/// Clone bumps the host's `Arc<TextureInner>` strong count via
-/// [`GpuContextLimitedAccessVTable::clone_texture`]; Drop decrements
-/// via [`GpuContextLimitedAccessVTable::drop_texture`]. Both run in
-/// host-compiled code regardless of the calling plugin.
-#[repr(C)]
+/// The platform-specific [`TextureInner`] is hidden behind the opaque
+/// `handle`; engine-internal callers reach it through the
+/// [`crate::host_rhi::HostTextureExt`] extension trait. Clone bumps the
+/// `Arc<TextureInner>` strong count and Drop decrements it.
 pub struct Texture {
     /// Opaque handle to the host's `Arc<TextureInner>` (produced by
     /// `Arc::into_raw`).
     pub(crate) handle: *const c_void,
-    /// Vtable for plugin ABI Clone/Drop dispatch. Resolved through the
-    /// plugin-ABI-routed accessor at construction; host mode points at
-    /// `&HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`, cdylib mode at the
-    /// host-installed pointer from
-    /// `HostServices::gpu_context_limited_access_vtable`.
-    pub(crate) vtable: *const GpuContextLimitedAccessVTable,
     /// Cached width (queried once at construction).
     pub(crate) width_cached: u32,
     /// Cached height (queried once at construction).
@@ -188,9 +167,7 @@ pub struct Texture {
 
 // SAFETY: `handle` points at an `Arc<TextureInner>` whose interior is
 // Send+Sync (platform-specific texture types — `HostVulkanTexture`,
-// `MetalTexture`, `DX12Texture` — are themselves Send+Sync). Refcount
-// management crosses the cdylib boundary through the vtable, but the
-// underlying Arc bookkeeping runs in host-compiled code regardless.
+// `MetalTexture`, `DX12Texture` — are themselves Send+Sync).
 unsafe impl Send for Texture {}
 unsafe impl Sync for Texture {}
 
@@ -217,10 +194,8 @@ impl Texture {
         format: TextureFormat,
     ) -> Self {
         let handle = Arc::into_raw(arc) as *const c_void;
-        let vtable = crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
         Self {
             handle,
-            vtable,
             width_cached: width,
             height_cached: height,
             format_raw: format as u32,
@@ -228,82 +203,20 @@ impl Texture {
         }
     }
 
-    /// Assemble a [`Texture`] PluginAbiObject from a raw `Arc::into_raw`-
-    /// shaped handle plus cached POD bytes. Used by cdylib-side
-    /// dispatch paths that receive a freshly-cloned handle through
-    /// a plugin ABI out-parameter (e.g.
-    /// [`crate::core::context::TextureRing::acquire_next`] in cdylib
-    /// mode) — the host wrapper bumped the texture's Arc through
-    /// the limited-access vtable's `clone_texture` slot, and the
-    /// returned [`Texture`] owns the matching `Drop`-side decrement
-    /// when it falls out of scope.
-    ///
-    /// The vtable pointer is resolved through the plugin-ABI-routed
-    /// accessor [`crate::core::plugin::host_services::host_gpu_context_limited_access_vtable`]
-    /// so cdylib code reaches the host's pointer (matching the
-    /// `clone_texture` slot used to mint the handle) and host code
-    /// reaches its own static.
-    ///
-    /// # Safety
-    ///
-    /// `handle` must come from a host-side
-    /// `Arc::into_raw(Arc<TextureInner>)` whose Arc strong count
-    /// the caller is responsible for (one strong count per
-    /// returned [`Texture`]). `format_raw` must match
-    /// [`TextureFormat`]'s `#[repr(u32)]` discriminant for the
-    /// texture's actual format; out-of-range values fall back to
-    /// `Rgba8Unorm` via [`Self::format`].
-    pub(crate) unsafe fn from_raw_handle_for_cdylib(
-        handle: *const c_void,
-        width: u32,
-        height: u32,
-        format_raw: u32,
-    ) -> Self {
-        let vtable = crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
-        Self {
-            handle,
-            vtable,
-            width_cached: width,
-            height_cached: height,
-            format_raw,
-            _padding: 0,
-        }
-    }
-
-    /// Engine-internal borrow of the host-owned [`TextureInner`].
-    ///
-    /// **Panics if called from cdylib code.** The `TextureInner` type's
-    /// in-memory layout is host-private; cdylib code that reads it
-    /// would deref host-written bytes under cdylib's view of
-    /// `TextureInner`'s layout, which is UB under the deployment model
-    /// the plugin ABI supports.
-    ///
-    /// The panic is caught by `run_host_extern_c` at the plugin ABI
-    /// (host extern "C" callbacks all route through `catch_unwind`),
-    /// so a misconfigured cdylib reaching this method gets a clean
-    /// "callback panicked" log entry instead of UB.
+    /// Engine-internal borrow of the owned [`TextureInner`].
     pub(crate) fn host_inner(&self) -> &TextureInner {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "Texture::host_inner() reached from cdylib code; this method must \
-                 dispatch through the GpuContextLimitedAccessVTable. The panic is \
-                 caught by run_host_extern_c at the plugin ABI."
-            );
-        }
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<TextureInner>)`
         // (see `from_arc_into_raw`). The leaked strong count keeps the
         // `TextureInner` alive at least until `Drop` runs.
         unsafe { &*(self.handle as *const TextureInner) }
     }
 
-    /// Texture width in pixels. Cached at construction; pure field
-    /// read with no plugin ABI dispatch.
+    /// Texture width in pixels. Cached at construction; pure field read.
     pub fn width(&self) -> u32 {
         self.width_cached
     }
 
-    /// Texture height in pixels. Cached at construction; pure field
-    /// read with no plugin ABI dispatch.
+    /// Texture height in pixels. Cached at construction; pure field read.
     pub fn height(&self) -> u32 {
         self.height_cached
     }
@@ -384,34 +297,13 @@ impl Texture {
         }
         #[cfg(target_os = "linux")]
         {
-            // Linux DMA-BUF export is plugin ABI safe: the slot returns
-            // the FD as a primitive `i64` (sentinel `-1` encodes
-            // `None`), which never crosses an Arc<TextureInner>
-            // layout boundary. Host mode resolves the slot pointer
-            // to `&HOST_GPU_CONTEXT_LIMITED_ACCESS_VTABLE`'s callback
-            // (which in turn calls `HostVulkanTexture::export_dma_buf_fd`);
-            // cdylib mode resolves to the host-installed pointer
-            // routed through `HostServices::gpu_context_limited_access_vtable`.
-            if self.handle.is_null() || self.vtable.is_null() {
+            if self.handle.is_null() {
                 return None;
             }
-            // SAFETY: `vtable` and `handle` were paired at construction
-            // by `from_arc_into_raw` / `from_raw_handle_for_cdylib`;
-            // the `texture_native_dma_buf_fd` slot accepts the texture
-            // handle directly and returns `-1` (no FD) or a non-
-            // negative `RawFd` widened to `i64`.
-            let fd_i64 = unsafe { ((*self.vtable).texture_native_dma_buf_fd)(self.handle) };
-            if fd_i64 < 0 {
-                None
-            } else {
-                // `get_memory_fd_khr` returns standard kernel FDs
-                // which always fit in i32; the i64 widening is purely
-                // forward-compat. A truncating cast here would
-                // silently corrupt the FD, so reject and treat as
-                // `None` rather than hand back garbage.
-                i32::try_from(fd_i64)
-                    .ok()
-                    .map(|fd| NativeTextureHandle::DmaBuf { fd })
+            use crate::host_rhi::HostTextureExt;
+            match self.vulkan_inner().export_dma_buf_fd() {
+                Ok(fd) => Some(NativeTextureHandle::DmaBuf { fd }),
+                Err(_) => None,
             }
         }
         #[cfg(target_os = "windows")]
@@ -482,18 +374,15 @@ impl Texture {
 
 impl Clone for Texture {
     fn clone(&self) -> Self {
-        if !self.handle.is_null() && !self.vtable.is_null() {
-            // SAFETY: vtable + handle were paired at construction by
-            // `from_arc_into_raw`; the vtable's `clone_texture` contract
-            // is `Arc::increment_strong_count(handle)` on the host side.
-            // Balanced by the Drop impl below.
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Arc::into_raw(Arc<TextureInner>)`
+            // (see `from_arc_into_raw`); balanced by the Drop impl below.
             unsafe {
-                ((*self.vtable).clone_texture)(self.handle);
+                Arc::increment_strong_count(self.handle as *const TextureInner);
             }
         }
         Self {
             handle: self.handle,
-            vtable: self.vtable,
             width_cached: self.width_cached,
             height_cached: self.height_cached,
             format_raw: self.format_raw,
@@ -504,14 +393,11 @@ impl Clone for Texture {
 
 impl Drop for Texture {
     fn drop(&mut self) {
-        if !self.handle.is_null() && !self.vtable.is_null() {
+        if !self.handle.is_null() {
             // SAFETY: matched with the `Arc::into_raw` in
-            // `from_arc_into_raw` and any `clone_texture` bumps.
-            // `drop_texture` decrements the host-side Arc; when refcount
-            // hits zero the underlying `TextureInner` is freed in
-            // host-compiled code.
+            // `from_arc_into_raw` and any `Clone` increment.
             unsafe {
-                ((*self.vtable).drop_texture)(self.handle);
+                Arc::decrement_strong_count(self.handle as *const TextureInner);
             }
         }
     }
@@ -534,28 +420,6 @@ impl std::fmt::Debug for Texture {
 #[cfg(all(test, target_pointer_width = "64"))]
 mod layout_tests {
     use super::*;
-    use core::mem::{align_of, offset_of, size_of};
-
-    #[test]
-    fn texture_layout() {
-        // Pin the byte-level shape of the plugin ABI
-        // `Texture`. Fields:
-        //   handle       : *const c_void  → offset 0,  size 8
-        //   vtable       : *const VTable  → offset 8,  size 8
-        //   width_cached : u32            → offset 16, size 4
-        //   height_cached: u32            → offset 20, size 4
-        //   format_raw   : u32            → offset 24, size 4
-        //   _padding     : u32            → offset 28, size 4
-        // Total: 32 bytes, 8-byte alignment (pinned by the pointer fields).
-        assert_eq!(size_of::<Texture>(), 32);
-        assert_eq!(align_of::<Texture>(), 8);
-        assert_eq!(offset_of!(Texture, handle), 0);
-        assert_eq!(offset_of!(Texture, vtable), 8);
-        assert_eq!(offset_of!(Texture, width_cached), 16);
-        assert_eq!(offset_of!(Texture, height_cached), 20);
-        assert_eq!(offset_of!(Texture, format_raw), 24);
-        assert_eq!(offset_of!(Texture, _padding), 28);
-    }
 
     /// Compile-time witness that `Texture` is Send + Sync.
     #[test]

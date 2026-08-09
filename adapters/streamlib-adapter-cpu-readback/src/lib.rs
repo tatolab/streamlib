@@ -30,7 +30,6 @@
 
 mod adapter;
 mod context;
-mod host_vtable;
 mod state;
 mod view;
 
@@ -39,7 +38,6 @@ pub use adapter::{
     InProcessCpuReadbackCopyTrigger, TriggerPlane,
 };
 pub use context::CpuReadbackContext;
-pub use host_vtable::host_cpu_readback_surface_adapter_vtable;
 pub use state::HostSurfaceRegistration;
 pub use streamlib_consumer_rhi::VulkanLayout;
 pub use view::{

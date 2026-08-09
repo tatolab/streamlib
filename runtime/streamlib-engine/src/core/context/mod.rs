@@ -2,13 +2,11 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 mod audio_clock;
-mod audio_clock_shim;
 #[cfg(target_os = "linux")]
 mod compute_kernel_bridge;
 #[cfg(target_os = "linux")]
 mod cpu_readback_bridge;
 pub(crate) mod escalate_gate;
-pub(crate) mod escalate_scope_registry;
 #[cfg(target_os = "linux")]
 mod device_export_staging;
 mod gpu_context;
@@ -18,7 +16,6 @@ pub(crate) mod isolation;
 #[cfg(target_os = "linux")]
 mod ray_tracing_kernel_bridge;
 mod runtime_context;
-mod runtime_ops_shim;
 pub(crate) mod surface_store;
 pub mod texture_pool;
 pub(crate) mod texture_registration;
@@ -29,7 +26,6 @@ pub use audio_clock::{
     AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext, SharedAudioClock,
     SoftwareAudioClock,
 };
-pub use audio_clock_shim::AudioClockShim;
 #[cfg(target_os = "linux")]
 pub use compute_kernel_bridge::ComputeKernelBridge;
 #[cfg(target_os = "linux")]
@@ -59,7 +55,6 @@ pub use ray_tracing_kernel_bridge::{
 pub use isolation::IsolationTier;
 pub(crate) use isolation::FullAccessGrant;
 pub use runtime_context::{RuntimeContext, RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-pub use runtime_ops_shim::RuntimeOpsShim;
 pub use surface_store::SurfaceStore;
 pub use texture_pool::*;
 pub use texture_registration::TextureRegistration;

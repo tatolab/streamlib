@@ -211,27 +211,6 @@ impl PubSub {
     /// 1. All subscribers of the specific topic
     /// 2. All subscribers of `topics::ALL` (wildcard)
     pub fn publish(&self, topic: &str, event: &Event) {
-        if let Some(cbs) = crate::core::plugin::host_services::host_callbacks() {
-            // Cdylib path: forward to the host via the callback
-            // table. The host's `PUBSUB` does the iceoryx2 work.
-            let bytes = match rmp_serde::to_vec_named(event) {
-                Ok(b) => b,
-                Err(e) => {
-                    tracing::warn!("Failed to serialize event for plugin ABI forwarding: {}", e);
-                    return;
-                }
-            };
-            unsafe {
-                (cbs.pubsub_publish)(
-                    cbs.host,
-                    topic.as_ptr(),
-                    topic.len(),
-                    bytes.as_ptr(),
-                    bytes.len(),
-                );
-            }
-            return;
-        }
 
         let Some(runtime_id) = self.runtime_id.get() else {
             tracing::trace!(

@@ -57,43 +57,15 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-test-
 
-      # A folder-backed package commits no crate root: its `[lib] path` points
-      # at `_generated_rust_crate_root_/lib.rs`, which cargo resolves at target resolution —
-      # before any build script — so it cannot be a `build.rs` step. Off the
-      # monorepo the build orchestrator writes it; in-tree this is the
-      # generation site.
-      - name: Generate folder-backed crate roots
-        run: cargo run --locked -p xtask -- generate-crate-roots
-
-      # Unit-test gate. Runs the facade + the engine-free ABI crates' lib tests:
-      # streamlib-plugin-abi / -plugin-sdk carry the layout-regression, fingerprint,
-      # twin-drift and tier-1 wire-format locks — the guards against silent ABI
-      # layout drift (which corrupts the driver only in a separately-built .slpkg).
-      # These crates are pure-repr / engine-free, so they add no flaky or GPU tests.
-      # streamlib-macros carries the `#[processor]` field-attribute emission locks.
-      # streamlib-engine's lib tests (host-body tier-1 + engine twin) are a tracked
-      # follow-up, pending a fix to a parallel-run test flake — attribute_macro_test
-      # is named explicitly because it is the compile-level half of those emission
-      # locks and cannot live in the proc-macro crate's own lib tests.
+      # Unit-test gate. Runs the facade + macros lib tests plus the
+      # `#[processor]` emission locks. streamlib-macros carries the
+      # field-attribute emission locks; attribute_macro_test is named
+      # explicitly because it is the compile-level half of those locks
+      # and cannot live in the proc-macro crate's own lib tests.
+      # streamlib-engine's lib tests (host-body tier-1 + engine twin) are a
+      # tracked follow-up, pending a fix to a parallel-run test flake.
       - name: Run unit tests
         run: |
-          cargo test --locked -p streamlib -p streamlib-macros -p streamlib-plugin-abi -p streamlib-plugin-sdk -p streamlib-processor-extract --lib
+          cargo test --locked -p streamlib -p streamlib-macros --lib
           cargo test --locked -p streamlib-engine --test attribute_macro_test
 
-      # `--lib` above reaches neither of the two places the plugin declaration's
-      # anchor is actually witnessed. The `export_plugin_*` binaries each hold a
-      # whole cdylib-shaped `export_plugin!` invocation (a macro invocation
-      # cannot live in a `#[cfg(test)]` mod and still emit `#[no_mangle]
-      # STREAMLIB_PLUGIN`), and they read the emitted declaration's
-      # `abi_layout_fingerprint` / `build_identity` back — the load handshake's
-      # plugin-side source — plus the panic-containment leg, which aborts the
-      # binary rather than failing an assert. `real_package_reachability` resolves the
-      # `processors/` scan against real in-tree packages, so a package that
-      # moves its sources out of the scanned root fails here rather than by
-      # deriving the empty processor set. The compile-fail doctests are the only
-      # witnesses that an unanchored declaration stays a hard error; a doctest
-      # that starts compiling is invisible to every other target.
-      - name: Run plugin-ABI and processor-extract integration tests
-        run: |
-          cargo test --locked -p streamlib-plugin-abi -p streamlib-processor-extract --tests
-          cargo test --locked -p streamlib-plugin-abi -p streamlib-processor-extract --doc

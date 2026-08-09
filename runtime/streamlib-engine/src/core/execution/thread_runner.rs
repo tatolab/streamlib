@@ -640,7 +640,7 @@ mod tests {
             .unwrap();
         let notifier = service.notifier_builder().create().unwrap();
 
-        let mut instance = ProcessorInstance::LegacyDyn(Box::new(
+        let mut instance = ProcessorInstance::new(Box::new(
             <MockInputOnlyProcessor::Processor as crate::core::GeneratedProcessor>::from_config(
                 Default::default(),
             )

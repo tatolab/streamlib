@@ -90,7 +90,7 @@ Avoid the two failure modes:
 <!-- polyglot-venv-package-source-env learning removed 2026-07-12 — the
      hosted-daemon backend it described (and its auth-token / daemon-URL
      env surface) was dropped when the static file tree became the only
-     package source (see docs/architecture/package-source.md). The venv build now
+     package source. The venv build now
      derives `UV_INDEX` from the tree-root `STREAMLIB_PACKAGE_SOURCE`; the
      tokenless read shape means there is no token env var to forget. -->
 - [@docs/learnings/sandboxing-demo-content-pending-engine-feature.md](sandboxing-demo-content-pending-engine-feature.md) —

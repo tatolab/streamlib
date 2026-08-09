@@ -30,7 +30,6 @@
 mod adapter;
 mod context;
 mod egl;
-mod host_vtable;
 mod state;
 mod view;
 
@@ -39,6 +38,5 @@ pub use context::OpenGlContext;
 pub use egl::{
     DRM_FORMAT_ABGR8888, DRM_FORMAT_ARGB8888, EglRuntime, EglRuntimeError, OwnedMakeCurrentGuard,
 };
-pub use host_vtable::host_opengl_surface_adapter_vtable;
 pub use state::HostSurfaceRegistration;
 pub use view::{GL_TEXTURE_2D, GL_TEXTURE_EXTERNAL_OES, OpenGlReadView, OpenGlWriteView};

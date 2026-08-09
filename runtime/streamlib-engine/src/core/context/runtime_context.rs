@@ -6,11 +6,8 @@ use std::marker::PhantomData;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use streamlib_plugin_abi::RuntimeContextVTable;
-
 use super::{
-    AudioClockShim, GpuContext, GpuContextFullAccess, GpuContextLimitedAccess, RuntimeOpsShim,
-    SharedAudioClock, TimeContext,
+    GpuContext, GpuContextFullAccess, GpuContextLimitedAccess, SharedAudioClock, TimeContext,
 };
 use crate::core::graph::ProcessorUniqueId;
 use crate::core::runtime::{RuntimeOperations, RuntimeUniqueId};
@@ -629,10 +626,6 @@ pub struct RuntimeContextFullAccess<'a> {
     /// static vtable casts this back to `&RuntimeContext`; the cdylib
     /// treats it as opaque.
     handle: *const c_void,
-    /// Pointer to the host's [`RuntimeContextVTable`] (today
-    /// `HOST_RUNTIME_CONTEXT_VTABLE`). Every accessor on the shim
-    /// dispatches through here.
-    vtable: *const RuntimeContextVTable,
     gpu_full: GpuContextFullAccess,
     /// Limited-access handle held alongside the full-access one so privileged
     /// lifecycle methods (e.g. Manual-mode `start()` spawning a worker thread)
@@ -666,7 +659,6 @@ pub struct RuntimeContextFullAccess<'a> {
 #[repr(C)]
 pub struct RuntimeContextLimitedAccess<'a> {
     handle: *const c_void,
-    vtable: *const RuntimeContextVTable,
     gpu_limited: GpuContextLimitedAccess,
     _marker: PhantomData<&'a RuntimeContext>,
 }
@@ -687,7 +679,6 @@ impl<'a> RuntimeContextFullAccess<'a> {
     pub(crate) fn new(base: &'a RuntimeContext, _grant: super::isolation::FullAccessGrant) -> Self {
         Self {
             handle: base as *const RuntimeContext as *const c_void,
-            vtable: crate::core::plugin::host_services::host_runtime_context_vtable(),
             gpu_full: GpuContextFullAccess::new(base.gpu.clone()),
             gpu_limited: GpuContextLimitedAccess::new(base.gpu.clone()),
             _marker: PhantomData,
@@ -711,26 +702,26 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// Runtime unique id as an owned [`String`]. Routed through the
     /// [`RuntimeContextVTable::runtime_id_copy`] callback.
     pub fn runtime_id(&self) -> String {
-        unsafe { vtable_copy_runtime_id(self.handle, self.vtable) }
+        self.host_base().runtime_id().to_string()
     }
 
     /// Processor unique id as an owned [`String`], or `None` for the
     /// shared/global context. Routed through
     /// [`RuntimeContextVTable::processor_id_copy`].
     pub fn processor_id(&self) -> Option<String> {
-        unsafe { vtable_copy_processor_id(self.handle, self.vtable) }
+        self.host_base().processor_id().map(|id| id.to_string())
     }
 
     /// Whether this processor is currently paused. Routed through
     /// [`RuntimeContextVTable::is_paused`].
     pub fn is_paused(&self) -> bool {
-        unsafe { ((*self.vtable).is_paused)(self.handle) }
+        self.host_base().is_paused()
     }
 
     /// Whether processing should proceed (not paused). Routed through
     /// [`RuntimeContextVTable::should_process`].
     pub fn should_process(&self) -> bool {
-        unsafe { ((*self.vtable).should_process)(self.handle) }
+        self.host_base().should_process()
     }
 
     /// Host-owned audio clock as a typed plugin ABI shim. Backed by the
@@ -739,16 +730,8 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// host's [`AudioClockVTable`](streamlib_plugin_abi::AudioClockVTable)
     /// from `HostServices`. Borrow-scoped to the ctx; cannot outlive
     /// the lifecycle call.
-    pub fn audio_clock(&self) -> AudioClockShim<'a> {
-        let handle = unsafe { ((*self.vtable).audio_clock_handle)(self.handle) };
-        // SAFETY: in the host-engine build path the shim was
-        // constructed with a vtable produced by
-        // `host_runtime_context_vtable()`; the audio-clock vtable is
-        // accessed via the side-channel below. In a cdylib build the
-        // analogous vtable pointer comes from `HostServices`. Both
-        // sides receive the same pointer the host installed.
-        let acv = crate::core::plugin::host_services::host_audio_clock_vtable();
-        AudioClockShim::from_ffi(handle, acv)
+    pub fn audio_clock(&self) -> &SharedAudioClock {
+        self.host_base().audio_clock()
     }
 
     /// Host-owned runtime operations. Implements [`RuntimeOperations`]
@@ -773,117 +756,7 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// the [`RuntimeOpsVTable::clone_handle`](streamlib_plugin_abi::RuntimeOpsVTable)
     /// callback, so it too is sound to stash past `Runner::stop()`.
     pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
-        if crate::core::plugin::host_services::host_callbacks().is_none() {
-            return self.host_base().runtime();
-        }
-        let borrowed_handle = unsafe { ((*self.vtable).runtime_ops_handle)(self.handle) };
-        let rov = crate::core::plugin::host_services::host_runtime_ops_vtable();
-        // SAFETY: rov + borrowed_handle come from the engine's host
-        // services; clone_handle is contractually required (v2 ABI)
-        // and returns an owned handle the shim's Drop releases.
-        let owned_handle = unsafe { ((*rov).clone_handle)(borrowed_handle) };
-        RuntimeOpsShim::from_ffi(owned_handle, rov) as Arc<dyn RuntimeOperations>
-    }
-
-    /// Run `f` against a cdylib-shaped sibling
-    /// `RuntimeContextFullAccess` whose `gpu_full` is a `ScopeToken`-
-    /// flavored [`GpuContextFullAccess`] (instead of the `Boxed`
-    /// shape this struct holds by default).
-    ///
-    /// The cdylib-shaped sibling's
-    /// [`GpuContextFullAccess`] methods dispatch through the
-    /// FullAccess vtable (plugin ABI via fn pointers in cdylib
-    /// address space, direct via host callbacks in host address
-    /// space) instead of the host-only direct-deref `host_inner`
-    /// path the Boxed shape uses. That makes `ctx.gpu_full_access()`
-    /// methods (e.g. `host_vulkan_device_arc`) usable from cdylib-
-    /// resident processor `setup()` / `teardown()` bodies without
-    /// tripping the `host_inner` panic guard.
-    ///
-    /// Engine-internal lifecycle dispatch (see
-    /// [`crate::core::processors::ProcessorInstance::setup`]) uses
-    /// this to wrap each cdylib lifecycle callback. The scope
-    /// management mirrors the cdylib-mode path of
-    /// [`GpuContextLimitedAccess::escalate`]:
-    ///
-    /// 1. Acquire the escalate gate + register the scope (via
-    ///    [`crate::core::context::escalate_scope_registry::begin_escalate_scope`]).
-    /// 2. Build the `ScopeToken`-shaped sibling.
-    /// 3. Run `f` against it under `catch_unwind` so a panic from
-    ///    the closure still releases the gate.
-    /// 4. End the scope (releases gate) and run `wait_device_idle`
-    ///    on the sibling Arc — matching `escalate_in_process`'s
-    ///    post-closure semantics.
-    /// 5. Re-raise the closure panic (if any).
-    ///
-    /// The historical sandbox contract serialized privileged
-    /// setup() work via the same escalate gate, so this helper
-    /// preserves that serialization invariant. Same-thread re-entry
-    /// (a `setup()` body that itself calls `escalate(...)`) is
-    /// rejected at the gate level — see
-    /// [`crate::core::context::escalate_gate::EscalateGate`].
-    pub(crate) fn with_cdylib_scope<F, T>(&self, f: F) -> crate::core::error::Result<T>
-    where
-        F: FnOnce(&RuntimeContextFullAccess<'_>) -> crate::core::error::Result<T>,
-    {
-        use super::escalate_scope_registry::{begin_escalate_scope, end_escalate_scope_draining};
-        use std::panic::{AssertUnwindSafe, catch_unwind};
-
-        // Build the Arc<GpuContext> that backs the scope. The
-        // LimitedAccess's `host_inner` deref reaches the boxed
-        // `Arc<GpuContext>` that backs this context; the value
-        // clone here produces a fresh `GpuContext` whose Arc-
-        // wrapped fields (notably `escalate_gate`) share state
-        // with the original, so gate semantics still serialize
-        // across all clones.
-        let host_lim = &self.gpu_limited;
-        let host_gpu = host_lim.host_inner();
-        let gpu_arc = Arc::new(host_gpu.clone());
-
-        // begin_escalate_scope acquires the gate. If the caller
-        // somehow already holds the gate on this thread (the
-        // historical "escalate-from-setup" footgun), the gate
-        // panics with an actionable message before this returns.
-        let scope_token = begin_escalate_scope(gpu_arc);
-        let scope_full = GpuContextFullAccess::from_scope_token(
-            scope_token as *const c_void,
-            host_lim.handle,
-            host_lim.vtable,
-        );
-
-        // Sibling ctx — same RuntimeContext handle / vtable; same
-        // host-side gpu_limited (cloned via the LimitedAccess
-        // vtable's `clone_handle`); ScopeToken-shaped gpu_full.
-        // PhantomData reuses 'a so the sibling can't outlive the
-        // original.
-        let cdylib_ctx: RuntimeContextFullAccess<'_> = RuntimeContextFullAccess {
-            handle: self.handle,
-            vtable: self.vtable,
-            gpu_full: scope_full,
-            gpu_limited: host_lim.clone(),
-            _marker: PhantomData,
-        };
-
-        let call_result = catch_unwind(AssertUnwindSafe(|| f(&cdylib_ctx)));
-
-        // End the scope: drain the device (`wait_device_idle`) WHILE
-        // the escalate gate is still held, then release it. Running the
-        // wait after releasing the gate (the prior shape) raced another
-        // processor thread's gated `vkCreateComputePipelines` and
-        // corrupted the NVIDIA driver during the concurrent setup
-        // fan-out — see `end_escalate_scope_draining` and
-        // `docs/learnings/concurrent-vkdevicewaitidle-threading.md`.
-        let wait_result = match end_escalate_scope_draining(scope_token) {
-            Some(r) => r,
-            None => Ok(()),
-        };
-
-        match (call_result, wait_result) {
-            (Ok(Ok(value)), Ok(())) => Ok(value),
-            (Ok(Err(e)), _) => Err(e),
-            (Ok(Ok(_)), Err(e)) => Err(e),
-            (Err(payload), _) => std::panic::resume_unwind(payload),
-        }
+        self.host_base().runtime()
     }
 
     // ------------ Engine-internal host accessors ------------
@@ -927,7 +800,6 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
     pub(crate) fn new(base: &'a RuntimeContext) -> Self {
         Self {
             handle: base as *const RuntimeContext as *const c_void,
-            vtable: crate::core::plugin::host_services::host_runtime_context_vtable(),
             gpu_limited: GpuContextLimitedAccess::new(base.gpu.clone()),
             _marker: PhantomData,
         }
@@ -947,39 +819,31 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
     // ------------ ABI-mediated accessors ------------
 
     pub fn runtime_id(&self) -> String {
-        unsafe { vtable_copy_runtime_id(self.handle, self.vtable) }
+        self.host_base().runtime_id().to_string()
     }
 
     pub fn processor_id(&self) -> Option<String> {
-        unsafe { vtable_copy_processor_id(self.handle, self.vtable) }
+        self.host_base().processor_id().map(|id| id.to_string())
     }
 
     pub fn is_paused(&self) -> bool {
-        unsafe { ((*self.vtable).is_paused)(self.handle) }
+        self.host_base().is_paused()
     }
 
     pub fn should_process(&self) -> bool {
-        unsafe { ((*self.vtable).should_process)(self.handle) }
+        self.host_base().should_process()
     }
 
     /// Host-owned audio clock as a typed plugin ABI shim. See
     /// [`RuntimeContextFullAccess::audio_clock`].
-    pub fn audio_clock(&self) -> AudioClockShim<'a> {
-        let handle = unsafe { ((*self.vtable).audio_clock_handle)(self.handle) };
-        let acv = crate::core::plugin::host_services::host_audio_clock_vtable();
-        AudioClockShim::from_ffi(handle, acv)
+    pub fn audio_clock(&self) -> &SharedAudioClock {
+        self.host_base().audio_clock()
     }
 
     /// Host-owned runtime operations. See
     /// [`RuntimeContextFullAccess::runtime`].
     pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
-        if crate::core::plugin::host_services::host_callbacks().is_none() {
-            return self.host_base().runtime();
-        }
-        let borrowed_handle = unsafe { ((*self.vtable).runtime_ops_handle)(self.handle) };
-        let rov = crate::core::plugin::host_services::host_runtime_ops_vtable();
-        let owned_handle = unsafe { ((*rov).clone_handle)(borrowed_handle) };
-        RuntimeOpsShim::from_ffi(owned_handle, rov) as Arc<dyn RuntimeOperations>
+        self.host_base().runtime()
     }
 
     // ------------ Engine-internal host accessors ------------
@@ -992,69 +856,6 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
     /// Engine-internal: direct borrow of the host's `SharedAudioClock`.
     pub(crate) fn host_audio_clock(&self) -> &SharedAudioClock {
         self.host_base().audio_clock()
-    }
-}
-
-// =============================================================================
-// vtable helper trampolines (shared by both shim flavors)
-// =============================================================================
-
-/// Adapter that turns the ABI's `(out_buf, cap, out_len) -> usize` byte-copy
-/// callback into an owned `String`. Calls the callback twice when the
-/// initial scratch buffer is too small.
-///
-/// # Safety
-///
-/// `vtable` must point at a valid [`RuntimeContextVTable`] whose
-/// `runtime_id_copy` callback writes UTF-8 bytes.
-unsafe fn vtable_copy_runtime_id(
-    handle: *const c_void,
-    vtable: *const RuntimeContextVTable,
-) -> String {
-    // Most runtime ids are short (~26 bytes for cuid2 plus the "R" prefix).
-    // 64 bytes covers every reasonable id without a retry.
-    let mut scratch = [0u8; 64];
-    let mut written: usize = 0;
-    let required = unsafe {
-        ((*vtable).runtime_id_copy)(handle, scratch.as_mut_ptr(), scratch.len(), &mut written)
-    };
-    if required <= scratch.len() {
-        // SAFETY: callback documents UTF-8 bytes.
-        unsafe { String::from_utf8_unchecked(scratch[..written].to_vec()) }
-    } else {
-        let mut buf = vec![0u8; required];
-        let mut written2: usize = 0;
-        unsafe {
-            ((*vtable).runtime_id_copy)(handle, buf.as_mut_ptr(), buf.len(), &mut written2);
-        }
-        buf.truncate(written2);
-        unsafe { String::from_utf8_unchecked(buf) }
-    }
-}
-
-unsafe fn vtable_copy_processor_id(
-    handle: *const c_void,
-    vtable: *const RuntimeContextVTable,
-) -> Option<String> {
-    let mut scratch = [0u8; 64];
-    let mut written: usize = 0;
-    let required = unsafe {
-        ((*vtable).processor_id_copy)(handle, scratch.as_mut_ptr(), scratch.len(), &mut written)
-    };
-    if required < 0 {
-        return None;
-    }
-    let required = required as usize;
-    if required <= scratch.len() {
-        Some(unsafe { String::from_utf8_unchecked(scratch[..written].to_vec()) })
-    } else {
-        let mut buf = vec![0u8; required];
-        let mut written2: usize = 0;
-        unsafe {
-            ((*vtable).processor_id_copy)(handle, buf.as_mut_ptr(), buf.len(), &mut written2);
-        }
-        buf.truncate(written2);
-        Some(unsafe { String::from_utf8_unchecked(buf) })
     }
 }
 
@@ -1094,109 +895,6 @@ mod capability_view_tests {
 }
 
 #[cfg(test)]
-mod with_cdylib_scope_tests {
-    //! Lock-in for the invariant the #1072 engine fix relies on:
-    //! [`RuntimeContextFullAccess::with_cdylib_scope`] hands the closure a
-    //! sibling [`RuntimeContextFullAccess`] whose `gpu_full` is
-    //! `HandleKind::ScopeToken`-shaped (so cdylib bodies' direct
-    //! `ctx.gpu_full_access()` calls dispatch through the FullAccess
-    //! vtable instead of tripping the Boxed branch's `host_inner()`
-    //! panic guard).
-    //!
-    //! Mentally revert the `from_scope_token` call inside
-    //! `with_cdylib_scope` to `GpuContextFullAccess::new(...)` (Boxed
-    //! shape) — this test fails because the closure sees
-    //! `HandleKind::Boxed`, which is exactly the bug #1072 is fixing.
-    //! Sibling tests at the gate layer
-    //! ([`super::escalate_gate::tests::same_thread_reentry_panics`])
-    //! and at the spawn-op layer
-    //! (`rust_processor_setup_phase_does_not_hold_gate_against_concurrent_escalate`)
-    //! lock different invariants; this one specifically locks the
-    //! ScopeToken-shape claim.
-
-    use super::super::gpu_context::HandleKind;
-    use super::*;
-    use crate::core::context::GpuContext;
-    use serial_test::serial;
-
-    fn gpu_or_skip(test_name: &str) -> Option<GpuContext> {
-        match GpuContext::init_for_platform_sync() {
-            Ok(gpu) => Some(gpu),
-            Err(e) => {
-                tracing::warn!("{test_name}: no GPU device ({e}) — skipping");
-                None
-            }
-        }
-    }
-
-    /// Hand-construct a [`RuntimeContextFullAccess`] from just a
-    /// [`GpuContext`] — bypasses the full [`RuntimeContext::new`]
-    /// requires (tokio handle, iceoryx2 node, runtime ops, audio
-    /// clock, surface socket). `with_cdylib_scope` only touches
-    /// `gpu_limited.host_inner()` and the sibling's struct fields,
-    /// so the runtime-side fields can stay null for this assertion.
-    ///
-    /// Invariant the null handle/vtable rely on: `with_cdylib_scope`
-    /// must NOT vtable-dispatch on the ctx itself (i.e., must not
-    /// reach `(*self.vtable).…(self.handle)` against the runtime-
-    /// context vtable). Today it only copies them as opaque pointers
-    /// into the sibling — if a future revision adds a runtime-context
-    /// vtable call, this test stops being safe and the helper needs
-    /// to build a real RuntimeContext.
-    fn ctx_from_gpu(gpu: GpuContext) -> RuntimeContextFullAccess<'static> {
-        RuntimeContextFullAccess {
-            handle: std::ptr::null(),
-            vtable: std::ptr::null(),
-            gpu_full: GpuContextFullAccess::new(gpu.clone()),
-            gpu_limited: GpuContextLimitedAccess::new(gpu),
-            _marker: PhantomData,
-        }
-    }
-
-    #[test]
-    #[serial]
-    fn closure_receives_scope_token_full_access() {
-        const TEST: &str = "closure_receives_scope_token_full_access";
-        let Some(gpu) = gpu_or_skip(TEST) else {
-            return;
-        };
-
-        let outer_ctx = ctx_from_gpu(gpu);
-        // The outer ctx's gpu_full is Boxed by design — that's what
-        // host-internal callers use directly via `host_inner()`.
-        assert_eq!(
-            outer_ctx.gpu_full.handle_kind,
-            HandleKind::Boxed,
-            "{TEST}: outer (host-internal) ctx must hold a Boxed FullAccess; \
-             ScopeToken there would break in-process host callers that deref \
-             the handle as `*const Arc<GpuContext>`"
-        );
-
-        // The closure's sibling ctx must hold a ScopeToken FullAccess.
-        // That's the load-bearing claim: cdylib bodies' direct
-        // `ctx.gpu_full_access()` calls dispatch through the
-        // FullAccess vtable, NOT the host_inner() panic guard.
-        //
-        // Mentally revert `with_cdylib_scope`'s
-        // `GpuContextFullAccess::from_scope_token(...)` to
-        // `GpuContextFullAccess::new(host_gpu.clone())` (the Boxed
-        // shape) — this assertion fails because the closure sees
-        // `HandleKind::Boxed`, which is exactly the bug #1072 fixes.
-        let result: crate::core::error::Result<()> = outer_ctx.with_cdylib_scope(|cdylib_ctx| {
-            assert_eq!(
-                cdylib_ctx.gpu_full.handle_kind,
-                HandleKind::ScopeToken,
-                "{TEST}: cdylib-scope sibling must hold a ScopeToken \
-                     FullAccess — this is the engine-fix invariant #1072 \
-                     relies on"
-            );
-            Ok(())
-        });
-        result.unwrap_or_else(|e| panic!("{TEST}: with_cdylib_scope returned err: {e}"));
-    }
-}
-
-#[cfg(test)]
 mod host_runtime_ops_wiring_tests {
     //! Lock-in for the #1426 wiring fix: a host-resident processor's
     //! `ctx.runtime()` must reach the REAL Runner-backed ops, not the
@@ -1220,144 +918,6 @@ mod host_runtime_ops_wiring_tests {
     //! GPU-gated because a `RuntimeContext` embeds a `GpuContext` by value;
     //! the assertion itself needs no GPU work, only the context shell.
 
-    use super::*;
-    use crate::core::context::{
-        AudioClockConfig, GpuContext, SharedAudioClock, SoftwareAudioClock, TimeContext,
-    };
-    use crate::core::error::Error;
-    use crate::core::runtime::Runner;
-
-    fn gpu_or_skip(test_name: &str) -> Option<GpuContext> {
-        match GpuContext::init_for_platform_sync() {
-            Ok(gpu) => Some(gpu),
-            Err(e) => {
-                tracing::warn!("{test_name}: no GPU device ({e}) — skipping");
-                None
-            }
-        }
-    }
-
-    #[test]
-    fn host_ctx_runtime_reaches_real_runner_ops_not_the_shim() {
-        const TEST: &str = "host_ctx_runtime_reaches_real_runner_ops_not_the_shim";
-        // No plugin loaded in a plain lib test, so `host_callbacks()` is
-        // `None` — this build IS the host, exactly the branch under test.
-        assert!(
-            crate::core::plugin::host_services::host_callbacks().is_none(),
-            "{TEST}: precondition — a plain lib test has no host callbacks installed"
-        );
-
-        let Some(gpu) = gpu_or_skip(TEST) else {
-            return;
-        };
-
-        let runner = Runner::new().expect("runner builds");
-        let runtime_ops: Arc<dyn RuntimeOperations> =
-            Arc::clone(&runner) as Arc<dyn RuntimeOperations>;
-
-        let tokio_runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("current-thread tokio runtime");
-        let node = Iceoryx2Node::new().expect("iceoryx2 node");
-        let audio_clock: SharedAudioClock =
-            Arc::new(SoftwareAudioClock::new(AudioClockConfig::default()));
-
-        let base = RuntimeContext::new(
-            gpu,
-            Arc::new(TimeContext::new()),
-            Arc::new(RuntimeUniqueId::new()),
-            runtime_ops,
-            tokio_runtime.handle().clone(),
-            node,
-            audio_clock,
-            #[cfg(target_os = "linux")]
-            std::path::PathBuf::from("/tmp/streamlib-test-tap-wiring.sock"),
-        );
-
-        // The FullAccess ctor is grant-gated (the isolation capability moat);
-        // a test standing in for lifecycle dispatch mints a grant from the
-        // trusted tier, exactly as `thread_runner` does at teardown.
-        let grant = crate::core::context::isolation::IsolationTier::TrustedInstalled
-            .grant_full_access()
-            .expect("TrustedInstalled mints a FullAccessGrant");
-        let ctx = RuntimeContextFullAccess::new(&base, grant);
-        let err = tokio_runtime.block_on(async {
-            ctx.runtime()
-                .tap_async("no-such-channel".to_string(), None)
-                .await
-                .expect_err("tapping an unwired channel must fail")
-        });
-
-        assert!(
-            matches!(err, Error::TapChannelNotFound(_)),
-            "{TEST}: host-resident ctx.runtime() must reach the real Runner ops so an unwired \
-             channel surfaces TapChannelNotFound; the RuntimeOpsShim would answer NotSupported. \
-             got {err:?}"
-        );
-    }
+    use crate::core::context::GpuContext;
 }
 
-// =============================================================================
-// Layout regression tests
-// =============================================================================
-//
-// `RuntimeContextFullAccess` / `RuntimeContextLimitedAccess` cross the plugin
-// ABI by raw-pointer reinterpret — the host builds the struct
-// (`processor_instance_factory.rs`) and a cdylib reads its fields directly
-// (`processor_vtable.rs`). They are `#[repr(C)]` so that layout is identical
-// across the host build and a separately-built plugin (`streamlib-plugin-sdk`),
-// which compiles a layout-matched twin. These assertions pin the byte shape;
-// the SDK twin asserts the SAME numbers, so a field added to one side but not
-// the other trips a test rather than corrupting field reads at runtime.
-#[cfg(all(test, target_pointer_width = "64"))]
-mod layout_tests {
-    use super::*;
-    use core::mem::{align_of, offset_of, size_of};
-
-    #[test]
-    fn gpu_context_view_sizes_are_pinned() {
-        // The RuntimeContext views embed these by value, so their sizes are
-        // load-bearing for the outer offsets below.
-        assert_eq!(size_of::<GpuContextFullAccess>(), 40);
-        assert_eq!(align_of::<GpuContextFullAccess>(), 8);
-        assert_eq!(size_of::<GpuContextLimitedAccess>(), 16);
-        assert_eq!(align_of::<GpuContextLimitedAccess>(), 8);
-    }
-
-    #[test]
-    fn runtime_context_full_access_layout() {
-        // handle      : *const c_void          → offset 0,  size 8
-        // vtable      : *const RuntimeContextVTable → offset 8, size 8
-        // gpu_full    : GpuContextFullAccess (40) → offset 16
-        // gpu_limited : GpuContextLimitedAccess (16) → offset 56
-        // _marker     : PhantomData (ZST)       → offset 72
-        // Total: 72 bytes, 8-byte alignment.
-        assert_eq!(size_of::<RuntimeContextFullAccess<'static>>(), 72);
-        assert_eq!(align_of::<RuntimeContextFullAccess<'static>>(), 8);
-        assert_eq!(offset_of!(RuntimeContextFullAccess<'static>, handle), 0);
-        assert_eq!(offset_of!(RuntimeContextFullAccess<'static>, vtable), 8);
-        assert_eq!(offset_of!(RuntimeContextFullAccess<'static>, gpu_full), 16);
-        assert_eq!(
-            offset_of!(RuntimeContextFullAccess<'static>, gpu_limited),
-            56
-        );
-    }
-
-    #[test]
-    fn runtime_context_limited_access_layout() {
-        // handle      : *const c_void          → offset 0,  size 8
-        // vtable      : *const RuntimeContextVTable → offset 8, size 8
-        // gpu_limited : GpuContextLimitedAccess (16) → offset 16
-        // _marker     : PhantomData (ZST)       → offset 32
-        // Total: 32 bytes, 8-byte alignment.
-        assert_eq!(size_of::<RuntimeContextLimitedAccess<'static>>(), 32);
-        assert_eq!(align_of::<RuntimeContextLimitedAccess<'static>>(), 8);
-        assert_eq!(offset_of!(RuntimeContextLimitedAccess<'static>, handle), 0);
-        assert_eq!(offset_of!(RuntimeContextLimitedAccess<'static>, vtable), 8);
-        assert_eq!(
-            offset_of!(RuntimeContextLimitedAccess<'static>, gpu_limited),
-            16
-        );
-    }
-}

@@ -60,7 +60,7 @@ pub use vulkan_blitter::VulkanBlitter;
 #[cfg(target_os = "linux")]
 mod vulkan_tone_mapper;
 #[cfg(target_os = "linux")]
-pub use vulkan_tone_mapper::{TONE_MAPPER_WORKGROUP_SIZE, VulkanToneMapper};
+pub use vulkan_tone_mapper::VulkanToneMapper;
 
 pub(crate) mod vulkan_buffer;
 pub use vulkan_buffer::HostVulkanBuffer;
@@ -82,9 +82,6 @@ pub use vulkan_pipeline_flags::{VulkanAccess, VulkanStage};
 mod vulkan_command_recorder;
 #[cfg(target_os = "linux")]
 pub use vulkan_command_recorder::{ImageCopyRegion, RhiCommandRecorder};
-pub(crate) use vulkan_compute_kernel::VulkanComputeKernelInner;
-pub(crate) use vulkan_graphics_kernel::VulkanGraphicsKernelInner;
-pub(crate) use vulkan_ray_tracing_kernel::VulkanRayTracingKernelInner;
 // `RhiCommandRecorderInner` is needed by `core::plugin::host_services`
 // for `Box::from_raw` in `drop_command_recorder`. Crate-scope export.
 pub(crate) use vulkan_command_recorder::RhiCommandRecorderInner;
@@ -93,12 +90,11 @@ pub(crate) use vulkan_command_recorder::RhiCommandRecorderInner;
 mod vulkan_present_target;
 #[cfg(target_os = "linux")]
 pub use vulkan_present_target::{
-    AcquiredFrame, MAX_FRAMES_IN_FLIGHT, PresentFrame, PresentTarget, VulkanPresentTarget,
+    MAX_FRAMES_IN_FLIGHT, PresentFrame, PresentTarget, VulkanPresentTarget,
 };
 // `PresentTargetInner` is needed by `core::plugin::host_services` to
 // reclaim the `Box<Mutex<VulkanPresentTarget>>` in the `drop_present_target`
 // slot body + lock it in the method slot bodies.
-pub(crate) use vulkan_present_target::PresentTargetInner;
 
 #[cfg(target_os = "linux")]
 mod vulkan_present_compositor;
@@ -107,10 +103,6 @@ pub use vulkan_present_compositor::{PresentScalingMode, VulkanPresentCompositor}
 
 #[cfg(target_os = "linux")]
 mod vulkan_swapchain_colorspace;
-#[cfg(target_os = "linux")]
-pub use vulkan_swapchain_colorspace::{
-    SwapchainColorPick, build_hdr_metadata, pick_swapchain_format,
-};
 
 mod vulkan_texture_cache;
 pub use vulkan_texture_cache::VulkanTextureCache;
@@ -134,8 +126,6 @@ pub use vulkan_acceleration_structure::{
 // the host's clone/drop callbacks in `core::plugin::host_services`
 // need to reference it for `Arc::increment_strong_count` /
 // `Arc::decrement_strong_count`. Re-export at crate scope.
-#[cfg(target_os = "linux")]
-pub(crate) use vulkan_acceleration_structure::VulkanAccelerationStructureInner;
 
 #[cfg(target_os = "linux")]
 mod vulkan_ray_tracing_kernel;
@@ -159,7 +149,7 @@ pub use vulkan_video_session::{
 #[cfg(target_os = "linux")]
 mod vulkan_query_pool;
 #[cfg(target_os = "linux")]
-pub use vulkan_query_pool::{HostVulkanQueryPool, QueryPoolDescriptor, VideoEncodeFeedbackResult};
+pub use vulkan_query_pool::{HostVulkanQueryPool, QueryPoolDescriptor};
 
 #[cfg(target_os = "linux")]
 pub mod drm_modifier_probe;

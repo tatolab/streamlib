@@ -14,8 +14,6 @@ use std::path::PathBuf;
 use streamlib_jtd_codegen::{GenerateOptions, RuntimeTarget, generate};
 
 pub mod check_boundaries;
-pub mod check_cdylib_reach;
-pub mod check_consumer_rhi_repr;
 pub mod check_device_wait_idle;
 pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_in_process_placement;
@@ -155,16 +153,7 @@ enum Commands {
     CheckProcessorSpecNew,
 
 
-    /// CI gate for the cdylib-reachability invariant on engine `Host*`
-    /// constructors. Fails when any constructor-class method
-    /// (`new*` / `create*` / `from_*`) inside an `impl HostVulkan*`
-    /// block in the engine RHI references `host_inner()` or
-    /// `host_callbacks()` — those break the cdylib direct-call path
-    /// documented at `docs/architecture/cdylib-reachability.md`.
-    CheckCdylibReach,
-
-    /// CI gate for the escalate-from-lifecycle ban (anti-pattern #1
-    /// in `docs/architecture/cdylib-reachability.md`). Fails when
+    /// CI gate for the escalate-from-lifecycle ban. Fails when
     /// any fn taking `&RuntimeContextFullAccess<'_>` (typically
     /// `setup` / `teardown` / `setup_inner` / `teardown_inner`) calls
     /// `.escalate(...)` in its body. The lifecycle dispatch already
@@ -172,16 +161,6 @@ enum Commands {
     /// `EscalateGate::enter`. The xtask is defense-in-depth — catches
     /// the violation at PR review before the runtime panic fires.
     CheckNoEscalateInLifecycle,
-
-    /// CI gate for issue #1039's consumer-rhi `#[repr(...)]` discipline.
-    /// Fails when any `pub enum` in `runtime/streamlib-consumer-rhi/src/`
-    /// is missing an explicit `#[repr(...)]`, or when any
-    /// `pub struct X(T)` scalar tuple newtype is missing
-    /// `#[repr(transparent)]` / `#[repr(C)]`. Consumer-rhi POD types
-    /// cross the plugin FFI boundary as bare scalars; their byte
-    /// layout is part of the wire contract. See
-    /// `docs/architecture/subprocess-rhi-parity.md`.
-    CheckConsumerRhiRepr,
 
     /// CI gate for the `vkDeviceWaitIdle` threading discipline. Fails on any
     /// raw `device_wait_idle()` call in the engine outside the mutex-guarded
@@ -252,11 +231,9 @@ fn main() -> Result<()> {
         }
         Commands::CheckNoInventorySubmit => check_no_inventory_submit::run(&workspace_root()?)?,
         Commands::CheckProcessorSpecNew => check_processor_spec_new::run(&workspace_root()?)?,
-        Commands::CheckCdylibReach => check_cdylib_reach::run(&workspace_root()?)?,
         Commands::CheckNoEscalateInLifecycle => {
             check_no_escalate_in_lifecycle::run(&workspace_root()?)?
         }
-        Commands::CheckConsumerRhiRepr => check_consumer_rhi_repr::run(&workspace_root()?)?,
         Commands::CheckDeviceWaitIdle => check_device_wait_idle::run(&workspace_root()?)?,
         Commands::CheckVendoredVulkanalia => check_vendored_vulkanalia::run(&workspace_root()?)?,
     }

@@ -101,7 +101,7 @@ mod tests {
     use super::*;
     use crate::core::rhi::{TextureDescriptor, TextureFormat};
     use crate::vulkan::rhi::{HostVulkanDevice, HostVulkanTexture};
-    use std::sync::Arc;
+    
 
     #[cfg_attr(
         not(feature = "hardware-tests"),

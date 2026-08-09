@@ -838,7 +838,7 @@ fn test_swapchain_allocation_scenarios() {
     };
 
     // Build event loop ONCE — winit allows only one EventLoop per process on X11.
-    use winit::platform::run_on_demand::EventLoopExtRunOnDemand;
+    
     use winit::platform::x11::EventLoopBuilderExtX11;
 
     let mut event_loop = match EventLoop::builder().with_any_thread(true).build() {

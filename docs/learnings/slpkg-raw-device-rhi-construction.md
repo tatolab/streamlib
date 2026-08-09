@@ -1,5 +1,12 @@
 # Separately-built `.slpkg` GPU plugins must not hand-roll RHI on the raw `HostVulkanDevice`
 
+> **Historical (2026-08 — plugin ABI deleted).** The separately-built
+> `.slpkg` cdylib plugin mechanism this learning describes no longer
+> exists: #1715 deleted the plugin ABI, `core/plugin/`, and the `.slpkg`
+> format. The driver-corruption failure mode is closed by construction —
+> there is no cdylib boundary to transit a host type across. Retained for
+> the empirical record; nothing below describes current behaviour.
+
 ## Symptom
 
 A GPU streamlib package runs **end-to-end clean in-process / as a
@@ -113,8 +120,7 @@ a GPU package is plugin-safe; the only real test is a separate-build
 > identical size (permitted by `repr(Rust)`) would still load and could
 > still corrupt. A package's GPU code should never name
 > `HostVulkanDevice`, `VulkanComputeKernel::new`, or
-> `HostVulkanBuffer::new*` regardless of the load-time check. See
-> `docs/architecture/plugin-abi.md` → "Load handshake".
+> `HostVulkanBuffer::new*` regardless of the load-time check.
 
 > **Update 2026-07-18 (raw-`Arc` transit slots deleted).** The
 > `host_vulkan_device_arc`, `host_vulkan_texture_arc`, and

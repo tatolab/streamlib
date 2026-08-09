@@ -26,7 +26,6 @@ use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
 use std::ffi::c_void;
 
-use streamlib_plugin_abi::GpuContextFullAccessVTable;
 
 use crate::core::rhi::{ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, Texture};
 use crate::core::{Error, Result};
@@ -983,17 +982,13 @@ impl std::fmt::Debug for VulkanComputeKernelInner {
 /// test.
 ///
 /// The `push_constant_size()` POD getter reads from the cached
-/// field — no plugin ABI hop. The value is captured by
+/// field . The value is captured by
 /// [`Self::from_arc_into_raw`] at construction and never mutates
 /// over the kernel's lifetime.
 #[repr(C)]
 pub struct VulkanComputeKernel {
     /// Opaque handle to the host's `Arc<VulkanComputeKernelInner>`.
     pub(crate) handle: *const c_void,
-    /// Parent vtable for plugin ABI Clone/Drop dispatch (#918 Phase D).
-    pub(crate) vtable: *const GpuContextFullAccessVTable,
-    /// Per-type vtable for plugin ABI method dispatch (#907 Phase E).
-    pub(crate) methods_vtable: *const streamlib_plugin_abi::VulkanComputeKernelMethodsVTable,
     /// Cached push-constant size in bytes. Set at construction; fixed
     /// for the kernel's lifetime.
     pub(crate) cached_push_constant_size: u32,
@@ -1035,36 +1030,14 @@ impl VulkanComputeKernel {
     pub(crate) fn from_arc_into_raw(arc: Arc<VulkanComputeKernelInner>) -> Self {
         let cached_push_constant_size = arc.push_constant_size();
         let handle = Arc::into_raw(arc) as *const c_void;
-        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
-        let methods_vtable =
-            crate::core::plugin::host_services::host_vulkan_compute_kernel_methods_vtable();
         Self {
             handle,
-            vtable,
-            methods_vtable,
             cached_push_constant_size,
             _reserved_padding: 0,
         }
     }
 
     pub(crate) fn host_inner(&self) -> &VulkanComputeKernelInner {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "VulkanComputeKernel::host_inner() reached from cdylib code; \
-                 this method must dispatch through the GpuContextFullAccessVTable. \
-                 \
-                 Read docs/architecture/cdylib-reachability.md before workarounds. \
-                 The raw-vk::* methods (set_sampled_image_view, \
-                 set_combined_image_sampler_view, set_storage_image_view, \
-                 record) are mode-routed through the v5 \
-                 VulkanComputeKernelMethodsVTable slots; if you're reaching \
-                 host_inner() from one of those, the routing is broken — \
-                 check that host_callbacks() is installed and the methods \
-                 vtable pointer is non-null. Any other public method that \
-                 still routes through host_inner() in cdylib mode is a bug \
-                 — file a regression and route it through the methods vtable."
-            );
-        }
         unsafe { &*(self.handle as *const VulkanComputeKernelInner) }
     }
 
@@ -1083,9 +1056,6 @@ impl VulkanComputeKernel {
         binding: u32,
         buffer: &crate::core::rhi::PixelBuffer,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_storage_buffer_pixel_via_vtable(binding, buffer);
-        }
         self.host_inner().set_storage_buffer(binding, buffer)
     }
 
@@ -1098,9 +1068,6 @@ impl VulkanComputeKernel {
         binding: u32,
         buffer: &crate::core::rhi::StorageBuffer,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_storage_buffer_storage_via_vtable(binding, buffer);
-        }
         self.host_inner().set_storage_buffer(binding, buffer)
     }
 
@@ -1111,23 +1078,14 @@ impl VulkanComputeKernel {
         binding: u32,
         buffer: &crate::core::rhi::UniformBuffer,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_uniform_buffer_via_vtable(binding, buffer);
-        }
         self.host_inner().set_uniform_buffer(binding, buffer)
     }
 
     pub fn set_sampled_texture(&self, binding: u32, texture: &Texture) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_sampled_texture_via_vtable(binding, texture);
-        }
         self.host_inner().set_sampled_texture(binding, texture)
     }
 
     pub fn set_storage_image(&self, binding: u32, texture: &Texture) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_storage_image_via_vtable(binding, texture);
-        }
         self.host_inner().set_storage_image(binding, texture)
     }
 
@@ -1141,9 +1099,6 @@ impl VulkanComputeKernel {
     /// dispatch avoids the `host_inner()` panic guard. The Python /
     /// Deno consumer-rhi cdylibs don't link this code at all.
     pub(crate) fn set_sampled_image_view(&self, binding: u32, view: vk::ImageView) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_sampled_image_view_via_vtable(binding, view);
-        }
         self.host_inner().set_sampled_image_view(binding, view)
     }
 
@@ -1158,9 +1113,6 @@ impl VulkanComputeKernel {
         binding: u32,
         view: vk::ImageView,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_combined_image_sampler_view_via_vtable(binding, view);
-        }
         self.host_inner()
             .set_combined_image_sampler_view(binding, view)
     }
@@ -1171,9 +1123,6 @@ impl VulkanComputeKernel {
     /// See [`Self::set_sampled_image_view`] for the cdylib-routing
     /// rationale.
     pub(crate) fn set_storage_image_view(&self, binding: u32, view: vk::ImageView) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_storage_image_view_via_vtable(binding, view);
-        }
         self.host_inner().set_storage_image_view(binding, view)
     }
 
@@ -1181,9 +1130,6 @@ impl VulkanComputeKernel {
     /// through `host_inner`; in cdylib mode routes through the per-
     /// type methods vtable (#949 first slice).
     pub fn set_push_constants(&self, bytes: &[u8]) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_push_constants_via_vtable(bytes);
-        }
         self.host_inner().set_push_constants(bytes)
     }
 
@@ -1191,14 +1137,6 @@ impl VulkanComputeKernel {
     /// to [`Self::set_push_constants`]. Inherits its dispatch
     /// contract — vtable in cdylib mode, host_inner otherwise.
     pub fn set_push_constants_value<T: Copy>(&self, value: &T) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            // SAFETY: T is Copy + Sized so its layout is stable; the
-            // byte view is read-only and consumed inside the plugin ABI call.
-            let bytes = unsafe {
-                std::slice::from_raw_parts(value as *const T as *const u8, std::mem::size_of::<T>())
-            };
-            return self.dispatch_set_push_constants_via_vtable(bytes);
-        }
         self.host_inner().set_push_constants_value(value)
     }
 
@@ -1211,222 +1149,8 @@ impl VulkanComputeKernel {
         group_count_y: u32,
         group_count_z: u32,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_dispatch_via_vtable(group_count_x, group_count_y, group_count_z);
-        }
         self.host_inner()
             .dispatch(group_count_x, group_count_y, group_count_z)
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_push_constants_via_vtable(&self, bytes: &[u8]) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_push_constants: kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_push_constants)(
-                self.handle,
-                bytes.as_ptr(),
-                bytes.len(),
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_dispatch_via_vtable(
-        &self,
-        group_count_x: u32,
-        group_count_y: u32,
-        group_count_z: u32,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "dispatch: kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).dispatch)(
-                self.handle,
-                group_count_x,
-                group_count_y,
-                group_count_z,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_storage_buffer_pixel_via_vtable(
-        &self,
-        binding: u32,
-        buffer: &crate::core::rhi::PixelBuffer,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_storage_buffer_pixel: kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_storage_buffer_pixel)(
-                self.handle,
-                binding,
-                buffer.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_storage_buffer_storage_via_vtable(
-        &self,
-        binding: u32,
-        buffer: &crate::core::rhi::StorageBuffer,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_storage_buffer_storage: kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_storage_buffer_storage)(
-                self.handle,
-                binding,
-                buffer.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_uniform_buffer_via_vtable(
-        &self,
-        binding: u32,
-        buffer: &crate::core::rhi::UniformBuffer,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_uniform_buffer: kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_uniform_buffer)(
-                self.handle,
-                binding,
-                buffer.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_sampled_texture_via_vtable(
-        &self,
-        binding: u32,
-        texture: &Texture,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_sampled_texture: kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_sampled_texture)(
-                self.handle,
-                binding,
-                texture.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_storage_image_via_vtable(&self, binding: u32, texture: &Texture) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_storage_image: kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_storage_image)(
-                self.handle,
-                binding,
-                texture.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
     }
 
     // ---- v5 raw-vulkanalia-handle dispatch helpers (#1073) ------------------
@@ -1437,142 +1161,6 @@ impl VulkanComputeKernel {
     // through the v5 vtable slot. The host's callback reconstructs the
     // typed handle via `Handle::from_raw` before forwarding to
     // `host_inner()`.
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_sampled_image_view_via_vtable(
-        &self,
-        binding: u32,
-        view: vk::ImageView,
-    ) -> Result<()> {
-        use vulkanalia::vk::Handle;
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_sampled_image_view: kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_sampled_image_view)(
-                self.handle,
-                binding,
-                view.as_raw(),
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_combined_image_sampler_view_via_vtable(
-        &self,
-        binding: u32,
-        view: vk::ImageView,
-    ) -> Result<()> {
-        use vulkanalia::vk::Handle;
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_combined_image_sampler_view: kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_combined_image_sampler_view)(
-                self.handle,
-                binding,
-                view.as_raw(),
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_storage_image_view_via_vtable(
-        &self,
-        binding: u32,
-        view: vk::ImageView,
-    ) -> Result<()> {
-        use vulkanalia::vk::Handle;
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_storage_image_view: kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_storage_image_view)(
-                self.handle,
-                binding,
-                view.as_raw(),
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_record_via_vtable(
-        &self,
-        command_buffer: vk::CommandBuffer,
-        group_x: u32,
-        group_y: u32,
-        group_z: u32,
-    ) -> Result<()> {
-        use vulkanalia::vk::Handle;
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "record: kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        // vulkanalia's CommandBuffer is `#[repr(transparent)] pub struct
-        // CommandBuffer(usize)`; `as_raw()` returns `usize` which casts
-        // losslessly to `u64` on every supported target.
-        let cb_raw: u64 = command_buffer.as_raw() as u64;
-        let status = unsafe {
-            ((*self.methods_vtable).record)(
-                self.handle,
-                cb_raw,
-                group_x,
-                group_y,
-                group_z,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
 
     /// Record bind + push-constants + dispatch into a caller-owned
     /// command buffer. Crate-private surface; engine-internal callers
@@ -1588,9 +1176,6 @@ impl VulkanComputeKernel {
         group_y: u32,
         group_z: u32,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_record_via_vtable(command_buffer, group_x, group_y, group_z);
-        }
         self.host_inner()
             .record(command_buffer, group_x, group_y, group_z)
     }
@@ -1603,93 +1188,10 @@ impl VulkanComputeKernel {
     /// public signature predates the introspection vtable and isn't
     /// fallible at the type level.
     pub fn bindings(&self) -> Vec<ComputeBindingSpec> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_bindings_via_vtable().unwrap_or_else(|e| {
-                tracing::warn!(
-                    error = %e,
-                    "VulkanComputeKernel::bindings cdylib dispatch failed; returning empty",
-                );
-                Vec::new()
-            });
-        }
         self.host_inner().bindings().to_vec()
     }
 
-    #[cfg(target_os = "linux")]
-    fn dispatch_bindings_via_vtable(&self) -> Result<Vec<ComputeBindingSpec>> {
-        use crate::core::Error;
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "bindings: compute kernel methods vtable is null".into(),
-            ));
-        }
-        // Inline-then-heap: one call with a stack buffer of cap=16
-        // covers ~all real kernels (~8 bindings in practice) without
-        // allocation. If the host signals status=2 (buffer-too-small),
-        // fall back to a heap buffer sized to the host-reported
-        // required count and call again.
-        let mut buf = [streamlib_plugin_abi::ComputeBindingSpecRepr {
-            binding: 0,
-            kind: 0,
-        }; 16];
-        let mut out_len: usize = 0;
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).bindings)(
-                self.handle,
-                buf.as_mut_ptr(),
-                buf.len(),
-                &mut out_len as *mut usize,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 2 {
-            // Inline buffer too small — fall back to heap with the
-            // host-reported required size.
-            let mut heap: Vec<streamlib_plugin_abi::ComputeBindingSpecRepr> = vec![
-                streamlib_plugin_abi::ComputeBindingSpecRepr {
-                    binding: 0,
-                    kind: 0,
-                };
-                out_len
-            ];
-            let mut out_len2: usize = 0;
-            let status2 = unsafe {
-                ((*self.methods_vtable).bindings)(
-                    self.handle,
-                    heap.as_mut_ptr(),
-                    heap.len(),
-                    &mut out_len2 as *mut usize,
-                    err_buf.as_mut_ptr(),
-                    err_buf.len(),
-                    &mut err_len as *mut usize,
-                )
-            };
-            if status2 != 0 {
-                let msg =
-                    String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-                return Err(Error::GpuError(msg));
-            }
-            return heap
-                .iter()
-                .take(out_len2)
-                .map(crate::core::rhi::plugin_abi_bridge::compute_binding_spec_from_repr)
-                .collect();
-        }
-        if status != 0 {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            return Err(Error::GpuError(msg));
-        }
-        buf.iter()
-            .take(out_len)
-            .map(crate::core::rhi::plugin_abi_bridge::compute_binding_spec_from_repr)
-            .collect()
-    }
-
-    /// Push-constant range size in bytes. Cached POD — no plugin ABI hop.
+    /// Push-constant range size in bytes. Cached POD.
     pub fn push_constant_size(&self) -> u32 {
         self.cached_push_constant_size
     }
@@ -1697,15 +1199,15 @@ impl VulkanComputeKernel {
 
 impl Clone for VulkanComputeKernel {
     fn clone(&self) -> Self {
-        if !self.handle.is_null() && !self.vtable.is_null() {
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Arc::into_raw(Arc<VulkanComputeKernelInner>)`;
+            // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                ((*self.vtable).clone_compute_kernel)(self.handle);
+                Arc::increment_strong_count(self.handle as *const VulkanComputeKernelInner);
             }
         }
         Self {
             handle: self.handle,
-            vtable: self.vtable,
-            methods_vtable: self.methods_vtable,
             cached_push_constant_size: self.cached_push_constant_size,
             _reserved_padding: self._reserved_padding,
         }
@@ -1714,9 +1216,11 @@ impl Clone for VulkanComputeKernel {
 
 impl Drop for VulkanComputeKernel {
     fn drop(&mut self) {
-        if !self.handle.is_null() && !self.vtable.is_null() {
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Arc::into_raw(Arc<VulkanComputeKernelInner>)`;
+            // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                ((*self.vtable).drop_compute_kernel)(self.handle);
+                Arc::decrement_strong_count(self.handle as *const VulkanComputeKernelInner);
             }
         }
     }
@@ -1731,28 +1235,7 @@ impl std::fmt::Debug for VulkanComputeKernel {
 #[cfg(all(test, target_pointer_width = "64"))]
 mod plugin_abi_object_layout_tests {
     use super::*;
-    use core::mem::{align_of, offset_of, size_of};
-
-    #[test]
-    fn vulkan_compute_kernel_layout() {
-        // PluginAbiObject struct as of #907 PR 2/5:
-        //   handle                       @ 0  (8 bytes, *const c_void)
-        //   vtable                       @ 8  (8 bytes, *const GpuContextFullAccessVTable)
-        //   methods_vtable               @ 16 (8 bytes, *const VulkanComputeKernelMethodsVTable)
-        //   cached_push_constant_size    @ 24 (4 bytes, u32)
-        //   _reserved_padding            @ 28 (4 bytes, u32)
-        // Total = 32, align = 8.
-        assert_eq!(size_of::<VulkanComputeKernel>(), 32);
-        assert_eq!(align_of::<VulkanComputeKernel>(), 8);
-        assert_eq!(offset_of!(VulkanComputeKernel, handle), 0);
-        assert_eq!(offset_of!(VulkanComputeKernel, vtable), 8);
-        assert_eq!(offset_of!(VulkanComputeKernel, methods_vtable), 16);
-        assert_eq!(
-            offset_of!(VulkanComputeKernel, cached_push_constant_size),
-            24
-        );
-        assert_eq!(offset_of!(VulkanComputeKernel, _reserved_padding), 28);
-    }
+    
 
     #[test]
     fn vulkan_compute_kernel_is_send_sync() {
@@ -2218,7 +1701,7 @@ fn vk_image_view_for(texture: &Texture) -> Result<vk::ImageView> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::rhi::{PixelBuffer, PixelFormat};
+    use crate::core::rhi::PixelBuffer;
     use crate::vulkan::rhi::HostVulkanBuffer;
 
     fn try_vulkan_device() -> Option<Arc<HostVulkanDevice>> {
@@ -3111,7 +2594,7 @@ mod tests {
         unsafe {
             device_handle.destroy_image_view(in_view, None);
             device_handle.destroy_image_view(out_view, None);
-            use vulkanalia_vma::Alloc;
+            
             allocator.destroy_image(in_image, in_alloc);
             allocator.destroy_image(out_image, out_alloc);
         }

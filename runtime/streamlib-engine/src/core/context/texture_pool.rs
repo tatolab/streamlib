@@ -9,7 +9,6 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use parking_lot::{Condvar, Mutex};
-use streamlib_plugin_abi::GpuContextLimitedAccessVTable;
 
 use crate::core::rhi::{
     GpuDevice, NativeTextureHandle, Texture, TextureDescriptor, TextureFormat, TextureUsages,
@@ -249,8 +248,6 @@ impl Drop for PooledTextureHandleInner {
 pub struct PooledTextureHandle {
     /// Opaque host handle (`Box::into_raw(Box<PooledTextureHandleInner>)`).
     pub(crate) handle: *const c_void,
-    /// Vtable for plugin ABI Drop dispatch.
-    pub(crate) vtable: *const GpuContextLimitedAccessVTable,
     /// The pooled texture. Already PluginAbiObject (`#[repr(C)]`, 32 bytes);
     /// embedding by value keeps the wire ABI flat without an
     /// indirection through another `Arc`.
@@ -311,10 +308,8 @@ impl PooledTextureHandle {
             slot_id,
         });
         let handle = Box::into_raw(inner) as *const c_void;
-        let vtable = crate::core::plugin::host_services::host_gpu_context_limited_access_vtable();
         Self {
             handle,
-            vtable,
             texture,
             width_cached: width,
             height_cached: height,
@@ -365,13 +360,6 @@ impl PooledTextureHandle {
     /// **Panics if called from cdylib code** for the same reason
     /// [`Texture::host_inner`] does.
     pub fn slot_id(&self) -> PoolSlotId {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "PooledTextureHandle::slot_id() reached from cdylib code; \
-                 the pool slot id is host-internal and not exposed via \
-                 the GpuContextLimitedAccessVTable."
-            );
-        }
         // SAFETY: `self.handle` is `Box::into_raw(Box<PooledTextureHandleInner>)`
         // (see `from_parts`); the Box keeps the inner alive until Drop runs.
         unsafe { (*(self.handle as *const PooledTextureHandleInner)).slot_id }
@@ -396,14 +384,12 @@ impl PooledTextureHandle {
 
 impl Drop for PooledTextureHandle {
     fn drop(&mut self) {
-        if !self.handle.is_null() && !self.vtable.is_null() {
+        if !self.handle.is_null() {
             // SAFETY: matched with the `Box::into_raw` in `from_parts`.
-            // The vtable's `drop_pooled_texture_handle` callback runs
-            // `Box::from_raw + drop` on the host side, which fires
-            // `Drop for PooledTextureHandleInner` and releases the
-            // pool slot exactly once.
+            // Dropping the Box fires `Drop for PooledTextureHandleInner`,
+            // which releases the pool slot exactly once.
             unsafe {
-                ((*self.vtable).drop_pooled_texture_handle)(self.handle);
+                drop(Box::from_raw(self.handle as *mut PooledTextureHandleInner));
             }
         }
     }
@@ -618,29 +604,7 @@ impl std::fmt::Debug for TexturePool {
 #[cfg(all(test, target_pointer_width = "64"))]
 mod layout_tests {
     use super::*;
-    use core::mem::{align_of, offset_of, size_of};
-
-    #[test]
-    fn pooled_texture_handle_layout() {
-        // Pin the byte-level shape. Fields:
-        //   handle        : *const c_void   → offset 0,  size 8
-        //   vtable        : *const VTable   → offset 8,  size 8
-        //   texture       : Texture (β,32B) → offset 16, size 32
-        //   width_cached  : u32             → offset 48, size 4
-        //   height_cached : u32             → offset 52, size 4
-        //   format_raw    : u32             → offset 56, size 4
-        //   _padding      : u32             → offset 60, size 4
-        // Total: 64 bytes, 8-byte alignment (pinned by the pointers).
-        assert_eq!(size_of::<PooledTextureHandle>(), 64);
-        assert_eq!(align_of::<PooledTextureHandle>(), 8);
-        assert_eq!(offset_of!(PooledTextureHandle, handle), 0);
-        assert_eq!(offset_of!(PooledTextureHandle, vtable), 8);
-        assert_eq!(offset_of!(PooledTextureHandle, texture), 16);
-        assert_eq!(offset_of!(PooledTextureHandle, width_cached), 48);
-        assert_eq!(offset_of!(PooledTextureHandle, height_cached), 52);
-        assert_eq!(offset_of!(PooledTextureHandle, format_raw), 56);
-        assert_eq!(offset_of!(PooledTextureHandle, _padding), 60);
-    }
+    
 
     /// Compile-time witness that `PooledTextureHandle` is Send + Sync.
     #[test]

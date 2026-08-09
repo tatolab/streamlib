@@ -69,7 +69,7 @@ pub use crate::vulkan::rhi::{
 
 pub use vulkanalia::vk::GeometryInstanceFlagsKHR;
 
-use crate::core::error::{Error, Result};
+use crate::core::error::Result;
 use crate::core::rhi::texture::TextureInner;
 use crate::core::rhi::{GpuDevice, PixelBufferRef, Texture};
 
@@ -117,16 +117,7 @@ impl HostTextureExt for Texture {
     }
 
     fn host_vulkan_texture_arc(&self) -> Result<Arc<HostVulkanTexture>> {
-        if crate::core::plugin::host_services::host_callbacks().is_none() {
-            return Ok(Arc::clone(self.vulkan_inner()));
-        }
-        Err(Error::GpuError(
-            "host_vulkan_texture_arc: engine-internal host-mode accessor; the \
-             raw-texture plugin ABI transit slot was removed (#1270). Cdylib \
-             GPU code reads a texture through the cdylib-safe Texture getters \
-             and FullAccess primitives, never the raw Arc."
-                .into(),
-        ))
+        Ok(Arc::clone(self.vulkan_inner()))
     }
 }
 

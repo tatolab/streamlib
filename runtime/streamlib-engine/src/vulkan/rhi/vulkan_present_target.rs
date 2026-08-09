@@ -738,35 +738,10 @@ impl VulkanPresentTarget {
         Ok(!out_of_date)
     }
 
-    /// Wire-format companion to [`Self::end_frame`]: materializes the
-    /// `vk::SemaphoreSubmitInfo` extra-waits from their `#[repr(C)]`
-    /// [`streamlib_plugin_abi::SemaphoreSubmitInfoRepr`] projections
-    /// host-side (the RHI boundary keeps `vulkanalia` inside this crate),
-    /// then dispatches [`Self::end_frame`]. The plugin-ABI `end_frame`
-    /// slot body calls this so it never names a `vk::*` type.
-    pub fn end_frame_from_wire(
-        &mut self,
-        extra_waits: &[streamlib_plugin_abi::SemaphoreSubmitInfoRepr],
-    ) -> Result<bool> {
-        let vk_waits: Vec<vk::SemaphoreSubmitInfo> = extra_waits
-            .iter()
-            .map(|r| {
-                vk::SemaphoreSubmitInfo::builder()
-                    .semaphore(vk::Semaphore::from_raw(r.semaphore))
-                    .value(r.value)
-                    .stage_mask(vk::PipelineStageFlags2::from_bits_truncate(r.stage_mask))
-                    .device_index(r.device_index)
-                    .build()
-            })
-            .collect();
-        self.end_frame(&vk_waits)
-    }
-
     /// Raw `Box<RhiCommandRecorderInner>` pointer of the in-flight frame's
     /// recorder, or null when no frame is in flight. Borrowed, NON-OWNING
     /// — the present target owns the recorder across the begin/end split;
-    /// a caller must never release it. Used by the plugin-ABI `begin_frame`
-    /// return (recorder handle) + `end_frame` recorder-identity check.
+    /// a caller must never release it.
     pub fn in_flight_recorder_handle(&self) -> *const std::ffi::c_void {
         match &self.in_flight {
             Some(f) => self.recorders[f.frame_index].raw_handle(),
@@ -954,12 +929,6 @@ pub type PresentTargetInner = Mutex<VulkanPresentTarget>;
 pub struct PresentTarget {
     /// Opaque handle to the host's `Box<PresentTargetInner>`.
     pub(crate) handle: *const c_void,
-    /// Parent vtable for plugin-ABI Drop dispatch (`drop_present_target`).
-    pub(crate) vtable: *const streamlib_plugin_abi::GpuContextFullAccessVTable,
-    /// Per-type vtable for plugin-ABI method dispatch. Null in a
-    /// vtable-less host-mode construction; populated by
-    /// [`Self::from_target`].
-    pub(crate) methods_vtable: *const streamlib_plugin_abi::PresentTargetMethodsVTable,
     /// Cached swapchain-image `TextureFormat` `#[repr(u32)]` discriminant.
     /// Refreshed from the `recreate` slot's `out_color_format_raw` so a
     /// format flip (SDR BGRA8 → HDR10 FP16) never leaves a stale getter.
@@ -982,13 +951,8 @@ impl PresentTarget {
     pub fn from_target(target: VulkanPresentTarget) -> Self {
         let color_format_raw = target.color_format() as u32;
         let handle = Box::into_raw(Box::new(Mutex::new(target))) as *const c_void;
-        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
-        let methods_vtable =
-            crate::core::plugin::host_services::host_present_target_methods_vtable();
         Self {
             handle,
-            vtable,
-            methods_vtable,
             color_format_raw,
             _padding: 0,
         }
@@ -1012,12 +976,10 @@ impl PresentTarget {
 
 impl Drop for PresentTarget {
     fn drop(&mut self) {
-        if !self.handle.is_null() && !self.vtable.is_null() {
-            // SAFETY: matched with `Box::into_raw` in `from_target`; the
-            // vtable's `drop_present_target` runs `Box::from_raw` + drop
-            // host-side.
+        if !self.handle.is_null() {
+            // SAFETY: matched with `Box::into_raw` in `from_target`.
             unsafe {
-                ((*self.vtable).drop_present_target)(self.handle);
+                drop(Box::from_raw(self.handle as *mut PresentTargetInner));
             }
         }
     }
@@ -1427,22 +1389,6 @@ mod tests {
         assert_eq!(MAX_FRAMES_IN_FLIGHT, 2);
     }
 
-    /// The `PresentTarget` PluginAbiObject is `#[repr(C)]` and must stay
-    /// byte-identical to the SDK twin
-    /// (`sdk/streamlib-plugin-sdk/src/rhi/present_target.rs`). Both arms
-    /// pin this layout; a drift on either side is a silent cross-build
-    /// corruption. Mentally reverting a field reorder makes this fail.
-    #[test]
-    fn present_target_pluginabiobject_layout() {
-        use core::mem::{align_of, offset_of, size_of};
-        assert_eq!(size_of::<PresentTarget>(), 32);
-        assert_eq!(align_of::<PresentTarget>(), 8);
-        assert_eq!(offset_of!(PresentTarget, handle), 0);
-        assert_eq!(offset_of!(PresentTarget, vtable), 8);
-        assert_eq!(offset_of!(PresentTarget, methods_vtable), 16);
-        assert_eq!(offset_of!(PresentTarget, color_format_raw), 24);
-        assert_eq!(offset_of!(PresentTarget, _padding), 28);
-    }
 
     /// `PresentTarget` is deliberately NOT `Clone` — the backing
     /// `VulkanPresentTarget` is single-owner `Drop`-heavy, so the parent

@@ -44,7 +44,6 @@ use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
 use std::ffi::c_void;
 
-use streamlib_plugin_abi::GpuContextFullAccessVTable;
 
 use crate::core::rhi::{
     BlendFactor, BlendOp, ColorBlendState, ColorWriteMask, CullMode, DepthCompareOp, DepthFormat,
@@ -1273,10 +1272,6 @@ impl std::fmt::Debug for VulkanGraphicsKernelInner {
 pub struct VulkanGraphicsKernel {
     /// Opaque handle to the host's `Arc<VulkanGraphicsKernelInner>`.
     pub(crate) handle: *const c_void,
-    /// Parent vtable for plugin ABI Clone/Drop dispatch (#918 Phase D).
-    pub(crate) vtable: *const GpuContextFullAccessVTable,
-    /// Per-type vtable for plugin ABI method dispatch (#907 Phase E).
-    pub(crate) methods_vtable: *const streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable,
     /// Cached push-constant size in bytes. Set at construction.
     pub(crate) cached_push_constant_size: u32,
     /// Cached descriptor-set ring depth. Set at construction.
@@ -1299,25 +1294,14 @@ impl VulkanGraphicsKernel {
         let cached_push_constant_size = arc.push_constant_size();
         let cached_descriptor_sets_in_flight = arc.descriptor_sets_in_flight();
         let handle = Arc::into_raw(arc) as *const c_void;
-        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
-        let methods_vtable =
-            crate::core::plugin::host_services::host_vulkan_graphics_kernel_methods_vtable();
         Self {
             handle,
-            vtable,
-            methods_vtable,
             cached_push_constant_size,
             cached_descriptor_sets_in_flight,
         }
     }
 
     pub(crate) fn host_inner(&self) -> &VulkanGraphicsKernelInner {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "VulkanGraphicsKernel::host_inner() reached from cdylib code; \
-                 this method must dispatch through the GpuContextFullAccessVTable."
-            );
-        }
         unsafe { &*(self.handle as *const VulkanGraphicsKernelInner) }
     }
 
@@ -1327,95 +1311,15 @@ impl VulkanGraphicsKernel {
     /// side plugin ABI errors the method emits a `tracing::warn` and returns
     /// an empty Vec.
     pub fn bindings(&self) -> Vec<GraphicsBindingSpec> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_bindings_via_vtable().unwrap_or_else(|e| {
-                tracing::warn!(
-                    error = %e,
-                    "VulkanGraphicsKernel::bindings cdylib dispatch failed; returning empty",
-                );
-                Vec::new()
-            });
-        }
         self.host_inner().bindings().to_vec()
     }
 
-    #[cfg(target_os = "linux")]
-    fn dispatch_bindings_via_vtable(&self) -> Result<Vec<GraphicsBindingSpec>> {
-        use crate::core::Error;
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "bindings: graphics kernel methods vtable is null".into(),
-            ));
-        }
-        let mut buf = [streamlib_plugin_abi::GraphicsBindingSpecRepr {
-            binding: 0,
-            kind: 0,
-            stages: 0,
-            _reserved_padding: 0,
-        }; 16];
-        let mut out_len: usize = 0;
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).bindings)(
-                self.handle,
-                buf.as_mut_ptr(),
-                buf.len(),
-                &mut out_len as *mut usize,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 2 {
-            let mut heap: Vec<streamlib_plugin_abi::GraphicsBindingSpecRepr> = vec![
-                streamlib_plugin_abi::GraphicsBindingSpecRepr {
-                    binding: 0,
-                    kind: 0,
-                    stages: 0,
-                    _reserved_padding: 0,
-                };
-                out_len
-            ];
-            let mut out_len2: usize = 0;
-            let status2 = unsafe {
-                ((*self.methods_vtable).bindings)(
-                    self.handle,
-                    heap.as_mut_ptr(),
-                    heap.len(),
-                    &mut out_len2 as *mut usize,
-                    err_buf.as_mut_ptr(),
-                    err_buf.len(),
-                    &mut err_len as *mut usize,
-                )
-            };
-            if status2 != 0 {
-                let msg =
-                    String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-                return Err(Error::GpuError(msg));
-            }
-            return heap
-                .iter()
-                .take(out_len2)
-                .map(crate::core::rhi::plugin_abi_bridge::graphics_binding_spec_from_repr)
-                .collect();
-        }
-        if status != 0 {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            return Err(Error::GpuError(msg));
-        }
-        buf.iter()
-            .take(out_len)
-            .map(crate::core::rhi::plugin_abi_bridge::graphics_binding_spec_from_repr)
-            .collect()
-    }
-
-    /// Push-constant range size in bytes. Cached POD — no plugin ABI hop.
+    /// Push-constant range size in bytes. Cached POD.
     pub fn push_constant_size(&self) -> u32 {
         self.cached_push_constant_size
     }
 
-    /// Descriptor-set ring depth. Cached POD — no plugin ABI hop.
+    /// Descriptor-set ring depth. Cached POD.
     pub fn descriptor_sets_in_flight(&self) -> u32 {
         self.cached_descriptor_sets_in_flight
     }
@@ -1426,9 +1330,6 @@ impl VulkanGraphicsKernel {
         binding: u32,
         texture: &Texture,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_sampled_texture_via_vtable(frame_index, binding, texture);
-        }
         self.host_inner()
             .set_sampled_texture(frame_index, binding, texture)
     }
@@ -1445,9 +1346,6 @@ impl VulkanGraphicsKernel {
         binding: u32,
         buffer: &crate::core::rhi::PixelBuffer,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_storage_buffer_pixel_via_vtable(frame_index, binding, buffer);
-        }
         self.host_inner()
             .set_storage_buffer(frame_index, binding, buffer)
     }
@@ -1461,13 +1359,6 @@ impl VulkanGraphicsKernel {
         binding: u32,
         buffer: &crate::core::rhi::StorageBuffer,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_storage_buffer_storage_via_vtable(
-                frame_index,
-                binding,
-                buffer,
-            );
-        }
         self.host_inner()
             .set_storage_buffer(frame_index, binding, buffer)
     }
@@ -1481,9 +1372,6 @@ impl VulkanGraphicsKernel {
         binding: u32,
         buffer: &crate::core::rhi::UniformBuffer,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_uniform_buffer_via_vtable(frame_index, binding, buffer);
-        }
         self.host_inner()
             .set_uniform_buffer(frame_index, binding, buffer)
     }
@@ -1494,33 +1382,15 @@ impl VulkanGraphicsKernel {
         binding: u32,
         texture: &Texture,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_storage_image_via_vtable(frame_index, binding, texture);
-        }
         self.host_inner()
             .set_storage_image(frame_index, binding, texture)
     }
 
     pub fn set_push_constants(&self, frame_index: u32, bytes: &[u8]) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_push_constants_via_vtable(frame_index, bytes);
-        }
         self.host_inner().set_push_constants(frame_index, bytes)
     }
 
     pub fn set_push_constants_value<T: Copy>(&self, frame_index: u32, value: &T) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            // SAFETY: T is Copy + Sized — the byte view is read-only
-            // and consumed inside the plugin ABI call. Caller is responsible
-            // for ensuring T is POD (no padding holding `uninit`
-            // bytes, no internal references, no Drop) since the
-            // push-constant slot the bytes land in is read verbatim
-            // by the GPU shader.
-            let bytes = unsafe {
-                std::slice::from_raw_parts(value as *const T as *const u8, std::mem::size_of::<T>())
-            };
-            return self.dispatch_set_push_constants_via_vtable(frame_index, bytes);
-        }
         self.host_inner()
             .set_push_constants_value(frame_index, value)
     }
@@ -1537,14 +1407,6 @@ impl VulkanGraphicsKernel {
         buffer: &crate::core::rhi::VertexBuffer,
         offset: u64,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_vertex_buffer_via_vtable(
-                frame_index,
-                binding,
-                buffer,
-                offset,
-            );
-        }
         self.host_inner()
             .set_vertex_buffer(frame_index, binding, buffer, offset)
     }
@@ -1558,14 +1420,6 @@ impl VulkanGraphicsKernel {
         offset: u64,
         index_type: IndexType,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_set_index_buffer_via_vtable(
-                frame_index,
-                buffer,
-                offset,
-                index_type,
-            );
-        }
         self.host_inner()
             .set_index_buffer(frame_index, buffer, offset, index_type)
     }
@@ -1588,9 +1442,6 @@ impl VulkanGraphicsKernel {
         frame_index: u32,
         draw: &DrawCall,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_cmd_bind_and_draw_via_vtable(cmd, frame_index, draw);
-        }
         self.host_inner().cmd_bind_and_draw(cmd, frame_index, draw)
     }
 
@@ -1603,9 +1454,6 @@ impl VulkanGraphicsKernel {
         frame_index: u32,
         draw: &DrawIndexedCall,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_cmd_bind_and_draw_indexed_via_vtable(cmd, frame_index, draw);
-        }
         self.host_inner()
             .cmd_bind_and_draw_indexed(cmd, frame_index, draw)
     }
@@ -1618,619 +1466,23 @@ impl VulkanGraphicsKernel {
         extent: (u32, u32),
         draw: super::OffscreenDraw,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_offscreen_render_via_vtable(
-                frame_index,
-                color_targets,
-                extent,
-                draw,
-            );
-        }
         self.host_inner()
             .offscreen_render(frame_index, color_targets, extent, draw)
     }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_push_constants_via_vtable(&self, frame_index: u32, bytes: &[u8]) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_push_constants: graphics kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_push_constants)(
-                self.handle,
-                frame_index,
-                bytes.as_ptr(),
-                bytes.len(),
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_storage_buffer_pixel_via_vtable(
-        &self,
-        frame_index: u32,
-        binding: u32,
-        buffer: &crate::core::rhi::PixelBuffer,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_storage_buffer_pixel: graphics kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_storage_buffer_pixel)(
-                self.handle,
-                frame_index,
-                binding,
-                buffer.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_storage_buffer_storage_via_vtable(
-        &self,
-        frame_index: u32,
-        binding: u32,
-        buffer: &crate::core::rhi::StorageBuffer,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_storage_buffer_storage: graphics kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_storage_buffer_storage)(
-                self.handle,
-                frame_index,
-                binding,
-                buffer.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_uniform_buffer_via_vtable(
-        &self,
-        frame_index: u32,
-        binding: u32,
-        buffer: &crate::core::rhi::UniformBuffer,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_uniform_buffer: graphics kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_uniform_buffer)(
-                self.handle,
-                frame_index,
-                binding,
-                buffer.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_sampled_texture_via_vtable(
-        &self,
-        frame_index: u32,
-        binding: u32,
-        texture: &Texture,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_sampled_texture: graphics kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_sampled_texture)(
-                self.handle,
-                frame_index,
-                binding,
-                texture.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_storage_image_via_vtable(
-        &self,
-        frame_index: u32,
-        binding: u32,
-        texture: &Texture,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_storage_image: graphics kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_storage_image)(
-                self.handle,
-                frame_index,
-                binding,
-                texture.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_vertex_buffer_via_vtable(
-        &self,
-        frame_index: u32,
-        binding: u32,
-        buffer: &crate::core::rhi::VertexBuffer,
-        offset: u64,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_vertex_buffer: graphics kernel methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_vertex_buffer)(
-                self.handle,
-                frame_index,
-                binding,
-                buffer.handle,
-                offset,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_set_index_buffer_via_vtable(
-        &self,
-        frame_index: u32,
-        buffer: &crate::core::rhi::IndexBuffer,
-        offset: u64,
-        index_type: IndexType,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "set_index_buffer: graphics kernel methods vtable is null".into(),
-            ));
-        }
-        let index_type_raw = match index_type {
-            IndexType::Uint16 => streamlib_plugin_abi::IndexTypeRepr::Uint16 as u32,
-            IndexType::Uint32 => streamlib_plugin_abi::IndexTypeRepr::Uint32 as u32,
-        };
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).set_index_buffer)(
-                self.handle,
-                frame_index,
-                buffer.handle,
-                offset,
-                index_type_raw,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    fn dispatch_offscreen_render_via_vtable(
-        &self,
-        frame_index: u32,
-        color_targets: &[super::OffscreenColorTarget<'_>],
-        extent: (u32, u32),
-        draw: super::OffscreenDraw,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "offscreen_render: graphics kernel methods vtable is null".into(),
-            ));
-        }
-
-        // Marshal color targets into the plugin ABI's parallel-array shape.
-        let mut handles: Vec<*const c_void> = Vec::with_capacity(color_targets.len());
-        let mut present_flags: Vec<u32> = Vec::with_capacity(color_targets.len());
-        let mut clear_values: Vec<[f32; 4]> = Vec::with_capacity(color_targets.len());
-        for target in color_targets {
-            handles.push(target.texture.handle);
-            if let Some(c) = target.clear_color {
-                present_flags.push(1);
-                clear_values.push(c);
-            } else {
-                present_flags.push(0);
-                clear_values.push([0.0, 0.0, 0.0, 0.0]);
-            }
-        }
-
-        let draw_repr = encode_offscreen_draw_repr(&draw);
-
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).offscreen_render)(
-                self.handle,
-                frame_index,
-                if handles.is_empty() {
-                    std::ptr::null()
-                } else {
-                    handles.as_ptr()
-                },
-                if present_flags.is_empty() {
-                    std::ptr::null()
-                } else {
-                    present_flags.as_ptr()
-                },
-                if clear_values.is_empty() {
-                    std::ptr::null()
-                } else {
-                    clear_values.as_ptr()
-                },
-                handles.len(),
-                extent.0,
-                extent.1,
-                &draw_repr,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    /// Cdylib-side dispatch helper for the v4 `cmd_bind_and_draw`
-    /// slot. Carries `vk::CommandBuffer`'s `repr(transparent)`
-    /// `usize` payload as a `u64` (lossless on 64-bit Linux) and
-    /// marshals the `DrawCall` into the `DrawCallRepr` shape the
-    /// host wrapper expects. Mirrors the `compute_kernel`'s
-    /// `dispatch_record_via_vtable`.
-    #[cfg(target_os = "linux")]
-    fn dispatch_cmd_bind_and_draw_via_vtable(
-        &self,
-        command_buffer: vk::CommandBuffer,
-        frame_index: u32,
-        draw: &DrawCall,
-    ) -> Result<()> {
-        use vulkanalia::vk::Handle;
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "cmd_bind_and_draw: graphics kernel methods vtable is null".into(),
-            ));
-        }
-        let draw_repr = draw_call_to_repr(draw);
-        let cb_handle: u64 = command_buffer.as_raw() as u64;
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).cmd_bind_and_draw)(
-                self.handle,
-                cb_handle,
-                frame_index,
-                &draw_repr,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    /// Cdylib-side dispatch helper for the v4
-    /// `cmd_bind_and_draw_indexed` slot. Same shape as
-    /// [`Self::dispatch_cmd_bind_and_draw_via_vtable`], marshals
-    /// `DrawIndexedCall` into `DrawIndexedCallRepr`.
-    #[cfg(target_os = "linux")]
-    fn dispatch_cmd_bind_and_draw_indexed_via_vtable(
-        &self,
-        command_buffer: vk::CommandBuffer,
-        frame_index: u32,
-        draw: &DrawIndexedCall,
-    ) -> Result<()> {
-        use vulkanalia::vk::Handle;
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "cmd_bind_and_draw_indexed: graphics kernel methods vtable is null".into(),
-            ));
-        }
-        let draw_repr = draw_indexed_call_to_repr(draw);
-        let cb_handle: u64 = command_buffer.as_raw() as u64;
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).cmd_bind_and_draw_indexed)(
-                self.handle,
-                cb_handle,
-                frame_index,
-                &draw_repr,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
 }
 
-#[cfg(target_os = "linux")]
-fn viewport_to_repr(v: Viewport) -> streamlib_plugin_abi::ViewportRepr {
-    streamlib_plugin_abi::ViewportRepr {
-        x: v.x,
-        y: v.y,
-        width: v.width,
-        height: v.height,
-        min_depth: v.min_depth,
-        max_depth: v.max_depth,
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn scissor_to_repr(s: ScissorRect) -> streamlib_plugin_abi::ScissorRectRepr {
-    streamlib_plugin_abi::ScissorRectRepr {
-        x: s.x,
-        y: s.y,
-        width: s.width,
-        height: s.height,
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn draw_call_to_repr(d: &DrawCall) -> streamlib_plugin_abi::DrawCallRepr {
-    let (viewport_present, viewport) = match d.viewport {
-        Some(v) => (1u32, viewport_to_repr(v)),
-        None => (
-            0u32,
-            streamlib_plugin_abi::ViewportRepr {
-                x: 0.0,
-                y: 0.0,
-                width: 0.0,
-                height: 0.0,
-                min_depth: 0.0,
-                max_depth: 0.0,
-            },
-        ),
-    };
-    let (scissor_present, scissor) = match d.scissor {
-        Some(s) => (1u32, scissor_to_repr(s)),
-        None => (
-            0u32,
-            streamlib_plugin_abi::ScissorRectRepr {
-                x: 0,
-                y: 0,
-                width: 0,
-                height: 0,
-            },
-        ),
-    };
-    streamlib_plugin_abi::DrawCallRepr {
-        vertex_count: d.vertex_count,
-        instance_count: d.instance_count,
-        first_vertex: d.first_vertex,
-        first_instance: d.first_instance,
-        viewport_present,
-        scissor_present,
-        viewport,
-        scissor,
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn draw_indexed_call_to_repr(d: &DrawIndexedCall) -> streamlib_plugin_abi::DrawIndexedCallRepr {
-    let (viewport_present, viewport) = match d.viewport {
-        Some(v) => (1u32, viewport_to_repr(v)),
-        None => (
-            0u32,
-            streamlib_plugin_abi::ViewportRepr {
-                x: 0.0,
-                y: 0.0,
-                width: 0.0,
-                height: 0.0,
-                min_depth: 0.0,
-                max_depth: 0.0,
-            },
-        ),
-    };
-    let (scissor_present, scissor) = match d.scissor {
-        Some(s) => (1u32, scissor_to_repr(s)),
-        None => (
-            0u32,
-            streamlib_plugin_abi::ScissorRectRepr {
-                x: 0,
-                y: 0,
-                width: 0,
-                height: 0,
-            },
-        ),
-    };
-    streamlib_plugin_abi::DrawIndexedCallRepr {
-        index_count: d.index_count,
-        instance_count: d.instance_count,
-        first_index: d.first_index,
-        vertex_offset: d.vertex_offset,
-        first_instance: d.first_instance,
-        viewport_present,
-        scissor_present,
-        _reserved_padding: 0,
-        viewport,
-        scissor,
-    }
-}
-
-#[cfg(target_os = "linux")]
-fn encode_offscreen_draw_repr(
-    draw: &super::OffscreenDraw,
-) -> streamlib_plugin_abi::OffscreenDrawRepr {
-    // Zero-initialized payload for the slot that doesn't match `kind`.
-    let zero_draw = streamlib_plugin_abi::DrawCallRepr {
-        vertex_count: 0,
-        instance_count: 0,
-        first_vertex: 0,
-        first_instance: 0,
-        viewport_present: 0,
-        scissor_present: 0,
-        viewport: streamlib_plugin_abi::ViewportRepr {
-            x: 0.0,
-            y: 0.0,
-            width: 0.0,
-            height: 0.0,
-            min_depth: 0.0,
-            max_depth: 0.0,
-        },
-        scissor: streamlib_plugin_abi::ScissorRectRepr {
-            x: 0,
-            y: 0,
-            width: 0,
-            height: 0,
-        },
-    };
-    let zero_draw_indexed = streamlib_plugin_abi::DrawIndexedCallRepr {
-        index_count: 0,
-        instance_count: 0,
-        first_index: 0,
-        vertex_offset: 0,
-        first_instance: 0,
-        viewport_present: 0,
-        scissor_present: 0,
-        _reserved_padding: 0,
-        viewport: streamlib_plugin_abi::ViewportRepr {
-            x: 0.0,
-            y: 0.0,
-            width: 0.0,
-            height: 0.0,
-            min_depth: 0.0,
-            max_depth: 0.0,
-        },
-        scissor: streamlib_plugin_abi::ScissorRectRepr {
-            x: 0,
-            y: 0,
-            width: 0,
-            height: 0,
-        },
-    };
-    match draw {
-        super::OffscreenDraw::Draw(d) => streamlib_plugin_abi::OffscreenDrawRepr {
-            kind: streamlib_plugin_abi::OffscreenDrawKindRepr::Draw as u32,
-            _reserved_padding: 0,
-            draw_call: draw_call_to_repr(d),
-            draw_indexed_call: zero_draw_indexed,
-        },
-        super::OffscreenDraw::DrawIndexed(d) => streamlib_plugin_abi::OffscreenDrawRepr {
-            kind: streamlib_plugin_abi::OffscreenDrawKindRepr::DrawIndexed as u32,
-            _reserved_padding: 0,
-            draw_call: zero_draw,
-            draw_indexed_call: draw_indexed_call_to_repr(d),
-        },
-    }
-}
 
 impl Clone for VulkanGraphicsKernel {
     fn clone(&self) -> Self {
-        if !self.handle.is_null() && !self.vtable.is_null() {
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Arc::into_raw(Arc<VulkanGraphicsKernelInner>)`;
+            // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                ((*self.vtable).clone_graphics_kernel)(self.handle);
+                Arc::increment_strong_count(self.handle as *const VulkanGraphicsKernelInner);
             }
         }
         Self {
             handle: self.handle,
-            vtable: self.vtable,
-            methods_vtable: self.methods_vtable,
             cached_push_constant_size: self.cached_push_constant_size,
             cached_descriptor_sets_in_flight: self.cached_descriptor_sets_in_flight,
         }
@@ -2239,9 +1491,11 @@ impl Clone for VulkanGraphicsKernel {
 
 impl Drop for VulkanGraphicsKernel {
     fn drop(&mut self) {
-        if !self.handle.is_null() && !self.vtable.is_null() {
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Arc::into_raw(Arc<VulkanGraphicsKernelInner>)`;
+            // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                ((*self.vtable).drop_graphics_kernel)(self.handle);
+                Arc::decrement_strong_count(self.handle as *const VulkanGraphicsKernelInner);
             }
         }
     }
@@ -2253,41 +1507,6 @@ impl std::fmt::Debug for VulkanGraphicsKernel {
     }
 }
 
-#[cfg(all(test, target_pointer_width = "64"))]
-mod plugin_abi_object_layout_tests {
-    use super::*;
-    use core::mem::{align_of, offset_of, size_of};
-
-    #[test]
-    fn vulkan_graphics_kernel_layout() {
-        // PluginAbiObject struct as of #907 PR 3/5:
-        //   handle                              @ 0  (8 bytes, *const c_void)
-        //   vtable                              @ 8  (8 bytes, *const GpuContextFullAccessVTable)
-        //   methods_vtable                      @ 16 (8 bytes, *const VulkanGraphicsKernelMethodsVTable)
-        //   cached_push_constant_size           @ 24 (4 bytes, u32)
-        //   cached_descriptor_sets_in_flight    @ 28 (4 bytes, u32)
-        // Total = 32, align = 8.
-        assert_eq!(size_of::<VulkanGraphicsKernel>(), 32);
-        assert_eq!(align_of::<VulkanGraphicsKernel>(), 8);
-        assert_eq!(offset_of!(VulkanGraphicsKernel, handle), 0);
-        assert_eq!(offset_of!(VulkanGraphicsKernel, vtable), 8);
-        assert_eq!(offset_of!(VulkanGraphicsKernel, methods_vtable), 16);
-        assert_eq!(
-            offset_of!(VulkanGraphicsKernel, cached_push_constant_size),
-            24
-        );
-        assert_eq!(
-            offset_of!(VulkanGraphicsKernel, cached_descriptor_sets_in_flight),
-            28
-        );
-    }
-
-    #[test]
-    fn vulkan_graphics_kernel_is_send_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<VulkanGraphicsKernel>();
-    }
-}
 
 // ---- Validation + creation helpers --------------------------------------------
 

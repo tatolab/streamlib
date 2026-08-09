@@ -15,24 +15,18 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-use streamlib_plugin_abi::PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST;
 
-use crate::core::error::{Error, Result};
-use crate::core::plugin::host_services::HostCallbacks;
+use crate::core::error::Result;
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent};
 
-/// Latched by the host arm of [`request_runtime_shutdown`], read by the run
+/// Latched by [`request_runtime_shutdown`], read by the run
 /// loop. A latch and not a counter, so "requesting twice is not an error"
-/// holds by construction. Process-global like `PUBSUB` — and, like `PUBSUB`,
-/// a facade cdylib statically links its own copy of the engine and therefore
-/// its own copy of this static, which is precisely why the cdylib arm of the
-/// funnel publishes across the plugin ABI instead of storing here.
+/// holds by construction. Process-global like `PUBSUB`.
 static RUNTIME_SHUTDOWN_REQUEST_LATCH: AtomicBool = AtomicBool::new(false);
 
 /// Fired at most once per image, so the wrong-image diagnostic below stays
 /// fail-loud without becoming a log firehose: the predicate it guards is meant
 /// to be polled, and inside a facade cdylib every emit is a plugin-ABI hop.
-static WRONG_IMAGE_LATCH_READ_WARNING: std::sync::Once = std::sync::Once::new();
 
 /// How often a loop owner re-reads the latch. Shared so the run loop
 /// ([`crate::core::runtime::Runner::wait_for_signal_with`]) and every
@@ -43,32 +37,9 @@ pub const RUNTIME_SHUTDOWN_REQUEST_OBSERVATION_POLL_INTERVAL: Duration = Duratio
 /// Ctrl+C / SIGTERM). Idempotent and fire-and-forget.
 ///
 /// `reason` is a human-readable attribution logged at `info` (empty string =
-/// unspecified). In a plugin cdylib whose `install_host_services` has run this
-/// publishes to the host across the plugin ABI and returns, and the only
-/// failure is that arm's msgpack encode of `reason`.
+/// unspecified).
 #[tracing::instrument]
 pub fn request_runtime_shutdown(reason: &str) -> Result<()> {
-    request_runtime_shutdown_with_installed_host_callbacks(
-        crate::core::plugin::host_services::host_callbacks(),
-        reason,
-    )
-}
-
-/// The funnel's two arms, with the "am I running inside a plugin cdylib?"
-/// answer passed in so the arm selection is testable.
-///
-/// `Some` means this engine copy is the one statically linked into a facade
-/// plugin cdylib: it must publish across the plugin ABI and latch NOTHING,
-/// because the latch it can reach is the plugin image's copy, which the host's
-/// run loop never reads.
-fn request_runtime_shutdown_with_installed_host_callbacks(
-    installed_host_callbacks: Option<&HostCallbacks>,
-    reason: &str,
-) -> Result<()> {
-    if let Some(callbacks) = installed_host_callbacks {
-        return publish_runtime_shutdown_request(callbacks, reason);
-    }
-
     tracing::info!(reason, "runtime shutdown requested");
     // Latch BEFORE publishing: the loop owner polls the latch as well as the
     // pubsub listener, so a request issued while the shutdown subscriber is
@@ -79,32 +50,8 @@ fn request_runtime_shutdown_with_installed_host_callbacks(
     Ok(())
 }
 
-/// Whether a runtime-shutdown request is latched. Host-only — see
-/// [`is_runtime_shutdown_requested_with_installed_host_callbacks`].
+/// Whether a runtime-shutdown request is latched.
 pub fn is_runtime_shutdown_requested() -> bool {
-    is_runtime_shutdown_requested_with_installed_host_callbacks(
-        crate::core::plugin::host_services::host_callbacks(),
-    )
-}
-
-/// Read the latch, with the "am I running inside a plugin cdylib?" answer
-/// passed in so the wrong-image warning is testable.
-///
-/// `Some` means this engine copy lives in a facade plugin cdylib, whose latch
-/// the funnel's cdylib arm never sets — the answer would be a silent `false`
-/// forever, so it is warned about rather than quietly returned.
-fn is_runtime_shutdown_requested_with_installed_host_callbacks(
-    installed_host_callbacks: Option<&HostCallbacks>,
-) -> bool {
-    if installed_host_callbacks.is_some() {
-        WRONG_IMAGE_LATCH_READ_WARNING.call_once(|| {
-            tracing::warn!(
-                "is_runtime_shutdown_requested read inside a plugin cdylib: this image's latch is \
-                 never set, so the answer is always `false` — the run loop that observes a \
-                 shutdown request lives in the host (warned once per image)"
-            );
-        });
-    }
     RUNTIME_SHUTDOWN_REQUEST_LATCH.load(Ordering::SeqCst)
 }
 
@@ -148,35 +95,12 @@ impl Drop for RuntimeShutdownRequestLatchClearedOnDrop {
 /// before its general `Event` decode and carry the per-topic payload defined
 /// next to the topic constant.
 // twin-guard(runtime-shutdown-publish): BEGIN
-fn publish_runtime_shutdown_request(callbacks: &HostCallbacks, reason: &str) -> Result<()> {
-    let reason_msgpack = rmp_serde::to_vec(reason)
-        .map_err(|e| Error::Runtime(format!("failed to encode shutdown reason: {e}")))?;
-
-    // SAFETY: `callbacks.pubsub_publish` and `callbacks.host` were
-    // populated by `install_host_services` from a host-provided
-    // `HostServices` and stay valid for the plugin's process lifetime.
-    // The topic and payload slices outlive the synchronous call.
-    unsafe {
-        (callbacks.pubsub_publish)(
-            callbacks.host,
-            PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST.as_ptr(),
-            PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST.len(),
-            reason_msgpack.as_ptr(),
-            reason_msgpack.len(),
-        );
-    }
-
-    Ok(())
-}
 // twin-guard(runtime-shutdown-publish): END
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::plugin::host_services::host_services_test_support::host_callbacks_with_capturing_pubsub_publish;
-    use core::cell::RefCell;
     use serial_test::serial;
-    use streamlib_plugin_abi::HostHandle;
 
     /// The latch is process-global, so every test that touches it runs
     /// `#[serial]` and leaves it cleared for the next one — including when an
@@ -246,123 +170,4 @@ mod tests {
         });
     }
 
-    /// One captured `pubsub_publish` call: the exact topic + payload byte
-    /// slices the cdylib arm handed the host callback.
-    struct CapturedRuntimeShutdownPublish {
-        topic: Vec<u8>,
-        payload: Vec<u8>,
-    }
-
-    // Capturing `pubsub_publish`: `host` is a `*const RefCell<Vec<...>>` the
-    // test owns; copy the topic + payload bytes out and record them.
-    unsafe extern "C" fn capturing_pubsub_publish(
-        host: HostHandle,
-        topic_ptr: *const u8,
-        topic_len: usize,
-        payload_ptr: *const u8,
-        payload_len: usize,
-    ) {
-        let sink = unsafe { &*(host as *const RefCell<Vec<CapturedRuntimeShutdownPublish>>) };
-        let topic = unsafe { core::slice::from_raw_parts(topic_ptr, topic_len) }.to_vec();
-        let payload = unsafe { core::slice::from_raw_parts(payload_ptr, payload_len) }.to_vec();
-        sink.borrow_mut()
-            .push(CapturedRuntimeShutdownPublish { topic, payload });
-    }
-
-    /// A `HostCallbacks` whose `pubsub_publish` records into `sink` and whose
-    /// `host` points at it; every other slot is an unused stub or a null
-    /// vtable pointer.
-    fn host_callbacks_with_capture(
-        sink: &RefCell<Vec<CapturedRuntimeShutdownPublish>>,
-    ) -> HostCallbacks {
-        host_callbacks_with_capturing_pubsub_publish(
-            sink as *const RefCell<Vec<CapturedRuntimeShutdownPublish>> as HostHandle,
-            capturing_pubsub_publish,
-        )
-    }
-
-    /// The cdylib arm's wire selection is load-bearing: the host decodes the
-    /// reason with `rmp_serde::from_slice(..).unwrap_or_default()` and STILL
-    /// shuts down, so a drifted encoding silently loses reason attribution
-    /// with no failure. This pins the exact `(topic, payload)` handed to the
-    /// host's `pubsub_publish`. Mental-revert: swapping the topic constant, or
-    /// `to_vec` → `to_vec_named` / the general `Event` msgpack encode, fails
-    /// one of the asserts below.
-    #[test]
-    fn cdylib_arm_publishes_the_reserved_control_topic_with_a_msgpack_reason() {
-        let sink: RefCell<Vec<CapturedRuntimeShutdownPublish>> = RefCell::new(Vec::new());
-        let callbacks = host_callbacks_with_capture(&sink);
-
-        publish_runtime_shutdown_request(&callbacks, "x").expect("the publish helper must succeed");
-
-        let captured = sink.borrow();
-        assert_eq!(captured.len(), 1, "exactly one pubsub_publish call");
-        let call = &captured[0];
-        assert_eq!(
-            call.topic,
-            PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST.as_bytes(),
-            "topic must be EXACTLY the reserved runtime-shutdown control topic",
-        );
-        assert_eq!(
-            call.payload,
-            rmp_serde::to_vec("x").expect("encode reason"),
-            "payload must be the msgpack reason the host decodes with rmp_serde::from_slice",
-        );
-    }
-
-    /// A facade cdylib statically links the engine, so this latch exists twice
-    /// (host image + plugin image). Latching in the plugin's copy would be
-    /// invisible to the host's run loop: nothing stops, no error, no panic.
-    /// The cdylib arm must publish ONLY.
-    ///
-    /// This drives the funnel's arm SELECTION, not the publish helper, because
-    /// the ordering between the latch store and the cdylib short-circuit is
-    /// the thing that breaks. Mental-revert: hoisting
-    /// `RUNTIME_SHUTDOWN_REQUEST_LATCH.store(true, ..)` above the `if let Some`
-    /// fails this.
-    #[test]
-    #[serial]
-    fn cdylib_arm_does_not_set_the_engine_local_latch() {
-        with_cleared_latch(|| {
-            let sink: RefCell<Vec<CapturedRuntimeShutdownPublish>> = RefCell::new(Vec::new());
-            let callbacks = host_callbacks_with_capture(&sink);
-
-            request_runtime_shutdown_with_installed_host_callbacks(
-                Some(&callbacks),
-                "from a cdylib",
-            )
-            .expect("the cdylib arm must succeed");
-
-            assert_eq!(sink.borrow().len(), 1, "the request must reach the host");
-            assert!(
-                !is_runtime_shutdown_requested(),
-                "the cdylib arm must NOT latch in the plugin image's copy of the engine",
-            );
-        });
-    }
-
-    /// The documented host-only semantic of the read side, composed with the
-    /// cdylib arm: a plugin image that requests shutdown can never see its own
-    /// request, because the request went to the host and the latch it reads is
-    /// its own. Mental-revert: making the cdylib arm latch as well as publish
-    /// fails this.
-    #[test]
-    #[serial]
-    fn a_plugin_image_never_observes_its_own_shutdown_request() {
-        with_cleared_latch(|| {
-            let sink: RefCell<Vec<CapturedRuntimeShutdownPublish>> = RefCell::new(Vec::new());
-            let callbacks = host_callbacks_with_capture(&sink);
-
-            request_runtime_shutdown_with_installed_host_callbacks(
-                Some(&callbacks),
-                "from a cdylib",
-            )
-            .expect("the cdylib arm must succeed");
-
-            assert!(
-                !is_runtime_shutdown_requested_with_installed_host_callbacks(Some(&callbacks)),
-                "a plugin image's own latch stays clear — the request is the host's to observe",
-            );
-        });
-    }
 }

@@ -964,12 +964,12 @@ mod tests {
         let source_instance = attach_processor_instance(
             &mut graph,
             &source_id,
-            ProcessorInstance::LegacyDyn(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
         );
         let dest_instance = attach_processor_instance(
             &mut graph,
             &dest_id,
-            ProcessorInstance::LegacyDyn(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
         );
         let link_id: LinkUniqueId = "L-seam-test".into();
 
@@ -1040,7 +1040,7 @@ mod tests {
         attach_processor_instance(
             &mut graph,
             &helper_hosted_id,
-            ProcessorInstance::LegacyDyn(Box::new(OutOfCrateHelperSpawnHostStub::default())),
+            ProcessorInstance::new(Box::new(OutOfCrateHelperSpawnHostStub::default())),
         );
         assert!(is_subprocess_processor(
             &mut graph,
@@ -1069,7 +1069,7 @@ mod tests {
         P: crate::core::GeneratedProcessor + DynGeneratedProcessor + Send + 'static,
         P::Config: Default,
     {
-        let mut instance = ProcessorInstance::LegacyDyn(Box::new(
+        let mut instance = ProcessorInstance::new(Box::new(
             P::from_config(Default::default())
                 .expect("the mock constructs from its default config"),
         ));

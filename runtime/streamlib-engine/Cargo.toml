@@ -68,7 +68,6 @@ streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.16.0" }
 # cyclic dep this dep used to dodge (engine → plugin-abi → sdk → engine)
 # is gone. The engine's dlopen loader uses `PluginDeclaration` and
 # `STREAMLIB_ABI_VERSION` from this crate directly.
-streamlib-plugin-abi = { path = "../streamlib-plugin-abi", version = "0.16.0" }
 
 # Shared iceoryx2 payload types (for cross-process IPC)
 streamlib-ipc-types = { path = "../streamlib-ipc-types", version = "0.16.0" }
@@ -166,7 +165,6 @@ streamlib-surface-client = { path = "../streamlib-surface-client", version = "0.
 streamlib-surface-adapter = { path = "../../adapters/streamlib-surface-adapter", version = "0.16.0" }
 # The extern "C" panic net (run_host_extern_c) every host_services callback
 # routes through.
-streamlib-adapter-abi = { path = "../../adapters/streamlib-adapter-abi", version = "0.16.0" }
 # Consumer-side carve-out — defines the trait machinery
 # (VulkanRhiDevice, DevicePrivilege, *Like, ConsumerMarker), the
 # Consumer* RHI types, and the format/error primitives shared with the

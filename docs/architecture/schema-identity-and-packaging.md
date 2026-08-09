@@ -242,7 +242,7 @@ Three dependency source flavors are supported:
   Resolved by `@org/name` + version range against the configured
   package source — any location serving versioned `.slpkg` files
   (`file://` tree, HTTP mount, later a mesh peer or offline cache),
-  read like another filesystem (see `package-source.md`). There is no
+  is treated like another filesystem. There is no
   central registry.
 - **Path** (`{ path: ../foo }`). Local-filesystem dependency, used
   inside the streamlib monorepo for pre-publish work.
@@ -272,7 +272,7 @@ appears.
 
 `streamlib-codegen.lock` is the resolved-set companion to `streamlib.yaml`.
 (The plain `streamlib.lock` name belongs to the per-app modules lockfile —
-see `package-development-model.md`.)
+see the package model.)
 Wire shape:
 
 ```yaml
@@ -450,7 +450,7 @@ graph.add_edge(VIDEO_FRAME_IDENT, …);   // No org/package on the wire
 > canonical shorthand for **owning** a processor's identity.~~ — Superseded 2026-07-19: a
 > `#[processor("@org/package/Type")]` declares a **version-free identity in code** (or synthesizes
 > `@app/local/<Type>`), reading nothing from a manifest. See
-> [`zero-ceremony-authoring.md`](zero-ceremony-authoring.md).
+> the zero-ceremony authoring model.
 
 Three macros **reference** a processor at a call site (typically the spawning binary that doesn't
 own the processor's Rust module):
@@ -535,7 +535,7 @@ to the authoring path:
   > time against the enclosing `streamlib.yaml`, validated against the manifest's `processors:` list.~~
   > — Superseded 2026-07-19: `_manifest` was removed and `@processor("@org/package/Type")` declares a
   > version-free identity from the decorator arguments, reading nothing from disk. See
-  > [`zero-ceremony-authoring.md`](zero-ceremony-authoring.md).
+  > the zero-ceremony authoring model.
 - **`@streamlib.input(schema=...)` / `@streamlib.output(schema=...)`**
   — accept a `SchemaIdent` instance or a class that carries
   `__streamlib_schema_ident__`. Bare-string and joined-string
@@ -545,7 +545,7 @@ to the authoring path:
   dataclasses; there is no language-side affordance for declaring a schema —
   JTD-in-YAML is the canonical source and generated code is what authors import.~~
   — Superseded 2026-07-19 by the two-door descriptor model
-  ([`zero-ceremony-authoring.md`](zero-ceremony-authoring.md)): the self-describing
+  (the zero-ceremony authoring model): the self-describing
   `Bag` wire carries its own field names, so no schema and no generated type is
   needed to interoperate; a by-ID JTD descriptor is consumed as data, never via
   required codegen. `@input(schema=GeneratedClass)` is now an optional typed view,

@@ -16,7 +16,6 @@ use std::ffi::c_void;
 use std::mem;
 use std::sync::Arc;
 
-use streamlib_plugin_abi::GpuContextFullAccessVTable;
 use vma::Alloc as _;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
@@ -116,15 +115,9 @@ pub(crate) struct VulkanAccelerationStructureInner {
 /// `drop_acceleration_structure` callbacks, which run
 /// `Arc::increment_strong_count` / `Arc::decrement_strong_count` in
 /// host-compiled code where the Inner layout is known.
-#[repr(C)]
 pub struct VulkanAccelerationStructure {
     /// Opaque handle to the host's `Arc<VulkanAccelerationStructureInner>`.
     pub(crate) handle: *const c_void,
-    /// Parent vtable for plugin ABI Clone/Drop dispatch (#918 Phase D).
-    pub(crate) vtable: *const GpuContextFullAccessVTable,
-    /// Per-type vtable for plugin ABI method dispatch (#907 Phase E).
-    pub(crate) methods_vtable:
-        *const streamlib_plugin_abi::VulkanAccelerationStructureMethodsVTable,
     /// Cached AS kind discriminant (0 = BottomLevel, 1 = TopLevel).
     /// Matches `AccelerationStructureKind`'s ordering.
     pub(crate) cached_kind: u32,
@@ -683,13 +676,8 @@ impl VulkanAccelerationStructure {
         let cached_device_address = arc.device_address();
         let cached_storage_size = arc.storage_size();
         let handle = Arc::into_raw(arc) as *const c_void;
-        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
-        let methods_vtable =
-            crate::core::plugin::host_services::host_vulkan_acceleration_structure_methods_vtable();
         Self {
             handle,
-            vtable,
-            methods_vtable,
             cached_kind,
             _reserved_padding: 0,
             cached_device_address,
@@ -701,12 +689,6 @@ impl VulkanAccelerationStructure {
     /// `VulkanAccelerationStructureInner`. **Panics if called from
     /// cdylib code.**
     pub(crate) fn host_inner(&self) -> &VulkanAccelerationStructureInner {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "VulkanAccelerationStructure::host_inner() reached from cdylib code; \
-                 this method must dispatch through the GpuContextFullAccessVTable."
-            );
-        }
         // SAFETY: `self.handle` is `Arc::into_raw(Arc<VulkanAccelerationStructureInner>)`.
         unsafe { &*(self.handle as *const VulkanAccelerationStructureInner) }
     }
@@ -778,42 +760,7 @@ impl VulkanAccelerationStructure {
     /// the buffer are silently truncated (diagnostic strings, not
     /// load-bearing).
     pub fn label(&self) -> String {
-        if crate::core::plugin::host_services::host_callbacks().is_some()
-            && !self.methods_vtable.is_null()
-            && !self.handle.is_null()
-        {
-            // Cdylib mode — dispatch through the methods vtable.
-            // 256 bytes covers every realistic AS label (callers in
-            // tree use names like "rt-smoke-blas", "drone-racer-tlas").
-            let mut out_buf = [0u8; 256];
-            let mut out_len: usize = 0;
-            let mut err_buf = [0u8; 256];
-            let mut err_len: usize = 0;
-            let status = unsafe {
-                ((*self.methods_vtable).label)(
-                    self.handle,
-                    out_buf.as_mut_ptr(),
-                    out_buf.len(),
-                    &mut out_len as *mut usize,
-                    err_buf.as_mut_ptr(),
-                    err_buf.len(),
-                    &mut err_len as *mut usize,
-                )
-            };
-            if status == 0 {
-                let bytes = &out_buf[..out_len.min(out_buf.len())];
-                String::from_utf8_lossy(bytes).into_owned()
-            } else {
-                // Best-effort: surface the error string as the
-                // label so log lines reading `.label()` still make
-                // sense, rather than panic. Labels are diagnostic.
-                let msg =
-                    String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-                format!("<label dispatch failed: {msg}>")
-            }
-        } else {
-            self.host_inner().label().to_string()
-        }
+        self.host_inner().label().to_string()
     }
 
     /// Storage size in bytes. Reads the cached POD value populated
@@ -825,18 +772,15 @@ impl VulkanAccelerationStructure {
 
 impl Clone for VulkanAccelerationStructure {
     fn clone(&self) -> Self {
-        if !self.handle.is_null() && !self.vtable.is_null() {
-            // SAFETY: vtable + handle were paired at construction; the
-            // vtable's `clone_acceleration_structure` contract is
-            // `Arc::increment_strong_count(handle)` host-side.
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Arc::into_raw(Arc<VulkanAccelerationStructureInner>)`;
+            // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                ((*self.vtable).clone_acceleration_structure)(self.handle);
+                Arc::increment_strong_count(self.handle as *const VulkanAccelerationStructureInner);
             }
         }
         Self {
             handle: self.handle,
-            vtable: self.vtable,
-            methods_vtable: self.methods_vtable,
             cached_kind: self.cached_kind,
             _reserved_padding: self._reserved_padding,
             cached_device_address: self.cached_device_address,
@@ -847,12 +791,11 @@ impl Clone for VulkanAccelerationStructure {
 
 impl Drop for VulkanAccelerationStructure {
     fn drop(&mut self) {
-        if !self.handle.is_null() && !self.vtable.is_null() {
-            // SAFETY: matched with the `Arc::into_raw` in
-            // `from_arc_into_raw` and any `clone_acceleration_structure`
-            // bumps.
+        if !self.handle.is_null() {
+            // SAFETY: `handle` is `Arc::into_raw(Arc<VulkanAccelerationStructureInner>)`;
+            // the increment in `Clone` and this decrement are balanced.
             unsafe {
-                ((*self.vtable).drop_acceleration_structure)(self.handle);
+                Arc::decrement_strong_count(self.handle as *const VulkanAccelerationStructureInner);
             }
         }
     }
@@ -864,48 +807,6 @@ impl std::fmt::Debug for VulkanAccelerationStructure {
     }
 }
 
-#[cfg(all(test, target_pointer_width = "64"))]
-mod layout_tests {
-    use super::*;
-    use core::mem::{align_of, offset_of, size_of};
-
-    #[test]
-    fn vulkan_acceleration_structure_layout() {
-        // PluginAbiObject struct as of #907 PR 5/5:
-        //   handle                @ 0  (8 bytes, *const c_void)
-        //   vtable                @ 8  (8 bytes, *const GpuContextFullAccessVTable)
-        //   methods_vtable        @ 16 (8 bytes, *const VulkanAccelerationStructureMethodsVTable)
-        //   cached_kind           @ 24 (4 bytes, u32)
-        //   _reserved_padding     @ 28 (4 bytes, u32)
-        //   cached_device_address @ 32 (8 bytes, u64)
-        //   cached_storage_size   @ 40 (8 bytes, u64)
-        // Total = 48, align = 8.
-        assert_eq!(size_of::<VulkanAccelerationStructure>(), 48);
-        assert_eq!(align_of::<VulkanAccelerationStructure>(), 8);
-        assert_eq!(offset_of!(VulkanAccelerationStructure, handle), 0);
-        assert_eq!(offset_of!(VulkanAccelerationStructure, vtable), 8);
-        assert_eq!(offset_of!(VulkanAccelerationStructure, methods_vtable), 16);
-        assert_eq!(offset_of!(VulkanAccelerationStructure, cached_kind), 24);
-        assert_eq!(
-            offset_of!(VulkanAccelerationStructure, _reserved_padding),
-            28
-        );
-        assert_eq!(
-            offset_of!(VulkanAccelerationStructure, cached_device_address),
-            32
-        );
-        assert_eq!(
-            offset_of!(VulkanAccelerationStructure, cached_storage_size),
-            40
-        );
-    }
-
-    #[test]
-    fn vulkan_acceleration_structure_is_send_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<VulkanAccelerationStructure>();
-    }
-}
 
 // ---- Internal buffer helper -------------------------------------------------
 

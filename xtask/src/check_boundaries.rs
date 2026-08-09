@@ -103,7 +103,6 @@ pub fn scan_all(project_root: &Path) -> Result<CheckReport> {
     check_streamlib_top_level_shortcut(project_root, &mut violations, &mut files_scanned)?;
     check_packages_facade_runtime_dep(project_root, &mut violations, &mut files_scanned)?;
     check_packages_engine_reach(project_root, &mut violations, &mut files_scanned)?;
-    check_examples_cdylib_facade_dep(project_root, &mut violations, &mut files_scanned)?;
     check_trunk_set_no_engine_dep(project_root, &mut violations, &mut files_scanned)?;
     Ok(CheckReport {
         violations,
@@ -593,13 +592,6 @@ const PRIVILEGED_VK_ALLOWLIST: &[AllowEntry] = &[
         path: "tests",
         kind: AllowKind::PathSegment,
         rationale: "tests bring up real Vulkan devices for end-to-end validation",
-    },
-    // Adapter test-helper bin lives outside the test/ tree but is
-    // test-only by purpose.
-    AllowEntry {
-        path: "adapters/streamlib-adapter-vulkan-helpers/",
-        kind: AllowKind::PathPrefix,
-        rationale: "test-helper crate isolated so streamlib doesn't leak into adapter-vulkan runtime deps",
     },
 ];
 
@@ -1126,77 +1118,6 @@ fn check_packages_engine_reach(
 }
 
 // ---------------------------------------------------------------------------
-// Check 10 — `examples/*` cdylib plugins must not link the full `streamlib`
-//            facade
-// ---------------------------------------------------------------------------
-//
-// An `examples/*` crate that ships as a cdylib is a plugin: it is built
-// independently at load time and rides the engine-free plugin-authoring SDK
-// (`streamlib-plugin-sdk`) plus `streamlib-consumer-rhi`, never the FullAccess
-// `streamlib` facade. Only cdylib-shipping example crates are gated — an
-// example *app* (a plain bin / rlib) links the facade by design (apps are code
-// calling the runtime's add-module API). Cdylib detection reuses
-// `check_cdylib_reach::cargo_toml_has_cdylib` — one crate-type detector.
-//
-// `camera-plugin-sdk-compute/plugin` is left un-allowlisted as live proof the
-// rule passes for a correctly-authored cdylib example (it links
-// `streamlib-plugin-sdk`, never the facade).
-
-const CHECK_EXAMPLES_CDYLIB_FACADE_DEP: &str = "examples-cdylib-no-facade-dep";
-
-const EXAMPLES_CDYLIB_FACADE_DEP_RATIONALE: &str = "an examples/* cdylib plugin must not link the full `streamlib` facade — a cdylib plugin is built independently at load time and rides streamlib-plugin-sdk / streamlib-consumer-rhi, never the FullAccess facade. Move it to [dev-dependencies] or author against the plugin SDK";
-
-/// The `examples/*` cdylib crates that still link the `streamlib` facade as a
-/// non-dev runtime dep (green baseline) — the conversion backlog. Now EMPTY:
-/// `camera-python-display/effects` (the last entry) was converted to
-/// `streamlib-plugin-sdk` in #1389, so every cdylib example rides the
-/// engine-free plugin SDK. `camera-plugin-sdk-compute/plugin` and
-/// `camera-python-display/effects` are the live proof the rule passes; a new
-/// facade-linking cdylib example fails the check with no allowlist to fall
-/// back on.
-const EXAMPLES_CDYLIB_FACADE_DEP_ALLOWLIST: &[AllowEntry] = &[];
-
-fn check_examples_cdylib_facade_dep(
-    project_root: &Path,
-    violations: &mut Vec<Violation>,
-    files_scanned: &mut usize,
-) -> Result<()> {
-    for path in walk_cargo_toml(project_root) {
-        let rel = rel_to_root(&path, project_root);
-        if !rel_starts_with(rel, "examples/") {
-            continue;
-        }
-        let content =
-            fs::read_to_string(&path).with_context(|| format!("read {}", path.display()))?;
-        // Only cdylib-shipping example crates are gated — reuse the single
-        // crate-type detector rather than a divergent second parser.
-        if !crate::check_cdylib_reach::cargo_toml_has_cdylib(&content) {
-            continue;
-        }
-        *files_scanned += 1;
-        if matches_allow(rel, EXAMPLES_CDYLIB_FACADE_DEP_ALLOWLIST) {
-            continue;
-        }
-        let parsed: toml::Value = match toml::from_str(&content) {
-            Ok(v) => v,
-            Err(_) => continue,
-        };
-        for (section, dep_name, line_no) in iter_dep_entries(&parsed, &content) {
-            if dep_name == "streamlib" && !section_is_dev_only(&section) {
-                violations.push(Violation {
-                    path: rel.to_path_buf(),
-                    line_no,
-                    line_text: format!("[{}] streamlib = ...", section),
-                    matched_pattern: format!("streamlib facade dep in [{}]", section),
-                    check: CHECK_EXAMPLES_CDYLIB_FACADE_DEP,
-                    rationale: EXAMPLES_CDYLIB_FACADE_DEP_RATIONALE,
-                });
-            }
-        }
-    }
-    Ok(())
-}
-
 // ---------------------------------------------------------------------------
 // Check 11 — the engine-free TRUNK SET must never Cargo-dep the engine
 // ---------------------------------------------------------------------------
@@ -2677,146 +2598,6 @@ streamlib = { version = "0.6.0" }
 
     // ----- Check 10: examples/* cdylib facade-dep ban -----
 
-    #[test]
-    fn rejects_facade_dep_in_new_cdylib_example() {
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "examples/newly-added/plugin/Cargo.toml",
-            r#"[package]
-name = "newly-added-plugin"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-crate-type = ["rlib", "cdylib"]
-
-[dependencies]
-streamlib = { workspace = true }
-"#,
-        );
-        let report = scan_all(dir.path()).unwrap();
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.check == CHECK_EXAMPLES_CDYLIB_FACADE_DEP),
-            "expected examples cdylib facade-dep violation, got {:?}",
-            report.violations,
-        );
-    }
-
-    #[test]
-    fn examples_cdylib_facade_dep_allowlist_is_empty() {
-        // #1389 converted `camera-python-display/effects` (the last entry) to
-        // `streamlib-plugin-sdk`, so the allowlist is now empty — every cdylib
-        // example rides the engine-free plugin SDK. Locking emptiness keeps a
-        // future facade-linking cdylib example from silently re-adding an
-        // allowlist crutch.
-        assert!(
-            EXAMPLES_CDYLIB_FACADE_DEP_ALLOWLIST.is_empty(),
-            "examples-cdylib facade-dep allowlist must stay empty after #1389; \
-             convert the cdylib to streamlib-plugin-sdk instead of allowlisting it"
-        );
-    }
-
-    #[test]
-    fn rejects_facade_dep_in_former_allowlisted_effects_example() {
-        // The former last allowlist entry: with the allowlist now empty, a
-        // facade-linking `camera-python-display/effects` Cargo.toml must be
-        // flagged — there is no allowlist fallback left. Mentally revert the
-        // allowlist back to containing this path and this test fails.
-        let dir = empty_workspace();
-        write_fixture(
-            dir.path(),
-            "examples/camera-python-display/effects/Cargo.toml",
-            r#"[package]
-name = "camera-python-display-effects"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-crate-type = ["rlib", "cdylib"]
-
-[dependencies]
-streamlib = { workspace = true }
-"#,
-        );
-        let report = scan_all(dir.path()).unwrap();
-        assert!(
-            report
-                .violations
-                .iter()
-                .any(|v| v.check == CHECK_EXAMPLES_CDYLIB_FACADE_DEP),
-            "a facade-linking effects Cargo.toml must be flagged now the allowlist is empty, \
-             got {:?}",
-            report.violations,
-        );
-    }
-
-    #[test]
-    fn ignores_facade_dep_in_non_cdylib_example() {
-        let dir = empty_workspace();
-        // An example *app* (bin/rlib, no cdylib) links the facade by design —
-        // only cdylib plugins are gated. The cdylib detector gates the check.
-        write_fixture(
-            dir.path(),
-            "examples/camera-display/Cargo.toml",
-            r#"[package]
-name = "camera-display"
-version = "0.1.0"
-edition = "2021"
-
-[dependencies]
-streamlib = { workspace = true }
-"#,
-        );
-        let report = scan_all(dir.path()).unwrap();
-        let hits: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.check == CHECK_EXAMPLES_CDYLIB_FACADE_DEP)
-            .collect();
-        assert!(
-            hits.is_empty(),
-            "non-cdylib example app should pass: {:?}",
-            hits
-        );
-    }
-
-    #[test]
-    fn allows_cdylib_example_without_facade_dep() {
-        let dir = empty_workspace();
-        // The un-allowlisted proof: a correctly-authored cdylib example that
-        // links the plugin SDK (never the facade) passes with no allowlist
-        // entry — mirrors examples/camera-plugin-sdk-compute/plugin.
-        write_fixture(
-            dir.path(),
-            "examples/camera-plugin-sdk-compute/plugin/Cargo.toml",
-            r#"[package]
-name = "camera-plugin-sdk-compute-plugin"
-version = "0.1.0"
-edition = "2021"
-
-[lib]
-crate-type = ["rlib", "cdylib"]
-
-[dependencies]
-streamlib-plugin-sdk = { workspace = true }
-"#,
-        );
-        let report = scan_all(dir.path()).unwrap();
-        let hits: Vec<_> = report
-            .violations
-            .iter()
-            .filter(|v| v.check == CHECK_EXAMPLES_CDYLIB_FACADE_DEP)
-            .collect();
-        assert!(
-            hits.is_empty(),
-            "cdylib example without facade dep should pass: {:?}",
-            hits
-        );
-    }
 
     // ----- Check 11: trunk-set -> streamlib-engine Cargo-dep ban -----
 

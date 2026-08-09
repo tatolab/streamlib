@@ -4891,13 +4891,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "streamlib-adapter-abi"
-version = "0.16.0"
-dependencies = [
- "tracing",
-]
-
-[[package]]
 name = "streamlib-adapter-cpu-readback"
 version = "0.16.0"
 dependencies = [
@@ -4906,37 +4899,12 @@ dependencies = [
  "serde_json",
  "serial_test",
  "streamlib",
- "streamlib-adapter-abi",
- "streamlib-adapter-cpu-readback-abi",
- "streamlib-adapter-cpu-readback-helpers",
  "streamlib-consumer-rhi",
  "streamlib-engine",
  "streamlib-surface-adapter",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
  "thiserror 2.0.18",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "streamlib-adapter-cpu-readback-abi"
-version = "0.16.0"
-
-[[package]]
-name = "streamlib-adapter-cpu-readback-helpers"
-version = "0.16.0"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
- "serial_test",
- "streamlib",
- "streamlib-adapter-cpu-readback",
- "streamlib-consumer-rhi",
- "streamlib-engine",
- "streamlib-surface-client",
- "tatolab-vulkanalia",
  "tracing",
  "tracing-subscriber",
 ]
@@ -4951,8 +4919,6 @@ dependencies = [
  "serde_json",
  "serial_test",
  "streamlib",
- "streamlib-adapter-abi",
- "streamlib-adapter-cuda-abi",
  "streamlib-consumer-rhi",
  "streamlib-engine",
  "streamlib-surface-adapter",
@@ -4962,10 +4928,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
 ]
-
-[[package]]
-name = "streamlib-adapter-cuda-abi"
-version = "0.16.0"
 
 [[package]]
 name = "streamlib-adapter-opengl"
@@ -4979,8 +4941,6 @@ dependencies = [
  "serde",
  "serde_json",
  "streamlib",
- "streamlib-adapter-abi",
- "streamlib-adapter-opengl-abi",
  "streamlib-adapter-vulkan",
  "streamlib-consumer-rhi",
  "streamlib-engine",
@@ -4991,10 +4951,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
 ]
-
-[[package]]
-name = "streamlib-adapter-opengl-abi"
-version = "0.16.0"
 
 [[package]]
 name = "streamlib-adapter-skia"
@@ -5007,9 +4963,7 @@ dependencies = [
  "serde_json",
  "skia-safe",
  "streamlib",
- "streamlib-adapter-abi",
  "streamlib-adapter-opengl",
- "streamlib-adapter-skia-abi",
  "streamlib-adapter-vulkan",
  "streamlib-consumer-rhi",
  "streamlib-engine",
@@ -5020,10 +4974,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
 ]
-
-[[package]]
-name = "streamlib-adapter-skia-abi"
-version = "0.16.0"
 
 [[package]]
 name = "streamlib-adapter-vulkan"
@@ -5034,37 +4984,12 @@ dependencies = [
  "serde_json",
  "serial_test",
  "streamlib",
- "streamlib-adapter-abi",
- "streamlib-adapter-vulkan-abi",
- "streamlib-adapter-vulkan-helpers",
  "streamlib-consumer-rhi",
  "streamlib-engine",
  "streamlib-surface-adapter",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
  "thiserror 2.0.18",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "streamlib-adapter-vulkan-abi"
-version = "0.16.0"
-
-[[package]]
-name = "streamlib-adapter-vulkan-helpers"
-version = "0.16.0"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
- "serial_test",
- "streamlib",
- "streamlib-adapter-vulkan",
- "streamlib-consumer-rhi",
- "streamlib-engine",
- "streamlib-surface-client",
- "tatolab-vulkanalia",
  "tracing",
  "tracing-subscriber",
 ]
@@ -5160,14 +5085,12 @@ dependencies = [
  "sha2",
  "signal-hook",
  "streamlib",
- "streamlib-adapter-abi",
  "streamlib-consumer-rhi",
  "streamlib-error",
  "streamlib-idents",
  "streamlib-ipc-types",
  "streamlib-jtd-codegen",
  "streamlib-macros",
- "streamlib-plugin-abi",
  "streamlib-processor-schema",
  "streamlib-surface-adapter",
  "streamlib-surface-client",
@@ -5291,33 +5214,6 @@ dependencies = [
  "tracing",
  "url",
  "web-transport",
-]
-
-[[package]]
-name = "streamlib-plugin-abi"
-version = "0.16.0"
-dependencies = [
- "tracing",
-]
-
-[[package]]
-name = "streamlib-plugin-sdk"
-version = "0.16.0"
-dependencies = [
- "criterion",
- "iceoryx2-log",
- "rmp",
- "rmp-serde",
- "rmpv",
- "serde",
- "serde_json",
- "streamlib-adapter-abi",
- "streamlib-consumer-rhi",
- "streamlib-error",
- "streamlib-macros",
- "streamlib-plugin-abi",
- "streamlib-processor-schema",
- "tracing",
 ]
 
 [[package]]

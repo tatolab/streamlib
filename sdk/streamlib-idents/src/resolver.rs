@@ -432,8 +432,8 @@ fn resolve_one(
     // Cargo `[patch.crates-io]` semantics: `dependencies:` declares *what* the
     // consumer needs, `patch:` declares *which copy* to use.
     //
-    // A path patch is a **dev-loop-only** affordance (the two-loops model in
-    // docs/architecture/package-development-model.md). It ships inside the
+    // A path patch is a **dev-loop-only** affordance (the two-loops model).
+    // It ships inside the
     // published artifact, but its monorepo-relative target only exists in a dev
     // checkout:
     //   * dev loop     — target exists → the patch wins (byte-identical to an

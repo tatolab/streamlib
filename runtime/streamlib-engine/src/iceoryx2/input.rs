@@ -3,28 +3,22 @@
 
 //! Input mailboxes for receiving frames from upstream processors.
 //!
-//! # Two-type split: PluginAbiObject vs. inner
-//!
-//! Issue #894 retires the last shared-Rust-type plugin ABI crossing
-//! by splitting this module's public surface into two types:
+//! # Two-type split: handle vs. inner
 //!
 //! - [`InputMailboxesInner`] holds the actual state — the
 //!   `HashMap<port, PortConfig>` of per-port mailboxes plus the
 //!   thread-local `Subscriber` and `Listener` wrappers. All
-//!   per-frame `receive_pending` + mailbox push/pop work runs
-//!   here; only the host references this type directly.
-//! - [`InputMailboxes`] is the public `#[repr(C)] { handle, vtable }`
-//!   PluginAbiObject that processor structs hold via the macro-emitted
-//!   `inputs: InputMailboxes` field. From inside `process()` the
-//!   cdylib reaches input data exclusively through `read` /
-//!   `read_raw` / `has_data` on this PluginAbiObject; the vtable dispatches
-//!   to the host-allocated inner.
+//!   per-frame `receive_pending` + mailbox push/pop work runs here.
+//! - [`InputMailboxes`] is the public handle that processor structs
+//!   hold via the macro-emitted `inputs: InputMailboxes` field. It
+//!   wraps an `Arc<InputMailboxesInner>` behind an opaque handle;
+//!   `process()` reaches input data through `read` / `read_raw` /
+//!   `has_data`, which borrow the inner and invoke it directly.
 //!
-//! Host-side wiring code that needs to mutate the inner
-//! (`add_port`, `add_channel_subscriber`, `set_listener`, `listener_fd`,
+//! Host-side wiring code that mutates the inner (`add_port`,
+//! `add_channel_subscriber`, `set_listener`, `listener_fd`,
 //! `drain_listener`, etc.) operates on `Arc<InputMailboxesInner>`
-//! directly via the methods declared on the inner type — no
-//! PluginAbiObject, no plugin ABI hop.
+//! directly via the methods declared on the inner type.
 
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
@@ -36,7 +30,6 @@ use iceoryx2::port::listener::Listener;
 use iceoryx2::port::subscriber::Subscriber;
 use iceoryx2::prelude::*;
 use serde::de::DeserializeOwned;
-use streamlib_plugin_abi::InputMailboxesVTable;
 
 use super::mailbox::PortMailbox;
 use super::read_mode::ReadMode;
@@ -603,25 +596,13 @@ impl Default for InputMailboxesInner {
 /// pointer, so the cdylib's view of this type does not couple to
 /// the host's [`InputMailboxesInner`] source layout.
 ///
-/// `Clone` bumps the host-side `Arc<InputMailboxesInner>` strong
-/// count via [`InputMailboxesVTable::clone_arc`]; `Drop` decrements
-/// via [`InputMailboxesVTable::drop_arc`]. Both run in host-
-/// compiled code regardless of which artifact holds this PluginAbiObject.
-#[repr(C)]
+/// `Clone` bumps the `Arc<InputMailboxesInner>` strong count; `Drop`
+/// decrements it.
 pub struct InputMailboxes {
-    /// Opaque handle. In host mode: `Arc::into_raw(Arc<InputMailboxesInner>)`.
-    /// In cdylib mode: whatever the host hands via
-    /// `ProcessorVTable::set_iceoryx2_resources`. Null on a
-    /// freshly-constructed processor before
+    /// Opaque handle: `Arc::into_raw(Arc<InputMailboxesInner>)`. Null
+    /// on a freshly-constructed processor before
     /// `set_iceoryx2_resources` fires.
     pub(crate) handle: *const c_void,
-    /// Static dispatch table. Host mode points at
-    /// `&HOST_INPUT_MAILBOXES_VTABLE`; cdylib mode points at the
-    /// host-installed pointer from
-    /// `HostServices::input_mailboxes_vtable`. Null on
-    /// freshly-constructed pre-wiring instances; methods short-
-    /// circuit cleanly when the vtable is null.
-    pub(crate) vtable: *const InputMailboxesVTable,
 }
 
 // SAFETY: `handle` points at an `Arc<InputMailboxesInner>` whose
@@ -639,33 +620,30 @@ impl InputMailboxes {
     /// its lifetime and releases on Drop.
     pub fn from_inner_arc(inner: Arc<InputMailboxesInner>) -> Self {
         let handle = Arc::into_raw(inner) as *const c_void;
-        let vtable = crate::core::plugin::host_services::host_input_mailboxes_vtable();
-        Self { handle, vtable }
+        Self { handle }
     }
 
-    /// Build an empty pre-wiring PluginAbiObject with null handle and
-    /// null vtable. The host patches in real values via
-    /// `ProcessorVTable::set_iceoryx2_resources`.
+    /// Engine-internal borrow of the `InputMailboxesInner`, or `None`
+    /// when unwired.
+    fn host_inner(&self) -> Option<&InputMailboxesInner> {
+        if self.handle.is_null() {
+            return None;
+        }
+        // SAFETY: `handle` is `Arc::into_raw(Arc<InputMailboxesInner>)`.
+        Some(unsafe { &*(self.handle as *const InputMailboxesInner) })
+    }
+
+    /// Build an empty pre-wiring handle (null). The host patches in
+    /// the real `Arc` via `set_iceoryx2_resources`.
     pub fn empty() -> Self {
         Self {
             handle: std::ptr::null(),
-            vtable: std::ptr::null(),
         }
     }
 
-    /// Raw-pointer construction used by
-    /// `ProcessorVTable::set_iceoryx2_resources` host wiring.
-    pub(crate) fn from_raw_parts(
-        handle: *const c_void,
-        vtable: *const InputMailboxesVTable,
-    ) -> Self {
-        Self { handle, vtable }
-    }
-
-    /// Returns true iff this PluginAbiObject has been wired to a real
-    /// host-allocated inner.
+    /// Returns true iff this has been wired to a real inner.
     pub fn is_configured(&self) -> bool {
-        !self.handle.is_null() && !self.vtable.is_null()
+        !self.handle.is_null()
     }
 
     /// Borrow the host-side `Arc<InputMailboxesInner>` this
@@ -679,12 +657,11 @@ impl InputMailboxes {
         // SAFETY: handle came from Arc::into_raw; bumping the
         // strong count via the vtable's clone_arc gives us a fresh
         // owning reference we can reconstruct as Arc::from_raw.
+        // SAFETY: `handle` is `Arc::into_raw(Arc<InputMailboxesInner>)`; bump
+        // the strong count and reconstruct an owning `Arc` from the raw handle.
         unsafe {
-            let cloned_handle = ((*self.vtable).clone_arc)(self.handle);
-            if cloned_handle.is_null() {
-                return None;
-            }
-            Some(Arc::from_raw(cloned_handle as *const InputMailboxesInner))
+            Arc::increment_strong_count(self.handle as *const InputMailboxesInner);
+            Some(Arc::from_raw(self.handle as *const InputMailboxesInner))
         }
     }
 
@@ -717,31 +694,18 @@ impl InputMailboxes {
     /// the pre-#1421 `max_payload_for_port` up-front sizing that dropped every
     /// frame past the authored budget.
     pub fn read_raw(&self, port: &str) -> Result<Option<(Vec<u8>, i64)>> {
-        use streamlib_ipc_types::DEFAULT_EXPECTED_PAYLOAD_BYTES;
-
-        if !self.is_configured() {
+        let Some(inner) = self.host_inner() else {
             return Ok(None);
-        }
-
-        // SAFETY: vtable + handle are non-null per is_configured().
-        unsafe {
-            streamlib_plugin_abi::grow_and_retry_read(
-                self.vtable,
-                self.handle,
-                port,
-                DEFAULT_EXPECTED_PAYLOAD_BYTES,
-            )
-        }
-        .map_err(Error::Link)
+        };
+        inner.read_raw(port)
     }
 
     /// Check if a port has any payloads available.
     pub fn has_data(&self, port: &str) -> bool {
-        if !self.is_configured() {
-            return false;
+        match self.host_inner() {
+            Some(inner) => inner.has_data(port),
+            None => false,
         }
-        // SAFETY: vtable + handle are non-null per is_configured().
-        unsafe { ((*self.vtable).has_data)(self.handle, port.as_ptr(), port.len()) }
     }
 }
 
@@ -756,11 +720,13 @@ impl Clone for InputMailboxes {
         if !self.is_configured() {
             return Self::empty();
         }
-        // SAFETY: vtable + handle are non-null per is_configured().
-        let cloned_handle = unsafe { ((*self.vtable).clone_arc)(self.handle) };
+        // SAFETY: `handle` is `Arc::into_raw(Arc<InputMailboxesInner>)`; bump
+        // the strong count so both handles own one reference.
+        unsafe {
+            Arc::increment_strong_count(self.handle as *const InputMailboxesInner);
+        }
         Self {
-            handle: cloned_handle,
-            vtable: self.vtable,
+            handle: self.handle,
         }
     }
 }
@@ -770,12 +736,11 @@ impl Drop for InputMailboxes {
         if !self.is_configured() {
             return;
         }
-        // SAFETY: vtable + handle are non-null per is_configured().
+        // SAFETY: `handle` is `Arc::into_raw(Arc<InputMailboxesInner>)`.
         unsafe {
-            ((*self.vtable).drop_arc)(self.handle);
+            drop(Arc::from_raw(self.handle as *const InputMailboxesInner));
         }
         self.handle = std::ptr::null();
-        self.vtable = std::ptr::null();
     }
 }
 
@@ -963,7 +928,11 @@ mod tests {
             .read_raw("in")
             .expect("read_raw must succeed under loose validation")
             .expect("a frame is queued");
-        assert_eq!(read.0, vec![9, 8, 7, 6], "payload delivered despite mismatch");
+        assert_eq!(
+            read.0,
+            vec![9, 8, 7, 6],
+            "payload delivered despite mismatch"
+        );
         assert!(
             mailboxes.schema_mismatch_observed("in"),
             "the disagreeing tag must be observed as a mismatch",
@@ -975,8 +944,8 @@ mod tests {
     /// likewise silent.
     #[test]
     fn read_raw_is_silent_on_matching_or_wildcard_schema() {
-        let matching = SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0)
-            .unwrap();
+        let matching =
+            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
 
         // Exact match → no mismatch.
         let mb_match = InputMailboxesInner::new();
@@ -1223,7 +1192,9 @@ mod tests {
 
         // The staged frame was consumed exactly once — the mailbox is now empty.
         assert!(matches!(
-            inner.read_raw_bounded("in", body.len()).expect("bounded read"),
+            inner
+                .read_raw_bounded("in", body.len())
+                .expect("bounded read"),
             BoundedReadOutcome::Empty
         ));
     }

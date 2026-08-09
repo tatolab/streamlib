@@ -66,10 +66,10 @@ pub struct Violation {
 
 /// How many files one scan root contributed to a lint run.
 ///
-/// Per-root rather than one workspace-wide total: this lint reads three
-/// independent trees (the Python SDKs and every opted-in Rust crate's source
-/// roots), and a single sum lets one tree going to zero hide behind the
-/// others' surviving files.
+/// Per-root rather than one workspace-wide total: this lint reads the
+/// Python wheel tree and every opted-in Rust crate's source roots, and a
+/// single sum lets one tree going to zero hide behind the others' surviving
+/// files.
 #[derive(Debug)]
 pub struct LintLoggingScanRootFileCount {
     pub scan_root_description: String,
@@ -199,9 +199,9 @@ fn is_excluded(path: &Path, root: &Path, target: &LintTarget) -> bool {
 }
 
 /// Marker comment that exempts an entire file. Used by the infrastructure
-/// files that *install* the unified pathway — `_log_interceptors.py`,
-/// `_log_interceptors.ts`, and the subprocess bootstrap runners that must
-/// emit diagnostics before the logging pipeline is wired.
+/// files that *install* the unified pathway — `_log_interceptors.py` and
+/// the subprocess bootstrap runners that must emit diagnostics before the
+/// logging pipeline is wired.
 const ALLOW_FILE_PRAGMA: &str = "streamlib:lint-logging:allow-file";
 
 /// Marker comment that exempts a single line.

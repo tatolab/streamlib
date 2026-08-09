@@ -16,8 +16,6 @@ path = "src/lib.rs"
 
 [dependencies]
 streamlib-surface-adapter = { path = "../streamlib-surface-adapter", version = "0.16.0" }
-streamlib-adapter-abi = { path = "../streamlib-adapter-abi", version = "0.16.0" }
-streamlib-adapter-cpu-readback-abi = { path = "../streamlib-adapter-cpu-readback-abi", version = "0.16.0" }
 thiserror.workspace = true
 tracing.workspace = true
 
@@ -47,8 +45,6 @@ serde = { workspace = true }
 # Test-helper bin lives in this dev-deps-only crate so the
 # `streamlib`-pulling helper does NOT propagate into adapter-cpu-readback's
 # runtime dep graph (and from there into the cdylibs). Tests reach the
-# bin via `env!("CARGO_BIN_EXE_cpu_readback_adapter_subprocess_helper")`.
-streamlib-adapter-cpu-readback-helpers = { path = "../streamlib-adapter-cpu-readback-helpers" }
 # Serialize Vulkan-device-touching tests; concurrent `VkDevice` /
 # `VkInstance` creation on NVIDIA Linux trips the dual-device crash
 # documented in `docs/learnings/nvidia-dual-vulkan-device-crash.md`.

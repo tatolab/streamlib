@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use std::collections::{HashMap, HashSet};
-use std::ffi::c_void;
 use std::sync::{Arc, LazyLock};
 
 use parking_lot::RwLock;
@@ -15,478 +14,103 @@ use crate::core::execution::ExecutionConfig;
 use crate::core::graph::{PortInfo, ProcessorNode};
 use crate::core::processors::{Config, DynGeneratedProcessor, GeneratedProcessor};
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
-use streamlib_plugin_abi::ProcessorVTable;
 use streamlib_processor_schema::PortSchemaSpec;
-
-/// Scratch buffer the vtable's error-out-params write into. 512 B is
-/// enough for the typical "config deserialize failed" message; the
-/// vtable's `write_err` truncates cleanly past that.
-const VTABLE_ERR_BUF_CAP: usize = 512;
 
 /// A created processor instance for runtime use.
 ///
-/// Two-variant: cdylib registrations (via `STREAMLIB_PLUGIN`) and
-/// in-process `PROCESSOR_REGISTRY.register::<P>()` calls both land in
-/// [`Self::VTable`] (dispatch via extern "C" fn pointers, retiring
-/// the dyn-trait crossing class); legacy non-generic registrations
-/// (subprocess host wrappers via [`ProcessorInstanceFactory::register_dynamic`])
-/// land in [`Self::LegacyDyn`] (dispatch via Rust trait-object
-/// methods, host-only).
+/// Every processor — host-compiled Rust types registered through
+/// `register::<P>()` / `add_local::<P>()` and subprocess host wrappers
+/// registered through [`ProcessorInstanceFactory::register_dynamic`] —
+/// dispatches through a boxed [`DynGeneratedProcessor`] trait object.
 ///
 /// # Iceoryx2 resource ownership (issue #894)
 ///
 /// The host allocates the inner `OutputWriterInner` and
-/// `InputMailboxesInner` Arcs at instance-construction time and
-/// retains them on the `VTable` variant via the
-/// `iceoryx2_output_writer_inner` / `iceoryx2_input_mailboxes_inner`
-/// fields. The cdylib's `outputs` / `inputs` PluginAbiObject fields receive
-/// `Arc::into_raw`-cloned handles via `set_iceoryx2_resources`.
-/// Connection-wiring code on the host operates on the inner Arc
-/// directly (no plugin ABI hop).
-pub enum ProcessorInstance {
-    /// Vtable-dispatched processor — cdylib registrations (via
-    /// `STREAMLIB_PLUGIN`) and in-process `register::<P>()` calls
-    /// both land here. `instance_ptr` is a
-    /// `Box::into_raw(Box::<P>::new(...))` allocation on the
-    /// registering artifact's heap (cdylib for plugin loads, host for
-    /// in-process registration). Dropped via `vtable.destroy`.
-    ///
-    /// `any_placeholder` is a ZST anchor whose `&mut` reference
-    /// satisfies the `as_any_mut() -> &mut dyn Any` shape without
-    /// touching the cdylib-side processor. Downcasts to host-only
-    /// subprocess-host types fall through to `None` as expected
-    /// (cdylib processors are never subprocess hosts).
-    ///
-    /// `iceoryx2_output_writer_inner` / `iceoryx2_input_mailboxes_inner`
-    /// hold the host's per-instance allocation (issue #894). `None`
-    /// for processors without outputs / inputs.
-    VTable {
-        instance_ptr: *mut c_void,
-        vtable: &'static ProcessorVTable,
-        any_placeholder: (),
-        iceoryx2_output_writer_inner: Option<Arc<crate::iceoryx2::OutputWriterInner>>,
-        iceoryx2_input_mailboxes_inner: Option<Arc<crate::iceoryx2::InputMailboxesInner>>,
-        /// `true` when the vtable's function pointers target a
-        /// cdylib's address space (loaded via `STREAMLIB_PLUGIN`);
-        /// `false` when they target the host's address space
-        /// (`register::<P>()`). Lifecycle dispatch
-        /// ([`Self::setup`] / [`Self::teardown`]) consults this to
-        /// pick the cdylib-shaped `ScopeToken` FullAccess wrap vs
-        /// the in-process Boxed dispatch — see the variant's doc
-        /// at [`super::RegistrationKind`].
-        cdylib_resident: bool,
-    },
-    /// Host-static dyn-trait registration. Used by subprocess host
-    /// wrappers (Python / Deno) that register a `Box<dyn Fn>`
-    /// constructor via [`ProcessorInstanceFactory::register_dynamic`].
-    /// No plugin ABI crossing — these live in the host and
-    /// dispatch via standard Rust trait objects.
-    LegacyDyn(Box<dyn DynGeneratedProcessor + Send>),
-}
-
-// Safety: VTable's `*mut c_void` is bound to the registering artifact's
-// process address space, which lives for the process lifetime
-// (cdylibs are pinned via `LOADED_PLUGIN_LIBRARIES`). LegacyDyn's
-// inner Box<dyn ... + Send> is already Send.
-unsafe impl Send for ProcessorInstance {}
-
-impl Drop for ProcessorInstance {
-    fn drop(&mut self) {
-        if let Self::VTable {
-            instance_ptr,
-            vtable,
-            ..
-        } = self
-        {
-            if !instance_ptr.is_null() {
-                // SAFETY: instance_ptr came from the same artifact's
-                // Box::into_raw via vtable.construct; destroy
-                // performs Box::from_raw + drop on that artifact's heap.
-                unsafe {
-                    (vtable.destroy)(*instance_ptr);
-                }
-            }
-        }
-    }
-}
+/// `InputMailboxesInner` Arcs at instance-construction time and hands
+/// the processor `OutputWriter` / `InputMailboxes` handles over those
+/// Arcs via `set_iceoryx2_resources`; connection-wiring code operates
+/// on the inner Arc directly.
+pub struct ProcessorInstance(Box<dyn DynGeneratedProcessor + Send>);
 
 impl ProcessorInstance {
-    /// Whether this instance's code lives in a separately-built cdylib loaded
-    /// via `STREAMLIB_PLUGIN` (`true`), versus host-binary-compiled code
-    /// (`register::<P>()` in-process VTable, or a `LegacyDyn` subprocess host)
-    /// (`false`). Feeds the isolation-tier derivation: a cdylib-resident
-    /// `@session` module is ELIGIBLE for Untrusted when the operator opts into
-    /// isolation — default is trusted (same as installed), and host-compiled
-    /// `@session` code (`add_local::<P>()`) is the host's own code and stays
-    /// trusted.
+    /// Wrap a boxed generated processor for runtime dispatch.
+    pub(crate) fn new(processor: Box<dyn DynGeneratedProcessor + Send>) -> Self {
+        Self(processor)
+    }
+
+    /// Isolation-tier seam: whether this instance's code is separately built
+    /// and untrusted. Always `false` now that every processor is host-compiled
+    /// (`register::<P>()` / `add_local::<P>()`) or a subprocess host wrapper —
+    /// both the host's own code. Retained as the isolation-tier input; when an
+    /// untrusted-code path returns, this is where it reports.
     pub(crate) fn is_cdylib_resident(&self) -> bool {
-        matches!(
-            self,
-            Self::VTable {
-                cdylib_resident: true,
-                ..
-            }
-        )
-    }
-
-    /// Issue one vtable lifecycle call against the VTable variant.
-    /// Returns the host-side error chained off the extern "C" return
-    /// code + scratch buffer.
-    fn vtable_call_full(
-        instance_ptr: *mut c_void,
-        method: unsafe extern "C" fn(*mut c_void, *const c_void, *mut u8, usize, *mut usize) -> i32,
-        ctx: &RuntimeContextFullAccess<'_>,
-        method_name: &str,
-    ) -> Result<()> {
-        let mut err_buf = [0u8; VTABLE_ERR_BUF_CAP];
-        let mut err_len = 0usize;
-        let rc = unsafe {
-            method(
-                instance_ptr,
-                ctx as *const RuntimeContextFullAccess<'_> as *const c_void,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if rc == 0 {
-            Ok(())
-        } else {
-            let msg = std::str::from_utf8(&err_buf[..err_len])
-                .unwrap_or("<non-utf8 error>")
-                .to_string();
-            Err(Error::Runtime(format!("{method_name}: {msg}")))
-        }
-    }
-
-    fn vtable_call_limited(
-        instance_ptr: *mut c_void,
-        method: unsafe extern "C" fn(*mut c_void, *const c_void, *mut u8, usize, *mut usize) -> i32,
-        ctx: &RuntimeContextLimitedAccess<'_>,
-        method_name: &str,
-    ) -> Result<()> {
-        let mut err_buf = [0u8; VTABLE_ERR_BUF_CAP];
-        let mut err_len = 0usize;
-        let rc = unsafe {
-            method(
-                instance_ptr,
-                ctx as *const RuntimeContextLimitedAccess<'_> as *const c_void,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if rc == 0 {
-            Ok(())
-        } else {
-            let msg = std::str::from_utf8(&err_buf[..err_len])
-                .unwrap_or("<non-utf8 error>")
-                .to_string();
-            Err(Error::Runtime(format!("{method_name}: {msg}")))
-        }
+        false
     }
 
     /// Run the processor's `setup` lifecycle.
-    ///
-    /// Dispatch shape depends on where the body's code lives:
-    /// - **`VTable { cdylib_resident: true }`** (loaded via
-    ///   `STREAMLIB_PLUGIN` dlopen): wraps the call in
-    ///   [`RuntimeContextFullAccess::with_cdylib_scope`] so the
-    ///   cdylib body's `ctx.gpu_full_access()` is `ScopeToken`-
-    ///   flavored and dispatches through the FullAccess vtable
-    ///   instead of tripping the Boxed branch's `host_inner` panic
-    ///   guard. Scope acquisition serializes against other
-    ///   privileged GPU work (same gate as in-process escalate)
-    ///   and ends with `wait_device_idle`.
-    /// - **`VTable { cdylib_resident: false }`** (in-process
-    ///   `register::<P>()`): serialize via
-    ///   `gpu_limited_access().escalate(|_| ...)`, matching the
-    ///   pre-#912 `processor_setup_lock` contract — the in-process
-    ///   body uses the Boxed FullAccess on `ctx` directly (no
-    ///   vtable hop) and the escalate wrap provides the gate +
-    ///   wait-idle. Using `with_cdylib_scope` for the in-process
-    ///   VTable case would hand the body a `ScopeToken` handle
-    ///   whose memory layout (a u64 serial) doesn't match
-    ///   `Box<Arc<GpuContext>>`, and any FullAccess method that
-    ///   reaches `host_inner()` without first matching `handle_kind`
-    ///   (e.g. `device()`) would execute UB instead of the expected
-    ///   direct deref.
-    /// - **`LegacyDyn`** (subprocess host wrappers — Python /
-    ///   TypeScript via `register_dynamic`): pure passthrough, no
-    ///   gate wrap. Subprocess host setup does no host-side GPU
-    ///   work — it spawns the child, constructs the bridge, sends a
-    ///   `setup` lifecycle, then blocks on the subprocess's `ready`
-    ///   reply. Wrapping that IPC wait in escalate would hold the
-    ///   gate against every escalate the subprocess issues during
-    ///   its own init — the bridge-reader thread dispatches each
-    ///   `escalate_request` inline through `sandbox.escalate(|full|
-    ///   ...)` and would deadlock on the same gate. Per-call
-    ///   bridge-handler escalates still acquire the gate + wait
-    ///   device idle on their own, so GPU-resource serialization
-    ///   is preserved (#867).
-    ///
-    /// For the wrapped variants the escalate gate is held for
-    /// exactly one nesting depth across the setup body, so a body
-    /// that itself calls `.escalate(...)` trips the gate's
-    /// same-thread re-entry panic instead of silently deadlocking.
     pub fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        match self {
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                cdylib_resident: true,
-                ..
-            } => {
-                let instance_ptr = *instance_ptr;
-                let setup_fn = vtable.setup;
-                ctx.with_cdylib_scope(|cdylib_ctx| {
-                    Self::vtable_call_full(instance_ptr, setup_fn, cdylib_ctx, "setup")
-                })
-            }
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                cdylib_resident: false,
-                ..
-            } => {
-                let instance_ptr = *instance_ptr;
-                let setup_fn = vtable.setup;
-                let sandbox = ctx.gpu_limited_access().clone();
-                sandbox
-                    .escalate(|_full| Self::vtable_call_full(instance_ptr, setup_fn, ctx, "setup"))
-            }
-            Self::LegacyDyn(inner) => inner.__generated_setup(ctx),
-        }
+        self.0.__generated_setup(ctx)
     }
 
     /// Run the processor's `teardown` lifecycle.
-    ///
-    /// Mirrors [`Self::setup`]'s variant-aware dispatch — see that
-    /// doc for the cdylib-resident vs in-process VTable vs
-    /// LegacyDyn shape rationale.
     pub fn teardown(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        match self {
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                cdylib_resident: true,
-                ..
-            } => {
-                let instance_ptr = *instance_ptr;
-                let teardown_fn = vtable.teardown;
-                ctx.with_cdylib_scope(|cdylib_ctx| {
-                    Self::vtable_call_full(instance_ptr, teardown_fn, cdylib_ctx, "teardown")
-                })
-            }
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                cdylib_resident: false,
-                ..
-            } => {
-                let instance_ptr = *instance_ptr;
-                let teardown_fn = vtable.teardown;
-                let sandbox = ctx.gpu_limited_access().clone();
-                sandbox.escalate(|_full| {
-                    Self::vtable_call_full(instance_ptr, teardown_fn, ctx, "teardown")
-                })
-            }
-            Self::LegacyDyn(inner) => inner.__generated_teardown(ctx),
-        }
+        self.0.__generated_teardown(ctx)
     }
 
     /// Run the processor's `on_pause` hook.
     pub fn on_pause(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        match self {
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                ..
-            } => Self::vtable_call_limited(*instance_ptr, vtable.on_pause, ctx, "on_pause"),
-            Self::LegacyDyn(inner) => inner.__generated_on_pause(ctx),
-        }
+        self.0.__generated_on_pause(ctx)
     }
 
     /// Run the processor's `on_resume` hook.
     pub fn on_resume(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        match self {
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                ..
-            } => Self::vtable_call_limited(*instance_ptr, vtable.on_resume, ctx, "on_resume"),
-            Self::LegacyDyn(inner) => inner.__generated_on_resume(ctx),
-        }
+        self.0.__generated_on_resume(ctx)
     }
 
     /// Run one tick of the processor's `process` body.
     pub fn process(&mut self, ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
-        match self {
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                ..
-            } => Self::vtable_call_limited(*instance_ptr, vtable.process, ctx, "process"),
-            Self::LegacyDyn(inner) => inner.process(ctx),
-        }
+        self.0.process(ctx)
     }
 
-    /// Start a Manual-mode processor.
-    ///
-    /// Variant-aware dispatch matching the historical "FullAccess
-    /// in signature → direct access in body" contract for every
-    /// runtime variant:
-    /// - **`VTable { cdylib_resident: true }`**: wraps in
-    ///   [`RuntimeContextFullAccess::with_cdylib_scope`] so cdylib
-    ///   bodies see a `ScopeToken` FullAccess (direct access
-    ///   becomes vtable dispatch — no `host_inner()` panic).
-    /// - **`VTable { cdylib_resident: false }`** (in-process
-    ///   `register::<P>()`) and **`LegacyDyn`** (subprocess hosts):
-    ///   pure passthrough. Historical: start/stop were never
-    ///   gate-wrapped (thread_runner calls them directly), so adding
-    ///   a wrap here would change semantics for in-process bodies
-    ///   that legitimately escalate or do their own thread spawning.
-    ///   In-process bodies use `ctx.gpu_full_access()` directly
-    ///   (Boxed deref, host-only); subprocess host bodies do their
-    ///   own per-call gate management via the bridge handlers (#867
-    ///   contract).
+    /// Start a Manual-mode processor. Pure passthrough — `start`/`stop` are
+    /// never gate-wrapped (thread_runner calls them directly); a body that
+    /// escalates or spawns threads does its own per-call gate management.
     pub fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        match self {
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                cdylib_resident: true,
-                ..
-            } => {
-                let instance_ptr = *instance_ptr;
-                let start_fn = vtable.start;
-                ctx.with_cdylib_scope(|cdylib_ctx| {
-                    Self::vtable_call_full(instance_ptr, start_fn, cdylib_ctx, "start")
-                })
-            }
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                cdylib_resident: false,
-                ..
-            } => Self::vtable_call_full(*instance_ptr, vtable.start, ctx, "start"),
-            Self::LegacyDyn(inner) => inner.start(ctx),
-        }
+        self.0.start(ctx)
     }
 
-    /// Stop a Manual-mode processor.
-    ///
-    /// Mirrors [`Self::start`]'s variant-aware dispatch — see that
-    /// doc for the rationale.
+    /// Stop a Manual-mode processor. Pure passthrough — see [`Self::start`].
     pub fn stop(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        match self {
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                cdylib_resident: true,
-                ..
-            } => {
-                let instance_ptr = *instance_ptr;
-                let stop_fn = vtable.stop;
-                ctx.with_cdylib_scope(|cdylib_ctx| {
-                    Self::vtable_call_full(instance_ptr, stop_fn, cdylib_ctx, "stop")
-                })
-            }
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                cdylib_resident: false,
-                ..
-            } => Self::vtable_call_full(*instance_ptr, vtable.stop, ctx, "stop"),
-            Self::LegacyDyn(inner) => inner.stop(ctx),
-        }
+        self.0.stop(ctx)
     }
 
-    /// Read the processor's execution config. For VTable variants
-    /// the call crosses extern "C" once; for LegacyDyn it dispatches
-    /// through the trait object.
+    /// Read the processor's execution config.
     pub fn execution_config(&self) -> ExecutionConfig {
-        match self {
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                ..
-            } => {
-                let mut buf = [0u8; 64];
-                let mut out_len = 0usize;
-                let required = unsafe {
-                    (vtable.execution_config_msgpack)(
-                        *instance_ptr,
-                        buf.as_mut_ptr(),
-                        buf.len(),
-                        &mut out_len as *mut usize,
-                    )
-                };
-                if required == 0 || required > buf.len() {
-                    // Either no payload or too-big payload (won't
-                    // happen for ExecutionConfig in practice). Fall
-                    // back to default.
-                    return ExecutionConfig::default();
-                }
-                match rmp_serde::from_slice(&buf[..out_len]) {
-                    Ok(cfg) => cfg,
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            "ProcessorInstance::execution_config: failed to decode msgpack payload; falling back to default",
-                        );
-                        ExecutionConfig::default()
-                    }
-                }
-            }
-            Self::LegacyDyn(inner) => inner.execution_config(),
-        }
+        self.0.execution_config()
     }
 
     pub fn has_iceoryx2_outputs(&self) -> bool {
-        match self {
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                ..
-            } => unsafe { (vtable.has_iceoryx2_outputs)(*instance_ptr) },
-            Self::LegacyDyn(inner) => inner.has_iceoryx2_outputs(),
-        }
+        self.0.has_iceoryx2_outputs()
     }
 
     pub fn has_iceoryx2_inputs(&self) -> bool {
-        match self {
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                ..
-            } => unsafe { (vtable.has_iceoryx2_inputs)(*instance_ptr) },
-            Self::LegacyDyn(inner) => inner.has_iceoryx2_inputs(),
-        }
+        self.0.has_iceoryx2_inputs()
     }
 
-    /// Whether this processor has failed unrecoverably. Always `false` for a
-    /// cdylib plugin — the plugin ABI has no slot for it.
+    /// Whether this processor has failed unrecoverably.
     pub fn has_failed_unrecoverably(&self) -> bool {
-        match self {
-            Self::VTable { .. } => false,
-            Self::LegacyDyn(inner) => inner.has_failed_unrecoverably(),
-        }
+        self.0.has_failed_unrecoverably()
     }
 
     /// Where this processor's link wiring goes when its iceoryx2 ports live
     /// outside the engine's address space, and `None` when the engine wires it
     /// itself.
     ///
-    /// Only a dyn registration can be out of process — a cdylib plugin's ports
-    /// are engine-side by construction.
+    /// Only a subprocess-host registration can be out of process.
     pub fn out_of_process_link_wiring(
         &mut self,
     ) -> Option<&mut super::OutOfProcessLinkWiringEnvelope> {
-        match self {
-            Self::VTable { .. } => None,
-            Self::LegacyDyn(inner) => inner.out_of_process_link_wiring(),
-        }
+        self.0.out_of_process_link_wiring()
     }
 
     /// Borrow the host-side `OutputWriterInner` Arc this processor
@@ -496,16 +120,9 @@ impl ProcessorInstance {
     /// Used by the host's connection-wiring path (compiler ops) to
     /// mutate the inner directly via
     /// [`crate::iceoryx2::OutputWriterInner::set_channel_publisher`]
-    /// and [`crate::iceoryx2::OutputWriterInner::add_channel_link`]
-    /// — no plugin ABI hop to the cdylib.
+    /// and [`crate::iceoryx2::OutputWriterInner::add_channel_link`].
     pub fn iceoryx2_output_writer_inner(&self) -> Option<Arc<crate::iceoryx2::OutputWriterInner>> {
-        match self {
-            Self::VTable {
-                iceoryx2_output_writer_inner,
-                ..
-            } => iceoryx2_output_writer_inner.clone(),
-            Self::LegacyDyn(inner) => inner.iceoryx2_output_writer_inner(),
-        }
+        self.0.iceoryx2_output_writer_inner()
     }
 
     /// Borrow the host-side `InputMailboxesInner` Arc this
@@ -519,13 +136,7 @@ impl ProcessorInstance {
     pub fn iceoryx2_input_mailboxes_inner(
         &self,
     ) -> Option<Arc<crate::iceoryx2::InputMailboxesInner>> {
-        match self {
-            Self::VTable {
-                iceoryx2_input_mailboxes_inner,
-                ..
-            } => iceoryx2_input_mailboxes_inner.clone(),
-            Self::LegacyDyn(inner) => inner.iceoryx2_input_mailboxes_inner(),
-        }
+        self.0.iceoryx2_input_mailboxes_inner()
     }
 
     /// Install host-allocated iceoryx2 inner Arcs into this
@@ -546,234 +157,33 @@ impl ProcessorInstance {
         let input_inner =
             needs_inputs.then(|| Arc::new(crate::iceoryx2::InputMailboxesInner::new()));
 
-        match self {
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                iceoryx2_output_writer_inner,
-                iceoryx2_input_mailboxes_inner,
-                ..
-            } => {
-                // Stash host-side Arcs first so the connection-
-                // wiring path can see them even if the vtable hop
-                // returns an error.
-                *iceoryx2_output_writer_inner = output_inner.clone();
-                *iceoryx2_input_mailboxes_inner = input_inner.clone();
-
-                // Build the (handle, vtable) pairs for the cdylib.
-                let output_writer_handle = output_inner
-                    .as_ref()
-                    .map(|arc| Arc::into_raw(arc.clone()) as *const c_void)
-                    .unwrap_or(std::ptr::null());
-                let output_writer_vtable = if output_inner.is_some() {
-                    crate::core::plugin::host_services::host_output_writer_vtable()
-                } else {
-                    std::ptr::null()
-                };
-                let input_mailboxes_handle = input_inner
-                    .as_ref()
-                    .map(|arc| Arc::into_raw(arc.clone()) as *const c_void)
-                    .unwrap_or(std::ptr::null());
-                let input_mailboxes_vtable = if input_inner.is_some() {
-                    crate::core::plugin::host_services::host_input_mailboxes_vtable()
-                } else {
-                    std::ptr::null()
-                };
-
-                let mut err_buf = [0u8; VTABLE_ERR_BUF_CAP];
-                let mut err_len = 0usize;
-                let rc = unsafe {
-                    (vtable.set_iceoryx2_resources)(
-                        *instance_ptr,
-                        output_writer_handle,
-                        output_writer_vtable,
-                        input_mailboxes_handle,
-                        input_mailboxes_vtable,
-                        err_buf.as_mut_ptr(),
-                        err_buf.len(),
-                        &mut err_len as *mut usize,
-                    )
-                };
-                if rc == 0 {
-                    Ok(())
-                } else {
-                    // The cdylib refused the install; balance the
-                    // leaked Arc handles so we don't leak refs.
-                    if !output_writer_handle.is_null() {
-                        unsafe {
-                            Arc::<crate::iceoryx2::OutputWriterInner>::decrement_strong_count(
-                                output_writer_handle as *const _,
-                            );
-                        }
-                    }
-                    if !input_mailboxes_handle.is_null() {
-                        unsafe {
-                            Arc::<crate::iceoryx2::InputMailboxesInner>::decrement_strong_count(
-                                input_mailboxes_handle as *const _,
-                            );
-                        }
-                    }
-                    let msg = std::str::from_utf8(&err_buf[..err_len])
-                        .unwrap_or("<non-utf8 error>")
-                        .to_string();
-                    Err(Error::Runtime(format!("set_iceoryx2_resources: {msg}")))
-                }
-            }
-            Self::LegacyDyn(inner) => {
-                let ow = output_inner
-                    .clone()
-                    .map(crate::iceoryx2::OutputWriter::from_inner_arc);
-                let im = input_inner
-                    .clone()
-                    .map(crate::iceoryx2::InputMailboxes::from_inner_arc);
-                inner.set_iceoryx2_resources(ow, im)
-            }
+        {
+            let ow = output_inner
+                .clone()
+                .map(crate::iceoryx2::OutputWriter::from_inner_arc);
+            let im = input_inner
+                .clone()
+                .map(crate::iceoryx2::InputMailboxes::from_inner_arc);
+            self.0.set_iceoryx2_resources(ow, im)
         }
     }
 
     pub fn apply_config_json(&mut self, config_json: &serde_json::Value) -> Result<()> {
-        match self {
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                ..
-            } => {
-                let bytes = rmp_serde::to_vec_named(config_json).map_err(|e| {
-                    Error::Configuration(format!("apply_config_json msgpack encode: {e}"))
-                })?;
-                let mut err_buf = [0u8; VTABLE_ERR_BUF_CAP];
-                let mut err_len = 0usize;
-                let rc = unsafe {
-                    (vtable.apply_config_msgpack)(
-                        *instance_ptr,
-                        bytes.as_ptr(),
-                        bytes.len(),
-                        err_buf.as_mut_ptr(),
-                        err_buf.len(),
-                        &mut err_len as *mut usize,
-                    )
-                };
-                if rc == 0 {
-                    Ok(())
-                } else {
-                    let msg = std::str::from_utf8(&err_buf[..err_len])
-                        .unwrap_or("<non-utf8 error>")
-                        .to_string();
-                    Err(Error::Configuration(format!("apply_config_json: {msg}")))
-                }
-            }
-            Self::LegacyDyn(inner) => inner.apply_config_json(config_json),
-        }
+        self.0.apply_config_json(config_json)
     }
 
     pub fn to_runtime_json(&self) -> serde_json::Value {
-        match self {
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                ..
-            } => {
-                let mut buf = vec![0u8; 4096];
-                let mut out_len = 0usize;
-                let required = unsafe {
-                    (vtable.to_runtime_msgpack)(
-                        *instance_ptr,
-                        buf.as_mut_ptr(),
-                        buf.len(),
-                        &mut out_len as *mut usize,
-                    )
-                };
-                if required == 0 {
-                    return serde_json::Value::Null;
-                }
-                if required > buf.len() {
-                    // Resize and retry. Runtime-state payloads in
-                    // practice fit well under 4 KiB, but this keeps
-                    // the contract honest.
-                    buf.resize(required, 0);
-                    let _ = unsafe {
-                        (vtable.to_runtime_msgpack)(
-                            *instance_ptr,
-                            buf.as_mut_ptr(),
-                            buf.len(),
-                            &mut out_len as *mut usize,
-                        )
-                    };
-                }
-                match rmp_serde::from_slice(&buf[..out_len]) {
-                    Ok(value) => value,
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            "ProcessorInstance::to_runtime_json: failed to decode msgpack payload; returning Null",
-                        );
-                        serde_json::Value::Null
-                    }
-                }
-            }
-            Self::LegacyDyn(inner) => inner.to_runtime_json(),
-        }
+        self.0.to_runtime_json()
     }
 
     pub fn config_json(&self) -> serde_json::Value {
-        match self {
-            Self::VTable {
-                instance_ptr,
-                vtable,
-                ..
-            } => {
-                let mut buf = vec![0u8; 4096];
-                let mut out_len = 0usize;
-                let required = unsafe {
-                    (vtable.config_msgpack)(
-                        *instance_ptr,
-                        buf.as_mut_ptr(),
-                        buf.len(),
-                        &mut out_len as *mut usize,
-                    )
-                };
-                if required == 0 {
-                    return serde_json::Value::Null;
-                }
-                if required > buf.len() {
-                    buf.resize(required, 0);
-                    let _ = unsafe {
-                        (vtable.config_msgpack)(
-                            *instance_ptr,
-                            buf.as_mut_ptr(),
-                            buf.len(),
-                            &mut out_len as *mut usize,
-                        )
-                    };
-                }
-                match rmp_serde::from_slice(&buf[..out_len]) {
-                    Ok(value) => value,
-                    Err(e) => {
-                        tracing::warn!(
-                            error = %e,
-                            "ProcessorInstance::config_json: failed to decode msgpack payload; returning Null",
-                        );
-                        serde_json::Value::Null
-                    }
-                }
-            }
-            Self::LegacyDyn(inner) => inner.config_json(),
-        }
+        self.0.config_json()
     }
 
-    /// Downcast handle. Only meaningful for the LegacyDyn variant —
-    /// cdylib-registered processors return a placeholder reference
-    /// that downcasts to nothing. Used by the host's compiler ops to
-    /// reach host-only subprocess host wrappers
-    /// (`PythonNativeSubprocessHostProcessor`, `DenoSubprocessHostProcessor`)
-    /// which only register via the legacy path.
+    /// Downcast handle. Used by the host's compiler ops to reach
+    /// host-only subprocess host wrappers.
     pub fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
-        match self {
-            Self::LegacyDyn(inner) => inner.as_any_mut(),
-            Self::VTable {
-                any_placeholder, ..
-            } => any_placeholder,
-        }
+        self.0.as_any_mut()
     }
 }
 
@@ -805,10 +215,6 @@ enum RegistrationKind {
     /// (and other `host_inner()`-only) calls through an opaque
     /// scope token whose memory layout doesn't match `Box<Arc<…>>`
     /// — UB.
-    VTable {
-        vtable: &'static ProcessorVTable,
-        cdylib_resident: bool,
-    },
     /// Box<dyn Fn> closure constructor — used for subprocess host
     /// wrappers via `register_dynamic`.
     LegacyDyn {
@@ -888,14 +294,25 @@ impl ProcessorInstanceFactory {
             }
         };
 
-        let vtable = crate::core::plugin::processor_vtable::vtable_for::<P>();
-
-        // In-process registration — vtable's function pointers
-        // target the host's address space; lifecycle dispatch uses
-        // the Boxed FullAccess directly (no plugin ABI hop).
-        if let Err(e) =
-            self.register_via_vtable(descriptor, vtable, /* cdylib_resident */ false)
-        {
+        // In-process registration — host-compiled Rust processors
+        // register through the same trait-object path as subprocess
+        // hosts: a constructor closure boxes `P` as a
+        // `DynGeneratedProcessor`.
+        let constructor: DynamicProcessorConstructorFn = Box::new(
+            |node: &ProcessorNode| -> Result<Box<dyn DynGeneratedProcessor + Send>> {
+                let config: P::Config = match &node.config {
+                    Some(json) => serde_json::from_value(json.clone()).map_err(|e| {
+                        Error::Configuration(format!(
+                            "config does not match {}'s Config type: {e}",
+                            std::any::type_name::<P>()
+                        ))
+                    })?,
+                    None => P::Config::default(),
+                };
+                Ok(Box::new(P::from_config(config)?))
+            },
+        );
+        if let Err(e) = self.register_dynamic(descriptor, constructor) {
             tracing::warn!(
                 "Processor registration for {} failed: {}",
                 std::any::type_name::<P>(),
@@ -922,83 +339,6 @@ impl ProcessorInstanceFactory {
     /// - The cdylib-bridge `processor_register` callback in
     ///   `core::plugin::host_services` — passes the cdylib's
     ///   `&'static ProcessorVTable` with `cdylib_resident: true`.
-    pub fn register_via_vtable(
-        &self,
-        descriptor: ProcessorDescriptor,
-        vtable: &'static ProcessorVTable,
-        cdylib_resident: bool,
-    ) -> Result<()> {
-        let type_name = descriptor.name.clone();
-
-        // Duplicate check FIRST — a duplicate must leave all four maps
-        // untouched. The previous ordering overwrote `port_info` /
-        // `schemas` / `descriptors` before checking `registrations`, so a
-        // duplicate re-registration could leave the four maps describing
-        // two different descriptors.
-        if self.registrations.read().contains_key(&type_name) {
-            tracing::debug!(
-                "Processor '{}' already registered, skipping duplicate",
-                type_name
-            );
-            return Ok(());
-        }
-
-        let inputs: Vec<PortInfo> = descriptor
-            .inputs
-            .iter()
-            .map(|p| PortInfo {
-                name: p.name.clone(),
-                data_type: p.schema.clone(),
-                port_kind: Default::default(),
-                delivery_profile: p.delivery_profile.clone(),
-            })
-            .collect();
-
-        let outputs: Vec<PortInfo> = descriptor
-            .outputs
-            .iter()
-            .map(|p| PortInfo {
-                name: p.name.clone(),
-                data_type: p.schema.clone(),
-                port_kind: Default::default(),
-                delivery_profile: p.delivery_profile.clone(),
-            })
-            .collect();
-
-        self.port_info
-            .write()
-            .insert(type_name.clone(), (inputs.clone(), outputs.clone()));
-
-        {
-            let mut schemas = self.schemas.write();
-            for port in inputs.iter().chain(outputs.iter()) {
-                schemas.insert(port.data_type.clone());
-            }
-        }
-
-        self.descriptors
-            .write()
-            .insert(type_name.clone(), descriptor);
-
-        self.registrations.write().insert(
-            type_name.clone(),
-            RegistrationKind::VTable {
-                vtable,
-                cdylib_resident,
-            },
-        );
-
-        tracing::info!("[register] new processor type registered '{}'", type_name);
-
-        PUBSUB.publish(
-            topics::RUNTIME_GLOBAL,
-            &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidRegisterProcessorType {
-                processor_type: type_name.clone(),
-            }),
-        );
-
-        Ok(())
-    }
 
     /// Register a processor dynamically at runtime with a non-generic
     /// `Box<dyn Fn>` constructor. Used for subprocess host wrappers
@@ -1243,64 +583,10 @@ impl ProcessorInstanceFactory {
             ))
         })?;
 
-        match registration {
-            RegistrationKind::VTable {
-                vtable,
-                cdylib_resident,
-            } => {
-                // Serialize node.config (serde_json::Value) to msgpack
-                // for the cdylib's construct fn to deserialize into
-                // P::Config.
-                let config_msgpack = match &node.config {
-                    Some(json) => rmp_serde::to_vec_named(json).map_err(|e| {
-                        Error::Configuration(format!(
-                            "Failed to encode config to msgpack for '{}': {}",
-                            node.id, e
-                        ))
-                    })?,
-                    None => Vec::new(),
-                };
-
-                let mut err_buf = [0u8; VTABLE_ERR_BUF_CAP];
-                let mut err_len = 0usize;
-                let ptr = unsafe {
-                    (vtable.construct)(
-                        config_msgpack.as_ptr(),
-                        config_msgpack.len(),
-                        err_buf.as_mut_ptr(),
-                        err_buf.len(),
-                        &mut err_len as *mut usize,
-                    )
-                };
-                if ptr.is_null() {
-                    let msg = std::str::from_utf8(&err_buf[..err_len])
-                        .unwrap_or("<non-utf8 error>")
-                        .to_string();
-                    return Err(Error::Configuration(format!(
-                        "construct for '{}': {}",
-                        node.processor_type, msg
-                    )));
-                }
-                let mut instance = ProcessorInstance::VTable {
-                    instance_ptr: ptr,
-                    vtable: *vtable,
-                    any_placeholder: (),
-                    iceoryx2_output_writer_inner: None,
-                    iceoryx2_input_mailboxes_inner: None,
-                    cdylib_resident: *cdylib_resident,
-                };
-                // Issue #894: host-allocates iceoryx2 inner Arcs +
-                // hands the cdylib opaque (handle, vtable) PluginAbiObjects
-                // via the new `set_iceoryx2_resources` slot.
-                instance.install_iceoryx2_resources()?;
-                Ok(instance)
-            }
-            RegistrationKind::LegacyDyn { constructor } => {
-                let mut instance = ProcessorInstance::LegacyDyn(constructor(node)?);
-                instance.install_iceoryx2_resources()?;
-                Ok(instance)
-            }
-        }
+        let RegistrationKind::LegacyDyn { constructor } = registration;
+        let mut instance = ProcessorInstance::new(constructor(node)?);
+        instance.install_iceoryx2_resources()?;
+        Ok(instance)
     }
 
     pub fn port_info(

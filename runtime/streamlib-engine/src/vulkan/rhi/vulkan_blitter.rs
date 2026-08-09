@@ -193,7 +193,7 @@ unsafe impl Sync for VulkanBlitter {}
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::rhi::{PixelBuffer, PixelBufferRef, PixelFormat};
+    use crate::core::rhi::PixelBuffer;
     use crate::vulkan::rhi::{HostVulkanBuffer, HostVulkanDevice};
     use std::sync::Arc;
 

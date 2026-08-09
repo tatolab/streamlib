@@ -7,11 +7,10 @@ use std::ffi::c_void;
 use std::sync::Arc;
 
 use parking_lot::Mutex;
-use streamlib_plugin_abi::GpuContextFullAccessVTable;
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
-use crate::core::rhi::{DrawCall, DrawIndexedCall, ScissorRect, Texture, Viewport, VulkanLayout};
+use crate::core::rhi::{DrawCall, DrawIndexedCall, Texture, VulkanLayout};
 use crate::core::{Error, Result};
 
 use super::{
@@ -937,74 +936,6 @@ impl RhiCommandRecorderInner {
     // inside `vulkan/rhi/`.
     // -------------------------------------------------------------------------
 
-    /// Wire-format companion to
-    /// [`Self::record_swapchain_image_barrier`].
-    #[allow(clippy::too_many_arguments)]
-    pub(crate) fn record_swapchain_image_barrier_from_wire(
-        &mut self,
-        image_raw: u64,
-        from_layout_raw: i32,
-        to_layout_raw: i32,
-        from_stage_raw: i64,
-        to_stage_raw: i64,
-        from_access_raw: i64,
-        to_access_raw: i64,
-    ) -> Result<()> {
-        let image = vk::Image::from_raw(image_raw);
-        let old_layout = vk::ImageLayout::from_raw(from_layout_raw);
-        let new_layout = vk::ImageLayout::from_raw(to_layout_raw);
-        let src_stage = vk::PipelineStageFlags2::from_bits_truncate(from_stage_raw as u64);
-        let src_access = vk::AccessFlags2::from_bits_truncate(from_access_raw as u64);
-        let dst_stage = vk::PipelineStageFlags2::from_bits_truncate(to_stage_raw as u64);
-        let dst_access = vk::AccessFlags2::from_bits_truncate(to_access_raw as u64);
-        self.record_swapchain_image_barrier(
-            image, old_layout, new_layout, src_stage, src_access, dst_stage, dst_access,
-        )
-    }
-
-    /// Wire-format companion to [`Self::cmd_begin_dynamic_rendering`].
-    pub(crate) fn cmd_begin_dynamic_rendering_from_wire(
-        &mut self,
-        image_view_raw: u64,
-        extent_w: u32,
-        extent_h: u32,
-        clear_color: Option<[f32; 4]>,
-    ) -> Result<()> {
-        let image_view = vk::ImageView::from_raw(image_view_raw);
-        self.cmd_begin_dynamic_rendering(image_view, (extent_w, extent_h), clear_color)
-    }
-
-    /// Wire-format companion to [`Self::submit_with_semaphores`].
-    pub(crate) fn submit_with_semaphores_from_wire(
-        &mut self,
-        waits_repr: &[streamlib_plugin_abi::SemaphoreSubmitInfoRepr],
-        signals_repr: &[streamlib_plugin_abi::SemaphoreSubmitInfoRepr],
-    ) -> Result<()> {
-        let waits: Vec<vk::SemaphoreSubmitInfo> = waits_repr
-            .iter()
-            .map(|r| {
-                vk::SemaphoreSubmitInfo::builder()
-                    .semaphore(vk::Semaphore::from_raw(r.semaphore))
-                    .value(r.value)
-                    .stage_mask(vk::PipelineStageFlags2::from_bits_truncate(r.stage_mask))
-                    .device_index(r.device_index)
-                    .build()
-            })
-            .collect();
-        let signals: Vec<vk::SemaphoreSubmitInfo> = signals_repr
-            .iter()
-            .map(|r| {
-                vk::SemaphoreSubmitInfo::builder()
-                    .semaphore(vk::Semaphore::from_raw(r.semaphore))
-                    .value(r.value)
-                    .stage_mask(vk::PipelineStageFlags2::from_bits_truncate(r.stage_mask))
-                    .device_index(r.device_index)
-                    .build()
-            })
-            .collect();
-        self.submit_with_semaphores(&waits, &signals)
-    }
-
     fn expect_recording(&self, op: &'static str) -> Result<()> {
         let state = self.state.lock();
         if *state != RecorderState::Recording {
@@ -1098,17 +1029,9 @@ impl std::fmt::Debug for RhiCommandRecorderInner {
 ///   `submit`, `submit_and_wait`) keep their cdylib-mode panic via
 ///   [`Self::host_inner_mut`]; a follow-up slice lifts each as a
 ///   consumer arrives.
-#[repr(C)]
 pub struct RhiCommandRecorder {
     /// Opaque handle to the host's `Box<RhiCommandRecorderInner>`.
     pub(crate) handle: *const c_void,
-    /// Parent vtable for plugin ABI Drop dispatch.
-    pub(crate) vtable: *const GpuContextFullAccessVTable,
-    /// Per-type vtable for plugin ABI method dispatch (Phase E
-    /// sub-lift slice B — #984). Null in host mode; populated by
-    /// [`Self::from_inner`] via
-    /// [`crate::core::plugin::host_services::host_rhi_command_recorder_methods_vtable`].
-    pub(crate) methods_vtable: *const streamlib_plugin_abi::RhiCommandRecorderMethodsVTable,
 }
 
 // SAFETY: handle points at a `Box<RhiCommandRecorderInner>`; Inner
@@ -1125,18 +1048,10 @@ impl RhiCommandRecorder {
     }
 
     /// Internal helper: leak a `Box<RhiCommandRecorderInner>` as the
-    /// opaque handle and resolve the host-mode FullAccess + per-type
-    /// methods vtables.
+    /// opaque handle.
     pub(crate) fn from_inner(inner: RhiCommandRecorderInner) -> Self {
         let handle = Box::into_raw(Box::new(inner)) as *const c_void;
-        let vtable = crate::core::plugin::host_services::host_gpu_context_full_access_vtable();
-        let methods_vtable =
-            crate::core::plugin::host_services::host_rhi_command_recorder_methods_vtable();
-        Self {
-            handle,
-            vtable,
-            methods_vtable,
-        }
+        Self { handle }
     }
 
     /// Raw `Box<RhiCommandRecorderInner>` handle backing this recorder.
@@ -1151,12 +1066,6 @@ impl RhiCommandRecorder {
     /// Engine-internal mutable borrow of the host-owned
     /// `RhiCommandRecorderInner`. **Panics if called from cdylib code.**
     pub(crate) fn host_inner_mut(&mut self) -> &mut RhiCommandRecorderInner {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            panic!(
-                "RhiCommandRecorder::host_inner_mut() reached from cdylib code; \
-                 this method must dispatch through the GpuContextFullAccessVTable."
-            );
-        }
         // SAFETY: `self.handle` is `Box::into_raw(Box<RhiCommandRecorderInner>)`
         // and `&mut self` guarantees no other reference exists.
         unsafe { &mut *(self.handle as *mut RhiCommandRecorderInner) }
@@ -1203,9 +1112,6 @@ impl RhiCommandRecorder {
     /// `host_inner_mut`; cdylib callers dispatch through the per-type
     /// methods vtable (Phase E sub-lift slice B).
     pub fn begin(&mut self) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_begin_via_vtable();
-        }
         self.host_inner_mut().begin()
     }
 
@@ -1223,17 +1129,6 @@ impl RhiCommandRecorder {
         from_access: VulkanAccess,
         to_access: VulkanAccess,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_record_image_barrier_via_vtable(
-                texture,
-                from_layout,
-                to_layout,
-                from_stage,
-                to_stage,
-                from_access,
-                to_access,
-            );
-        }
         self.host_inner_mut().record_image_barrier(
             texture,
             from_layout,
@@ -1264,15 +1159,6 @@ impl RhiCommandRecorder {
         from_access: VulkanAccess,
         to_access: VulkanAccess,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_record_buffer_barrier_via_vtable(
-                buffer,
-                from_stage,
-                to_stage,
-                from_access,
-                to_access,
-            );
-        }
         self.host_inner_mut().record_buffer_barrier(
             buffer,
             from_stage,
@@ -1297,10 +1183,6 @@ impl RhiCommandRecorder {
         dst: &(impl VulkanBufferLike + ?Sized),
         region: ImageCopyRegion,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self
-                .dispatch_record_copy_image_to_buffer_via_vtable(src, src_layout, dst, region);
-        }
         self.host_inner_mut()
             .record_copy_image_to_buffer(src, src_layout, dst, region)
     }
@@ -1340,9 +1222,6 @@ impl RhiCommandRecorder {
         group_y: u32,
         group_z: u32,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_record_dispatch_via_vtable(kernel, group_x, group_y, group_z);
-        }
         self.host_inner_mut()
             .record_dispatch(kernel, group_x, group_y, group_z)
     }
@@ -1358,9 +1237,6 @@ impl RhiCommandRecorder {
         frame_index: u32,
         draw: &DrawCall,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_record_draw_via_vtable(kernel, frame_index, draw);
-        }
         self.host_inner_mut().record_draw(kernel, frame_index, draw)
     }
 
@@ -1376,9 +1252,6 @@ impl RhiCommandRecorder {
         frame_index: u32,
         draw: &DrawIndexedCall,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_record_draw_indexed_via_vtable(kernel, frame_index, draw);
-        }
         self.host_inner_mut()
             .record_draw_indexed(kernel, frame_index, draw)
     }
@@ -1391,9 +1264,6 @@ impl RhiCommandRecorder {
         timeline: &HostVulkanTimelineSemaphore,
         signal_value: u64,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_submit_signaling_timeline_via_vtable(timeline, signal_value);
-        }
         self.host_inner_mut()
             .submit_signaling_timeline(timeline, signal_value)
     }
@@ -1406,322 +1276,12 @@ impl RhiCommandRecorder {
     // return into `Result<()>`.
     // -------------------------------------------------------------------------
 
-    fn dispatch_begin_via_vtable(&self) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "begin: command recorder methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).begin)(
-                self.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn dispatch_record_image_barrier_via_vtable(
-        &self,
-        texture: &Texture,
-        from_layout: VulkanLayout,
-        to_layout: VulkanLayout,
-        from_stage: VulkanStage,
-        to_stage: VulkanStage,
-        from_access: VulkanAccess,
-        to_access: VulkanAccess,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "record_image_barrier: command recorder methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).record_image_barrier)(
-                self.handle,
-                texture.handle,
-                from_layout.0,
-                to_layout.0,
-                from_stage.0 as i64,
-                to_stage.0 as i64,
-                from_access.0 as i64,
-                to_access.0 as i64,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    fn dispatch_record_buffer_barrier_via_vtable(
-        &self,
-        buffer: &(impl VulkanBufferLike + ?Sized),
-        from_stage: VulkanStage,
-        to_stage: VulkanStage,
-        from_access: VulkanAccess,
-        to_access: VulkanAccess,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "record_buffer_barrier: command recorder methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = if let Some(storage_handle) = buffer.cdylib_storage_buffer_handle() {
-            unsafe {
-                ((*self.methods_vtable).record_buffer_barrier)(
-                    self.handle,
-                    storage_handle,
-                    from_stage.0 as i64,
-                    to_stage.0 as i64,
-                    from_access.0 as i64,
-                    to_access.0 as i64,
-                    err_buf.as_mut_ptr(),
-                    err_buf.len(),
-                    &mut err_len as *mut usize,
-                )
-            }
-        } else if let Some(pixel_handle) = buffer.cdylib_pixel_buffer_handle() {
-            unsafe {
-                ((*self.methods_vtable).record_pixel_buffer_barrier)(
-                    self.handle,
-                    pixel_handle,
-                    from_stage.0 as i64,
-                    to_stage.0 as i64,
-                    from_access.0 as i64,
-                    to_access.0 as i64,
-                    err_buf.as_mut_ptr(),
-                    err_buf.len(),
-                    &mut err_len as *mut usize,
-                )
-            }
-        } else {
-            return Err(Error::GpuError(
-                "record_buffer_barrier: cdylib path only supports \
-                 StorageBuffer- or PixelBuffer-flavored buffers today \
-                 (extend the methods vtable with a sibling slot for other \
-                 flavors)"
-                    .into(),
-            ));
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    fn dispatch_record_dispatch_via_vtable(
-        &self,
-        kernel: &VulkanComputeKernel,
-        group_x: u32,
-        group_y: u32,
-        group_z: u32,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "record_dispatch: command recorder methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).record_dispatch)(
-                self.handle,
-                kernel.handle,
-                group_x,
-                group_y,
-                group_z,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    fn dispatch_record_copy_image_to_buffer_via_vtable(
-        &self,
-        src: &Texture,
-        src_layout: VulkanLayout,
-        dst: &(impl VulkanBufferLike + ?Sized),
-        region: ImageCopyRegion,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "record_copy_image_to_buffer: command recorder methods vtable is null".into(),
-            ));
-        }
-        let region_repr = streamlib_plugin_abi::ImageCopyRegionRepr {
-            width: region.width,
-            height: region.height,
-            buffer_offset: region.buffer_offset,
-            buffer_row_length: region.buffer_row_length,
-            buffer_image_height: region.buffer_image_height,
-            mip_level: region.mip_level,
-            array_layer: region.array_layer,
-            _reserved_padding: 0,
-        };
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = if let Some(dst_storage_handle) = dst.cdylib_storage_buffer_handle() {
-            unsafe {
-                ((*self.methods_vtable).record_copy_image_to_buffer)(
-                    self.handle,
-                    src.handle,
-                    src_layout.0,
-                    dst_storage_handle,
-                    &region_repr,
-                    err_buf.as_mut_ptr(),
-                    err_buf.len(),
-                    &mut err_len as *mut usize,
-                )
-            }
-        } else if let Some(dst_pixel_handle) = dst.cdylib_pixel_buffer_handle() {
-            unsafe {
-                ((*self.methods_vtable).record_copy_image_to_pixel_buffer)(
-                    self.handle,
-                    src.handle,
-                    src_layout.0,
-                    dst_pixel_handle,
-                    &region_repr,
-                    err_buf.as_mut_ptr(),
-                    err_buf.len(),
-                    &mut err_len as *mut usize,
-                )
-            }
-        } else {
-            return Err(Error::GpuError(
-                "record_copy_image_to_buffer: cdylib path only supports \
-                 StorageBuffer- or PixelBuffer-flavored destinations today \
-                 (extend the methods vtable with a sibling slot for other \
-                 flavors)"
-                    .into(),
-            ));
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    fn dispatch_submit_signaling_timeline_via_vtable(
-        &self,
-        timeline: &HostVulkanTimelineSemaphore,
-        signal_value: u64,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "submit_signaling_timeline: command recorder methods vtable is null".into(),
-            ));
-        }
-        let timeline_handle = timeline as *const HostVulkanTimelineSemaphore as *const c_void;
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).submit_signaling_timeline)(
-                self.handle,
-                timeline_handle,
-                signal_value,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    /// Cdylib-side dispatch helper for the v5 `submit` slot.
-    fn dispatch_submit_via_vtable(&self) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "submit: command recorder methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).submit)(
-                self.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    /// Cdylib-side dispatch helper for the v5 `submit_and_wait` slot.
-    fn dispatch_submit_and_wait_via_vtable(&self) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "submit_and_wait: command recorder methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).submit_and_wait)(
-                self.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
     /// Submit without semaphore signaling.
     ///
     /// Mode-routed: host callers dispatch through `host_inner_mut`;
     /// cdylib callers dispatch through the v5 `submit` slot on
     /// [`RhiCommandRecorderMethodsVTable`](streamlib_plugin_abi::RhiCommandRecorderMethodsVTable).
     pub fn submit(&mut self) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_submit_via_vtable();
-        }
         self.host_inner_mut().submit()
     }
 
@@ -1733,9 +1293,6 @@ impl RhiCommandRecorder {
     /// `RhiToneMapper::apply_with_layouts` is the first in-tree
     /// cdylib consumer.
     pub fn submit_and_wait(&mut self) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_submit_and_wait_via_vtable();
-        }
         self.host_inner_mut().submit_and_wait()
     }
 
@@ -1750,9 +1307,6 @@ impl RhiCommandRecorder {
         waits: &[vk::SemaphoreSubmitInfo],
         signals: &[vk::SemaphoreSubmitInfo],
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_submit_with_semaphores_via_vtable(waits, signals);
-        }
         self.host_inner_mut().submit_with_semaphores(waits, signals)
     }
 
@@ -1772,11 +1326,6 @@ impl RhiCommandRecorder {
         dst_stage: vk::PipelineStageFlags2,
         dst_access: vk::AccessFlags2,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_record_swapchain_image_barrier_via_vtable(
-                image, old_layout, new_layout, src_stage, src_access, dst_stage, dst_access,
-            );
-        }
         self.host_inner_mut().record_swapchain_image_barrier(
             image, old_layout, new_layout, src_stage, src_access, dst_stage, dst_access,
         )
@@ -1794,13 +1343,6 @@ impl RhiCommandRecorder {
         extent: (u32, u32),
         clear_color: Option<[f32; 4]>,
     ) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_cmd_begin_dynamic_rendering_via_vtable(
-                image_view,
-                extent,
-                clear_color,
-            );
-        }
         self.host_inner_mut()
             .cmd_begin_dynamic_rendering(image_view, extent, clear_color)
     }
@@ -1812,314 +1354,20 @@ impl RhiCommandRecorder {
     /// cdylib callers dispatch through the v3
     /// `cmd_end_dynamic_rendering` slot.
     pub(crate) fn cmd_end_dynamic_rendering(&mut self) -> Result<()> {
-        if crate::core::plugin::host_services::host_callbacks().is_some() {
-            return self.dispatch_cmd_end_dynamic_rendering_via_vtable();
-        }
         self.host_inner_mut().cmd_end_dynamic_rendering()
     }
 
     // -------------------------------------------------------------------------
     // v3 dispatch helpers (#1066) — match the v1 / v2 helpers above.
     // -------------------------------------------------------------------------
-
-    fn dispatch_record_draw_via_vtable(
-        &self,
-        kernel: &VulkanGraphicsKernel,
-        frame_index: u32,
-        draw: &DrawCall,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "record_draw: command recorder methods vtable is null".into(),
-            ));
-        }
-        let (viewport_present, vp) = match draw.viewport {
-            Some(v) => (1u32, v),
-            None => (0u32, Viewport::full(0, 0)),
-        };
-        let (scissor_present, sc) = match draw.scissor {
-            Some(s) => (1u32, s),
-            None => (0u32, ScissorRect::full(0, 0)),
-        };
-        let draw_repr = streamlib_plugin_abi::DrawCallRepr {
-            vertex_count: draw.vertex_count,
-            instance_count: draw.instance_count,
-            first_vertex: draw.first_vertex,
-            first_instance: draw.first_instance,
-            viewport_present,
-            scissor_present,
-            viewport: streamlib_plugin_abi::ViewportRepr {
-                x: vp.x,
-                y: vp.y,
-                width: vp.width,
-                height: vp.height,
-                min_depth: vp.min_depth,
-                max_depth: vp.max_depth,
-            },
-            scissor: streamlib_plugin_abi::ScissorRectRepr {
-                x: sc.x,
-                y: sc.y,
-                width: sc.width,
-                height: sc.height,
-            },
-        };
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).record_draw)(
-                self.handle,
-                kernel.handle,
-                frame_index,
-                &draw_repr,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    fn dispatch_record_draw_indexed_via_vtable(
-        &self,
-        kernel: &VulkanGraphicsKernel,
-        frame_index: u32,
-        draw: &DrawIndexedCall,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "record_draw_indexed: command recorder methods vtable is null".into(),
-            ));
-        }
-        let (viewport_present, vp) = match draw.viewport {
-            Some(v) => (1u32, v),
-            None => (0u32, Viewport::full(0, 0)),
-        };
-        let (scissor_present, sc) = match draw.scissor {
-            Some(s) => (1u32, s),
-            None => (0u32, ScissorRect::full(0, 0)),
-        };
-        let draw_repr = streamlib_plugin_abi::DrawIndexedCallRepr {
-            index_count: draw.index_count,
-            instance_count: draw.instance_count,
-            first_index: draw.first_index,
-            vertex_offset: draw.vertex_offset,
-            first_instance: draw.first_instance,
-            viewport_present,
-            scissor_present,
-            _reserved_padding: 0,
-            viewport: streamlib_plugin_abi::ViewportRepr {
-                x: vp.x,
-                y: vp.y,
-                width: vp.width,
-                height: vp.height,
-                min_depth: vp.min_depth,
-                max_depth: vp.max_depth,
-            },
-            scissor: streamlib_plugin_abi::ScissorRectRepr {
-                x: sc.x,
-                y: sc.y,
-                width: sc.width,
-                height: sc.height,
-            },
-        };
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).record_draw_indexed)(
-                self.handle,
-                kernel.handle,
-                frame_index,
-                &draw_repr,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn dispatch_record_swapchain_image_barrier_via_vtable(
-        &self,
-        image: vk::Image,
-        old_layout: vk::ImageLayout,
-        new_layout: vk::ImageLayout,
-        src_stage: vk::PipelineStageFlags2,
-        src_access: vk::AccessFlags2,
-        dst_stage: vk::PipelineStageFlags2,
-        dst_access: vk::AccessFlags2,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "record_swapchain_image_barrier: command recorder methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).record_swapchain_image_barrier)(
-                self.handle,
-                image.as_raw(),
-                old_layout.as_raw(),
-                new_layout.as_raw(),
-                src_stage.bits() as i64,
-                dst_stage.bits() as i64,
-                src_access.bits() as i64,
-                dst_access.bits() as i64,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    fn dispatch_cmd_begin_dynamic_rendering_via_vtable(
-        &self,
-        image_view: vk::ImageView,
-        extent: (u32, u32),
-        clear_color: Option<[f32; 4]>,
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "cmd_begin_dynamic_rendering: command recorder methods vtable is null".into(),
-            ));
-        }
-        let has_clear = if clear_color.is_some() { 1u32 } else { 0u32 };
-        let rgba = clear_color.unwrap_or([0.0; 4]);
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).cmd_begin_dynamic_rendering)(
-                self.handle,
-                image_view.as_raw(),
-                extent.0,
-                extent.1,
-                has_clear,
-                rgba[0],
-                rgba[1],
-                rgba[2],
-                rgba[3],
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    fn dispatch_cmd_end_dynamic_rendering_via_vtable(&self) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "cmd_end_dynamic_rendering: command recorder methods vtable is null".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).cmd_end_dynamic_rendering)(
-                self.handle,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
-
-    fn dispatch_submit_with_semaphores_via_vtable(
-        &self,
-        waits: &[vk::SemaphoreSubmitInfo],
-        signals: &[vk::SemaphoreSubmitInfo],
-    ) -> Result<()> {
-        if self.methods_vtable.is_null() {
-            return Err(Error::GpuError(
-                "submit_with_semaphores: command recorder methods vtable is null".into(),
-            ));
-        }
-        // Project the vk::SemaphoreSubmitInfo arrays into POD reprs.
-        let waits_repr: Vec<streamlib_plugin_abi::SemaphoreSubmitInfoRepr> = waits
-            .iter()
-            .map(|w| streamlib_plugin_abi::SemaphoreSubmitInfoRepr {
-                semaphore: w.semaphore.as_raw(),
-                value: w.value,
-                stage_mask: w.stage_mask.bits() as u64,
-                device_index: w.device_index,
-                _reserved_padding: 0,
-            })
-            .collect();
-        let signals_repr: Vec<streamlib_plugin_abi::SemaphoreSubmitInfoRepr> = signals
-            .iter()
-            .map(|s| streamlib_plugin_abi::SemaphoreSubmitInfoRepr {
-                semaphore: s.semaphore.as_raw(),
-                value: s.value,
-                stage_mask: s.stage_mask.bits() as u64,
-                device_index: s.device_index,
-                _reserved_padding: 0,
-            })
-            .collect();
-        let mut err_buf = [0u8; 256];
-        let mut err_len: usize = 0;
-        let status = unsafe {
-            ((*self.methods_vtable).submit_with_semaphores)(
-                self.handle,
-                if waits_repr.is_empty() {
-                    std::ptr::null()
-                } else {
-                    waits_repr.as_ptr()
-                },
-                waits_repr.len(),
-                if signals_repr.is_empty() {
-                    std::ptr::null()
-                } else {
-                    signals_repr.as_ptr()
-                },
-                signals_repr.len(),
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
-        }
-    }
 }
 
 impl Drop for RhiCommandRecorder {
     fn drop(&mut self) {
-        if !self.handle.is_null() && !self.vtable.is_null() {
+        if !self.handle.is_null() {
             // SAFETY: matched with `Box::into_raw` in `from_inner`.
             unsafe {
-                ((*self.vtable).drop_command_recorder)(self.handle);
+                drop(Box::from_raw(self.handle as *mut RhiCommandRecorderInner));
             }
         }
     }
@@ -2135,19 +1383,6 @@ impl std::fmt::Debug for RhiCommandRecorder {
 mod layout_tests {
     use super::*;
     use core::mem::{align_of, offset_of, size_of};
-
-    #[test]
-    fn rhi_command_recorder_layout() {
-        // Phase E sub-lift slice B (#984) appended `methods_vtable`
-        // (16 → 24 bytes); the PluginAbiObject now mirrors the
-        // `(handle, vtable, methods_vtable)` triple used by every
-        // per-type kernel PluginAbiObject and `RhiColorConverter`.
-        assert_eq!(size_of::<RhiCommandRecorder>(), 24);
-        assert_eq!(align_of::<RhiCommandRecorder>(), 8);
-        assert_eq!(offset_of!(RhiCommandRecorder, handle), 0);
-        assert_eq!(offset_of!(RhiCommandRecorder, vtable), 8);
-        assert_eq!(offset_of!(RhiCommandRecorder, methods_vtable), 16);
-    }
 
     #[test]
     fn rhi_command_recorder_is_send_sync() {
@@ -2341,198 +1576,6 @@ mod tests {
         // Second begin should pick up the now-Idle state.
         rec.begin().expect("begin 2");
         rec.submit_and_wait().expect("submit_and_wait 2");
-    }
-
-    // ----- Vulkan-free: dispatcher argument-ordering regression test (#1089) -----
-    //
-    // The plugin-ABI vtable's `record_swapchain_image_barrier` slot
-    // groups parameters by kind: (from_stage, to_stage, from_access,
-    // to_access). The dispatcher in `dispatch_record_swapchain_image_barrier_via_vtable`
-    // received them as a (src_stage, src_access, dst_stage, dst_access)
-    // tuple from the caller and must reorder them onto the wire. Issue
-    // #1089 was a regression where the dispatcher passed them in
-    // (src_stage, src_access, dst_stage, dst_access) order on the wire —
-    // misaligned by one slot — so the host wrapper interpreted the
-    // caller's dst_stage bits as src_access (and vice versa). The bit
-    // values collide on real Vulkan flag layouts
-    // (`COLOR_ATTACHMENT_OUTPUT` stage = `DEPTH_STENCIL_ATTACHMENT_WRITE`
-    // access = 0x400), which is what made the validation layer flag a
-    // missing-stage error rather than a bogus-bits error.
-    //
-    // Mentally reverting the swap reproduces #1089's exact symptom in
-    // this test: each captured slot would contain the wrong caller-side
-    // value.
-
-    use std::cell::Cell;
-    use std::ffi::c_void;
-
-    thread_local! {
-        static CAPTURED_BARRIER_ARGS:
-            Cell<Option<[i64; 4]>> = const { Cell::new(None) };
-    }
-
-    unsafe extern "C" fn capture_record_swapchain_image_barrier(
-        _recorder_handle: *const c_void,
-        _image_raw: u64,
-        _from_layout_raw: i32,
-        _to_layout_raw: i32,
-        from_stage_raw: i64,
-        to_stage_raw: i64,
-        from_access_raw: i64,
-        to_access_raw: i64,
-        _err_buf: *mut u8,
-        _err_buf_cap: usize,
-        _err_len: *mut usize,
-    ) -> i32 {
-        CAPTURED_BARRIER_ARGS.with(|c| {
-            c.set(Some([
-                from_stage_raw,
-                to_stage_raw,
-                from_access_raw,
-                to_access_raw,
-            ]));
-        });
-        0
-    }
-
-    // Fill the remaining slots with stub functions that just return 0;
-    // the test only exercises the swapchain-barrier slot.
-    macro_rules! stub_zero {
-        ($name:ident($($arg:ident: $ty:ty),* $(,)?)) => {
-            unsafe extern "C" fn $name($($arg: $ty),*) -> i32 {
-                $(let _ = $arg;)*
-                0
-            }
-        };
-    }
-    stub_zero!(stub_begin(a: *const c_void, b: *mut u8, c: usize, d: *mut usize));
-    stub_zero!(stub_image_barrier(
-        a: *const c_void, b: *const c_void, c: i32, d: i32, e: i64, f: i64, g: i64, h: i64,
-        i: *mut u8, j: usize, k: *mut usize,
-    ));
-    stub_zero!(stub_buffer_barrier(
-        a: *const c_void, b: *const c_void, c: i64, d: i64, e: i64, f: i64,
-        g: *mut u8, h: usize, i: *mut usize,
-    ));
-    stub_zero!(stub_dispatch(
-        a: *const c_void, b: *const c_void, c: u32, d: u32, e: u32,
-        f: *mut u8, g: usize, h: *mut usize,
-    ));
-    stub_zero!(stub_copy_image_to_buffer(
-        a: *const c_void, b: *const c_void, c: i32, d: *const c_void,
-        e: *const streamlib_plugin_abi::ImageCopyRegionRepr,
-        f: *mut u8, g: usize, h: *mut usize,
-    ));
-    stub_zero!(stub_submit_signaling_timeline(
-        a: *const c_void, b: *const c_void, c: u64, d: *mut u8, e: usize, f: *mut usize,
-    ));
-    stub_zero!(stub_begin_dynamic_rendering(
-        a: *const c_void, b: u64, c: u32, d: u32, e: u32,
-        f: f32, g: f32, h: f32, i: f32, j: *mut u8, k: usize, l: *mut usize,
-    ));
-    stub_zero!(stub_end_dynamic_rendering(a: *const c_void, b: *mut u8, c: usize, d: *mut usize));
-    stub_zero!(stub_submit_with_semaphores(
-        a: *const c_void,
-        b: *const streamlib_plugin_abi::SemaphoreSubmitInfoRepr, c: usize,
-        d: *const streamlib_plugin_abi::SemaphoreSubmitInfoRepr, e: usize,
-        f: *mut u8, g: usize, h: *mut usize,
-    ));
-    stub_zero!(stub_record_draw(
-        a: *const c_void, b: *const c_void, c: u32,
-        d: *const streamlib_plugin_abi::DrawCallRepr,
-        e: *mut u8, f: usize, g: *mut usize,
-    ));
-    stub_zero!(stub_record_draw_indexed(
-        a: *const c_void, b: *const c_void, c: u32,
-        d: *const streamlib_plugin_abi::DrawIndexedCallRepr,
-        e: *mut u8, f: usize, g: *mut usize,
-    ));
-    stub_zero!(stub_submit(a: *const c_void, b: *mut u8, c: usize, d: *mut usize));
-    stub_zero!(stub_submit_and_wait(a: *const c_void, b: *mut u8, c: usize, d: *mut usize));
-
-    #[test]
-    fn dispatch_swapchain_barrier_passes_args_in_vtable_slot_order() {
-        // Use distinctive non-colliding bit patterns for each role so a
-        // misaligned wire reordering would produce visibly wrong slots.
-        let src_stage = vk::PipelineStageFlags2::COMPUTE_SHADER; // bit 11 (0x800)
-        let dst_stage = vk::PipelineStageFlags2::FRAGMENT_SHADER; // bit 7 (0x80)
-        let src_access = vk::AccessFlags2::SHADER_STORAGE_READ; // bit 33 (0x200000000)
-        let dst_access = vk::AccessFlags2::SHADER_SAMPLED_READ; // bit 32 (0x100000000)
-
-        // Fake methods vtable with our capture function in the swapchain slot.
-        let fake_vtable = streamlib_plugin_abi::RhiCommandRecorderMethodsVTable {
-            layout_version:
-                streamlib_plugin_abi::RHI_COMMAND_RECORDER_METHODS_VTABLE_LAYOUT_VERSION,
-            _reserved_padding: 0,
-            begin: stub_begin,
-            record_image_barrier: stub_image_barrier,
-            record_buffer_barrier: stub_buffer_barrier,
-            record_dispatch: stub_dispatch,
-            record_copy_image_to_buffer: stub_copy_image_to_buffer,
-            submit_signaling_timeline: stub_submit_signaling_timeline,
-            record_pixel_buffer_barrier: stub_buffer_barrier,
-            record_copy_image_to_pixel_buffer: stub_copy_image_to_buffer,
-            record_swapchain_image_barrier: capture_record_swapchain_image_barrier,
-            cmd_begin_dynamic_rendering: stub_begin_dynamic_rendering,
-            cmd_end_dynamic_rendering: stub_end_dynamic_rendering,
-            submit_with_semaphores: stub_submit_with_semaphores,
-            record_draw: stub_record_draw,
-            record_draw_indexed: stub_record_draw_indexed,
-            submit: stub_submit,
-            submit_and_wait: stub_submit_and_wait,
-        };
-
-        // Synthetic PluginAbiObject with our fake vtable. handle/vtable can stay null
-        // because the capture function never dereferences them.
-        let beta = RhiCommandRecorder {
-            handle: std::ptr::null(),
-            vtable: std::ptr::null(),
-            methods_vtable: &fake_vtable,
-        };
-
-        CAPTURED_BARRIER_ARGS.with(|c| c.set(None));
-        let rc = beta.dispatch_record_swapchain_image_barrier_via_vtable(
-            vk::Image::null(),
-            vk::ImageLayout::UNDEFINED,
-            vk::ImageLayout::COLOR_ATTACHMENT_OPTIMAL,
-            src_stage,
-            src_access,
-            dst_stage,
-            dst_access,
-        );
-        assert!(rc.is_ok(), "dispatcher returned error: {:?}", rc);
-
-        let captured = CAPTURED_BARRIER_ARGS
-            .with(|c| c.get())
-            .expect("vtable slot did not fire");
-
-        // The vtable signature names these parameters (in order):
-        // from_stage_raw, to_stage_raw, from_access_raw, to_access_raw.
-        // The caller's (src_stage, src_access, dst_stage, dst_access)
-        // must therefore reach the vtable as (src, dst, src, dst) —
-        // src→from, dst→to. Mentally reverting the dispatcher's swap
-        // makes this assertion fail with src_access in the to_stage
-        // slot (#1089's exact failure mode).
-        assert_eq!(
-            captured[0],
-            src_stage.bits() as i64,
-            "from_stage_raw must receive caller's src_stage"
-        );
-        assert_eq!(
-            captured[1],
-            dst_stage.bits() as i64,
-            "to_stage_raw must receive caller's dst_stage (#1089: was src_access)"
-        );
-        assert_eq!(
-            captured[2],
-            src_access.bits() as i64,
-            "from_access_raw must receive caller's src_access (#1089: was dst_stage)"
-        );
-        assert_eq!(
-            captured[3],
-            dst_access.bits() as i64,
-            "to_access_raw must receive caller's dst_access"
-        );
     }
 
     // ----- Integration test: real compute kernel + timeline-signaling submit -----
