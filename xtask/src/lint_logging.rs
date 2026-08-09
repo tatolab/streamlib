@@ -473,7 +473,7 @@ fn discover_lint_opted_in_crates(project_root: &Path) -> Result<Vec<PathBuf>> {
     // out, this gate declares a source root nothing under it can ever hold, and
     // the per-root refusal in `run` has no way to tell "the root moved" from
     // "this gate never reads that root".
-    const ZONE_PARENTS: &[&str] = &["runtime", "sdk", "adapters", "tools", "vendor", "packages"];
+    const ZONE_PARENTS: &[&str] = &["runtime", "sdk", "adapters", "vendor", "packages"];
     let mut result = Vec::new();
     for zone in ZONE_PARENTS {
         let zone_dir = project_root.join(zone);
@@ -1414,11 +1414,11 @@ mod tests {
     fn rust_crate_without_workspace_lints_is_skipped() {
         let tmp = TempDir::new().unwrap();
         let root = tmp.path();
-        let crate_root = root.join("tools/streamlib-cli");
+        let crate_root = root.join("runtime/streamlib-binary");
         fs::create_dir_all(crate_root.join("src")).unwrap();
         fs::write(
             crate_root.join("Cargo.toml"),
-            "[package]\nname=\"cli\"\nversion=\"0.1.0\"\n", // no [lints]
+            "[package]\nname=\"binary\"\nversion=\"0.1.0\"\n", // no [lints]
         )
         .unwrap();
         fs::write(

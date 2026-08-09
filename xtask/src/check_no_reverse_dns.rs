@@ -33,7 +33,7 @@ use std::path::{Path, PathBuf};
 use syn::visit::Visit;
 use walkdir::WalkDir;
 
-const SCAN_PARENTS: &[&str] = &["runtime", "sdk", "adapters", "tools", "vendor", "packages", "examples", "xtask"];
+const SCAN_PARENTS: &[&str] = &["runtime", "sdk", "adapters", "vendor", "packages", "examples", "xtask"];
 
 const SKIP_PATH_FRAGMENTS: &[&str] = &[
     "/target/",

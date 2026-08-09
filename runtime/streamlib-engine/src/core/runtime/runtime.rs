@@ -118,8 +118,8 @@ pub struct Runner {
     /// ([`Runner::new`]) — the engine never shells out to a toolchain.
     /// A [`BuildPolicy`] requiring a (re)build fails loud when this is
     /// absent. Wired via [`Runner::new_with_orchestrator`] /
-    /// [`Runner::set_build_orchestrator`] (or the SDK `auto-build`
-    /// feature). Mirrors the [`setup_hooks`] injection shape.
+    /// [`Runner::set_build_orchestrator`]. Mirrors the [`setup_hooks`]
+    /// injection shape.
     ///
     /// [`BuildPolicy`]: crate::core::runtime::module_loader::BuildPolicy
     /// [`setup_hooks`]: Self::setup_hooks
@@ -305,10 +305,8 @@ impl Runner {
     /// Construct a runtime with a [`BuildOrchestrator`] wired so that
     /// build-requiring module loads ([`Strategy::Path`] /
     /// [`Strategy::Git`] with a non-`NeverBuild` [`BuildPolicy`]) can
-    /// materialize from source. The conventional construction for dev
-    /// loops, runtime-authoring hosts (AI agents, CLIs, daemons), and CI
-    /// — the SDK's `auto-build` feature wires the default polyglot
-    /// orchestrator here for you.
+    /// materialize from source. No orchestrator ships in-tree; a host
+    /// that wants one supplies its own.
     ///
     /// [`BuildOrchestrator`]: crate::core::runtime::module_loader::BuildOrchestrator
     /// [`Strategy::Path`]: crate::core::runtime::module_loader::Strategy::Path
@@ -1243,8 +1241,8 @@ impl Runner {
     /// api-server in-process at boot).
     ///
     /// One `add_module` per referenced package (deduped), resolved by version at
-    /// its highest published version and built on the host —
-    /// requires a build orchestrator (e.g. `RunnerAutoBuild::with_auto_build`).
+    /// its highest published version and built on the host — requires a
+    /// wired [`BuildOrchestrator`](crate::core::runtime::module_loader::BuildOrchestrator).
     /// Fails loud, naming the package, if a referenced module can't resolve.
     pub async fn load_graph_snapshot_with_resolving(
         &self,

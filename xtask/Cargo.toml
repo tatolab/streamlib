@@ -18,7 +18,6 @@ streamlib-processor-schema = { path = "../sdk/streamlib-processor-schema" }
 # Package-artifact assembly — backs `strip-publish-manifest` (publish-side
 # path-patch strip) and `check-package-version-drift --fix` (shared
 # Cargo.toml version rewrite).
-streamlib-pack = { path = "../tools/streamlib-pack" }
 
 # Folder-backed crate-root generation — `generate-crate-roots` is a thin
 # wrapper around the one generator the build orchestrator also drives.

@@ -142,8 +142,8 @@ pub(crate) fn resolve_subprocess_native_lib_path(
         Error::Runtime(format!(
             "{filename} not found. Looked at ${} (unset or missing), the registry-built host \
              cache ({}), and the monorepo target/{{debug,release}}. For a registry consumer the \
-             host is built on first Python/Deno use by the build orchestrator — run the pipeline \
-             through `Runner::with_auto_build()`, or set ${} to a prebuilt host.",
+             host is built on first Python/Deno use by a wired build orchestrator — set ${} to a \
+             prebuilt host.",
             runtime.env_var(),
             cached.display(),
             runtime.env_var(),
