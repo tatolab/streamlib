@@ -234,7 +234,6 @@ pub mod sdk {
     pub use crate::core::graph_snapshot;
     pub use crate::core::json_schema;
     pub use crate::core::media_clock;
-    pub use crate::core::plugin;
     pub use crate::core::prelude;
     pub use crate::core::rhi;
     pub use crate::core::runtime;

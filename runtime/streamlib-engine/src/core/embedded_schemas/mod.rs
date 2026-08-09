@@ -53,19 +53,6 @@ static SCHEMA_REGISTRY: LazyLock<SchemaRegistryStorage> =
 pub fn register_schema(canonical_id: impl Into<String>, body: impl Into<Arc<str>>) {
     let canonical = canonical_id.into();
     let body = body.into();
-    if let Some(cbs) = crate::core::plugin::host_services::host_callbacks() {
-        let yaml: &str = &body;
-        unsafe {
-            (cbs.schema_register)(
-                cbs.host,
-                canonical.as_ptr(),
-                canonical.len(),
-                yaml.as_ptr(),
-                yaml.len(),
-            );
-        }
-        return;
-    }
     let mut guard = SCHEMA_REGISTRY.write();
     guard.insert(canonical, body);
 }
@@ -89,34 +76,6 @@ pub(crate) fn unregister_schema(canonical_id: &str) {
 /// host's call returns; the borrow doesn't outlive the call.
 pub fn get_embedded_schema_definition(name: &str) -> Option<Arc<str>> {
     let canonical = strip_semver_suffix(name);
-    if let Some(cbs) = crate::core::plugin::host_services::host_callbacks() {
-        let mut captured: Option<Arc<str>> = None;
-        extern "C" fn capture(userdata: *mut c_void, yaml_ptr: *const u8, yaml_len: usize) {
-            if yaml_ptr.is_null() || yaml_len == 0 {
-                return;
-            }
-            // SAFETY: caller (host) guarantees the bytes are valid
-            // UTF-8 for the duration of this call. We copy into an
-            // owned String before returning, so the borrow doesn't
-            // outlive the call.
-            let bytes = unsafe { std::slice::from_raw_parts(yaml_ptr, yaml_len) };
-            let s: Arc<str> = std::str::from_utf8(bytes)
-                .map(Into::into)
-                .unwrap_or_else(|_| Arc::<str>::from(""));
-            let target = unsafe { &mut *(userdata as *mut Option<Arc<str>>) };
-            *target = Some(s);
-        }
-        unsafe {
-            (cbs.schema_lookup)(
-                cbs.host,
-                canonical.as_ptr(),
-                canonical.len(),
-                capture,
-                &mut captured as *mut _ as *mut c_void,
-            );
-        }
-        return captured;
-    }
     SCHEMA_REGISTRY.read().get(canonical).cloned()
 }
 
