@@ -1,17 +1,11 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Host-side wire envelope for the exportable-timeline PluginAbiObject
-//! (#1260).
+//! Host-side exportable-timeline handle (#1260).
 //!
-//! Layout-stable `(handle, methods)` shape — the exportable timeline is
-//! an Arc-refcounted PluginAbiObject minted by the FullAccess vtable's
-//! `create_exportable_timeline_semaphore` slot and handed to a cdylib.
-//! The cdylib holds `(handle, methods)` opaquely and dispatches
-//! clone/drop/wait/signal/current_value/export_opaque_fd through the
-//! per-type [`HostTimelineSemaphoreMethodsVTable`]; refcount accounting
-//! runs in host-compiled code (`Arc::increment/decrement_strong_count`
-//! against [`crate::vulkan::rhi::HostVulkanTimelineSemaphore`]).
+//! Wraps `Arc<`[`crate::vulkan::rhi::HostVulkanTimelineSemaphore`]`>` behind an
+//! opaque handle; Clone/Drop refcount it directly, and
+//! wait/signal/current_value/export_opaque_fd read the inner.
 //!
 //! Sibling shape of [`super::StorageBuffer`] / [`super::RhiColorConverter`]:
 //! every field is an opaque pointer, the byte layout is pinned by a

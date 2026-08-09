@@ -17,50 +17,27 @@ use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
 use streamlib_processor_schema::PortSchemaSpec;
 
 /// Scratch buffer the vtable's error-out-params write into. 512 B is
-/// enough for the typical "config deserialize failed" message; the
-/// vtable's `write_err` truncates cleanly past that.
-
 /// A created processor instance for runtime use.
 ///
-/// Two-variant: cdylib registrations (via `STREAMLIB_PLUGIN`) and
-/// in-process `PROCESSOR_REGISTRY.register::<P>()` calls both land in
-/// [`Self::VTable`] (dispatch via extern "C" fn pointers, retiring
-/// the dyn-trait crossing class); legacy non-generic registrations
-/// (subprocess host wrappers via [`ProcessorInstanceFactory::register_dynamic`])
-/// land in [`Self::LegacyDyn`] (dispatch via Rust trait-object
-/// methods, host-only).
+/// Every processor — host-compiled Rust types registered through
+/// `register::<P>()` / `add_local::<P>()` and subprocess host wrappers
+/// registered through [`ProcessorInstanceFactory::register_dynamic`] —
+/// dispatches through a boxed [`DynGeneratedProcessor`] trait object.
 ///
 /// # Iceoryx2 resource ownership (issue #894)
 ///
 /// The host allocates the inner `OutputWriterInner` and
-/// `InputMailboxesInner` Arcs at instance-construction time and
-/// retains them on the `VTable` variant via the
-/// `iceoryx2_output_writer_inner` / `iceoryx2_input_mailboxes_inner`
-/// fields. The cdylib's `outputs` / `inputs` PluginAbiObject fields receive
-/// `Arc::into_raw`-cloned handles via `set_iceoryx2_resources`.
-/// Connection-wiring code on the host operates on the inner Arc
-/// directly (no plugin ABI hop).
+/// `InputMailboxesInner` Arcs at instance-construction time and hands
+/// the processor `OutputWriter` / `InputMailboxes` handles over those
+/// Arcs via `set_iceoryx2_resources`; connection-wiring code operates
+/// on the inner Arc directly.
 pub enum ProcessorInstance {
-    /// Host-static dyn-trait registration. Used by subprocess host
-    /// wrappers (Python / Deno) that register a `Box<dyn Fn>`
-    /// constructor via [`ProcessorInstanceFactory::register_dynamic`].
-    /// No plugin ABI crossing — these live in the host and
-    /// dispatch via standard Rust trait objects.
+    /// A processor dispatched through a boxed trait object.
     LegacyDyn(Box<dyn DynGeneratedProcessor + Send>),
 }
 
-// Safety: VTable's `*mut c_void` is bound to the registering artifact's
-// process address space, which lives for the process lifetime
-// (cdylibs are pinned via `LOADED_PLUGIN_LIBRARIES`). LegacyDyn's
-// inner Box<dyn ... + Send> is already Send.
+// Safety: the boxed `dyn DynGeneratedProcessor + Send` is already Send.
 unsafe impl Send for ProcessorInstance {}
-
-impl Drop for ProcessorInstance {
-    fn drop(&mut self) {
-        // LegacyDyn drops its boxed processor via its own `Drop`.
-
-    }
-}
 
 impl ProcessorInstance {
     /// Whether this instance's code lives in a separately-built cdylib loaded

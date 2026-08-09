@@ -3,9 +3,8 @@
 
 //! Raw byte-shaped GPU storage buffer (SSBO).
 //!
-//! Layout-stable `(handle, vtable, cached POD)` shape — Arc refcount
-//! accounting runs in host-compiled code via the vtable's
-//! `clone_storage_buffer` / `drop_storage_buffer` callbacks.
+//! `(handle, cached POD)` shape — the handle is
+//! `Arc::into_raw(Arc<HostVulkanBuffer>)`; Clone/Drop refcount it directly.
 //!
 //! Sibling of [`PixelBuffer`](super::PixelBuffer) for callers that
 //! have raw bytes rather than formatted pixel data — V4L2-shape capture

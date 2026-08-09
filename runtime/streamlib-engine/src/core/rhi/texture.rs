@@ -3,19 +3,14 @@
 
 //! RHI texture abstraction.
 //!
-//! Layout-stable `(handle, vtable, cached POD)` shape: every field
-//! is either a primitive or an opaque pointer, so the type
-//! round-trips across the plugin ABI unchanged. The
-//! handle is `Arc::into_raw(Arc<TextureInner>)` produced by host
-//! code; the vtable's `clone_texture` / `drop_texture` callbacks
-//! manage the Arc refcount in host-compiled code, so Clone/Drop
-//! work correctly regardless of the cdylib's compiled `Arc` layout.
+//! `(handle, cached POD)` shape: the handle is
+//! `Arc::into_raw(Arc<TextureInner>)`; Clone/Drop refcount it directly.
 //!
 //! Platform-specific Arcs (`HostVulkanTexture` on Linux,
 //! `MetalTexture` on macOS, `DX12Texture` on Windows) live on the
 //! private [`TextureInner`] type behind the opaque handle. Engine code
 //! reaches them via the [`crate::host_rhi::HostTextureExt`] extension
-//! trait; cdylib code never sees them.
+//! trait.
 //!
 //! `TextureFormat` and `TextureUsages` are defined in
 //! [`streamlib_consumer_rhi`] so subprocess-shape dep graphs can name

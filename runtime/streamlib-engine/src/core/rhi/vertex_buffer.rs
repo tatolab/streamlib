@@ -3,7 +3,7 @@
 
 //! Vertex buffer for graphics pipeline vertex input.
 //!
-//! Layout-stable `(handle, vtable, cached POD)` shape; see
+//! `(handle, cached POD)` shape; see
 //! [`StorageBuffer`](super::StorageBuffer) for the shared rationale.
 
 #[cfg(target_os = "linux")]

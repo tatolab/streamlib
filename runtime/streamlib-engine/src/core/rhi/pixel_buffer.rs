@@ -3,14 +3,8 @@
 
 //! Pixel buffer with cached dimensions.
 //!
-//! Layout-stable `(handle, vtable, cached POD)` shape: every field
-//! is either a primitive or an opaque pointer, so the type
-//! round-trips across the plugin ABI unchanged. The
-//! handle is `Arc::into_raw(Arc<PixelBufferRef>)` produced by host
-//! code; the vtable's `clone_pixel_buffer` / `drop_pixel_buffer`
-//! callbacks manage the Arc refcount in host-compiled code, so
-//! Clone/Drop work correctly regardless of the cdylib's compiled
-//! `Arc` layout.
+//! `(handle, cached POD)` shape: the handle is
+//! `Arc::into_raw(Arc<PixelBufferRef>)`; Clone/Drop refcount it directly.
 
 use std::ffi::c_void;
 use std::sync::Arc;
