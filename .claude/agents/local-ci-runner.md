@@ -17,16 +17,7 @@ The gate list is **not** hardcoded here. Derive it fresh each run from the CI co
 The `.github/workflows/*.yml` files are the source of truth for what CI enforces — run what they run.
 
 ## Test-gate note
-The CI unit-test gate is the minimal per-crate `--lib` run that `test.yml` defines — run exactly what the workflow specifies. For a broader local pass (the full workspace unit suite with its exclusion list, and the hardware-integration tier), the canonical commands live in `docs/testing-hardware.md`; the tier-1 workspace baseline is:
-
-```bash
-cargo test --workspace \
-    --exclude api-server-demo \
-    --exclude camera-deno-subprocess \
-    --exclude camera-python-subprocess \
-    --exclude camera-rust-plugin \
-    --exclude webrtc-cloudflare-stream
-```
+The CI unit-test gate is the minimal per-crate `--lib` run that `test.yml` defines — run exactly what the workflow specifies. For a broader local pass, read the tier-1 workspace baseline and its exclusion list out of `docs/testing-hardware.md` at run time and run it verbatim; do not reproduce the exclusion list from memory, because it drifts as example crates come and go.
 
 Use the CI command as the gate; treat the workspace baseline as the broader fallback when the caller asks for full local coverage. The hardware-integration tier (`--features streamlib/hardware-tests … --test-threads=1`) needs a GPU and cannot run in a sandboxed session — note it as "not run (needs rig)" rather than reporting a false pass.
 
