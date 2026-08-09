@@ -1,6 +1,6 @@
 ---
 name: drive-running-node
-description: Resolve exactly one running StreamLib node and health-check it with a live `graph` round-trip, then pin its `--url` / `--node` so every following control verb targets the same node. Use at the start of a session against a running app — after `discover-running-nodes`, or whenever you are about to inspect, tap, submit, replace, connect, or capture and need a confirmed target locked in. Wraps `streamlib nodes` then `streamlib graph`.
+description: Resolve exactly one running StreamLib node and health-check it with a live `graph` round-trip, then pin its `--url` / `--node` so every following control verb targets the same node. Use at the start of a session against a running app — after `discover-running-nodes`, or whenever you are about to inspect, tap, read logs, or capture evidence and need a confirmed target locked in. Wraps `streamlib nodes` then `streamlib graph`.
 ---
 
 # drive-running-node
@@ -38,7 +38,7 @@ A JSON graph dump (processors, links, states, metrics) means the node is healthy
 - A transport/HTTP error — the endpoint is unreachable or auth failed (set `STREAMLIB_MCP_TOKEN`).
 
 ### 3. Pin it for the rest of the session
-Record the chosen `--node <runtime_id>` (preferred — stable across a port change) or `--url <control_url>`, and pass the same flag to every subsequent verb (`inspect-live-graph`, `tap-live-channel`, `author-and-submit-processor`, `hot-swap-live-processor`, `capture-node-evidence`, `teardown-running-node`).
+Record the chosen `--node <runtime_id>` (preferred — stable across a port change) or `--url <control_url>`, and pass the same flag to every subsequent verb (`inspect-live-graph`, `tap-live-channel`, `capture-node-evidence`, `teardown-running-node`).
 
 ## Notes
 - Prefer `--node <runtime_id>` over `--url` when several nodes may be live — it is unambiguous and survives the `ApiServer`'s port auto-increment.

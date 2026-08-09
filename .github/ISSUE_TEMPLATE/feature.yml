@@ -1,5 +1,5 @@
 name: Feature
-description: A change to the engine, a package, or the tooling.
+description: A change to the engine, the Python SDK, or the tooling.
 title: "feat: "
 body:
   - type: textarea
@@ -13,7 +13,7 @@ body:
     id: design
     attributes:
       label: Design
-      description: "mermaid diagram + trade-offs + decisions; required before build for engine-zone work — /draft-design fills this"
+      description: "trade-offs + decisions, as the change file states them; architecture is decided in docs/plan/ via /propose-change, never in the ticket"
     validations:
       required: false
   - type: textarea

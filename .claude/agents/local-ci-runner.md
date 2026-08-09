@@ -10,23 +10,14 @@ You run streamlib's local gate battery and report the results as a compact table
 ## Source of truth — read it at run time
 The gate list is **not** hardcoded here. Derive it fresh each run from the CI configuration and the xtask lint suite, because both drift:
 
-1. Read every workflow under `.github/workflows/*.yml` and extract the command each job runs (the boundary check, the logging lint, the layout-version / schema / manifest drift checks, the license check, the package-load smoke, the unit-test gate, etc.).
+1. Read every workflow under `.github/workflows/*.yml` and extract the command each job runs. Take the list from the files, not from any example — jobs are added and retired, and a name you remember may be gone.
 2. Read the `xtask` command surface (its subcommand list) and include every check-style lint it exposes.
 3. Run each derived gate locally, in the worktree you were pointed at.
 
 The `.github/workflows/*.yml` files are the source of truth for what CI enforces — run what they run.
 
 ## Test-gate note
-The CI unit-test gate is the minimal per-crate `--lib` run that `test.yml` defines — run exactly what the workflow specifies. For a broader local pass (the full workspace unit suite with its exclusion list, and the hardware-integration tier), the canonical commands live in `docs/testing-hardware.md`; the tier-1 workspace baseline is:
-
-```bash
-cargo test --workspace \
-    --exclude api-server-demo \
-    --exclude camera-deno-subprocess \
-    --exclude camera-python-subprocess \
-    --exclude camera-rust-plugin \
-    --exclude webrtc-cloudflare-stream
-```
+The CI unit-test gate is the minimal per-crate `--lib` run that `test.yml` defines — run exactly what the workflow specifies. For a broader local pass, read the tier-1 workspace baseline and its exclusion list out of `docs/testing-hardware.md` at run time rather than reproducing it from memory — it drifts as example crates come and go. Drop any `--exclude` naming a crate that no longer exists, and say in your report that you did.
 
 Use the CI command as the gate; treat the workspace baseline as the broader fallback when the caller asks for full local coverage. The hardware-integration tier (`--features streamlib/hardware-tests … --test-threads=1`) needs a GPU and cannot run in a sandboxed session — note it as "not run (needs rig)" rather than reporting a false pass.
 

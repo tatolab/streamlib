@@ -1,6 +1,6 @@
 ---
 name: capture-node-evidence
-description: Freeze a verifiable record of a running StreamLib node — a live graph snapshot, N tapped bags from one or more channels on disk, and a bounded log excerpt — into a directory for a PR, an issue, or a before/after comparison. Use when you need durable proof that a pipeline is running and producing, or to capture the "before" and "after" around a hot-swap. Wraps `streamlib graph`, `streamlib tap`, and `streamlib logs` with shell redirection.
+description: Freeze a verifiable record of a running StreamLib node — a live graph snapshot, N tapped bags from one or more channels on disk, and a bounded log excerpt — into a directory for a PR, an issue, or a before/after comparison. Use when you need durable proof that a pipeline is running and producing, or to capture the "before" and "after" around an app-code change. Wraps `streamlib graph`, `streamlib tap`, and `streamlib logs` with shell redirection.
 ---
 
 # capture-node-evidence

@@ -14,15 +14,15 @@ paths:
   never reintroduce it. `cargo xtask check-boundaries` enforces.
 - **One kernel abstraction per pipeline kind** (`VulkanComputeKernel`, graphics, ray-tracing).
   Construct via `GpuContext::create_*` / `GpuContextFullAccess::create_*` — never
-  `VulkanComputeKernel::new` on a raw device (unsound in a separately-built `.slpkg`). Declare
+  `VulkanComputeKernel::new` on a raw device. Declare
   bindings as data; never hand-roll a descriptor set / pool / pipeline layout / command buffer /
   fence.
 - **`TextureRegistration` is the single per-surface lifecycle record**, keyed by `surface_id` in
   `GpuContext::texture_cache` — extend it, never spin up a parallel `HashMap<surface_id, …>`.
 - **`TextureRing` is the single decode-output / CPU-upload rotating-texture abstraction** — never
   hand-roll a `Vec<Texture>` + index for that use case.
-- Subprocess Vulkan is import-side only (FD import + bind + map + layout transitions + timeline
-  wait/signal); everything privileged escalates.
+- Helper-process Vulkan is import-side only (FD import + bind + map + layout transitions +
+  timeline wait/signal); everything privileged escalates to the parent.
 
 Read before you change:
 - allocation / export / VMA config → `docs/learnings/vma-export-pools.md`,

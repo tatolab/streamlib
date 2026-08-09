@@ -4,8 +4,8 @@
 #
 #   docs/plan/**                 requires .claude/state/plan-session
 #                                (set by /align, /propose-change, /ship-change, /pivot)
-#   runtime/ sdk/ tools/
-#   adapters/ xtask/             requires .claude/state/active-ticket.json
+#   runtime/ sdk/ adapters/
+#   xtask/                       requires .claude/state/active-ticket.json
 #                                (set by /implement after the owner confirms the plan)
 #
 # Contract: exit 0 + JSON permissionDecision:"deny" blocks the edit with the reason;
@@ -35,7 +35,7 @@ case "$rel" in
     [ -f "$state/plan-session" ] && exit 0
     deny 'docs/plan/ is the locked decision source. Plan edits happen only inside /align, /propose-change, /ship-change, or /pivot — those skills create .claude/state/plan-session for the session. Owner escape hatch: touch .claude/state/plan-session yourself.'
     ;;
-  runtime/*|sdk/*|tools/*|adapters/*|xtask/*)
+  runtime/*|sdk/*|adapters/*|xtask/*)
     [ -f "$state/active-ticket.json" ] && exit 0
     deny 'Source edits happen only inside /implement with an owner-confirmed ticket (.claude/state/active-ticket.json is missing). Run /implement — or, as the owner escape hatch, create the marker by hand.'
     ;;

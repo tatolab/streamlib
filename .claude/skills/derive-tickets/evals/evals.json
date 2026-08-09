@@ -4,12 +4,13 @@
     {
       "id": 0,
       "prompt": "Turn the approved change 'streaming-overhaul' (8 distinct workstreams including two REMOVED migrations) into tickets. The owner is away.",
-      "expected_output": "Drafts tracer-bullet tickets but stops at the owner-approval quiz with a numbered list; publishes nothing; proposes at most 5 tickets or recommends splitting the change; the REMOVED migration is sequenced expand-contract.",
+      "expected_output": "Drafts tracer-bullet tickets but stops at the owner-approval quiz with a numbered list; publishes nothing; drafts as many tracer bullets as the eight workstreams honestly need rather than capping the count, while checking whether the change has a seam it should have been split at; the REMOVED migration is sequenced expand-contract; the milestone is the standing MVP umbrella, not a new per-change milestone.",
       "files": ["fixture: docs/plan/changes/streaming-overhaul.md marked APPROVED"],
       "assertions": [
         "Stops at the owner-approval quiz: numbered list (title / blocked-by / delivers) and an explicit wait",
         "Publishes nothing: no new ticket files/issues created",
-        "Proposes at most 5 tickets, or explicitly recommends splitting the change",
+        "Does not cap the ticket count at five or refuse to proceed on count alone; a long list prompts a re-read for a missed seam, not a veto",
+        "Puts the tickets on the standing MVP umbrella milestone rather than creating one named after the change",
         "Tickets are vertical slices with blocking edges; REMOVED work rides the contract ticket"
       ]
     }

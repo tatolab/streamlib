@@ -15,7 +15,7 @@ Never "component", "service", or "boundary".
 Procedure:
 
 1. **Search first.** Prove no core system (RHI, `GpuContext`, pubsub, processor model,
-   package source) already covers the concern. Extending beats parallel — always.
+   the escalate bridge) already covers the concern. Extending beats parallel — always.
 2. **Design it twice.** Spawn parallel design subagents with different constraints —
    minimize the interface / optimize for the dominant caller / ports-and-adapters. Each
    returns: the interface, a usage example, what's hidden, the error taxonomy,

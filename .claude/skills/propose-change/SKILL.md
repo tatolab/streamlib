@@ -13,8 +13,8 @@ this skill — route to `/align` first.
    - Bug fix / refactor / test work → **no change artifact**. A bug ticket and
      `/implement`. Stop here.
    - New behavior or a changed contract → this skill.
-   - Anything touching the plugin ABI, RHI, IPC wire format, or the processor model →
-     this skill **plus** an ADR.
+   - Anything touching the RHI, the IPC wire format, the processor model, or the Python
+     API's public contract → this skill **plus** an ADR.
    - Too fuzzy or too broad to state as a ≤350-line delta with few unknowns →
      `/explore-idea` first; come back when the shape is crisp.
 2. **Recon, read-only.** Spawn the relevant domain experts to map current state before

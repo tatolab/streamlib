@@ -31,7 +31,7 @@ jobs:
           # docs/architecture/vendored-vulkanalia.md and CLAUDE.md's
           # licensing exception. Exact-dir exclusions (a future
           # vendor/tatolab-vulkanalia-extras/ crate would NOT be excluded).
-          done < <(find runtime sdk adapters tools vendor examples -name "*.rs" \
+          done < <(find runtime sdk adapters vendor examples -name "*.rs" \
             -not -path "vendor/tatolab-vulkanalia/*" \
             -not -path "vendor/tatolab-vulkanalia-sys/*" \
             -not -path "vendor/tatolab-vulkanalia-vma/*" \

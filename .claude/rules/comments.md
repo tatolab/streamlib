@@ -20,4 +20,4 @@ Write a comment only when it carries information you can't get by reading the co
 - Comment a *why* the code's shape can't show.
 - Delete narration or decision comments from any method you touch, in the same edit.
 
-Applies to Rust, Python, Deno, and everything else.
+Applies to Rust, Python, and everything else.

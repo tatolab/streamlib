@@ -2,43 +2,46 @@
 resolver = "2"
 members = [
     "sdk/streamlib-error", # engine-free: canonical Error + Result
-    "sdk/vulkan-jpeg", # engine-free JPEG decoder — CPU parser + Huffman entropy decode + fused Vulkan-compute kernel (cdylib-safe; nvJPEG backend parked in the engine)
+    "sdk/vulkan-jpeg", # engine-free JPEG decoder — CPU parser + Huffman entropy decode + fused Vulkan-compute kernel (nvJPEG backend parked in the engine)
     "xtask",                    # Development tasks (cargo xtask <command>)
     "sdk/streamlib-sdk",       # Public authoring API surface — customer apps depend on this (Cargo name `streamlib`)
     "runtime/streamlib-engine",    # Engine internals (RHI, IPC, surface-share, runtime executor) — private dep of the SDK
     "runtime/streamlib-surface-client", # Wire-format helpers for the per-runtime surface-sharing socket (Linux)
     "runtime/streamlib-media-builtins", # First-party media built-ins (test pattern, camera, display) — native blocks statically linked into the wheel
-    "sdk/streamlib-processor-schema", # Processor schema types + YAML parser shared between streamlib runtime and streamlib-macros
+    "sdk/streamlib-processor-schema", # Processor schema types + YAML parser shared between the engine and streamlib-macros
     "sdk/streamlib-jtd-codegen", # JTD-codegen pipeline: schema YAML → typed Rust/Python/TypeScript bindings
     "sdk/streamlib-idents",    # Structured schema identifiers, semver, manifest/lockfile types (#399)
-    "sdk/streamlib-macros",    # Procedural macros for reducing boilerplate
+    "sdk/streamlib-macros",    # Procedural macros — owns the `#[processor]` authoring grammar
     "adapters/streamlib-surface-adapter", # Surface adapter contract shared by every adapter core
-    "runtime/streamlib-consumer-rhi", # Consumer-side carve-out of the Vulkan RHI — DMA-BUF FD import + bind + map. cdylibs depend on this NOT the full streamlib so the FullAccess capability boundary is type-system enforced (Linux)
+    "runtime/streamlib-consumer-rhi", # Consumer-side carve-out of the Vulkan RHI — DMA-BUF FD import + bind + map. Adapters depend on this NOT the full engine, so the FullAccess capability boundary is type-system enforced (Linux)
     "adapters/streamlib-adapter-vulkan", # Vulkan-native surface adapter — canonical implementor of VulkanWritable / VulkanImageInfoExt (Linux)
     "adapters/streamlib-adapter-opengl", # OpenGL/EGL surface adapter — canonical implementor of GlWritable; DMA-BUF + DRM modifier import (Linux)
     "adapters/streamlib-adapter-cpu-readback", # Explicit GPU→CPU surface adapter — sole implementor of CpuReadable / CpuWritable (Linux)
     "adapters/streamlib-adapter-cuda", # CUDA surface adapter — Vulkan↔CUDA OPAQUE_FD interop foundation for GPU-resident AI inference (Linux, #587)
     "adapters/streamlib-adapter-skia", # Skia surface adapter — composes on streamlib-adapter-vulkan; customer sees skia::Surface directly, never GrVkImageInfo / VkImageLayout (Linux)
-    "sdk/streamlib-python-wheel", # The importable Python wheel — CPython imports the engine and authors pipelines in-process
+    "sdk/streamlib-python-wheel", # The importable Python wheel — the app's CPython imports the engine and authors pipelines; every `@processor` runs in its own helper process
     "runtime/streamlib-ipc-types",  # Shared iceoryx2 payload types for cross-process IPC
-    "runtime/streamlib-api-server", # The one control plane — HTTP + WebSocket + MCP. A host, not a loadable plugin: crate-type rlib, statically linked into the wheel and the streamlib crate
+    "runtime/streamlib-api-server", # The one control plane — HTTP + WebSocket + MCP. crate-type rlib, statically linked into the wheel and the streamlib crate
     "runtime/streamlib-moq",        # MoQ-over-QUIC transport library (sessions + catalog); the @tatolab/moq package's processors + the api-server build on it
     "vendor/tatolab-vulkanalia",     # Vendored vulkanalia fork (Apache-2.0) — see docs/architecture/vendored-vulkanalia.md
     "vendor/tatolab-vulkanalia-sys", # Vendored vulkanalia-sys fork (Apache-2.0) — see docs/architecture/vendored-vulkanalia.md
     "vendor/tatolab-vulkanalia-vma", # Vendored vulkanalia-vma fork (Apache-2.0, VMA 3.3.0 + Vulkan-Headers 1.4.309) — see docs/architecture/vendored-vulkanalia.md
-    # `examples/*` and most `packages/*` are NOT workspace members. They are
-    # standalone, package-source-only units (each headed to its own repo): every
-    # dependency — the streamlib SDK, package crates, adapters — resolves
-    # from the package source by version, and each carries its own
-    # `[workspace]` self-root. Only the zone crates (`runtime/*`, `sdk/*`,
-    # `adapters/*`, `vendor/*`) and `xtask` form this workspace. Build a
-    # package/example with `cd <dir> && cargo build`.
+    # `examples/*` and most `packages/*` are NOT workspace members. Only the
+    # zone crates (`runtime/*`, `sdk/*`, `adapters/*`, `vendor/*`) and `xtask`
+    # form this workspace. Build a non-member with `cd <dir> && cargo build`.
     #
-    # The exception below is INTERNAL test infrastructure, not shipped through
-    # the package source: it path-deps the zone crates and stays a workspace
+    # The non-members split, and the split is the one CLAUDE.md states:
+    # everything except `escalate`, `core` and `test-fixtures` is a downstream
+    # CONSUMER — standalone, its own `[workspace]` self-root, headed to
+    # `tatolab/streamlib-packages` (#1672), deny-ruled against editing, and an
+    # engine change that breaks one is upgrade backlog rather than a defect.
+    # Those three are engine-side, and read as contract sources: `escalate`
+    # holds the escalate wire schemas, `core` the core schemas and their
+    # crate, and `test-fixtures` below is INTERNAL test infrastructure — it
+    # path-deps the zone crates and is the one package that stays a workspace
     # member (`publish = false`, which also keeps it out of the release
     # closure).
-    "packages/test-fixtures",    # @tatolab/test-fixtures — attribute-macro test fixtures (TestConfiguredProcessor)
+    "packages/test-fixtures",    # Attribute-macro test fixtures (TestConfiguredProcessor)
 ]
 
 [workspace.package]
@@ -90,10 +93,10 @@ rmpv = { version = "1.3", features = ["with-serde"] }
 sha2 = "0.10"
 tempfile = "3.14"
 
-# Blocking HTTP client — used by the engine module-loader resolver to
-# fetch a remote `.slpkg` for `Strategy::Url`. Blocking (not async) by
-# design: the resolver runs on `spawn_blocking`, where a runtime-aware
-# client (reqwest::blocking) would panic on the ambient tokio context.
+# Blocking HTTP client — streamlib-idents reads schema packages off a
+# package source (a static tree over `file://` or a dumb HTTP mount).
+# Blocking by design: the callers are a build script and a synchronous
+# config load, neither of which has an async runtime to await on.
 ureq = "2"
 
 # Typed bitflags (used by streamlib-surface-adapter)
@@ -133,17 +136,16 @@ rspirv-reflect = "0.9.0"
 # change upstream is an API-break here, not a silent minor bump.
 # `default-features = false` keeps the dep surface to `bitflags` +
 # `snafu`; the optional `pyo3` / `ndarray` / `cudarc` features stay off
-# so the cdylib boundary doesn't pick up Python or ML transitive deps.
+# so a consumer of this crate doesn't pick up Python or ML transitive deps.
 dlpark = { version = "=0.6.0", default-features = false }
 
-# CUDA bindings — used by `streamlib-adapter-cuda` (test-only,
-# behind its `cuda` Cargo feature) and by the polyglot cdylib runtimes
-# (`streamlib-python-native`, `streamlib-deno-native`) to import OPAQUE_FD
-# Vulkan memory + timeline semaphores into CUDA via
-# `cudaImportExternalMemory` / `cudaImportExternalSemaphore`. The cdylibs
-# depend on cudarc unconditionally (Linux-only) but `fallback-dynamic-loading`
-# means libcuda.so is only required at runtime — build hosts without a
-# CUDA toolkit still compile the cdylib, and runtime detection via
+# CUDA bindings — used by `streamlib-adapter-cuda` (optional, behind its
+# `cuda` Cargo feature) and by `streamlib-python-wheel` (unconditional,
+# Linux-only) to import OPAQUE_FD Vulkan memory + timeline semaphores
+# into CUDA via `cudaImportExternalMemory` /
+# `cudaImportExternalSemaphore`. `fallback-dynamic-loading` means
+# libcuda.so is only required at runtime — build hosts without a CUDA
+# toolkit still compile, and runtime detection via
 # `cudarc::runtime::sys::is_culib_present()` lets the adapter fail
 # gracefully on CUDA-less machines.
 #

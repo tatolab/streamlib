@@ -1,6 +1,6 @@
 ---
 name: tap-live-channel
-description: Attach a read-only tap to one named channel of a running StreamLib node and collect a bounded sample of raw bags to confirm data is actually flowing. Use to answer "are frames/samples really moving through this link?" — after inspecting the graph, to verify a `submit`/`connect` produced live output, or to spot-check behavior before and after a `hot-swap-live-processor`. Wraps `streamlib tap`.
+description: Attach a read-only tap to one named channel of a running StreamLib node and collect a bounded sample of raw bags to confirm data is actually flowing. Use to answer "are frames/samples really moving through this link?" — after inspecting the graph, or to spot-check a link before and after an app-code change. Wraps `streamlib tap`.
 ---
 
 # tap-live-channel
