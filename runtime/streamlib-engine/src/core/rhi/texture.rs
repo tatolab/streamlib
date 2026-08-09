@@ -244,21 +244,7 @@ impl Texture {
     /// [`TextureFormat`]'s `#[repr(u32)]` discriminant for the
     /// texture's actual format; out-of-range values fall back to
     /// `Rgba8Unorm` via [`Self::format`].
-    pub(crate) unsafe fn from_raw_handle_for_cdylib(
-        handle: *const c_void,
-        width: u32,
-        height: u32,
-        format_raw: u32,
-    ) -> Self {
-        Self {
-            handle,
-            width_cached: width,
-            height_cached: height,
-            format_raw,
-            _padding: 0,
-        }
-    }
-
+ 
     /// Engine-internal borrow of the host-owned [`TextureInner`].
     ///
     /// **Panics if called from cdylib code.** The `TextureInner` type's
@@ -489,7 +475,6 @@ impl std::fmt::Debug for Texture {
 #[cfg(all(test, target_pointer_width = "64"))]
 mod layout_tests {
     use super::*;
-    use core::mem::{align_of, offset_of, size_of};
 
     /// Compile-time witness that `Texture` is Send + Sync.
     #[test]

@@ -570,41 +570,7 @@ impl TextureRing {
     }
 }
 
-/// Assemble a `TextureRingSlot` from vtable out-parameters. The
-/// `texture_handle` is consumed (its strong-count is the freshly-
-/// cloned one the host wrapper produced); the resulting slot owns
-/// the Drop side of that clone via its `Texture` field.
-fn slot_from_out_params(
-    texture_handle: *const c_void,
-    texture_width: u32,
-    texture_height: u32,
-    texture_format_raw: u32,
-    surface_id_bytes: [u8; TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES],
-    surface_id_len: u32,
-    slot_index: u32,
-) -> TextureRingSlot {
-    // Build the Texture PluginAbiObject directly from the host-returned
-    // handle. Use the limited-access vtable installed in cdylib mode
-    // (or the host's static for in-process tests of this helper) —
-    // the host wrapper paired the Arc bump with that same vtable's
-    // `clone_texture`, so `Texture::Drop` calls the matching
-    // `drop_texture` to balance.
-    let texture = unsafe {
-        Texture::from_raw_handle_for_cdylib(
-            texture_handle,
-            texture_width,
-            texture_height,
-            texture_format_raw,
-        )
-    };
-    TextureRingSlot {
-        texture,
-        surface_id_bytes,
-        surface_id_len,
-        slot_index,
-    }
-}
-
+/
 impl Clone for TextureRing {
     fn clone(&self) -> Self {
         if !self.handle.is_null() {

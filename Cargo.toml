@@ -18,7 +18,6 @@ members = [
     "adapters/streamlib-adapter-vulkan-helpers", # Test-helper binaries for streamlib-adapter-vulkan — held in a dedicated crate so streamlib doesn't leak into adapter-vulkan's runtime dep graph (Linux)
     "adapters/streamlib-adapter-opengl", # OpenGL/EGL surface adapter — canonical implementor of GlWritable; DMA-BUF + DRM modifier import (Linux)
     "adapters/streamlib-adapter-cpu-readback", # Explicit GPU→CPU surface adapter — sole implementor of CpuReadable / CpuWritable (Linux)
-    "adapters/streamlib-adapter-cpu-readback-helpers", # Test-helper binaries for streamlib-adapter-cpu-readback — held in a dedicated crate so streamlib doesn't leak into adapter-cpu-readback's runtime dep graph (Linux)
     "adapters/streamlib-adapter-cuda", # CUDA surface adapter — Vulkan↔CUDA OPAQUE_FD interop foundation for GPU-resident AI inference (Linux, #587)
     "adapters/streamlib-adapter-skia", # Skia surface adapter — composes on streamlib-adapter-vulkan; customer sees skia::Surface directly, never GrVkImageInfo / VkImageLayout (Linux)
     "sdk/streamlib-python-wheel", # The importable Python wheel — CPython imports the engine and authors pipelines in-process

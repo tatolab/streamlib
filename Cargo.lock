@@ -4899,31 +4899,12 @@ dependencies = [
  "serde_json",
  "serial_test",
  "streamlib",
- "streamlib-adapter-cpu-readback-helpers",
  "streamlib-consumer-rhi",
  "streamlib-engine",
  "streamlib-surface-adapter",
  "streamlib-surface-client",
  "tatolab-vulkanalia",
  "thiserror 2.0.18",
- "tracing",
- "tracing-subscriber",
-]
-
-[[package]]
-name = "streamlib-adapter-cpu-readback-helpers"
-version = "0.16.0"
-dependencies = [
- "libc",
- "serde",
- "serde_json",
- "serial_test",
- "streamlib",
- "streamlib-adapter-cpu-readback",
- "streamlib-consumer-rhi",
- "streamlib-engine",
- "streamlib-surface-client",
- "tatolab-vulkanalia",
  "tracing",
  "tracing-subscriber",
 ]

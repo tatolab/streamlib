@@ -69,7 +69,7 @@ pub use crate::vulkan::rhi::{
 
 pub use vulkanalia::vk::GeometryInstanceFlagsKHR;
 
-use crate::core::error::{Error, Result};
+use crate::core::error::Result;
 use crate::core::rhi::texture::TextureInner;
 use crate::core::rhi::{GpuDevice, PixelBufferRef, Texture};
 
