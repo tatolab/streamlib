@@ -167,8 +167,7 @@ pub mod sdk {
     /// version at runtime against the global processor registry,
     /// picking the highest registered `SemVer` (Cargo / npm convention).
     /// Returns `Result<SchemaIdent, streamlib::sdk::error::Error>`. For a
-    /// version-free reference that lazily loads its provider from
-    /// `streamlib_modules/`, use [`processor_type_ref!`] instead.
+    /// version-free reference, use [`processor_type_ref!`] instead.
     pub use streamlib_engine::schema_ident_any_version;
 
     /// `streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")` —
@@ -186,8 +185,7 @@ pub mod sdk {
     /// [`ProcessorTypeReference`](processors::ProcessorTypeReference), which
     /// carries no version and does **no registry lookup at the call site**, so
     /// the reference reaches `add_processor`'s lazy hook and resolves to the
-    /// installed provider — loading its package from `streamlib_modules/` on
-    /// first reference.
+    /// installed provider.
     pub use streamlib_engine::processor_type_ref;
 
     /// `streamlib::sdk::module_ident!("org", "name", "^1.0.0")` —
