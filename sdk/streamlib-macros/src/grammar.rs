@@ -29,9 +29,9 @@
 //! scope here and handled at the runtime layer.
 
 use streamlib_processor_schema::{
-    Org, Package, PortSchemaSpec, ProcessorPortSchema, ProcessorSchema, ProcessorSchemaExecution,
-    ProcessorScheduling, RuntimeConfig, RuntimeOptions, SchemaIdent, SemVer, ThreadPriority,
-    TypeName,
+    DELIVERY_PROFILE_DECLARATION_VALUES, Org, Package, PortSchemaSpec, ProcessorPortSchema,
+    ProcessorSchema, ProcessorSchemaExecution, ProcessorScheduling, RuntimeConfig, RuntimeOptions,
+    SchemaIdent, SemVer, ThreadPriority, TypeName,
 };
 use syn::ext::IdentExt;
 use syn::parse::{ParseStream, Parser};
@@ -427,10 +427,10 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
         return Err(syn::Error::new(
             name_lit.span(),
             format!(
-                "input port `{name}` must declare a `delivery_profile` — add \
-                 `delivery_profile = \"latest\"`, `\"every_sample\"`, or `\"lossless\"`. \
+                "input port `{name}` must declare a `delivery_profile` — one of {}. \
                  There is no default: channel policy is declared port-locally at the \
-                 consuming input port"
+                 consuming input port",
+                render_delivery_profile_values(),
             ),
         ));
     }
@@ -441,6 +441,15 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
         description,
         delivery_profile,
     })
+}
+
+/// The legal `delivery_profile` values as a quoted, comma-joined list.
+fn render_delivery_profile_values() -> String {
+    DELIVERY_PROFILE_DECLARATION_VALUES
+        .iter()
+        .map(|value| format!("`\"{value}\"`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Reject `delivery_profile` on an `output(...)` with a spanned error — the

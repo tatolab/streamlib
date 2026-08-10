@@ -513,6 +513,13 @@ impl JsonSchema for ProcessorSchemaExecution {
     }
 }
 
+/// The values an input port's `delivery_profile` declaration may take.
+///
+/// The single Rust-side list: the `#[processor]` grammar, the engine's
+/// wire-time resolver, and `DeliveryProfile::from_manifest_str` all render
+/// their errors from this, so a new profile cannot leave one of them lying.
+pub const DELIVERY_PROFILE_DECLARATION_VALUES: [&str; 3] = ["latest", "every_sample", "lossless"];
+
 /// A port definition within a processor schema.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

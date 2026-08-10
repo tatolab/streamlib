@@ -8,12 +8,22 @@
 //! three transport settings the engine used to expose as four separate knobs
 //! (`read_mode`, `overflow`, `buffer_size`, `max_queued_messages`): the
 //! consumer-side drain order ([`ReadMode`]), the producer-side overflow policy
-//! ([`Overflow`]), and the ring depth. When a port declares no profile, the
-//! default derives from the wire type's [`FlowClass`], carried in the schema
-//! `metadata` block — so authors mostly never touch it.
+//! ([`Overflow`]), and the ring depth. Every input port declares one and
+//! nothing is inferred — an input port without a profile is a wiring error.
+
+use streamlib_processor_schema::DELIVERY_PROFILE_DECLARATION_VALUES;
 
 use super::overflow::Overflow;
 use super::read_mode::ReadMode;
+
+/// The legal `delivery_profile` values as a quoted, comma-joined list.
+pub(crate) fn render_delivery_profile_values() -> String {
+    DELIVERY_PROFILE_DECLARATION_VALUES
+        .iter()
+        .map(|value| format!("'{value}'"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 
 /// The one per-port delivery knob. Each profile bundles a fixed
 /// (drain order, overflow policy, ring depth) triple; see [`DeliveryProfile::resolve`].
@@ -29,7 +39,7 @@ pub enum DeliveryProfile {
     EverySample,
     /// Lossless FIFO: read next in order, the producer blocks rather than
     /// drop, deeper ring. File writers, muxers, loggers where every sample
-    /// must be delivered. Explicit-only — no [`FlowClass`] resolves here.
+    /// must be delivered.
     Lossless,
 }
 
@@ -83,8 +93,8 @@ impl DeliveryProfile {
             "every_sample" => Ok(Self::EverySample),
             "lossless" => Ok(Self::Lossless),
             other => Err(format!(
-                "unknown delivery_profile value '{other}', expected 'latest', \
-                 'every_sample', or 'lossless'"
+                "unknown delivery_profile value '{other}', expected one of {}",
+                render_delivery_profile_values()
             )),
         }
     }
@@ -100,26 +110,22 @@ impl DeliveryProfile {
 }
 
 /// The per-wire-type data class carried in a schema's `metadata.flow_class`.
-/// It sets the *default* [`DeliveryProfile`] for any port carrying that type,
-/// which a port-site profile override still wins over.
+///
+/// Payload-classification vocabulary only: delivery is resolved from the
+/// consuming input port's own declaration, never from the wire type.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlowClass {
     /// Ordered samples where every one matters — audio, encoded frames.
-    /// Defaults to [`DeliveryProfile::EverySample`].
     SampleStream,
     /// Latest-state snapshots where a stale sample has no value once a fresher
-    /// one exists — video frames, control state. Defaults to
-    /// [`DeliveryProfile::Latest`].
+    /// one exists — video frames, control state.
     StateStream,
 }
 
 impl FlowClass {
     /// Parse a schema-declared `metadata.flow_class` string.
     ///
-    /// Recognized values: `"sample_stream"` and `"state_stream"`. `lossless`
-    /// is deliberately absent — a lossless profile is an explicit port-site
-    /// choice, never a type-level default (a wire type doesn't know whether a
-    /// given consumer can afford to backpressure its producer).
+    /// Recognized values: `"sample_stream"` and `"state_stream"`.
     pub fn from_manifest_str(value: &str) -> Result<Self, String> {
         match value {
             "sample_stream" => Ok(Self::SampleStream),
@@ -130,8 +136,8 @@ impl FlowClass {
         }
     }
 
-    /// The default [`DeliveryProfile`] a port carrying this flow class resolves
-    /// to when it declares no explicit profile override.
+    /// The [`DeliveryProfile`] this flow class corresponds to. No delivery
+    /// path calls this — a port's profile comes from its own declaration.
     pub fn default_profile(self) -> DeliveryProfile {
         match self {
             FlowClass::SampleStream => DeliveryProfile::EverySample,

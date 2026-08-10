@@ -119,9 +119,9 @@ pub fn delivery_profile_for_input_port(
     let Some(declared) = port.delivery_profile.as_deref() else {
         return Err(crate::core::error::Error::Configuration(format!(
             "input port '{port_name}' on '{processor_type}' declares no delivery_profile. \
-             Every input port must declare one — 'latest', 'every_sample', or 'lossless'. \
-             There is no default: channel policy is declared port-locally at the consuming \
-             input port"
+             Every input port must declare one — {}. There is no default: channel policy \
+             is declared port-locally at the consuming input port",
+            crate::iceoryx2::render_delivery_profile_values()
         )));
     };
     DeliveryProfile::from_manifest_str(declared).map_err(|err| {
@@ -638,13 +638,11 @@ mod tests {
         );
     }
 
-    /// The port's own declaration is the whole answer, and a schema that
-    /// declares a competing `flow_class` never enters into it: `lossless` on a
-    /// port whose wire type says `state_stream` (flow-class default `latest`)
-    /// resolves to `Lossless`. Mentally restore the inference chain and this
-    /// still passes — its sibling
-    /// [`delivery_profile_ignores_the_schema_flow_class`] is the one that
-    /// catches a reintroduced fallback.
+    /// The port's own declaration is the whole answer, and a schema declaring
+    /// a competing `flow_class` never enters into it: `lossless` on a port
+    /// whose wire type says `state_stream` resolves to `Lossless`. This one
+    /// passes either way — `delivery_profile_ignores_the_schema_flow_class`
+    /// is the test that goes red if delivery is resolved from the schema.
     #[test]
     fn delivery_profile_reads_the_port_declaration() {
         use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
@@ -684,10 +682,9 @@ mod tests {
 
     /// A registered input port carrying no declaration is a wiring error
     /// naming the port — not a profile inferred from its schema's
-    /// `flow_class`. The port's wire type here declares `sample_stream`, which
-    /// the retired inference chain would have resolved to `EverySample`:
-    /// mentally restore that fallback and this test goes green when it must
-    /// fail.
+    /// `flow_class`. This port's wire type declares `sample_stream`, so
+    /// resolving delivery from the schema instead of the port declaration
+    /// yields `EverySample` and this test goes green when it must fail.
     #[test]
     fn delivery_profile_ignores_the_schema_flow_class() {
         use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
