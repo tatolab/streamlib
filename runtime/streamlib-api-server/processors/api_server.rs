@@ -110,7 +110,7 @@ fn generate_runtime_name() -> String {
     "@tatolab/api-server/ApiServer",
     description = "Runtime API server — HTTP + WebSocket control plane",
     execution = manual,
-    config = crate::_generated_::ApiServerConfig,
+    config = crate::ApiServerConfig,
 )]
 pub struct ApiServerProcessor {
     handles: Option<StashedHandles>,

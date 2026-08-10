@@ -66,7 +66,7 @@ const SMOKE_SURFACE_SIZE: u32 = 64;
     "@tatolab/test-fixtures/GraphicsKernelSmokeTestProcessor",
     description = "Graphics-kernel smoke test fixture — creates a graphics kernel via FullAccess, acquires a render-target Texture, runs a single offscreen_render() to assert the binding methods don't panic. Smoke-only; pixel correctness not asserted.",
     execution = manual,
-    config = crate::_generated_::GraphicsKernelSmokeTestProcessorConfig,
+    config = crate::test_fixture_processor_configs::GraphicsKernelSmokeTestProcessorConfig,
 )]
 pub struct GraphicsKernelSmokeTest {}
 

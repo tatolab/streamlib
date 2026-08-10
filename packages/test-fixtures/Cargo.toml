@@ -32,6 +32,10 @@ streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.16.0" }
 # Serialization (config dataclass ships as serde-derived).
 serde.workspace = true
 
+[dev-dependencies]
+# Round-trip assertions pinning each fixture config's JSON encoding.
+serde_json.workspace = true
+
 
 [lints]
 workspace = true

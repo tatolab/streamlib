@@ -35,7 +35,7 @@ use streamlib::sdk::rhi::{PixelFormat, TextureFormat};
     "@tatolab/test-fixtures/EscalateSmokeTestProcessor",
     description = "Escalate smoke test fixture — runs gpu.escalate(|_full| Ok(())) end-to-end through escalate_begin/escalate_end and FullAccess construction",
     execution = manual,
-    config = crate::_generated_::EscalateSmokeTestProcessorConfig,
+    config = crate::test_fixture_processor_configs::EscalateSmokeTestProcessorConfig,
 )]
 pub struct EscalateSmokeTest {}
 

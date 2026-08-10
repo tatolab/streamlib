@@ -6,6 +6,7 @@ pub mod _generated_ {
     include!(concat!(env!("OUT_DIR"), "/_generated_shim.rs"));
 }
 
+mod api_server_config;
 mod auth;
 pub mod control_plane_host;
 #[cfg(test)]
@@ -23,7 +24,7 @@ mod state;
 #[path = "../processors/api_server.rs"]
 pub mod api_server;
 
-pub use _generated_::ApiServerConfig;
+pub use api_server_config::ApiServerConfig;
 pub use api_server::ApiServerProcessor;
 pub use handlers::control_plane_openapi_spec;
 pub use node_registry::{

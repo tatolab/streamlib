@@ -13,7 +13,7 @@
 //! discriminated by `op` and `result` fields respectively; the shape is
 //! owned by `@tatolab/escalate`
 //! (`packages/escalate/schemas/escalate_{request,response}.yaml`) and the
-//! generated Rust types live under `crate::_generated_::tatolab__escalate`.
+//! wire types live in [`super::subprocess_escalate_wire_types`].
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
@@ -24,7 +24,7 @@ use uuid::Uuid;
 #[cfg(target_os = "linux")]
 use crate::host_rhi::HostSurfaceStoreExt;
 
-use crate::_generated_::tatolab__escalate::escalate_request::{
+use super::subprocess_escalate_wire_types::escalate_request::{
     EscalateRequestAcquireImage, EscalateRequestAcquirePixelBuffer, EscalateRequestAcquireTexture,
     EscalateRequestCopyDeviceExportStagingBackToSurface, EscalateRequestLog,
     EscalateRequestLogLevel, EscalateRequestLogSource, EscalateRequestOpenDeviceExportStaging,
@@ -57,10 +57,10 @@ use crate::_generated_::tatolab__escalate::escalate_request::{
     EscalateRequestRunRayTracingKernelBindingKind, EscalateRequestTryRunCpuReadbackCopy,
     EscalateRequestTryRunCpuReadbackCopyDirection, EscalateRequestWaitDeviceIdle,
 };
-use crate::_generated_::tatolab__escalate::escalate_response::{
+use super::subprocess_escalate_wire_types::escalate_response::{
     EscalateResponseContended, EscalateResponseErr, EscalateResponseOk,
 };
-use crate::_generated_::{EscalateRequest, EscalateResponse};
+use super::subprocess_escalate_wire_types::{EscalateRequest, EscalateResponse};
 use crate::core::context::GpuContextLimitedAccess;
 #[cfg(target_os = "linux")]
 use crate::core::context::{
@@ -3604,7 +3604,7 @@ mod tests {
         use super::EscalateHandleRegistry;
         use std::sync::{Arc, Mutex};
 
-        use crate::_generated_::tatolab__escalate::escalate_request::{
+        use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
             EscalateRequestRegisterGraphicsKernelBinding,
             EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttribute,
             EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBinding,
@@ -4408,7 +4408,7 @@ mod tests {
         use super::EscalateHandleRegistry;
         use std::sync::{Arc, Mutex};
 
-        use crate::_generated_::tatolab__escalate::escalate_request::{
+        use crate::core::compiler::compiler_ops::subprocess_escalate_wire_types::escalate_request::{
             EscalateRequestRegisterAccelerationStructureTlasInstance,
             EscalateRequestRegisterRayTracingKernelBinding,
             EscalateRequestRegisterRayTracingKernelGroup,

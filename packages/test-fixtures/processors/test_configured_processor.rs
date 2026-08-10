@@ -13,7 +13,7 @@ use streamlib::sdk::processors::ContinuousProcessor;
     "@tatolab/test-fixtures/TestConfiguredProcessor",
     description = "Attribute-macro test fixture verifying config-emit against a streamlib.yaml package block",
     execution = continuous,
-    config = crate::_generated_::TestConfiguredProcessorConfig,
+    config = crate::test_fixture_processor_configs::TestConfiguredProcessorConfig,
 )]
 pub struct ConfiguredProcessor;
 

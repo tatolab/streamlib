@@ -12,6 +12,8 @@ pub mod _generated_ {
     include!(concat!(env!("OUT_DIR"), "/_generated_shim.rs"));
 }
 
+pub mod test_fixture_processor_configs;
+
 #[path = "../processors/compute_kernel_test_processor.rs"]
 pub mod compute_kernel_test_processor;
 #[path = "../processors/concurrent_escalate_test_processor.rs"]

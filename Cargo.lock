@@ -5274,6 +5274,7 @@ name = "streamlib-test-fixtures"
 version = "0.16.0"
 dependencies = [
  "serde",
+ "serde_json",
  "streamlib",
  "streamlib-jtd-codegen",
  "streamlib-macros",

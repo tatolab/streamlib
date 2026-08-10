@@ -6,7 +6,7 @@
 //! round-trips through `from_config` / `update_config`.
 
 use streamlib::sdk::processors::GeneratedProcessor;
-use streamlib_test_fixtures::_generated_::TestConfiguredProcessorConfig;
+use streamlib_test_fixtures::test_fixture_processor_configs::TestConfiguredProcessorConfig;
 use streamlib_test_fixtures::test_configured_processor::ConfiguredProcessor;
 
 #[test]
