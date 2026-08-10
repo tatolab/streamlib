@@ -11,9 +11,6 @@
 //! document cannot — which absent optionals drop out of the encoding, and
 //! which carry an explicit null.
 
-use serde::Serialize;
-use serde::de::DeserializeOwned;
-
 use super::escalate_request::{
     EscalateRequestLogLevel, EscalateRequestLogSource,
     EscalateRequestRegisterGraphicsKernelBindingKind,
@@ -42,18 +39,32 @@ use super::escalate_request::{
 use super::escalate_response::EscalateResponseOk;
 use super::{EscalateRequest, EscalateResponse};
 
-/// Decode each golden, re-encode it, and require the bytes back unchanged.
-fn assert_golden_vectors_round_trip<T: Serialize + DeserializeOwned>(vectors: &[(&str, &str)]) {
-    for (variant, golden) in vectors {
-        let decoded: T = serde_json::from_str(golden)
-            .unwrap_or_else(|e| panic!("{variant}: golden failed to decode: {e}"));
-        let reencoded = serde_json::to_string(&decoded)
-            .unwrap_or_else(|e| panic!("{variant}: re-encode failed: {e}"));
-        assert_eq!(
-            reencoded, *golden,
-            "{variant}: wire encoding drifted from the golden vector"
-        );
-    }
+/// Decode each golden, require it to land in the variant it names, and require
+/// the bytes back unchanged.
+///
+/// The variant is asserted, not merely labelled: two variants whose payloads
+/// carry identical fields — run vs try CPU readback — round-trip symmetrically,
+/// so re-encoding alone cannot tell them apart if their wire tags are ever
+/// swapped. That swap is a dispatch break, not a wire break.
+macro_rules! assert_golden_vectors_round_trip {
+    ($enum_type:ident: $($variant:ident => $golden:literal),+ $(,)?) => {
+        $({
+            let decoded: $enum_type = serde_json::from_str($golden).unwrap_or_else(|e| {
+                panic!(concat!(stringify!($variant), ": golden failed to decode: {}"), e)
+            });
+            assert!(
+                matches!(decoded, $enum_type::$variant(_)),
+                concat!(stringify!($variant), ": golden decoded into a different variant")
+            );
+            let reencoded = serde_json::to_string(&decoded).unwrap_or_else(|e| {
+                panic!(concat!(stringify!($variant), ": re-encode failed: {}"), e)
+            });
+            assert_eq!(
+                reencoded, $golden,
+                concat!(stringify!($variant), ": wire encoding drifted from the golden vector")
+            );
+        })+
+    };
 }
 
 /// Assert each named variant serialises to its wire spelling.
@@ -71,110 +82,38 @@ macro_rules! assert_wire_spellings {
 /// Every `EscalateRequest` variant survives a decode/encode round trip unchanged.
 #[test]
 fn escalate_request_vectors_round_trip() {
-    assert_golden_vectors_round_trip::<EscalateRequest>(ESCALATE_REQUEST_GOLDEN_WIRE_VECTORS);
+    assert_golden_vectors_round_trip!(EscalateRequest:
+        AcquireImage => r#"{"op":"acquire_image","format":"acquire_image.format-1","height":2,"request_id":"acquire_image.request_id-3","width":4}"#,
+        AcquirePixelBuffer => r#"{"op":"acquire_pixel_buffer","format":"acquire_pixel_buffer.format-5","height":6,"request_id":"acquire_pixel_buffer.request_id-7","width":8}"#,
+        AcquireTexture => r#"{"op":"acquire_texture","format":"acquire_texture.format-9","height":10,"request_id":"acquire_texture.request_id-11","usage":["acquire_texture.usage[0]-12","acquire_texture.usage[1]-13"],"width":14}"#,
+        CopyDeviceExportStagingBackToSurface => r#"{"op":"copy_device_export_staging_back_to_surface","request_id":"copy_device_export_staging_back_to_surface.request_id-15","surface_id":"copy_device_export_staging_back_to_surface.surface_id-16"}"#,
+        Log => r#"{"op":"log","attrs":{"attr":"log.attrs.attr-17"},"channel":"log.channel-18","intercepted":false,"level":"debug","message":"log.message-21","pipeline_id":"log.pipeline_id-22","processor_id":"log.processor_id-23","source":"python","source_seq":"log.source_seq-25","source_ts":"log.source_ts-26"}"#,
+        OpenDeviceExportStaging => r#"{"op":"open_device_export_staging","request_id":"open_device_export_staging.request_id-27","surface_id":"open_device_export_staging.surface_id-28"}"#,
+        RefillDeviceExportStaging => r#"{"op":"refill_device_export_staging","request_id":"refill_device_export_staging.request_id-29","surface_id":"refill_device_export_staging.surface_id-30"}"#,
+        RegisterAccelerationStructureBlas => r#"{"op":"register_acceleration_structure_blas","indices_hex":"register_acceleration_structure_blas.indices_hex-31","label":"register_acceleration_structure_blas.label-32","request_id":"register_acceleration_structure_blas.request_id-33","vertices_hex":"register_acceleration_structure_blas.vertices_hex-34"}"#,
+        RegisterAccelerationStructureTlas => r#"{"op":"register_acceleration_structure_tlas","instances":[{"blas_id":"register_acceleration_structure_tlas.instances[0].blas_id-35","custom_index":36,"flags":37,"mask":38,"sbt_record_offset":39,"transform":[40.5,41.5]},{"blas_id":"register_acceleration_structure_tlas.instances[1].blas_id-42","custom_index":43,"flags":44,"mask":45,"sbt_record_offset":46,"transform":[47.5,48.5]}],"label":"register_acceleration_structure_tlas.label-49","request_id":"register_acceleration_structure_tlas.request_id-50"}"#,
+        RegisterComputeKernel => r#"{"op":"register_compute_kernel","push_constant_size":51,"request_id":"register_compute_kernel.request_id-52","spv_hex":"register_compute_kernel.spv_hex-53"}"#,
+        RegisterGraphicsKernel => r#"{"op":"register_graphics_kernel","bindings":[{"binding":54,"kind":"uniform_buffer","stages":56},{"binding":57,"kind":"storage_image","stages":59}],"descriptor_sets_in_flight":60,"fragment_entry_point":"register_graphics_kernel.fragment_entry_point-61","fragment_spv_hex":"register_graphics_kernel.fragment_spv_hex-62","label":"register_graphics_kernel.label-63","pipeline_state":{"attachment_color_formats":["register_graphics_kernel.pipeline_state.attachment_color_formats[0]-64","register_graphics_kernel.pipeline_state.attachment_color_formats[1]-65"],"color_blend_alpha_op":"max","color_blend_color_op":"min","color_blend_dst_alpha_factor":"one_minus_dst_color","color_blend_dst_color_factor":"one_minus_src_alpha","color_blend_enabled":true,"color_blend_src_alpha_factor":"src_alpha","color_blend_src_color_factor":"src_alpha_saturate","color_write_mask":73,"depth_compare_op":"greater","depth_stencil_enabled":false,"depth_write":true,"dynamic_state":"viewport_scissor","multisample_samples":78,"rasterization_cull_mode":"none","rasterization_front_face":"clockwise","rasterization_line_width":81.5,"rasterization_polygon_mode":"line","topology":"triangle_strip","vertex_input_attributes":[{"binding":84,"format":"r32_sint","location":86,"offset":87},{"binding":88,"format":"rg32_uint","location":90,"offset":91}],"vertex_input_bindings":[{"binding":92,"input_rate":"vertex","stride":94},{"binding":95,"input_rate":"instance","stride":97}],"attachment_depth_format":"d32_sfloat"},"push_constant_size":99,"push_constant_stages":100,"request_id":"register_graphics_kernel.request_id-101","vertex_entry_point":"register_graphics_kernel.vertex_entry_point-102","vertex_spv_hex":"register_graphics_kernel.vertex_spv_hex-103"}"#,
+        RegisterRayTracingKernel => r#"{"op":"register_ray_tracing_kernel","bindings":[{"binding":104,"kind":"acceleration_structure","stages":106},{"binding":107,"kind":"storage_image","stages":109}],"groups":[{"any_hit_stage":110,"closest_hit_stage":111,"general_stage":112,"intersection_stage":113,"kind":"general"},{"any_hit_stage":115,"closest_hit_stage":116,"general_stage":117,"intersection_stage":118,"kind":"triangles_hit"}],"label":"register_ray_tracing_kernel.label-120","max_recursion_depth":121,"push_constant_size":122,"push_constant_stages":123,"request_id":"register_ray_tracing_kernel.request_id-124","stages":[{"entry_point":"register_ray_tracing_kernel.stages[0].entry_point-125","spv_hex":"register_ray_tracing_kernel.stages[0].spv_hex-126","stage":"callable"},{"entry_point":"register_ray_tracing_kernel.stages[1].entry_point-128","spv_hex":"register_ray_tracing_kernel.stages[1].spv_hex-129","stage":"miss"}]}"#,
+        ReleaseHandle => r#"{"op":"release_handle","handle_id":"release_handle.handle_id-131","request_id":"release_handle.request_id-132"}"#,
+        RunComputeKernel => r#"{"op":"run_compute_kernel","group_count_x":133,"group_count_y":134,"group_count_z":135,"kernel_id":"run_compute_kernel.kernel_id-136","push_constants_hex":"run_compute_kernel.push_constants_hex-137","request_id":"run_compute_kernel.request_id-138","surface_uuid":"run_compute_kernel.surface_uuid-139"}"#,
+        RunCpuReadbackCopy => r#"{"op":"run_cpu_readback_copy","direction":"buffer_to_image","request_id":"run_cpu_readback_copy.request_id-141","surface_id":"run_cpu_readback_copy.surface_id-142"}"#,
+        RunGraphicsDraw => r#"{"op":"run_graphics_draw","bindings":[{"binding":143,"kind":"sampled_texture","surface_uuid":"run_graphics_draw.bindings[0].surface_uuid-145"},{"binding":146,"kind":"uniform_buffer","surface_uuid":"run_graphics_draw.bindings[1].surface_uuid-148"}],"color_target_uuids":["run_graphics_draw.color_target_uuids[0]-149","run_graphics_draw.color_target_uuids[1]-150"],"draw":{"first_index":151,"first_instance":152,"first_vertex":153,"index_count":154,"instance_count":155,"kind":"draw","vertex_count":157,"vertex_offset":158},"extent_height":159,"extent_width":160,"frame_index":161,"kernel_id":"run_graphics_draw.kernel_id-162","push_constants_hex":"run_graphics_draw.push_constants_hex-163","request_id":"run_graphics_draw.request_id-164","vertex_buffers":[{"binding":165,"offset":"run_graphics_draw.vertex_buffers[0].offset-166","surface_uuid":"run_graphics_draw.vertex_buffers[0].surface_uuid-167"},{"binding":168,"offset":"run_graphics_draw.vertex_buffers[1].offset-169","surface_uuid":"run_graphics_draw.vertex_buffers[1].surface_uuid-170"}],"depth_target_uuid":"run_graphics_draw.depth_target_uuid-171","index_buffer":{"index_type":"uint16","offset":"run_graphics_draw.index_buffer.offset-173","surface_uuid":"run_graphics_draw.index_buffer.surface_uuid-174"},"scissor":{"height":175,"width":176,"x":177,"y":178},"viewport":{"height":179.5,"max_depth":180.5,"min_depth":181.5,"width":182.5,"x":183.5,"y":184.5}}"#,
+        RunRayTracingKernel => r#"{"op":"run_ray_tracing_kernel","bindings":[{"binding":185,"kind":"sampled_texture","target_id":"run_ray_tracing_kernel.bindings[0].target_id-187"},{"binding":188,"kind":"uniform_buffer","target_id":"run_ray_tracing_kernel.bindings[1].target_id-190"}],"depth":191,"height":192,"kernel_id":"run_ray_tracing_kernel.kernel_id-193","push_constants_hex":"run_ray_tracing_kernel.push_constants_hex-194","request_id":"run_ray_tracing_kernel.request_id-195","width":196}"#,
+        TryRunCpuReadbackCopy => r#"{"op":"try_run_cpu_readback_copy","direction":"image_to_buffer","request_id":"try_run_cpu_readback_copy.request_id-198","surface_id":"try_run_cpu_readback_copy.surface_id-199"}"#,
+        WaitDeviceIdle => r#"{"op":"wait_device_idle","request_id":"wait_device_idle.request_id-200"}"#,
+    );
 }
-
-/// Golden `EscalateRequest` documents, one per variant.
-const ESCALATE_REQUEST_GOLDEN_WIRE_VECTORS: &[(&str, &str)] = &[
-    (
-        "AcquireImage",
-        r#"{"op":"acquire_image","format":"acquire_image.format-1","height":2,"request_id":"acquire_image.request_id-3","width":4}"#,
-    ),
-    (
-        "AcquirePixelBuffer",
-        r#"{"op":"acquire_pixel_buffer","format":"acquire_pixel_buffer.format-5","height":6,"request_id":"acquire_pixel_buffer.request_id-7","width":8}"#,
-    ),
-    (
-        "AcquireTexture",
-        r#"{"op":"acquire_texture","format":"acquire_texture.format-9","height":10,"request_id":"acquire_texture.request_id-11","usage":["acquire_texture.usage[0]-12","acquire_texture.usage[1]-13"],"width":14}"#,
-    ),
-    (
-        "CopyDeviceExportStagingBackToSurface",
-        r#"{"op":"copy_device_export_staging_back_to_surface","request_id":"copy_device_export_staging_back_to_surface.request_id-15","surface_id":"copy_device_export_staging_back_to_surface.surface_id-16"}"#,
-    ),
-    (
-        "Log",
-        r#"{"op":"log","attrs":{"attr":"log.attrs.attr-17"},"channel":"log.channel-18","intercepted":false,"level":"debug","message":"log.message-21","pipeline_id":"log.pipeline_id-22","processor_id":"log.processor_id-23","source":"python","source_seq":"log.source_seq-25","source_ts":"log.source_ts-26"}"#,
-    ),
-    (
-        "OpenDeviceExportStaging",
-        r#"{"op":"open_device_export_staging","request_id":"open_device_export_staging.request_id-27","surface_id":"open_device_export_staging.surface_id-28"}"#,
-    ),
-    (
-        "RefillDeviceExportStaging",
-        r#"{"op":"refill_device_export_staging","request_id":"refill_device_export_staging.request_id-29","surface_id":"refill_device_export_staging.surface_id-30"}"#,
-    ),
-    (
-        "RegisterAccelerationStructureBlas",
-        r#"{"op":"register_acceleration_structure_blas","indices_hex":"register_acceleration_structure_blas.indices_hex-31","label":"register_acceleration_structure_blas.label-32","request_id":"register_acceleration_structure_blas.request_id-33","vertices_hex":"register_acceleration_structure_blas.vertices_hex-34"}"#,
-    ),
-    (
-        "RegisterAccelerationStructureTlas",
-        r#"{"op":"register_acceleration_structure_tlas","instances":[{"blas_id":"register_acceleration_structure_tlas.instances[0].blas_id-35","custom_index":36,"flags":37,"mask":38,"sbt_record_offset":39,"transform":[40.5,41.5]},{"blas_id":"register_acceleration_structure_tlas.instances[1].blas_id-42","custom_index":43,"flags":44,"mask":45,"sbt_record_offset":46,"transform":[47.5,48.5]}],"label":"register_acceleration_structure_tlas.label-49","request_id":"register_acceleration_structure_tlas.request_id-50"}"#,
-    ),
-    (
-        "RegisterComputeKernel",
-        r#"{"op":"register_compute_kernel","push_constant_size":51,"request_id":"register_compute_kernel.request_id-52","spv_hex":"register_compute_kernel.spv_hex-53"}"#,
-    ),
-    (
-        "RegisterGraphicsKernel",
-        r#"{"op":"register_graphics_kernel","bindings":[{"binding":54,"kind":"uniform_buffer","stages":56},{"binding":57,"kind":"storage_image","stages":59}],"descriptor_sets_in_flight":60,"fragment_entry_point":"register_graphics_kernel.fragment_entry_point-61","fragment_spv_hex":"register_graphics_kernel.fragment_spv_hex-62","label":"register_graphics_kernel.label-63","pipeline_state":{"attachment_color_formats":["register_graphics_kernel.pipeline_state.attachment_color_formats[0]-64","register_graphics_kernel.pipeline_state.attachment_color_formats[1]-65"],"color_blend_alpha_op":"max","color_blend_color_op":"min","color_blend_dst_alpha_factor":"one_minus_dst_color","color_blend_dst_color_factor":"one_minus_src_alpha","color_blend_enabled":true,"color_blend_src_alpha_factor":"src_alpha","color_blend_src_color_factor":"src_alpha_saturate","color_write_mask":73,"depth_compare_op":"greater","depth_stencil_enabled":false,"depth_write":true,"dynamic_state":"viewport_scissor","multisample_samples":78,"rasterization_cull_mode":"none","rasterization_front_face":"clockwise","rasterization_line_width":81.5,"rasterization_polygon_mode":"line","topology":"triangle_strip","vertex_input_attributes":[{"binding":84,"format":"r32_sint","location":86,"offset":87},{"binding":88,"format":"rg32_uint","location":90,"offset":91}],"vertex_input_bindings":[{"binding":92,"input_rate":"vertex","stride":94},{"binding":95,"input_rate":"instance","stride":97}],"attachment_depth_format":"d32_sfloat"},"push_constant_size":99,"push_constant_stages":100,"request_id":"register_graphics_kernel.request_id-101","vertex_entry_point":"register_graphics_kernel.vertex_entry_point-102","vertex_spv_hex":"register_graphics_kernel.vertex_spv_hex-103"}"#,
-    ),
-    (
-        "RegisterRayTracingKernel",
-        r#"{"op":"register_ray_tracing_kernel","bindings":[{"binding":104,"kind":"acceleration_structure","stages":106},{"binding":107,"kind":"storage_image","stages":109}],"groups":[{"any_hit_stage":110,"closest_hit_stage":111,"general_stage":112,"intersection_stage":113,"kind":"general"},{"any_hit_stage":115,"closest_hit_stage":116,"general_stage":117,"intersection_stage":118,"kind":"triangles_hit"}],"label":"register_ray_tracing_kernel.label-120","max_recursion_depth":121,"push_constant_size":122,"push_constant_stages":123,"request_id":"register_ray_tracing_kernel.request_id-124","stages":[{"entry_point":"register_ray_tracing_kernel.stages[0].entry_point-125","spv_hex":"register_ray_tracing_kernel.stages[0].spv_hex-126","stage":"callable"},{"entry_point":"register_ray_tracing_kernel.stages[1].entry_point-128","spv_hex":"register_ray_tracing_kernel.stages[1].spv_hex-129","stage":"miss"}]}"#,
-    ),
-    (
-        "ReleaseHandle",
-        r#"{"op":"release_handle","handle_id":"release_handle.handle_id-131","request_id":"release_handle.request_id-132"}"#,
-    ),
-    (
-        "RunComputeKernel",
-        r#"{"op":"run_compute_kernel","group_count_x":133,"group_count_y":134,"group_count_z":135,"kernel_id":"run_compute_kernel.kernel_id-136","push_constants_hex":"run_compute_kernel.push_constants_hex-137","request_id":"run_compute_kernel.request_id-138","surface_uuid":"run_compute_kernel.surface_uuid-139"}"#,
-    ),
-    (
-        "RunCpuReadbackCopy",
-        r#"{"op":"run_cpu_readback_copy","direction":"buffer_to_image","request_id":"run_cpu_readback_copy.request_id-141","surface_id":"run_cpu_readback_copy.surface_id-142"}"#,
-    ),
-    (
-        "RunGraphicsDraw",
-        r#"{"op":"run_graphics_draw","bindings":[{"binding":143,"kind":"sampled_texture","surface_uuid":"run_graphics_draw.bindings[0].surface_uuid-145"},{"binding":146,"kind":"uniform_buffer","surface_uuid":"run_graphics_draw.bindings[1].surface_uuid-148"}],"color_target_uuids":["run_graphics_draw.color_target_uuids[0]-149","run_graphics_draw.color_target_uuids[1]-150"],"draw":{"first_index":151,"first_instance":152,"first_vertex":153,"index_count":154,"instance_count":155,"kind":"draw","vertex_count":157,"vertex_offset":158},"extent_height":159,"extent_width":160,"frame_index":161,"kernel_id":"run_graphics_draw.kernel_id-162","push_constants_hex":"run_graphics_draw.push_constants_hex-163","request_id":"run_graphics_draw.request_id-164","vertex_buffers":[{"binding":165,"offset":"run_graphics_draw.vertex_buffers[0].offset-166","surface_uuid":"run_graphics_draw.vertex_buffers[0].surface_uuid-167"},{"binding":168,"offset":"run_graphics_draw.vertex_buffers[1].offset-169","surface_uuid":"run_graphics_draw.vertex_buffers[1].surface_uuid-170"}],"depth_target_uuid":"run_graphics_draw.depth_target_uuid-171","index_buffer":{"index_type":"uint16","offset":"run_graphics_draw.index_buffer.offset-173","surface_uuid":"run_graphics_draw.index_buffer.surface_uuid-174"},"scissor":{"height":175,"width":176,"x":177,"y":178},"viewport":{"height":179.5,"max_depth":180.5,"min_depth":181.5,"width":182.5,"x":183.5,"y":184.5}}"#,
-    ),
-    (
-        "RunRayTracingKernel",
-        r#"{"op":"run_ray_tracing_kernel","bindings":[{"binding":185,"kind":"sampled_texture","target_id":"run_ray_tracing_kernel.bindings[0].target_id-187"},{"binding":188,"kind":"uniform_buffer","target_id":"run_ray_tracing_kernel.bindings[1].target_id-190"}],"depth":191,"height":192,"kernel_id":"run_ray_tracing_kernel.kernel_id-193","push_constants_hex":"run_ray_tracing_kernel.push_constants_hex-194","request_id":"run_ray_tracing_kernel.request_id-195","width":196}"#,
-    ),
-    (
-        "TryRunCpuReadbackCopy",
-        r#"{"op":"try_run_cpu_readback_copy","direction":"image_to_buffer","request_id":"try_run_cpu_readback_copy.request_id-198","surface_id":"try_run_cpu_readback_copy.surface_id-199"}"#,
-    ),
-    (
-        "WaitDeviceIdle",
-        r#"{"op":"wait_device_idle","request_id":"wait_device_idle.request_id-200"}"#,
-    ),
-];
 
 /// Every `EscalateResponse` variant survives a decode/encode round trip unchanged.
 #[test]
 fn escalate_response_vectors_round_trip() {
-    assert_golden_vectors_round_trip::<EscalateResponse>(ESCALATE_RESPONSE_GOLDEN_WIRE_VECTORS);
+    assert_golden_vectors_round_trip!(EscalateResponse:
+        Contended => r#"{"result":"contended","request_id":"contended.request_id-1"}"#,
+        Err => r#"{"result":"err","message":"err.message-2","request_id":"err.request_id-3"}"#,
+        Ok => r#"{"result":"ok","handle_id":"ok.handle_id-4","request_id":"ok.request_id-5","bytes_per_row":"ok.bytes_per_row-6","exporting_device_uuid":"ok.exporting_device_uuid-7","format":"ok.format-8","height":9,"staging_byte_size":"ok.staging_byte_size-10","timeline_value":"ok.timeline_value-11","usage":["ok.usage[0]-12","ok.usage[1]-13"],"width":14,"writable":false}"#,
+    );
 }
-
-/// Golden `EscalateResponse` documents, one per variant.
-const ESCALATE_RESPONSE_GOLDEN_WIRE_VECTORS: &[(&str, &str)] = &[
-    (
-        "Contended",
-        r#"{"result":"contended","request_id":"contended.request_id-1"}"#,
-    ),
-    (
-        "Err",
-        r#"{"result":"err","message":"err.message-2","request_id":"err.request_id-3"}"#,
-    ),
-    (
-        "Ok",
-        r#"{"result":"ok","handle_id":"ok.handle_id-4","request_id":"ok.request_id-5","bytes_per_row":"ok.bytes_per_row-6","exporting_device_uuid":"ok.exporting_device_uuid-7","format":"ok.format-8","height":9,"staging_byte_size":"ok.staging_byte_size-10","timeline_value":"ok.timeline_value-11","usage":["ok.usage[0]-12","ok.usage[1]-13"],"width":14,"writable":false}"#,
-    ),
-];
 
 /// Every enum variant keeps its wire spelling.
 #[test]
