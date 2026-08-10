@@ -162,7 +162,7 @@ pub mod sdk {
 
     /// `streamlib::sdk::schema_ident_any_version!("org", "package", "Type")` —
     /// resolve a `SchemaIdent` **now** against the **already-registered**
-    /// processor types (the post-`add_module` / power-caller form).
+    /// processor types (the power-caller form).
     /// Validates `(org, package, type)` at compile time; resolves the
     /// version at runtime against the global processor registry,
     /// picking the highest registered `SemVer` (Cargo / npm convention).
@@ -192,7 +192,7 @@ pub mod sdk {
     /// imperative-API module identifier with a pinned semver range.
     /// Validates org / name / semver range at compile time; expands to
     /// a [`ModuleIdent::new`](descriptors::ModuleIdent::new)
-    /// expression. Pair with [`crate::sdk::runtime::Runner::add_module`].
+    /// expression.
     pub use streamlib_engine::module_ident;
 
     /// `streamlib::sdk::module_ident_any_version!("org", "name")` —
