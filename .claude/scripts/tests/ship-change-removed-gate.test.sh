@@ -68,56 +68,56 @@ echo "ship-change-removed-gate.sh"
 # --- the baseline: absence passes, presence fails -------------------------------
 
 new_repo <<'EOF'
-- REMOVED: WidgetVtable
+- REMOVED: ProcessorVTable
 EOF
 plant src/lib.rs "pub struct Something;"
 run_gate
 expect_pass "a symbol that is genuinely gone passes"
 
 new_repo <<'EOF'
-- REMOVED: WidgetVtable
+- REMOVED: ProcessorVTable
 EOF
-plant src/lib.rs "pub struct WidgetVtable { slot: usize }"
+plant src/lib.rs "pub struct ProcessorVTable { slot: usize }"
 run_gate
-expect_fail "a symbol still defined in a tracked file fails" "STILL PRESENT (referenced): WidgetVtable"
+expect_fail "a symbol still defined in a tracked file fails" "STILL PRESENT (referenced): ProcessorVTable"
 
 new_repo <<'EOF'
-* REMOVED: WidgetVtable
+* REMOVED: ProcessorVTable
 EOF
-plant src/lib.rs "pub struct WidgetVtable;"
+plant src/lib.rs "pub struct ProcessorVTable;"
 run_gate
-expect_fail "a '*' bullet marker is parsed too" "STILL PRESENT (referenced): WidgetVtable"
+expect_fail "a '*' bullet marker is parsed too" "STILL PRESENT (referenced): ProcessorVTable"
 
 new_repo <<'EOF'
-- REMOVED: WidgetVtable
+- REMOVED: ProcessorVTable
 EOF
 mkdir -p "$repo/src"
-printf 'pub struct WidgetVtable;\n' >"$repo/src/untracked.rs"
+printf 'pub struct ProcessorVTable;\n' >"$repo/src/untracked.rs"
 run_gate
 expect_pass "an untracked file cannot fake a failure"
 
 # --- defect 6: git grep never matches a filename ---------------------------------
 
 new_repo <<'EOF'
-- REMOVED: tools/fictional-pack
+- REMOVED: tools/streamlib-pack
 EOF
-plant tools/fictional-pack/src/main.rs "fn main() {}"
+plant tools/streamlib-pack/src/main.rs "fn main() {}"
 run_gate
 expect_fail "a directory that still exists fails even when nothing references it" \
-  "STILL PRESENT (on disk): tools/fictional-pack"
+  "STILL PRESENT (on disk): tools/streamlib-pack"
 
 new_repo <<'EOF'
-- REMOVED: schemas/fictional.schema.json
+- REMOVED: schemas/streamlib.schema.json
 EOF
-plant schemas/fictional.schema.json '{"title":"unreferenced leaf"}'
+plant schemas/streamlib.schema.json '{"title":"unreferenced leaf"}'
 run_gate
 expect_fail "an unreferenced leaf file fails on the path check" \
-  "STILL PRESENT (on disk): schemas/fictional.schema.json"
+  "STILL PRESENT (on disk): schemas/streamlib.schema.json"
 
 new_repo <<'EOF'
-- REMOVED: tools/fictional-pack
+- REMOVED: tools/streamlib-pack
 EOF
-plant tools/fictional-keep/src/main.rs "fn main() {}"
+plant tools/streamlib-keep/src/main.rs "fn main() {}"
 run_gate
 expect_pass "a sibling directory is not mistaken for the removed one"
 
@@ -173,32 +173,32 @@ expect_pass "another change file's own inventory is not residue"
 # /ship-change gates at step 1 but folds ARCHITECTURE.md at step 3, so a change whose own
 # plan text names what it removes could never reach the step that retires that text.
 new_repo <<'EOF'
-- REMOVED: fictional_modules
+- REMOVED: streamlib_modules
 EOF
-plant docs/plan/ARCHITECTURE.md "deleted in full: \`fictional_modules/\`, the .fkpkg format, streamlib.lock"
+plant docs/plan/ARCHITECTURE.md "deleted in full: \`streamlib_modules/\`, the .slpkg format, streamlib.lock"
 run_gate
 expect_pass "the plan's own description of a removal is not residue"
 
 # Empirical records outlive the thing that surfaced them.
 new_repo <<'EOF'
-- REMOVED: .fkpkg
+- REMOVED: .slpkg
 EOF
-plant docs/learnings/slpkg-raw-device-rhi-construction.md "A separately-built .fkpkg double-frees in vkCreatePipelineLayout."
+plant docs/learnings/slpkg-raw-device-rhi-construction.md "A separately-built .slpkg double-frees in vkCreatePipelineLayout."
 run_gate
 expect_pass "a learning that records driver behaviour is not residue"
 
 # Consumers lag by design (CLAUDE.md) and are moving out-of-repo (#1672).
 new_repo <<'EOF'
-- REMOVED: fictional_modules
+- REMOVED: streamlib_modules
 EOF
-plant examples/camera-display/src/main.rs "let dir = home.join(\"fictional_modules\");"
+plant examples/camera-display/src/main.rs "let dir = home.join(\"streamlib_modules\");"
 run_gate
 expect_pass "an example that still uses the artifact is not residue"
 
 new_repo <<'EOF'
-- REMOVED: .fkpkg
+- REMOVED: .slpkg
 EOF
-plant packages/h264/src/lib.rs "// resolves a .fkpkg from the store"
+plant packages/h264/src/lib.rs "// resolves a .slpkg from the store"
 run_gate
 expect_pass "a consumer package is not residue"
 
@@ -206,24 +206,24 @@ expect_pass "a consumer package is not residue"
 # not downstream consumers, so their residue is real work and must still be reported.
 for engine_pkg in escalate core test-fixtures; do
   new_repo <<'EOF'
-- REMOVED: .fkpkg
+- REMOVED: .slpkg
 EOF
-  plant "packages/$engine_pkg/src/lib.rs" "// resolves a .fkpkg from the store"
+  plant "packages/$engine_pkg/src/lib.rs" "// resolves a .slpkg from the store"
   run_gate
   expect_fail "packages/$engine_pkg is engine-side and stays in the sweep" \
-    "STILL PRESENT (referenced): .fkpkg"
+    "STILL PRESENT (referenced): .slpkg"
 done
 
 # ...but the path check inherits none of those exclusions. A bullet naming a path inside
 # an excluded tree still fails while that path is tracked — otherwise this change's own
-# `packages/fictional-abi-mismatch` bullet would pass green forever.
+# `packages/test-fixtures-abi-mismatch` bullet would pass green forever.
 new_repo <<'EOF'
-- REMOVED: packages/fictional-abi-mismatch
+- REMOVED: packages/test-fixtures-abi-mismatch
 EOF
-plant packages/fictional-abi-mismatch/Cargo.toml "[package]"
+plant packages/test-fixtures-abi-mismatch/Cargo.toml "[package]"
 run_gate
 expect_fail "a path inside a content-excluded tree is still checked for existence" \
-  "STILL PRESENT (on disk): packages/fictional-abi-mismatch"
+  "STILL PRESENT (on disk): packages/test-fixtures-abi-mismatch"
 
 new_repo <<'EOF'
 - REMOVED: docs/plan/changes/dead-change.md
@@ -246,20 +246,20 @@ expect_fail "an excluded-from-grep path is still checked for existence" \
 # --- defects 1-4: bullets that can never match -----------------------------------
 
 new_repo <<'EOF'
-- REMOVED: `tools/fictional-pack`
+- REMOVED: `tools/streamlib-pack`
 EOF
-plant tools/fictional-pack/src/main.rs "fn main() {}"
+plant tools/streamlib-pack/src/main.rs "fn main() {}"
 run_gate
 expect_fail "a backticked bullet is rejected, not searched" "MALFORMED BULLET"
 
 new_repo <<'EOF'
-- REMOVED: `tools/fictional-pack`
+- REMOVED: `tools/streamlib-pack`
 EOF
 run_gate
 expect_fail "a backticked bullet is rejected even when the tree is clean" "MALFORMED BULLET"
 
 new_repo <<'EOF'
-- REMOVED: fictional-adapter-a / fictional-adapter-b
+- REMOVED: streamlib-adapter-vulkan-abi / streamlib-adapter-vulkan-helpers
 EOF
 run_gate
 expect_fail "a '/'-joined bullet is rejected" "joins several items"
@@ -271,7 +271,7 @@ run_gate
 expect_fail "a brace-expansion bullet is rejected" "brace expansion"
 
 new_repo <<'EOF'
-- REMOVED: fictional_lib_resolver (the cdylib resolution)
+- REMOVED: native_lib_resolver (the cdylib resolution)
 EOF
 run_gate
 expect_fail "a trailing parenthetical is rejected" "trailing parenthetical"
@@ -305,9 +305,9 @@ fi
 # The rejections must not fire on legitimate patterns.
 new_repo <<'EOF'
 - REMOVED: host_callbacks()
-- REMOVED: runtime/fictional-engine/src/core/plugin/
-- REMOVED: export_widget!
-- REMOVED: FictionalAutoBuild
+- REMOVED: runtime/streamlib-engine/src/core/plugin/
+- REMOVED: export_plugin!
+- REMOVED: RunnerAutoBuild
 EOF
 run_gate
 expect_pass "a call-shaped, path-shaped, macro-shaped or plain symbol is not rejected"
@@ -315,7 +315,7 @@ expect_pass "a call-shaped, path-shaped, macro-shaped or plain symbol is not rej
 # --- defect 5: only the first physical line is a pattern -------------------------
 
 new_repo <<'EOF'
-- REMOVED: WidgetVtable
+- REMOVED: ProcessorVTable
   The vtable and its layout regression test, both retired with the plugin ABI.
 EOF
 plant src/lib.rs "// the layout regression test lived here"
