@@ -229,7 +229,11 @@ half still belongs to this ticket.
   all survive this change, so those citations are scrubbed with it.
 - REMOVED: runtime/streamlib-engine/src/core/runtime/module_loader/
 - REMOVED: runtime/streamlib-engine/src/core/runtime/install.rs
-- REMOVED: add_modules_from_lockfile
+> ~~- REMOVED: add_modules_from_lockfile~~ — Deferred 2026-08-10 (owner ruling at the
+> #1806 residue scrub). Every remaining reference lives in `sdk/streamlib-idents`'
+> lockfile module — a crate this change **carries unchanged** by its own survivor-rewire
+> bullet (deleted whole by `processor-class-identity`). The symbol's engine-side
+> definition and callers are gone; the residue defers to the successor with its crate.
 - REMOVED: native_lib_resolver
 - REMOVED: spawn_python_native_subprocess_op
 - REMOVED: sdk/streamlib-python/python/streamlib/subprocess_runner.py
@@ -268,10 +272,21 @@ half still belongs to this ticket.
 - REMOVED: tools/streamlib-cargo-build
 - REMOVED: tools/streamlib-pack
 - REMOVED: tools/streamlib-cross-rustc-fixture
-- REMOVED: .slpkg
-- REMOVED: streamlib_modules
+> ~~- REMOVED: .slpkg~~ / ~~- REMOVED: streamlib_modules~~ — Deferred 2026-08-10 (owner
+> ruling at the #1806 residue scrub). The engine-tree scrub the continuation below lists
+> is **done** (#1806): `streamlib_home`, `streamlib-sdk`, `streamlib-macros`,
+> `streamlib-error`, `xtask`, `Cargo.toml`, `.gitignore`/`.dockerignore`,
+> `docker/README.md`, `sdk/vulkan-jpeg`, `test-fixtures`, `processor-schema` all reach
+> zero. Every remaining reference lives in `sdk/streamlib-idents` (a live `.slpkg`
+> package-source/resolver subsystem, incl. functional URL/path builders — not prose),
+> `sdk/streamlib-jtd-codegen`'s registry-resolved E2E that drives it, and
+> `docs/architecture/schema-identity-and-packaging.md` which describes it. All three are
+> surfaces this change **carries unchanged** by its own survivor-rewire bullets;
+> "scrub the mention" was unsatisfiable for jtd-codegen, whose `.slpkg` test is
+> functional. The residue defers to `schema-free-ports` / `processor-class-identity`,
+> which delete those crates whole.
 
-  Both reach zero. The format and the module directory die outright: distribution moves to
+  The format and the module directory die outright: distribution moves to
   Python's own mechanism (§Distribution — the wheel is the artifact), which is what
   `ARCHITECTURE.md`'s "deleted in full: `streamlib_modules/`, the `.slpkg` format,
   `streamlib.lock`" already states. Residue after this change's deletions is 27 files for
@@ -319,7 +334,12 @@ half still belongs to this ticket.
   The sdk feature. Survivors that still name it — the api-server and wheel manifests,
   `runtime.rs`, `check_boundaries.rs` — are de-referenced with it.
 - REMOVED: runtime/streamlib-runtime
-- REMOVED: sdk/streamlib-deno
+> ~~- REMOVED: sdk/streamlib-deno~~ — Deferred 2026-08-10 (owner ruling at the #1806
+> residue scrub). The crate, the untracked codegen dir, and every doc/comment/xtask
+> reference are gone (#1806). The two remaining references are `sdk/streamlib-idents`'
+> live `deno_sdk_entrypoint_path` link-marker field and its doc example — removing the
+> field changes the link-marker wire shape of a crate this change carries unchanged.
+> Defers to `processor-class-identity`, which deletes `streamlib-idents` whole.
 - REMOVED: sdk/streamlib-deno-native
 - REMOVED: spawn_deno_subprocess_op
 - REMOVED: sdk/streamlib-processor-extract
