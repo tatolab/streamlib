@@ -44,7 +44,7 @@ trap 'rm -f "$hits"' EXIT
 #   packages/<consumer>  the downstream-consumer entries only, same doctrine — see below.
 #   vendor/**         the vendored vulkanalia fork, never ours to edit.
 # The path check inherits none of these: a file existing at a named path is residue
-# wherever it lives, so a bullet naming e.g. packages/test-fixtures-abi-mismatch or a
+# wherever it lives, so a bullet naming e.g. a packages/ leaf or a
 # docs/plan file still fails while that path is tracked.
 content_excludes=(
   ':!vendor/**'
