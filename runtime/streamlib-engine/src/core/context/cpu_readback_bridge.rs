@@ -55,8 +55,8 @@ pub trait CpuReadbackBridge: Send + Sync {
     /// and return that value.
     ///
     /// Errors map onto host adapter failures (surface not registered,
-    /// GPU submit failure) — wire-encoded as
-    /// [`crate::_generated_::tatolab__escalate::escalate_response::EscalateResponseErr`].
+    /// GPU submit failure) — wire-encoded as the escalate response's
+    /// `err` variant.
     fn run_copy(
         &self,
         surface_id: SurfaceId,

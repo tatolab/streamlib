@@ -10,8 +10,6 @@
 //! `include_bytes!` to consume at compile time.
 
 fn main() {
-    streamlib_jtd_codegen::build_rs::run_for_rust_crate();
-
     // Link Metal framework on macOS for MP4 writer
     #[cfg(target_os = "macos")]
     {

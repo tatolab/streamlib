@@ -31,13 +31,6 @@ pub mod logging {
     pub use crate::core::logging::*;
 }
 
-/// Generated types from JTD schemas. Regenerated at build time from
-/// `streamlib.yaml` via `build.rs` + `streamlib_jtd_codegen::build_rs`.
-#[allow(non_snake_case, unused_imports, clippy::all)]
-pub mod _generated_ {
-    include!(concat!(env!("OUT_DIR"), "/_generated_shim.rs"));
-}
-
 /// Schemas currently registered with the runtime.
 pub mod schemas {
     use std::sync::Arc;

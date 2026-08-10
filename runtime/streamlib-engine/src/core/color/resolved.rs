@@ -60,8 +60,8 @@ pub enum RangeId {
 }
 
 /// Color description with every axis resolved to a concrete value. The
-/// converter consumes this; the on-wire [`crate::_generated_::ColorInfo`]
-/// is a sparse `Option<T>`-per-axis projection of the same shape.
+/// converter consumes this; a consumer's on-wire color description is a
+/// sparse `Option<T>`-per-axis projection of the same shape.
 ///
 /// Construction goes through [`super::resolve::resolve_color_defaults`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

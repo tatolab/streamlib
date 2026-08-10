@@ -7,8 +7,8 @@
 //!
 //! Two behaviors locked here:
 //! 1. The error variant is `UnknownProcessorType` (not the old generic
-//!    `GraphError("Could not create node")`), and carries the offending
-//!    ident verbatim.
+//!    `GraphError("Could not create node")`), and names the offending
+//!    `(org, package, type)` tuple.
 //! 2. The failed node is left in the graph in `ProcessorState::Error`, so
 //!    API consumers (`GET /api/graph`) can see what failed and why. This
 //!    is the runtime-dynamic-system shape: the runtime tells you something
@@ -38,7 +38,20 @@ fn add_processor_with_unknown_type_returns_typed_error() {
 
     match result {
         Err(Error::UnknownProcessorType { ident: returned }) => {
-            assert_eq!(returned, ident);
+            // The tuple, not the whole ident: resolution is version-blind, so
+            // the error names what was searched for and carries no meaningful
+            // version. Asserting the caller's version back would lock the
+            // pre-version-blind behaviour.
+            //
+            // Spelled as literals rather than compared against `ident` — that
+            // would echo the input on both sides and pass no matter what the
+            // engine returned.
+            assert_eq!(returned.org.as_str(), "tatolab");
+            assert_eq!(returned.package.as_str(), "ghost-package");
+            assert_eq!(
+                returned.r#type.as_str(),
+                "DefinitelyNotARegisteredProcessor"
+            );
         }
         other => panic!("expected Err(UnknownProcessorType), got {:?}", other),
     }

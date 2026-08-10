@@ -8,9 +8,6 @@ edition = "2024"
 publish = false
 
 [dependencies]
-# JTD-codegen pipeline (extracted in #400) — xtask is a thin wrapper.
-streamlib-jtd-codegen = { path = "../sdk/streamlib-jtd-codegen" }
-
 # JSON Schema source-of-truth for streamlib.yaml — emit-manifest-schema serialises
 # `schemars::schema_for!(StreamlibYaml)` from this crate (#714).
 streamlib-processor-schema = { path = "../sdk/streamlib-processor-schema" }
@@ -26,14 +23,16 @@ streamlib-processor-schema = { path = "../sdk/streamlib-processor-schema" }
 # validated through the same SemVer type the pack stamp derives from.
 streamlib-idents = { path = "../sdk/streamlib-idents" }
 
-# Logging — needed to surface tracing::info! output from streamlib-jtd-codegen.
+# Logging — `main` installs the subscriber that surfaces
+# check-vendored-vulkanalia's `tracing::info!` output.
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
 # CLI argument parsing
 clap = { version = "4.5", features = ["derive"] }
 
-# Serialization for reading Cargo.toml and JTD schemas
+# Serialization for reading Cargo.toml and the schema YAML that
+# check-schema-versions walks.
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 serde_yaml = "0.9"

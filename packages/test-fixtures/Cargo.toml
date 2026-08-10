@@ -16,12 +16,8 @@ categories = ["development-tools::testing"]
 name = "streamlib_test_fixtures"
 crate-type = ["rlib"]
 
-[build-dependencies]
-streamlib-jtd-codegen = { path = "../../sdk/streamlib-jtd-codegen", version = "0.16.0" }
-
 [dependencies]
-# Engine substrate — runtime context, processor traits, generated config
-# types under `crate::_generated_::tatolab__test_fixtures::*`.
+# Engine substrate — runtime context and processor traits.
 streamlib = { path = "../../sdk/streamlib-sdk", version = "0.16.0" }
 
 # Procedural macros — `#[streamlib::sdk::processor("...")]` reads the
@@ -31,6 +27,10 @@ streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.16.0" }
 
 # Serialization (config dataclass ships as serde-derived).
 serde.workspace = true
+
+[dev-dependencies]
+# Round-trip assertions pinning each fixture config's JSON encoding.
+serde_json.workspace = true
 
 
 [lints]

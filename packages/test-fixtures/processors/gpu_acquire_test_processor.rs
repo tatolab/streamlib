@@ -29,7 +29,7 @@ use streamlib::sdk::rhi::PixelFormat;
     "@tatolab/test-fixtures/GpuAcquireTestProcessor",
     description = "GPU integration test fixture — exercises acquire_pixel_buffer, plane_base_address_pixel_buffer, and the pixel-buffer lifecycle through GpuContextLimitedAccess",
     execution = manual,
-    config = crate::_generated_::GpuAcquireTestProcessorConfig,
+    config = crate::test_fixture_processor_configs::GpuAcquireTestProcessorConfig,
 )]
 pub struct GpuAcquireTest {
     gpu: Option<GpuContextLimitedAccess>,

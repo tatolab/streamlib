@@ -21,7 +21,7 @@ jobs:
 
       - name: Install system dependencies
         # Same minimal engine build set as test.yml: the engine's build.rs
-        # compiles GLSL with glslc and generates JTD bindings, and the Linux
+        # compiles GLSL with glslc, and the Linux
         # dep set links Vulkan.
         run: |
           sudo apt-get update
@@ -32,12 +32,6 @@ jobs:
             libvulkan-dev \
             glslc \
             python3-dev
-
-      - name: Install jtd-codegen
-        run: |
-          curl -sSL https://github.com/jsontypedef/json-typedef-codegen/releases/download/v0.4.1/x86_64-unknown-linux-gnu.zip -o /tmp/jtd-codegen.zip
-          unzip -q /tmp/jtd-codegen.zip -d /tmp/jtd-codegen
-          sudo install -m 0755 /tmp/jtd-codegen/jtd-codegen /usr/local/bin/jtd-codegen
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

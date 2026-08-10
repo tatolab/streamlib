@@ -31,7 +31,7 @@ use streamlib::sdk::processors::ManualProcessor;
     "@tatolab/test-fixtures/ConcurrentEscalateTestProcessor",
     description = "Concurrent-escalate fixture. Spawns thread_count threads from start(); each clones gpu_limited_access() and calls escalate concurrently. Output captures overlap count; expected overlaps=0 — proves the escalate gate serializes concurrent callers.",
     execution = manual,
-    config = crate::_generated_::ConcurrentEscalateTestProcessorConfig,
+    config = crate::test_fixture_processor_configs::ConcurrentEscalateTestProcessorConfig,
 )]
 pub struct ConcurrentEscalateTest {}
 

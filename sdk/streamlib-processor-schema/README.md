@@ -41,9 +41,3 @@ Before adding anything here, ask:
 
 If neither is true, keep the type in `streamlib`.
 
-## Sibling crate
-
-`streamlib-jtd-codegen` is the JTD-codegen *pipeline* — separate
-concern. It reads schemas (some of which use the
-`ProcessorSchema` types from this crate) and emits typed
-Rust/Python/TypeScript bindings into `_generated_/`.

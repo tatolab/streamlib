@@ -2,16 +2,10 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Build tasks for StreamLib development.
-//!
-//! For routine codegen, each Rust crate's `build.rs` invokes
-//! `streamlib_jtd_codegen::build_rs::run_for_rust_crate` automatically.
-//! This subcommand exists for ad-hoc generation and the Python / Deno
-//! triggers (`setup.py` + `deno task setup`) that shell out to the CLI.
 
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::path::PathBuf;
-use streamlib_jtd_codegen::{GenerateOptions, RuntimeTarget, generate};
 
 pub mod check_boundaries;
 pub mod check_device_wait_idle;
@@ -66,36 +60,6 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Generate code from JTD schemas using jtd-codegen.
-    ///
-    /// Thin wrapper around `streamlib-jtd-codegen`. The same pipeline is also
-    /// reachable as `streamlib generate` for non-Rust developers (no rustup
-    /// required).
-    GenerateSchemas {
-        /// Target language (default: rust)
-        #[arg(long, default_value = "rust")]
-        runtime: RuntimeTarget,
-
-        /// Output directory (required)
-        #[arg(long)]
-        output: PathBuf,
-
-        /// `streamlib.yaml`-driven mode: directory containing the manifest.
-        /// The resolver walks declared dependencies and codegen ingests the
-        /// resulting set.
-        #[arg(long, group = "input")]
-        project_dir: Option<PathBuf>,
-
-        /// Process a single schema file
-        #[arg(long, group = "input")]
-        schema_file: Option<PathBuf>,
-
-        /// Process all .yaml files in a directory
-        #[arg(long, group = "input")]
-        schema_dir: Option<PathBuf>,
-    },
-
-
     /// Ban ad-hoc logging in polyglot SDK library code (Python + TypeScript).
     /// Paired with the workspace clippy.toml `disallowed-macros` rule for Rust.
     LintLogging,
@@ -198,29 +162,6 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::GenerateSchemas {
-            runtime,
-            output,
-            project_dir,
-            schema_file,
-            schema_dir,
-        } => {
-            // Human-run codegen (like the `streamlib generate` CLI): resolve the
-            // active `streamlib link` checkout marker-first from the project dir.
-            let link_checkout = project_dir
-                .as_deref()
-                .and_then(|d| streamlib_idents::ResolverOptions::from_env_or_marker(d).link_checkout);
-            generate(GenerateOptions {
-                runtime,
-                output,
-                project_dir,
-                schema_file,
-                schema_dir,
-                workspace_root: workspace_root()?,
-                write_lockfile: true,
-                link_checkout,
-            })?
-        }
         Commands::LintLogging => lint_logging::run(&workspace_root()?)?,
         Commands::CheckBoundaries => check_boundaries::run(&workspace_root()?)?,
         Commands::CheckSchemaVersions => check_schema_versions::run(&workspace_root()?)?,

@@ -38,9 +38,8 @@
 
 /// Resource kind for a binding slot in the graphics kernel's
 /// descriptor set 0. Wire-format mirror of
-/// [`crate::core::rhi::GraphicsBindingKind`] decoupled from the
-/// generated JTD types so the bridge surface is stable across schema
-/// regenerations.
+/// [`crate::core::rhi::GraphicsBindingKind`], kept separate so the
+/// bridge surface does not move when the RHI enum does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum GraphicsBindingKindWire {
     SampledTexture,

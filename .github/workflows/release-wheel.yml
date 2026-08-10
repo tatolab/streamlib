@@ -52,7 +52,7 @@ jobs:
           target: x86_64
           manylinux: 2_28
           args: --release --out dist
-          # The engine's build.rs compiles GLSL and generates JTD bindings, so
+          # The engine's build.rs compiles GLSL, so
           # the container needs the same toolchain the test workflows install.
           before-script-linux: |
             set -euo pipefail
@@ -62,12 +62,9 @@ jobs:
             # brings are not needed here. The Ubuntu test workflow does need
             # them; that job builds the crate's unit tests, which link it.
             dnf install -y pkgconfig protobuf-compiler clang-devel \
-              vulkan-headers vulkan-loader-devel unzip \
+              vulkan-headers vulkan-loader-devel \
               cmake ninja-build git
             python3 --version
-            curl -sSL https://github.com/jsontypedef/json-typedef-codegen/releases/download/v0.4.1/x86_64-unknown-linux-gnu.zip -o /tmp/jtd-codegen.zip
-            unzip -q /tmp/jtd-codegen.zip -d /tmp/jtd-codegen
-            install -m 0755 /tmp/jtd-codegen/jtd-codegen /usr/local/bin/jtd-codegen
             # `glslc`, which the engine's build.rs invokes to compile GLSL.
             # Built from source rather than installed: AlmaLinux 8 — the
             # manylinux_2_28 base — packages no glslc in base or EPEL (it lives

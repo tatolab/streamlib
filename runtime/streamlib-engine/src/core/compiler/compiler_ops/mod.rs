@@ -6,6 +6,7 @@ mod prepare_processor_op;
 mod spawn_processor_op;
 pub(crate) mod subprocess_bridge;
 mod subprocess_escalate;
+mod subprocess_escalate_wire_types;
 
 pub(crate) use open_iceoryx2_service_op::{
     ChannelSizing, find_channel_source_port, resolve_channel_sizing,

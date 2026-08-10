@@ -9,7 +9,6 @@ members = [
     "runtime/streamlib-surface-client", # Wire-format helpers for the per-runtime surface-sharing socket (Linux)
     "runtime/streamlib-media-builtins", # First-party media built-ins (test pattern, camera, display) — native blocks statically linked into the wheel
     "sdk/streamlib-processor-schema", # Processor schema types + YAML parser shared between the engine and streamlib-macros
-    "sdk/streamlib-jtd-codegen", # JTD-codegen pipeline: schema YAML → typed Rust/Python/TypeScript bindings
     "sdk/streamlib-idents",    # Structured schema identifiers, semver, manifest/lockfile types (#399)
     "sdk/streamlib-macros",    # Procedural macros — owns the `#[processor]` authoring grammar
     "adapters/streamlib-surface-adapter", # Surface adapter contract shared by every adapter core
@@ -36,8 +35,8 @@ members = [
     # `tatolab/streamlib-packages` (#1672), deny-ruled against editing, and an
     # engine change that breaks one is upgrade backlog rather than a defect.
     # Those three are engine-side, and read as contract sources: `escalate`
-    # holds the escalate wire schemas, `core` the core schemas and their
-    # crate, and `test-fixtures` below is INTERNAL test infrastructure — it
+    # holds the escalate wire schemas, `core` the core schemas, and
+    # `test-fixtures` below is INTERNAL test infrastructure — it
     # path-deps the zone crates and is the one package that stays a workspace
     # member (`publish = false`, which also keeps it out of the release
     # closure).
@@ -72,11 +71,6 @@ tokio = { version = "1.48.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 serde_yaml = "0.9"
-# Specialized msgpack `bin` (de)serialization for Vec<u8> fields — jtd-codegen
-# emits `#[serde(with = "serde_bytes")]` for JTD `elements: type: uint8`
-# shapes so `rmp_serde` writes a `bin` tag (1× wire footprint) instead of an
-# array of integers (~1.5× footprint for ≥128 byte values).
-serde_bytes = "0.11"
 toml = "0.8"
 toml_edit = "0.22"
 rmp-serde = "1.3"

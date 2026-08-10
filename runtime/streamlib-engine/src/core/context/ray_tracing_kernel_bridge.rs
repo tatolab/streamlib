@@ -30,9 +30,9 @@
 #![cfg(target_os = "linux")]
 
 /// Resource kind for a binding slot in the RT kernel's descriptor set 0.
-/// Wire-format mirror of [`crate::core::rhi::RayTracingBindingKind`]
-/// decoupled from the generated JTD types so the bridge surface is
-/// stable across schema regenerations.
+/// Wire-format mirror of [`crate::core::rhi::RayTracingBindingKind`],
+/// kept separate so the bridge surface does not move when the RHI
+/// enum does.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RayTracingBindingKindWire {
     StorageBuffer,
@@ -75,7 +75,7 @@ pub struct RayTracingStageDecl {
 }
 
 /// Sentinel value the wire format uses to mean "this optional stage
-/// index is absent" (JTD has no `Option<uint32>`). Mirrors what the
+/// index is absent" (the field is always present on the wire). Mirrors what the
 /// subprocess SDK serializes for absent group fields.
 pub const RAY_TRACING_STAGE_INDEX_NONE: u32 = u32::MAX;
 

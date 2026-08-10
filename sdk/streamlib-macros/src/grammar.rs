@@ -651,7 +651,7 @@ mod tests {
         let parsed = parse_ok(quote! {
             "@tatolab/camera/Camera",
             execution = manual,
-            config = crate::_generated_::tatolab__camera::CameraConfig,
+            config = crate::camera_config::CameraConfig,
         });
         assert!(parsed.config_type.is_some());
         assert_eq!(parsed.config_field_name, "config");
