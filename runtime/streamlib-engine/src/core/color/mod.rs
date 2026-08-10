@@ -5,10 +5,10 @@
 //!
 //! Engine core math + kernel inputs are engine-ID-shaped — every
 //! type re-exported here uses [`PrimariesId`] / [`TransferId`] /
-//! [`MatrixId`] / [`RangeId`] rather than any schema enum. Consumers
-//! translate their own `_generated_::*` flavor of the wire schemas
-//! into these IDs at their own call sites; the engine does not
-//! accept schema types in any public method signature.
+//! [`MatrixId`] / [`RangeId`] rather than any wire enum. Consumers
+//! translate their own wire flavor of the color description into
+//! these IDs at their own call sites; the engine does not accept a
+//! wire type in any public method signature.
 
 mod matrix;
 mod resolve;

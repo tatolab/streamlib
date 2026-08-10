@@ -4,8 +4,11 @@
 //! Wire types for the escalate IPC protocol — the seam every escalate
 //! encode and decode goes through.
 
-pub(crate) use crate::_generated_::tatolab__escalate::{escalate_request, escalate_response};
-pub(crate) use crate::_generated_::{EscalateRequest, EscalateResponse};
+pub(crate) mod escalate_request;
+pub(crate) mod escalate_response;
+
+pub(crate) use escalate_request::EscalateRequest;
+pub(crate) use escalate_response::EscalateResponse;
 
 #[cfg(test)]
 mod escalate_wire_encoding_tests;

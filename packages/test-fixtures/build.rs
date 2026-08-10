@@ -4,8 +4,6 @@
 #![allow(clippy::disallowed_macros)] // build.rs uses println! for `cargo:` directives
 
 fn main() {
-    streamlib_jtd_codegen::build_rs::run_for_rust_crate();
-
     #[cfg(target_os = "linux")]
     {
         compile_cpu_ref_doubler();

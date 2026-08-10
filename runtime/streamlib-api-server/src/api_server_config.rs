@@ -4,7 +4,32 @@
 //! The api-server processor's configuration type — the seam its encoding is
 //! pinned at.
 
-pub use crate::_generated_::ApiServerConfig;
+use serde::{Deserialize, Serialize};
+
+/// Configuration for the runtime API server.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ApiServerConfig {
+    /// Host address to bind to.
+    pub host: String,
+
+    /// Port number to listen on.
+    pub port: u16,
+
+    /// Log file path for surface-share registration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub log_path: Option<String>,
+
+    /// Runtime name for surface-share registration; auto-generated when absent.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+
+    /// Opt into bearer-token auth on the mutating control-plane routes. Absent
+    /// or false leaves them open — a node runs locally with full permission;
+    /// true auto-generates and 0600-persists a shared secret and gates every
+    /// mutating route behind `Authorization: Bearer <token>`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub require_auth: Option<bool>,
+}
 
 #[cfg(test)]
 mod api_server_config_encoding_tests {

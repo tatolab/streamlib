@@ -5008,7 +5008,6 @@ dependencies = [
  "serde_json",
  "serial_test",
  "streamlib",
- "streamlib-jtd-codegen",
  "streamlib-macros",
  "streamlib-moq",
  "tempfile",
@@ -5089,7 +5088,6 @@ dependencies = [
  "streamlib-error",
  "streamlib-idents",
  "streamlib-ipc-types",
- "streamlib-jtd-codegen",
  "streamlib-macros",
  "streamlib-processor-schema",
  "streamlib-surface-adapter",
@@ -5145,21 +5143,6 @@ version = "0.16.0"
 dependencies = [
  "iceoryx2",
  "tracing",
-]
-
-[[package]]
-name = "streamlib-jtd-codegen"
-version = "0.16.0"
-dependencies = [
- "anyhow",
- "clap",
- "serde",
- "serde_json",
- "serde_yaml",
- "streamlib-idents",
- "tempfile",
- "tracing",
- "zip",
 ]
 
 [[package]]
@@ -5276,7 +5259,6 @@ dependencies = [
  "serde",
  "serde_json",
  "streamlib",
- "streamlib-jtd-codegen",
  "streamlib-macros",
 ]
 
@@ -6922,7 +6904,6 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "streamlib-idents",
- "streamlib-jtd-codegen",
  "streamlib-processor-schema",
  "syn",
  "tempfile",

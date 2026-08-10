@@ -4,13 +4,76 @@
 //! Config types for the fixture processors — the seam their encoding is
 //! pinned at.
 
-pub use crate::_generated_::{
-    ComputeKernelTestProcessorConfig, ConcurrentEscalateTestProcessorConfig,
-    EscalateSmokeTestProcessorConfig, GpuAcquireTestProcessorConfig,
-    GraphicsKernelSmokeTestProcessorConfig, LifecycleProbeProcessorConfig,
-    PanickingContinuousLifecycleProcessorConfig, PanickingManualLifecycleProcessorConfig,
-    RayTracingKernelSmokeTestProcessorConfig, TestConfiguredProcessorConfig,
-};
+use serde::{Deserialize, Serialize};
+
+/// Compute-kernel CPU-reference fixture: buffer length and where to write the
+/// comparison result.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ComputeKernelTestProcessorConfig {
+    pub element_count: u32,
+    pub output_path: String,
+}
+
+/// Concurrent-escalate fixture: how many threads contend and how long each
+/// holds the gate.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct ConcurrentEscalateTestProcessorConfig {
+    pub hold_ms: u32,
+    pub output_path: String,
+    pub thread_count: u32,
+}
+
+/// Escalate smoke fixture: where to record that the round trip completed.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct EscalateSmokeTestProcessorConfig {
+    pub output_path: String,
+}
+
+/// GPU-acquire fixture: the pixel-buffer dimensions to acquire.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GpuAcquireTestProcessorConfig {
+    pub height: u32,
+    pub output_path: String,
+    pub width: u32,
+}
+
+/// Graphics-kernel smoke fixture: where to record that the render completed.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct GraphicsKernelSmokeTestProcessorConfig {
+    pub output_path: String,
+}
+
+/// Lifecycle-probe fixture: how many process iterations to run and where to
+/// append the per-hook markers.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct LifecycleProbeProcessorConfig {
+    pub max_iterations: u32,
+    pub output_path: String,
+}
+
+/// Panic-injection Continuous fixture: which lifecycle hook panics.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PanickingContinuousLifecycleProcessorConfig {
+    pub panic_at_hook: String,
+}
+
+/// Panic-injection Manual fixture: which lifecycle hook panics.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PanickingManualLifecycleProcessorConfig {
+    pub panic_at_hook: String,
+}
+
+/// Ray-tracing-kernel smoke fixture: where to record that the trace completed.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct RayTracingKernelSmokeTestProcessorConfig {
+    pub output_path: String,
+}
+
+/// Attribute-macro config-emit fixture: one scalar field to round-trip.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct TestConfiguredProcessorConfig {
+    pub threshold: f32,
+}
 
 #[cfg(test)]
 mod fixture_config_encoding_tests {

@@ -7,11 +7,6 @@
 //! adding its arm here — the generator that used to write this file went with
 //! the packaging tools.
 
-#[allow(non_snake_case, unused_imports, dead_code, clippy::all)]
-pub mod _generated_ {
-    include!(concat!(env!("OUT_DIR"), "/_generated_shim.rs"));
-}
-
 pub mod test_fixture_processor_configs;
 
 #[path = "../processors/compute_kernel_test_processor.rs"]
