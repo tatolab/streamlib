@@ -41,9 +41,9 @@
 #                        runs cleanly at q=95 too. The historical q ≤ 70
 #                        cap (msgpack-array wire expansion past iceoryx2's
 #                        64 KiB per-slot default on `complex_pattern`) is
-#                        no longer in effect — JTD codegen now emits
-#                        `#[serde(with = "serde_bytes")]` on
-#                        `EncodedJpegFrame.data` so the payload rides
+#                        no longer in effect — `EncodedJpegFrame.data`
+#                        carries `#[serde(with = "serde_bytes")]` in the
+#                        @tatolab/jpeg package, so the payload rides
 #                        msgpack `bin` (1× wire footprint) instead of an
 #                        array of integers.
 #   FIXTURE_REPS       — frames per reference (default 10)

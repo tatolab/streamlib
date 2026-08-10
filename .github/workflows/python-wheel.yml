@@ -21,7 +21,7 @@ jobs:
 
       - name: Install system dependencies
         # Same minimal engine build set as test.yml: the engine's build.rs
-        # compiles GLSL with glslc and generates JTD bindings, and the Linux
+        # compiles GLSL with glslc, and the Linux
         # dep set links Vulkan.
         run: |
           sudo apt-get update

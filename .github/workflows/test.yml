@@ -19,7 +19,7 @@ jobs:
 
       - name: Install system dependencies
         # `-p streamlib` pulls streamlib-engine, whose build.rs compiles GLSL
-        # compute shaders with glslc and generates JTD bindings; the Linux
+        # compute shaders with glslc; the Linux
         # engine dep set links Vulkan. Minimal subset — no GPU/codec backends.
         run: |
           sudo apt-get update

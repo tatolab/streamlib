@@ -19,8 +19,8 @@ mod state;
 #[path = "../processors/api_server.rs"]
 pub mod api_server;
 
-pub use api_server_config::ApiServerConfig;
 pub use api_server::ApiServerProcessor;
+pub use api_server_config::ApiServerConfig;
 pub use handlers::control_plane_openapi_spec;
 pub use node_registry::{
     NODE_REGISTRY_SCHEMA_VERSION, NodeRegistryEntry, NodeRegistryError, read_entry, registry_dir,

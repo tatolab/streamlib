@@ -52,7 +52,7 @@ jobs:
           target: x86_64
           manylinux: 2_28
           args: --release --out dist
-          # The engine's build.rs compiles GLSL and generates JTD bindings, so
+          # The engine's build.rs compiles GLSL, so
           # the container needs the same toolchain the test workflows install.
           before-script-linux: |
             set -euo pipefail

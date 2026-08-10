@@ -79,7 +79,8 @@ fn response_field<'py>(response: &Bound<'py, PyAny>, field: &str) -> PyResult<Bo
     })
 }
 
-/// A u64 the wire carries as a decimal string, because JTD has no u64.
+/// A u64 the wire carries as a decimal string, because JSON has no 64-bit
+/// integer. Host-side counterpart: `EscalateResponseOk::staging_byte_size`.
 #[cfg(target_os = "linux")]
 fn decimal_string_field(response: &Bound<'_, PyAny>, field: &str) -> PyResult<u64> {
     let as_written: String = response_field(response, field)?.extract()?;
