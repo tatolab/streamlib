@@ -5,14 +5,14 @@
 //!
 //! Each vector is a fully-populated message — every optional present, every
 //! nested structure recursed — captured from the JTD-generated types before
-//! they were hand-written, and asserted to round-trip byte-identically. The
-//! helper side builds these documents as plain Python dicts, so serde's
-//! encoding of these types is the entire wire contract.
+//! they were hand-written, and asserted to round-trip byte-identically. Two
+//! further tests cover what a populated document cannot: which absent optionals
+//! drop out of the encoding and which carry an explicit null. The helper side
+//! builds these documents as plain Python dicts, so serde's encoding of these
+//! types is the entire wire contract.
 
-use super::{EscalateRequest, EscalateResponse};
 use super::escalate_request::{
-    EscalateRequestLogLevel,
-    EscalateRequestLogSource,
+    EscalateRequestLogLevel, EscalateRequestLogSource,
     EscalateRequestRegisterGraphicsKernelBindingKind,
     EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp,
     EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp,
@@ -39,6 +39,8 @@ use super::escalate_request::{
     EscalateRequestRunRayTracingKernelBindingKind,
     EscalateRequestTryRunCpuReadbackCopyDirection,
 };
+use super::escalate_response::EscalateResponseOk;
+use super::{EscalateRequest, EscalateResponse};
 
 /// Every `EscalateRequest` variant survives a decode/encode round trip unchanged.
 #[test]
@@ -324,4 +326,28 @@ fn escalate_enum_variants_keep_their_wire_spelling() {
     assert_eq!(serde_json::to_string(&EscalateRequestRunRayTracingKernelBindingKind::UniformBuffer).unwrap(), r#""uniform_buffer""#);
     assert_eq!(serde_json::to_string(&EscalateRequestTryRunCpuReadbackCopyDirection::BufferToImage).unwrap(), r#""buffer_to_image""#);
     assert_eq!(serde_json::to_string(&EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer).unwrap(), r#""image_to_buffer""#);
+}
+
+/// An absent optional is omitted from the encoding, never written as null.
+#[test]
+fn absent_optionals_are_omitted_on_a_response() {
+    let response = EscalateResponse::Ok(EscalateResponseOk {
+        handle_id: "handle-1".to_string(),
+        request_id: "request-1".to_string(),
+        ..Default::default()
+    });
+    assert_eq!(
+        serde_json::to_string(&response).unwrap(),
+        r#"{"result":"ok","handle_id":"handle-1","request_id":"request-1"}"#
+    );
+}
+
+/// The log record's three nullable-required fields are the exception: they
+/// carry an explicit null rather than dropping out of the document, because a
+/// runtime-level record has no pipeline and an uncaptured one has no channel.
+#[test]
+fn a_log_records_nullable_required_fields_encode_as_null() {
+    let golden = r#"{"op":"log","attrs":{},"channel":null,"intercepted":false,"level":"info","message":"hello","pipeline_id":null,"processor_id":null,"source":"python","source_seq":"1","source_ts":"2"}"#;
+    let decoded: EscalateRequest = serde_json::from_str(golden).unwrap();
+    assert_eq!(serde_json::to_string(&decoded).unwrap(), golden);
 }
