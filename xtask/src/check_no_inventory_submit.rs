@@ -77,14 +77,9 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     eprintln!(
         "\nFix:\n  \
          The engine substrate is empty by design. Register processors \
-         through one of:\n    \
-           1. Cdylib `export_plugin!(...)` — the runtime dlopens the \
-              cdylib and registers via the plugin ABI's STREAMLIB_PLUGIN \
-              callback.\n    \
-           2. In-process `PROCESSOR_REGISTRY.register::<P>()` — for \
-              engine-internal tests / mocks / inline registrations.\n  \
-         The `#[processor]` macro no longer emits any registration. See \
-         issue #793 + the All-Dynamic Package Loading milestone."
+         in-process via `PROCESSOR_REGISTRY.register::<P>()` — for \
+         engine-internal tests / mocks / inline registrations.\n  \
+         The `#[processor]` macro no longer emits any registration."
     );
     anyhow::bail!("check-no-inventory-submit failed");
 }
