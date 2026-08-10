@@ -32,6 +32,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
     input(
         "video_in",
         "@tatolab/core/VideoFrame",
+        delivery_profile = "latest",
         description = "Frames from the upstream camera source"
     ),
     output(
