@@ -14,7 +14,6 @@ pub(crate) mod embedded_schemas;
 pub(crate) mod logging;
 pub(crate) mod observability;
 pub(crate) mod runtime_hooks;
-pub(crate) mod schema_agreement;
 pub(crate) mod signals;
 pub(crate) mod streamlib_home;
 #[cfg(test)]

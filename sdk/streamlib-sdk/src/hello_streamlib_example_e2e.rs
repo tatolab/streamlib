@@ -38,7 +38,7 @@ use iceoryx2::prelude::*;
 
 use crate::sdk::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader, InputMailboxes,
-    InputMailboxesInner, OutputWriter, OutputWriterInner, ReadMode, SchemaIdentWire,
+    InputMailboxesInner, OutputWriter, OutputWriterInner, ReadMode,
     TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
 };
 use crate::sdk::processors::{EmptyConfig, GeneratedProcessor};
@@ -57,21 +57,12 @@ fn unique_service_name(tag: &str) -> String {
     )
 }
 
-/// The single `@tatolab/core/VideoFrame` wire identity for this edge. Both the
-/// input framing and the output connection must agree on it or the edge
-/// silently mismatches, so it lives in exactly one place.
-fn video_frame_schema() -> SchemaIdentWire {
-    SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0)
-        .expect("VideoFrame identity fits the wire capacity")
-}
-
 /// Frame the given opaque payload for `port` exactly as the runtime does, so it
 /// can be routed straight into an [`InputMailboxesInner`] without an iceoryx2
 /// subscriber (the in-memory injection path the runtime's own tests use).
 fn framed_payload(port: &str, payload: &[u8], timestamp_ns: i64) -> Vec<u8> {
-    let schema = video_frame_schema();
     let mut buf = vec![0u8; FRAME_HEADER_SIZE + payload.len()];
-    FrameHeader::new(port, schema, timestamp_ns, payload.len() as u32)
+    FrameHeader::new(port, timestamp_ns, payload.len() as u32)
         .expect("port name fits the wire capacity")
         .write_to_slice(&mut buf[..FRAME_HEADER_SIZE]);
     buf[FRAME_HEADER_SIZE..].copy_from_slice(payload);
@@ -130,7 +121,6 @@ fn fixture_frame_traverses_the_inline_forward_processor() {
     let output_writer_inner = Arc::new(OutputWriterInner::new());
     output_writer_inner.set_channel_publisher(
         "video_out",
-        video_frame_schema(),
         publisher,
         ChannelEgressConfig {
             service_name: "e2e/video_out".to_string(),

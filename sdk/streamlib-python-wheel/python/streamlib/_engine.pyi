@@ -219,7 +219,6 @@ class ProcessorLinkDataAccess:
         notify_max_notifiers: int,
         enable_safe_overflow: bool,
         link_id: str,
-        schema: tuple[str, str, str, int, int, int] | None = None,
     ) -> None: ...
     def wire_input_link(
         self,

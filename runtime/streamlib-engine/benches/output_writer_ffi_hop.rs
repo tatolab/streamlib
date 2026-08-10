@@ -44,7 +44,7 @@ use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use iceoryx2::prelude::*;
 
 use streamlib_engine::iceoryx2::{
-    ChannelEgressConfig, ChannelTrustTier, OutputWriter, OutputWriterInner, SchemaIdentWire,
+    ChannelEgressConfig, ChannelTrustTier, OutputWriter, OutputWriterInner,
     TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
 };
 
@@ -94,7 +94,7 @@ fn build_inner_with_connection(tag: &str) -> BenchFixture {
         .subscriber_max_buffer_size(8192)
         .open_or_create()
         .unwrap();
-    // Publisher slice cap covers payload + FRAME_HEADER_SIZE (96 B
+    // Publisher slice cap covers payload + FRAME_HEADER_SIZE (76 B
     // today). 128 KiB headroom covers the bench's 64 KiB sweep
     // arm with margin.
     let publisher = pubsub
@@ -115,11 +115,8 @@ fn build_inner_with_connection(tag: &str) -> BenchFixture {
     let listener = notify.listener_builder().create().unwrap();
 
     let inner = Arc::new(OutputWriterInner::new());
-    let schema_ident =
-        SchemaIdentWire::from_segments("tatolab", "bench", "FfiHop", 1, 0, 0).unwrap();
     inner.set_channel_publisher(
         "out",
-        schema_ident,
         publisher,
         ChannelEgressConfig {
             service_name: "bench/out".to_string(),
@@ -242,11 +239,8 @@ fn build_inner_with_fanout(tag: &str, subscriber_count: usize) -> FanoutFixture 
         .collect();
 
     let inner = Arc::new(OutputWriterInner::new());
-    let schema_ident =
-        SchemaIdentWire::from_segments("tatolab", "bench", "FfiHop", 1, 0, 0).unwrap();
     inner.set_channel_publisher(
         "out",
-        schema_ident,
         publisher,
         ChannelEgressConfig {
             service_name: "bench/out".to_string(),

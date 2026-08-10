@@ -25,7 +25,6 @@ from streamlib._helper import (
     ParentProcessBridge,
     ParentProcessLogSink,
     load_processor_class,
-    schema_ident_segments,
 )
 
 FRAME_LENGTH_PREFIX = struct.Struct(">I")
@@ -124,23 +123,6 @@ def test_an_import_path_without_a_qualname_is_refused():
 # =============================================================================
 
 
-def test_a_wire_schema_flattens_into_the_six_segments_the_binding_takes():
-    assert schema_ident_segments(
-        {
-            "org": "tatolab",
-            "package": "media",
-            "type": "VideoFrame",
-            "version": {"major": 1, "minor": 2, "patch": 3},
-        }
-    ) == ("tatolab", "media", "VideoFrame", 1, 2, 3)
-
-
-def test_a_wildcard_port_carries_no_schema():
-    """The engine sends `null` for a port that declared no schema; the channel
-    then carries no routing tag."""
-    assert schema_ident_segments(None) is None
-
-
 def engine_shaped_link_wiring(direction: str, link_id: str) -> dict:
     """One entry of the envelope the compiler's wiring path emits.
 
@@ -157,7 +139,6 @@ def engine_shaped_link_wiring(direction: str, link_id: str) -> dict:
             "enable_safe_overflow": True,
             "channel_service_name": channel_service_name,
             "dest_notify_service_name": notify_service_name,
-            "schema": None,
             "expected_payload_bytes": 1024,
             "max_payload_bytes_per_channel": 1 << 20,
             "max_queued_messages": 8,

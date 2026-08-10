@@ -19,7 +19,7 @@
 use std::time::{Duration, Instant};
 
 use super::{expected_payload_bytes_for_port_spec, test_support};
-use crate::iceoryx2::{FRAME_HEADER_SIZE, FrameHeader, Iceoryx2Node, SchemaIdentWire};
+use crate::iceoryx2::{FRAME_HEADER_SIZE, FrameHeader, Iceoryx2Node};
 use iceoryx2::prelude::*;
 use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib_processor_schema::PortSchemaSpec;
@@ -227,7 +227,10 @@ fn test_small_frame_hint_publisher_grows_and_delivers_256kb() {
         "PowerOfTwo publisher primed at the small-frame hint must grow to loan a \
          256 KiB slice instead of rejecting it",
     );
-    sample.write_from_slice(&vec![0u8; 256 * 1024]).send().unwrap();
+    sample
+        .write_from_slice(&vec![0u8; 256 * 1024])
+        .send()
+        .unwrap();
 }
 
 /// Publisher sized from the large-frame schema accepts a 256 KiB payload.
@@ -290,9 +293,7 @@ fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
 
     let total_len = FRAME_HEADER_SIZE + data_size;
     let mut frame = vec![0u8; total_len];
-    let schema_ident = SchemaIdentWire::from_segments("test", "wire", "LargeFrame", 1, 0, 0)
-        .expect("LargeFrame segments fit SchemaIdentWire bounds");
-    FrameHeader::new("dest_port", schema_ident, 42, data_size as u32)
+    FrameHeader::new("dest_port", 42, data_size as u32)
         .expect("dest_port fits PortKey bounds")
         .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
     frame[FRAME_HEADER_SIZE..].copy_from_slice(&data);
@@ -323,9 +324,6 @@ fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
 
     let header = FrameHeader::read_from_slice(&buf);
     assert_eq!(header.port(), "dest_port");
-    let expected_ident =
-        SchemaIdentWire::from_segments("test", "wire", "LargeFrame", 1, 0, 0).unwrap();
-    assert_eq!(header.schema(), &expected_ident);
     assert_eq!(header.timestamp_ns, 42);
     assert_eq!(header.len as usize, data_size);
     assert_eq!(

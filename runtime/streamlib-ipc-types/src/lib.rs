@@ -3,16 +3,10 @@
 
 //! Shared iceoryx2 payload types for cross-process IPC communication.
 //!
-//! Wire format is structured-everywhere (#401 phase 2):
-//! [`SchemaIdentWire`] carries `(org, package, type, version)` as separate
-//! fixed-width fields rather than a joined string. See
-//! `docs/architecture/schema-identity-and-packaging.md` Decision 2.
-//!
-//! No parser ever runs at the wire boundary: producers obtain structured
-//! segments from the build-time `EMBEDDED_SCHEMA_IDENT_SEGMENTS` table in
-//! the `streamlib` host crate (or directly from the Surface 2 IPC envelope
-//! for cdylibs) and call [`SchemaIdentWire::from_segments`] to materialize
-//! the wire bytes.
+//! A [`FrameHeader`] carries routing and framing only — port key, timestamp,
+//! payload length. Nothing on this wire names a type, so no read path can
+//! compare one: a consumer handed a payload it cannot read discovers that as
+//! a decode failure of the payload itself, at its own read.
 //!
 //! Alongside the payload types, this crate owns the channel rules the host
 //! and every language native must agree on byte-for-byte or silently drift:
@@ -114,7 +108,9 @@ pub enum ChannelEgressAdmission {
     /// is `Some(growth)` the tracked data-segment capacity crossed the frame size
     /// and was advanced — a PowerOfTwo growth the caller logs, additionally
     /// raising a `warn` when [`ChannelSegmentGrowth::crossed_quarter_ceiling`].
-    Admitted { grew_to: Option<ChannelSegmentGrowth> },
+    Admitted {
+        grew_to: Option<ChannelSegmentGrowth>,
+    },
 }
 
 /// Single authority for the per-channel-egress ceiling refusal + PowerOfTwo
@@ -245,26 +241,6 @@ pub fn next_read_required_len(queue: &[(Vec<u8>, i64)], read_next_in_order: bool
 /// `metadata.expected_payload_bytes` hint) and grow on demand.
 pub const DEFAULT_MAX_QUEUED_MESSAGES: usize = 16;
 
-/// On-wire size of a [`SchemaIdentWire`]. Held constant at 128 bytes so
-/// the total [`FrameHeader`] layout matches the pre-#401-phase-2
-/// `SchemaName`-shaped predecessor.
-pub const SCHEMA_IDENT_WIRE_SIZE: usize = 128;
-
-/// Maximum byte length of the org segment when serialized into a
-/// [`SchemaIdentWire`]. Real-world orgs sit under ~16 chars; 31 leaves
-/// room for any plausible org name (GitHub's 39-char org cap is the upper
-/// bound of real-world usage).
-pub const SCHEMA_IDENT_WIRE_MAX_ORG_LEN: usize = 31;
-
-/// Maximum byte length of the package segment.
-pub const SCHEMA_IDENT_WIRE_MAX_PACKAGE_LEN: usize = 31;
-
-/// Maximum byte length of the type-name segment. Wider than org/package
-/// because PascalCase processor types like `EncodedVideoFrame` (17) need
-/// headroom for any plausible deeply-nested type name; 51 keeps the struct
-/// neatly at 128 bytes.
-pub const SCHEMA_IDENT_WIRE_MAX_TYPE_LEN: usize = 51;
-
 /// Publishers on a channel-centric iceoryx2 pub/sub data service.
 ///
 /// A channel is keyed on its **source output port** — one source port publishes
@@ -290,7 +266,7 @@ pub const MAX_PUBLISHERS_PER_CHANNEL: usize = 1;
 pub const RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL: usize = 1;
 
 /// Size of the frame header in the `[u8]` slice wire format.
-pub const FRAME_HEADER_SIZE: usize = MAX_PORT_KEY_SIZE + SCHEMA_IDENT_WIRE_SIZE + 8 + 4; // 204 bytes
+pub const FRAME_HEADER_SIZE: usize = MAX_PORT_KEY_SIZE + 8 + 4; // 76 bytes
 
 /// Error constructing a [`PortKey`] from a name that overflows the fixed
 /// wire capacity.
@@ -369,258 +345,27 @@ impl Default for PortKey {
     }
 }
 
-/// Errors returned when constructing a [`SchemaIdentWire`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SchemaIdentWireError {
-    OrgTooLong { len: usize, max: usize },
-    PackageTooLong { len: usize, max: usize },
-    TypeTooLong { len: usize, max: usize },
-}
-
-impl std::fmt::Display for SchemaIdentWireError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::OrgTooLong { len, max } => {
-                write!(f, "schema ident org segment is {len} bytes (max {max})")
-            }
-            Self::PackageTooLong { len, max } => {
-                write!(f, "schema ident package segment is {len} bytes (max {max})")
-            }
-            Self::TypeTooLong { len, max } => {
-                write!(f, "schema ident type segment is {len} bytes (max {max})")
-            }
-        }
-    }
-}
-
-impl std::error::Error for SchemaIdentWireError {}
-
-/// Structured schema identifier on the iceoryx2 wire — `@org/package/Type@version`.
-///
-/// Replaces the joined-string `SchemaName` predecessor (#401 phase 2). The
-/// architecture's structured-everywhere rule (Decision 2) requires every
-/// wire surface — including iceoryx2 payloads — to carry the four
-/// identifier segments as separate fields rather than a single joined
-/// string subject to per-runtime parsing drift.
-///
-/// Layout (`#[repr(C)]`, alignment 4, total 128 bytes):
-///
-/// ```text
-/// offset  0      : org_len: u8
-/// offset  1..=31 : org bytes (UTF-8, length=`org_len`)
-/// offset 32      : package_len: u8
-/// offset 33..=63 : package bytes
-/// offset 64      : type_len: u8
-/// offset 65..=115: type bytes
-/// offset 116..=119: version_major: u32 little-endian
-/// offset 120..=123: version_minor: u32 little-endian
-/// offset 124..=127: version_patch: u32 little-endian
-/// ```
-///
-/// Endianness: little-endian for the version u32 fields (matches the
-/// little-endian `timestamp_ns` and `len` fields elsewhere in
-/// [`FrameHeader`]; matches every supported streamlib platform).
-///
-/// Length-prefix semantics: `*_len = 0` means "empty segment" (zero
-/// readable bytes); the trailing buffer bytes are zeroed at construction.
-///
-/// The derived `PartialEq` / `Hash` below are version-INCLUSIVE, which is
-/// correct for byte-identity but wrong for deciding whether two ports carry
-/// the same schema: a Rust cdylib stamps the `0.0.0` version-free sentinel
-/// while its Python/Deno peer carries the schema owner's package version.
-/// Schema agreement compares [`Self::matches_schema_tuple`] instead. Reaching
-/// for `==` there is what reintroduced #1460 as #1477.
-#[derive(Clone, Copy, Eq, PartialEq, Hash, ZeroCopySend)]
-#[repr(C)]
-pub struct SchemaIdentWire {
-    pub org_len: u8,
-    pub org: [u8; SCHEMA_IDENT_WIRE_MAX_ORG_LEN],
-    pub package_len: u8,
-    pub package: [u8; SCHEMA_IDENT_WIRE_MAX_PACKAGE_LEN],
-    pub type_len: u8,
-    pub type_name: [u8; SCHEMA_IDENT_WIRE_MAX_TYPE_LEN],
-    pub version_major: u32,
-    pub version_minor: u32,
-    pub version_patch: u32,
-}
-
-const _: () = {
-    // Compile-time ABI lock — drift trips immediately. The whole point of
-    // this struct is to be byte-identical across Rust + Python + Deno.
-    assert!(std::mem::size_of::<SchemaIdentWire>() == SCHEMA_IDENT_WIRE_SIZE);
-    assert!(std::mem::align_of::<SchemaIdentWire>() == 4);
-};
-
-impl SchemaIdentWire {
-    /// Construct from validated segment strings + version components.
-    ///
-    /// Performs length-bound validation against the per-segment maxima
-    /// (org ≤ 31, package ≤ 31, type ≤ 51 bytes). Charset / grammar
-    /// validation is the upstream caller's responsibility — by the time
-    /// data reaches the wire format the segments have already been
-    /// validated by `streamlib_idents::Org::new` /
-    /// `streamlib_idents::Package::new` /
-    /// `streamlib_idents::TypeName::new` (or their codegen / build-time
-    /// equivalents).
-    pub fn from_segments(
-        org: &str,
-        package: &str,
-        type_name: &str,
-        version_major: u32,
-        version_minor: u32,
-        version_patch: u32,
-    ) -> Result<Self, SchemaIdentWireError> {
-        let org_bytes = org.as_bytes();
-        if org_bytes.len() > SCHEMA_IDENT_WIRE_MAX_ORG_LEN {
-            return Err(SchemaIdentWireError::OrgTooLong {
-                len: org_bytes.len(),
-                max: SCHEMA_IDENT_WIRE_MAX_ORG_LEN,
-            });
-        }
-        let package_bytes = package.as_bytes();
-        if package_bytes.len() > SCHEMA_IDENT_WIRE_MAX_PACKAGE_LEN {
-            return Err(SchemaIdentWireError::PackageTooLong {
-                len: package_bytes.len(),
-                max: SCHEMA_IDENT_WIRE_MAX_PACKAGE_LEN,
-            });
-        }
-        let type_bytes = type_name.as_bytes();
-        if type_bytes.len() > SCHEMA_IDENT_WIRE_MAX_TYPE_LEN {
-            return Err(SchemaIdentWireError::TypeTooLong {
-                len: type_bytes.len(),
-                max: SCHEMA_IDENT_WIRE_MAX_TYPE_LEN,
-            });
-        }
-        let mut wire = Self::default();
-        wire.org_len = org_bytes.len() as u8;
-        wire.org[..org_bytes.len()].copy_from_slice(org_bytes);
-        wire.package_len = package_bytes.len() as u8;
-        wire.package[..package_bytes.len()].copy_from_slice(package_bytes);
-        wire.type_len = type_bytes.len() as u8;
-        wire.type_name[..type_bytes.len()].copy_from_slice(type_bytes);
-        wire.version_major = version_major;
-        wire.version_minor = version_minor;
-        wire.version_patch = version_patch;
-        Ok(wire)
-    }
-
-    /// Whether this is the zero-segment "unset" wire tag a producer stamps
-    /// for a [`PortSchemaSpec::Any`] output — no org / package / type and a
-    /// `0.0.0` version. Schema-agreement checks treat an unset tag on either
-    /// side as the tolerant wildcard: it never triggers a mismatch.
-    ///
-    /// [`PortSchemaSpec::Any`]: https://docs.rs/streamlib-processor-schema
-    pub fn is_unset(&self) -> bool {
-        self.org_len == 0
-            && self.package_len == 0
-            && self.type_len == 0
-            && self.version_major == 0
-            && self.version_minor == 0
-            && self.version_patch == 0
-    }
-
-    pub fn org_str(&self) -> &str {
-        std::str::from_utf8(&self.org[..self.org_len as usize]).unwrap_or("")
-    }
-
-    pub fn package_str(&self) -> &str {
-        std::str::from_utf8(&self.package[..self.package_len as usize]).unwrap_or("")
-    }
-
-    pub fn type_str(&self) -> &str {
-        std::str::from_utf8(&self.type_name[..self.type_len as usize]).unwrap_or("")
-    }
-
-    /// Whether two tags share the same `(org, package, type)` identity tuple,
-    /// version-blind — the wire-side mirror of
-    /// `streamlib_idents::SchemaIdent::matches_schema_tuple`, and the
-    /// projection every schema-agreement check compares on.
-    pub fn matches_schema_tuple(&self, other: &SchemaIdentWire) -> bool {
-        self.org_str() == other.org_str()
-            && self.package_str() == other.package_str()
-            && self.type_str() == other.type_str()
-    }
-
-    /// Render the joined `@org/package/Type@major.minor.patch` form for
-    /// human-facing surfaces (logs, error messages). One-way: the joined
-    /// form never round-trips back through any parser at the structured
-    /// boundary (architecture Decision 2). Use the typed `*_str` /
-    /// `version_*` accessors for structured access.
-    pub fn render_joined(&self) -> String {
-        format!(
-            "@{}/{}/{}@{}.{}.{}",
-            self.org_str(),
-            self.package_str(),
-            self.type_str(),
-            self.version_major,
-            self.version_minor,
-            self.version_patch,
-        )
-    }
-}
-
-impl Default for SchemaIdentWire {
-    fn default() -> Self {
-        Self {
-            org_len: 0,
-            org: [0u8; SCHEMA_IDENT_WIRE_MAX_ORG_LEN],
-            package_len: 0,
-            package: [0u8; SCHEMA_IDENT_WIRE_MAX_PACKAGE_LEN],
-            type_len: 0,
-            type_name: [0u8; SCHEMA_IDENT_WIRE_MAX_TYPE_LEN],
-            version_major: 0,
-            version_minor: 0,
-            version_patch: 0,
-        }
-    }
-}
-
-impl std::fmt::Debug for SchemaIdentWire {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SchemaIdentWire")
-            .field("org", &self.org_str())
-            .field("package", &self.package_str())
-            .field("type", &self.type_str())
-            .field(
-                "version",
-                &format_args!(
-                    "{}.{}.{}",
-                    self.version_major, self.version_minor, self.version_patch
-                ),
-            )
-            .finish()
-    }
-}
-
 /// Header for slice-based iceoryx2 frame transport.
 ///
 /// Wire format in a `[u8]` slice (little-endian for multi-byte fields):
-/// `[port_key: 64][schema_ident: 128][timestamp_ns: 8][len: 4][data: len]`
+/// `[port_key: 64][timestamp_ns: 8][len: 4][data: len]`
 ///
-/// The 128-byte `schema_ident` block is a structured [`SchemaIdentWire`]
-/// (org/package/type/version, length-prefixed segments + LE u32 versions),
-/// not a joined string.
+/// Routing and framing only — the header names no type, so a subscriber can
+/// route a frame and bound its payload without knowing what is in it.
 pub struct FrameHeader {
     pub port_key: PortKey,
-    pub schema_ident: SchemaIdentWire,
     pub timestamp_ns: i64,
     pub len: u32,
 }
 
 impl FrameHeader {
-    /// Create a new frame header from a structured schema identifier.
+    /// Create a new frame header for `port`.
     ///
     /// Fails with [`PortKeyError`] if `port` overflows the fixed wire capacity —
     /// see [`PortKey::new`].
-    pub fn new(
-        port: &str,
-        schema_ident: SchemaIdentWire,
-        timestamp_ns: i64,
-        data_len: u32,
-    ) -> Result<Self, PortKeyError> {
+    pub fn new(port: &str, timestamp_ns: i64, data_len: u32) -> Result<Self, PortKeyError> {
         Ok(Self {
             port_key: PortKey::new(port)?,
-            schema_ident,
             timestamp_ns,
             len: data_len,
         })
@@ -631,11 +376,8 @@ impl FrameHeader {
         // port_key: [len: 1][name: 63] = 64 bytes
         buf[0] = self.port_key.len;
         buf[1..MAX_PORT_KEY_SIZE].copy_from_slice(&self.port_key.name);
-        // schema_ident: SchemaIdentWire = 128 bytes (structured, LE u32 versions)
-        let s = MAX_PORT_KEY_SIZE;
-        write_schema_ident_to_slice(&self.schema_ident, &mut buf[s..s + SCHEMA_IDENT_WIRE_SIZE]);
         // timestamp_ns: 8 bytes little-endian
-        let t = s + SCHEMA_IDENT_WIRE_SIZE;
+        let t = MAX_PORT_KEY_SIZE;
         buf[t..t + 8].copy_from_slice(&self.timestamp_ns.to_le_bytes());
         // len: 4 bytes little-endian
         buf[t + 8..t + 12].copy_from_slice(&self.len.to_le_bytes());
@@ -647,16 +389,12 @@ impl FrameHeader {
         port_key.len = buf[0];
         port_key.name.copy_from_slice(&buf[1..MAX_PORT_KEY_SIZE]);
 
-        let s = MAX_PORT_KEY_SIZE;
-        let schema_ident = read_schema_ident_from_slice(&buf[s..s + SCHEMA_IDENT_WIRE_SIZE]);
-
-        let t = s + SCHEMA_IDENT_WIRE_SIZE;
+        let t = MAX_PORT_KEY_SIZE;
         let timestamp_ns = i64::from_le_bytes(buf[t..t + 8].try_into().unwrap());
         let len = u32::from_le_bytes(buf[t + 8..t + 12].try_into().unwrap());
 
         Self {
             port_key,
-            schema_ident,
             timestamp_ns,
             len,
         }
@@ -672,53 +410,6 @@ impl FrameHeader {
     pub fn port(&self) -> &str {
         self.port_key.as_str()
     }
-
-    /// Get the structured schema identifier.
-    pub fn schema(&self) -> &SchemaIdentWire {
-        &self.schema_ident
-    }
-}
-
-/// Write a [`SchemaIdentWire`] to the first [`SCHEMA_IDENT_WIRE_SIZE`] bytes
-/// of `buf` (little-endian for the version u32 fields).
-fn write_schema_ident_to_slice(ident: &SchemaIdentWire, buf: &mut [u8]) {
-    debug_assert!(buf.len() >= SCHEMA_IDENT_WIRE_SIZE);
-    buf[0] = ident.org_len;
-    buf[1..1 + SCHEMA_IDENT_WIRE_MAX_ORG_LEN].copy_from_slice(&ident.org);
-    let p = 1 + SCHEMA_IDENT_WIRE_MAX_ORG_LEN; // 32
-    buf[p] = ident.package_len;
-    buf[p + 1..p + 1 + SCHEMA_IDENT_WIRE_MAX_PACKAGE_LEN].copy_from_slice(&ident.package);
-    let t = p + 1 + SCHEMA_IDENT_WIRE_MAX_PACKAGE_LEN; // 64
-    buf[t] = ident.type_len;
-    buf[t + 1..t + 1 + SCHEMA_IDENT_WIRE_MAX_TYPE_LEN].copy_from_slice(&ident.type_name);
-    let v = t + 1 + SCHEMA_IDENT_WIRE_MAX_TYPE_LEN; // 116
-    buf[v..v + 4].copy_from_slice(&ident.version_major.to_le_bytes());
-    buf[v + 4..v + 8].copy_from_slice(&ident.version_minor.to_le_bytes());
-    buf[v + 8..v + 12].copy_from_slice(&ident.version_patch.to_le_bytes());
-}
-
-fn read_schema_ident_from_slice(buf: &[u8]) -> SchemaIdentWire {
-    debug_assert!(buf.len() >= SCHEMA_IDENT_WIRE_SIZE);
-    let mut ident = SchemaIdentWire::default();
-    ident.org_len = buf[0];
-    ident
-        .org
-        .copy_from_slice(&buf[1..1 + SCHEMA_IDENT_WIRE_MAX_ORG_LEN]);
-    let p = 1 + SCHEMA_IDENT_WIRE_MAX_ORG_LEN;
-    ident.package_len = buf[p];
-    ident
-        .package
-        .copy_from_slice(&buf[p + 1..p + 1 + SCHEMA_IDENT_WIRE_MAX_PACKAGE_LEN]);
-    let t = p + 1 + SCHEMA_IDENT_WIRE_MAX_PACKAGE_LEN;
-    ident.type_len = buf[t];
-    ident
-        .type_name
-        .copy_from_slice(&buf[t + 1..t + 1 + SCHEMA_IDENT_WIRE_MAX_TYPE_LEN]);
-    let v = t + 1 + SCHEMA_IDENT_WIRE_MAX_TYPE_LEN;
-    ident.version_major = u32::from_le_bytes(buf[v..v + 4].try_into().unwrap());
-    ident.version_minor = u32::from_le_bytes(buf[v + 4..v + 8].try_into().unwrap());
-    ident.version_patch = u32::from_le_bytes(buf[v + 8..v + 12].try_into().unwrap());
-    ident
 }
 
 /// Fixed-size topic name for event pub/sub IPC.
@@ -819,17 +510,10 @@ impl std::fmt::Debug for EventPayload {
 mod tests {
     use super::*;
 
-    fn sample_ident() -> SchemaIdentWire {
-        SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap()
-    }
-
     #[test]
     fn next_read_required_len_picks_front_or_back_by_read_mode() {
-        let queue: Vec<(Vec<u8>, i64)> = vec![
-            (vec![0u8; 4], 1),
-            (vec![0u8; 16], 2),
-            (vec![0u8; 64], 3),
-        ];
+        let queue: Vec<(Vec<u8>, i64)> =
+            vec![(vec![0u8; 4], 1), (vec![0u8; 16], 2), (vec![0u8; 64], 3)];
         assert_eq!(next_read_required_len(&queue, true), Some(4));
         assert_eq!(next_read_required_len(&queue, false), Some(64));
         assert_eq!(next_read_required_len(&[], true), None);
@@ -837,99 +521,87 @@ mod tests {
     }
 
     #[test]
-    fn schema_ident_wire_layout_locked() {
-        // ABI lock — these constants are part of the cross-runtime contract.
-        // Drift between Rust + Python ctypes + Deno FFI tripped immediately
-        // here means the const_assert above will already have failed.
-        assert_eq!(std::mem::size_of::<SchemaIdentWire>(), 128);
-        assert_eq!(std::mem::align_of::<SchemaIdentWire>(), 4);
-    }
-
-    #[test]
-    fn schema_ident_wire_round_trip_struct_to_struct() {
-        let ident = sample_ident();
-        assert_eq!(ident.org_str(), "tatolab");
-        assert_eq!(ident.package_str(), "core");
-        assert_eq!(ident.type_str(), "VideoFrame");
-        assert_eq!(ident.version_major, 1);
-        assert_eq!(ident.version_minor, 0);
-        assert_eq!(ident.version_patch, 0);
-        assert_eq!(ident.render_joined(), "@tatolab/core/VideoFrame@1.0.0");
-    }
-
-    #[test]
-    fn schema_ident_wire_matches_schema_tuple_ignores_version() {
-        let ident = sample_ident();
-        let other_version =
-            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 9, 4, 2).unwrap();
-        assert!(ident.matches_schema_tuple(&other_version));
-        assert!(other_version.matches_schema_tuple(&ident));
-
-        for differing in [
-            SchemaIdentWire::from_segments("acme", "core", "VideoFrame", 1, 0, 0).unwrap(),
-            SchemaIdentWire::from_segments("tatolab", "vision", "VideoFrame", 1, 0, 0).unwrap(),
-            SchemaIdentWire::from_segments("tatolab", "core", "AudioFrame", 1, 0, 0).unwrap(),
-        ] {
-            assert!(
-                !ident.matches_schema_tuple(&differing),
-                "every segment of the identity tuple is load-bearing: {}",
-                differing.render_joined(),
-            );
-        }
-    }
-
-    #[test]
-    fn schema_ident_wire_round_trip_via_slice() {
-        let ident = sample_ident();
-        let mut buf = [0u8; SCHEMA_IDENT_WIRE_SIZE];
-        write_schema_ident_to_slice(&ident, &mut buf);
-        let back = read_schema_ident_from_slice(&buf);
-        assert_eq!(ident, back);
-        assert_eq!(back.render_joined(), "@tatolab/core/VideoFrame@1.0.0");
-    }
-
-    #[test]
-    fn schema_ident_wire_rejects_oversized_segments() {
-        let too_long_org = "a".repeat(SCHEMA_IDENT_WIRE_MAX_ORG_LEN + 1);
-        assert!(matches!(
-            SchemaIdentWire::from_segments(&too_long_org, "core", "VideoFrame", 1, 0, 0),
-            Err(SchemaIdentWireError::OrgTooLong { .. })
-        ));
-        let too_long_pkg = "a".repeat(SCHEMA_IDENT_WIRE_MAX_PACKAGE_LEN + 1);
-        assert!(matches!(
-            SchemaIdentWire::from_segments("tatolab", &too_long_pkg, "VideoFrame", 1, 0, 0),
-            Err(SchemaIdentWireError::PackageTooLong { .. })
-        ));
-        let too_long_type = "A".repeat(SCHEMA_IDENT_WIRE_MAX_TYPE_LEN + 1);
-        assert!(matches!(
-            SchemaIdentWire::from_segments("tatolab", "core", &too_long_type, 1, 0, 0),
-            Err(SchemaIdentWireError::TypeTooLong { .. })
-        ));
-    }
-
-    #[test]
     fn frame_header_round_trip_via_slice() {
-        let ident = SchemaIdentWire::from_segments("tatolab", "core", "EncodedVideoFrame", 1, 2, 3)
-            .unwrap();
-        let header = FrameHeader::new("dest_port", ident, 42, 1024).unwrap();
+        let header = FrameHeader::new("dest_port", 42, 1024).unwrap();
         let mut buf = [0u8; FRAME_HEADER_SIZE];
         header.write_to_slice(&mut buf);
         let back = FrameHeader::read_from_slice(&buf);
         assert_eq!(back.port(), "dest_port");
-        assert_eq!(back.schema(), &ident);
         assert_eq!(back.timestamp_ns, 42);
         assert_eq!(back.len, 1024);
-        assert_eq!(
-            back.schema().render_joined(),
-            "@tatolab/core/EncodedVideoFrame@1.2.3"
-        );
+    }
+
+    #[test]
+    fn frame_header_round_trips_the_extremes_of_every_field() {
+        // A negative timestamp is representable and must survive: the data
+        // plane stamps CLOCK_MONOTONIC, and a reader comparing two stamps can
+        // legitimately carry a value below its own epoch.
+        let longest_port = "z".repeat(PortKey::MAX_NAME_BYTES);
+        for (port, timestamp_ns, len) in [
+            ("", i64::MIN, 0u32),
+            ("p", -1, 1),
+            (longest_port.as_str(), i64::MAX, u32::MAX),
+        ] {
+            let mut buf = [0u8; FRAME_HEADER_SIZE];
+            FrameHeader::new(port, timestamp_ns, len)
+                .expect("port fits the wire capacity")
+                .write_to_slice(&mut buf);
+            let back = FrameHeader::read_from_slice(&buf);
+            assert_eq!(back.port(), port);
+            assert_eq!(back.timestamp_ns, timestamp_ns);
+            assert_eq!(back.len, len);
+        }
     }
 
     #[test]
     fn frame_header_size_matches_constant() {
-        // [PortKey: 64][SchemaIdentWire: 128][i64: 8][u32: 4] = 204 bytes.
-        assert_eq!(FRAME_HEADER_SIZE, 64 + 128 + 8 + 4);
-        assert_eq!(FRAME_HEADER_SIZE, 204);
+        // [PortKey: 64][i64: 8][u32: 4] = 76 bytes.
+        assert_eq!(FRAME_HEADER_SIZE, 64 + 8 + 4);
+        assert_eq!(FRAME_HEADER_SIZE, 76);
+    }
+
+    #[test]
+    fn frame_header_fields_sit_at_their_documented_wire_offsets() {
+        // The layout regression test engine doctrine requires of anything
+        // crossing the IPC wire. `FrameHeader` is not `#[repr(C)]` — it is
+        // packed field by field by `write_to_slice` — so the contract is the
+        // byte offsets in the serialized slice, not the Rust struct layout.
+        // Every publisher and subscriber in the graph agrees on these offsets
+        // and there is no version field to negotiate a disagreement on: a
+        // shift here is silent cross-process corruption, not a compile error.
+        let mut buf = [0u8; FRAME_HEADER_SIZE];
+        FrameHeader::new("cam", 0x0102_0304_0506_0708, 0x0A0B_0C0D)
+            .unwrap()
+            .write_to_slice(&mut buf);
+
+        assert_eq!(buf[0], 3, "port_key len prefix at offset 0");
+        assert_eq!(&buf[1..4], b"cam", "port_key name bytes start at offset 1");
+        assert!(
+            buf[4..64].iter().all(|&b| b == 0),
+            "the port_key name field is zero-padded through offset 63"
+        );
+        assert_eq!(
+            i64::from_le_bytes(buf[64..72].try_into().unwrap()),
+            0x0102_0304_0506_0708,
+            "timestamp_ns is 8 bytes little-endian at 64..72"
+        );
+        assert_eq!(
+            u32::from_le_bytes(buf[72..76].try_into().unwrap()),
+            0x0A0B_0C0D,
+            "len is 4 bytes little-endian at 72..76"
+        );
+    }
+
+    #[test]
+    fn frame_header_carries_no_type_anywhere_in_its_bytes() {
+        // The header names no type, so the only bytes a frame spends past its
+        // port key are the timestamp and the length. Re-add a schema tag and
+        // this fails on the size before anyone notices the wire moved.
+        assert_eq!(
+            FRAME_HEADER_SIZE - MAX_PORT_KEY_SIZE,
+            12,
+            "past the port key a frame header is exactly a timestamp and a length"
+        );
     }
 
     #[test]
@@ -952,50 +624,6 @@ mod tests {
             ChannelTrustTier::UntrustedSession.as_str(),
             "untrusted-session"
         );
-    }
-
-    #[test]
-    fn schema_ident_wire_max_segment_lengths() {
-        // Boundary values — exact-fit segments must succeed.
-        let max_org = "a".repeat(SCHEMA_IDENT_WIRE_MAX_ORG_LEN);
-        let max_pkg = "b".repeat(SCHEMA_IDENT_WIRE_MAX_PACKAGE_LEN);
-        let max_type = "C".repeat(SCHEMA_IDENT_WIRE_MAX_TYPE_LEN);
-        let ident = SchemaIdentWire::from_segments(
-            &max_org,
-            &max_pkg,
-            &max_type,
-            u32::MAX,
-            u32::MAX,
-            u32::MAX,
-        )
-        .unwrap();
-        assert_eq!(ident.org_str(), max_org);
-        assert_eq!(ident.package_str(), max_pkg);
-        assert_eq!(ident.type_str(), max_type);
-        assert_eq!(ident.version_major, u32::MAX);
-    }
-
-    #[test]
-    fn schema_ident_wire_offsets_match_documented_layout() {
-        // Fixed-offset assertions — these are part of the documented wire
-        // format that Python ctypes and Deno FFI mirror. If the Rust layout
-        // shifts (e.g. someone reorders fields, or alignment padding is
-        // inserted) this test catches it.
-        let ident = SchemaIdentWire::from_segments("a", "b", "C", 1, 2, 3).unwrap();
-        let mut buf = [0u8; SCHEMA_IDENT_WIRE_SIZE];
-        write_schema_ident_to_slice(&ident, &mut buf);
-
-        assert_eq!(buf[0], 1, "org_len at offset 0");
-        assert_eq!(buf[1], b'a', "org bytes start at offset 1");
-        assert_eq!(buf[32], 1, "package_len at offset 32");
-        assert_eq!(buf[33], b'b', "package bytes start at offset 33");
-        assert_eq!(buf[64], 1, "type_len at offset 64");
-        assert_eq!(buf[65], b'C', "type bytes start at offset 65");
-
-        // version u32s little-endian at offsets 116/120/124.
-        assert_eq!(u32::from_le_bytes(buf[116..120].try_into().unwrap()), 1);
-        assert_eq!(u32::from_le_bytes(buf[120..124].try_into().unwrap()), 2);
-        assert_eq!(u32::from_le_bytes(buf[124..128].try_into().unwrap()), 3);
     }
 
     #[test]
@@ -1113,7 +741,10 @@ mod tests {
             decide_channel_egress_admission(4096, ceiling, &mut refused, &mut slot),
             ChannelEgressAdmission::Admitted { grew_to: None }
         );
-        assert_eq!(slot, 65_536, "an in-slot frame leaves the tracked slot as-is");
+        assert_eq!(
+            slot, 65_536,
+            "an in-slot frame leaves the tracked slot as-is"
+        );
         assert_eq!(refused, 0);
     }
 
@@ -1122,12 +753,10 @@ mod tests {
         // The truncation defect surfaced through FrameHeader::new on the write
         // path — over-length must propagate as the typed error, not silently
         // build a header with a clipped port key.
-        let ident = sample_ident();
         let over = "c".repeat(PortKey::MAX_NAME_BYTES + 1);
         assert!(matches!(
-            FrameHeader::new(&over, ident, 0, 0),
+            FrameHeader::new(&over, 0, 0),
             Err(PortKeyError::TooLong { .. })
         ));
     }
-
 }

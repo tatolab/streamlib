@@ -24,7 +24,6 @@ use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 
 use iceoryx2::port::listener::Listener;
 use iceoryx2::port::subscriber::Subscriber;
@@ -33,9 +32,8 @@ use serde::de::DeserializeOwned;
 
 use super::mailbox::PortMailbox;
 use super::read_mode::ReadMode;
-use super::{FRAME_HEADER_SIZE, FrameHeader, SchemaIdentWire};
+use super::{FRAME_HEADER_SIZE, FrameHeader};
 use crate::core::error::{Error, Result};
-use crate::core::schema_agreement::{SchemaAgreement, classify_wire_schema_agreement};
 
 /// One channel subscriber bound to the local input port it feeds.
 ///
@@ -201,23 +199,9 @@ struct PortConfig {
     /// A frame popped by [`InputMailboxesInner::read_raw_bounded`] that did not
     /// fit the caller's buffer. It is stashed here (not lost) and re-delivered
     /// on the next call once the caller resizes — the grow-and-retry contract
-    /// that lets a PowerOfTwo-grown oversized payload reach the cdylib without
-    /// dropping it or re-running the per-frame schema-mismatch check.
+    /// that lets a PowerOfTwo-grown oversized payload reach the reader without
+    /// dropping it.
     staged_oversized: Option<(Vec<u8>, i64)>,
-    /// Schema-ident tag this consumer port expects every inbound frame to
-    /// carry — the wire form of the port's declared input schema, set by the
-    /// compiler op at wire time via
-    /// [`InputMailboxesInner::set_port_expected_schema_ident`]. Default
-    /// [`SchemaIdentWire::default`] (unset) means "no expectation" (an `any`
-    /// port), which never triggers a mismatch. `read_raw` compares each
-    /// frame's stamped tag against this and warns on a concrete mismatch.
-    expected_schema_ident: SchemaIdentWire,
-    /// Latched once `read_raw` observes an inbound tag that disagrees with
-    /// [`Self::expected_schema_ident`]. Doubles as the warn-once guard (the
-    /// realtime read path must not re-log every frame) and the test / graph
-    /// observation surface via
-    /// [`InputMailboxesInner::schema_mismatch_observed`].
-    schema_mismatch_observed: AtomicBool,
 }
 
 /// Host-side inner state for input mailboxes. Owns the per-port
@@ -263,37 +247,8 @@ impl InputMailboxesInner {
                 mailbox: PortMailbox::new(buffer_size),
                 read_mode,
                 staged_oversized: None,
-                expected_schema_ident: SchemaIdentWire::default(),
-                schema_mismatch_observed: AtomicBool::new(false),
             },
         );
-    }
-
-    /// Record the schema-ident tag this port expects inbound frames to carry.
-    /// Called by the compiler op at wire time from the consumer's declared
-    /// input schema; [`read_raw`] compares each frame's stamped tag against it
-    /// and warns on a concrete mismatch. No-op for unknown ports.
-    ///
-    /// [`read_raw`]: Self::read_raw
-    pub fn set_port_expected_schema_ident(&self, port: &str, expected: SchemaIdentWire) {
-        if let Some(cfg) = self.ports.lock().get_mut(port) {
-            cfg.expected_schema_ident = expected;
-            cfg.schema_mismatch_observed.store(false, Ordering::Relaxed);
-        }
-    }
-
-    /// Whether [`read_raw`] has observed at least one inbound frame whose
-    /// stamped schema tag disagreed with the port's expected tag. Latches on
-    /// the first mismatch (the read path warns once, not per frame). `false`
-    /// for unknown ports.
-    ///
-    /// [`read_raw`]: Self::read_raw
-    pub fn schema_mismatch_observed(&self, port: &str) -> bool {
-        self.ports
-            .lock()
-            .get(port)
-            .map(|cfg| cfg.schema_mismatch_observed.load(Ordering::Relaxed))
-            .unwrap_or(false)
     }
 
     /// Whether any channel subscriber has been configured yet.
@@ -430,13 +385,13 @@ impl InputMailboxesInner {
     /// Read the next frame for `port` into a caller buffer bounded by `out_cap`
     /// bytes, following the port's read mode.
     ///
-    /// This is the grow-and-retry primitive behind the cdylib read path: with
-    /// PowerOfTwo publisher growth a frame can exceed any fixed receive buffer,
-    /// so a frame that would not fit `out_cap` is stashed
+    /// This is the grow-and-retry primitive behind the out-of-process read
+    /// path: with PowerOfTwo publisher growth a frame can exceed any fixed
+    /// receive buffer, so a frame that would not fit `out_cap` is stashed
     /// ([`PortConfig::staged_oversized`]) rather than dropped and reported as
     /// [`BoundedReadOutcome::NeedsLargerBuffer`]. The caller resizes to
     /// `required_bytes` and calls again; the staged frame is re-delivered in
-    /// order, without re-running the per-frame schema-mismatch check.
+    /// order.
     pub fn read_raw_bounded(&self, port: &str, out_cap: usize) -> Result<BoundedReadOutcome> {
         self.receive_pending();
 
@@ -456,24 +411,6 @@ impl InputMailboxesInner {
                 None => return Ok(BoundedReadOutcome::Empty),
                 Some(r) => {
                     let header = FrameHeader::read_from_slice(&r);
-                    if classify_wire_schema_agreement(
-                        header.schema(),
-                        &port_config.expected_schema_ident,
-                    ) == SchemaAgreement::Mismatch
-                        && !port_config
-                            .schema_mismatch_observed
-                            .swap(true, Ordering::Relaxed)
-                    {
-                        tracing::warn!(
-                            port = port,
-                            stamped_schema = %header.schema().render_joined(),
-                            expected_schema = %port_config.expected_schema_ident.render_joined(),
-                            "read_raw: inbound frame carries a schema tag that does not \
-                             match this port's expected input schema (loose validation; \
-                             warned once per port). A producer was re-typed, or the \
-                             wrong producer is wired to this port."
-                        );
-                    }
                     let data =
                         r[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + header.len as usize].to_vec();
                     (data, header.timestamp_ns)
@@ -822,18 +759,9 @@ mod tests {
         // Build a minimal valid frame for `port_a` and route it directly
         // — bypasses the iceoryx2 subscriber, exercising only the
         // mailbox-depth accounting.
-        let schema_ident = streamlib_ipc_types::SchemaIdentWire::from_segments(
-            "tatolab",
-            "test",
-            "AnyPortHasData",
-            1,
-            0,
-            0,
-        )
-        .expect("schema ident");
         let make_frame = |port: &str| -> Vec<u8> {
             let mut buf = vec![0u8; FRAME_HEADER_SIZE + 4];
-            let header = FrameHeader::new(port, schema_ident, 0, 4).expect("port fits PortKey");
+            let header = FrameHeader::new(port, 0, 4).expect("port fits PortKey");
             header.write_to_slice(&mut buf);
             buf[FRAME_HEADER_SIZE..].copy_from_slice(&[1, 2, 3, 4]);
             buf
@@ -885,106 +813,6 @@ mod tests {
         );
     }
 
-    fn frame_with_schema(port: &str, schema: SchemaIdentWire) -> Vec<u8> {
-        let mut buf = vec![0u8; FRAME_HEADER_SIZE + 4];
-        let header = FrameHeader::new(port, schema, 0, 4).expect("port fits PortKey");
-        header.write_to_slice(&mut buf);
-        buf[FRAME_HEADER_SIZE..].copy_from_slice(&[9, 8, 7, 6]);
-        buf
-    }
-
-    /// Runtime read-side schema check (#1430): a frame whose stamped schema
-    /// tag disagrees with the port's expected input schema is observed as a
-    /// mismatch, but the read still succeeds (loose-but-observed posture).
-    ///
-    /// Revert lock: mentally revert `read_raw`'s tag comparison (stop reading
-    /// `header.schema()`) and `schema_mismatch_observed` stays `false` — this
-    /// asserts `true`, so the test fails, catching a regression back to the
-    /// pre-#1430 "stamped-but-unread" state.
-    #[test]
-    fn read_raw_observes_schema_tag_mismatch_but_still_delivers() {
-        let mailboxes = InputMailboxesInner::new();
-        mailboxes.add_port("in", 64, ReadMode::ReadNextInOrder);
-
-        let expected =
-            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
-        mailboxes.set_port_expected_schema_ident("in", expected);
-
-        let stamped_wrong =
-            SchemaIdentWire::from_segments("tatolab", "core", "AudioFrame", 1, 0, 0).unwrap();
-        assert!(mailboxes.route(frame_with_schema("in", stamped_wrong)));
-
-        let read = mailboxes
-            .read_raw("in")
-            .expect("read_raw must succeed under loose validation")
-            .expect("a frame is queued");
-        assert_eq!(
-            read.0,
-            vec![9, 8, 7, 6],
-            "payload delivered despite mismatch"
-        );
-        assert!(
-            mailboxes.schema_mismatch_observed("in"),
-            "the disagreeing tag must be observed as a mismatch",
-        );
-    }
-
-    /// A frame whose stamped tag matches the port's expected schema is NOT
-    /// flagged; the wildcard cases (unset expected, or unset stamp) are
-    /// likewise silent.
-    #[test]
-    fn read_raw_is_silent_on_matching_or_wildcard_schema() {
-        let matching =
-            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
-
-        // Exact match → no mismatch.
-        let mb_match = InputMailboxesInner::new();
-        mb_match.add_port("in", 64, ReadMode::ReadNextInOrder);
-        mb_match.set_port_expected_schema_ident("in", matching);
-        assert!(mb_match.route(frame_with_schema("in", matching)));
-        mb_match.read_raw("in").unwrap().unwrap();
-        assert!(!mb_match.schema_mismatch_observed("in"));
-
-        // Unset expected (an `any` port) accepts any stamped tag.
-        let mb_any = InputMailboxesInner::new();
-        mb_any.add_port("in", 64, ReadMode::ReadNextInOrder);
-        assert!(mb_any.route(frame_with_schema("in", matching)));
-        mb_any.read_raw("in").unwrap().unwrap();
-        assert!(!mb_any.schema_mismatch_observed("in"));
-    }
-
-    /// Exit-criterion lock for #1654 on the READ path — the other half of the
-    /// spurious cross-language warn. A frame stamped with the `0.0.0`
-    /// version-free sentinel a Rust cdylib synthesizes, arriving at a port
-    /// whose expected tag carries its schema owner's package version, is the
-    /// same schema: no mismatch, no once-per-port warn. Restore the
-    /// version-sensitive tag comparison and `schema_mismatch_observed` flips
-    /// to `true`, failing here.
-    #[test]
-    fn read_raw_is_silent_across_the_version_free_sentinel_asymmetry() {
-        let mailboxes = InputMailboxesInner::new();
-        mailboxes.add_port("in", 64, ReadMode::ReadNextInOrder);
-
-        let expected =
-            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
-        mailboxes.set_port_expected_schema_ident("in", expected);
-
-        let stamped_sentinel =
-            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 0, 0, 0).unwrap();
-        assert!(mailboxes.route(frame_with_schema("in", stamped_sentinel)));
-
-        let read = mailboxes
-            .read_raw("in")
-            .expect("read_raw must succeed")
-            .expect("a frame is queued");
-        assert_eq!(read.0, vec![9, 8, 7, 6], "payload delivered");
-        assert!(
-            !mailboxes.schema_mismatch_observed("in"),
-            "a version-only difference is the same schema identity and must not \
-             be observed as a mismatch",
-        );
-    }
-
     /// N→1 fan-in DELIVERY lock (#1419): a destination consuming TWO inbound
     /// channels binds two subscribers to ONE local input port; `receive_pending`
     /// routes every frame from both channels into that shared mailbox.
@@ -998,8 +826,6 @@ mod tests {
     #[test]
     fn two_channel_subscribers_fan_into_one_local_port() {
         let node = NodeBuilder::new().create::<ipc::Service>().unwrap();
-        let schema =
-            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
 
         // Open a fresh channel, publish one frame stamped with its own source
         // port, and hand back the publisher (kept alive so the sent sample stays
@@ -1020,7 +846,7 @@ mod tests {
 
             let total = FRAME_HEADER_SIZE + data.len();
             let mut frame = vec![0u8; total];
-            FrameHeader::new(source_port, schema, 0, data.len() as u32)
+            FrameHeader::new(source_port, 0, data.len() as u32)
                 .expect("source port fits PortKey")
                 .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
             frame[FRAME_HEADER_SIZE..].copy_from_slice(data);
@@ -1136,8 +962,7 @@ mod tests {
     /// Grow-and-retry staging (#1421): a frame larger than the caller's buffer
     /// is NOT dropped — [`InputMailboxesInner::read_raw_bounded`] reports its
     /// required length and stashes it, then re-delivers it intact on the retry
-    /// with a large-enough buffer, without re-running the per-frame
-    /// schema-mismatch check.
+    /// with a large-enough buffer.
     ///
     /// Fail-without-fix: revert `read_raw_bounded` to consume-then-error on a
     /// too-small buffer and the second read returns `Empty` (the frame was
@@ -1148,10 +973,8 @@ mod tests {
         inner.add_port("in", 8, ReadMode::ReadNextInOrder);
 
         let body: Vec<u8> = (0..300u32).map(|i| (i % 251) as u8).collect();
-        let schema = SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0)
-            .expect("schema ident");
         let mut frame = vec![0u8; FRAME_HEADER_SIZE + body.len()];
-        FrameHeader::new("in", schema, 42, body.len() as u32)
+        FrameHeader::new("in", 42, body.len() as u32)
             .expect("port fits PortKey")
             .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
         frame[FRAME_HEADER_SIZE..].copy_from_slice(&body);

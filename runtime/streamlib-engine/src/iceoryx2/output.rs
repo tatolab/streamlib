@@ -30,7 +30,7 @@ use iceoryx2::prelude::*;
 use parking_lot::Mutex;
 use serde::Serialize;
 
-use super::{ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader, SchemaIdentWire};
+use super::{ChannelTrustTier, FRAME_HEADER_SIZE, FrameHeader};
 use crate::core::error::{ChannelTrustTierLabel, Error, Result};
 use crate::core::media_clock::MediaClock;
 
@@ -47,8 +47,8 @@ fn trust_tier_label(trust_tier: ChannelTrustTier) -> ChannelTrustTierLabel {
 
 /// One source output port's channel egress: the single channel publisher
 /// (a channel carries exactly one publisher — see
-/// [`streamlib_ipc_types::MAX_PUBLISHERS_PER_CHANNEL`]), the structured schema
-/// tag it stamps into every [`FrameHeader`], and one notifier per destination.
+/// [`streamlib_ipc_types::MAX_PUBLISHERS_PER_CHANNEL`]) and one notifier per
+/// destination.
 ///
 /// The transport inversion (#1419): one source output port maps to one channel,
 /// so a single zero-copy loan reaches every subscriber. The per-destination
@@ -56,7 +56,6 @@ fn trust_tier_label(trust_tier: ChannelTrustTier) -> ChannelTrustTierLabel {
 /// (the notify service is destination-keyed for fd-multiplexed wakeups); the
 /// data itself is published ONCE.
 struct ChannelEgress {
-    schema_ident: SchemaIdentWire,
     publisher: Publisher<ipc::Service, [u8], ()>,
     /// Every outbound `connect()` link from this source port. Its length — not
     /// the notifier count — is what decides when the last link went away and
@@ -148,18 +147,13 @@ impl OutputWriterInner {
 
     /// Install the single channel publisher for an output port.
     ///
-    /// `schema_ident` is the structured wire identifier stamped into every
-    /// [`FrameHeader`] this port publishes. Callers build it once at wiring time
-    /// from the port's structured `PortSchemaSpec` via
-    /// [`SchemaIdentWire::from_segments`] — no parser runs on the per-frame hot
-    /// path. The [`ChannelEgressConfig`] primes the growth / ceiling
-    /// observability the per-frame [`Self::write_raw`] enforces. Called once per
-    /// output port (the first link out of it); a second call replaces the
-    /// publisher, which the wiring op avoids via [`Self::has_channel_publisher`].
+    /// The [`ChannelEgressConfig`] primes the growth / ceiling observability the
+    /// per-frame [`Self::write_raw`] enforces. Called once per output port (the
+    /// first link out of it); a second call replaces the publisher, which the
+    /// wiring op avoids via [`Self::has_channel_publisher`].
     pub fn set_channel_publisher(
         &self,
         output_port: &str,
-        schema_ident: SchemaIdentWire,
         publisher: Publisher<ipc::Service, [u8], ()>,
         egress_config: ChannelEgressConfig,
     ) {
@@ -172,7 +166,6 @@ impl OutputWriterInner {
         self.channels.lock().insert(
             output_port.to_string(),
             ChannelEgress {
-                schema_ident,
                 publisher,
                 links: Vec::new(),
                 channel_service_name: service_name,
@@ -295,7 +288,7 @@ impl OutputWriterInner {
         }
 
         let mut frame = vec![0u8; total_len];
-        FrameHeader::new(port, egress.schema_ident, timestamp_ns, data.len() as u32)
+        FrameHeader::new(port, timestamp_ns, data.len() as u32)
             .map_err(|e| Error::Link(format!("output port '{}': {}", port, e)))?
             .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
         frame[FRAME_HEADER_SIZE..].copy_from_slice(data);
@@ -550,11 +543,8 @@ mod tests {
         let listener = notify.listener_builder().create().unwrap();
 
         let inner = Arc::new(OutputWriterInner::new());
-        let schema_ident =
-            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
         inner.set_channel_publisher(
             "out",
-            schema_ident,
             publisher,
             ChannelEgressConfig {
                 service_name: "test/out".to_string(),
@@ -624,7 +614,6 @@ mod tests {
         let inner = Arc::new(OutputWriterInner::new());
         inner.set_channel_publisher(
             "out",
-            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap(),
             publisher,
             ChannelEgressConfig {
                 service_name: "test/mixed-fanout".to_string(),
@@ -759,11 +748,8 @@ mod tests {
             .collect();
 
         let inner = Arc::new(OutputWriterInner::new());
-        let schema_ident =
-            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
         inner.set_channel_publisher(
             "out",
-            schema_ident,
             publisher,
             ChannelEgressConfig {
                 service_name: "test/out".to_string(),
@@ -850,11 +836,8 @@ mod tests {
             .unwrap();
 
         let inner = Arc::new(OutputWriterInner::new());
-        let schema =
-            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
         inner.set_channel_publisher(
             "out",
-            schema,
             publisher,
             ChannelEgressConfig {
                 service_name: "test/reclaim/out".to_string(),
@@ -972,13 +955,9 @@ mod tests {
         let subscriber = pubsub.subscriber_builder().create().unwrap();
 
         let inner = Arc::new(OutputWriterInner::new());
-        let schema =
-            SchemaIdentWire::from_segments("tatolab", "core", "EncodedVideoFrame", 1, 0, 0)
-                .unwrap();
         let ceiling = 128 * 1024usize;
         inner.set_channel_publisher(
             "out",
-            schema,
             publisher,
             ChannelEgressConfig {
                 service_name: "test/ceiling/out".to_string(),
