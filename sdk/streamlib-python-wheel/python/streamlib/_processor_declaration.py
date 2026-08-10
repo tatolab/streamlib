@@ -73,10 +73,9 @@ def input(
         # known — a bare TypeError from the call could not name it.
         if delivery_profile is None:
             raise ValueError(
-                f"input port {port_name!r} must declare a delivery_profile — pass "
-                f"delivery_profile={'|'.join(repr(p) for p in _DELIVERY_PROFILES)}. "
-                f"There is no default: channel policy is declared port-locally at the "
-                f"consuming input port"
+                f"input port {port_name!r} must declare a delivery_profile — one of "
+                f"{', '.join(_DELIVERY_PROFILES)}. There is no default: channel policy "
+                f"is declared port-locally at the consuming input port"
             )
         setattr(
             method,
