@@ -264,11 +264,10 @@ fn generate_processor_struct_from_schema(
         quote! { pub #name: Config, }
     });
 
-    // Generate iceoryx2 PluginAbiObject fields if ports are defined.
-    // Issue #894 retires the shared-Rust-type crossings — the
-    // processor's `outputs` / `inputs` fields are now layout-stable
-    // `#[repr(C)] { handle, vtable }` PluginAbiObjects; the host patches
-    // them up via `ProcessorVTable::set_iceoryx2_resources` after
+    // Generate iceoryx2 port-handle fields if ports are defined. The
+    // processor's `outputs` / `inputs` fields are the layout-stable
+    // `OutputWriter` / `InputMailboxes` handles; the engine patches
+    // them up via `GeneratedProcessor::set_iceoryx2_resources` after
     // `from_config` returns.
     let ipc_input_field = if !schema.inputs.is_empty() {
         quote! { pub inputs: __streamlib_sdk::iceoryx2::InputMailboxes, }
@@ -566,9 +565,9 @@ fn generate_from_config_from_schema(
     custom_fields: &[CustomField],
 ) -> TokenStream {
     // Issue #894: host-allocates iceoryx2 inner Arcs. The macro
-    // emits empty PluginAbiObjects; the host's
+    // emits empty handles; the host's
     // `ProcessorInstance::install_iceoryx2_resources` patches in
-    // real handles via `ProcessorVTable::set_iceoryx2_resources`
+    // real handles via `GeneratedProcessor::set_iceoryx2_resources`
     // immediately after `from_config` returns. Per-port delivery
     // resolution (drain order + ring depth) is owned entirely by the
     // host wire path, which reads the wire type's `flow_class` and any
@@ -751,7 +750,7 @@ fn generate_iceoryx2_accessors_from_schema(schema: &ProcessorSchema) -> TokenStr
     };
 
     // Issue #894: emit `set_iceoryx2_resources` to receive host-
-    // allocated PluginAbiObjects + the `iceoryx2_output_writer_inner` /
+    // allocated handles + the `iceoryx2_output_writer_inner` /
     // `iceoryx2_input_mailboxes_inner` accessors so the host's
     // wiring path can mutate the inner Arc directly. The host owns
     // per-port registration (`InputMailboxesInner::add_port`) at wire
@@ -1050,11 +1049,11 @@ mod processor_struct_emit_tests {
         }
     }
 
-    /// The `inputs` / `outputs` fields are the `#[repr(C)]` `(handle, vtable)`
-    /// PluginAbiObjects the host patches through
-    /// `ProcessorVTable::set_iceoryx2_resources`, so their presence is a plugin
-    /// ABI contract, not an authoring convenience: no authored field attribute
-    /// may ever reach them, at either emission site. Compiling out every
+    /// The `inputs` / `outputs` fields are the `OutputWriter` /
+    /// `InputMailboxes` handles the engine patches through
+    /// `GeneratedProcessor::set_iceoryx2_resources`, so their presence is
+    /// a wiring contract, not an authoring convenience: no authored field
+    /// attribute may ever reach them, at either emission site. Compiling out every
     /// authored field is the adversarial case — if the #1588 attribute filter
     /// ever widened to the whole field list, these assertions are what catches
     /// it. Declaration order is deliberately not asserted: `Processor` is not
@@ -1073,7 +1072,7 @@ mod processor_struct_emit_tests {
             let port_field =
                 declared_field(&generated_struct, port_field_name).unwrap_or_else(|| {
                     panic!(
-                        "the generated Processor struct must declare the `{}` PluginAbiObject port \
+                        "the generated Processor struct must declare the `{}` port \
                      field — it declares {:?}",
                         port_field_name,
                         declared_field_names(&generated_struct)
@@ -1095,7 +1094,7 @@ mod processor_struct_emit_tests {
             assert_eq!(
                 type_path_last_segment(&port_field.ty).as_deref(),
                 Some(port_field_type),
-                "the `{}` port field must keep its PluginAbiObject type",
+                "the `{}` port field must keep its handle type",
                 port_field_name
             );
         }
@@ -1123,7 +1122,7 @@ mod processor_struct_emit_tests {
                 initialized_field(&from_config_struct_expression, port_field_name).unwrap_or_else(
                     || {
                         panic!(
-                            "`from_config` must initialize the `{}` PluginAbiObject port field — \
+                            "`from_config` must initialize the `{}` port field — \
                              it initializes {:?}",
                             port_field_name,
                             initialized_field_names(&from_config_struct_expression)

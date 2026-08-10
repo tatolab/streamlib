@@ -8,8 +8,7 @@
 //! - [`VulkanComputeBackend`] — cross-vendor Vulkan compute kernel, host CPU
 //!   parser + Huffman entropy decode → fused dequant + IDCT + chroma upsample
 //!   + YCbCr→RGB compute kernel. Always available on any Vulkan device, and
-//!   built entirely through the engine-free FullAccess primitives so this
-//!   crate stays safe to compile into a `.slpkg` cdylib.
+//!   built entirely through the engine-free FullAccess primitives.
 //!
 //! The NVIDIA `libnvjpeg` (CUDA) backend that previously shipped behind this
 //! trait reaches the raw `HostVulkanDevice` / OPAQUE_FD export path, which is

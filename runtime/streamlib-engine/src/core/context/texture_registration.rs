@@ -34,9 +34,8 @@ use std::sync::atomic::{AtomicI32, Ordering};
 #[cfg(target_os = "linux")]
 use streamlib_consumer_rhi::VulkanLayout;
 
-/// Host-only rich data backing a [`TextureRegistration`]. Cdylib code
-/// never sees this type; it reaches the public [`TextureRegistration`]
-/// surface through the `(handle, vtable)` PluginAbiObject.
+/// Rich data backing a [`TextureRegistration`], reached through the
+/// registration's opaque handle.
 pub(crate) struct TextureRegistrationInner {
     pub(crate) texture: Texture,
     /// Last-known Vulkan image layout. Producers update after their

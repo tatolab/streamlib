@@ -36,35 +36,17 @@ pub trait VulkanBufferLike {
     fn vk_buffer(&self) -> vk::Buffer;
     fn vk_buffer_size(&self) -> vk::DeviceSize;
 
-    /// Cdylib-mode handle accessor: if this buffer flavor is
-    /// reachable as a [`crate::core::rhi::StorageBuffer`] PluginAbiObject,
-    /// return the underlying `Arc::into_raw(Arc<HostVulkanBufferInner>)`
-    /// pointer for plugin ABI dispatch (Phase E sub-lift slice B —
-    /// #984). Default is `None`; only [`crate::core::rhi::StorageBuffer`]
-    /// overrides today. The cdylib-side
-    /// [`crate::vulkan::rhi::RhiCommandRecorder::record_buffer_barrier`]
-    /// / `record_copy_image_to_buffer` paths route to the
-    /// StorageBuffer-flavored vtable slot when this returns `Some`.
+    /// Opaque `Arc::into_raw(Arc<HostVulkanBufferInner>)` handle when
+    /// this buffer flavor is a [`crate::core::rhi::StorageBuffer`], else
+    /// `None`. Only [`crate::core::rhi::StorageBuffer`] overrides today.
     fn cdylib_storage_buffer_handle(&self) -> Option<*const std::ffi::c_void> {
         None
     }
 
-    /// Cdylib-mode handle accessor for the [`PixelBuffer`] PluginAbiObject
-    /// (issue #988 sibling-slot extension of Phase E sub-lift slice
-    /// B). Returns the underlying
-    /// `Arc::into_raw(Arc<PixelBufferRef>)` pointer when this buffer
-    /// flavor is a [`PixelBuffer`]. The cdylib-side
-    /// `record_buffer_barrier` / `record_copy_image_to_buffer` paths
-    /// route to the PixelBuffer-flavored vtable slot
-    /// (`record_pixel_buffer_barrier`,
-    /// `record_copy_image_to_pixel_buffer`) when this returns `Some`.
-    ///
-    /// At most one of [`Self::cdylib_storage_buffer_handle`] /
-    /// [`Self::cdylib_pixel_buffer_handle`] returns `Some` for any
-    /// given implementor; the recorder's dispatch logic checks both
-    /// in order and errors with a typed "unsupported buffer flavor"
-    /// message when neither matches, matching the slot coverage of
-    /// [`streamlib_plugin_abi::RhiCommandRecorderMethodsVTable`].
+    /// Opaque `Arc::into_raw(Arc<PixelBufferRef>)` handle when this
+    /// buffer flavor is a [`PixelBuffer`], else `None`. At most one of
+    /// this and [`Self::cdylib_storage_buffer_handle`] returns `Some`
+    /// for any given implementor.
     ///
     /// [`PixelBuffer`]: crate::core::rhi::PixelBuffer
     fn cdylib_pixel_buffer_handle(&self) -> Option<*const std::ffi::c_void> {

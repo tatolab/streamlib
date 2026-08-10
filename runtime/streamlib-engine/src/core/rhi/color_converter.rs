@@ -197,9 +197,8 @@ pub fn pixel_format_color_kind(format: PixelFormat) -> ColorSpaceKind {
     }
 }
 
-/// Host-only rich data backing a [`RhiColorConverter`]. Cdylib code
-/// never sees this type; it reaches the public surface through the
-/// `(handle, vtable)` PluginAbiObject.
+/// Rich data backing a [`RhiColorConverter`], reached through the
+/// converter's opaque handle.
 pub struct RhiColorConverterInner {
     #[cfg(target_os = "linux")]
     pub(crate) inner: crate::vulkan::rhi::VulkanColorConverter,
@@ -329,7 +328,7 @@ impl std::fmt::Debug for RhiColorConverterInner {
 }
 
 // =============================================================================
-// PluginAbiObject implementation
+// Public handle
 // =============================================================================
 
 /// Stateless color converter — a `(src, dst)`-keyed handle that knows
@@ -418,14 +417,6 @@ impl RhiColorConverter {
 
     /// Bind source / destination / push-constants on the buffer→image
     /// kernel and return it for recorder-driven dispatch.
-    ///
-    /// Mode-routed: in-process callers dispatch through `host_inner`;
-    /// cdylib callers dispatch through the per-type methods vtable
-    /// (Phase E sub-lift slice A). The cdylib-side return reconstructs
-    /// a `VulkanComputeKernel` PluginAbiObject from the host-handed-out
-    /// `Arc<VulkanComputeKernelInner>`-shaped opaque handle + cached
-    /// `push_constant_size`, sourcing the parent / per-type vtables
-    /// from `host_callbacks()`.
     #[cfg(target_os = "linux")]
     pub fn prepare_buffer_to_image_storage(
         &self,

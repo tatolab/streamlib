@@ -62,9 +62,8 @@ use super::HostVulkanDevice;
 /// kinds live under the same root.
 pub const PIPELINE_CACHE_DIR_ENV: &str = "STREAMLIB_PIPELINE_CACHE_DIR";
 
-/// Host-only rich data backing a [`VulkanGraphicsKernel`]. Cdylib code
-/// never sees this type; it reaches the public surface through the
-/// `(handle, vtable)` PluginAbiObject.
+/// Rich data backing a [`VulkanGraphicsKernel`], reached through the
+/// kernel's opaque handle.
 pub struct VulkanGraphicsKernelInner {
     label: String,
     vulkan_device: Arc<HostVulkanDevice>,
@@ -1262,12 +1261,12 @@ impl std::fmt::Debug for VulkanGraphicsKernelInner {
 }
 
 // =============================================================================
-// PluginAbiObject implementation (#917)
+// Public handle
 // =============================================================================
 
-/// Graphics kernel — layout-stable `#[repr(C)]` PluginAbiObject (#907 Phase
-/// E PR 3/5). Mirrors `VulkanComputeKernel`'s shape: handle + parent
-/// vtable + per-type methods vtable + cached PODs.
+/// Graphics kernel — a layout-stable `#[repr(C)]` handle. Mirrors
+/// `VulkanComputeKernel`'s shape: an opaque handle to the inner Arc plus
+/// cached PODs.
 #[repr(C)]
 pub struct VulkanGraphicsKernel {
     /// Opaque handle to the host's `Arc<VulkanGraphicsKernelInner>`.

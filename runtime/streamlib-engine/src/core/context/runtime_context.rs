@@ -724,11 +724,7 @@ impl<'a> RuntimeContextFullAccess<'a> {
         self.host_base().should_process()
     }
 
-    /// Host-owned audio clock as a typed plugin ABI shim. Backed by the
-    /// per-RuntimeContext audio-clock handle returned from
-    /// [`RuntimeContextVTable::audio_clock_handle`] paired with the
-    /// host's [`AudioClockVTable`](streamlib_plugin_abi::AudioClockVTable)
-    /// from `HostServices`. Borrow-scoped to the ctx; cannot outlive
+    /// Host-owned audio clock. Borrow-scoped to the ctx; cannot outlive
     /// the lifecycle call.
     pub fn audio_clock(&self) -> &SharedAudioClock {
         self.host_base().audio_clock()

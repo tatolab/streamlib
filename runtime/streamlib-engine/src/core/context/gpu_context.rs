@@ -1342,7 +1342,7 @@ impl GpuContext {
     #[cfg(target_os = "linux")]
     pub fn color_converter(&self, src: PixelFormat, dst: PixelFormat) -> Result<RhiColorConverter> {
         // Fast path: read lock; cache stores Arc<Inner> so we can build
-        // a fresh PluginAbiObject via from_arc_into_raw per request.
+        // a fresh handle via from_arc_into_raw per request.
         {
             let cache = self.color_converter_cache.read().unwrap();
             if let Some(c) = cache.get(&(src, dst)) {
@@ -2525,8 +2525,6 @@ impl GpuContextLimitedAccess {
     /// `catch_unwind`), so a misconfigured cdylib path gets a clean
     /// "callback panicked" log entry instead of UB.
     pub(crate) fn host_inner(&self) -> &GpuContext {
-        // `host_callbacks()` is `Some` in cdylib mode (set by
-        // `install_host_services`) and `None` in host mode.
         // SAFETY: `self.handle` was produced by `Self::new` or
         // `host_gpu_lim_clone_handle` — both produce
         // `Box::into_raw(Box::new(Arc::new(GpuContext)))`. The
@@ -2738,7 +2736,7 @@ impl GpuContextLimitedAccess {
     /// `acquire_pixel_buffer` callback. The tuple return is encoded
     /// via paired out-params: the pool id's string bytes land in a
     /// fixed-size stack buffer (1 KiB; UUID strings are well under
-    /// 128 bytes), and the PluginAbiObject PixelBuffer goes into a
+    /// 128 bytes), and the PixelBuffer handle goes into a
     /// MaybeUninit slot.
     pub fn acquire_pixel_buffer(
         &self,
@@ -2943,9 +2941,8 @@ impl GpuContextLimitedAccess {
     /// images/buffers a Sandbox caller can construct are pool-backed and
     /// pre-reserved. See design doc §8 Q5.
     ///
-    /// Dispatches through the plugin ABI vtable's `command_queue`
-    /// callback. Returns an owned [`RhiCommandQueue`] PluginAbiObject with the
-    /// host's `Arc<RhiCommandQueueInner>` refcount bumped.
+    /// Returns an owned [`RhiCommandQueue`] handle with the host's
+    /// `Arc<RhiCommandQueueInner>` refcount bumped.
     pub fn command_queue(&self) -> RhiCommandQueue {
         self.host_inner().command_queue().clone()
     }
@@ -3011,12 +3008,9 @@ impl GpuContextLimitedAccess {
 
     /// Get the surface store, if initialized.
     ///
-    /// Dispatches through the plugin ABI vtable's `surface_store`
-    /// callback. Returns `Some(SurfaceStore)` (PluginAbiObject, refcount
-    /// bumped) when the host has one, else `None`. The PluginAbiObject's
-    /// own Clone/Drop dispatch through the
-    /// [`streamlib_plugin_abi::SurfaceStoreVTable`] reached via
-    /// [`HostServices::surface_store_vtable`].
+    /// Returns `Some(SurfaceStore)` (refcount bumped) when the host has
+    /// one, else `None`. The handle's own Clone/Drop manage the inner
+    /// `Arc<SurfaceStoreInner>` strong count.
     pub fn surface_store(&self) -> Option<SurfaceStore> {
         self.host_inner().surface_store()
     }
@@ -3291,7 +3285,7 @@ impl GpuContextFullAccess {
 
     /// Create a single-in-flight GPU→CPU texture readback bound to a
     /// fixed format/extent and return it as the layout-stable
-    /// [`crate::core::rhi::TextureReadback`] PluginAbiObject. The staging
+    /// [`crate::core::rhi::TextureReadback`] handle. The staging
     /// buffer + command resources + timeline semaphore are allocated
     /// once at construction and reused across every submit; for parallel
     /// readbacks, hold N handles. Planar `Nv12` is rejected (the readback
@@ -3385,13 +3379,8 @@ impl GpuContextFullAccess {
 
     /// Get the shared command queue.
     ///
-    /// Phase D adopts the owned PluginAbiObject return that matches
-    /// [`GpuContextLimitedAccess::command_queue`] — borrowed
-    /// references can't cross the plugin ABI, so a cdylib-callable
-    /// `command_queue` must hand out a refcount-bumped owned
-    /// [`RhiCommandQueue`] regardless of mode. The PluginAbiObject's Drop
-    /// dispatches through the LimitedAccess vtable's
-    /// `drop_rhi_command_queue` callback.
+    /// Hands out a refcount-bumped owned [`RhiCommandQueue`] handle; its
+    /// Drop decrements the inner Arc's strong count.
     pub fn command_queue(&self) -> RhiCommandQueue {
         self.host_inner().command_queue().clone()
     }
@@ -3573,7 +3562,7 @@ impl GpuContextFullAccess {
         self.host_inner().supports_ray_tracing_pipeline()
     }
 
-    /// Import a DMA-BUF FD as a `StorageBuffer` (PluginAbiObject). Camera
+    /// Import a DMA-BUF FD as a `StorageBuffer` handle. Camera
     /// V4L2 zero-copy path. **Consumes `fd` on success** — on success
     /// the host's `vkImportMemoryFdInfoKHR` takes ownership of the
     /// kernel-side fd transfer; on failure the caller retains the fd
@@ -3657,10 +3646,7 @@ impl GpuContextFullAccess {
 
     /// Per-frame CUDA producer copy: image→buffer in one host-device
     /// submission with optional `consume_done` wait + `produce_done`
-    /// signal (#1262). Mode-routed: host-mode via `host_inner()`,
-    /// cdylib-mode via the `copy_texture_to_storage_buffer_and_signal`
-    /// slot (marshalling the texture PluginAbiObject handle + timeline
-    /// inner-Arc pointers).
+    /// signal (#1262).
     #[cfg(target_os = "linux")]
     pub fn copy_texture_to_storage_buffer_and_signal(
         &self,
@@ -4385,10 +4371,9 @@ mod tests {
     ///
     /// A kernel constructed inside `escalate(|full| ...)` and returned
     /// out of the closure must Drop cleanly after the scope ends. The
-    /// kernel PluginAbiObject's Drop dispatches through its own per-vtable
-    /// `drop_compute_kernel` callback — independent of any active
-    /// escalate scope (the scope token only validates FullAccess CALL
-    /// dispatch; drop is a refcount decrement on an opaque handle).
+    /// kernel handle's Drop is independent of any active escalate scope
+    /// (the scope token only validates FullAccess CALL dispatch; drop is
+    /// a refcount decrement on an opaque handle).
     ///
     /// Mental revert: wiring the drop to require a live escalate
     /// scope would crash here because the scope is closed before the

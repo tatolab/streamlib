@@ -137,9 +137,8 @@ impl RecorderDynamicRenderingBalance {
 /// Recording is serial (one recording in flight at a time per
 /// recorder handle). For parallel recording, hold one recorder per
 /// in-flight slot.
-/// Host-only rich data backing a [`RhiCommandRecorder`]. Cdylib code
-/// never sees this type; it reaches the public surface through the
-/// `(handle, vtable)` PluginAbiObject.
+/// Rich data backing a [`RhiCommandRecorder`], reached through the
+/// recorder's opaque handle.
 pub struct RhiCommandRecorderInner {
     label: String,
     vulkan_device: Arc<HostVulkanDevice>,
@@ -799,7 +798,7 @@ impl RhiCommandRecorderInner {
 
     /// Record a layout transition on a raw `VkImage` handle.
     /// Distinct from [`Self::record_image_barrier`] which takes a
-    /// `Texture` PluginAbiObject; this variant is used by
+    /// `Texture` handle; this variant is used by
     /// [`VulkanPresentTarget`](super::vulkan_present_target::VulkanPresentTarget)
     /// for swapchain images (which are never wrapped in a `Texture`).
     /// COLOR aspect, single mip / single layer, QUEUE_FAMILY_IGNORED
@@ -989,46 +988,24 @@ impl std::fmt::Debug for RhiCommandRecorderInner {
 }
 
 // =============================================================================
-// PluginAbiObject implementation
+// Public handle
 // =============================================================================
 
 /// Multi-step command-buffer recorder.
 ///
-/// Layout-stable `#[repr(C)] (handle, vtable)` PluginAbiObject. The opaque
-/// handle points at a `Box<RhiCommandRecorderInner>`; lifecycle
-/// dispatches through the host-installed FullAccess vtable's
-/// `drop_command_recorder` callback (Box::from_raw + drop host-side).
+/// The opaque handle points at a `Box<RhiCommandRecorderInner>`; `Drop`
+/// does `Box::from_raw` + drop.
 ///
 /// **Single-owner; deliberately NOT `Clone`.** Recording carries
 /// mutable state (`begin()` → `record_*(&mut self)` → `submit_*(&mut
-/// self)`) that doesn't survive duplication. The
-/// `clone_command_recorder` vtable slot is reserved but never invoked
-/// — calling `.clone()` on the public PluginAbiObject is a compile error,
-/// locked by the `compile_fail` doctest below:
+/// self)`) that doesn't survive duplication. Calling `.clone()` on the
+/// public handle is a compile error, locked by the `compile_fail`
+/// doctest below:
 ///
 /// ```compile_fail
 /// fn assert_clone<T: Clone>() {}
 /// assert_clone::<streamlib_engine::vulkan::rhi::RhiCommandRecorder>();
 /// ```
-///
-/// Method dispatch routes through three different vtables depending
-/// on the method and call site:
-///
-/// - Drop runs through [`GpuContextFullAccessVTable::drop_command_recorder`]
-///   (the parent vtable).
-/// - The six camera-hot-path methods (`begin`, `record_image_barrier`,
-///   `record_buffer_barrier`, `record_dispatch`,
-///   `record_copy_image_to_buffer`, `submit_signaling_timeline`,
-///   `record_swapchain_image_barrier`,
-///   `cmd_begin_dynamic_rendering`, `cmd_end_dynamic_rendering`,
-///   `submit_with_semaphores`, `record_draw`, `record_draw_indexed`)
-///   route through the per-type
-///   [`streamlib_plugin_abi::RhiCommandRecorderMethodsVTable`] when
-///   called from cdylib code.
-/// - The remaining host-only methods (`record_copy_buffer_to_image`,
-///   `submit`, `submit_and_wait`) keep their cdylib-mode panic via
-///   [`Self::host_inner_mut`]; a follow-up slice lifts each as a
-///   consumer arrives.
 pub struct RhiCommandRecorder {
     /// Opaque handle to the host's `Box<RhiCommandRecorderInner>`.
     pub(crate) handle: *const c_void,

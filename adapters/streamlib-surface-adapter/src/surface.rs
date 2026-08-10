@@ -361,10 +361,8 @@ mod tests {
     //! Layout regression suite for the descriptor types.
     //!
     //! These numbers are copied verbatim into the Python ctypes mirror
-    //! (the wheel's surface-adapter surface) and
-    //! the Deno UnsafePointerView reader (`sdk/streamlib-deno/
-    //! surface_adapter.ts`). When this file changes, both polyglot
-    //! mirrors must be updated in the same commit; their twin tests
+    //! (the wheel's surface-adapter surface). When this file changes,
+    //! that mirror must be updated in the same commit; its twin tests
     //! lock the same offsets from the other side.
 
     use super::*;

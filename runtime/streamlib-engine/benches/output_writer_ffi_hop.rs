@@ -1,29 +1,18 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Microbench for the issue #894 `OutputWriter::write_raw` plugin ABI hop.
+//! Microbench for the `OutputWriter::write_raw` per-call cost.
 //!
-//! Two arms compare the per-call cost of the pre-#894 direct-method
-//! shape against the post-#894 vtable-dispatch PluginAbiObject. A third bench
-//! varies payload size so the report shows how the hop cost scales
-//! with the data length:
+//! Two arms compare a direct call on the inner against a call through
+//! the public `OutputWriter` handle. A third bench varies payload size
+//! so the report shows how the cost scales with the data length:
 //!
 //! - `baseline_direct_inner` — `Arc<OutputWriterInner>::write_raw`
-//!   called directly (pre-#894 shape from the cdylib's perspective:
-//!   the cdylib's struct held `Arc<OutputWriter>` and called methods
-//!   on it via direct Rust dispatch, with `OutputWriter` being the
-//!   real impl, not a PluginAbiObject). Includes the full iceoryx2 publish
-//!   + notify step.
-//! - `vtable_dispatch` — `OutputWriter::write_raw` on the PluginAbiObject,
-//!   which dispatches through the host-installed vtable to the
-//!   host-side `OutputWriterInner::write_raw`. In host mode (this
-//!   bench) the fn pointer resolves to the same plugin; in cdylib mode
-//!   it resolves to the host via the same fn pointer planted
-//!   by `HostServices`. The PER-CALL machine cost is identical
-//!   between the two modes — both pay the indirect-call overhead;
-//!   neither pays any extra marshaling beyond pointer + length pairs
-//!   on the stack. The delta vs `baseline_direct_inner` is the cost
-//!   of the plugin ABI hop the #894 design adds.
+//!   called directly. Includes the full iceoryx2 publish + notify step.
+//! - `vtable_dispatch` — `OutputWriter::write_raw` on the public handle,
+//!   which derefs the opaque handle to the same
+//!   `OutputWriterInner::write_raw`. The delta vs `baseline_direct_inner`
+//!   is the handle-indirection cost.
 //! - `payload_sweep_vtable` — vtable-dispatch arm at 64 B / 256 B /
 //!   1 KiB / 8 KiB / 64 KiB payloads. Tells the reader whether the
 //!   hop's per-call cost is dominated by the fixed overhead (call

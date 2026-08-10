@@ -43,9 +43,8 @@ use super::HostVulkanDevice;
 /// holds a single descriptor set, so dispatches against it are serial — that's
 /// fine for the format-converter / compositor / codec-pre-process workloads
 /// this abstraction targets.
-/// Host-only rich data backing a [`VulkanComputeKernel`]. Cdylib code
-/// never sees this type; it reaches the public surface through the
-/// `(handle, vtable)` PluginAbiObject.
+/// Rich data backing a [`VulkanComputeKernel`], reached through the
+/// kernel's opaque handle.
 pub struct VulkanComputeKernelInner {
     label: String,
     vulkan_device: Arc<HostVulkanDevice>,
@@ -961,30 +960,16 @@ impl std::fmt::Debug for VulkanComputeKernelInner {
 }
 
 // =============================================================================
-// PluginAbiObject implementation (#917)
+// Public handle
 // =============================================================================
 
-/// Compute kernel — layout-stable `#[repr(C)]` PluginAbiObject so cdylibs
-/// can hold, refcount, drop, and read POD descriptors without
-/// sharing rustc-version or dep-graph with the host.
+/// Compute kernel — a layout-stable `#[repr(C)]` handle over an opaque
+/// pointer to an `Arc<VulkanComputeKernelInner>`, plus cached POD
+/// descriptors. `Clone` / `Drop` manage the inner Arc's strong count.
 ///
-/// The opaque handle points at an `Arc<VulkanComputeKernelInner>`;
-/// lifecycle (Clone / Drop) dispatches through the host-installed
-/// parent [`GpuContextFullAccessVTable`]'s `clone_compute_kernel` /
-/// `drop_compute_kernel` callbacks (locked by PR #918's PluginAbiObject
-/// Phase D work). Per-method dispatch is reached through the
-/// dedicated
-/// [`streamlib_plugin_abi::VulkanComputeKernelMethodsVTable`] pointed
-/// at by `methods_vtable` — issue #907 PR 2/5 lands the pointer
-/// plumbing + cached POD fields; follow-up PRs append method slots
-/// and route `set_*` / `dispatch` / `record` / `bindings` through
-/// them, plus land the ambitious CPU-reference dlopen integration
-/// test.
-///
-/// The `push_constant_size()` POD getter reads from the cached
-/// field . The value is captured by
-/// [`Self::from_arc_into_raw`] at construction and never mutates
-/// over the kernel's lifetime.
+/// The `push_constant_size()` POD getter reads the cached field,
+/// captured by [`Self::from_arc_into_raw`] at construction and never
+/// mutated over the kernel's lifetime.
 #[repr(C)]
 pub struct VulkanComputeKernel {
     /// Opaque handle to the host's `Arc<VulkanComputeKernelInner>`.

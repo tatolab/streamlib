@@ -253,14 +253,12 @@ impl CheckedInSurfaces {
 ///
 /// Connects to the macOS XPC surface-share service to exchange mach ports for surface IDs.
 /// Caches resolved surfaces locally to minimize XPC round-trips.
-/// Host-only rich data backing a [`SurfaceStore`]. Cdylib code never
-/// sees this type; it reaches the public [`SurfaceStore`] surface
-/// through the `(handle, vtable)` PluginAbiObject.
+/// Rich data backing a [`SurfaceStore`], reached through the store's
+/// opaque handle.
 ///
 /// All cross-platform and Linux-specific surface-share IPC methods
 /// (`connect`, `check_in`, `check_out`, `register_texture`, etc.)
-/// live on this type. The PluginAbiObject `SurfaceStore` dispatches each
-/// method through the [`streamlib_plugin_abi::SurfaceStoreVTable`].
+/// live on this type; the `SurfaceStore` handle forwards each to it.
 pub(crate) struct SurfaceStoreInner {
     /// XPC connection to the surface-share service (macOS only).
     #[cfg(target_os = "macos")]
@@ -286,8 +284,7 @@ pub(crate) struct SurfaceStoreInner {
 impl SurfaceStoreInner {
     /// Create a new surface store (not yet connected). Returns an
     /// `Arc<SurfaceStoreInner>` so the engine can store it directly
-    /// and hand PluginAbiObject [`SurfaceStore`] wrappers to consumers on
-    /// demand.
+    /// and hand [`SurfaceStore`] handles to consumers on demand.
     pub fn new(service_name: String, runtime_id: String) -> Arc<Self> {
         Arc::new(SurfaceStoreInner {
             #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -2016,7 +2013,7 @@ impl std::fmt::Debug for SurfaceStoreInner {
 }
 
 // =============================================================================
-// PluginAbiObject `SurfaceStore`
+// SurfaceStore
 // =============================================================================
 //
 // Public handle wrapping `Arc<SurfaceStoreInner>`. Every method
@@ -2040,7 +2037,7 @@ unsafe impl Send for SurfaceStore {}
 unsafe impl Sync for SurfaceStore {}
 
 impl SurfaceStore {
-    /// Create a new SurfaceStore PluginAbiObject (not yet connected). The
+    /// Create a new SurfaceStore handle (not yet connected). The
     /// underlying [`SurfaceStoreInner`] is allocated as an
     /// `Arc<SurfaceStoreInner>` and wrapped behind the opaque handle.
     /// Engine and integration
@@ -2063,7 +2060,7 @@ impl SurfaceStore {
     /// shape. `SurfaceStore::is_none()` returns `true` for such a
     /// value and `Drop` short-circuits on null handle.
  
-    /// Whether this is a null-handle PluginAbiObject (the "None" branch of
+    /// Whether this is a null-handle sentinel (the "None" branch of
     /// the `Option<SurfaceStore>` return shape).
     pub(crate) fn is_none(&self) -> bool {
         self.handle.is_null()

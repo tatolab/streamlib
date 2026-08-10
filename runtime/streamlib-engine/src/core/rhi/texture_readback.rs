@@ -193,27 +193,17 @@ impl TextureReadbackDescriptor<'_> {
 }
 
 // =============================================================================
-// PluginAbiObject twin
+// Public handle
 // =============================================================================
 
-/// Single-in-flight GPU→CPU texture readback, exposed across the plugin
-/// ABI as a layout-stable `#[repr(C)]` PluginAbiObject so cdylibs can
-/// hold, drop, and drive it without sharing rustc-version or dep-graph
-/// with the host.
+/// Single-in-flight GPU→CPU texture readback, a layout-stable
+/// `#[repr(C)]` handle over an opaque pointer to the host-owned
+/// `Box<Arc<crate::vulkan::rhi::VulkanTextureReadback>>`.
 ///
-/// The opaque `handle` points at a host-owned
-/// `Box<Arc<crate::vulkan::rhi::VulkanTextureReadback>>`. Unlike the
-/// Arc-into-raw kernel PluginAbiObjects, this one **deviates** from the
-/// clone/drop pair convention: the handle is Box-shaped and the object
-/// is `!Clone` (the primitive owns exclusive single-in-flight staging +
-/// command resources), so the parent [`GpuContextFullAccessVTable`]
-/// carries `drop_texture_readback` only — there is no clone slot.
-///
-/// Per-method dispatch (`submit` / `try_read` / `wait_and_read` /
-/// `try_read_copy` / `wait_and_copy`) is reached through the per-type
-/// [`VulkanTextureReadbackMethodsVTable`] pointed at by `methods_vtable`.
-/// The five POD getters (`width` / `height` / `format` / `handle_id` /
-/// `staging_size`) read cached fields directly .
+/// `!Clone` — the primitive owns exclusive single-in-flight staging +
+/// command resources, so the handle carries a drop but no clone. The
+/// five POD getters (`width` / `height` / `format` / `handle_id` /
+/// `staging_size`) read the cached fields directly.
 #[repr(C)]
 pub struct TextureReadback {
     /// Opaque handle to the host's
@@ -223,15 +213,15 @@ pub struct TextureReadback {
     /// run host-side; this is exposed for diagnostics/logging only.
     pub(crate) cached_handle_id: u64,
     /// Cached total staging-buffer size in bytes (`width × height ×
-    /// bytes_per_pixel`). Never recomputed ABI-side — sourced from the
+    /// bytes_per_pixel`). Never recomputed here — sourced from the
     /// primitive's own `staging_size()`.
     pub(crate) cached_staging_size: u64,
     /// Cached pixel width the readback is bound to.
     pub(crate) cached_width: u32,
     /// Cached pixel height the readback is bound to.
     pub(crate) cached_height: u32,
-    /// Cached pixel format (plugin-ABI-stable `u32` discriminant,
-    /// matches [`TextureFormat`]'s `#[repr(u32)]`).
+    /// Cached pixel format (`u32` discriminant, matches
+    /// [`TextureFormat`]'s `#[repr(u32)]`).
     pub(crate) cached_format_raw: u32,
     /// Reserved padding (keeps size a multiple of 8; zero, never read).
     pub(crate) _reserved_padding: u32,

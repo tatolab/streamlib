@@ -24,21 +24,6 @@ thread_local! {
 }
 
 /// Process-wide pub/sub handle.
-///
-/// **Per-loaded-artifact instance.** Each linked copy of streamlib-engine (host
-/// binary + every dlopen'd cdylib plugin) gets its own `LazyLock<PubSub>`
-/// — Rust mangled statics aren't in the dynsym table, the dynamic
-/// linker doesn't dedupe them, and trying to share the same `PubSub`
-/// reference across the host and plugins would couple the cdylib to byte-identical
-/// internal layouts of `Iceoryx2Node`, parking_lot::Mutex, etc.
-///
-/// Plugin ABI bridging happens **inside the methods**: when
-/// `crate::core::plugin::host_services::host_callbacks()` returns
-/// `Some` (i.e. this artifact is a plugin cdylib whose
-/// `install_host_services` has run), `publish` serializes the event
-/// and forwards it through the host's `pubsub_publish` fn pointer.
-/// The host's installed `PUBSUB` performs the actual iceoryx2 work,
-/// and any host-side subscribers receive the event.
 pub static PUBSUB: LazyLock<PubSub> = LazyLock::new(PubSub::new);
 
 /// iceoryx2-backed pub/sub for runtime events.
@@ -200,12 +185,6 @@ impl PubSub {
     }
 
     /// Publish event to topic (serializes and sends via iceoryx2).
-    ///
-    /// In a plugin cdylib whose `install_host_services` has run,
-    /// short-circuits to the host's `pubsub_publish` callback —
-    /// the event is serialized once and the host's `PUBSUB`
-    /// performs the actual iceoryx2 work. In the host,
-    /// runs the local iceoryx2 path below.
     ///
     /// Events are dispatched to:
     /// 1. All subscribers of the specific topic

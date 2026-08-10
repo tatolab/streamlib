@@ -8,9 +8,7 @@
 //! ([`GpuContextFullAccess`]) per `docs/architecture/compute-kernel.md`:
 //! the kernel is constructed via `create_compute_kernel` and its storage
 //! buffers via `acquire_storage_buffer`, so this package never touches the
-//! raw `HostVulkanDevice` and stays sound when built as a separately-
-//! compiled `.slpkg` plugin (see
-//! `docs/learnings/slpkg-raw-device-rhi-construction.md`). Bindings are
+//! raw `HostVulkanDevice`. Bindings are
 //! declared as data; SPIR-V reflection validates the layout at kernel
 //! construction. No raw `vulkanalia` calls; no hand-rolled descriptor
 //! sets, pipeline layouts, or command buffers.
@@ -102,8 +100,7 @@ impl JpegDecodeKernel {
     /// back a cdylib-safe `#[repr(C)]` handle. Loads SPIR-V, runs
     /// reflection, validates the declared bindings match the shader,
     /// allocates the Vulkan pipeline + descriptor set + command buffer +
-    /// fence host-side. Never reaches the raw `HostVulkanDevice`, so it is
-    /// sound from a separately-built `.slpkg` plugin.
+    /// fence host-side. Never reaches the raw `HostVulkanDevice`.
     pub fn new(full_access: &GpuContextFullAccess) -> Result<Self> {
         let spv: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/jpeg_decode.spv"));
         let kernel = full_access.create_compute_kernel(&ComputeKernelDescriptor {

@@ -275,9 +275,7 @@ impl ProcessorInstanceFactory {
         }
     }
 
-    /// Register a processor type with the vtable shape. Monomorphizes a
-    /// `&'static ProcessorVTable` for `P` and stores it alongside the
-    /// processor's descriptor + port info.
+    /// Register a processor type, storing `P`'s descriptor + port info.
     pub fn register<P>(&self)
     where
         P: GeneratedProcessor + 'static,
@@ -320,25 +318,6 @@ impl ProcessorInstanceFactory {
             );
         }
     }
-
-    /// Insert a descriptor + vtable pair under the descriptor's
-    /// structured ident. Idempotent on `(ident)` keys — a duplicate
-    /// registration logs `debug!` and skips.
-    ///
-    /// `cdylib_resident` is `true` when the vtable's function
-    /// pointers target a cdylib's address space (loaded via
-    /// `STREAMLIB_PLUGIN`) and `false` when they target the host's
-    /// address space (`register::<P>()`). The flag propagates onto
-    /// the [`ProcessorInstance::VTable`] variant so lifecycle
-    /// dispatch can pick the right FullAccess shape.
-    ///
-    /// Used by:
-    /// - `register::<P>()` (inventory + in-tree host-side
-    ///   registrations) — passes the vtable from `vtable_for::<P>()`
-    ///   with `cdylib_resident: false`.
-    /// - The cdylib-bridge `processor_register` callback in
-    ///   `core::plugin::host_services` — passes the cdylib's
-    ///   `&'static ProcessorVTable` with `cdylib_resident: true`.
 
     /// Register a processor dynamically at runtime with a non-generic
     /// `Box<dyn Fn>` constructor. Used for subprocess host wrappers

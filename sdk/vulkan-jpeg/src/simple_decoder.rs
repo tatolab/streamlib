@@ -85,8 +85,7 @@ impl SimpleJpegDecoder {
     ///
     /// The backend is the cross-vendor [`VulkanComputeBackend`], built
     /// entirely through the FullAccess primitives — this decoder never
-    /// touches the raw `HostVulkanDevice`, so it stays sound when compiled
-    /// into a separately-built `.slpkg` plugin.
+    /// touches the raw `HostVulkanDevice`.
     pub fn new(
         full_access: &GpuContextFullAccess,
         max_width: u32,

@@ -38,7 +38,7 @@ pub enum AccelerationStructureKind {
 /// the hit shader can read via `gl_InstanceCustomIndexEXT`, a visibility
 /// mask, an SBT record offset, and the BLAS this instance points to.
 ///
-/// The BLAS reference is by `VulkanAccelerationStructure` PluginAbiObject so the
+/// The BLAS reference is by `VulkanAccelerationStructure` handle so the
 /// lifetime contract is "the TLAS holds a strong reference to every
 /// referenced BLAS for as long as the TLAS lives."
 #[derive(Clone)]
@@ -84,9 +84,8 @@ pub const IDENTITY_TRANSFORM: [[f32; 4]; 3] = [
     [0.0, 0.0, 1.0, 0.0],
 ];
 
-/// Host-only rich data backing a [`VulkanAccelerationStructure`].
-/// Cdylib code never sees this type; it reaches the public surface
-/// through the `(handle, vtable)` PluginAbiObject.
+/// Rich data backing a [`VulkanAccelerationStructure`], reached through
+/// the structure's opaque handle.
 pub(crate) struct VulkanAccelerationStructureInner {
     label: String,
     kind: AccelerationStructureKind,
@@ -661,7 +660,7 @@ impl std::fmt::Debug for VulkanAccelerationStructureInner {
 }
 
 // =============================================================================
-// PluginAbiObject implementation
+// Public handle
 // =============================================================================
 
 impl VulkanAccelerationStructure {

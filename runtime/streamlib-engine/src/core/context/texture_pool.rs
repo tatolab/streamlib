@@ -217,11 +217,10 @@ impl TexturePoolInner {
     }
 }
 
-/// Host-only rich data backing a [`PooledTextureHandle`]. Holds the
+/// Rich data backing a [`PooledTextureHandle`]. Holds the
 /// `Arc<TexturePoolInner>` reference plus the `PoolSlotId` so Drop
-/// can release the slot exactly once. Cdylib code never sees this
-/// type; it reaches `PooledTextureHandle` through the
-/// `(handle, vtable, Texture, POD)` PluginAbiObject.
+/// can release the slot exactly once, reached through the handle's
+/// opaque pointer.
 pub(crate) struct PooledTextureHandleInner {
     pub(crate) pool_inner: Arc<TexturePoolInner>,
     pub(crate) slot_id: PoolSlotId,
@@ -248,8 +247,8 @@ impl Drop for PooledTextureHandleInner {
 pub struct PooledTextureHandle {
     /// Opaque host handle (`Box::into_raw(Box<PooledTextureHandleInner>)`).
     pub(crate) handle: *const c_void,
-    /// The pooled texture. Already PluginAbiObject (`#[repr(C)]`, 32 bytes);
-    /// embedding by value keeps the wire ABI flat without an
+    /// The pooled texture. Already a `#[repr(C)]` handle (32 bytes);
+    /// embedding by value keeps the layout flat without an
     /// indirection through another `Arc`.
     pub(crate) texture: Texture,
     /// Cached width (mirrors `slot.key.width` at allocation time).

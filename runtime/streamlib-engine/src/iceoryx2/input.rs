@@ -224,10 +224,9 @@ struct PortConfig {
 /// mailbox map plus the per-thread subscriber + listener. All
 /// per-frame `receive_pending` + queue-pop work runs here.
 ///
-/// Never crosses the plugin ABI. Held by the host via
-/// `Arc<InputMailboxesInner>`; the cdylib's [`InputMailboxes`]
-/// PluginAbiObject stores a separate `Arc::into_raw`-encoded strong
-/// reference to the same inner.
+/// Held via `Arc<InputMailboxesInner>`; the [`InputMailboxes`] handle
+/// stores a separate `Arc::into_raw`-encoded strong reference to the
+/// same inner.
 pub struct InputMailboxesInner {
     ports: parking_lot::Mutex<HashMap<String, PortConfig>>,
     subscribers: SendableChannelSubscribers,
@@ -585,19 +584,16 @@ impl Default for InputMailboxesInner {
 }
 
 // =============================================================================
-// InputMailboxes PluginAbiObject
+// InputMailboxes
 // =============================================================================
 
-/// Public input mailboxes PluginAbiObject. The macro emits
+/// Public input mailboxes handle. The macro emits
 /// `pub inputs: InputMailboxes` on every processor struct that
 /// declares input ports.
 ///
-/// Layout-stable: every field is either a primitive or an opaque
-/// pointer, so the cdylib's view of this type does not couple to
-/// the host's [`InputMailboxesInner`] source layout.
-///
-/// `Clone` bumps the `Arc<InputMailboxesInner>` strong count; `Drop`
-/// decrements it.
+/// The sole field is an opaque pointer to the host's
+/// [`InputMailboxesInner`]. `Clone` bumps the `Arc<InputMailboxesInner>`
+/// strong count; `Drop` decrements it.
 pub struct InputMailboxes {
     /// Opaque handle: `Arc::into_raw(Arc<InputMailboxesInner>)`. Null
     /// on a freshly-constructed processor before
@@ -608,16 +604,14 @@ pub struct InputMailboxes {
 // SAFETY: `handle` points at an `Arc<InputMailboxesInner>` whose
 // interior is Send+Sync (the inner uses parking_lot::Mutex for
 // `ports` and the SendableSubscriber/SendableListener wrappers
-// declare Send+Sync above). Refcount management crosses the plugin
-// ABI through the host-installed refcount fn pointers; the
-// underlying Arc bookkeeping runs in host-compiled code.
+// declare Send+Sync above).
 unsafe impl Send for InputMailboxes {}
 unsafe impl Sync for InputMailboxes {}
 
 impl InputMailboxes {
-    /// Build a host-mode PluginAbiObject from an `Arc<InputMailboxesInner>`.
-    /// The strong reference is consumed; the PluginAbiObject owns it for
-    /// its lifetime and releases on Drop.
+    /// Build a handle from an `Arc<InputMailboxesInner>`. The strong
+    /// reference is consumed; the handle owns it for its lifetime and
+    /// releases on Drop.
     pub fn from_inner_arc(inner: Arc<InputMailboxesInner>) -> Self {
         let handle = Arc::into_raw(inner) as *const c_void;
         Self { handle }
@@ -646,9 +640,8 @@ impl InputMailboxes {
         !self.handle.is_null()
     }
 
-    /// Borrow the host-side `Arc<InputMailboxesInner>` this
-    /// PluginAbiObject points at. Returns `None` for unwired PluginAbiObjects.
-    /// Bumps the strong count via the vtable's `clone_arc`; the
+    /// Borrow the `Arc<InputMailboxesInner>` this handle points at.
+    /// Returns `None` for unwired handles. Bumps the strong count; the
     /// returned Arc balances with one Drop on the inner.
     pub fn inner_arc(&self) -> Option<Arc<InputMailboxesInner>> {
         if !self.is_configured() {
@@ -1132,9 +1125,9 @@ mod tests {
         );
     }
 
-    /// Empty (unwired) PluginAbiObject should return Ok(None) from read_raw
+    /// Empty (unwired) mailboxes should return Ok(None) from read_raw
     /// rather than crash. Mentally revert the is_configured guard
-    /// and the test panics dereferencing a null vtable.
+    /// and the test panics dereferencing a null handle.
     #[test]
     fn empty_mailboxes_returns_none_cleanly() {
         let mb = InputMailboxes::empty();

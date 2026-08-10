@@ -896,35 +896,26 @@ unsafe impl Send for VulkanPresentTarget {}
 unsafe impl Sync for VulkanPresentTarget {}
 
 /// Boxed, `Mutex`-guarded [`VulkanPresentTarget`] backing a
-/// [`PresentTarget`] PluginAbiObject handle. The `Mutex` matches
-/// `RhiCommandRecorderInner`'s state-guard discipline: the plugin-ABI
-/// method bodies `try_lock` it so a concurrent or misordered
+/// [`PresentTarget`] handle. The `Mutex` matches
+/// `RhiCommandRecorderInner`'s state-guard discipline: the method
+/// bodies `try_lock` it so a concurrent or misordered
 /// `begin_frame`/`end_frame` returns a typed error rather than aliasing
 /// `&mut VulkanPresentTarget` (UB). Single-owner — leaked with
 /// [`Box::into_raw`] at mint, reclaimed with `Box::from_raw` at drop.
 pub type PresentTargetInner = Mutex<VulkanPresentTarget>;
 
-/// Layout-stable `#[repr(C)]` PluginAbiObject projecting the host
-/// [`VulkanPresentTarget`] swapchain orchestrator across the plugin ABI.
+/// Layout-stable `#[repr(C)]` handle projecting the host
+/// [`VulkanPresentTarget`] swapchain orchestrator.
 ///
 /// **Box-shaped, drop-only (`!Clone`).** The opaque `handle` points at a
 /// `Box<PresentTargetInner>` (`Box<Mutex<VulkanPresentTarget>>`); the
 /// target is single-owner, `!Clone`, `Drop`-heavy (drains + destroys the
 /// surface / swapchain / semaphores / recorders), so it maps onto the
 /// [`RhiCommandRecorder`] Box precedent, not the Arc clone/drop pair.
-/// Drop dispatches the parent [`GpuContextFullAccessVTable`]'s
-/// `drop_present_target` slot (`Box::from_raw` + drop in host-compiled
-/// code, keeping every `vkDestroy*` inside the host build). A raw
-/// `repr(Rust)` `Arc<VulkanPresentTarget>` transiting a separately-built
-/// `.slpkg` would be cross-build layout skew — see
-/// `docs/learnings/slpkg-raw-device-rhi-construction.md`; the Box
-/// PluginAbiObject is what keeps destruction host-side.
+/// `Drop` reclaims the Box (`Box::from_raw` + drop).
 ///
-/// Per-frame method dispatch (`begin_frame` / `end_frame` / `recreate` /
-/// `set_hdr_metadata`) routes through the per-type
-/// [`streamlib_plugin_abi::PresentTargetMethodsVTable`]; the swapchain
-/// color format is a cached POD field (`color_format_raw`) read with a
-/// zero-hop `&self` getter and refreshed on `recreate`.
+/// The swapchain color format is a cached POD field (`color_format_raw`)
+/// read with a zero-hop `&self` getter and refreshed on `recreate`.
 #[repr(C)]
 pub struct PresentTarget {
     /// Opaque handle to the host's `Box<PresentTargetInner>`.

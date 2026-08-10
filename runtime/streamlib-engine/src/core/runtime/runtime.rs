@@ -187,11 +187,7 @@ impl Runner {
 
         // Bridge iceoryx2's internal log records into streamlib tracing
         // before creating the iceoryx2 Node so any iceoryx2 emit at
-        // construction time lands in the unified JSONL pipeline. The
-        // host's bridge value is the same `&'static dyn Log` that
-        // [`crate::core::plugin::host_services`] hands to plugin cdylibs
-        // via `HostServices.iceoryx2_logger_ptr` so the host and every
-        // plugin converge on a single logger.
+        // construction time lands in the unified JSONL pipeline.
         crate::core::logging::iceoryx2_log_bridge::install_iceoryx2_log_bridge_for_self();
 
         // Create iceoryx2 Node early so PUBSUB can initialize before start().
@@ -280,12 +276,7 @@ impl Runner {
         &self.runtime_id
     }
 
-    /// This runtime's iceoryx2 node. Exposed so external loaders
-    /// (embedding apps that `dlopen` a cdylib outside `add_module`)
-    /// can hand it to
-    /// [`crate::core::plugin::host_services::runtime_facing::host_services_for_self`]
-    /// when assembling the `HostServices` payload for a plugin
-    /// register callback.
+    /// This runtime's iceoryx2 node.
     pub fn iceoryx2_node(&self) -> &Iceoryx2Node {
         &self.iceoryx2_node
     }
@@ -401,9 +392,8 @@ impl Runner {
                 "[start] Initializing SurfaceStore against runtime-internal Unix socket '{}'...",
                 socket_path
             );
-            // `SurfaceStore::new` constructs the PluginAbiObject from a fresh
-            // `Arc<SurfaceStoreInner>`. Method dispatch goes through
-            // the host's `SurfaceStoreVTable`.
+            // `SurfaceStore::new` constructs the handle from a fresh
+            // `Arc<SurfaceStoreInner>`.
             let surface_store = SurfaceStore::new(socket_path.clone(), self.runtime_id.to_string());
             surface_store.connect().map_err(|e| {
                 Error::Runtime(format!(
