@@ -42,10 +42,17 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   package source, the `add`/`install`/`link`/`pkg` verbs, `BuildOrchestrator` and all
   runtime downloading or compiling. Compilation happens at publish time, by the
   author, with standard tools (maturin/CI for wheels, cargo for crates) — StreamLib
-  never compiles user code. [importable-python-library]
+  never compiles user code.
+  [importable-python-library; importable-python-library-ripout — SHIPPED #1715 for the
+  verbs, `BuildOrchestrator` and every runtime build path; the `.slpkg`, lockfile and
+  package-source residue rides `streamlib-idents` and `streamlib-jtd-codegen` into
+  processor-class-identity, which deletes them whole]
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-10-importable-python-library-ripout.md -->
 - **DECIDED** — The plugin ABI is deleted: no dlopen'd processor cdylibs, no `repr(C)`
   vtable surface, no load handshake, no build fingerprints. The extension paths are
-  Python packages and Rust source crates only. [importable-python-library]
+  Python packages and Rust source crates only.
+  [importable-python-library; importable-python-library-ripout — SHIPPED #1715]
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-10-importable-python-library-ripout.md -->
 - **DECIDED** — Third-party native code (closed-source included) ships as an ordinary
   Python package whose native internals expose capabilities to Python as handles —
   frames, FDs, exportable device allocations, buffers — wrapped by a Python
@@ -244,7 +251,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   deleted with the module system they are built on. TypeScript authoring is paused,
   not rejected — a future TypeScript SDK follows this same importable-library model
   (a native module a TypeScript app imports; Deno itself optional), aimed at the
-  hobbyist / video-creator audience when it is scheduled. [importable-python-library]
+  hobbyist / video-creator audience when it is scheduled.
+  [importable-python-library; importable-python-library-ripout — SHIPPED #1715 for the
+  deletion clause]
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-10-importable-python-library-ripout.md -->
 - **DECIDED** — The Python SDK carries a GIL-release contract: every native binding
   that can block releases the GIL around the blocking call, and pixels never cross
   into Python as Python-owned objects — frames travel as handles / surface ids, and
@@ -296,7 +306,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   stdio server, or bridge process stands between a host and that endpoint — an MCP
   host is configured with a running node's URL.
   [importable-python-library; mcp-served-with-the-node — SHIPPED #1712]
-  <!-- verify: cargo test -p streamlib-cli --bins the_rust_cli_owns_no_observation_verb -->
+  <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_the_wheel_serves_no_mcp_verb -->
 - **DECIDED** — `dev` and `run` bind the control plane identically: all interfaces
   (`0.0.0.0`) by default, narrowed per invocation by `--host`. There is no dev-only
   exposure posture — a node another host can reach is bound wide by definition, so
@@ -311,7 +321,8 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   provisioning, and codegen verbs are deleted. The standalone streamlib-runtime
   binary retires. Python embeds the engine in-process via the wheel; the control
   plane exists to observe and drive *running* nodes, not to embed.
-  [importable-python-library]
+  [importable-python-library; importable-python-library-ripout — SHIPPED #1715]
+  <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_this_wheel_is_the_only_streamlib_cli -->
 - **DECIDED** — Node discovery is a per-user on-disk registry — one JSON file per live
   node in the OS's standard per-user runtime directory — written only by
   control-plane-hosting runtimes, pruned only when both liveness signals (control

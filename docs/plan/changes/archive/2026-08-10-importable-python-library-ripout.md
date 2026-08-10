@@ -44,6 +44,17 @@ where a bullet says otherwise)
   not around the named traits — they are defined in terms of the guards and the
   surface descriptor, so the whole non-cross-DSO half travels with them, leaving
   `streamlib-adapter-abi` as exactly the cross-DSO half this change deletes.
+
+  > ~~the cores' dev-deps on doomed `-helpers` crates drop with their subprocess-parity
+  > tests~~ — Half-superseded 2026-08-09 by #1715 / PR #1804 (owner ruling, after an
+  > independent audit). `streamlib-adapter-cpu-readback-helpers` died whole and the clause
+  > holds for it — its bin was a placeholder and its only consumer a "cannot fail by
+  > design" test. `streamlib-adapter-vulkan-helpers` died too, but its four
+  > subprocess-parity tests **survive**: the helper bin re-homed into
+  > `adapters/streamlib-adapter-vulkan/tests/bin/vulkan_adapter_subprocess_helper.rs`,
+  > rewritten against the `streamlib-consumer-rhi` carve-out — the same import path the
+  > wheel's helper children use, which tightens those tests' fidelity rather than
+  > retiring them.
 - **`sdk/streamlib-python-native` retires into the wheel**: helper processes import
   the wheel itself (one native artifact, per §Distribution); the iceoryx2 transport
   and `escalate`/`subprocess_bridge` re-scope to same-interpreter spawns
@@ -140,6 +151,26 @@ where a bullet says otherwise)
   `check-no-inventory-submit`, `check-no-reverse-dns` (doc pointer), `test.yml`,
   `schemas.yml`. Keep — device-wait-idle, no-escalate-in-lifecycle,
   vendored-vulkanalia, license-check, pr-title, release-please.
+
+  > ~~Re-scope — `check-consumer-rhi-repr` (owner call: rationale was plugin FFI)~~ —
+  > Superseded 2026-08-08 (owner ruling at #1715's `/implement` plan gate). It is
+  > **deleted**, not re-scoped. The gate's own header states its entire rationale as
+  > cross-DSO transit — adapter vtables passing POD discriminants across the plugin DSO
+  > boundary — and that boundary dies here. `streamlib-consumer-rhi` survives and the
+  > wheel statically links it, but nothing passes its PODs across a DSO any more. The
+  > surviving cross-process boundary is `streamlib-ipc-types`, which carries its own
+  > `#[repr(C)]` discipline and layout regression tests and which this gate never
+  > covered; re-pointing the xtask at it would be a *new* gate, which this change does
+  > not commission. `xtask/src/check_consumer_rhi_repr.rs` and
+  > `.github/workflows/check-consumer-rhi-repr.yml` are both gone.
+  >
+  > ~~die — … `check-no-streamlib-metadata`, … `check-schema-versions`~~ — Superseded
+  > 2026-08-09 by #1715 / PR #1804. Both are **kept**: `streamlib.yaml` survives this
+  > change — 30 manifests on disk (17 under `packages/`, 11 under `examples/`, 2 under
+  > `runtime/`), named by 74 tracked files — so both gates still guard live subjects, and
+  > deleting them would leave surviving-package metadata discipline unguarded. They retire
+  > with the manifest in `schema-free-ports` / `processor-class-identity`, alongside
+  > `schemas/streamlib.schema.json`, which is struck below for the same reason.
 - The contract-deletion ticket lands as a **pre-approved stacked-PR structure** — its
   blast radius is unreviewable as one diff. **Four more stack levels joined it 2026-08-08**
   (owner ruling, #1713 plan gate), each for the same reason the host-services strip moved:
