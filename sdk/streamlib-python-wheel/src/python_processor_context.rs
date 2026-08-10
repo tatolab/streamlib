@@ -1024,14 +1024,20 @@ pub(crate) struct PythonLinkInputDataReader {
 #[pymethods]
 impl PythonLinkInputDataReader {
     /// The next bag on `port_name`, or `None` when the mailbox is empty.
+    ///
+    /// `into` is the opt-in strictness dial: a TypedDict casts for free, a
+    /// dataclass or pydantic model constructs and validates, and a bag that
+    /// does not fit raises here rather than travelling on.
+    #[pyo3(signature = (port_name, *, into = None))]
     fn read<'py>(
         &self,
         python: Python<'py>,
         port_name: &str,
+        into: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
         self.link_data_access
             .get()
-            .read_from_input_port(python, port_name)
+            .read_from_input_port(python, port_name, into)
     }
 
     /// The next bag with its stamp, or `(None, None)` when empty.
