@@ -482,8 +482,7 @@ impl VulkanPresentTarget {
     /// the caller must drive [`Self::recreate`] and NOT call `end_frame`).
     ///
     /// The recorder is left borrowed on the target — reach it via
-    /// `self.recorders[frame_index]` or the raw handle from
-    /// [`Self::in_flight_recorder_handle`]. This is the
+    /// `self.recorders[frame_index]`. This is the
     /// non-closure half of the `render_frame` loop. Blocks on the
     /// slot-reuse timeline wait and the `u64::MAX`-timeout acquire.
     #[tracing::instrument(level = "trace", skip(self), fields(frame_index = self.current_frame))]
@@ -731,17 +730,6 @@ impl VulkanPresentTarget {
 
         self.current_frame = (frame_index + 1) % MAX_FRAMES_IN_FLIGHT;
         Ok(!out_of_date)
-    }
-
-    /// Raw `Box<RhiCommandRecorderInner>` pointer of the in-flight frame's
-    /// recorder, or null when no frame is in flight. Borrowed, NON-OWNING
-    /// — the present target owns the recorder across the begin/end split;
-    /// a caller must never release it.
-    pub fn in_flight_recorder_handle(&self) -> *const std::ffi::c_void {
-        match &self.in_flight {
-            Some(f) => self.recorders[f.frame_index].raw_handle(),
-            None => std::ptr::null(),
-        }
     }
 
     /// Acquire the next swapchain image, run the caller's `render`

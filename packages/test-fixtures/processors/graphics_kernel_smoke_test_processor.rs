@@ -131,12 +131,7 @@ fn run_graphics_kernel_smoke(ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         .acquire_texture(&pool_descriptor)
         .map_err(|e| Error::Runtime(format!("acquire_texture: {e}")))?;
 
-    // Manual-mode start() takes FullAccess directly; the engine
-    // wraps cdylib lifecycle dispatch in `with_cdylib_scope` (#1075),
-    // so `ctx.gpu_full_access()` is `ScopeToken`-flavored and
-    // dispatches through the FullAccess vtable transparently.
-    // Same coverage as the pre-#1075 escalate path; the wrap is the
-    // engine-side replacement for the explicit `.escalate(|full|...)`.
+    // Manual-mode start() takes FullAccess directly.
     let full = ctx.gpu_full_access();
     let kernel = {
         let stages = [

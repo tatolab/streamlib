@@ -20,7 +20,7 @@ use super::{PixelBufferRef, PixelFormat};
 /// [`PixelBuffer::buffer_ref`].
 ///
 /// Clone only increments the host's `Arc<PixelBufferRef>` strong
-/// count via [`GpuContextLimitedAccessVTable::clone_pixel_buffer`] —
+/// count —
 /// it does NOT increment the platform buffer refcount (e.g.,
 /// CVPixelBufferRetain on macOS). This is critical for avoiding
 /// memory leaks when sharing buffers between Rust and Python.

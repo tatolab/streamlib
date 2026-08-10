@@ -31,9 +31,8 @@ use std::sync::Arc;
 /// export_opaque_fd methods.
 ///
 /// Layout-stable: `handle` is `Arc::into_raw(Arc<HostVulkanTimelineSemaphore>)`
-/// (the same inner pointer the SurfaceStore `register_texture` slot
-/// derefs for its `produce_done` / `consume_done` sidecars); `methods`
-/// points at the host-static [`HostTimelineSemaphoreMethodsVTable`].
+/// (the same inner pointer the SurfaceStore `register_texture` path
+/// derefs for its `produce_done` / `consume_done` sidecars).
 #[cfg(target_os = "linux")]
 #[repr(C)]
 pub struct HostTimelineSemaphore {

@@ -129,12 +129,8 @@ impl RuntimeContext {
         Arc::clone(&self.runtime_ops)
     }
 
-    /// Borrow the runtime-operations `Arc` directly. Engine-internal:
-    /// the [`RuntimeContextVTable`](streamlib_plugin_abi::RuntimeContextVTable)
-    /// `runtime_ops_handle` callback returns a pointer to this field
-    /// so the cdylib-paired [`HOST_RUNTIME_OPS_VTABLE`](crate::core::plugin::host_services::HOST_RUNTIME_OPS_VTABLE)
-    /// callbacks can clone a fresh `Arc<dyn RuntimeOperations>` per
-    /// invocation. The Arc itself lives for the lifetime of the
+    /// Borrow the runtime-operations `Arc` directly. Engine-internal.
+    /// The Arc itself lives for the lifetime of the
     /// `RuntimeContext`, so the borrow is sound for any caller that
     /// holds an `&RuntimeContext`.
     pub(crate) fn runtime_operations_ref(&self) -> &Arc<dyn RuntimeOperations> {
@@ -596,11 +592,6 @@ impl RuntimeContext {
 // plumbing). They are already exported so compile-fail doc tests can
 // assert the enforcement invariants.
 
-// Shim shape: `(handle, vtable)`-driven dispatch. The shim stores the
-// raw host pointer + the [`RuntimeContextVTable`] reference, and every
-// accessor calls through the vtable. This matches the plugin ABI
-// the cdylib uses.
-//
 // Host-internal compiler ops that still need direct access to the
 // underlying `RuntimeContext` (e.g. `surface_socket_path`,
 // `iceoryx2_node`) reach it via the `host_base()` crate-internal
@@ -621,10 +612,7 @@ impl RuntimeContext {
 /// ```
 #[repr(C)]
 pub struct RuntimeContextFullAccess<'a> {
-    /// Opaque pointer to the host-owned [`RuntimeContext`]. Threaded
-    /// through every [`RuntimeContextVTable`] callback. The host's
-    /// static vtable casts this back to `&RuntimeContext`; the cdylib
-    /// treats it as opaque.
+    /// Opaque pointer to the host-owned [`RuntimeContext`].
     handle: *const c_void,
     gpu_full: GpuContextFullAccess,
     /// Limited-access handle held alongside the full-access one so privileged
@@ -697,29 +685,23 @@ impl<'a> RuntimeContextFullAccess<'a> {
         &self.gpu_limited
     }
 
-    // ------------ ABI-mediated accessors ------------
-
-    /// Runtime unique id as an owned [`String`]. Routed through the
-    /// [`RuntimeContextVTable::runtime_id_copy`] callback.
+    /// Runtime unique id as an owned [`String`].
     pub fn runtime_id(&self) -> String {
         self.host_base().runtime_id().to_string()
     }
 
     /// Processor unique id as an owned [`String`], or `None` for the
-    /// shared/global context. Routed through
-    /// [`RuntimeContextVTable::processor_id_copy`].
+    /// shared/global context.
     pub fn processor_id(&self) -> Option<String> {
         self.host_base().processor_id().map(|id| id.to_string())
     }
 
-    /// Whether this processor is currently paused. Routed through
-    /// [`RuntimeContextVTable::is_paused`].
+    /// Whether this processor is currently paused.
     pub fn is_paused(&self) -> bool {
         self.host_base().is_paused()
     }
 
-    /// Whether processing should proceed (not paused). Routed through
-    /// [`RuntimeContextVTable::should_process`].
+    /// Whether processing should proceed (not paused).
     pub fn should_process(&self) -> bool {
         self.host_base().should_process()
     }
@@ -733,33 +715,15 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// Host-owned runtime operations. Implements [`RuntimeOperations`]
     /// so existing call sites
     /// (`ctx.runtime().add_processor_async(...).await`) keep working.
-    ///
-    /// When this build IS the host (no host callbacks installed — the
-    /// same host-vs-plugin discriminator
-    /// [`host_runtime_ops_vtable`](crate::core::plugin::host_services::host_runtime_ops_vtable)
-    /// uses), return a direct `Arc::clone` of the Runner-backed ops.
-    /// A host-resident processor (including the in-process api-server)
-    /// then reaches the real ops — the byte-shaped `RuntimeOpsVTable`
-    /// shim carries no transport for streaming ops such as `tap_async`
-    /// (its iceoryx2 subscriber is `!Send` and host-owned), so a
-    /// host-resident caller must bypass it. The `Arc` clone is
-    /// stash-safe past `Runner::stop()` exactly like the shim's
-    /// `clone_handle` refcount bump.
-    ///
-    /// When host callbacks ARE installed (a dlopened plugin), mint the
-    /// typed plugin ABI shim: the returned `Arc<dyn RuntimeOperations>`
-    /// owns an Arc refcount bump on the host's underlying ops impl via
-    /// the [`RuntimeOpsVTable::clone_handle`](streamlib_plugin_abi::RuntimeOpsVTable)
-    /// callback, so it too is sound to stash past `Runner::stop()`.
+    /// Returns a direct `Arc::clone` of the Runner-backed ops; the
+    /// clone is stash-safe past `Runner::stop()`.
     pub fn runtime(&self) -> Arc<dyn RuntimeOperations> {
         self.host_base().runtime()
     }
 
     // ------------ Engine-internal host accessors ------------
 
-    /// Direct reference to the underlying [`RuntimeContext`]. **Host-only**:
-    /// the shim is constructed from a real `&RuntimeContext`; cdylib
-    /// callers reach functionality through vtable-routed equivalents.
+    /// Direct reference to the underlying [`RuntimeContext`].
     /// Engine compiler ops that need direct access to
     /// `surface_socket_path` / `iceoryx2_node` / `tokio_handle` reach
     /// them through here.
@@ -830,7 +794,7 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
         self.host_base().should_process()
     }
 
-    /// Host-owned audio clock as a typed plugin ABI shim. See
+    /// Host-owned audio clock. See
     /// [`RuntimeContextFullAccess::audio_clock`].
     pub fn audio_clock(&self) -> &SharedAudioClock {
         self.host_base().audio_clock()

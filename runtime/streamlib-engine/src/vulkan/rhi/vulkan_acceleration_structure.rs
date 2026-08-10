@@ -103,17 +103,10 @@ pub(crate) struct VulkanAccelerationStructureInner {
     referenced_blases: Vec<VulkanAccelerationStructure>,
 }
 
-/// Acceleration-structure (BLAS or TLAS) RHI handle — layout-stable
-/// `#[repr(C)] (handle, vtable)` shape so cdylibs can hold, refcount,
-/// and drop without sharing rustc-version or dep-graph with the host.
-///
-/// The opaque handle points at an
-/// `Arc<VulkanAccelerationStructureInner>`; lifecycle dispatches
-/// through the host-installed
-/// [`GpuContextFullAccessVTable::clone_acceleration_structure`] /
-/// `drop_acceleration_structure` callbacks, which run
-/// `Arc::increment_strong_count` / `Arc::decrement_strong_count` in
-/// host-compiled code where the Inner layout is known.
+/// Acceleration-structure (BLAS or TLAS) RHI handle — a layout-stable
+/// `#[repr(C)]` handle over an opaque pointer to an
+/// `Arc<VulkanAccelerationStructureInner>`. Clone / Drop run
+/// `Arc::increment_strong_count` / `Arc::decrement_strong_count`.
 pub struct VulkanAccelerationStructure {
     /// Opaque handle to the host's `Arc<VulkanAccelerationStructureInner>`.
     pub(crate) handle: *const c_void,

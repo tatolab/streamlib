@@ -67,16 +67,9 @@ impl ManualProcessor for EscalateSmokeTest::Processor {
     fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         let output_path = self.config.output_path.clone();
 
-        // Manual-mode start() takes FullAccess directly. The engine's
-        // `ProcessorInstance::start` wraps cdylib-resident lifecycle
-        // dispatch in `with_cdylib_scope` (#1075), so
-        // `ctx.gpu_full_access()` is `ScopeToken`-flavored and
-        // dispatches through the FullAccess vtable transparently —
-        // same coverage as the pre-#1075 `escalate(|full| ...)` path,
-        // just exercised via the lifecycle wrap instead of the
-        // explicit escalate primitive.
+        // Manual-mode start() takes FullAccess directly.
         //
-        // Coverage (same as pre-#1075):
+        // Coverage:
         //   - wait_device_idle: Phase D Bucket B (FullAccess vtable slot).
         //   - acquire_pixel_buffer: Phase D Bucket C (inherited
         //     LimitedAccess vtable via Option B).

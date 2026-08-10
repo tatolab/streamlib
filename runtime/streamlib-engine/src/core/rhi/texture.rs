@@ -269,11 +269,9 @@ impl Texture {
     ///
     /// Returns the appropriate handle type for the current platform:
     /// - macOS/iOS: `IOSurface { id }`
-    /// - Linux: `DmaBuf { fd }` (plugin ABI safe — dispatches through
-    ///   [`GpuContextLimitedAccessVTable::texture_native_dma_buf_fd`]
-    ///   so cdylib subprocess adapters can export DMA-BUF FDs to a
-    ///   different GPU API — CUDA, OpenGL, downstream IPC — without
-    ///   touching host-internal `TextureInner` layout).
+    /// - Linux: `DmaBuf { fd }` — adapters export DMA-BUF FDs to a
+    ///   different GPU API (CUDA, OpenGL, downstream IPC) without
+    ///   touching host-internal `TextureInner` layout.
     /// - Windows: `DxgiSharedHandle { handle }` (when implemented).
     ///
     /// Returns `None` if no sharing handle is available (no Vulkan

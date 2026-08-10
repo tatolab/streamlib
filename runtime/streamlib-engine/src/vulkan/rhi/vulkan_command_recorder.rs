@@ -93,7 +93,7 @@ enum RecorderState {
 /// reads this before recording the swapchain post-draw layout barrier: a
 /// `vkCmdPipelineBarrier2` recorded inside an open dynamic-rendering
 /// instance is `VUID-vkCmdPipelineBarrier2`-class undefined behavior, so a
-/// plugin that drove `begin_frame` across the ABI split and forgot
+/// caller that drove `begin_frame` and forgot
 /// `cmd_end_dynamic_rendering` must have its pass auto-closed first. Pure
 /// state (no Vulkan handle) so the open/close balance is unit-testable
 /// without a GPU.
@@ -926,15 +926,6 @@ impl RhiCommandRecorderInner {
         *self.state.lock() = RecorderState::Idle;
     }
 
-    // -------------------------------------------------------------------------
-    // From-wire shims used by host extern "C" callbacks in
-    // `core/plugin/host_services.rs`. The check-boundaries rule keeps
-    // raw `vulkanalia` imports inside the RHI / consumer-rhi / adapter
-    // crates; the host wrappers receive raw integer wire types and
-    // dispatch through these shims so all `vk::*` construction happens
-    // inside `vulkan/rhi/`.
-    // -------------------------------------------------------------------------
-
     fn expect_recording(&self, op: &'static str) -> Result<()> {
         let state = self.state.lock();
         if *state != RecorderState::Recording {
@@ -1031,15 +1022,6 @@ impl RhiCommandRecorder {
         Self { handle }
     }
 
-    /// Raw `Box<RhiCommandRecorderInner>` handle backing this recorder.
-    /// Borrowed, NON-OWNING — used by [`VulkanPresentTarget`] to hand its
-    /// internal per-frame recorder back across the plugin ABI `begin_frame`
-    /// return + `end_frame` identity check. The caller must never release
-    /// it (the present target owns the recorder).
-    pub(crate) fn raw_handle(&self) -> *const c_void {
-        self.handle
-    }
-
     /// Engine-internal mutable borrow of the host-owned
     /// `RhiCommandRecorderInner`.
     pub(crate) fn host_inner_mut(&mut self) -> &mut RhiCommandRecorderInner {
@@ -1053,8 +1035,7 @@ impl RhiCommandRecorder {
     /// is the backing recorder inside an open dynamic-rendering instance?
     /// The present target owns its per-frame recorders and drives them
     /// host-side across the begin/end split, so this reads the boxed inner
-    /// directly (never dispatched across the ABI — there is no vtable slot,
-    /// and none is needed since `end_frame` runs in host-compiled code).
+    /// directly.
     pub(crate) fn host_in_render_pass(&self) -> bool {
         // SAFETY: `self.handle` is `Box::into_raw(Box<RhiCommandRecorderInner>)`;
         // the present target owns the recorder and drives it host-side, so

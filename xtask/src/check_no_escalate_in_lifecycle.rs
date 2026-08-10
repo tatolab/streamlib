@@ -27,16 +27,11 @@
 //!   `teardown_inner`, `start`, `stop`, `start_inner`, or
 //!   `stop_inner` AND takes `&RuntimeContextFullAccess` in its
 //!   parameter list. The name-match scopes the lint to the
-//!   engine-side gate-wrap surface — `ProcessorInstance` wraps all
-//!   four FullAccess lifecycle methods (`setup` / `teardown` /
-//!   `start` / `stop`) in either `with_cdylib_scope` (cdylib-
-//!   resident processors) or `gpu_limited_access().escalate(|_|)`
-//!   (in-process register processors) since PR #1075 extended
-//!   #1072's wrap to symmetry across all four. The escalate gate
-//!   is therefore held for the entire body in every variant; inner
-//!   `.escalate(...)` re-enters on the same thread and trips the
-//!   gate's same-thread re-entry panic in
-//!   `EscalateGate::enter`.
+//!   engine-side FullAccess lifecycle surface (`setup` / `teardown` /
+//!   `start` / `stop`): those bodies already hold FullAccess, so an
+//!   inner `.escalate(...)` is redundant at best and, under any
+//!   gate-holding dispatch, re-enters on the same thread and trips
+//!   the gate's same-thread re-entry panic in `EscalateGate::enter`.
 //! - The `_inner` suffix variants cover delegation helpers (see
 //!   the `BlendingCompositor` / `CrtFilmGrain` / `CameraToCudaCopy`
 //!   shape) — a `fn setup` that immediately calls
@@ -73,17 +68,11 @@ const TARGET_DIRS: &[&str] = &["packages", "examples"];
 /// silent suppression.
 const ALLOWLIST: &[(&str, &str)] = &[
     // `concurrent_escalate_test_processor`'s purpose is testing
-    // gate serialization across N concurrent worker threads. Its
-    // spawn-then-join shape deadlocks under the with_cdylib_scope
-    // wrap (workers block on gate held by start). Restructure to Reactive
-    // `process()` driven by external trigger frames is the
-    // documented follow-up; until then this fixture knowingly
-    // ships the pattern the lint exists to ban, with the runtime
-    // panic as the safety net if it's ever loaded.
+    // gate serialization across N concurrent worker threads, so it
+    // knowingly ships the exact pattern the lint exists to ban.
     (
         "packages/test-fixtures/processors/concurrent_escalate_test_processor.rs",
-        "intentional pattern that #1075's wrap deadlocks; \
-         integration test #[ignore]d, restructure deferred",
+        "intentionally escalates from start() to test gate serialization",
     ),
 ];
 
@@ -94,11 +83,7 @@ const ALLOWLIST: &[(&str, &str)] = &[
 const LIFECYCLE_PARAM_MARKER: &str = "RuntimeContextFullAccess";
 
 /// Function names whose bodies are subject to the escalate ban
-/// when they also take `&RuntimeContextFullAccess`. Scoped to the
-/// engine-side gate-wrap surface — `ProcessorInstance::setup`,
-/// `teardown`, `start` (Manual mode), and `stop` (Manual mode) all
-/// wrap cdylib-resident dispatch in `with_cdylib_scope` (which
-/// acquires the escalate gate) per PR #1075.
+/// when they also take `&RuntimeContextFullAccess`.
 const LIFECYCLE_FN_NAMES: &[&str] = &[
     "setup",
     "teardown",
@@ -164,13 +149,11 @@ pub fn run(workspace_root: &Path) -> Result<()> {
     }
     eprintln!(
         "\nFix:\n  \
-         Use `ctx.gpu_full_access()` directly. setup() / teardown() bodies\n  \
-         are dispatched inside an engine-managed scope that already grants\n  \
-         FullAccess (cdylib-resident: ScopeToken via `with_cdylib_scope`;\n  \
-         in-process: Boxed via the gpu_limited_access().escalate(|_| ...)\n  \
-         wrap inside ProcessorInstance::setup). Calling `.escalate(...)`\n  \
-         again from your body re-enters the same gate on the same thread\n  \
-         and trips the gate's same-thread re-entry panic in\n  \
+         Use `ctx.gpu_full_access()` directly. FullAccess lifecycle bodies\n  \
+         (`setup` / `teardown` / `start` / `stop`) already hold FullAccess;\n  \
+         `.escalate(...)` inside them is banned — under any gate-holding\n  \
+         dispatch it re-enters the same gate on the same thread and trips\n  \
+         the same-thread re-entry panic in\n  \
          runtime/streamlib-engine/src/core/context/escalate_gate.rs.\n  \
          \n  \
          The lifecycle dispatch already holds the escalate gate.\n  \
@@ -470,10 +453,8 @@ mod tests {
 
     #[test]
     fn flags_escalate_in_manual_mode_start() {
-        // Per PR #1075, the engine wraps Manual-mode `start` in
-        // `with_cdylib_scope` for cdylib-resident processors —
-        // same gate-held semantic as setup/teardown. Inner
-        // escalate re-enters and panics.
+        // Manual-mode `start` is on the banned surface — same
+        // semantic as setup/teardown.
         let src = r#"
             impl Proc {
                 fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {

@@ -248,14 +248,10 @@ pub struct ProcessorInstanceFactory {
 ///
 /// Starts empty. Callers populate it through one of two paths:
 ///
-/// - **Cdylib packages** loaded via `runtime.add_module(...)` register
-///   their processors through the plugin ABI's `STREAMLIB_PLUGIN`
-///   symbol, which calls the host's `processor_register` callback
-///   (see [`crate::core::plugin::host_services`]).
-/// - **In-process Rust callers** invoke
-///   [`ProcessorInstanceFactory::register`] (typed) or
-///   [`ProcessorInstanceFactory::register_dynamic`] (subprocess host
-///   wrappers) directly on the registry.
+/// In-process Rust callers invoke
+/// [`ProcessorInstanceFactory::register`] (typed) or
+/// [`ProcessorInstanceFactory::register_dynamic`] (subprocess host
+/// wrappers) directly on the registry.
 pub static PROCESSOR_REGISTRY: LazyLock<ProcessorInstanceFactory> =
     LazyLock::new(ProcessorInstanceFactory::new);
 

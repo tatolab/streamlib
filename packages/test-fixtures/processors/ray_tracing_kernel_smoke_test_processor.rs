@@ -152,12 +152,7 @@ fn run_ray_tracing_kernel_smoke(ctx: &RuntimeContextFullAccess<'_>) -> Result<()
     let vertices: Vec<f32> = vec![0.0, -0.5, 0.0, -0.5, 0.5, 0.0, 0.5, 0.5, 0.0];
     let indices: Vec<u32> = vec![0, 1, 2];
 
-    // Manual-mode start() takes FullAccess directly; the engine
-    // wraps cdylib lifecycle dispatch in `with_cdylib_scope` (#1075),
-    // so `ctx.gpu_full_access()` is `ScopeToken`-flavored and
-    // dispatches through the FullAccess vtable transparently.
-    // Same coverage as the pre-#1075 escalate path; the wrap is the
-    // engine-side replacement for the explicit `.escalate(|full|...)`.
+    // Manual-mode start() takes FullAccess directly.
     let full = ctx.gpu_full_access();
 
     // Probe RT capability first — on devices without
