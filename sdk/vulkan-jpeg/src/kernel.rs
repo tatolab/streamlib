@@ -97,7 +97,7 @@ pub struct JpegDecodeKernel {
 impl JpegDecodeKernel {
     /// Build the kernel through the FullAccess `create_compute_kernel`
     /// primitive — the host builds the kernel on its own device and hands
-    /// back a cdylib-safe `#[repr(C)]` handle. Loads SPIR-V, runs
+    /// back a `#[repr(C)]` handle. Loads SPIR-V, runs
     /// reflection, validates the declared bindings match the shader,
     /// allocates the Vulkan pipeline + descriptor set + command buffer +
     /// fence host-side. Never reaches the raw `HostVulkanDevice`.

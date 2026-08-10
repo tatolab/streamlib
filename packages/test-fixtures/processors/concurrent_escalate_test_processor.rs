@@ -1,16 +1,14 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Phase H (#1006 scenario 1) dlopen-cdylib concurrent-escalate test
-//! fixture.
+//! Concurrent-escalate test fixture.
 //!
-//! Spawns `config.thread_count` threads from inside the cdylib's
-//! `start()` lifecycle, each cloning `gpu_limited_access()` and
-//! calling `escalate(|_full| ...)` concurrently. The escalate gate
-//! is documented to serialize concurrent callers — overlapping
-//! closures would be a regression. Each thread bumps a shared
-//! atomic on closure entry; if the atomic was already set, that's
-//! an overlap.
+//! Spawns `config.thread_count` threads from `start()`, each cloning
+//! `gpu_limited_access()` and calling `escalate(|_full| ...)`
+//! concurrently. The escalate gate is documented to serialize
+//! concurrent callers — overlapping closures would be a regression.
+//! Each thread bumps a shared atomic on closure entry; if the atomic
+//! was already set, that's an overlap.
 //!
 //! Output format:
 //!   - `OK\n<thread_count>\noverlaps=<N>` — every escalate closure
@@ -19,9 +17,7 @@
 //!     panicked.
 //!
 //! Mirrors the in-process `test_escalate_serializes_concurrent_callers`
-//! test (`runtime/streamlib-engine/src/core/context/gpu_context.rs`) but
-//! drives the cdylib path through `escalate_via_vtable` — the
-//! plugin ABI contract the audit flagged as previously uncovered.
+//! test (`runtime/streamlib-engine/src/core/context/gpu_context.rs`).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -33,7 +29,7 @@ use streamlib::sdk::processors::ManualProcessor;
 
 #[streamlib::sdk::processor(
     "@tatolab/test-fixtures/ConcurrentEscalateTestProcessor",
-    description = "Phase H (#1006 scenario 1) dlopen-cdylib concurrent-escalate fixture. Spawns thread_count threads from start(); each clones gpu_limited_access() and calls escalate concurrently. Output captures overlap count; expected overlaps=0 — proves the escalate gate serializes cdylib-path callers through escalate_via_vtable.",
+    description = "Concurrent-escalate fixture. Spawns thread_count threads from start(); each clones gpu_limited_access() and calls escalate concurrently. Output captures overlap count; expected overlaps=0 — proves the escalate gate serializes concurrent callers.",
     execution = manual,
     config = crate::_generated_::ConcurrentEscalateTestProcessorConfig,
 )]
@@ -45,10 +41,9 @@ impl ManualProcessor for ConcurrentEscalateTest::Processor {
     }
 
     fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        // Orphaned end-to-end: the dlopen integration test that drove
-        // this fixture was deleted with the plugin ABI, so nothing
-        // exercises it. The serialization invariant it was guarding is
-        // covered by the unit test
+        // Orphaned end-to-end: the integration test that drove this
+        // fixture was removed, so nothing exercises it. The
+        // serialization invariant it guarded is covered by the unit test
         // `escalate_gate::tests::enter_serializes_concurrent_callers`.
         let output_path = self.config.output_path.clone();
         let thread_count = self.config.thread_count as usize;

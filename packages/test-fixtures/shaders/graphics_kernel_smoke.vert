@@ -4,7 +4,7 @@
 // Cdylib graphics-kernel smoke test — vertex stage.
 // Fabricates a single centered triangle from gl_VertexIndex (no vertex
 // buffer required). Single fragment-only push-constant variant gate
-// proves the push-constant slot vtable wiring works end-to-end.
+// proves the push-constant wiring works end-to-end.
 
 #version 450
 

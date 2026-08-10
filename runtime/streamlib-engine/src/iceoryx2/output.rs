@@ -393,10 +393,9 @@ impl OutputWriter {
     /// Build an empty pre-wiring handle with a null handle pointer. The
     /// engine patches in a real inner via
     /// `GeneratedProcessor::set_iceoryx2_resources` before any
-    /// downstream connection wiring runs. Method calls on the
-    /// empty handle return cleanly with no-op semantics
-    /// (matches today's pre-wiring behaviour of an empty
-    /// `OutputWriter::new()`).
+    /// downstream connection wiring runs. Safe to hold before wiring —
+    /// `has_port` / `is_configured` answer without a wired inner — but
+    /// `write` / `write_raw` return [`Error::Link`] until it fires.
     pub fn empty() -> Self {
         Self {
             handle: std::ptr::null(),

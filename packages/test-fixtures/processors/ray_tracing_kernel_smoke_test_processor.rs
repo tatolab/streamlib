@@ -1,51 +1,40 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Integration-test fixture: a dlopen'd processor that exercises a
-//! handful of the `VulkanRayTracingKernelMethodsVTable` slots end-to-end
-//! from cdylib code.
+//! Integration-test fixture that exercises a handful of the
+//! ray-tracing-kernel methods end-to-end.
 //!
 //! Smoke-only — narrower scope than the compute-kernel CPU-reference
-//! test. Validates that the vtable round-trips for kernel construction,
-//! AS-binding setter, storage-image setter, push-constant staging, and
-//! a `trace_rays()` dispatch complete without panicking or returning
-//! an error code. Pixel correctness is not asserted.
+//! test. Validates that kernel construction, AS-binding setter,
+//! storage-image setter, push-constant staging, and a `trace_rays()`
+//! dispatch complete without panicking or returning an error code.
+//! Pixel correctness is not asserted.
 //!
 //! Lifecycle:
 //!   1. `setup()` — nothing.
 //!   2. `start()` —
-//!      a. Probe the FullAccess vtable's
-//!         `supports_ray_tracing_pipeline()` slot. If the device
+//!      a. Probe `supports_ray_tracing_pipeline()`. If the device
 //!         doesn't expose `VK_KHR_ray_tracing_pipeline`, write `OK`
-//!         immediately — the cdylib vtable round-trip itself
-//!         succeeded; per-platform RT support is a host concern.
+//!         immediately — per-platform RT support is a host concern.
 //!      b. Build a single-triangle BLAS via
-//!         `gpu_full_access().build_triangles_blas(...)`. Exercises
-//!         the FullAccess vtable's `build_triangles_blas` slot.
+//!         `gpu_full_access().build_triangles_blas(...)`.
 //!      c. Build an identity TLAS over the BLAS via
-//!         `gpu_full_access().build_tlas(...)`. Exercises the
-//!         FullAccess vtable's `build_tlas` slot.
+//!         `gpu_full_access().build_tlas(...)`.
 //!      d. Construct a [`RayTracingKernelDescriptor`] for the
 //!         embedded rgen+rmiss+rchit SPIR-V (acceleration_structure
 //!         + storage_image bindings, push-constant variant gate) and
 //!         create the kernel via
 //!         `gpu_full_access().create_ray_tracing_kernel(...)`.
-//!         Exercises the FullAccess vtable's
-//!         `create_ray_tracing_kernel` slot.
 //!      e. Acquire a STORAGE_BINDING + COPY_SRC render-target
 //!         `Texture` via `gpu_limited_access().acquire_texture(...)`.
 //!      f. Stage AS binding via
-//!         `kernel.set_acceleration_structure(0, &tlas)` —
-//!         exercises the `set_acceleration_structure` vtable slot.
+//!         `kernel.set_acceleration_structure(0, &tlas)`.
 //!      g. Stage storage image binding via
-//!         `kernel.set_storage_image(1, texture)` — exercises the
-//!         `set_storage_image` vtable slot.
+//!         `kernel.set_storage_image(1, texture)`.
 //!      h. Stage push constants via
-//!         `kernel.set_push_constants_value(&variant)` — exercises
-//!         the `set_push_constants` vtable slot.
+//!         `kernel.set_push_constants_value(&variant)`.
 //!      i. Drive `kernel.trace_rays(width, height, 1)` against the
-//!         acquired texture — exercises the `trace_rays` vtable slot
-//!         end-to-end (including the SBT + queue submit + fence
+//!         acquired texture (including the SBT + queue submit + fence
 //!         wait).
 //!      j. Write `OK` or `ERR:<message>` to the configured
 //!         `output_path` so the integration test can assert the
@@ -57,9 +46,8 @@
 //! `supports_ray_tracing_pipeline`, `build_triangles_blas`,
 //! `build_tlas`, `create_ray_tracing_kernel`, `acquire_texture`,
 //! `set_acceleration_structure`, `set_storage_image`,
-//! `set_push_constants`, or `trace_rays` at the cdylib boundary
-//! surfaces here as either a missing output file (cdylib panicked at
-//! the FFI boundary) or `ERR:<message>` in the file.
+//! `set_push_constants`, or `trace_rays` surfaces here as either a
+//! missing output file (the processor panicked) or `ERR:<message>`.
 
 use streamlib::engine_internal::core::context::TexturePoolDescriptor;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
@@ -92,7 +80,7 @@ const SMOKE_SURFACE_SIZE: u32 = 64;
 
 #[streamlib::sdk::processor(
     "@tatolab/test-fixtures/RayTracingKernelSmokeTestProcessor",
-    description = "Phase E (#953) dlopen-cdylib ray-tracing-kernel methods-vtable smoke test fixture — builds a single-triangle BLAS + identity TLAS via FullAccess, creates an RT kernel, acquires a STORAGE_BINDING Texture, runs a single trace_rays() through the per-type binding-method vtable to assert the vtable round-trips (set_acceleration_structure / set_storage_image / set_push_constants / trace_rays) don't panic. Smoke-only; pixel correctness not asserted.",
+    description = "Ray-tracing-kernel smoke test fixture — builds a single-triangle BLAS + identity TLAS via FullAccess, creates an RT kernel, acquires a STORAGE_BINDING Texture, runs a single trace_rays() to assert the binding methods (set_acceleration_structure / set_storage_image / set_push_constants / trace_rays) don't panic. Smoke-only; pixel correctness not asserted.",
     execution = manual,
     config = crate::_generated_::RayTracingKernelSmokeTestProcessorConfig,
 )]
@@ -155,9 +143,9 @@ fn run_ray_tracing_kernel_smoke(ctx: &RuntimeContextFullAccess<'_>) -> Result<()
     // Manual-mode start() takes FullAccess directly.
     let full = ctx.gpu_full_access();
 
-    // Probe RT capability first — on devices without
-    // VK_KHR_ray_tracing_pipeline, the cdylib vtable round-trip
-    // itself succeeded; per-platform RT support is a host concern.
+    // Probe RT capability first — per-platform RT support is a host
+    // concern, so a device without VK_KHR_ray_tracing_pipeline still
+    // counts as a passing run.
     let supports_rt = full.supports_ray_tracing_pipeline();
     if !supports_rt {
         return Ok(());

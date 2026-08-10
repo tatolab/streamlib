@@ -1,15 +1,15 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 #
-# Test-only config schema for the Phase G (#961) dlopen-cdylib
-# lifecycle-probe processor. The processor is a ContinuousProcessor
+# Test-only config schema for the lifecycle-probe processor. The
+# processor is a ContinuousProcessor
 # whose process / on_pause / on_resume / setup / teardown hooks
 # append a marker line to `output_path`. The integration test parses
 # the file to confirm each lifecycle hook dispatched correctly.
 
 metadata:
   type: LifecycleProbeProcessorConfig
-  description: "Test config schema for the Phase G dlopen-cdylib lifecycle-probe processor (#961)."
+  description: "Test config schema for the lifecycle-probe processor."
 
 properties:
   output_path:

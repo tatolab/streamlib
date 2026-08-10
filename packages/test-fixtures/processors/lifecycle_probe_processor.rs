@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Phase G (#961) dlopen-cdylib lifecycle-probe processor fixture.
+//! Lifecycle-probe processor fixture.
 //!
 //! ContinuousProcessor whose lifecycle hooks (`setup`, `process`,
 //! `on_pause`, `on_resume`, `teardown`) each append a single marker

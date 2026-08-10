@@ -2815,31 +2815,9 @@ impl GpuContextLimitedAccess {
         width: u32,
         height: u32,
     ) -> Result<()> {
-        if self.handle.is_null() || self.vtable.is_null() {
-            return Err(Error::GpuError(
-                "blit_copy_iosurface: GpuContextLimitedAccess has null handle/vtable".into(),
-            ));
-        }
-        let mut err_buf = [0u8; 512];
-        let mut err_len: usize = 0;
-        // SAFETY: see the method-level safety note.
-        let status = unsafe {
-            ((*self.vtable).blit_copy_iosurface)(
-                self.handle,
-                src as *const std::ffi::c_void,
-                dest as *const PixelBuffer as *const std::ffi::c_void,
-                width,
-                height,
-                err_buf.as_mut_ptr(),
-                err_buf.len(),
-                &mut err_len as *mut usize,
-            )
-        };
-        if status == 0 {
-            Ok(())
-        } else {
-            let msg = String::from_utf8_lossy(&err_buf[..err_len.min(err_buf.len())]).into_owned();
-            Err(Error::GpuError(msg))
+        unsafe {
+            self.host_inner()
+                .blit_copy_iosurface(src, dest, width, height)
         }
     }
 

@@ -1059,7 +1059,7 @@ mod processor_struct_emit_tests {
     /// it. Declaration order is deliberately not asserted: `Processor` is not
     /// `#[repr(C)]`, so its field order is not a contract.
     #[test]
-    fn plugin_abi_object_port_fields_stay_unconditional_when_every_custom_field_is_compiled_out() {
+    fn port_fields_stay_unconditional_when_every_custom_field_is_compiled_out() {
         let schema = schema_declaring_iceoryx2_input_and_output_ports();
         let custom_fields = extract_custom_fields(&struct_with_every_custom_field_compiled_out());
 

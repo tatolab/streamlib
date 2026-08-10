@@ -1,15 +1,14 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Integration-test fixture: a dlopen'd processor that exercises a
-//! handful of the `VulkanGraphicsKernelMethodsVTable` slots end-to-end
-//! from cdylib code.
+//! Integration-test fixture that exercises a handful of the
+//! graphics-kernel methods end-to-end.
 //!
 //! Smoke-only — narrower scope than the compute-kernel CPU-reference
-//! test. Validates that the vtable round-trips for kernel construction,
-//! a couple of binding-method setters, push-constant staging, and an
-//! `offscreen_render()` dispatch complete without panicking or
-//! returning an error code. Pixel correctness is not asserted.
+//! test. Validates that kernel construction, a couple of binding-method
+//! setters, push-constant staging, and an `offscreen_render()` dispatch
+//! complete without panicking or returning an error code. Pixel
+//! correctness is not asserted.
 //!
 //! Lifecycle:
 //!   1. `setup()` — nothing.
@@ -18,17 +17,14 @@
 //!         vert+frag SPIR-V (centered triangle, push-constant
 //!         variant gate, single Rgba8Unorm color attachment) and
 //!         create the kernel via
-//!         `gpu_full_access().create_graphics_kernel(...)`. Exercises
-//!         the FullAccess vtable's `create_graphics_kernel` slot.
+//!         `gpu_full_access().create_graphics_kernel(...)`.
 //!      b. Acquire a render-target `Texture` (Rgba8Unorm,
 //!         COPY_DST | TEXTURE_BINDING | RENDER_ATTACHMENT) via
 //!         `gpu_limited_access().acquire_texture(...)`.
 //!      c. Stage push constants via
-//!         `kernel.set_push_constants_value(0, &variant)` — exercises
-//!         the `set_push_constants` vtable slot.
+//!         `kernel.set_push_constants_value(0, &variant)`.
 //!      d. Drive `kernel.offscreen_render(...)` against the acquired
-//!         texture with a single CLEAR-load color target — exercises
-//!         the `offscreen_render` vtable slot end-to-end (including
+//!         texture with a single CLEAR-load color target (including
 //!         the parallel-array color-target marshaling + the
 //!         `OffscreenDrawRepr` tagged-union encoding).
 //!      e. Write `OK` or `ERR:<message>` to the configured
@@ -38,9 +34,8 @@
 //!
 //! What this locks: a regression that breaks any of
 //! `create_graphics_kernel`, `acquire_texture`, `set_push_constants`,
-//! or `offscreen_render` at the cdylib boundary surfaces here as
-//! either a missing output file (cdylib panicked at the FFI
-//! boundary) or `ERR:<message>` in the file.
+//! or `offscreen_render` surfaces here as either a missing output
+//! file (the processor panicked) or `ERR:<message>` in the file.
 
 use streamlib::engine_internal::core::context::TexturePoolDescriptor;
 use streamlib::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
@@ -69,7 +64,7 @@ const SMOKE_SURFACE_SIZE: u32 = 64;
 
 #[streamlib::sdk::processor(
     "@tatolab/test-fixtures/GraphicsKernelSmokeTestProcessor",
-    description = "Phase E (#951) dlopen-cdylib graphics-kernel methods-vtable smoke test fixture — creates a graphics kernel via FullAccess, acquires a render-target Texture, runs a single offscreen_render() through the per-type binding-method vtable to assert the vtable round-trips don't panic. Smoke-only; pixel correctness not asserted.",
+    description = "Graphics-kernel smoke test fixture — creates a graphics kernel via FullAccess, acquires a render-target Texture, runs a single offscreen_render() to assert the binding methods don't panic. Smoke-only; pixel correctness not asserted.",
     execution = manual,
     config = crate::_generated_::GraphicsKernelSmokeTestProcessorConfig,
 )]

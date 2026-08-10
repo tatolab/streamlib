@@ -729,16 +729,11 @@ impl<'a> RuntimeContextFullAccess<'a> {
     /// them through here.
     pub(crate) fn host_base(&self) -> &RuntimeContext {
         // SAFETY: shim is constructed from a real `&'a RuntimeContext`;
-        // the borrow's lifetime is encoded in `'a`. Cdylib code never
-        // calls this — it is `pub(crate)` and only invoked by engine
-        // compiler ops on the host side.
+        // the borrow's lifetime is encoded in `'a`.
         unsafe { &*(self.handle as *const RuntimeContext) }
     }
 
     /// Engine-internal: direct borrow of the host's `SharedAudioClock`.
-    /// Same data the public [`Self::audio_clock`] reaches via the
-    /// vtable; the direct borrow avoids the trip through the
-    /// callback when the call site is already in host code.
     pub(crate) fn host_audio_clock(&self) -> &SharedAudioClock {
         self.host_base().audio_clock()
     }
@@ -775,8 +770,6 @@ impl<'a> RuntimeContextLimitedAccess<'a> {
     pub fn gpu_limited_access(&self) -> &GpuContextLimitedAccess {
         &self.gpu_limited
     }
-
-    // ------------ ABI-mediated accessors ------------
 
     pub fn runtime_id(&self) -> String {
         self.host_base().runtime_id().to_string()

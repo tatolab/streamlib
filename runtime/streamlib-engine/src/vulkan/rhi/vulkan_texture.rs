@@ -164,8 +164,8 @@ impl Default for HostVkImageMeta {
 /// 1. **High-level acquire (recommended for standard render-target
 ///    use):** call
 ///    `GpuContextFullAccess::acquire_render_target_dma_buf_image(w, h, format)`
-///    — backed by the FullAccess `acquire_render_target_dma_buf_image`
-///    vtable slot. Returns a `Texture`. Extract the underlying
+///    — the FullAccess `acquire_render_target_dma_buf_image` entry
+///    point. Returns a `Texture`. Extract the underlying
 ///    `Arc<HostVulkanTexture>` via the v10 `host_vulkan_texture_arc`
 ///    bridge (`HostTextureExt::host_vulkan_texture_arc`). The slot's
 ///    host-side body does FOURCC mapping, queries the device's RT-capable
