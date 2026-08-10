@@ -345,11 +345,10 @@ mod tests {
     use super::*;
 
     /// `PortDescriptor::schema` must round-trip every `PortSchemaSpec`
-    /// variant losslessly through `rmp_serde` — that's the cdylib plugin ABI
-    /// wire format. A regression here would silently degrade
-    /// `Specific(SchemaIdent)` to `Named(bare_type)` at the
-    /// plugin ABI; the WIRE phase would then panic at
-    /// `open_iceoryx2_service_op::schema_ident_wire_for_producer`.
+    /// variant losslessly through `rmp_serde`. A regression here would
+    /// silently degrade `Specific(SchemaIdent)` to `Named(bare_type)`; channel
+    /// sizing then fails the link at wire time with a `Configuration` error
+    /// naming the schema it could not find in the registry.
     /// Mentally revert the `#[serde(with = "port_schema_spec_wire")]`
     /// attribute on `PortDescriptor::schema` and this test fails on
     /// the Specific case.

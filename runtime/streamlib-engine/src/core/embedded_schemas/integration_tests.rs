@@ -257,13 +257,11 @@ fn test_large_frame_schema_publisher_accepts_256kb() {
     );
 }
 
-/// Full publish/subscribe round-trip using the subprocess FFI wire format:
-/// `[FrameHeader (204 bytes)][encoded video data (256 KB)]` — the exact layout
-/// `sldn_output_write` / `slpn_output_write` build and `sldn_input_poll` /
-/// `slpn_input_poll` parse when a Deno or Python subprocess carries an
-/// encodedvideoframe. Before the per-input `expected_payload_bytes` wiring fix,
-/// the TS/Python read buffer was hard-coded to 32 KB and this payload would
-/// have been silently truncated on receipt.
+/// Full publish/subscribe round-trip at the wire format a helper process
+/// speaks: `[FrameHeader (76 bytes)][encoded video data (256 KB)]`. Before the
+/// per-input `expected_payload_bytes` wiring fix, the helper's read buffer was
+/// hard-coded to 32 KB and this payload would have been silently truncated on
+/// receipt.
 #[test]
 fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
     test_support::register_test_wire_vocabulary();

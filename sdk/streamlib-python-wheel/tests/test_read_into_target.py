@@ -231,6 +231,14 @@ def test_a_pydantic_model_target_raises_at_the_read_on_a_bad_field(
 
 # =============================================================================
 # Cast, not contract
+#
+# These pin the contract forward, not the deletion that established it: the
+# frame header's schema tag was inert on the read path before it was removed
+# (it fed a warn-once tracing line and never blocked delivery), so every test
+# below passes against the tagged wire too. What goes red if the tag comes
+# back is the byte-offset assertion in `streamlib-ipc-types` —
+# `frame_header_fields_sit_at_their_documented_wire_offsets`. That is the
+# revert lock; this section is the behaviour it buys.
 # =============================================================================
 
 

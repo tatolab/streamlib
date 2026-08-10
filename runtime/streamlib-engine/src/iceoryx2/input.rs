@@ -160,7 +160,7 @@ impl SendableListener {
     }
 }
 
-/// Outcome of a bounded read for the cdylib grow-and-retry read protocol.
+/// Outcome of a bounded read for the grow-and-retry read protocol.
 ///
 /// A publisher under PowerOfTwo growth can deliver a frame larger than any fixed
 /// receive buffer; [`InputMailboxesInner::read_raw_bounded`] reports that as
