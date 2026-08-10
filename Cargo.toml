@@ -35,8 +35,8 @@ members = [
     # `tatolab/streamlib-packages` (#1672), deny-ruled against editing, and an
     # engine change that breaks one is upgrade backlog rather than a defect.
     # Those three are engine-side, and read as contract sources: `escalate`
-    # holds the escalate wire schemas, `core` the core schemas and their
-    # crate, and `test-fixtures` below is INTERNAL test infrastructure — it
+    # holds the escalate wire schemas, `core` the core schemas, and
+    # `test-fixtures` below is INTERNAL test infrastructure — it
     # path-deps the zone crates and is the one package that stays a workspace
     # member (`publish = false`, which also keeps it out of the release
     # closure).

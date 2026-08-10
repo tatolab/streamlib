@@ -750,8 +750,8 @@ pub(crate) fn handle_escalate_op(
 /// Convert a wire-format [`EscalateRequestLog`] into a host-side
 /// [`LogRecord`]. Stamps `host_ts` at the moment of receipt — the
 /// subprocess-supplied `source_ts` is advisory only and never used for
-/// ordering. Parses `source_seq` from its string wire encoding (JTD has
-/// no native u64); silently drops the value on parse failure so a
+/// ordering. Parses `source_seq` from its string wire encoding (JSON has
+/// no 64-bit integer); silently drops the value on parse failure so a
 /// malformed subprocess can't block log delivery.
 fn log_record_from_wire(log: EscalateRequestLog) -> LogRecord {
     let source = match log.source {
@@ -1749,7 +1749,7 @@ fn handle_register_acceleration_structure_blas(
 /// Failure modes (each surfaced as an [`EscalateResponse::Err`] keyed
 /// by the original request_id):
 /// 1. Instance `transform` length isn't 12 floats.
-/// 2. Instance `mask` exceeds 0xff (JTD has no native u8).
+/// 2. Instance `mask` exceeds 0xff (the wire form is a u32).
 /// 3. No bridge is registered.
 /// 4. Bridge `register_tlas` returned an error — typically empty
 ///    instance list, unknown blas_id, kind mismatch (a TLAS appearing
@@ -2062,7 +2062,7 @@ fn handle_run_ray_tracing_kernel(
 
 /// Convert a sentinel-encoded wire stage index back into an
 /// `Option<u32>`. The wire form uses `0xFFFFFFFF` to mean "absent"
-/// because JTD has no `Option<uint32>`.
+/// because the field is always present on the wire.
 #[cfg(target_os = "linux")]
 fn optional_stage(idx: u32) -> Option<u32> {
     if idx == RAY_TRACING_STAGE_INDEX_NONE {
@@ -2811,7 +2811,7 @@ mod tests {
     fn log_frame_parses_as_escalate_request_log_variant() {
         // Parser-shape assertion: the wire-format `log` frame must carry
         // `rpc == "escalate_request"` and decode as `EscalateRequest::Log`.
-        // This locks the JTD discriminator tag — the actual "bridge does not
+        // This locks the `op` discriminator tag — the actual "bridge does not
         // forward log frames to the lifecycle channel" contract is locked by
         // `subprocess_bridge::tests::log_frame_does_not_leak_to_lifecycle_channel`,
         // which drives a real reader_loop over a socketpair.

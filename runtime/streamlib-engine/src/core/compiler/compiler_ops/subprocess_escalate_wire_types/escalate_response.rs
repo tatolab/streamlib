@@ -20,7 +20,7 @@ pub(crate) enum EscalateResponse {
     Ok(EscalateResponseOk),
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateResponseContended {
     /// Correlates response with request. Returned by
@@ -32,7 +32,7 @@ pub(crate) struct EscalateResponseContended {
     pub(crate) request_id: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct EscalateResponseErr {
     /// Human-readable error message from the host side.
