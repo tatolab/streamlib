@@ -175,7 +175,7 @@ expect_pass "another change file's own inventory is not residue"
 new_repo <<'EOF'
 - REMOVED: fictional_modules
 EOF
-plant docs/plan/ARCHITECTURE.md "deleted in full: \`fictional_modules/\`, the .fkpkg format, streamlib.lock"
+plant docs/plan/ARCHITECTURE.md "deleted in full: \`fictional_modules/\`, the .fkpkg format, fictional.lock"
 run_gate
 expect_pass "the plan's own description of a removal is not residue"
 
