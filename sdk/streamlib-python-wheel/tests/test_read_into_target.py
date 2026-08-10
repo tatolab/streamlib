@@ -21,6 +21,7 @@ from typing import Any, TypedDict
 
 import pydantic
 import pytest
+from typing_extensions import TypedDict as TypedDictFromTypingExtensions
 from typing_extensions import assert_type
 
 from streamlib import ProcessorLinkDataAccess
@@ -31,6 +32,13 @@ INPUT_PORT = "detections_from_upstream"
 
 class DetectionTypedDict(TypedDict):
     """The free-cast target: a TypedDict is a dict at runtime."""
+
+    label: str
+    score: float
+
+
+class DetectionTypedDictFromTypingExtensions(TypedDictFromTypingExtensions):
+    """The spelling `typing.is_typeddict` does not recognize."""
 
     label: str
     score: float
@@ -151,6 +159,26 @@ def test_a_typed_dict_target_validates_nothing(wired_link: WiredLinkUnderTest):
     )
 
     assert detection == {"label": "cat", "unexpected": True}
+
+
+def test_a_typing_extensions_typed_dict_is_an_accepted_target(
+    wired_link: WiredLinkUnderTest,
+):
+    """A package supporting several interpreter versions spells its TypedDicts
+    this way, and the read has to accept one rather than raise.
+
+    It cannot show whether the bag was copied on the way through — both
+    spellings return an equal dict when constructed, so only the Rust unit test
+    can see the difference. What this pins is that the target is accepted at
+    all.
+    """
+    wired_link.deliver({"label": "cat", "score": 0.9})
+
+    detection = wired_link.destination.read_from_input_port(
+        INPUT_PORT, into=DetectionTypedDictFromTypingExtensions
+    )
+
+    assert detection == {"label": "cat", "score": 0.9}
 
 
 def test_a_dataclass_target_is_constructed_from_the_bag(
