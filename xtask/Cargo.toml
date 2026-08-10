@@ -23,7 +23,8 @@ streamlib-processor-schema = { path = "../sdk/streamlib-processor-schema" }
 # validated through the same SemVer type the pack stamp derives from.
 streamlib-idents = { path = "../sdk/streamlib-idents" }
 
-# Logging.
+# Logging — `main` installs the subscriber that surfaces
+# check-vendored-vulkanalia's `tracing::info!` output.
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
