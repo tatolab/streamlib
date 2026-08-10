@@ -564,15 +564,13 @@ fn generate_from_config_from_schema(
     config_field_name: &Option<Ident>,
     custom_fields: &[CustomField],
 ) -> TokenStream {
-    // Issue #894: host-allocates iceoryx2 inner Arcs. The macro
-    // emits empty handles; the host's
-    // `ProcessorInstance::install_iceoryx2_resources` patches in
-    // real handles via `GeneratedProcessor::set_iceoryx2_resources`
+    // The macro emits empty handles; the host's
+    // `ProcessorInstance::install_iceoryx2_resources` patches in real
+    // handles via `GeneratedProcessor::set_iceoryx2_resources`
     // immediately after `from_config` returns. Per-port delivery
     // resolution (drain order + ring depth) is owned entirely by the
-    // host wire path, which reads the wire type's `flow_class` and any
-    // port-site `delivery_profile` override at wire time — the macro
-    // registers no ports here.
+    // host wire path, which reads the destination input port's declared
+    // `delivery_profile` at wire time — the macro registers no ports here.
     let ipc_input_init = if !schema.inputs.is_empty() {
         quote! { inputs: __streamlib_sdk::iceoryx2::InputMailboxes::empty(), }
     } else {

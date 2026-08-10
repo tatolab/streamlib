@@ -13,11 +13,15 @@ from streamlib import SchemaIdent, input, output, processor
 
 
 def test_a_bare_decorator_needs_no_arguments_at_all():
-    """The zero-ceremony bar: a filter declares nothing but its ports."""
+    """The zero-ceremony bar: a filter declares its ports and nothing else.
+
+    An input's delivery profile is part of declaring the port, not ceremony
+    on top of it — there is no identity, no manifest, no schema to wrangle.
+    """
 
     @processor
     class BrightnessFilter:
-        @input()
+        @input(delivery_profile="latest")
         def frames_from_upstream(self) -> None: ...
 
         @output()
@@ -65,7 +69,7 @@ def test_the_method_name_is_the_port_name():
 def test_an_explicit_name_overrides_the_method_name():
     @processor
     class Renamed:
-        @input(name="video_in")
+        @input(name="video_in", delivery_profile="latest")
         def handle_incoming_video(self) -> None: ...
 
         @output(name="video_out")
@@ -84,7 +88,7 @@ def test_a_schema_ident_instance_is_stored_as_its_wire_dict():
 
     @processor
     class Typed:
-        @input(schema=video_frame, description="frames")
+        @input(schema=video_frame, description="frames", delivery_profile="latest")
         def frames_from_upstream(self) -> None: ...
 
         @output(schema=video_frame)
@@ -106,7 +110,7 @@ def test_a_codegen_class_carrying_a_schema_ident_is_accepted():
 
     @processor
     class Typed:
-        @input(schema=VideoFrame)
+        @input(schema=VideoFrame, delivery_profile="latest")
         def frames_from_upstream(self) -> None: ...
 
     assert Typed.__streamlib_processor_input_ports__[0]["schema"] == {
@@ -142,12 +146,45 @@ def test_an_unknown_delivery_profile_is_refused_at_decoration():
         input(delivery_profile="eventually")
 
 
+def test_an_input_port_without_a_delivery_profile_is_refused():
+    """There is no default, so the omission is a wiring error naming the port."""
+    with pytest.raises(ValueError, match="'frames_from_upstream' must declare a delivery_profile"):
+
+        @processor
+        class Unprofiled:
+            @input()
+            def frames_from_upstream(self) -> None: ...
+
+
+def test_the_refusal_names_the_overriding_port_name():
+    """`name=` renames the port, so the error must name that, not the method."""
+    with pytest.raises(ValueError, match="'video_in' must declare a delivery_profile"):
+
+        @processor
+        class Unprofiled:
+            @input(name="video_in")
+            def frames_from_upstream(self) -> None: ...
+
+
+def test_an_output_port_needs_no_delivery_profile():
+    """Delivery is the consuming port's policy — an output declaring none is correct."""
+
+    @processor(execution="manual")
+    class Source:
+        @output()
+        def frames_to_downstream(self) -> None: ...
+
+    assert Source.__streamlib_processor_output_ports__ == [
+        {"name": "frames_to_downstream", "description": "", "schema": None}
+    ]
+
+
 def test_a_duplicate_port_name_is_refused():
     with pytest.raises(ValueError, match="more than once"):
 
         @processor
         class Clashing:
-            @input(name="frames")
+            @input(name="frames", delivery_profile="latest")
             def frames_in(self) -> None: ...
 
             @output(name="frames")
@@ -219,7 +256,7 @@ def test_a_class_name_that_cannot_be_an_identity_says_so():
 
         @processor
         class lowercase_name:
-            @input()
+            @input(delivery_profile="latest")
             def frames_from_upstream(self) -> None: ...
 
 
@@ -235,7 +272,7 @@ def test_an_unknown_mode_or_priority_is_refused(keyword, value, expected_message
 
         @processor(**{keyword: value})
         class Filter:
-            @input()
+            @input(delivery_profile="latest")
             def frames_from_upstream(self) -> None: ...
 
 

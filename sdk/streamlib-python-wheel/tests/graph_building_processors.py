@@ -13,7 +13,7 @@ from streamlib import RuntimeContextLimitedAccess, input, output, processor
 
 @processor
 class GraphBuildingFilter:
-    @input()
+    @input(delivery_profile="latest")
     def frames_from_upstream(self) -> None: ...
 
     @output()

@@ -87,29 +87,20 @@ pub fn expected_payload_bytes_for_port_spec(
         .map(|opt| opt.unwrap_or(DEFAULT_EXPECTED_PAYLOAD_BYTES))
 }
 
-/// Resolve the effective [`DeliveryProfile`] for a destination input port.
+/// Resolve the [`DeliveryProfile`] a destination input port declares.
 ///
-/// This is the single delivery-resolution primitive. Precedence:
-///
-/// 1. A port-site `delivery_profile` override (the one delivery knob on the
-///    authoring surface) wins outright.
-/// 2. Otherwise the default derived from the wire type's `metadata.flow_class`
-///    ([`flow_class_for_port_spec`]): `sample_stream` → `every_sample`,
-///    `state_stream` → `latest`.
-/// 3. Otherwise (an `any` wildcard port, or a registered schema that declares
-///    no `flow_class`) [`DeliveryProfile::Latest`] — the newest-wins realtime
-///    default.
+/// This is the single delivery-resolution primitive, and it reads exactly one
+/// thing: the port's own declaration. Nothing is inferred — not from the
+/// port's schema, not from a type-level default — so a registered input port
+/// carrying no declaration is a wiring error, not a silent substitution.
 ///
 /// Falls back to [`DeliveryProfile::Latest`] when the destination processor
 /// type isn't registered or the named port doesn't exist (defensive; a Wired
-/// link always resolves both). Returns [`Error::Configuration`] when an
-/// override or `flow_class` string is present but unrecognized, or when the
-/// port's wire schema is absent from the runtime registry — a wire-time error,
-/// not a silent default substitution.
+/// link always resolves both — the wiring path itself reports the missing
+/// processor).
 ///
 /// [`DeliveryProfile`]: crate::iceoryx2::DeliveryProfile
 /// [`DeliveryProfile::Latest`]: crate::iceoryx2::DeliveryProfile::Latest
-/// [`Error::Configuration`]: crate::core::error::Error::Configuration
 pub fn delivery_profile_for_input_port(
     processor_type: &streamlib_idents::SchemaIdent,
     port_name: &str,
@@ -125,18 +116,19 @@ pub fn delivery_profile_for_input_port(
         return Ok(DeliveryProfile::Latest);
     };
 
-    if let Some(declared) = port.delivery_profile.as_deref() {
-        return DeliveryProfile::from_manifest_str(declared).map_err(|err| {
-            crate::core::error::Error::Configuration(format!(
-                "input port '{}' on '{}' declared {}",
-                port_name, processor_type, err
-            ))
-        });
-    }
-
-    Ok(flow_class_for_port_spec(&port.data_type)?
-        .map(|fc| fc.default_profile())
-        .unwrap_or(DeliveryProfile::Latest))
+    let Some(declared) = port.delivery_profile.as_deref() else {
+        return Err(crate::core::error::Error::Configuration(format!(
+            "input port '{port_name}' on '{processor_type}' declares no delivery_profile. \
+             Every input port must declare one — 'latest', 'every_sample', or 'lossless'. \
+             There is no default: channel policy is declared port-locally at the consuming \
+             input port"
+        )));
+    };
+    DeliveryProfile::from_manifest_str(declared).map_err(|err| {
+        crate::core::error::Error::Configuration(format!(
+            "input port '{port_name}' on '{processor_type}' declared {err}"
+        ))
+    })
 }
 
 /// Resolve the [`FlowClass`] declared in a port's wire schema
@@ -646,11 +638,15 @@ mod tests {
         );
     }
 
-    /// A port-site `delivery_profile` override wins over the flow-class
-    /// default — `lossless` on a video input (whose flow_class default is
-    /// `latest`) resolves to `Lossless`.
+    /// The port's own declaration is the whole answer, and a schema that
+    /// declares a competing `flow_class` never enters into it: `lossless` on a
+    /// port whose wire type says `state_stream` (flow-class default `latest`)
+    /// resolves to `Lossless`. Mentally restore the inference chain and this
+    /// still passes — its sibling
+    /// [`delivery_profile_ignores_the_schema_flow_class`] is the one that
+    /// catches a reintroduced fallback.
     #[test]
-    fn delivery_profile_override_wins_over_flow_class() {
+    fn delivery_profile_reads_the_port_declaration() {
         use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
         use crate::core::processors::PROCESSOR_REGISTRY;
         use crate::iceoryx2::DeliveryProfile;
@@ -683,17 +679,19 @@ mod tests {
         assert_eq!(
             delivery_profile_for_input_port(&processor_type, "video_in").unwrap(),
             DeliveryProfile::Lossless,
-            "explicit lossless override must beat the state_stream default"
         );
     }
 
-    /// With no override, the flow-class default drives the profile:
-    /// `sample_stream` → `EverySample`.
+    /// A registered input port carrying no declaration is a wiring error
+    /// naming the port — not a profile inferred from its schema's
+    /// `flow_class`. The port's wire type here declares `sample_stream`, which
+    /// the retired inference chain would have resolved to `EverySample`:
+    /// mentally restore that fallback and this test goes green when it must
+    /// fail.
     #[test]
-    fn delivery_profile_defaults_from_flow_class() {
+    fn delivery_profile_ignores_the_schema_flow_class() {
         use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
         use crate::core::processors::PROCESSOR_REGISTRY;
-        use crate::iceoryx2::DeliveryProfile;
 
         let processor_type = SchemaIdent::new(
             Org::new("tatolab").unwrap(),
@@ -718,10 +716,15 @@ mod tests {
             .register_descriptor_only(desc)
             .expect("descriptor registration");
 
-        assert_eq!(
-            delivery_profile_for_input_port(&processor_type, "audio_in").unwrap(),
-            DeliveryProfile::EverySample
+        let err = delivery_profile_for_input_port(&processor_type, "audio_in")
+            .expect_err("an undeclared delivery profile must be a wiring error");
+        let msg = err.to_string();
+        assert!(msg.contains("audio_in"), "the error must name the port: {msg}");
+        assert!(
+            msg.contains("declares no delivery_profile"),
+            "got: {msg}"
         );
+        assert!(matches!(err, crate::core::error::Error::Configuration(_)));
     }
 
     /// A typo in a port-site `delivery_profile` override surfaces as a typed
