@@ -7,14 +7,12 @@
 //! `teardown` / `on_pause` / `on_resume`) and one Continuous (covers
 //! `process`, the slot Manual doesn't expose). Each carries a
 //! `panic_at_hook` config field that names the hook to panic in; all
-//! other hooks no-op. The companion integration test
-//! (`runtime/streamlib-engine/tests/load_project_dylib_processor_panic_safety.rs`)
-//! drives each variant in turn and asserts the host's
-//! `run_host_extern_c` panic-safety net caught the panic at the cdylib
-//! DSO boundary (i.e. the runtime stayed alive instead of unwinding
-//! into the host's runtime thread).
+//! other hooks no-op. The companion integration test drives each
+//! variant in turn and asserts the panic-safety net caught the panic
+//! (i.e. the runtime stayed alive instead of unwinding into the host's
+//! runtime thread).
 //!
-//! Why two fixtures: the cdylib-reachable `ProcessorVTable` carries
+//! Why two fixtures: the processor lifecycle carries
 //! all seven hooks (`setup`, `teardown`, `on_pause`, `on_resume`,
 //! `process`, `start`, `stop`) but a single `Manual` trait impl
 //! delivers only six of them (no `process`) and a single `Continuous`

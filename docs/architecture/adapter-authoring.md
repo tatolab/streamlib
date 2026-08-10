@@ -492,14 +492,12 @@ subprocesses (which is the default for any new adapter), follow
   `0`. CI enforces this via `cargo xtask check-boundaries` (see
   CLAUDE.md → Vulkan RHI Boundary).
 - The Python adapter mirror at
-  `sdk/streamlib-python/python/streamlib/adapters/` and the Deno
-  mirror at `sdk/streamlib-deno/adapters/` carry the per-adapter
-  context types (`VulkanContext`, `OpenGLContext`, etc.); the
-  base `SurfaceAdapter` Protocol/interface lives in
-  `sdk/streamlib-python/python/streamlib/surface_adapter.py` and
-  `sdk/streamlib-deno/surface_adapter.ts`. Both runtimes mirror
-  the trait shape using the language's idiomatic scope binding
-  (`with` for Python, `using` for Deno). Escalate-op schemas live
+  `sdk/streamlib-python/python/streamlib/adapters/` carries the
+  per-adapter context types (`VulkanContext`, `OpenGLContext`, etc.);
+  the base `SurfaceAdapter` Protocol/interface lives in
+  `sdk/streamlib-python/python/streamlib/surface_adapter.py`. It mirrors
+  the trait shape using Python's idiomatic scope binding (`with`).
+  Escalate-op schemas live
   in `packages/escalate/schemas/`.
 - Polyglot coverage is **both Python AND Deno together** (per
   `polyglot.md`). The only legitimate split is schema-only /

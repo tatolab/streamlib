@@ -5,11 +5,8 @@
 //!
 //! ContinuousProcessor whose lifecycle hooks (`setup`, `process`,
 //! `on_pause`, `on_resume`, `teardown`) each append a single marker
-//! line to `config.output_path`. The integration tests in
-//! `runtime/streamlib-engine/tests/load_project_dylib_process_lifecycle.rs`
-//! and `..._pause_resume.rs` parse the file to assert each hook
-//! dispatched correctly through the `ProcessorVTable` from cdylib
-//! code.
+//! line to `config.output_path`. An integration test parses the file
+//! to assert each hook dispatched correctly.
 //!
 //! `config.max_iterations` caps the number of `PROCESS:n` lines
 //! the probe will append — once the counter hits the cap the
@@ -17,13 +14,10 @@
 //! file size bounded so the test reads a stable known content
 //! after a sleep.
 //!
-//! What this fixture locks: regressions in `ProcessorVTable::process`,
-//! `on_pause`, or `on_resume` wire-format at the cdylib boundary
-//! either surface as missing marker lines (the host's
-//! `run_host_extern_c` swallowed a panic at the FFI boundary) or
-//! the hooks fire on the wrong thread / wrong order. Smoke-only —
-//! the lines are observed for presence, not pixel correctness or
-//! timing.
+//! What this fixture locks: regressions in `process`, `on_pause`, or
+//! `on_resume` dispatch either surface as missing marker lines or the
+//! hooks fire on the wrong thread / wrong order. Smoke-only — the lines
+//! are observed for presence, not pixel correctness or timing.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -33,7 +27,7 @@ use streamlib::sdk::processors::ContinuousProcessor;
 
 #[streamlib::sdk::processor(
     "@tatolab/test-fixtures/LifecycleProbeProcessor",
-    description = "Phase G (#961) dlopen-cdylib lifecycle-probe processor — appends marker lines for each ProcessorVTable lifecycle hook (setup / process / on_pause / on_resume / teardown) to a file so the integration test can confirm every hook dispatched through the cdylib boundary correctly.",
+    description = "Lifecycle-probe processor — appends marker lines for each lifecycle hook (setup / process / on_pause / on_resume / teardown) to a file so the integration test can confirm every hook dispatched correctly.",
     execution = continuous,
     config = crate::_generated_::LifecycleProbeProcessorConfig,
 )]

@@ -5,8 +5,7 @@
 # lifecycle-probe processor. The processor is a ContinuousProcessor
 # whose process / on_pause / on_resume / setup / teardown hooks
 # append a marker line to `output_path`. The integration test parses
-# the file to confirm each ProcessorVTable lifecycle slot dispatched
-# correctly from cdylib code.
+# the file to confirm each lifecycle hook dispatched correctly.
 
 metadata:
   type: LifecycleProbeProcessorConfig

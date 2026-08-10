@@ -20,7 +20,7 @@
 //!        `with_full_scope_or_err`.
 //!      - `full.acquire_pixel_buffer(...)` — Phase D Bucket C
 //!        (Option B inherited LimitedAccess vtable dispatch).
-//!        Returns a `PixelBuffer` PluginAbiObject through the plugin ABI.
+//!        Returns a `PixelBuffer` handle.
 //!      - `full.acquire_output_texture(...)` — Phase D Bucket B
 //!        (new FullAccess vtable slot returning `(String, Texture)`).
 //!      - `full.register_texture_with_layout(...)` — Phase D Bucket C

@@ -158,12 +158,8 @@ fn run_compute_kernel_round_trip(
     // dispatches through the FullAccess vtable transparently.
     // Same coverage as the pre-#1075 escalate path; the wrap is the
     // engine-side replacement for the explicit `.escalate(|full|...)`.
-    // The kernel plugin handle is valid for the rest of this fn —
-    // its Clone/Drop route through the host's FullAccess parent
-    // vtable (#918's Phase D shape) and its per-method dispatch
-    // routes through the VulkanComputeKernelMethodsVTable installed
-    // in `install_host_services` (#907 PR 2/5 + #963's v3 method
-    // slots).
+    // The kernel handle is valid for the rest of this fn; its Clone/Drop
+    // manage the underlying Arc's strong count.
     let full = ctx.gpu_full_access();
     let kernel = full
         .create_compute_kernel(&ComputeKernelDescriptor {

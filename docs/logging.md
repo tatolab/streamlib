@@ -32,12 +32,10 @@ Use the API above instead.
    opt in via `[lints] workspace = true` in `Cargo.toml`. `cargo clippy
    --workspace` fails on any violation.
 
-2. **CI lint (Python + TypeScript)** — `cargo xtask lint-logging` scans
-   `sdk/streamlib-python/**/*.py` and `sdk/streamlib-deno/**/*.ts` for
-   banned substrings (`print(`, `sys.stdout`, `sys.stderr`,
-   `logging.basicConfig`, `console.log`/`warn`/`error`/`info`/`debug`,
-   `Deno.stdout.write`, `Deno.stderr.write`). Exits non-zero with each
-   offending file+line on failure.
+2. **CI lint (Python)** — `cargo xtask lint-logging` scans
+   `sdk/streamlib-python/**/*.py` for banned substrings (`print(`,
+   `sys.stdout`, `sys.stderr`, `logging.basicConfig`). Exits non-zero
+   with each offending file+line on failure.
 
 3. **Runtime interceptors** — the subprocess-side `_log_interceptors.py` and
    `_log_interceptors.ts` replace `sys.stdout`/`sys.stderr`/`console.*` with

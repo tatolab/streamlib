@@ -9,14 +9,11 @@ or pipeline layout for a kernel.**
 
 Construct kernels through `GpuContext::create_compute_kernel` (or
 `GpuContextFullAccess::create_compute_kernel`), **never** by calling
-`VulkanComputeKernel::new` directly on a `HostVulkanDevice`. In a package
-destined to ship as a `.slpkg`, calling `VulkanComputeKernel::new` on a
-device obtained via `host_vulkan_device_arc()` is unsound: the FullAccess
-`create_compute_kernel` path dispatches host-side and returns a
-`#[repr(C)]` handle, whereas a directly-constructed kernel dereferences a
-non-`#[repr(C)]` device that a separately-built plugin can read at the
-wrong layout — corrupting the driver during pipeline-layout creation. See
-[`../learnings/slpkg-raw-device-rhi-construction.md`](../learnings/slpkg-raw-device-rhi-construction.md).
+`VulkanComputeKernel::new` directly on a `HostVulkanDevice`. The FullAccess
+`create_compute_kernel` path allocates the pipeline host-side and returns a
+`#[repr(C)]` handle; hand-rolling a kernel on a device obtained via
+`host_vulkan_device_arc()` corrupts the driver during pipeline-layout
+creation.
 
 For graphics-pipeline (vertex + fragment) work, see the sibling
 [graphics-kernel.md](graphics-kernel.md). For ray-tracing-pipeline work
