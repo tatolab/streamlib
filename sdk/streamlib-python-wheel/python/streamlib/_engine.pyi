@@ -16,11 +16,12 @@ binary no longer exports still reads as complete.
 from pathlib import Path
 from types import TracebackType
 from collections.abc import Callable, Mapping
-from typing import Any, Literal, TypeVar, final
+from typing import Any, Literal, TypeVar, final, overload
 
 from typing_extensions import disjoint_base
 
 _EscalateResult = TypeVar("_EscalateResult")
+_BagReadTarget = TypeVar("_BagReadTarget")
 
 __all__ = [
     "AddedProcessor",
@@ -235,7 +236,14 @@ class ProcessorLinkDataAccess:
     def input_listener_fd(self) -> int | None: ...
     def drain_input_listener(self) -> None: ...
     def any_input_port_has_data(self) -> bool: ...
-    def read_from_input_port(self, port_name: str) -> Any | None: ...
+    @overload
+    def read_from_input_port(
+        self, port_name: str, *, into: None = None
+    ) -> Any | None: ...
+    @overload
+    def read_from_input_port(
+        self, port_name: str, *, into: Callable[..., _BagReadTarget]
+    ) -> _BagReadTarget | None: ...
     def read_from_input_port_with_timestamp(
         self, port_name: str
     ) -> tuple[Any, int] | tuple[None, None]: ...
@@ -313,7 +321,20 @@ class RuntimeContextLimitedAccess:
 class LinkInputDataReader:
     """A processor's input ports, as `ctx.inputs`."""
 
-    def read(self, port_name: str) -> Any | None: ...
+    @overload
+    def read(self, port_name: str, *, into: None = None) -> Any | None: ...
+    @overload
+    def read(
+        self, port_name: str, *, into: Callable[..., _BagReadTarget]
+    ) -> _BagReadTarget | None:
+        """The next bag on `port_name`, read into `into`.
+
+        The opt-in strictness dial. A TypedDict casts for free — the bag
+        arrives as itself, unvalidated. A dataclass or pydantic model is
+        constructed from the bag's entries, so a bag that does not fit raises
+        here, at the consuming read.
+        """
+
     def read_with_timestamp(
         self, port_name: str
     ) -> tuple[Any, int] | tuple[None, None]: ...

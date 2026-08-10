@@ -74,8 +74,10 @@ jobs:
           uv venv --python 3.12 .venv
           # numpy rides along because the exchange-surface tests import it at
           # module scope — collection needs it even when `requires_gpu`
-          # deselects every test that would use it.
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy
+          # deselects every test that would use it. pydantic is what proves a
+          # model is a legal `read(port, into=T)` target; the wheel never
+          # imports it.
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest mypy numpy pydantic typing_extensions
           VIRTUAL_ENV="$PWD/.venv" uvx maturin@1.9.6 develop
 
       # The crate's own unit tests link libpython rather than building as an
@@ -136,7 +138,7 @@ jobs:
         working-directory: sdk/streamlib-python-wheel
         run: |
           uv venv --python 3.12 .venv
-          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest numpy
+          VIRTUAL_ENV="$PWD/.venv" uv pip install pytest numpy pydantic typing_extensions
           # CPU torch: the exchange tests type-check against torch's API, and
           # pyright reports a missing import as an error. The cpu wheel keeps
           # the download tractable for a no-build job.

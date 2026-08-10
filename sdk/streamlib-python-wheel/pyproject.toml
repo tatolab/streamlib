@@ -35,8 +35,17 @@ streamlib = "streamlib.cli:main"
 [project.optional-dependencies]
 # numpy and torch are test-and-types dependencies, not runtime ones — the
 # wheel itself never imports either; the exchange surface hands frames to
-# whichever consumer the user installed.
-dev = ["pytest>=7.0", "numpy>=2.1", "torch>=2.0"]
+# whichever consumer the user installed. pydantic is the same: `read(port,
+# into=T)` constructs whatever target it is handed and names no library, so
+# pydantic is here to prove that a model is one of them.
+dev = [
+    "pytest>=7.0",
+    "numpy>=2.1",
+    "torch>=2.0",
+    "pydantic>=2.0",
+    # `assert_type` at the 3.10 floor, and the stub's own `disjoint_base`.
+    "typing_extensions>=4.6",
+]
 
 [tool.pytest.ini_options]
 markers = [

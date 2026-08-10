@@ -25,7 +25,9 @@ use streamlib::sdk::iceoryx2::{
     ReadMode, SchemaIdentWire,
 };
 
-use crate::python_bag_conversion::{decode_msgpack_to_python_object, encode_bag_to_msgpack};
+use crate::python_bag_conversion::{
+    cast_decoded_bag_into_read_target, decode_msgpack_to_python_object, encode_bag_to_msgpack,
+};
 use crate::python_logging::monotonic_clock_now_ns;
 
 /// One processor's links, as seen from Python.
@@ -293,10 +295,16 @@ impl PythonProcessorLinkDataAccess {
     }
 
     /// The next bag on `port_name`, or `None` when the mailbox is empty.
+    ///
+    /// `into` is the opt-in strictness dial: without it the bag arrives as a
+    /// mapping, and with it the bag is cast or constructed into the type named
+    /// — so a mismatch surfaces here, at the consuming read, and nowhere else.
+    #[pyo3(signature = (port_name, *, into = None))]
     pub(crate) fn read_from_input_port<'py>(
         &self,
         python: Python<'py>,
         port_name: &str,
+        into: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Option<Bound<'py, PyAny>>> {
         let Some(input_mailboxes) = self.input_mailboxes.get() else {
             return Err(unwired_port_error("input", port_name));
@@ -306,7 +314,14 @@ impl PythonProcessorLinkDataAccess {
             .map_err(|read_failure| PyRuntimeError::new_err(read_failure.to_string()))?;
         match read {
             Some((encoded, _timestamp_ns)) => {
-                decode_msgpack_to_python_object(python, &encoded).map(Some)
+                let bag = decode_msgpack_to_python_object(python, &encoded)?;
+                match into {
+                    Some(read_target_type) => {
+                        cast_decoded_bag_into_read_target(port_name, bag, read_target_type)
+                            .map(Some)
+                    }
+                    None => Ok(Some(bag)),
+                }
             }
             None => Ok(None),
         }
@@ -453,7 +468,7 @@ mod tests {
                 .unwrap();
 
             let received = destination
-                .read_from_input_port(python, "frames_from_upstream")
+                .read_from_input_port(python, "frames_from_upstream", None)
                 .unwrap()
                 .expect("the wired input received nothing");
             assert_eq!(
