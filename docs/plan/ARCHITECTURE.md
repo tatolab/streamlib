@@ -306,7 +306,7 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   stdio server, or bridge process stands between a host and that endpoint — an MCP
   host is configured with a running node's URL.
   [importable-python-library; mcp-served-with-the-node — SHIPPED #1712]
-  <!-- verify: sdk/streamlib-python-wheel/tests/test_cli_observation_verbs.py::test_the_wheel_serves_no_mcp_verb -->
+  <!-- verify: sdk/streamlib-python-wheel/tests/test_cli.py::test_the_wheel_serves_no_mcp_verb -->
 - **DECIDED** — `dev` and `run` bind the control plane identically: all interfaces
   (`0.0.0.0`) by default, narrowed per invocation by `--host`. There is no dev-only
   exposure posture — a node another host can reach is bound wide by definition, so
