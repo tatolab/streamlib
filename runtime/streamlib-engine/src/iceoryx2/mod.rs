@@ -17,6 +17,7 @@ pub use channel_ceiling::{
     ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_TRUSTED, ENV_MAX_PAYLOAD_BYTES_PER_CHANNEL_UNTRUSTED_SESSION,
     effective_channel_ceiling_bytes,
 };
+pub(crate) use delivery_profile::render_delivery_profile_values;
 pub use delivery_profile::{DeliveryProfile, DeliveryResolution, FlowClass};
 pub use input::{BoundedReadOutcome, InputMailboxes, InputMailboxesInner};
 pub use mailbox::PortMailbox;

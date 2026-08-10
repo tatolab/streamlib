@@ -137,10 +137,9 @@ pub struct PortDescriptor {
     /// Whether this port uses iceoryx2 IPC.
     #[serde(default)]
     pub is_iceoryx2: bool,
-    /// Delivery-profile override declared by an *input* port (the
-    /// destination of an iceoryx2 service) — `"latest"`, `"every_sample"`,
-    /// or `"lossless"`. `None` defers to the default derived from the wire
-    /// type's `flow_class` at wire time. Always `None` on output ports.
+    /// Delivery profile declared by an *input* port (the destination of an
+    /// iceoryx2 service) — `"latest"`, `"every_sample"`, or `"lossless"`.
+    /// Required on every input port and always `None` on an output port.
     #[serde(default)]
     pub delivery_profile: Option<String>,
 }

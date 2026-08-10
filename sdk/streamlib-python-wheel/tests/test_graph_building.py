@@ -27,7 +27,7 @@ def graph_building_app(start_app_under_test):
 
 @processor
 class GraphBuildingFilter:
-    @input()
+    @input(delivery_profile="latest")
     def frames_from_upstream(self) -> None: ...
 
     @output()

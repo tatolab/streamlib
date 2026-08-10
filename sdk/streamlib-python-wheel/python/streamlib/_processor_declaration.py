@@ -55,9 +55,9 @@ def input(
     The port is named after the method unless `name` overrides it. `schema` is
     a structured carrier — a [`SchemaIdent`] instance or a codegen-emitted
     class carrying `__streamlib_schema_ident__` — never a string.
-    `delivery_profile` is `"latest"`, `"every_sample"`, or `"lossless"`; omit
-    it to default from the wire type's flow class. The decorated method is a
-    declaration only: bags are read with `ctx.inputs.read(port_name)`.
+    `delivery_profile` is required and is `"latest"`, `"every_sample"`, or
+    `"lossless"`. The decorated method is a declaration only: bags are read
+    with `ctx.inputs.read(port_name)`.
     """
     if delivery_profile is not None and delivery_profile not in _DELIVERY_PROFILES:
         raise ValueError(
@@ -67,11 +67,21 @@ def input(
     resolved_schema = _resolve_schema_ident(schema)
 
     def attach_input_port_marker(method: MethodUnderDecoration) -> MethodUnderDecoration:
+        port_name = name or method.__name__
+        # `delivery_profile` defaults to None rather than being a required
+        # keyword so the omission is caught here, where the port's name is
+        # known — a bare TypeError from the call could not name it.
+        if delivery_profile is None:
+            raise ValueError(
+                f"input port {port_name!r} must declare a delivery_profile — one of "
+                f"{', '.join(_DELIVERY_PROFILES)}. There is no default: channel policy "
+                f"is declared port-locally at the consuming input port"
+            )
         setattr(
             method,
             _INPUT_PORT_MARKER_ATTRIBUTE,
             {
-                "name": name or method.__name__,
+                "name": port_name,
                 "schema": resolved_schema,
                 "description": description,
                 "delivery_profile": delivery_profile,

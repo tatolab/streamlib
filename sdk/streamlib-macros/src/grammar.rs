@@ -29,9 +29,9 @@
 //! scope here and handled at the runtime layer.
 
 use streamlib_processor_schema::{
-    Org, Package, PortSchemaSpec, ProcessorPortSchema, ProcessorSchema, ProcessorSchemaExecution,
-    ProcessorScheduling, RuntimeConfig, RuntimeOptions, SchemaIdent, SemVer, ThreadPriority,
-    TypeName,
+    DELIVERY_PROFILE_DECLARATION_VALUES, Org, Package, PortSchemaSpec, ProcessorPortSchema,
+    ProcessorSchema, ProcessorSchemaExecution, ProcessorScheduling, RuntimeConfig, RuntimeOptions,
+    SchemaIdent, SemVer, ThreadPriority, TypeName,
 };
 use syn::ext::IdentExt;
 use syn::parse::{ParseStream, Parser};
@@ -60,6 +60,8 @@ pub struct ParsedPort {
     pub name: String,
     pub schema: PortSchemaSpec,
     pub description: Option<String>,
+    /// Always `Some` on an input and always `None` on an output — the grammar
+    /// requires it on the one and rejects it on the other.
     pub delivery_profile: Option<String>,
 }
 
@@ -372,8 +374,8 @@ fn parse_execution(input: ParseStream<'_>) -> syn::Result<ProcessorSchemaExecuti
 /// where `<schema>` is either the bare identifier `any` or a version-free
 /// `"@org/package/Type"` string.
 ///
-/// `delivery_profile` is a consumer-side setting the destination input port
-/// declares; it is rejected with a spanned error on an `output(...)` rather
+/// `delivery_profile` is a consumer-side setting: **required** on every
+/// `input(...)`, and rejected with a spanned error on an `output(...)` rather
 /// than silently dropped.
 fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<ParsedPort> {
     let content;
@@ -421,12 +423,33 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
         }
     }
 
+    if direction == PortDirection::Input && delivery_profile.is_none() {
+        return Err(syn::Error::new(
+            name_lit.span(),
+            format!(
+                "input port `{name}` must declare a `delivery_profile` — one of {}. \
+                 There is no default: channel policy is declared port-locally at the \
+                 consuming input port",
+                render_delivery_profile_values(),
+            ),
+        ));
+    }
+
     Ok(ParsedPort {
         name,
         schema,
         description,
         delivery_profile,
     })
+}
+
+/// The legal `delivery_profile` values as a quoted, comma-joined list.
+fn render_delivery_profile_values() -> String {
+    DELIVERY_PROFILE_DECLARATION_VALUES
+        .iter()
+        .map(|value| format!("`\"{value}\"`"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Reject `delivery_profile` on an `output(...)` with a spanned error — the
@@ -574,7 +597,12 @@ mod tests {
             "@tatolab/camera/Camera",
             description = "Captures video from cameras",
             execution = manual,
-            input("video_in", "@tatolab/core/VideoFrame", description = "Frames to convert"),
+            input(
+                "video_in",
+                "@tatolab/core/VideoFrame",
+                delivery_profile = "latest",
+                description = "Frames to convert"
+            ),
             output("video", "@tatolab/core/VideoFrame", description = "Live video frames"),
         });
         assert_eq!(parsed.description.as_deref(), Some("Captures video from cameras"));
@@ -611,7 +639,7 @@ mod tests {
         let parsed = parse_ok(quote! {
             "@tatolab/testing/Mock",
             execution = manual,
-            input("in1", any),
+            input("in1", any, delivery_profile = "latest"),
             output("out1", any),
         });
         assert!(matches!(parsed.inputs[0].schema, PortSchemaSpec::Any));
@@ -706,8 +734,8 @@ mod tests {
         let msg = parse_err(quote! {
             "@tatolab/testing/Mock",
             execution = manual,
-            input("dup", any),
-            input("dup", any),
+            input("dup", any, delivery_profile = "latest"),
+            input("dup", any, delivery_profile = "latest"),
         });
         assert!(msg.contains("duplicate input port name `dup`"), "got: {msg}");
     }
@@ -754,6 +782,35 @@ mod tests {
             parsed.inputs[0].delivery_profile.as_deref(),
             Some("lossless")
         );
+    }
+
+    #[test]
+    fn input_without_a_delivery_profile_is_an_error() {
+        let msg = parse_err(quote! {
+            "@tatolab/camera/Camera",
+            execution = manual,
+            input("video_in", "@tatolab/core/VideoFrame"),
+        });
+        assert!(
+            msg.contains("input port `video_in` must declare a `delivery_profile`"),
+            "got: {msg}"
+        );
+        assert!(
+            msg.contains("latest") && msg.contains("every_sample") && msg.contains("lossless"),
+            "the error must list the valid profiles: {msg}"
+        );
+    }
+
+    #[test]
+    fn output_without_a_delivery_profile_stays_valid() {
+        // The requirement is consumer-side only: an `output(...)` declaring no
+        // profile is the correct shape, not a missing declaration.
+        let parsed = parse_ok(quote! {
+            "@tatolab/camera/Camera",
+            execution = manual,
+            output("video", "@tatolab/core/VideoFrame"),
+        });
+        assert_eq!(parsed.outputs[0].delivery_profile, None);
     }
 
     #[test]

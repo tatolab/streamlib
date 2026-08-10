@@ -513,6 +513,13 @@ impl JsonSchema for ProcessorSchemaExecution {
     }
 }
 
+/// The values an input port's `delivery_profile` declaration may take.
+///
+/// The single Rust-side list: the `#[processor]` grammar, the engine's
+/// wire-time resolver, and `DeliveryProfile::from_manifest_str` all render
+/// their errors from this, so a new profile cannot leave one of them lying.
+pub const DELIVERY_PROFILE_DECLARATION_VALUES: [&str; 3] = ["latest", "every_sample", "lossless"];
+
 /// A port definition within a processor schema.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -525,12 +532,11 @@ pub struct ProcessorPortSchema {
     /// Human-readable description.
     #[serde(default)]
     pub description: Option<String>,
-    /// Delivery-profile override for this input port — `"latest"`,
+    /// Delivery profile declared by this input port — `"latest"`,
     /// `"every_sample"`, or `"lossless"`. The one delivery knob on the
     /// authoring surface: it resolves to the consumer-side drain order,
-    /// the producer-side overflow policy, and the ring depth. `None`
-    /// defers to the default derived from the wire type's `flow_class`.
-    /// Always `None` on output ports.
+    /// the producer-side overflow policy, and the ring depth. Required on
+    /// every input port and always `None` on an output port.
     #[serde(default)]
     pub delivery_profile: Option<String>,
 }
