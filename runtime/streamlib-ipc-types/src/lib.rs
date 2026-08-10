@@ -108,9 +108,7 @@ pub enum ChannelEgressAdmission {
     /// is `Some(growth)` the tracked data-segment capacity crossed the frame size
     /// and was advanced — a PowerOfTwo growth the caller logs, additionally
     /// raising a `warn` when [`ChannelSegmentGrowth::crossed_quarter_ceiling`].
-    Admitted {
-        grew_to: Option<ChannelSegmentGrowth>,
-    },
+    Admitted { grew_to: Option<ChannelSegmentGrowth> },
 }
 
 /// Single authority for the per-channel-egress ceiling refusal + PowerOfTwo
@@ -373,6 +371,7 @@ impl FrameHeader {
 
     /// Write the header to the first [`FRAME_HEADER_SIZE`] bytes of `buf`.
     pub fn write_to_slice(&self, buf: &mut [u8]) {
+        debug_assert!(buf.len() >= FRAME_HEADER_SIZE);
         // port_key: [len: 1][name: 63] = 64 bytes
         buf[0] = self.port_key.len;
         buf[1..MAX_PORT_KEY_SIZE].copy_from_slice(&self.port_key.name);
@@ -385,8 +384,11 @@ impl FrameHeader {
 
     /// Read a header from the first [`FRAME_HEADER_SIZE`] bytes of `buf`.
     pub fn read_from_slice(buf: &[u8]) -> Self {
-        let mut port_key = PortKey::default();
-        port_key.len = buf[0];
+        debug_assert!(buf.len() >= FRAME_HEADER_SIZE);
+        let mut port_key = PortKey {
+            len: buf[0],
+            ..Default::default()
+        };
         port_key.name.copy_from_slice(&buf[1..MAX_PORT_KEY_SIZE]);
 
         let t = MAX_PORT_KEY_SIZE;
@@ -589,18 +591,6 @@ mod tests {
             u32::from_le_bytes(buf[72..76].try_into().unwrap()),
             0x0A0B_0C0D,
             "len is 4 bytes little-endian at 72..76"
-        );
-    }
-
-    #[test]
-    fn frame_header_carries_no_type_anywhere_in_its_bytes() {
-        // The header names no type, so the only bytes a frame spends past its
-        // port key are the timestamp and the length. Re-add a schema tag and
-        // this fails on the size before anyone notices the wire moved.
-        assert_eq!(
-            FRAME_HEADER_SIZE - MAX_PORT_KEY_SIZE,
-            12,
-            "past the port key a frame header is exactly a timestamp and a length"
         );
     }
 

@@ -227,10 +227,7 @@ fn test_small_frame_hint_publisher_grows_and_delivers_256kb() {
         "PowerOfTwo publisher primed at the small-frame hint must grow to loan a \
          256 KiB slice instead of rejecting it",
     );
-    sample
-        .write_from_slice(&vec![0u8; 256 * 1024])
-        .send()
-        .unwrap();
+    sample.write_from_slice(&vec![0u8; 256 * 1024]).send().unwrap();
 }
 
 /// Publisher sized from the large-frame schema accepts a 256 KiB payload.

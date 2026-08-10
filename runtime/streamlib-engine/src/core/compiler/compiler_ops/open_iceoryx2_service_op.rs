@@ -16,11 +16,10 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::core::PortSchemaSpec;
 use crate::core::ProcessorUniqueId;
 use crate::core::context::RuntimeContext;
 use crate::core::embedded_schemas::{
-    delivery_profile_for_input_port, expected_payload_bytes_for_port_spec, port_schema_spec,
+    delivery_profile_for_input_port, expected_payload_bytes_for_port_spec, resolve_node_port_schema,
 };
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
@@ -103,7 +102,12 @@ pub fn open_iceoryx2_service(
     // the compile-time destination fan-out plus the reserved tap slot. Ring
     // depth, overflow policy, and consumer drain order all derive from the
     // single delivery profile the channel's destinations agree on.
-    let output_schema = resolve_output_schema(graph, &source_proc_id, &source_port);
+    let output_schema = resolve_node_port_schema(
+        graph,
+        &source_proc_id,
+        &source_port,
+        crate::core::PortDirection::Output,
+    );
     let expected_payload = expected_payload_bytes_for_port_spec(&output_schema)?;
     // A channel touching a subprocess on either end crosses a trust boundary and
     // gets the tighter untrusted-session ceiling; a host-to-host channel is
@@ -566,26 +570,6 @@ fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bo
     }
 
     false
-}
-
-/// Resolve the schema declared on a source processor's output port — the only
-/// thing left that consults one, and only to size the channel's first slot.
-/// Returns [`PortSchemaSpec::Any`] when the node is absent.
-fn resolve_output_schema(
-    graph: &mut Graph,
-    source_proc_id: &ProcessorUniqueId,
-    source_port: &str,
-) -> PortSchemaSpec {
-    let proc_type = graph
-        .traversal_mut()
-        .v(source_proc_id)
-        .first()
-        .map(|node| node.processor_type().clone());
-
-    match proc_type {
-        Some(ident) => port_schema_spec(&ident, source_port, crate::core::PortDirection::Output),
-        None => PortSchemaSpec::Any,
-    }
 }
 
 fn get_single_processor(
