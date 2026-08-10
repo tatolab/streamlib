@@ -2055,11 +2055,6 @@ impl SurfaceStore {
         Self { handle }
     }
 
-    /// Build a null-handle "None" sentinel for the
-    /// `GpuContext::surface_store()` API's `Option<SurfaceStore>`
-    /// shape. `SurfaceStore::is_none()` returns `true` for such a
-    /// value and `Drop` short-circuits on null handle.
- 
     /// Whether this is a null-handle sentinel (the "None" branch of
     /// the `Option<SurfaceStore>` return shape).
     pub(crate) fn is_none(&self) -> bool {

@@ -419,9 +419,6 @@ impl OutputWriter {
         if !self.is_configured() {
             return None;
         }
-        // SAFETY: handle came from Arc::into_raw; bumping the
-        // strong count via the vtable's clone_arc gives us a fresh
-        // owning reference we can reconstruct as Arc::from_raw.
         // SAFETY: `handle` is `Arc::into_raw(Arc<OutputWriterInner>)`; bump
         // the strong count and reconstruct an owning `Arc` from the raw handle.
         unsafe {
@@ -911,7 +908,7 @@ mod tests {
 
     /// Empty (unwired) writers should fail cleanly rather than crash.
     /// Mentally revert the `is_configured()` guard in `write_raw` and
-    /// the test segfaults dereferencing the null vtable.
+    /// the test segfaults dereferencing the null handle.
     #[test]
     fn empty_writer_fails_cleanly() {
         let writer = OutputWriter::empty();
@@ -926,8 +923,8 @@ mod tests {
         assert!(!writer.has_port("any_port"));
     }
 
-    /// Clone bumps the strong count via the vtable; both clones drop
-    /// independently. Mentally revert the `clone_arc` call in
+    /// Clone bumps the strong count; both clones drop
+    /// independently. Mentally revert the strong-count bump in
     /// `Clone::clone` and the second clone observes a freed handle.
     #[test]
     fn clone_balances_drop() {

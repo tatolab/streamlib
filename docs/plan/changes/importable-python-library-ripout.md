@@ -336,10 +336,12 @@ half still belongs to this ticket.
 - REMOVED: runtime/streamlib-runtime
 > ~~- REMOVED: sdk/streamlib-deno~~ — Deferred 2026-08-10 (owner ruling at the #1806
 > residue scrub). The crate, the untracked codegen dir, and every doc/comment/xtask
-> reference are gone (#1806). The two remaining references are `sdk/streamlib-idents`'
-> live `deno_sdk_entrypoint_path` link-marker field and its doc example — removing the
-> field changes the link-marker wire shape of a crate this change carries unchanged.
-> Defers to `processor-class-identity`, which deletes `streamlib-idents` whole.
+> reference are gone (#1806). The three remaining hits are all test fixtures inside
+> `sdk/streamlib-idents` (`link_marker.rs:162,:217`, `resolver.rs:2602` — path strings in
+> link-marker round-trip tests), a crate this change carries unchanged. Separately, the
+> crate's live `deno_sdk_entrypoint_path` link-marker field survives because removing it
+> changes the link-marker wire shape. Defers to `processor-class-identity`, which deletes
+> `streamlib-idents` whole.
 - REMOVED: sdk/streamlib-deno-native
 - REMOVED: spawn_deno_subprocess_op
 - REMOVED: sdk/streamlib-processor-extract

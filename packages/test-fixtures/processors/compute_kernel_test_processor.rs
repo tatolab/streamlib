@@ -151,13 +151,8 @@ fn run_compute_kernel_round_trip(
         .map_err(|e| Error::Runtime(format!("acquire output storage_buffer: {e}")))?;
 
     // Kernel construction is FullAccess-privileged (touches
-    // descriptor pools + pipeline cache + queue). Manual-mode
-    // start() takes FullAccess directly; the engine wraps cdylib
-    // lifecycle dispatch in `with_cdylib_scope` (#1075), so
-    // `ctx.gpu_full_access()` is `ScopeToken`-flavored and
-    // dispatches through the FullAccess vtable transparently.
-    // Same coverage as the pre-#1075 escalate path; the wrap is the
-    // engine-side replacement for the explicit `.escalate(|full|...)`.
+    // descriptor pools + pipeline cache + queue); Manual-mode
+    // start() takes FullAccess directly.
     // The kernel handle is valid for the rest of this fn; its Clone/Drop
     // manage the underlying Arc's strong count.
     let full = ctx.gpu_full_access();

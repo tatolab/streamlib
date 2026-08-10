@@ -107,12 +107,12 @@ expect_fail "a directory that still exists fails even when nothing references it
   "STILL PRESENT (on disk): tools/fictional-pack"
 
 new_repo <<'EOF'
-- REMOVED: schemas/streamlib.schema.json
+- REMOVED: schemas/fictional.schema.json
 EOF
-plant schemas/streamlib.schema.json '{"title":"unreferenced leaf"}'
+plant schemas/fictional.schema.json '{"title":"unreferenced leaf"}'
 run_gate
 expect_fail "an unreferenced leaf file fails on the path check" \
-  "STILL PRESENT (on disk): schemas/streamlib.schema.json"
+  "STILL PRESENT (on disk): schemas/fictional.schema.json"
 
 new_repo <<'EOF'
 - REMOVED: tools/fictional-pack

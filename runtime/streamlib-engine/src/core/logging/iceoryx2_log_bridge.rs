@@ -55,9 +55,9 @@ impl Log for IceoryxLogBridge {
 /// against the workspace-pinned `iceoryx2-log-types::Log` vtable.
 pub static HOST_BRIDGE: IceoryxLogBridge = IceoryxLogBridge;
 
-/// Install [`HOST_BRIDGE`] as this artifact's iceoryx2 process-wide
+/// Install [`HOST_BRIDGE`] as iceoryx2's process-wide
 /// logger. Idempotent — `iceoryx2_log::set_logger` is `Once`-guarded
 /// and returns false on subsequent calls, which we treat as success.
-pub fn install_iceoryx2_log_bridge_for_self() {
+pub fn install_iceoryx2_log_bridge() {
     let _ = iceoryx2_log::set_logger(&HOST_BRIDGE);
 }

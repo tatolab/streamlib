@@ -190,7 +190,7 @@ impl Default for HostVkImageMeta {
 ///    `HostVulkanDevice` (`allocator`, `dma_buf_image_pool_tiled`, …)
 ///    plus `vulkanalia-vma` — no `host_inner()` deref.
 ///
-/// Adding a `host_inner()` or `host_callbacks()` guard inside any of
+/// Adding a `host_inner()` guard inside any of
 /// the `new*` constructor bodies (`new`, `new_render_target_dma_buf`,
 /// `new_opaque_fd_export`, etc.) would break path 2 silently — reviewers
 /// touching constructor bodies must keep them guard-free. The cdylib

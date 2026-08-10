@@ -45,24 +45,18 @@ impl ManualProcessor for ConcurrentEscalateTest::Processor {
     }
 
     fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        // **Currently un-driveable end-to-end.** `start` holds the
-        // escalate gate for its entire body; the worker threads spawned
-        // below try to acquire that same gate via their
-        // `limited.escalate(...)` call and deadlock — start blocks
-        // waiting for join, workers block waiting for the gate, gate
-        // never releases. The serialization invariant this fixture was
-        // guarding is covered by the unit test
+        // Orphaned end-to-end: the dlopen integration test that drove
+        // this fixture was deleted with the plugin ABI, so nothing
+        // exercises it. The serialization invariant it was guarding is
+        // covered by the unit test
         // `escalate_gate::tests::enter_serializes_concurrent_callers`.
-        // Restructuring to drive the concurrent escalates from a
-        // Reactive `process()` body (LimitedAccess, no wrap) is the
-        // natural follow-up.
         let output_path = self.config.output_path.clone();
         let thread_count = self.config.thread_count as usize;
         let hold_ms = self.config.hold_ms as u64;
 
         // Clone the LimitedAccess handle once; each spawned thread
         // gets its own clone (the Clone impl bumps the inner Arc
-        // refcount via the FullAccess vtable's `clone_handle`).
+        // refcount).
         let limited_template = ctx.gpu_limited_access().clone();
 
         let in_closure = Arc::new(AtomicBool::new(false));

@@ -35,23 +35,6 @@ use crate::core::rhi::{IndexBuffer, StorageBuffer, UniformBuffer, VertexBuffer};
 pub trait VulkanBufferLike {
     fn vk_buffer(&self) -> vk::Buffer;
     fn vk_buffer_size(&self) -> vk::DeviceSize;
-
-    /// Opaque `Arc::into_raw(Arc<HostVulkanBufferInner>)` handle when
-    /// this buffer flavor is a [`crate::core::rhi::StorageBuffer`], else
-    /// `None`. Only [`crate::core::rhi::StorageBuffer`] overrides today.
-    fn cdylib_storage_buffer_handle(&self) -> Option<*const std::ffi::c_void> {
-        None
-    }
-
-    /// Opaque `Arc::into_raw(Arc<PixelBufferRef>)` handle when this
-    /// buffer flavor is a [`PixelBuffer`], else `None`. At most one of
-    /// this and [`Self::cdylib_storage_buffer_handle`] returns `Some`
-    /// for any given implementor.
-    ///
-    /// [`PixelBuffer`]: crate::core::rhi::PixelBuffer
-    fn cdylib_pixel_buffer_handle(&self) -> Option<*const std::ffi::c_void> {
-        None
-    }
 }
 
 impl VulkanBufferLike for PixelBuffer {
@@ -76,10 +59,6 @@ impl VulkanBufferLike for PixelBuffer {
             0
         }
     }
-
-    fn cdylib_pixel_buffer_handle(&self) -> Option<*const std::ffi::c_void> {
-        Some(self.handle)
-    }
 }
 
 #[cfg(target_os = "linux")]
@@ -89,9 +68,6 @@ impl VulkanBufferLike for StorageBuffer {
     }
     fn vk_buffer_size(&self) -> vk::DeviceSize {
         self.host_inner().size()
-    }
-    fn cdylib_storage_buffer_handle(&self) -> Option<*const std::ffi::c_void> {
-        Some(self.cdylib_handle())
     }
 }
 

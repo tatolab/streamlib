@@ -2261,7 +2261,6 @@ streamlib = { path = "../streamlib" }
         );
     }
 
-
     #[test]
     fn rejects_vulkanalia_cargo_dep_in_the_wheel() {
         let dir = empty_workspace();
@@ -2283,17 +2282,17 @@ vulkanalia = { workspace = true }
                 .violations
                 .iter()
                 .any(|v| v.check == CHECK_VULKANALIA),
-            "expected vulkanalia Cargo-dep violation in python-native cdylib, got {:?}",
+            "expected vulkanalia Cargo-dep violation in the wheel, got {:?}",
             report.violations,
         );
     }
 
     #[test]
-    fn rejects_allocate_memory_in_python_native_cdylib() {
+    fn rejects_allocate_memory_in_the_wheel() {
         let dir = empty_workspace();
         write_fixture(
             dir.path(),
-            "sdk/streamlib-python-native/src/some_module.rs",
+            "sdk/streamlib-python-wheel/src/some_module.rs",
             "fn f() { unsafe { device.allocate_memory(&info, None).unwrap(); } }\n",
         );
         let report = scan_all(dir.path()).unwrap();
@@ -2302,7 +2301,7 @@ vulkanalia = { workspace = true }
                 .violations
                 .iter()
                 .any(|v| v.check == CHECK_PRIVILEGED_VK),
-            "expected privileged-vk violation in python-native cdylib, got {:?}",
+            "expected privileged-vk violation in the wheel, got {:?}",
             report.violations,
         );
     }

@@ -188,7 +188,7 @@ impl Runner {
         // Bridge iceoryx2's internal log records into streamlib tracing
         // before creating the iceoryx2 Node so any iceoryx2 emit at
         // construction time lands in the unified JSONL pipeline.
-        crate::core::logging::iceoryx2_log_bridge::install_iceoryx2_log_bridge_for_self();
+        crate::core::logging::iceoryx2_log_bridge::install_iceoryx2_log_bridge();
 
         // Create iceoryx2 Node early so PUBSUB can initialize before start().
         // The node is cloned into RuntimeContext during start().

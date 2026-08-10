@@ -20,10 +20,11 @@ Workers, VST3 plugin sandbox, WebGPU/wgpu-core).
 
 ## Swapchain / present target — host-side, not the subprocess
 
-The swapchain is host-side. The FullAccess `create_present_target` slot
-mints a Box-shaped `PresentTarget` handle from a native window handle
-(`RawWindowHandleRepr`), and the frame loop (`begin_frame` / `end_frame`
-/ `recreate` / `set_hdr_metadata`) runs host-side. The host's
+The swapchain is host-side. `GpuContextFullAccess::create_present_target`
+mints a Box-shaped `PresentTarget` handle from a native window
+(`raw_window_handle::HasWindowHandle + HasDisplayHandle`), and the frame
+loop (`begin_frame` / `end_frame` / `recreate` / `set_hdr_metadata`)
+runs host-side. The host's
 `render_frame` loop is split into a `begin_frame` (acquire + prime the
 frame's borrowed recorder) / `end_frame` (barrier + submit + present)
 pair; per-image render-finished-semaphore keying stays entirely host-side
@@ -45,9 +46,8 @@ ownership belongs to the host / application layer — a display processor
 receives the window handle as an input rather than assuming it owns the
 loop. `vkQueuePresentKHR` itself is not main-thread-bound, so
 host-owns-window + processor-presents-on-its-thread works on every
-platform. The `RawWindowHandleRepr` reserves the Win32 / AppKit
-discriminants from day one so Windows / macOS activation lands a new host
-dispatch arm.
+platform. `raw_window_handle` carries the Win32 / AppKit window flavors
+already, so Windows / macOS activation lands a new host dispatch arm.
 
 ## The carve-out
 

@@ -7,8 +7,8 @@
 //! A shutdown *request* never tears the runtime down itself: it latches and
 //! publishes `Event::RuntimeGlobal(RuntimeEvent::RuntimeShutdown)`, and the
 //! loop owner ([`crate::core::runtime::Runner::wait_for_signal_with`]) runs the
-//! normal teardown. The latch is process-global (the signal handler and the
-//! plugin ABI hold no `Runner`) and first-observer-wins: whichever loop owner
+//! normal teardown. The latch is process-global (the signal handler holds
+//! no `Runner`) and first-observer-wins: whichever loop owner
 //! reads it takes it, so a request issued while no run loop is running is
 //! observed by the next one to start.
 
@@ -23,10 +23,6 @@ use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent};
 /// loop. A latch and not a counter, so "requesting twice is not an error"
 /// holds by construction. Process-global like `PUBSUB`.
 static RUNTIME_SHUTDOWN_REQUEST_LATCH: AtomicBool = AtomicBool::new(false);
-
-/// Fired at most once per image, so the wrong-image diagnostic below stays
-/// fail-loud without becoming a log firehose: the predicate it guards is meant
-/// to be polled, and inside a facade cdylib every emit is a plugin-ABI hop.
 
 /// How often a loop owner re-reads the latch. Shared so the run loop
 /// ([`crate::core::runtime::Runner::wait_for_signal_with`]) and every
@@ -86,17 +82,6 @@ impl Drop for RuntimeShutdownRequestLatchClearedOnDrop {
     }
 }
 
-/// Publish a shutdown request to the host on the reserved plugin-ABI control
-/// topic ([`PUBSUB_CONTROL_TOPIC_RUNTIME_SHUTDOWN_REQUEST`]) through the
-/// cached `pubsub_publish` callback.
-///
-/// The payload is `rmp_serde::to_vec(reason)` — a bare msgpack UTF-8 string,
-/// NOT an `Event` msgpack: the reserved control topics are matched by the host
-/// before its general `Event` decode and carry the per-topic payload defined
-/// next to the topic constant.
-// twin-guard(runtime-shutdown-publish): BEGIN
-// twin-guard(runtime-shutdown-publish): END
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -111,8 +96,7 @@ mod tests {
         body();
     }
 
-    /// The host binary's `host_callbacks()` is `None`, so this drives the host
-    /// arm: it latches, and a loop owner that polls
+    /// A request latches, and a loop owner that polls
     /// `is_runtime_shutdown_requested` observes the request even when the
     /// pubsub listener missed the event.
     #[test]

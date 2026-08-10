@@ -647,9 +647,6 @@ impl InputMailboxes {
         if !self.is_configured() {
             return None;
         }
-        // SAFETY: handle came from Arc::into_raw; bumping the
-        // strong count via the vtable's clone_arc gives us a fresh
-        // owning reference we can reconstruct as Arc::from_raw.
         // SAFETY: `handle` is `Arc::into_raw(Arc<InputMailboxesInner>)`; bump
         // the strong count and reconstruct an owning `Arc` from the raw handle.
         unsafe {

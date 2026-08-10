@@ -12,7 +12,11 @@
 //! - `vtable_dispatch` — `OutputWriter::write_raw` on the public handle,
 //!   which derefs the opaque handle to the same
 //!   `OutputWriterInner::write_raw`. The delta vs `baseline_direct_inner`
-//!   is the handle-indirection cost.
+//!   is the handle-indirection cost. (The `vtable_dispatch` /
+//!   `payload_sweep_vtable` criterion ids date from the deleted
+//!   vtable-dispatch arm and are kept as-is: criterion ids are
+//!   historical comparison keys, and renaming them orphans every
+//!   recorded baseline.)
 //! - `payload_sweep_vtable` — vtable-dispatch arm at 64 B / 256 B /
 //!   1 KiB / 8 KiB / 64 KiB payloads. Tells the reader whether the
 //!   hop's per-call cost is dominated by the fixed overhead (call
@@ -175,7 +179,7 @@ fn bench_vtable_dispatch(c: &mut Criterion) {
     });
 }
 
-/// Vary payload size to characterize how the plugin ABI hop cost scales
+/// Vary payload size to characterize how the handle-indirection cost scales
 /// with the data length. Useful for the drone-racing JPEG path
 /// (typical 30-100 KB JPEG payloads per frame) vs the control-path
 /// (sub-100 byte messages).

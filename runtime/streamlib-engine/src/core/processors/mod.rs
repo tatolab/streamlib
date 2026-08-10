@@ -42,9 +42,6 @@ pub use processor_type_reference::ProcessorTypeReference;
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct EmptyConfig;
 
-// Wire-load-bearing: config crosses the iceoryx2 wire as a named map, so
-// `EmptyConfig` serializes to an empty named map and tolerates any decode
-// shape.
 impl serde::Serialize for EmptyConfig {
     fn serialize<S: serde::Serializer>(
         &self,

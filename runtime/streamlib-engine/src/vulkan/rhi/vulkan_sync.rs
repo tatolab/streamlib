@@ -190,7 +190,7 @@ unsafe impl Sync for VulkanFence {}
 /// `create_exportable_timeline_semaphore` slot which builds one of these
 /// via [`Self::new_exportable`]. That host-side backing is why the
 /// `new` / `new_exportable` / `create` constructor bodies must stay free
-/// of any `host_inner()` / `host_callbacks()` guard.
+/// of any `host_inner()` guard.
 pub struct HostVulkanTimelineSemaphore {
     device: vulkanalia::Device,
     semaphore: vk::Semaphore,

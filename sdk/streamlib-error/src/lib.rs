@@ -4,9 +4,8 @@
 //! Canonical StreamLib [`Error`] + [`Result`].
 //!
 //! Shared by `streamlib-engine` (which re-exports it at
-//! `core::error`) and the plugin-SDK, so a plugin cdylib can author
-//! against `Result` without linking the engine. Every variant is
-//! String / std / anyhow based plus the engine-free `SchemaIdent`
+//! `core::error`) and the engine-free authoring surface. Every variant
+//! is String / std / anyhow based plus the engine-free `SchemaIdent`
 //! (from `streamlib-processor-schema`) and, on Linux, the engine-free
 //! `ConsumerRhiError` conversion.
 
@@ -107,44 +106,6 @@ pub enum Error {
          allowed; detach the existing tap first"
     )]
     TapSlotOccupied(String),
-
-    #[error("Plugin host services unavailable: {0}")]
-    PluginHostUnavailable(String),
-
-    #[error("Invalid escalate scope: {0}")]
-    InvalidEscalateScope(String),
-
-    #[error("Escalate begin rejected: {0}")]
-    EscalateBeginRejected(String),
-
-    #[error(
-        "Plugin ABI version mismatch loading '{plugin_path}': plugin was built \
-         against plugin-ABI v{plugin_abi_version}, but this host speaks \
-         v{host_abi_version}. Rebuild the plugin against the host's \
-         streamlib-plugin-abi version — publish a matching engine `-dev` \
-         version and bump the plugin's pin, or use `streamlib link`."
-    )]
-    PluginAbiVersionMismatch {
-        plugin_path: String,
-        plugin_abi_version: u32,
-        host_abi_version: u32,
-    },
-
-    #[error(
-        "Plugin build mismatch loading '{plugin_path}': the plugin's build \
-         fingerprint does not match this host's. Plugin build: [{plugin_identity}] \
-         (abi_layout={plugin_abi_fingerprint:#018x}); host build: \
-         [{host_identity}] (abi_layout={host_abi_fingerprint:#018x}). Rebuild the \
-         plugin against the host's engine build — publish a matching engine `-dev` \
-         version and bump the plugin's pin, or use `streamlib link`."
-    )]
-    PluginBuildMismatch {
-        plugin_path: String,
-        plugin_identity: String,
-        host_identity: String,
-        plugin_abi_fingerprint: u64,
-        host_abi_fingerprint: u64,
-    },
 
     #[error("Bag key '{key}' is not present")]
     BagKeyMissing { key: String },
@@ -248,10 +209,21 @@ mod tests {
 
     #[test]
     fn unknown_processor_type_names_the_type() {
+        // One message for every ident flavor — the install fix-it died
+        // with the module system. Mentally revert the collapse and the
+        // no-fix-it assertion goes red.
         let msg = Error::UnknownProcessorType {
             ident: ident("tatolab", "camera", "Camera"),
         }
         .to_string();
         assert!(msg.contains("not registered"), "message: {msg}");
+        assert!(
+            msg.contains("tatolab") && msg.contains("Camera"),
+            "ident must reach the user: {msg}"
+        );
+        assert!(
+            !msg.contains("streamlib add"),
+            "no install fix-it survives the module-system removal: {msg}"
+        );
     }
 }
