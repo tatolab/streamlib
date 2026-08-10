@@ -9,6 +9,7 @@
 //! as a handle, and the payload here is the named map describing it.
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::intern;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyFloat, PyInt, PyList, PyString, PyTuple, PyType};
 use rmpv::Value;
@@ -27,9 +28,7 @@ pub(crate) fn encode_bag_to_msgpack(bag: &Bound<'_, PyAny>) -> PyResult<Vec<u8>>
             "a bag is a dict with string keys — the wire carries a named map, and a \
              {} cannot be read as one by a processor in another language. Wrap it: \
              `{{\"value\": …}}`.",
-            bag.get_type()
-                .name()
-                .map_or_else(|_| "value".to_string(), |type_name| type_name.to_string())
+            python_type_name_for_error_message(bag, "value")
         ))
     })?;
 
@@ -66,16 +65,24 @@ pub(crate) fn cast_decoded_bag_into_read_target<'py>(
         PyTypeError::new_err(format!(
             "the bag on input port {port_name:?} decoded as a {}, and `into=` builds its target \
              from a named map's entries. Read it without `into=` to see what arrived.",
-            decoded_bag
-                .get_type()
-                .name()
-                .map_or_else(|_| "value".to_string(), |type_name| type_name.to_string())
+            python_type_name_for_error_message(&decoded_bag, "value")
         ))
     })?;
     if read_target_is_a_typed_dict(read_target_type)? {
         return Ok(decoded_bag);
     }
-    read_target_type.call((), Some(named_map))
+    read_target_type
+        .call((), Some(named_map))
+        .map_err(|construction_failure| {
+            if read_target_type.is_callable() {
+                return construction_failure;
+            }
+            PyTypeError::new_err(format!(
+                "`into=` on input port {port_name:?} was handed a {}, which cannot be called to \
+                 build anything — name a TypedDict, a dataclass, or a model class.",
+                python_type_name_for_error_message(read_target_type, "value")
+            ))
+        })
 }
 
 /// Whether `read_target_type` is a TypedDict class.
@@ -89,7 +96,22 @@ fn read_target_is_a_typed_dict(read_target_type: &Bound<'_, PyAny>) -> PyResult<
     let Ok(target_class) = read_target_type.cast::<PyType>() else {
         return Ok(false);
     };
-    Ok(target_class.is_subclass_of::<PyDict>()? && target_class.hasattr("__required_keys__")?)
+    // Interned: this is the per-frame free-cast path, and a plain `&str` here
+    // allocates a Python string per read.
+    Ok(target_class.is_subclass_of::<PyDict>()?
+        && target_class.hasattr(intern!(target_class.py(), "__required_keys__"))?)
+}
+
+/// The type name to name in a refusal, or `unknown_type_placeholder` when even
+/// that cannot be read.
+fn python_type_name_for_error_message(
+    value: &Bound<'_, PyAny>,
+    unknown_type_placeholder: &str,
+) -> String {
+    value.get_type().name().map_or_else(
+        |_| unknown_type_placeholder.to_string(),
+        |type_name| type_name.to_string(),
+    )
 }
 
 /// Convert a processor's JSON configuration into the keyword arguments its
@@ -212,10 +234,7 @@ fn named_map_to_msgpack_value(mapping: &Bound<'_, PyDict>) -> PyResult<Value> {
         let key = key.cast::<PyString>().map_err(|_| {
             PyTypeError::new_err(format!(
                 "bag keys must be strings — the wire carries a named map; got a {} key",
-                key.get_type().name().map_or_else(
-                    |_| "non-string".to_string(),
-                    |type_name| type_name.to_string()
-                )
+                python_type_name_for_error_message(&key, "non-string")
             ))
         })?;
         entries.push((
@@ -451,6 +470,42 @@ mod tests {
         });
     }
 
+    /// The free cast has to survive a TypedDict `typing.is_typeddict` does not
+    /// recognize — a `typing_extensions.TypedDict` is one on every interpreter
+    /// this wheel supports, and the predicate answers `False` for it.
+    ///
+    /// Spelled here as the structure every TypedDict class shares rather than
+    /// by importing typing_extensions: the interpreter these tests link is the
+    /// system one, which carries no third-party packages.
+    #[test]
+    fn a_typed_dict_the_stdlib_predicate_misses_still_casts_for_free() {
+        Python::initialize();
+        Python::attach(|python| {
+            let target = read_target_from_source(
+                python,
+                "class Detection(dict):\n    __required_keys__ = frozenset({'name'})\n    \
+                 __optional_keys__ = frozenset()\n",
+                "Detection",
+            );
+            assert!(
+                !python
+                    .import("typing")
+                    .unwrap()
+                    .call_method1("is_typeddict", (&target,))
+                    .unwrap()
+                    .is_truthy()
+                    .unwrap(),
+                "this target must be one the stdlib predicate rejects, or it proves nothing"
+            );
+
+            let bag = bag_with_one_name(python, "cat");
+            let read =
+                cast_decoded_bag_into_read_target("detections", bag.clone(), &target).unwrap();
+
+            assert!(read.is(&bag), "the free cast must not copy the bag");
+        });
+    }
+
     /// A dataclass is the constructing half of the dial: a good bag builds an
     /// instance, and construction is the validation.
     #[test]
@@ -516,6 +571,26 @@ mod tests {
             assert!(
                 refusal.to_string().contains("detections")
                     && refusal.to_string().contains("named map"),
+                "got: {refusal}"
+            );
+        });
+    }
+
+    /// A target that is not a class at all cannot build anything, and CPython's
+    /// own "not callable" names neither the port nor `into=`.
+    #[test]
+    fn a_target_that_cannot_be_called_is_refused_by_port_name() {
+        Python::initialize();
+        Python::attach(|python| {
+            let not_a_class = "Detection".into_pyobject(python).unwrap().into_any();
+            let refusal = cast_decoded_bag_into_read_target(
+                "detections",
+                bag_with_one_name(python, "cat"),
+                &not_a_class,
+            )
+            .unwrap_err();
+            assert!(
+                refusal.to_string().contains("detections") && refusal.to_string().contains("into="),
                 "got: {refusal}"
             );
         });
