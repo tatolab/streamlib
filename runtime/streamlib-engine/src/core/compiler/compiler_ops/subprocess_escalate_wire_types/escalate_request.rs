@@ -15,7 +15,7 @@ use std::collections::HashMap;
 /// Polyglot subprocess escalate-on-behalf request (subprocess → host)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "op")]
-pub enum EscalateRequest {
+pub(crate) enum EscalateRequest {
     #[serde(rename = "acquire_image")]
     AcquireImage(EscalateRequestAcquireImage),
 
@@ -76,7 +76,7 @@ pub enum EscalateRequest {
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestAcquireImage {
+pub(crate) struct EscalateRequestAcquireImage {
     /// Texture format identifier. Lowercase snake-case names: bgra8_unorm,
     /// bgra8_unorm_srgb, rgba8_unorm, rgba8_unorm_srgb. The host
     /// backs this with a render-target-capable VkImage allocated via
@@ -89,63 +89,63 @@ pub struct EscalateRequestAcquireImage {
     /// Internal host primitive — surface adapters (streamlib-adapter-vulkan /
     /// -opengl / -skia) use this on customers' behalf; customers never invoke
     /// acquire_image directly.
-    pub format: String,
+    pub(crate) format: String,
 
     /// Pixel height of the image.
-    pub height: u32,
+    pub(crate) height: u32,
 
     /// Correlates request with response. UUID string.
-    pub request_id: String,
+    pub(crate) request_id: String,
 
     /// Pixel width of the image.
-    pub width: u32,
+    pub(crate) width: u32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestAcquirePixelBuffer {
+pub(crate) struct EscalateRequestAcquirePixelBuffer {
     /// Pixel format identifier (e.g. bgra32, nv12_video_range, gray8).
-    pub format: String,
+    pub(crate) format: String,
 
     /// Pixel height of the buffer.
-    pub height: u32,
+    pub(crate) height: u32,
 
     /// Correlates request with response. UUID string.
-    pub request_id: String,
+    pub(crate) request_id: String,
 
     /// Pixel width of the buffer.
-    pub width: u32,
+    pub(crate) width: u32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestAcquireTexture {
+pub(crate) struct EscalateRequestAcquireTexture {
     /// Texture format identifier. Lowercase snake-case names: rgba8_unorm,
     /// rgba8_unorm_srgb, bgra8_unorm, bgra8_unorm_srgb, rgba16_float,
     /// rgba32_float, nv12.
-    pub format: String,
+    pub(crate) format: String,
 
     /// Pixel height of the texture.
-    pub height: u32,
+    pub(crate) height: u32,
 
     /// Correlates request with response. UUID string.
-    pub request_id: String,
+    pub(crate) request_id: String,
 
     /// Usage flags the texture must support. Non-empty array of lowercase
     /// snake-case tokens drawn from: copy_src, copy_dst, texture_binding,
     /// storage_binding, render_attachment. Host validates — unknown tokens
     /// return an error response.
-    pub usage: Vec<String>,
+    pub(crate) usage: Vec<String>,
 
     /// Pixel width of the texture.
-    pub width: u32,
+    pub(crate) width: u32,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestCopyDeviceExportStagingBackToSurface {
+pub(crate) struct EscalateRequestCopyDeviceExportStagingBackToSurface {
     /// Correlates request with response. UUID string.
-    pub request_id: String,
+    pub(crate) request_id: String,
 
     /// Same surface as `open_device_export_staging.surface_id`. Publishes
     /// a device-side edit: the host copies the staging buffer back into the
@@ -153,14 +153,13 @@ pub struct EscalateRequestCopyDeviceExportStagingBackToSurface {
     /// `refill_done` at end-of-submit. Refused when the surface's export is
     /// read-only — a texture-backed export has no write-back path. Answers with
     /// the signalled `timeline_value`.
-    pub surface_id: String,
+    pub(crate) surface_id: String,
 }
 
 /// Severity level of the record. Maps 1:1 onto tracing::Level.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestLogLevel {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestLogLevel {
     #[serde(rename = "debug")]
-    #[default]
     Debug,
 
     #[serde(rename = "error")]
@@ -179,65 +178,64 @@ pub enum EscalateRequestLogLevel {
 /// Origin runtime of the record. Always "python" on the wire — Rust never
 /// routes through escalate; Rust call sites hit `tracing::*!()` directly on
 /// the host.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestLogSource {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestLogSource {
     #[serde(rename = "python")]
-    #[default]
     Python,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestLog {
+pub(crate) struct EscalateRequestLog {
     /// User-supplied structured fields. Copied flat onto the emitted
     /// RuntimeLogEvent's `attrs` map — not nested under an `attrs.key` path in
     /// the JSONL.
-    pub attrs: HashMap<String, Option<Value>>,
+    pub(crate) attrs: HashMap<String, Option<Value>>,
 
     /// Interceptor channel when `intercepted: true`. Conventional values:
     /// "stdout", "stderr", "console.log", "logging", "fd1", "fd2". Null when
     /// `intercepted: false`.
-    pub channel: Option<String>,
+    pub(crate) channel: Option<String>,
 
     /// True when the record was captured from subprocess stdout/stderr,
     /// console.log, root logging handler, or a raw fd write, rather than a
     /// direct `streamlib.log.*` call.
-    pub intercepted: bool,
+    pub(crate) intercepted: bool,
 
     /// Severity level of the record. Maps 1:1 onto tracing::Level.
-    pub level: EscalateRequestLogLevel,
+    pub(crate) level: EscalateRequestLogLevel,
 
     /// Primary human-readable message.
-    pub message: String,
+    pub(crate) message: String,
 
     /// Pipeline identifier. Null for runtime-level records.
-    pub pipeline_id: Option<String>,
+    pub(crate) pipeline_id: Option<String>,
 
     /// Processor identifier. Null outside a processor.
-    pub processor_id: Option<String>,
+    pub(crate) processor_id: Option<String>,
 
     /// Origin runtime of the record. Always "python" on the wire — Rust never
     /// routes through escalate; Rust call sites hit `tracing::*!()` directly on
     /// the host.
-    pub source: EscalateRequestLogSource,
+    pub(crate) source: EscalateRequestLogSource,
 
-    /// Subprocess-monotonic sequence number (uint64 as string — JTD has no
+    /// Subprocess-monotonic sequence number (u64 as string — JSON has no
     /// native u64). Escape hatch for recovering subprocess-local order within
     /// a single source. Not authoritative across sources — use `host_ts` for
     /// merged-stream ordering.
-    pub source_seq: String,
+    pub(crate) source_seq: String,
 
     /// Subprocess wall-clock timestamp ISO8601 (advisory). Never used for
     /// ordering; the host stamps `host_ts` on receipt as the authoritative
     /// sort key.
-    pub source_ts: String,
+    pub(crate) source_ts: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestOpenDeviceExportStaging {
+pub(crate) struct EscalateRequestOpenDeviceExportStaging {
     /// Correlates request with response. UUID string.
-    pub request_id: String,
+    pub(crate) request_id: String,
 
     /// The surface whose pixels the subprocess wants in an external device
     /// API's dialect (CUDA today). The host allocates that surface's OPAQUE_FD
@@ -251,14 +249,14 @@ pub struct EscalateRequestOpenDeviceExportStaging {
     /// `writable`, and `exporting_device_uuid`. The staging fd and the timeline
     /// fd travel over the surface-share socket at check-out, never over this
     /// one.
-    pub surface_id: String,
+    pub(crate) surface_id: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRefillDeviceExportStaging {
+pub(crate) struct EscalateRequestRefillDeviceExportStaging {
     /// Correlates request with response. UUID string.
-    pub request_id: String,
+    pub(crate) request_id: String,
 
     /// Same surface as `open_device_export_staging.surface_id`. The
     /// host resolves the blit source fresh, copies the surface's current
@@ -270,94 +268,94 @@ pub struct EscalateRequestRefillDeviceExportStaging {
     /// The source is resolved per refill and never cached: rotating producers
     /// re-register a different texture under the same surface id every frame,
     /// so a cached source blits the previous cycle's pixels.
-    pub surface_id: String,
+    pub(crate) surface_id: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRegisterAccelerationStructureBlas {
+pub(crate) struct EscalateRequestRegisterAccelerationStructureBlas {
     /// Index blob, lowercase hex-encoded little-endian u32s.
     /// Must be a multiple of 3 — three indices per triangle.
     /// The host decodes these into a `&[u32]` and forwards to
     /// `VulkanAccelerationStructure::build_triangles_blas`.
-    pub indices_hex: String,
+    pub(crate) indices_hex: String,
 
     /// Human-readable label used in error messages and tracing on the host.
     /// Echoed in the returned `as_id` derivation only via its bytes — purely
     /// diagnostic.
-    pub label: String,
+    pub(crate) label: String,
 
     /// Correlates request with response. UUID string.
-    pub request_id: String,
+    pub(crate) request_id: String,
 
     /// Vertex blob, lowercase hex-encoded little-endian f32s
     /// (`R32G32B32_SFLOAT`, stride 12 bytes — interleaved `[x,y,z,x,y,z,...]`).
     /// Length in bytes after hex decoding must be a multiple of 12; total f32
     /// count must equal `3 × vertex_count`.
-    pub vertices_hex: String,
+    pub(crate) vertices_hex: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRegisterAccelerationStructureTlasInstance {
+pub(crate) struct EscalateRequestRegisterAccelerationStructureTlasInstance {
     /// Handle returned by a prior `register_acceleration_structure_blas`
     /// response. Must reference a BLAS, not a TLAS — the host validates kind
     /// and rejects mismatches.
-    pub blas_id: String,
+    pub(crate) blas_id: String,
 
     /// 24-bit user data exposed to hit shaders as `gl_InstanceCustomIndexEXT`.
     /// The high 8 bits must be zero.
-    pub custom_index: u32,
+    pub(crate) custom_index: u32,
 
     /// `VkGeometryInstanceFlagsKHR` bitmask. The host passes this through to
     /// `VkAccelerationStructureInstanceKHR` unchanged. `0` selects the spec
     /// default; conventional combinations: `1 = TRIANGLE_FACING_CULL_DISABLE`,
     /// `4 = FORCE_OPAQUE`.
-    pub flags: u32,
+    pub(crate) flags: u32,
 
     /// 8-bit visibility mask. Rays specify a `cullMask`; the instance is hit
-    /// only when `(mask & cullMask) != 0`. JTD has no native u8 — the wire form
+    /// only when `(mask & cullMask) != 0`. The wire form
     /// is uint32 and the host rejects values > 0xff.
-    pub mask: u32,
+    pub(crate) mask: u32,
 
     /// Offset added to the SBT hit-group index. Usually 0 for single-hit-group
     /// RT pipelines.
-    pub sbt_record_offset: u32,
+    pub(crate) sbt_record_offset: u32,
 
     /// Row-major 3×4 affine transform applied to the BLAS geometry in world
     /// space. Exactly 12 floats — three rows of four — laid out `[m00, m01,
     /// m02, m03, m10, ..., m23]`. Matches `VkTransformMatrixKHR` directly.
-    pub transform: Vec<f32>,
+    pub(crate) transform: Vec<f32>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRegisterAccelerationStructureTlas {
+pub(crate) struct EscalateRequestRegisterAccelerationStructureTlas {
     /// One TLAS instance per entry. The host resolves `blas_id`
     /// to a previously-registered BLAS via the bridge's `as_id
     /// → Arc<VulkanAccelerationStructure>` map and forwards to
     /// `VulkanAccelerationStructure::build_tlas`. Empty array is rejected (TLAS
     /// must have at least one instance).
-    pub instances: Vec<EscalateRequestRegisterAccelerationStructureTlasInstance>,
+    pub(crate) instances: Vec<EscalateRequestRegisterAccelerationStructureTlasInstance>,
 
     /// Human-readable label used in error messages and tracing on the host.
     /// Diagnostic only.
-    pub label: String,
+    pub(crate) label: String,
 
     /// Correlates request with response. UUID string.
-    pub request_id: String,
+    pub(crate) request_id: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRegisterComputeKernel {
+pub(crate) struct EscalateRequestRegisterComputeKernel {
     /// Push-constant range size in bytes. 0 if the shader uses no push
     /// constants. The host validates this against the shader's reflected push-
     /// constant range and rejects mismatches with an `err` response.
-    pub push_constant_size: u32,
+    pub(crate) push_constant_size: u32,
 
     /// Correlates request with response. UUID string.
-    pub request_id: String,
+    pub(crate) request_id: String,
 
     /// Compiled SPIR-V bytecode for the compute shader, encoded as lowercase
     /// hex (no `0x` prefix, no whitespace). The host parses the bytes back,
@@ -370,14 +368,13 @@ pub struct EscalateRequestRegisterComputeKernel {
     /// state to `<XDG_CACHE_HOME>/streamlib/ pipeline-cache/<spirv_hash>.bin`,
     /// so first-inference latency after a host process restart is fast on user-
     /// registered ML kernels.
-    pub spv_hex: String,
+    pub(crate) spv_hex: String,
 }
 
 /// Resource kind for this binding slot.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRegisterGraphicsKernelBindingKind {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRegisterGraphicsKernelBindingKind {
     #[serde(rename = "sampled_texture")]
-    #[default]
     SampledTexture,
 
     #[serde(rename = "storage_buffer")]
@@ -390,23 +387,22 @@ pub enum EscalateRequestRegisterGraphicsKernelBindingKind {
     UniformBuffer,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRegisterGraphicsKernelBinding {
-    pub binding: u32,
+pub(crate) struct EscalateRequestRegisterGraphicsKernelBinding {
+    pub(crate) binding: u32,
 
     /// Resource kind for this binding slot.
-    pub kind: EscalateRequestRegisterGraphicsKernelBindingKind,
+    pub(crate) kind: EscalateRequestRegisterGraphicsKernelBindingKind,
 
     /// Bitmask of stages the binding is visible to. `1 = VERTEX`, `2 =
     /// FRAGMENT`, `3 = VERTEX_FRAGMENT`.
-    pub stages: u32,
+    pub(crate) stages: u32,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp {
     #[serde(rename = "add")]
-    #[default]
     Add,
 
     #[serde(rename = "max")]
@@ -422,10 +418,9 @@ pub enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp {
     Subtract,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp {
     #[serde(rename = "add")]
-    #[default]
     Add,
 
     #[serde(rename = "max")]
@@ -441,10 +436,9 @@ pub enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp {
     Subtract,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor {
     #[serde(rename = "constant_alpha")]
-    #[default]
     ConstantAlpha,
 
     #[serde(rename = "constant_color")]
@@ -490,10 +484,9 @@ pub enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFac
     Zero,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor {
     #[serde(rename = "constant_alpha")]
-    #[default]
     ConstantAlpha,
 
     #[serde(rename = "constant_color")]
@@ -539,10 +532,9 @@ pub enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFac
     Zero,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor {
     #[serde(rename = "constant_alpha")]
-    #[default]
     ConstantAlpha,
 
     #[serde(rename = "constant_color")]
@@ -590,10 +582,9 @@ pub enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFac
 
 /// Blend factor. Ignored when `color_blend_enabled` is false; carry a valid
 /// value (e.g. `one`) regardless.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor {
     #[serde(rename = "constant_alpha")]
-    #[default]
     ConstantAlpha,
 
     #[serde(rename = "constant_color")]
@@ -642,10 +633,9 @@ pub enum EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFac
 /// Depth compare op. Ignored when `depth_stencil_enabled` is false; the
 /// wire field must still carry a valid value (use `always` as the default
 /// placeholder when disabled).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp {
     #[serde(rename = "always")]
-    #[default]
     Always,
 
     #[serde(rename = "equal")]
@@ -673,20 +663,18 @@ pub enum EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp {
 /// Which pipeline state is set dynamically per draw vs baked into the pipeline
 /// at creation. `none` bakes a default 1×1 viewport (offscreen fixed-size
 /// only); `viewport_scissor` lets the same pipeline serve varying extents.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState {
     #[serde(rename = "none")]
-    #[default]
     None,
 
     #[serde(rename = "viewport_scissor")]
     ViewportScissor,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode {
     #[serde(rename = "back")]
-    #[default]
     Back,
 
     #[serde(rename = "front")]
@@ -699,20 +687,18 @@ pub enum EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode
     None,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace {
     #[serde(rename = "clockwise")]
-    #[default]
     Clockwise,
 
     #[serde(rename = "counter_clockwise")]
     CounterClockwise,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode {
     #[serde(rename = "fill")]
-    #[default]
     Fill,
 
     #[serde(rename = "line")]
@@ -722,10 +708,9 @@ pub enum EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonM
     Point,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRegisterGraphicsKernelPipelineStateTopology {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRegisterGraphicsKernelPipelineStateTopology {
     #[serde(rename = "line_list")]
-    #[default]
     LineList,
 
     #[serde(rename = "line_strip")]
@@ -744,10 +729,9 @@ pub enum EscalateRequestRegisterGraphicsKernelPipelineStateTopology {
     TriangleStrip,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat {
     #[serde(rename = "r32_float")]
-    #[default]
     R32Float,
 
     #[serde(rename = "r32_sint")]
@@ -790,45 +774,44 @@ pub enum EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeF
     Rgba8Unorm,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttribute {
-    pub binding: u32,
+pub(crate) struct EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttribute {
+    pub(crate) binding: u32,
 
-    pub format: EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat,
+    pub(crate) format: EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat,
 
-    pub location: u32,
+    pub(crate) location: u32,
 
-    pub offset: u32,
+    pub(crate) offset: u32,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate {
     #[serde(rename = "instance")]
-    #[default]
     Instance,
 
     #[serde(rename = "vertex")]
     Vertex,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBinding {
-    pub binding: u32,
+pub(crate) struct EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBinding {
+    pub(crate) binding: u32,
 
-    pub input_rate: EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate,
+    pub(crate) input_rate:
+        EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate,
 
-    pub stride: u32,
+    pub(crate) stride: u32,
 }
 
 /// Depth attachment format. Absent disables depth attachments — the
 /// depth_stencil flags must be consistent (`depth_stencil_enabled = false` when
 /// this is absent).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat {
     #[serde(rename = "d16_unorm")]
-    #[default]
     D16Unorm,
 
     #[serde(rename = "d24_unorm_s8_uint")]
@@ -842,17 +825,19 @@ pub enum EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat
 /// pipeline. Mirrors the host `GraphicsPipelineState` shape; unsupported
 /// combinations (multi-attachment color blend, MSAA samples > 1, etc.) are
 /// rejected with an `err` response.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRegisterGraphicsKernelPipelineState {
+pub(crate) struct EscalateRequestRegisterGraphicsKernelPipelineState {
     /// Color attachment texture formats (lowercase snake-case names matching
     /// `acquire_texture.format`). v1 supports a single color attachment; arrays
     /// of length other than 1 are rejected.
-    pub attachment_color_formats: Vec<String>,
+    pub(crate) attachment_color_formats: Vec<String>,
 
-    pub color_blend_alpha_op: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp,
+    pub(crate) color_blend_alpha_op:
+        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp,
 
-    pub color_blend_color_op: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp,
+    pub(crate) color_blend_color_op:
+        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp,
 
     pub color_blend_dst_alpha_factor:
         EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor,
@@ -860,7 +845,7 @@ pub struct EscalateRequestRegisterGraphicsKernelPipelineState {
     pub color_blend_dst_color_factor:
         EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor,
 
-    pub color_blend_enabled: bool,
+    pub(crate) color_blend_enabled: bool,
 
     pub color_blend_src_alpha_factor:
         EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor,
@@ -873,26 +858,26 @@ pub struct EscalateRequestRegisterGraphicsKernelPipelineState {
     /// Color write mask bits — `1=R`, `2=G`, `4=B`, `8=A`. `15` (`0b1111`)
     /// writes RGBA. Used both when blending is disabled and as the blend
     /// attachment's `color_write_mask` when enabled.
-    pub color_write_mask: u32,
+    pub(crate) color_write_mask: u32,
 
     /// Depth compare op. Ignored when `depth_stencil_enabled` is false; the
     /// wire field must still carry a valid value (use `always` as the default
     /// placeholder when disabled).
-    pub depth_compare_op: EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp,
+    pub(crate) depth_compare_op: EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp,
 
-    pub depth_stencil_enabled: bool,
+    pub(crate) depth_stencil_enabled: bool,
 
-    pub depth_write: bool,
+    pub(crate) depth_write: bool,
 
     /// Which pipeline state is set dynamically per draw vs baked into the
     /// pipeline at creation. `none` bakes a default 1×1 viewport (offscreen
     /// fixed-size only); `viewport_scissor` lets the same pipeline serve
     /// varying extents.
-    pub dynamic_state: EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState,
+    pub(crate) dynamic_state: EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState,
 
     /// MSAA sample count. Only `1` is supported in v1; any other value returns
     /// an `err` response.
-    pub multisample_samples: u32,
+    pub(crate) multisample_samples: u32,
 
     pub rasterization_cull_mode:
         EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode,
@@ -900,12 +885,12 @@ pub struct EscalateRequestRegisterGraphicsKernelPipelineState {
     pub rasterization_front_face:
         EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace,
 
-    pub rasterization_line_width: f32,
+    pub(crate) rasterization_line_width: f32,
 
     pub rasterization_polygon_mode:
         EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode,
 
-    pub topology: EscalateRequestRegisterGraphicsKernelPipelineStateTopology,
+    pub(crate) topology: EscalateRequestRegisterGraphicsKernelPipelineStateTopology,
 
     /// Vertex attributes pulled from the bindings. Must be empty when
     /// `vertex_input_bindings` is empty.
@@ -927,64 +912,63 @@ pub struct EscalateRequestRegisterGraphicsKernelPipelineState {
         Option<EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRegisterGraphicsKernel {
+pub(crate) struct EscalateRequestRegisterGraphicsKernel {
     /// Descriptor-set-0 bindings the host pipeline declares. Validated against
     /// `rspirv-reflect` of the supplied SPIR-V at register time — mismatches
     /// return an `err` response. Empty array means no bindings.
-    pub bindings: Vec<EscalateRequestRegisterGraphicsKernelBinding>,
+    pub(crate) bindings: Vec<EscalateRequestRegisterGraphicsKernelBinding>,
 
     /// Depth of the descriptor-set ring. Render-loop callers pass `frame_index
     /// ∈ [0, descriptor_sets_in_flight)` per draw. Must be ≥ 1.
-    pub descriptor_sets_in_flight: u32,
+    pub(crate) descriptor_sets_in_flight: u32,
 
     /// Entry-point name for the fragment stage. Empty string is normalized to
     /// `"main"` host-side.
-    pub fragment_entry_point: String,
+    pub(crate) fragment_entry_point: String,
 
     /// Compiled SPIR-V bytecode for the fragment stage, encoded as lowercase
     /// hex. Today exactly one fragment stage is required (matching the host
     /// kernel's v1 contract).
-    pub fragment_spv_hex: String,
+    pub(crate) fragment_spv_hex: String,
 
     /// Human-readable label used in error messages and tracing on the host.
     /// Echoed in `kernel_id` derivation only via its bytes — purely diagnostic.
-    pub label: String,
+    pub(crate) label: String,
 
     /// Fixed-function pipeline state plus attachment formats for the graphics
     /// pipeline. Mirrors the host `GraphicsPipelineState` shape; unsupported
     /// combinations (multi-attachment color blend, MSAA samples > 1, etc.) are
     /// rejected with an `err` response.
-    pub pipeline_state: EscalateRequestRegisterGraphicsKernelPipelineState,
+    pub(crate) pipeline_state: EscalateRequestRegisterGraphicsKernelPipelineState,
 
     /// Push-constant range size in bytes, validated against the merged shader
     /// reflection. Set 0 if the shaders use no push constants.
-    pub push_constant_size: u32,
+    pub(crate) push_constant_size: u32,
 
     /// Bitmask of stages the push-constant range is visible to. `1 = VERTEX`,
     /// `2 = FRAGMENT`. Ignored when `push_constant_size == 0`.
-    pub push_constant_stages: u32,
+    pub(crate) push_constant_stages: u32,
 
     /// Correlates request with response. UUID string.
-    pub request_id: String,
+    pub(crate) request_id: String,
 
     /// Entry-point name for the vertex stage. Empty string is normalized to
     /// `"main"` host-side.
-    pub vertex_entry_point: String,
+    pub(crate) vertex_entry_point: String,
 
     /// Compiled SPIR-V bytecode for the vertex stage, encoded as lowercase
     /// hex (no `0x` prefix, no whitespace). Today exactly one vertex stage
     /// is required (the host kernel rejects zero or multiple vertex stages).
     /// Geometry / tessellation / mesh / task stages are not yet supported.
-    pub vertex_spv_hex: String,
+    pub(crate) vertex_spv_hex: String,
 }
 
 /// Resource kind for this binding slot.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRegisterRayTracingKernelBindingKind {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRegisterRayTracingKernelBindingKind {
     #[serde(rename = "acceleration_structure")]
-    #[default]
     AccelerationStructure,
 
     #[serde(rename = "sampled_texture")]
@@ -1000,33 +984,32 @@ pub enum EscalateRequestRegisterRayTracingKernelBindingKind {
     UniformBuffer,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRegisterRayTracingKernelBinding {
-    pub binding: u32,
+pub(crate) struct EscalateRequestRegisterRayTracingKernelBinding {
+    pub(crate) binding: u32,
 
     /// Resource kind for this binding slot.
-    pub kind: EscalateRequestRegisterRayTracingKernelBindingKind,
+    pub(crate) kind: EscalateRequestRegisterRayTracingKernelBindingKind,
 
     /// Bitmask of RT stages the binding is visible to. Bits: `1=RAYGEN`,
     /// `2=MISS`, `4=CLOSEST_HIT`, `8=ANY_HIT`, `16=INTERSECTION`,
     /// `32=CALLABLE`.
-    pub stages: u32,
+    pub(crate) stages: u32,
 }
 
 /// - `general`: contributes one ray-gen, miss, or
 ///   callable stage via `general_stage`.
 /// - `triangles_hit`: triangle hit group; sets at least
 ///   one of `closest_hit_stage` / `any_hit_stage` (use
-///   `0xFFFFFFFF` as the absent sentinel — JTD has no
-///   `Option<uint32>`).
+///   `0xFFFFFFFF` as the absent sentinel — the field is
+///   always present on the wire).
 /// - `procedural_hit`: procedural hit group with custom
 ///   intersection shader plus optional closest-hit /
 ///   any-hit (same sentinel for absent).
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRegisterRayTracingKernelGroupKind {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRegisterRayTracingKernelGroupKind {
     #[serde(rename = "general")]
-    #[default]
     General,
 
     #[serde(rename = "procedural_hit")]
@@ -1036,42 +1019,41 @@ pub enum EscalateRequestRegisterRayTracingKernelGroupKind {
     TrianglesHit,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRegisterRayTracingKernelGroup {
+pub(crate) struct EscalateRequestRegisterRayTracingKernelGroup {
     /// Stage index for `triangles_hit` / `procedural_hit`. `0xFFFFFFFF` for
     /// absent. Ignored for `general`.
-    pub any_hit_stage: u32,
+    pub(crate) any_hit_stage: u32,
 
     /// Stage index for `triangles_hit` / `procedural_hit`. Use `0xFFFFFFFF` to
     /// indicate absent. Ignored for `general`.
-    pub closest_hit_stage: u32,
+    pub(crate) closest_hit_stage: u32,
 
     /// Stage index for `general`. `0xFFFFFFFF` for the other group kinds
     /// (ignored host-side).
-    pub general_stage: u32,
+    pub(crate) general_stage: u32,
 
     /// Stage index for `procedural_hit`. `0xFFFFFFFF` for the other group
     /// kinds. Required for `procedural_hit`.
-    pub intersection_stage: u32,
+    pub(crate) intersection_stage: u32,
 
     /// - `general`: contributes one ray-gen, miss, or
     ///   callable stage via `general_stage`.
     /// - `triangles_hit`: triangle hit group; sets at least
     ///   one of `closest_hit_stage` / `any_hit_stage` (use
-    ///   `0xFFFFFFFF` as the absent sentinel — JTD has no
-    ///   `Option<uint32>`).
+    ///   `0xFFFFFFFF` as the absent sentinel — the field is
+    ///   always present on the wire).
     /// - `procedural_hit`: procedural hit group with custom
     ///   intersection shader plus optional closest-hit /
     ///   any-hit (same sentinel for absent).
-    pub kind: EscalateRequestRegisterRayTracingKernelGroupKind,
+    pub(crate) kind: EscalateRequestRegisterRayTracingKernelGroupKind,
 }
 
 /// Which RT stage this SPIR-V blob fills.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRegisterRayTracingKernelStageStage {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRegisterRayTracingKernelStageStage {
     #[serde(rename = "any_hit")]
-    #[default]
     AnyHit,
 
     #[serde(rename = "callable")]
@@ -1090,95 +1072,95 @@ pub enum EscalateRequestRegisterRayTracingKernelStageStage {
     RayGen,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRegisterRayTracingKernelStage {
+pub(crate) struct EscalateRequestRegisterRayTracingKernelStage {
     /// Entry-point name. Empty string is normalized to `"main"` host-side.
-    pub entry_point: String,
+    pub(crate) entry_point: String,
 
     /// Compiled SPIR-V bytecode for the stage, lowercase hex (no `0x` prefix,
     /// no whitespace).
-    pub spv_hex: String,
+    pub(crate) spv_hex: String,
 
     /// Which RT stage this SPIR-V blob fills.
-    pub stage: EscalateRequestRegisterRayTracingKernelStageStage,
+    pub(crate) stage: EscalateRequestRegisterRayTracingKernelStageStage,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRegisterRayTracingKernel {
+pub(crate) struct EscalateRequestRegisterRayTracingKernel {
     /// Descriptor-set-0 bindings. Validated against `rspirv-reflect` of every
     /// supplied stage at register time — mismatches return an `err` response.
-    pub bindings: Vec<EscalateRequestRegisterRayTracingKernelBinding>,
+    pub(crate) bindings: Vec<EscalateRequestRegisterRayTracingKernelBinding>,
 
     /// Shader-group layout. The order here is the order entries appear in the
     /// SBT regions (raygen / miss / hit / callable). Each variant references
     /// stage indices into `stages`.
-    pub groups: Vec<EscalateRequestRegisterRayTracingKernelGroup>,
+    pub(crate) groups: Vec<EscalateRequestRegisterRayTracingKernelGroup>,
 
     /// Human-readable label used in error messages and tracing. Diagnostic
     /// only.
-    pub label: String,
+    pub(crate) label: String,
 
     /// Maximum ray recursion depth. Must be ≤ device's `maxRayRecursionDepth`.
     /// Most scenes (primary rays only) use 1; secondary-ray techniques bump
     /// this to 2 or more.
-    pub max_recursion_depth: u32,
+    pub(crate) max_recursion_depth: u32,
 
     /// Push-constant range size in bytes. 0 if the kernel uses no push
     /// constants. Validated against the merged shader reflection.
-    pub push_constant_size: u32,
+    pub(crate) push_constant_size: u32,
 
     /// Bitmask of RT stages the push-constant range is visible to. Same bit
     /// layout as `bindings.stages`. Ignored when `push_constant_size == 0`.
-    pub push_constant_stages: u32,
+    pub(crate) push_constant_stages: u32,
 
     /// Correlates request with response. UUID string.
-    pub request_id: String,
+    pub(crate) request_id: String,
 
     /// Shader stages composing the pipeline. Indices into this array
     /// are referenced by `groups`. At minimum a RayGen stage plus enough
     /// hit / miss stages to populate every group entry — the host's
     /// `validate_shader_groups` validates the consistency.
-    pub stages: Vec<EscalateRequestRegisterRayTracingKernelStage>,
+    pub(crate) stages: Vec<EscalateRequestRegisterRayTracingKernelStage>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestReleaseHandle {
+pub(crate) struct EscalateRequestReleaseHandle {
     /// Opaque handle ID previously returned by acquire_*.
-    pub handle_id: String,
+    pub(crate) handle_id: String,
 
     /// Correlates request with response. UUID string.
-    pub request_id: String,
+    pub(crate) request_id: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRunComputeKernel {
+pub(crate) struct EscalateRequestRunComputeKernel {
     /// vkCmdDispatch groupCountX.
-    pub group_count_x: u32,
+    pub(crate) group_count_x: u32,
 
     /// vkCmdDispatch groupCountY.
-    pub group_count_y: u32,
+    pub(crate) group_count_y: u32,
 
     /// vkCmdDispatch groupCountZ.
-    pub group_count_z: u32,
+    pub(crate) group_count_z: u32,
 
     /// Handle returned by a prior `register_compute_kernel` response. The
     /// host looks up the cached `Arc<VulkanComputeKernel>` and dispatches
     /// against it. Dispatching with an unrecognized kernel_id returns an `err`
     /// response.
-    pub kernel_id: String,
+    pub(crate) kernel_id: String,
 
     /// Push-constant payload for this dispatch, encoded as lowercase hex.
     /// Length in bytes (after hex decoding) must equal the kernel's declared
     /// `push_constant_size`. Empty string when the kernel has no push
     /// constants.
-    pub push_constants_hex: String,
+    pub(crate) push_constants_hex: String,
 
     /// Correlates request with response. UUID string.
-    pub request_id: String,
+    pub(crate) request_id: String,
 
     /// UUID string of a render-target surface previously registered
     /// with the surface-share service via `register_texture`. The host
@@ -1188,7 +1170,7 @@ pub struct EscalateRequestRunComputeKernel {
     /// — multi-binding kernels are a future extension). UUID rather than u64
     /// so the host can resolve the surface without subprocess-side counter
     /// coordination.
-    pub surface_uuid: String,
+    pub(crate) surface_uuid: String,
 }
 
 /// Which copy direction to run on the host. `image_to_buffer` runs
@@ -1198,19 +1180,18 @@ pub struct EscalateRequestRunComputeKernel {
 /// the timeline (through its imported `ConsumerVulkanTimelineSemaphore`) before
 /// reading or releasing. No FDs travel on the wire — only the timeline value
 /// the host signaled.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRunCpuReadbackCopyDirection {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRunCpuReadbackCopyDirection {
     #[serde(rename = "buffer_to_image")]
-    #[default]
     BufferToImage,
 
     #[serde(rename = "image_to_buffer")]
     ImageToBuffer,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRunCpuReadbackCopy {
+pub(crate) struct EscalateRequestRunCpuReadbackCopy {
     /// Which copy direction to run on the host. `image_to_buffer` runs
     /// `vkCmdCopyImageToBuffer` (image → staging) at acquire time;
     /// `buffer_to_image` runs the reverse at write release. The host
@@ -1218,26 +1199,25 @@ pub struct EscalateRequestRunCpuReadbackCopy {
     /// the subprocess waits on the timeline (through its imported
     /// `ConsumerVulkanTimelineSemaphore`) before reading or releasing. No FDs
     /// travel on the wire — only the timeline value the host signaled.
-    pub direction: EscalateRequestRunCpuReadbackCopyDirection,
+    pub(crate) direction: EscalateRequestRunCpuReadbackCopyDirection,
 
     /// Correlates request with response. UUID string.
-    pub request_id: String,
+    pub(crate) request_id: String,
 
     /// Host-assigned surface id (the u64 carried by `StreamlibSurface::id`)
     /// of a surface previously registered with the host's cpu-readback adapter
     /// and whose staging buffer + timeline were registered with the surface-
     /// share service via `register_pixel_buffer_with_timeline`. The subprocess
     /// imported them once at registration time through `streamlib-consumer-
-    /// rhi`'s `ConsumerVulkanBuffer` / `ConsumerVulkanTimelineSemaphore`. JTD
-    /// has no native u64 — the wire form is the decimal string representation,
-    /// parsed back into u64 by the host before dispatch.
-    pub surface_id: String,
+    /// rhi`'s `ConsumerVulkanBuffer` / `ConsumerVulkanTimelineSemaphore`. JSON
+    /// has no 64-bit integer — the wire form is the decimal string
+    /// representation, parsed back into u64 by the host before dispatch.
+    pub(crate) surface_id: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRunGraphicsDrawBindingKind {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRunGraphicsDrawBindingKind {
     #[serde(rename = "sampled_texture")]
-    #[default]
     SampledTexture,
 
     #[serde(rename = "storage_buffer")]
@@ -1250,20 +1230,19 @@ pub enum EscalateRequestRunGraphicsDrawBindingKind {
     UniformBuffer,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRunGraphicsDrawBinding {
-    pub binding: u32,
+pub(crate) struct EscalateRequestRunGraphicsDrawBinding {
+    pub(crate) binding: u32,
 
-    pub kind: EscalateRequestRunGraphicsDrawBindingKind,
+    pub(crate) kind: EscalateRequestRunGraphicsDrawBindingKind,
 
-    pub surface_uuid: String,
+    pub(crate) surface_uuid: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRunGraphicsDrawDrawKind {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRunGraphicsDrawDrawKind {
     #[serde(rename = "draw")]
-    #[default]
     Draw,
 
     #[serde(rename = "draw_indexed")]
@@ -1275,40 +1254,39 @@ pub enum EscalateRequestRunGraphicsDrawDrawKind {
 /// `index_count` / `first_index` / `vertex_offset`. Fields not used by the
 /// selected kind are ignored host-side; subprocesses should still send valid
 /// placeholder values (zero is fine) to keep the wire shape regular.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRunGraphicsDrawDraw {
-    pub first_index: u32,
+pub(crate) struct EscalateRequestRunGraphicsDrawDraw {
+    pub(crate) first_index: u32,
 
-    pub first_instance: u32,
+    pub(crate) first_instance: u32,
 
-    pub first_vertex: u32,
+    pub(crate) first_vertex: u32,
 
-    pub index_count: u32,
+    pub(crate) index_count: u32,
 
-    pub instance_count: u32,
+    pub(crate) instance_count: u32,
 
-    pub kind: EscalateRequestRunGraphicsDrawDrawKind,
+    pub(crate) kind: EscalateRequestRunGraphicsDrawDrawKind,
 
-    pub vertex_count: u32,
+    pub(crate) vertex_count: u32,
 
-    pub vertex_offset: i32,
+    pub(crate) vertex_offset: i32,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRunGraphicsDrawVertexBuffer {
-    pub binding: u32,
+pub(crate) struct EscalateRequestRunGraphicsDrawVertexBuffer {
+    pub(crate) binding: u32,
 
-    pub offset: String,
+    pub(crate) offset: String,
 
-    pub surface_uuid: String,
+    pub(crate) surface_uuid: String,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRunGraphicsDrawIndexBufferIndexType {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRunGraphicsDrawIndexBufferIndexType {
     #[serde(rename = "uint16")]
-    #[default]
     Uint16,
 
     #[serde(rename = "uint32")]
@@ -1318,126 +1296,125 @@ pub enum EscalateRequestRunGraphicsDrawIndexBufferIndexType {
 /// Required when `draw.kind == "draw_indexed"`, must be absent otherwise.
 /// `surface_uuid` resolves to a `PixelBuffer`; `offset` is the byte offset
 /// into it.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRunGraphicsDrawIndexBuffer {
-    pub index_type: EscalateRequestRunGraphicsDrawIndexBufferIndexType,
+pub(crate) struct EscalateRequestRunGraphicsDrawIndexBuffer {
+    pub(crate) index_type: EscalateRequestRunGraphicsDrawIndexBufferIndexType,
 
-    pub offset: String,
+    pub(crate) offset: String,
 
-    pub surface_uuid: String,
+    pub(crate) surface_uuid: String,
 }
 
 /// Dynamic scissor rect for this draw. Required when the kernel declared
 /// `dynamic_state = "viewport_scissor"`; ignored otherwise.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRunGraphicsDrawScissor {
-    pub height: u32,
+pub(crate) struct EscalateRequestRunGraphicsDrawScissor {
+    pub(crate) height: u32,
 
-    pub width: u32,
+    pub(crate) width: u32,
 
-    pub x: i32,
+    pub(crate) x: i32,
 
-    pub y: i32,
+    pub(crate) y: i32,
 }
 
 /// Dynamic viewport for this draw. Required when the kernel's pipeline state
 /// declared `dynamic_state = "viewport_scissor"`; ignored otherwise.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRunGraphicsDrawViewport {
-    pub height: f32,
+pub(crate) struct EscalateRequestRunGraphicsDrawViewport {
+    pub(crate) height: f32,
 
-    pub max_depth: f32,
+    pub(crate) max_depth: f32,
 
-    pub min_depth: f32,
+    pub(crate) min_depth: f32,
 
-    pub width: f32,
+    pub(crate) width: f32,
 
-    pub x: f32,
+    pub(crate) x: f32,
 
-    pub y: f32,
+    pub(crate) y: f32,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRunGraphicsDraw {
+pub(crate) struct EscalateRequestRunGraphicsDraw {
     /// Per-draw bindings — each slot's `surface_uuid` must resolve through
     /// the host bridge's UUID → resource map. `kind` must match the binding's
     /// declared kind from register time.
-    pub bindings: Vec<EscalateRequestRunGraphicsDrawBinding>,
+    pub(crate) bindings: Vec<EscalateRequestRunGraphicsDrawBinding>,
 
     /// UUIDs of color attachment textures. v1 requires exactly one entry —
     /// multi-attachment is a future extension. Each UUID must resolve to a
     /// host-side `Texture` registered as a render target.
-    pub color_target_uuids: Vec<String>,
+    pub(crate) color_target_uuids: Vec<String>,
 
     /// Draw call. `kind = "draw"` selects non-indexed (`vertex_count`-driven),
     /// `kind = "draw_indexed"` requires `index_buffer` to be set and uses
     /// `index_count` / `first_index` / `vertex_offset`. Fields not used by
     /// the selected kind are ignored host-side; subprocesses should still send
     /// valid placeholder values (zero is fine) to keep the wire shape regular.
-    pub draw: EscalateRequestRunGraphicsDrawDraw,
+    pub(crate) draw: EscalateRequestRunGraphicsDrawDraw,
 
     /// Render-area height in pixels.
-    pub extent_height: u32,
+    pub(crate) extent_height: u32,
 
     /// Render-area width in pixels.
-    pub extent_width: u32,
+    pub(crate) extent_width: u32,
 
     /// Slot in the kernel's descriptor-set ring. Must satisfy `frame_index
     /// < descriptor_sets_in_flight` declared at register time. Render-loop
     /// callers cycle this through `MAX_FRAMES_IN_FLIGHT` so concurrent frames
     /// don't scribble each other's bindings.
-    pub frame_index: u32,
+    pub(crate) frame_index: u32,
 
     /// Handle returned by a prior `register_graphics_kernel` response. The
     /// host looks up the cached `Arc<VulkanGraphicsKernel>` and dispatches
     /// against it. Dispatching with an unrecognized kernel_id returns an `err`
     /// response.
-    pub kernel_id: String,
+    pub(crate) kernel_id: String,
 
     /// Push-constant payload for this draw, lowercase hex. Must decode to
     /// exactly the kernel's declared `push_constant_size` (or empty if zero).
-    pub push_constants_hex: String,
+    pub(crate) push_constants_hex: String,
 
     /// Correlates request with response. UUID string.
-    pub request_id: String,
+    pub(crate) request_id: String,
 
     /// Per-draw vertex buffer bindings. Each entry's `surface_uuid` must
     /// resolve to a host-side `PixelBuffer`. `offset` is the byte offset into
-    /// the buffer where vertex data starts (decimal-encoded u64 — JTD has no
-    /// native u64). Empty for vertex-fabricating shaders (`gl_VertexIndex`
+    /// the buffer where vertex data starts (decimal-encoded u64 — JSON has no
+    /// 64-bit integer). Empty for vertex-fabricating shaders (`gl_VertexIndex`
     /// patterns).
-    pub vertex_buffers: Vec<EscalateRequestRunGraphicsDrawVertexBuffer>,
+    pub(crate) vertex_buffers: Vec<EscalateRequestRunGraphicsDrawVertexBuffer>,
 
     /// UUID of a depth attachment texture. Reserved for future use — v1 rejects
     /// depth attachments with an `err` response.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub depth_target_uuid: Option<String>,
+    pub(crate) depth_target_uuid: Option<String>,
 
     /// Required when `draw.kind == "draw_indexed"`, must be absent otherwise.
     /// `surface_uuid` resolves to a `PixelBuffer`; `offset` is the byte offset
     /// into it.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub index_buffer: Option<EscalateRequestRunGraphicsDrawIndexBuffer>,
+    pub(crate) index_buffer: Option<EscalateRequestRunGraphicsDrawIndexBuffer>,
 
     /// Dynamic scissor rect for this draw. Required when the kernel declared
     /// `dynamic_state = "viewport_scissor"`; ignored otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub scissor: Option<EscalateRequestRunGraphicsDrawScissor>,
+    pub(crate) scissor: Option<EscalateRequestRunGraphicsDrawScissor>,
 
     /// Dynamic viewport for this draw. Required when the kernel's pipeline
     /// state declared `dynamic_state = "viewport_scissor"`; ignored otherwise.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub viewport: Option<EscalateRequestRunGraphicsDrawViewport>,
+    pub(crate) viewport: Option<EscalateRequestRunGraphicsDrawViewport>,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestRunRayTracingKernelBindingKind {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestRunRayTracingKernelBindingKind {
     #[serde(rename = "acceleration_structure")]
-    #[default]
     AccelerationStructure,
 
     #[serde(rename = "sampled_texture")]
@@ -1453,19 +1430,19 @@ pub enum EscalateRequestRunRayTracingKernelBindingKind {
     UniformBuffer,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRunRayTracingKernelBinding {
-    pub binding: u32,
+pub(crate) struct EscalateRequestRunRayTracingKernelBinding {
+    pub(crate) binding: u32,
 
-    pub kind: EscalateRequestRunRayTracingKernelBindingKind,
+    pub(crate) kind: EscalateRequestRunRayTracingKernelBindingKind,
 
-    pub target_id: String,
+    pub(crate) target_id: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestRunRayTracingKernel {
+pub(crate) struct EscalateRequestRunRayTracingKernel {
     /// Per-trace bindings. `kind` must match the binding's declared kind from
     /// register time. The host bridge resolves `target_id` based on `kind`: -
     /// `acceleration_structure`: `target_id` is an `as_id`
@@ -1473,64 +1450,64 @@ pub struct EscalateRequestRunRayTracingKernel {
     /// - all other kinds: `target_id` is the surface-share UUID
     ///   of a host-side `PixelBuffer` / `Texture`
     ///   (same convention compute and graphics use).
-    pub bindings: Vec<EscalateRequestRunRayTracingKernelBinding>,
+    pub(crate) bindings: Vec<EscalateRequestRunRayTracingKernelBinding>,
 
     /// vkCmdTraceRaysKHR depth (usually 1 for 2D output).
-    pub depth: u32,
+    pub(crate) depth: u32,
 
     /// vkCmdTraceRaysKHR height.
-    pub height: u32,
+    pub(crate) height: u32,
 
     /// Handle returned by a prior `register_ray_tracing_kernel` response. The
     /// host looks up the cached `Arc<VulkanRayTracingKernel>` and dispatches
     /// against it. Dispatching with an unrecognized kernel_id returns an `err`
     /// response.
-    pub kernel_id: String,
+    pub(crate) kernel_id: String,
 
     /// Push-constant payload for this dispatch, lowercase hex. Length
     /// in bytes (after hex decoding) must equal the kernel's declared
     /// `push_constant_size`. Empty string when the kernel has no push
     /// constants.
-    pub push_constants_hex: String,
+    pub(crate) push_constants_hex: String,
 
     /// Correlates request with response. UUID string.
-    pub request_id: String,
+    pub(crate) request_id: String,
 
     /// vkCmdTraceRaysKHR width.
-    pub width: u32,
+    pub(crate) width: u32,
 }
 
 /// Same shape as `run_cpu_readback_copy.direction`.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-pub enum EscalateRequestTryRunCpuReadbackCopyDirection {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub(crate) enum EscalateRequestTryRunCpuReadbackCopyDirection {
     #[serde(rename = "buffer_to_image")]
-    #[default]
     BufferToImage,
 
     #[serde(rename = "image_to_buffer")]
     ImageToBuffer,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestTryRunCpuReadbackCopy {
+pub(crate) struct EscalateRequestTryRunCpuReadbackCopy {
     /// Same shape as `run_cpu_readback_copy.direction`.
-    pub direction: EscalateRequestTryRunCpuReadbackCopyDirection,
+    pub(crate) direction: EscalateRequestTryRunCpuReadbackCopyDirection,
 
     /// Correlates request with response. UUID string.
-    pub request_id: String,
+    pub(crate) request_id: String,
 
     /// Same shape as `run_cpu_readback_copy.surface_id`. The host returns a
-    /// [`contended`] response (no timeline value, no copy executed) when its
+    /// [`super::escalate_response::EscalateResponse::Contended`] response (no
+    /// timeline value, no copy executed) when its
     /// registry would have blocked instead of performing the copy. Subprocess
     /// customers use this to skip a frame instead of stalling their thread
     /// runner.
-    pub surface_id: String,
+    pub(crate) surface_id: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct EscalateRequestWaitDeviceIdle {
+pub(crate) struct EscalateRequestWaitDeviceIdle {
     /// Correlates request with response. UUID string.
-    pub request_id: String,
+    pub(crate) request_id: String,
 }

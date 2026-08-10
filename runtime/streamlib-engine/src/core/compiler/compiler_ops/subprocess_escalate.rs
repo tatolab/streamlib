@@ -10,10 +10,10 @@
 //!
 //! Wire format is the existing length-prefixed JSON stdio bridge used for
 //! lifecycle commands (see `SubprocessBridge`). Requests and responses are
-//! discriminated by `op` and `result` fields respectively; the shape is
-//! owned by `@tatolab/escalate`
-//! (`packages/escalate/schemas/escalate_{request,response}.yaml`) and the
-//! wire types live in [`super::subprocess_escalate_wire_types`].
+//! discriminated by `op` and `result` fields respectively. The shape is
+//! owned by the types in [`super::subprocess_escalate_wire_types`] — their
+//! serde encoding is the agreement with the helper, which builds the same
+//! documents as plain Python dicts.
 
 use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};

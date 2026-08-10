@@ -5077,7 +5077,6 @@ dependencies = [
  "rspirv-reflect",
  "schemars 0.8.22",
  "serde",
- "serde_bytes",
  "serde_json",
  "serde_yaml",
  "serial_test",
