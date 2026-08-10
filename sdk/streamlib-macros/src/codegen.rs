@@ -747,13 +747,13 @@ fn generate_iceoryx2_accessors_from_schema(schema: &ProcessorSchema) -> TokenStr
         quote! {}
     };
 
-    // Issue #894: emit `set_iceoryx2_resources` to receive host-
-    // allocated handles + the `iceoryx2_output_writer_inner` /
-    // `iceoryx2_input_mailboxes_inner` accessors so the host's
-    // wiring path can mutate the inner Arc directly. The host owns
-    // per-port registration (`InputMailboxesInner::add_port`) at wire
-    // time, where it resolves the delivery profile from the wire type's
-    // `flow_class` + any port-site override — the macro registers none.
+    // Emit `set_iceoryx2_resources` to receive host-allocated handles +
+    // the `iceoryx2_output_writer_inner` / `iceoryx2_input_mailboxes_inner`
+    // accessors so the host's wiring path can mutate the inner Arc
+    // directly. The host owns per-port registration
+    // (`InputMailboxesInner::add_port`) at wire time, where it reads the
+    // destination input port's declared delivery profile — the macro
+    // registers none.
     let assign_outputs = if has_iceoryx2_outputs {
         quote! {
             if let ::std::option::Option::Some(ow) = output_writer {

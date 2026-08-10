@@ -525,12 +525,11 @@ pub struct ProcessorPortSchema {
     /// Human-readable description.
     #[serde(default)]
     pub description: Option<String>,
-    /// Delivery-profile override for this input port — `"latest"`,
+    /// Delivery profile declared by this input port — `"latest"`,
     /// `"every_sample"`, or `"lossless"`. The one delivery knob on the
     /// authoring surface: it resolves to the consumer-side drain order,
-    /// the producer-side overflow policy, and the ring depth. `None`
-    /// defers to the default derived from the wire type's `flow_class`.
-    /// Always `None` on output ports.
+    /// the producer-side overflow policy, and the ring depth. Required on
+    /// every input port and always `None` on an output port.
     #[serde(default)]
     pub delivery_profile: Option<String>,
 }
