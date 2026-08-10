@@ -125,16 +125,6 @@ impl StorageBuffer {
         }
     }
 
-    /// Engine-internal accessor for the raw
-    /// `Arc::into_raw(Arc<HostVulkanBuffer>)` handle. Used by
-    /// cdylib-mode dispatch paths
-    /// (`RhiCommandRecorder::record_buffer_barrier` /
-    /// `record_copy_image_to_buffer`) that need to forward the
-    /// underlying Arc-shaped pointer across the plugin ABI without
-    /// reaching for `self.handle` directly.
-    pub(crate) fn cdylib_handle(&self) -> *const c_void {
-        self.handle
-    }
 }
 
 #[cfg(target_os = "linux")]

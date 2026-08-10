@@ -185,13 +185,12 @@ unsafe impl Sync for VulkanFence {}
 /// [`Self::from_imported_opaque_fd`] into its own `VkDevice`. The two
 /// processes then signal/wait the same timeline.
 ///
-/// Host-internal — never crosses the plugin ABI. The engine-free
-/// exportable-timeline surface a plugin sees is the `#[repr(C)]`
-/// `HostTimelineSemaphore` PluginAbiObject, minted host-side by the
-/// FullAccess `create_exportable_timeline_semaphore` slot which builds
-/// one of these via [`Self::new_exportable`]. That host-side backing is
-/// why the `new` / `new_exportable` / `create` constructor bodies must
-/// stay free of any `host_inner()` / `host_callbacks()` guard.
+/// Host-internal. The public exportable-timeline surface is the
+/// `#[repr(C)]` `HostTimelineSemaphore` handle, minted by the FullAccess
+/// `create_exportable_timeline_semaphore` slot which builds one of these
+/// via [`Self::new_exportable`]. That host-side backing is why the
+/// `new` / `new_exportable` / `create` constructor bodies must stay free
+/// of any `host_inner()` guard.
 pub struct HostVulkanTimelineSemaphore {
     device: vulkanalia::Device,
     semaphore: vk::Semaphore,

@@ -162,13 +162,12 @@ pub mod sdk {
 
     /// `streamlib::sdk::schema_ident_any_version!("org", "package", "Type")` —
     /// resolve a `SchemaIdent` **now** against the **already-registered**
-    /// processor types (the post-`add_module` / power-caller form).
+    /// processor types (the power-caller form).
     /// Validates `(org, package, type)` at compile time; resolves the
     /// version at runtime against the global processor registry,
     /// picking the highest registered `SemVer` (Cargo / npm convention).
     /// Returns `Result<SchemaIdent, streamlib::sdk::error::Error>`. For a
-    /// version-free reference that lazily loads its provider from
-    /// `streamlib_modules/`, use [`processor_type_ref!`] instead.
+    /// version-free reference, use [`processor_type_ref!`] instead.
     pub use streamlib_engine::schema_ident_any_version;
 
     /// `streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")` —
@@ -186,15 +185,14 @@ pub mod sdk {
     /// [`ProcessorTypeReference`](processors::ProcessorTypeReference), which
     /// carries no version and does **no registry lookup at the call site**, so
     /// the reference reaches `add_processor`'s lazy hook and resolves to the
-    /// installed provider — loading its package from `streamlib_modules/` on
-    /// first reference.
+    /// installed provider.
     pub use streamlib_engine::processor_type_ref;
 
     /// `streamlib::sdk::module_ident!("org", "name", "^1.0.0")` —
     /// imperative-API module identifier with a pinned semver range.
     /// Validates org / name / semver range at compile time; expands to
     /// a [`ModuleIdent::new`](descriptors::ModuleIdent::new)
-    /// expression. Pair with [`crate::sdk::runtime::Runner::add_module`].
+    /// expression.
     pub use streamlib_engine::module_ident;
 
     /// `streamlib::sdk::module_ident_any_version!("org", "name")` —

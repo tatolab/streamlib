@@ -42,10 +42,6 @@ pub use processor_type_reference::ProcessorTypeReference;
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct EmptyConfig;
 
-// twin-guard(empty-config-serde): BEGIN — wire-load-bearing twin of the SDK's
-// EmptyConfig serde in sdk/streamlib-plugin-sdk/src/processors.rs. Config crosses
-// the plugin ABI, so both sides must serialize to the same empty named map and
-// tolerate any decode shape. twin_drift_guard.rs trip-wires an edit to either.
 impl serde::Serialize for EmptyConfig {
     fn serialize<S: serde::Serializer>(
         &self,
@@ -63,7 +59,6 @@ impl<'de> serde::Deserialize<'de> for EmptyConfig {
         Ok(EmptyConfig)
     }
 }
-// twin-guard(empty-config-serde): END
 
 // Audio processors (capture, output, mixer, channel converter, resampler,
 // buffer rechunker, chord generator) live in `@tatolab/audio` (#672).

@@ -225,10 +225,8 @@ fn example_dir_has_no_ceremony_files() {
 
     let forbidden_files = ["build.rs", "streamlib.yaml"];
     let forbidden_dirs = ["schemas", "_generated_"];
-    // Gitignored build/link artifacts (the `node_modules`-equivalents) carry
-    // their own committed ceremony from the packages they mirror; the budget
-    // this test enforces is the example's own committed tree.
-    let skip_dirs = ["streamlib_modules", "target"];
+    // The budget this test enforces is the example's own committed tree.
+    let skip_dirs = ["target"];
 
     let mut offenders: Vec<std::path::PathBuf> = Vec::new();
     let mut stack = vec![example_dir.clone()];

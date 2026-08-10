@@ -12,8 +12,8 @@
 //! --check` already disagrees with the vendored formatting, and no stable
 //! rustfmt exclusion mechanism exists — `rustfmt.toml`'s `ignore` is
 //! nightly-only). Prose alone can't stop that, so this check pins one
-//! deterministic content hash per vendored crate dir, in the
-//! `twin_drift_guard` trip-wire style: any byte change (edit, reformat,
+//! deterministic content hash per vendored crate dir, in a content-hash
+//! trip-wire style: any byte change (edit, reformat,
 //! added/removed/renamed file) fails CI and names the offending dir.
 //!
 //! When it trips on a DELIBERATE re-vendor or documented local patch:
@@ -33,8 +33,7 @@ const VENDORED_TREES: &[(&str, u64)] = &[
     ("vendor/tatolab-vulkanalia-vma", 0xac41_8fe4_7384_c0c9),
 ];
 
-/// FNV-1a 64 — deterministic (platform/version-stable), matching the
-/// engine's `twin_drift_guard` trip-wire style.
+/// FNV-1a 64 — deterministic (platform/version-stable).
 fn fnv1a_bytes(h: u64, bytes: &[u8]) -> u64 {
     let mut h = h;
     for &b in bytes {
@@ -193,7 +192,7 @@ mod tests {
     }
 
     /// The real guard: the repo's vendored trees match the recorded hashes.
-    /// Mirrors `twin_drift_guard` — there is no fixture to update; making
+    /// There is no fixture to update; making
     /// this pass after a vendored-tree change requires updating
     /// `VENDORED_TREES` in the same commit (per the provenance doc's recipe).
     #[test]

@@ -84,10 +84,8 @@ impl VulkanComputeBackend {
 
         // Build the kernel and SSBOs through the FullAccess primitives —
         // the host constructs them on its own device and hands back
-        // cdylib-safe `#[repr(C)]` handles. This backend never touches the
-        // raw `HostVulkanDevice`, so it stays sound when built as a
-        // separately-compiled `.slpkg` plugin (see
-        // `docs/learnings/slpkg-raw-device-rhi-construction.md`).
+        // `#[repr(C)]` handles. This backend never touches the raw
+        // `HostVulkanDevice`.
         let kernel = JpegDecodeKernel::new(full_access)?;
 
         let coef_bytes = worst_case_coefficient_buffer_bytes_420(max_width, max_height);

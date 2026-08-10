@@ -93,7 +93,7 @@ enum RecorderState {
 /// reads this before recording the swapchain post-draw layout barrier: a
 /// `vkCmdPipelineBarrier2` recorded inside an open dynamic-rendering
 /// instance is `VUID-vkCmdPipelineBarrier2`-class undefined behavior, so a
-/// plugin that drove `begin_frame` across the ABI split and forgot
+/// caller that drove `begin_frame` and forgot
 /// `cmd_end_dynamic_rendering` must have its pass auto-closed first. Pure
 /// state (no Vulkan handle) so the open/close balance is unit-testable
 /// without a GPU.
@@ -137,9 +137,8 @@ impl RecorderDynamicRenderingBalance {
 /// Recording is serial (one recording in flight at a time per
 /// recorder handle). For parallel recording, hold one recorder per
 /// in-flight slot.
-/// Host-only rich data backing a [`RhiCommandRecorder`]. Cdylib code
-/// never sees this type; it reaches the public surface through the
-/// `(handle, vtable)` PluginAbiObject.
+/// Rich data backing a [`RhiCommandRecorder`], reached through the
+/// recorder's opaque handle.
 pub struct RhiCommandRecorderInner {
     label: String,
     vulkan_device: Arc<HostVulkanDevice>,
@@ -799,7 +798,7 @@ impl RhiCommandRecorderInner {
 
     /// Record a layout transition on a raw `VkImage` handle.
     /// Distinct from [`Self::record_image_barrier`] which takes a
-    /// `Texture` PluginAbiObject; this variant is used by
+    /// `Texture` handle; this variant is used by
     /// [`VulkanPresentTarget`](super::vulkan_present_target::VulkanPresentTarget)
     /// for swapchain images (which are never wrapped in a `Texture`).
     /// COLOR aspect, single mip / single layer, QUEUE_FAMILY_IGNORED
@@ -927,15 +926,6 @@ impl RhiCommandRecorderInner {
         *self.state.lock() = RecorderState::Idle;
     }
 
-    // -------------------------------------------------------------------------
-    // From-wire shims used by host extern "C" callbacks in
-    // `core/plugin/host_services.rs`. The check-boundaries rule keeps
-    // raw `vulkanalia` imports inside the RHI / consumer-rhi / adapter
-    // crates; the host wrappers receive raw integer wire types and
-    // dispatch through these shims so all `vk::*` construction happens
-    // inside `vulkan/rhi/`.
-    // -------------------------------------------------------------------------
-
     fn expect_recording(&self, op: &'static str) -> Result<()> {
         let state = self.state.lock();
         if *state != RecorderState::Recording {
@@ -989,46 +979,24 @@ impl std::fmt::Debug for RhiCommandRecorderInner {
 }
 
 // =============================================================================
-// PluginAbiObject implementation
+// Public handle
 // =============================================================================
 
 /// Multi-step command-buffer recorder.
 ///
-/// Layout-stable `#[repr(C)] (handle, vtable)` PluginAbiObject. The opaque
-/// handle points at a `Box<RhiCommandRecorderInner>`; lifecycle
-/// dispatches through the host-installed FullAccess vtable's
-/// `drop_command_recorder` callback (Box::from_raw + drop host-side).
+/// The opaque handle points at a `Box<RhiCommandRecorderInner>`; `Drop`
+/// does `Box::from_raw` + drop.
 ///
 /// **Single-owner; deliberately NOT `Clone`.** Recording carries
 /// mutable state (`begin()` → `record_*(&mut self)` → `submit_*(&mut
-/// self)`) that doesn't survive duplication. The
-/// `clone_command_recorder` vtable slot is reserved but never invoked
-/// — calling `.clone()` on the public PluginAbiObject is a compile error,
-/// locked by the `compile_fail` doctest below:
+/// self)`) that doesn't survive duplication. Calling `.clone()` on the
+/// public handle is a compile error, locked by the `compile_fail`
+/// doctest below:
 ///
 /// ```compile_fail
 /// fn assert_clone<T: Clone>() {}
 /// assert_clone::<streamlib_engine::vulkan::rhi::RhiCommandRecorder>();
 /// ```
-///
-/// Method dispatch routes through three different vtables depending
-/// on the method and call site:
-///
-/// - Drop runs through [`GpuContextFullAccessVTable::drop_command_recorder`]
-///   (the parent vtable).
-/// - The six camera-hot-path methods (`begin`, `record_image_barrier`,
-///   `record_buffer_barrier`, `record_dispatch`,
-///   `record_copy_image_to_buffer`, `submit_signaling_timeline`,
-///   `record_swapchain_image_barrier`,
-///   `cmd_begin_dynamic_rendering`, `cmd_end_dynamic_rendering`,
-///   `submit_with_semaphores`, `record_draw`, `record_draw_indexed`)
-///   route through the per-type
-///   [`streamlib_plugin_abi::RhiCommandRecorderMethodsVTable`] when
-///   called from cdylib code.
-/// - The remaining host-only methods (`record_copy_buffer_to_image`,
-///   `submit`, `submit_and_wait`) keep their cdylib-mode panic via
-///   [`Self::host_inner_mut`]; a follow-up slice lifts each as a
-///   consumer arrives.
 pub struct RhiCommandRecorder {
     /// Opaque handle to the host's `Box<RhiCommandRecorderInner>`.
     pub(crate) handle: *const c_void,
@@ -1054,17 +1022,8 @@ impl RhiCommandRecorder {
         Self { handle }
     }
 
-    /// Raw `Box<RhiCommandRecorderInner>` handle backing this recorder.
-    /// Borrowed, NON-OWNING — used by [`VulkanPresentTarget`] to hand its
-    /// internal per-frame recorder back across the plugin ABI `begin_frame`
-    /// return + `end_frame` identity check. The caller must never release
-    /// it (the present target owns the recorder).
-    pub(crate) fn raw_handle(&self) -> *const c_void {
-        self.handle
-    }
-
     /// Engine-internal mutable borrow of the host-owned
-    /// `RhiCommandRecorderInner`. **Panics if called from cdylib code.**
+    /// `RhiCommandRecorderInner`.
     pub(crate) fn host_inner_mut(&mut self) -> &mut RhiCommandRecorderInner {
         // SAFETY: `self.handle` is `Box::into_raw(Box<RhiCommandRecorderInner>)`
         // and `&mut self` guarantees no other reference exists.
@@ -1076,8 +1035,7 @@ impl RhiCommandRecorder {
     /// is the backing recorder inside an open dynamic-rendering instance?
     /// The present target owns its per-frame recorders and drives them
     /// host-side across the begin/end split, so this reads the boxed inner
-    /// directly (never dispatched across the ABI — there is no vtable slot,
-    /// and none is needed since `end_frame` runs in host-compiled code).
+    /// directly.
     pub(crate) fn host_in_render_pass(&self) -> bool {
         // SAFETY: `self.handle` is `Box::into_raw(Box<RhiCommandRecorderInner>)`;
         // the present target owns the recorder and drives it host-side, so
@@ -1090,35 +1048,21 @@ impl RhiCommandRecorder {
     /// or a failed per-frame record). Resets the recorder to `Idle` so the
     /// reused slot begins clean next attempt; harmless when nothing is
     /// recording. See [`RhiCommandRecorderInner::abort_recording`].
-    /// **Panics if called from cdylib code** (host-only recorders).
     pub fn abort_recording(&mut self) {
         self.host_inner_mut().abort_recording();
     }
 
     // -------------------------------------------------------------------------
-    // Method mirrors. The six camera-hot-path methods (`begin`,
-    // `record_image_barrier`, `record_buffer_barrier`,
-    // `record_dispatch`, `record_copy_image_to_buffer`,
-    // `submit_signaling_timeline`) route through the per-type
-    // methods vtable when called from cdylib code (Phase E sub-lift
-    // slice B — #984). The remaining methods route via host_inner_mut()
-    // with cdylib panic-guard until a future slice lifts them as
-    // consumers arrive.
+    // Method mirrors. Each forwards to the boxed inner via host_inner_mut().
     // -------------------------------------------------------------------------
 
     /// Begin a new recording. See [`RhiCommandRecorderInner::begin`].
-    ///
-    /// Mode-routed: in-process callers dispatch through
-    /// `host_inner_mut`; cdylib callers dispatch through the per-type
-    /// methods vtable (Phase E sub-lift slice B).
     pub fn begin(&mut self) -> Result<()> {
         self.host_inner_mut().begin()
     }
 
     /// Record an image layout transition. See
     /// [`RhiCommandRecorderInner::record_image_barrier`].
-    ///
-    /// Mode-routed; see [`Self::begin`] for the dispatch contract.
     pub fn record_image_barrier(
         &mut self,
         texture: &Texture,
@@ -1141,16 +1085,6 @@ impl RhiCommandRecorder {
     }
 
     /// Buffer memory barrier covering the whole buffer.
-    ///
-    /// Mode-routed; see [`Self::begin`] for the dispatch contract.
-    /// **Cdylib path supports
-    /// [`crate::core::rhi::StorageBuffer`]- and
-    /// [`crate::core::rhi::PixelBuffer`]-flavored buffers today** —
-    /// the buffer must report a non-`None`
-    /// [`VulkanBufferLike::cdylib_storage_buffer_handle`] or
-    /// [`VulkanBufferLike::cdylib_pixel_buffer_handle`] or the
-    /// dispatch returns a typed error. Future buffer flavors add
-    /// further sibling vtable slots; the host path is unchanged.
     pub fn record_buffer_barrier(
         &mut self,
         buffer: &(impl VulkanBufferLike + ?Sized),
@@ -1169,13 +1103,6 @@ impl RhiCommandRecorder {
     }
 
     /// Copy image → buffer. See [`RhiCommandRecorderInner::record_copy_image_to_buffer`].
-    ///
-    /// Mode-routed; see [`Self::begin`] for the dispatch contract.
-    /// **Cdylib path supports
-    /// [`crate::core::rhi::StorageBuffer`]- and
-    /// [`crate::core::rhi::PixelBuffer`]-flavored destinations
-    /// today** — same buffer-flavor coverage as
-    /// [`Self::record_buffer_barrier`].
     pub fn record_copy_image_to_buffer(
         &mut self,
         src: &Texture,
@@ -1187,8 +1114,7 @@ impl RhiCommandRecorder {
             .record_copy_image_to_buffer(src, src_layout, dst, region)
     }
 
-    /// Copy buffer → image. Host-only until a cdylib consumer
-    /// arrives; cdylib callers panic at [`Self::host_inner_mut`].
+    /// Copy buffer → image.
     pub fn record_copy_buffer_to_image(
         &mut self,
         src: &(impl VulkanBufferLike + ?Sized),
@@ -1200,8 +1126,7 @@ impl RhiCommandRecorder {
             .record_copy_buffer_to_image(src, dst, dst_layout, region)
     }
 
-    /// Copy buffer → buffer. Host-only until a cdylib consumer
-    /// arrives; cdylib callers panic at [`Self::host_inner_mut`].
+    /// Copy buffer → buffer.
     pub fn record_copy_buffer_to_buffer(
         &mut self,
         src: &(impl VulkanBufferLike + ?Sized),
@@ -1213,8 +1138,6 @@ impl RhiCommandRecorder {
     }
 
     /// Compute dispatch.
-    ///
-    /// Mode-routed; see [`Self::begin`] for the dispatch contract.
     pub fn record_dispatch(
         &mut self,
         kernel: &VulkanComputeKernel,
@@ -1227,10 +1150,6 @@ impl RhiCommandRecorder {
     }
 
     /// Draw call.
-    ///
-    /// Mode-routed: host callers dispatch through `host_inner_mut`;
-    /// cdylib callers dispatch through the v3 `record_draw` slot on
-    /// [`RhiCommandRecorderMethodsVTable`](streamlib_plugin_abi::RhiCommandRecorderMethodsVTable).
     pub fn record_draw(
         &mut self,
         kernel: &VulkanGraphicsKernel,
@@ -1241,11 +1160,6 @@ impl RhiCommandRecorder {
     }
 
     /// Indexed-draw variant.
-    ///
-    /// Mode-routed: host callers dispatch through `host_inner_mut`;
-    /// cdylib callers dispatch through the v4 `record_draw_indexed`
-    /// slot on
-    /// [`RhiCommandRecorderMethodsVTable`](streamlib_plugin_abi::RhiCommandRecorderMethodsVTable).
     pub fn record_draw_indexed(
         &mut self,
         kernel: &VulkanGraphicsKernel,
@@ -1257,8 +1171,6 @@ impl RhiCommandRecorder {
     }
 
     /// Submit signaling a timeline semaphore.
-    ///
-    /// Mode-routed; see [`Self::begin`] for the dispatch contract.
     pub fn submit_signaling_timeline(
         &mut self,
         timeline: &HostVulkanTimelineSemaphore,
@@ -1268,40 +1180,18 @@ impl RhiCommandRecorder {
             .submit_signaling_timeline(timeline, signal_value)
     }
 
-    // -------------------------------------------------------------------------
-    // Cdylib-mode dispatch helpers (Phase E sub-lift slice B — #984).
-    // Each helper validates the methods vtable pointer, marshals
-    // arguments into the wire-format integer types, dispatches
-    // through the vtable, and converts the host's `i32 + err_buf`
-    // return into `Result<()>`.
-    // -------------------------------------------------------------------------
-
     /// Submit without semaphore signaling.
-    ///
-    /// Mode-routed: host callers dispatch through `host_inner_mut`;
-    /// cdylib callers dispatch through the v5 `submit` slot on
-    /// [`RhiCommandRecorderMethodsVTable`](streamlib_plugin_abi::RhiCommandRecorderMethodsVTable).
     pub fn submit(&mut self) -> Result<()> {
         self.host_inner_mut().submit()
     }
 
     /// Submit and block until the GPU completes.
-    ///
-    /// Mode-routed: host callers dispatch through `host_inner_mut`;
-    /// cdylib callers dispatch through the v5 `submit_and_wait` slot
-    /// on [`RhiCommandRecorderMethodsVTable`](streamlib_plugin_abi::RhiCommandRecorderMethodsVTable).
-    /// `RhiToneMapper::apply_with_layouts` is the first in-tree
-    /// cdylib consumer.
     pub fn submit_and_wait(&mut self) -> Result<()> {
         self.host_inner_mut().submit_and_wait()
     }
 
     /// Engine-internal submit path supporting binary + timeline waits.
     /// **Engine-internal** — for `VulkanPresentTarget`'s render submit.
-    ///
-    /// Mode-routed: host callers dispatch through `host_inner_mut`;
-    /// cdylib callers dispatch through the v3
-    /// `submit_with_semaphores` slot.
     pub(crate) fn submit_with_semaphores(
         &mut self,
         waits: &[vk::SemaphoreSubmitInfo],
@@ -1312,9 +1202,7 @@ impl RhiCommandRecorder {
 
     /// Engine-internal swapchain-image layout transition.
     /// **Engine-internal** — for `VulkanPresentTarget`'s pre/post-draw
-    /// barriers. Mode-routed: host callers dispatch through
-    /// `host_inner_mut`; cdylib callers dispatch through the v3
-    /// `record_swapchain_image_barrier` slot.
+    /// barriers.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn record_swapchain_image_barrier(
         &mut self,
@@ -1334,9 +1222,6 @@ impl RhiCommandRecorder {
     /// Engine-internal dynamic-rendering begin.
     /// **Engine-internal** — for
     /// [`PresentFrame::begin_rendering`](super::vulkan_present_target::PresentFrame::begin_rendering).
-    /// Mode-routed: host callers dispatch through `host_inner_mut`;
-    /// cdylib callers dispatch through the v3
-    /// `cmd_begin_dynamic_rendering` slot.
     pub(crate) fn cmd_begin_dynamic_rendering(
         &mut self,
         image_view: vk::ImageView,
@@ -1350,9 +1235,6 @@ impl RhiCommandRecorder {
     /// Engine-internal dynamic-rendering end.
     /// **Engine-internal** — for
     /// [`PresentFrame::end_rendering`](super::vulkan_present_target::PresentFrame::end_rendering).
-    /// Mode-routed: host callers dispatch through `host_inner_mut`;
-    /// cdylib callers dispatch through the v3
-    /// `cmd_end_dynamic_rendering` slot.
     pub(crate) fn cmd_end_dynamic_rendering(&mut self) -> Result<()> {
         self.host_inner_mut().cmd_end_dynamic_rendering()
     }

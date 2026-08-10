@@ -245,7 +245,7 @@ fn cfg_gated_processor_field_survives_onto_both_generated_sites() {
 
 #[test]
 fn cfg_gated_processor_still_declares_its_port_fields_unconditionally() {
-    // The `inputs` / `outputs` PluginAbiObject fields are emitted ahead of the
+    // The `inputs` / `outputs` handle fields are emitted ahead of the
     // custom fields and are patched by name in `set_iceoryx2_resources` — the
     // field-attribute filter must never reach them. Naming both fields here is
     // the compile-level half; `is_configured()` is false until the host wires

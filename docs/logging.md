@@ -10,18 +10,14 @@ keep everyone on the same path.
 | ----------- | -------------------------------------- |
 | Rust        | `tracing::{trace,debug,info,warn,error}!` |
 | Python SDK  | `streamlib.log.{trace,debug,info,warn,error}(message, **attrs)` |
-| Deno SDK    | `streamlib.log.{trace,debug,info,warn,error}(message, attrs)`   |
 
-Both polyglot SDKs and the Rust host subscribe produce the same unified JSONL
+The Python SDK and the Rust host produce the same unified JSONL
 stream on disk (`<STREAMLIB_HOME>/.streamlib/logs/<runtime_id>-<started_at>.jsonl`)
-and mirror to stdout. The
-subprocess-side interceptors capture anything that slips through
-(`print()`, `console.log`, raw writes to fd1/fd2) and tag it
-`intercepted=true`. The host handler (escalate IPC `{op:"log"}`) forwards
-records to the subscriber that owns the file.
+and mirror to stdout. The host handler (escalate IPC `{op:"log"}`)
+forwards helper-process records to the subscriber that owns the file.
 
-**Don't reach for `eprintln!` / `println!` / `print` / `console.log` /
-`Deno.stdout.write` / `logging.basicConfig`.** They're banned in library code.
+**Don't reach for `eprintln!` / `println!` / `print` /
+`logging.basicConfig`.** They're banned in library code.
 Use the API above instead.
 
 ## Enforcement — three layers, all load-bearing
@@ -32,18 +28,14 @@ Use the API above instead.
    opt in via `[lints] workspace = true` in `Cargo.toml`. `cargo clippy
    --workspace` fails on any violation.
 
-2. **CI lint (Python + TypeScript)** — `cargo xtask lint-logging` scans
-   `sdk/streamlib-python/**/*.py` and `sdk/streamlib-deno/**/*.ts` for
-   banned substrings (`print(`, `sys.stdout`, `sys.stderr`,
-   `logging.basicConfig`, `console.log`/`warn`/`error`/`info`/`debug`,
-   `Deno.stdout.write`, `Deno.stderr.write`). Exits non-zero with each
-   offending file+line on failure.
+2. **CI lint (Python)** — `cargo xtask lint-logging` scans
+   `sdk/streamlib-python-wheel/python/**/*.py` for banned substrings
+   (`print(`, `sys.stdout`, `sys.stderr`, `logging.basicConfig`). Exits
+   non-zero with each offending file+line on failure.
 
-3. **Runtime interceptors** — the subprocess-side `_log_interceptors.py` and
-   `_log_interceptors.ts` replace `sys.stdout`/`sys.stderr`/`console.*` with
-   line-buffered shims that emit through `streamlib.log` with
-   `intercepted=true`. The Rust host also captures fd2 at the process level
-   for anything that escapes that (third-party libs, native code).
+3. **Runtime capture** — the Rust host captures a helper process's fd2 at
+   the process level for anything the static layers can't see
+   (third-party libs, native code).
 
 All three catch different things. The static-analysis layers (1 + 2) stop
 first-party code from regressing. The runtime layer (3) catches third-party
@@ -60,7 +52,7 @@ are green.
 
 ### Binary crates
 
-Binary-only crates (`streamlib-cli`, `streamlib-runtime`, `xtask`, examples)
+Binary-only crates (`xtask`, examples)
 do NOT opt into the workspace `[lints]` block because stdout IS their user
 output channel. The rule only applies to library crates.
 
@@ -81,11 +73,10 @@ doesn't include `--tests`.
 
 ### Individual files
 
-Two kinds of files legitimately bypass the unified pathway, because they
-*install* it: the interceptor itself (`_log_interceptors.py`,
-`_log_interceptors.ts`) and subprocess bootstraps that emit diagnostics
-before the logger is wired (`subprocess_runner.py`, `subprocess_runner.ts`).
-Those files carry a file-level pragma near their copyright header:
+Files that legitimately bypass the unified pathway because they *install*
+it — e.g. the wheel's helper bootstrap (`_helper.py`) and log plumbing
+(`_runtime_log_reader.py`) — carry a file-level pragma near their
+copyright header:
 
 ```python
 # streamlib:lint-logging:allow-file — installs the unified pathway; must touch sys.stdout/sys.stderr directly
@@ -158,9 +149,8 @@ Verify the effective level at compile time via
 
 ## Recap
 
-- One API per language: `tracing::*!` (Rust) / `streamlib.log.*` (Python,
-  Deno).
-- Three enforcement layers: clippy, xtask lint, runtime interceptors.
+- One API per language: `tracing::*!` (Rust) / `streamlib.log.*` (Python).
+- Three enforcement layers: clippy, xtask lint, runtime fd capture.
 - `trace!` is zero-cost in release; `debug!` is opt-out via
   `strip_debug_logging`; `warn!` / `error!` are never stripped.
 - Binary crates and installer/bootstrap files are the only acceptable

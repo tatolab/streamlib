@@ -116,14 +116,12 @@ pub struct ChannelEgressConfig {
     pub ceiling_bytes: usize,
 }
 
-/// Host-side inner state for an output writer. Owns the per-output-port
+/// Inner state for an output writer. Owns the per-output-port
 /// channel publisher and its destination notifiers; all per-frame publish +
 /// notify work runs here.
 ///
-/// Never crosses the plugin ABI. Held by the host via
-/// `Arc<OutputWriterInner>`; the cdylib's [`OutputWriter`] PluginAbiObject
-/// stores a separate `Arc::into_raw`-encoded strong reference to
-/// the same inner.
+/// Held via `Arc<OutputWriterInner>`; the [`OutputWriter`] handle stores a
+/// separate `Arc::into_raw`-encoded strong reference to the same inner.
 pub struct OutputWriterInner {
     /// Map from source output port name to its channel egress.
     channels: Mutex<HashMap<String, ChannelEgress>>,
@@ -258,9 +256,9 @@ impl OutputWriterInner {
     /// Write raw bytes to the specified output port without serialization.
     ///
     /// The data is assumed to be pre-serialized (e.g., msgpack from a
-    /// subprocess bridge OR the PluginAbiObject's serialize-then-plugin-ABI path).
-    /// One zero-copy loan reaches every channel subscriber; the frame is built
-    /// and sent ONCE, then every destination notifier is signalled.
+    /// subprocess bridge). One zero-copy loan reaches every channel subscriber;
+    /// the frame is built and sent ONCE, then every destination notifier is
+    /// signalled.
     pub fn write_raw(&self, port: &str, data: &[u8], timestamp_ns: i64) -> Result<()> {
         let mut channels = self.channels.lock();
         let egress = channels
@@ -346,21 +344,16 @@ impl Default for OutputWriterInner {
 }
 
 // =============================================================================
-// OutputWriter PluginAbiObject
+// OutputWriter
 // =============================================================================
 
-/// Public output writer PluginAbiObject. The macro emits
+/// Public output writer handle. The macro emits
 /// `pub outputs: OutputWriter` on every processor struct that
 /// declares output ports.
 ///
-/// Layout-stable: every field is either a primitive or an opaque
-/// pointer, so the cdylib's view of this type does not couple to
-/// the host's [`OutputWriterInner`] source layout.
-///
-/// `Clone` bumps the host-side `Arc<OutputWriterInner>` strong
-/// count via [`OutputWriterVTable::clone_arc`]; `Drop` decrements
-/// via [`OutputWriterVTable::drop_arc`]. Both run in host-compiled
-/// code regardless of which artifact holds this PluginAbiObject.
+/// The sole field is an opaque pointer to the host's
+/// [`OutputWriterInner`]. `Clone` bumps the `Arc<OutputWriterInner>`
+/// strong count; `Drop` decrements it.
 pub struct OutputWriter {
     /// Opaque handle: `Arc::into_raw(Arc<OutputWriterInner>)`. Null
     /// on a freshly-constructed processor before
@@ -370,18 +363,15 @@ pub struct OutputWriter {
 
 // SAFETY: `handle` points at an `Arc<OutputWriterInner>` whose
 // interior is Send+Sync (OutputWriterInner declares both above).
-// Refcount management crosses the plugin ABI through the
-// vtable but the underlying Arc bookkeeping runs in host-compiled
-// code regardless.
 unsafe impl Send for OutputWriter {}
 unsafe impl Sync for OutputWriter {}
 
 impl OutputWriter {
-    /// Build a host-mode PluginAbiObject from an `Arc<OutputWriterInner>`.
-    /// The strong reference is consumed; the PluginAbiObject owns it for
-    /// its lifetime and releases on Drop.
+    /// Build a handle from an `Arc<OutputWriterInner>`. The strong
+    /// reference is consumed; the handle owns it for its lifetime and
+    /// releases on Drop.
     ///
-    /// Engine-only — used by the host's processor wiring path
+    /// Engine-only — used by the processor wiring path
     /// (`ProcessorInstanceFactory::install_iceoryx2_resources`) and
     /// by the macro-emitted `from_config` initializer when no
     /// outputs are declared (an empty inner is used).
@@ -400,13 +390,12 @@ impl OutputWriter {
         Some(unsafe { &*(self.handle as *const OutputWriterInner) })
     }
 
-    /// Build an empty pre-wiring PluginAbiObject with null handle and
-    /// null vtable. The host patches in real values via
-    /// `ProcessorVTable::set_iceoryx2_resources` before any
-    /// downstream connection wiring runs. Method calls on the
-    /// empty PluginAbiObject return cleanly with no-op semantics
-    /// (matches today's pre-wiring behaviour of an empty
-    /// `OutputWriter::new()`).
+    /// Build an empty pre-wiring handle with a null handle pointer. The
+    /// engine patches in a real inner via
+    /// `GeneratedProcessor::set_iceoryx2_resources` before any
+    /// downstream connection wiring runs. Safe to hold before wiring —
+    /// `has_port` / `is_configured` answer without a wired inner — but
+    /// `write` / `write_raw` return [`Error::Link`] until it fires.
     pub fn empty() -> Self {
         Self {
             handle: std::ptr::null(),
@@ -418,23 +407,17 @@ impl OutputWriter {
         !self.handle.is_null()
     }
 
-    /// Borrow the host-side `Arc<OutputWriterInner>` this PluginAbiObject
-    /// points at. Returns `None` for unwired PluginAbiObjects. Bumps the
-    /// strong count via the vtable's `clone_arc`; the returned
+    /// Borrow the `Arc<OutputWriterInner>` this handle points at. Returns
+    /// `None` for unwired handles. Bumps the strong count; the returned
     /// Arc balances with one Drop on the inner.
     ///
     /// Engine-only (used by the macro-emitted
     /// `iceoryx2_output_writer_inner` trait method to expose the
-    /// host's wiring path to compiler ops). Cdylib code can call
-    /// this too but the host's inner reach is always preferred for
-    /// per-frame mutation since it skips the vtable hop.
+    /// wiring path to compiler ops).
     pub fn inner_arc(&self) -> Option<Arc<OutputWriterInner>> {
         if !self.is_configured() {
             return None;
         }
-        // SAFETY: handle came from Arc::into_raw; bumping the
-        // strong count via the vtable's clone_arc gives us a fresh
-        // owning reference we can reconstruct as Arc::from_raw.
         // SAFETY: `handle` is `Arc::into_raw(Arc<OutputWriterInner>)`; bump
         // the strong count and reconstruct an owning `Arc` from the raw handle.
         unsafe {
@@ -443,11 +426,8 @@ impl OutputWriter {
         }
     }
 
-    /// Write a frame to the specified output port.
-    ///
-    /// Source-compatible with the pre-#894 `OutputWriter::write` —
-    /// the cdylib serializes `T` to msgpack in its own plugin then
-    /// crosses extern "C" once with the bytes. Thread-safe.
+    /// Write a frame to the specified output port. Serializes `T` to
+    /// msgpack, then publishes the bytes. Thread-safe.
     pub fn write<T: Serialize>(&self, port: &str, value: &T) -> Result<()> {
         let timestamp_ns = MediaClock::now().as_nanos() as i64;
         self.write_with_timestamp(port, value, timestamp_ns)
@@ -927,7 +907,7 @@ mod tests {
 
     /// Empty (unwired) writers should fail cleanly rather than crash.
     /// Mentally revert the `is_configured()` guard in `write_raw` and
-    /// the test segfaults dereferencing the null vtable.
+    /// the test segfaults dereferencing the null handle.
     #[test]
     fn empty_writer_fails_cleanly() {
         let writer = OutputWriter::empty();
@@ -942,8 +922,8 @@ mod tests {
         assert!(!writer.has_port("any_port"));
     }
 
-    /// Clone bumps the strong count via the vtable; both clones drop
-    /// independently. Mentally revert the `clone_arc` call in
+    /// Clone bumps the strong count; both clones drop
+    /// independently. Mentally revert the strong-count bump in
     /// `Clone::clone` and the second clone observes a freed handle.
     #[test]
     fn clone_balances_drop() {

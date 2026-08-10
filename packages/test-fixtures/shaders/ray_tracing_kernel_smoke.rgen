@@ -4,8 +4,8 @@
 // Cdylib ray-tracing-kernel smoke test — ray-generation stage.
 // Traces a single ray per pixel against the bound TLAS and writes
 // the bary-coord hit color into the storage image. Push-constant
-// variant gate proves the push-constant slot vtable wiring works
-// end-to-end. Smoke-only — pixel correctness is not asserted.
+// variant gate proves the push-constant wiring works end-to-end.
+// Smoke-only — pixel correctness is not asserted.
 
 #version 460
 #extension GL_EXT_ray_tracing : require

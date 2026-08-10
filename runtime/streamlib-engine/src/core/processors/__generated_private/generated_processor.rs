@@ -67,7 +67,7 @@ pub trait GeneratedProcessor: Send + 'static {
     /// Called by the host once after `from_config` returns and
     /// before any connections are wired. Default impl is a no-op
     /// for processors that declare no input/output ports; the macro
-    /// emits an override that writes the PluginAbiObjects into `self.outputs`
+    /// emits an override that writes the handles into `self.outputs`
     /// / `self.inputs` for processors that do.
     fn set_iceoryx2_resources(
         &mut self,
@@ -77,23 +77,22 @@ pub trait GeneratedProcessor: Send + 'static {
         Ok(())
     }
 
-    /// Borrow the (now host-side) `OutputWriterInner` Arc the
-    /// processor's PluginAbiObject is wired to, if any. Default `None`;
-    /// the macro emits an override for processors with outputs.
+    /// Borrow the `OutputWriterInner` Arc the processor's output writer
+    /// is wired to, if any. Default `None`; the macro emits an override
+    /// for processors with outputs.
     ///
-    /// Used by the host's connection-wiring path to mutate the
-    /// inner directly (add_connection, etc.) without crossing
-    /// the plugin ABI. The returned Arc is cloned from the
-    /// PluginAbiObject's stored Arc, so it's safe to retain.
+    /// Used by the connection-wiring path to mutate the inner directly
+    /// (add_connection, etc.). The returned Arc is cloned from the
+    /// handle's stored Arc, so it's safe to retain.
     fn iceoryx2_output_writer_inner(
         &self,
     ) -> Option<std::sync::Arc<crate::iceoryx2::OutputWriterInner>> {
         None
     }
 
-    /// Borrow the (now host-side) `InputMailboxesInner` Arc the
-    /// processor's PluginAbiObject is wired to, if any. Default `None`;
-    /// the macro emits an override for processors with inputs.
+    /// Borrow the `InputMailboxesInner` Arc the processor's input
+    /// mailboxes are wired to, if any. Default `None`; the macro emits
+    /// an override for processors with inputs.
     fn iceoryx2_input_mailboxes_inner(
         &self,
     ) -> Option<std::sync::Arc<crate::iceoryx2::InputMailboxesInner>> {

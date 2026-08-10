@@ -32,23 +32,14 @@ pub type SchemaRegistryStorage = RwLock<HashMap<String, Arc<str>>>;
 ///
 /// **Per-loaded-artifact instance.** Same shape as [`crate::core::pubsub::PUBSUB`]
 /// — each linked copy of streamlib-engine has its own
-/// `LazyLock<SchemaRegistryStorage>`. Plugin ABI bridging happens
-/// inside the public functions below: when this artifact is a plugin
-/// cdylib whose `install_host_services` has run,
-/// [`register_schema`] and [`get_embedded_schema_definition`] route
-/// through the host's `schema_register` / `schema_lookup` fn
-/// pointers; otherwise they read/write the local artifact's instance
-/// directly.
+/// `LazyLock<SchemaRegistryStorage>`. [`register_schema`] and
+/// [`get_embedded_schema_definition`] read and write this artifact's
+/// instance directly.
 static SCHEMA_REGISTRY: LazyLock<SchemaRegistryStorage> =
     LazyLock::new(|| RwLock::new(HashMap::new()));
 
 /// Register a schema's YAML body under its canonical identifier. Last
 /// write wins. Idempotent for identical bodies.
-///
-/// In a plugin cdylib whose `install_host_services` has run, forwards
-/// to the host's `schema_register` callback so registrations from
-/// cdylib code land in the host's registry (where every consumer
-/// reads).
 pub fn register_schema(canonical_id: impl Into<String>, body: impl Into<Arc<str>>) {
     let canonical = canonical_id.into();
     let body = body.into();
@@ -67,12 +58,6 @@ pub(crate) fn unregister_schema(canonical_id: &str) {
 /// Accepts both unversioned (`@tatolab/core/VideoFrame`) and versioned
 /// (`@tatolab/core/VideoFrame@1.0.0`) forms; the version suffix is
 /// stripped before lookup.
-///
-/// In a plugin cdylib whose `install_host_services` has run, routes
-/// through the host's `schema_lookup` callback — the host invokes a
-/// cdylib-provided result callback with the yaml bytes (or null on
-/// miss). The bytes are copied into an owned `Arc<str>` before the
-/// host's call returns; the borrow doesn't outlive the call.
 pub fn get_embedded_schema_definition(name: &str) -> Option<Arc<str>> {
     let canonical = strip_semver_suffix(name);
     SCHEMA_REGISTRY.read().get(canonical).cloned()

@@ -62,9 +62,8 @@ use super::HostVulkanDevice;
 /// kinds live under the same root.
 pub const PIPELINE_CACHE_DIR_ENV: &str = "STREAMLIB_PIPELINE_CACHE_DIR";
 
-/// Host-only rich data backing a [`VulkanGraphicsKernel`]. Cdylib code
-/// never sees this type; it reaches the public surface through the
-/// `(handle, vtable)` PluginAbiObject.
+/// Rich data backing a [`VulkanGraphicsKernel`], reached through the
+/// kernel's opaque handle.
 pub struct VulkanGraphicsKernelInner {
     label: String,
     vulkan_device: Arc<HostVulkanDevice>,
@@ -538,43 +537,6 @@ impl VulkanGraphicsKernelInner {
         draw: &DrawCall,
     ) -> Result<()> {
         self.cmd_bind_and_draw_inner(command_buffer, frame_index, DrawKind::Draw(*draw))
-    }
-
-    /// Cdylib-side shim — reconstruct the `vk::CommandBuffer` handle
-    /// the cdylib minted (via its own vulkanalia link, gated by
-    /// `xtask check-boundaries`) from the u64 wire form and forward
-    /// to [`Self::cmd_bind_and_draw`]. Owned here so this file is
-    /// the canonical site of the `vk::CommandBuffer::from_raw`
-    /// reconstruction and the host-services file (which is off the
-    /// `vulkanalia` allowlist) doesn't have to touch the type
-    /// directly. Mirrors `VulkanComputeKernelInner::record_raw`.
-    pub(crate) fn cmd_bind_and_draw_raw(
-        &self,
-        command_buffer_handle: u64,
-        frame_index: u32,
-        draw: &DrawCall,
-    ) -> Result<()> {
-        use vulkanalia::vk::Handle;
-        // vulkanalia's CommandBuffer wraps a `usize`; on every supported
-        // target `usize == u64`, so the cast is lossless. The wire form
-        // is `u64` for ABI uniformity with the compute kernel's
-        // v5 `record` slot.
-        let cb = vk::CommandBuffer::from_raw(command_buffer_handle as usize);
-        self.cmd_bind_and_draw(cb, frame_index, draw)
-    }
-
-    /// Cdylib-side shim for [`Self::cmd_bind_and_draw_indexed`].
-    /// Same reconstruction contract as
-    /// [`Self::cmd_bind_and_draw_raw`].
-    pub(crate) fn cmd_bind_and_draw_indexed_raw(
-        &self,
-        command_buffer_handle: u64,
-        frame_index: u32,
-        draw: &DrawIndexedCall,
-    ) -> Result<()> {
-        use vulkanalia::vk::Handle;
-        let cb = vk::CommandBuffer::from_raw(command_buffer_handle as usize);
-        self.cmd_bind_and_draw_indexed(cb, frame_index, draw)
     }
 
     /// Indexed variant of [`Self::cmd_bind_and_draw`] (same drain-on-draw
@@ -1262,12 +1224,12 @@ impl std::fmt::Debug for VulkanGraphicsKernelInner {
 }
 
 // =============================================================================
-// PluginAbiObject implementation (#917)
+// Public handle
 // =============================================================================
 
-/// Graphics kernel — layout-stable `#[repr(C)]` PluginAbiObject (#907 Phase
-/// E PR 3/5). Mirrors `VulkanComputeKernel`'s shape: handle + parent
-/// vtable + per-type methods vtable + cached PODs.
+/// Graphics kernel — a layout-stable `#[repr(C)]` handle. Mirrors
+/// `VulkanComputeKernel`'s shape: an opaque handle to the inner Arc plus
+/// cached PODs.
 #[repr(C)]
 pub struct VulkanGraphicsKernel {
     /// Opaque handle to the host's `Arc<VulkanGraphicsKernelInner>`.
@@ -1305,11 +1267,7 @@ impl VulkanGraphicsKernel {
         unsafe { &*(self.handle as *const VulkanGraphicsKernelInner) }
     }
 
-    /// Kernel's declared binding shape. Mode-routed: host-mode reads
-    /// directly from `host_inner`; cdylib-mode dispatches through the
-    /// v3 `bindings` slot on the per-type methods vtable. On cdylib-
-    /// side plugin ABI errors the method emits a `tracing::warn` and returns
-    /// an empty Vec.
+    /// Kernel's declared binding shape.
     pub fn bindings(&self) -> Vec<GraphicsBindingSpec> {
         self.host_inner().bindings().to_vec()
     }
@@ -1336,9 +1294,7 @@ impl VulkanGraphicsKernel {
 
     /// Bind a [`crate::core::rhi::PixelBuffer`]-shaped storage
     /// buffer (SSBO) at `(frame_index, binding)`. Per-input-type
-    /// concrete shape (no generic) so the cdylib path can dispatch
-    /// via the matching typed plugin ABI slot
-    /// (`set_storage_buffer_pixel`) without a kind discriminator.
+    /// concrete shape (no generic), without a kind discriminator.
     /// Mirrors `VulkanComputeKernel::set_storage_buffer_pixel`.
     pub fn set_storage_buffer_pixel(
         &self,
@@ -1424,18 +1380,8 @@ impl VulkanGraphicsKernel {
             .set_index_buffer(frame_index, buffer, offset, index_type)
     }
 
-    /// Record bind + push + draw into `command_buffer`. Mode-routed:
-    /// host callers dispatch through `host_inner`; cdylib callers
-    /// dispatch through the v4 `cmd_bind_and_draw` slot on
-    /// [`VulkanGraphicsKernelMethodsVTable`](streamlib_plugin_abi::VulkanGraphicsKernelMethodsVTable).
-    ///
-    /// `command_buffer` is a raw `vk::CommandBuffer` the caller
-    /// minted and owns (typically from a cdylib's own command pool
-    /// under a `vulkanalia` boundary-check allowlist exception). The
-    /// wire form for the cdylib path carries the handle as `u64`
-    /// (same shape as `VulkanComputeKernelInner::record_raw`); on
-    /// 64-bit Linux — the only platform that ships — vulkanalia's
-    /// `CommandBuffer(usize)` cast is lossless.
+    /// Record bind + push + draw into `command_buffer` — a raw
+    /// `vk::CommandBuffer` the caller minted and owns.
     pub fn cmd_bind_and_draw(
         &self,
         cmd: vk::CommandBuffer,
@@ -1445,9 +1391,7 @@ impl VulkanGraphicsKernel {
         self.host_inner().cmd_bind_and_draw(cmd, frame_index, draw)
     }
 
-    /// Indexed variant of [`Self::cmd_bind_and_draw`]. Same
-    /// mode-routing contract; dispatches through the v4
-    /// `cmd_bind_and_draw_indexed` slot in cdylib mode.
+    /// Indexed variant of [`Self::cmd_bind_and_draw`].
     pub(crate) fn cmd_bind_and_draw_indexed(
         &self,
         cmd: vk::CommandBuffer,

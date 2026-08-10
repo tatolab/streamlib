@@ -18,17 +18,15 @@ FullAccess primitives (`create_compute_kernel`, `acquire_storage_buffer`,
 `create_texture_ring`, `create_command_recorder`) that return `#[repr(C)]`
 handles.
 
-The nvJPEG backend is **not** cdylib-safe. It reaches the raw
+The nvJPEG backend is **not** engine-free. It reaches the raw
 `HostVulkanDevice` (via `GpuContextFullAccess::host_vulkan_device_arc()`)
 and allocates OPAQUE_FD-exportable `VkBuffer`s / timeline semaphores
 directly so it can import them into CUDA (`cudaImportExternalMemory`,
 `cudaImportExternalSemaphore`). Those primitives are engine-internal and
-have **no cdylib-safe FullAccess form yet** — transiting a
-non-`#[repr(C)]` `HostVulkanDevice` across the plugin ABI is unsound for a
-separately-built `.slpkg` (see
-`docs/learnings/slpkg-raw-device-rhi-construction.md`). So the nvJPEG
-backend cannot live in `sdk/vulkan-jpeg`; it has to come back as an
-engine-resident backend with a cdylib-safe exposure path.
+have **no engine-free FullAccess form yet**. So the nvJPEG backend cannot
+live in `sdk/vulkan-jpeg` (built entirely against the engine-free
+FullAccess primitives); it has to come back as an engine-resident
+backend.
 
 ## Files
 

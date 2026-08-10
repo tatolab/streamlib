@@ -56,8 +56,7 @@ pub enum TextureSourceLayout {
 }
 
 impl TextureSourceLayout {
-    /// Encode to the raw `VkImageLayout` `i32` that crosses the
-    /// readback methods vtable's `source_layout_raw` slot. Uses the
+    /// Encode to the raw `VkImageLayout` `i32`. Uses the
     /// [`streamlib_consumer_rhi::VulkanLayout`] constants (the single
     /// source of truth for the raw enumerant values) so a drift in
     /// vulkanalia's `as_raw()` mapping is caught by that crate's layout
@@ -193,27 +192,17 @@ impl TextureReadbackDescriptor<'_> {
 }
 
 // =============================================================================
-// PluginAbiObject twin
+// Public handle
 // =============================================================================
 
-/// Single-in-flight GPU→CPU texture readback, exposed across the plugin
-/// ABI as a layout-stable `#[repr(C)]` PluginAbiObject so cdylibs can
-/// hold, drop, and drive it without sharing rustc-version or dep-graph
-/// with the host.
+/// Single-in-flight GPU→CPU texture readback, a layout-stable
+/// `#[repr(C)]` handle over an opaque pointer to the host-owned
+/// `Box<Arc<crate::vulkan::rhi::VulkanTextureReadback>>`.
 ///
-/// The opaque `handle` points at a host-owned
-/// `Box<Arc<crate::vulkan::rhi::VulkanTextureReadback>>`. Unlike the
-/// Arc-into-raw kernel PluginAbiObjects, this one **deviates** from the
-/// clone/drop pair convention: the handle is Box-shaped and the object
-/// is `!Clone` (the primitive owns exclusive single-in-flight staging +
-/// command resources), so the parent [`GpuContextFullAccessVTable`]
-/// carries `drop_texture_readback` only — there is no clone slot.
-///
-/// Per-method dispatch (`submit` / `try_read` / `wait_and_read` /
-/// `try_read_copy` / `wait_and_copy`) is reached through the per-type
-/// [`VulkanTextureReadbackMethodsVTable`] pointed at by `methods_vtable`.
-/// The five POD getters (`width` / `height` / `format` / `handle_id` /
-/// `staging_size`) read cached fields directly .
+/// `!Clone` — the primitive owns exclusive single-in-flight staging +
+/// command resources, so the handle carries a drop but no clone. The
+/// five POD getters (`width` / `height` / `format` / `handle_id` /
+/// `staging_size`) read the cached fields directly.
 #[repr(C)]
 pub struct TextureReadback {
     /// Opaque handle to the host's
@@ -223,15 +212,15 @@ pub struct TextureReadback {
     /// run host-side; this is exposed for diagnostics/logging only.
     pub(crate) cached_handle_id: u64,
     /// Cached total staging-buffer size in bytes (`width × height ×
-    /// bytes_per_pixel`). Never recomputed ABI-side — sourced from the
+    /// bytes_per_pixel`). Never recomputed here — sourced from the
     /// primitive's own `staging_size()`.
     pub(crate) cached_staging_size: u64,
     /// Cached pixel width the readback is bound to.
     pub(crate) cached_width: u32,
     /// Cached pixel height the readback is bound to.
     pub(crate) cached_height: u32,
-    /// Cached pixel format (plugin-ABI-stable `u32` discriminant,
-    /// matches [`TextureFormat`]'s `#[repr(u32)]`).
+    /// Cached pixel format (`u32` discriminant, matches
+    /// [`TextureFormat`]'s `#[repr(u32)]`).
     pub(crate) cached_format_raw: u32,
     /// Reserved padding (keeps size a multiple of 8; zero, never read).
     pub(crate) _reserved_padding: u32,
@@ -240,7 +229,7 @@ pub struct TextureReadback {
 // SAFETY: `handle` points at a host-owned
 // `Box<Arc<VulkanTextureReadback>>` whose inner is Send + Sync (staging
 // + command resources serialized by the primitive's own state mutex and
-// owned timeline semaphore). The vtable pointers are `&'static`.
+// owned timeline semaphore).
 unsafe impl Send for TextureReadback {}
 unsafe impl Sync for TextureReadback {}
 
@@ -265,8 +254,8 @@ impl TextureReadback {
         self.cached_height
     }
 
-    /// Pixel format the readback is bound to. Cached POD — no plugin ABI
-    /// hop. Decoded from the plugin-ABI-stable `u32` discriminant.
+    /// Pixel format the readback is bound to. Decoded from the cached
+    /// `u32` discriminant.
     pub fn format(&self) -> TextureFormat {
         match self.cached_format_raw {
             0 => TextureFormat::Rgba8Unorm,
@@ -290,8 +279,7 @@ impl TextureReadback {
     /// Schedule a GPU→CPU copy of `texture` (at its current
     /// `source_layout`) into the readback's staging buffer, returning a
     /// [`ReadbackTicket`]. Single-in-flight: a second `submit` before
-    /// the prior ticket is read returns an error. Dispatches through the
-    /// per-type methods vtable's `submit` slot.
+    /// the prior ticket is read returns an error.
     pub fn submit(
         &self,
         texture: &Texture,
@@ -304,15 +292,13 @@ impl TextureReadback {
     /// (the slice borrows the host persistent-mapped staging, row
     /// stride = `width × bytes_per_pixel`, no padding — valid only until
     /// the next `submit` on this handle), `Ok(None)` while in flight.
-    /// Dispatches through the methods vtable's `try_read` slot.
     pub fn try_read(&self, ticket: ReadbackTicket) -> Result<Option<&[u8]>> {
         self.host_inner().try_read(ticket).map_err(Error::from)
     }
 
     /// Block until the copy completes (`timeout_ns == u64::MAX` = no
     /// timeout), then borrow the staging buffer. Same borrow-window
-    /// contract as [`Self::try_read`]. Dispatches through the methods
-    /// vtable's `wait_and_read` slot.
+    /// contract as [`Self::try_read`].
     pub fn wait_and_read(&self, ticket: ReadbackTicket, timeout_ns: u64) -> Result<&[u8]> {
         self.host_inner()
             .wait_and_read(ticket, timeout_ns)
@@ -322,9 +308,7 @@ impl TextureReadback {
     /// Non-blocking poll that COPIES the staging bytes into an owned
     /// `Vec<u8>` once ready (for callers that must outlive the handle's
     /// borrow window). `Ok(Some(bytes))` when copied, `Ok(None)` while
-    /// in flight. Dispatches through the methods vtable's `try_read_copy`
-    /// slot; a `status 2` (`out_buf` too small) grows the buffer to the
-    /// host-reported length and retries once.
+    /// in flight.
     pub fn try_read_copy(&self, ticket: ReadbackTicket) -> Result<Option<Vec<u8>>> {
         Ok(self
             .host_inner()
@@ -334,9 +318,7 @@ impl TextureReadback {
     }
 
     /// Block until the copy completes, then COPY the staging bytes into
-    /// an owned `Vec<u8>`. Dispatches through the methods vtable's
-    /// `wait_and_copy` slot; `status 2` grows + retries as in
-    /// [`Self::try_read_copy`].
+    /// an owned `Vec<u8>`.
     pub fn wait_and_copy(&self, ticket: ReadbackTicket, timeout_ns: u64) -> Result<Vec<u8>> {
         Ok(self
             .host_inner()

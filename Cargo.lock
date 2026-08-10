@@ -5103,7 +5103,6 @@ dependencies = [
  "tonic-build",
  "tracing",
  "tracing-subscriber",
- "ureq",
  "utoipa",
  "uuid",
  "winit",

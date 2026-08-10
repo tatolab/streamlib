@@ -38,7 +38,7 @@ pub enum AccelerationStructureKind {
 /// the hit shader can read via `gl_InstanceCustomIndexEXT`, a visibility
 /// mask, an SBT record offset, and the BLAS this instance points to.
 ///
-/// The BLAS reference is by `VulkanAccelerationStructure` PluginAbiObject so the
+/// The BLAS reference is by `VulkanAccelerationStructure` handle so the
 /// lifetime contract is "the TLAS holds a strong reference to every
 /// referenced BLAS for as long as the TLAS lives."
 #[derive(Clone)]
@@ -84,9 +84,8 @@ pub const IDENTITY_TRANSFORM: [[f32; 4]; 3] = [
     [0.0, 0.0, 1.0, 0.0],
 ];
 
-/// Host-only rich data backing a [`VulkanAccelerationStructure`].
-/// Cdylib code never sees this type; it reaches the public surface
-/// through the `(handle, vtable)` PluginAbiObject.
+/// Rich data backing a [`VulkanAccelerationStructure`], reached through
+/// the structure's opaque handle.
 pub(crate) struct VulkanAccelerationStructureInner {
     label: String,
     kind: AccelerationStructureKind,
@@ -104,17 +103,10 @@ pub(crate) struct VulkanAccelerationStructureInner {
     referenced_blases: Vec<VulkanAccelerationStructure>,
 }
 
-/// Acceleration-structure (BLAS or TLAS) RHI handle — layout-stable
-/// `#[repr(C)] (handle, vtable)` shape so cdylibs can hold, refcount,
-/// and drop without sharing rustc-version or dep-graph with the host.
-///
-/// The opaque handle points at an
-/// `Arc<VulkanAccelerationStructureInner>`; lifecycle dispatches
-/// through the host-installed
-/// [`GpuContextFullAccessVTable::clone_acceleration_structure`] /
-/// `drop_acceleration_structure` callbacks, which run
-/// `Arc::increment_strong_count` / `Arc::decrement_strong_count` in
-/// host-compiled code where the Inner layout is known.
+/// Acceleration-structure (BLAS or TLAS) RHI handle — a layout-stable
+/// `#[repr(C)]` handle over an opaque pointer to an
+/// `Arc<VulkanAccelerationStructureInner>`. Clone / Drop run
+/// `Arc::increment_strong_count` / `Arc::decrement_strong_count`.
 pub struct VulkanAccelerationStructure {
     /// Opaque handle to the host's `Arc<VulkanAccelerationStructureInner>`.
     pub(crate) handle: *const c_void,
@@ -661,7 +653,7 @@ impl std::fmt::Debug for VulkanAccelerationStructureInner {
 }
 
 // =============================================================================
-// PluginAbiObject implementation
+// Public handle
 // =============================================================================
 
 impl VulkanAccelerationStructure {

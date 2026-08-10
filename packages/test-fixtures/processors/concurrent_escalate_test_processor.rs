@@ -1,16 +1,14 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Phase H (#1006 scenario 1) dlopen-cdylib concurrent-escalate test
-//! fixture.
+//! Concurrent-escalate test fixture.
 //!
-//! Spawns `config.thread_count` threads from inside the cdylib's
-//! `start()` lifecycle, each cloning `gpu_limited_access()` and
-//! calling `escalate(|_full| ...)` concurrently. The escalate gate
-//! is documented to serialize concurrent callers — overlapping
-//! closures would be a regression. Each thread bumps a shared
-//! atomic on closure entry; if the atomic was already set, that's
-//! an overlap.
+//! Spawns `config.thread_count` threads from `start()`, each cloning
+//! `gpu_limited_access()` and calling `escalate(|_full| ...)`
+//! concurrently. The escalate gate is documented to serialize
+//! concurrent callers — overlapping closures would be a regression.
+//! Each thread bumps a shared atomic on closure entry; if the atomic
+//! was already set, that's an overlap.
 //!
 //! Output format:
 //!   - `OK\n<thread_count>\noverlaps=<N>` — every escalate closure
@@ -19,9 +17,7 @@
 //!     panicked.
 //!
 //! Mirrors the in-process `test_escalate_serializes_concurrent_callers`
-//! test (`runtime/streamlib-engine/src/core/context/gpu_context.rs`) but
-//! drives the cdylib path through `escalate_via_vtable` — the
-//! plugin ABI contract the audit flagged as previously uncovered.
+//! test (`runtime/streamlib-engine/src/core/context/gpu_context.rs`).
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
@@ -33,7 +29,7 @@ use streamlib::sdk::processors::ManualProcessor;
 
 #[streamlib::sdk::processor(
     "@tatolab/test-fixtures/ConcurrentEscalateTestProcessor",
-    description = "Phase H (#1006 scenario 1) dlopen-cdylib concurrent-escalate fixture. Spawns thread_count threads from start(); each clones gpu_limited_access() and calls escalate concurrently. Output captures overlap count; expected overlaps=0 — proves the escalate gate serializes cdylib-path callers through escalate_via_vtable.",
+    description = "Concurrent-escalate fixture. Spawns thread_count threads from start(); each clones gpu_limited_access() and calls escalate concurrently. Output captures overlap count; expected overlaps=0 — proves the escalate gate serializes concurrent callers.",
     execution = manual,
     config = crate::_generated_::ConcurrentEscalateTestProcessorConfig,
 )]
@@ -45,28 +41,17 @@ impl ManualProcessor for ConcurrentEscalateTest::Processor {
     }
 
     fn start(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        // **Currently un-driveable end-to-end.** Per PR #1075,
-        // `ProcessorInstance::start` wraps cdylib-resident Manual-
-        // mode dispatch in `with_cdylib_scope`, which acquires the
-        // escalate gate for the entire start body. The worker
-        // threads spawned below try to acquire that same gate via
-        // their `limited.escalate(...)` call and deadlock — start
-        // blocks waiting for join, workers block waiting for the
-        // gate, gate never releases. The integration test at
-        // `runtime/streamlib-engine/tests/load_project_dylib_concurrent_escalate.rs`
-        // is `#[ignore]`d as a result. The serialization invariant
-        // this fixture was guarding is covered by the unit test
+        // Orphaned end-to-end: the integration test that drove this
+        // fixture was removed, so nothing exercises it. The
+        // serialization invariant it guarded is covered by the unit test
         // `escalate_gate::tests::enter_serializes_concurrent_callers`.
-        // Restructuring to drive the concurrent escalates from a
-        // Reactive `process()` body (LimitedAccess, no wrap) is the
-        // natural follow-up.
         let output_path = self.config.output_path.clone();
         let thread_count = self.config.thread_count as usize;
         let hold_ms = self.config.hold_ms as u64;
 
         // Clone the LimitedAccess handle once; each spawned thread
         // gets its own clone (the Clone impl bumps the inner Arc
-        // refcount via the FullAccess vtable's `clone_handle`).
+        // refcount).
         let limited_template = ctx.gpu_limited_access().clone();
 
         let in_closure = Arc::new(AtomicBool::new(false));

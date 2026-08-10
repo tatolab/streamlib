@@ -363,11 +363,9 @@ fn spawn_dedicated_thread(
                     runtime,
                 );
                 let setup_result = run_setup_phase(runtime, &runtime_ctx_clone.gpu, || {
-                    let _ = &tokio_handle; // block_on now happens inside the
-                    // ProcessorInstance::setup dispatch — VTable variant calls
-                    // through extern "C" (cdylib block_ons on its own tokio
-                    // handle pulled from ctx), LegacyDyn variant block_ons
-                    // here via the ctx's tokio handle.
+                    // block_on happens inside the ProcessorInstance::setup
+                    // dispatch via the ctx's tokio handle.
+                    let _ = &tokio_handle;
                     guard.setup(&full_ctx)
                 });
                 if let Err(e) = setup_result {
@@ -446,23 +444,11 @@ fn full_access_grant_or_mark_untrusted_error(
 
 /// Run a processor's `__generated_setup` body.
 ///
-/// Gate management for Rust-runtime processors moved one layer
-/// inward — `ProcessorInstance::setup` now wraps its own dispatch
-/// (cdylib variant uses
-/// [`RuntimeContextFullAccess::with_cdylib_scope`] so the cdylib
-/// body sees a `ScopeToken`-flavored FullAccess instead of the
-/// host-only Boxed shape; in-process variant uses the same
-/// `gpu_limited_access().escalate(...)` shape this function used to
-/// provide). The historical serialization-via-gate invariant is
-/// preserved at the new layer; the outer wrap that used to live
-/// here would now trigger the gate's same-thread re-entry panic
-/// when an inner call (a cdylib's mint-scope-token or any setup
-/// body that itself uses `.escalate(...)`) also tried to acquire
-/// it.
-///
-/// Subprocess hosts continue to skip the outer wrap entirely (per
-/// #867 — wrapping their IPC wait would deadlock against the
-/// bridge-reader thread's per-call escalates).
+/// No gate wrap here: an outer wrap would trigger the escalate
+/// gate's same-thread re-entry panic when a setup body that itself
+/// uses `.escalate(...)` also tried to acquire it, and wrapping a
+/// subprocess host's IPC wait would deadlock against the
+/// bridge-reader thread's per-call escalates (#867).
 fn run_setup_phase<F>(runtime: ProcessorRuntime, gpu: &GpuContext, setup_body: F) -> Result<()>
 where
     F: FnOnce() -> Result<()>,
@@ -612,15 +598,10 @@ mod tests {
     ///
     /// The historical Rust-branch wrap held the escalate gate around
     /// every `setup_body`, so a concurrent escalate from another
-    /// thread blocked until the body returned. That wrap moved one
-    /// layer inward in #1072 — [`crate::core::processors::ProcessorInstance::setup`]
-    /// now owns the gate management (escalate-wrap for `LegacyDyn`,
-    /// scope-token mint via
-    /// [`crate::core::context::escalate_scope_registry::begin_escalate_scope`]
-    /// for `VTable`). [`run_setup_phase`] is therefore a passthrough
-    /// for every runtime, and a concurrent escalate from inside the
-    /// body must complete promptly because no other gate-holder
-    /// exists.
+    /// thread blocked until the body returned. [`run_setup_phase`] is
+    /// a passthrough for every runtime, and a concurrent escalate
+    /// from inside the body must complete promptly because no other
+    /// gate-holder exists.
     ///
     /// Mentally revert the [`run_setup_phase`] change (re-add the
     /// outer `sandbox.escalate(...)` wrap) — this test hangs past

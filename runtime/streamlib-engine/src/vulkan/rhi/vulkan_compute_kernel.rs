@@ -43,9 +43,8 @@ use super::HostVulkanDevice;
 /// holds a single descriptor set, so dispatches against it are serial — that's
 /// fine for the format-converter / compositor / codec-pre-process workloads
 /// this abstraction targets.
-/// Host-only rich data backing a [`VulkanComputeKernel`]. Cdylib code
-/// never sees this type; it reaches the public surface through the
-/// `(handle, vtable)` PluginAbiObject.
+/// Rich data backing a [`VulkanComputeKernel`], reached through the
+/// kernel's opaque handle.
 pub struct VulkanComputeKernelInner {
     label: String,
     vulkan_device: Arc<HostVulkanDevice>,
@@ -614,56 +613,6 @@ impl VulkanComputeKernelInner {
         )
     }
 
-    // ---- Raw-handle entry points for the v5 cdylib vtable callbacks --------
-    //
-    // The four `*_raw` methods exist so the host-services callback layer
-    // (`core/plugin/host_services.rs`) can dispatch to the kernel without
-    // importing `vulkanalia` itself — that file isn't on the RHI vulkanalia
-    // allowlist by design (per `xtask check-boundaries`). Each shim
-    // reconstructs the typed vulkanalia handle via `Handle::from_raw` and
-    // forwards to the corresponding typed method above.
-
-    pub(crate) fn set_sampled_image_view_raw(
-        &self,
-        binding: u32,
-        image_view_handle: u64,
-    ) -> Result<()> {
-        use vulkanalia::vk::Handle;
-        self.set_sampled_image_view(binding, vk::ImageView::from_raw(image_view_handle))
-    }
-
-    pub(crate) fn set_combined_image_sampler_view_raw(
-        &self,
-        binding: u32,
-        image_view_handle: u64,
-    ) -> Result<()> {
-        use vulkanalia::vk::Handle;
-        self.set_combined_image_sampler_view(binding, vk::ImageView::from_raw(image_view_handle))
-    }
-
-    pub(crate) fn set_storage_image_view_raw(
-        &self,
-        binding: u32,
-        image_view_handle: u64,
-    ) -> Result<()> {
-        use vulkanalia::vk::Handle;
-        self.set_storage_image_view(binding, vk::ImageView::from_raw(image_view_handle))
-    }
-
-    pub(crate) fn record_raw(
-        &self,
-        command_buffer_handle: u64,
-        group_count_x: u32,
-        group_count_y: u32,
-        group_count_z: u32,
-    ) -> Result<()> {
-        use vulkanalia::vk::Handle;
-        // vulkanalia's CommandBuffer wraps a `usize`; on every supported
-        // target `usize == u64`, so the cast is lossless. The wire form
-        // is `u64` for ABI uniformity with the image-view slots.
-        let cb = vk::CommandBuffer::from_raw(command_buffer_handle as usize);
-        self.record(cb, group_count_x, group_count_y, group_count_z)
-    }
 
     fn drain_and_validate_pending(&self) -> Result<PendingState> {
         let pending = {
@@ -961,30 +910,16 @@ impl std::fmt::Debug for VulkanComputeKernelInner {
 }
 
 // =============================================================================
-// PluginAbiObject implementation (#917)
+// Public handle
 // =============================================================================
 
-/// Compute kernel — layout-stable `#[repr(C)]` PluginAbiObject so cdylibs
-/// can hold, refcount, drop, and read POD descriptors without
-/// sharing rustc-version or dep-graph with the host.
+/// Compute kernel — a layout-stable `#[repr(C)]` handle over an opaque
+/// pointer to an `Arc<VulkanComputeKernelInner>`, plus cached POD
+/// descriptors. `Clone` / `Drop` manage the inner Arc's strong count.
 ///
-/// The opaque handle points at an `Arc<VulkanComputeKernelInner>`;
-/// lifecycle (Clone / Drop) dispatches through the host-installed
-/// parent [`GpuContextFullAccessVTable`]'s `clone_compute_kernel` /
-/// `drop_compute_kernel` callbacks (locked by PR #918's PluginAbiObject
-/// Phase D work). Per-method dispatch is reached through the
-/// dedicated
-/// [`streamlib_plugin_abi::VulkanComputeKernelMethodsVTable`] pointed
-/// at by `methods_vtable` — issue #907 PR 2/5 lands the pointer
-/// plumbing + cached POD fields; follow-up PRs append method slots
-/// and route `set_*` / `dispatch` / `record` / `bindings` through
-/// them, plus land the ambitious CPU-reference dlopen integration
-/// test.
-///
-/// The `push_constant_size()` POD getter reads from the cached
-/// field . The value is captured by
-/// [`Self::from_arc_into_raw`] at construction and never mutates
-/// over the kernel's lifetime.
+/// The `push_constant_size()` POD getter reads the cached field,
+/// captured by [`Self::from_arc_into_raw`] at construction and never
+/// mutated over the kernel's lifetime.
 #[repr(C)]
 pub struct VulkanComputeKernel {
     /// Opaque handle to the host's `Arc<VulkanComputeKernelInner>`.
@@ -1045,10 +980,8 @@ impl VulkanComputeKernel {
     /// (SSBO) at `binding`. Pixel-shape SSBO is legitimate — pixel
     /// buffer allocations carry `STORAGE_BUFFER` usage from birth.
     ///
-    /// Per-input-type concrete shape (no generic) so the cdylib path
-    /// can dispatch via the matching typed plugin ABI slot
-    /// (`set_storage_buffer_pixel`) without a kind discriminator.
-    /// Mirrors the production plugin ABI pattern in Dawn / WebGPU
+    /// Per-input-type concrete shape (no generic), without a kind
+    /// discriminator. Mirrors the typed-binding pattern in Dawn / WebGPU
     /// (`wgpuComputePassEncoderSetBindGroup` family) and Unreal RHI
     /// (typed `SetShaderResourceViewParameter`).
     pub fn set_storage_buffer_pixel(
@@ -1092,12 +1025,8 @@ impl VulkanComputeKernel {
     /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::SampledImage`]
     /// slot. See [`VulkanComputeKernelInner::set_sampled_image_view`].
     ///
-    /// Crate-private surface; engine-internal callers only. Workspace
-    /// plugin cdylibs (h264 / h265 / camera) reach this via engine SDK
-    /// code (`RgbToNv12Converter::convert`) compiled into the cdylib;
-    /// the body is mode-routed through the v5 vtable slot so cdylib
-    /// dispatch avoids the `host_inner()` panic guard. The Python /
-    /// Deno consumer-rhi cdylibs don't link this code at all.
+    /// Crate-private surface; engine-internal callers only
+    /// (e.g. `RgbToNv12Converter::convert`).
     pub(crate) fn set_sampled_image_view(&self, binding: u32, view: vk::ImageView) -> Result<()> {
         self.host_inner().set_sampled_image_view(binding, view)
     }
@@ -1105,9 +1034,6 @@ impl VulkanComputeKernel {
     /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::SampledTexture`]
     /// slot that was created with an immutable sampler. See
     /// [`VulkanComputeKernelInner::set_combined_image_sampler_view`].
-    ///
-    /// See [`Self::set_sampled_image_view`] for the cdylib-routing
-    /// rationale.
     pub(crate) fn set_combined_image_sampler_view(
         &self,
         binding: u32,
@@ -1119,30 +1045,22 @@ impl VulkanComputeKernel {
 
     /// Bind a raw `vk::ImageView` to a [`ComputeBindingKind::StorageImage`]
     /// slot. See [`VulkanComputeKernelInner::set_storage_image_view`].
-    ///
-    /// See [`Self::set_sampled_image_view`] for the cdylib-routing
-    /// rationale.
     pub(crate) fn set_storage_image_view(&self, binding: u32, view: vk::ImageView) -> Result<()> {
         self.host_inner().set_storage_image_view(binding, view)
     }
 
-    /// Upload push-constant bytes. In host mode dispatches directly
-    /// through `host_inner`; in cdylib mode routes through the per-
-    /// type methods vtable (#949 first slice).
+    /// Upload push-constant bytes.
     pub fn set_push_constants(&self, bytes: &[u8]) -> Result<()> {
         self.host_inner().set_push_constants(bytes)
     }
 
     /// Convenience: re-interprets `&T` as a byte slice and forwards
-    /// to [`Self::set_push_constants`]. Inherits its dispatch
-    /// contract — vtable in cdylib mode, host_inner otherwise.
+    /// to [`Self::set_push_constants`].
     pub fn set_push_constants_value<T: Copy>(&self, value: &T) -> Result<()> {
         self.host_inner().set_push_constants_value(value)
     }
 
-    /// Dispatch the kernel with the given workgroup counts. In host
-    /// mode dispatches through `host_inner`; in cdylib mode routes
-    /// through the per-type methods vtable (#949 first slice).
+    /// Dispatch the kernel with the given workgroup counts.
     pub fn dispatch(
         &self,
         group_count_x: u32,
@@ -1153,22 +1071,9 @@ impl VulkanComputeKernel {
             .dispatch(group_count_x, group_count_y, group_count_z)
     }
 
-    // ---- v5 raw-vulkanalia-handle dispatch helpers (#1073) ------------------
-    //
-    // Each helper takes the typed `vk::ImageView` / `vk::CommandBuffer`
-    // the cdylib-side engine SDK code is already holding, extracts the
-    // raw integer via vulkanalia's `Handle::as_raw`, and dispatches
-    // through the v5 vtable slot. The host's callback reconstructs the
-    // typed handle via `Handle::from_raw` before forwarding to
-    // `host_inner()`.
-
     /// Record bind + push-constants + dispatch into a caller-owned
     /// command buffer. Crate-private surface; engine-internal callers
-    /// only. See [`Self::set_sampled_image_view`] for the cdylib-
-    /// routing rationale — engine SDK code
-    /// (`RgbToNv12Converter::convert`, `Nv12ToRgbConverter::convert`)
-    /// compiled into workspace plugin cdylibs reaches this via the v5
-    /// vtable slot.
+    /// only (`RgbToNv12Converter::convert`, `Nv12ToRgbConverter::convert`).
     pub(crate) fn record(
         &self,
         command_buffer: vk::CommandBuffer,
@@ -1180,13 +1085,7 @@ impl VulkanComputeKernel {
             .record(command_buffer, group_x, group_y, group_z)
     }
 
-    /// Kernel's declared binding shape. Mode-routed: host-mode reads
-    /// directly from `host_inner`; cdylib-mode dispatches through the
-    /// v4 `bindings` slot on the per-type methods vtable. On cdylib-
-    /// side plugin ABI errors (null vtable, malformed err_buf, host panic) the
-    /// method emits a `tracing::warn` and returns an empty Vec — the
-    /// public signature predates the introspection vtable and isn't
-    /// fallible at the type level.
+    /// Kernel's declared binding shape.
     pub fn bindings(&self) -> Vec<ComputeBindingSpec> {
         self.host_inner().bindings().to_vec()
     }
@@ -1233,9 +1132,8 @@ impl std::fmt::Debug for VulkanComputeKernel {
 }
 
 #[cfg(all(test, target_pointer_width = "64"))]
-mod plugin_abi_object_layout_tests {
+mod layout_tests {
     use super::*;
-    
 
     #[test]
     fn vulkan_compute_kernel_is_send_sync() {

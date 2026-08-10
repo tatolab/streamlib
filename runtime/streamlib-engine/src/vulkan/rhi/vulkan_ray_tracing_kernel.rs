@@ -41,9 +41,8 @@ use crate::core::{Error, Result};
 
 use super::{HostVulkanDevice, VulkanAccelerationStructure};
 
-/// Host-only rich data backing a [`VulkanRayTracingKernel`]. Cdylib code
-/// never sees this type; it reaches the public surface through the
-/// `(handle, vtable)` PluginAbiObject.
+/// Rich data backing a [`VulkanRayTracingKernel`], reached through the
+/// kernel's opaque handle.
 pub struct VulkanRayTracingKernelInner {
     label: String,
     vulkan_device: Arc<HostVulkanDevice>,
@@ -99,8 +98,8 @@ enum BindingResource {
     },
     AccelerationStructure {
         handle: vk::AccelerationStructureKHR,
-        // The PluginAbiObject clone keeps the AS alive while bound (the
-        // PluginAbiObject's Clone bumps the underlying Arc strong count via vtable).
+        // The handle clone keeps the AS alive while bound (its Clone
+        // bumps the underlying Arc strong count).
         _keep_alive: VulkanAccelerationStructure,
     },
 }
@@ -909,11 +908,11 @@ impl std::fmt::Debug for VulkanRayTracingKernelInner {
 }
 
 // =============================================================================
-// PluginAbiObject implementation (#917)
+// Public handle
 // =============================================================================
 
-/// Ray-tracing kernel — layout-stable `#[repr(C)]` PluginAbiObject (#907
-/// Phase E PR 4/5). Mirrors the compute kernel shape.
+/// Ray-tracing kernel — a layout-stable `#[repr(C)]` handle. Mirrors the
+/// compute kernel shape.
 #[repr(C)]
 pub struct VulkanRayTracingKernel {
     /// Opaque handle to the host's `Arc<VulkanRayTracingKernelInner>`.

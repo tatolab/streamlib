@@ -27,32 +27,28 @@ use crate::vulkan::rhi::HostVulkanUploadResources;
 #[cfg(target_os = "linux")]
 use streamlib_consumer_rhi::VulkanLayout;
 
-/// Maximum on-the-wire `surface_id` length in bytes — fits any UUID
+/// Maximum inline `surface_id` length in bytes — fits any UUID
 /// representation (canonical 36-byte form plus generous headroom for
-/// future identifier shapes) without crossing the plugin ABI as a
-/// heap `String`.
+/// future identifier shapes) without a heap `String`.
 pub const TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES: usize = 64;
 
 /// A single slot in a [`TextureRing`].
 ///
-/// Layout-stable `#[repr(C)]` PluginAbiObject — cdylibs can hold, copy, and
-/// drop slots safely without sharing rustc-version or dep-graph with
-/// the host. The `Texture` is itself a `(handle, vtable, POD)` PluginAbiObject
-/// (Clone bumps its Arc through the parent limited-access vtable;
-/// Drop balances). The `surface_id` is stored inline as a fixed
-/// 64-byte buffer plus a length — UUIDs are pure ASCII so a single
-/// UTF-8 validation at construction time lets [`Self::surface_id`]
-/// use `from_utf8_unchecked` on every read.
+/// Layout-stable `#[repr(C)]` handle. The `Texture` is itself a
+/// `#[repr(C)]` handle over an opaque pointer plus cached PODs
+/// (Clone bumps its Arc; Drop balances). The `surface_id` is stored
+/// inline as a fixed 64-byte buffer plus a length — UUIDs are pure
+/// ASCII so a single UTF-8 validation at construction time lets
+/// [`Self::surface_id`] use `from_utf8_unchecked` on every read.
 ///
 /// `Clone` here is structural — `Texture`'s `Clone` impl runs (Arc-
-/// bumped through its own per-type vtable) and the POD bytes copy.
-/// `Drop` is also structural — `Texture::Drop` decrements the
-/// texture's Arc; the inline bytes have no destructor.
+/// bumped) and the POD bytes copy. `Drop` is also structural —
+/// `Texture::Drop` decrements the texture's Arc; the inline bytes
+/// have no destructor.
 #[repr(C)]
 pub struct TextureRingSlot {
-    /// Pre-allocated texture handle for this slot. PluginAbiObject
-    /// `(handle, vtable, POD)` triple; Clone/Drop dispatch through
-    /// the parent limited-access vtable.
+    /// Pre-allocated texture handle for this slot; Clone/Drop manage
+    /// the underlying Arc's strong count.
     pub texture: Texture,
     /// Stable per-slot `surface_id` registered in
     /// [`GpuContext::resolve_texture_registration_by_surface_id`]'s
@@ -71,7 +67,7 @@ pub struct TextureRingSlot {
     pub(crate) slot_index: u32,
 }
 
-// SAFETY: `Texture` is `Send + Sync` (PluginAbiObject over an Arc); the
+// SAFETY: `Texture` is `Send + Sync` (a handle over an Arc); the
 // inline POD bytes carry no thread-state. `TextureRingSlot` is Send
 // + Sync because every field is.
 unsafe impl Send for TextureRingSlot {}
@@ -94,7 +90,7 @@ impl TextureRingSlot {
             "TextureRingSlot::new: surface_id length {} exceeds \
              TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES = {} \
              (UUIDs are 36 bytes; a longer id needs an explicit \
-             budget bump in the PluginAbiObject, not silent truncation)",
+             budget bump in the slot, not silent truncation)",
             bytes.len(),
             TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES,
         );
@@ -113,9 +109,7 @@ impl TextureRingSlot {
     /// `surface_id_len`. Uses `from_utf8_unchecked` because the
     /// invariant is locked at construction: [`Self::new`] always
     /// passes the bytes through `str::as_bytes()` (which produces
-    /// valid UTF-8 by construction), and the plugin ABI ingestion path
-    /// (`acquire_next` / `slot` host wrappers) likewise sources
-    /// from a host-side `&str`.
+    /// valid UTF-8 by construction).
     pub fn surface_id(&self) -> &str {
         // SAFETY: bytes [0, surface_id_len) are valid UTF-8 by the
         // construction invariant (always sourced from `&str`-bytes
@@ -138,8 +132,7 @@ impl TextureRingSlot {
 
 impl Clone for TextureRingSlot {
     fn clone(&self) -> Self {
-        // `Texture::clone` runs the texture's PluginAbiObject Clone (Arc-
-        // bumped through its parent limited-access vtable);
+        // `Texture::clone` runs the texture's Clone (Arc-bumped);
         // remaining fields are POD bytes.
         Self {
             texture: self.texture.clone(),
@@ -184,9 +177,8 @@ impl std::fmt::Debug for TextureRingSlot {
 ///
 /// On drop, the ring unregisters its `surface_id`s from
 /// [`GpuContext`]'s texture cache.
-/// Host-only rich data backing a [`TextureRing`]. Cdylib code never
-/// sees this type; it reaches the public surface through the
-/// `(handle, vtable)` PluginAbiObject.
+/// Rich data backing a [`TextureRing`], reached through the ring's
+/// opaque handle.
 pub struct TextureRingInner {
     slots: Vec<TextureRingSlot>,
     /// Per-slot pre-allocated upload resources (command pool + command
@@ -321,9 +313,7 @@ impl TextureRingInner {
 
     /// Copy a host-visible pixel buffer's contents into a ring slot's
     /// pre-allocated texture, identified by `(slot_index, surface_id)`
-    /// rather than a [`TextureRingSlot`] reference. Used by the cdylib
-    /// dispatch path so the slot's POD identity bytes flow across the
-    /// plugin ABI without reconstituting a borrow on the host side.
+    /// rather than a [`TextureRingSlot`] reference.
     #[cfg(target_os = "linux")]
     pub(crate) fn copy_pixel_buffer_to_slot_by_index(
         &self,
@@ -418,28 +408,18 @@ impl Drop for TextureRingInner {
 }
 
 // =============================================================================
-// PluginAbiObject implementation
+// Public handle
 // =============================================================================
 
 /// Pre-allocated ring of textures rotated per-frame on the decode hot
-/// path. Layout-stable `#[repr(C)]` PluginAbiObject so cdylibs can hold,
-/// refcount, drop, and read POD descriptors without sharing
-/// rustc-version or dep-graph with the host.
-///
-/// The opaque handle points at an `Arc<TextureRingInner>`; lifecycle
-/// (Clone / Drop) dispatches through the host-installed parent
-/// [`GpuContextFullAccessVTable`]'s `clone_texture_ring` /
-/// `drop_texture_ring` callbacks (locked by PR #918's PluginAbiObject Phase D
-/// work). Per-method dispatch is reached through the dedicated
-/// [`streamlib_plugin_abi::TextureRingMethodsVTable`] pointed at by
-/// `methods_vtable` — the v2 vtable wires `acquire_next` /
-/// `copy_pixel_buffer_to_slot` / `slot` through to the host via
-/// caller-provided POD out-parameters.
+/// path. A layout-stable `#[repr(C)]` handle over an opaque pointer to
+/// an `Arc<TextureRingInner>`, plus cached POD descriptors. `Clone` /
+/// `Drop` manage the inner Arc's strong count.
 ///
 /// The four POD getters (`len`, `width`, `height`, `format`) read
-/// directly from cached fields on this struct . The
-/// values are captured by [`Self::from_arc_into_raw`] at construction
-/// and never mutate over the ring's lifetime.
+/// directly from cached fields on this struct. The values are captured
+/// by [`Self::from_arc_into_raw`] at construction and never mutate over
+/// the ring's lifetime.
 #[repr(C)]
 pub struct TextureRing {
     /// Opaque handle to the host's `Arc<TextureRingInner>`.
@@ -451,8 +431,8 @@ pub struct TextureRing {
     /// Cached pixel height every slot's texture was allocated with.
     pub(crate) cached_height: u32,
     /// Cached pixel format every slot's texture was allocated with.
-    /// Stored as the plugin-ABI-stable `u32` discriminant (matches
-    /// `TextureFormat`'s `#[repr(u32)]`).
+    /// Stored as the `u32` discriminant (matches `TextureFormat`'s
+    /// `#[repr(u32)]`).
     pub(crate) cached_format: u32,
 }
 
@@ -464,10 +444,9 @@ unsafe impl Sync for TextureRing {}
 
 impl TextureRing {
     /// Internal helper: leak an initial Arc strong count via
-    /// `Arc::into_raw`, resolve the host-mode FullAccess vtable +
-    /// per-type methods vtable, snapshot the ring's POD descriptors
+    /// `Arc::into_raw` and snapshot the ring's POD descriptors
     /// (len / width / height / format — fixed across the ring's
-    /// lifetime), and assemble the plugin ABI shape.
+    /// lifetime).
     pub(crate) fn from_arc_into_raw(arc: Arc<TextureRingInner>) -> Self {
         let cached_len = arc.len() as u32;
         let cached_width = arc.width();
@@ -490,22 +469,12 @@ impl TextureRing {
     }
 
     /// Rotate to the next slot. Thread-safe (atomic counter).
-    ///
-    /// In host mode, calls into `TextureRingInner::acquire_next`
-    /// directly. In cdylib mode, dispatches through the per-type
-    /// methods vtable's `acquire_next` slot — the host wrapper writes
-    /// the slot's POD bytes into a caller-provided buffer that
-    /// becomes the returned [`TextureRingSlot`].
     pub fn acquire_next(&self) -> TextureRingSlot {
         self.host_inner().acquire_next()
     }
 
     /// Copy a host-visible pixel buffer's contents into a ring slot.
     /// See [`TextureRingInner::copy_pixel_buffer_to_slot`] for details.
-    ///
-    /// In cdylib mode, dispatches through the per-type methods
-    /// vtable; the slot's `(slot_index, surface_id)` POD identity is
-    /// what crosses the plugin ABI, not a slot borrow.
     #[cfg(target_os = "linux")]
     pub fn copy_pixel_buffer_to_slot(
         &self,
@@ -529,21 +498,19 @@ impl TextureRing {
         self.cached_len == 0
     }
 
-    /// Width of every slot's texture, in pixels. Cached POD — no plugin ABI
-    /// hop.
+    /// Width of every slot's texture, in pixels. Cached POD.
     pub fn width(&self) -> u32 {
         self.cached_width
     }
 
-    /// Height of every slot's texture, in pixels. Cached POD — no
-    /// plugin ABI hop.
+    /// Height of every slot's texture, in pixels. Cached POD.
     pub fn height(&self) -> u32 {
         self.cached_height
     }
 
-    /// Format every slot's texture was allocated with. Cached POD —
-    /// no plugin ABI hop. Decoded from the plugin-ABI-stable `u32` discriminant via
-    /// `match` (matches `TextureFormat`'s `#[repr(u32)]` layout).
+    /// Format every slot's texture was allocated with. Decoded from the
+    /// cached `u32` discriminant via `match` (matches `TextureFormat`'s
+    /// `#[repr(u32)]` layout).
     pub fn format(&self) -> TextureFormat {
         match self.cached_format {
             0 => TextureFormat::Rgba8Unorm,
@@ -561,9 +528,6 @@ impl TextureRing {
     }
 
     /// Borrow a slot by index — engine-internal / debug only.
-    ///
-    /// In cdylib mode, dispatches through the per-type methods
-    /// vtable's `slot` slot.
     #[doc(hidden)]
     pub fn slot(&self, index: usize) -> Option<TextureRingSlot> {
         self.host_inner().slot(index).cloned()
@@ -616,7 +580,7 @@ mod layout_tests {
     #[test]
     fn texture_ring_slot_surface_id_max_bytes_constant() {
         // The constant must match the in-line buffer length on the
-        // PluginAbiObject and the plugin vtable's `out_surface_id_bytes` slot.
+        // TextureRingSlot handle.
         assert_eq!(TEXTURE_RING_SLOT_SURFACE_ID_MAX_BYTES, 64);
     }
 

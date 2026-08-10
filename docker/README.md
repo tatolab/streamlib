@@ -1,7 +1,7 @@
 # Container support
 
 There is no StreamLib image here. The one that used to live in this repo built an
-image-local `.slpkg` package-source tree, `streamlib link`ed the engine into it, served the
+image-local package-source tree, linked the engine into it, served the
 Deno SDK over an HTTP mount, and let the runtime compile the api-server from source on
 first boot — every mechanism of which the importable-Python-library pivot deletes. It was
 removed rather than rewritten; nothing in CI built it. Issue #1781 records the commit to

@@ -1,28 +1,22 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Integration-test fixture: a dlopen'd processor that exercises the
-//! `GpuContextLimitedAccessVTable` callbacks end-to-end from cdylib
-//! code.
+//! Integration-test fixture that exercises the GpuContextLimitedAccess
+//! surface end-to-end.
 //!
 //! Lifecycle:
 //!   1. `setup()` — clones `ctx.gpu_limited_access()` and stashes it.
-//!      Exercises `clone_handle` (Arc refcount bump on
-//!      `Arc<GpuContext>`).
+//!      Bumps the `Arc<GpuContext>` refcount.
 //!   2. `start()` — acquires a `PixelBuffer` via the stashed
-//!      `GpuContextLimitedAccess::acquire_pixel_buffer`. Exercises
-//!      `acquire_pixel_buffer` (paired-out-param tuple return). Reads
-//!      the cached `width`/`height` (POD; no plugin ABI dispatch).
-//!      Calls `plane_base_address(0)` — exercises
-//!      `plane_base_address_pixel_buffer`. Writes a sentinel byte
-//!      through the returned pointer to prove the host-allocated
-//!      mapped memory is reachable from cdylib code. Drops the
-//!      `PixelBuffer` — exercises `drop_pixel_buffer`.
+//!      `GpuContextLimitedAccess::acquire_pixel_buffer`. Reads
+//!      the cached `width`/`height`. Calls `plane_base_address(0)` and
+//!      writes a sentinel byte through the returned pointer to prove
+//!      the host-allocated mapped memory is reachable, then drops the
+//!      `PixelBuffer`.
 //!   3. Writes "OK\n<width>x<height>\nsentinel_addr=0x<hex>" or
 //!      "ERR:<message>" to the configured `output_path` so the
 //!      integration test can verify the round-trip.
-//!   4. `teardown()` — drops the stashed `GpuContextLimitedAccess`,
-//!      exercising `drop_handle`.
+//!   4. `teardown()` — drops the stashed `GpuContextLimitedAccess`.
 
 use streamlib::sdk::context::{
     GpuContextLimitedAccess, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
@@ -33,7 +27,7 @@ use streamlib::sdk::rhi::PixelFormat;
 
 #[streamlib::sdk::processor(
     "@tatolab/test-fixtures/GpuAcquireTestProcessor",
-    description = "Phase C1 (#901) dlopen-cdylib GPU vtable integration test fixture — exercises clone_handle/acquire_pixel_buffer/plane_base_address_pixel_buffer/drop_pixel_buffer/drop_handle through the GpuContextLimitedAccessVTable",
+    description = "GPU integration test fixture — exercises acquire_pixel_buffer, plane_base_address_pixel_buffer, and the pixel-buffer lifecycle through GpuContextLimitedAccess",
     execution = manual,
     config = crate::_generated_::GpuAcquireTestProcessorConfig,
 )]
@@ -43,12 +37,9 @@ pub struct GpuAcquireTest {
 
 impl ManualProcessor for GpuAcquireTest::Processor {
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        // Clone the GpuContextLimitedAccess across the plugin ABI.
-        // The `Clone` impl dispatches through the
-        // `clone_handle` vtable callback (Arc refcount bump on
+        // Clone the GpuContextLimitedAccess (Arc refcount bump on
         // `Arc<GpuContext>`); dropping the clone in `teardown()`
-        // fires `drop_handle`. Both refcount ops run in host-compiled
-        // code regardless of caller plugin.
+        // balances it.
         self.gpu = Some(ctx.gpu_limited_access().clone());
         Ok(())
     }
@@ -69,18 +60,16 @@ impl ManualProcessor for GpuAcquireTest::Processor {
             let (_pool_id, pixel_buffer) =
                 gpu.acquire_pixel_buffer(width, height, PixelFormat::Bgra32)?;
 
-            // Read the cached POD width/height (pure field reads,
-            // no plugin ABI dispatch).
+            // Read the cached POD width/height (pure field reads).
             let observed_w = pixel_buffer.width;
             let observed_h = pixel_buffer.height;
 
-            // Exercise `plane_base_address_pixel_buffer`. Host
-            // returns a host-allocated mapped pointer — same process
-            // address space, so the cdylib can deref it.
+            // `plane_base_address` returns a host-allocated mapped
+            // pointer in the same process address space.
             let plane_ptr = pixel_buffer.plane_base_address(0);
 
             // If the mapping is HOST_VISIBLE, write a sentinel byte
-            // to prove cdylib→host memory access works.
+            // to prove the mapped memory is reachable.
             if !plane_ptr.is_null() {
                 // SAFETY: `plane_ptr` is the mapped base address for
                 // plane 0 of a freshly-acquired HOST_VISIBLE pixel

@@ -1,9 +1,8 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-//! Integration-test fixture: a dlopen'd processor that exercises the
-//! `VulkanComputeKernelMethodsVTable` typed binding-method slots
-//! end-to-end from cdylib code.
+//! Integration-test fixture that exercises the compute-kernel typed
+//! binding methods end-to-end.
 //!
 //! Lifecycle:
 //!   1. `setup()` — nothing (the kernel is built in `start()` so the
@@ -13,28 +12,23 @@
 //!      a. Construct a [`ComputeKernelDescriptor`] for the
 //!         embedded "output[i] = input[i] * 2" SPIR-V shader and
 //!         create the kernel through
-//!         `gpu_full_access().create_compute_kernel(...)`. Exercises
-//!         the FullAccess vtable's `create_compute_kernel` slot
-//!         end-to-end (already covered by EscalateSmokeTest but
-//!         re-exercised here for completeness — the kernel return
-//!         must be valid for the rest of this test).
+//!         `gpu_full_access().create_compute_kernel(...)` (already
+//!         covered by EscalateSmokeTest but re-exercised here for
+//!         completeness — the kernel return must be valid for the rest
+//!         of this test).
 //!      b. Acquire input + output `StorageBuffer` handles via
 //!         `gpu_limited_access().acquire_storage_buffer(...)`.
 //!         HOST_VISIBLE allocations, persistently-mapped pointer
-//!         cached on the plugin handle.
+//!         cached on the handle.
 //!      c. Populate input through `mapped_ptr()` with `[1, 2, 3,
 //!         ..., element_count]`. Pure CPU writes through the
-//!         persistently-mapped pointer the LimitedAccess vtable
-//!         returned at acquire time.
+//!         persistently-mapped pointer returned at acquire time.
 //!      d. Bind input + output through
-//!         `kernel.set_storage_buffer_storage(...)` — exercises
-//!         the `set_storage_buffer_storage` vtable slot.
+//!         `kernel.set_storage_buffer_storage(...)`.
 //!      e. Stage push constants via
-//!         `kernel.set_push_constants_value(&[element_count])` —
-//!         exercises the `set_push_constants` vtable slot.
+//!         `kernel.set_push_constants_value(&[element_count])`.
 //!      f. Dispatch the kernel via
-//!         `kernel.dispatch(group_count, 1, 1)` — exercises the
-//!         `dispatch` vtable slot.
+//!         `kernel.dispatch(group_count, 1, 1)`.
 //!      g. Read the output buffer back via its `mapped_ptr()` and
 //!         compare each element to the CPU reference (`input[i] *
 //!         2`). Any mismatch is a hard fail.
@@ -42,18 +36,15 @@
 //!         configured `output_path` so the integration test can
 //!         assert the round-trip succeeded.
 //!   3. `teardown()` — nothing; the kernel + storage buffers drop
-//!      naturally via their plugin-handle Drop impls (which fire
-//!      `drop_compute_kernel` and `drop_storage_buffer` on the
-//!      respective vtables).
+//!      naturally via their handle Drop impls.
 //!
 //! What this locks: a regression that breaks any of
 //! `create_compute_kernel`, `acquire_storage_buffer`,
 //! `set_storage_buffer_storage`, `set_push_constants`, or
-//! `dispatch` at the cdylib boundary surfaces here as either:
-//!   - A missing output file (cdylib's `start()` panicked at the
-//!     FFI boundary and `run_host_extern_c` swallowed the panic).
-//!   - `ERR:<message>` in the file (one of the vtable dispatches
-//!     returned an error code).
+//! `dispatch` surfaces here as either:
+//!   - A missing output file (`start()` panicked).
+//!   - `ERR:<message>` in the file (one of the calls returned an
+//!     error code).
 //!   - The output buffer's contents disagreeing with the CPU
 //!     reference (the GPU dispatch ran but produced wrong output,
 //!     e.g. a binding-handle mismatch routed the wrong buffer
@@ -82,7 +73,7 @@ const CPU_REF_DOUBLER_BINDINGS: &[ComputeBindingSpec] = &[
 
 #[streamlib::sdk::processor(
     "@tatolab/test-fixtures/ComputeKernelTestProcessor",
-    description = "Phase E (#963) dlopen-cdylib compute-kernel CPU-reference integration test fixture — creates a kernel via FullAccess, allocates input + output storage buffers via LimitedAccess, dispatches output[i] = input[i] * 2 via the per-type binding-method vtable, and asserts CPU-reference match",
+    description = "Compute-kernel CPU-reference integration test fixture — creates a kernel via FullAccess, allocates input + output storage buffers via LimitedAccess, dispatches output[i] = input[i] * 2, and asserts CPU-reference match",
     execution = manual,
     config = crate::_generated_::ComputeKernelTestProcessorConfig,
 )]
@@ -138,9 +129,9 @@ fn run_compute_kernel_round_trip(
 
     let gpu_limited = ctx.gpu_limited_access();
 
-    // Acquire input + output storage buffers up-front through the
-    // LimitedAccess vtable. HOST_VISIBLE allocations — persistently-
-    // mapped pointer is cached on the plugin handle, no escalation
+    // Acquire input + output storage buffers up-front through
+    // LimitedAccess. HOST_VISIBLE allocations — the persistently-
+    // mapped pointer is cached on the handle, no escalation
     // required to read/write them.
     let byte_size = (element_count as u64) * (std::mem::size_of::<u32>() as u64);
     let input = gpu_limited
@@ -151,19 +142,10 @@ fn run_compute_kernel_round_trip(
         .map_err(|e| Error::Runtime(format!("acquire output storage_buffer: {e}")))?;
 
     // Kernel construction is FullAccess-privileged (touches
-    // descriptor pools + pipeline cache + queue). Manual-mode
-    // start() takes FullAccess directly; the engine wraps cdylib
-    // lifecycle dispatch in `with_cdylib_scope` (#1075), so
-    // `ctx.gpu_full_access()` is `ScopeToken`-flavored and
-    // dispatches through the FullAccess vtable transparently.
-    // Same coverage as the pre-#1075 escalate path; the wrap is the
-    // engine-side replacement for the explicit `.escalate(|full|...)`.
-    // The kernel plugin handle is valid for the rest of this fn —
-    // its Clone/Drop route through the host's FullAccess parent
-    // vtable (#918's Phase D shape) and its per-method dispatch
-    // routes through the VulkanComputeKernelMethodsVTable installed
-    // in `install_host_services` (#907 PR 2/5 + #963's v3 method
-    // slots).
+    // descriptor pools + pipeline cache + queue); Manual-mode
+    // start() takes FullAccess directly.
+    // The kernel handle is valid for the rest of this fn; its Clone/Drop
+    // manage the underlying Arc's strong count.
     let full = ctx.gpu_full_access();
     let kernel = full
         .create_compute_kernel(&ComputeKernelDescriptor {

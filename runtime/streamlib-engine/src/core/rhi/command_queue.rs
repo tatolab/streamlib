@@ -20,9 +20,8 @@ use crate::core::Result;
 
 use super::CommandBuffer;
 
-/// Host-only rich data backing a [`RhiCommandQueue`]. Cdylib code
-/// never sees this type; it reaches the public [`RhiCommandQueue`]
-/// surface through the `(handle, vtable)` PluginAbiObject.
+/// Rich data backing a [`RhiCommandQueue`], reached through the
+/// queue's opaque handle.
 pub(crate) struct RhiCommandQueueInner {
     // Metal backend: explicit feature OR macOS/iOS default (when vulkan not requested)
     #[cfg(all(

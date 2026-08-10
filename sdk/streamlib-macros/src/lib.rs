@@ -62,19 +62,9 @@ use syn::{
 ///
 /// The macro emits the processor's type, port markers, descriptor, and
 /// `schema_ident()` accessor — but does NOT register the processor in
-/// the global `PROCESSOR_REGISTRY`. Callers register processors through
-/// one of two paths:
-///
-/// - **Cdylib packages** declare `crate-type = ["rlib", "cdylib"]` and author
-///   the struct under `processors/`; the generated crate root
-///   (`[lib] path = "_generated_rust_crate_root_/lib.rs"`) emits the
-///   `export_plugin!` naming it, so the package hand-writes no registration.
-///   The runtime `dlopen()`s the cdylib at `runtime.add_module(...)` time; the
-///   plugin ABI's `STREAMLIB_PLUGIN` callback registers each processor via the
-///   host's `processor_register` callback.
-/// - **In-process Rust callers** invoke
-///   `PROCESSOR_REGISTRY.register::<Foo::Processor>()` directly. Tests
-///   and engine-internal mocks use this path.
+/// the global `PROCESSOR_REGISTRY`. In-process Rust callers invoke
+/// `PROCESSOR_REGISTRY.register::<Foo::Processor>()` directly; tests and
+/// engine-internal mocks use this path.
 #[proc_macro_attribute]
 pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
     let item_struct = parse_macro_input!(item as ItemStruct);
@@ -264,8 +254,7 @@ fn expand_schema_ident_any_version(
 /// Expands to a `ProcessorTypeReference` value, which carries no version and
 /// does **no registry lookup at the call site**, so the reference
 /// reaches `add_processor`'s lazy hook and resolves to the single installed
-/// provider — loading its package from `streamlib_modules/` on first
-/// reference. This is the canonical form for referencing a processor by
+/// provider. This is the canonical form for referencing a processor by
 /// `@org/package/Type` with no version.
 ///
 /// Distinct from [`schema_ident_any_version!`], which resolves a `SchemaIdent`

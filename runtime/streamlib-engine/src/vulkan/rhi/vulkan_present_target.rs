@@ -87,8 +87,7 @@ pub struct VulkanPresentTarget {
     /// State stashed between [`Self::begin_frame`] and
     /// [`Self::end_frame`] for the frame currently being recorded. `None`
     /// between an `end_frame` and the next `begin_frame` — the state
-    /// machine that lets the plugin-ABI `begin_frame`/`end_frame` split
-    /// (which cannot pass a Rust closure across the boundary) detect a
+    /// machine that lets the `begin_frame`/`end_frame` split detect a
     /// misordered call (`begin_frame` while a frame is already in flight,
     /// or `end_frame` with none) as a typed error instead of UB.
     in_flight: Option<InFlightFrame>,
@@ -96,7 +95,7 @@ pub struct VulkanPresentTarget {
 
 /// The per-frame handles [`VulkanPresentTarget::end_frame`] needs, stashed
 /// by [`VulkanPresentTarget::begin_frame`] after acquiring the swapchain
-/// image. Kept host-side and opaque to any plugin-ABI caller — all
+/// image. Kept host-side and opaque to callers — all
 /// per-image render-finished-semaphore keying (VUID-vkQueueSubmit2-
 /// semaphore-03868) stays inside the host across the begin/end split.
 struct InFlightFrame {
@@ -128,7 +127,7 @@ enum PresentEndFramePostDrawOp {
 /// a barrier inside an open dynamic-rendering instance is UB); a properly
 /// balanced frame emits the barrier alone. Pure so the ordering is
 /// unit-testable without a swapchain — the render-pass-balance guard the
-/// plugin-ABI `begin_frame`/`end_frame` split needs (a plugin can open a
+/// `begin_frame`/`end_frame` split needs (a caller can open a
 /// pass via the borrowed recorder and forget to close it), mirroring
 /// [`VulkanPresentTarget::render_frame`]'s closure-path auto-close.
 fn present_end_frame_post_draw_ops(
@@ -148,10 +147,8 @@ fn present_end_frame_post_draw_ops(
 /// already `begin()`'d and pre-barriered) — the caller drives it and then
 /// calls [`VulkanPresentTarget::end_frame`].
 ///
-/// Pure-POD (raw `VkImage` / `VkImageView` widened to `u64`) so the
-/// plugin-ABI slot body can populate `PresentFrameBeginRepr` without
-/// touching `vulkanalia` — the RHI boundary keeps every `vk::*` type
-/// inside this crate.
+/// Pure-POD (raw `VkImage` / `VkImageView` widened to `u64`) — the RHI
+/// boundary keeps every `vk::*` type inside this crate.
 pub struct AcquiredFrame {
     /// Frame-in-flight slot index ∈ `[0, MAX_FRAMES_IN_FLIGHT)`.
     pub frame_index: u32,
@@ -485,12 +482,9 @@ impl VulkanPresentTarget {
     /// the caller must drive [`Self::recreate`] and NOT call `end_frame`).
     ///
     /// The recorder is left borrowed on the target — reach it via
-    /// `self.recorders[frame_index]` (host-Rust) or the raw handle from
-    /// [`Self::in_flight_recorder_handle`] (plugin ABI). This is the
-    /// non-closure half of the former `render_frame` loop; splitting it
-    /// lets the plugin ABI drive the frame without passing a Rust closure
-    /// across the boundary. Blocks on the slot-reuse timeline wait and the
-    /// `u64::MAX`-timeout acquire.
+    /// `self.recorders[frame_index]`. This is the
+    /// non-closure half of the `render_frame` loop. Blocks on the
+    /// slot-reuse timeline wait and the `u64::MAX`-timeout acquire.
     #[tracing::instrument(level = "trace", skip(self), fields(frame_index = self.current_frame))]
     pub fn begin_frame(&mut self) -> Result<Option<AcquiredFrame>> {
         if self.in_flight.is_some() {
@@ -646,9 +640,9 @@ impl VulkanPresentTarget {
         let timeline_signal_value = in_flight.timeline_signal_value;
 
         let recorder = &mut self.recorders[frame_index];
-        // Render-pass balance guard across the ABI split: if the frame's
-        // draws opened a dynamic-rendering pass and never closed it (a
-        // plugin drove `begin_frame` via the ABI split and forgot
+        // Render-pass balance guard across the begin/end split: if the
+        // frame's draws opened a dynamic-rendering pass and never closed it
+        // (a caller drove `begin_frame` and forgot
         // `cmd_end_dynamic_rendering`), close it BEFORE the post-draw layout
         // barrier — a `vkCmdPipelineBarrier2` recorded inside an open
         // dynamic-rendering instance is UB. Mirrors `render_frame`'s
@@ -663,7 +657,7 @@ impl VulkanPresentTarget {
                         frame_index,
                         "VulkanPresentTarget::end_frame: the frame's draws left a \
                          dynamic-rendering pass open — auto-closing it before the \
-                         swapchain present barrier (a plugin opened a pass via the \
+                         swapchain present barrier (a caller opened a pass via the \
                          borrowed recorder and did not call cmd_end_dynamic_rendering; \
                          a layout barrier inside an open dynamic-rendering instance is \
                          undefined behavior)"
@@ -738,25 +732,13 @@ impl VulkanPresentTarget {
         Ok(!out_of_date)
     }
 
-    /// Raw `Box<RhiCommandRecorderInner>` pointer of the in-flight frame's
-    /// recorder, or null when no frame is in flight. Borrowed, NON-OWNING
-    /// — the present target owns the recorder across the begin/end split;
-    /// a caller must never release it.
-    pub fn in_flight_recorder_handle(&self) -> *const std::ffi::c_void {
-        match &self.in_flight {
-            Some(f) => self.recorders[f.frame_index].raw_handle(),
-            None => std::ptr::null(),
-        }
-    }
-
     /// Acquire the next swapchain image, run the caller's `render`
     /// closure with the recorder in scope, then submit + present.
     /// Returns `Ok(false)` if the swapchain returned `OUT_OF_DATE_KHR`
     /// during acquire — callers should drive [`Self::recreate`] and
     /// retry next frame. Reimplemented atop the
-    /// [`Self::begin_frame`]/[`Self::end_frame`] split so the host-Rust
-    /// closure API and the plugin-ABI split share one frame-loop
-    /// implementation.
+    /// [`Self::begin_frame`]/[`Self::end_frame`] split so the closure
+    /// API and the split share one frame-loop implementation.
     #[tracing::instrument(level = "trace", skip(self, render))]
     pub fn render_frame<F>(&mut self, render: F) -> Result<bool>
     where
@@ -896,35 +878,26 @@ unsafe impl Send for VulkanPresentTarget {}
 unsafe impl Sync for VulkanPresentTarget {}
 
 /// Boxed, `Mutex`-guarded [`VulkanPresentTarget`] backing a
-/// [`PresentTarget`] PluginAbiObject handle. The `Mutex` matches
-/// `RhiCommandRecorderInner`'s state-guard discipline: the plugin-ABI
-/// method bodies `try_lock` it so a concurrent or misordered
+/// [`PresentTarget`] handle. The `Mutex` matches
+/// `RhiCommandRecorderInner`'s state-guard discipline: the method
+/// bodies `try_lock` it so a concurrent or misordered
 /// `begin_frame`/`end_frame` returns a typed error rather than aliasing
 /// `&mut VulkanPresentTarget` (UB). Single-owner — leaked with
 /// [`Box::into_raw`] at mint, reclaimed with `Box::from_raw` at drop.
 pub type PresentTargetInner = Mutex<VulkanPresentTarget>;
 
-/// Layout-stable `#[repr(C)]` PluginAbiObject projecting the host
-/// [`VulkanPresentTarget`] swapchain orchestrator across the plugin ABI.
+/// Layout-stable `#[repr(C)]` handle projecting the host
+/// [`VulkanPresentTarget`] swapchain orchestrator.
 ///
 /// **Box-shaped, drop-only (`!Clone`).** The opaque `handle` points at a
 /// `Box<PresentTargetInner>` (`Box<Mutex<VulkanPresentTarget>>`); the
 /// target is single-owner, `!Clone`, `Drop`-heavy (drains + destroys the
 /// surface / swapchain / semaphores / recorders), so it maps onto the
 /// [`RhiCommandRecorder`] Box precedent, not the Arc clone/drop pair.
-/// Drop dispatches the parent [`GpuContextFullAccessVTable`]'s
-/// `drop_present_target` slot (`Box::from_raw` + drop in host-compiled
-/// code, keeping every `vkDestroy*` inside the host build). A raw
-/// `repr(Rust)` `Arc<VulkanPresentTarget>` transiting a separately-built
-/// `.slpkg` would be cross-build layout skew — see
-/// `docs/learnings/slpkg-raw-device-rhi-construction.md`; the Box
-/// PluginAbiObject is what keeps destruction host-side.
+/// `Drop` reclaims the Box (`Box::from_raw` + drop).
 ///
-/// Per-frame method dispatch (`begin_frame` / `end_frame` / `recreate` /
-/// `set_hdr_metadata`) routes through the per-type
-/// [`streamlib_plugin_abi::PresentTargetMethodsVTable`]; the swapchain
-/// color format is a cached POD field (`color_format_raw`) read with a
-/// zero-hop `&self` getter and refreshed on `recreate`.
+/// The swapchain color format is a cached POD field (`color_format_raw`)
+/// read with a zero-hop `&self` getter and refreshed on `recreate`.
 #[repr(C)]
 pub struct PresentTarget {
     /// Opaque handle to the host's `Box<PresentTargetInner>`.
@@ -939,15 +912,14 @@ pub struct PresentTarget {
 
 // SAFETY: `handle` points at a `Box<Mutex<VulkanPresentTarget>>`; the
 // inner is Send + Sync (VulkanPresentTarget is Send + Sync and the Mutex
-// serializes access). The vtable pointers are `'static` host statics.
+// serializes access).
 unsafe impl Send for PresentTarget {}
 unsafe impl Sync for PresentTarget {}
 
 impl PresentTarget {
-    /// Leak `target` as a `Box<PresentTargetInner>` opaque handle and
-    /// resolve the host-mode parent + per-type vtables, caching the
-    /// initial swapchain color format. Minting entry point for the
-    /// FullAccess `create_present_target` slot body.
+    /// Leak `target` as a `Box<PresentTargetInner>` opaque handle,
+    /// caching the initial swapchain color format. Minting entry point
+    /// for the FullAccess `create_present_target` slot body.
     pub fn from_target(target: VulkanPresentTarget) -> Self {
         let color_format_raw = target.color_format() as u32;
         let handle = Box::into_raw(Box::new(Mutex::new(target))) as *const c_void;
@@ -959,16 +931,12 @@ impl PresentTarget {
     }
 
     /// Swapchain image color format `#[repr(u32)]` discriminant — a
-    /// zero-hop cached-POD read (no plugin-ABI hop). Refreshed on
-    /// `recreate`.
+    /// zero-hop cached-POD read. Refreshed on `recreate`.
     pub fn color_format_raw(&self) -> u32 {
         self.color_format_raw
     }
 
-    /// Opaque `Box<PresentTargetInner>` handle. Borrowed — the plugin-ABI
-    /// method slots (`begin_frame` / `end_frame` / `recreate` /
-    /// `set_hdr_metadata`) take it as `present_handle`. A host-side test
-    /// harness drives the surface by passing this to the methods vtable.
+    /// Opaque `Box<PresentTargetInner>` handle, borrowed.
     pub fn handle(&self) -> *const c_void {
         self.handle
     }
@@ -1391,8 +1359,7 @@ mod tests {
 
 
     /// `PresentTarget` is deliberately NOT `Clone` — the backing
-    /// `VulkanPresentTarget` is single-owner `Drop`-heavy, so the parent
-    /// vtable carries only `drop_present_target`, no clone slot.
+    /// `VulkanPresentTarget` is single-owner `Drop`-heavy.
     /// ```compile_fail
     /// fn assert_clone<T: Clone>() {}
     /// assert_clone::<streamlib_engine::vulkan::rhi::PresentTarget>();

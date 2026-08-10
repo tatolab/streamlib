@@ -177,12 +177,8 @@ is the precedent shape for that check.
 - `adapters/streamlib-surface-adapter/` — the contract crate. Trait,
   descriptor, errors, guards, mock, conformance suite, subprocess
   crash harness.
-- `adapters/streamlib-adapter-abi/` — the cross-DSO half: the
-  `extern "C"` panic net every host-side adapter vtable shares, and
-  the ABI version constant.
 - `sdk/streamlib-python/python/streamlib/surface_adapter.py` —
   Python mirror.
-- `sdk/streamlib-deno/surface_adapter.ts` — Deno mirror.
 - `runtime/streamlib-engine/src/linux/surface_share/` — host-side backing
   store and the Unix-socket service that hands DMA-BUF fds to
   subprocesses.

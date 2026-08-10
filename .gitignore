@@ -20,7 +20,6 @@ htmlcov/
 # Output files
 output/
 *.mp4
-*.slpkg
 output.log
 
 # IDE
@@ -88,14 +87,7 @@ examples/camera-python-display/assets/*
 .envrc
 .cargo/config.toml
 
-# Co-located package slots (compile-on-install): `streamlib add` / `install`
-# materialize package sources and their build output (compiled cdylib, venv,
-# build-provenance sidecar) into `streamlib_modules/@org/name/`. In THIS repo
-# that tree is only ever regenerable app/test scratch — a real consumer app
-# owns its own tree in its own repo — so ignore it wholesale here.
-# (`.venv/`, `target/`, `_generated_/` are already ignored above/below.)
 .streamlib-build.json
-streamlib_modules/
 
 plan.md
 

@@ -4,13 +4,12 @@
 //! Canonical StreamLib [`Error`] + [`Result`].
 //!
 //! Shared by `streamlib-engine` (which re-exports it at
-//! `core::error`) and the plugin-SDK, so a plugin cdylib can author
-//! against `Result` without linking the engine. Every variant is
-//! String / std / anyhow based plus the engine-free `SchemaIdent`
+//! `core::error`) and the engine-free authoring surface. Every variant
+//! is String / std / anyhow based plus the engine-free `SchemaIdent`
 //! (from `streamlib-processor-schema`) and, on Linux, the engine-free
 //! `ConsumerRhiError` conversion.
 
-use streamlib_processor_schema::{PackageRef, SchemaIdent};
+use streamlib_processor_schema::SchemaIdent;
 
 /// The StreamLib error type.
 #[derive(thiserror::Error, Debug)]
@@ -60,44 +59,8 @@ pub enum Error {
     #[error("Processor not found: {0}")]
     ProcessorNotFound(String),
 
-    #[error("{}", unknown_processor_type_message(.ident))]
+    #[error("Unknown processor type: {ident} (not registered)")]
     UnknownProcessorType { ident: SchemaIdent },
-
-    #[error(
-        "Processor type {processor_type} is provided by more than one package in \
-         streamlib_modules/: {packages:?} — lazy discovery cannot pick one; remove \
-         the duplicate package folder"
-    )]
-    AmbiguousProcessorTypeProviders {
-        processor_type: SchemaIdent,
-        packages: Vec<PackageRef>,
-    },
-
-    #[error(
-        "Lazy load of package {package} providing processor type {processor_type} \
-         failed: {detail}"
-    )]
-    LazyModuleLoadFailed {
-        processor_type: SchemaIdent,
-        package: PackageRef,
-        detail: String,
-    },
-
-    #[error("acquire-on-reference for package {package} failed: {detail}")]
-    AcquireOnReferenceFailed { package: PackageRef, detail: String },
-
-    #[error(
-        "This app's streamlib.yaml at {manifest_path} declares `dependencies:` \
-         ({declared_count} package(s)), but an app is code, not a manifest — it \
-         resolves processor refs against its installed set (streamlib_modules/ + \
-         streamlib.lock), never a manifest dependency list. Remove the \
-         `dependencies:` block; install each package with `streamlib add <source>` \
-         (a folder, a .slpkg archive, or a URL)."
-    )]
-    AppManifestDeclaresDependencies {
-        manifest_path: String,
-        declared_count: usize,
-    },
 
     #[error("Processor '{processor_id}' has no {direction} port named '{port_name}'")]
     ProcessorPortNotFound {
@@ -144,44 +107,6 @@ pub enum Error {
     )]
     TapSlotOccupied(String),
 
-    #[error("Plugin host services unavailable: {0}")]
-    PluginHostUnavailable(String),
-
-    #[error("Invalid escalate scope: {0}")]
-    InvalidEscalateScope(String),
-
-    #[error("Escalate begin rejected: {0}")]
-    EscalateBeginRejected(String),
-
-    #[error(
-        "Plugin ABI version mismatch loading '{plugin_path}': plugin was built \
-         against plugin-ABI v{plugin_abi_version}, but this host speaks \
-         v{host_abi_version}. Rebuild the plugin against the host's \
-         streamlib-plugin-abi version — publish a matching engine `-dev` \
-         version and bump the plugin's pin, or use `streamlib link`."
-    )]
-    PluginAbiVersionMismatch {
-        plugin_path: String,
-        plugin_abi_version: u32,
-        host_abi_version: u32,
-    },
-
-    #[error(
-        "Plugin build mismatch loading '{plugin_path}': the plugin's build \
-         fingerprint does not match this host's. Plugin build: [{plugin_identity}] \
-         (abi_layout={plugin_abi_fingerprint:#018x}); host build: \
-         [{host_identity}] (abi_layout={host_abi_fingerprint:#018x}). Rebuild the \
-         plugin against the host's engine build — publish a matching engine `-dev` \
-         version and bump the plugin's pin, or use `streamlib link`."
-    )]
-    PluginBuildMismatch {
-        plugin_path: String,
-        plugin_identity: String,
-        host_identity: String,
-        plugin_abi_fingerprint: u64,
-        host_abi_fingerprint: u64,
-    },
-
     #[error("Bag key '{key}' is not present")]
     BagKeyMissing { key: String },
 
@@ -213,26 +138,6 @@ pub enum Error {
 
     #[error(transparent)]
     Other(#[from] anyhow::Error),
-}
-
-/// Render the [`Error::UnknownProcessorType`] message. A genuinely-absent
-/// package-owned type carries a fix-it naming `streamlib add @org/name` — the
-/// installed-set-only load gate resolves refs against `streamlib_modules/` +
-/// `streamlib.lock`, so the recovery is to install the providing package. A
-/// `@session/` type is exempt: session processors register live via
-/// `Runner::add_local` and are never installable, so no `streamlib add` fix-it
-/// is offered for them.
-fn unknown_processor_type_message(ident: &SchemaIdent) -> String {
-    if ident.org.is_reserved_for_session() {
-        format!("Unknown processor type: {ident} (not registered)")
-    } else {
-        format!(
-            "Unknown processor type: {ident} (not registered). No installed package \
-             provides it — run `streamlib add @{}/{}` to install the providing package \
-             into this app's streamlib_modules/, then re-run.",
-            ident.org, ident.package
-        )
-    }
 }
 
 /// StreamLib result alias.
@@ -303,43 +208,22 @@ mod tests {
     }
 
     #[test]
-    fn unknown_processor_type_names_streamlib_add_fix_it() {
-        // A genuinely-absent package-owned type must name the exact
-        // `streamlib add @org/name` recovery. Mentally revert the fix-it branch
-        // and the message drops the actionable command.
+    fn unknown_processor_type_names_the_type() {
+        // One message for every ident flavor — the install fix-it died
+        // with the module system. Mentally revert the collapse and the
+        // no-fix-it assertion goes red.
         let msg = Error::UnknownProcessorType {
             ident: ident("tatolab", "camera", "Camera"),
         }
         .to_string();
+        assert!(msg.contains("not registered"), "message: {msg}");
         assert!(
-            msg.contains("streamlib add @tatolab/camera"),
-            "fix-it missing: {msg}"
+            msg.contains("tatolab") && msg.contains("Camera"),
+            "ident must reach the user: {msg}"
         );
-    }
-
-    #[test]
-    fn unknown_processor_type_exempts_session_types() {
-        // A `@session/` type registers live via `add_local` and is never
-        // installable, so it must NOT be told to `streamlib add`.
-        let msg = Error::UnknownProcessorType {
-            ident: ident("session", "test-mock", "TestMock"),
-        }
-        .to_string();
         assert!(
             !msg.contains("streamlib add"),
-            "session type must not carry an install fix-it: {msg}"
+            "no install fix-it survives the module-system removal: {msg}"
         );
-        assert!(msg.contains("not registered"), "message: {msg}");
-    }
-
-    #[test]
-    fn app_manifest_declares_dependencies_names_the_installed_set() {
-        let msg = Error::AppManifestDeclaresDependencies {
-            manifest_path: "/app/streamlib.yaml".to_string(),
-            declared_count: 2,
-        }
-        .to_string();
-        assert!(msg.contains("streamlib_modules/"), "message: {msg}");
-        assert!(msg.contains("streamlib add"), "message: {msg}");
     }
 }

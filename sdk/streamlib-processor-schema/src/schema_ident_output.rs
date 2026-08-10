@@ -15,7 +15,7 @@
 //!
 //! The `utoipa` cargo feature adds a `utoipa::ToSchema` derive so the
 //! host-side API server can register these DTOs in its OpenAPI document. It is
-//! off by default: a plugin `.slpkg` built against the engine-free authoring
+//! off by default: a consumer built against the engine-free authoring
 //! SDK reaches these types through this crate but must not compile the
 //! host-only OpenAPI machinery.
 

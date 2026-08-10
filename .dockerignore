@@ -15,7 +15,6 @@ packages/**/Cargo.lock
 **/_generated_
 **/.venv
 **/venv
-**/*.slpkg
 **/*.pyc
 **/.mypy_cache
 **/.pytest_cache

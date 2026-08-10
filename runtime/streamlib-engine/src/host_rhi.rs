@@ -177,7 +177,7 @@ impl HostGpuDeviceExt for GpuDevice {
 /// # Boundary lock
 ///
 /// Without the trait in scope, the privileged accessors are
-/// unreachable from the [`SurfaceStore`] PluginAbiObject's inherent impl:
+/// unreachable from the [`SurfaceStore`] handle's inherent impl:
 ///
 /// ```compile_fail
 /// # #[cfg(target_os = "linux")]

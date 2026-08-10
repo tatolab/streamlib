@@ -7,23 +7,9 @@
 //! [`Log`] interface plus a one-shot global `set_logger` that takes a
 //! `&'static dyn Log`. Without a bridge, iceoryx2's internal log
 //! records go to its default stderr logger and bypass the streamlib
-//! JSONL pipeline entirely. With this bridge:
-//!
-//! - Host-side: `Runner::new` calls `install_iceoryx2_log_bridge()`
-//!   once on first construction, installing [`HOST_BRIDGE`] as
-//!   `iceoryx2`'s process-wide logger.
-//! - Plugin cdylib-side: the cdylib's `STREAMLIB_PLUGIN` register
-//!   callback receives the host's `&'static dyn Log` pointer via
-//!   [`crate::core::plugin::HostServices::iceoryx2_logger`] and
-//!   installs it in the cdylib's `iceoryx2-log` static. The host and
-//!   each plugin have their own `iceoryx2-log` static; both end up
-//!   pointing at the same bridge value living in host memory.
-//!
-//! Plugin ABI safety: the host and the plugin link the same
-//! `iceoryx2-log-types` version (workspace pin), so the
-//! `&'static dyn Log` trait object's vtable is layout-compatible
-//! on both sides. Logging through the pointer dispatches through the
-//! host's vtable, which calls back into the host's tracing pipeline.
+//! JSONL pipeline entirely. With this bridge, `Runner::new` calls
+//! `install_iceoryx2_log_bridge()` once on first construction,
+//! installing [`HOST_BRIDGE`] as `iceoryx2`'s process-wide logger.
 
 use iceoryx2_log::Log;
 use iceoryx2_log::LogLevel;
@@ -69,9 +55,9 @@ impl Log for IceoryxLogBridge {
 /// against the workspace-pinned `iceoryx2-log-types::Log` vtable.
 pub static HOST_BRIDGE: IceoryxLogBridge = IceoryxLogBridge;
 
-/// Install [`HOST_BRIDGE`] as this artifact's iceoryx2 process-wide
+/// Install [`HOST_BRIDGE`] as iceoryx2's process-wide
 /// logger. Idempotent — `iceoryx2_log::set_logger` is `Once`-guarded
 /// and returns false on subsequent calls, which we treat as success.
-pub fn install_iceoryx2_log_bridge_for_self() {
+pub fn install_iceoryx2_log_bridge() {
     let _ = iceoryx2_log::set_logger(&HOST_BRIDGE);
 }
