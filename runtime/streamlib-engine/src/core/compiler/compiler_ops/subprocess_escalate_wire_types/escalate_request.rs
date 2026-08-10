@@ -854,17 +854,21 @@ pub struct EscalateRequestRegisterGraphicsKernelPipelineState {
 
     pub color_blend_color_op: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp,
 
-    pub color_blend_dst_alpha_factor: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor,
+    pub color_blend_dst_alpha_factor:
+        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor,
 
-    pub color_blend_dst_color_factor: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor,
+    pub color_blend_dst_color_factor:
+        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor,
 
     pub color_blend_enabled: bool,
 
-    pub color_blend_src_alpha_factor: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor,
+    pub color_blend_src_alpha_factor:
+        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor,
 
     /// Blend factor. Ignored when `color_blend_enabled` is false; carry a valid
     /// value (e.g. `one`) regardless.
-    pub color_blend_src_color_factor: EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor,
+    pub color_blend_src_color_factor:
+        EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor,
 
     /// Color write mask bits — `1=R`, `2=G`, `4=B`, `8=A`. `15` (`0b1111`)
     /// writes RGBA. Used both when blending is disabled and as the blend
@@ -890,31 +894,37 @@ pub struct EscalateRequestRegisterGraphicsKernelPipelineState {
     /// an `err` response.
     pub multisample_samples: u32,
 
-    pub rasterization_cull_mode: EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode,
+    pub rasterization_cull_mode:
+        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode,
 
-    pub rasterization_front_face: EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace,
+    pub rasterization_front_face:
+        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace,
 
     pub rasterization_line_width: f32,
 
-    pub rasterization_polygon_mode: EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode,
+    pub rasterization_polygon_mode:
+        EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode,
 
     pub topology: EscalateRequestRegisterGraphicsKernelPipelineStateTopology,
 
     /// Vertex attributes pulled from the bindings. Must be empty when
     /// `vertex_input_bindings` is empty.
-    pub vertex_input_attributes: Vec<EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttribute>,
+    pub vertex_input_attributes:
+        Vec<EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttribute>,
 
     /// Vertex buffer binding slots — stride and step rate per binding. Empty
     /// array selects the `VertexInputState::None` (gl_VertexIndex-driven)
     /// shape; non-empty selects `VertexInputState::Buffers` with the given
     /// bindings + attributes.
-    pub vertex_input_bindings: Vec<EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBinding>,
+    pub vertex_input_bindings:
+        Vec<EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBinding>,
 
     /// Depth attachment format. Absent disables depth attachments — the
     /// depth_stencil flags must be consistent (`depth_stencil_enabled = false`
     /// when this is absent).
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub attachment_depth_format: Option<EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat>,
+    pub attachment_depth_format:
+        Option<EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]

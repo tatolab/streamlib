@@ -14,6 +14,7 @@
 use super::escalate_request::{
     EscalateRequestLogLevel, EscalateRequestLogSource,
     EscalateRequestRegisterGraphicsKernelBindingKind,
+    EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat,
     EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp,
     EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp,
     EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor,
@@ -28,16 +29,12 @@ use super::escalate_request::{
     EscalateRequestRegisterGraphicsKernelPipelineStateTopology,
     EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat,
     EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate,
-    EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat,
     EscalateRequestRegisterRayTracingKernelBindingKind,
     EscalateRequestRegisterRayTracingKernelGroupKind,
-    EscalateRequestRegisterRayTracingKernelStageStage,
-    EscalateRequestRunCpuReadbackCopyDirection,
-    EscalateRequestRunGraphicsDrawBindingKind,
-    EscalateRequestRunGraphicsDrawDrawKind,
+    EscalateRequestRegisterRayTracingKernelStageStage, EscalateRequestRunCpuReadbackCopyDirection,
+    EscalateRequestRunGraphicsDrawBindingKind, EscalateRequestRunGraphicsDrawDrawKind,
     EscalateRequestRunGraphicsDrawIndexBufferIndexType,
-    EscalateRequestRunRayTracingKernelBindingKind,
-    EscalateRequestTryRunCpuReadbackCopyDirection,
+    EscalateRequestRunRayTracingKernelBindingKind, EscalateRequestTryRunCpuReadbackCopyDirection,
 };
 use super::escalate_response::EscalateResponseOk;
 use super::{EscalateRequest, EscalateResponse};
@@ -171,117 +168,529 @@ const ESCALATE_RESPONSE_VECTORS_ROUND_TRIP_VECTORS: &[(&str, &str)] = &[
 /// Every enum variant keeps its wire spelling.
 #[test]
 fn escalate_enum_variants_keep_their_wire_spelling() {
-    assert_eq!(serde_json::to_string(&EscalateRequestLogLevel::Debug).unwrap(), r#""debug""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestLogLevel::Error).unwrap(), r#""error""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestLogLevel::Info).unwrap(), r#""info""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestLogLevel::Trace).unwrap(), r#""trace""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestLogLevel::Warn).unwrap(), r#""warn""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestLogSource::Python).unwrap(), r#""python""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelBindingKind::SampledTexture).unwrap(), r#""sampled_texture""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelBindingKind::StorageBuffer).unwrap(), r#""storage_buffer""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelBindingKind::StorageImage).unwrap(), r#""storage_image""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelBindingKind::UniformBuffer).unwrap(), r#""uniform_buffer""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp::Add).unwrap(), r#""add""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp::Max).unwrap(), r#""max""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp::Min).unwrap(), r#""min""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp::ReverseSubtract).unwrap(), r#""reverse_subtract""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp::Subtract).unwrap(), r#""subtract""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp::Add).unwrap(), r#""add""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp::Max).unwrap(), r#""max""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp::Min).unwrap(), r#""min""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp::ReverseSubtract).unwrap(), r#""reverse_subtract""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp::Subtract).unwrap(), r#""subtract""#);
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestLogLevel::Debug).unwrap(),
+        r#""debug""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestLogLevel::Error).unwrap(),
+        r#""error""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestLogLevel::Info).unwrap(),
+        r#""info""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestLogLevel::Trace).unwrap(),
+        r#""trace""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestLogLevel::Warn).unwrap(),
+        r#""warn""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestLogSource::Python).unwrap(),
+        r#""python""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRegisterGraphicsKernelBindingKind::SampledTexture)
+            .unwrap(),
+        r#""sampled_texture""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRegisterGraphicsKernelBindingKind::StorageBuffer)
+            .unwrap(),
+        r#""storage_buffer""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRegisterGraphicsKernelBindingKind::StorageImage)
+            .unwrap(),
+        r#""storage_image""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRegisterGraphicsKernelBindingKind::UniformBuffer)
+            .unwrap(),
+        r#""uniform_buffer""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp::Add
+        )
+        .unwrap(),
+        r#""add""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp::Max
+        )
+        .unwrap(),
+        r#""max""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp::Min
+        )
+        .unwrap(),
+        r#""min""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp::ReverseSubtract
+        )
+        .unwrap(),
+        r#""reverse_subtract""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendAlphaOp::Subtract
+        )
+        .unwrap(),
+        r#""subtract""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp::Add
+        )
+        .unwrap(),
+        r#""add""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp::Max
+        )
+        .unwrap(),
+        r#""max""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp::Min
+        )
+        .unwrap(),
+        r#""min""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp::ReverseSubtract
+        )
+        .unwrap(),
+        r#""reverse_subtract""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendColorOp::Subtract
+        )
+        .unwrap(),
+        r#""subtract""#
+    );
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::ConstantAlpha).unwrap(), r#""constant_alpha""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::ConstantColor).unwrap(), r#""constant_color""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::DstAlpha).unwrap(), r#""dst_alpha""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::DstColor).unwrap(), r#""dst_color""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::One).unwrap(), r#""one""#);
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::DstAlpha
+        )
+        .unwrap(),
+        r#""dst_alpha""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::DstColor
+        )
+        .unwrap(),
+        r#""dst_color""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::One
+        )
+        .unwrap(),
+        r#""one""#
+    );
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::OneMinusConstantAlpha).unwrap(), r#""one_minus_constant_alpha""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::OneMinusConstantColor).unwrap(), r#""one_minus_constant_color""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::OneMinusDstAlpha).unwrap(), r#""one_minus_dst_alpha""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::OneMinusDstColor).unwrap(), r#""one_minus_dst_color""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::OneMinusSrcAlpha).unwrap(), r#""one_minus_src_alpha""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::OneMinusSrcColor).unwrap(), r#""one_minus_src_color""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::SrcAlpha).unwrap(), r#""src_alpha""#);
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::SrcAlpha
+        )
+        .unwrap(),
+        r#""src_alpha""#
+    );
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::SrcAlphaSaturate).unwrap(), r#""src_alpha_saturate""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::SrcColor).unwrap(), r#""src_color""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::Zero).unwrap(), r#""zero""#);
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::SrcColor
+        )
+        .unwrap(),
+        r#""src_color""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstAlphaFactor::Zero
+        )
+        .unwrap(),
+        r#""zero""#
+    );
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::ConstantAlpha).unwrap(), r#""constant_alpha""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::ConstantColor).unwrap(), r#""constant_color""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::DstAlpha).unwrap(), r#""dst_alpha""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::DstColor).unwrap(), r#""dst_color""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::One).unwrap(), r#""one""#);
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::DstAlpha
+        )
+        .unwrap(),
+        r#""dst_alpha""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::DstColor
+        )
+        .unwrap(),
+        r#""dst_color""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::One
+        )
+        .unwrap(),
+        r#""one""#
+    );
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::OneMinusConstantAlpha).unwrap(), r#""one_minus_constant_alpha""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::OneMinusConstantColor).unwrap(), r#""one_minus_constant_color""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::OneMinusDstAlpha).unwrap(), r#""one_minus_dst_alpha""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::OneMinusDstColor).unwrap(), r#""one_minus_dst_color""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::OneMinusSrcAlpha).unwrap(), r#""one_minus_src_alpha""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::OneMinusSrcColor).unwrap(), r#""one_minus_src_color""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::SrcAlpha).unwrap(), r#""src_alpha""#);
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::SrcAlpha
+        )
+        .unwrap(),
+        r#""src_alpha""#
+    );
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::SrcAlphaSaturate).unwrap(), r#""src_alpha_saturate""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::SrcColor).unwrap(), r#""src_color""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::Zero).unwrap(), r#""zero""#);
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::SrcColor
+        )
+        .unwrap(),
+        r#""src_color""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendDstColorFactor::Zero
+        )
+        .unwrap(),
+        r#""zero""#
+    );
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::ConstantAlpha).unwrap(), r#""constant_alpha""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::ConstantColor).unwrap(), r#""constant_color""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::DstAlpha).unwrap(), r#""dst_alpha""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::DstColor).unwrap(), r#""dst_color""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::One).unwrap(), r#""one""#);
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::DstAlpha
+        )
+        .unwrap(),
+        r#""dst_alpha""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::DstColor
+        )
+        .unwrap(),
+        r#""dst_color""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::One
+        )
+        .unwrap(),
+        r#""one""#
+    );
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::OneMinusConstantAlpha).unwrap(), r#""one_minus_constant_alpha""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::OneMinusConstantColor).unwrap(), r#""one_minus_constant_color""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::OneMinusDstAlpha).unwrap(), r#""one_minus_dst_alpha""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::OneMinusDstColor).unwrap(), r#""one_minus_dst_color""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::OneMinusSrcAlpha).unwrap(), r#""one_minus_src_alpha""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::OneMinusSrcColor).unwrap(), r#""one_minus_src_color""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::SrcAlpha).unwrap(), r#""src_alpha""#);
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::SrcAlpha
+        )
+        .unwrap(),
+        r#""src_alpha""#
+    );
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::SrcAlphaSaturate).unwrap(), r#""src_alpha_saturate""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::SrcColor).unwrap(), r#""src_color""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::Zero).unwrap(), r#""zero""#);
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::SrcColor
+        )
+        .unwrap(),
+        r#""src_color""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcAlphaFactor::Zero
+        )
+        .unwrap(),
+        r#""zero""#
+    );
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::ConstantAlpha).unwrap(), r#""constant_alpha""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::ConstantColor).unwrap(), r#""constant_color""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::DstAlpha).unwrap(), r#""dst_alpha""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::DstColor).unwrap(), r#""dst_color""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::One).unwrap(), r#""one""#);
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::DstAlpha
+        )
+        .unwrap(),
+        r#""dst_alpha""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::DstColor
+        )
+        .unwrap(),
+        r#""dst_color""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::One
+        )
+        .unwrap(),
+        r#""one""#
+    );
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::OneMinusConstantAlpha).unwrap(), r#""one_minus_constant_alpha""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::OneMinusConstantColor).unwrap(), r#""one_minus_constant_color""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::OneMinusDstAlpha).unwrap(), r#""one_minus_dst_alpha""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::OneMinusDstColor).unwrap(), r#""one_minus_dst_color""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::OneMinusSrcAlpha).unwrap(), r#""one_minus_src_alpha""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::OneMinusSrcColor).unwrap(), r#""one_minus_src_color""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::SrcAlpha).unwrap(), r#""src_alpha""#);
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::SrcAlpha
+        )
+        .unwrap(),
+        r#""src_alpha""#
+    );
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::SrcAlphaSaturate).unwrap(), r#""src_alpha_saturate""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::SrcColor).unwrap(), r#""src_color""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::Zero).unwrap(), r#""zero""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::Always).unwrap(), r#""always""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::Equal).unwrap(), r#""equal""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::Greater).unwrap(), r#""greater""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::GreaterOrEqual).unwrap(), r#""greater_or_equal""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::Less).unwrap(), r#""less""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::LessOrEqual).unwrap(), r#""less_or_equal""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::Never).unwrap(), r#""never""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::NotEqual).unwrap(), r#""not_equal""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState::None).unwrap(), r#""none""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState::ViewportScissor).unwrap(), r#""viewport_scissor""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::Back).unwrap(), r#""back""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::Front).unwrap(), r#""front""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::FrontAndBack).unwrap(), r#""front_and_back""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::None).unwrap(), r#""none""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace::Clockwise).unwrap(), r#""clockwise""#);
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::SrcColor
+        )
+        .unwrap(),
+        r#""src_color""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateColorBlendSrcColorFactor::Zero
+        )
+        .unwrap(),
+        r#""zero""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::Always
+        )
+        .unwrap(),
+        r#""always""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::Equal
+        )
+        .unwrap(),
+        r#""equal""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::Greater
+        )
+        .unwrap(),
+        r#""greater""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::GreaterOrEqual
+        )
+        .unwrap(),
+        r#""greater_or_equal""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::Less
+        )
+        .unwrap(),
+        r#""less""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::LessOrEqual
+        )
+        .unwrap(),
+        r#""less_or_equal""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::Never
+        )
+        .unwrap(),
+        r#""never""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateDepthCompareOp::NotEqual
+        )
+        .unwrap(),
+        r#""not_equal""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState::None
+        )
+        .unwrap(),
+        r#""none""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateDynamicState::ViewportScissor
+        )
+        .unwrap(),
+        r#""viewport_scissor""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::Back
+        )
+        .unwrap(),
+        r#""back""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::Front
+        )
+        .unwrap(),
+        r#""front""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::FrontAndBack
+        )
+        .unwrap(),
+        r#""front_and_back""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationCullMode::None
+        )
+        .unwrap(),
+        r#""none""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace::Clockwise
+        )
+        .unwrap(),
+        r#""clockwise""#
+    );
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationFrontFace::CounterClockwise).unwrap(), r#""counter_clockwise""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Fill).unwrap(), r#""fill""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Line).unwrap(), r#""line""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Point).unwrap(), r#""point""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateTopology::LineList).unwrap(), r#""line_list""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateTopology::LineStrip).unwrap(), r#""line_strip""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateTopology::PointList).unwrap(), r#""point_list""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateTopology::TriangleFan).unwrap(), r#""triangle_fan""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateTopology::TriangleList).unwrap(), r#""triangle_list""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateTopology::TriangleStrip).unwrap(), r#""triangle_strip""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat::R32Float).unwrap(), r#""r32_float""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat::R32Sint).unwrap(), r#""r32_sint""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat::R32Uint).unwrap(), r#""r32_uint""#);
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Fill
+        )
+        .unwrap(),
+        r#""fill""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Line
+        )
+        .unwrap(),
+        r#""line""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateRasterizationPolygonMode::Point
+        )
+        .unwrap(),
+        r#""point""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateTopology::LineList
+        )
+        .unwrap(),
+        r#""line_list""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateTopology::LineStrip
+        )
+        .unwrap(),
+        r#""line_strip""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateTopology::PointList
+        )
+        .unwrap(),
+        r#""point_list""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateTopology::TriangleFan
+        )
+        .unwrap(),
+        r#""triangle_fan""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateTopology::TriangleList
+        )
+        .unwrap(),
+        r#""triangle_list""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateTopology::TriangleStrip
+        )
+        .unwrap(),
+        r#""triangle_strip""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat::R32Float
+        )
+        .unwrap(),
+        r#""r32_float""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat::R32Sint
+        )
+        .unwrap(),
+        r#""r32_sint""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat::R32Uint
+        )
+        .unwrap(),
+        r#""r32_uint""#
+    );
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat::Rg32Float).unwrap(), r#""rg32_float""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat::Rg32Sint).unwrap(), r#""rg32_sint""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat::Rg32Uint).unwrap(), r#""rg32_uint""#);
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat::Rg32Sint
+        )
+        .unwrap(),
+        r#""rg32_sint""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat::Rg32Uint
+        )
+        .unwrap(),
+        r#""rg32_uint""#
+    );
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat::Rgb32Float).unwrap(), r#""rgb32_float""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat::Rgb32Sint).unwrap(), r#""rgb32_sint""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat::Rgb32Uint).unwrap(), r#""rgb32_uint""#);
@@ -291,41 +700,173 @@ fn escalate_enum_variants_keep_their_wire_spelling() {
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat::Rgba8Snorm).unwrap(), r#""rgba8_snorm""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputAttributeFormat::Rgba8Unorm).unwrap(), r#""rgba8_unorm""#);
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate::Instance).unwrap(), r#""instance""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate::Vertex).unwrap(), r#""vertex""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat::D16Unorm).unwrap(), r#""d16_unorm""#);
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateVertexInputBindingInputRate::Vertex
+        )
+        .unwrap(),
+        r#""vertex""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat::D16Unorm
+        )
+        .unwrap(),
+        r#""d16_unorm""#
+    );
     assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat::D24UnormS8Uint).unwrap(), r#""d24_unorm_s8_uint""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat::D32Sfloat).unwrap(), r#""d32_sfloat""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterRayTracingKernelBindingKind::AccelerationStructure).unwrap(), r#""acceleration_structure""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterRayTracingKernelBindingKind::SampledTexture).unwrap(), r#""sampled_texture""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterRayTracingKernelBindingKind::StorageBuffer).unwrap(), r#""storage_buffer""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterRayTracingKernelBindingKind::StorageImage).unwrap(), r#""storage_image""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterRayTracingKernelBindingKind::UniformBuffer).unwrap(), r#""uniform_buffer""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterRayTracingKernelGroupKind::General).unwrap(), r#""general""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterRayTracingKernelGroupKind::ProceduralHit).unwrap(), r#""procedural_hit""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterRayTracingKernelGroupKind::TrianglesHit).unwrap(), r#""triangles_hit""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterRayTracingKernelStageStage::AnyHit).unwrap(), r#""any_hit""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterRayTracingKernelStageStage::Callable).unwrap(), r#""callable""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterRayTracingKernelStageStage::ClosestHit).unwrap(), r#""closest_hit""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterRayTracingKernelStageStage::Intersection).unwrap(), r#""intersection""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterRayTracingKernelStageStage::Miss).unwrap(), r#""miss""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRegisterRayTracingKernelStageStage::RayGen).unwrap(), r#""ray_gen""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRunCpuReadbackCopyDirection::BufferToImage).unwrap(), r#""buffer_to_image""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRunCpuReadbackCopyDirection::ImageToBuffer).unwrap(), r#""image_to_buffer""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRunGraphicsDrawBindingKind::SampledTexture).unwrap(), r#""sampled_texture""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRunGraphicsDrawBindingKind::StorageBuffer).unwrap(), r#""storage_buffer""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRunGraphicsDrawBindingKind::StorageImage).unwrap(), r#""storage_image""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRunGraphicsDrawBindingKind::UniformBuffer).unwrap(), r#""uniform_buffer""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRunGraphicsDrawDrawKind::Draw).unwrap(), r#""draw""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRunGraphicsDrawDrawKind::DrawIndexed).unwrap(), r#""draw_indexed""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRunGraphicsDrawIndexBufferIndexType::Uint16).unwrap(), r#""uint16""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRunGraphicsDrawIndexBufferIndexType::Uint32).unwrap(), r#""uint32""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRunRayTracingKernelBindingKind::AccelerationStructure).unwrap(), r#""acceleration_structure""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRunRayTracingKernelBindingKind::SampledTexture).unwrap(), r#""sampled_texture""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRunRayTracingKernelBindingKind::StorageBuffer).unwrap(), r#""storage_buffer""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRunRayTracingKernelBindingKind::StorageImage).unwrap(), r#""storage_image""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestRunRayTracingKernelBindingKind::UniformBuffer).unwrap(), r#""uniform_buffer""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestTryRunCpuReadbackCopyDirection::BufferToImage).unwrap(), r#""buffer_to_image""#);
-    assert_eq!(serde_json::to_string(&EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer).unwrap(), r#""image_to_buffer""#);
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterGraphicsKernelPipelineStateAttachmentDepthFormat::D32Sfloat
+        )
+        .unwrap(),
+        r#""d32_sfloat""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRegisterRayTracingKernelBindingKind::AccelerationStructure
+        )
+        .unwrap(),
+        r#""acceleration_structure""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRegisterRayTracingKernelBindingKind::SampledTexture)
+            .unwrap(),
+        r#""sampled_texture""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRegisterRayTracingKernelBindingKind::StorageBuffer)
+            .unwrap(),
+        r#""storage_buffer""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRegisterRayTracingKernelBindingKind::StorageImage)
+            .unwrap(),
+        r#""storage_image""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRegisterRayTracingKernelBindingKind::UniformBuffer)
+            .unwrap(),
+        r#""uniform_buffer""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRegisterRayTracingKernelGroupKind::General).unwrap(),
+        r#""general""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRegisterRayTracingKernelGroupKind::ProceduralHit)
+            .unwrap(),
+        r#""procedural_hit""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRegisterRayTracingKernelGroupKind::TrianglesHit)
+            .unwrap(),
+        r#""triangles_hit""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRegisterRayTracingKernelStageStage::AnyHit).unwrap(),
+        r#""any_hit""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRegisterRayTracingKernelStageStage::Callable)
+            .unwrap(),
+        r#""callable""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRegisterRayTracingKernelStageStage::ClosestHit)
+            .unwrap(),
+        r#""closest_hit""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRegisterRayTracingKernelStageStage::Intersection)
+            .unwrap(),
+        r#""intersection""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRegisterRayTracingKernelStageStage::Miss).unwrap(),
+        r#""miss""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRegisterRayTracingKernelStageStage::RayGen).unwrap(),
+        r#""ray_gen""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRunCpuReadbackCopyDirection::BufferToImage).unwrap(),
+        r#""buffer_to_image""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRunCpuReadbackCopyDirection::ImageToBuffer).unwrap(),
+        r#""image_to_buffer""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRunGraphicsDrawBindingKind::SampledTexture).unwrap(),
+        r#""sampled_texture""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRunGraphicsDrawBindingKind::StorageBuffer).unwrap(),
+        r#""storage_buffer""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRunGraphicsDrawBindingKind::StorageImage).unwrap(),
+        r#""storage_image""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRunGraphicsDrawBindingKind::UniformBuffer).unwrap(),
+        r#""uniform_buffer""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRunGraphicsDrawDrawKind::Draw).unwrap(),
+        r#""draw""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRunGraphicsDrawDrawKind::DrawIndexed).unwrap(),
+        r#""draw_indexed""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRunGraphicsDrawIndexBufferIndexType::Uint16).unwrap(),
+        r#""uint16""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRunGraphicsDrawIndexBufferIndexType::Uint32).unwrap(),
+        r#""uint32""#
+    );
+    assert_eq!(
+        serde_json::to_string(
+            &EscalateRequestRunRayTracingKernelBindingKind::AccelerationStructure
+        )
+        .unwrap(),
+        r#""acceleration_structure""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRunRayTracingKernelBindingKind::SampledTexture)
+            .unwrap(),
+        r#""sampled_texture""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRunRayTracingKernelBindingKind::StorageBuffer)
+            .unwrap(),
+        r#""storage_buffer""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRunRayTracingKernelBindingKind::StorageImage)
+            .unwrap(),
+        r#""storage_image""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestRunRayTracingKernelBindingKind::UniformBuffer)
+            .unwrap(),
+        r#""uniform_buffer""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestTryRunCpuReadbackCopyDirection::BufferToImage)
+            .unwrap(),
+        r#""buffer_to_image""#
+    );
+    assert_eq!(
+        serde_json::to_string(&EscalateRequestTryRunCpuReadbackCopyDirection::ImageToBuffer)
+            .unwrap(),
+        r#""image_to_buffer""#
+    );
 }
 
 /// An absent optional is omitted from the encoding, never written as null.
