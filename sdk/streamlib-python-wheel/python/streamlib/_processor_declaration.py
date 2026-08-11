@@ -17,7 +17,6 @@ from __future__ import annotations
 import re
 from typing import Any, Callable, Optional, Pattern, TypeVar, Union
 
-from .schema_ident import SchemaIdent
 
 __all__ = [
     "input",
@@ -46,26 +45,22 @@ MethodUnderDecoration = TypeVar("MethodUnderDecoration", bound=Callable[..., Any
 def input(
     name: Optional[str] = None,
     *,
-    schema: Union[SchemaIdent, type, None] = None,
     description: str = "",
     delivery_profile: Optional[str] = None,
 ) -> "Callable[[MethodUnderDecoration], MethodUnderDecoration]":
     """Mark a method as declaring an input port.
 
-    The port is named after the method unless `name` overrides it. `schema` is
-    a structured carrier — a [`SchemaIdent`] instance or a codegen-emitted
-    class carrying `__streamlib_schema_ident__` — never a string.
-    `delivery_profile` is required and is `"latest"`, `"every_sample"`, or
-    `"lossless"`. The decorated method is a declaration only: bags are read
-    with `ctx.inputs.read(port_name)`.
+    The port is named after the method unless `name` overrides it. The port
+    carries no type — the method's return annotation is the declaration, read
+    by humans and type checkers only. `delivery_profile` is required and is
+    `"latest"`, `"every_sample"`, or `"lossless"`. The decorated method is a
+    declaration only: bags are read with `ctx.inputs.read(port_name)`.
     """
     if delivery_profile is not None and delivery_profile not in _DELIVERY_PROFILES:
         raise ValueError(
             f"invalid delivery_profile {delivery_profile!r}: must be one of "
             f"{', '.join(_DELIVERY_PROFILES)}"
         )
-    resolved_schema = _resolve_schema_ident(schema)
-
     def attach_input_port_marker(method: MethodUnderDecoration) -> MethodUnderDecoration:
         port_name = name or method.__name__
         # `delivery_profile` defaults to None rather than being a required
@@ -82,7 +77,6 @@ def input(
             _INPUT_PORT_MARKER_ATTRIBUTE,
             {
                 "name": port_name,
-                "schema": resolved_schema,
                 "description": description,
                 "delivery_profile": delivery_profile,
             },
@@ -95,7 +89,6 @@ def input(
 def output(
     name: Optional[str] = None,
     *,
-    schema: Union[SchemaIdent, type, None] = None,
     description: str = "",
 ) -> "Callable[[MethodUnderDecoration], MethodUnderDecoration]":
     """Mark a method as declaring an output port.
@@ -104,66 +97,18 @@ def output(
     consuming port's policy. Bags are written with
     `ctx.outputs.write(port_name, bag)`.
     """
-    resolved_schema = _resolve_schema_ident(schema)
-
     def attach_output_port_marker(method: MethodUnderDecoration) -> MethodUnderDecoration:
         setattr(
             method,
             _OUTPUT_PORT_MARKER_ATTRIBUTE,
             {
                 "name": name or method.__name__,
-                "schema": resolved_schema,
                 "description": description,
             },
         )
         return method
 
     return attach_output_port_marker
-
-
-def _resolve_schema_ident(
-    schema_arg: "Union[SchemaIdent, type, None]",
-) -> Optional[SchemaIdent]:
-    """Resolve a `schema=` argument to a structured `SchemaIdent`.
-
-    Accepts:
-        - `None` (port has no declared schema)
-        - `SchemaIdent` instance (returned as-is)
-        - a codegen-emitted class carrying `__streamlib_schema_ident__`
-          as a `ClassVar[SchemaIdent]` attribute (produced by
-          `streamlib generate` from the package's JTD/YAML schemas)
-
-    Rejects:
-        - any string (bare type name OR joined `@org/pkg/Type@v` form)
-        - classes without structured-ident metadata
-    """
-    if schema_arg is None:
-        return None
-    if isinstance(schema_arg, SchemaIdent):
-        return schema_arg
-    if isinstance(schema_arg, str):
-        raise TypeError(
-            f"schema={schema_arg!r}: string schema references are no longer "
-            f"accepted. Pass a structured `SchemaIdent(org, package, type_, version)` "
-            f"instance instead. Joined-string forms like '@tatolab/core/VideoFrame@1.0.0' "
-            f"and bare type names like 'VideoFrame' are both rejected — schemas are "
-            f"cross-package references by definition and have no shorthand. See "
-            f"docs/architecture/schema-identity-and-packaging.md."
-        )
-    if isinstance(schema_arg, type):
-        ident = getattr(schema_arg, "__streamlib_schema_ident__", None)
-        if isinstance(ident, SchemaIdent):
-            return ident
-        raise TypeError(
-            f"schema={schema_arg.__name__}: class does not carry a structured "
-            f"SchemaIdent. Import a codegen-emitted class from "
-            f"streamlib._generated_.<package>, or pass a `SchemaIdent` "
-            f"instance directly."
-        )
-    raise TypeError(
-        f"schema={schema_arg!r}: unsupported type {type(schema_arg).__name__}. "
-        f"Pass a `SchemaIdent` instance or a codegen-emitted schema class."
-    )
 
 
 def processor(
@@ -246,11 +191,7 @@ def _declare_processor(
 def _collect_declared_ports(
     processor_class: type,
 ) -> "tuple[list[dict[str, Any]], list[dict[str, Any]]]":
-    """Every `@input` / `@output` declaration, as the dicts the engine reads.
-
-    The `"schema"` value is rendered to the 4-field wire dict here — the native
-    reader consumes plain dicts, never `SchemaIdent` instances.
-    """
+    """Every `@input` / `@output` declaration, as the dicts the engine reads."""
     input_ports: "list[dict[str, Any]]" = []
     output_ports: "list[dict[str, Any]]" = []
     claimed_port_names: "set[str]" = set()
@@ -262,15 +203,12 @@ def _collect_declared_ports(
                 f"than once — every port, input or output, needs its own name"
             )
         claimed_port_names.add(port_name)
-        declared_schema: Optional[SchemaIdent] = marker["schema"]
-        wire_schema = None if declared_schema is None else declared_schema.to_wire_dict()
         if "delivery_profile" in marker:
             input_ports.append(
                 {
                     "name": port_name,
                     "description": marker["description"],
                     "delivery_profile": marker["delivery_profile"],
-                    "schema": wire_schema,
                 }
             )
         else:
@@ -278,7 +216,6 @@ def _collect_declared_ports(
                 {
                     "name": port_name,
                     "description": marker["description"],
-                    "schema": wire_schema,
                 }
             )
     return input_ports, output_ports

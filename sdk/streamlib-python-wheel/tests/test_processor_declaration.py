@@ -9,7 +9,7 @@ half of the authoring surface that stays honest on a machine with no GPU.
 
 import pytest
 
-from streamlib import SchemaIdent, input, output, processor
+from streamlib import input, output, processor
 
 
 def test_a_bare_decorator_needs_no_arguments_at_all():
@@ -54,14 +54,12 @@ def test_the_method_name_is_the_port_name():
             "name": "frames_from_upstream",
             "description": "",
             "delivery_profile": "every_sample",
-            "schema": None,
         }
     ]
     assert Passthrough.__streamlib_processor_output_ports__ == [
         {
             "name": "frames_to_downstream",
             "description": "the filtered frames",
-            "schema": None,
         }
     ]
 
@@ -83,62 +81,34 @@ def test_an_explicit_name_overrides_the_method_name():
     ]
 
 
-def test_a_schema_ident_instance_is_stored_as_its_wire_dict():
-    video_frame = SchemaIdent("tatolab", "core", "VideoFrame", "1.0.0")
+def test_a_port_declaration_takes_no_schema():
+    """A port carries no type: `schema=` is gone, not tolerated-and-ignored.
 
+    Type information belongs to the authoring language — the port method's
+    return annotation — and never reaches the engine.
+    """
+    with pytest.raises(TypeError, match="unexpected keyword argument 'schema'"):
+        input(schema="VideoFrame", delivery_profile="latest")  # type: ignore[call-arg]
+    with pytest.raises(TypeError, match="unexpected keyword argument 'schema'"):
+        output(schema="VideoFrame")  # type: ignore[call-arg]
+
+
+def test_a_declared_port_carries_no_type_key_under_any_spelling():
     @processor
-    class Typed:
-        @input(schema=video_frame, description="frames", delivery_profile="latest")
+    class Untyped:
+        @input(delivery_profile="latest")
         def frames_from_upstream(self) -> None: ...
 
-        @output(schema=video_frame)
+        @output()
         def frames_to_downstream(self) -> None: ...
 
-    expected_wire_dict = {
-        "org": "tatolab",
-        "package": "core",
-        "type": "VideoFrame",
-        "version": "1.0.0",
-    }
-    assert Typed.__streamlib_processor_input_ports__[0]["schema"] == expected_wire_dict
-    assert Typed.__streamlib_processor_output_ports__[0]["schema"] == expected_wire_dict
-
-
-def test_a_codegen_class_carrying_a_schema_ident_is_accepted():
-    class VideoFrame:
-        __streamlib_schema_ident__ = SchemaIdent("tatolab", "core", "VideoFrame", "1.0.0")
-
-    @processor
-    class Typed:
-        @input(schema=VideoFrame, delivery_profile="latest")
-        def frames_from_upstream(self) -> None: ...
-
-    assert Typed.__streamlib_processor_input_ports__[0]["schema"] == {
-        "org": "tatolab",
-        "package": "core",
-        "type": "VideoFrame",
-        "version": "1.0.0",
-    }
-
-
-def test_a_string_schema_is_refused_with_the_structured_alternative():
-    with pytest.raises(TypeError, match="string schema references are no longer accepted"):
-        input(schema="VideoFrame")  # pyright: ignore[reportArgumentType]
-    with pytest.raises(TypeError, match="string schema references"):
-        output(schema="@tatolab/core/VideoFrame@1.0.0")  # pyright: ignore[reportArgumentType]
-
-
-def test_a_class_without_schema_metadata_is_refused():
-    class Plain:
-        pass
-
-    with pytest.raises(TypeError, match="does not carry a structured SchemaIdent"):
-        input(schema=Plain)
-
-
-def test_a_schema_of_an_unsupported_type_is_refused():
-    with pytest.raises(TypeError, match="unsupported type"):
-        output(schema=42)  # type: ignore[arg-type]
+    declared = (
+        Untyped.__streamlib_processor_input_ports__
+        + Untyped.__streamlib_processor_output_ports__
+    )
+    for port in declared:
+        for key in ("schema", "data_type", "type", "schema_ident"):
+            assert key not in port, f"port {port['name']!r} carries a type key {key!r}"
 
 
 def test_an_unknown_delivery_profile_is_refused_at_decoration():
@@ -175,7 +145,7 @@ def test_an_output_port_needs_no_delivery_profile():
         def frames_to_downstream(self) -> None: ...
 
     assert Source.__streamlib_processor_output_ports__ == [
-        {"name": "frames_to_downstream", "description": "", "schema": None}
+        {"name": "frames_to_downstream", "description": ""}
     ]
 
 
@@ -304,7 +274,6 @@ def test_ports_are_inherited_and_a_subclass_can_redeclare_one():
             "name": "frames_from_upstream",
             "description": "",
             "delivery_profile": "every_sample",
-            "schema": None,
         }
     ]
     # The inherited output survives the subclass's redeclaration of the input.
