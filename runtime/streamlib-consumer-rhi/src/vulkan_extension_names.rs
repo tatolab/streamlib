@@ -2,11 +2,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Borrowing extension names out of an enumerated `VkExtensionProperties` buffer.
-//!
-//! Both Vulkan device bring-up paths — the host `HostVulkanDevice` and the
-//! carve-out `ConsumerVulkanDevice` — enumerate device extensions and then test
-//! the results by name. Lives in consumer-rhi so the two share one spelling
-//! rather than each re-deriving the borrow.
 
 use std::ffi::CStr;
 
@@ -14,16 +9,10 @@ use vulkanalia::vk;
 
 /// Borrows every extension name out of an enumerated properties buffer.
 ///
-/// Each `vk::ExtensionProperties` stores its name as an inline
-/// `StringArray`, so the returned `&CStr`s point into
-/// `available_extension_properties` itself. Taking the buffer by reference ties
-/// that borrow to the caller's owner: a caller that passes a temporary, or lets
-/// the owner fall out of scope first, fails to compile.
-///
-/// The trap this exists to close is `CStr::from_ptr`, whose *unbounded* return
-/// lifetime silences the borrow checker entirely and let two bring-up paths
-/// read freed memory (#1846). `StringArray::as_cstr` borrows from `&self`, so
-/// the enforcement is the type system rather than reviewer attention.
+/// Each `vk::ExtensionProperties` stores its name as an inline `StringArray`,
+/// so the returned `&CStr`s point into `available_extension_properties`
+/// itself. The elided lifetime ties them to it: a caller that passes a
+/// temporary, or lets the owner fall out of scope first, fails to compile.
 pub fn vulkan_extension_names_borrowed_from_properties(
     available_extension_properties: &[vk::ExtensionProperties],
 ) -> Vec<&CStr> {
@@ -37,10 +26,13 @@ pub fn vulkan_extension_names_borrowed_from_properties(
 ///
 /// The negative cases below are the exact shapes that shipped as
 /// use-after-free in #1846: an owner that is a statement temporary, and an
-/// owner confined to a block that closes before the names are read. Both must
-/// stay `compile_fail`. If a future change reintroduces an unbounded lifetime
-/// (a bare `CStr::from_ptr`, or a signature taking the buffer by value), these
-/// start compiling and the suite fails.
+/// owner confined to a block that closes before the names are read.
+///
+/// What they lock is the *signature*. A signature that stops borrowing from
+/// the buffer — taking it by value, or handing back an unbounded lifetime —
+/// makes these compile and fails the suite. They say nothing about how the
+/// body spells the borrow, and nothing about call sites elsewhere: with this
+/// signature, elision ties the return to the parameter whatever the body does.
 ///
 /// The owner is a statement temporary — `ConsumerVulkanDevice::new`'s shape.
 ///
@@ -128,9 +120,9 @@ mod tests {
         assert!(vulkan_extension_names_borrowed_from_properties(&available).is_empty());
     }
 
-    /// A driver that fills the array to its last byte leaves no room for a
-    /// terminator; reading must stop at the array bound rather than run into
-    /// the next element.
+    /// An over-long name is truncated to leave room for the terminator, and
+    /// reading it stops at the array bound rather than running into the next
+    /// element.
     #[test]
     fn a_name_filling_the_array_stops_at_the_bound() {
         let longest = vec![b'x'; vk::MAX_EXTENSION_NAME_SIZE];

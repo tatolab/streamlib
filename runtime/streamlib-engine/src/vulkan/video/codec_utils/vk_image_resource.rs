@@ -861,19 +861,8 @@ impl Drop for VkImageResource {
     }
 }
 
-/// A device whose command table resolves to nothing.
-///
-/// Tests here exercise pure layout logic and never issue a Vulkan call, but
-/// `VkImageResource` still has to hold a `vulkanalia::Device`. That type owns
-/// two `BTreeSet`s, so `MaybeUninit::uninit().assume_init()` hands it garbage
-/// heap pointers — undefined behaviour the moment it is created, and a wild
-/// free for any caller who drops it.
-///
-/// `Device::from_created` fills the command table from the loader it is given.
-/// A loader that resolves nothing leaves every entry as vulkanalia's own
-/// panicking fallback and both name sets legitimately empty, so the value is
-/// fully initialized and safe to drop. A stray Vulkan call panics by name
-/// instead of corrupting the heap.
+/// A fully initialized device whose every command resolves to vulkanalia's
+/// panicking fallback, so a Vulkan call on it aborts by name.
 #[cfg(test)]
 fn device_with_no_loaded_commands() -> vulkanalia::Device {
     unsafe extern "system" fn resolve_nothing(
@@ -883,6 +872,10 @@ fn device_with_no_loaded_commands() -> vulkanalia::Device {
         None
     }
 
+    // SAFETY: `from_created` documents that the handle must come from a real
+    // `vkCreateDevice`; a null one deliberately does not. Nothing dereferences
+    // it — the loader ignores the handle it is passed, and the returned device
+    // is never used for a call.
     unsafe {
         vulkanalia::Device::from_created(
             resolve_nothing,

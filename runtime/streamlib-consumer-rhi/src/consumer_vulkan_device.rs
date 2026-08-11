@@ -41,6 +41,7 @@ use vulkanalia::loader::{LIBRARY, LibloadingLoader};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
+use crate::vulkan_extension_names::vulkan_extension_names_borrowed_from_properties;
 use crate::{ConsumerMarker, ConsumerRhiError, Result, VulkanRhiDevice};
 
 /// Single-COLOR-aspect / single-mip / single-layer subresource range —
@@ -183,8 +184,6 @@ impl ConsumerVulkanDevice {
         // Required device extensions. All four are mandatory on the
         // carve-out path — refusing to construct the device on a driver
         // that doesn't expose them is the right shape (see module docs).
-        // Bound here rather than left a temporary because every name below
-        // borrows from it.
         let available_device_extension_properties = unsafe {
             instance
                 .enumerate_device_extension_properties(physical_device, None)
@@ -192,9 +191,8 @@ impl ConsumerVulkanDevice {
                     ConsumerRhiError::Gpu(format!("enumerate_device_extension_properties: {e}"))
                 })?
         };
-        let available_device_ext_names = crate::vulkan_extension_names_borrowed_from_properties(
-            &available_device_extension_properties,
-        );
+        let available_device_ext_names =
+            vulkan_extension_names_borrowed_from_properties(&available_device_extension_properties);
 
         const REQUIRED: &[&CStr] = &[
             c"VK_KHR_external_memory",

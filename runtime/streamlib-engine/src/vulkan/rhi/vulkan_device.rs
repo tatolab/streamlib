@@ -774,9 +774,7 @@ impl HostVulkanDevice {
             device_extensions.push(c"VK_KHR_portability_subset".as_ptr());
         }
 
-        // On Linux, enumerate device extensions once and enable what's available.
-        // The properties buffer is bound in this scope because every name below
-        // borrows from it.
+        // On Linux, enumerate device extensions once and enable what's available
         #[cfg(target_os = "linux")]
         let available_device_extension_properties =
             unsafe { instance.enumerate_device_extension_properties(physical_device, None) }
