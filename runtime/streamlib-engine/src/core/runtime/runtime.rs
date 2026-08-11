@@ -1026,6 +1026,23 @@ impl Runner {
         })
     }
 
+    /// The display name the graph assigned this processor.
+    ///
+    /// The assigned name, which is the requested one only when nothing else in
+    /// the graph already answered to it — an `add` caller reads it back here to
+    /// learn what its handle should report. A node's name is fixed at `add`, so
+    /// this answers the same string for the life of the node.
+    pub fn display_name_of_processor(&self, processor_id: &ProcessorUniqueId) -> Result<String> {
+        self.compiler.scope(|graph, _tx| {
+            graph
+                .traversal()
+                .v(processor_id)
+                .first()
+                .map(|node| node.display_name.clone())
+                .ok_or_else(|| Error::ProcessorNotFound(processor_id.to_string()))
+        })
+    }
+
     // =========================================================================
     // Graph Snapshot Save / Load
     // =========================================================================

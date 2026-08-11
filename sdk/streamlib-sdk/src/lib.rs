@@ -102,7 +102,7 @@ pub mod sdk {
     /// `Runner` op.
     pub mod app;
 
-    pub use app::{App, AppPortEndpoint};
+    pub use app::{AddedProcessor, App, AppPortEndpoint};
 
     // ---- Processors namespace ----
     //

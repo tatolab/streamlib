@@ -57,6 +57,7 @@ manual_fixture!(
     IgnoredConnectNode,
     "@tatolab/app-sugar-test/IgnoredConnectNode"
 );
+manual_fixture!(DisplayNamedNode, "@tatolab/app-sugar-test/DisplayNamedNode");
 
 /// Register a `#[processor]` host type on the processor registry and return
 /// the reference that resolves it — what `App::add_local` builds internally,
@@ -97,14 +98,17 @@ fn app_add_matches_runner_add_processor_snapshot() {
     // App-built graph.
     let app = App::new().expect("App::new");
     let app_alpha = app
-        .add(alpha_ref.clone(), config.clone())
+        .add(alpha_ref.clone(), config.clone(), None)
         .expect("app add alpha");
     let app_beta = app
-        .add(beta_ref.clone(), config.clone())
+        .add(beta_ref.clone(), config.clone(), None)
         .expect("app add beta");
     let app_snapshot = normalize_ids(
         &app.runner().to_json().expect("app graph json"),
-        &[app_alpha.to_string(), app_beta.to_string()],
+        &[
+            app_alpha.processor_id().to_string(),
+            app_beta.processor_id().to_string(),
+        ],
     );
 
     // Runner-built graph — the same operations, spelled out against `Runner`.
@@ -136,13 +140,13 @@ fn app_connect_is_a_faithful_passthrough_of_runner_connect() {
 
     let app = App::new().expect("App::new");
     let node = app
-        .add_local::<PassthroughNode::Processor>(serde_json::json!({}))
-        .expect("add_local returns a connectable id");
+        .add_local::<PassthroughNode::Processor>(serde_json::json!({}), None)
+        .expect("add_local returns a connectable processor");
 
     let via_app = app.connect((&node, "no_such_out"), (&node, "no_such_in"));
     let via_runner = app.runner().connect(
-        OutputLinkPortRef::new(&node, "no_such_out"),
-        InputLinkPortRef::new(&node, "no_such_in"),
+        OutputLinkPortRef::new(node.processor_id(), "no_such_out"),
+        InputLinkPortRef::new(node.processor_id(), "no_such_in"),
     );
 
     assert_eq!(
@@ -186,16 +190,16 @@ fn app_connect_between_real_processors_on_valid_ports_returns_ok() {
 
     let app = App::new().expect("App::new");
     let source = app
-        .add(source_ref, serde_json::json!({}))
+        .add(source_ref, serde_json::json!({}), None)
         .expect("app add source");
     let sink = app
-        .add(sink_ref, serde_json::json!({}))
+        .add(sink_ref, serde_json::json!({}), None)
         .expect("app add sink");
 
     // The ids `App` handed back are the default uppercase-leading form — the
     // shape that pre-fix produced `InvalidLink` for every real connect.
-    assert!(source.to_string().starts_with('P'));
-    assert!(sink.to_string().starts_with('P'));
+    assert!(source.processor_id().to_string().starts_with('P'));
+    assert!(sink.processor_id().to_string().starts_with('P'));
 
     let link = app
         .connect((&source, "video"), (&sink, "video_in"))
@@ -214,7 +218,7 @@ fn add_local_hello_world_materializes_a_real_node() {
     let app = App::new().expect("App::new");
 
     let node = app
-        .add_local::<MaterializeNode::Processor>(serde_json::json!({}))
+        .add_local::<MaterializeNode::Processor>(serde_json::json!({}), None)
         .expect("add_local materializes a node");
 
     let graph_json = app.runner().to_json().expect("graph json");
@@ -225,9 +229,10 @@ fn add_local_hello_world_materializes_a_real_node() {
         .filter_map(|n| n["id"].as_str())
         .collect();
 
+    let node_id = node.processor_id().to_string();
     assert!(
-        node_ids.contains(&node.to_string().as_str()),
-        "the add_local id {node} must name a real node in the graph, found {node_ids:?}"
+        node_ids.contains(&node_id.as_str()),
+        "the add_local id {node_id} must name a real node in the graph, found {node_ids:?}"
     );
 }
 
@@ -252,7 +257,7 @@ fn add_rejects_a_non_serializable_config() {
     let mut unserializable: HashMap<(i32, i32), i32> = HashMap::new();
     unserializable.insert((1, 2), 3);
 
-    match app.add(reference, unserializable) {
+    match app.add(reference, unserializable, None) {
         Err(Error::Configuration(_)) => {}
         other => panic!("expected Error::Configuration, got {other:?}"),
     }
@@ -268,8 +273,8 @@ fn connect_to_nonexistent_port_surfaces_processor_port_not_found() {
 
     let app = App::new().expect("App::new");
     let node = app
-        .add_local::<IgnoredConnectNode::Processor>(serde_json::json!({}))
-        .expect("add_local returns a connectable id");
+        .add_local::<IgnoredConnectNode::Processor>(serde_json::json!({}), None)
+        .expect("add_local returns a connectable processor");
 
     let error = app
         .connect((&node, "no_such_out"), (&node, "no_such_in"))
@@ -286,4 +291,54 @@ fn connect_to_nonexistent_port_surfaces_processor_port_not_found() {
         }
         other => panic!("expected ProcessorPortNotFound, got {other:?}"),
     }
+}
+
+/// The handle `App::add` returns reports the name the engine assigned, not the
+/// one the caller asked for: the second processor of one type is decorated, and
+/// the caller learns that from the handle rather than by asking the graph.
+#[test]
+fn the_handle_reports_the_display_name_the_engine_assigned() {
+    let reference = register_ported_type("AppDisplayNameDefault", "_unused_in", "_unused_out");
+
+    let app = App::new().expect("App::new");
+    let first = app
+        .add(reference.clone(), serde_json::json!({}), None)
+        .expect("app add first");
+    let second = app
+        .add(reference, serde_json::json!({}), None)
+        .expect("app add second");
+
+    assert_eq!(first.display_name(), "AppDisplayNameDefault");
+    assert_eq!(second.display_name(), "AppDisplayNameDefault 2");
+}
+
+/// A requested name reaches the graph, and a requested name that collides is
+/// disambiguated exactly like a default — the handle reports the decorated one.
+#[test]
+fn a_requested_display_name_is_honoured_and_a_duplicate_is_disambiguated() {
+    let reference = register_ported_type("AppDisplayNameRequested", "_unused_in", "_unused_out");
+
+    let app = App::new().expect("App::new");
+    let first = app
+        .add(reference.clone(), serde_json::json!({}), Some("Front Camera"))
+        .expect("app add first");
+    let second = app
+        .add(reference, serde_json::json!({}), Some("Front Camera"))
+        .expect("app add second");
+
+    assert_eq!(first.display_name(), "Front Camera");
+    assert_eq!(second.display_name(), "Front Camera 2");
+}
+
+/// `add_local` reaches the same surface — the hello-world path can name its
+/// processor and read back what it got.
+#[test]
+fn add_local_reaches_the_display_name_surface_too() {
+    let app = App::new().expect("App::new");
+
+    let node = app
+        .add_local::<DisplayNamedNode::Processor>(serde_json::json!({}), Some("Blur"))
+        .expect("add_local materializes a node");
+
+    assert_eq!(node.display_name(), "Blur");
 }

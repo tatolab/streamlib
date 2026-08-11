@@ -18,9 +18,33 @@ use crate::sdk::processors::{Config, GeneratedProcessor, ProcessorSpec, Processo
 use crate::sdk::runtime::Runner;
 
 /// A `(processor, port)` endpoint for [`App::connect`]. The processor is
-/// referenced by the [`ProcessorUniqueId`] an `add`/`add_local` call returned;
+/// referenced by the [`AddedProcessor`] an `add`/`add_local` call returned;
 /// the port is the source-declared port name.
-pub type AppPortEndpoint<'a> = (&'a ProcessorUniqueId, &'a str);
+pub type AppPortEndpoint<'a> = (&'a AddedProcessor, &'a str);
+
+/// A processor [`App::add`] or [`App::add_local`] put in the graph.
+///
+/// Carries the display name the engine *assigned*, which is the requested one
+/// only when nothing else in the graph already answered to it — the graph
+/// appends a counter to a duplicate, so the requested name is not what a caller
+/// can rely on having got.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AddedProcessor {
+    processor_id: ProcessorUniqueId,
+    display_name: String,
+}
+
+impl AddedProcessor {
+    /// The engine's id for this processor — what `streamlib graph` shows.
+    pub fn processor_id(&self) -> &ProcessorUniqueId {
+        &self.processor_id
+    }
+
+    /// The display name the graph assigned this processor.
+    pub fn display_name(&self) -> &str {
+        &self.display_name
+    }
+}
 
 /// Thin authoring sugar over [`Runner`]: construct,
 /// add processors, connect ports, run.
@@ -43,30 +67,33 @@ impl App {
     /// Add a processor by type reference, configured from `config`. `config` is
     /// any [`Serialize`] value (a generated config `Bag`, a plain struct, or a
     /// [`serde_json::Value`]); it is encoded to JSON and handed to the runtime
-    /// unchanged.
+    /// unchanged. A `display_name` of `None` takes the type's short name.
     pub fn add(
         &self,
         processor_ref: impl Into<ProcessorTypeReference>,
         config: impl Serialize,
-    ) -> Result<ProcessorUniqueId> {
+        display_name: Option<&str>,
+    ) -> Result<AddedProcessor> {
         let config = to_config_value(config)?;
-        self.runner
-            .add_processor(ProcessorSpec::new(processor_ref, config))
+        self.add_spec(ProcessorSpec::new(processor_ref, config), display_name)
     }
 
     /// Register a `#[processor]`-annotated host type `P` on the processor
     /// registry (no package on disk) and immediately instantiate it,
-    /// returning the connectable [`ProcessorUniqueId`]. `config` is validated
+    /// returning the connectable [`AddedProcessor`]. `config` is validated
     /// against `P::Config` at registration and used as the instance config.
-    pub fn add_local<P>(&self, config: impl Serialize) -> Result<ProcessorUniqueId>
+    pub fn add_local<P>(
+        &self,
+        config: impl Serialize,
+        display_name: Option<&str>,
+    ) -> Result<AddedProcessor>
     where
         P: GeneratedProcessor + 'static,
         P::Config: Config,
     {
         let config = to_config_value(config)?;
         let reference = self.runner.add_local::<P>(config.clone())?;
-        self.runner
-            .add_processor(ProcessorSpec::new(reference, config))
+        self.add_spec(ProcessorSpec::new(reference, config), display_name)
     }
 
     /// Connect an output endpoint to an input endpoint — `((&from, "out"),
@@ -78,8 +105,8 @@ impl App {
         to: AppPortEndpoint<'_>,
     ) -> Result<LinkUniqueId> {
         self.runner.connect(
-            OutputLinkPortRef::new(from.0, from.1),
-            InputLinkPortRef::new(to.0, to.1),
+            OutputLinkPortRef::new(from.0.processor_id(), from.1),
+            InputLinkPortRef::new(to.0.processor_id(), to.1),
         )
     }
 
@@ -93,6 +120,26 @@ impl App {
     /// hatch for anything the sugar doesn't wrap.
     pub fn runner(&self) -> &Arc<Runner> {
         &self.runner
+    }
+
+    /// Add `spec` under an optional requested display name and read back the
+    /// name the graph assigned, which is the requested one only when no other
+    /// node already answered to it.
+    fn add_spec(
+        &self,
+        spec: ProcessorSpec,
+        display_name: Option<&str>,
+    ) -> Result<AddedProcessor> {
+        let spec = match display_name {
+            Some(display_name) => spec.with_display_name(display_name),
+            None => spec,
+        };
+        let processor_id = self.runner.add_processor(spec)?;
+        let display_name = self.runner.display_name_of_processor(&processor_id)?;
+        Ok(AddedProcessor {
+            processor_id,
+            display_name,
+        })
     }
 }
 
