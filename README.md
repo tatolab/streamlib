@@ -351,6 +351,6 @@ and link infrastructure — as your product.
 
 Built by [Tatolab](https://tatolab.com) — sensory infrastructure for AI.
 
-[tatolab.com](https://tatolab.com) · [hello@tatolab.com](mailto:hello@tatolab.com) · [@tatolab](https://twitter.com/tatolab)
+[tatolab.com](https://tatolab.com) · [hello@tatolab.com](mailto:hello@tatolab.com)
 
 </div>
