@@ -861,21 +861,48 @@ impl Drop for VkImageResource {
     }
 }
 
+/// A device whose command table resolves to nothing.
+///
+/// Tests here exercise pure layout logic and never issue a Vulkan call, but
+/// `VkImageResource` still has to hold a `vulkanalia::Device`. That type owns
+/// two `BTreeSet`s, so `MaybeUninit::uninit().assume_init()` hands it garbage
+/// heap pointers — undefined behaviour the moment it is created, and a wild
+/// free for any caller who drops it.
+///
+/// `Device::from_created` fills the command table from the loader it is given.
+/// A loader that resolves nothing leaves every entry as vulkanalia's own
+/// panicking fallback and both name sets legitimately empty, so the value is
+/// fully initialized and safe to drop. A stray Vulkan call panics by name
+/// instead of corrupting the heap.
+#[cfg(test)]
+fn device_with_no_loaded_commands() -> vulkanalia::Device {
+    unsafe extern "system" fn resolve_nothing(
+        _device: vk::Device,
+        _name: *const std::ffi::c_char,
+    ) -> vk::PFN_vkVoidFunction {
+        None
+    }
+
+    unsafe {
+        vulkanalia::Device::from_created(
+            resolve_nothing,
+            vk::PhysicalDevice::null(),
+            &vk::DeviceCreateInfo::default(),
+            vk::Device::null(),
+        )
+    }
+    .expect("loading an empty command table cannot fail")
+}
+
 #[cfg(test)]
 impl VkImageResource {
     /// Create a test-only VkImageResource without a real Vulkan device.
     ///
-    /// SAFETY: The returned resource has `owns_resources = false` and must never
-    /// have device methods called on it. This is only for testing pure logic
-    /// (is_compatible, get_plane_layout, etc.).
-    /// Create a test-only VkImageResource that is wrapped in ManuallyDrop
-    /// to prevent the uninitialized Device from being dropped.
-    fn new_test_stub(image_create_info: vk::ImageCreateInfo) -> std::mem::ManuallyDrop<Self> {
-        // SAFETY: dummy_device is never used for Vulkan calls; owns_resources is false.
-        // ManuallyDrop prevents the uninitialized Device from being dropped.
-        let device: vulkanalia::Device = unsafe { std::mem::MaybeUninit::uninit().assume_init() };
-        std::mem::ManuallyDrop::new(Self {
-            device,
+    /// The resource has `owns_resources = false`, so `destroy` never reaches
+    /// the device.
+    fn new_test_stub(image_create_info: vk::ImageCreateInfo) -> Self {
+        Self {
+            device: device_with_no_loaded_commands(),
             image: vk::Image::null(),
             image_create_info,
             image_offset: 0,
@@ -893,7 +920,7 @@ impl VkImageResource {
             is_subsampled_y: false,
             uses_drm_format_modifier: false,
             owns_resources: false,
-        })
+        }
     }
 }
 
@@ -1363,15 +1390,6 @@ fn cleanup_views(device: &vulkanalia::Device, views: &[vk::ImageView; 4], count:
 mod tests {
     use super::*;
 
-    /// Create a dummy vulkanalia::Device for testing pure logic that never
-    /// invokes device methods. Uses MaybeUninit to avoid the zeroed-initialization
-    /// panic on function pointers.
-    ///
-    /// SAFETY: Caller must never call Vulkan methods on the returned device.
-    unsafe fn dummy_device() -> vulkanalia::Device {
-        unsafe { std::mem::MaybeUninit::uninit().assume_init() }
-    }
-
     #[test]
     fn test_ycbcr_vk_format_info_nv12() {
         let info = ycbcr_vk_format_info(vk::Format::G8_B8R8_2PLANE_420_UNORM);
@@ -1529,8 +1547,8 @@ mod tests {
         };
 
         // No DRM modifier
-        let r1 = std::mem::ManuallyDrop::new(VkImageResource::new_inner(
-            unsafe { dummy_device() },
+        let r1 = VkImageResource::new_inner(
+            device_with_no_loaded_commands(),
             &base_info,
             vk::Image::null(),
             0,
@@ -1540,12 +1558,12 @@ mod tests {
             None,
             0,
             0,
-        ));
+        );
         assert!(!r1.uses_drm_format_modifier);
 
         // With DRM modifier value
-        let r2 = std::mem::ManuallyDrop::new(VkImageResource::new_inner(
-            unsafe { dummy_device() },
+        let r2 = VkImageResource::new_inner(
+            device_with_no_loaded_commands(),
             &base_info,
             vk::Image::null(),
             0,
@@ -1555,7 +1573,7 @@ mod tests {
             None,
             1,
             2,
-        ));
+        );
         assert!(r2.uses_drm_format_modifier);
         assert_eq!(r2.drm_format_modifier, 1);
         assert_eq!(r2.memory_plane_count, 2);
@@ -1565,8 +1583,8 @@ mod tests {
             tiling: vk::ImageTiling::DRM_FORMAT_MODIFIER_EXT,
             ..base_info
         };
-        let r3 = std::mem::ManuallyDrop::new(VkImageResource::new_inner(
-            unsafe { dummy_device() },
+        let r3 = VkImageResource::new_inner(
+            device_with_no_loaded_commands(),
             &drm_info,
             vk::Image::null(),
             0,
@@ -1576,7 +1594,7 @@ mod tests {
             None,
             0,
             0,
-        ));
+        );
         assert!(r3.uses_drm_format_modifier);
     }
 
@@ -1618,8 +1636,8 @@ mod tests {
 
     #[test]
     fn test_memory_plane_layout_bounds() {
-        let resource = std::mem::ManuallyDrop::new(VkImageResource {
-            device: unsafe { dummy_device() },
+        let resource = VkImageResource {
+            device: device_with_no_loaded_commands(),
             image: vk::Image::null(),
             image_create_info: vk::ImageCreateInfo {
                 s_type: vk::StructureType::IMAGE_CREATE_INFO,
@@ -1674,7 +1692,7 @@ mod tests {
             is_subsampled_y: true,
             uses_drm_format_modifier: true,
             owns_resources: false,
-        });
+        };
 
         // Valid planes
         assert!(resource.get_memory_plane_layout(0).is_some());
