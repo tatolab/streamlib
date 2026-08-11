@@ -2,7 +2,6 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use serde::{Deserialize, Serialize};
-use streamlib_processor_schema::PortSchemaSpec;
 
 use super::PortKind;
 
@@ -10,7 +9,10 @@ use super::PortKind;
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PortInfo {
     pub name: String,
-    pub data_type: PortSchemaSpec,
+    /// Human-readable description declared alongside the port. Mirrors the
+    /// field on [`crate::core::descriptors::PortDescriptor`].
+    #[serde(default)]
+    pub description: String,
     #[serde(default)]
     pub port_kind: PortKind,
     /// Delivery profile declared by this input port —
@@ -21,4 +23,15 @@ pub struct PortInfo {
     /// locking the processor instance.
     #[serde(default)]
     pub delivery_profile: Option<String>,
+}
+
+impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
+    fn from(port: &crate::core::descriptors::PortDescriptor) -> Self {
+        Self {
+            name: port.name.clone(),
+            description: port.description.clone(),
+            port_kind: PortKind::default(),
+            delivery_profile: port.delivery_profile.clone(),
+        }
+    }
 }

@@ -227,10 +227,6 @@ pub mod sdk {
         // Port markers + input/output helpers — semantically processor-
         // related; live in `core::graph::edges::link_port_markers`.
         pub use crate::core::graph::{InputPortMarker, OutputPortMarker, input, output};
-
-        // Port schema spec — semantically processor-related; lives in
-        // `core::descriptors`.
-        pub use crate::core::descriptors::PortSchemaSpec;
     }
 
     pub use crate::crossbeam_channel;

@@ -18,9 +18,7 @@ use parking_lot::Mutex;
 use serde::Deserialize;
 use std::sync::Arc;
 use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::json_schema::{
-    ProcessorDescriptorOutput, RegistryResponse, SchemaDescriptorOutput, SemanticVersionOutput,
-};
+use streamlib::sdk::json_schema::{ProcessorDescriptorOutput, RegistryResponse};
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
 use streamlib::sdk::runtime::RuntimeOperations;
@@ -227,7 +225,7 @@ pub(crate) async fn request_runtime_shutdown(
     path = "/api/registry",
     tag = "registry",
     responses(
-        (status = 200, description = "Available processors and schemas", body = RegistryResponse)
+        (status = 200, description = "Available processor types", body = RegistryResponse)
     )
 )]
 pub(crate) async fn get_registry() -> Json<RegistryResponse> {
@@ -237,26 +235,7 @@ pub(crate) async fn get_registry() -> Json<RegistryResponse> {
         .map(|d| ProcessorDescriptorOutput::from(&d))
         .collect();
 
-    let schemas: Vec<SchemaDescriptorOutput> = PROCESSOR_REGISTRY
-        .known_schemas()
-        .into_iter()
-        .map(|spec| SchemaDescriptorOutput {
-            name: spec.to_string(),
-            version: SemanticVersionOutput {
-                major: 1,
-                minor: 0,
-                patch: 0,
-            },
-            fields: vec![],
-            read_behavior: Default::default(),
-            default_capacity: 0,
-        })
-        .collect();
-
-    Json(RegistryResponse {
-        processors,
-        schemas,
-    })
+    Json(RegistryResponse { processors })
 }
 
 pub(crate) async fn get_openapi_spec(

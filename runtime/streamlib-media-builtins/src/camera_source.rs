@@ -122,7 +122,7 @@ pub fn list_camera_capture_devices() -> Result<Vec<CameraCaptureDevice>> {
     execution = manual,
     scheduling = high,
     config = crate::camera_source::CameraSourceConfig,
-    output("video", any, description = "Live camera video frames"),
+    output("video", description = "Live camera video frames"),
 )]
 pub struct CameraSource {
     camera_name: String,

@@ -11,8 +11,8 @@ use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use streamlib::sdk::descriptors::{
-    Org, Package, PortDescriptor, PortSchemaSpec, ProcessorDescriptor, ProcessorRuntime,
-    ProcessorScheduling, SchemaIdent, SemVer, TypeName,
+    Org, Package, PortDescriptor, ProcessorDescriptor, ProcessorRuntime, ProcessorScheduling,
+    SchemaIdent, SemVer, TypeName,
 };
 use streamlib::sdk::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
 use streamlib::sdk::processors::ProcessorTypeReference;
@@ -170,7 +170,6 @@ fn read_port_descriptors(
         let mut port = PortDescriptor::iceoryx2(
             read_dict_string(&declaration, "name")?,
             read_dict_string(&declaration, "description")?,
-            port_schema_spec_from_declaration(&declaration)?,
         );
         if let Some(delivery_profile) = declaration
             .get_item("delivery_profile")?
@@ -181,32 +180,6 @@ fn read_port_descriptors(
         ports.push(port);
     }
     Ok(ports)
-}
-
-/// The port's declared schema: absent or `None` means a wildcard — the wire
-/// is self-describing and consuming is a cast at read time — while a typed
-/// declaration names the schema for the engine to agree on.
-fn port_schema_spec_from_declaration(declaration: &Bound<'_, PyDict>) -> PyResult<PortSchemaSpec> {
-    let Some(schema) = declaration
-        .get_item("schema")?
-        .filter(|declared| !declared.is_none())
-    else {
-        return Ok(PortSchemaSpec::Any);
-    };
-    let schema = schema.cast_into::<PyDict>().map_err(|_| {
-        PyTypeError::new_err(
-            "a port's \"schema\" must be a dict with org, package, type and version keys",
-        )
-    })?;
-    let org = Org::new(read_dict_string(&schema, "org")?).map_err(ident_error)?;
-    let package = Package::new(read_dict_string(&schema, "package")?).map_err(ident_error)?;
-    let type_name = TypeName::new(read_dict_string(&schema, "type")?).map_err(ident_error)?;
-    let version = read_dict_string(&schema, "version")?
-        .parse::<SemVer>()
-        .map_err(ident_error)?;
-    Ok(PortSchemaSpec::Specific(SchemaIdent::new(
-        org, package, type_name, version,
-    )))
 }
 
 fn read_string_attribute(object: &Bound<'_, PyAny>, attribute: &str) -> PyResult<String> {
@@ -222,80 +195,4 @@ fn read_dict_string(dictionary: &Bound<'_, PyDict>, key: &str) -> PyResult<Strin
 
 fn ident_error(failure: impl std::fmt::Display) -> PyErr {
     PyTypeError::new_err(failure.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    /// The tolerant reading: no `"schema"` key and an explicit `None` both
-    /// mean wildcard, so pre-schema Python declarations keep working.
-    #[test]
-    fn a_port_without_a_schema_declaration_is_a_wildcard() {
-        Python::initialize();
-        Python::attach(|python| {
-            let declaration = PyDict::new(python);
-            assert!(matches!(
-                port_schema_spec_from_declaration(&declaration).unwrap(),
-                PortSchemaSpec::Any
-            ));
-
-            declaration.set_item("schema", python.None()).unwrap();
-            assert!(matches!(
-                port_schema_spec_from_declaration(&declaration).unwrap(),
-                PortSchemaSpec::Any
-            ));
-        });
-    }
-
-    #[test]
-    fn a_four_key_schema_dict_becomes_a_specific_ident() {
-        Python::initialize();
-        Python::attach(|python| {
-            let schema = PyDict::new(python);
-            schema.set_item("org", "tatolab").unwrap();
-            schema.set_item("package", "video").unwrap();
-            schema.set_item("type", "VideoFrame").unwrap();
-            schema.set_item("version", "1.2.3").unwrap();
-            let declaration = PyDict::new(python);
-            declaration.set_item("schema", schema).unwrap();
-
-            let spec = port_schema_spec_from_declaration(&declaration).unwrap();
-            let PortSchemaSpec::Specific(ident) = spec else {
-                panic!("expected Specific, got {spec:?}");
-            };
-            assert_eq!(
-                ident,
-                SchemaIdent::new(
-                    Org::new("tatolab").unwrap(),
-                    Package::new("video").unwrap(),
-                    TypeName::new("VideoFrame").unwrap(),
-                    SemVer::new(1, 2, 3),
-                )
-            );
-        });
-    }
-
-    #[test]
-    fn a_malformed_schema_declaration_is_refused() {
-        Python::initialize();
-        Python::attach(|python| {
-            let missing_version = PyDict::new(python);
-            missing_version.set_item("org", "tatolab").unwrap();
-            missing_version.set_item("package", "video").unwrap();
-            missing_version.set_item("type", "VideoFrame").unwrap();
-            let declaration = PyDict::new(python);
-            declaration.set_item("schema", &missing_version).unwrap();
-            assert!(port_schema_spec_from_declaration(&declaration).is_err());
-
-            missing_version
-                .set_item("version", "not-a-version")
-                .unwrap();
-            assert!(port_schema_spec_from_declaration(&declaration).is_err());
-
-            let declaration = PyDict::new(python);
-            declaration.set_item("schema", "VideoFrame").unwrap();
-            assert!(port_schema_spec_from_declaration(&declaration).is_err());
-        });
-    }
 }

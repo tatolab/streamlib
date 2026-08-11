@@ -14,24 +14,24 @@
 //!     scheduling = high,                // realtime | high | normal (default: normal)
 //!     unsafe_send,                      // flag — emit `unsafe impl Send`
 //!     config = crate::CameraConfig,     // Rust type path for the typed Config alias
-//!     input("video_in", "@tatolab/core/VideoFrame", delivery_profile = "latest"),
-//!     output("video", "@tatolab/core/VideoFrame"),
+//!     input("video_in", delivery_profile = "latest"),
+//!     output("video"),
 //! )]
 //! ```
 //!
-//! Every schema reference — the processor identity and each port schema — is
-//! **version-free** (`@org/package/Type`, no `@version`): a schema ref is an
-//! identity the runtime binds version-blind to whatever a node provides, and
-//! versions are derived at package-build time, never hand-authored (#1409).
-//! References are **resolve-free**: the attribute carries the `@org/package/Type`
-//! verbatim, so the macro never walks the dependency graph. Deep schema
-//! validation (does the referenced schema exist / stay compatible) is out of
-//! scope here and handled at the runtime layer.
+//! A port declares a name, a description, and — on an input — a delivery
+//! profile. It carries no type: type information belongs to the authoring
+//! language and never reaches the engine.
+//!
+//! The processor identity is **version-free** (`@org/package/Type`, no
+//! `@version`): it is an identity the runtime binds version-blind to whatever a
+//! node provides, and versions are derived at package-build time, never
+//! hand-authored (#1409).
 
 use streamlib_processor_schema::{
-    DELIVERY_PROFILE_DECLARATION_VALUES, Org, Package, PortSchemaSpec, ProcessorPortSchema,
-    ProcessorSchema, ProcessorSchemaExecution, ProcessorScheduling, RuntimeConfig, RuntimeOptions,
-    SchemaIdent, SemVer, ThreadPriority, TypeName,
+    DELIVERY_PROFILE_DECLARATION_VALUES, Org, Package, ProcessorPortSchema, ProcessorScheduling,
+    ProcessorSchema, ProcessorSchemaExecution, RuntimeConfig, RuntimeOptions, SchemaIdent, SemVer,
+    ThreadPriority, TypeName,
 };
 use syn::ext::IdentExt;
 use syn::parse::{ParseStream, Parser};
@@ -58,7 +58,6 @@ impl PortDirection {
 /// A parsed input/output port declaration.
 pub struct ParsedPort {
     pub name: String,
-    pub schema: PortSchemaSpec,
     pub description: Option<String>,
     /// Always `Some` on an input and always `None` on an output — the grammar
     /// requires it on the one and rejects it on the other.
@@ -95,7 +94,6 @@ impl ParsedProcessorAttr {
     pub fn to_processor_schema(&self) -> ProcessorSchema {
         let to_port = |p: &ParsedPort| ProcessorPortSchema {
             name: p.name.clone(),
-            schema: p.schema.clone(),
             description: p.description.clone(),
             delivery_profile: p.delivery_profile.clone(),
         };
@@ -370,9 +368,7 @@ fn parse_execution(input: ParseStream<'_>) -> syn::Result<ProcessorSchemaExecuti
 
 /// Parse an `input(...)` / `output(...)` port body.
 ///
-/// `<name-string>, <schema>, [delivery_profile = "...", description = "..."]` —
-/// where `<schema>` is either the bare identifier `any` or a version-free
-/// `"@org/package/Type"` string.
+/// `<name-string>[, delivery_profile = "...", description = "..."]`.
 ///
 /// `delivery_profile` is a consumer-side setting: **required** on every
 /// `input(...)`, and rejected with a spanned error on an `output(...)` rather
@@ -384,11 +380,11 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
     let name_lit: LitStr = content.parse()?;
     let name = name_lit.value();
     if name.is_empty() {
-        return Err(syn::Error::new(name_lit.span(), "port name must not be empty"));
+        return Err(syn::Error::new(
+            name_lit.span(),
+            "port name must not be empty",
+        ));
     }
-
-    content.parse::<Token![,]>()?;
-    let schema = parse_port_schema(&content)?;
 
     let mut description = None;
     let mut delivery_profile = None;
@@ -398,6 +394,7 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
         if content.is_empty() {
             break;
         }
+        reject_positional_port_schema(&content, &name, direction)?;
         let key: Ident = content.parse()?;
         let key_span = key.span();
         content.parse::<Token![=]>()?;
@@ -437,7 +434,6 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
 
     Ok(ParsedPort {
         name,
-        schema,
         description,
         delivery_profile,
     })
@@ -450,6 +446,35 @@ fn render_delivery_profile_values() -> String {
         .map(|value| format!("`\"{value}\"`"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Reject the pre-#1816 positional port schema — `"@org/package/Type"` or the
+/// bare `any` — where a key is expected, naming the removal.
+///
+/// Without this the author sees syn's bare `expected identifier` / `expected
+/// =` and has nothing to act on.
+fn reject_positional_port_schema(
+    content: ParseStream<'_>,
+    port_name: &str,
+    direction: PortDirection,
+) -> syn::Result<()> {
+    let span = if content.peek(LitStr) {
+        content.fork().parse::<LitStr>()?.span()
+    } else if content.peek(Ident::peek_any) && content.fork().parse::<Ident>()? == "any" {
+        content.fork().parse::<Ident>()?.span()
+    } else {
+        return Ok(());
+    };
+    Err(syn::Error::new(
+        span,
+        format!(
+            "a port declares no type — remove this argument from \
+             `{}(\"{port_name}\", ...)`. A port declares a name plus \
+             `delivery_profile` and `description`; type information belongs to \
+             the authoring language and never reaches the engine",
+            direction.keyword()
+        ),
+    ))
 }
 
 /// Reject `delivery_profile` on an `output(...)` with a spanned error — the
@@ -472,29 +497,6 @@ fn reject_delivery_profile_on_output(
         ));
     }
     Ok(())
-}
-
-/// Parse a port schema reference: `any` (bare ident) or a version-free
-/// `"@org/package/Type"` string literal.
-fn parse_port_schema(content: ParseStream<'_>) -> syn::Result<PortSchemaSpec> {
-    if content.peek(LitStr) {
-        let lit: LitStr = content.parse()?;
-        let ident = parse_schema_ident_str(&lit.value(), lit.span())?;
-        Ok(PortSchemaSpec::Specific(ident))
-    } else {
-        let kw: Ident = content.parse()?;
-        if kw == "any" {
-            Ok(PortSchemaSpec::Any)
-        } else {
-            Err(syn::Error::new(
-                kw.span(),
-                format!(
-                    "port schema must be `any` or a version-free \
-                     `\"@org/package/Type\"` string; got `{kw}`"
-                ),
-            ))
-        }
-    }
 }
 
 /// Parse a **version-free** `@org/package/Type` into a validated
@@ -535,7 +537,12 @@ pub fn parse_schema_ident_str(raw: &str, span: proc_macro2::Span) -> syn::Result
     let type_name =
         TypeName::new(segments[2]).map_err(|e| err(format!("invalid type in `{raw}`: {e}")))?;
 
-    Ok(SchemaIdent::new(org, package, type_name, SemVer::new(0, 0, 0)))
+    Ok(SchemaIdent::new(
+        org,
+        package,
+        type_name,
+        SemVer::new(0, 0, 0),
+    ))
 }
 
 #[cfg(test)]
@@ -565,8 +572,8 @@ mod tests {
             "@tatolab/camera/Camera",
             execution = manual,
             scheduling = high,
-            input("video_in", "@tatolab/core/VideoFrame", delivery_profile = "latest"),
-            output("video", "@tatolab/core/VideoFrame"),
+            input("video_in", delivery_profile = "latest"),
+            output("video"),
         });
         assert_eq!(parsed.ident.org.as_str(), "tatolab");
         assert_eq!(parsed.ident.package.as_str(), "camera");
@@ -578,10 +585,6 @@ mod tests {
         assert_eq!(parsed.inputs.len(), 1);
         assert_eq!(parsed.inputs[0].name, "video_in");
         assert_eq!(parsed.inputs[0].delivery_profile.as_deref(), Some("latest"));
-        assert!(matches!(
-            parsed.inputs[0].schema,
-            PortSchemaSpec::Specific(_)
-        ));
         assert_eq!(parsed.outputs.len(), 1);
         assert_eq!(parsed.outputs[0].name, "video");
         // Output ports never carry a delivery profile.
@@ -599,15 +602,23 @@ mod tests {
             execution = manual,
             input(
                 "video_in",
-                "@tatolab/core/VideoFrame",
                 delivery_profile = "latest",
                 description = "Frames to convert"
             ),
-            output("video", "@tatolab/core/VideoFrame", description = "Live video frames"),
+            output("video", description = "Live video frames"),
         });
-        assert_eq!(parsed.description.as_deref(), Some("Captures video from cameras"));
-        assert_eq!(parsed.inputs[0].description.as_deref(), Some("Frames to convert"));
-        assert_eq!(parsed.outputs[0].description.as_deref(), Some("Live video frames"));
+        assert_eq!(
+            parsed.description.as_deref(),
+            Some("Captures video from cameras")
+        );
+        assert_eq!(
+            parsed.inputs[0].description.as_deref(),
+            Some("Frames to convert")
+        );
+        assert_eq!(
+            parsed.outputs[0].description.as_deref(),
+            Some("Live video frames")
+        );
     }
 
     #[test]
@@ -635,15 +646,32 @@ mod tests {
     }
 
     #[test]
-    fn any_port_schema() {
-        let parsed = parse_ok(quote! {
+    fn a_positional_port_schema_is_an_error() {
+        // A port declares a name and keyed options only. The old
+        // `input("name", <schema>, ...)` form must fail to parse, not be
+        // silently accepted and dropped.
+        let msg = parse_err(quote! {
             "@tatolab/testing/Mock",
             execution = manual,
-            input("in1", any, delivery_profile = "latest"),
+            input("in1", "@tatolab/core/VideoFrame", delivery_profile = "latest"),
+        });
+        assert!(
+            msg.contains("a port declares no type") && msg.contains("input(\"in1\", ...)"),
+            "the error must name the removal and the offending port: {msg}"
+        );
+    }
+
+    #[test]
+    fn a_bare_any_port_schema_is_an_error() {
+        let msg = parse_err(quote! {
+            "@tatolab/testing/Mock",
+            execution = manual,
             output("out1", any),
         });
-        assert!(matches!(parsed.inputs[0].schema, PortSchemaSpec::Any));
-        assert!(matches!(parsed.outputs[0].schema, PortSchemaSpec::Any));
+        assert!(
+            msg.contains("a port declares no type") && msg.contains("output(\"out1\", ...)"),
+            "the error must name the removal and the offending port: {msg}"
+        );
     }
 
     #[test]
@@ -689,11 +717,8 @@ mod tests {
     #[test]
     fn app_local_synthesis_from_struct_name() {
         // No identity string, no `type` — synthesize @app/local/<StructName>.
-        let parsed = parse2(
-            quote! { execution = reactive },
-            &ident("MyLocalProcessor"),
-        )
-        .expect("bare app-local processor should parse");
+        let parsed = parse2(quote! { execution = reactive }, &ident("MyLocalProcessor"))
+            .expect("bare app-local processor should parse");
         assert_eq!(parsed.ident.org.as_str(), "app");
         assert_eq!(parsed.ident.package.as_str(), "local");
         assert_eq!(parsed.ident.r#type.as_str(), "MyLocalProcessor");
@@ -734,10 +759,13 @@ mod tests {
         let msg = parse_err(quote! {
             "@tatolab/testing/Mock",
             execution = manual,
-            input("dup", any, delivery_profile = "latest"),
-            input("dup", any, delivery_profile = "latest"),
+            input("dup", delivery_profile = "latest"),
+            input("dup", delivery_profile = "latest"),
         });
-        assert!(msg.contains("duplicate input port name `dup`"), "got: {msg}");
+        assert!(
+            msg.contains("duplicate input port name `dup`"),
+            "got: {msg}"
+        );
     }
 
     #[test]
@@ -745,10 +773,13 @@ mod tests {
         let msg = parse_err(quote! {
             "@tatolab/testing/Mock",
             execution = manual,
-            output("dup", any),
-            output("dup", any),
+            output("dup"),
+            output("dup"),
         });
-        assert!(msg.contains("duplicate output port name `dup`"), "got: {msg}");
+        assert!(
+            msg.contains("duplicate output port name `dup`"),
+            "got: {msg}"
+        );
     }
 
     #[test]
@@ -757,11 +788,10 @@ mod tests {
         // `output(...)`. It must be a spanned error, not silently nulled.
         // Mentally revert `reject_delivery_profile_on_output` and this parses
         // cleanly (bug) instead of erroring.
-        let tokens: proc_macro2::TokenStream =
-            "\"@tatolab/camera/Camera\", execution = manual, \
-             output(\"video\", \"@tatolab/core/VideoFrame\", delivery_profile = \"latest\")"
-                .parse()
-                .expect("token stream parses");
+        let tokens: proc_macro2::TokenStream = "\"@tatolab/camera/Camera\", execution = manual, \
+             output(\"video\", delivery_profile = \"latest\")"
+            .parse()
+            .expect("token stream parses");
         let msg = parse_err(tokens);
         assert!(
             msg.contains("`delivery_profile` is a consumer-side setting"),
@@ -776,7 +806,7 @@ mod tests {
         let parsed = parse_ok(quote! {
             "@tatolab/camera/Camera",
             execution = manual,
-            input("video_in", "@tatolab/core/VideoFrame", delivery_profile = "lossless"),
+            input("video_in", delivery_profile = "lossless"),
         });
         assert_eq!(
             parsed.inputs[0].delivery_profile.as_deref(),
@@ -789,7 +819,7 @@ mod tests {
         let msg = parse_err(quote! {
             "@tatolab/camera/Camera",
             execution = manual,
-            input("video_in", "@tatolab/core/VideoFrame"),
+            input("video_in"),
         });
         assert!(
             msg.contains("input port `video_in` must declare a `delivery_profile`"),
@@ -808,7 +838,7 @@ mod tests {
         let parsed = parse_ok(quote! {
             "@tatolab/camera/Camera",
             execution = manual,
-            output("video", "@tatolab/core/VideoFrame"),
+            output("video"),
         });
         assert_eq!(parsed.outputs[0].delivery_profile, None);
     }
@@ -820,7 +850,10 @@ mod tests {
             execution = manual,
             frobnicate = "yes",
         });
-        assert!(msg.contains("unknown `#[processor(...)]` key `frobnicate`"), "got: {msg}");
+        assert!(
+            msg.contains("unknown `#[processor(...)]` key `frobnicate`"),
+            "got: {msg}"
+        );
     }
 
     #[test]
@@ -829,7 +862,10 @@ mod tests {
             "@tatolab/testing/Mock",
             execution = sideways,
         });
-        assert!(msg.contains("unknown execution mode `sideways`"), "got: {msg}");
+        assert!(
+            msg.contains("unknown execution mode `sideways`"),
+            "got: {msg}"
+        );
     }
 
     #[test]
@@ -854,17 +890,6 @@ mod tests {
     }
 
     #[test]
-    fn versioned_port_schema_is_rejected() {
-        // A hand-authored `@<version>` on a port schema ref is rejected too.
-        let msg = parse_err(quote! {
-            "@tatolab/camera/Camera",
-            execution = manual,
-            output("video", "@tatolab/core/VideoFrame@1.0.0"),
-        });
-        assert!(msg.contains("must be version-free"), "got: {msg}");
-    }
-
-    #[test]
     fn identity_wrong_segment_count_is_an_error() {
         let msg = parse_err(quote! {
             "@tatolab/Camera",
@@ -874,39 +899,12 @@ mod tests {
     }
 
     #[test]
-    fn port_schema_bad_ident_is_an_error() {
-        let msg = parse_err(quote! {
-            "@tatolab/testing/Mock",
-            execution = manual,
-            input("in1", something_else),
-        });
-        assert!(msg.contains("port schema must be `any`"), "got: {msg}");
-    }
-
-    #[test]
     fn continuous_unknown_key_is_an_error() {
         let msg = parse_err(quote! {
             "@tatolab/camera/Camera",
             execution = continuous(period = 5),
         });
         assert!(msg.contains("expected `interval_ms`"), "got: {msg}");
-    }
-
-    #[test]
-    fn schema_from_parsed_uses_named_free_specific_ports() {
-        // Regression: a resolve-free grammar must still produce Specific idents
-        // for the runtime (Named panics at iceoryx2 service open).
-        let parsed = parse_ok(quote! {
-            "@tatolab/camera/Camera",
-            execution = manual,
-            output("video", "@tatolab/core/VideoFrame"),
-        });
-        let PortSchemaSpec::Specific(id) = &parsed.outputs[0].schema else {
-            panic!("expected Specific port schema");
-        };
-        assert_eq!(id.org.as_str(), "tatolab");
-        assert_eq!(id.package.as_str(), "core");
-        assert_eq!(id.r#type.as_str(), "VideoFrame");
     }
 
     #[test]

@@ -17,8 +17,8 @@ use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextFullAccess};
 #[streamlib::sdk::processor(
     "@tatolab/streamlib-engine/TestProcessor",
     execution = manual,
-    input("video_in", any, delivery_profile = "latest"),
-    output("video_out", any),
+    input("video_in", delivery_profile = "latest"),
+    output("video_out"),
 )]
 pub struct TestProcessor;
 
@@ -200,8 +200,8 @@ pub struct CfgGatedFieldAlwaysCompiledState {
 #[streamlib::sdk::processor(
     "@tatolab/streamlib-engine/CfgGatedFieldProcessor",
     execution = manual,
-    input("video_in", any, delivery_profile = "latest"),
-    output("video_out", any),
+    input("video_in", delivery_profile = "latest"),
+    output("video_out"),
 )]
 pub struct CfgGatedFieldProcessor {
     #[cfg(any())]

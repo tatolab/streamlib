@@ -72,17 +72,15 @@ pub struct ProcessorNodePortsOutput {
 pub struct PortInfoOutput {
     /// Port name (e.g., "video_in", "audio_out").
     pub name: String,
-    /// Structured schema identifier of the data flowing through this port.
-    ///
-    /// Resolved from the build-time embedded-schema segment table. `None`
-    /// when the port's declared schema doesn't have a structured-segment
-    /// representation (legacy reverse-DNS schemas, or schemas not in the
-    /// resolver dep graph).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub data_type: Option<SchemaIdentOutput>,
+    /// Human-readable description declared alongside the port.
+    #[serde(default)]
+    pub description: String,
     /// Kind of port: data, event, or control.
     #[serde(default)]
     pub port_kind: PortKindOutput,
+    /// Delivery profile declared by this input port — `"latest"`,
+    /// `"every_sample"` or `"lossless"`; `None` on an output port.
+    pub delivery_profile: Option<String>,
 }
 
 /// The kind of port - determines how data flows.
@@ -149,8 +147,6 @@ pub enum LinkStateOutput {
 pub struct RegistryResponse {
     /// Available processor types with their descriptors.
     pub processors: Vec<ProcessorDescriptorOutput>,
-    /// Available data frame schemas.
-    pub schemas: Vec<SchemaDescriptorOutput>,
 }
 
 /// Runtime environment for a processor.
@@ -212,15 +208,11 @@ pub struct PortDescriptorOutput {
     pub name: String,
     /// Human-readable description.
     pub description: String,
-    /// Structured schema identifier for data flowing through this port.
-    ///
-    /// Resolved from the build-time embedded-schema segment table. `None`
-    /// when the port's declared schema doesn't have a structured-segment
-    /// representation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub schema: Option<SchemaIdentOutput>,
     /// Whether the port is required.
     pub required: bool,
+    /// Delivery profile declared by this input port — `"latest"`,
+    /// `"every_sample"` or `"lossless"`; `None` on an output port.
+    pub delivery_profile: Option<String>,
 }
 
 /// Code examples for a processor in different languages.
@@ -232,51 +224,6 @@ pub struct CodeExamplesOutput {
     pub python: String,
     /// TypeScript code example.
     pub typescript: String,
-}
-
-/// Descriptor for a data schema.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct SchemaDescriptorOutput {
-    /// Schema name (e.g., "VideoFrame", "AudioFrame").
-    pub name: String,
-    /// Semantic version.
-    pub version: SemanticVersionOutput,
-    /// Fields in this schema.
-    pub fields: Vec<SchemaFieldOutput>,
-    /// How data is read from the link buffer.
-    pub read_behavior: LinkBufferReadModeOutput,
-    /// Default ring buffer capacity.
-    pub default_capacity: usize,
-}
-
-/// A field in a data schema.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-pub struct SchemaFieldOutput {
-    /// Field name.
-    pub name: String,
-    /// Human-readable description.
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub description: String,
-    /// Type name (e.g., "u32", "Arc<wgpu::Texture>").
-    #[serde(rename = "type")]
-    pub type_name: String,
-    /// Shape for multi-dimensional fields (e.g., [512] for embeddings).
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub shape: Vec<usize>,
-    /// Whether this is an internal field (not serializable).
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub internal: bool,
-}
-
-/// How data is read from the link buffer.
-#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
-#[serde(rename_all = "snake_case")]
-pub enum LinkBufferReadModeOutput {
-    /// Drain buffer and return only the newest frame (optimal for video).
-    #[default]
-    SkipToLatest,
-    /// Read next frame in FIFO order (required for audio).
-    ReadNextInOrder,
 }
 
 // =============================================================================
@@ -310,8 +257,9 @@ impl From<&crate::core::graph::PortInfo> for PortInfoOutput {
     fn from(port: &crate::core::graph::PortInfo) -> Self {
         Self {
             name: port.name.clone(),
-            data_type: SchemaIdentOutput::from_port_spec(&port.data_type),
+            description: port.description.clone(),
             port_kind: PortKindOutput::from(port.port_kind),
+            delivery_profile: port.delivery_profile.clone(),
         }
     }
 }
@@ -415,8 +363,8 @@ impl From<&crate::core::PortDescriptor> for PortDescriptorOutput {
         Self {
             name: port.name.clone(),
             description: port.description.clone(),
-            schema: SchemaIdentOutput::from_port_spec(&port.schema),
             required: port.required,
+            delivery_profile: port.delivery_profile.clone(),
         }
     }
 }
@@ -432,92 +380,77 @@ impl From<&crate::core::CodeExamples> for CodeExamplesOutput {
 }
 
 #[cfg(test)]
-mod schema_ident_output_tests {
+mod port_rendering_tests {
     use super::*;
-    use crate::core::{Org, Package, PortSchemaSpec, SchemaIdent, SemVer, TypeName};
 
-    fn ident(org: &str, pkg: &str, ty: &str, v: SemVer) -> SchemaIdent {
-        SchemaIdent::new(
-            Org::new(org).unwrap(),
-            Package::new(pkg).unwrap(),
-            TypeName::new(ty).unwrap(),
-            v,
-        )
-    }
+    /// Every key a rendered port may carry. A port that grows a type field
+    /// again fails here, whatever the field is named.
+    const PORT_INFO_KEYS: [&str; 4] = ["name", "description", "port_kind", "delivery_profile"];
+    const PORT_DESCRIPTOR_KEYS: [&str; 4] = ["name", "description", "required", "delivery_profile"];
+    const FORBIDDEN_PORT_TYPE_KEYS: [&str; 4] = ["data_type", "schema", "type", "schema_ident"];
 
-    #[test]
-    fn port_info_output_emits_structured_data_type() {
-        // The graph JSON wire format lock — given a PortInfo carrying a
-        // structured `Specific(...)` spec, the JSON output is a structured
-        // 4-key record matching `SchemaIdentOutput`.
-        let port = crate::core::graph::PortInfo {
-            name: "video".to_string(),
-            data_type: PortSchemaSpec::Specific(ident(
-                "tatolab",
-                "core",
-                "VideoFrame",
-                SemVer::new(1, 0, 0),
-            )),
-            port_kind: crate::core::graph::PortKind::Data,
-            delivery_profile: None,
-        };
-        let out = PortInfoOutput::from(&port);
-        let s = out.data_type.as_ref().expect("Specific must resolve");
-        assert_eq!(s.org, "tatolab");
-        assert_eq!(s.package, "core");
-        assert_eq!(s.type_name, "VideoFrame");
-
-        let json = serde_json::to_value(&out).unwrap();
-        assert!(
-            json["data_type"].is_object(),
-            "data_type must be a structured object on the wire, not a string"
+    fn assert_renders_exactly(json: &serde_json::Value, expected: &[&str]) {
+        let rendered: Vec<&String> = json.as_object().unwrap().keys().collect();
+        assert_eq!(
+            rendered.len(),
+            expected.len(),
+            "a rendered port carries exactly {expected:?}; got {rendered:?}"
         );
-        assert_eq!(json["data_type"]["org"], "tatolab");
-        assert_eq!(json["data_type"]["package"], "core");
-        assert_eq!(json["data_type"]["type"], "VideoFrame");
+        for key in expected {
+            assert!(json.get(key).is_some(), "missing `{key}` in {json}");
+        }
+    }
+
+    fn assert_carries_no_type_key(json: &serde_json::Value) {
+        for key in FORBIDDEN_PORT_TYPE_KEYS {
+            assert!(
+                json.get(key).is_none(),
+                "port rendering must carry no type key; found `{key}` in {json}"
+            );
+        }
     }
 
     #[test]
-    fn port_info_output_emits_null_for_any_wildcard() {
-        // `Any` ports (e.g. MoQ tracks) omit the `data_type` field on the
-        // wire — `skip_serializing_if = Option::is_none`.
+    fn port_info_output_renders_exactly_the_declared_keys() {
+        let port = crate::core::graph::PortInfo {
+            name: "video_in".to_string(),
+            description: "Frames to convert".to_string(),
+            port_kind: crate::core::graph::PortKind::Data,
+            delivery_profile: Some("latest".to_string()),
+        };
+        let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
+
+        assert_eq!(json["name"], "video_in");
+        assert_eq!(json["description"], "Frames to convert");
+        assert_eq!(json["port_kind"], "data");
+        assert_eq!(json["delivery_profile"], "latest");
+        assert_renders_exactly(&json, &PORT_INFO_KEYS);
+    }
+
+    /// The type layer is gone, not omitted-when-empty: no spelling of a port
+    /// type may appear on the wire, even as an absent optional field.
+    #[test]
+    fn port_info_output_carries_no_type_key_under_any_spelling() {
         let port = crate::core::graph::PortInfo {
             name: "data".to_string(),
-            data_type: PortSchemaSpec::Any,
+            description: String::new(),
             port_kind: crate::core::graph::PortKind::Data,
             delivery_profile: None,
         };
-        let out = PortInfoOutput::from(&port);
-        assert!(out.data_type.is_none());
-
-        let json = serde_json::to_value(&out).unwrap();
-        assert!(
-            json.get("data_type").is_none(),
-            "Any-wildcard ports must omit the data_type field, not serialize as null/empty"
-        );
+        let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
+        assert_carries_no_type_key(&json);
     }
 
     #[test]
-    fn port_descriptor_output_emits_structured_schema() {
-        let pd = crate::core::PortDescriptor::new(
-            "video",
-            "Video output",
-            PortSchemaSpec::Specific(ident(
-                "tatolab",
-                "core",
-                "EncodedVideoFrame",
-                SemVer::new(1, 0, 0),
-            )),
-            true,
-        );
-        let out = PortDescriptorOutput::from(&pd);
-        let s = out.schema.as_ref().expect("Specific must resolve");
-        assert_eq!(s.org, "tatolab");
-        assert_eq!(s.package, "core");
-        assert_eq!(s.type_name, "EncodedVideoFrame");
+    fn port_descriptor_output_carries_no_type_key() {
+        let pd = crate::core::PortDescriptor::new("video", "Video output", true)
+            .with_delivery_profile("lossless");
+        let json = serde_json::to_value(PortDescriptorOutput::from(&pd)).unwrap();
 
-        let json = serde_json::to_value(&out).unwrap();
-        assert!(json["schema"].is_object());
-        assert_eq!(json["schema"]["type"], "EncodedVideoFrame");
+        assert_eq!(json["name"], "video");
+        assert_eq!(json["description"], "Video output");
+        assert_eq!(json["delivery_profile"], "lossless");
+        assert_renders_exactly(&json, &PORT_DESCRIPTOR_KEYS);
+        assert_carries_no_type_key(&json);
     }
 }

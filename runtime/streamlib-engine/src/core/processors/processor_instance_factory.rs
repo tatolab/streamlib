@@ -1,7 +1,7 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::{Arc, LazyLock};
 
 use parking_lot::RwLock;
@@ -14,7 +14,6 @@ use crate::core::execution::ExecutionConfig;
 use crate::core::graph::{PortInfo, ProcessorNode};
 use crate::core::processors::{Config, DynGeneratedProcessor, GeneratedProcessor};
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
-use streamlib_processor_schema::PortSchemaSpec;
 
 /// A created processor instance for runtime use.
 ///
@@ -237,11 +236,6 @@ pub struct ProcessorInstanceFactory {
     registrations: RwLock<HashMap<SchemaIdent, RegistrationKind>>,
     port_info: RwLock<HashMap<SchemaIdent, (Vec<PortInfo>, Vec<PortInfo>)>>,
     descriptors: RwLock<HashMap<SchemaIdent, ProcessorDescriptor>>,
-    /// Set of port-data-type schema specs ([`PortSchemaSpec`]).
-    /// Orthogonal to the processor-identity HashMaps above — tracks the
-    /// universe of port schemas any registered processor exposes, for
-    /// `known_schemas()` / `is_schema_known()` debugging surface only.
-    schemas: RwLock<HashSet<PortSchemaSpec>>,
 }
 
 /// Global processor registry for runtime lookups.
@@ -267,7 +261,6 @@ impl ProcessorInstanceFactory {
             registrations: RwLock::new(HashMap::new()),
             port_info: RwLock::new(HashMap::new()),
             descriptors: RwLock::new(HashMap::new()),
-            schemas: RwLock::new(HashSet::new()),
         }
     }
 
@@ -342,38 +335,13 @@ impl ProcessorInstanceFactory {
         }
 
         // Build port info from descriptor
-        let inputs: Vec<PortInfo> = descriptor
-            .inputs
-            .iter()
-            .map(|p| PortInfo {
-                name: p.name.clone(),
-                data_type: p.schema.clone(),
-                port_kind: Default::default(),
-                delivery_profile: p.delivery_profile.clone(),
-            })
-            .collect();
+        let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
 
-        let outputs: Vec<PortInfo> = descriptor
-            .outputs
-            .iter()
-            .map(|p| PortInfo {
-                name: p.name.clone(),
-                data_type: p.schema.clone(),
-                port_kind: Default::default(),
-                delivery_profile: p.delivery_profile.clone(),
-            })
-            .collect();
+        let outputs: Vec<PortInfo> = descriptor.outputs.iter().map(PortInfo::from).collect();
 
         self.port_info
             .write()
             .insert(type_name.clone(), (inputs.clone(), outputs.clone()));
-
-        {
-            let mut schemas = self.schemas.write();
-            for port in inputs.iter().chain(outputs.iter()) {
-                schemas.insert(port.data_type.clone());
-            }
-        }
 
         self.descriptors
             .write()
@@ -414,38 +382,13 @@ impl ProcessorInstanceFactory {
             )));
         }
 
-        let inputs: Vec<PortInfo> = descriptor
-            .inputs
-            .iter()
-            .map(|p| PortInfo {
-                name: p.name.clone(),
-                data_type: p.schema.clone(),
-                port_kind: Default::default(),
-                delivery_profile: p.delivery_profile.clone(),
-            })
-            .collect();
+        let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
 
-        let outputs: Vec<PortInfo> = descriptor
-            .outputs
-            .iter()
-            .map(|p| PortInfo {
-                name: p.name.clone(),
-                data_type: p.schema.clone(),
-                port_kind: Default::default(),
-                delivery_profile: p.delivery_profile.clone(),
-            })
-            .collect();
+        let outputs: Vec<PortInfo> = descriptor.outputs.iter().map(PortInfo::from).collect();
 
         self.port_info
             .write()
             .insert(type_name.clone(), (inputs.clone(), outputs.clone()));
-
-        {
-            let mut schemas = self.schemas.write();
-            for port in inputs.iter().chain(outputs.iter()) {
-                schemas.insert(port.data_type.clone());
-            }
-        }
 
         self.descriptors
             .write()
@@ -494,9 +437,6 @@ impl ProcessorInstanceFactory {
                 descriptor,
             });
         }
-        if !removed.is_empty() {
-            self.rebuild_port_schema_universe_from_descriptors();
-        }
         removed
     }
 
@@ -527,22 +467,6 @@ impl ProcessorInstanceFactory {
                     .insert(record.processor_type.clone(), descriptor);
             }
         }
-        self.rebuild_port_schema_universe_from_descriptors();
-    }
-
-    /// Recompute the port-schema universe from the remaining descriptors.
-    /// The `schemas` set is additive-only on registration, so removal has
-    /// to rebuild it — a schema stays known only while some registered
-    /// processor still exposes it on a port.
-    fn rebuild_port_schema_universe_from_descriptors(&self) {
-        let rebuilt: HashSet<PortSchemaSpec> = self
-            .descriptors
-            .read()
-            .values()
-            .flat_map(|descriptor| descriptor.inputs.iter().chain(descriptor.outputs.iter()))
-            .map(|port| port.schema.clone())
-            .collect();
-        *self.schemas.write() = rebuilt;
     }
 
     pub fn can_create(&self, processor_type: &SchemaIdent) -> bool {
@@ -682,19 +606,6 @@ impl ProcessorInstanceFactory {
         type_name: &crate::core::descriptors::TypeName,
     ) -> Option<SchemaIdent> {
         self.highest_registered_for_tuple(org, package, type_name)
-    }
-
-    /// All known port-schema specs from registered processor ports,
-    /// sorted by Display rendering for diff-stable output.
-    pub fn known_schemas(&self) -> Vec<PortSchemaSpec> {
-        let mut schemas: Vec<PortSchemaSpec> = self.schemas.read().iter().cloned().collect();
-        schemas.sort_by(|a, b| a.to_string().cmp(&b.to_string()));
-        schemas
-    }
-
-    /// Check if a port-schema spec is known from any registered processor port.
-    pub fn is_schema_known(&self, schema: &PortSchemaSpec) -> bool {
-        self.schemas.read().contains(schema)
     }
 }
 

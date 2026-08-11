@@ -74,12 +74,9 @@ pub fn open_iceoryx2_service(
     // rest of the run, one iceoryx2 warning per frame (#1764). The notify
     // service exists to wake a waiting destination, so a destination that does
     // not wait gets none of it: no service, no notifier, no listener.
-    let notify_service_name = destination_consumes_notifications(
-        graph,
-        &dest_proc_id,
-        dest_is_subprocess,
-    )
-    .then(|| notify_service_name_for(&dest_proc_id));
+    let notify_service_name =
+        destination_consumes_notifications(graph, &dest_proc_id, dest_is_subprocess)
+            .then(|| notify_service_name_for(&dest_proc_id));
 
     tracing::info!(
         channel = %channel_service_name,
@@ -1361,7 +1358,6 @@ mod tests {
     fn conflicting_destination_profile_is_a_configuration_error() {
         use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
         use streamlib_idents::{Org, Package, SemVer, TypeName};
-        use streamlib_processor_schema::PortSchemaSpec;
 
         let register_sink = |pkg: &str, profile: &str| -> SchemaIdent {
             let ident = SchemaIdent::new(
@@ -1371,10 +1367,8 @@ mod tests {
                 SemVer::new(1, 0, 0),
             );
             let mut desc = ProcessorDescriptor::new(ident.clone(), "conflicting-profile sink");
-            desc.inputs.push(
-                PortDescriptor::iceoryx2("in1", "input", PortSchemaSpec::Any)
-                    .with_delivery_profile(profile),
-            );
+            desc.inputs
+                .push(PortDescriptor::iceoryx2("in1", "input").with_delivery_profile(profile));
             // Idempotent: a duplicate ident (re-run in the same process) errors;
             // the first registration is the one that stands.
             let _ = PROCESSOR_REGISTRY.register_descriptor_only(desc);

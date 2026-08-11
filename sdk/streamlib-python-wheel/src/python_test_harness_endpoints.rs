@@ -152,7 +152,7 @@ fn take_collected_bag(channel: &str, timeout: Duration) -> CollectedBagWaitOutco
     description = "Publishes bags a test queued on its channel, in order",
     execution = continuous(interval_ms = 1),
     config = crate::python_test_harness_endpoints::TestHarnessChannelConfig,
-    output("bags_to_downstream", any, description = "Bags the test fed"),
+    output("bags_to_downstream", description = "Bags the test fed"),
 )]
 pub struct TestBagFeeder {}
 
@@ -179,7 +179,6 @@ impl ContinuousProcessor for TestBagFeeder::Processor {
     config = crate::python_test_harness_endpoints::TestHarnessChannelConfig,
     input(
         "bags_from_upstream",
-        any,
         delivery_profile = "every_sample",
         description = "Bags the processor under test produced"
     ),

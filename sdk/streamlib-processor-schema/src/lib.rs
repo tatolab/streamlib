@@ -22,7 +22,7 @@ pub use thread_priority::ThreadPriority;
 // Processor schema re-exports
 pub use error::{SchemaError, SchemaResult};
 pub use processor_schema::{
-    DELIVERY_PROFILE_DECLARATION_VALUES, PortSchemaSpec, ProcessorConfigSchema, ProcessorLanguage,
+    DELIVERY_PROFILE_DECLARATION_VALUES, ProcessorConfigSchema, ProcessorLanguage,
     ProcessorPortSchema, ProcessorScheduling, ProcessorSchema, ProcessorSchemaExecution,
     ProcessorStateField, RuntimeConfig, RuntimeOptions, to_pascal_case, to_snake_case,
 };

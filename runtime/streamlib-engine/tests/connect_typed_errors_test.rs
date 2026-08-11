@@ -18,8 +18,7 @@
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
-    Org, Package, PortDescriptor, PortSchemaSpec, ProcessorDescriptor, SchemaIdent, SemVer,
-    TypeName,
+    Org, Package, PortDescriptor, ProcessorDescriptor, SchemaIdent, SemVer, TypeName,
 };
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
@@ -48,8 +47,8 @@ fn register_test_type(short: &str, input: &str, output: &str) -> SchemaIdent {
         SemVer::new(1, 0, 0),
     );
     let descriptor = ProcessorDescriptor::new(id.clone(), "connect typed-errors test")
-        .with_input(PortDescriptor::new(input, "", PortSchemaSpec::Any, false))
-        .with_output(PortDescriptor::new(output, "", PortSchemaSpec::Any, false));
+        .with_input(PortDescriptor::new(input, "", false))
+        .with_output(PortDescriptor::new(output, "", false));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
     id
 }

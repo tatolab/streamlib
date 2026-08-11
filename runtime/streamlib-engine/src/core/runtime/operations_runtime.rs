@@ -4,9 +4,7 @@
 use std::sync::Arc;
 
 use super::Runner;
-use super::operations::{
-    BoxFuture, RuntimeOperations,
-};
+use super::operations::{BoxFuture, RuntimeOperations};
 use super::runtime::TokioRuntimeVariant;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
@@ -395,7 +393,9 @@ impl RuntimeOperations for Runner {
 
     fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
         match &self.tokio_runtime_variant {
-            TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.block_on(self.add_processor_async(spec)),
+            TokioRuntimeVariant::OwnedTokioRuntime(rt) => {
+                rt.block_on(self.add_processor_async(spec))
+            }
             TokioRuntimeVariant::ExternalTokioHandle(handle) => {
                 let compiler = Arc::clone(&self.compiler);
                 let (tx, rx) = std::sync::mpsc::channel();
@@ -509,13 +509,12 @@ mod channel_wire_bound_tests {
 }
 
 #[cfg(test)]
-mod connect_emits_no_type_advisory_tests {
-    //! Connect-path revert lock: a link is pure plumbing. Connect inspects no
-    //! type, compares no type, and never warns — not even advisorily. Two ports
-    //! declaring tuple-distinct types wire in silence; a mismatch is the
-    //! consumer's decode failure at read, and nothing at wiring time hints at
-    //! it. Restoring any resolution or comparison in [`connect_impl`] fails
-    //! this module.
+mod connect_wires_without_inspecting_a_port_tests {
+    //! Connect-path revert lock: a link is pure plumbing. Connect inspects
+    //! nothing about either port beyond its existence, and wires in silence —
+    //! not even advisorily. A payload mismatch is the consumer's decode failure
+    //! at read, and nothing at wiring time hints at it. Reintroducing any
+    //! inspection or comparison in [`connect_impl`] fails this module.
 
     use std::sync::{Arc, Mutex};
 
@@ -530,10 +529,9 @@ mod connect_emits_no_type_advisory_tests {
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef, ProcessorUniqueId};
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
     use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
-    use streamlib_processor_schema::PortSchemaSpec;
 
-    const PRODUCER_TYPE: &str = "TypeDivergentProducer";
-    const CONSUMER_TYPE: &str = "TypeDivergentConsumer";
+    const PRODUCER_TYPE: &str = "ConnectSilenceProducer";
+    const CONSUMER_TYPE: &str = "ConnectSilenceConsumer";
 
     fn ident(package: &str, ty: &str) -> SchemaIdent {
         SchemaIdent::new(
@@ -544,39 +542,31 @@ mod connect_emits_no_type_advisory_tests {
         )
     }
 
-    fn schema(ty: &str) -> PortSchemaSpec {
-        PortSchemaSpec::Specific(ident("core", ty))
-    }
-
-    /// Register a producer whose `out` declares `VideoFrame` against a consumer
-    /// whose `in` declares `AudioFrame` — the most divergent pairing the port
-    /// descriptors can still express.
-    fn register_divergent_types() {
+    /// Register the producer and consumer descriptors this module wires.
+    fn register_producer_and_consumer_descriptors() {
         let mut producer =
-            ProcessorDescriptor::new(ident("connectcheck", PRODUCER_TYPE), "divergent producer");
-        producer.outputs.push(PortDescriptor::iceoryx2(
-            "out",
-            "output",
-            schema("VideoFrame"),
-        ));
+            ProcessorDescriptor::new(ident("connectcheck", PRODUCER_TYPE), "producer");
+        producer
+            .outputs
+            .push(PortDescriptor::iceoryx2("out", "output"));
         PROCESSOR_REGISTRY
             .register_descriptor_only(producer)
-            .expect("register divergent producer descriptor");
+            .expect("register producer descriptor");
 
         let mut consumer =
-            ProcessorDescriptor::new(ident("connectcheck", CONSUMER_TYPE), "divergent consumer");
-        consumer.inputs.push(
-            PortDescriptor::iceoryx2("in", "input", schema("AudioFrame"))
-                .with_delivery_profile("latest"),
-        );
+            ProcessorDescriptor::new(ident("connectcheck", CONSUMER_TYPE), "consumer");
+        consumer
+            .inputs
+            .push(PortDescriptor::iceoryx2("in", "input").with_delivery_profile("latest"));
         PROCESSOR_REGISTRY
             .register_descriptor_only(consumer)
-            .expect("register divergent consumer descriptor");
+            .expect("register consumer descriptor");
     }
 
     /// Fresh compiler holding one producer and one consumer node, plus the
     /// wiring refs for the producer's `out` and the consumer's `in`.
-    fn compiler_with_divergent_pair() -> (Arc<Compiler>, OutputLinkPortRef, InputLinkPortRef) {
+    fn compiler_holding_a_producer_and_consumer_node()
+    -> (Arc<Compiler>, OutputLinkPortRef, InputLinkPortRef) {
         let compiler = Arc::new(Compiler::new());
         let (from_id, to_id): (ProcessorUniqueId, ProcessorUniqueId) =
             compiler.scope(|graph, _tx| {
@@ -641,9 +631,9 @@ mod connect_emits_no_type_advisory_tests {
     }
 
     #[test]
-    fn connect_wires_a_type_divergent_pair_in_silence() {
-        register_divergent_types();
-        let (compiler, from, to) = compiler_with_divergent_pair();
+    fn connect_wires_a_producer_to_a_consumer_without_warning() {
+        register_producer_and_consumer_descriptors();
+        let (compiler, from, to) = compiler_holding_a_producer_and_consumer_node();
         let warnings = CapturedWarnings::default();
         let subscriber = tracing_subscriber::registry().with(warnings.clone());
 
@@ -654,11 +644,11 @@ mod connect_emits_no_type_advisory_tests {
                 .block_on(connect_impl(compiler, from, to))
         });
 
-        result.expect("connect must wire a type-divergent pair — a link is pure plumbing");
+        result.expect("connect must wire any two ports — a link is pure plumbing");
         let captured = warnings.captured_messages();
         assert!(
             captured.is_empty(),
-            "connect must emit no WARN for a type-divergent pair; captured: {captured:?}"
+            "connect must emit no WARN when wiring a link; captured: {captured:?}"
         );
     }
 }
