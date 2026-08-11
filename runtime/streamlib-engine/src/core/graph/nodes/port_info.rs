@@ -24,3 +24,14 @@ pub struct PortInfo {
     #[serde(default)]
     pub delivery_profile: Option<String>,
 }
+
+impl From<&crate::core::descriptors::PortDescriptor> for PortInfo {
+    fn from(port: &crate::core::descriptors::PortDescriptor) -> Self {
+        Self {
+            name: port.name.clone(),
+            description: port.description.clone(),
+            port_kind: PortKind::default(),
+            delivery_profile: port.delivery_profile.clone(),
+        }
+    }
+}

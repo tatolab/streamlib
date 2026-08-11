@@ -224,7 +224,7 @@ mod tests {
         use crate::core::error::Error;
         use crate::core::processors::PROCESSOR_REGISTRY;
         use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
-        
+
         fn processor_ident(package: &str, type_name: &str) -> SchemaIdent {
             SchemaIdent::new(
                 Org::new("tatolab").unwrap(),

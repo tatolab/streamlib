@@ -17,8 +17,7 @@
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
-    Org, Package, PortDescriptor, ProcessorDescriptor, SchemaIdent, SemVer,
-    TypeName,
+    Org, Package, PortDescriptor, ProcessorDescriptor, SchemaIdent, SemVer, TypeName,
 };
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::graph_snapshot::GraphSnapshot;

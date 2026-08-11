@@ -61,6 +61,7 @@ def input(
             f"invalid delivery_profile {delivery_profile!r}: must be one of "
             f"{', '.join(_DELIVERY_PROFILES)}"
         )
+
     def attach_input_port_marker(method: MethodUnderDecoration) -> MethodUnderDecoration:
         port_name = name or method.__name__
         # `delivery_profile` defaults to None rather than being a required
@@ -97,6 +98,7 @@ def output(
     consuming port's policy. Bags are written with
     `ctx.outputs.write(port_name, bag)`.
     """
+
     def attach_output_port_marker(method: MethodUnderDecoration) -> MethodUnderDecoration:
         setattr(
             method,

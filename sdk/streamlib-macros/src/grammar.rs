@@ -29,9 +29,9 @@
 //! hand-authored (#1409).
 
 use streamlib_processor_schema::{
-    DELIVERY_PROFILE_DECLARATION_VALUES, Org, Package, ProcessorPortSchema, ProcessorSchema,
-    ProcessorSchemaExecution, ProcessorScheduling, RuntimeConfig, RuntimeOptions, SchemaIdent,
-    SemVer, ThreadPriority, TypeName,
+    DELIVERY_PROFILE_DECLARATION_VALUES, Org, Package, ProcessorPortSchema, ProcessorScheduling,
+    ProcessorSchema, ProcessorSchemaExecution, RuntimeConfig, RuntimeOptions, SchemaIdent, SemVer,
+    ThreadPriority, TypeName,
 };
 use syn::ext::IdentExt;
 use syn::parse::{ParseStream, Parser};
@@ -380,7 +380,10 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
     let name_lit: LitStr = content.parse()?;
     let name = name_lit.value();
     if name.is_empty() {
-        return Err(syn::Error::new(name_lit.span(), "port name must not be empty"));
+        return Err(syn::Error::new(
+            name_lit.span(),
+            "port name must not be empty",
+        ));
     }
 
     let mut description = None;
@@ -391,6 +394,7 @@ fn parse_port(input: ParseStream<'_>, direction: PortDirection) -> syn::Result<P
         if content.is_empty() {
             break;
         }
+        reject_positional_port_schema(&content, &name, direction)?;
         let key: Ident = content.parse()?;
         let key_span = key.span();
         content.parse::<Token![=]>()?;
@@ -442,6 +446,35 @@ fn render_delivery_profile_values() -> String {
         .map(|value| format!("`\"{value}\"`"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+/// Reject the pre-#1816 positional port schema — `"@org/package/Type"` or the
+/// bare `any` — where a key is expected, naming the removal.
+///
+/// Without this the author sees syn's bare `expected identifier` / `expected
+/// =` and has nothing to act on.
+fn reject_positional_port_schema(
+    content: ParseStream<'_>,
+    port_name: &str,
+    direction: PortDirection,
+) -> syn::Result<()> {
+    let span = if content.peek(LitStr) {
+        content.fork().parse::<LitStr>()?.span()
+    } else if content.peek(Ident::peek_any) && content.fork().parse::<Ident>()? == "any" {
+        content.fork().parse::<Ident>()?.span()
+    } else {
+        return Ok(());
+    };
+    Err(syn::Error::new(
+        span,
+        format!(
+            "a port declares no type — remove this argument from \
+             `{}(\"{port_name}\", ...)`. A port declares a name plus \
+             `delivery_profile` and `description`; type information belongs to \
+             the authoring language and never reaches the engine",
+            direction.keyword()
+        ),
+    ))
 }
 
 /// Reject `delivery_profile` on an `output(...)` with a spanned error — the
@@ -504,7 +537,12 @@ pub fn parse_schema_ident_str(raw: &str, span: proc_macro2::Span) -> syn::Result
     let type_name =
         TypeName::new(segments[2]).map_err(|e| err(format!("invalid type in `{raw}`: {e}")))?;
 
-    Ok(SchemaIdent::new(org, package, type_name, SemVer::new(0, 0, 0)))
+    Ok(SchemaIdent::new(
+        org,
+        package,
+        type_name,
+        SemVer::new(0, 0, 0),
+    ))
 }
 
 #[cfg(test)]
@@ -569,9 +607,18 @@ mod tests {
             ),
             output("video", description = "Live video frames"),
         });
-        assert_eq!(parsed.description.as_deref(), Some("Captures video from cameras"));
-        assert_eq!(parsed.inputs[0].description.as_deref(), Some("Frames to convert"));
-        assert_eq!(parsed.outputs[0].description.as_deref(), Some("Live video frames"));
+        assert_eq!(
+            parsed.description.as_deref(),
+            Some("Captures video from cameras")
+        );
+        assert_eq!(
+            parsed.inputs[0].description.as_deref(),
+            Some("Frames to convert")
+        );
+        assert_eq!(
+            parsed.outputs[0].description.as_deref(),
+            Some("Live video frames")
+        );
     }
 
     #[test]
@@ -609,8 +656,8 @@ mod tests {
             input("in1", "@tatolab/core/VideoFrame", delivery_profile = "latest"),
         });
         assert!(
-            msg.contains("expected identifier"),
-            "a positional schema must be rejected at the key position: {msg}"
+            msg.contains("a port declares no type") && msg.contains("input(\"in1\", ...)"),
+            "the error must name the removal and the offending port: {msg}"
         );
     }
 
@@ -622,8 +669,8 @@ mod tests {
             output("out1", any),
         });
         assert!(
-            msg.contains("expected `="),
-            "the `any` wildcard must be rejected at the key position: {msg}"
+            msg.contains("a port declares no type") && msg.contains("output(\"out1\", ...)"),
+            "the error must name the removal and the offending port: {msg}"
         );
     }
 
@@ -670,11 +717,8 @@ mod tests {
     #[test]
     fn app_local_synthesis_from_struct_name() {
         // No identity string, no `type` — synthesize @app/local/<StructName>.
-        let parsed = parse2(
-            quote! { execution = reactive },
-            &ident("MyLocalProcessor"),
-        )
-        .expect("bare app-local processor should parse");
+        let parsed = parse2(quote! { execution = reactive }, &ident("MyLocalProcessor"))
+            .expect("bare app-local processor should parse");
         assert_eq!(parsed.ident.org.as_str(), "app");
         assert_eq!(parsed.ident.package.as_str(), "local");
         assert_eq!(parsed.ident.r#type.as_str(), "MyLocalProcessor");
@@ -718,7 +762,10 @@ mod tests {
             input("dup", delivery_profile = "latest"),
             input("dup", delivery_profile = "latest"),
         });
-        assert!(msg.contains("duplicate input port name `dup`"), "got: {msg}");
+        assert!(
+            msg.contains("duplicate input port name `dup`"),
+            "got: {msg}"
+        );
     }
 
     #[test]
@@ -729,7 +776,10 @@ mod tests {
             output("dup"),
             output("dup"),
         });
-        assert!(msg.contains("duplicate output port name `dup`"), "got: {msg}");
+        assert!(
+            msg.contains("duplicate output port name `dup`"),
+            "got: {msg}"
+        );
     }
 
     #[test]
@@ -738,11 +788,10 @@ mod tests {
         // `output(...)`. It must be a spanned error, not silently nulled.
         // Mentally revert `reject_delivery_profile_on_output` and this parses
         // cleanly (bug) instead of erroring.
-        let tokens: proc_macro2::TokenStream =
-            "\"@tatolab/camera/Camera\", execution = manual, \
+        let tokens: proc_macro2::TokenStream = "\"@tatolab/camera/Camera\", execution = manual, \
              output(\"video\", delivery_profile = \"latest\")"
-                .parse()
-                .expect("token stream parses");
+            .parse()
+            .expect("token stream parses");
         let msg = parse_err(tokens);
         assert!(
             msg.contains("`delivery_profile` is a consumer-side setting"),
@@ -801,7 +850,10 @@ mod tests {
             execution = manual,
             frobnicate = "yes",
         });
-        assert!(msg.contains("unknown `#[processor(...)]` key `frobnicate`"), "got: {msg}");
+        assert!(
+            msg.contains("unknown `#[processor(...)]` key `frobnicate`"),
+            "got: {msg}"
+        );
     }
 
     #[test]
@@ -810,7 +862,10 @@ mod tests {
             "@tatolab/testing/Mock",
             execution = sideways,
         });
-        assert!(msg.contains("unknown execution mode `sideways`"), "got: {msg}");
+        assert!(
+            msg.contains("unknown execution mode `sideways`"),
+            "got: {msg}"
+        );
     }
 
     #[test]

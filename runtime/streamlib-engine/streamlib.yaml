@@ -11,9 +11,9 @@ package:
 # Engine is schema-free for wire data by design — `@tatolab/core` lives in
 # packages that actually speak it on the wire, never here. iceoryx2 carries
 # bytes; each package brings its own JTD-codegen output for the messages
-# it speaks. Engine's attribute-macro + graph-compiler test fixtures
-# declare `schema: any` on their ports so the codebase exercises engine
-# logic without coupling to any wire schema.
+# it speaks. A port declares no type at all — name, description, and on an
+# input a delivery profile — so engine fixtures couple to no wire schema by
+# construction.
 #
 # `@tatolab/escalate` is a different shape — it's the polyglot escalate IPC
 # protocol the engine itself implements (cdylib subprocesses on one side,
@@ -42,17 +42,13 @@ processors:
     execution: manual
     inputs:
       - name: in1
-        schema: any
         description: Test input port 1
       - name: in2
-        schema: any
         description: Test input port 2
     outputs:
       - name: out1
-        schema: any
         description: Test output port 1
       - name: out2
-        schema: any
         description: Test output port 2
 
   - name: TestMockInputOnlyProcessor
@@ -60,10 +56,8 @@ processors:
     execution: manual
     inputs:
       - name: in1
-        schema: any
         description: Test input port 1
       - name: in2
-        schema: any
         description: Test input port 2
 
   - name: TestMockReactiveInputOnlyProcessor
@@ -71,10 +65,8 @@ processors:
     execution: reactive
     inputs:
       - name: in1
-        schema: any
         description: Test input port 1
       - name: in2
-        schema: any
         description: Test input port 2
 
   - name: TestMockOutputOnlyProcessor
@@ -82,10 +74,8 @@ processors:
     execution: manual
     outputs:
       - name: out1
-        schema: any
         description: Test output port 1
       - name: out2
-        schema: any
         description: Test output port 2
 
   # === Test attribute macro processors ===
@@ -95,7 +85,5 @@ processors:
     execution: manual
     inputs:
       - name: video_in
-        schema: any
     outputs:
       - name: video_out
-        schema: any

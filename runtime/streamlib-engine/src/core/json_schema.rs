@@ -80,7 +80,6 @@ pub struct PortInfoOutput {
     pub port_kind: PortKindOutput,
     /// Delivery profile declared by this input port — `"latest"`,
     /// `"every_sample"` or `"lossless"`; `None` on an output port.
-    #[serde(default)]
     pub delivery_profile: Option<String>,
 }
 
@@ -213,7 +212,6 @@ pub struct PortDescriptorOutput {
     pub required: bool,
     /// Delivery profile declared by this input port — `"latest"`,
     /// `"every_sample"` or `"lossless"`; `None` on an output port.
-    #[serde(default)]
     pub delivery_profile: Option<String>,
 }
 
@@ -388,9 +386,32 @@ mod port_rendering_tests {
     /// Every key a rendered port may carry. A port that grows a type field
     /// again fails here, whatever the field is named.
     const PORT_INFO_KEYS: [&str; 4] = ["name", "description", "port_kind", "delivery_profile"];
+    const PORT_DESCRIPTOR_KEYS: [&str; 4] = ["name", "description", "required", "delivery_profile"];
+    const FORBIDDEN_PORT_TYPE_KEYS: [&str; 4] = ["data_type", "schema", "type", "schema_ident"];
+
+    fn assert_renders_exactly(json: &serde_json::Value, expected: &[&str]) {
+        let rendered: Vec<&String> = json.as_object().unwrap().keys().collect();
+        assert_eq!(
+            rendered.len(),
+            expected.len(),
+            "a rendered port carries exactly {expected:?}; got {rendered:?}"
+        );
+        for key in expected {
+            assert!(json.get(key).is_some(), "missing `{key}` in {json}");
+        }
+    }
+
+    fn assert_carries_no_type_key(json: &serde_json::Value) {
+        for key in FORBIDDEN_PORT_TYPE_KEYS {
+            assert!(
+                json.get(key).is_none(),
+                "port rendering must carry no type key; found `{key}` in {json}"
+            );
+        }
+    }
 
     #[test]
-    fn port_info_output_renders_exactly_four_fields() {
+    fn port_info_output_renders_exactly_the_declared_keys() {
         let port = crate::core::graph::PortInfo {
             name: "video_in".to_string(),
             description: "Frames to convert".to_string(),
@@ -403,18 +424,7 @@ mod port_rendering_tests {
         assert_eq!(json["description"], "Frames to convert");
         assert_eq!(json["port_kind"], "data");
         assert_eq!(json["delivery_profile"], "latest");
-
-        let rendered: Vec<&String> = json.as_object().unwrap().keys().collect();
-        assert_eq!(
-            rendered.len(),
-            PORT_INFO_KEYS.len(),
-            "a rendered port carries exactly {:?}; got {:?}",
-            PORT_INFO_KEYS,
-            rendered
-        );
-        for key in PORT_INFO_KEYS {
-            assert!(json.get(key).is_some(), "missing `{key}` in {json}");
-        }
+        assert_renders_exactly(&json, &PORT_INFO_KEYS);
     }
 
     /// The type layer is gone, not omitted-when-empty: no spelling of a port
@@ -428,12 +438,7 @@ mod port_rendering_tests {
             delivery_profile: None,
         };
         let json = serde_json::to_value(PortInfoOutput::from(&port)).unwrap();
-        for key in ["data_type", "schema", "type", "schema_ident"] {
-            assert!(
-                json.get(key).is_none(),
-                "port rendering must carry no type key; found `{key}` in {json}"
-            );
-        }
+        assert_carries_no_type_key(&json);
     }
 
     #[test]
@@ -445,11 +450,7 @@ mod port_rendering_tests {
         assert_eq!(json["name"], "video");
         assert_eq!(json["description"], "Video output");
         assert_eq!(json["delivery_profile"], "lossless");
-        for key in ["data_type", "schema", "type", "schema_ident"] {
-            assert!(
-                json.get(key).is_none(),
-                "port rendering must carry no type key; found `{key}` in {json}"
-            );
-        }
+        assert_renders_exactly(&json, &PORT_DESCRIPTOR_KEYS);
+        assert_carries_no_type_key(&json);
     }
 }

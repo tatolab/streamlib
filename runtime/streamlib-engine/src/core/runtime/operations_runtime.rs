@@ -4,9 +4,7 @@
 use std::sync::Arc;
 
 use super::Runner;
-use super::operations::{
-    BoxFuture, RuntimeOperations,
-};
+use super::operations::{BoxFuture, RuntimeOperations};
 use super::runtime::TokioRuntimeVariant;
 use crate::core::compiler::{Compiler, PendingOperation};
 use crate::core::graph::{
@@ -395,7 +393,9 @@ impl RuntimeOperations for Runner {
 
     fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
         match &self.tokio_runtime_variant {
-            TokioRuntimeVariant::OwnedTokioRuntime(rt) => rt.block_on(self.add_processor_async(spec)),
+            TokioRuntimeVariant::OwnedTokioRuntime(rt) => {
+                rt.block_on(self.add_processor_async(spec))
+            }
             TokioRuntimeVariant::ExternalTokioHandle(handle) => {
                 let compiler = Arc::clone(&self.compiler);
                 let (tx, rx) = std::sync::mpsc::channel();
@@ -509,13 +509,12 @@ mod channel_wire_bound_tests {
 }
 
 #[cfg(test)]
-mod connect_emits_no_type_advisory_tests {
-    //! Connect-path revert lock: a link is pure plumbing. Connect inspects no
-    //! type, compares no type, and never warns — not even advisorily. Two ports
-    //! declaring tuple-distinct types wire in silence; a mismatch is the
-    //! consumer's decode failure at read, and nothing at wiring time hints at
-    //! it. Restoring any resolution or comparison in [`connect_impl`] fails
-    //! this module.
+mod connect_wires_without_inspecting_a_port_tests {
+    //! Connect-path revert lock: a link is pure plumbing. Connect inspects
+    //! nothing about either port beyond its existence, and wires in silence —
+    //! not even advisorily. A payload mismatch is the consumer's decode failure
+    //! at read, and nothing at wiring time hints at it. Reintroducing any
+    //! inspection or comparison in [`connect_impl`] fails this module.
 
     use std::sync::{Arc, Mutex};
 
@@ -530,9 +529,9 @@ mod connect_emits_no_type_advisory_tests {
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef, ProcessorUniqueId};
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
     use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
-    
-    const PRODUCER_TYPE: &str = "TypeDivergentProducer";
-    const CONSUMER_TYPE: &str = "TypeDivergentConsumer";
+
+    const PRODUCER_TYPE: &str = "ConnectSilenceProducer";
+    const CONSUMER_TYPE: &str = "ConnectSilenceConsumer";
 
     fn ident(package: &str, ty: &str) -> SchemaIdent {
         SchemaIdent::new(
@@ -543,9 +542,8 @@ mod connect_emits_no_type_advisory_tests {
         )
     }
 
-    /// Register a producer and a consumer whose ports carry nothing connect
-    /// could compare even if it wanted to — the shape every port now has.
-    fn register_unrelated_pair() {
+    /// Register the producer and consumer descriptors this module wires.
+    fn register_producer_and_consumer_descriptors() {
         let mut producer =
             ProcessorDescriptor::new(ident("connectcheck", PRODUCER_TYPE), "producer");
         producer
@@ -567,7 +565,8 @@ mod connect_emits_no_type_advisory_tests {
 
     /// Fresh compiler holding one producer and one consumer node, plus the
     /// wiring refs for the producer's `out` and the consumer's `in`.
-    fn compiler_with_unrelated_pair() -> (Arc<Compiler>, OutputLinkPortRef, InputLinkPortRef) {
+    fn compiler_holding_a_producer_and_consumer_node()
+    -> (Arc<Compiler>, OutputLinkPortRef, InputLinkPortRef) {
         let compiler = Arc::new(Compiler::new());
         let (from_id, to_id): (ProcessorUniqueId, ProcessorUniqueId) =
             compiler.scope(|graph, _tx| {
@@ -632,9 +631,9 @@ mod connect_emits_no_type_advisory_tests {
     }
 
     #[test]
-    fn connect_wires_an_unrelated_pair_in_silence() {
-        register_unrelated_pair();
-        let (compiler, from, to) = compiler_with_unrelated_pair();
+    fn connect_wires_a_producer_to_a_consumer_without_warning() {
+        register_producer_and_consumer_descriptors();
+        let (compiler, from, to) = compiler_holding_a_producer_and_consumer_node();
         let warnings = CapturedWarnings::default();
         let subscriber = tracing_subscriber::registry().with(warnings.clone());
 

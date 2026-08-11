@@ -18,8 +18,7 @@ use std::time::{Duration, Instant};
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
-    Org, Package, PortDescriptor, ProcessorDescriptor, SchemaIdent, SemVer,
-    TypeName,
+    Org, Package, PortDescriptor, ProcessorDescriptor, SchemaIdent, SemVer, TypeName,
 };
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
@@ -36,16 +35,8 @@ fn register_test_type(short: &str) -> SchemaIdent {
         SemVer::new(1, 0, 0),
     );
     let descriptor = ProcessorDescriptor::new(id.clone(), "graph readiness signal test")
-        .with_input(PortDescriptor::new(
-            "bags_from_upstream",
-            "",
-            false,
-        ))
-        .with_output(PortDescriptor::new(
-            "bags_to_downstream",
-            "",
-            false,
-        ));
+        .with_input(PortDescriptor::new("bags_from_upstream", "", false))
+        .with_output(PortDescriptor::new("bags_to_downstream", "", false));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
     id
 }

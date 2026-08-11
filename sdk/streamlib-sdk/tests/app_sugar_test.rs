@@ -158,8 +158,7 @@ fn app_connect_is_a_faithful_passthrough_of_runner_connect() {
 /// collision-free across the parallel test binary.
 fn register_ported_type(short: &str, input: &str, output: &str) -> ProcessorTypeReference {
     use streamlib::sdk::descriptors::{
-        Org, Package, PortDescriptor, ProcessorDescriptor, SchemaIdent, SemVer,
-        TypeName,
+        Org, Package, PortDescriptor, ProcessorDescriptor, SchemaIdent, SemVer, TypeName,
     };
     use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 

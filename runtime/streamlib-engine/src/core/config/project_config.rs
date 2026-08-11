@@ -417,10 +417,8 @@ processors:
     entrypoint: "grayscale_processor:GrayscaleProcessor"
     inputs:
       - name: video_in
-        schema: any
     outputs:
       - name: video_out
-        schema: any
 "#
         )
         .unwrap();
@@ -436,90 +434,5 @@ processors:
         assert_eq!(config.processors[0].name, "Grayscale");
         assert_eq!(config.processors[0].inputs.len(), 1);
         assert_eq!(config.processors[0].outputs.len(), 1);
-    }
-
-    /// Removes the resolution-driving env for a test's duration and restores it
-    /// after, so a stray `STREAMLIB_PACKAGE_SOURCE` / `STREAMLIB_LINK_CHECKOUT` in
-    /// the shell can't make the load-time link tests non-deterministic.
-    struct CleanResolutionEnv {
-        prev_package_source: Option<std::ffi::OsString>,
-        prev_link: Option<std::ffi::OsString>,
-    }
-    impl CleanResolutionEnv {
-        fn new() -> Self {
-            let prev_package_source = std::env::var_os("STREAMLIB_PACKAGE_SOURCE");
-            let prev_link = std::env::var_os("STREAMLIB_LINK_CHECKOUT");
-            // SAFETY: the tests using this guard are `#[serial]`, so no other
-            // thread races the process-global environment for its lifetime.
-            unsafe {
-                std::env::remove_var("STREAMLIB_PACKAGE_SOURCE");
-                std::env::remove_var("STREAMLIB_LINK_CHECKOUT");
-            }
-            Self {
-                prev_package_source,
-                prev_link,
-            }
-        }
-    }
-    impl Drop for CleanResolutionEnv {
-        fn drop(&mut self) {
-            unsafe {
-                match self.prev_package_source.take() {
-                    Some(v) => std::env::set_var("STREAMLIB_PACKAGE_SOURCE", v),
-                    None => std::env::remove_var("STREAMLIB_PACKAGE_SOURCE"),
-                }
-                match self.prev_link.take() {
-                    Some(v) => std::env::set_var("STREAMLIB_LINK_CHECKOUT", v),
-                    None => std::env::remove_var("STREAMLIB_LINK_CHECKOUT"),
-                }
-            }
-        }
-    }
-
-    /// Write a consumer manifest whose port declares a `Named` `VideoFrame`
-    /// imported from `@tatolab/core` (a bare version dep, NO patch) — the shape
-    /// that forces the load-time bare-name resolution to walk the dep graph.
-    fn write_named_port_consumer(dir: &Path) {
-        std::fs::write(
-            dir.join("streamlib.yaml"),
-            r#"
-package:
-  org: tatolab
-  name: consumer
-  version: 1.0.0
-dependencies:
-  "@tatolab/core":
-    version: ^1.0.0
-schemas:
-  VideoFrame:
-    package: "@tatolab/core"
-processors:
-  - name: Consumer
-    description: d
-    runtime: rust
-    execution: manual
-    inputs:
-      - name: in0
-        schema: VideoFrame
-    outputs: []
-"#,
-        )
-        .unwrap();
-    }
-
-    /// Write `<checkout>/packages/core` declaring the `VideoFrame` Local schema.
-    fn write_checkout_core(checkout: &Path) {
-        let core = checkout.join("packages").join("core");
-        std::fs::create_dir_all(core.join("schemas")).unwrap();
-        std::fs::write(
-            core.join("streamlib.yaml"),
-            "package:\n  org: tatolab\n  name: core\n  version: 1.0.0\nschemas:\n  VideoFrame:\n    file: schemas/video_frame.yaml\n",
-        )
-        .unwrap();
-        std::fs::write(
-            core.join("schemas/video_frame.yaml"),
-            "metadata:\n  type: VideoFrame\nproperties: {}\n",
-        )
-        .unwrap();
     }
 }

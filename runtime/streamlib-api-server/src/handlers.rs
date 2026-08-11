@@ -18,9 +18,7 @@ use parking_lot::Mutex;
 use serde::Deserialize;
 use std::sync::Arc;
 use streamlib::sdk::error::{Error, Result};
-use streamlib::sdk::json_schema::{
-    ProcessorDescriptorOutput, RegistryResponse,
-};
+use streamlib::sdk::json_schema::{ProcessorDescriptorOutput, RegistryResponse};
 use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 use streamlib::sdk::pubsub::{Event, EventListener, PUBSUB, topics};
 use streamlib::sdk::runtime::RuntimeOperations;

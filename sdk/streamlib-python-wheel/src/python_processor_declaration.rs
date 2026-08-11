@@ -11,8 +11,8 @@ use pyo3::exceptions::PyTypeError;
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use streamlib::sdk::descriptors::{
-    Org, Package, PortDescriptor, ProcessorDescriptor, ProcessorRuntime,
-    ProcessorScheduling, SchemaIdent, SemVer, TypeName,
+    Org, Package, PortDescriptor, ProcessorDescriptor, ProcessorRuntime, ProcessorScheduling,
+    SchemaIdent, SemVer, TypeName,
 };
 use streamlib::sdk::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
 use streamlib::sdk::processors::ProcessorTypeReference;

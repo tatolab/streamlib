@@ -68,9 +68,9 @@ pub struct Manifest {
     /// schemas it owns (`Local { file }`) and types it imports from declared
     /// dependencies (`External { package }`).
     ///
-    /// Use-site references in `processors[].config.schema` and
-    /// `processors[].inputs/outputs[].schema` are bare type-name strings that
-    /// resolve against this map. Discrimination between local vs external
+    /// The use-site reference in `processors[].config.schema` is a bare
+    /// type-name string that resolves against this map. Discrimination
+    /// between local vs external
     /// happens here at the declaration site; use-sites are parser-free.
     ///
     /// `None` → the resolver falls back to auto-discovery: every YAML file

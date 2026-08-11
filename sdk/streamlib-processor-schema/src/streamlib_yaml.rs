@@ -56,9 +56,9 @@ pub struct StreamlibYaml {
     /// schemas it owns (`{ file: <path> }`) and types it imports from declared
     /// dependencies (`{ package: "@org/name" }`). When omitted, the resolver
     /// auto-discovers `schemas/*.yaml` under the manifest directory and treats
-    /// each as a Local entry. Use-site references (`processors[].config.schema`,
-    /// `processors[].inputs/outputs[].schema`) are bare PascalCase TypeNames
-    /// resolved against this map.
+    /// each as a Local entry. The one use-site reference
+    /// (`processors[].config.schema`) is a bare PascalCase TypeName resolved
+    /// against this map.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schemas: Option<BTreeMap<TypeName, SchemaEntry>>,
 

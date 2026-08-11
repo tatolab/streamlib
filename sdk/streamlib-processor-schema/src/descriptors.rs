@@ -49,11 +49,8 @@ impl PortDescriptor {
     /// Create a port descriptor for an iceoryx2 port.
     pub fn iceoryx2(name: impl Into<String>, description: impl Into<String>) -> Self {
         Self {
-            name: name.into(),
-            description: description.into(),
-            required: true,
             is_iceoryx2: true,
-            delivery_profile: None,
+            ..Self::new(name, description, true)
         }
     }
 

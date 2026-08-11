@@ -335,27 +335,9 @@ impl ProcessorInstanceFactory {
         }
 
         // Build port info from descriptor
-        let inputs: Vec<PortInfo> = descriptor
-            .inputs
-            .iter()
-            .map(|p| PortInfo {
-                name: p.name.clone(),
-                description: p.description.clone(),
-                port_kind: Default::default(),
-                delivery_profile: p.delivery_profile.clone(),
-            })
-            .collect();
+        let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
 
-        let outputs: Vec<PortInfo> = descriptor
-            .outputs
-            .iter()
-            .map(|p| PortInfo {
-                name: p.name.clone(),
-                description: p.description.clone(),
-                port_kind: Default::default(),
-                delivery_profile: p.delivery_profile.clone(),
-            })
-            .collect();
+        let outputs: Vec<PortInfo> = descriptor.outputs.iter().map(PortInfo::from).collect();
 
         self.port_info
             .write()
@@ -400,27 +382,9 @@ impl ProcessorInstanceFactory {
             )));
         }
 
-        let inputs: Vec<PortInfo> = descriptor
-            .inputs
-            .iter()
-            .map(|p| PortInfo {
-                name: p.name.clone(),
-                description: p.description.clone(),
-                port_kind: Default::default(),
-                delivery_profile: p.delivery_profile.clone(),
-            })
-            .collect();
+        let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
 
-        let outputs: Vec<PortInfo> = descriptor
-            .outputs
-            .iter()
-            .map(|p| PortInfo {
-                name: p.name.clone(),
-                description: p.description.clone(),
-                port_kind: Default::default(),
-                delivery_profile: p.delivery_profile.clone(),
-            })
-            .collect();
+        let outputs: Vec<PortInfo> = descriptor.outputs.iter().map(PortInfo::from).collect();
 
         self.port_info
             .write()

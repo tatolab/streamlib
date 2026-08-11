@@ -126,8 +126,6 @@ enum Commands {
     /// reports `UNASSIGNED-Threading-Info`).
     CheckDeviceWaitIdle,
 
-
-
     /// Drift trip-wire for the vendored vulkanalia fork trees
     /// (`vendor/tatolab-vulkanalia{,-sys,-vma}`): hashes each vendored crate
     /// dir and fails on any byte change vs. the recorded hash — the guard
@@ -136,9 +134,7 @@ enum Commands {
     /// recorded hashes in the same commit per
     /// `docs/architecture/vendored-vulkanalia.md`.
     CheckVendoredVulkanalia,
-
 }
-
 
 fn main() -> Result<()> {
     tracing_subscriber::fmt()

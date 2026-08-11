@@ -51,12 +51,6 @@ fn validate_processor_schema(schema: &ProcessorSchema) -> SchemaResult<()> {
         });
     }
 
-    // Config schema reference: shape (non-empty bare PascalCase TypeName)
-    // is locked by `TypeName`'s typed deserializer in
-    // `streamlib_idents::TypeName`. Resolution against the enclosing
-    // manifest's `schemas:` map happens downstream (proc-macro expansion /
-    // runtime startup); the standalone parser doesn't have package context.
-
     for input in &schema.inputs {
         if input.name.is_empty() {
             return Err(SchemaError::InvalidName {
@@ -228,7 +222,9 @@ inputs:
 "#;
 
         let result = parse_processor_yaml(yaml);
-        let err = result.expect_err("a port `schema:` key must be rejected").to_string();
+        let err = result
+            .expect_err("a port `schema:` key must be rejected")
+            .to_string();
         assert!(
             err.contains("schema"),
             "the error must name the offending key, got: {err}"
