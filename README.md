@@ -26,13 +26,24 @@ and the data-collection rigs that train them.
 
 ---
 
-- **Every stage is its own OS process** — a model that wedges takes down one stage, not the machine.
-- **Frames reach your model as device memory** — DLPack straight to torch, a DMA-BUF fd, or a mapped numpy view. Pixels never round-trip the host bus to be looked at.
-- **One clock across every sensor** — the same monotonic epoch V4L2 and ALSA stamp their own buffers with, so multi-sensor data lines up by subtraction.
-- **Capture what actually ran** — tap a live link for the real payloads it carried, without blocking or perturbing the producer.
-- **Inspect a deployed device from your laptop** — every node serves HTTP, WebSocket, and MCP. No redeploy, no debugger, no code change.
-- **Any sensor** — a source is a Python class you write; nothing in the engine is video-specific.
-- **No CUDA dependency** — all GPU work goes through Vulkan, so your compute supplier stays a decision you can revisit.
+- **Real-time processing on commodity hardware.** Deadline-driven stages on dedicated OS threads at
+  a priority you declare — an off-the-shelf GPU and a Linux box, not a proprietary accelerator or a
+  vendor runtime you have to buy into.
+- **GPU acceleration for video, built in.** Capture lands in device memory and stays there — imported
+  zero-copy where the device exports it, transparently uploaded where it doesn't, with no
+  configuration dial in between. Your model gets the frame where it already sits.
+- **Open, and extendable to hardware nobody has heard of.** Any sensor is a stage you write, and a
+  proprietary driver ships as an ordinary Python package. No plugin ABI, no framework headers, no
+  manifest, no vendor allowlist deciding what you're allowed to plug in.
+- **The execution graph is code, not a config file.** You compose it in Python at startup, so it can
+  branch on the sensors actually present, the mission profile, or the tier of hardware it booted on
+  — the same source deployed across a heterogeneous fleet.
+- **AI-first, not AI-bolted-on.** A control policy is a stage like any other: a VLA or world model
+  receives frames as device memory and emits actions on the same clock as the sensors that fed it.
+  The control plane speaks MCP, so an agent can inspect a running machine on its own.
+- **Built to survive the field.** A stage that wedges takes down one stage and names itself; every
+  sensor shares one clock; and a deployed device stays inspectable from your laptop without a
+  redeploy.
 
 > **Alpha.** APIs will change. There is no fleet orchestration, device-to-device transport, OTA
 > deployment, ROS integration, aarch64/Jetson wheel, or control-plane authentication —
