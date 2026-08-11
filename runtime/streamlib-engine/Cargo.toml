@@ -169,10 +169,6 @@ core-foundation = "0.9"
 core-graphics = "0.24"
 
 [dev-dependencies]
-# Folder-backed crate-root generation — an integration test that shells out to
-# `cargo build -p <package>` writes the package's generated `[lib] path` target
-# first, through the one generator `cargo xtask generate-crate-roots` also runs.
-
 # Self-alias via the SDK so engine tests / benches that use
 # `#[streamlib::processor(...)]` resolve macro-emitted `::streamlib::*`
 # paths through the SDK (which transitively re-exports engine items).
@@ -181,7 +177,7 @@ streamlib = { path = "../../sdk/streamlib-sdk" }
 tokio = { workspace = true, features = ["full"] }
 hound = "3.5"  # WAV file writing for examples
 serial_test = "3.2"  # Run tests sequentially to avoid global PUBSUB interference
-tempfile = "3.14"  # Temporary directories for config tests
+tempfile = "3.14"  # Temporary directories for logging and runtime tests
 criterion = { version = "0.5", features = ["html_reports"] }  # Benches for logging hot path (#447)
 png = "0.17"  # PNG decoding for shader-output fixture comparisons
 

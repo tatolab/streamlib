@@ -34,9 +34,8 @@ fn resolve_streamlib_home(env_override: Option<OsString>, cwd: Option<PathBuf>) 
 }
 
 /// The generated / regenerable working tree, `<streamlib-home>/.streamlib`.
-/// Holds the Python uv cache, per-runtime data + logs, and git/URL resolver
-/// checkouts. It is gitignored, so collocating it in a dev workspace doesn't
-/// litter the tree.
+/// Holds the Python uv cache and per-runtime data + logs. It is gitignored, so
+/// collocating it in a dev workspace doesn't litter the tree.
 pub fn get_streamlib_data_dir() -> PathBuf {
     get_streamlib_home().join(".streamlib")
 }

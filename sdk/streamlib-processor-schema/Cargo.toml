@@ -16,7 +16,7 @@ serde_json = { workspace = true }  # used by schemars for enum_values literals
 serde_yaml = { workspace = true }
 streamlib-idents = { path = "../streamlib-idents", version = "0.17.0" }
 thiserror = { workspace = true }
-schemars = "0.8"  # JSON Schema generation for streamlib.yaml editor support
+schemars = "0.8"  # JsonSchema impls on the processor-schema and descriptor types
 # Host-only OpenAPI schema derive for the wire-output DTOs, behind the
 # off-by-default `utoipa` feature. The engine's API layer enables it; a
 # consumer built engine-free never compiles it.

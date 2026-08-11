@@ -18,8 +18,9 @@ pub mod lint_logging;
 pub mod normal_build_dep_graph;
 
 /// Rust source roots a workspace crate may hold: the classic `src/` and the
-/// folder-backed `processors/` a generated crate root declares its module arms
-/// out of. Every source-walking gate shares this list.
+/// folder-backed `processors/`. `lint_logging` walks these by name rather
+/// than descending from the crate root, so a source tree outside both is
+/// invisible to it.
 pub const RUST_CRATE_SOURCE_ROOT_DIR_NAMES: &[&str] = &["src", "processors"];
 
 /// Refuse a source-walking gate run that read no source at all.

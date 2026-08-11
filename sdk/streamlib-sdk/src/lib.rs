@@ -165,10 +165,9 @@ pub mod sdk {
     /// `streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")` —
     /// compile-time-validated short form of
     /// [`SchemaIdent::new`](descriptors::SchemaIdent::new), for the *resolved*
-    /// identities that carry a version: lockfile entries, registry keys,
-    /// package resolution. It is not how code references a processor — pass one
-    /// to `ProcessorSpec::new` and the version is dropped. Use
-    /// [`processor_type_ref!`] to name a processor.
+    /// identities that carry a version — registry keys. It is not how code
+    /// references a processor: pass one to `ProcessorSpec::new` and the
+    /// version is dropped. Use [`processor_type_ref!`] to name a processor.
     pub use streamlib_engine::schema_ident;
 
     /// `streamlib::sdk::processor_type_ref!("org", "package", "Type")` — the
