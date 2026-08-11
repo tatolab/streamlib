@@ -5,6 +5,9 @@
 **One perception and control runtime that runs on the hardware itself** — an embedded board, a drone,<br>
 a robot already running ROS, or the laptop you develop on. Write each stage in Python; a Rust engine runs it on the device.
 
+For teams shipping physical AI: humanoids, autonomous vehicles, self-piloting drones,<br>
+and the data-collection rigs that train them.
+
 [![release](https://img.shields.io/github/v/release/tatolab/streamlib?color=0ea5e9&label=release)](https://github.com/tatolab/streamlib/releases)
 [![website](https://img.shields.io/badge/tatolab.com-0ea5e9?label=website)](https://tatolab.com)
 [![license](https://img.shields.io/badge/license-BUSL--1.1-0ea5e9)](LICENSE)
@@ -35,16 +38,35 @@ a robot already running ROS, or the laptop you develop on. Write each stage in P
 > deployment, ROS integration, aarch64/Jetson wheel, or control-plane authentication —
 > see [what ships today](#what-ships-today).
 
-## Why StreamLib
+## Built for
 
-|  | Typical Python pipeline | StreamLib |
-|---|---|---|
-| **A stage hangs or leaks** | Shared interpreter — everything slows down, and the symptom names nobody | Its own OS process; the failure has an address |
-| **Frames into your model** | numpy on the host — a device→host copy and a host→device copy back | Device memory, handed over as DLPack / DMA-BUF |
-| **Timestamps across sensors** | Per-library epochs, correlated after the fact | One monotonic epoch, the driver's own |
-| **A device in the field** | SSH in and hope the logs caught it | `graph`, `tap`, `logs` against the running node, from anywhere |
-| **Adding a sensor** | Framework-specific plugin, built against framework headers | A Python class; native drivers wrap as ordinary pip packages |
-| **GPU vendor** | CUDA, in practice | Vulkan; CUDA only as a torch interop adapter |
+- **Humanoid and manipulation teams** collecting demonstration data for VLA training, where the
+  value of an episode depends entirely on camera, proprioception, and action sharing one timeline.
+- **Drone and autonomous-vehicle stacks** running a deadline-bound perception loop on the vehicle,
+  across cameras, lidar, radar, and IMU that all arrive at different rates.
+- **On-device policy inference** — a VLA or world model, Cosmos- or GR00T-class, that needs the
+  frame as device memory rather than as a numpy array that already cost you two copies.
+- **Data-collection rigs** where time-aligned multi-sensor capture *is* the product, not a
+  supporting detail.
+- **Eval on the machine that will run it** — proving a checkpoint against what the robot actually
+  sees, instead of a replay pipeline that has quietly drifted from the online one.
+
+## What it doesn't replace
+
+StreamLib is the substrate for the loop on the device. It is deliberately narrow, and it composes
+with what you already run rather than asking you to move.
+
+| You keep | StreamLib's part |
+|---|---|
+| **Your model runtime** — torch, TensorRT, ONNX Runtime | Hands it device memory and gets out of the way. No inference stack ships, and none is planned. |
+| **Your middleware** — ROS 2 and its ecosystem | Runs on the same box. StreamLib is the compute inside a node with a deadline and a GPU, not a bus or a package ecosystem. |
+| **Your accelerated pipelines** — Holoscan, DeepStream, vendor SDKs | Nothing stops them coexisting on the machine; StreamLib does not want the whole box. |
+| **Your training and cloud stack** | StreamLib is the on-device half — it produces the aligned data your training consumes. |
+| **Your sensors and drivers** | Anything with a Python binding, a file descriptor, or an exportable allocation composes as a stage you write. |
+
+**Honest limit on all of that:** composing today means *on the same machine, through Python*. There
+are no bridges shipping — no ROS node, no Holoscan operator, no device-to-device transport. Where
+you need one, it is a stage you write against the driver or binding you already have.
 
 ## Install
 
@@ -267,18 +289,6 @@ rather than validated.
 
 Rust authoring is first-class: a plain cargo project depending on the `streamlib` crate, released
 at the wheel's version. PyPI and cargo are the package systems.
-
-</details>
-
-<details>
-<summary><b>Where this sits next to ROS 2</b></summary>
-
-<br>
-
-StreamLib is not a ROS 2 replacement. ROS 2 is middleware and an ecosystem; StreamLib is the
-compute substrate *inside* a node that has a deadline and a GPU, running on the same box as the
-rest of your stack. There is no ROS integration of any kind today — no bridge, no message
-conversion. If you need one, it's a stage you would write.
 
 </details>
 
