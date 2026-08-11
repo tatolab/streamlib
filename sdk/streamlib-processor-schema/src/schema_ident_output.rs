@@ -22,7 +22,7 @@
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{PortSchemaSpec, SchemaIdent};
+use crate::SchemaIdent;
 
 /// Semantic version (major.minor.patch).
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
@@ -66,60 +66,9 @@ impl From<&SchemaIdent> for SchemaIdentOutput {
     }
 }
 
-impl SchemaIdentOutput {
-    /// Resolve a structured port schema spec into the JSON-wire output
-    /// shape. `Any` ports yield `None` (the field is omitted on the wire).
-    pub fn from_port_spec(spec: &PortSchemaSpec) -> Option<Self> {
-        match spec {
-            PortSchemaSpec::Any => None,
-            PortSchemaSpec::Specific(ident) => Some(Self::from(ident)),
-            // `Named` should never reach this site — runtime startup +
-            // proc-macro expansion both resolve bare-name port refs to
-            // `Specific(SchemaIdent)` against the enclosing manifest's
-            // `schemas:` map. A `Named` here is a runtime bug.
-            PortSchemaSpec::Named(name) => panic!(
-                "PortSchemaSpec::Named(`{}`) reached json-schema render — \
-                 must be resolved before this site",
-                name.as_str()
-            ),
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{Org, Package, SemVer, TypeName};
-
-    fn ident(org: &str, pkg: &str, ty: &str, v: SemVer) -> SchemaIdent {
-        SchemaIdent::new(
-            Org::new(org).unwrap(),
-            Package::new(pkg).unwrap(),
-            TypeName::new(ty).unwrap(),
-            v,
-        )
-    }
-
-    #[test]
-    fn from_port_spec_resolves_specific_to_structured() {
-        let spec =
-            PortSchemaSpec::Specific(ident("tatolab", "core", "VideoFrame", SemVer::new(1, 0, 0)));
-        let s = SchemaIdentOutput::from_port_spec(&spec)
-            .expect("Specific must yield a structured output");
-        assert_eq!(s.org, "tatolab");
-        assert_eq!(s.package, "core");
-        assert_eq!(s.type_name, "VideoFrame");
-        assert_eq!(s.version.major, 1);
-        assert_eq!(s.version.minor, 0);
-        assert_eq!(s.version.patch, 0);
-    }
-
-    #[test]
-    fn from_port_spec_returns_none_for_any() {
-        // `Any` is the wildcard for ports accepting arbitrary payloads.
-        // The JSON wire shape is `null` (skip_serializing_if = Option::is_none).
-        assert!(SchemaIdentOutput::from_port_spec(&PortSchemaSpec::Any).is_none());
-    }
 
     #[test]
     fn schema_ident_output_serializes_with_renamed_type_field() {

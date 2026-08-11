@@ -57,9 +57,6 @@ fn validate_processor_schema(schema: &ProcessorSchema) -> SchemaResult<()> {
     // manifest's `schemas:` map happens downstream (proc-macro expansion /
     // runtime startup); the standalone parser doesn't have package context.
 
-    // Validate input port schema references — port name presence + buffer
-    // size sanity. Schema shape is locked by [`PortSchemaSpec`]'s typed
-    // deserializer (rejects joined-string and other non-structured forms).
     for input in &schema.inputs {
         if input.name.is_empty() {
             return Err(SchemaError::InvalidName {
@@ -69,7 +66,6 @@ fn validate_processor_schema(schema: &ProcessorSchema) -> SchemaResult<()> {
         }
     }
 
-    // Validate output port schema references — port name presence only.
     for output in &schema.outputs {
         if output.name.is_empty() {
             return Err(SchemaError::InvalidName {
@@ -116,12 +112,10 @@ config:
 
 inputs:
   - name: image_in
-    schema: Frame
     description: "Input video frame"
 
 outputs:
   - name: image_out
-    schema: Frame
     description: "Blurred video frame"
 "#;
 
@@ -143,7 +137,6 @@ outputs:
 
         assert_eq!(schema.inputs.len(), 1);
         assert_eq!(schema.inputs[0].name, "image_in");
-        assert_eq!(schema.inputs[0].schema.to_string(), "Frame");
 
         assert_eq!(schema.outputs.len(), 1);
         assert_eq!(schema.outputs[0].name, "image_out");
@@ -158,11 +151,9 @@ entrypoint: detector:ObjectDetector
 
 inputs:
   - name: frame
-    schema: Frame
 
 outputs:
   - name: detections
-    schema: Detections
 "#;
 
         let schema = parse_processor_yaml(yaml).unwrap();
@@ -223,59 +214,25 @@ name: ""
     }
 
     #[test]
-    fn test_processor_schema_rejects_joined_string_port_schema() {
-        // Joined-string `com.streamlib.video.frame` is not a valid bare
-        // PascalCase TypeName — `PortSchemaSpec` only accepts `any` or a
-        // bare PascalCase TypeName resolved against the manifest's
-        // `schemas:` map.
+    fn test_processor_port_rejects_a_schema_key() {
+        // A port declares name, description and delivery profile only. The
+        // `schema:` key is not "ignored" — `deny_unknown_fields` rejects it,
+        // so a manifest carrying a port type fails loudly instead of
+        // silently dropping it.
         let yaml = r#"
 name: Test
 
 inputs:
   - name: video
-    schema: com.streamlib.video.frame
+    schema: VideoFrame
 "#;
 
         let result = parse_processor_yaml(yaml);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
+        let err = result.expect_err("a port `schema:` key must be rejected").to_string();
         assert!(
-            err.contains("bare PascalCase TypeName") || err.contains("schemas: map"),
-            "expected bare-name guidance, got: {err}"
+            err.contains("schema"),
+            "the error must name the offending key, got: {err}"
         );
-    }
-
-    #[test]
-    fn test_processor_schema_rejects_structured_port_form() {
-        let yaml = r#"
-name: Test
-inputs:
-  - name: video
-    schema: { org: tatolab, package: core, type: VideoFrame, version: 1.0.0 }
-"#;
-        let result = parse_processor_yaml(yaml);
-        assert!(result.is_err());
-        let err = result.unwrap_err().to_string();
-        assert!(
-            err.contains("bare PascalCase TypeName") || err.contains("schemas: map"),
-            "expected bare-name guidance, got: {err}"
-        );
-    }
-
-    #[test]
-    fn test_processor_schema_accepts_any_port_schema() {
-        // `any` is the wildcard for ports that accept arbitrary serialized
-        // payloads (e.g. MoQ tracks).
-        let yaml = r#"
-name: Test
-
-inputs:
-  - name: data
-    schema: any
-"#;
-
-        let schema = parse_processor_yaml(yaml).unwrap();
-        assert_eq!(schema.inputs[0].schema.to_string(), "any");
     }
 
     #[test]
@@ -311,7 +268,6 @@ name: Writer
 
 inputs:
   - name: video_in
-    schema: VideoFrame
     delivery_profile: lossless
 "#;
 
@@ -330,7 +286,6 @@ name: Passthrough
 
 inputs:
   - name: video
-    schema: Frame
 "#;
 
         let schema = parse_processor_yaml(yaml).unwrap();

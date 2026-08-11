@@ -6,161 +6,13 @@ use schemars::r#gen::SchemaGenerator;
 use schemars::schema::{InstanceType, Schema, SchemaObject, SubschemaValidation};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use streamlib_idents::{SchemaIdent, TypeName};
+use streamlib_idents::TypeName;
 
 use crate::ThreadPriority;
 
 // ============================================================================
 // Processor Schema Types
 // ============================================================================
-
-/// Schema spec for a port — tri-state across the use-site lifecycle.
-///
-/// YAML accepts exactly two string shapes at use-sites:
-/// - `schema: any` — wildcard (any payload accepted)
-/// - `schema: <BarePascalCaseTypeName>` (e.g. `VideoFrame`) — bare type-name
-///   reference resolved against the enclosing manifest's `schemas:` map at
-///   proc-macro expansion / runtime startup
-///
-/// The structured 4-field map (`{ org, package, type, version }`) and any
-/// joined-string shorthand (`'@org/pkg/Type@version'`) are rejected at the
-/// parser boundary — declare the type once in the manifest's `schemas:`
-/// map and reference it by bare name at every use-site. See
-/// `docs/architecture/schema-identity-and-packaging.md`.
-///
-/// The [`PortSchemaSpec::Specific`] variant is constructed downstream of
-/// the parser (proc-macro expansion / manifest resolution) once a bare
-/// [`Named`](PortSchemaSpec::Named) reference has been resolved against
-/// the manifest's `schemas:` map. The wire layer, generated code, and
-/// `ProcessorDescriptor` continue to carry [`SchemaIdent`] verbatim.
-///
-/// `Default` resolves to [`PortSchemaSpec::Any`] — the most permissive
-/// shape. Used by callers that build a `PortInfo` before the routing tag
-/// is known (e.g. graph-builder fallbacks); a default `Any` carries no
-/// false specificity.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
-pub enum PortSchemaSpec {
-    #[default]
-    Any,
-    /// Bare PascalCase type-name reference (e.g. `VideoFrame`), unresolved.
-    /// Produced by the YAML parser; resolved to [`Specific`](Self::Specific)
-    /// downstream against the enclosing manifest's `schemas:` map.
-    Named(TypeName),
-    /// Fully-qualified schema identifier — the resolved post-lookup form.
-    Specific(SchemaIdent),
-}
-
-impl Serialize for PortSchemaSpec {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        match self {
-            PortSchemaSpec::Any => serializer.serialize_str("any"),
-            PortSchemaSpec::Named(name) => serializer.serialize_str(name.as_str()),
-            // Round-trips to `Named` on next parse — by the time a spec has
-            // been resolved to `Specific`, the full SchemaIdent is the
-            // source of truth and re-serialization to YAML is uncommon.
-            PortSchemaSpec::Specific(ident) => serializer.serialize_str(ident.r#type.as_str()),
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for PortSchemaSpec {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        use serde::de::Error;
-        let value = serde_yaml::Value::deserialize(deserializer)?;
-        match value {
-            serde_yaml::Value::String(s) if s == "any" => Ok(PortSchemaSpec::Any),
-            serde_yaml::Value::String(s) => {
-                let name = TypeName::new(s.clone()).map_err(|e| {
-                    D::Error::custom(format!(
-                        "port schema `{}` is not a valid bare PascalCase TypeName \
-                         (must match `^[A-Z][A-Za-z0-9]*$`): {}. Declare the type \
-                         once in the manifest's `schemas:` map and reference it by \
-                         bare name (`docs/architecture/schema-identity-and-packaging.md`).",
-                        s, e
-                    ))
-                })?;
-                Ok(PortSchemaSpec::Named(name))
-            }
-            serde_yaml::Value::Mapping(_) => Err(D::Error::custom(
-                "port schema must be either `any` or a bare PascalCase TypeName \
-                 string (e.g. `VideoFrame`); the structured 4-field map form \
-                 (`{ org, package, type, version }`) is no longer accepted. \
-                 Declare the type once in the manifest's `schemas:` map and \
-                 reference it by bare name (`docs/architecture/schema-identity-and-packaging.md`).",
-            )),
-            other => Err(D::Error::custom(format!(
-                "port schema must be either `any` or a bare PascalCase TypeName string; got {:?}",
-                other
-            ))),
-        }
-    }
-}
-
-impl PortSchemaSpec {
-    /// Returns the inner [`SchemaIdent`] only when this spec has been
-    /// resolved to its fully-qualified form. Returns `None` for both
-    /// [`Any`](Self::Any) and unresolved [`Named`](Self::Named) variants.
-    pub fn specific(&self) -> Option<&SchemaIdent> {
-        match self {
-            PortSchemaSpec::Specific(ident) => Some(ident),
-            PortSchemaSpec::Any | PortSchemaSpec::Named(_) => None,
-        }
-    }
-}
-
-impl std::fmt::Display for PortSchemaSpec {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PortSchemaSpec::Any => f.write_str("any"),
-            PortSchemaSpec::Named(name) => f.write_str(name.as_str()),
-            PortSchemaSpec::Specific(ident) => ident.fmt(f),
-        }
-    }
-}
-
-impl JsonSchema for PortSchemaSpec {
-    fn schema_name() -> String {
-        "PortSchemaSpec".into()
-    }
-    fn schema_id() -> Cow<'static, str> {
-        Cow::Borrowed("streamlib_processor_schema::PortSchemaSpec")
-    }
-    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
-        let any_literal = Schema::Object(SchemaObject {
-            instance_type: Some(InstanceType::String.into()),
-            enum_values: Some(vec![serde_json::Value::String("any".into())]),
-            ..Default::default()
-        });
-        let bare_typename = Schema::Object(SchemaObject {
-            instance_type: Some(InstanceType::String.into()),
-            string: Some(Box::new(schemars::schema::StringValidation {
-                pattern: Some(r"^[A-Z][A-Za-z0-9]*$".to_string()),
-                ..Default::default()
-            })),
-            ..Default::default()
-        });
-        Schema::Object(SchemaObject {
-            metadata: Some(Box::new(schemars::schema::Metadata {
-                description: Some(
-                    "Either the literal `any` (wildcard, accepts any payload) or a bare PascalCase TypeName resolved against the enclosing manifest's `schemas:` map."
-                        .into(),
-                ),
-                ..Default::default()
-            })),
-            subschemas: Some(Box::new(SubschemaValidation {
-                one_of: Some(vec![any_literal, bare_typename]),
-                ..Default::default()
-            })),
-            ..Default::default()
-        })
-    }
-}
 
 /// Runtime language for a processor.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq, Eq)]
@@ -526,9 +378,6 @@ pub const DELIVERY_PROFILE_DECLARATION_VALUES: [&str; 3] = ["latest", "every_sam
 pub struct ProcessorPortSchema {
     /// Port name (e.g., "video_in").
     pub name: String,
-    /// Schema spec — either `any` or a bare PascalCase TypeName resolved
-    /// against the enclosing manifest's `schemas:` map.
-    pub schema: PortSchemaSpec,
     /// Human-readable description.
     #[serde(default)]
     pub description: Option<String>,
