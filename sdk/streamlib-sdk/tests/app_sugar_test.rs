@@ -320,7 +320,11 @@ fn a_requested_display_name_is_honoured_and_a_duplicate_is_disambiguated() {
 
     let app = App::new().expect("App::new");
     let first = app
-        .add(reference.clone(), serde_json::json!({}), Some("Front Camera"))
+        .add(
+            reference.clone(),
+            serde_json::json!({}),
+            Some("Front Camera"),
+        )
         .expect("app add first");
     let second = app
         .add(reference, serde_json::json!({}), Some("Front Camera"))

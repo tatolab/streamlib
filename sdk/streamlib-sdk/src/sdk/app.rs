@@ -125,11 +125,7 @@ impl App {
     /// Add `spec` under an optional requested display name and read back the
     /// name the graph assigned, which is the requested one only when no other
     /// node already answered to it.
-    fn add_spec(
-        &self,
-        spec: ProcessorSpec,
-        display_name: Option<&str>,
-    ) -> Result<AddedProcessor> {
+    fn add_spec(&self, spec: ProcessorSpec, display_name: Option<&str>) -> Result<AddedProcessor> {
         let spec = match display_name {
             Some(display_name) => spec.with_display_name(display_name),
             None => spec,

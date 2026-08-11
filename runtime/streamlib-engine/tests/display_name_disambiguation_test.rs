@@ -84,9 +84,7 @@ fn the_read_back_name_is_the_assigned_one_not_the_requested_one() {
         )
         .unwrap();
     let second = runtime
-        .add_processor(
-            ProcessorSpec::new(camera, serde_json::json!({})).with_display_name("Front"),
-        )
+        .add_processor(ProcessorSpec::new(camera, serde_json::json!({})).with_display_name("Front"))
         .unwrap();
 
     assert_eq!(runtime.display_name_of_processor(&first).unwrap(), "Front");
@@ -144,11 +142,7 @@ fn a_graph_with_duplicates_round_trips_without_the_counter_climbing() {
 
     assert_eq!(
         display_names_in_the_graph_json(&second_runtime),
-        vec![
-            "RoundTripCamera",
-            "RoundTripCamera 2",
-            "RoundTripCamera 3"
-        ],
+        vec!["RoundTripCamera", "RoundTripCamera 2", "RoundTripCamera 3"],
         "a reloaded graph must carry the same names, not re-decorated ones"
     );
     assert_eq!(
