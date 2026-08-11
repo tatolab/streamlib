@@ -6,11 +6,10 @@
 
 ## What this document describes
 
-The architecture surface shared across the `streamlib-idents` and
-`streamlib-jtd-codegen` crates: identifier grammar, package manifest
-formats, dependency resolver, lockfile, the codegen pipeline, and the
-anti-patterns the design rules out. Every claim below describes
-behavior that ships in current code.
+The architecture surface the `streamlib-idents` crate covers:
+identifier grammar, package manifest formats, dependency resolver,
+lockfile, and the anti-patterns the design rules out. Every claim
+below describes behavior that ships in current code.
 
 ## Why this exists
 
@@ -26,14 +25,13 @@ three independent strands:
   in `Cargo.toml`, `[tool.streamlib]` in `pyproject.toml`, an
   ungoverned `streamlib` block in `deno.json`). Three sources of truth
   describing the same set of facts.
-- **Incomplete distribution attempts** (`embedded_schemas.rs`'s
-  hand-curated match statement, ad-hoc `.slpkg` archive experiments,
-  schemas that lived only in `runtime/streamlib-engine/schemas/` with no
-  publication story).
+- **Incomplete distribution attempts** (a hand-curated match statement
+  in the engine, ad-hoc `.slpkg` archive experiments, schemas that
+  lived only in `runtime/streamlib-engine/schemas/` with no publication
+  story).
 
 The fix is one cohesive architecture covering identifier grammar,
-package manifest, dependency resolution, code generation, and
-distribution.
+package manifest, dependency resolution, and distribution.
 
 ## Architectural decisions
 
@@ -88,10 +86,7 @@ Surfaces this rule covers:
 
 - IPC envelopes (`escalate_request` / `escalate_response`, surface-
   share, iceoryx2 payloads).
-- Codegen-emitted const records (`SCHEMA_IDENT: SchemaIdent { … }`).
 - Graph JSON (the runtime's serialized pipeline graph).
-- Embedded-schema lookup keys (replaces `embedded_schemas.rs`'s
-  `match` on string).
 - Lockfile entries (`streamlib-codegen.lock`).
 
 The `Display` impl on `SchemaIdent` produces the joined `@org/pkg/Type@v`
@@ -150,7 +145,7 @@ YAML declaring a top-level `version` key.
 Every project that consumes packages (applications, examples) writes
 a `streamlib-codegen.lock` next to its `streamlib.yaml`. The lockfile is
 content-hash-pinned and diff-stable (sorted `BTreeMap` keys), so a
-fresh checkout reconstructs the same generated bindings byte-for-byte.
+fresh checkout resolves the same package set byte-for-byte.
 
 Discipline (mirrors `Cargo.lock`):
 
@@ -167,31 +162,6 @@ live in a single `@tatolab/core` package at `packages/core/`. This is
 streamlib's `google.protobuf` analogue. `@tatolab/core` ships at
 `1.0.0` from day one; breaking changes require a deliberate v2 bump
 and downstream migration.
-
-### Decision 6 — universal `streamlib generate` CLI
-
-Code generation goes through `streamlib generate` (a subcommand on
-the `streamlib` CLI). Non-Rust developers regenerate bindings without
-ever installing rustup. `cargo xtask generate-schemas` remains as a
-thin contributor-only wrapper. The library crate behind both is
-`streamlib-jtd-codegen`.
-
-### Decision 7 — sentinel-substitution codegen + deterministic ordering
-
-Backend codegen (`jtd-codegen`) historically produced subtly different
-field orderings + name manglings across runs and across backends
-(rust / python / typescript). The fix is two passes:
-
-1. **Sentinel substitution.** Replace cross-package type references
-   with deterministic placeholder sentinels *before* invoking the
-   per-backend codegen, then substitute back after. The backend
-   never sees real cross-package references and can't disagree
-   about how to mangle them.
-2. **Deterministic field ordering.** A normalization pass that
-   stable-sorts properties by name across all backends.
-
-Together these eliminate the per-backend mangling drift that bled
-silent fix-PRs every quarter.
 
 ## Manifest formats
 
@@ -308,91 +278,17 @@ packages:
 | `content_hash` | Namespace-prefixed (`sha256:…`) so future hash-algorithm migrations don't break parsing. |
 
 The content hash is computed over the resolved package's contents
-(deterministic pass over schemas + manifest). It's the load-bearing
-primitive that lets a determinism gate prove committed `_generated_/`
-matches the lockfile's inputs.
+(deterministic pass over schemas + manifest), so a resolved set is
+reproducible across checkouts.
 
-## Sentinel-substitution codegen contract
+## Crate ownership
 
-Code generation runs in three passes:
-
-1. **Resolve** — read `streamlib.yaml` + `streamlib-codegen.lock`, walk the
-   dependency graph, produce the full set of `(SchemaIdent, JtdSchema)`
-   pairs to generate.
-2. **Substitute → generate → substitute back.**
-   - Pre-pass: replace every cross-package `SchemaIdent` reference in
-     each schema's JTD definition with a deterministic placeholder
-     sentinel (`__STREAMLIB_REF_<hash>__`).
-   - Per-backend codegen: invoke `jtd-codegen --target {rust,python,typescript}`
-     against the sentinel-substituted schemas. The backend never sees
-     a real cross-package reference and can't mangle one inconsistently.
-   - Post-pass: substitute the sentinels back to native cross-package
-     `import`s in each backend's emitted code.
-3. **Order** — stable-sort properties by name in all generated types
-   (a normalization pass that makes the output diff-stable across
-   backends and across runs).
-
-Then the generated files are written to each consumer's `_generated_/`
-directory.
-
-The `streamlib-jtd-codegen` crate owns this pipeline. The
-`streamlib-idents` crate owns the structured types the pipeline reads
-and writes (`SchemaIdent`, `SemVer`, `Manifest`, `PackageMetadata`,
-`Lockfile`) and the resolver that walks `streamlib.yaml` (`resolve`,
-`ResolvedPackages`). `Manifest` deserialization tolerates runtime-side
-fields (`processors:`, `env:`) without `deny_unknown_fields` rejection
-so one `streamlib.yaml` carries both the schema-identity surface and
-the runtime configuration.
-
-### Root-name sentinel — sibling pattern at the `--root-name` boundary
-
-Cross-package references aren't the only place `jtd-codegen` v0.4.1
-mangles names. The same backend bugs (digit-boundary lowercasing
-across all three; Python-only acronym upcasing; inconsistent
-`--root-name` honoring across emit shapes) apply to **the root type
-name `--root-name` declares**. `H264DecoderConfig` lands as
-`H264decoderConfig` in TypeScript output even though that exact
-spelling was passed on the CLI. The fix mirrors the cross-package
-sentinel pattern at a different layer: pass a sentinel as
-`--root-name` that no backend mangles, then literal-substitute the
-sentinel back to the schema's `metadata.name`-derived identifier in
-each post-processor.
-
-Implementation: `ROOT_NAME_SENTINEL` const in
-`streamlib-jtd-codegen::lib.rs` carries `"StreamlibCanonRoot"` as
-the chosen sentinel value. Per-language `post_process_*` functions
-end with a single `code.replace(ROOT_NAME_SENTINEL, expected_name)`
-pass. The `ROOT_NAME_SENTINEL` value is a transport detail — it
-never appears in committed `_generated_/` output.
-
-Any sentinel must satisfy two constraints:
-
-- **Survive byte-identically** through all three backends (no
-  case-folding, no underscore stripping, no acronym up/down-casing).
-  CamelCase identifiers do; `__ROOT__`-shape identifiers do not
-  (`jtd-codegen` v0.4.1 normalizes underscore-prefixed identifiers,
-  collapsing `__ROOT__` to `Root` across all three backends).
-- **Be distinct enough that no real schema would emit it.**
-  `StreamlibCanonRoot` is internally namespaced; a `s/Streamlib/`
-  grep finds the implementation rather than user code.
-
-The sub-type prefix-strip pass in Rust's `post_process_rust` runs
-**before** the final sentinel substitution and operates on
-`ROOT_NAME_SENTINEL`-prefixed names (e.g., `StreamlibCanonRootRateControl`
-→ `RateControl`). Names that don't get stripped retain their
-sentinel prefix until the final `code.replace`, at which point
-`StreamlibCanonRootBar` becomes `EscalateRequestBar` — the existing
-committed shape. Sub-type renames don't use a separate sentinel; the
-prefix-strip heuristic operates on `ROOT_NAME_SENTINEL`-prefixed
-input, which the upstream sentinel pass guarantees.
-
-The two sentinel passes — cross-package `__STREAMLIB_REF_<hash>__`
-and `ROOT_NAME_SENTINEL` — operate on disjoint parts of the input
-(JTD `ref:` lines vs. the `--root-name` CLI arg), at disjoint
-layers (pre-codegen JSON manipulation vs. post-codegen string
-substitution), and never interact. Both implement the same
-architectural principle (no heuristic detection at the codegen
-boundary) at different surfaces.
+The `streamlib-idents` crate owns the structured types (`SchemaIdent`,
+`SemVer`, `Manifest`, `PackageMetadata`, `Lockfile`) and the resolver
+that walks `streamlib.yaml` (`resolve`, `ResolvedPackages`). `Manifest`
+deserialization tolerates runtime-side fields (`processors:`, `env:`)
+without `deny_unknown_fields` rejection so one `streamlib.yaml` carries
+both the schema-identity surface and the runtime configuration.
 
 ## Anti-patterns
 
@@ -500,87 +396,45 @@ versions collapse this to a single dimension per package.
 `Cargo.toml` does not contain `[package.metadata.streamlib]`,
 `pyproject.toml` does not contain `[tool.streamlib]`, and `deno.json`
 has no `streamlib` block. The single source of truth is
-`streamlib.yaml` for every runtime; the resolver feeds the resolved
-set into each language's codegen pipeline. A CI lint
+`streamlib.yaml` for every runtime. A CI lint
 (`cargo xtask check-no-streamlib-metadata`) rejects re-introductions.
-
-### 5. Hand-curated `embedded_schemas.rs`-style match statements
-
-The schema registry at
-`runtime/streamlib-engine/src/core/embedded_schemas/mod.rs` is a runtime
-`LazyLock<RwLock<HashMap<String, Arc<str>>>>` populated by
-`Runner::add_module`: for every package the project depends on,
-the module loader walks the package's `schemas:` declarations and calls
-`register_schema(canonical_id, yaml_body)`. Adding a schema means
-declaring it in your `streamlib.yaml` and depending on the owning
-package; nothing else. Hand-curated match arms mapping schema IDs to
-embedded YAML strings are not allowed — they silently drift when a
-schema renames or is added.
 
 ## Polyglot SchemaIdent parity
 
 The `streamlib-idents` crate's full surface (range matching,
-lockfile read/write, content-hash resolver, codegen pipeline)
+lockfile read/write, content-hash resolver)
 is Rust-only. The Python SDK carries a focused subset matched
 to the authoring path:
 
-- > ~~**`streamlib.SchemaIdent`** — frozen dataclass mirroring the
-  > Rust 4-field shape with the same regex-validating constructors
-  > (org / package / type / version follow the same grammar that
-  > `streamlib_idents::Org` / `Package` / `TypeName` / `SemVer`
-  > enforce). No `parse` / `from_str` API; the joined `__str__` form
-  > is render-only and never round-trips through a parser.~~
-  > — Superseded 2026-08-10 by the port type layer's deletion:
-  > `streamlib/schema_ident.py` and its `__init__` re-export are removed. The
-  > class existed only to be passed as `schema=`, which no longer exists.
 - > ~~**`streamlib._manifest`** — hand-rolled YAML reader for the `package:` block + processor-name
   > list; **`@streamlib.processor("PascalCase")`** — positional short name resolved at decoration
   > time against the enclosing `streamlib.yaml`, validated against the manifest's `processors:` list.~~
   > — Superseded 2026-07-19: `_manifest` was removed and `@processor("@org/package/Type")` declares a
   > version-free identity from the decorator arguments, reading nothing from disk. See
   > the zero-ceremony authoring model.
-- Removed 2026-08-10: the description of `@streamlib.input(schema=...)` /
-  `@streamlib.output(schema=...)` and the generated-class marker they resolved
-  against. A port declares name, description and — on an input — delivery
-  profile, and nothing else; the `schema=` keyword is deleted from both
-  decorators and the port method's return annotation is the type declaration,
-  read by humans and type checkers only.
-- ~~**Schemas enter Python only through codegen.** Authors import generated
-  dataclasses; there is no language-side affordance for declaring a schema —
-  JTD-in-YAML is the canonical source and generated code is what authors import.~~
-  — Superseded 2026-07-19 by the two-door descriptor model
-  (the zero-ceremony authoring model): the self-describing
-  `Bag` wire carries its own field names, so no schema and no generated type is
-  needed to interoperate; a by-ID JTD descriptor is consumed as data, never via
-  required codegen. Further superseded 2026-08-10: the sentence that followed
-  offered `@input(schema=GeneratedClass)` as an optional typed view. There is no
-  `schema=` keyword and no generated type class — the opt-in typed read is
+- **`@streamlib.input` / `@streamlib.output`** — a port declares name,
+  description and, on an input, a delivery profile. The port method's return
+  annotation is the type declaration, read by humans and type checkers only.
+- **No schema and no generated type is needed to interoperate.** The
+  self-describing `Bag` wire carries its own field names, and a by-ID JTD
+  descriptor is consumed as data. The opt-in typed read is
   `ctx.inputs.read(port, into=T)`.
 
 The reason for the focused subset rather than full parity:
 structured-everywhere eliminates the need for non-Rust callers to
 *validate identifiers* at runtime. Polyglot SDKs consume already-
-validated records produced by Rust codegen or inbound IPC. The
+validated records produced by Rust or inbound IPC. The
 Python SDK's local validators run only at authoring time —
 guarding against manifest-vs-decorator drift, not validating
 wire-format input.
 
-Range matching, lockfile resolution, and the codegen pipeline
-stay Rust-side because no non-Rust caller currently exercises
-them. This matches the polyglot rule's escape clause
+Range matching and lockfile resolution stay Rust-side because no
+non-Rust caller currently exercises them. This matches the polyglot rule's escape clause
 (`.claude/rules/polyglot.md`): *"the only legitimate split is
 schema-only / language-specific by construction"* — the deeper
-crate functionality (range matching, lockfile, codegen) is
+crate functionality (range matching, lockfile) is
 "language-specific by construction" while basic identity
 validation is mirrored across runtimes that need it.
-
-### Codegen-emitted `SCHEMA_IDENT`
-
-Removed 2026-08-10: the claim that the Python codegen post-processor emits a
-structured ident on generated types, and that the port decorators resolve it
-off the class. Nothing emits it — `streamlib-jtd-codegen` was deleted whole,
-and its last consumer, the `schema=` resolution in the wheel's port
-decorators, is deleted too. There is no codegen and no generated type class.
 
 ## Reference
 
@@ -591,10 +445,6 @@ decorators, is deleted too. There is no codegen and no generated type class.
     too and walks path / git / `.slpkg` sources; the lockfile writer
     (`write_lockfile`, `read_lockfile`) and `compute_content_hash`
     helper are siblings of the resolver.
-  - Removed 2026-08-10: the `sdk/streamlib-jtd-codegen/` and
-    `runtime/streamlib-engine/src/core/embedded_schemas/` entries. Neither
-    directory exists — the codegen crate was deleted whole and the runtime
-    schema registry with it. There is no codegen and no schema registry.
   - `xtask/src/check_schema_versions.rs` — CI lint (no per-schema
     `version` keys in YAML).
   - `xtask/src/check_no_streamlib_metadata.rs` — CI lint
@@ -603,11 +453,8 @@ decorators, is deleted too. There is no codegen and no generated type class.
   - `.github/workflows/check-schema-versions.yml` — schema-version CI gate.
   - `.github/workflows/check-no-streamlib-metadata.yml` —
     legacy-metadata CI gate.
-  - Removed 2026-08-10: the three `sdk/streamlib-python/python/streamlib/`
-    entries (`schema_ident.py`, `_manifest.py`, `decorators.py`). That tree no
-    longer exists. The authoring decorators live in the wheel at
-    `sdk/streamlib-python-wheel/python/streamlib/_processor_declaration.py`, and
-    they carry no `SchemaIdent`.
+  - `sdk/streamlib-python-wheel/python/streamlib/_processor_declaration.py`
+    — the authoring decorators; they carry no `SchemaIdent`.
 - **Tests**:
   - `sdk/streamlib-idents/src/{ident,semver,manifest,lockfile,resolver}.rs::tests`
     — unit tests covering grammar conformance, semver-range matching,
@@ -619,9 +466,6 @@ decorators, is deleted too. There is no codegen and no generated type class.
   - `sdk/streamlib-idents/tests/no_parse_api.rs` — positive
     counterpart: locks the *allowed* construction pathways and
     asserts joined-string deserialization fails.
-  - Removed 2026-08-10: the `sdk/streamlib-jtd-codegen/` and
-    `runtime/streamlib-engine/src/core/embedded_schemas/` test entries. Both
-    trees were deleted, so neither suite exists.
   - `xtask/src/check_schema_versions.rs::tests` — schema-version
     lint fixtures.
   - `xtask/src/check_no_streamlib_metadata.rs::tests` —

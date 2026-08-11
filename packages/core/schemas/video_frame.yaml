@@ -23,7 +23,6 @@ imports:
 metadata:
   type: VideoFrame
   description: "Video frame for IPC - references GPU surface by ID"
-  flow_class: state_stream
 
 properties:
   surface_id:
