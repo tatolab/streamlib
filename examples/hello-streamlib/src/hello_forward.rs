@@ -31,13 +31,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
     execution = reactive,
     input(
         "video_in",
-        "@tatolab/core/VideoFrame",
         delivery_profile = "latest",
         description = "Frames from the upstream camera source"
     ),
     output(
         "video_out",
-        "@tatolab/core/VideoFrame",
         description = "The same frames, forwarded verbatim to the downstream sink"
     ),
 )]
