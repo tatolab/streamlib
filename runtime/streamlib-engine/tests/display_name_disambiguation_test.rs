@@ -5,8 +5,8 @@
 //! name is the one every surface shows.
 //!
 //! The unit coverage of the counter itself lives beside `add_v`; what this
-//! locks is the whole path an author actually meets: `add_processor` assigns,
-//! `display_name_of_processor` reads back what a handle must report, and the
+//! locks is the whole path an author actually meets: the add reports the
+//! assigned name a handle must carry, and the
 //! graph JSON — the exact payload `streamlib graph` and `GET /api/graph` serve
 //! (`to_json_async` in both) — carries the assigned names, not the requested
 //! ones.
@@ -78,19 +78,20 @@ fn the_read_back_name_is_the_assigned_one_not_the_requested_one() {
     let camera = register_test_type("ReadBackCamera");
 
     let runtime = Runner::new().unwrap();
-    let first = runtime
-        .add_processor(
+    let (_first_id, first_name) = runtime
+        .add_processor_reporting_assigned_display_name(
             ProcessorSpec::new(camera.clone(), serde_json::json!({})).with_display_name("Front"),
         )
         .unwrap();
-    let second = runtime
-        .add_processor(ProcessorSpec::new(camera, serde_json::json!({})).with_display_name("Front"))
+    let (_second_id, second_name) = runtime
+        .add_processor_reporting_assigned_display_name(
+            ProcessorSpec::new(camera, serde_json::json!({})).with_display_name("Front"),
+        )
         .unwrap();
 
-    assert_eq!(runtime.display_name_of_processor(&first).unwrap(), "Front");
+    assert_eq!(first_name, "Front");
     assert_eq!(
-        runtime.display_name_of_processor(&second).unwrap(),
-        "Front 2",
+        second_name, "Front 2",
         "the second add asked for `Front` and must be told it got `Front 2`"
     );
 }

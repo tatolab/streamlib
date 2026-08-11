@@ -21,10 +21,15 @@ use streamlib_idents::ChannelName;
 // =============================================================================
 
 /// Core implementation for add_processor - takes owned Arcs for 'static lifetime.
+///
+/// Reports the display name the graph assigned alongside the id. Both come out
+/// of the one `compiler.scope` that added the node, so a caller that needs the
+/// name never has to ask a second time — and never races a concurrent removal
+/// into being told its own successful add does not exist.
 async fn add_processor_impl(
     compiler: Arc<Compiler>,
     spec: ProcessorSpec,
-) -> Result<ProcessorUniqueId> {
+) -> Result<(ProcessorUniqueId, String)> {
     let emit_will_add = |id: &ProcessorUniqueId| {
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
@@ -48,12 +53,12 @@ async fn add_processor_impl(
     // `add_v`. A version-free reference projects to `(org, package, type)@0.0.0`.
     let ident_for_err = spec.name.to_diagnostic_ident();
 
-    let processor_id = compiler.scope(|graph, tx| -> Result<ProcessorUniqueId> {
-        let node_id = graph
+    let added = compiler.scope(|graph, tx| -> Result<(ProcessorUniqueId, String)> {
+        let (node_id, assigned_display_name) = graph
             .traversal_mut()
             .add_v(spec)
             .first()
-            .map(|node| node.id.clone())
+            .map(|node| (node.id.clone(), node.display_name.clone()))
             .ok_or_else(|| Error::GraphError("Could not create node".into()))?;
 
         // Registry miss: `add_v` already attached `StateComponent(Error)` so
@@ -80,7 +85,7 @@ async fn add_processor_impl(
         emit_will_add(&node_id);
         tx.log(PendingOperation::AddProcessor(node_id.clone()));
         emit_did_add(&node_id);
-        Ok(node_id)
+        Ok((node_id, assigned_display_name))
     })?;
 
     PUBSUB.publish(
@@ -88,7 +93,7 @@ async fn add_processor_impl(
         &Event::RuntimeGlobal(RuntimeEvent::GraphDidChange),
     );
 
-    Ok(processor_id)
+    Ok(added)
 }
 
 /// Core implementation for remove_processor - takes owned Arcs for 'static lifetime.
@@ -299,6 +304,32 @@ async fn disconnect_impl(compiler: Arc<Compiler>, link_id: LinkUniqueId) -> Resu
     Ok(())
 }
 
+impl Runner {
+    /// Add a processor and report the display name the graph assigned it, which
+    /// is the requested one only when no other node already answered to it.
+    pub fn add_processor_reporting_assigned_display_name(
+        &self,
+        spec: ProcessorSpec,
+    ) -> Result<(ProcessorUniqueId, String)> {
+        match &self.tokio_runtime_variant {
+            TokioRuntimeVariant::OwnedTokioRuntime(rt) => {
+                let compiler = Arc::clone(&self.compiler);
+                rt.block_on(add_processor_impl(compiler, spec))
+            }
+            TokioRuntimeVariant::ExternalTokioHandle(handle) => {
+                let compiler = Arc::clone(&self.compiler);
+                let (tx, rx) = std::sync::mpsc::channel();
+                handle.spawn(async move {
+                    let result = add_processor_impl(compiler, spec).await;
+                    let _ = tx.send(result);
+                });
+                rx.recv()
+                    .map_err(|_| Error::Runtime("Task channel closed".into()))?
+            }
+        }
+    }
+}
+
 // =============================================================================
 // RuntimeOperations Implementation
 // =============================================================================
@@ -310,7 +341,11 @@ impl RuntimeOperations for Runner {
 
     fn add_processor_async(&self, spec: ProcessorSpec) -> BoxFuture<'_, Result<ProcessorUniqueId>> {
         let compiler = Arc::clone(&self.compiler);
-        Box::pin(add_processor_impl(compiler, spec))
+        Box::pin(async move {
+            add_processor_impl(compiler, spec)
+                .await
+                .map(|(processor_id, _assigned_display_name)| processor_id)
+        })
     }
 
     fn remove_processor_async(&self, processor_id: ProcessorUniqueId) -> BoxFuture<'_, Result<()>> {
@@ -392,21 +427,8 @@ impl RuntimeOperations for Runner {
     // =========================================================================
 
     fn add_processor(&self, spec: ProcessorSpec) -> Result<ProcessorUniqueId> {
-        match &self.tokio_runtime_variant {
-            TokioRuntimeVariant::OwnedTokioRuntime(rt) => {
-                rt.block_on(self.add_processor_async(spec))
-            }
-            TokioRuntimeVariant::ExternalTokioHandle(handle) => {
-                let compiler = Arc::clone(&self.compiler);
-                let (tx, rx) = std::sync::mpsc::channel();
-                handle.spawn(async move {
-                    let result = add_processor_impl(compiler, spec).await;
-                    let _ = tx.send(result);
-                });
-                rx.recv()
-                    .map_err(|_| Error::Runtime("Task channel closed".into()))?
-            }
-        }
+        self.add_processor_reporting_assigned_display_name(spec)
+            .map(|(processor_id, _assigned_display_name)| processor_id)
     }
 
     fn remove_processor(&self, processor_id: &ProcessorUniqueId) -> Result<()> {

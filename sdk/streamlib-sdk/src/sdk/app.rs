@@ -23,12 +23,7 @@ use crate::sdk::runtime::Runner;
 pub type AppPortEndpoint<'a> = (&'a AddedProcessor, &'a str);
 
 /// A processor [`App::add`] or [`App::add_local`] put in the graph.
-///
-/// Carries the display name the engine *assigned*, which is the requested one
-/// only when nothing else in the graph already answered to it — the graph
-/// appends a counter to a duplicate, so the requested name is not what a caller
-/// can rely on having got.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct AddedProcessor {
     processor_id: ProcessorUniqueId,
     display_name: String,
@@ -41,6 +36,10 @@ impl AddedProcessor {
     }
 
     /// The display name the graph assigned this processor.
+    ///
+    /// The requested one only when nothing else in the graph already answered
+    /// to it: the graph appends a counter to a duplicate, so a caller that
+    /// asked for a name cannot assume it got that name.
     pub fn display_name(&self) -> &str {
         &self.display_name
     }
@@ -122,16 +121,16 @@ impl App {
         &self.runner
     }
 
-    /// Add `spec` under an optional requested display name and read back the
-    /// name the graph assigned, which is the requested one only when no other
-    /// node already answered to it.
-    fn add_spec(&self, spec: ProcessorSpec, display_name: Option<&str>) -> Result<AddedProcessor> {
-        let spec = match display_name {
-            Some(display_name) => spec.with_display_name(display_name),
-            None => spec,
-        };
-        let processor_id = self.runner.add_processor(spec)?;
-        let display_name = self.runner.display_name_of_processor(&processor_id)?;
+    /// Add `spec` under an optional requested display name.
+    fn add_spec(
+        &self,
+        mut spec: ProcessorSpec,
+        requested_display_name: Option<&str>,
+    ) -> Result<AddedProcessor> {
+        spec.display_name = requested_display_name.map(str::to_string);
+        let (processor_id, display_name) = self
+            .runner
+            .add_processor_reporting_assigned_display_name(spec)?;
         Ok(AddedProcessor {
             processor_id,
             display_name,

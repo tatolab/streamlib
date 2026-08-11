@@ -88,12 +88,9 @@ impl<'a> TraversalSourceMut<'a> {
 /// Make `requested_display_name` unique among the graph's nodes by appending
 /// ` 2`, ` 3` … until nothing else answers to it.
 ///
-/// The spelling is a contract, not a formatting choice: the same string is what
+/// The spelling is a contract, not a formatting choice: this one string is what
 /// the `add` handle reports, what `streamlib graph` renders, and what prefixes
-/// the processor's log records, so it must be identical in every language.
-/// Applied to an author-supplied name as well as to the type-derived default —
-/// two `add(Camera, display_name = "Front")` calls are as ambiguous as two
-/// defaults.
+/// the processor's log records, so every language must show the same one.
 fn disambiguate_display_name_within_graph(
     graph: &DiGraph<ProcessorNode, Link>,
     requested_display_name: String,
