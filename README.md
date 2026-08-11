@@ -1,67 +1,156 @@
 # StreamLib
 
-**A domain-agnostic, multimodal sensor processing platform — Python authoring, a Rust engine,
-GPU acceleration without vendor lock-in.**
+**The perception and control loop your machine actually runs — written in Python, isolated by
+the kernel, and observable while the machine is still moving.**
 
-StreamLib runs applications that take live sensor data — cameras, microphones, lidar, radar,
-anything that produces samples on a deadline — move it across the GPU, run your kernels and
-models over it, and act on the result. You write one Python class per stage of the pipeline.
-The engine schedules them, owns the GPU memory, and keeps pixels out of the interpreter.
+`0.17.1` · alpha, APIs will change · Linux + NVIDIA, x86_64 · BUSL-1.1, converting to Apache 2.0
+on 2029-01-01
 
-It is built like a game engine: one core system per concern — graph, scheduler, GPU context,
-media I/O, control plane — and ordinary Python on top of all of it.
+---
+
+An inspection drone follows a transmission line. A picking arm reaches into a bin of parts it has
+never seen. A ground vehicle runs a warehouse aisle at 3am with nobody in the building.
+
+The work that fills your quarter is not writing the model. It is explaining why the new one
+regressed when the old one didn't, on a rig you cannot reproduce at your desk. It is finding out
+that the frames you trained on were never quite the frames the robot saw. It is having devices
+deployed somewhere inconvenient and no way to ask them what they are doing right now. And it is
+all of that under a power budget, on a network you cannot count on, in a place nobody wants to
+drive to.
+
+StreamLib is the runtime under that loop — the part you would otherwise spend a year building
+before your model ever sees a real frame.
+
+**Scope, plainly, before you read further.** StreamLib runs the loop on *one machine*: sensors in,
+GPU work, your model, display or actuation out — plus remote observation of that machine while it
+runs. Fleet orchestration, device-to-device transport, and over-the-air deployment are the
+direction this is built toward; none of them exist today, and neither does any ROS integration.
+[What ships today](#what-ships-today-and-what-does-not) names every gap.
+
+## The data you capture is the data that ran
+
+When a model regresses, the question is what changed in the input, and the honest answer is
+usually that nobody knows. The offline pipeline drifted from the online one. The interesting
+failure was never recorded. Recording it would have perturbed the thing you were trying to watch,
+so you sampled less, so you caught less.
+
+`streamlib tap` pulls the real payloads a live graph carried — verbatim, off a node running right
+now, bounded, and without ever blocking the producer. What lands on your disk is what the machine
+actually processed, not a reconstruction of what you believe it processed. A parked capture on a
+moving vehicle cannot back-pressure the camera.
+
+Timestamps are what make that capture worth training on. Every timestamp on the data path is the
+machine's own monotonic clock — the same epoch the V4L2 and ALSA drivers already stamp their
+buffers with, shared by every sensor, every process, and every stage on the host. A camera
+driver's stamp, a frame three stages downstream in another process, and a reading your own code
+takes are comparable by subtraction. Camera and IMU agree on when something happened because they
+were never in different epochs, not because someone fitted an offset after the fact.
+
+## A stage that wedges takes itself down, not the vehicle
+
+A perception model hangs on a malformed frame. A vendor's driver leaks until it stalls. On a
+Python stack that is a whole-system event, because every stage shares one interpreter — and the
+symptom is never "the detector is stuck," it is "everything got slow," at 3am, on a machine in a
+warehouse.
+
+In StreamLib a failing stage fails alone. Every processor runs in its own OS process with its own
+interpreter, on its own dedicated thread at a priority you declare — isolated by the kernel, not
+by convention and everyone's good behavior. There is no in-process mode to fall back into: not a
+default, not an optimization, not something that quietly kicks in under load. What you get
+instead of a mystery is a fault with an address — scoped to a named stage, visible from outside
+the machine, and recoverable without restarting the loop around it.
+
+**It costs you** a process boundary on every link crossing into Python, and one authoring rule: a
+stage's class lives in an importable module rather than in your entry file, because the child
+process imports it by name. `rt.add` rejects the mistake with a message naming the fix.
+
+## Your laptop, a device somewhere else, four commands
+
+The device is in a field, a tunnel, a rack, an aisle. Normally that means logs after the fact,
+assuming the logs caught the thing that went wrong, which they did not.
+
+Every running StreamLib node hosts its own control surface, so a machine you cannot physically
+reach is still a machine you can ask. Add `--url http://<host>:9000` to any of these and you are
+debugging the rig instead of your desk:
+
+```console
+$ streamlib nodes
+RUNTIME_ID                 CONTROL_URL            PID  ALIVE?  HINT
+Rq1w8xk3m2v0pz7ny4tbd6hsf  http://0.0.0.0:9000  48212  yes     streamlib (/home/you/my-rig)
+```
+
+```bash
+streamlib graph                              # its stages, links, states, metrics — as JSON
+streamlib tap CameraSource/video --count 5   # what's actually flowing, verbatim
+streamlib logs --follow --level warn         # structured, per-stage, per-severity
+```
+
+`tap` hands back what the link really carried, bounded and non-blocking — a quiet link returns a
+partial sample instead of hanging:
+
+```console
+$ streamlib tap CameraSource/video --count 3
+{"channel": "CameraSource/video", "requested": 3, "window_ms": 500, "dropped_bags": 0,
+ "bags": [{"byte_len": 214, "hex_preview": "84aa73...", "hex_truncated": false}, ...]}
+```
+
+That is the deployed build, unmodified: no redeploy, no debugger attached, no code change to make
+it observable. It already was. The same surface speaks MCP at `POST /mcp` on that same port —
+mounted with the node, sharing its lifecycle, no bridge process — so an AI agent handed a
+device's URL can do all of this itself:
+
+```json
+{"mcpServers": {"streamlib": {"type": "http", "url": "http://rig-04:9000/mcp"}}}
+```
+
+The tools are `graph`, `tap`, `logs`, and `shutdown`. Nothing on that surface mutates the graph:
+the pipeline is defined by the code on the device, so what you read off a machine always matches
+your source. The CLI above is a pure client of exactly this surface.
+
+**It costs you** an unauthenticated port. A node binds all interfaces and does not authenticate
+callers — narrow it with `--host` on any network you don't control.
+
+## Start here
 
 ```bash
 pip install streamlib --index-url https://tatolab.github.io/streamlib/simple/
-streamlib new my-app && cd my-app
-streamlib dev            # camera → your effect → a window
+
+streamlib new my-rig        # camera → effect → window, wired and working
+cd my-rig
+streamlib dev               # your camera, live, in a window
 ```
 
-## The bets
+No camera on this machine? `streamlib new my-rig --test-pattern` uses the built-in test source.
+Nothing is generated, compiled, or downloaded at run time — one wheel carries the Python API, the
+CLI, and the engine. (That index is a static PEP 503 index served from this repo's releases; PyPI
+publication is pending a project rename.)
 
-The category was defined by NVIDIA Holoscan, and on NVIDIA hardware Holoscan is the more
-complete product today. StreamLib is aimed at the same problem with four different bets.
+## The loop you write
 
-| | The bet |
-|---|---|
-| **Vendor-neutral GPU** | Every GPU operation goes through a Vulkan RHI. CUDA is an interop adapter for handing buffers to torch/cupy, never a requirement of the engine. NVIDIA on Linux is the tested floor today; nothing in the design is bound to it. |
-| **No shared GIL, ever** | Every Python processor runs in its own child process, with its own interpreter and its own GIL. One slow processor cannot stall another. This is the reason the library exists — not a tuning option, and there is no in-process mode to fall back to. |
-| **No media-stack inheritance** | No GStreamer, no FFmpeg, no libav, no DeepStream. Capture, present, and color are engine primitives written against V4L2, Vulkan, and the platform's own APIs. |
-| **Operable by agents** | A running node hosts one control plane speaking HTTP, WebSocket, and **MCP**. The same verbs — `nodes`, `graph`, `tap`, `logs` — serve the CLI, your dashboards, and an AI agent pointed at the node's URL. |
-
-## Writing a pipeline
-
-An app is a normal Python codebase: an entry file, a `pyproject.toml`, one venv. No manifest,
-no `main()`, no schema files, nothing StreamLib-specific on disk.
+`streamlib new` writes exactly this. `app.py` is wiring and nothing else:
 
 ```python
-# app.py — `streamlib dev` finds setup(rt) by convention
 from processors.inverting_effect import InvertingEffect
 from streamlib import CameraSource, DisplayWindow, Runtime
 
 
 def setup(rt: Runtime) -> None:
-    camera = rt.add(CameraSource)
+    source = rt.add(CameraSource)
     effect = rt.add(InvertingEffect)
     window = rt.add(DisplayWindow, config={"title": "StreamLib", "scaling": "fit"})
 
-    rt.connect(camera.output("video"), effect.input("video_from_upstream"))
+    rt.connect(source.output("video"), effect.input("video_from_upstream"))
     rt.connect(effect.output("video_to_downstream"), window.input("video"))
 ```
 
-A processor is a decorated class in an importable module. It declares ports — a name, a
-description, and on an input the delivery profile that says which samples it wants — and gets a
-capability-typed context in every lifecycle hook.
+`processors/inverting_effect.py` is the stage — the file you replace with your model:
 
 ```python
-# processors/inverting_effect.py
 from streamlib import RuntimeContextLimitedAccess, VideoFrame, input, output, processor
 
 
 @processor
 class InvertingEffect:
-    """Reads each frame, inverts its colors, and passes it on."""
-
     @input(delivery_profile="latest")
     def video_from_upstream(self) -> None: ...
 
@@ -73,6 +162,8 @@ class InvertingEffect:
         if bag is None:
             return
         frame = VideoFrame.from_bag(bag)
+        # The frame arrives as a handle, not pixels: resolve it and open
+        # CPU access to the engine's own memory.
         with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
             surface.lock(read_only=False)
             pixels = surface.as_numpy()
@@ -83,140 +174,122 @@ class InvertingEffect:
         ctx.outputs.write("video_to_downstream", bag)
 ```
 
-That is the whole authoring surface. Re-run `streamlib dev` to see an edit; warm restart is
-sub-second by construction.
+No manifest, no `main()`, no registration file. `dev` imports `app.py` from the working directory
+and calls `setup(rt)`; edit a stage and re-run `dev`. Each stage runs `reactive` (the default once
+it has an input), `manual`, or `continuous` at an interval you set.
 
-## What the engine gives you
+## Your model gets device memory, not a copy
 
-- **Frames as handles, not bytes.** A frame crosses into Python as a surface id. You resolve it
-  and choose how to touch it: a mapped CPU view as numpy, a DMA-BUF export, or a DLPack capsule
-  handed straight to torch or cupy on the device. Pixels never become Python objects, and
-  nothing is copied behind your back.
-- **Bring your own models.** StreamLib ships no inference stack and does not want one. Your
-  model runtime is an ordinary pip dependency in your venv; the engine's job is to get device
-  memory to it without a round trip through the host.
-- **Per-port delivery policy.** Each input port declares `latest`, `every_sample`, or
-  `lossless` — explicitly, with no default to guess wrong. Back-pressure and drop behavior are
-  decided at the consumer, where the deadline actually lives.
-- **Schema-free links.** A link carries a self-describing msgpack bag. The engine has no type
-  layer to negotiate, no registry to keep in sync, and no version to bump; typing is your
-  language's, and `read(port, into=T)` is the opt-in strictness dial when you want validation.
-- **One clock.** Every data-plane timestamp is the machine's monotonic clock — the same epoch
-  the V4L2 and ALSA driver stamps carry — so samples from different devices and different
-  processes are directly comparable. Wall clock exists only on observability surfaces.
-- **Native built-ins.** Camera, display, and a test-pattern source are Rust processors compiled
-  into the wheel. Their per-frame paths never enter an interpreter, and they are written against
-  the same handle-shaped primitives third-party code gets.
+Frames do not cross into Python as pixels, and they do not round-trip the host bus to be looked
+at. A stage resolves the frame it was handed and gives the memory straight to torch, on the
+device:
 
-## Observing a running node
-
-Any node started by `streamlib run` or `streamlib dev` registers itself and can be inspected
-live, from another terminal or another machine:
-
-```bash
-streamlib nodes                               # what is running on this box
-streamlib graph                               # processors, ports, links, states, metrics — JSON
-streamlib tap CameraSource/video --count 10   # a bounded sample of real bags off a link
-streamlib logs <runtime_id> --follow          # JSONL logs, filterable by processor and level
+```python
+with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
+    surface.lock(read_only=False)
+    tensor = torch.from_dlpack(surface)          # H×W×4 uint8, on the CUDA device
+    tensor[:, :, :3] = 255 - tensor[:, :, :3]    # runs on the GPU
+    torch.cuda.synchronize()
+    surface.unlock()                             # publishes the device-side write
 ```
 
-The CLI is a thin client of the node's control plane. Point an MCP host at the same URL and an
-agent gets the identical vocabulary — inspection only: code is the source of truth, and the edit
-loop is `dev`, not live graph mutation.
+Other doors on the same handle: `surface.as_numpy()` for a mapped host view,
+`numpy.from_dlpack(surface, device="cpu")` for that memory as a capsule, `export_dma_buf` for a
+file descriptor to hand to something else. CUDA Array Interface is available through the cuda
+adapter, and lifetimes are engine-owned — a tensor pins its frame.
 
-## Rust authoring
+Stated honestly, this is zero-**CPU**-copy, not copy-free: a tiled engine texture reaches a linear
+tensor through one GPU blit into an exportable staging buffer, because DLPack expresses strided
+linear memory only.
 
-The engine is a Rust library and stays one. A Rust app is a plain cargo project depending on the
-`streamlib` crate — no wrapper generation, no manifest, no special build. Third-party Rust
-processors are ordinary cargo dependencies, compiled from source. The wheel and the crate are
-one version, released together.
+No inference stack ships and none is planned. torch, ONNX Runtime, TensorRT — whatever you already
+use is an ordinary pip dependency in your venv, upgraded on your schedule. Putting device memory
+in front of it is the engine's job; running it is not.
 
-## Platform support
+## Back-pressure is decided where the deadline is
 
-| Platform | Status |
-|---|---|
-| Linux x86_64, NVIDIA GPU | ✅ The supported floor — CI-tested, wheels published |
-| Linux, other Vulkan GPUs | 🚧 Nothing in the design excludes them; not yet exercised |
-| Linux aarch64 (Jetson-class) | 📋 Planned — no wheel published yet |
-| macOS | 🚧 Engine paths are cross-compiled; capture (AVFoundation) is undesigned |
-| Windows | 📋 Planned |
+A controller that must never miss a command and a display that should always show the newest frame
+want opposite things from the same producer. Each input says which it is, and saying so is
+required — there is no default to inherit by accident:
 
-Python 3.10+ (abi3, GIL-enabled builds). The wheel dlopens the Vulkan loader, the window system,
-and libcuda at runtime rather than linking them, so it stays manylinux-portable.
-
-## Status
-
-Alpha. The APIs on this page work today and will still change.
-
-Honest gaps, so you can judge the fit:
-
-- **Audio has no backend yet.** The clock primitive is settled; PipeWire-vs-ALSA is an open
-  decision, so there is no audio built-in in the wheel.
-- **GPU kernels are Rust-side for now.** Compute, graphics, and ray-tracing kernels exist in the
-  engine; the Python surface that lets you pass GLSL and dispatch it is in flight.
-- **DMA-BUF export works from Python; import does not.** A foreign fd cannot yet be handed to a
-  processor's graph.
-- **Networking between nodes is undesigned.** Cross-language, cross-machine interop is decided
-  to happen on the wire as bags — the transport itself is not chosen.
-
-## Project structure
-
-```
-streamlib/
-├── runtime/     # the engine: streamlib-engine, media-builtins, api-server, consumer-rhi,
-│                #   ipc-types, surface-client, moq
-├── sdk/         # what authors compile against: the Python wheel (API + CLI + engine),
-│                #   the streamlib crate, macros, error types
-├── adapters/    # GPU interop: vulkan, cuda, opengl, cpu-readback
-├── vendor/      # vendored third-party forks (Apache-2.0, never edited in place)
-├── docs/        # plan, decisions, learnings, architecture
-└── examples/    # example apps (standalone, not workspace members)
+```python
+@input(delivery_profile="latest")          # newest wins, stale samples dropped
+@input(delivery_profile="every_sample")    # every sample in order, may fall behind
+@input(delivery_profile="lossless")        # never dropped
 ```
 
-Build and test:
+What crosses a link is a self-describing named map. There is no schema registry, no negotiation,
+no versions, no code-generation step, and nothing in the engine ever compares one stage's types
+against another's. Strictness is a dial you turn at your own read: `ctx.inputs.read(port)` hands
+you a mapping, and `read(port, into=T)` constructs and validates — a `TypedDict` casts for free, a
+dataclass or pydantic model raises on a payload that doesn't fit.
 
-```bash
-cargo build --workspace
-cargo test -p streamlib-engine
-cd sdk/streamlib-python-wheel && maturin develop && pytest
-```
+**It costs you** compile-time safety. A mismatch surfaces as a decode failure at the consumer
+while running, not when you wire the graph.
 
-## License
+## Your compute supplier stays your choice
 
-StreamLib is licensed under the [Business Source License 1.1](LICENSE), and converts to
-[Apache 2.0](LICENSES/Apache-2.0.txt) on **January 1, 2029**.
+A stack welded to one vendor's compute API decides your supplier, your unit cost, and your thermal
+envelope — exactly where you have the least slack. Every GPU operation in the engine goes through
+Vulkan; CUDA appears only as an interop adapter, the thing that hands a tensor to torch. `libcuda`,
+the Vulkan loader, and the window system are dlopen'd at run time, never linked.
 
-The split, in one line: **what you build is yours; reselling the runtime itself needs a
-license.**
+**It costs you** any CUDA-specific fast path inside the engine, permanently — a vendor trick that
+would help is expressed through Vulkan interop or not at all. And portability in the design is not
+portability in practice: NVIDIA on Linux x86_64 is what CI tests. Other vendors are untested
+rather than validated.
+
+Extension stays inside package managers you already have. A Rust app is a plain cargo project
+depending on the `streamlib` crate, released at the wheel's version. Third-party native code —
+closed-source included — ships as an ordinary Python package that exposes handles and is wrapped
+by a Python stage; it never links the engine, and the CPython ABI is the only binary boundary.
+There is no plugin system, no ABI, no manifest, and no lockfile.
+
+## Where this sits
+
+StreamLib is not a ROS 2 replacement. ROS 2 is middleware and an ecosystem; StreamLib is the
+compute substrate *inside* a node that has a deadline and a GPU. There is no ROS integration of
+any kind today — no bridge, no message conversion. If you need one, it is a stage you would write.
+
+## What ships today, and what does not
+
+Alpha. The on-device loop, and remote observation of one node, are what exist. `CameraSource`
+(V4L2), `DisplayWindow`, and `TestPatternSource` are native Rust stages compiled into the wheel,
+configured from Python, whose per-frame paths never enter an interpreter. These do not exist:
 
 | | |
 |---|---|
-| Build processors, apps, and products on StreamLib — commercial, private, or open source | **Free** |
-| Sell processors you wrote; keep their source closed | **Free**, you keep 100% |
-| Personal, educational, and research use | **Free** |
-| Sell, host, white-label, or sublicense **the runtime** as the product | Commercial license |
+| **Fleet & networking** | No device-to-device transport, no orchestration, no OTA. Undesigned. The one decision made: cross-machine interop happens on the wire, never in-graph. |
+| **ROS** | No integration of any kind. |
+| **Jetson / aarch64** | No wheel published. x86_64 only today. |
+| **Control-plane auth** | Undesigned. A node binds all interfaces and does not authenticate callers. |
+| **Audio** | No backend ships. The clock primitive is settled; PipeWire-vs-ALSA is an open decision. |
+| **GPU kernels from Python** | Compute, graphics, ray tracing, and acceleration structures exist Rust-side. The Python kernel API is in flight, not shipped. |
+| **DMA-BUF import** | Export from Python works; importing a foreign fd into a graph does not yet. |
 
-"The runtime" means the engine — graph compiler, scheduler, processor execution, GPU context,
-link infrastructure. It does not mean the processors you write against the authoring API.
+**Platform floor.** Linux + NVIDIA, which is what CI tests: abi3 wheel, CPython 3.10+, GIL-enabled
+builds, manylinux_2_28, x86_64, V4L2 the only capture backend. The wheel carries its own GLSL
+compiler, so there is no system toolchain to install. macOS engine paths cross-compile but Apple
+capture is undesigned; Windows is unbuilt.
+
+## License
+
+StreamLib is [BUSL-1.1](LICENSE), converting automatically to
+[Apache 2.0](LICENSES/Apache-2.0.txt) on **January 1, 2029**.
+
+The short version: **what you build is yours; reselling the runtime itself needs a license.**
+
+Free, no permission needed: building stages, applications, robots, and products on StreamLib —
+commercial, private, or open source; selling stages you wrote with their source closed; personal,
+educational, and research use.
+
+A commercial license is required to sell, host as a managed service, white-label, or sublicense
+**the runtime itself** — the engine, graph compiler, scheduler, processor execution, GPU context,
+and link infrastructure — as your product.
 
 [Commercial licensing](docs/license/COMMERCIAL-LICENSING.md) ·
-[Partner licensing](docs/license/PARTNER-LICENSING.md) ·
-[Contributor agreement](docs/license/CLA.md)
-
-## Contributing
-
-Pull requests are welcome and are licensed under the same BUSL-1.1 terms; see
-[CLA.md](docs/license/CLA.md).
-
-Work is tracked as a dependency graph over GitHub issues, driven with
-[`amos`](https://github.com/tatolab/amos):
-
-```bash
-amos focus "<milestone>"   # scope to a milestone
-amos next                  # what is ready to start
-amos blocked               # what is gated, and by what
-```
+[Partner licensing](docs/license/PARTNER-LICENSING.md) · [CLA](docs/license/CLA.md)
 
 ## Contact
 
-Jonathan Fontanez · fontanezj1@gmail.com · <https://github.com/tatolab/streamlib>
+Jonathan Fontanez — fontanezj1@gmail.com — <https://github.com/tatolab/streamlib>
