@@ -524,23 +524,27 @@ lockfile read/write, content-hash resolver, codegen pipeline)
 is Rust-only. The Python SDK carries a focused subset matched
 to the authoring path:
 
-- **`streamlib.SchemaIdent`** — frozen dataclass mirroring the
-  Rust 4-field shape with the same regex-validating constructors
-  (org / package / type / version follow the same grammar that
-  `streamlib_idents::Org` / `Package` / `TypeName` / `SemVer`
-  enforce). No `parse` / `from_str` API; the joined `__str__` form
-  is render-only and never round-trips through a parser.
+- > ~~**`streamlib.SchemaIdent`** — frozen dataclass mirroring the
+  > Rust 4-field shape with the same regex-validating constructors
+  > (org / package / type / version follow the same grammar that
+  > `streamlib_idents::Org` / `Package` / `TypeName` / `SemVer`
+  > enforce). No `parse` / `from_str` API; the joined `__str__` form
+  > is render-only and never round-trips through a parser.~~
+  > — Superseded 2026-08-10 by the port type layer's deletion:
+  > `streamlib/schema_ident.py` and its `__init__` re-export are removed. The
+  > class existed only to be passed as `schema=`, which no longer exists.
 - > ~~**`streamlib._manifest`** — hand-rolled YAML reader for the `package:` block + processor-name
   > list; **`@streamlib.processor("PascalCase")`** — positional short name resolved at decoration
   > time against the enclosing `streamlib.yaml`, validated against the manifest's `processors:` list.~~
   > — Superseded 2026-07-19: `_manifest` was removed and `@processor("@org/package/Type")` declares a
   > version-free identity from the decorator arguments, reading nothing from disk. See
   > the zero-ceremony authoring model.
-- **`@streamlib.input(schema=...)` / `@streamlib.output(schema=...)`**
-  — accept a `SchemaIdent` instance or a class that carries
-  `__streamlib_schema_ident__`. Bare-string and joined-string
-  forms are rejected at decoration time, mirroring the no-parse
-  invariant on the Rust side.
+- Removed 2026-08-10: the description of `@streamlib.input(schema=...)` /
+  `@streamlib.output(schema=...)` and the generated-class marker they resolved
+  against. A port declares name, description and — on an input — delivery
+  profile, and nothing else; the `schema=` keyword is deleted from both
+  decorators and the port method's return annotation is the type declaration,
+  read by humans and type checkers only.
 - ~~**Schemas enter Python only through codegen.** Authors import generated
   dataclasses; there is no language-side affordance for declaring a schema —
   JTD-in-YAML is the canonical source and generated code is what authors import.~~
@@ -570,19 +574,11 @@ validation is mirrored across runtimes that need it.
 
 ### Codegen-emitted `SCHEMA_IDENT`
 
-Decision 2 above lists "codegen-emitted const records
-(`SCHEMA_IDENT: SchemaIdent { … }`)" as a structured-everywhere
-surface. To the best of our current knowledge, the Python
-post-processor in `streamlib-jtd-codegen` is the only one that
-emits the structured ident on generated types
-(`__streamlib_schema_ident__: ClassVar[SchemaIdent]`). The Rust
-and TypeScript post-processors emit the dataclass / struct /
-interface body but no `SCHEMA_IDENT` const. Python is the
-load-bearing case because `@streamlib.input(schema=...)` /
-`@streamlib.output(schema=...)` resolves the structured ident
-*off the class* via `__streamlib_schema_ident__`; Rust and TS
-have no analogous runtime resolution path that requires the
-const today.
+Removed 2026-08-10: the claim that the Python codegen post-processor emits a
+structured ident on generated types, and that the port decorators resolve it
+off the class. Nothing emits it — `streamlib-jtd-codegen` was deleted whole,
+and its last consumer, the `schema=` resolution in the wheel's port
+decorators, is deleted too. There is no codegen and no generated type class.
 
 ## Reference
 
