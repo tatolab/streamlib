@@ -71,8 +71,9 @@ compute / graphics / ray-tracing register + run ops, and
 `escalate_request.yaml` for the canonical list.
 
 Each request carries a UUID `request_id`; responses echo it.
-Adding a new op is a schema change → `cargo xtask generate-schemas`
-→ rebuild all three runtimes (Rust, Python, Deno). The host side
+Adding a new op means updating the schema YAML alongside the
+hand-written wire types in `subprocess_escalate_wire_types/` and the
+helper-side encoder in the wheel's `_helper.py`. The host side
 holds resources alive on behalf of the subprocess via
 `EscalateHandleRegistry`; subprocess crash drops them.
 

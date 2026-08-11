@@ -6,7 +6,6 @@
 metadata:
   type: AudioFrame
   description: "Audio frame with interleaved samples (1-8 channels)"
-  flow_class: sample_stream
 
 properties:
   samples:

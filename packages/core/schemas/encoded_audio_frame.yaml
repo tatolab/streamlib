@@ -6,7 +6,6 @@
 metadata:
   type: EncodedAudioFrame
   description: "Encoded audio frame with Opus/AAC bitstream data"
-  flow_class: state_stream
 
 properties:
   data:

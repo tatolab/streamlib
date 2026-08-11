@@ -23,7 +23,6 @@ imports:
 metadata:
   type: EncodedVideoFrame
   description: "Encoded video frame with H.264/H.265 NAL unit data"
-  flow_class: sample_stream
   # Slot-priming HINT, never a cap: the publisher opens under PowerOfTwo growth
   # and grows the segment on the first oversized loan (a 4K IDR ≈ 8–12 MiB), so
   # a keyframe past this hint delivers instead of crashing. 4 MiB covers the
