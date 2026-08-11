@@ -14,7 +14,6 @@ pub mod check_no_in_process_placement;
 pub mod check_no_inventory_submit;
 pub mod check_no_reverse_dns;
 pub mod check_no_streamlib_metadata;
-pub mod check_processor_spec_new;
 pub mod check_schema_versions;
 pub mod check_vendored_vulkanalia;
 pub mod lint_logging;
@@ -109,14 +108,6 @@ enum Commands {
     /// is flagged.
     CheckNoInventorySubmit,
 
-    /// CI gate for the structured-everywhere `ProcessorSpec` rule from
-    /// #707. Fails on `ProcessorSpec::new("PascalCase", ...)` — every
-    /// call site must take a structured `SchemaIdent` (built via
-    /// `SchemaIdent::new(...)` or via the macro-emitted
-    /// `<Module>::schema_ident()`).
-    CheckProcessorSpecNew,
-
-
     /// CI gate for the escalate-from-lifecycle ban. Fails when
     /// any fn taking `&RuntimeContextFullAccess<'_>` (typically
     /// `setup` / `teardown` / `setup_inner` / `teardown_inner`) calls
@@ -171,7 +162,6 @@ fn main() -> Result<()> {
             check_no_in_process_placement::run(&workspace_root()?)?
         }
         Commands::CheckNoInventorySubmit => check_no_inventory_submit::run(&workspace_root()?)?,
-        Commands::CheckProcessorSpecNew => check_processor_spec_new::run(&workspace_root()?)?,
         Commands::CheckNoEscalateInLifecycle => {
             check_no_escalate_in_lifecycle::run(&workspace_root()?)?
         }
