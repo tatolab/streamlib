@@ -17,8 +17,6 @@
       "Bash(docker info *)"
     ],
     "ask": [
-      "Edit(./docs/plan/**)",
-      "Write(./docs/plan/**)",
       "Edit(./examples/**)",
       "Edit(./packages/audio/**)",
       "Edit(./packages/camera/**)",
@@ -37,10 +35,7 @@
       "Edit(vendor/tatolab-vulkanalia*/**)",
       "Edit(LICENSE)",
       "Edit(LICENSES/**)",
-      "Edit(docs/license/**)",
-      "Edit(docs/logging-schema.md)",
-      "Edit(docs/testing-hardware.md)",
-      "Edit(docs/architecture/schema-identity-and-packaging.md)"
+      "Edit(docs/license/**)"
     ]
   },
   "hooks": {

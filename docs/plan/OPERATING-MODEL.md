@@ -221,8 +221,9 @@ A model can't be *forced* to invoke a skill — so the system makes the side eff
 skipping one physically fail, in layers from soft to hard:
 
 1. **Router text in CLAUDE.md** (always loaded): all work enters through `/plan`; source
-   edits happen only inside `/implement` with a confirmed ticket; plan edits happen only
-   inside `/align`, `/propose-change`, `/ship-change`, or `/pivot`.
+   edits happen only inside `/implement` with a confirmed ticket; plan *decisions* happen
+   only inside `/align`, `/propose-change`, `/ship-change`, or `/pivot`. Plan and doc
+   *records* are ordinary work and land with the change they describe.
 2. **Sharp descriptions** on the model-invoked primitives so they trigger on phrasing
    without being asked.
 3. **Hooks** (the hard layer): a PreToolUse hook rejects `Edit`/`Write` under `runtime/`,
@@ -235,15 +236,24 @@ skipping one physically fail, in layers from soft to hard:
 
 ### The plan is locked
 
-Agents cannot quietly rewrite the decision source:
+Agents cannot quietly rewrite the decision source — but the lock is on *decisions*, not on
+every keystroke under `docs/plan/`:
 
-- `settings.json` puts `Edit(docs/plan/**)` on the **ask** list — every plan write
-  surfaces a permission prompt the owner personally approves, in session, per edit.
-- The PreToolUse hook additionally rejects plan writes unless one of the four
-  plan-editing skills has set its marker — so even an approved edit can only happen
-  inside `/align`, `/propose-change`, `/ship-change`, or `/pivot`.
 - Git layer: `CODEOWNERS` on `docs/plan/**` + branch protection — no plan change merges
-  without the owner's review, even from a session the owner wasn't watching.
+  without the owner's review, even from a session the owner wasn't watching. This is the
+  whole enforcement layer, and it is the right one: it reviews the diff, which is where a
+  smuggled decision is actually visible.
+- Doctrine layer: `CLAUDE.md` §Recording facts vs deciding draws the line the machinery
+  can't. A record of what shipped lands with the work; a `DECIDED` / `OPEN` entry moves
+  only inside `/align`, `/propose-change`, `/ship-change`, or `/pivot`.
+
+> ~~`settings.json` puts `Edit(docs/plan/**)` on the **ask** list … the PreToolUse hook
+> additionally rejects plan writes unless one of the four plan-editing skills has set its
+> marker.~~ — Superseded 2026-08-11: both are removed, and the `plan-session` marker with
+> them. A path guard sees a path, never an intent, so it prompted identically on a
+> corrected file anchor and on a reversed decision. The factual majority trained the owner
+> to click through without reading — which cost the prompt its meaning on the rare edit
+> that deserved it — and trained sessions to escalate trivia instead of finishing work.
 
 ### Rules have a lifecycle
 

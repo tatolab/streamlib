@@ -23,11 +23,14 @@ ONE core system per concern — extend the existing system, never build a parall
   which skill is next.
 - Source edits (`runtime/ sdk/ adapters/ xtask/`) belong inside `/implement` with an
   owner-confirmed ticket — the hook prompts via `.claude/state/active-ticket.json`.
-- Plan edits (`docs/plan/**`) belong inside `/align`, `/propose-change`,
-  `/ship-change`, or `/pivot` — the hook and the ask rules prompt.
+- Plan *decisions* belong inside `/align`, `/propose-change`, `/ship-change`, or `/pivot`.
+  Plan and doc *records* do not — see §Recording facts vs deciding. Nothing prompts on a
+  doc edit; the distinction is the session's to apply, because a path guard can't see it.
 - **Guardrails prompt; they never wall off.** Every path guard routes to the owner rather
   than refusing, so a scope written months ago can't strand work that has to land. The
   doctrine still decides what is *right* — a prompt is not permission to bend a rule.
+  Guards cover what is genuinely hard to reverse — source without a ticket, consumer
+  trees, licence files. They are not a review queue for prose.
 - Lifecycle: `/align` (decide) → `/propose-change` (delta) → `/derive-tickets` (as few
   tracer bullets as the change honestly needs) →
   `/implement` (build) → `/ship-change` (fold + prove removals). `/pivot` for direction
@@ -38,6 +41,43 @@ ONE core system per concern — extend the existing system, never build a parall
   (how does X work, with evidence), `/reconcile-understanding` (corrections that stick).
   Code is the authority on what IS; the plan on what we AGREED.
 - Full model: `docs/plan/OPERATING-MODEL.md`.
+
+## Recording facts vs deciding
+
+Writing down what is true is ordinary work. Deciding what we build is not. The lifecycle
+skills exist to sharpen decisions, not to license prose.
+
+- **A factual record needs no skill, no prompt, and no approval.** What a shipped change
+  removed, renamed, or proved — a `REMOVED:` bullet, a superseded claim, a corrected file
+  anchor, a stale reference, a doc describing code that no longer exists — is part of
+  finishing the work. Write it in the same PR as the change it describes. Leaving the
+  record wrong to avoid ceremony is the worse outcome, always.
+- **A decision goes through the lifecycle.** Adding, retracting or reversing a `DECIDED` /
+  `OPEN` entry, changing what we agreed to build, or settling a question the plan leaves
+  open belongs in `/align`, `/propose-change`, `/ship-change`, or `/pivot`.
+- The test: **could a careful reader derive it from the diff and the tree?** Then it is a
+  fact — write it, and say in the PR body that you did. Does it commit us to something we
+  have not agreed? Then it is a decision — bring it.
+- Doc hygiene inside work you are already doing — fixing a claim your own change falsified —
+  is never a separate ticket and never a question.
+
+## Asking the owner
+
+An approved design is standing authority. Implementing it, recording it, and cleaning up
+after it need no further confirmation. Re-asking is not diligence; it spends the owner's
+attention, and attention spent on settled things is unavailable for real forks.
+
+- **Ask only for a live fork the plan does not settle** — two defensible paths, materially
+  different outcomes, where guessing wrong wastes real work.
+- **Never ask** to re-confirm something already agreed, to re-approve a scope already
+  signed off, to check that work is going well, or in place of reading the tree. If the
+  answer is discoverable, discover it.
+- **Prefer a stated assumption to a blocking question.** Do the work, say plainly what you
+  assumed and where it would bite, and let the owner correct it. Reserve blocking for cases
+  where proceeding either way is unsafe or would waste the work.
+- **Batch** what genuinely must be asked into one round at the point of decision — never a
+  drip of one-question stops.
+- A finding is not a question. Non-blocking findings go in the PR description, then move on.
 
 ## Runtime-first, plan-first (MVP doctrine)
 
