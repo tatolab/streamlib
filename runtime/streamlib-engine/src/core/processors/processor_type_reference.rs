@@ -11,11 +11,9 @@ use crate::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 /// processor type: `(org, package, type)`, resolved against whatever the
 /// installed set provides.
 ///
-/// Carries no version, and has no field one could be written into. A version
-/// belongs to package *resolution* — the lockfile records what `add` / `link` /
-/// `install` selected, and the module walker checks the installed slot against
-/// it. By the time code names a processor the question is already settled, so a
-/// reference is an import: ask by name, get whatever is installed.
+/// Carries no version, and has no field one could be written into. By the time
+/// code names a processor the question is already settled, so a reference is an
+/// import: ask by name, get whatever is installed.
 ///
 /// A version at the reference site could only disagree with that resolution.
 /// It used to be expressible, and the disagreement resolved version-exact

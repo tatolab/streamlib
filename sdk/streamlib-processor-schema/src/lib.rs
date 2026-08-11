@@ -5,7 +5,6 @@
 
 mod execution_config;
 mod process_execution;
-mod streamlib_yaml;
 mod thread_priority;
 
 pub mod descriptors;
@@ -16,7 +15,6 @@ pub mod schema_ident_output;
 
 pub use execution_config::ExecutionConfig;
 pub use process_execution::ProcessExecution;
-pub use streamlib_yaml::StreamlibYaml;
 pub use thread_priority::ThreadPriority;
 
 // Processor schema re-exports
@@ -33,18 +31,5 @@ pub use schema_ident_output::{SchemaIdentOutput, SemanticVersionOutput};
 // loaders) reach `SchemaIdent`, `Org`, `Package`, etc. through this crate
 // without depending on `streamlib-idents` directly.
 pub use streamlib_idents::{
-    ModuleIdent, Org, Package, PackageMetadata, PackageRef, SchemaIdent, SemVer, SemVerRange,
-    TypeName,
+    ModuleIdent, Org, Package, PackageRef, SchemaIdent, SemVer, SemVerRange, TypeName,
 };
-
-/// Minimal project config for the macro: surfaces the `package:` block (so
-/// processor short names can be resolved to a structured [`SchemaIdent`])
-/// and the `processors:` list. The resolver in `streamlib-idents` handles
-/// the full dependency graph; this is a focused view for codegen.
-#[derive(serde::Deserialize)]
-pub struct ProjectConfigMinimal {
-    #[serde(default)]
-    pub package: Option<PackageMetadata>,
-    #[serde(default)]
-    pub processors: Vec<ProcessorSchema>,
-}

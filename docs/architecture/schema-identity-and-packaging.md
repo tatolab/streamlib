@@ -6,10 +6,15 @@
 
 ## What this document describes
 
-The architecture surface the `streamlib-idents` crate covers:
-identifier grammar, package manifest formats, dependency resolver,
-lockfile, and the anti-patterns the design rules out. Every claim
-below describes behavior that ships in current code.
+The identifier grammar the `streamlib-idents` crate covers, and the
+anti-patterns the design rules out.
+
+> ~~package manifest formats, dependency resolver, lockfile~~ — Superseded
+> 2026-08-11: the package layer is deleted. `streamlib.yaml`, the resolver,
+> the lockfile, the package source and the archive readers no longer exist,
+> and nothing in the tree reads a manifest. The sections describing them are
+> struck below. What remains here is the grammar, the structured-everywhere
+> rule, and anti-patterns 1 and 2.
 
 ## Why this exists
 
@@ -30,8 +35,11 @@ three independent strands:
   lived only in `runtime/streamlib-engine/schemas/` with no publication
   story).
 
-The fix is one cohesive architecture covering identifier grammar,
-package manifest, dependency resolution, and distribution.
+The fix is one cohesive architecture covering identifier grammar.
+
+> ~~package manifest, dependency resolution, and distribution~~ —
+> Superseded 2026-08-11: all three are deleted. PyPI and cargo are the
+> package systems; nothing is resolved or downloaded at runtime.
 
 ## Architectural decisions
 
@@ -87,7 +95,9 @@ Surfaces this rule covers:
 - IPC envelopes (`escalate_request` / `escalate_response`, surface-
   share, iceoryx2 payloads).
 - Graph JSON (the runtime's serialized pipeline graph).
-- Lockfile entries (`streamlib-codegen.lock`).
+
+> ~~Lockfile entries (`streamlib-codegen.lock`).~~ — Superseded 2026-08-11:
+> the lockfile is deleted, so it is no longer a surface this rule covers.
 
 The `Display` impl on `SchemaIdent` produces the joined `@org/pkg/Type@v`
 form for human-facing surfaces (logs, error messages, CLI output).
@@ -126,33 +136,16 @@ between the two.
 
 ### Decision 3 — package-as-publication-unit
 
-`streamlib.yaml` is the only place a `version` field lives. Schema
-files declare `type` and content fields; **they do not declare a
-version anywhere**. Bumping any type in a package bumps the whole
-package's version (npm-style; Cargo-style; cargo-workspace-style).
-
-Why: per-schema versions create N-dimensional matrices of "which
-versions of which schemas are mutually compatible" that no consumer
-ever actually reasons about. Publication-unit-scoped versions
-collapse this to a single dimension per package.
-
-A CI lint (`cargo xtask check-schema-versions`, wired into
-`.github/workflows/check-schema-versions.yml`) rejects any schema
-YAML declaring a top-level `version` key.
+> Removed 2026-08-11: `streamlib.yaml` is deleted, so there is no
+> publication unit to scope a version to, and the `check-schema-versions`
+> lint that enforced it is gone with it. Versions never live at the code
+> layer; distribution versioning is a wheel/crate concern.
 
 ### Decision 4 — `streamlib-codegen.lock` for content-hash resolution
 
-Every project that consumes packages (applications, examples) writes
-a `streamlib-codegen.lock` next to its `streamlib.yaml`. The lockfile is
-content-hash-pinned and diff-stable (sorted `BTreeMap` keys), so a
-fresh checkout resolves the same package set byte-for-byte.
-
-Discipline (mirrors `Cargo.lock`):
-
-- **Commit `streamlib-codegen.lock`** in applications, examples, and any
-  non-publishable consumer.
-- **Don't commit `streamlib-codegen.lock`** in publishable libraries — they
-  inherit their consumer's lock.
+> Removed 2026-08-11: the lockfile, the resolver that wrote it, and the
+> content-hash machinery are deleted. PyPI and cargo are the package
+> systems, and nothing is resolved or downloaded at runtime.
 
 ### Decision 5 — `@tatolab/core` is the canonical wire vocabulary
 
@@ -165,130 +158,30 @@ and downstream migration.
 
 ## Manifest formats
 
-`streamlib.yaml` has two flavors. The top-level shape distinguishes
-them; pick by what your crate is.
-
-### Package flavor
-
-A publishable package — has its own `package` block.
-
-```yaml
-package:
-  org: tatolab
-  name: core
-  version: 1.0.0
-  description: Canonical wire vocabulary
-
-dependencies: {}
-```
-
-Package metadata fields:
-
-| Field | Required | Notes |
-|---|---|---|
-| `org` | yes | Validated against the `org` grammar. |
-| `name` | yes | Validated against the `package` grammar. The full identifier prefix is `@{org}/{name}`. |
-| `version` | yes | SemVer. The only place a version field lives. |
-| `description` | no | Free-form prose. |
-
-### Project flavor
-
-A consumer project (application, example) — depends on packages but
-isn't itself publishable.
-
-```yaml
-dependencies:
-  "@tatolab/core": "^1.0.0"
-  "@tatolab/h264":
-    path: ../h264
-  "@tatolab/moq":
-    git: https://github.com/tatolab/moq
-    rev: abc123def456
-```
-
-Three dependency source flavors are supported:
-
-- **By version** (string form `"^1.0.0"` or `{ version: "^1.0.0" }`).
-  Resolved by `@org/name` + version range against the configured
-  package source — any location serving versioned `.slpkg` files
-  (`file://` tree, HTTP mount, later a mesh peer or offline cache),
-  is treated like another filesystem. There is no
-  central registry.
-- **Path** (`{ path: ../foo }`). Local-filesystem dependency, used
-  inside the streamlib monorepo for pre-publish work.
-- **Git** (`{ git: <url>, rev: <commit-sha> }`). Pinned-commit-only;
-  branch / tag refs are deliberately not supported, mirroring the
-  workspace dep-pinning rule from `CLAUDE.md` (Conventions →
-  Dependencies). Resolver fails loudly on a missing `rev`.
-
-### Semver-range matching
-
-The supported range operators are an npm-flavored subset:
-
-| Operator | Example | Matches |
-|---|---|---|
-| Exact | `=1.2.3` or bare `1.2.3` | exactly 1.2.3 |
-| At least | `>=1.2.3` | 1.2.3 or any later |
-| Caret (post-1.0) | `^1.2.3` | same major, version ≥ input |
-| Caret (0.minor) | `^0.2.3` | same minor (`0.2.x`), version ≥ input |
-| Caret (0.0.patch) | `^0.0.3` | exactly 0.0.3 |
-| Tilde | `~1.2.3` | same major.minor (`1.2.x`), version ≥ input |
-
-These are exactly what `streamlib.yaml` declarations need today —
-adding more operators is straightforward when a real consumer
-appears.
+> Removed 2026-08-11: both `streamlib.yaml` flavors, the three dependency
+> source kinds (version / path / git), and the semver-range operator table
+> that served them. `Manifest`, `PackageMetadata`, `DependencySpec` and the
+> resolver are deleted. A StreamLib app is a normal Python or cargo codebase
+> and declares nothing to streamlib. `SemVerRange` itself outlives this
+> section but no longer has a manifest to range over.
 
 ## Lockfile shape
 
-`streamlib-codegen.lock` is the resolved-set companion to `streamlib.yaml`.
-(The plain `streamlib.lock` name belongs to the per-app modules lockfile —
-see the package model.)
-Wire shape:
-
-```yaml
-version: 1
-packages:
-  "@tatolab/core":
-    version: 1.0.0
-    source:
-      kind: by-version
-      url: file:///path/to/package-source
-    content_hash: "sha256:0123456789abcdef…"
-  "@tatolab/h264":
-    version: 0.4.2
-    source:
-      kind: path
-      path: ../h264
-    content_hash: "sha256:fedcba9876543210…"
-  "@tatolab/moq":
-    version: 0.2.0
-    source:
-      kind: git
-      url: https://github.com/tatolab/moq
-      rev: abc123def456
-    content_hash: "sha256:1111222233334444…"
-```
-
-| Field | Notes |
-|---|---|
-| `version` | Lockfile schema version. Currently `1`. Future format-incompatible bumps are explicit. |
-| `packages` | `BTreeMap` keyed by `"@org/name"` — sorted iteration is what makes the lockfile diff-stable. |
-| `version` (entry) | The concrete resolved SemVer (not a range). |
-| `source` | Discriminated union: `by-version` / `path` / `git` (`tag = kind`, snake-case). |
-| `content_hash` | Namespace-prefixed (`sha256:…`) so future hash-algorithm migrations don't break parsing. |
-
-The content hash is computed over the resolved package's contents
-(deterministic pass over schemas + manifest), so a resolved set is
-reproducible across checkouts.
+> Removed 2026-08-11: `streamlib-codegen.lock`, `streamlib.lock`, their
+> entry shape and the content-hash contract. Nothing resolves a package set,
+> so nothing pins one.
 
 ## Crate ownership
 
-The `streamlib-idents` crate owns the structured types (`SchemaIdent`,
-`SemVer`, `Manifest`, `PackageMetadata`, `Lockfile`) and the resolver
-that walks `streamlib.yaml` (`resolve`, `ResolvedPackages`). `Manifest`
-deserialization tolerates runtime-side fields (`processors:`, `env:`)
-without `deny_unknown_fields` rejection so one `streamlib.yaml` carries
-both the schema-identity surface and the runtime configuration.
+The `streamlib-idents` crate owns the structured identifier types
+(`SchemaIdent`, `Org`, `Package`, `TypeName`, `PackageRef`, `ModuleIdent`),
+`SemVer`, and the channel-name grammar.
+
+> ~~and the resolver that walks `streamlib.yaml` (`resolve`,
+> `ResolvedPackages`) […] so one `streamlib.yaml` carries both the
+> schema-identity surface and the runtime configuration.~~ — Superseded
+> 2026-08-11: `Manifest`, `PackageMetadata`, `Lockfile` and the resolver are
+> deleted from the crate.
 
 ## Anti-patterns
 
@@ -357,9 +250,11 @@ own the processor's Rust module):
   `ProcessorTypeReference::ResolveToInstalled` value with **no package-source
   lookup at the call site**. Passed to `ProcessorSpec::new`, it reaches
   `add_processor`'s lazy hook and resolves to the single installed
-  provider — loading its package from `streamlib_modules/` on first
-  reference. This is what app code uses: no `add_module`, no version at
-  the reference site. Every example uses it.
+  provider. This is what app code uses: no version at the reference site.
+
+  > ~~loading its package from `streamlib_modules/` on first reference~~,
+  > ~~no `add_module`~~ — Superseded 2026-08-11: the module loader and
+  > `streamlib_modules/` are deleted.
 - **`streamlib::sdk::schema_ident_any_version!("org", "package", "Type")`**
   — the power-caller form. Resolves a `SchemaIdent` *now* against the
   already-registered processor types (highest registered `SemVer`,
@@ -374,37 +269,36 @@ own the processor's Rust module):
   expansion. Reach for it only when the call site has a deliberate
   reason to refuse newer-but-compatible versions.
 
-Cross-package references in graph JSON, IPC envelopes, generated
-code, and lockfiles still carry a fully-qualified
-`SchemaIdent { org, package, type, version }` structured record. The
+Cross-package references in graph JSON and IPC envelopes still carry a
+fully-qualified `SchemaIdent { org, package, type, version }` structured
+record.
+
+> ~~generated code, and lockfiles~~ — Superseded 2026-08-11: the lockfile
+> is deleted, and codegen went with the schema layer.
+
+The
 macro-emitted `schema_ident()` returns the structured record;
 consumers can read its fields, but serializing across a wire surface
 always emits the full structured shape.
 
 ### 3. Per-schema `version` field
 
-Schema files declare `type` and content fields. They do **not**
-declare a version. The CI lint catches re-introductions; the
-architecture rejects them by design.
-
-Why: per-schema versions create N-dimensional compatibility matrices
-that consumers don't actually reason about. Publication-unit-scoped
-versions collapse this to a single dimension per package.
+> Removed 2026-08-11: there is no schema layer to carry a version and no
+> package to scope one to. The `check-schema-versions` lint is deleted.
 
 ### 4. Legacy metadata blocks in language-native manifests
 
-`Cargo.toml` does not contain `[package.metadata.streamlib]`,
-`pyproject.toml` does not contain `[tool.streamlib]`, and `deno.json`
-has no `streamlib` block. The single source of truth is
-`streamlib.yaml` for every runtime. A CI lint
-(`cargo xtask check-no-streamlib-metadata`) rejects re-introductions.
+> Removed 2026-08-11: the rule survives as plan doctrine — a StreamLib app
+> declares nothing to streamlib in its language-native manifest
+> (`docs/plan/ARCHITECTURE.md` §Product, the zero-ceremony bar) — but the
+> remedy this section named, "put it in `streamlib.yaml`", no longer exists,
+> and the `check-no-streamlib-metadata` lint that enforced it is deleted.
 
 ## Polyglot SchemaIdent parity
 
-The `streamlib-idents` crate's full surface (range matching,
-lockfile read/write, content-hash resolver)
-is Rust-only. The Python SDK carries a focused subset matched
-to the authoring path:
+The `streamlib-idents` crate's full surface (grammar validation, semver
+range matching) is Rust-only. The Python SDK carries a focused subset
+matched to the authoring path:
 
 - > ~~**`streamlib._manifest`** — hand-rolled YAML reader for the `package:` block + processor-name
   > list; **`@streamlib.processor("PascalCase")`** — positional short name resolved at decoration
@@ -428,11 +322,10 @@ Python SDK's local validators run only at authoring time —
 guarding against manifest-vs-decorator drift, not validating
 wire-format input.
 
-Range matching and lockfile resolution stay Rust-side because no
-non-Rust caller currently exercises them. This matches the polyglot rule's escape clause
+Range matching stays Rust-side because no non-Rust caller currently
+exercises it. This matches the polyglot rule's escape clause
 (`.claude/rules/polyglot.md`): *"the only legitimate split is
-schema-only / language-specific by construction"* — the deeper
-crate functionality (range matching, lockfile) is
+schema-only / language-specific by construction"* — range matching is
 "language-specific by construction" while basic identity
 validation is mirrored across runtimes that need it.
 
@@ -440,36 +333,18 @@ validation is mirrored across runtimes that need it.
 
 - **Implementation**:
   - `sdk/streamlib-idents/` — `SchemaIdent`, `SemVer`, `SemVerRange`,
-    `Manifest`, `PackageMetadata`, `Lockfile`. The `streamlib.yaml`
-    resolver (`resolve`, `resolve_with`, `ResolvedPackages`) lives here
-    too and walks path / git / `.slpkg` sources; the lockfile writer
-    (`write_lockfile`, `read_lockfile`) and `compute_content_hash`
-    helper are siblings of the resolver.
-  - `xtask/src/check_schema_versions.rs` — CI lint (no per-schema
-    `version` keys in YAML).
-  - `xtask/src/check_no_streamlib_metadata.rs` — CI lint
-    (no `[package.metadata.streamlib]`, no `[tool.streamlib]`, no
-    top-level `streamlib` key in `deno.json` / `deno.jsonc`).
-  - `.github/workflows/check-schema-versions.yml` — schema-version CI gate.
-  - `.github/workflows/check-no-streamlib-metadata.yml` —
-    legacy-metadata CI gate.
+    and the channel-name grammar.
   - `sdk/streamlib-python-wheel/python/streamlib/_processor_declaration.py`
     — the authoring decorators; they carry no `SchemaIdent`.
 - **Tests**:
-  - `sdk/streamlib-idents/src/{ident,semver,manifest,lockfile,resolver}.rs::tests`
+  - `sdk/streamlib-idents/src/{ident,semver,channel}.rs::tests`
     — unit tests covering grammar conformance, semver-range matching,
-    typed deserialization, lockfile round-trip + diff stability,
-    content-hash determinism, and resolver scenarios (path / `.slpkg`
-    / transitive / diamond / id-mismatch / registry-not-implemented).
+    and typed deserialization.
   - `sdk/streamlib-idents/src/ident.rs` — `compile_fail` doctests on
     each identifier type that lock the no-`parse`-API invariant.
   - `sdk/streamlib-idents/tests/no_parse_api.rs` — positive
     counterpart: locks the *allowed* construction pathways and
     asserts joined-string deserialization fails.
-  - `xtask/src/check_schema_versions.rs::tests` — schema-version
-    lint fixtures.
-  - `xtask/src/check_no_streamlib_metadata.rs::tests` —
-    legacy-metadata lint fixtures.
   - `sdk/streamlib-python-wheel/tests/test_processor_declaration.py` —
     `@processor` version-free identity decoration, delivery-profile
     enforcement, and the locks that a port declaration takes no `schema=`

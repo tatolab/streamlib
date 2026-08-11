@@ -19,9 +19,9 @@
 //! - `streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")` —
 //!   the same four fields as the long [`SchemaIdent::new`] constructor,
 //!   validated at compile time and expanding to it verbatim. For the
-//!   *resolved* identities that carry a version (lockfile entries, registry
-//!   keys); naming a processor from code goes through `processor_type_ref!`,
-//!   which carries no version at all.
+//!   *resolved* identities that carry a version (registry keys); naming a
+//!   processor from code goes through `processor_type_ref!`, which carries
+//!   no version at all.
 
 mod codegen;
 mod config_descriptor;
@@ -412,8 +412,7 @@ pub fn module_ident(input: TokenStream) -> TokenStream {
 /// `module_ident_any_version!("org", "name")` — split args, any version.
 ///
 /// Equivalent to `module_ident!("org", "name", "*")`. Use when the
-/// caller doesn't pin a version range — the runtime resolver picks the
-/// highest installed `SemVer` matching `(@org/name)`.
+/// caller doesn't pin a version range.
 #[proc_macro]
 pub fn module_ident_any_version(input: TokenStream) -> TokenStream {
     let args = parse_macro_input!(input as ModuleIdentAnyArgs);

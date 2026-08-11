@@ -165,10 +165,9 @@ pub mod sdk {
     /// `streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")` —
     /// compile-time-validated short form of
     /// [`SchemaIdent::new`](descriptors::SchemaIdent::new), for the *resolved*
-    /// identities that carry a version: lockfile entries, registry keys,
-    /// package resolution. It is not how code references a processor — pass one
-    /// to `ProcessorSpec::new` and the version is dropped. Use
-    /// [`processor_type_ref!`] to name a processor.
+    /// identities that carry a version — registry keys. It is not how code
+    /// references a processor: pass one to `ProcessorSpec::new` and the
+    /// version is dropped. Use [`processor_type_ref!`] to name a processor.
     pub use streamlib_engine::schema_ident;
 
     /// `streamlib::sdk::processor_type_ref!("org", "package", "Type")` — the
@@ -319,9 +318,9 @@ pub mod sdk {
 ///
 /// Items inside engine-internal modules that genuinely need
 /// cross-crate access are explicitly re-exported item-by-item at
-/// `streamlib_engine::core::*` (e.g. `ProjectConfig`,
-/// `installed_package_slot_dir`) or at the engine crate root. The set of
-/// those re-exports IS the engine's external surface.
+/// `streamlib_engine::core::*` (e.g. `get_streamlib_home`) or at the
+/// engine crate root. The set of those re-exports IS the engine's
+/// external surface.
 ///
 /// If you find yourself importing from this namespace for an item
 /// that would benefit other consumers, that's a signal: either extend

@@ -13,20 +13,15 @@ pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_in_process_placement;
 pub mod check_no_inventory_submit;
 pub mod check_no_reverse_dns;
-pub mod check_no_streamlib_metadata;
-pub mod check_schema_versions;
 pub mod check_vendored_vulkanalia;
 pub mod lint_logging;
 pub mod normal_build_dep_graph;
 
 /// Rust source roots a workspace crate may hold: the classic `src/` and the
-/// folder-backed `processors/` a generated crate root declares its module arms
-/// out of. Every source-walking gate shares this list, and it spells the
-/// folder-backed root through [`streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME`]
-/// so renaming that root cannot leave a gate scanning a directory that no
-/// longer exists.
-pub const RUST_CRATE_SOURCE_ROOT_DIR_NAMES: &[&str] =
-    &["src", streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME];
+/// folder-backed `processors/`. `lint_logging` walks these by name rather
+/// than descending from the crate root, so a source tree outside both is
+/// invisible to it.
+pub const RUST_CRATE_SOURCE_ROOT_DIR_NAMES: &[&str] = &["src", "processors"];
 
 /// Refuse a source-walking gate run that read no source at all.
 ///
@@ -68,19 +63,6 @@ enum Commands {
     /// on the full `streamlib` crate, or privileged Vulkan calls outside
     /// the RHI. See `docs/architecture/subprocess-rhi-parity.md`.
     CheckBoundaries,
-
-    /// CI gate for the package-as-publication-unit rule from milestone 10.
-    /// Fails when any schema YAML declares a top-level `version` key
-    /// (versioning lives in `streamlib.yaml`, not in individual schemas).
-    /// See `docs/architecture/schema-identity-and-packaging.md`.
-    CheckSchemaVersions,
-
-    /// CI gate for #402's atomic cutover off language-native metadata.
-    /// Fails on `[package.metadata.streamlib]`, `[tool.streamlib]`, or a
-    /// top-level `streamlib` key in `deno.json` / `deno.jsonc`. The single
-    /// source of truth is `streamlib.yaml`; see
-    /// `docs/architecture/schema-identity-and-packaging.md` (anti-pattern 4).
-    CheckNoStreamlibMetadata,
 
     /// CI gate for milestone-10's structured-identifier rule. Fails on
     /// legacy reverse-DNS schema literals (`com.tatolab.*`,
@@ -151,8 +133,6 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::LintLogging => lint_logging::run(&workspace_root()?)?,
         Commands::CheckBoundaries => check_boundaries::run(&workspace_root()?)?,
-        Commands::CheckSchemaVersions => check_schema_versions::run(&workspace_root()?)?,
-        Commands::CheckNoStreamlibMetadata => check_no_streamlib_metadata::run(&workspace_root()?)?,
         Commands::CheckNoReverseDns => check_no_reverse_dns::run(&workspace_root()?)?,
         Commands::CheckNoInProcessPlacement => {
             check_no_in_process_placement::run(&workspace_root()?)?
