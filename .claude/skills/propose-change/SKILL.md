@@ -20,8 +20,7 @@ this skill — route to `/align` first.
 2. **Recon, read-only.** Spawn the relevant domain experts to map current state before
    writing a word — proposals invented without reading the tree reference APIs that
    don't exist.
-3. `mkdir -p .claude/state && touch .claude/state/plan-session`, then write
-   `docs/plan/changes/<name>.md`:
+3. Write `docs/plan/changes/<name>.md`:
    - Sections typed `ADDED:` / `MODIFIED:` / `REMOVED:` against ARCHITECTURE.md.
      Every `- REMOVED: <pattern>` bullet is a grep pattern the ship gate will verify is
      gone.
@@ -30,8 +29,7 @@ this skill — route to `/align` first.
    - A factual gap you can resolve by reading the repo: resolve it. An architectural
      choice the plan doesn't state: write `[NEEDS DECISION]` with the options and your
      recommendation. **You may never resolve one yourself.**
-4. Still inside the marker window: flip the affected plan sections to
-   `IN-FLIGHT (→ <name>)`. Then `rm -f .claude/state/plan-session`.
+4. Flip the affected plan sections to `IN-FLIGHT (→ <name>)`.
 5. **Stop.** Present the proposal. The owner approves in their own words before
    `/derive-tickets` may run — and a proposal with an unresolved `[NEEDS DECISION]`
    cannot be approved yet.

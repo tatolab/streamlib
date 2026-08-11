@@ -18,6 +18,16 @@ paths:
   happens. Prompting keeps the friction and the reason while leaving the owner a way through.
   This is not permission to bend doctrine: the rules still say what is right, and an approved
   prompt only means the owner judged this edit to be the exception.
+- **Guard only what a wrong edit makes expensive to undo** — source without ticket traceability,
+  consumer trees, vendored sources, licence files. Never guard prose. A guard fires on a path and
+  cannot see intent, so guarding a directory whose edits are mostly routine records trains the
+  session to escalate trivia and the owner to click through without reading — which costs the
+  guard its meaning everywhere else. Judgement the session must exercise belongs in an always-on
+  rule (`CLAUDE.md`), not in an `ask` entry; a path-scoped rule file loads too late to govern the
+  decision to ask.
+- **Adding an `ask` entry or a hook branch needs the same justification as an agent.** State what
+  a wrong edit costs, why an always-on rule can't carry it, and what the session should do when it
+  fires. An entry no one can justify in those terms is friction, and friction is not free.
 - **A new agent definition PR must state three things:** the non-derivable knowledge the agent
   captures, why the existing agents don't already cover it, and its model tier.
 - **Model tiers:** implementation and reasoning agents run `opus`; mechanical / prescribed-steps

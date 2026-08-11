@@ -10,10 +10,8 @@ Only the owner invokes a pivot. Never propose one mid-implementation.
 
 1. Run `grilling` until the new direction is stated in five sentences or fewer and the
    owner confirms them verbatim.
-2. **Plan first**: `mkdir -p .claude/state && touch .claude/state/plan-session`;
-   rewrite the affected ARCHITECTURE.md sections — new DECIDED entries, invalidated
-   sections back to OPEN, diagrams updated. Rationale goes to an ADR. Then
-   `rm -f .claude/state/plan-session`.
+2. **Plan first**: rewrite the affected ARCHITECTURE.md sections — new DECIDED entries,
+   invalidated sections back to OPEN, diagrams updated. Rationale goes to an ADR.
 3. **Inventory the legacy** (read-only sweep): the code paths, docs, rules, skills,
    tickets, and milestones the old direction leaves behind. Present the inventory —
    under this model legacy is deleted, never kept running in parallel with the new

@@ -2,8 +2,6 @@
 # plan-gate (PreToolUse / Edit|Write): the enforcement layer of the plan-first
 # operating model (docs/plan/OPERATING-MODEL.md).
 #
-#   docs/plan/**                 requires .claude/state/plan-session
-#                                (set by /align, /propose-change, /ship-change, /pivot)
 #   runtime/ sdk/ adapters/
 #   xtask/                       requires .claude/state/active-ticket.json
 #                                (set by /implement after the owner confirms the plan)
@@ -12,6 +10,12 @@
 # reason; plain exit 0 defers to the normal permission flow. The gate informs and slows
 # down — it does not wall off. An edit the owner approves at the prompt proceeds without
 # a marker file, so a stale scope can never strand work that has to land.
+#
+# docs/plan/** is deliberately NOT gated here. A hook sees a path, never an intent, so it
+# cannot tell recording a fact from making a decision — it prompted on both, and the
+# every-time prompt on the factual majority is what taught sessions to escalate trivia.
+# That line is doctrine the session applies (CLAUDE.md §Recording facts vs deciding), not
+# a path match: facts land with the work, decisions go through the lifecycle skills.
 
 input="$(cat)"
 fp="$(printf '%s' "$input" | jq -r '.tool_input.file_path // ""')"
@@ -32,10 +36,6 @@ case "$rel" in
 esac
 
 case "$rel" in
-  docs/plan/*)
-    [ -f "$state/plan-session" ] && exit 0
-    ask 'docs/plan/ is the decision source. Plan edits belong inside /align, /propose-change, /ship-change, or /pivot — those skills create .claude/state/plan-session for the session. Approve to edit anyway, or decline and run the skill.'
-    ;;
   runtime/*|sdk/*|adapters/*|xtask/*)
     [ -f "$state/active-ticket.json" ] && exit 0
     ask 'Source edits belong inside /implement with an owner-confirmed ticket (.claude/state/active-ticket.json is missing). Approve to edit anyway — the change lands without ticket traceability — or decline and run /implement.'
