@@ -90,6 +90,38 @@ def test_two_added_processors_of_one_class_get_their_own_identities():
         runtime.shutdown()
 
 
+def test_two_adds_of_one_class_get_distinct_display_names():
+    """`rt.add(Blur)` twice must not label both nodes `Blur`.
+
+    The engine is the only place that defaults a name and the only place that
+    disambiguates, so the handle reports what it assigned rather than what the
+    wheel asked for. Mental-revert: pre-computing the default in the wheel and
+    handing the engine a `Some(...)` — the engine then never sees an absent
+    name, both nodes come back `GraphBuildingFilter`, and this fails.
+    """
+    runtime = streamlib.Runtime()
+    try:
+        first = runtime.add(GraphBuildingFilter)
+        second = runtime.add(GraphBuildingFilter)
+        third = runtime.add(GraphBuildingFilter)
+        assert first.display_name == "GraphBuildingFilter"
+        assert second.display_name == "GraphBuildingFilter 2"
+        assert third.display_name == "GraphBuildingFilter 3"
+    finally:
+        runtime.shutdown()
+
+
+def test_a_duplicate_requested_display_name_is_disambiguated_too():
+    """Two `display_name="Front"` calls are as ambiguous as two defaults."""
+    runtime = streamlib.Runtime()
+    try:
+        first = runtime.add(GraphBuildingFilter, display_name="Front")
+        second = runtime.add(GraphBuildingFilter, display_name="Front")
+        assert (first.display_name, second.display_name) == ("Front", "Front 2")
+    finally:
+        runtime.shutdown()
+
+
 def test_connecting_a_port_that_does_not_exist_is_refused():
     runtime = streamlib.Runtime()
     try:
