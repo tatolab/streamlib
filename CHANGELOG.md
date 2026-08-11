@@ -1,5 +1,46 @@
 # Changelog
 
+## [0.17.0](https://github.com/tatolab/streamlib/compare/v0.16.0...v0.17.0) (2026-08-11)
+
+
+### ⚠ BREAKING CHANGES
+
+* **ipc:** 76-byte frame header — delete the wire schema tag and the per-read comparison ([#1820](https://github.com/tatolab/streamlib/issues/1820))
+* **engine:** retire streamlib-jtd-codegen and the generated-type shim ([#1819](https://github.com/tatolab/streamlib/issues/1819))
+* **engine:** require an explicit delivery profile on every input port ([#1817](https://github.com/tatolab/streamlib/issues/1817))
+* **engine:** delete the plugin ABI and host services; collapse the RHI onto direct ownership ([#1804](https://github.com/tatolab/streamlib/issues/1804))
+* **sdk:** move the #[processor] grammar into streamlib-macros; delete the extract crate ([#1801](https://github.com/tatolab/streamlib/issues/1801))
+* **sdk:** delete the old Python SDK, python-native, and the polyglot examples ([#1800](https://github.com/tatolab/streamlib/issues/1800))
+* **sdk:** delete the Deno SDK and the TypeScript authoring path ([#1799](https://github.com/tatolab/streamlib/issues/1799))
+* **engine:** delete the module system, install path and source-submit ops ([#1798](https://github.com/tatolab/streamlib/issues/1798))
+* **tools:** delete the build orchestration and packaging tools ([#1797](https://github.com/tatolab/streamlib/issues/1797))
+* **engine:** delete the cdylib and polyglot integration corpus ([#1796](https://github.com/tatolab/streamlib/issues/1796))
+* **cli:** delete the Rust CLI — every verb it owned is deleted ([#1795](https://github.com/tatolab/streamlib/issues/1795))
+
+### Features
+
+* **cli:** delete the Rust CLI — every verb it owned is deleted ([#1795](https://github.com/tatolab/streamlib/issues/1795)) ([769e34d](https://github.com/tatolab/streamlib/commit/769e34ddf3ff5acecb3ea57adb5fa31c0d79e57c))
+* **engine:** delete the module system, install path and source-submit ops ([#1798](https://github.com/tatolab/streamlib/issues/1798)) ([978e7c3](https://github.com/tatolab/streamlib/commit/978e7c33028db96807e35a5b01b4cc2f76311132))
+* **engine:** delete the plugin ABI and host services; collapse the RHI onto direct ownership ([#1804](https://github.com/tatolab/streamlib/issues/1804)) ([bfcf9db](https://github.com/tatolab/streamlib/commit/bfcf9dbc2a60f86304a542f02da668c0d0373084)), closes [#1715](https://github.com/tatolab/streamlib/issues/1715)
+* **engine:** require an explicit delivery profile on every input port ([#1817](https://github.com/tatolab/streamlib/issues/1817)) ([04831cf](https://github.com/tatolab/streamlib/commit/04831cf6f1cf2df59cc0b5a2e6aaef945ef2c3ad)), closes [#1811](https://github.com/tatolab/streamlib/issues/1811)
+* **engine:** retire streamlib-jtd-codegen and the generated-type shim ([#1819](https://github.com/tatolab/streamlib/issues/1819)) ([8458d9f](https://github.com/tatolab/streamlib/commit/8458d9fcb6465868001a62d36499984343d16132)), closes [#1813](https://github.com/tatolab/streamlib/issues/1813)
+* **ipc:** 76-byte frame header — delete the wire schema tag and the per-read comparison ([#1820](https://github.com/tatolab/streamlib/issues/1820)) ([da928ec](https://github.com/tatolab/streamlib/commit/da928ec55cd362bbd66b553297f049a90f7e4c93)), closes [#1814](https://github.com/tatolab/streamlib/issues/1814)
+* **python:** add read(port, into=T) — the opt-in strictness dial ([#1818](https://github.com/tatolab/streamlib/issues/1818)) ([b740dd4](https://github.com/tatolab/streamlib/commit/b740dd4afe7b997f4fb8981b2448a638749101be))
+* **sdk:** delete the Deno SDK and the TypeScript authoring path ([#1799](https://github.com/tatolab/streamlib/issues/1799)) ([2728d76](https://github.com/tatolab/streamlib/commit/2728d765e8cd574b539ee6d91d0a74f9b6084c38))
+* **sdk:** delete the old Python SDK, python-native, and the polyglot examples ([#1800](https://github.com/tatolab/streamlib/issues/1800)) ([d9e028b](https://github.com/tatolab/streamlib/commit/d9e028b2be9eed45e9a6696ec1e3eb6fef5f3502))
+* **sdk:** move the #[processor] grammar into streamlib-macros; delete the extract crate ([#1801](https://github.com/tatolab/streamlib/issues/1801)) ([ee739cb](https://github.com/tatolab/streamlib/commit/ee739cb97825b6c1f883073f9ea09764551fbe0d))
+* **tools:** delete the build orchestration and packaging tools ([#1797](https://github.com/tatolab/streamlib/issues/1797)) ([f7cac5e](https://github.com/tatolab/streamlib/commit/f7cac5e44f508cd4e4b4b1db6c1f4ccc366970ad))
+
+
+### Bug Fixes
+
+* **ci:** mark the placement tests rig-only so the wheel gate reports honestly ([#1824](https://github.com/tatolab/streamlib/issues/1824)) ([f27cf41](https://github.com/tatolab/streamlib/commit/f27cf414baf477d9d7d6657f0afbf6627861acab)), closes [#1823](https://github.com/tatolab/streamlib/issues/1823)
+
+
+### Tests
+
+* **engine:** delete the cdylib and polyglot integration corpus ([#1796](https://github.com/tatolab/streamlib/issues/1796)) ([8885af6](https://github.com/tatolab/streamlib/commit/8885af6a30a63b47cb9a26d0263e1dc671892b28))
+
 ## [0.16.0](https://github.com/tatolab/streamlib/compare/v0.15.0...v0.16.0) (2026-08-08)
 
 
