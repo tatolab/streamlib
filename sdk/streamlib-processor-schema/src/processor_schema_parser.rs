@@ -368,10 +368,15 @@ name: Test
 
 inputs:
   - name: video
-    schema: Frame
     read_mode: skip_to_latest
 "#;
 
-        assert!(parse_processor_yaml(yaml).is_err());
+        let err = parse_processor_yaml(yaml)
+            .expect_err("the retired `read_mode` knob must be rejected")
+            .to_string();
+        assert!(
+            err.contains("read_mode"),
+            "the rejection must name the retired knob, not some other unknown field: {err}"
+        );
     }
 }

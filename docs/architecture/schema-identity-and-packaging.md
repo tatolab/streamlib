@@ -552,8 +552,10 @@ to the authoring path:
   (the zero-ceremony authoring model): the self-describing
   `Bag` wire carries its own field names, so no schema and no generated type is
   needed to interoperate; a by-ID JTD descriptor is consumed as data, never via
-  required codegen. `@input(schema=GeneratedClass)` is now an optional typed view,
-  not the only door schemas enter a language.
+  required codegen. Further superseded 2026-08-10: the sentence that followed
+  offered `@input(schema=GeneratedClass)` as an optional typed view. There is no
+  `schema=` keyword and no generated type class — the opt-in typed read is
+  `ctx.inputs.read(port, into=T)`.
 
 The reason for the focused subset rather than full parity:
 structured-everywhere eliminates the need for non-Rust callers to
@@ -589,19 +591,10 @@ decorators, is deleted too. There is no codegen and no generated type class.
     too and walks path / git / `.slpkg` sources; the lockfile writer
     (`write_lockfile`, `read_lockfile`) and `compute_content_hash`
     helper are siblings of the resolver.
-  - `sdk/streamlib-jtd-codegen/` — three-pass codegen pipeline.
-    `sentinel.rs` substitutes cross-package refs with deterministic
-    sentinels and restores them as native imports; `ordering.rs`
-    stable-sorts every JSON object key before invoking `jtd-codegen`.
-    Public entry `generate(GenerateOptions { project_dir, ... })`
-    drives `streamlib.yaml`-mode end-to-end; `generate_from_resolved`
-    is the lower-level entry for callers that already ran the
-    resolver.
-  - `runtime/streamlib-engine/src/core/embedded_schemas/mod.rs` — runtime
-    `LazyLock<RwLock<HashMap<…>>>` registry; `register_schema` /
-    `get_embedded_schema_definition` / `list_embedded_schema_names`
-    public surface. Populated by `Runner::add_module` walking each
-    loaded package's `schemas:` declarations.
+  - Removed 2026-08-10: the `sdk/streamlib-jtd-codegen/` and
+    `runtime/streamlib-engine/src/core/embedded_schemas/` entries. Neither
+    directory exists — the codegen crate was deleted whole and the runtime
+    schema registry with it. There is no codegen and no schema registry.
   - `xtask/src/check_schema_versions.rs` — CI lint (no per-schema
     `version` keys in YAML).
   - `xtask/src/check_no_streamlib_metadata.rs` — CI lint
@@ -610,15 +603,11 @@ decorators, is deleted too. There is no codegen and no generated type class.
   - `.github/workflows/check-schema-versions.yml` — schema-version CI gate.
   - `.github/workflows/check-no-streamlib-metadata.yml` —
     legacy-metadata CI gate.
-  - `sdk/streamlib-python/python/streamlib/schema_ident.py` —
-    Python `SchemaIdent` dataclass with regex-validating
-    constructors and render-only joined `__str__`.
-  - ~~`sdk/streamlib-python/python/streamlib/_manifest.py`~~ — removed 2026-07-19 (the decorators no
-    longer read a manifest).
-  - `sdk/streamlib-python/python/streamlib/decorators.py` —
-    `@processor("@org/package/Type")` / `@input` / `@output`
-    decorators; version-free identity from the decorator arguments,
-    read from code, not a manifest.
+  - Removed 2026-08-10: the three `sdk/streamlib-python/python/streamlib/`
+    entries (`schema_ident.py`, `_manifest.py`, `decorators.py`). That tree no
+    longer exists. The authoring decorators live in the wheel at
+    `sdk/streamlib-python-wheel/python/streamlib/_processor_declaration.py`, and
+    they carry no `SchemaIdent`.
 - **Tests**:
   - `sdk/streamlib-idents/src/{ident,semver,manifest,lockfile,resolver}.rs::tests`
     — unit tests covering grammar conformance, semver-range matching,
@@ -630,21 +619,17 @@ decorators, is deleted too. There is no codegen and no generated type class.
   - `sdk/streamlib-idents/tests/no_parse_api.rs` — positive
     counterpart: locks the *allowed* construction pathways and
     asserts joined-string deserialization fails.
-  - `sdk/streamlib-jtd-codegen/src/{sentinel,ordering}.rs::tests`
-    — pre-pass / post-pass coverage for sentinel substitution,
-    deterministic property ordering, and per-language restore
-    (Rust / Python / TypeScript).
-  - `runtime/streamlib-engine/src/core/embedded_schemas/mod.rs::tests` —
-    register / lookup round-trip, version-suffix stripping, empty-
-    registry behavior, sorted listing, no duplicate names.
+  - Removed 2026-08-10: the `sdk/streamlib-jtd-codegen/` and
+    `runtime/streamlib-engine/src/core/embedded_schemas/` test entries. Both
+    trees were deleted, so neither suite exists.
   - `xtask/src/check_schema_versions.rs::tests` — schema-version
     lint fixtures.
   - `xtask/src/check_no_streamlib_metadata.rs::tests` —
     legacy-metadata lint fixtures.
-  - `sdk/streamlib-python/python/streamlib/tests/test_processor_decorator.py`
-    — `SchemaIdent` validation, `@processor` version-free identity
-    decoration, `@input` / `@output` schema rejection of
-    bare-string and joined-string forms.
+  - `sdk/streamlib-python-wheel/tests/test_processor_declaration.py` —
+    `@processor` version-free identity decoration, delivery-profile
+    enforcement, and the locks that a port declaration takes no `schema=`
+    and carries no type key under any spelling.
   - ~~`test_manifest_reader.py`~~ — removed 2026-07-19 with the `_manifest` reader.
 - **Sibling architecture docs**:
   - [`compute-kernel.md`](compute-kernel.md), [`graphics-kernel.md`](graphics-kernel.md),
