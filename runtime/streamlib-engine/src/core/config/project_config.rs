@@ -81,116 +81,19 @@ impl ProjectConfig {
     /// Load project configuration from a directory. Returns error if file is
     /// missing or cannot be parsed.
     ///
-    /// Also runs the bare-name schema resolution pass (#767) on every
-    /// processor's port + config schemas: any `PortSchemaSpec::Named`
-    /// reference is resolved against the manifest's `schemas:` map and
-    /// rewritten in-place to `PortSchemaSpec::Specific(SchemaIdent)`.
-    /// Downstream consumers (graph wiring, iceoryx2 service open,
-    /// json-schema render) operate on `Specific` only.
     pub fn load(project_path: &Path) -> Result<Self> {
-        Self::load_with_link(project_path, None)
-    }
-
-    /// [`Self::load`], made link-aware for the runtime package-load path.
-    ///
-    /// When `link_checkout` is `Some` (a non-locked run under an active
-    /// `streamlib link`), the bare-name schema-resolution pass resolves a
-    /// schema dep present in `<checkout>/packages/<name>` from the checkout —
-    /// the load-time mirror of the build-time redirect, so a linked package
-    /// loaded from its staged cache dir with `STREAMLIB_PACKAGE_SOURCE` unset
-    /// still resolves `@tatolab/core` (the link dev loop). `None`
-    /// (every other caller, and every locked run) is byte-identical to before.
-    /// The module loader threads its already-discovered, `is_locked`-gated
-    /// checkout here.
-    pub fn load_with_link(project_path: &Path, link_checkout: Option<&Path>) -> Result<Self> {
         let config_path = project_path.join(Self::FILE_NAME);
 
         let content = std::fs::read_to_string(&config_path).map_err(|e| {
             Error::Configuration(format!("Failed to read {}: {}", config_path.display(), e))
         })?;
 
-        let mut config: Self = serde_yaml::from_str(&content).map_err(|e| {
+        let config: Self = serde_yaml::from_str(&content).map_err(|e| {
             Error::Configuration(format!("Failed to parse {}: {}", config_path.display(), e))
         })?;
 
-        config.resolve_bare_schema_refs(project_path, link_checkout)?;
-
         tracing::info!("Loaded project config from {}", config_path.display());
         Ok(config)
-    }
-
-    /// Walk every processor's port + config schemas and resolve any
-    /// [`streamlib_processor_schema::PortSchemaSpec::Named`] reference
-    /// to its fully-qualified [`streamlib_processor_schema::SchemaIdent`]
-    /// against the manifest's `schemas:` map (#767). No-op when there
-    /// are no `Named` references in scope (saves the resolver invocation
-    /// cost on `any`-only / config-less manifests).
-    fn resolve_bare_schema_refs(
-        &mut self,
-        project_path: &Path,
-        link_checkout: Option<&Path>,
-    ) -> Result<()> {
-        use streamlib_processor_schema::PortSchemaSpec;
-
-        let needs_resolution = self.processors.iter().any(|p| {
-            p.config.is_some()
-                || p.inputs
-                    .iter()
-                    .chain(p.outputs.iter())
-                    .any(|port| matches!(port.schema, PortSchemaSpec::Named(_)))
-        });
-
-        if !needs_resolution {
-            return Ok(());
-        }
-
-        // Runtime package-load boundary: read the package source from the
-        // environment (STREAMLIB_PACKAGE_SOURCE) so a standalone package
-        // resolves its schema deps (e.g. @tatolab/core) by version from that
-        // package source instead of failing as PackageSourceNotConfigured. An
-        // active `streamlib link` (threaded by the module loader) additionally
-        // redirects a schema dep present in the checkout to the checkout — the
-        // load-time half of the link dev loop; `None` is unchanged.
-        let mut resolver_options = streamlib_idents::ResolverOptions::from_env();
-        if let Some(checkout) = link_checkout {
-            resolver_options.link_checkout = Some(checkout.to_path_buf());
-        }
-        let resolved =
-            streamlib_idents::resolve_with(project_path, &resolver_options).map_err(|e| {
-                Error::Configuration(format!(
-                    "failed to resolve manifest dependencies for bare-name \
-                 schema lookup at {}: {}",
-                    project_path.display(),
-                    e
-                ))
-            })?;
-
-        for proc in &mut self.processors {
-            for port in proc.inputs.iter_mut().chain(proc.outputs.iter_mut()) {
-                if let PortSchemaSpec::Named(name) = &port.schema {
-                    let ident = resolve_named_to_ident(&resolved, name).map_err(|msg| {
-                        Error::Configuration(format!(
-                            "processor `{}` port `{}`: {}",
-                            proc.name, port.name, msg
-                        ))
-                    })?;
-                    port.schema = PortSchemaSpec::Specific(ident);
-                }
-            }
-            // Config schemas hold `TypeName` (Stage 2). They flow into
-            // the runtime as canonical id strings via
-            // `with_config_schema(&config.schema)`. Rather than
-            // converting the field's type, we leave the `TypeName` in
-            // place — runtime code paths use `as_str()` on it for the
-            // descriptor field, and the canonical-id form is computed
-            // lazily by the dynamic-registration path below
-            // (`register_processor_descriptor` in runtime.rs) which
-            // joins org/package/type/version on the fly. The bare-name
-            // is sufficient at the descriptor layer; full resolution is
-            // a future-tightening concern tracked under #767.
-        }
-
-        Ok(())
     }
 
     /// Load project configuration from a directory, returning defaults if the
@@ -275,50 +178,6 @@ impl ProjectConfig {
     }
 }
 
-/// Walk the resolved-packages graph for a bare TypeName reference and
-/// build the fully-qualified [`streamlib_processor_schema::SchemaIdent`]
-/// from the owning package's metadata. Reads the schema file's
-/// `metadata.type` (preferred) for the type segment; falls back to the
-/// bare name when the YAML lacks `metadata.type` (legacy reverse-DNS
-/// schemas with `metadata.name` only).
-fn resolve_named_to_ident(
-    resolved: &streamlib_idents::ResolvedPackages,
-    name: &TypeName,
-) -> std::result::Result<streamlib_processor_schema::SchemaIdent, String> {
-    let (owner, schema_path) =
-        streamlib_idents::resolve_bare_schema_name(resolved, &resolved.root, name)
-            .map_err(|e| format!("bare-name resolution failed: {}", e))?;
-
-    let owner_pkg = owner
-        .manifest
-        .package
-        .as_ref()
-        .ok_or_else(|| "owning package has no `package:` block".to_string())?;
-
-    // Prefer `metadata.type` from the schema file; fall back to the
-    // bare map-key name. Legacy reverse-DNS schemas with `metadata.name`
-    // only carry no separate type segment, so the bare-name lookup form
-    // is correct for them.
-    let type_segment = std::fs::read_to_string(&schema_path)
-        .ok()
-        .and_then(|body| serde_yaml::from_str::<serde_yaml::Value>(&body).ok())
-        .and_then(|value| {
-            value
-                .get("metadata")?
-                .get("type")?
-                .as_str()
-                .and_then(|s| TypeName::new(s).ok())
-        })
-        .unwrap_or_else(|| name.clone());
-
-    Ok(streamlib_processor_schema::SchemaIdent::new(
-        owner_pkg.org.clone(),
-        owner_pkg.name.clone(),
-        type_segment,
-        owner_pkg.version,
-    ))
-}
-
 /// Compare two semver strings. Returns -1, 0, or 1.
 fn compare_semver(a: &str, b: &str) -> i32 {
     let parse = |s: &str| -> Vec<u64> {
@@ -398,40 +257,6 @@ env:
 
     fn pkg_ref(org: &str, name: &str) -> PackageRef {
         PackageRef::new(Org::new(org).unwrap(), Package::new(name).unwrap())
-    }
-
-    #[test]
-    fn resolve_named_to_ident_projects_prerelease_owner_to_release_core() {
-        // Runtime mirror of the macro-side bare-name resolution. The ident it
-        // mints flows onto `PortSchemaSpec`'s wire form, which carries only
-        // major/minor/patch — `SchemaIdent::new`'s release-core projection is
-        // what prevents a dev-versioned owner from silently truncating there.
-        let dir = TempDir::new().unwrap();
-        let root = dir.path().join("project");
-        std::fs::create_dir_all(root.join("schemas")).unwrap();
-        std::fs::write(
-            root.join("streamlib.yaml"),
-            r#"
-package:
-  org: tatolab
-  name: camera
-  version: 0.4.33-dev.2
-schemas:
-  VideoFrame:
-    file: schemas/video_frame.yaml
-"#,
-        )
-        .unwrap();
-        std::fs::write(
-            root.join("schemas/video_frame.yaml"),
-            "metadata:\n  type: VideoFrame\nproperties: {}\n",
-        )
-        .unwrap();
-        let resolved = streamlib_idents::resolve(&root).unwrap();
-        let name = streamlib_processor_schema::TypeName::new("VideoFrame").unwrap();
-        let ident = resolve_named_to_ident(&resolved, &name).unwrap();
-        assert_eq!(ident.version, streamlib_idents::SemVer::new(0, 4, 33));
-        assert_eq!(ident.to_string(), "@tatolab/camera/VideoFrame@0.4.33");
     }
 
     #[test]
@@ -696,61 +521,5 @@ processors:
             "metadata:\n  type: VideoFrame\nproperties: {}\n",
         )
         .unwrap();
-    }
-
-    /// Load-time dev loop: `load_with_link` with an active checkout resolves a
-    /// bare-name schema dep from the checkout's `packages/core` with ZERO
-    /// package source configured — the load-time half of the link loop. The
-    /// `Named` port is rewritten to a `Specific` ident owned by `@tatolab/core`.
-    /// Mentally revert the `link_checkout` threading in `resolve_bare_schema_refs`
-    /// (or pass `None`, as the sibling test does) and this fails
-    /// `PackageSourceNotConfigured` — locking that the checkout is what resolved it.
-    #[test]
-    #[serial_test::serial]
-    fn load_with_link_resolves_bare_schema_from_checkout_without_package_source() {
-        use streamlib_processor_schema::PortSchemaSpec;
-        let _env = CleanResolutionEnv::new();
-        let tmp = TempDir::new().unwrap();
-        let consumer = tmp.path().join("consumer");
-        std::fs::create_dir_all(&consumer).unwrap();
-        write_named_port_consumer(&consumer);
-        let checkout = tmp.path().join("checkout");
-        write_checkout_core(&checkout);
-
-        let config = ProjectConfig::load_with_link(&consumer, Some(checkout.as_path())).expect(
-            "linked load must resolve the bare-name schema from the checkout, no package source",
-        );
-        let port = &config.processors[0].inputs[0];
-        match &port.schema {
-            PortSchemaSpec::Specific(ident) => {
-                assert_eq!(ident.to_string(), "@tatolab/core/VideoFrame@1.0.0")
-            }
-            other => panic!("port schema must be resolved to a Specific ident, got {other:?}"),
-        }
-    }
-
-    /// Load-time distribution guardrail: with NO link (`None`) and no package source,
-    /// the same manifest fails `PackageSourceNotConfigured` — the checkout on disk is
-    /// ignored without a link, so the no-link path is byte-identical to before.
-    /// This is also the mental-revert of the positive test above.
-    #[test]
-    #[serial_test::serial]
-    fn load_without_link_ignores_checkout_and_needs_package_source() {
-        let _env = CleanResolutionEnv::new();
-        let tmp = TempDir::new().unwrap();
-        let consumer = tmp.path().join("consumer");
-        std::fs::create_dir_all(&consumer).unwrap();
-        write_named_port_consumer(&consumer);
-        // A checkout carrying core exists on disk, but no link is threaded.
-        let checkout = tmp.path().join("checkout");
-        write_checkout_core(&checkout);
-
-        let err = ProjectConfig::load_with_link(&consumer, None)
-            .expect_err("without a link + no package source, the bare version dep must fail loud");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("no package source is configured") || msg.contains("cannot be resolved"),
-            "expected a package-source-not-configured failure, got: {msg}"
-        );
     }
 }

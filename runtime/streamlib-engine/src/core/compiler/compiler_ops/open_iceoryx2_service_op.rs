@@ -1361,8 +1361,7 @@ mod tests {
     fn conflicting_destination_profile_is_a_configuration_error() {
         use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
         use streamlib_idents::{Org, Package, SemVer, TypeName};
-        use streamlib_processor_schema::PortSchemaSpec;
-
+        
         let register_sink = |pkg: &str, profile: &str| -> SchemaIdent {
             let ident = SchemaIdent::new(
                 Org::new("tatolab").unwrap(),
@@ -1372,7 +1371,7 @@ mod tests {
             );
             let mut desc = ProcessorDescriptor::new(ident.clone(), "conflicting-profile sink");
             desc.inputs.push(
-                PortDescriptor::iceoryx2("in1", "input", PortSchemaSpec::Any)
+                PortDescriptor::iceoryx2("in1", "input")
                     .with_delivery_profile(profile),
             );
             // Idempotent: a duplicate ident (re-run in the same process) errors;

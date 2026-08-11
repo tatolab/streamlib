@@ -224,8 +224,7 @@ mod tests {
         use crate::core::error::Error;
         use crate::core::processors::PROCESSOR_REGISTRY;
         use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
-        use streamlib_processor_schema::PortSchemaSpec;
-
+        
         fn processor_ident(package: &str, type_name: &str) -> SchemaIdent {
             SchemaIdent::new(
                 Org::new("tatolab").unwrap(),
@@ -244,7 +243,7 @@ mod tests {
             declared_profile: Option<&str>,
         ) -> SchemaIdent {
             let ident = processor_ident(package, type_name);
-            let mut port = PortDescriptor::iceoryx2(port_name, "input", PortSchemaSpec::Any);
+            let mut port = PortDescriptor::iceoryx2(port_name, "input");
             if let Some(profile) = declared_profile {
                 port = port.with_delivery_profile(profile);
             }

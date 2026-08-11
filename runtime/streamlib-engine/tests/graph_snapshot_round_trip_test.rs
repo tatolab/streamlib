@@ -17,7 +17,7 @@
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
-    Org, Package, PortDescriptor, PortSchemaSpec, ProcessorDescriptor, SchemaIdent, SemVer,
+    Org, Package, PortDescriptor, ProcessorDescriptor, SchemaIdent, SemVer,
     TypeName,
 };
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
@@ -40,8 +40,8 @@ fn ident(short: &str) -> SchemaIdent {
 fn register_test_type(short: &str, input: &str, output: &str) -> SchemaIdent {
     let id = ident(short);
     let descriptor = ProcessorDescriptor::new(id.clone(), "snapshot round-trip test")
-        .with_input(PortDescriptor::new(input, "", PortSchemaSpec::Any, false))
-        .with_output(PortDescriptor::new(output, "", PortSchemaSpec::Any, false));
+        .with_input(PortDescriptor::new(input, "", false))
+        .with_output(PortDescriptor::new(output, "", false));
     // Idempotent across `serial_test` runs — second register returns
     // `Error::Configuration("Processor 'X' already registered")` which
     // we ignore.

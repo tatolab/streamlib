@@ -158,7 +158,7 @@ fn app_connect_is_a_faithful_passthrough_of_runner_connect() {
 /// collision-free across the parallel test binary.
 fn register_ported_type(short: &str, input: &str, output: &str) -> ProcessorTypeReference {
     use streamlib::sdk::descriptors::{
-        Org, Package, PortDescriptor, PortSchemaSpec, ProcessorDescriptor, SchemaIdent, SemVer,
+        Org, Package, PortDescriptor, ProcessorDescriptor, SchemaIdent, SemVer,
         TypeName,
     };
     use streamlib::sdk::processors::PROCESSOR_REGISTRY;
@@ -170,8 +170,8 @@ fn register_ported_type(short: &str, input: &str, output: &str) -> ProcessorType
         SemVer::new(1, 0, 0),
     );
     let descriptor = ProcessorDescriptor::new(id.clone(), "app-sugar connect test")
-        .with_input(PortDescriptor::new(input, "", PortSchemaSpec::Any, false))
-        .with_output(PortDescriptor::new(output, "", PortSchemaSpec::Any, false));
+        .with_input(PortDescriptor::new(input, "", false))
+        .with_output(PortDescriptor::new(output, "", false));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
     id.into()
 }

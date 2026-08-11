@@ -530,8 +530,7 @@ mod connect_emits_no_type_advisory_tests {
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef, ProcessorUniqueId};
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
     use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
-    use streamlib_processor_schema::PortSchemaSpec;
-
+    
     const PRODUCER_TYPE: &str = "TypeDivergentProducer";
     const CONSUMER_TYPE: &str = "TypeDivergentConsumer";
 
@@ -544,39 +543,31 @@ mod connect_emits_no_type_advisory_tests {
         )
     }
 
-    fn schema(ty: &str) -> PortSchemaSpec {
-        PortSchemaSpec::Specific(ident("core", ty))
-    }
-
-    /// Register a producer whose `out` declares `VideoFrame` against a consumer
-    /// whose `in` declares `AudioFrame` — the most divergent pairing the port
-    /// descriptors can still express.
-    fn register_divergent_types() {
+    /// Register a producer and a consumer whose ports carry nothing connect
+    /// could compare even if it wanted to — the shape every port now has.
+    fn register_unrelated_pair() {
         let mut producer =
-            ProcessorDescriptor::new(ident("connectcheck", PRODUCER_TYPE), "divergent producer");
-        producer.outputs.push(PortDescriptor::iceoryx2(
-            "out",
-            "output",
-            schema("VideoFrame"),
-        ));
+            ProcessorDescriptor::new(ident("connectcheck", PRODUCER_TYPE), "producer");
+        producer
+            .outputs
+            .push(PortDescriptor::iceoryx2("out", "output"));
         PROCESSOR_REGISTRY
             .register_descriptor_only(producer)
-            .expect("register divergent producer descriptor");
+            .expect("register producer descriptor");
 
         let mut consumer =
-            ProcessorDescriptor::new(ident("connectcheck", CONSUMER_TYPE), "divergent consumer");
-        consumer.inputs.push(
-            PortDescriptor::iceoryx2("in", "input", schema("AudioFrame"))
-                .with_delivery_profile("latest"),
-        );
+            ProcessorDescriptor::new(ident("connectcheck", CONSUMER_TYPE), "consumer");
+        consumer
+            .inputs
+            .push(PortDescriptor::iceoryx2("in", "input").with_delivery_profile("latest"));
         PROCESSOR_REGISTRY
             .register_descriptor_only(consumer)
-            .expect("register divergent consumer descriptor");
+            .expect("register consumer descriptor");
     }
 
     /// Fresh compiler holding one producer and one consumer node, plus the
     /// wiring refs for the producer's `out` and the consumer's `in`.
-    fn compiler_with_divergent_pair() -> (Arc<Compiler>, OutputLinkPortRef, InputLinkPortRef) {
+    fn compiler_with_unrelated_pair() -> (Arc<Compiler>, OutputLinkPortRef, InputLinkPortRef) {
         let compiler = Arc::new(Compiler::new());
         let (from_id, to_id): (ProcessorUniqueId, ProcessorUniqueId) =
             compiler.scope(|graph, _tx| {
@@ -641,9 +632,9 @@ mod connect_emits_no_type_advisory_tests {
     }
 
     #[test]
-    fn connect_wires_a_type_divergent_pair_in_silence() {
-        register_divergent_types();
-        let (compiler, from, to) = compiler_with_divergent_pair();
+    fn connect_wires_an_unrelated_pair_in_silence() {
+        register_unrelated_pair();
+        let (compiler, from, to) = compiler_with_unrelated_pair();
         let warnings = CapturedWarnings::default();
         let subscriber = tracing_subscriber::registry().with(warnings.clone());
 
@@ -654,11 +645,11 @@ mod connect_emits_no_type_advisory_tests {
                 .block_on(connect_impl(compiler, from, to))
         });
 
-        result.expect("connect must wire a type-divergent pair — a link is pure plumbing");
+        result.expect("connect must wire any two ports — a link is pure plumbing");
         let captured = warnings.captured_messages();
         assert!(
             captured.is_empty(),
-            "connect must emit no WARN for a type-divergent pair; captured: {captured:?}"
+            "connect must emit no WARN when wiring a link; captured: {captured:?}"
         );
     }
 }

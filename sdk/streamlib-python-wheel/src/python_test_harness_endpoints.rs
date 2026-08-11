@@ -179,7 +179,6 @@ impl ContinuousProcessor for TestBagFeeder::Processor {
     config = crate::python_test_harness_endpoints::TestHarnessChannelConfig,
     input(
         "bags_from_upstream",
-        any,
         delivery_profile = "every_sample",
         description = "Bags the processor under test produced"
     ),

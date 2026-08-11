@@ -12,9 +12,9 @@
 
 pub use streamlib_processor_schema::descriptors::{
     CodeExamples, ConfigDescriptor, ConfigField, PortDescriptor, ProcessorDescriptor,
-    ProcessorRuntime, port_schema_spec_wire,
+    ProcessorRuntime,
 };
 pub use streamlib_processor_schema::{
-    ModuleIdent, Org, Package, PortSchemaSpec, ProcessorScheduling, SchemaIdent, SemVer,
+    ModuleIdent, Org, Package, ProcessorScheduling, SchemaIdent, SemVer,
     SemVerRange, TypeName,
 };

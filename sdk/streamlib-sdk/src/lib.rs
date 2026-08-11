@@ -117,11 +117,6 @@ pub mod sdk {
         // related; physically live in `core::graph::edges::link_port_markers`
         // in engine source.
         pub use streamlib_engine::core::graph::{InputPortMarker, OutputPortMarker, input, output};
-
-        // Port schema spec — semantically processor-related; lives in
-        // `core::descriptors` in engine source (re-exported from
-        // `streamlib-processor-schema`).
-        pub use streamlib_engine::core::descriptors::PortSchemaSpec;
     }
 
     // ---- Runtime-control requests ----

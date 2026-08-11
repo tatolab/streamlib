@@ -18,7 +18,7 @@ use std::time::{Duration, Instant};
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
-    Org, Package, PortDescriptor, PortSchemaSpec, ProcessorDescriptor, SchemaIdent, SemVer,
+    Org, Package, PortDescriptor, ProcessorDescriptor, SchemaIdent, SemVer,
     TypeName,
 };
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
@@ -39,13 +39,11 @@ fn register_test_type(short: &str) -> SchemaIdent {
         .with_input(PortDescriptor::new(
             "bags_from_upstream",
             "",
-            PortSchemaSpec::Any,
             false,
         ))
         .with_output(PortDescriptor::new(
             "bags_to_downstream",
             "",
-            PortSchemaSpec::Any,
             false,
         ));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
