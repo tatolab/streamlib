@@ -1,47 +1,72 @@
-# StreamLib
+<div align="center">
 
-**One perception and control runtime that runs on the hardware itself** — an embedded board, a
-drone, a robot already running ROS, or the laptop you develop on. You write each stage of the loop
-as a Python class; a Rust engine runs it on the device, schedules it, and owns the GPU memory.
+<img src="docs/assets/streamlib-logo.svg" alt="StreamLib" width="520">
 
-`0.17.1` · alpha, APIs will change · Linux x86_64 wheel · BUSL-1.1, converting to Apache 2.0 on
-2029-01-01
+**One perception and control runtime that runs on the hardware itself** — an embedded board, a drone,<br>
+a robot already running ROS, or the laptop you develop on. Write each stage in Python; a Rust engine runs it on the device.
+
+[![release](https://img.shields.io/github/v/release/tatolab/streamlib?color=0ea5e9&label=release)](https://github.com/tatolab/streamlib/releases)
+[![license](https://img.shields.io/badge/license-BUSL--1.1-0ea5e9)](LICENSE)
+[![python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.13-0ea5e9)](#install)
+[![platform](https://img.shields.io/badge/platform-linux%20x86__64-64748b)](#what-ships-today)
+[![gpu](https://img.shields.io/badge/GPU-Vulkan-64748b)](#gpu-without-the-vendor-lock)
+[![tests](https://github.com/tatolab/streamlib/actions/workflows/test.yml/badge.svg)](https://github.com/tatolab/streamlib/actions/workflows/test.yml)
+
+[Install](#install) · [Quickstart](#quickstart) · [Inspect a live device](#inspect-a-device-thats-already-running) · [How it works](#how-it-works) · [What ships today](#what-ships-today) · [License](#license)
+
+</div>
+
+<!-- Demo GIF slot. Generate on the rig with `vhs docs/assets/demo.tape`, commit the
+     result, then replace this comment with:
+     <div align="center"><img src="docs/assets/demo.gif" alt="Inspecting a running node" width="900"></div> -->
+
+---
 
 - **Every stage is its own OS process** — a model that wedges takes down one stage, not the machine.
-- **Frames reach your model as device memory** — DLPack straight to torch, a DMA-BUF fd, or a
-  mapped numpy view. Pixels never round-trip the host bus to be looked at.
-- **One clock across every sensor** — the same monotonic epoch V4L2 and ALSA stamp their own
-  buffers with, so multi-sensor data lines up by subtraction.
-- **Capture what actually ran** — tap a live link for the real payloads it carried, without
-  blocking or perturbing the producer.
-- **Inspect a deployed device from your laptop** — every node serves HTTP, WebSocket, and MCP. No
-  redeploy, no debugger, no code change.
+- **Frames reach your model as device memory** — DLPack straight to torch, a DMA-BUF fd, or a mapped numpy view. Pixels never round-trip the host bus to be looked at.
+- **One clock across every sensor** — the same monotonic epoch V4L2 and ALSA stamp their own buffers with, so multi-sensor data lines up by subtraction.
+- **Capture what actually ran** — tap a live link for the real payloads it carried, without blocking or perturbing the producer.
+- **Inspect a deployed device from your laptop** — every node serves HTTP, WebSocket, and MCP. No redeploy, no debugger, no code change.
 - **Any sensor** — a source is a Python class you write; nothing in the engine is video-specific.
-- **No CUDA dependency** — all GPU work goes through Vulkan, so your compute supplier stays a
-  decision you can revisit.
+- **No CUDA dependency** — all GPU work goes through Vulkan, so your compute supplier stays a decision you can revisit.
 
-**Not yet:** fleet orchestration, device-to-device transport, over-the-air deployment, ROS
-integration, aarch64/Jetson wheels, or control-plane authentication. See
-[what ships today](#what-ships-today-and-what-does-not).
+> **Alpha.** APIs will change. There is no fleet orchestration, device-to-device transport, OTA
+> deployment, ROS integration, aarch64/Jetson wheel, or control-plane authentication —
+> see [what ships today](#what-ships-today).
+
+## Why StreamLib
+
+|  | Typical Python pipeline | StreamLib |
+|---|---|---|
+| **A stage hangs or leaks** | Shared interpreter — everything slows down, and the symptom names nobody | Its own OS process; the failure has an address |
+| **Frames into your model** | numpy on the host — a device→host copy and a host→device copy back | Device memory, handed over as DLPack / DMA-BUF |
+| **Timestamps across sensors** | Per-library epochs, correlated after the fact | One monotonic epoch, the driver's own |
+| **A device in the field** | SSH in and hope the logs caught it | `graph`, `tap`, `logs` against the running node, from anywhere |
+| **Adding a sensor** | Framework-specific plugin, built against framework headers | A Python class; native drivers wrap as ordinary pip packages |
+| **GPU vendor** | CUDA, in practice | Vulkan; CUDA only as a torch interop adapter |
 
 ## Install
 
 ```bash
 pip install streamlib --index-url https://tatolab.github.io/streamlib/simple/
+```
 
+A static PEP 503 index served from this repo's releases — PyPI publication is pending a project
+rename, and the artifact is identical either way. One wheel carries the Python API, the CLI, and
+the engine; nothing is generated, compiled, or downloaded at run time.
+
+## Quickstart
+
+```bash
 streamlib new my-rig        # camera → effect → window, wired and working
 cd my-rig
 streamlib dev               # your camera, live, in a window
 ```
 
 No camera on this machine? `streamlib new my-rig --test-pattern` uses the built-in test source.
-Nothing is generated, compiled, or downloaded at run time — one wheel carries the Python API, the
-CLI, and the engine. (A static PEP 503 index served from this repo's releases; PyPI publication is
-pending a project rename.)
 
-## The loop you write
-
-`streamlib new` writes exactly this. `app.py` is wiring and nothing else:
+`app.py` is wiring and nothing else — no manifest, no `main()`, no registration file. `dev` imports
+it from the working directory and calls `setup(rt)`:
 
 ```python
 from processors.inverting_effect import InvertingEffect
@@ -88,28 +113,76 @@ class InvertingEffect:
         ctx.outputs.write("video_to_downstream", bag)
 ```
 
-No manifest, no `main()`, no registration file. `dev` imports `app.py` from the working directory
-and calls `setup(rt)`; edit a stage and re-run `dev`. Each stage runs `reactive` (the default once
-it has an input), `manual`, or `continuous` at an interval you set.
+Edit a stage, re-run `dev`. Each stage runs `reactive` (the default once it has an input),
+`manual`, or `continuous` at an interval you set.
 
-## Stage isolation
+## Inspect a device that's already running
+
+Add `--url http://<host>:9000` to any of these and you're debugging the rig instead of your desk.
+
+```console
+$ streamlib nodes
+RUNTIME_ID                 CONTROL_URL            PID  ALIVE?  HINT
+Rq1w8xk3m2v0pz7ny4tbd6hsf  http://0.0.0.0:9000  48212  yes     streamlib (/home/you/my-rig)
+
+$ streamlib tap CameraSource/video --count 3
+{"channel": "CameraSource/video", "requested": 3, "window_ms": 500, "dropped_bags": 0,
+ "bags": [{"byte_len": 214, "hex_preview": "84aa73...", "hex_truncated": false}, ...]}
+```
+
+`graph` dumps stages, links, states and metrics as JSON; `logs` streams structured records
+filtered by stage and severity. `tap` returns what the link really carried, bounded and
+non-blocking — a quiet link gives a partial sample instead of hanging. That's the deployed build,
+unmodified, and it's also how an eval or training set comes off the machine that produced it
+rather than off an offline pipeline that has already drifted from it.
+
+<details>
+<summary><b>The same surface speaks MCP, so an agent can do this itself</b></summary>
+
+<br>
+
+```json
+{"mcpServers": {"streamlib": {"type": "http", "url": "http://rig-04:9000/mcp"}}}
+```
+
+Served at `POST /mcp`, mounted with the node and sharing its lifecycle — there is no bridge
+process to run. The tools are `graph`, `tap`, `logs`, and `shutdown`. Nothing on that surface
+mutates the graph: the pipeline is defined by the code on the device, so what you read off a
+machine always matches your source. The CLI is a pure client of exactly this surface.
+
+**It costs you** an unauthenticated port. A node binds all interfaces and does not authenticate
+callers — narrow it with `--host` on any network you don't control.
+
+</details>
+
+## How it works
+
+<details>
+<summary><b>Stage isolation</b> — why a wedged model can't take the machine down</summary>
+
+<br>
 
 Every processor runs in its own OS process with its own interpreter, on its own dedicated thread
 at a priority you declare. A model that deadlocks on a malformed frame, a C extension that
-segfaults, a vendor driver that leaks — each takes down one stage and becomes a named,
-restartable event instead of a whole-system slowdown with no address. The boundary is enforced by
-the kernel, not by convention. There is no in-process mode: not a default, not a fallback, not
-something that kicks in under load.
+segfaults, a vendor driver that leaks — each takes down one stage and becomes a named, restartable
+event instead of a whole-system slowdown with no address. The boundary is enforced by the kernel,
+not by convention. There is no in-process mode: not a default, not a fallback, not something that
+kicks in under load.
 
 **It costs you** a process boundary on every link crossing into Python, and one authoring rule: a
 stage's class lives in an importable module rather than in your entry file, because the child
 process imports it by name. `rt.add` rejects the mistake with a message naming the fix.
 
-## Any sensor, not just cameras
+</details>
+
+<details>
+<summary><b>Any sensor, not just cameras</b> — the extension model</summary>
+
+<br>
 
 Nothing in the engine is specific to video. A source is a stage that produces without consuming —
 running `continuous` at an interval, or `manual` when driven by a callback it owns. Lidar, radar,
-thermal, encoders, a CAN bus, a proprietary SDK with a Python binding: if you can read it, it is a
+thermal, encoders, a CAN bus, a proprietary SDK with a Python binding: if you can read it, it's a
 source you write, and it gets the same isolation, the same clock, and the same observability as
 everything that ships.
 
@@ -121,7 +194,12 @@ binary boundary. There is no plugin system, no ABI, no manifest, and no lockfile
 **It costs you** the built-ins you don't get. V4L2 capture, a display window, and a test pattern
 are what ship native; every other sensor is yours to wrap.
 
-## Your model gets device memory, not a copy
+</details>
+
+<details>
+<summary><b>Device memory, not a copy</b> — handing frames to torch</summary>
+
+<br>
 
 ```python
 with ctx.gpu_limited_access.resolve_surface(frame.surface_id) as surface:
@@ -144,50 +222,12 @@ linear memory only.
 No inference stack ships and none is planned. torch, ONNX Runtime, TensorRT — whatever you already
 use is an ordinary pip dependency in your venv, upgraded on your schedule.
 
-## Inspecting a device that is already running
+</details>
 
-Add `--url http://<host>:9000` to any of these and you are debugging the rig instead of your desk.
+<details>
+<summary><b>Back-pressure is decided at the consumer</b> — delivery profiles and payloads</summary>
 
-```console
-$ streamlib nodes
-RUNTIME_ID                 CONTROL_URL            PID  ALIVE?  HINT
-Rq1w8xk3m2v0pz7ny4tbd6hsf  http://0.0.0.0:9000  48212  yes     streamlib (/home/you/my-rig)
-```
-
-```bash
-streamlib graph                              # stages, links, states, metrics — as JSON
-streamlib tap CameraSource/video --count 5   # what's actually flowing, verbatim
-streamlib logs --follow --level warn         # structured, per-stage, per-severity
-```
-
-`tap` hands back what the link really carried, bounded and non-blocking — a quiet link returns a
-partial sample instead of hanging:
-
-```console
-$ streamlib tap CameraSource/video --count 3
-{"channel": "CameraSource/video", "requested": 3, "window_ms": 500, "dropped_bags": 0,
- "bags": [{"byte_len": 214, "hex_preview": "84aa73...", "hex_truncated": false}, ...]}
-```
-
-That is the deployed build, unmodified — it was already observable. This is also how an eval or
-training set comes off the machine that produced it, rather than off an offline pipeline that has
-already drifted from it.
-
-The same surface speaks MCP at `POST /mcp` on that port — mounted with the node, sharing its
-lifecycle, no bridge process — so an agent handed a device's URL can do all of this itself:
-
-```json
-{"mcpServers": {"streamlib": {"type": "http", "url": "http://rig-04:9000/mcp"}}}
-```
-
-The tools are `graph`, `tap`, `logs`, and `shutdown`. Nothing on that surface mutates the graph:
-the pipeline is defined by the code on the device, so what you read off a machine always matches
-your source. The CLI is a pure client of exactly this surface.
-
-**It costs you** an unauthenticated port. A node binds all interfaces and does not authenticate
-callers — narrow it with `--host` on any network you don't control.
-
-## Back-pressure is decided at the consumer
+<br>
 
 A controller that must never miss a command and a display that should always show the newest frame
 want opposite things from the same producer. Each input says which it is, and saying so is
@@ -208,7 +248,12 @@ dataclass or pydantic model raises on a payload that doesn't fit.
 **It costs you** compile-time safety. A mismatch surfaces as a decode failure at the consumer
 while running, not when you wire the graph.
 
-## GPU without the vendor lock
+</details>
+
+<details id="gpu-without-the-vendor-lock">
+<summary><b>GPU without the vendor lock</b> — and what that costs</summary>
+
+<br>
 
 Every GPU operation in the engine goes through Vulkan. CUDA appears only as an interop adapter —
 the thing that hands a tensor to torch. `libcuda`, the Vulkan loader, and the window system are
@@ -222,19 +267,28 @@ rather than validated.
 Rust authoring is first-class: a plain cargo project depending on the `streamlib` crate, released
 at the wheel's version. PyPI and cargo are the package systems.
 
-## Where this sits
+</details>
+
+<details>
+<summary><b>Where this sits next to ROS 2</b></summary>
+
+<br>
 
 StreamLib is not a ROS 2 replacement. ROS 2 is middleware and an ecosystem; StreamLib is the
 compute substrate *inside* a node that has a deadline and a GPU, running on the same box as the
 rest of your stack. There is no ROS integration of any kind today — no bridge, no message
-conversion. If you need one, it is a stage you would write.
+conversion. If you need one, it's a stage you would write.
 
-## What ships today, and what does not
+</details>
 
-Alpha. What exists is the on-device loop — sensors in, GPU work, your model, actuation or display
-out — plus remote observation of that device. `CameraSource` (V4L2), `DisplayWindow`, and
-`TestPatternSource` are native Rust stages compiled into the wheel, configured from Python, whose
-per-frame paths never enter an interpreter.
+## What ships today
+
+The on-device loop — sensors in, GPU work, your model, actuation or display out — plus remote
+observation of that device. `CameraSource` (V4L2), `DisplayWindow`, and `TestPatternSource` are
+native Rust stages compiled into the wheel, configured from Python, whose per-frame paths never
+enter an interpreter.
+
+These do not exist yet:
 
 | | |
 |---|---|
@@ -256,7 +310,7 @@ capture is undesigned; Windows is unbuilt.
 StreamLib is [BUSL-1.1](LICENSE), converting automatically to
 [Apache 2.0](LICENSES/Apache-2.0.txt) on **January 1, 2029**.
 
-The short version: **what you build is yours; reselling the runtime itself needs a license.**
+**What you build is yours; reselling the runtime itself needs a license.**
 
 Free, no permission needed: building stages, applications, robots, and products on StreamLib —
 commercial, private, or open source; selling stages you wrote with their source closed; personal,
@@ -269,6 +323,10 @@ and link infrastructure — as your product.
 [Commercial licensing](docs/license/COMMERCIAL-LICENSING.md) ·
 [Partner licensing](docs/license/PARTNER-LICENSING.md) · [CLA](docs/license/CLA.md)
 
-## Contact
+---
 
-Jonathan Fontanez — fontanezj1@gmail.com — <https://github.com/tatolab/streamlib>
+<div align="center">
+
+Jonathan Fontanez · <fontanezj1@gmail.com>
+
+</div>
