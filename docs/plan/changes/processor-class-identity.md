@@ -98,6 +98,18 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   The xtask check and its workflow. Its stated rationale is enforcing the
   `@org/package/Type@version` grammar (`check_no_reverse_dns.rs:5-9`); with that grammar
   deleted it has no rule left to enforce. This supersedes the ripout's "re-scope" line.
+- REMOVED: check-schema-versions
+  The xtask check and its workflow. Added 2026-08-11 during #1837, which deleted both:
+  the importable-python-library ripout's 2026-08-09 supersession kept this gate and
+  `check-no-streamlib-metadata` only until the manifest retired and named this change as
+  where they go, but recorded it as prose in an archived file, which the ship gate cannot
+  read. The gate enforced "versioning lives in `streamlib.yaml`, not in individual
+  schemas" — both halves are now deleted concepts.
+- REMOVED: check-no-streamlib-metadata
+  The xtask check and its workflow, deleted alongside `check-schema-versions` under the
+  same supersession. The ban it enforced survives as plan doctrine — a StreamLib app
+  declares nothing to streamlib in its language-native manifest (§Product, the
+  zero-ceremony bar) — but the remedy it named, `streamlib.yaml`, no longer exists.
 
 ## MODIFIED
 
