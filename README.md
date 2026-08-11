@@ -6,13 +6,14 @@
 a robot already running ROS, or the laptop you develop on. Write each stage in Python; a Rust engine runs it on the device.
 
 [![release](https://img.shields.io/github/v/release/tatolab/streamlib?color=0ea5e9&label=release)](https://github.com/tatolab/streamlib/releases)
+[![website](https://img.shields.io/badge/tatolab.com-0ea5e9?label=website)](https://tatolab.com)
 [![license](https://img.shields.io/badge/license-BUSL--1.1-0ea5e9)](LICENSE)
 [![python](https://img.shields.io/badge/python-3.10%20%E2%80%93%203.13-0ea5e9)](#install)
 [![platform](https://img.shields.io/badge/platform-linux%20x86__64-64748b)](#what-ships-today)
 [![gpu](https://img.shields.io/badge/GPU-Vulkan-64748b)](#gpu-without-the-vendor-lock)
 [![tests](https://github.com/tatolab/streamlib/actions/workflows/test.yml/badge.svg)](https://github.com/tatolab/streamlib/actions/workflows/test.yml)
 
-[Install](#install) · [Quickstart](#quickstart) · [Inspect a live device](#inspect-a-device-thats-already-running) · [How it works](#how-it-works) · [What ships today](#what-ships-today) · [License](#license)
+[Install](#install) · [Quickstart](#quickstart) · [Inspect a live device](#inspect-a-device-thats-already-running) · [How it works](#how-it-works) · [What ships today](#what-ships-today) · [License](#license) · [tatolab.com](https://tatolab.com)
 
 </div>
 
@@ -327,6 +328,8 @@ and link infrastructure — as your product.
 
 <div align="center">
 
-Jonathan Fontanez · <fontanezj1@gmail.com>
+Built by [Tatolab](https://tatolab.com) — sensory infrastructure for AI.
+
+[tatolab.com](https://tatolab.com) · [hello@tatolab.com](mailto:hello@tatolab.com) · [@tatolab](https://twitter.com/tatolab)
 
 </div>
