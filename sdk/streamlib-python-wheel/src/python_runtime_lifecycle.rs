@@ -273,19 +273,17 @@ impl PythonRuntimeHandle {
             None => serde_json::Value::Object(serde_json::Map::new()),
         };
 
-        // The same rule the graph applies when it names the node, so the handle
-        // and `streamlib graph` agree without a round trip to ask.
-        let display_name =
-            display_name.unwrap_or_else(|| type_reference.r#type().as_str().to_string());
-        let spec = ProcessorSpec::new(type_reference, configuration)
-            .with_display_name(display_name.clone());
+        // An absent `display_name` stays absent — the graph is the only place
+        // that defaults a name, and the only place that disambiguates one.
+        let mut spec = ProcessorSpec::new(type_reference, configuration);
+        spec.display_name = display_name;
 
-        let processor_id = python
-            .detach(|| engine.add_processor(spec))
+        let (processor_id, assigned_display_name) = python
+            .detach(|| engine.add_processor_reporting_assigned_display_name(spec))
             .map_err(|add_failure| PyRuntimeError::new_err(add_failure.to_string()))?;
         Ok(PythonAddedProcessor::new(
             processor_id.as_str().to_string(),
-            display_name,
+            assigned_display_name,
         ))
     }
 

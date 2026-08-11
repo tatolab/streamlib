@@ -1205,3 +1205,149 @@ mod edge_navigation {
         assert_eq!(downstream_processors[0].as_str(), downstream_id);
     }
 }
+
+// =============================================================================
+// 8. Display-Name Disambiguation Tests
+// =============================================================================
+
+mod display_name_disambiguation {
+    use super::*;
+
+    /// Read every node's display name in node-iteration order.
+    fn display_names_in_the_graph(graph: &Graph) -> Vec<String> {
+        graph
+            .traversal()
+            .v(())
+            .iter()
+            .map(|node| node.display_name.clone())
+            .collect()
+    }
+
+    /// The counter's spelling, locked: a space and the ordinal, starting at 2.
+    /// The same string reaches the handle, `streamlib graph` and the log
+    /// prefix, so it is a contract rather than a formatting preference.
+    #[test]
+    fn a_second_node_of_one_type_is_suffixed_and_the_first_keeps_the_bare_name() {
+        let mut graph = test_graph();
+
+        graph
+            .traversal_mut()
+            .add_v(MockProcessor::Processor::node(Default::default()));
+        graph
+            .traversal_mut()
+            .add_v(MockProcessor::Processor::node(Default::default()));
+
+        assert_eq!(
+            display_names_in_the_graph(&graph),
+            vec!["TestMockProcessor", "TestMockProcessor 2"]
+        );
+    }
+
+    #[test]
+    fn the_counter_keeps_climbing_past_the_second_duplicate() {
+        let mut graph = test_graph();
+
+        for _ in 0..4 {
+            graph
+                .traversal_mut()
+                .add_v(MockProcessor::Processor::node(Default::default()));
+        }
+
+        assert_eq!(
+            display_names_in_the_graph(&graph),
+            vec![
+                "TestMockProcessor",
+                "TestMockProcessor 2",
+                "TestMockProcessor 3",
+                "TestMockProcessor 4",
+            ]
+        );
+    }
+
+    /// Two author-supplied names that collide are as ambiguous as two defaults,
+    /// and get the same treatment.
+    #[test]
+    fn an_author_supplied_name_is_disambiguated_like_a_default() {
+        let mut graph = test_graph();
+
+        graph.traversal_mut().add_v(
+            MockProcessor::Processor::node(Default::default()).with_display_name("Front Camera"),
+        );
+        graph.traversal_mut().add_v(
+            MockProcessor::Processor::node(Default::default()).with_display_name("Front Camera"),
+        );
+
+        assert_eq!(
+            display_names_in_the_graph(&graph),
+            vec!["Front Camera", "Front Camera 2"]
+        );
+    }
+
+    /// Nodes of different types never collide, so neither is decorated.
+    #[test]
+    fn distinct_names_are_left_alone() {
+        let mut graph = test_graph();
+
+        graph
+            .traversal_mut()
+            .add_v(MockProcessor::Processor::node(Default::default()));
+        graph
+            .traversal_mut()
+            .add_v(MockOutputOnlyProcessor::Processor::node(Default::default()));
+
+        assert_eq!(
+            display_names_in_the_graph(&graph),
+            vec!["TestMockProcessor", "TestMockOutputOnlyProcessor"]
+        );
+    }
+
+    /// The suffix search skips a name an author already took, rather than
+    /// minting a second `X 2`.
+    #[test]
+    fn a_taken_suffix_is_skipped_rather_than_duplicated() {
+        let mut graph = test_graph();
+
+        graph.traversal_mut().add_v(
+            MockProcessor::Processor::node(Default::default())
+                .with_display_name("TestMockProcessor 2"),
+        );
+        graph
+            .traversal_mut()
+            .add_v(MockProcessor::Processor::node(Default::default()));
+        graph
+            .traversal_mut()
+            .add_v(MockProcessor::Processor::node(Default::default()));
+
+        assert_eq!(
+            display_names_in_the_graph(&graph),
+            vec![
+                "TestMockProcessor 2",
+                "TestMockProcessor",
+                "TestMockProcessor 3",
+            ]
+        );
+    }
+
+    /// Identity never derives from the display name: the disambiguating counter
+    /// reaches the label and nothing else on the node.
+    #[test]
+    fn the_counter_never_leaks_into_the_processor_type_or_id() {
+        let mut graph = test_graph();
+
+        graph
+            .traversal_mut()
+            .add_v(MockProcessor::Processor::node(Default::default()));
+        graph
+            .traversal_mut()
+            .add_v(MockProcessor::Processor::node(Default::default()));
+
+        for node in graph.traversal().v(()).iter() {
+            assert_eq!(node.processor_type.r#type.as_str(), "TestMockProcessor");
+            assert!(
+                !node.id.to_string().contains("TestMockProcessor"),
+                "the minted id must not carry the display name, got {}",
+                node.id
+            );
+        }
+    }
+}

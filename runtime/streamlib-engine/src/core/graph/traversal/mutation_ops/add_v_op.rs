@@ -1,8 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
+use petgraph::graph::DiGraph;
+
 use crate::core::graph::{
-    GraphNodeWithComponents, ProcessorNode, ProcessorTraversalMut, StateComponent,
+    GraphNodeWithComponents, Link, ProcessorNode, ProcessorTraversalMut, StateComponent,
     TraversalSourceMut,
 };
 use crate::core::processors::{
@@ -54,9 +56,11 @@ impl<'a> TraversalSourceMut<'a> {
         let (node_ident, (inputs, outputs)) =
             resolved.unwrap_or_else(|| (spec.name.to_diagnostic_ident(), (vec![], vec![])));
 
-        let display_name = spec
+        let requested_display_name = spec
             .display_name
             .unwrap_or_else(|| node_ident.r#type.as_str().to_string());
+        let display_name =
+            disambiguate_display_name_within_graph(self.graph, requested_display_name);
 
         let node = ProcessorNode::new(node_ident, display_name, Some(spec.config), inputs, outputs);
 
@@ -78,5 +82,35 @@ impl<'a> TraversalSourceMut<'a> {
             graph: self.graph,
             ids: vec![node_idx],
         }
+    }
+}
+
+/// Make `requested_display_name` unique among the graph's nodes by appending
+/// ` 2`, ` 3` … until nothing else answers to it.
+///
+/// The spelling is a contract, not a formatting choice: this one string is what
+/// the `add` handle reports, what `streamlib graph` renders, and what prefixes
+/// the processor's log records, so every language must show the same one.
+fn disambiguate_display_name_within_graph(
+    graph: &DiGraph<ProcessorNode, Link>,
+    requested_display_name: String,
+) -> String {
+    let is_taken = |candidate: &str| {
+        graph
+            .node_weights()
+            .any(|node| node.display_name == candidate)
+    };
+
+    if !is_taken(&requested_display_name) {
+        return requested_display_name;
+    }
+
+    let mut ordinal = 2usize;
+    loop {
+        let candidate = format!("{requested_display_name} {ordinal}");
+        if !is_taken(&candidate) {
+            return candidate;
+        }
+        ordinal += 1;
     }
 }
