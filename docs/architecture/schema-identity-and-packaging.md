@@ -13,10 +13,8 @@ anti-patterns the design rules out.
 > 2026-08-11: the package layer is deleted. `streamlib.yaml`, the resolver,
 > the lockfile, the package source and the archive readers no longer exist,
 > and nothing in the tree reads a manifest. The sections describing them are
-> struck below. What remains here — the grammar, the structured-everywhere
-> rule, and anti-patterns 1 and 2 — is live until `processor-class-identity`
-> replaces identity with the class's import path, which deletes this document
-> along with the crate.
+> struck below. What remains here is the grammar, the structured-everywhere
+> rule, and anti-patterns 1 and 2.
 
 ## Why this exists
 
@@ -37,8 +35,11 @@ three independent strands:
   lived only in `runtime/streamlib-engine/schemas/` with no publication
   story).
 
-The fix is one cohesive architecture covering identifier grammar,
-package manifest, dependency resolution, and distribution.
+The fix is one cohesive architecture covering identifier grammar.
+
+> ~~package manifest, dependency resolution, and distribution~~ —
+> Superseded 2026-08-11: all three are deleted. PyPI and cargo are the
+> package systems; nothing is resolved or downloaded at runtime.
 
 ## Architectural decisions
 
@@ -253,9 +254,7 @@ own the processor's Rust module):
 
   > ~~loading its package from `streamlib_modules/` on first reference~~,
   > ~~no `add_module`~~ — Superseded 2026-08-11: the module loader and
-  > `streamlib_modules/` are deleted. `ProcessorTypeReference` and this
-  > macro family retire with the identity grammar in
-  > `processor-class-identity`.
+  > `streamlib_modules/` are deleted.
 - **`streamlib::sdk::schema_ident_any_version!("org", "package", "Type")`**
   — the power-caller form. Resolves a `SchemaIdent` *now* against the
   already-registered processor types (highest registered `SemVer`,
@@ -270,9 +269,14 @@ own the processor's Rust module):
   expansion. Reach for it only when the call site has a deliberate
   reason to refuse newer-but-compatible versions.
 
-Cross-package references in graph JSON, IPC envelopes, generated
-code, and lockfiles still carry a fully-qualified
-`SchemaIdent { org, package, type, version }` structured record. The
+Cross-package references in graph JSON and IPC envelopes still carry a
+fully-qualified `SchemaIdent { org, package, type, version }` structured
+record.
+
+> ~~generated code, and lockfiles~~ — Superseded 2026-08-11: the lockfile
+> is deleted, and codegen went with the schema layer.
+
+The
 macro-emitted `schema_ident()` returns the structured record;
 consumers can read its fields, but serializing across a wire surface
 always emits the full structured shape.
