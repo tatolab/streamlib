@@ -302,7 +302,7 @@ pub struct PortKey {
 }
 
 // The `len` field is one wire byte, so the name capacity must stay addressable
-// by it: widening `MAX_PORT_KEY_SIZE` past 256 would silently wrap every length
+// by it: widening `MAX_PORT_KEY_SIZE` past 256 would silently wrap the lengths
 // this type narrows to `u8` rather than fail to compile.
 const _: () = assert!(PortKey::MAX_NAME_BYTES <= u8::MAX as usize);
 
@@ -314,13 +314,12 @@ impl PortKey {
     /// Bound a wire-derived name-length prefix to the capacity of the fixed
     /// `name` field it indexes.
     ///
-    /// The prefix is one untrusted byte reaching 255 while the field it indexes
-    /// holds [`PortKey::MAX_NAME_BYTES`], so saturating is the total answer: a
-    /// well-formed frame is unaffected — [`PortKey::new`] refuses a longer name
-    /// at write time — and a malformed one yields a bounded, wrong-but-safe name
-    /// that matches no mailbox instead of slicing past the field.
-    fn bound_wire_name_len_prefix_to_capacity(len_prefix: u8) -> usize {
-        (len_prefix as usize).min(Self::MAX_NAME_BYTES)
+    /// Saturating rather than failing: the prefix cannot legally exceed the
+    /// field — [`PortKey::new`] refuses a longer name at write time — so this is
+    /// lossless for every well-formed frame and owes the read path no failure
+    /// case. The narrowing is sound under the module's capacity assertion.
+    fn bound_wire_name_len_prefix_to_capacity(len_prefix: u8) -> u8 {
+        len_prefix.min(Self::MAX_NAME_BYTES as u8)
     }
 
     /// Construct a [`PortKey`], rejecting an over-length name.
@@ -396,14 +395,12 @@ impl FrameHeader {
         buf[t + 8..t + 12].copy_from_slice(&self.len.to_le_bytes());
     }
 
-    /// Read a header from the first [`FRAME_HEADER_SIZE`] bytes of `buf`.
-    ///
-    /// The name-length prefix comes off the wire and is bounded to the field it
-    /// indexes — see [`PortKey::bound_wire_name_len_prefix_to_capacity`].
+    /// Read a header from the first [`FRAME_HEADER_SIZE`] bytes of `buf`,
+    /// bounding the wire name-length prefix to [`PortKey::MAX_NAME_BYTES`].
     pub fn read_from_slice(buf: &[u8]) -> Self {
         debug_assert!(buf.len() >= FRAME_HEADER_SIZE);
         let mut port_key = PortKey {
-            len: PortKey::bound_wire_name_len_prefix_to_capacity(buf[0]) as u8,
+            len: PortKey::bound_wire_name_len_prefix_to_capacity(buf[0]),
             ..Default::default()
         };
         port_key.name.copy_from_slice(&buf[1..MAX_PORT_KEY_SIZE]);
@@ -421,16 +418,14 @@ impl FrameHeader {
 
     /// Read the port key string from a raw slice without parsing the full header.
     ///
-    /// Every length this indexes with comes off the wire, so each is bounded
-    /// against what it indexes: the prefix against the name field (see
-    /// [`PortKey::bound_wire_name_len_prefix_to_capacity`]) and the resulting
-    /// span against `buf` itself. A frame that fails either bound reads as the
-    /// empty port, which matches no mailbox.
+    /// Bounded on both wire-derived lengths — the prefix to
+    /// [`PortKey::MAX_NAME_BYTES`], the resulting span to `buf` — so a malformed
+    /// frame reads as the empty port instead of panicking.
     pub fn read_port_from_slice(buf: &[u8]) -> &str {
         let Some(&len_prefix) = buf.first() else {
             return "";
         };
-        let len = PortKey::bound_wire_name_len_prefix_to_capacity(len_prefix);
+        let len = usize::from(PortKey::bound_wire_name_len_prefix_to_capacity(len_prefix));
         buf.get(1..1 + len)
             .and_then(|name| std::str::from_utf8(name).ok())
             .unwrap_or("")

@@ -411,12 +411,8 @@ impl InputMailboxesInner {
                 None => return Ok(BoundedReadOutcome::Empty),
                 Some(r) => {
                     let header = FrameHeader::read_from_slice(&r);
-                    // The stamped length comes off the wire; the frame is the
-                    // capacity it indexes. Unlike the port key it has no safe
-                    // default — a frame claiming more than it carries is
-                    // unusable — so it fails typed rather than saturating.
                     let stamped_payload_bytes = header.len as usize;
-                    let available_payload_bytes = r.len().saturating_sub(FRAME_HEADER_SIZE);
+                    let available_payload_bytes = r.len() - FRAME_HEADER_SIZE;
                     if stamped_payload_bytes > available_payload_bytes {
                         return Err(Error::FrameHeaderPayloadLengthExceedsFrameBytes {
                             port: port.to_string(),
@@ -1038,14 +1034,26 @@ mod tests {
         const STAMPED: u32 = 4096;
         const CARRIED: usize = 8;
 
+        // The stamped and carried payload lengths are separate arguments
+        // because their divergence is the whole subject of this test.
+        fn frame_with_stamped_payload_length(
+            timestamp_ns: i64,
+            stamped_payload_bytes: u32,
+            carried_body: &[u8],
+        ) -> Vec<u8> {
+            let mut frame = vec![0u8; FRAME_HEADER_SIZE + carried_body.len()];
+            FrameHeader::new("in", timestamp_ns, stamped_payload_bytes)
+                .expect("port fits PortKey")
+                .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+            frame[FRAME_HEADER_SIZE..].copy_from_slice(carried_body);
+            frame
+        }
+
         let inner = InputMailboxesInner::new();
         inner.add_port("in", 64, ReadMode::ReadNextInOrder);
 
-        let mut frame = vec![0u8; FRAME_HEADER_SIZE + CARRIED];
-        FrameHeader::new("in", 42, STAMPED)
-            .expect("port fits PortKey")
-            .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
-        assert!(inner.route(frame), "frame must route to port 'in'");
+        let malformed = frame_with_stamped_payload_length(42, STAMPED, &[0u8; CARRIED]);
+        assert!(inner.route(malformed), "frame must route to port 'in'");
 
         let err = match inner.read_raw_bounded("in", usize::MAX) {
             Err(e) => e,
@@ -1075,13 +1083,9 @@ mod tests {
 
         // The malformed frame is dropped, not staged — the port keeps serving.
         let body = [1u8, 2, 3, 4];
-        let mut good = vec![0u8; FRAME_HEADER_SIZE + body.len()];
-        FrameHeader::new("in", 43, body.len() as u32)
-            .expect("port fits PortKey")
-            .write_to_slice(&mut good[..FRAME_HEADER_SIZE]);
-        good[FRAME_HEADER_SIZE..].copy_from_slice(&body);
+        let well_formed = frame_with_stamped_payload_length(43, body.len() as u32, &body);
         assert!(
-            inner.route(good),
+            inner.route(well_formed),
             "well-formed frame must route to port 'in'"
         );
 
