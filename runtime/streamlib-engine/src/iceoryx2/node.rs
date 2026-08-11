@@ -101,7 +101,7 @@ impl Iceoryx2Node {
     /// `max_queued_messages` caps how many `[u8]` samples any subscriber on this
     /// service can buffer — the ring depth of the channel's agreed
     /// [`DeliveryProfile`](crate::iceoryx2::DeliveryProfile), resolved via
-    /// [`crate::core::embedded_schemas::delivery_profile_for_input_port`].
+    /// [`crate::iceoryx2::delivery_profile_for_input_port`].
     ///
     /// `enable_safe_overflow` derives from that same profile's overflow policy.
     /// When `true` (the realtime default — `Overflow::DropOldest`), the subscriber
@@ -157,8 +157,8 @@ impl Iceoryx2Service {
     /// cap. The first loan larger than the primed slot grows the shared-memory
     /// segment (rounded to the next power of two) and subscribers remap
     /// transparently, so an oversized payload delivers instead of failing with
-    /// `ExceedsMaxLoanSize`. Derive the hint from the output port's schema via
-    /// [`crate::core::embedded_schemas::expected_payload_bytes_for_port_spec`].
+    /// `ExceedsMaxLoanSize`. Every channel primes at
+    /// [`DEFAULT_EXPECTED_PAYLOAD_BYTES`](crate::iceoryx2::DEFAULT_EXPECTED_PAYLOAD_BYTES).
     pub fn create_publisher(
         &self,
         expected_payload_bytes: usize,

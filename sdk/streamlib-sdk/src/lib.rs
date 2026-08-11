@@ -37,7 +37,7 @@
 //! expose what's needed AND extending the SDK isn't right. Reads as
 //! "I'm reaching past the curated boundary; I know what I'm doing."
 //!
-//! Engine-internal `core::*` modules (`compiler`, `embedded_schemas`,
+//! Engine-internal `core::*` modules (`compiler`,
 //! `runtime_hooks`, etc.) are `pub(crate)` in the engine, so
 //! `streamlib::engine_internal::core::<internal>` does not compile
 //! by construction — even Tier 3 cannot reach module paths the
@@ -66,7 +66,7 @@ pub mod sdk {
 
     // ---- Engine `core::*` sub-modules that are SDK-public ----
     //
-    // Engine internals (`compiler`, `config`, `embedded_schemas`,
+    // Engine internals (`compiler`, `config`,
     // `logging`, `observability`, `runtime_hooks`, `signals`,
     // `streamlib_home`) are `pub(crate)` in the engine crate (see
     // `core/mod.rs`) — those module paths are not reachable here OR
@@ -147,9 +147,6 @@ pub mod sdk {
 
     /// `crossbeam_channel` re-export — required by macro-emitted paths.
     pub use streamlib_engine::crossbeam_channel;
-
-    /// Schemas currently registered with the runtime.
-    pub use streamlib_engine::schemas;
 
     // ---- Procedural macros ----
 

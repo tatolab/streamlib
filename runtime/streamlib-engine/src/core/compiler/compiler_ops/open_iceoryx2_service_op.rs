@@ -18,9 +18,6 @@ use parking_lot::Mutex;
 
 use crate::core::ProcessorUniqueId;
 use crate::core::context::RuntimeContext;
-use crate::core::embedded_schemas::{
-    delivery_profile_for_input_port, expected_payload_bytes_for_port_spec, resolve_node_port_schema,
-};
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkState, LinkStateComponent,
@@ -28,8 +25,9 @@ use crate::core::graph::{
 };
 use crate::core::processors::ProcessorInstance;
 use crate::iceoryx2::{
-    ChannelEgressConfig, ChannelTrustTier, Iceoryx2NotifyService, Iceoryx2Service,
-    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, effective_channel_ceiling_bytes,
+    ChannelEgressConfig, ChannelTrustTier, DEFAULT_EXPECTED_PAYLOAD_BYTES, Iceoryx2NotifyService,
+    Iceoryx2Service, RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, delivery_profile_for_input_port,
+    effective_channel_ceiling_bytes,
 };
 
 /// Open an iceoryx2 channel for a `connect()` link in the graph.
@@ -97,18 +95,6 @@ pub fn open_iceoryx2_service(
         dest_is_subprocess,
     );
 
-    // Channel sizing. The channel carries one publisher (the source), so its
-    // slot size derives from the source output schema; its subscriber count is
-    // the compile-time destination fan-out plus the reserved tap slot. Ring
-    // depth, overflow policy, and consumer drain order all derive from the
-    // single delivery profile the channel's destinations agree on.
-    let output_schema = resolve_node_port_schema(
-        graph,
-        &source_proc_id,
-        &source_port,
-        crate::core::PortDirection::Output,
-    );
-    let expected_payload = expected_payload_bytes_for_port_spec(&output_schema)?;
     // A channel touching a subprocess on either end crosses a trust boundary and
     // gets the tighter untrusted-session ceiling; a host-to-host channel is
     // trusted. The ceiling is the graceful, observable layer in front of the
@@ -121,6 +107,9 @@ pub fn open_iceoryx2_service(
     // The tier default is the structural ceiling; an operator raises or lowers it
     // per deployment through the tier's node-level env override.
     let channel_ceiling_bytes = effective_channel_ceiling_bytes(trust_tier);
+    // Subscriber count is the compile-time destination fan-out plus the reserved
+    // tap slot. Ring depth, overflow policy, and consumer drain order all derive
+    // from the single delivery profile the channel's destinations agree on.
     let ChannelSizing {
         max_subscribers,
         max_queued_messages,
@@ -150,7 +139,7 @@ pub fn open_iceoryx2_service(
             &source_port,
             &channel_service_name,
             notify_service_name.as_deref().unwrap_or(""),
-            expected_payload,
+            DEFAULT_EXPECTED_PAYLOAD_BYTES,
             channel_ceiling_bytes,
             max_queued_messages,
             max_subscribers,
@@ -169,7 +158,7 @@ pub fn open_iceoryx2_service(
             ChannelEgressConfig {
                 service_name: channel_service_name.clone(),
                 trust_tier,
-                expected_payload_bytes: expected_payload,
+                expected_payload_bytes: DEFAULT_EXPECTED_PAYLOAD_BYTES,
                 ceiling_bytes: channel_ceiling_bytes,
             },
         )?;
@@ -1427,82 +1416,6 @@ mod tests {
         assert!(
             matches!(err, Error::Configuration(_)),
             "conflicting destination profile must surface as Error::Configuration; got {err:?}",
-        );
-    }
-
-    /// Wire-time integration lock: a registered output port carrying a
-    /// `PortSchemaSpec::Specific(ident)` whose canonical id is NOT in the runtime
-    /// schema registry (the "forgot to call `runtime.add_module(...)`" footgun)
-    /// surfaces a typed configuration error pointing at `add_module` rather than
-    /// silently deferring the failure to first publish.
-    #[test]
-    fn unregistered_specific_port_schema_surfaces_typed_error_at_wire_time() {
-        use crate::core::descriptors::{
-            CodeExamples, PortDescriptor, ProcessorDescriptor, ProcessorRuntime,
-            ProcessorScheduling,
-        };
-        use crate::core::embedded_schemas::expected_payload_bytes_for_port_spec;
-        use streamlib_idents::{Org, Package, SemVer, TypeName};
-        use streamlib_processor_schema::PortSchemaSpec;
-
-        let processor_ident = SchemaIdent::new(
-            Org::new("tatolab").unwrap(),
-            Package::new("test-wire-time-registry-miss").unwrap(),
-            TypeName::new("CarryingProcessor").unwrap(),
-            SemVer::new(1, 0, 0),
-        );
-        let unloaded_schema_ident = SchemaIdent::new(
-            Org::new("tatolab").unwrap(),
-            Package::new("test-wire-time-unloaded-schema-pkg").unwrap(),
-            TypeName::new("UnloadedWireType").unwrap(),
-            SemVer::new(1, 0, 0),
-        );
-        let unloaded_spec = PortSchemaSpec::Specific(unloaded_schema_ident.clone());
-
-        let descriptor = ProcessorDescriptor {
-            name: processor_ident.clone(),
-            description: "wire-time registry-miss regression mock".into(),
-            version: "1.0.0".into(),
-            repository: String::new(),
-            runtime: ProcessorRuntime::Rust,
-            entrypoint: None,
-            config_schema: None,
-            scheduling: ProcessorScheduling::default(),
-            inputs: Vec::new(),
-            outputs: vec![PortDescriptor::iceoryx2(
-                "out_unloaded",
-                "carries UnloadedWireType",
-                unloaded_spec,
-            )],
-            examples: CodeExamples::default(),
-        };
-        PROCESSOR_REGISTRY
-            .register_descriptor_only(descriptor)
-            .expect("register_descriptor_only must accept a fresh ident");
-
-        let (_, outputs) = PROCESSOR_REGISTRY
-            .port_info(&processor_ident)
-            .expect("port_info must return the descriptor's ports");
-        let output_spec = outputs
-            .iter()
-            .find(|p| p.name == "out_unloaded")
-            .map(|p| p.data_type.clone())
-            .expect("descriptor advertises `out_unloaded`");
-
-        let err = expected_payload_bytes_for_port_spec(&output_spec)
-            .expect_err("registry miss must surface as Err at wire time");
-        let msg = err.to_string();
-        assert!(
-            msg.contains("@tatolab/test-wire-time-unloaded-schema-pkg/UnloadedWireType"),
-            "error must name the missing canonical id; got: {msg}"
-        );
-        assert!(
-            msg.contains("add_module"),
-            "error must point at `runtime.add_module(...)` as the fix; got: {msg}"
-        );
-        assert!(
-            matches!(err, crate::core::error::Error::Configuration(_)),
-            "registry miss at wire time must surface as Error::Configuration; got: {err:?}"
         );
     }
 }
