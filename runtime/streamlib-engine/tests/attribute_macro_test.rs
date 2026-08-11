@@ -258,8 +258,7 @@ fn cfg_gated_processor_still_declares_its_port_fields_unconditionally() {
 #[test]
 fn test_processor_schema_ident_renders_canonical_joined_form() {
     // The structured SchemaIdent's Display impl produces the canonical
-    // `@<org>/<package>/<Type>@<major.minor.patch>` joined form used by
-    // `expected_payload_bytes_for_port_spec` and other lookup paths. The
+    // `@<org>/<package>/<Type>@<major.minor.patch>` joined form. The
     // version-free grammar renders the 0.0.0 sentinel.
     assert_eq!(
         TestProcessor::schema_ident().to_string(),

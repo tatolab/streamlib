@@ -44,8 +44,6 @@ fn always_open_routes() -> OpenApiRouter<AppState> {
         .routes(routes!(health))
         .routes(routes!(get_graph))
         .routes(routes!(get_registry))
-        .routes(routes!(list_schema_definitions))
-        .routes(routes!(get_schema_definition))
 }
 
 /// The REST routes the bearer middleware covers when auth is opted in.
@@ -259,38 +257,6 @@ pub(crate) async fn get_registry() -> Json<RegistryResponse> {
         processors,
         schemas,
     })
-}
-
-#[utoipa::path(
-    get,
-    path = "/api/schemas",
-    tag = "schemas",
-    responses(
-        (status = 200, description = "List of canonical schema identifiers currently registered with the runtime", body = Vec<String>)
-    )
-)]
-pub(crate) async fn list_schema_definitions() -> Json<Vec<String>> {
-    Json(streamlib::sdk::schemas::current_schema_idents())
-}
-
-#[utoipa::path(
-    get,
-    path = "/api/schemas/{name}",
-    tag = "schemas",
-    params(
-        ("name" = String, Path, description = "Schema name (e.g. @tatolab/core/VideoFrame)")
-    ),
-    responses(
-        (status = 200, description = "YAML schema definition", body = String),
-        (status = 404, description = "Schema not found")
-    )
-)]
-pub(crate) async fn get_schema_definition(
-    Path(name): Path<String>,
-) -> std::result::Result<String, axum::http::StatusCode> {
-    streamlib::sdk::schemas::current_schema_definition(&name)
-        .map(|def| def.to_string())
-        .ok_or(axum::http::StatusCode::NOT_FOUND)
 }
 
 pub(crate) async fn get_openapi_spec(

@@ -31,21 +31,6 @@ pub mod logging {
     pub use crate::core::logging::*;
 }
 
-/// Schemas currently registered with the runtime.
-pub mod schemas {
-    use std::sync::Arc;
-
-    /// Canonical identifiers of all currently-registered schemas, sorted.
-    pub fn current_schema_idents() -> Vec<String> {
-        crate::core::embedded_schemas::list_embedded_schema_names()
-    }
-
-    /// YAML body of a currently-registered schema.
-    pub fn current_schema_definition(name: &str) -> Option<Arc<str>> {
-        crate::core::embedded_schemas::get_embedded_schema_definition(name)
-    }
-}
-
 // Re-export attribute macros for processor syntax:
 // - #[streamlib::processor("@org/pkg/Type", …)] - identity + execution + ports in code
 // - #[derive(ConfigDescriptor)] - Config field metadata derive macro

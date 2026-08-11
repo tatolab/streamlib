@@ -9,7 +9,6 @@ use super::operations::{
 };
 use super::runtime::TokioRuntimeVariant;
 use crate::core::compiler::{Compiler, PendingOperation};
-use crate::core::embedded_schemas::resolve_node_port_schema;
 use crate::core::graph::{
     GraphEdgeWithComponents, GraphNodeWithComponents, LinkUniqueId, PendingDeletionComponent,
     ProcessorUniqueId, StateComponent,
@@ -18,7 +17,6 @@ use crate::core::processors::{ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, PortDirection, Result};
 use streamlib_idents::ChannelName;
-use streamlib_processor_schema::PortSchemaSpec;
 
 // =============================================================================
 // Core Implementation Functions ('static async fns for spawn compatibility)
@@ -136,25 +134,11 @@ async fn remove_processor_impl(
     Ok(())
 }
 
-/// Whether two resolved port schema hints are both concrete and name different
-/// `(org, package, type)` identity tuples — the only shape that draws the
-/// advisory connect warn. A wildcard (`Any`/unresolved) on either side never
-/// differs; versions never participate.
-fn port_schema_hints_differ(producer: &PortSchemaSpec, consumer: &PortSchemaSpec) -> bool {
-    match (producer.specific(), consumer.specific()) {
-        (Some(producer_ident), Some(consumer_ident)) => {
-            !producer_ident.matches_schema_tuple(consumer_ident)
-        }
-        _ => false,
-    }
-}
-
 /// Core implementation for connect - takes owned Arcs for 'static lifetime.
 ///
-/// Connect always wires: the engine mediates no schema agreement. Two
-/// concrete, tuple-distinct port schema hints get one advisory `warn` and the
-/// link is wired anyway — a type mismatch surfaces at the consuming
-/// processor's cast at read time.
+/// A link is pure plumbing. Connect inspects no type, compares no type, and
+/// never warns — a mismatch surfaces as a decode failure at the consuming
+/// processor's read.
 #[tracing::instrument(
     name = "runtime.connect",
     skip(compiler),
@@ -218,23 +202,6 @@ async fn connect_impl(
                 }
             }
 
-            // Advisory only — never a refusal, never a per-read check (plan:
-            // [data-plane-cast-not-contract]). Resolved here while `from`/`to`
-            // are still borrowable; warned only after `add_e` succeeds, so the
-            // advisory never describes a link that rolled back.
-            let producer_schema = resolve_node_port_schema(
-                graph,
-                &from.processor_id,
-                &from.port_name,
-                PortDirection::Output,
-            );
-            let consumer_schema = resolve_node_port_schema(
-                graph,
-                &to.processor_id,
-                &to.port_name,
-                PortDirection::Input,
-            );
-
             // The one channel this link's source output port publishes to — keyed
             // on the SOURCE only (`{src_processor}/{src_output}`), so every link
             // from this output port shares one channel / one publisher / N
@@ -258,19 +225,6 @@ async fn connect_impl(
                     Error::GraphError("failed to create link after validation".into())
                 })?;
 
-            if port_schema_hints_differ(&producer_schema, &consumer_schema) {
-                tracing::warn!(
-                    from_processor = %from_processor,
-                    from_port = %from_port,
-                    to_processor = %to_processor,
-                    to_port = %to_port,
-                    producer_schema = %producer_schema,
-                    consumer_schema = %consumer_schema,
-                    "connect: producer output schema hint does not match consumer \
-                     input schema hint — wiring the link anyway; a real type \
-                     mismatch surfaces as a cast error at the consumer's read."
-                );
-            }
             Ok((link_id, channel))
         })?;
 
@@ -555,15 +509,15 @@ mod channel_wire_bound_tests {
 }
 
 #[cfg(test)]
-mod connect_advisory_schema_hint_tests {
-    //! Connect-path revert lock for the cast-not-contract data plane
-    //! (`[data-plane-cast-not-contract]`): connect ALWAYS wires. Two concrete,
-    //! tuple-distinct schema hints draw exactly one advisory warn; a wildcard
-    //! on either side and a version-only difference stay silent. Restoring any
-    //! refusal path or a version-sensitive comparison in [`connect_impl`]
-    //! fails this module.
+mod connect_emits_no_type_advisory_tests {
+    //! Connect-path revert lock: a link is pure plumbing. Connect inspects no
+    //! type, compares no type, and never warns — not even advisorily. Two ports
+    //! declaring tuple-distinct types wire in silence; a mismatch is the
+    //! consumer's decode failure at read, and nothing at wiring time hints at
+    //! it. Restoring any resolution or comparison in [`connect_impl`] fails
+    //! this module.
 
-    use std::sync::{Arc, Mutex, Once};
+    use std::sync::{Arc, Mutex};
 
     use serde_json::Value;
     use tracing::field::{Field, Visit};
@@ -571,26 +525,15 @@ mod connect_advisory_schema_hint_tests {
     use tracing_subscriber::layer::{Context, SubscriberExt};
 
     use super::connect_impl;
-    use crate::core::Result;
     use crate::core::compiler::Compiler;
     use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
-    use crate::core::graph::{
-        InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId,
-    };
+    use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef, ProcessorUniqueId};
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
     use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
     use streamlib_processor_schema::PortSchemaSpec;
 
-    const PRODUCER_TYPE: &str = "SchemaMismatchProducer";
-    const CONSUMER_TYPE: &str = "SchemaMismatchConsumer";
-    const WILDCARD_PRODUCER_TYPE: &str = "WildcardSchemaProducer";
-    const WILDCARD_CONSUMER_TYPE: &str = "WildcardSchemaConsumer";
-    const SENTINEL_PRODUCER_TYPE: &str = "VersionSentinelProducer";
-    const VERSIONED_CONSUMER_TYPE: &str = "VersionedSchemaConsumer";
-
-    /// The stable fragment of the advisory warn's message the assertions
-    /// match on, so unrelated WARN events never count.
-    const ADVISORY_WARN_FRAGMENT: &str = "does not match consumer";
+    const PRODUCER_TYPE: &str = "TypeDivergentProducer";
+    const CONSUMER_TYPE: &str = "TypeDivergentConsumer";
 
     fn ident(package: &str, ty: &str) -> SchemaIdent {
         SchemaIdent::new(
@@ -605,123 +548,42 @@ mod connect_advisory_schema_hint_tests {
         PortSchemaSpec::Specific(ident("core", ty))
     }
 
-    fn schema_at(ty: &str, major: u32, minor: u32, patch: u32) -> PortSchemaSpec {
-        PortSchemaSpec::Specific(SchemaIdent::new(
-            Org::new("test").unwrap(),
-            Package::new("core").unwrap(),
-            TypeName::new(ty).unwrap(),
-            SemVer::new(major, minor, patch),
-        ))
+    /// Register a producer whose `out` declares `VideoFrame` against a consumer
+    /// whose `in` declares `AudioFrame` — the most divergent pairing the port
+    /// descriptors can still express.
+    fn register_divergent_types() {
+        let mut producer =
+            ProcessorDescriptor::new(ident("connectcheck", PRODUCER_TYPE), "divergent producer");
+        producer.outputs.push(PortDescriptor::iceoryx2(
+            "out",
+            "output",
+            schema("VideoFrame"),
+        ));
+        PROCESSOR_REGISTRY
+            .register_descriptor_only(producer)
+            .expect("register divergent producer descriptor");
+
+        let mut consumer =
+            ProcessorDescriptor::new(ident("connectcheck", CONSUMER_TYPE), "divergent consumer");
+        consumer.inputs.push(
+            PortDescriptor::iceoryx2("in", "input", schema("AudioFrame"))
+                .with_delivery_profile("latest"),
+        );
+        PROCESSOR_REGISTRY
+            .register_descriptor_only(consumer)
+            .expect("register divergent consumer descriptor");
     }
 
-    /// Register a producer type (`out` → VideoFrame), a consumer type
-    /// (`in` → AudioFrame), and wildcard types on both ends (`out`/`in` →
-    /// `Any`), so a producer→consumer link is a concrete tuple-distinct
-    /// pairing and either end of a pairing can be a wildcard. Idempotent
-    /// across tests in the process.
-    fn ensure_hint_types_registered() {
-        static REGISTER: Once = Once::new();
-        REGISTER.call_once(|| {
-            let mut producer =
-                ProcessorDescriptor::new(ident("connectcheck", PRODUCER_TYPE), "mismatch producer");
-            producer.outputs.push(PortDescriptor::iceoryx2(
-                "out",
-                "output",
-                schema("VideoFrame"),
-            ));
-            PROCESSOR_REGISTRY
-                .register_descriptor_only(producer)
-                .expect("register mismatch producer descriptor");
-
-            let mut consumer =
-                ProcessorDescriptor::new(ident("connectcheck", CONSUMER_TYPE), "mismatch consumer");
-            consumer.inputs.push(PortDescriptor::iceoryx2(
-                "in",
-                "input",
-                schema("AudioFrame"),
-            ));
-            PROCESSOR_REGISTRY
-                .register_descriptor_only(consumer)
-                .expect("register mismatch consumer descriptor");
-
-            let mut wildcard_producer = ProcessorDescriptor::new(
-                ident("connectcheck", WILDCARD_PRODUCER_TYPE),
-                "wildcard producer",
-            );
-            wildcard_producer.outputs.push(PortDescriptor::iceoryx2(
-                "out",
-                "output",
-                PortSchemaSpec::Any,
-            ));
-            PROCESSOR_REGISTRY
-                .register_descriptor_only(wildcard_producer)
-                .expect("register wildcard producer descriptor");
-
-            let mut wildcard_consumer = ProcessorDescriptor::new(
-                ident("connectcheck", WILDCARD_CONSUMER_TYPE),
-                "wildcard consumer",
-            );
-            wildcard_consumer.inputs.push(PortDescriptor::iceoryx2(
-                "in",
-                "input",
-                PortSchemaSpec::Any,
-            ));
-            PROCESSOR_REGISTRY
-                .register_descriptor_only(wildcard_consumer)
-                .expect("register wildcard consumer descriptor");
-        });
-    }
-
-    /// Register the cross-language-shaped pair: a producer whose `out` port
-    /// carries the `0.0.0` version-free sentinel a Rust cdylib synthesizes, and
-    /// a consumer whose `in` port carries the `1.0.0` a manifest-resolved
-    /// Python/Deno port inherits from its schema owner's package. Same schema
-    /// identity, different version — the asymmetry every wireable Rust→Python
-    /// link in the tree hits. Idempotent across tests in the process.
-    fn ensure_cross_language_types_registered() {
-        static REGISTER: Once = Once::new();
-        REGISTER.call_once(|| {
-            let mut producer = ProcessorDescriptor::new(
-                ident("connectcheck", SENTINEL_PRODUCER_TYPE),
-                "version-free sentinel producer",
-            );
-            producer.outputs.push(PortDescriptor::iceoryx2(
-                "out",
-                "output",
-                schema_at("VideoFrame", 0, 0, 0),
-            ));
-            PROCESSOR_REGISTRY
-                .register_descriptor_only(producer)
-                .expect("register sentinel producer descriptor");
-
-            let mut consumer = ProcessorDescriptor::new(
-                ident("connectcheck", VERSIONED_CONSUMER_TYPE),
-                "manifest-versioned consumer",
-            );
-            consumer.inputs.push(PortDescriptor::iceoryx2(
-                "in",
-                "input",
-                schema_at("VideoFrame", 1, 0, 0),
-            ));
-            PROCESSOR_REGISTRY
-                .register_descriptor_only(consumer)
-                .expect("register versioned consumer descriptor");
-        });
-    }
-
-    /// Fresh compiler holding one node of each named registered type, plus the
+    /// Fresh compiler holding one producer and one consumer node, plus the
     /// wiring refs for the producer's `out` and the consumer's `in`.
-    fn compiler_with_pair(
-        producer_type: &str,
-        consumer_type: &str,
-    ) -> (Arc<Compiler>, OutputLinkPortRef, InputLinkPortRef) {
+    fn compiler_with_divergent_pair() -> (Arc<Compiler>, OutputLinkPortRef, InputLinkPortRef) {
         let compiler = Arc::new(Compiler::new());
         let (from_id, to_id): (ProcessorUniqueId, ProcessorUniqueId) =
             compiler.scope(|graph, _tx| {
                 let from = graph
                     .traversal_mut()
                     .add_v(ProcessorSpec::new(
-                        ident("connectcheck", producer_type),
+                        ident("connectcheck", PRODUCER_TYPE),
                         Value::Null,
                     ))
                     .first()
@@ -731,7 +593,7 @@ mod connect_advisory_schema_hint_tests {
                 let to = graph
                     .traversal_mut()
                     .add_v(ProcessorSpec::new(
-                        ident("connectcheck", consumer_type),
+                        ident("connectcheck", CONSUMER_TYPE),
                         Value::Null,
                     ))
                     .first()
@@ -747,26 +609,12 @@ mod connect_advisory_schema_hint_tests {
         )
     }
 
-    fn block_on<F: std::future::Future>(fut: F) -> F::Output {
-        tokio::runtime::Builder::new_current_thread()
-            .build()
-            .expect("current-thread runtime")
-            .block_on(fut)
-    }
-
-    /// Collects the message of every `WARN`-level tracing event so a test can
-    /// assert the advisory connect warn fired (or stayed silent).
+    /// Collects the message of every `WARN`-level tracing event raised while
+    /// connect runs.
     #[derive(Clone, Default)]
     struct CapturedWarnings(Arc<Mutex<Vec<String>>>);
 
     impl CapturedWarnings {
-        fn advisory_warn_count(&self) -> usize {
-            self.captured_messages()
-                .iter()
-                .filter(|message| message.contains(ADVISORY_WARN_FRAGMENT))
-                .count()
-        }
-
         fn captured_messages(&self) -> Vec<String> {
             self.0.lock().unwrap().clone()
         }
@@ -792,85 +640,25 @@ mod connect_advisory_schema_hint_tests {
         }
     }
 
-    /// Drive [`connect_impl`] over the named pair with WARN capture attached.
-    fn connect_pair_capturing_warns(
-        producer_type: &str,
-        consumer_type: &str,
-    ) -> (Result<LinkUniqueId>, CapturedWarnings) {
-        let (compiler, from, to) = compiler_with_pair(producer_type, consumer_type);
+    #[test]
+    fn connect_wires_a_type_divergent_pair_in_silence() {
+        register_divergent_types();
+        let (compiler, from, to) = compiler_with_divergent_pair();
         let warnings = CapturedWarnings::default();
         let subscriber = tracing_subscriber::registry().with(warnings.clone());
+
         let result = tracing::subscriber::with_default(subscriber, || {
-            block_on(connect_impl(compiler, from, to))
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .expect("current-thread runtime")
+                .block_on(connect_impl(compiler, from, to))
         });
-        (result, warnings)
-    }
 
-    #[test]
-    fn connect_wires_a_tuple_distinct_pair_and_warns_exactly_once() {
-        ensure_hint_types_registered();
-        let (result, warnings) = connect_pair_capturing_warns(PRODUCER_TYPE, CONSUMER_TYPE);
-
-        result.expect("two concrete, tuple-distinct hints must wire the link, never fail");
-        assert_eq!(
-            warnings.advisory_warn_count(),
-            1,
-            "a concrete tuple-distinct pairing must emit exactly one advisory \
-             warn; captured WARN messages: {:?}",
-            warnings.captured_messages()
-        );
-    }
-
-    #[test]
-    fn connect_is_silent_when_the_consumer_hint_is_a_wildcard() {
-        ensure_hint_types_registered();
-        let (result, warnings) =
-            connect_pair_capturing_warns(PRODUCER_TYPE, WILDCARD_CONSUMER_TYPE);
-
-        result.expect("a wildcard pairing must wire the link");
-        assert_eq!(
-            warnings.advisory_warn_count(),
-            0,
-            "a wildcard consumer end never draws the advisory warn; captured \
-             WARN messages: {:?}",
-            warnings.captured_messages()
-        );
-    }
-
-    #[test]
-    fn connect_is_silent_when_the_producer_hint_is_a_wildcard() {
-        ensure_hint_types_registered();
-        let (result, warnings) =
-            connect_pair_capturing_warns(WILDCARD_PRODUCER_TYPE, CONSUMER_TYPE);
-
-        result.expect("a wildcard pairing must wire the link");
-        assert_eq!(
-            warnings.advisory_warn_count(),
-            0,
-            "a wildcard producer end never draws the advisory warn; captured \
-             WARN messages: {:?}",
-            warnings.captured_messages()
-        );
-    }
-
-    /// Revert lock (#1654): versions never participate. A Rust cdylib port
-    /// stamps the `0.0.0` version-free sentinel while its Python/Deno peer
-    /// carries the schema owner's package version — the same schema, so the
-    /// link wires silently.
-    #[test]
-    fn connect_is_silent_across_the_version_free_sentinel_asymmetry() {
-        ensure_cross_language_types_registered();
-        let (result, warnings) =
-            connect_pair_capturing_warns(SENTINEL_PRODUCER_TYPE, VERSIONED_CONSUMER_TYPE);
-
-        result.expect("the cross-language pair must wire");
-        assert_eq!(
-            warnings.advisory_warn_count(),
-            0,
-            "a `0.0.0` sentinel producer and a `1.0.0` consumer share a schema \
-             identity and must wire without a schema warn; captured WARN \
-             messages: {:?}",
-            warnings.captured_messages()
+        result.expect("connect must wire a type-divergent pair — a link is pure plumbing");
+        let captured = warnings.captured_messages();
+        assert!(
+            captured.is_empty(),
+            "connect must emit no WARN for a type-divergent pair; captured: {captured:?}"
         );
     }
 }

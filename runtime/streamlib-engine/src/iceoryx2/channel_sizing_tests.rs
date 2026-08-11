@@ -3,11 +3,11 @@
 
 //! Channel sizing under a fixed initial prime.
 //!
-//! Nothing resolves a per-port payload hint any more: every channel publisher is
-//! primed at [`DEFAULT_EXPECTED_PAYLOAD_BYTES`] and grows on the first oversized
-//! loan. These tests hold the line that the prime is a starting size and never a
-//! cap — an encoded-video channel that starts at 64 KiB must still carry a
-//! 256 KiB frame, header and payload bytes intact.
+//! Every channel publisher is primed at [`DEFAULT_EXPECTED_PAYLOAD_BYTES`] and
+//! grows on the first oversized loan; no per-port hint is resolved. These tests
+//! hold the line that the prime is a starting size and never a cap — an
+//! encoded-video channel must carry a frame several times its prime, header and
+//! payload bytes intact.
 
 use std::time::{Duration, Instant};
 
@@ -17,28 +17,31 @@ use crate::iceoryx2::{
 };
 use iceoryx2::prelude::*;
 
-/// Payload large enough to sit well above the 64 KiB prime, so a publisher that
-/// failed to grow would reject the loan outright.
-const OVERSIZED_PAYLOAD_BYTES: usize = 256 * 1024;
+/// Derived from the prime rather than written as a literal, so raising
+/// [`DEFAULT_EXPECTED_PAYLOAD_BYTES`] past it can never quietly turn the growth
+/// tests below into no-ops.
+const OVERSIZED_PAYLOAD_BYTES: usize = DEFAULT_EXPECTED_PAYLOAD_BYTES * 4;
 
-/// Poll a subscriber until it yields one sample or the deadline passes.
-fn receive_within(
+/// Poll a subscriber until it yields one sample or the deadline passes. A
+/// transport error is a failure in its own right, never a timeout.
+fn receive_one_sample_within(
     subscriber: &iceoryx2::port::subscriber::Subscriber<ipc::Service, [u8], ()>,
     timeout: Duration,
 ) -> Option<Vec<u8>> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
-        if let Ok(Some(sample)) = subscriber.receive() {
-            return Some(sample.payload().to_vec());
+        match subscriber.receive() {
+            Ok(Some(sample)) => return Some(sample.payload().to_vec()),
+            Ok(None) => std::thread::sleep(Duration::from_millis(5)),
+            Err(err) => panic!("subscriber.receive() failed: {err:?}"),
         }
-        std::thread::sleep(Duration::from_millis(5));
     }
     None
 }
 
 /// The counterfactual that gives the growth tests their teeth: without
-/// [`AllocationStrategy::PowerOfTwo`], a publisher primed at 64 KiB rejects a
-/// 256 KiB loan. `create_publisher` sets that strategy, which is the whole
+/// [`AllocationStrategy::PowerOfTwo`], a publisher primed at the default rejects
+/// an oversized loan. `create_publisher` sets that strategy, which is the whole
 /// reason a fixed prime is safe.
 #[test]
 fn loan_past_the_prime_fails_when_the_publisher_cannot_grow() {
@@ -55,27 +58,33 @@ fn loan_past_the_prime_fails_when_the_publisher_cannot_grow() {
         .unwrap();
 
     assert!(
-        publisher.loan_slice_uninit(OVERSIZED_PAYLOAD_BYTES).is_err(),
+        publisher
+            .loan_slice_uninit(OVERSIZED_PAYLOAD_BYTES)
+            .is_err(),
         "a publisher primed at the default with no growth strategy must reject an \
          oversized loan — if this passes, the growth tests below prove nothing"
     );
 }
 
-/// A channel publisher primed at the default grows to loan a payload four times
-/// its prime. Mentally dropping the `PowerOfTwo` allocation strategy from
-/// `create_publisher` trips the `expect`.
+/// A channel publisher primed at the default grows to loan an oversized payload.
+/// Mentally dropping the `PowerOfTwo` allocation strategy from `create_publisher`
+/// trips the `expect`.
 #[test]
 fn default_primed_publisher_grows_to_loan_an_oversized_payload() {
+    let max_subscribers = 2;
+    let enable_safe_overflow = true;
     let node = Iceoryx2Node::new().unwrap();
     let service = node
         .open_or_create_service(
             "streamlib/test/sizing-default-grows",
-            2,
+            max_subscribers,
             DEFAULT_MAX_QUEUED_MESSAGES,
-            true,
+            enable_safe_overflow,
         )
         .unwrap();
-    let publisher = service.create_publisher(DEFAULT_EXPECTED_PAYLOAD_BYTES).unwrap();
+    let publisher = service
+        .create_publisher(DEFAULT_EXPECTED_PAYLOAD_BYTES)
+        .unwrap();
 
     let sample = publisher.loan_slice_uninit(OVERSIZED_PAYLOAD_BYTES).expect(
         "a publisher primed at DEFAULT_EXPECTED_PAYLOAD_BYTES must grow to loan an \
@@ -92,16 +101,20 @@ fn default_primed_publisher_grows_to_loan_an_oversized_payload() {
 /// payload byte intact.
 #[test]
 fn default_primed_channel_round_trips_a_header_and_an_oversized_payload() {
+    let max_subscribers = 2;
+    let enable_safe_overflow = true;
     let node = Iceoryx2Node::new().unwrap();
     let service = node
         .open_or_create_service(
             "streamlib/test/sizing-default-roundtrip",
-            2,
+            max_subscribers,
             DEFAULT_MAX_QUEUED_MESSAGES,
-            true,
+            enable_safe_overflow,
         )
         .unwrap();
-    let publisher = service.create_publisher(DEFAULT_EXPECTED_PAYLOAD_BYTES).unwrap();
+    let publisher = service
+        .create_publisher(DEFAULT_EXPECTED_PAYLOAD_BYTES)
+        .unwrap();
     let subscriber = service.create_subscriber().unwrap();
 
     let payload: Vec<u8> = (0..OVERSIZED_PAYLOAD_BYTES)
@@ -121,7 +134,7 @@ fn default_primed_channel_round_trips_a_header_and_an_oversized_payload() {
     sample.write_from_slice(&frame).send().expect("send");
 
     let received =
-        receive_within(&subscriber, Duration::from_secs(2)).expect("frame within 2s");
+        receive_one_sample_within(&subscriber, Duration::from_secs(2)).expect("frame within 2s");
     assert_eq!(
         received.len(),
         total_len,

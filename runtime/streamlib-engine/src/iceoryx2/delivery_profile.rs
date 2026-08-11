@@ -11,13 +11,16 @@
 //! ([`Overflow`]), and the ring depth. Every input port declares one and
 //! nothing is inferred — an input port without a profile is a wiring error.
 
+use streamlib_idents::SchemaIdent;
 use streamlib_processor_schema::DELIVERY_PROFILE_DECLARATION_VALUES;
 
 use super::overflow::Overflow;
 use super::read_mode::ReadMode;
+use crate::core::error::{Error, Result};
+use crate::core::processors::PROCESSOR_REGISTRY;
 
 /// The legal `delivery_profile` values as a quoted, comma-joined list.
-pub(crate) fn render_delivery_profile_values() -> String {
+fn render_delivery_profile_values() -> String {
     DELIVERY_PROFILE_DECLARATION_VALUES
         .iter()
         .map(|value| format!("'{value}'"))
@@ -87,7 +90,7 @@ impl DeliveryProfile {
     /// Recognized values: `"latest"`, `"every_sample"`, `"lossless"`. Unknown
     /// values surface as a structured configuration error so a typo at the
     /// declaration site is rejected at wire time, not silently defaulted.
-    pub fn from_manifest_str(value: &str) -> Result<Self, String> {
+    pub fn from_manifest_str(value: &str) -> std::result::Result<Self, String> {
         match value {
             "latest" => Ok(Self::Latest),
             "every_sample" => Ok(Self::EverySample),
@@ -109,41 +112,41 @@ impl DeliveryProfile {
     }
 }
 
-/// The per-wire-type data class carried in a schema's `metadata.flow_class`.
+/// Resolve the [`DeliveryProfile`] a destination input port declares.
 ///
-/// Payload-classification vocabulary only: delivery is resolved from the
-/// consuming input port's own declaration, never from the wire type.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FlowClass {
-    /// Ordered samples where every one matters — audio, encoded frames.
-    SampleStream,
-    /// Latest-state snapshots where a stale sample has no value once a fresher
-    /// one exists — video frames, control state.
-    StateStream,
-}
+/// This is the single delivery-resolution primitive, and it reads exactly one
+/// thing: the port's own declaration. Nothing is inferred, so a registered
+/// input port carrying no declaration is a wiring error, not a silent
+/// substitution.
+///
+/// Falls back to [`DeliveryProfile::Latest`] when the destination processor
+/// type isn't registered or the named port doesn't exist (defensive; a Wired
+/// link always resolves both — the wiring path itself reports the missing
+/// processor).
+pub(crate) fn delivery_profile_for_input_port(
+    processor_type: &SchemaIdent,
+    port_name: &str,
+) -> Result<DeliveryProfile> {
+    let Some((inputs, _outputs)) = PROCESSOR_REGISTRY.port_info(processor_type) else {
+        return Ok(DeliveryProfile::Latest);
+    };
+    let Some(port) = inputs.iter().find(|p| p.name == port_name) else {
+        return Ok(DeliveryProfile::Latest);
+    };
 
-impl FlowClass {
-    /// Parse a schema-declared `metadata.flow_class` string.
-    ///
-    /// Recognized values: `"sample_stream"` and `"state_stream"`.
-    pub fn from_manifest_str(value: &str) -> Result<Self, String> {
-        match value {
-            "sample_stream" => Ok(Self::SampleStream),
-            "state_stream" => Ok(Self::StateStream),
-            other => Err(format!(
-                "unknown flow_class value '{other}', expected 'sample_stream' or 'state_stream'"
-            )),
-        }
-    }
-
-    /// The [`DeliveryProfile`] this flow class corresponds to. No delivery
-    /// path calls this — a port's profile comes from its own declaration.
-    pub fn default_profile(self) -> DeliveryProfile {
-        match self {
-            FlowClass::SampleStream => DeliveryProfile::EverySample,
-            FlowClass::StateStream => DeliveryProfile::Latest,
-        }
-    }
+    let Some(declared) = port.delivery_profile.as_deref() else {
+        return Err(Error::Configuration(format!(
+            "input port '{port_name}' on '{processor_type}' declares no delivery_profile. \
+             Every input port must declare one — {}. There is no default: channel policy \
+             is declared port-locally at the consuming input port",
+            render_delivery_profile_values()
+        )));
+    };
+    DeliveryProfile::from_manifest_str(declared).map_err(|err| {
+        Error::Configuration(format!(
+            "input port '{port_name}' on '{processor_type}' declared {err}"
+        ))
+    })
 }
 
 #[cfg(test)]
@@ -212,31 +215,118 @@ mod tests {
         }
     }
 
-    #[test]
-    fn flow_class_defaults_match_landmines() {
-        // Landmine #1: video_frame (skip_to_latest) is state_stream → latest.
-        assert_eq!(
-            FlowClass::StateStream.default_profile(),
-            DeliveryProfile::Latest
-        );
-        // sample_stream (audio, encoded frames) → every_sample.
-        assert_eq!(
-            FlowClass::SampleStream.default_profile(),
-            DeliveryProfile::EverySample
-        );
-    }
+    mod port_declaration_resolution {
+        //! `delivery_profile_for_input_port` reads the port's own declaration
+        //! and nothing else. There is no second source to fall back to.
 
-    #[test]
-    fn flow_class_parses_known_and_rejects_lossless() {
-        assert_eq!(
-            FlowClass::from_manifest_str("sample_stream").unwrap(),
-            FlowClass::SampleStream
-        );
-        assert_eq!(
-            FlowClass::from_manifest_str("state_stream").unwrap(),
-            FlowClass::StateStream
-        );
-        // Landmine #3: lossless never resolves from a flow class.
-        assert!(FlowClass::from_manifest_str("lossless").is_err());
+        use super::super::{DeliveryProfile, delivery_profile_for_input_port};
+        use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
+        use crate::core::error::Error;
+        use crate::core::processors::PROCESSOR_REGISTRY;
+        use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
+        use streamlib_processor_schema::PortSchemaSpec;
+
+        fn processor_ident(package: &str, type_name: &str) -> SchemaIdent {
+            SchemaIdent::new(
+                Org::new("tatolab").unwrap(),
+                Package::new(package).unwrap(),
+                TypeName::new(type_name).unwrap(),
+                SemVer::new(1, 0, 0),
+            )
+        }
+
+        /// Registers a processor carrying one input port, optionally declaring a
+        /// delivery profile, and returns the processor's identity.
+        fn register_processor_with_one_input_port(
+            package: &str,
+            type_name: &str,
+            port_name: &str,
+            declared_profile: Option<&str>,
+        ) -> SchemaIdent {
+            let ident = processor_ident(package, type_name);
+            let mut port = PortDescriptor::iceoryx2(port_name, "input", PortSchemaSpec::Any);
+            if let Some(profile) = declared_profile {
+                port = port.with_delivery_profile(profile);
+            }
+            let mut descriptor = ProcessorDescriptor::new(ident.clone(), type_name);
+            descriptor.inputs.push(port);
+            PROCESSOR_REGISTRY
+                .register_descriptor_only(descriptor)
+                .expect("descriptor registration");
+            ident
+        }
+
+        /// The default-fallback path: an unregistered processor type yields the
+        /// newest-wins realtime default. Mentally reverting this to a blocking
+        /// profile would silently re-introduce producer-blocking for the
+        /// defensively-handled cases.
+        #[test]
+        fn unregistered_processor_falls_back_to_latest() {
+            let unknown = processor_ident("does-not-exist-profile", "Nothing");
+            assert_eq!(
+                delivery_profile_for_input_port(&unknown, "video_in").unwrap(),
+                DeliveryProfile::Latest
+            );
+        }
+
+        #[test]
+        fn declared_profile_is_the_whole_answer() {
+            let ident = register_processor_with_one_input_port(
+                "test-profile-override",
+                "BlockSink",
+                "video_in",
+                Some("lossless"),
+            );
+            assert_eq!(
+                delivery_profile_for_input_port(&ident, "video_in").unwrap(),
+                DeliveryProfile::Lossless,
+            );
+        }
+
+        /// A registered input port carrying no declaration is a wiring error
+        /// naming the port. There is nothing left to infer a profile from, so
+        /// any resolution here other than an error is a regression.
+        #[test]
+        fn missing_declaration_is_a_wiring_error_naming_the_port() {
+            let ident = register_processor_with_one_input_port(
+                "test-profile-default",
+                "SampleSink",
+                "audio_in",
+                None,
+            );
+            let err = delivery_profile_for_input_port(&ident, "audio_in")
+                .expect_err("an undeclared delivery profile must be a wiring error");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("audio_in"),
+                "the error must name the port: {msg}"
+            );
+            assert!(msg.contains("declares no delivery_profile"), "got: {msg}");
+            assert!(matches!(err, Error::Configuration(_)));
+        }
+
+        /// A typo at the declaration site surfaces as a typed configuration
+        /// error listing the legal values, never a silent default.
+        #[test]
+        fn unknown_declared_value_is_rejected_with_the_legal_values() {
+            let ident = register_processor_with_one_input_port(
+                "test-profile-typo",
+                "TypoSink",
+                "video_in",
+                Some("skip_to_latest"), // retired knob, not a profile
+            );
+            let err = delivery_profile_for_input_port(&ident, "video_in")
+                .expect_err("unknown delivery_profile must error");
+            let msg = err.to_string();
+            assert!(
+                msg.contains("'latest'"),
+                "error must list the legal values, quoted as the renderer emits them: {msg}"
+            );
+            assert!(
+                msg.contains("'every_sample'"),
+                "error must list the legal values, quoted as the renderer emits them: {msg}"
+            );
+            assert!(matches!(err, Error::Configuration(_)));
+        }
     }
 }

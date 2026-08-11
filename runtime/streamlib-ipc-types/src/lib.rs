@@ -17,8 +17,7 @@
 
 use iceoryx2::prelude::*;
 
-/// Default hint used to prime a publisher's initial iceoryx2 slot capacity
-/// when a wire schema declares no `metadata.expected_payload_bytes`.
+/// The initial iceoryx2 slot capacity every channel publisher is primed at.
 ///
 /// This is a HINT, never a cap. Publishers open under
 /// [`iceoryx2::prelude::AllocationStrategy::PowerOfTwo`]; the first loan larger
@@ -229,14 +228,12 @@ pub fn next_read_required_len(queue: &[(Vec<u8>, i64)], read_next_in_order: bool
 }
 
 /// Default iceoryx2 ring depth (slot count, not bytes) for the data
-/// pub/sub channel between two processors. Wire schemas override this
-/// per-vocabulary via `metadata.max_queued_messages` in their YAML.
+/// pub/sub channel between two processors.
 ///
 /// iceoryx2 pre-allocates `DEFAULT_MAX_QUEUED_MESSAGES * (primed slot bytes)`
-/// of shared memory per publisher when the wire schema does not declare its
-/// own depth, so this value is a per-publisher memory commitment too. The slot
-/// bytes are primed from [`DEFAULT_EXPECTED_PAYLOAD_BYTES`] (or the schema's
-/// `metadata.expected_payload_bytes` hint) and grow on demand.
+/// of shared memory per publisher, so this value is a per-publisher memory
+/// commitment too. The slot bytes are primed from
+/// [`DEFAULT_EXPECTED_PAYLOAD_BYTES`] and grow on demand.
 pub const DEFAULT_MAX_QUEUED_MESSAGES: usize = 16;
 
 /// Publishers on a channel-centric iceoryx2 pub/sub data service.
