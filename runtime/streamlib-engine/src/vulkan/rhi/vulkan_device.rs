@@ -17,6 +17,9 @@ use crate::core::rhi::TextureDescriptor;
 use crate::core::{Error, Result};
 
 #[cfg(target_os = "linux")]
+use streamlib_consumer_rhi::vulkan_extension_names_borrowed_from_properties;
+
+#[cfg(target_os = "linux")]
 use super::drm_modifier_probe::{self, DrmModifierTable};
 use super::{HostMarker, HostVulkanTexture, VulkanCommandQueue, VulkanRhiDevice};
 
@@ -771,17 +774,23 @@ impl HostVulkanDevice {
             device_extensions.push(c"VK_KHR_portability_subset".as_ptr());
         }
 
-        // On Linux, enumerate device extensions once and enable what's available
+        // On Linux, enumerate device extensions once and enable what's available.
+        // The properties buffer is bound in this scope because every name below
+        // borrows from it.
         #[cfg(target_os = "linux")]
-        let available_device_ext_names: Vec<&CStr> = {
-            let available_device_extensions =
-                unsafe { instance.enumerate_device_extension_properties(physical_device, None) }
-                    .unwrap_or_default();
-            available_device_extensions
-                .iter()
-                .map(|ext| unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) })
-                .collect()
-        };
+        let available_device_extension_properties =
+            unsafe { instance.enumerate_device_extension_properties(physical_device, None) }
+                .inspect_err(|e| {
+                    tracing::warn!(
+                        error = %e,
+                        "vkEnumerateDeviceExtensionProperties failed; treating this device as \
+                         exposing no optional extensions"
+                    );
+                })
+                .unwrap_or_default();
+        #[cfg(target_os = "linux")]
+        let available_device_ext_names =
+            vulkan_extension_names_borrowed_from_properties(&available_device_extension_properties);
 
         // On Linux, check for DMA-BUF external memory extensions
         #[cfg(target_os = "linux")]

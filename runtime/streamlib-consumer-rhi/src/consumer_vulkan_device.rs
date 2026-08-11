@@ -183,16 +183,18 @@ impl ConsumerVulkanDevice {
         // Required device extensions. All four are mandatory on the
         // carve-out path — refusing to construct the device on a driver
         // that doesn't expose them is the right shape (see module docs).
-        let available_device_ext_names: Vec<&CStr> = unsafe {
+        // Bound here rather than left a temporary because every name below
+        // borrows from it.
+        let available_device_extension_properties = unsafe {
             instance
                 .enumerate_device_extension_properties(physical_device, None)
                 .map_err(|e| {
                     ConsumerRhiError::Gpu(format!("enumerate_device_extension_properties: {e}"))
                 })?
-        }
-        .iter()
-        .map(|ext| unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) })
-        .collect();
+        };
+        let available_device_ext_names = crate::vulkan_extension_names_borrowed_from_properties(
+            &available_device_extension_properties,
+        );
 
         const REQUIRED: &[&CStr] = &[
             c"VK_KHR_external_memory",
