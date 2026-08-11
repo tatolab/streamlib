@@ -411,8 +411,21 @@ impl InputMailboxesInner {
                 None => return Ok(BoundedReadOutcome::Empty),
                 Some(r) => {
                     let header = FrameHeader::read_from_slice(&r);
+                    // The stamped length comes off the wire; the frame is the
+                    // capacity it indexes. Unlike the port key it has no safe
+                    // default — a frame claiming more than it carries is
+                    // unusable — so it fails typed rather than saturating.
+                    let stamped_payload_bytes = header.len as usize;
+                    let available_payload_bytes = r.len().saturating_sub(FRAME_HEADER_SIZE);
+                    if stamped_payload_bytes > available_payload_bytes {
+                        return Err(Error::FrameHeaderPayloadLengthExceedsFrameBytes {
+                            port: port.to_string(),
+                            stamped_payload_bytes,
+                            available_payload_bytes,
+                        });
+                    }
                     let data =
-                        r[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + header.len as usize].to_vec();
+                        r[FRAME_HEADER_SIZE..FRAME_HEADER_SIZE + stamped_payload_bytes].to_vec();
                     (data, header.timestamp_ns)
                 }
             }
@@ -1010,6 +1023,72 @@ mod tests {
                 .expect("bounded read"),
             BoundedReadOutcome::Empty
         ));
+    }
+
+    /// The payload length is the last wire-derived number the read path trusts,
+    /// and a frame claiming more than it carries has no safe default — it is
+    /// unusable, so it must surface as a typed error naming the port and both
+    /// numbers rather than slicing past the frame.
+    ///
+    /// Fail-without-fix: drop the bound and `read_raw_bounded` slices
+    /// `[76..76 + 4096]` out of an 84-byte frame — "range end index 4172 out of
+    /// range for slice of length 84".
+    #[test]
+    fn read_raw_bounded_rejects_a_frame_stamping_more_payload_than_it_carries() {
+        const STAMPED: u32 = 4096;
+        const CARRIED: usize = 8;
+
+        let inner = InputMailboxesInner::new();
+        inner.add_port("in", 64, ReadMode::ReadNextInOrder);
+
+        let mut frame = vec![0u8; FRAME_HEADER_SIZE + CARRIED];
+        FrameHeader::new("in", 42, STAMPED)
+            .expect("port fits PortKey")
+            .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+        assert!(inner.route(frame), "frame must route to port 'in'");
+
+        let err = match inner.read_raw_bounded("in", usize::MAX) {
+            Err(e) => e,
+            Ok(_) => panic!("a frame stamping more than it carries must not read"),
+        };
+        assert!(
+            matches!(
+                &err,
+                Error::FrameHeaderPayloadLengthExceedsFrameBytes {
+                    port,
+                    stamped_payload_bytes,
+                    available_payload_bytes,
+                } if port == "in"
+                    && *stamped_payload_bytes == STAMPED as usize
+                    && *available_payload_bytes == CARRIED
+            ),
+            "expected the typed length error naming the port and both numbers, got {err:?}"
+        );
+        // Diagnosable without a debugger: the rendered message carries all three.
+        let rendered = err.to_string();
+        for expected in ["'in'", "4096", "8"] {
+            assert!(
+                rendered.contains(expected),
+                "message must name {expected}: {rendered}"
+            );
+        }
+
+        // The malformed frame is dropped, not staged — the port keeps serving.
+        let body = [1u8, 2, 3, 4];
+        let mut good = vec![0u8; FRAME_HEADER_SIZE + body.len()];
+        FrameHeader::new("in", 43, body.len() as u32)
+            .expect("port fits PortKey")
+            .write_to_slice(&mut good[..FRAME_HEADER_SIZE]);
+        good[FRAME_HEADER_SIZE..].copy_from_slice(&body);
+        assert!(inner.route(good), "well-formed frame must route to port 'in'");
+
+        match inner.read_raw_bounded("in", usize::MAX).expect("bounded read") {
+            BoundedReadOutcome::Frame { data, timestamp_ns } => {
+                assert_eq!(data, body, "a well-formed frame still delivers intact");
+                assert_eq!(timestamp_ns, 43);
+            }
+            _ => panic!("expected the well-formed frame to deliver"),
+        }
     }
 
     /// Clone bumps the strong count via the host-installed

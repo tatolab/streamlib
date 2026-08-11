@@ -136,6 +136,17 @@ pub enum Error {
         tier: ChannelTrustTierLabel,
     },
 
+    #[error(
+        "frame on input port '{port}' stamps a payload length of \
+         {stamped_payload_bytes} bytes but carries only {available_payload_bytes} \
+         after its header — the frame is malformed and was dropped"
+    )]
+    FrameHeaderPayloadLengthExceedsFrameBytes {
+        port: String,
+        stamped_payload_bytes: usize,
+        available_payload_bytes: usize,
+    },
+
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
