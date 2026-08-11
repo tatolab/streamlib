@@ -683,6 +683,7 @@ impl Drop for InputMailboxes {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::iceoryx2::PortKey;
 
     fn unique_suffix(tag: &str) -> String {
         format!(
@@ -1099,6 +1100,31 @@ mod tests {
             }
             _ => panic!("expected the well-formed frame to deliver"),
         }
+    }
+
+    /// A malformed length prefix must not deliver a frame to a real mailbox.
+    ///
+    /// The saturating bound is only safe because a clamped name fails to match
+    /// a port — which stops being true at exactly one width: a port named with
+    /// the full 63 bytes is what the clamp produces, so an over-capacity prefix
+    /// on a frame for that port reads back as the port's own name.
+    #[test]
+    fn route_refuses_a_frame_whose_port_key_prefix_is_over_capacity() {
+        let longest_port = "z".repeat(PortKey::MAX_NAME_BYTES);
+
+        let inner = InputMailboxesInner::new();
+        inner.add_port(&longest_port, 64, ReadMode::ReadNextInOrder);
+
+        let mut frame = vec![0u8; FRAME_HEADER_SIZE + 4];
+        FrameHeader::new(&longest_port, 42, 4)
+            .expect("a max-width port fits PortKey")
+            .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
+        frame[0] = 0xFF;
+
+        assert!(
+            !inner.route(frame),
+            "a frame with an over-capacity prefix must not reach a real mailbox"
+        );
     }
 
     /// Clone bumps the strong count via the host-installed

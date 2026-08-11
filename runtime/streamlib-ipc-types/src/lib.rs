@@ -311,15 +311,17 @@ impl PortKey {
     /// (the fixed `name` field is [`MAX_PORT_KEY_SIZE`] `- 1` bytes).
     pub const MAX_NAME_BYTES: usize = MAX_PORT_KEY_SIZE - 1;
 
-    /// Bound a wire-derived name-length prefix to the capacity of the fixed
-    /// `name` field it indexes.
+    /// The wire name-length prefix, or `None` when it exceeds the capacity of
+    /// the fixed `name` field it indexes.
     ///
-    /// Saturating rather than failing: the prefix cannot legally exceed the
-    /// field — [`PortKey::new`] refuses a longer name at write time — so this is
-    /// lossless for every well-formed frame and owes the read path no failure
-    /// case. The narrowing is sound under the module's capacity assertion.
-    fn bound_wire_name_len_prefix_to_capacity(len_prefix: u8) -> u8 {
-        len_prefix.min(Self::MAX_NAME_BYTES as u8)
+    /// Rejecting rather than saturating. A clamp is safe to *slice* but not safe
+    /// to *route*: it reconstructs exactly [`PortKey::MAX_NAME_BYTES`] bytes of
+    /// name, which is the name of a port declared at the full width — so a
+    /// corrupt frame aimed at one would land in its mailbox rather than miss.
+    /// A prefix past capacity cannot have come from [`PortKey::new`], so the
+    /// frame is malformed and its port is not recoverable.
+    fn wire_name_len_prefix_within_capacity(len_prefix: u8) -> Option<u8> {
+        (usize::from(len_prefix) <= Self::MAX_NAME_BYTES).then_some(len_prefix)
     }
 
     /// Construct a [`PortKey`], rejecting an over-length name.
@@ -395,12 +397,14 @@ impl FrameHeader {
         buf[t + 8..t + 12].copy_from_slice(&self.len.to_le_bytes());
     }
 
-    /// Read a header from the first [`FRAME_HEADER_SIZE`] bytes of `buf`,
-    /// bounding the wire name-length prefix to [`PortKey::MAX_NAME_BYTES`].
+    /// Read a header from the first [`FRAME_HEADER_SIZE`] bytes of `buf`.
+    ///
+    /// A name-length prefix past [`PortKey::MAX_NAME_BYTES`] reads as the empty
+    /// port, which matches no mailbox.
     pub fn read_from_slice(buf: &[u8]) -> Self {
         debug_assert!(buf.len() >= FRAME_HEADER_SIZE);
         let mut port_key = PortKey {
-            len: PortKey::bound_wire_name_len_prefix_to_capacity(buf[0]),
+            len: PortKey::wire_name_len_prefix_within_capacity(buf[0]).unwrap_or(0),
             ..Default::default()
         };
         port_key.name.copy_from_slice(&buf[1..MAX_PORT_KEY_SIZE]);
@@ -418,15 +422,18 @@ impl FrameHeader {
 
     /// Read the port key string from a raw slice without parsing the full header.
     ///
-    /// Bounded on both wire-derived lengths — the prefix to
-    /// [`PortKey::MAX_NAME_BYTES`], the resulting span to `buf` — so a malformed
-    /// frame reads as the empty port instead of panicking.
+    /// Checked on both wire-derived lengths — the prefix against
+    /// [`PortKey::MAX_NAME_BYTES`], the resulting span against `buf` — so a
+    /// malformed frame reads as the empty port, which matches no mailbox,
+    /// instead of panicking or naming a port it was not stamped for.
     pub fn read_port_from_slice(buf: &[u8]) -> &str {
         let Some(&len_prefix) = buf.first() else {
             return "";
         };
-        let len = usize::from(PortKey::bound_wire_name_len_prefix_to_capacity(len_prefix));
-        buf.get(1..1 + len)
+        let Some(len) = PortKey::wire_name_len_prefix_within_capacity(len_prefix) else {
+            return "";
+        };
+        buf.get(1..1 + usize::from(len))
             .and_then(|name| std::str::from_utf8(name).ok())
             .unwrap_or("")
     }
@@ -674,7 +681,7 @@ mod tests {
     }
 
     #[test]
-    fn read_from_slice_bounds_an_over_capacity_port_key_len_prefix() {
+    fn read_from_slice_rejects_an_over_capacity_port_key_len_prefix() {
         // The length prefix is one untrusted byte indexing a 63-byte field, so
         // it reaches 255 while the field cannot. Unclamped it lands in
         // `PortKey::len` and `as_str` slices past the field: "range end index
@@ -683,15 +690,11 @@ mod tests {
         frame[0] = 0xFF;
 
         let header = FrameHeader::read_from_slice(&frame);
-        let port = header.port();
-        assert!(
-            port.len() <= PortKey::MAX_NAME_BYTES,
-            "a wire prefix of 255 must not name more bytes than the field holds, got {}",
-            port.len()
-        );
-        assert_ne!(
-            port, "cam",
-            "a malformed prefix must not read as well-formed"
+        assert_eq!(
+            header.port(),
+            "",
+            "an over-capacity prefix names no port at all — clamping it to the \
+             field width would reconstruct the name of a max-width port"
         );
 
         // Same path, well-formed prefix: routing is untouched.
@@ -700,7 +703,7 @@ mod tests {
     }
 
     #[test]
-    fn read_port_from_slice_bounds_an_over_capacity_len_prefix() {
+    fn read_port_from_slice_rejects_an_over_capacity_len_prefix() {
         // Same prefix, the peek path: on a header-sized frame the unclamped
         // slice runs off the buffer itself — "range end index 256 out of range
         // for slice of length 76".
@@ -708,11 +711,10 @@ mod tests {
         assert_eq!(frame.len(), FRAME_HEADER_SIZE);
         frame[0] = 0xFF;
 
-        let port = FrameHeader::read_port_from_slice(&frame);
-        assert!(
-            port.len() <= PortKey::MAX_NAME_BYTES,
-            "the peek path must bound the prefix too, got {} bytes",
-            port.len()
+        assert_eq!(
+            FrameHeader::read_port_from_slice(&frame),
+            "",
+            "the peek path must reject the prefix too"
         );
 
         let well_formed = frame_with_payload_filler("cam", 0, 0);
@@ -740,11 +742,7 @@ mod tests {
             !port.as_bytes().contains(&FILLER),
             "the port name must never be read out of the payload, got {port:?}"
         );
-        assert!(port.len() <= PortKey::MAX_NAME_BYTES);
-        assert_ne!(
-            port, "cam",
-            "a malformed prefix must not read as well-formed"
-        );
+        assert_eq!(port, "", "an over-capacity prefix names no port at all");
 
         let well_formed = frame_with_payload_filler("cam", 100, FILLER);
         assert_eq!(FrameHeader::read_port_from_slice(&well_formed), "cam");
