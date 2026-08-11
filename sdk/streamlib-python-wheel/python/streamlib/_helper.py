@@ -400,29 +400,7 @@ def wire_link_data_access(
             output_link["notify_max_notifiers"],
             output_link["enable_safe_overflow"],
             output_link["link_id"],
-            schema_ident_segments(output_link.get("schema")),
         )
-
-
-def schema_ident_segments(
-    schema: "Optional[dict[str, Any]]",
-) -> "Optional[tuple[str, str, str, int, int, int]]":
-    """Flatten a wire schema ident into the six segments the binding takes.
-
-    `None` is the wildcard port — the engine sends it for a port that
-    declared no schema, and the channel carries no routing tag.
-    """
-    if not isinstance(schema, dict):
-        return None
-    version = schema.get("version") or {}
-    return (
-        schema.get("org") or "",
-        schema.get("package") or "",
-        schema.get("type") or "",
-        int(version.get("major") or 0),
-        int(version.get("minor") or 0),
-        int(version.get("patch") or 0),
-    )
 
 
 # =============================================================================

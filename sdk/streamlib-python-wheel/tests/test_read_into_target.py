@@ -229,6 +229,95 @@ def test_a_pydantic_model_target_raises_at_the_read_on_a_bad_field(
         wired_link.destination.read_from_input_port(INPUT_PORT, into=DetectionModel)
 
 
+# =============================================================================
+# Cast, not contract
+#
+# These pin the contract forward, not the deletion that established it: the
+# frame header's schema tag was inert on the read path before it was removed
+# (it fed a warn-once tracing line and never blocked delivery), so every test
+# below passes against the tagged wire too. What goes red if the tag comes
+# back is the byte-offset assertion in `streamlib-ipc-types` —
+# `frame_header_fields_sit_at_their_documented_wire_offsets`. That is the
+# revert lock; this section is the behaviour it buys.
+# =============================================================================
+
+
+class UnrelatedAudioChunk(TypedDict):
+    """The type the producer publishes — nothing like what the consumer reads
+    into, and nothing anywhere gets to notice."""
+
+    samples: list[int]
+    sample_rate_hz: int
+
+
+def test_a_producer_publishing_one_type_reaches_a_consumer_reading_another(
+    wired_link: WiredLinkUnderTest,
+):
+    """The engine has no type layer, so a producer publishing type X into a
+    consumer that reads type Y is not an error anywhere in the engine: the bag
+    is delivered, and the disagreement is the consumer's to discover.
+
+    Mentally restore the wire schema tag and the per-read comparison this
+    ticket deleted and the frame would carry a type the read path could reject
+    or warn on. Nothing here would fail — which is the point, and why the two
+    assertions that follow (raise-at-read, plain-read-succeeds) are what
+    actually carry the contract.
+    """
+    audio_chunk: UnrelatedAudioChunk = {"samples": [1, 2, 3], "sample_rate_hz": 48_000}
+    wired_link.deliver(dict(audio_chunk))
+
+    assert wired_link.destination.read_from_input_port(INPUT_PORT) == audio_chunk
+
+
+def test_the_mismatch_surfaces_only_at_a_read_that_asked_for_strictness(
+    wired_link: WiredLinkUnderTest,
+):
+    """The same delivered bag two ways: named a target, the read raises; named
+    nothing, the read hands back the mapping. Delivery is identical either way
+    — the only difference is what the consumer asked for."""
+    audio_chunk = {"samples": [1, 2, 3], "sample_rate_hz": 48_000}
+
+    wired_link.deliver(audio_chunk)
+    with pytest.raises(TypeError):
+        wired_link.destination.read_from_input_port(INPUT_PORT, into=DetectionDataclass)
+
+    wired_link.deliver(audio_chunk)
+    assert wired_link.destination.read_from_input_port(INPUT_PORT) == audio_chunk
+
+
+def test_a_read_that_raises_consumes_its_bag(wired_link: WiredLinkUnderTest):
+    """Where the frame goes when the cast fails: the read pops it before it
+    constructs, so a raise is not a peek an author can retry — the bag is
+    spent. Pinned because the alternative (leaving it queued) would silently
+    re-raise on every later read of that port."""
+    wired_link.deliver({"samples": [1, 2, 3], "sample_rate_hz": 48_000})
+
+    with pytest.raises(TypeError):
+        wired_link.destination.read_from_input_port(INPUT_PORT, into=DetectionDataclass)
+
+    assert wired_link.destination.read_from_input_port(INPUT_PORT) is None
+
+
+def test_the_link_keeps_delivering_after_a_read_raises(wired_link: WiredLinkUnderTest):
+    """A failed strict read is a consumer-side exception, not a link fault:
+    both ends stay healthy and the very next bag crosses normally.
+
+    This is what "a mismatch surfaces as a decode failure at the consuming
+    processor" has to mean in practice — the processor sees an exception it can
+    handle, and its neighbours never learn anything happened.
+    """
+    wired_link.deliver({"samples": [1, 2, 3], "sample_rate_hz": 48_000})
+    with pytest.raises(TypeError):
+        wired_link.destination.read_from_input_port(INPUT_PORT, into=DetectionDataclass)
+
+    for expected_score in (0.1, 0.2, 0.3):
+        wired_link.deliver({"label": "cat", "score": expected_score})
+        detection = wired_link.destination.read_from_input_port(
+            INPUT_PORT, into=DetectionDataclass
+        )
+        assert detection == DetectionDataclass(label="cat", score=expected_score)
+
+
 def test_the_named_target_is_what_a_type_checker_sees(wired_link: WiredLinkUnderTest):
     """Half of what `into=` buys is static: the annotation on a port method is
     read by humans and type checkers only, so a read that names a target has

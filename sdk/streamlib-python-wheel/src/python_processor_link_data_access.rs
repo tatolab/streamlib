@@ -22,7 +22,7 @@ use pyo3::prelude::*;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, Iceoryx2Node, InputMailboxesInner, OutputWriterInner,
-    ReadMode, SchemaIdentWire,
+    ReadMode,
 };
 
 use crate::python_bag_conversion::{
@@ -109,7 +109,6 @@ impl PythonProcessorLinkDataAccess {
         notify_max_notifiers,
         enable_safe_overflow,
         link_id,
-        schema = None,
     ))]
     #[allow(clippy::too_many_arguments)]
     fn wire_output_link(
@@ -125,21 +124,8 @@ impl PythonProcessorLinkDataAccess {
         notify_max_notifiers: usize,
         enable_safe_overflow: bool,
         link_id: &str,
-        schema: Option<(String, String, String, u32, u32, u32)>,
     ) -> PyResult<()> {
         let (node, output_writer) = self.helper_process_output_plane()?;
-        let schema_ident = match schema {
-            Some((org, package, type_name, major, minor, patch)) => {
-                SchemaIdentWire::from_segments(&org, &package, &type_name, major, minor, patch)
-                    .map_err(|schema_failure| {
-                        PyValueError::new_err(format!(
-                            "output port {port_name:?} declared a schema the wire cannot carry: \
-                     {schema_failure:?}"
-                        ))
-                    })?
-            }
-            None => SchemaIdentWire::default(),
-        };
 
         python
             .detach(|| -> Result<(), Error> {
@@ -153,7 +139,6 @@ impl PythonProcessorLinkDataAccess {
                     let publisher = channel.create_publisher(expected_payload_bytes)?;
                     output_writer.set_channel_publisher(
                         port_name,
-                        schema_ident,
                         publisher,
                         ChannelEgressConfig {
                             service_name: channel_service_name.to_string(),
@@ -457,7 +442,6 @@ mod tests {
                     1,
                     true,
                     "link-1",
-                    None,
                 )
                 .unwrap();
 
@@ -506,7 +490,6 @@ mod tests {
                     1,
                     true,
                     "link-1",
-                    None,
                 )
                 .unwrap();
             source
@@ -522,7 +505,6 @@ mod tests {
                     1,
                     true,
                     "link-2",
-                    None,
                 )
                 .expect("a second link out of one port must not reopen the publisher");
         });
@@ -550,7 +532,6 @@ mod tests {
                     1,
                     true,
                     "link-1",
-                    None,
                 )
                 .unwrap_err();
             assert!(

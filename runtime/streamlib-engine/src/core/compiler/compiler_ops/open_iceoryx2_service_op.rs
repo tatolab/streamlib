@@ -16,61 +16,21 @@ use std::sync::Arc;
 
 use parking_lot::Mutex;
 
-use crate::core::PortSchemaSpec;
 use crate::core::ProcessorUniqueId;
 use crate::core::context::RuntimeContext;
 use crate::core::embedded_schemas::{
-    delivery_profile_for_input_port, expected_payload_bytes_for_port_spec, port_schema_spec,
+    delivery_profile_for_input_port, expected_payload_bytes_for_port_spec, resolve_node_port_schema,
 };
 use crate::core::error::{Error, Result};
 use crate::core::graph::{
     Graph, GraphEdgeWithComponents, GraphNodeWithComponents, LinkState, LinkStateComponent,
     LinkUniqueId, ProcessorInstanceComponent, SubprocessHandleComponent,
 };
-use crate::core::json_schema::SchemaIdentOutput;
 use crate::core::processors::ProcessorInstance;
 use crate::iceoryx2::{
     ChannelEgressConfig, ChannelTrustTier, Iceoryx2NotifyService, Iceoryx2Service,
-    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, SchemaIdentWire, effective_channel_ceiling_bytes,
+    RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, effective_channel_ceiling_bytes,
 };
-
-/// Render a port's structured schema spec as the JSON value embedded in the
-/// subprocess wiring envelope: a structured `SchemaIdentOutput` object for
-/// `Specific(...)`, or `Value::Null` for `Any` (the wildcard MoQ-style port).
-/// Subprocess-side parsers branch on `null` to detect wildcard ports.
-fn schema_ident_json(spec: &PortSchemaSpec) -> serde_json::Value {
-    SchemaIdentOutput::from_port_spec(spec)
-        .map(|s| serde_json::to_value(s).expect("SchemaIdentOutput must serialize cleanly"))
-        .unwrap_or(serde_json::Value::Null)
-}
-
-/// Resolve a port's structured schema spec into the iceoryx2 wire-routing
-/// tag. `Any` ports yield the default zero-segment wire bytes (unset routing
-/// tag — preserves the existing wildcard semantics). `Specific(...)` ports
-/// build the wire bytes directly from the validated structured fields.
-fn schema_ident_wire_for_spec(spec: &PortSchemaSpec) -> SchemaIdentWire {
-    match spec {
-        PortSchemaSpec::Any => SchemaIdentWire::default(),
-        PortSchemaSpec::Specific(ident) => SchemaIdentWire::from_segments(
-            ident.org.as_str(),
-            ident.package.as_str(),
-            ident.r#type.as_str(),
-            ident.version.major,
-            ident.version.minor,
-            ident.version.patch,
-        )
-        .expect("validated SchemaIdent fits in SchemaIdentWire bounds"),
-        // `Named` should never reach this site — runtime startup +
-        // proc-macro expansion both resolve bare-name port refs to
-        // `Specific(SchemaIdent)` against the enclosing manifest's
-        // `schemas:` map (#767). A `Named` here is a runtime bug.
-        PortSchemaSpec::Named(name) => panic!(
-            "PortSchemaSpec::Named(`{}`) reached iceoryx2 service open — \
-             must be resolved before this site",
-            name.as_str()
-        ),
-    }
-}
 
 /// Open an iceoryx2 channel for a `connect()` link in the graph.
 ///
@@ -137,17 +97,16 @@ pub fn open_iceoryx2_service(
         dest_is_subprocess,
     );
 
-    // Resolve schemas + channel sizing. The channel carries one publisher (the
-    // source), so its slot size derives from the source output schema; its
-    // subscriber count is the compile-time destination fan-out plus the reserved
-    // tap slot. Ring depth, overflow policy, and consumer drain order all derive
-    // from the single delivery profile the channel's destinations agree on.
-    let output_schema = resolve_output_schema(graph, &source_proc_id, &source_port);
-    let dest_schema = resolve_port_schema(
+    // Channel sizing. The channel carries one publisher (the source), so its
+    // slot size derives from the source output schema; its subscriber count is
+    // the compile-time destination fan-out plus the reserved tap slot. Ring
+    // depth, overflow policy, and consumer drain order all derive from the
+    // single delivery profile the channel's destinations agree on.
+    let output_schema = resolve_node_port_schema(
         graph,
-        &dest_proc_id,
-        &dest_port,
-        crate::core::PortDirection::Input,
+        &source_proc_id,
+        &source_port,
+        crate::core::PortDirection::Output,
     );
     let expected_payload = expected_payload_bytes_for_port_spec(&output_schema)?;
     // A channel touching a subprocess on either end crosses a trust boundary and
@@ -191,7 +150,6 @@ pub fn open_iceoryx2_service(
             &source_port,
             &channel_service_name,
             notify_service_name.as_deref().unwrap_or(""),
-            &output_schema,
             expected_payload,
             channel_ceiling_bytes,
             max_queued_messages,
@@ -206,7 +164,6 @@ pub fn open_iceoryx2_service(
             &source_processor,
             &source_port,
             link_id,
-            &output_schema,
             &service,
             notify_service.as_ref(),
             ChannelEgressConfig {
@@ -240,7 +197,6 @@ pub fn open_iceoryx2_service(
             &dest_processor,
             &dest_port,
             link_id,
-            &dest_schema,
             drain_order,
             max_queued_messages,
             &service,
@@ -616,40 +572,6 @@ fn is_subprocess_processor(graph: &mut Graph, proc_id: &ProcessorUniqueId) -> bo
     false
 }
 
-/// Resolve the wire schema declared on a source processor's output port.
-fn resolve_output_schema(
-    graph: &mut Graph,
-    source_proc_id: &ProcessorUniqueId,
-    source_port: &str,
-) -> PortSchemaSpec {
-    resolve_port_schema(
-        graph,
-        source_proc_id,
-        source_port,
-        crate::core::PortDirection::Output,
-    )
-}
-
-/// Resolve the [`PortSchemaSpec`] on one port of a graph node, in either
-/// direction. Returns [`PortSchemaSpec::Any`] when the node is absent.
-fn resolve_port_schema(
-    graph: &mut Graph,
-    proc_id: &ProcessorUniqueId,
-    port: &str,
-    direction: crate::core::PortDirection,
-) -> PortSchemaSpec {
-    let proc_type = graph
-        .traversal_mut()
-        .v(proc_id)
-        .first()
-        .map(|node| node.processor_type().clone());
-
-    match proc_type {
-        Some(ident) => port_schema_spec(&ident, port, direction),
-        None => PortSchemaSpec::Any,
-    }
-}
-
 fn get_single_processor(
     graph: &mut Graph,
     proc_id: &ProcessorUniqueId,
@@ -674,7 +596,6 @@ fn wire_rust_source(
     source_processor: &Arc<Mutex<ProcessorInstance>>,
     source_port: &str,
     link_id: &LinkUniqueId,
-    output_schema: &PortSchemaSpec,
     service: &Iceoryx2Service,
     notify_service: Option<&Iceoryx2NotifyService>,
     egress_config: ChannelEgressConfig,
@@ -686,12 +607,7 @@ fn wire_rust_source(
 
     if !output_inner.has_channel_publisher(source_port) {
         let publisher = service.create_publisher(egress_config.expected_payload_bytes)?;
-        output_inner.set_channel_publisher(
-            source_port,
-            schema_ident_wire_for_spec(output_schema),
-            publisher,
-            egress_config,
-        );
+        output_inner.set_channel_publisher(source_port, publisher, egress_config);
         tracing::debug!(
             "Installed channel publisher for source output port '{}'",
             source_port
@@ -714,7 +630,6 @@ fn wire_rust_dest(
     dest_processor: &Arc<Mutex<ProcessorInstance>>,
     dest_port: &str,
     link_id: &LinkUniqueId,
-    dest_schema: &PortSchemaSpec,
     drain_order: crate::iceoryx2::ReadMode,
     depth: usize,
     service: &Iceoryx2Service,
@@ -728,7 +643,6 @@ fn wire_rust_dest(
     if !input_inner.has_port(dest_port) {
         input_inner.add_port(dest_port, depth, drain_order);
     }
-    input_inner.set_port_expected_schema_ident(dest_port, schema_ident_wire_for_spec(dest_schema));
 
     let subscriber = service.create_subscriber()?;
     input_inner.add_channel_subscriber(dest_port, link_id.as_str(), subscriber);
@@ -762,7 +676,6 @@ fn wire_subprocess_source(
     source_port: &str,
     channel_service_name: &str,
     notify_service_name: &str,
-    output_schema: &PortSchemaSpec,
     expected_payload: usize,
     channel_ceiling_bytes: usize,
     max_queued_messages: usize,
@@ -777,7 +690,6 @@ fn wire_subprocess_source(
         "enable_safe_overflow": enable_safe_overflow,
         "channel_service_name": channel_service_name,
         "dest_notify_service_name": notify_service_name,
-        "schema": schema_ident_json(output_schema),
         "expected_payload_bytes": expected_payload,
         "max_payload_bytes_per_channel": channel_ceiling_bytes,
         "max_queued_messages": max_queued_messages,
@@ -979,7 +891,6 @@ mod tests {
             "out1",
             "pabc/out1",
             "pdef/notify",
-            &PortSchemaSpec::Any,
             4096,
             1 << 20,
             8,
@@ -1191,7 +1102,6 @@ mod tests {
             &source,
             "out1",
             &link_id,
-            &PortSchemaSpec::Any,
             &channel,
             notify_service.as_ref(),
             ChannelEgressConfig {
@@ -1206,7 +1116,6 @@ mod tests {
             &dest,
             "in1",
             &link_id,
-            &PortSchemaSpec::Any,
             crate::iceoryx2::ReadMode::SkipToLatest,
             8,
             &channel,

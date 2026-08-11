@@ -19,7 +19,7 @@
 use std::time::{Duration, Instant};
 
 use super::{expected_payload_bytes_for_port_spec, test_support};
-use crate::iceoryx2::{FRAME_HEADER_SIZE, FrameHeader, Iceoryx2Node, SchemaIdentWire};
+use crate::iceoryx2::{FRAME_HEADER_SIZE, FrameHeader, Iceoryx2Node};
 use iceoryx2::prelude::*;
 use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
 use streamlib_processor_schema::PortSchemaSpec;
@@ -257,13 +257,11 @@ fn test_large_frame_schema_publisher_accepts_256kb() {
     );
 }
 
-/// Full publish/subscribe round-trip using the subprocess FFI wire format:
-/// `[FrameHeader (204 bytes)][encoded video data (256 KB)]` — the exact layout
-/// `sldn_output_write` / `slpn_output_write` build and `sldn_input_poll` /
-/// `slpn_input_poll` parse when a Deno or Python subprocess carries an
-/// encodedvideoframe. Before the per-input `expected_payload_bytes` wiring fix,
-/// the TS/Python read buffer was hard-coded to 32 KB and this payload would
-/// have been silently truncated on receipt.
+/// Full publish/subscribe round-trip at the wire format a helper process
+/// speaks: `[FrameHeader (76 bytes)][encoded video data (256 KB)]`. Before the
+/// per-input `expected_payload_bytes` wiring fix, the helper's read buffer was
+/// hard-coded to 32 KB and this payload would have been silently truncated on
+/// receipt.
 #[test]
 fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
     test_support::register_test_wire_vocabulary();
@@ -290,9 +288,7 @@ fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
 
     let total_len = FRAME_HEADER_SIZE + data_size;
     let mut frame = vec![0u8; total_len];
-    let schema_ident = SchemaIdentWire::from_segments("test", "wire", "LargeFrame", 1, 0, 0)
-        .expect("LargeFrame segments fit SchemaIdentWire bounds");
-    FrameHeader::new("dest_port", schema_ident, 42, data_size as u32)
+    FrameHeader::new("dest_port", 42, data_size as u32)
         .expect("dest_port fits PortKey bounds")
         .write_to_slice(&mut frame[..FRAME_HEADER_SIZE]);
     frame[FRAME_HEADER_SIZE..].copy_from_slice(&data);
@@ -323,9 +319,6 @@ fn test_frame_header_plus_256kb_roundtrip_through_slice_service() {
 
     let header = FrameHeader::read_from_slice(&buf);
     assert_eq!(header.port(), "dest_port");
-    let expected_ident =
-        SchemaIdentWire::from_segments("test", "wire", "LargeFrame", 1, 0, 0).unwrap();
-    assert_eq!(header.schema(), &expected_ident);
     assert_eq!(header.timestamp_ns, 42);
     assert_eq!(header.len as usize, data_size);
     assert_eq!(

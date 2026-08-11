@@ -1053,7 +1053,7 @@ mod tests {
             ChannelEgressConfig, ChannelTrustTier, InputMailboxesInner, OutputWriterInner, ReadMode,
             TRUSTED_CHANNEL_PAYLOAD_CEILING_BYTES,
         };
-        use streamlib_ipc_types::{RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL, SchemaIdentWire};
+        use streamlib_ipc_types::RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
 
         let node = Iceoryx2Node::new().expect("create iceoryx2 node");
         let data_name = unique_service_name("cycle/data");
@@ -1062,8 +1062,6 @@ mod tests {
         // fan-in = 1 (one inbound link), fan-out = 1 (+ reserved tap slot).
         let max_notifiers = 1usize;
         let max_subscribers = 1 + RESERVED_TAP_SUBSCRIBER_SLOTS_PER_CHANNEL;
-        let schema =
-            SchemaIdentWire::from_segments("tatolab", "core", "VideoFrame", 1, 0, 0).unwrap();
 
         let out_inner = Arc::new(OutputWriterInner::new());
         let in_inner = Arc::new(InputMailboxesInner::new());
@@ -1082,7 +1080,6 @@ mod tests {
                 let publisher = data.create_publisher(64).expect("source publisher");
                 out_inner.set_channel_publisher(
                     "out",
-                    schema,
                     publisher,
                     ChannelEgressConfig {
                         service_name: data_name.clone(),
