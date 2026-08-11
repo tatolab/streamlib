@@ -44,9 +44,10 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   author, with standard tools (maturin/CI for wheels, cargo for crates) — StreamLib
   never compiles user code.
   [importable-python-library; importable-python-library-ripout — SHIPPED #1715 for the
-  verbs, `BuildOrchestrator` and every runtime build path; the `.slpkg`, lockfile and
-  package-source residue rides `streamlib-idents` and `streamlib-jtd-codegen` into
-  processor-class-identity, which deletes them whole]
+  verbs, `BuildOrchestrator` and every runtime build path; `streamlib-jtd-codegen` is
+  gone with schema-free-ports #1813, and the remaining `.slpkg`, lockfile and
+  package-source residue rides `streamlib-idents` into processor-class-identity, which
+  deletes it whole]
   <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-10-importable-python-library-ripout.md -->
 - **DECIDED** — The plugin ABI is deleted: no dlopen'd processor cdylibs, no `repr(C)`
   vtable surface, no load handshake, no build fingerprints. The extension paths are
@@ -73,14 +74,16 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   as in-process capabilities (torch/cupy and GL consumers); only their cross-DSO
   `-abi` halves die with the plugin ABI. [importable-python-library]
 
-## Processor model & scheduling — IN-FLIGHT (→ schema-free-ports, processor-class-identity, importable-python-library)
+## Processor model & scheduling — IN-FLIGHT (→ processor-class-identity, importable-python-library)
 
 - **DECIDED** — A link is pure plumbing: output port → input port, carrying a bag
   (self-describing msgpack named map). The engine has no type layer: ports carry no
   type declaration, connect never inspects or compares types and never warns, no read
   path examines a tag, and the frame header carries no schema ident. Consuming is a
   cast at read time; a mismatch surfaces as a decode failure at the consuming
-  processor. [schema-free-ports]
+  processor. [schema-free-ports — SHIPPED #1814]
+  <!-- verify: cargo test -p streamlib-ipc-types frame_header_size_matches_constant -->
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-11-schema-free-ports.md -->
 - **DECIDED** — A port declares three things and nothing else: name, description, and
   — on an input — delivery profile. Type information belongs to the authoring language
   and never reaches the engine: in Python the port method's return annotation is the
@@ -88,17 +91,23 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   yielding the bag as a mapping and `read(port, into=T)` the opt-in strictness dial
   (a TypedDict casts for free, a dataclass or pydantic model constructs and validates,
   raising at read); in Rust the read target's `Deserialize` impl is the validation,
-  always on, with no free-cast mode. [schema-free-ports]
+  always on, with no free-cast mode. [schema-free-ports — SHIPPED #1816, #1812]
+  <!-- verify: sdk/streamlib-python-wheel/tests/test_read_into_target.py -->
 - **DECIDED** — Channel policy (delivery profile, ring depth, overflow) is declared
   port-locally at the consuming input port. Every input port declares its delivery
   profile explicitly — there is no default and nothing left to infer one from, so an
-  input port without one is a wiring error. [schema-free-ports]
+  input port without one is a wiring error. [schema-free-ports — SHIPPED #1811]
+  <!-- verify: cargo test -p streamlib-engine missing_declaration_is_a_wiring_error_naming_the_port -->
+  <!-- verify: sdk/streamlib-python-wheel/tests/test_processor_declaration.py::test_an_input_port_without_a_delivery_profile_is_refused -->
 - **DECIDED** — There is no schema layer: no JTD, no schema registry, no embedded
   schemas, no codegen and no generated type classes, and no schema identity grammar
-  anywhere in the engine or the authoring surfaces. [schema-free-ports]
+  anywhere in the engine or the authoring surfaces. [schema-free-ports — SHIPPED
+  #1813, #1815; the `SchemaIdent` grammar itself rides processor-class-identity]
+  <!-- verify: bash .claude/scripts/ship-change-removed-gate.sh docs/plan/changes/archive/2026-08-11-schema-free-ports.md -->
 - **DECIDED** — Port rendering in the control plane is name, description, delivery
   profile, and direction; no port carries a type in `graph`, `tap`, or any snapshot.
-  [schema-free-ports]
+  [schema-free-ports — SHIPPED #1816]
+  <!-- verify: sdk/streamlib-python-wheel/tests/test_processor_declaration.py::test_a_declared_port_carries_no_type_key_under_any_spelling -->
 - **DECIDED** — Three execution modes (reactive / manual / continuous); one dedicated
   OS thread per processor with descriptor-driven priority (realtime / high / normal);
   synchronous lifecycle traits; Full/Limited capability typestate on the phase axis
@@ -133,12 +142,12 @@ Legend: **DECIDED** — build exactly this. **OPEN** — do not build; needs an 
   `__main__`; only processor classes may not live there.
   The `@org/package/Type` identity grammar is deleted along with
   the `@app/local` synthesis; `@processor` declares execution, interval, scheduling
-  priority, and description only. [schema-free-ports; `__main__` clause reversed by
-  helper-process-placement-only]
+  priority, and description only. [processor-class-identity; `__main__` clause reversed
+  by helper-process-placement-only]
 - **DECIDED** — An instance's display name is the human-facing label — passed at `add`,
   readable off the returned handle, and the prefix on its log records; it defaults to
   the class's short name and the engine disambiguates duplicates within one graph.
-  Identity is never derived from it. [schema-free-ports]
+  Identity is never derived from it. [processor-class-identity]
 - **OPEN** — Additional execution flavors to scale processor count (lightweight /
   green-thread style): intended, do not build until designed; hard constraint — no new
   configuration dials. [execution-model]
