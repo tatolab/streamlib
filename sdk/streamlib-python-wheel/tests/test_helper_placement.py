@@ -11,6 +11,13 @@ processor's module, and the pid a bag was produced in is not the app's.
 `cargo xtask check-no-in-process-placement` gates the vocabulary; this gates
 the behaviour. A change that reintroduces the banned model without using any
 of the banned words still turns these red.
+
+Rig-only, and that is a weaker gate than it reads: every scenario here drives a
+real graph through `runtime.run()`, which initialises a GPU context whose
+DMA-BUF pool pre-warm needs a driver that can allocate exportable device
+memory. A software rasterizer cannot supply one, so on a GPU-less runner these
+do not fail meaningfully — they cannot start. Part of what this file asserts
+needs no device and belongs back in CI; #1823 carries that.
 """
 
 import os
@@ -18,6 +25,8 @@ import re
 from pathlib import Path
 
 import pytest
+
+pytestmark = pytest.mark.requires_gpu
 
 APP = Path(__file__).parent / "helper_placement_app.py"
 
