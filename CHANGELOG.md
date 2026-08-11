@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.17.1](https://github.com/tatolab/streamlib/compare/v0.17.0...v0.17.1) (2026-08-11)
+
+
+### Bug Fixes
+
+* **build:** realign intra-workspace version pins to 0.17.0 ([#1826](https://github.com/tatolab/streamlib/issues/1826)) ([2f6fe09](https://github.com/tatolab/streamlib/commit/2f6fe0935b3680cad43dd4ec3ada1869075d73c7)), closes [#1825](https://github.com/tatolab/streamlib/issues/1825)
+
 ## [0.17.0](https://github.com/tatolab/streamlib/compare/v0.16.0...v0.17.0) (2026-08-11)
 
 
