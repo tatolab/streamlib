@@ -16,10 +16,10 @@ use crate::core::processors::PROCESSOR_REGISTRY;
 #[crate::processor(
     "@tatolab/streamlib-engine/TestMockProcessor",
     execution = manual,
-    input("in1", any, delivery_profile = "latest"),
-    input("in2", any, delivery_profile = "latest"),
-    output("out1", any),
-    output("out2", any),
+    input("in1", delivery_profile = "latest"),
+    input("in2", delivery_profile = "latest"),
+    output("out1"),
+    output("out2"),
 )]
 pub(crate) struct MockProcessor;
 
@@ -48,8 +48,8 @@ impl crate::core::ManualProcessor for MockProcessor::Processor {
 #[crate::processor(
     "@tatolab/streamlib-engine/TestMockOutputOnlyProcessor",
     execution = manual,
-    output("out1", any),
-    output("out2", any),
+    output("out1"),
+    output("out2"),
 )]
 pub(crate) struct MockOutputOnlyProcessor;
 
@@ -78,8 +78,8 @@ impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
 #[crate::processor(
     "@tatolab/streamlib-engine/TestMockInputOnlyProcessor",
     execution = manual,
-    input("in1", any, delivery_profile = "latest"),
-    input("in2", any, delivery_profile = "latest"),
+    input("in1", delivery_profile = "latest"),
+    input("in2", delivery_profile = "latest"),
 )]
 pub(crate) struct MockInputOnlyProcessor;
 
@@ -110,8 +110,8 @@ impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {
 #[crate::processor(
     "@tatolab/streamlib-engine/TestMockReactiveInputOnlyProcessor",
     execution = reactive,
-    input("in1", any, delivery_profile = "latest"),
-    input("in2", any, delivery_profile = "latest"),
+    input("in1", delivery_profile = "latest"),
+    input("in2", delivery_profile = "latest"),
 )]
 pub(crate) struct MockReactiveInputOnlyProcessor;
 

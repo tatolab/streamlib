@@ -11,7 +11,7 @@
 
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{quote, quote_spanned};
-use streamlib_processor_schema::{PortSchemaSpec, ProcessorSchema, SchemaIdent};
+use streamlib_processor_schema::{ProcessorSchema, SchemaIdent};
 use syn::spanned::Spanned;
 use syn::{ItemStruct, Path};
 
@@ -31,29 +31,6 @@ fn schema_ident_tokens(ident: &SchemaIdent) -> TokenStream {
             __streamlib_sdk::descriptors::TypeName::new(#ty).expect("validated by manifest parser"),
             __streamlib_sdk::descriptors::SemVer::new(#major, #minor, #patch),
         )
-    }
-}
-
-/// Emit a `PortSchemaSpec` literal expression.
-///
-/// `PortSchemaSpec::Named` should never reach this function — the attribute
-/// grammar only ever produces `Any` or a fully-qualified `Specific`. A `Named`
-/// here means the spec arrived unresolved, which is a macro implementation bug.
-fn port_schema_spec_tokens(spec: &PortSchemaSpec) -> TokenStream {
-    match spec {
-        PortSchemaSpec::Any => quote! { __streamlib_sdk::processors::PortSchemaSpec::Any },
-        PortSchemaSpec::Specific(ident) => {
-            let inner = schema_ident_tokens(ident);
-            quote! { __streamlib_sdk::processors::PortSchemaSpec::Specific(#inner) }
-        }
-        PortSchemaSpec::Named(name) => {
-            let msg = format!(
-                "internal error: PortSchemaSpec::Named(`{}`) reached codegen — \
-                 macro should have resolved this against the manifest's `schemas:` map",
-                name.as_str()
-            );
-            quote! { compile_error!(#msg) }
-        }
     }
 }
 
@@ -634,7 +611,6 @@ fn generate_descriptor_from_schema(
         .iter()
         .map(|p| {
             let port_name = &p.name;
-            let port_schema_tokens = port_schema_spec_tokens(&p.schema);
             let port_desc = p.description.as_deref().unwrap_or("");
             let delivery_profile_tokens = match p.delivery_profile.as_deref() {
                 Some(value) => quote! { ::std::option::Option::Some(#value.to_string()) },
@@ -644,7 +620,6 @@ fn generate_descriptor_from_schema(
                 .with_input(__streamlib_sdk::descriptors::PortDescriptor {
                     name: #port_name.to_string(),
                     description: #port_desc.to_string(),
-                    schema: #port_schema_tokens,
                     required: true,
                     is_iceoryx2: true,
                     delivery_profile: #delivery_profile_tokens,
@@ -659,13 +634,11 @@ fn generate_descriptor_from_schema(
         .iter()
         .map(|p| {
             let port_name = &p.name;
-            let port_schema_tokens = port_schema_spec_tokens(&p.schema);
             let port_desc = p.description.as_deref().unwrap_or("");
             quote! {
                 .with_output(__streamlib_sdk::descriptors::PortDescriptor {
                     name: #port_name.to_string(),
                     description: #port_desc.to_string(),
-                    schema: #port_schema_tokens,
                     required: true,
                     is_iceoryx2: true,
                     delivery_profile: ::std::option::Option::None,
@@ -824,7 +797,7 @@ fn generate_iceoryx2_accessors_from_schema(schema: &ProcessorSchema) -> TokenStr
 #[cfg(test)]
 mod processor_struct_emit_tests {
     use super::*;
-    use streamlib_processor_schema::{PortSchemaSpec, ProcessorPortSchema, ProcessorSchema};
+    use streamlib_processor_schema::{ProcessorPortSchema, ProcessorSchema};
 
     fn minimal_schema() -> ProcessorSchema {
         ProcessorSchema {
@@ -1025,7 +998,6 @@ mod processor_struct_emit_tests {
     fn schema_declaring_iceoryx2_input_and_output_ports() -> ProcessorSchema {
         let port = |name: &str| ProcessorPortSchema {
             name: name.to_string(),
-            schema: PortSchemaSpec::Any,
             description: None,
             delivery_profile: None,
         };

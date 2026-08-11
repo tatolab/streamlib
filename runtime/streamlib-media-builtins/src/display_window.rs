@@ -105,7 +105,7 @@ impl Default for DisplayWindowConfig {
     execution = manual,
     scheduling = high,
     config = crate::display_window::DisplayWindowConfig,
-    input("video", any, delivery_profile = "latest", description = "Video frames to show in the window"),
+    input("video", delivery_profile = "latest", description = "Video frames to show in the window"),
 )]
 pub struct DisplayWindow {
     gpu_context: Option<GpuContextLimitedAccess>,
