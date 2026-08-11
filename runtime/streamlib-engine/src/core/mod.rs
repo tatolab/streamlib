@@ -9,7 +9,6 @@
 // narrow `pub use` selections; items not re-exported stay
 // engine-internal.
 pub(crate) mod compiler;
-pub(crate) mod config;
 pub(crate) mod logging;
 pub(crate) mod observability;
 pub(crate) mod runtime_hooks;
@@ -63,7 +62,6 @@ pub use utils::*;
 // crossing — items not listed here stay engine-internal.
 //
 // Home / data-dir resolution:
-pub use config::ProjectConfig;
 pub use streamlib_home::{
     get_streamlib_data_dir, get_streamlib_home, get_uv_cache_dir,
 };

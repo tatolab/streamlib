@@ -319,9 +319,9 @@ pub mod sdk {
 ///
 /// Items inside engine-internal modules that genuinely need
 /// cross-crate access are explicitly re-exported item-by-item at
-/// `streamlib_engine::core::*` (e.g. `ProjectConfig`,
-/// `installed_package_slot_dir`) or at the engine crate root. The set of
-/// those re-exports IS the engine's external surface.
+/// `streamlib_engine::core::*` (e.g. `get_streamlib_home`) or at the
+/// engine crate root. The set of those re-exports IS the engine's
+/// external surface.
 ///
 /// If you find yourself importing from this namespace for an item
 /// that would benefit other consumers, that's a signal: either extend

@@ -21,12 +21,8 @@ pub mod normal_build_dep_graph;
 
 /// Rust source roots a workspace crate may hold: the classic `src/` and the
 /// folder-backed `processors/` a generated crate root declares its module arms
-/// out of. Every source-walking gate shares this list, and it spells the
-/// folder-backed root through [`streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME`]
-/// so renaming that root cannot leave a gate scanning a directory that no
-/// longer exists.
-pub const RUST_CRATE_SOURCE_ROOT_DIR_NAMES: &[&str] =
-    &["src", streamlib_idents::PACKAGE_PROCESSOR_SOURCE_DIR_NAME];
+/// out of. Every source-walking gate shares this list.
+pub const RUST_CRATE_SOURCE_ROOT_DIR_NAMES: &[&str] = &["src", "processors"];
 
 /// Refuse a source-walking gate run that read no source at all.
 ///

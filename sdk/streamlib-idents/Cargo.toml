@@ -3,40 +3,21 @@
 
 [package]
 name = "streamlib-idents"
-description = "Structured schema identifiers, semver, and manifest/lockfile types for streamlib"
+description = "Structured schema identifiers, semver, and channel names for streamlib"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 license-file.workspace = true
 repository.workspace = true
 
-[features]
-# Package-archive authoring helpers (`archive::package_archive_fixtures`) for
-# downstream test suites, so no consumer of the reader re-implements zip /
-# tar.gz fixture construction or pulls its own container dev-dependencies.
-archive-test-fixtures = []
-
 [dependencies]
 serde = { workspace = true }
-serde_yaml = { workspace = true }
-serde_json = { workspace = true }
-# Cargo-manifest parsing for the path-artifact guard — a materialized Rust
-# package's `Cargo.toml` is part of what `app_modules` installs.
-toml = { workspace = true }
 thiserror = { workspace = true }
-sha2 = { workspace = true }
-zip = "2.2"
-tar = "0.4"  # .tar.gz extraction for `streamlib add` archive sources
-flate2 = "1.1"  # gzip decode for .tar.gz archive sources
-tracing = { workspace = true }
-schemars = "0.8"  # JSON Schema generation for streamlib.yaml editor support
-ureq = { workspace = true }  # Blocking HTTP for static generic-registry schema-package fetch
+schemars = "0.8"  # JsonSchema impls on the identifier and semver types
 
 [dev-dependencies]
 serde_yaml = { workspace = true }
 serde_json = { workspace = true }
-tempfile = "3.14"
-serial_test = "3.2"
 
 [lints]
 workspace = true
