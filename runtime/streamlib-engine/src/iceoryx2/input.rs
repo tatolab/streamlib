@@ -1080,9 +1080,15 @@ mod tests {
             .expect("port fits PortKey")
             .write_to_slice(&mut good[..FRAME_HEADER_SIZE]);
         good[FRAME_HEADER_SIZE..].copy_from_slice(&body);
-        assert!(inner.route(good), "well-formed frame must route to port 'in'");
+        assert!(
+            inner.route(good),
+            "well-formed frame must route to port 'in'"
+        );
 
-        match inner.read_raw_bounded("in", usize::MAX).expect("bounded read") {
+        match inner
+            .read_raw_bounded("in", usize::MAX)
+            .expect("bounded read")
+        {
             BoundedReadOutcome::Frame { data, timestamp_ns } => {
                 assert_eq!(data, body, "a well-formed frame still delivers intact");
                 assert_eq!(timestamp_ns, 43);

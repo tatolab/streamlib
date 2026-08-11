@@ -694,7 +694,10 @@ mod tests {
             "a wire prefix of 255 must not name more bytes than the field holds, got {}",
             port.len()
         );
-        assert_ne!(port, "cam", "a malformed prefix must not read as well-formed");
+        assert_ne!(
+            port, "cam",
+            "a malformed prefix must not read as well-formed"
+        );
 
         // Same path, well-formed prefix: routing is untouched.
         let well_formed = frame_with_payload_filler("cam", 0, 0);
@@ -743,7 +746,10 @@ mod tests {
             "the port name must never be read out of the payload, got {port:?}"
         );
         assert!(port.len() <= PortKey::MAX_NAME_BYTES);
-        assert_ne!(port, "cam", "a malformed prefix must not read as well-formed");
+        assert_ne!(
+            port, "cam",
+            "a malformed prefix must not read as well-formed"
+        );
 
         let well_formed = frame_with_payload_filler("cam", 100, FILLER);
         assert_eq!(FrameHeader::read_port_from_slice(&well_formed), "cam");
