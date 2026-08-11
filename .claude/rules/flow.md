@@ -11,6 +11,13 @@ paths:
   agents, skills, hooks, settings) or the issue templates changes in a dedicated PR that explains
   why — never mixed into feature work. A session never edits the agents, rules, or skills it is
   itself using.
+- **Path guards ask; they never deny.** `permissions.deny` and a hook's `"deny"` decision are both
+  banned — use `ask` and let the owner resolve it at the prompt. A hard wall cannot be overridden
+  in the moment, so a scope written months ago outlives the reason for it and blocks a removal the
+  plan already committed to; the session then routes around the wall, which is where the damage
+  happens. Prompting keeps the friction and the reason while leaving the owner a way through.
+  This is not permission to bend doctrine: the rules still say what is right, and an approved
+  prompt only means the owner judged this edit to be the exception.
 - **A new agent definition PR must state three things:** the non-derivable knowledge the agent
   captures, why the existing agents don't already cover it, and its model tier.
 - **Model tiers:** implementation and reasoning agents run `opus`; mechanical / prescribed-steps

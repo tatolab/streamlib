@@ -18,9 +18,7 @@
     ],
     "ask": [
       "Edit(./docs/plan/**)",
-      "Write(./docs/plan/**)"
-    ],
-    "deny": [
+      "Write(./docs/plan/**)",
       "Edit(./examples/**)",
       "Edit(./packages/audio/**)",
       "Edit(./packages/camera/**)",

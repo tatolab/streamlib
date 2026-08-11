@@ -21,10 +21,13 @@ ONE core system per concern — extend the existing system, never build a parall
 
 - All work enters through `/plan` — it reads the plan statuses and the tracker and says
   which skill is next.
-- Source edits (`runtime/ sdk/ adapters/ xtask/`) happen only inside `/implement`
-  with an owner-confirmed ticket — hook-enforced via `.claude/state/active-ticket.json`.
-- Plan edits (`docs/plan/**`) happen only inside `/align`, `/propose-change`,
-  `/ship-change`, or `/pivot` — hook- and ask-rule-enforced.
+- Source edits (`runtime/ sdk/ adapters/ xtask/`) belong inside `/implement` with an
+  owner-confirmed ticket — the hook prompts via `.claude/state/active-ticket.json`.
+- Plan edits (`docs/plan/**`) belong inside `/align`, `/propose-change`,
+  `/ship-change`, or `/pivot` — the hook and the ask rules prompt.
+- **Guardrails prompt; they never wall off.** Every path guard routes to the owner rather
+  than refusing, so a scope written months ago can't strand work that has to land. The
+  doctrine still decides what is *right* — a prompt is not permission to bend a rule.
 - Lifecycle: `/align` (decide) → `/propose-change` (delta) → `/derive-tickets` (as few
   tracer bullets as the change honestly needs) →
   `/implement` (build) → `/ship-change` (fold + prove removals). `/pivot` for direction

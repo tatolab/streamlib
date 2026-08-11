@@ -8,9 +8,10 @@
 #   xtask/                       requires .claude/state/active-ticket.json
 #                                (set by /implement after the owner confirms the plan)
 #
-# Contract: exit 0 + JSON permissionDecision:"deny" blocks the edit with the reason;
-# plain exit 0 defers to the normal permission flow. Owner escape hatch: create the
-# marker file by hand.
+# Contract: exit 0 + JSON permissionDecision:"ask" routes the edit to the owner with the
+# reason; plain exit 0 defers to the normal permission flow. The gate informs and slows
+# down — it does not wall off. An edit the owner approves at the prompt proceeds without
+# a marker file, so a stale scope can never strand work that has to land.
 
 input="$(cat)"
 fp="$(printf '%s' "$input" | jq -r '.tool_input.file_path // ""')"
@@ -19,8 +20,8 @@ fp="$(printf '%s' "$input" | jq -r '.tool_input.file_path // ""')"
 root="${CLAUDE_PROJECT_DIR:-$(pwd)}"
 state="$root/.claude/state"
 
-deny() {
-  jq -n --arg r "$1" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: $r}}'
+ask() {
+  jq -n --arg r "$1" '{hookSpecificOutput: {hookEventName: "PreToolUse", permissionDecision: "ask", permissionDecisionReason: $r}}'
   exit 0
 }
 
@@ -33,11 +34,11 @@ esac
 case "$rel" in
   docs/plan/*)
     [ -f "$state/plan-session" ] && exit 0
-    deny 'docs/plan/ is the locked decision source. Plan edits happen only inside /align, /propose-change, /ship-change, or /pivot — those skills create .claude/state/plan-session for the session. Owner escape hatch: touch .claude/state/plan-session yourself.'
+    ask 'docs/plan/ is the decision source. Plan edits belong inside /align, /propose-change, /ship-change, or /pivot — those skills create .claude/state/plan-session for the session. Approve to edit anyway, or decline and run the skill.'
     ;;
   runtime/*|sdk/*|adapters/*|xtask/*)
     [ -f "$state/active-ticket.json" ] && exit 0
-    deny 'Source edits happen only inside /implement with an owner-confirmed ticket (.claude/state/active-ticket.json is missing). Run /implement — or, as the owner escape hatch, create the marker by hand.'
+    ask 'Source edits belong inside /implement with an owner-confirmed ticket (.claude/state/active-ticket.json is missing). Approve to edit anyway — the change lands without ticket traceability — or decline and run /implement.'
     ;;
 esac
 
