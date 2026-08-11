@@ -4,6 +4,8 @@
 //! iceoryx2-based IPC communication layer for cross-process processor communication.
 
 mod channel_ceiling;
+#[cfg(test)]
+mod channel_sizing_tests;
 mod delivery_profile;
 mod input;
 mod mailbox;
