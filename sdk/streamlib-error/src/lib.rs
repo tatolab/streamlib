@@ -57,9 +57,9 @@ pub enum Error {
     EmptyChannelName,
 
     #[error(
-        "channel `{0}` contains invalid character `{1}` (allowed: a-z, 0-9, hyphen, underscore, must start with a-z)"
+        "channel `{name}` contains invalid character `{character}` (allowed: a-z, 0-9, hyphen, underscore, must start with a-z)"
     )]
-    InvalidChannelNameCharacter(String, char),
+    InvalidChannelNameCharacter { name: String, character: char },
 
     #[error("channel `{0}` must start with a-z")]
     ChannelNameMustStartWithLowercase(String),

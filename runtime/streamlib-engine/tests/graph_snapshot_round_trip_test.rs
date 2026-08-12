@@ -24,10 +24,6 @@ use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
 
-fn class_short_name(short: &str) -> ProcessorClassShortName {
-    ProcessorClassShortName::new(short).unwrap()
-}
-
 /// Register a descriptor-only processor type with two `Any`-typed
 /// ports — enough to satisfy `add_processor`'s port-info lookup and
 /// `connect`'s port existence check. Idempotent under `serial_test`.
@@ -35,7 +31,7 @@ fn register_test_type(short: &str, input: &str, output: &str) -> ProcessorClassI
     let import_path =
         ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
     let descriptor = ProcessorDescriptor::new(
-        class_short_name(short),
+        ProcessorClassShortName::new(short).unwrap(),
         import_path.clone(),
         "snapshot round-trip test",
     )

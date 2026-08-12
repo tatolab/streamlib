@@ -30,9 +30,10 @@ const SHORT_TIMEOUT: Duration = Duration::from_millis(250);
 fn register_test_type(short: &str) -> ProcessorClassImportPath {
     let import_path =
         ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
-    let id = ProcessorClassShortName::new(short).unwrap();
+    let class_short_name = ProcessorClassShortName::new(short).unwrap();
     let descriptor =
-        ProcessorDescriptor::new(id, import_path.clone(), "graph readiness signal test")
+        ProcessorDescriptor::new(
+        class_short_name, import_path.clone(), "graph readiness signal test")
             .with_input(PortDescriptor::new("bags_from_upstream", "", false))
             .with_output(PortDescriptor::new("bags_to_downstream", "", false));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);

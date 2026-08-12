@@ -1129,8 +1129,8 @@ fn check_packages_engine_reach(
 //
 // The list is PRINCIPLED, not enumerated ad hoc: a crate earns root status by
 // being something packages dep DIRECTLY and consume by version. The small
-// utility crates (`streamlib-error`, `streamlib-processor-schema`,
-// `streamlib-processor-schema`) are deliberately NOT listed — they are covered
+// utility crates (`streamlib-error`, `streamlib-processor-schema`) are
+// deliberately NOT listed — they are covered
 // TRANSITIVELY through the roots (check 12 walks the closure), so a listing
 // would be redundant. `streamlib-consumer-rhi` earns root status on its own
 // because check 3 makes it a first-class part of the boundary contract:
@@ -1159,8 +1159,8 @@ const TRUNK_ENGINE_CRATE_NAME: &str = "streamlib-engine";
 /// `NO_STREAMLIB_RUNTIME_DEP`) — this is a permanent invariant, not a
 /// shrinking ratchet. Roots = every crate packages are mandated or expected to
 /// link directly and consume by version; the small utility crates
-/// (streamlib-error / streamlib-processor-schema) are
-/// covered transitively through these roots (check 12), and consumer-rhi is a
+/// (streamlib-error / streamlib-processor-schema) are covered transitively
+/// through these roots (check 12), and consumer-rhi is a
 /// root because check 3 makes it a first-class part of the boundary contract.
 const TRUNK_NO_ENGINE_DEP: &[&str] = &[
     "sdk/streamlib-macros/Cargo.toml",

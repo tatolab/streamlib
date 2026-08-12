@@ -201,7 +201,7 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
                 config_schema_id = Some(lit.value());
             }
             "type" => {
-                return Err(syn::Error::new(key.span(), CLASS_PATH_RULE));
+                return Err(syn::Error::new(key.span(), class_path_rule()));
             }
             "input" => inputs.push(parse_port(input, PortDirection::Input)?),
             "output" => outputs.push(parse_port(input, PortDirection::Output)?),
@@ -209,9 +209,8 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
                 return Err(syn::Error::new(
                     key.span(),
                     format!(
-                        "unknown `#[processor(...)]` key `{other}` — expected one of \
-                         `execution`, `scheduling`, `unsafe_send`, `config`, `config_field`, \
-                         `config_schema`, `description`, `input`, `output`"
+                        "unknown `#[processor(...)]` key `{other}` — expected one of {}",
+                        rendered_attribute_keys()
                     ),
                 ));
             }
@@ -446,12 +445,38 @@ fn reject_delivery_profile_on_output(
     Ok(())
 }
 
+/// Every key the attribute takes — the one list both error messages render, so
+/// adding or retiring a key cannot leave one of them lying.
+const PROCESSOR_ATTRIBUTE_KEYS: &[&str] = &[
+    "execution",
+    "scheduling",
+    "unsafe_send",
+    "config",
+    "config_field",
+    "config_schema",
+    "description",
+    "input",
+    "output",
+];
+
+/// [`PROCESSOR_ATTRIBUTE_KEYS`] as a quoted, comma-joined list.
+fn rendered_attribute_keys() -> String {
+    PROCESSOR_ATTRIBUTE_KEYS
+        .iter()
+        .map(|key| format!("`{key}`"))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 /// The refusal every authored-identity spelling lands on.
-const CLASS_PATH_RULE: &str = "`#[processor(...)]` declares no identity. A processor is named by \
-     the import path of the type it is — `my_app::filters::BlurProcessor` — captured by the macro \
-     at the expansion site and never authored. Remove it; `execution`, `scheduling`, \
-     `unsafe_send`, `config`, `config_field`, `config_schema`, `description`, `input` and \
-     `output` are the keys the attribute takes.";
+fn class_path_rule() -> String {
+    format!(
+        "`#[processor(...)]` declares no identity. A processor is named by the import path of \
+         the type it is — `my_app::filters::BlurProcessor` — captured by the macro at the \
+         expansion site and never authored. Remove it; {} are the keys the attribute takes.",
+        rendered_attribute_keys()
+    )
+}
 
 /// Reject the leading positional `"@org/package/Type"` the attribute used to
 /// take, naming the class-path rule.
@@ -462,7 +487,7 @@ fn reject_positional_identity(input: ParseStream<'_>) -> syn::Result<()> {
     if input.peek(LitStr) {
         return Err(syn::Error::new(
             input.fork().parse::<LitStr>()?.span(),
-            CLASS_PATH_RULE,
+            class_path_rule(),
         ));
     }
     Ok(())

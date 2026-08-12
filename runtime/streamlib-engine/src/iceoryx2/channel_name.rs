@@ -98,17 +98,19 @@ fn is_channel_chunk_character(c: char) -> bool {
 /// without any length bound. A `/` inside `s` is itself an invalid character
 /// here — callers split on `/` before validating chunks.
 fn validate_channel_chunk_charset(s: &str) -> Result<()> {
-    if s.is_empty() {
-        return Err(Error::EmptyChannelName);
-    }
     let mut chars = s.chars();
-    let first = chars.next().expect("non-empty");
+    let Some(first) = chars.next() else {
+        return Err(Error::EmptyChannelName);
+    };
     if !first.is_ascii_lowercase() {
         return Err(Error::ChannelNameMustStartWithLowercase(s.to_string()));
     }
     for c in chars {
         if !is_channel_chunk_character(c) {
-            return Err(Error::InvalidChannelNameCharacter(s.to_string(), c));
+            return Err(Error::InvalidChannelNameCharacter {
+                name: s.to_string(),
+                character: c,
+            });
         }
     }
     Ok(())
@@ -292,7 +294,7 @@ mod tests {
         // Dot, space, and the Zenoh-reserved wildcard/pipeline chars `* $ ? #`
         // are none of them chunk-legal. Underscore and hyphen are NOT in this
         // list — they are transport-legal within a chunk.
-        for (name, bad) in [
+        for (n, bad) in [
             ("cam.out", '.'),
             ("cam out", ' '),
             ("cam*", '*'),
@@ -302,10 +304,11 @@ mod tests {
         ] {
             assert!(
                 matches!(
-                    validate_channel_name(name),
-                    Err(Error::InvalidChannelNameCharacter(ref n, c)) if n == name && c == bad
+                    validate_channel_name(n),
+                    Err(Error::InvalidChannelNameCharacter { ref name, character })
+                        if name == n && character == bad
                 ),
-                "{name} must reject `{bad}` as an invalid chunk character"
+                "{n} must reject `{bad}` as an invalid chunk character"
             );
         }
     }
@@ -443,7 +446,8 @@ mod tests {
         // forge an extra chunk, so it is rejected as an invalid character.
         assert!(matches!(
             source_channel_name("cam", "video/in"),
-            Err(Error::InvalidChannelNameCharacter(ref n, '/')) if n == "video/in"
+            Err(Error::InvalidChannelNameCharacter { ref name, character: '/' })
+                if name == "video/in"
         ));
         // An uppercase char in a port name is an author error — the port name
         // is not normalized, only the processor id is.

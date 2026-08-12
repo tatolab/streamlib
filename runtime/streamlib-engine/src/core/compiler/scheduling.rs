@@ -62,15 +62,11 @@ mod tests {
         ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap()
     }
 
-    fn class_short_name(short: &str) -> ProcessorClassShortName {
-        ProcessorClassShortName::new(short).unwrap()
-    }
-
     #[test]
     fn strategy_reads_priority_from_registered_descriptor() {
         let path = class_import_path("Widgetron");
         let descriptor =
-            ProcessorDescriptor::new(class_short_name("Widgetron"), path.clone(), "fixture")
+            ProcessorDescriptor::new(ProcessorClassShortName::new("Widgetron").unwrap(), path.clone(), "fixture")
                 .with_scheduling(ProcessorScheduling {
                     priority: ThreadPriority::RealTime,
                 });
