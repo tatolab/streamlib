@@ -55,17 +55,18 @@ pub(crate) fn register_processor_class(
         return if already_registered.bind(python).is(processor_class) {
             Ok(identity)
         } else {
-            // An import path is derived from `__module__` + `__qualname__`, so
-            // two classes reach the same one only when the module reached
-            // `sys.modules` twice under different names — a re-import, not a
-            // naming collision. There is nothing to declare that would tell
-            // them apart; the fix is upstream, at the import.
+            // An import path is `__module__` + `__qualname__`, so two classes
+            // reach the same one only by being the same declaration executed
+            // twice — the module was loaded again and rebuilt its classes. Two
+            // *differently named* classes can no longer collide at all, so
+            // there is nothing to declare that would tell these apart; the fix
+            // is upstream, at the reload.
             Err(PyValueError::new_err(format!(
-                "two different classes both identify as `{identity}`: {} and {}. One import \
-                 path names one class, so this means the module was imported twice under \
-                 different names and `sys.modules` holds two copies of it — import it by one \
-                 name (a package-relative import and a path-based one reach the same file as \
-                 two modules).",
+                "two different class objects both identify as `{identity}`: {} and {}. One \
+                 import path names one class, so these are the same declaration loaded twice \
+                 — `importlib.reload` is the usual cause, and the class object you are adding \
+                 is not the one already registered. Add the class from the module the \
+                 interpreter currently holds, or restart the app.",
                 class_qualified_name(already_registered.bind(python)),
                 class_qualified_name(processor_class),
             )))

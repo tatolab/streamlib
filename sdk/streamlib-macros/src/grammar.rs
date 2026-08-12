@@ -502,12 +502,11 @@ fn reject_delivery_profile_on_output(
 /// Parse a **version-free** `@org/package/Type` into a validated
 /// [`SchemaIdent`].
 ///
-/// The attribute grammar is version-free (#1409): a schema ref is an identity
-/// the runtime binds version-blind, and versions are derived at package-build
-/// time — never hand-authored. A trailing `@<version>` is rejected. The
-/// synthesized `SchemaIdent` carries the `0.0.0` version-free sentinel — the
-/// same placeholder `ProcessorTypeReference` renders for diagnostics and the
-/// runtime schema registry (which stores/looks up unversioned) ignores.
+/// The attribute grammar is version-free: a trailing `@<version>` is
+/// rejected, and the synthesized [`SchemaIdent`] carries the `0.0.0`
+/// version-free sentinel. Nothing keys on the result — a processor is named by
+/// the import path of its type — so this fills the descriptor's vestigial
+/// `name` and supplies the default display name.
 pub fn parse_schema_ident_str(raw: &str, span: proc_macro2::Span) -> syn::Result<SchemaIdent> {
     let err = |msg: String| syn::Error::new(span, msg);
 

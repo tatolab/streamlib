@@ -32,7 +32,8 @@ pub mod logging {
 }
 
 // Re-export attribute macros for processor syntax:
-// - #[streamlib::processor("@org/pkg/Type", …)] - identity + execution + ports in code
+// - #[streamlib::processor("@org/pkg/Type", …)] - execution + ports in code; a
+//   processor's identity is the import path of its type, captured by the macro
 // - #[derive(ConfigDescriptor)] - Config field metadata derive macro
 pub use streamlib_macros::{
     ConfigDescriptor, module_ident, module_ident_any_version, module_ident_joined,

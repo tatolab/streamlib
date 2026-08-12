@@ -17,15 +17,15 @@ serde_yaml = { workspace = true }
 streamlib-idents = { path = "../streamlib-idents", version = "0.17.0" }
 thiserror = { workspace = true }
 schemars = "0.8"  # JsonSchema impls on the processor-schema and descriptor types
-# Host-only OpenAPI schema derive for the wire-output DTOs, behind the
+# Host-only OpenAPI schema derive for the wire-facing types, behind the
 # off-by-default `utoipa` feature. The engine's API layer enables it; a
 # consumer built engine-free never compiles it.
 utoipa = { version = "5.3", optional = true }
 
 [features]
-# Adds a `utoipa::ToSchema` derive to `SchemaIdentOutput` /
-# `SemanticVersionOutput` for host-side OpenAPI generation. Off by default so
-# the engine-free plugin authoring chain carries no OpenAPI machinery.
+# Adds a `utoipa::ToSchema` derive to `ProcessorClassImportPath` for host-side
+# OpenAPI generation. Off by default so the engine-free authoring chain carries
+# no OpenAPI machinery.
 utoipa = ["dep:utoipa"]
 
 [dev-dependencies]

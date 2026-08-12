@@ -304,8 +304,12 @@ impl ProcessorInstanceFactory {
     ) -> Result<()> {
         let processor_class_import_path = descriptor.processor_class_import_path.clone();
 
+        // Checked against `descriptors`, not `registrations`: both registration
+        // paths write `descriptors`, only this one writes `registrations`, so
+        // reading the narrower map would let a constructor-bearing registration
+        // silently overwrite a descriptor-only one holding the same path.
         if self
-            .registrations
+            .descriptors
             .read()
             .contains_key(&processor_class_import_path)
         {
@@ -513,10 +517,10 @@ impl ProcessorInstanceFactory {
 fn duplicate_class_import_path(processor_class_import_path: &ProcessorClassImportPath) -> Error {
     Error::Configuration(format!(
         "two processors both identify as `{processor_class_import_path}`, and one import path \
-         names one class. In Python this means a module was imported twice under different \
-         names, so `sys.modules` holds two copies of the class — import it by one name. In Rust \
-         it means two `#[processor]` types share a module path, which happens when one is \
-         declared inside a function body: a function's name is not part of a module path, so \
+         names one class. In Python this means the module was loaded twice, so the class object \
+         being added is not the one already registered — `importlib.reload` is the usual cause. \
+         In Rust it means two `#[processor]` types share a module path, which happens when one \
+         is declared inside a function body: a function's name is not part of a module path, so \
          neither type is reachable by `use`. Declare processors at module scope."
     ))
 }
@@ -622,7 +626,7 @@ mod tests {
             "the refusal must name the contested path; got: {message}"
         );
         assert!(
-            message.contains("sys.modules"),
+            message.contains("importlib.reload"),
             "the refusal must name the Python cause; got: {message}"
         );
         assert!(
@@ -676,6 +680,10 @@ mod tests {
                 .register_dynamic(descriptor_for(path), constructor)
                 .is_err(),
             "a constructor-bearing registration must not overwrite a descriptor-only one"
+        );
+        assert!(
+            !factory.can_create(&import_path(path)),
+            "the refused registration must not have installed its constructor either"
         );
     }
 

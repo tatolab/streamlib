@@ -94,10 +94,15 @@ Surfaces this rule covers:
 
 - IPC envelopes (`escalate_request` / `escalate_response`, surface-
   share, iceoryx2 payloads).
-- Graph JSON (the runtime's serialized pipeline graph).
 
 > ~~Lockfile entries (`streamlib-codegen.lock`).~~ — Superseded 2026-08-11:
 > the lockfile is deleted, so it is no longer a surface this rule covers.
+
+> ~~Graph JSON (the runtime's serialized pipeline graph).~~ — Superseded
+> 2026-08-11 by #1840. A processor is identified by the import path of its
+> class, so the graph's `type` field is a plain string
+> (`my_app.filters:BlurProcessor`), not a structured record. No schema
+> identifier reaches graph JSON at all — the engine has no type layer.
 
 The `Display` impl on `SchemaIdent` produces the joined `@org/pkg/Type@v`
 form for human-facing surfaces (logs, error messages, CLI output).
@@ -241,37 +246,26 @@ graph.add_edge(VIDEO_FRAME_IDENT, …);   // No org/package on the wire
 > `@app/local/<Type>`), reading nothing from a manifest. See
 > the zero-ceremony authoring model.
 
-Three macros **reference** a processor at a call site (typically the spawning binary that doesn't
-own the processor's Rust module):
+A call site **references** a processor by the import path of its class —
+`Processor::processor_class_import_path()`, which the `#[processor]` macro
+captures from its own expansion site. That path is what `ProcessorSpec::new`
+takes and what the registry is keyed on.
 
-- **`streamlib::sdk::processor_type_ref!("org", "package", "Type")`**
-  — the default reference form for the no-load-call world. Validates
-  `(org, package, type)` at compile time and expands to a **version-free**
-  `ProcessorTypeReference::ResolveToInstalled` value with **no package-source
-  lookup at the call site**. Passed to `ProcessorSpec::new`, it reaches
-  `add_processor`'s lazy hook and resolves to the single installed
-  provider. This is what app code uses: no version at the reference site.
+> ~~Three macros reference a processor at a call site:
+> `processor_type_ref!`, `schema_ident_any_version!`, `schema_ident!`.~~ —
+> Superseded 2026-08-11 by #1840. `processor_type_ref!` and
+> `schema_ident_any_version!` are deleted: the first expanded to a
+> `ProcessorTypeReference`, which no longer exists, and the second resolved a
+> version against a registry that no longer holds one. `schema_ident!`
+> survives but does not name a processor.
 
-  > ~~loading its package from `streamlib_modules/` on first reference~~,
-  > ~~no `add_module`~~ — Superseded 2026-08-11: the module loader and
-  > `streamlib_modules/` are deleted.
-- **`streamlib::sdk::schema_ident_any_version!("org", "package", "Type")`**
-  — the power-caller form. Resolves a `SchemaIdent` *now* against the
-  already-registered processor types (highest registered `SemVer`,
-  Cargo / npm convention), returning
-  `Result<SchemaIdent, streamlib::sdk::error::Error>`. Reach for it only
-  when the provider is already registered (a post-`add_module` /
-  explicit-load call site) and you need the resolved `SchemaIdent`
-  eagerly; otherwise prefer `processor_type_ref!`.
 - **`streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")`**
-  — strict-pin reference form. Same four fields as the long
-  `SchemaIdent::new(...)` constructor, validated at proc-macro
-  expansion. Reach for it only when the call site has a deliberate
-  reason to refuse newer-but-compatible versions.
+  — the same four fields as the long `SchemaIdent::new(...)` constructor,
+  validated at proc-macro expansion. It builds a schema identifier, not a
+  processor reference.
 
-Cross-package references in graph JSON and IPC envelopes still carry a
-fully-qualified `SchemaIdent { org, package, type, version }` structured
-record.
+Cross-package references in IPC envelopes still carry a fully-qualified
+`SchemaIdent { org, package, type, version }` structured record.
 
 > ~~generated code, and lockfiles~~ — Superseded 2026-08-11: the lockfile
 > is deleted, and codegen went with the schema layer.

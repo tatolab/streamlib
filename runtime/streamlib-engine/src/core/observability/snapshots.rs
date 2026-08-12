@@ -17,7 +17,7 @@ use crate::core::processors::ProcessorState;
 pub struct ProcessorSnapshot {
     /// Processor identifier.
     pub id: ProcessorUniqueId,
-    /// Structured processor identity — `@org/package/Type@version`.
+    /// The import path of the class this processor is.
     pub processor_type: ProcessorClassImportPath,
     /// Current state.
     pub state: ProcessorState,

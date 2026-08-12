@@ -441,9 +441,9 @@ fn generate_processor_impl_from_schema(
 
     quote! {
         impl Processor {
-            /// Processor PascalCase short name (the `type` segment of the
-            /// structured [`SchemaIdent`](__streamlib_sdk::descriptors::SchemaIdent)).
-            /// Use [`Processor::schema_ident`] for the full structured identity.
+            /// Processor PascalCase short name — what an instance's display
+            /// name defaults to. Not the processor's identity: use
+            /// [`Processor::processor_class_import_path`] for that.
             pub const NAME: &'static str = #processor_name;
 
             /// Returns the structured wire identity for this processor —

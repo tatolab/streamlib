@@ -112,7 +112,10 @@ impl ConfigDescriptor for () {
 /// Describes a processor with its ports and configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessorDescriptor {
-    /// Structured processor identity — `@org/package/Type@version`.
+    /// The `@org/package/Type@version` the authoring surface still
+    /// declares. Vestigial: nothing keys on it — a processor is named by
+    /// `processor_class_import_path` — and it supplies the default display
+    /// name until the authoring grammar retires.
     pub name: SchemaIdent,
     /// The processor class's fully-qualified import path — what the registry,
     /// the control plane and helper-process spawning all name this processor
@@ -135,9 +138,8 @@ pub struct ProcessorDescriptor {
     /// Reference to config schema (e.g., "com.example.blur.config@1.0.0").
     #[serde(default)]
     pub config_schema: Option<String>,
-    /// Declarative scheduling intent sourced from the manifest's
-    /// `scheduling:` block. Read at thread-spawn time. Defaults to `Normal`
-    /// priority + `processor-{id}` thread name.
+    /// Declarative scheduling intent declared in the `#[processor]` attribute.
+    /// Read at thread-spawn time; defaults to `Normal` priority.
     #[serde(default)]
     pub scheduling: ProcessorScheduling,
     pub inputs: Vec<PortDescriptor>,

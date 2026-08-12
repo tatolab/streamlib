@@ -46,8 +46,8 @@ The same "code is the truth-source" decision holds for the Python and Deno
 SDKs, but the mechanism inverts to fit each runtime. A `syn` AST scan reads
 Rust source without running it; Python and Deno have no comparable
 parse-without-run path for decorator semantics, so **extraction is import**:
-applying `@processor(...)` at import time registers the processor's structured
-identity into a process-global registry (`_processor_registry`), and the
+applying `@processor(...)` at import time registers the processor into a
+process-global registry (`_processor_registry`), and the
 per-language extractor imports every processor module and enumerates what
 registered. Only the package identity (`package: { org, name, version }`) is
 still read from `streamlib.yaml`; the decorator no longer validates its short
