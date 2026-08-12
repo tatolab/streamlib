@@ -11,11 +11,12 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread::{self, JoinHandle};
 
-/// Linux audio clock using `timerfd_create(CLOCK_MONOTONIC)` for drift-free timing.
+/// Linux audio clock pacing ticks from a `timerfd_create(CLOCK_MONOTONIC)` timer.
 ///
-/// Uses kernel-managed timers via timerfd for high-precision, absolute-time
-/// scheduling without cumulative drift. A dedicated thread reads from the
-/// timerfd and invokes registered callbacks on each tick.
+/// `TFD_TIMER_ABSTIME` keeps the schedule free of cumulative drift against the
+/// machine clock. The clock is free-running — no audio device paces it — so it
+/// drifts against any real device's sample clock. A dedicated thread reads from
+/// the timerfd and invokes registered callbacks on each tick.
 pub struct LinuxTimerFdAudioClock {
     config: AudioClockConfig,
     callbacks: Arc<Mutex<Vec<AudioTickCallback>>>,
@@ -271,6 +272,14 @@ fn run_timerfd_loop(
             return Err(Error::Runtime(format!("timerfd read failed: {}", err)));
         }
 
+        // FIXME(audio-backend): one read stamps every tick in a catch-up burst, so
+        // N blocks of samples claim the same instant, and the value is the wake
+        // time rather than the expiration the timerfd was programmed for. Both
+        // follow from the timer's own absolute schedule. Deferred because a
+        // free-running clock's tick time is meaningless until a device paces it:
+        // the audio backend is OPEN (docs/plan/ARCHITECTURE.md §Media I/O), and it
+        // also owns the capture path's discarded driver stamp
+        // (cpal `InputCallbackInfo::timestamp().capture`).
         let timestamp_ns = MediaClock::now().as_nanos() as i64;
 
         if expirations > 1 {
