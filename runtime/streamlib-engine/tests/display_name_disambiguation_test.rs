@@ -23,10 +23,16 @@ use streamlib::sdk::runtime::Runner;
 /// port-info lookup, with no instance to construct. Idempotent: a second
 /// register under `serial_test` returns an already-registered error we ignore.
 fn register_test_type(short: &str) -> ProcessorClassImportPath {
+    register_test_type_named(short, short)
+}
+
+/// Register under an import path whose trailing segment is `path_tail` while
+/// the descriptor's short name is `short_name`.
+fn register_test_type_named(path_tail: &str, short_name: &str) -> ProcessorClassImportPath {
     let import_path =
-        ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
+        ProcessorClassImportPath::new(format!("{}::{path_tail}", module_path!())).unwrap();
     let descriptor = ProcessorDescriptor::new(
-        ProcessorClassShortName::new(short).unwrap(),
+        ProcessorClassShortName::new(short_name).unwrap(),
         import_path.clone(),
         "display-name disambiguation test",
     )
@@ -150,5 +156,34 @@ fn a_graph_with_duplicates_round_trips_without_the_counter_climbing() {
         second_runtime.save_graph_snapshot().unwrap(),
         first_snapshot,
         "save → load → save must be byte-equivalent"
+    );
+}
+
+/// The default display name is read off the registered descriptor, never
+/// recovered from the import path.
+///
+/// The two are deliberately different here: the path ends `WidgetronImpl`, the
+/// descriptor says `Widgetron`. Any implementation that splits the path on `::`
+/// — the grammar re-invention #1840 forbids — yields `WidgetronImpl` and fails.
+/// A fixture where the two coincided would pass under either mechanism and
+/// prove nothing.
+#[test]
+#[serial]
+fn the_default_display_name_comes_from_the_descriptor_not_the_import_path() {
+    let widgetron = register_test_type_named("WidgetronImpl", "Widgetron");
+
+    let runtime = Runner::new().unwrap();
+    runtime
+        .add_processor(ProcessorSpec::new(widgetron.clone(), serde_json::json!({})))
+        .expect("the fixture type is registered");
+
+    assert_eq!(
+        display_names_in_the_graph_json(&runtime),
+        vec!["Widgetron".to_string()],
+        "the label must be the descriptor's short name, not the path's tail"
+    );
+    assert!(
+        widgetron.as_str().ends_with("::WidgetronImpl"),
+        "the fixture only proves anything while the two genuinely differ"
     );
 }

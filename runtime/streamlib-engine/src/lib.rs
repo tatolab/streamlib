@@ -37,6 +37,27 @@ pub mod logging {
 // - #[derive(ConfigDescriptor)] - Config field metadata derive macro
 pub use streamlib_macros::{ConfigDescriptor, processor};
 
+/// The `#[processor]` attribute accepts no authored identity, in any spelling.
+///
+/// The message is asserted at the parse seam in `streamlib-macros`; these
+/// assert the refusal survives a real expansion, which a unit test on the
+/// parser cannot — a caller that reintroduced a positional argument ahead of
+/// `parse_body` would pass there and fail here.
+///
+/// ```compile_fail
+/// // The leading positional `@org/package/Type` the grammar used to take.
+/// #[streamlib::processor("@tatolab/camera/Camera", execution = manual)]
+/// pub struct RefusedPositionalIdentity;
+/// ```
+///
+/// ```compile_fail
+/// // The `type = "..."` override that used to name the synthesized segment.
+/// #[streamlib::processor(execution = manual, type = "CustomName")]
+/// pub struct RefusedTypeOverride;
+/// ```
+#[cfg(doctest)]
+pub struct ProcessorAttributeAcceptsNoIdentity;
+
 pub use core::{
     ConnectionDefinition,
     // Processor traits (mode-specific)
