@@ -11,6 +11,7 @@ import streamlib
 from identity_stable_processor import IdentityStableProcessor
 from second_identity_stable_processor import SecondIdentityStableProcessor
 
+
 def setup(rt) -> None:
     """Both processors, in one graph."""
     rt.add(IdentityStableProcessor)

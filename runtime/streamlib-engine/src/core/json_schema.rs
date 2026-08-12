@@ -158,8 +158,11 @@ pub enum ProcessorRuntimeOutput {
 /// Descriptor for a processor type.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ProcessorDescriptorOutput {
-    /// The import path of the class this processor is — the same value, under
-    /// the same name, that a graph node renders as `type`.
+    /// The import path of the class this processor is.
+    ///
+    /// The same value a graph node carries, but under its own key: a node
+    /// renames the field to `type`, because there it is the node's type; here
+    /// it is what the registry is keyed on.
     pub processor_class_import_path: ProcessorClassImportPath,
     /// Human-readable description.
     pub description: String,
