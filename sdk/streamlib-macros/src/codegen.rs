@@ -1428,4 +1428,40 @@ mod processor_struct_emit_tests {
             }
         }
     }
+
+    fn rendered_descriptor() -> String {
+        render_token_stream_without_whitespace(generate_descriptor_from_schema(
+            &minimal_schema(),
+            "a probe",
+            "0.0.0",
+            None,
+        ))
+    }
+
+    /// The mechanism, not just the result. What the string comes out as is
+    /// asserted where a real `#[processor]` can be expanded and read back
+    /// (`streamlib-engine/tests/processor_class_import_path_test.rs`); what
+    /// this pins is that it came from the one capture whose output format
+    /// rustc guarantees.
+    #[test]
+    fn the_descriptor_captures_its_identity_with_module_path() {
+        let rendered = rendered_descriptor();
+        assert!(
+            rendered.contains("module_path!()"),
+            "identity must be captured at the expansion site — got: {rendered}"
+        );
+    }
+
+    /// `std::any::type_name`'s output format is documented as unspecified and
+    /// free to change between compiler versions. Keying a registry on it means
+    /// a toolchain bump silently renames every processor, with nothing failing
+    /// to say so — which is why this is a test and not a comment.
+    #[test]
+    fn the_descriptor_never_reaches_for_type_name() {
+        let rendered = rendered_descriptor();
+        assert!(
+            !rendered.contains("type_name"),
+            "identity must never be reflected at runtime — got: {rendered}"
+        );
+    }
 }

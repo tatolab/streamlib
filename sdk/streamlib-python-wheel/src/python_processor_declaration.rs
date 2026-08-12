@@ -203,3 +203,61 @@ fn read_dict_string(dictionary: &Bound<'_, PyDict>, key: &str) -> PyResult<Strin
 fn ident_error(failure: impl std::fmt::Display) -> PyErr {
     PyTypeError::new_err(failure.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use pyo3::types::PyDict;
+
+    /// A class carrying what `@streamlib.processor` attaches, built by running
+    /// Python rather than by setting attributes from Rust, so `__module__` and
+    /// `__qualname__` are whatever CPython actually assigns.
+    const DECLARED_CLASS_SOURCE: &str = "\
+__name__ = 'my_app.filters'
+
+
+class BlurProcessor:
+    __streamlib_processor_type_reference__ = {
+        'org': 'app', 'package': 'local', 'type': 'BlurProcessor'
+    }
+    __streamlib_processor_description__ = 'blurs'
+    __streamlib_processor_execution__ = {'mode': 'reactive'}
+    __streamlib_processor_scheduling_priority__ = None
+    __streamlib_processor_input_ports__ = []
+    __streamlib_processor_output_ports__ = []
+";
+
+    fn declared_class<'py>(python: Python<'py>) -> Bound<'py, PyAny> {
+        let namespace = PyDict::new(python);
+        python
+            .run(
+                &std::ffi::CString::new(DECLARED_CLASS_SOURCE).unwrap(),
+                Some(&namespace),
+                None,
+            )
+            .unwrap();
+        namespace.get_item("BlurProcessor").unwrap().unwrap()
+    }
+
+    /// The two fields are separate contracts — identity is what the registry
+    /// names the type by, `entrypoint` is what the child interpreter imports —
+    /// but they are one derivation, so a class that drifted between them would
+    /// mean a processor registered under a name its own helper cannot import.
+    #[test]
+    fn the_identity_and_the_entrypoint_are_the_same_derived_string() {
+        Python::initialize();
+        Python::attach(|python| {
+            let declaration =
+                PythonProcessorDeclaration::read_from_class(&declared_class(python)).unwrap();
+
+            assert_eq!(
+                declaration.descriptor.processor_class_import_path,
+                "my_app.filters:BlurProcessor"
+            );
+            assert_eq!(
+                Some(declaration.descriptor.processor_class_import_path.clone()),
+                declaration.descriptor.entrypoint,
+            );
+        });
+    }
+}
