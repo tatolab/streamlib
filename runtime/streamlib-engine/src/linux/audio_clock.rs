@@ -4,6 +4,7 @@
 #![allow(dead_code)]
 
 use crate::core::context::{AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext};
+use crate::core::media_clock::MediaClock;
 use crate::core::{Error, Result};
 use parking_lot::Mutex;
 use std::sync::Arc;
@@ -165,9 +166,6 @@ fn run_timerfd_loop(
     }
     start_sec += interval_sec;
 
-    // Record the start time in nanoseconds for timestamp calculation
-    let start_time_ns = now.tv_sec as i64 * 1_000_000_000 + now.tv_nsec as i64;
-
     // Set timerfd with TFD_TIMER_ABSTIME for drift-free repeats
     let timer_spec = libc::itimerspec {
         it_interval: libc::timespec {
@@ -273,14 +271,7 @@ fn run_timerfd_loop(
             return Err(Error::Runtime(format!("timerfd read failed: {}", err)));
         }
 
-        // Get current time for timestamp
-        let mut current_time = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        };
-        unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut current_time) };
-        let current_ns = current_time.tv_sec as i64 * 1_000_000_000 + current_time.tv_nsec as i64;
-        let elapsed_ns = current_ns - start_time_ns;
+        let timestamp_ns = MediaClock::now().as_nanos() as i64;
 
         if expirations > 1 {
             tracing::warn!(
@@ -294,7 +285,7 @@ fn run_timerfd_loop(
             let tick_num = tick_count.fetch_add(1, Ordering::SeqCst);
 
             let ctx = AudioTickContext {
-                timestamp_ns: elapsed_ns,
+                timestamp_ns,
                 samples_needed: config.buffer_size,
                 sample_rate: config.sample_rate,
                 tick_number: tick_num,

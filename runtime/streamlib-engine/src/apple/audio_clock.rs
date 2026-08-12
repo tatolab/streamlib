@@ -8,8 +8,8 @@
 
 #![allow(dead_code)]
 
-use crate::apple::time::mach_now_ns;
 use crate::core::context::{AudioClock, AudioClockConfig, AudioTickCallback, AudioTickContext};
+use crate::core::media_clock::MediaClock;
 use crate::core::{Error, Result};
 use parking_lot::Mutex;
 use std::ffi::c_void;
@@ -93,7 +93,6 @@ struct CoreAudioClockState {
     config: AudioClockConfig,
     callbacks: Mutex<Vec<AudioTickCallback>>,
     tick_count: AtomicU64,
-    start_time_ns: AtomicU64,
 }
 
 /// macOS/iOS audio clock using GCD dispatch timers.
@@ -129,7 +128,6 @@ impl CoreAudioClock {
                 config,
                 callbacks: Mutex::new(Vec::new()),
                 tick_count: AtomicU64::new(0),
-                start_time_ns: AtomicU64::new(0),
             }),
             timer_source: Mutex::new(None),
             queue,
@@ -153,12 +151,9 @@ extern "C" fn timer_callback(context: *mut c_void) {
     let state = unsafe { &*(context as *const CoreAudioClockState) };
 
     let tick_num = state.tick_count.fetch_add(1, Ordering::SeqCst);
-    let start_ns = state.start_time_ns.load(Ordering::SeqCst);
-    let now_ns = mach_now_ns();
-    let elapsed_ns = now_ns - start_ns as i64;
 
     let ctx = AudioTickContext {
-        timestamp_ns: elapsed_ns,
+        timestamp_ns: MediaClock::now().as_nanos() as i64,
         samples_needed: state.config.buffer_size,
         sample_rate: state.config.sample_rate,
         tick_number: tick_num,
@@ -189,11 +184,7 @@ impl AudioClock for CoreAudioClock {
             return Ok(()); // Already running
         }
 
-        // Reset tick count and record start time
         self.state.tick_count.store(0, Ordering::SeqCst);
-        self.state
-            .start_time_ns
-            .store(mach_now_ns() as u64, Ordering::SeqCst);
 
         // Calculate interval in nanoseconds
         let interval_ns = self.state.config.tick_duration_nanos();
