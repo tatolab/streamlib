@@ -113,9 +113,9 @@ class MasteringDisplay:
 class VideoFrame:
     """A video-frame bag, cast: GPU surface reference plus per-frame metadata.
 
-    ``surface_id`` is the handoff contract; ``timestamp_ns`` (monotonic
-    nanoseconds — process-relative until the engine's clock-epoch unification
-    lands) is the ordering primitive.
+    ``surface_id`` is the handoff contract; ``timestamp_ns`` (the machine's
+    monotonic clock in nanoseconds, comparable across every process on the
+    host) is the ordering primitive.
     """
 
     surface_id: str

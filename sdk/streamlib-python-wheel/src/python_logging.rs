@@ -22,10 +22,9 @@ use crate::python_bag_conversion::python_object_to_json_value;
 
 /// The clock the engine stamps bags with, in nanoseconds.
 ///
-/// Monotonic and shared by every processor in this process, so two readings
-/// subtract to a real duration. It is not the system-wide `CLOCK_MONOTONIC`
-/// epoch — the origin is this process's engine start — so a value from one
-/// process means nothing in another.
+/// The machine's monotonic clock — `CLOCK_MONOTONIC` on Linux,
+/// `mach_absolute_time` on Apple — so a value is comparable across every
+/// process on the host.
 #[pyfunction]
 pub(crate) fn media_clock_now_ns() -> u64 {
     MediaClock::now().as_nanos() as u64
@@ -33,11 +32,11 @@ pub(crate) fn media_clock_now_ns() -> u64 {
 
 /// Current monotonic time in nanoseconds via `clock_gettime(CLOCK_MONOTONIC)`.
 ///
-/// The kernel's monotonic epoch, so values are comparable across processes —
-/// to Python's `time.clock_gettime_ns(time.CLOCK_MONOTONIC)`, to Rust
-/// `Instant` reads, and to the old SDK's canonical bag stamps. This is a
-/// different epoch from [`media_clock_now_ns`]; both are documented, neither
-/// is derived from the other.
+/// The kernel's `CLOCK_MONOTONIC` epoch, so values are comparable across
+/// processes — the same domain Python's
+/// `time.clock_gettime_ns(time.CLOCK_MONOTONIC)` reads. Matches the engine's
+/// bag stamps on Linux; on Apple the engine stamps with `mach_absolute_time`,
+/// which stops across system sleep.
 #[pyfunction]
 pub(crate) fn monotonic_now_ns() -> u64 {
     monotonic_clock_now_ns()
@@ -120,8 +119,7 @@ mod tests {
     }
 
     /// The value domain is the kernel's CLOCK_MONOTONIC epoch — the same one
-    /// `time.clock_gettime_ns(time.CLOCK_MONOTONIC)` reads — not a
-    /// process-local origin like the media clock's.
+    /// `time.clock_gettime_ns(time.CLOCK_MONOTONIC)` reads.
     #[test]
     fn monotonic_clock_shares_the_kernel_clock_monotonic_domain() {
         let mut timespec = libc::timespec {

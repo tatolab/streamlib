@@ -93,7 +93,7 @@ def test_ctx_config_is_an_empty_dict_when_nothing_was_passed(start_app_under_tes
 
 def test_ctx_time_is_kernel_monotonic_nanoseconds(start_app_under_test):
     """Two kernel reads bracket `ctx.time`, so the value is provably the raw
-    `CLOCK_MONOTONIC` domain — not the engine's media clock.
+    `CLOCK_MONOTONIC` domain.
 
     The bracket is taken inside the helper process, which is the point: the
     clock has to be the machine's, comparable across processes, not each

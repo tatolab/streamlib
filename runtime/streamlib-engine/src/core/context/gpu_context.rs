@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 use crate::core::context::TextureRegistration;
+use crate::core::media_clock::MediaClock;
 use crate::core::rhi::{
     CommandBuffer, GpuDevice, PixelBuffer, PixelBufferDescriptor, PixelBufferPoolId, PixelFormat,
     RhiBlitter, RhiColorConverter, RhiCommandQueue, RhiPixelBufferPool, Texture, TextureDescriptor,
@@ -2528,7 +2529,8 @@ impl GpuContextLimitedAccess {
 std::thread_local! {
     static ESCALATION_TIMESTAMPS_NS: std::cell::RefCell<std::collections::VecDeque<u64>> =
         std::cell::RefCell::new(std::collections::VecDeque::with_capacity(16));
-    static ESCALATION_LAST_WARN_NS: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    static ESCALATION_LAST_WARN_NS: std::cell::Cell<Option<u64>> =
+        const { std::cell::Cell::new(None) };
 }
 
 const ESCALATION_RATE_WARN_THRESHOLD_PER_SEC: usize = 1;
@@ -2536,7 +2538,7 @@ const ESCALATION_RATE_WINDOW_NS: u64 = 1_000_000_000;
 const ESCALATION_WARN_DEBOUNCE_NS: u64 = 5_000_000_000;
 
 fn check_sustained_escalation_rate() {
-    let now_ns = escalation_monotonic_ns();
+    let now_ns = MediaClock::now().as_nanos() as u64;
     let cutoff = now_ns.saturating_sub(ESCALATION_RATE_WINDOW_NS);
 
     let (count, last_warn) = ESCALATION_TIMESTAMPS_NS.with(|buf| {
@@ -2551,9 +2553,9 @@ fn check_sustained_escalation_rate() {
     });
 
     if count > ESCALATION_RATE_WARN_THRESHOLD_PER_SEC
-        && now_ns.saturating_sub(last_warn) >= ESCALATION_WARN_DEBOUNCE_NS
+        && last_warn.is_none_or(|at_ns| now_ns.saturating_sub(at_ns) >= ESCALATION_WARN_DEBOUNCE_NS)
     {
-        ESCALATION_LAST_WARN_NS.with(|c| c.set(now_ns));
+        ESCALATION_LAST_WARN_NS.with(|c| c.set(Some(now_ns)));
         let thread = std::thread::current();
         tracing::warn!(
             thread = thread.name().unwrap_or("<unnamed>"),
@@ -2562,13 +2564,6 @@ fn check_sustained_escalation_rate() {
              processor likely needs more pre-reservation in setup()"
         );
     }
-}
-
-fn escalation_monotonic_ns() -> u64 {
-    use std::sync::OnceLock;
-    static ORIGIN: OnceLock<std::time::Instant> = OnceLock::new();
-    let origin = ORIGIN.get_or_init(std::time::Instant::now);
-    origin.elapsed().as_nanos() as u64
 }
 
 impl GpuContextFullAccess {
