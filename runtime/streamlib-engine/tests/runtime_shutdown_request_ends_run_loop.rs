@@ -44,7 +44,6 @@ const SHUTDOWN_OBSERVED_WATCHDOG: Duration = Duration::from_secs(5);
 /// "a processor decides the run is over" case, using nothing but the public
 /// `RuntimeOperations` handle its context hands it.
 #[streamlib::sdk::processor(
-    "@tatolab/streamlib-engine/ShutdownRequestingTestProcessor",
     execution = manual,
 )]
 pub struct ShutdownRequestingTestProcessor;

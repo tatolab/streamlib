@@ -11,17 +11,12 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyDict, PyList};
 use streamlib::sdk::descriptors::{
-    Org, Package, PortDescriptor, ProcessorClassImportPath, ProcessorDescriptor, ProcessorRuntime,
-    ProcessorScheduling, SchemaIdent, SemVer, TypeName,
+    PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
+    ProcessorRuntime, ProcessorScheduling,
 };
 use streamlib::sdk::execution::{ExecutionConfig, ProcessExecution, ThreadPriority};
 
 use crate::python_processor_import_path::processor_class_import_path;
-
-/// The version the vestigial `ProcessorDescriptor::name` carries. Nothing keys
-/// on that field any more — a processor is named by its class's import path —
-/// so this is inert filler for the one struct that still has it.
-const VERSION_FREE_SENTINEL: SemVer = SemVer::new(0, 0, 0);
 
 /// Everything the engine needs to register and instantiate one Python
 /// processor class.
@@ -33,7 +28,7 @@ pub(crate) struct PythonProcessorDeclaration {
 impl PythonProcessorDeclaration {
     /// Read the decorator's metadata off `processor_class`.
     pub(crate) fn read_from_class(processor_class: &Bound<'_, PyAny>) -> PyResult<Self> {
-        let vestigial_name = read_declared_schema_ident(processor_class)?;
+        let class_short_name = read_class_short_name(processor_class)?;
         let execution_config = read_execution_config(processor_class)?;
 
         // Identity and `entrypoint` are separate contracts, but one
@@ -41,7 +36,7 @@ impl PythonProcessorDeclaration {
         let class_import_path = processor_class_import_path(processor_class)?;
 
         let mut descriptor = ProcessorDescriptor::new(
-            vestigial_name,
+            class_short_name,
             ProcessorClassImportPath::new(class_import_path.clone())
                 .map_err(|blank| PyValueError::new_err(blank.to_string()))?,
             read_string_attribute(processor_class, "__streamlib_processor_description__")?,
@@ -66,33 +61,20 @@ impl PythonProcessorDeclaration {
 pub(crate) fn is_declared_processor_class(candidate: &Bound<'_, PyAny>) -> bool {
     candidate.is_instance_of::<pyo3::types::PyType>()
         && candidate
-            .hasattr("__streamlib_processor_type_reference__")
+            .hasattr("__streamlib_processor_declared__")
             .unwrap_or(false)
 }
 
-/// The `@org/package/Type` the decorator still records, read only to fill the
-/// descriptor's vestigial `name`. Nothing keys on it; the grammar and the field
-/// die together.
-fn read_declared_schema_ident(processor_class: &Bound<'_, PyAny>) -> PyResult<SchemaIdent> {
-    let reference = processor_class
-        .getattr("__streamlib_processor_type_reference__")?
-        .cast_into::<PyDict>()
-        .map_err(|_| {
-            PyTypeError::new_err(
-                "__streamlib_processor_type_reference__ must be a dict — the class was not \
-                 declared by @streamlib.processor",
-            )
-        })?;
-
-    let org = Org::new(read_dict_string(&reference, "org")?).map_err(ident_error)?;
-    let package = Package::new(read_dict_string(&reference, "package")?).map_err(ident_error)?;
-    let type_name = TypeName::new(read_dict_string(&reference, "type")?).map_err(ident_error)?;
-    Ok(SchemaIdent::new(
-        org,
-        package,
-        type_name,
-        VERSION_FREE_SENTINEL,
-    ))
+/// The class's short name — what an instance's display name defaults to.
+///
+/// `__name__` is CPython's own short name for the class (`Inner` for a nested
+/// `Outer.Inner`), so it needs no string surgery. The import path is the
+/// separate `__module__`/`__qualname__` derivation; neither is recovered from
+/// the other.
+fn read_class_short_name(processor_class: &Bound<'_, PyAny>) -> PyResult<ProcessorClassShortName> {
+    let short_name = processor_class.getattr("__name__")?.extract::<String>()?;
+    ProcessorClassShortName::new(short_name)
+        .map_err(|blank| PyValueError::new_err(blank.to_string()))
 }
 
 fn read_execution_config(processor_class: &Bound<'_, PyAny>) -> PyResult<ExecutionConfig> {
@@ -196,10 +178,6 @@ fn read_dict_string(dictionary: &Bound<'_, PyDict>, key: &str) -> PyResult<Strin
         .extract::<String>()
 }
 
-fn ident_error(failure: impl std::fmt::Display) -> PyErr {
-    PyTypeError::new_err(failure.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,9 +189,7 @@ __name__ = 'my_app.filters'
 
 
 class BlurProcessor:
-    __streamlib_processor_type_reference__ = {
-        'org': 'app', 'package': 'local', 'type': 'BlurProcessor'
-    }
+    __streamlib_processor_declared__ = True
     __streamlib_processor_description__ = 'blurs'
     __streamlib_processor_execution__ = {'mode': 'reactive'}
     __streamlib_processor_scheduling_priority__ = None

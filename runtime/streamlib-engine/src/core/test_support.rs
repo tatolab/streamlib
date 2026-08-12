@@ -14,7 +14,6 @@ use crate::core::processors::PROCESSOR_REGISTRY;
 
 /// Mock processor with two input ports + two output ports.
 #[crate::processor(
-    "@tatolab/streamlib-engine/TestMockProcessor",
     execution = manual,
     input("in1", delivery_profile = "latest"),
     input("in2", delivery_profile = "latest"),
@@ -46,7 +45,6 @@ impl crate::core::ManualProcessor for MockProcessor::Processor {
 
 /// Mock processor with only output ports.
 #[crate::processor(
-    "@tatolab/streamlib-engine/TestMockOutputOnlyProcessor",
     execution = manual,
     output("out1"),
     output("out2"),
@@ -76,7 +74,6 @@ impl crate::core::ManualProcessor for MockOutputOnlyProcessor::Processor {
 
 /// Mock processor with only input ports.
 #[crate::processor(
-    "@tatolab/streamlib-engine/TestMockInputOnlyProcessor",
     execution = manual,
     input("in1", delivery_profile = "latest"),
     input("in2", delivery_profile = "latest"),
@@ -108,7 +105,6 @@ impl crate::core::ManualProcessor for MockInputOnlyProcessor::Processor {
 /// than driving itself — the one execution mode that consumes the link
 /// notifications its listener receives.
 #[crate::processor(
-    "@tatolab/streamlib-engine/TestMockReactiveInputOnlyProcessor",
     execution = reactive,
     input("in1", delivery_profile = "latest"),
     input("in2", delivery_profile = "latest"),

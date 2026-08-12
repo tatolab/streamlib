@@ -9,7 +9,6 @@ members = [
     "runtime/streamlib-surface-client", # Wire-format helpers for the per-runtime surface-sharing socket (Linux)
     "runtime/streamlib-media-builtins", # First-party media built-ins (test pattern, camera, display) — native blocks statically linked into the wheel
     "sdk/streamlib-processor-schema", # Processor schema types + YAML parser shared between the engine and streamlib-macros
-    "sdk/streamlib-idents",    # Structured schema identifiers, semver, manifest/lockfile types (#399)
     "sdk/streamlib-macros",    # Procedural macros — owns the `#[processor]` authoring grammar
     "adapters/streamlib-surface-adapter", # Surface adapter contract shared by every adapter core
     "runtime/streamlib-consumer-rhi", # Consumer-side carve-out of the Vulkan RHI — DMA-BUF FD import + bind + map. Adapters depend on this NOT the full engine, so the FullAccess capability boundary is type-system enforced (Linux)

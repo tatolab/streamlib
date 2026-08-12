@@ -11,32 +11,13 @@
 
 use proc_macro2::{Ident, Span, TokenStream};
 use quote::{quote, quote_spanned};
-use streamlib_processor_schema::{ProcessorSchema, SchemaIdent};
+use streamlib_processor_schema::ProcessorSchema;
 use syn::spanned::Spanned;
 use syn::{ItemStruct, Path};
 
-/// Emit a `SchemaIdent` literal expression. Inputs are pre-validated by the
-/// attribute parser so the `expect("validated")` calls are infallible.
-fn schema_ident_tokens(ident: &SchemaIdent) -> TokenStream {
-    let org = ident.org.as_str();
-    let pkg = ident.package.as_str();
-    let ty = ident.r#type.as_str();
-    let major = ident.version.major;
-    let minor = ident.version.minor;
-    let patch = ident.version.patch;
-    quote! {
-        __streamlib_sdk::descriptors::SchemaIdent::new(
-            __streamlib_sdk::descriptors::Org::new(#org).expect("validated by manifest parser"),
-            __streamlib_sdk::descriptors::Package::new(#pkg).expect("validated by manifest parser"),
-            __streamlib_sdk::descriptors::TypeName::new(#ty).expect("validated by manifest parser"),
-            __streamlib_sdk::descriptors::SemVer::new(#major, #minor, #patch),
-        )
-    }
-}
-
-/// Generate a processor module from the attribute-declared [`ProcessorSchema`]
-/// and its fully-qualified [`SchemaIdent`]. Identity, execution, and ports are
-/// authored in the `#[processor(...)]` attribute — nothing here reads a file.
+/// Generate a processor module from the attribute-declared [`ProcessorSchema`].
+/// Execution and ports are authored in the `#[processor(...)]` attribute —
+/// nothing here reads a file, and nothing authors identity.
 ///
 /// `config_type_path` is the Rust type path for the processor's typed `Config`
 /// alias, taken verbatim from the attribute's `config = <Path>`; `None` binds
@@ -46,7 +27,6 @@ fn schema_ident_tokens(ident: &SchemaIdent) -> TokenStream {
 pub fn generate_from_processor_schema(
     item: &ItemStruct,
     schema: &ProcessorSchema,
-    schema_ident: &SchemaIdent,
     config_type_path: Option<&Path>,
     config_field_name: Option<&str>,
     config_schema_id: Option<&str>,
@@ -71,22 +51,13 @@ pub fn generate_from_processor_schema(
     let output_link_module = generate_output_link_module_from_schema(schema);
     let processor_impl = generate_processor_impl_from_schema(
         schema,
-        schema_ident,
         &config_type,
         &config_field_name,
         &custom_fields,
         config_schema_id,
     );
 
-    let schema_ident_const = quote! {
-        /// Structured wire identity for this processor —
-        /// `@<org>/<package>/<Type>@<version>` declared in the
-        /// `#[processor(...)]` attribute.
-        #[allow(dead_code)]
-        pub fn schema_ident() -> __streamlib_sdk::descriptors::SchemaIdent {
-            Processor::schema_ident()
-        }
-
+    let processor_class_import_path_accessor = quote! {
         /// This processor's identity: the path its type is reached by.
         #[allow(dead_code)]
         pub fn processor_class_import_path()
@@ -124,7 +95,7 @@ pub fn generate_from_processor_schema(
             /// Configuration type for this processor.
             pub type Config = #config_type;
 
-            #schema_ident_const
+            #processor_class_import_path_accessor
 
             /// Create a [`ProcessorSpec`] for adding this processor to a runtime.
             ///
@@ -341,7 +312,6 @@ fn generate_output_link_module_from_schema(schema: &ProcessorSchema) -> TokenStr
 /// Generate Processor trait implementation from schema.
 fn generate_processor_impl_from_schema(
     schema: &ProcessorSchema,
-    schema_ident: &SchemaIdent,
     config_type: &TokenStream,
     config_field_name: &Option<Ident>,
     custom_fields: &[CustomField],
@@ -349,13 +319,8 @@ fn generate_processor_impl_from_schema(
 ) -> TokenStream {
     use streamlib_processor_schema::ProcessorSchemaExecution;
 
-    let processor_name = &schema.name;
+    let processor_class_short_name = &schema.name;
     let description = schema.description.as_deref().unwrap_or("Processor");
-    // The descriptor version mirrors the processor's own identity version — the
-    // version-free `0.0.0` sentinel in the attribute grammar (#1409); the load
-    // path re-registers the descriptor under the package version.
-    let version = schema_ident.version.to_string();
-    let schema_ident_literal = schema_ident_tokens(schema_ident);
 
     // Derive execution mode from schema
     let (
@@ -426,8 +391,7 @@ fn generate_processor_impl_from_schema(
 
     let from_config_body =
         generate_from_config_from_schema(schema, config_field_name, custom_fields);
-    let descriptor_impl =
-        generate_descriptor_from_schema(schema, description, &version, config_schema_id);
+    let descriptor_impl = generate_descriptor_from_schema(schema, description, config_schema_id);
     let iceoryx2_accessors = generate_iceoryx2_accessors_from_schema(schema);
 
     let update_config = config_field_name.as_ref().map(|name| {
@@ -441,18 +405,10 @@ fn generate_processor_impl_from_schema(
 
     quote! {
         impl Processor {
-            /// Processor PascalCase short name — what an instance's display
-            /// name defaults to. Not the processor's identity: use
+            /// The authored type's name — what an instance's display name
+            /// defaults to. Not the processor's identity: use
             /// [`Processor::processor_class_import_path`] for that.
-            pub const NAME: &'static str = #processor_name;
-
-            /// Returns the structured wire identity for this processor —
-            /// the version-free `@<org>/<package>/<Type>` declared in the
-            /// `#[processor(...)]` attribute (carrying the `0.0.0`
-            /// version-free sentinel).
-            pub fn schema_ident() -> __streamlib_sdk::descriptors::SchemaIdent {
-                #schema_ident_literal
-            }
+            pub const NAME: &'static str = #processor_class_short_name;
 
             /// This processor's identity: the path its type is reached by,
             /// captured where the macro expanded.
@@ -615,10 +571,8 @@ fn generate_from_config_from_schema(
 fn generate_descriptor_from_schema(
     schema: &ProcessorSchema,
     description: &str,
-    version: &str,
     config_schema_id: Option<&str>,
 ) -> TokenStream {
-    let _name = &schema.name; // PascalCase short name retained for identifier checks elsewhere
     let repository = "https://github.com/tatolab/streamlib";
 
     // iceoryx2-based input ports
@@ -691,11 +645,11 @@ fn generate_descriptor_from_schema(
         fn descriptor() -> Option<__streamlib_sdk::descriptors::ProcessorDescriptor> {
             Some(
                 __streamlib_sdk::descriptors::ProcessorDescriptor::new(
-                    Processor::schema_ident(),
+                    __streamlib_sdk::descriptors::ProcessorClassShortName::new(Processor::NAME)
+                        .expect("a struct's identifier is never blank"),
                     Processor::processor_class_import_path(),
                     #description,
                 )
-                    .with_version(#version)
                     .with_repository(#repository)
                     #config_schema
                     #scheduling
@@ -1274,21 +1228,10 @@ mod processor_struct_emit_tests {
         messages
     }
 
-    fn probe_schema_ident() -> SchemaIdent {
-        use streamlib_processor_schema::{Org, Package, SemVer, TypeName};
-        SchemaIdent::new(
-            Org::new("tatolab").expect("valid org"),
-            Package::new("streamlib-macros").expect("valid package"),
-            TypeName::new("FieldAttributeProbe").expect("valid type name"),
-            SemVer::new(0, 0, 0),
-        )
-    }
-
     fn expand_probe_processor(item: &ItemStruct) -> TokenStream {
         generate_from_processor_schema(
             item,
             &minimal_schema(),
-            &probe_schema_ident(),
             None,
             None,
             None,
@@ -1443,7 +1386,6 @@ mod processor_struct_emit_tests {
         render_token_stream_without_whitespace(generate_descriptor_from_schema(
             &minimal_schema(),
             "a probe",
-            "0.0.0",
             None,
         ))
     }
@@ -1453,7 +1395,6 @@ mod processor_struct_emit_tests {
     fn rendered_processor_impl() -> String {
         render_token_stream_without_whitespace(generate_processor_impl_from_schema(
             &minimal_schema(),
-            &probe_schema_ident(),
             &quote! { __streamlib_sdk::processors::EmptyConfig },
             &None,
             &[],

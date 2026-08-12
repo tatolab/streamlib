@@ -117,7 +117,6 @@ pub fn list_camera_capture_devices() -> Result<Vec<CameraCaptureDevice>> {
 }
 
 #[streamlib::sdk::processor(
-    "@tatolab/media-builtins/CameraSource",
     description = "Captures live video from a V4L2 camera (zero-copy DMA-BUF when the device exports it, CPU upload otherwise)",
     execution = manual,
     scheduling = high,

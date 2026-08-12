@@ -27,11 +27,7 @@ def test_a_bare_decorator_needs_no_arguments_at_all():
         @output()
         def frames_to_downstream(self) -> None: ...
 
-    assert BrightnessFilter.__streamlib_processor_type_reference__ == {
-        "org": "app",
-        "package": "local",
-        "type": "BrightnessFilter",
-    }
+    assert BrightnessFilter.__streamlib_processor_declared__ is True
     assert BrightnessFilter.__streamlib_processor_execution__ == {
         "mode": "reactive",
         "interval_ms": 0,
@@ -188,46 +184,68 @@ def test_a_source_that_declares_a_mode_is_accepted():
     }
 
 
-def test_an_explicit_identity_is_parsed_into_its_three_segments():
-    @processor("@tatolab/camera/Camera", execution="manual", scheduling="realtime")
+def test_keyword_arguments_are_the_whole_grammar():
+    @processor(execution="manual", scheduling="realtime")
     class Camera:
         @output()
         def frames_to_downstream(self) -> None: ...
 
-    assert Camera.__streamlib_processor_type_reference__ == {
-        "org": "tatolab",
-        "package": "camera",
-        "type": "Camera",
-    }
+    assert Camera.__streamlib_processor_declared__ is True
     assert Camera.__streamlib_processor_scheduling_priority__ == "realtime"
 
 
 @pytest.mark.parametrize(
-    ("identity", "expected_message"),
+    "identity",
     [
-        ("@tatolab/camera/Camera@1.0.0", "version-free"),
-        ("tatolab/camera/Camera", "three `/`-separated segments"),
-        ("@tatolab/camera", "three `/`-separated segments"),
-        ("@tatolab/camera/lowercase", "invalid type segment"),
-        ("@Tatolab/camera/Camera", "invalid org segment"),
+        "@tatolab/camera/Camera",
+        "@tatolab/camera/Camera@1.0.0",
+        "tatolab/camera/Camera",
+        "@tatolab/camera",
     ],
 )
-def test_a_malformed_identity_is_refused_with_its_reason(identity, expected_message):
-    with pytest.raises(ValueError, match=expected_message):
+def test_a_positional_identity_is_refused_naming_the_class_path_rule(identity: str):
+    """Every spelling the deleted grammar accepted lands on one refusal.
 
-        @processor(identity, execution="manual")
+    Mental-revert guard: restore the positional identity parameter and these
+    declare cleanly instead of raising. The argument is deliberately the wrong
+    type — the decorator's signature takes `type | None` — because the runtime
+    refusal is what a caller without a type checker actually meets.
+    """
+    with pytest.raises(TypeError, match="takes no positional argument"):
+
+        @processor(identity, execution="manual")  # pyright: ignore[reportArgumentType]
         class Camera:
             @output()
             def frames_to_downstream(self) -> None: ...
 
 
-def test_a_class_name_that_cannot_be_an_identity_says_so():
-    with pytest.raises(ValueError, match="must be PascalCase"):
+def test_the_refusal_names_where_the_identity_actually_comes_from():
+    with pytest.raises(TypeError) as refusal:
 
-        @processor
-        class lowercase_name:
-            @input(delivery_profile="latest")
-            def frames_from_upstream(self) -> None: ...
+        @processor("@tatolab/camera/Camera")  # pyright: ignore[reportArgumentType]
+        class Camera:
+            @output()
+            def frames_to_downstream(self) -> None: ...
+
+    message = str(refusal.value)
+    assert "import path" in message
+    assert "__module__" in message and "__qualname__" in message
+
+
+def test_a_class_name_that_is_not_pascal_case_is_accepted():
+    """Python does not enforce PascalCase, so neither does the decorator.
+
+    The old grammar refused `lowercase_name` because it had to fit a
+    `^[A-Z][A-Za-z0-9]*$` type segment. Nothing parses the class name now — it
+    is read off `__name__` for the display-name default and passed through.
+    """
+
+    @processor
+    class lowercase_name:
+        @input(delivery_profile="latest")
+        def frames_from_upstream(self) -> None: ...
+
+    assert lowercase_name.__streamlib_processor_declared__ is True
 
 
 @pytest.mark.parametrize(

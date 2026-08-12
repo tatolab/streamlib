@@ -100,7 +100,6 @@ impl Default for DisplayWindowConfig {
 }
 
 #[streamlib::sdk::processor(
-    "@tatolab/media-builtins/DisplayWindow",
     description = "Shows video frames in a window with vsync",
     execution = manual,
     scheduling = high,

@@ -12,7 +12,6 @@ pub mod check_device_wait_idle;
 pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_in_process_placement;
 pub mod check_no_inventory_submit;
-pub mod check_no_reverse_dns;
 pub mod check_no_unbounded_cstr_from_ptr;
 pub mod check_vendored_vulkanalia;
 pub mod lint_logging;
@@ -64,14 +63,6 @@ enum Commands {
     /// on the full `streamlib` crate, or privileged Vulkan calls outside
     /// the RHI. See `docs/architecture/subprocess-rhi-parity.md`.
     CheckBoundaries,
-
-    /// CI gate for milestone-10's structured-identifier rule. Fails on
-    /// legacy reverse-DNS schema literals (`com.tatolab.*`,
-    /// `com.streamlib.*`) anywhere in live workspace code. Apple
-    /// platform code (`*/apple/*`), test code (`#[cfg(test)]`,
-    /// `tests/`, `*_test{s}.rs`), and Rust comments are allowed. See
-    /// `docs/architecture/schema-identity-and-packaging.md`.
-    CheckNoReverseDns,
 
     /// CI gate for the helper-process-placement-only ruling (owner
     /// 2026-08-04). Fails on the vocabulary of the banned model anywhere in
@@ -145,7 +136,6 @@ fn main() -> Result<()> {
     match cli.command {
         Commands::LintLogging => lint_logging::run(&workspace_root()?)?,
         Commands::CheckBoundaries => check_boundaries::run(&workspace_root()?)?,
-        Commands::CheckNoReverseDns => check_no_reverse_dns::run(&workspace_root()?)?,
         Commands::CheckNoInProcessPlacement => {
             check_no_in_process_placement::run(&workspace_root()?)?
         }

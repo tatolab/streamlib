@@ -1,7 +1,7 @@
 # Copyright (c) 2025 Jonathan Fontanez
 # SPDX-License-Identifier: BUSL-1.1
 
-"""The `@processor` grammar — identity, execution mode, and ports, declared in code.
+"""The `@processor` grammar — execution mode and ports, declared in code.
 
 Nothing is read from disk: there is no manifest, and a bare `.py` module defines
 a working processor. `@processor` attaches the metadata the engine reads at
@@ -10,12 +10,14 @@ the contract between this module and the native half, and the two move together.
 Ports are declared with the `@input` / `@output` method decorators and accessed
 at run time through `ctx.inputs` / `ctx.outputs` — the marker methods themselves
 are never called.
+
+A processor is named by its class's import path, derived from `__module__` and
+`__qualname__` by the native half. Identity is never authored here.
 """
 
 from __future__ import annotations
 
-import re
-from typing import Any, Callable, Optional, Pattern, TypeVar, Union
+from typing import Any, Callable, Optional, TypeVar
 
 
 __all__ = [
@@ -23,13 +25,6 @@ __all__ = [
     "output",
     "processor",
 ]
-
-# Mirrors `streamlib_idents`' newtype validation. A processor reference is
-# version-free — versions never appear at the code layer.
-_ORGANIZATION_PATTERN: Pattern[str] = re.compile(r"^[a-z][a-z0-9-]*$")
-_PACKAGE_PATTERN: Pattern[str] = re.compile(r"^[a-z][a-z0-9-]*$")
-_TYPE_NAME_PATTERN: Pattern[str] = re.compile(r"^[A-Z][A-Za-z0-9]*$")
-_IDENTITY_PATTERN: Pattern[str] = re.compile(r"^@([^/@]+)/([^/@]+)/([^/@]+)$")
 
 _EXECUTION_MODES = ("reactive", "manual", "continuous")
 _SCHEDULING_PRIORITIES = ("realtime", "high", "normal")
@@ -114,7 +109,7 @@ def output(
 
 
 def processor(
-    class_or_identity: Union[type, str, None] = None,
+    processor_class: Optional[type] = None,
     *,
     execution: Optional[str] = None,
     interval_ms: int = 0,
@@ -123,38 +118,38 @@ def processor(
 ) -> Any:
     """Mark a class as a streamlib processor.
 
-    Usable bare (`@processor`) or with arguments. Omitting the identity
-    synthesizes `@app/local/<ClassName>`, so an app-local processor needs no
-    identity at all; pass a version-free `@org/package/Type` string to publish
-    one under a shared name.
+    Usable bare (`@processor`) or with keyword arguments. It declares execution,
+    interval, scheduling priority and description — never identity: a processor
+    is named by the import path of the class it is, derived from `__module__`
+    and `__qualname__`.
 
     `execution` defaults to `"reactive"` for a class that declares at least one
     input port, and is required for one that declares none — a source has
     nothing to react to, so defaulting it there would produce a processor that
     silently never runs.
     """
-    if isinstance(class_or_identity, type):
+    if isinstance(processor_class, type):
         return _declare_processor(
-            class_or_identity,
-            identity=None,
+            processor_class,
             execution=execution,
             interval_ms=interval_ms,
             scheduling=scheduling,
             description=description,
         )
 
-    if class_or_identity is not None and not isinstance(class_or_identity, str):
+    if processor_class is not None:
         raise TypeError(
-            f"@processor() takes a version-free `@org/package/Type` identity string or "
-            f"nothing at all; got {type(class_or_identity).__name__}."
+            f"@processor() takes no positional argument; got "
+            f"{type(processor_class).__name__}. A processor is named by the import path "
+            f"of the class it is — `my_app.filters:BlurProcessor` — derived from "
+            f"`__module__` and `__qualname__` and never authored. Use `@processor` bare, "
+            f"or with keyword arguments (`execution`, `interval_ms`, `scheduling`, "
+            f"`description`)."
         )
 
-    identity = class_or_identity
-
-    def apply_to_class(processor_class: ProcessorClass) -> ProcessorClass:
+    def apply_to_class(class_under_decoration: ProcessorClass) -> ProcessorClass:
         return _declare_processor(
-            processor_class,
-            identity=identity,
+            class_under_decoration,
             execution=execution,
             interval_ms=interval_ms,
             scheduling=scheduling,
@@ -167,7 +162,6 @@ def processor(
 def _declare_processor(
     processor_class: ProcessorClass,
     *,
-    identity: Optional[str],
     execution: Optional[str],
     interval_ms: int,
     scheduling: Optional[str],
@@ -175,9 +169,7 @@ def _declare_processor(
 ) -> ProcessorClass:
     input_ports, output_ports = _collect_declared_ports(processor_class)
 
-    processor_class.__streamlib_processor_type_reference__ = _resolve_type_reference(  # type: ignore[attr-defined]
-        identity, processor_class
-    )
+    processor_class.__streamlib_processor_declared__ = True  # type: ignore[attr-defined]
     processor_class.__streamlib_processor_description__ = description  # type: ignore[attr-defined]
     processor_class.__streamlib_processor_execution__ = _resolve_execution(  # type: ignore[attr-defined]
         execution, interval_ms, processor_class, has_input_ports=bool(input_ports)
@@ -246,46 +238,6 @@ def _declared_port_markers(processor_class: type) -> "list[dict[str, Any]]":
     return [
         marker for markers in markers_by_attribute.values() for marker in markers
     ]
-
-
-def _resolve_type_reference(
-    identity: Optional[str], processor_class: type
-) -> "dict[str, str]":
-    if identity is None:
-        type_name = processor_class.__name__
-        if not _TYPE_NAME_PATTERN.match(type_name):
-            raise ValueError(
-                f"cannot synthesize an `@app/local` identity for class {type_name!r}: a "
-                f"processor type name must be PascalCase (`^[A-Z][A-Za-z0-9]*$`). Give "
-                f"the class a PascalCase name, or declare an explicit "
-                f"`@org/package/Type` identity."
-            )
-        return {"org": "app", "package": "local", "type": type_name}
-
-    if "@" in identity[1:]:
-        raise ValueError(
-            f"processor identity {identity!r} must be version-free "
-            f"`@<org>/<package>/<Type>` with no `@<version>` — versions never appear at "
-            f"the code layer."
-        )
-    match = _IDENTITY_PATTERN.match(identity)
-    if match is None:
-        raise ValueError(
-            f"processor identity {identity!r} must be `@<org>/<package>/<Type>` "
-            f"(exactly three `/`-separated segments, leading `@`)"
-        )
-    organization, package, type_name = match.groups()
-    for value, pattern, label in (
-        (organization, _ORGANIZATION_PATTERN, "org"),
-        (package, _PACKAGE_PATTERN, "package"),
-        (type_name, _TYPE_NAME_PATTERN, "type"),
-    ):
-        if not pattern.match(value):
-            raise ValueError(
-                f"processor identity {identity!r} has an invalid {label} segment "
-                f"{value!r}: must match {pattern.pattern}"
-            )
-    return {"org": organization, "package": package, "type": type_name}
 
 
 def _resolve_execution(

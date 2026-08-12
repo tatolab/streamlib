@@ -27,26 +27,25 @@ pub fn parse_processor_yaml_file(path: &Path) -> SchemaResult<ProcessorSchema> {
     parse_processor_yaml(&yaml)
 }
 
+/// Whether `s` is a bare PascalCase name — `^[A-Z][A-Za-z0-9]*$`.
+fn is_pascal_case(s: &str) -> bool {
+    let mut chars = s.chars();
+    chars.next().is_some_and(|first| first.is_ascii_uppercase())
+        && chars.all(|c| c.is_ascii_alphanumeric())
+}
+
 /// Validate a parsed processor schema.
 fn validate_processor_schema(schema: &ProcessorSchema) -> SchemaResult<()> {
-    // Name must be a bare PascalCase short name (`Camera`, `BlurFilter`)
-    // matching the macro's contract — `(org, package)` come from the
-    // enclosing `streamlib.yaml`'s `package:` block, not from the
-    // processor schema itself. Legacy reverse-DNS shapes
-    // (`com.example.foo`) are rejected at parse time.
     if schema.name.is_empty() {
         return Err(SchemaError::MissingField {
             field: "name".to_string(),
         });
     }
-    if streamlib_idents::TypeName::new(schema.name.as_str()).is_err() {
+    if !is_pascal_case(&schema.name) {
         return Err(SchemaError::InvalidName {
             name: schema.name.clone(),
             reason: "processor `name:` must be a bare PascalCase short name \
-                     (`^[A-Z][A-Za-z0-9]*$`) — the `(org, package)` come from \
-                     the enclosing `streamlib.yaml`'s `package:` block. Legacy \
-                     reverse-DNS shapes (`com.example.foo`) are no longer \
-                     accepted; see docs/architecture/schema-identity-and-packaging.md."
+                     (`^[A-Z][A-Za-z0-9]*$`)"
                 .to_string(),
         });
     }

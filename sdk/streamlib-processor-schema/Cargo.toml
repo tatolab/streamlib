@@ -14,7 +14,6 @@ repository.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }  # used by schemars for enum_values literals
 serde_yaml = { workspace = true }
-streamlib-idents = { path = "../streamlib-idents", version = "0.17.0" }
 thiserror = { workspace = true }
 schemars = "0.8"  # JsonSchema impls on the processor-schema and descriptor types
 # Host-only OpenAPI schema derive for the wire-facing types, behind the

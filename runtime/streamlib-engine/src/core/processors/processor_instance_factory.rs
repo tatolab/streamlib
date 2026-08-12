@@ -504,7 +504,7 @@ impl ProcessorInstanceFactory {
         self.descriptors
             .read()
             .get(processor_type)
-            .map(|descriptor| descriptor.name.r#type.as_str().to_string())
+            .map(|descriptor| descriptor.processor_class_short_name.as_str().to_string())
     }
 
     /// List all registered processor types with their full descriptors.
@@ -534,23 +534,18 @@ fn duplicate_class_import_path(processor_class_import_path: &ProcessorClassImpor
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
+    use crate::core::descriptors::ProcessorClassShortName;
 
     fn class_import_path(path: &str) -> ProcessorClassImportPath {
         ProcessorClassImportPath::new(path).expect("the fixture path names a class")
     }
 
-    /// `name` is vestigial from here on — nothing keys on it — so the fixtures
-    /// hold it constant while the import path varies. A test that varied both
-    /// together could not tell which one the registry actually keyed on.
+    /// The short name is held constant while the import path varies. A test
+    /// that varied both together could not tell which one the registry
+    /// actually keyed on.
     fn descriptor_for(path: &str) -> ProcessorDescriptor {
         ProcessorDescriptor::new(
-            SchemaIdent::new(
-                Org::new("vestigial").unwrap(),
-                Package::new("vestigial").unwrap(),
-                TypeName::new("Vestigial").unwrap(),
-                SemVer::new(0, 0, 0),
-            ),
+            ProcessorClassShortName::new("HeldConstant").unwrap(),
             class_import_path(path),
             "test",
         )

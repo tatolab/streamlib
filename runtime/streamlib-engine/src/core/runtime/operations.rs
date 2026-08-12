@@ -68,7 +68,7 @@ pub trait RuntimeOperations: Send + Sync {
     ///
     /// `channel` is a channel data-service name
     /// (`{source_processor}/{source_output_port}`,
-    /// `streamlib_idents::source_channel_name`); `count` bounds the tap to that
+    /// [`crate::iceoryx2::source_channel_name`]); `count` bounds the tap to that
     /// many bags then ends, `None` streams live until the returned
     /// [`TapSubscription`] is dropped. The tap consumes the channel's single
     /// reserved subscriber slot with no publisher re-open, so exactly one

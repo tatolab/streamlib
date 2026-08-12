@@ -145,42 +145,14 @@ pub mod sdk {
 
     // ---- Procedural macros ----
 
-    /// `#[streamlib::sdk::processor("@org/pkg/Type@version", …)]` attribute
-    /// macro — declares processor identity, execution, and ports.
+    /// `#[streamlib::sdk::processor(execution = …, …)]` attribute macro —
+    /// declares a processor's execution mode and ports. It declares no
+    /// identity: a processor is named by the import path of the class it is,
+    /// which the macro captures at its expansion site.
     pub use streamlib_engine::processor;
 
     /// `#[derive(ConfigDescriptor)]` derive macro.
     pub use streamlib_engine::ConfigDescriptor;
-
-    /// `streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")` —
-    /// compile-time-validated short form of
-    /// [`SchemaIdent::new`](descriptors::SchemaIdent::new). It does not name a
-    /// processor: a processor is named by the import path of the class it is,
-    /// which the `#[processor]` macro captures.
-    pub use streamlib_engine::schema_ident;
-
-    /// `streamlib::sdk::module_ident!("org", "name", "^1.0.0")` —
-    /// imperative-API module identifier with a pinned semver range.
-    /// Validates org / name / semver range at compile time; expands to
-    /// a [`ModuleIdent::new`](descriptors::ModuleIdent::new)
-    /// expression.
-    pub use streamlib_engine::module_ident;
-
-    /// `streamlib::sdk::module_ident_any_version!("org", "name")` —
-    /// any-installed-version variant of [`module_ident!`]. Equivalent
-    /// to `module_ident!("org", "name", "*")`.
-    pub use streamlib_engine::module_ident_any_version;
-
-    /// `streamlib::sdk::module_ident_joined!("@org/name", "^1.0.0")` —
-    /// joined-org/name variant of [`module_ident!`]. Same identifier;
-    /// different call-site ergonomics for callers that already have
-    /// the canonical `"@org/name"` string in hand.
-    pub use streamlib_engine::module_ident_joined;
-
-    /// `streamlib::sdk::module_ident_joined_any_version!("@org/name")` —
-    /// joined-org/name + any-version variant. Equivalent to
-    /// `module_ident_joined!("@org/name", "*")`.
-    pub use streamlib_engine::module_ident_joined_any_version;
 
     // ---- Permission helpers ----
 

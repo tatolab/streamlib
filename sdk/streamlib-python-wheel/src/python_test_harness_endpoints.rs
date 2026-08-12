@@ -148,7 +148,6 @@ fn take_collected_bag(channel: &str, timeout: Duration) -> CollectedBagWaitOutco
 
 /// Publishes whatever a test hands it, in order.
 #[streamlib::sdk::processor(
-    "@tatolab/wheel-testing/TestBagFeeder",
     description = "Publishes bags a test queued on its channel, in order",
     execution = continuous(interval_ms = 1),
     config = crate::python_test_harness_endpoints::TestHarnessChannelConfig,
@@ -173,7 +172,6 @@ impl ContinuousProcessor for TestBagFeeder::Processor {
 /// `every_sample` rather than the default: a test asserts on what was
 /// produced, so dropping a bag under a burst would make the assertion lie.
 #[streamlib::sdk::processor(
-    "@tatolab/wheel-testing/TestBagCollector",
     description = "Collects every bag the processor under test produced",
     execution = reactive,
     config = crate::python_test_harness_endpoints::TestHarnessChannelConfig,

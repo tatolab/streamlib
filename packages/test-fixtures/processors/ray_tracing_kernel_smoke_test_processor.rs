@@ -79,7 +79,6 @@ const SMOKE_RCHIT_SPV: &[u8] = include_bytes!(concat!(
 const SMOKE_SURFACE_SIZE: u32 = 64;
 
 #[streamlib::sdk::processor(
-    "@tatolab/test-fixtures/RayTracingKernelSmokeTestProcessor",
     description = "Ray-tracing-kernel smoke test fixture — builds a single-triangle BLAS + identity TLAS via FullAccess, creates an RT kernel, acquires a STORAGE_BINDING Texture, runs a single trace_rays() to assert the binding methods (set_acceleration_structure / set_storage_image / set_push_constants / trace_rays) don't panic. Smoke-only; pixel correctness not asserted.",
     execution = manual,
     config = crate::test_fixture_processor_configs::RayTracingKernelSmokeTestProcessorConfig,

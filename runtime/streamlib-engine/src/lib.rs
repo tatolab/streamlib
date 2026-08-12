@@ -32,13 +32,71 @@ pub mod logging {
 }
 
 // Re-export attribute macros for processor syntax:
-// - #[streamlib::processor("@org/pkg/Type", …)] - execution + ports in code; a
+// - #[streamlib::processor(execution = …, …)] - execution + ports in code; a
 //   processor's identity is the import path of its type, captured by the macro
 // - #[derive(ConfigDescriptor)] - Config field metadata derive macro
-pub use streamlib_macros::{
-    ConfigDescriptor, module_ident, module_ident_any_version, module_ident_joined,
-    module_ident_joined_any_version, processor, schema_ident,
-};
+pub use streamlib_macros::{ConfigDescriptor, processor};
+
+/// The `#[processor]` attribute accepts no authored identity, in any spelling.
+///
+/// The message is asserted at the parse seam in `streamlib-macros`; these
+/// assert the refusal survives a real expansion, which a unit test on the
+/// parser cannot.
+///
+/// The first block is the control, and it is what makes the other two mean
+/// anything: it is the same fixture with the identity removed, and it must
+/// COMPILE. A `compile_fail` block passes for any reason at all — an
+/// unresolved path, a missing trait impl — so without a positive twin proving
+/// the fixture is otherwise sound, the two refusals below would pass on a
+/// typo.
+///
+/// ```
+/// use streamlib::sdk::context::RuntimeContextFullAccess;
+/// use streamlib::sdk::error::Result;
+///
+/// #[streamlib::sdk::processor(execution = manual)]
+/// pub struct AcceptedWithoutIdentity;
+///
+/// impl streamlib::sdk::processors::ManualProcessor for AcceptedWithoutIdentity::Processor {
+///     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+///         Ok(())
+///     }
+/// }
+/// ```
+///
+/// The leading positional `@org/package/Type` the grammar used to take:
+///
+/// ```compile_fail
+/// use streamlib::sdk::context::RuntimeContextFullAccess;
+/// use streamlib::sdk::error::Result;
+///
+/// #[streamlib::sdk::processor("@tatolab/camera/Camera", execution = manual)]
+/// pub struct RefusedPositionalIdentity;
+///
+/// impl streamlib::sdk::processors::ManualProcessor for RefusedPositionalIdentity::Processor {
+///     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+///         Ok(())
+///     }
+/// }
+/// ```
+///
+/// The `type = "..."` override that used to name the synthesized segment:
+///
+/// ```compile_fail
+/// use streamlib::sdk::context::RuntimeContextFullAccess;
+/// use streamlib::sdk::error::Result;
+///
+/// #[streamlib::sdk::processor(execution = manual, type = "CustomName")]
+/// pub struct RefusedTypeOverride;
+///
+/// impl streamlib::sdk::processors::ManualProcessor for RefusedTypeOverride::Processor {
+///     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+///         Ok(())
+///     }
+/// }
+/// ```
+#[cfg(doctest)]
+pub struct ProcessorAttributeAcceptsNoIdentity;
 
 pub use core::{
     ConnectionDefinition,
@@ -235,10 +293,7 @@ pub mod sdk {
     pub use crate::logging;
     pub use crate::serde_json;
 
-    pub use streamlib_macros::{
-        ConfigDescriptor, module_ident, module_ident_any_version, module_ident_joined,
-        module_ident_joined_any_version, processor, schema_ident,
-    };
+    pub use streamlib_macros::{ConfigDescriptor, processor};
 
     pub mod permissions {
         pub use crate::{

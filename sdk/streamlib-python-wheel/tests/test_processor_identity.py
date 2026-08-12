@@ -171,8 +171,8 @@ def test_two_classes_in_one_graph_register_under_two_distinct_paths(
 ):
     """A graph is keyed per class, not per app.
 
-    The registry key used to be a synthesized `@app/local/<Type>`, which two
-    classes could share; it is now each class's own module path, which they
+    The registry key used to be a synthesized org/package/type triple, which
+    two classes could share; it is now each class's own module path, which they
     cannot. Asserted as an ordered pair of literals: comparing the two to each
     other would pass on any pair of distinct strings, including two the engine
     derived the same wrong way.

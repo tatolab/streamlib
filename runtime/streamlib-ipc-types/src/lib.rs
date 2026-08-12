@@ -272,7 +272,7 @@ pub const FRAME_HEADER_SIZE: usize = MAX_PORT_KEY_SIZE + 8 + 4; // 76 bytes
 /// one the author named. Over-length is now a hard, named error the caller
 /// must handle rather than a data-corruption surface. Names crossing this
 /// boundary have already passed the charset + length grammar in
-/// `streamlib_idents::validate_channel_name`; this guard is the wire-level
+/// the engine's `iceoryx2::validate_channel_name`; this guard is the wire-level
 /// backstop that makes truncation unrepresentable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PortKeyError {

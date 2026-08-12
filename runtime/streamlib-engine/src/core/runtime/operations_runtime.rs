@@ -14,7 +14,7 @@ use crate::core::graph::{
 use crate::core::processors::{ProcessorSpec, ProcessorState};
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent, topics};
 use crate::core::{Error, InputLinkPortRef, OutputLinkPortRef, PortDirection, Result};
-use streamlib_idents::ChannelName;
+use crate::iceoryx2::ChannelName;
 
 // =============================================================================
 // Core Implementation Functions ('static async fns for spawn compatibility)
@@ -214,7 +214,7 @@ async fn connect_impl(
             // inside the transaction means an illegal port name rolls the pending
             // link back rather than committing a half-built edge.
             let channel =
-                streamlib_idents::source_channel_name(from.processor_id.as_str(), &from.port_name)
+                crate::iceoryx2::source_channel_name(from.processor_id.as_str(), &from.port_name)
                     .map_err(|source| Error::InvalidLink(source.to_string()))?;
 
             let link_id = graph
@@ -502,34 +502,6 @@ impl RuntimeOperations for Runner {
 }
 
 #[cfg(test)]
-mod channel_wire_bound_tests {
-    // The channel-name grammar (streamlib_idents) and the fixed PortKey wire
-    // capacity (streamlib_ipc_types) live in separate crates that cannot depend
-    // on each other, so the max-length bound is duplicated. This engine layer
-    // depends on both and is the one place that reconciles them: a channel name
-    // that passes the grammar must always fit the wire.
-    #[test]
-    fn channel_name_bound_matches_port_key_wire_capacity() {
-        assert_eq!(
-            streamlib_idents::MAX_CHANNEL_NAME_BYTES,
-            streamlib_ipc_types::PortKey::MAX_NAME_BYTES,
-            "channel-name grammar bound drifted from the PortKey wire capacity"
-        );
-    }
-
-    #[test]
-    fn generated_source_channel_name_fits_the_wire() {
-        // A generated name — including the hash-legalized over-budget path —
-        // must construct a PortKey without the fallible constructor rejecting it.
-        let long = "verylongprocessorname".repeat(4);
-        let channel = streamlib_idents::source_channel_name(&long, "outputport")
-            .expect("a grammar-legal source output port must produce a channel name");
-        streamlib_ipc_types::PortKey::new(channel.as_str())
-            .expect("a grammar-legal channel name must always fit the PortKey wire");
-    }
-}
-
-#[cfg(test)]
 mod connect_wires_without_inspecting_a_port_tests {
     //! Connect-path revert lock: a link is pure plumbing. Connect inspects
     //! nothing about either port beyond its existence, and wires in silence —
@@ -547,21 +519,15 @@ mod connect_wires_without_inspecting_a_port_tests {
     use super::connect_impl;
     use crate::core::compiler::Compiler;
     use crate::core::descriptors::ProcessorClassImportPath;
-    use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
+    use crate::core::descriptors::{PortDescriptor, ProcessorClassShortName, ProcessorDescriptor};
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef, ProcessorUniqueId};
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
-    use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
 
     const PRODUCER_TYPE: &str = "ConnectSilenceProducer";
     const CONSUMER_TYPE: &str = "ConnectSilenceConsumer";
 
-    fn ident(package: &str, ty: &str) -> SchemaIdent {
-        SchemaIdent::new(
-            Org::new("test").unwrap(),
-            Package::new(package).unwrap(),
-            TypeName::new(ty).unwrap(),
-            SemVer::new(1, 0, 0),
-        )
+    fn class_short_name(ty: &str) -> ProcessorClassShortName {
+        ProcessorClassShortName::new(ty).unwrap()
     }
 
     fn producer_class_path() -> ProcessorClassImportPath {
@@ -575,7 +541,7 @@ mod connect_wires_without_inspecting_a_port_tests {
     /// Register the producer and consumer descriptors this module wires.
     fn register_producer_and_consumer_descriptors() {
         let mut producer = ProcessorDescriptor::new(
-            ident("connectcheck", PRODUCER_TYPE),
+            class_short_name(PRODUCER_TYPE),
             producer_class_path(),
             "producer",
         );
@@ -587,7 +553,7 @@ mod connect_wires_without_inspecting_a_port_tests {
             .expect("register producer descriptor");
 
         let mut consumer = ProcessorDescriptor::new(
-            ident("connectcheck", CONSUMER_TYPE),
+            class_short_name(CONSUMER_TYPE),
             consumer_class_path(),
             "consumer",
         );

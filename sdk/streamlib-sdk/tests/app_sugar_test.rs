@@ -31,8 +31,8 @@ use streamlib::sdk::runtime::Runner;
 // =============================================================================
 
 macro_rules! manual_fixture {
-    ($struct_name:ident, $ident:literal) => {
-        #[streamlib::sdk::processor($ident, execution = manual)]
+    ($struct_name:ident) => {
+        #[streamlib::sdk::processor(execution = manual)]
         struct $struct_name;
         impl ManualProcessor for $struct_name::Processor {
             fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
@@ -48,15 +48,12 @@ macro_rules! manual_fixture {
     };
 }
 
-manual_fixture!(EquivAlpha, "@tatolab/app-sugar-test/EquivAlpha");
-manual_fixture!(EquivBeta, "@tatolab/app-sugar-test/EquivBeta");
-manual_fixture!(PassthroughNode, "@tatolab/app-sugar-test/PassthroughNode");
-manual_fixture!(MaterializeNode, "@tatolab/app-sugar-test/MaterializeNode");
-manual_fixture!(
-    IgnoredConnectNode,
-    "@tatolab/app-sugar-test/IgnoredConnectNode"
-);
-manual_fixture!(DisplayNamedNode, "@tatolab/app-sugar-test/DisplayNamedNode");
+manual_fixture!(EquivAlpha);
+manual_fixture!(EquivBeta);
+manual_fixture!(PassthroughNode);
+manual_fixture!(MaterializeNode);
+manual_fixture!(IgnoredConnectNode);
+manual_fixture!(DisplayNamedNode);
 
 /// Register a `#[processor]` host type on the processor registry and return
 /// the class import path that names it — what `App::add_local` builds
@@ -161,19 +158,14 @@ fn app_connect_is_a_faithful_passthrough_of_runner_connect() {
 /// collision-free across the parallel test binary.
 fn register_ported_type(short: &str, input: &str, output: &str) -> ProcessorClassImportPath {
     use streamlib::sdk::descriptors::{
-        Org, Package, PortDescriptor, ProcessorDescriptor, SchemaIdent, SemVer, TypeName,
+        PortDescriptor, ProcessorClassShortName, ProcessorDescriptor,
     };
     use streamlib::sdk::processors::PROCESSOR_REGISTRY;
 
     let import_path =
         ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
     let descriptor = ProcessorDescriptor::new(
-        SchemaIdent::new(
-            Org::new("tatolab").unwrap(),
-            Package::new("app-sugar-test").unwrap(),
-            TypeName::new(short).unwrap(),
-            SemVer::new(1, 0, 0),
-        ),
+        ProcessorClassShortName::new(short).unwrap(),
         import_path.clone(),
         "app-sugar connect test",
     )

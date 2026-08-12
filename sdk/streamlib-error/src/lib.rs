@@ -53,6 +53,24 @@ pub enum Error {
     #[error("Invalid port address: {0}")]
     InvalidPortAddress(String),
 
+    #[error("channel name is empty")]
+    EmptyChannelName,
+
+    #[error(
+        "channel `{name}` contains invalid character `{character}` (allowed: a-z, 0-9, hyphen, underscore, must start with a-z)"
+    )]
+    InvalidChannelNameCharacter { name: String, character: char },
+
+    #[error("channel `{0}` must start with a-z")]
+    ChannelNameMustStartWithLowercase(String),
+
+    #[error("channel `{name}` is {len} bytes, exceeding the {max}-byte wire capacity")]
+    ChannelNameTooLong {
+        name: String,
+        len: usize,
+        max: usize,
+    },
+
     #[error("Invalid graph: {0}")]
     InvalidGraph(String),
 

@@ -114,6 +114,14 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   seam an untrusted-code path returns through must be rebuilt against the helper-process
   boundary rather than against an org.
 - REMOVED: IsolationTier::for_processor
+- REMOVED: ProcessorDescriptor::with_version
+  With `ProcessorDescriptor.version` and the control plane's
+  `ProcessorDescriptorOutput.version`. Recorded 2026-08-12 during #1841. The field's only
+  writer was the macro emitting `schema_ident.version` — always the `0.0.0` version-free
+  sentinel this change deletes — so with the sentinel gone nothing could write it and the
+  control plane would have rendered `"version": ""` for every processor under a field
+  documented as a semantic version string. Versions never live at the code layer (§Product,
+  the zero-ceremony bar), so the field goes rather than acquiring a new source.
 - REMOVED: check-no-reverse-dns
   The xtask check and its workflow. Its stated rationale is enforcing the
   `@org/package/Type@version` grammar (`check_no_reverse_dns.rs:5-9`); with that grammar
@@ -168,6 +176,18 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   processor runs — a banned capability under helper-only placement.)
 - ADDED: an identity-stability test — a class in an importable module registers under the
   same string however the app was launched.
+- ADDED: `ProcessorClassShortName` (`sdk/streamlib-processor-schema/`). Recorded 2026-08-12
+  during #1841. The REMOVED list has `ProcessorDescriptor.name` going with the grammar on
+  the basis that the import path is the only *identity* a descriptor carries — true of
+  identity, and not true of the field, whose last reader is the display-name default that
+  §Processor model & scheduling DECIDES is the class's short name. Both routes out were
+  closed: splitting the import path re-invents the deleted grammar (#1840's non-derivable
+  notes), and changing the default is a plan change. So the short name is re-homed rather
+  than deleted. It is a validating newtype, not a second bare `String`, because
+  `ProcessorDescriptor::new` had exactly one `impl Into<String>` parameter and a second
+  adjacent one re-opens the argument-swap hazard #1840 closed by typing the import path;
+  non-emptiness is the whole rule, since neither language enforces PascalCase on a class
+  name. Read off the authored struct ident in Rust and `cls.__name__` in Python.
 
 ## Out of scope
 

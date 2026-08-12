@@ -47,8 +47,7 @@ pub(crate) fn scheduling_strategy_for_processor(node: &ProcessorNode) -> Schedul
 mod tests {
     use super::*;
     use crate::core::descriptors::{
-        Org, Package, ProcessorClassImportPath, ProcessorDescriptor, ProcessorScheduling,
-        SchemaIdent, SemVer, TypeName,
+        ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor, ProcessorScheduling,
     };
 
     /// Build a class import path that is **deliberately neutral** — no segment
@@ -63,22 +62,11 @@ mod tests {
         ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap()
     }
 
-    /// The descriptor's vestigial `name`. Nothing keys on it; it supplies the
-    /// default display name and nothing else.
-    fn vestigial_name(short: &str) -> SchemaIdent {
-        SchemaIdent::new(
-            Org::new("scheduling-test").unwrap(),
-            Package::new("fixture").unwrap(),
-            TypeName::new(short).unwrap(),
-            SemVer::new(1, 0, 0),
-        )
-    }
-
     #[test]
     fn strategy_reads_priority_from_registered_descriptor() {
         let path = class_import_path("Widgetron");
         let descriptor =
-            ProcessorDescriptor::new(vestigial_name("Widgetron"), path.clone(), "fixture")
+            ProcessorDescriptor::new(ProcessorClassShortName::new("Widgetron").unwrap(), path.clone(), "fixture")
                 .with_scheduling(ProcessorScheduling {
                     priority: ThreadPriority::RealTime,
                 });

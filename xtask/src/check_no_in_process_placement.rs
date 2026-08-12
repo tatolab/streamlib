@@ -9,7 +9,7 @@
 //! GIL or an interpreter. See `docs/decisions/helper-process-placement-only.md`
 //! and `.claude/rules/placement.md`.
 //!
-//! Two deliberate inversions of the `check_no_reverse_dns` shape this lint is
+//! Two deliberate inversions of the boundary-lint shape this lint is
 //! otherwise modeled on:
 //!
 //! - **Prose is in scope, not out of it.** This lint is line-based over `.md`

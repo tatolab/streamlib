@@ -1131,8 +1131,8 @@ fn check_packages_engine_reach(
 //
 // The list is PRINCIPLED, not enumerated ad hoc: a crate earns root status by
 // being something packages dep DIRECTLY and consume by version. The small
-// utility crates (`streamlib-error`, `streamlib-processor-schema`,
-// `streamlib-idents`) are deliberately NOT listed — they are covered
+// utility crates (`streamlib-error`, `streamlib-processor-schema`) are
+// deliberately NOT listed — they are covered
 // TRANSITIVELY through the roots (check 12 walks the closure), so a listing
 // would be redundant. `streamlib-consumer-rhi` earns root status on its own
 // because check 3 makes it a first-class part of the boundary contract:
@@ -1150,7 +1150,7 @@ fn check_packages_engine_reach(
 
 const CHECK_TRUNK_NO_ENGINE_DEP: &str = "trunk-set-no-engine-cargo-dep";
 
-const TRUNK_NO_ENGINE_DEP_RATIONALE: &str = "PERMANENT trunk ban: an engine-free trunk root (streamlib-macros / streamlib-consumer-rhi) must never carry `streamlib-engine` as a non-dev Cargo dep. MEMBERSHIP RULE: roots = every crate packages are mandated or expected to link directly and consume by version — the small utility crates (streamlib-error / streamlib-processor-schema / streamlib-idents) are covered transitively through the roots, and consumer-rhi earns root status because check 3 makes it a first-class part of the boundary contract (adapter crates dep it directly). External packages consume these roots by version from the registry, so a published root that pulled the engine would propagate the FullAccess engine surface to every external consumer invisibly. This ban has no shrinking allowlist; [dev-dependencies] are exempt (conformance tests may pull the engine)";
+const TRUNK_NO_ENGINE_DEP_RATIONALE: &str = "PERMANENT trunk ban: an engine-free trunk root (streamlib-macros / streamlib-consumer-rhi) must never carry `streamlib-engine` as a non-dev Cargo dep. MEMBERSHIP RULE: roots = every crate packages are mandated or expected to link directly and consume by version — the small utility crates (streamlib-error / streamlib-processor-schema) are covered transitively through the roots, and consumer-rhi earns root status because check 3 makes it a first-class part of the boundary contract (adapter crates dep it directly). External packages consume these roots by version from the registry, so a published root that pulled the engine would propagate the FullAccess engine surface to every external consumer invisibly. This ban has no shrinking allowlist; [dev-dependencies] are exempt (conformance tests may pull the engine)";
 
 /// The engine crate's Cargo package name (lib name is `streamlib_engine`; the
 /// Cargo dependency key / `package =` rename resolves to this hyphenated form).
@@ -1161,7 +1161,7 @@ const TRUNK_ENGINE_CRATE_NAME: &str = "streamlib-engine";
 /// `NO_STREAMLIB_RUNTIME_DEP`) — this is a permanent invariant, not a
 /// shrinking ratchet. Roots = every crate packages are mandated or expected to
 /// link directly and consume by version; the small utility crates
-/// (streamlib-error / streamlib-processor-schema / streamlib-idents) are
+/// (streamlib-error / streamlib-processor-schema) are
 /// covered transitively through these roots (check 12), and consumer-rhi is a
 /// root because check 3 makes it a first-class part of the boundary contract.
 const TRUNK_NO_ENGINE_DEP: &[&str] = &[
