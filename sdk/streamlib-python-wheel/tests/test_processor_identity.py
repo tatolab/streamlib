@@ -31,8 +31,8 @@ from identity_stability_app import DIRECT_LAUNCH_ARGUMENT
 ENTRY_FILE_PROCESSOR_APP = Path(__file__).parent / "entry_file_processor_app.py"
 IDENTITY_STABILITY_APP = Path(__file__).parent / "identity_stability_app.py"
 
-# The engine's own record of what it derived. Asserting on `__module__` from
-# the app would agree with a derivation that never ran.
+# The engine's own registration record. Asserting on `__module__` from the app
+# would agree with a derivation that never ran.
 DERIVED_IDENTITY_PATTERN = re.compile(r'processor_class_import_path="([^"]+)"')
 
 

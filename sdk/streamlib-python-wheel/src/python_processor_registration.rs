@@ -101,15 +101,6 @@ pub(crate) fn register_processor_class(
         )
         .map_err(|registration_failure| PyValueError::new_err(registration_failure.to_string()))?;
 
-    // The identity, on the record. A processor's class is reached by import
-    // and nothing else, so "which class is this node actually running?" is a
-    // question a log has to be able to answer — a display name cannot, and by
-    // the time a helper fails to import, the app has already exited `add`.
-    tracing::info!(
-        processor_class_import_path = %declaration.descriptor.processor_class_import_path,
-        "registered a python processor class"
-    );
-
     registered.insert(identity, held_processor_class);
     Ok(type_reference)
 }

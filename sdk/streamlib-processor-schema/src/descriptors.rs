@@ -120,8 +120,8 @@ pub struct ProcessorDescriptor {
     ///
     /// Derived mechanically by the authoring surface — the `#[processor]`
     /// macro captures it at the expansion site, the wheel reads it off the
-    /// class — and never authored. Required at construction so no descriptor
-    /// can reach the registry without one.
+    /// class — and never authored. Taken by `new` rather than by a builder so
+    /// that adding a descriptor without deriving one does not compile.
     pub processor_class_import_path: String,
     pub description: String,
     pub version: String,

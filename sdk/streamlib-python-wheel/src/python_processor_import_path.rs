@@ -109,26 +109,7 @@ fn suggested_module_name(qualname: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyo3::types::PyDict;
-
-    /// Build a class the way a user's module would, so `__module__` and
-    /// `__qualname__` are whatever CPython actually assigns rather than
-    /// attributes a test set by hand.
-    fn class_from_source<'py>(
-        python: Python<'py>,
-        source: &str,
-        class_name: &str,
-    ) -> Bound<'py, PyAny> {
-        let namespace = PyDict::new(python);
-        python
-            .run(
-                &std::ffi::CString::new(source).unwrap(),
-                Some(&namespace),
-                None,
-            )
-            .unwrap();
-        namespace.get_item(class_name).unwrap().unwrap()
-    }
+    use crate::python_class_from_source_for_tests::class_from_source;
 
     #[test]
     fn a_module_scope_class_derives_module_colon_qualname() {

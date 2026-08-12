@@ -8,6 +8,8 @@ use pyo3::prelude::*;
 
 mod python_added_processor;
 mod python_bag_conversion;
+#[cfg(test)]
+mod python_class_from_source_for_tests;
 mod python_control_plane_hosting;
 #[cfg(target_os = "linux")]
 mod python_cuda_pixel_exchange;

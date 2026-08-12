@@ -160,11 +160,18 @@ class AppUnderTest:
                 pipe.close()
 
 
-def start_command(command: "list[str]", *, working_directory: Path) -> AppUnderTest:
+def start_command(
+    command: "list[str]", *, working_directory: "Path | None" = None
+) -> AppUnderTest:
     """Spawn `command` in its own process group, output on one pipe.
 
     Its own group so a SIGINT aimed at the app cannot reach the test runner that
     spawned it — and so the group can be checked for survivors afterwards.
+
+    `working_directory` stays unset unless an arrangement genuinely needs it: a
+    helper child inherits the app's cwd, and cwd leads `sys.path` in the child's
+    `-m` launch, so pointing it at the processor modules would import them for
+    free and mask a break in the `PYTHONPATH` the spawn host sets.
     """
     process = subprocess.Popen(
         command,
@@ -174,26 +181,28 @@ def start_command(command: "list[str]", *, working_directory: Path) -> AppUnderT
         text=True,
         bufsize=1,
         start_new_session=True,
-        cwd=str(working_directory),
+        cwd=None if working_directory is None else str(working_directory),
     )
     return AppUnderTest(process)
 
 
 def start_app(app_path: Path, *arguments: str) -> AppUnderTest:
     """Spawn `python <app_path> <arguments...>` — the arrangement the
-    interpreter-lifecycle contract was proven against."""
-    return start_command(
-        [sys.executable, str(app_path), *arguments],
-        working_directory=app_path.parent,
-    )
+    interpreter-lifecycle contract was proven against.
+
+    A script path puts the script's own directory on `sys.path`, so this needs
+    no working directory of its own.
+    """
+    return start_command([sys.executable, str(app_path), *arguments])
 
 
 def start_app_as_module(app_path: Path, *arguments: str) -> AppUnderTest:
     """Spawn `python -m <app> <arguments...>` from the app's own directory.
 
-    A different arrangement, not a different app: `-m` puts the *working
-    directory* on `sys.path` where a script path puts the script's own
-    directory. Naming the same file two ways is what makes them comparable.
+    A different arrangement, not a different app. `-m` resolves the module
+    against the *working directory* where a script path resolves against the
+    file, which is the only reason this arm sets one — and why it is the only
+    arm that does.
     """
     return start_command(
         [sys.executable, "-m", app_path.stem, *arguments],
@@ -206,9 +215,9 @@ def start_app_under_the_streamlib_cli(app_path: Path, *arguments: str) -> AppUnd
 
     Reached as a module rather than through the console script so the app runs
     under the interpreter this test session is using, whether or not the venv's
-    `bin` is on PATH.
+    `bin` is on PATH. The launcher puts the entry file's own directory on
+    `sys.path` itself, so this arm needs no working directory either.
     """
     return start_command(
-        [sys.executable, "-m", "streamlib.cli", "dev", "-f", str(app_path), *arguments],
-        working_directory=app_path.parent,
+        [sys.executable, "-m", "streamlib.cli", "dev", "-f", str(app_path), *arguments]
     )

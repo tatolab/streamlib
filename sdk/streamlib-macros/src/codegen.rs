@@ -667,16 +667,10 @@ fn generate_descriptor_from_schema(
         }
     });
 
-    // The identity capture. `module_path!()` resolves here to
-    // `<the author's module>::<the authored type name>`, because this
-    // expansion lands inside the `pub mod` the macro names after the
-    // author's struct — so the generated module's own path *is* the type
+    // `module_path!()` resolves here to `<author's module>::<authored type>`,
+    // because this expansion lands inside the `pub mod` the macro names after
+    // the author's struct — the generated module's own path *is* the type
     // path, with no `stringify!` needed to append the name.
-    //
-    // Never `std::any::type_name`: its output format is documented as
-    // unspecified and free to change between compiler versions, and an
-    // identity the toolchain can silently rewrite is a registry key that
-    // breaks with no failing test. `module_path!` is specified.
     quote! {
         fn descriptor() -> Option<__streamlib_sdk::descriptors::ProcessorDescriptor> {
             Some(
@@ -1438,11 +1432,9 @@ mod processor_struct_emit_tests {
         ))
     }
 
-    /// The mechanism, not just the result. What the string comes out as is
+    /// The mechanism, not the result — what the string comes out as is
     /// asserted where a real `#[processor]` can be expanded and read back
-    /// (`streamlib-engine/tests/processor_class_import_path_test.rs`); what
-    /// this pins is that it came from the one capture whose output format
-    /// rustc guarantees.
+    /// (`streamlib-engine/tests/processor_class_import_path_test.rs`).
     #[test]
     fn the_descriptor_captures_its_identity_with_module_path() {
         let rendered = rendered_descriptor();

@@ -38,11 +38,8 @@ impl PythonProcessorDeclaration {
         let type_reference = read_type_reference(processor_class)?;
         let execution_config = read_execution_config(processor_class)?;
 
-        // Derived once and spent twice. The two fields are different
-        // contracts — identity is what the registry names the type by,
-        // `entrypoint` is what the child interpreter imports — so they are
-        // separate fields, but a second derivation call is a second chance
-        // for them to disagree.
+        // Identity and `entrypoint` are separate contracts, but one
+        // derivation: a second call is a second chance for them to disagree.
         let class_import_path = processor_class_import_path(processor_class)?;
 
         let mut descriptor = ProcessorDescriptor::new(
@@ -56,8 +53,6 @@ impl PythonProcessorDeclaration {
             read_string_attribute(processor_class, "__streamlib_processor_description__")?,
         )
         .with_runtime(ProcessorRuntime::Python)
-        // Refusing an unimportable class here rather than at spawn is what
-        // lets the author be told about the class they named, not about a pid.
         .with_entrypoint(class_import_path)
         .with_scheduling(ProcessorScheduling {
             priority: read_thread_priority(processor_class)?,
@@ -207,11 +202,9 @@ fn ident_error(failure: impl std::fmt::Display) -> PyErr {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pyo3::types::PyDict;
+    use crate::python_class_from_source_for_tests::class_from_source;
 
-    /// A class carrying what `@streamlib.processor` attaches, built by running
-    /// Python rather than by setting attributes from Rust, so `__module__` and
-    /// `__qualname__` are whatever CPython actually assigns.
+    /// A class carrying what `@streamlib.processor` attaches.
     const DECLARED_CLASS_SOURCE: &str = "\
 __name__ = 'my_app.filters'
 
@@ -227,28 +220,14 @@ class BlurProcessor:
     __streamlib_processor_output_ports__ = []
 ";
 
-    fn declared_class<'py>(python: Python<'py>) -> Bound<'py, PyAny> {
-        let namespace = PyDict::new(python);
-        python
-            .run(
-                &std::ffi::CString::new(DECLARED_CLASS_SOURCE).unwrap(),
-                Some(&namespace),
-                None,
-            )
-            .unwrap();
-        namespace.get_item("BlurProcessor").unwrap().unwrap()
-    }
-
-    /// The two fields are separate contracts — identity is what the registry
-    /// names the type by, `entrypoint` is what the child interpreter imports —
-    /// but they are one derivation, so a class that drifted between them would
-    /// mean a processor registered under a name its own helper cannot import.
+    /// A class that drifted between the two fields would be a processor
+    /// registered under a name its own helper process cannot import.
     #[test]
     fn the_identity_and_the_entrypoint_are_the_same_derived_string() {
         Python::initialize();
         Python::attach(|python| {
-            let declaration =
-                PythonProcessorDeclaration::read_from_class(&declared_class(python)).unwrap();
+            let declared_class = class_from_source(python, DECLARED_CLASS_SOURCE, "BlurProcessor");
+            let declaration = PythonProcessorDeclaration::read_from_class(&declared_class).unwrap();
 
             assert_eq!(
                 declaration.descriptor.processor_class_import_path,
