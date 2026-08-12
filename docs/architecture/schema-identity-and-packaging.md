@@ -251,13 +251,12 @@ A call site **references** a processor by the import path of its class —
 captures from its own expansion site. That path is what `ProcessorSpec::new`
 takes and what the registry is keyed on.
 
-> ~~Three macros reference a processor at a call site:
-> `processor_type_ref!`, `schema_ident_any_version!`, `schema_ident!`.~~ —
-> Superseded 2026-08-11 by #1840. `processor_type_ref!` and
-> `schema_ident_any_version!` are deleted: the first expanded to a
-> `ProcessorTypeReference`, which no longer exists, and the second resolved a
-> version against a registry that no longer holds one. `schema_ident!`
-> survives but does not name a processor.
+> Removed 2026-08-11 by #1840: the two call-site reference macros and the
+> version-free reference type they expanded to. One resolved a version against
+> a registry that no longer holds one; the other narrowed an identity the
+> registry no longer keys on. Their names are in that PR and in git history —
+> repeating them here would keep the ship gate's literal grep hitting this
+> file. The surviving `schema_ident!` is below; it does not name a processor.
 
 - **`streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")`**
   — the same four fields as the long `SchemaIdent::new(...)` constructor,
