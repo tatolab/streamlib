@@ -24,24 +24,27 @@ impl MediaClock {
     }
 }
 
+/// The kernel's own `CLOCK_MONOTONIC`, read without going through [`MediaClock`]
+/// so a domain assertion cannot pass by agreeing with the clock it is checking.
+#[cfg(all(test, not(target_os = "macos")))]
+pub(crate) fn clock_gettime_monotonic_ns() -> i64 {
+    let mut timespec = libc::timespec {
+        tv_sec: 0,
+        tv_nsec: 0,
+    };
+    // SAFETY: same contract as `MediaClock::now`.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut timespec) };
+    std::time::Duration::new(timespec.tv_sec as u64, timespec.tv_nsec as u32).as_nanos() as i64
+}
+
 #[cfg(all(test, not(target_os = "macos")))]
 mod tests {
-    use super::MediaClock;
-
-    fn clock_gettime_monotonic_ns() -> u128 {
-        let mut timespec = libc::timespec {
-            tv_sec: 0,
-            tv_nsec: 0,
-        };
-        // SAFETY: same contract as `MediaClock::now`.
-        unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut timespec) };
-        timespec.tv_sec as u128 * 1_000_000_000 + timespec.tv_nsec as u128
-    }
+    use super::{MediaClock, clock_gettime_monotonic_ns};
 
     #[test]
     fn now_lands_in_the_kernel_monotonic_domain() {
         let before = clock_gettime_monotonic_ns();
-        let sampled = MediaClock::now().as_nanos();
+        let sampled = MediaClock::now().as_nanos() as i64;
         let after = clock_gettime_monotonic_ns();
 
         assert!(

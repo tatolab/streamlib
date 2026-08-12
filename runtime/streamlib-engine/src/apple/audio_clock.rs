@@ -186,10 +186,8 @@ impl AudioClock for CoreAudioClock {
 
         self.state.tick_count.store(0, Ordering::SeqCst);
 
-        // Calculate interval in nanoseconds
         let interval_ns = self.state.config.tick_duration_nanos();
 
-        // Create GCD timer source
         let timer_source =
             unsafe { dispatch_source_create(dispatch_source_type_timer(), 0, 0, self.queue) };
 
