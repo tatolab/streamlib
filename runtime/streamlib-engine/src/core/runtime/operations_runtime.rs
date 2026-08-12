@@ -565,11 +565,11 @@ mod connect_wires_without_inspecting_a_port_tests {
     }
 
     fn producer_class_path() -> ProcessorClassImportPath {
-        ProcessorClassImportPath::new(concat!(module_path!(), "::ConnectCheckProducer")).unwrap()
+        ProcessorClassImportPath::new(format!("{}::{PRODUCER_TYPE}", module_path!())).unwrap()
     }
 
     fn consumer_class_path() -> ProcessorClassImportPath {
-        ProcessorClassImportPath::new(concat!(module_path!(), "::ConnectCheckConsumer")).unwrap()
+        ProcessorClassImportPath::new(format!("{}::{CONSUMER_TYPE}", module_path!())).unwrap()
     }
 
     /// Register the producer and consumer descriptors this module wires.

@@ -224,7 +224,7 @@ mod tests {
 
     /// Helper for tests — the JSON literal a snapshot's `type` field carries:
     /// the quoted class import path.
-    fn structured_type(short: &str) -> String {
+    fn serialized_class_import_path(short: &str) -> String {
         format!(r#""my_app.processors:{short}""#)
     }
 
@@ -241,8 +241,8 @@ mod tests {
                     {{ "from": "camera.video", "to": "display.video" }}
                 ]
             }}"#,
-            structured_type("CameraProcessor"),
-            structured_type("DisplayProcessor"),
+            serialized_class_import_path("CameraProcessor"),
+            serialized_class_import_path("DisplayProcessor"),
         );
 
         let snap = GraphSnapshot::from_json_str(&json).unwrap();
@@ -269,7 +269,7 @@ mod tests {
                     {{ "alias": "camera", "type": {}, "config": {{}} }}
                 ]
             }}"#,
-            structured_type("CameraProcessor"),
+            serialized_class_import_path("CameraProcessor"),
         );
         let snap = GraphSnapshot::from_json_str(&json).unwrap();
         let back = serde_json::to_value(&snap).unwrap();
@@ -314,7 +314,7 @@ mod tests {
                        "display_name": "Camera A" }}
                 ]
             }}"#,
-            structured_type("CameraProcessor"),
+            serialized_class_import_path("CameraProcessor"),
         );
         let snap = GraphSnapshot::from_json_str(&json).unwrap();
         assert_eq!(snap.processors[0].display_name.as_deref(), Some("Camera A"));
@@ -336,7 +336,7 @@ mod tests {
                 ],
                 "connections": []
             }}"#,
-            structured_type("CameraProcessor"),
+            serialized_class_import_path("CameraProcessor"),
         );
         let snap = GraphSnapshot::from_json_str(&json_in).unwrap();
         let json_out = snap.to_json_string().unwrap();
@@ -352,7 +352,7 @@ mod tests {
                     {{ "alias": "camera", "type": {}, "config": {{ "n": 7 }} }}
                 ]
             }}"#,
-            structured_type("CameraProcessor"),
+            serialized_class_import_path("CameraProcessor"),
         );
         let snap = GraphSnapshot::from_json_str(&json_in).unwrap();
         let tmp = std::env::temp_dir().join(format!(
@@ -391,8 +391,8 @@ mod tests {
                     {{ "alias": "cam", "type": {}, "config": {{}} }}
                 ]
             }}"#,
-            structured_type("CameraProcessor"),
-            structured_type("DisplayProcessor"),
+            serialized_class_import_path("CameraProcessor"),
+            serialized_class_import_path("DisplayProcessor"),
         );
 
         let snap = GraphSnapshot::from_json_str(&json).unwrap();
@@ -410,7 +410,7 @@ mod tests {
                     {{ "from": "camera.video", "to": "unknown.video" }}
                 ]
             }}"#,
-            structured_type("CameraProcessor"),
+            serialized_class_import_path("CameraProcessor"),
         );
 
         let snap = GraphSnapshot::from_json_str(&json).unwrap();
@@ -432,7 +432,7 @@ mod tests {
     /// miss. The docstring promised this; the implementation now delivers.
     #[test]
     fn test_validate_unknown_processor_type() {
-        let unknown_type = structured_type("NotARegisteredProcessor");
+        let unknown_type = serialized_class_import_path("NotARegisteredProcessor");
         let json = format!(
             r#"{{
                 "processors": [

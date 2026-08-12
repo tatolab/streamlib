@@ -59,7 +59,7 @@ mod tests {
     /// substring-match heuristic causes these tests to fail. The whole path is
     /// what has to stay neutral now: the key is the whole string, and this
     /// module's own path is part of it.
-    fn import_path(short: &str) -> ProcessorClassImportPath {
+    fn class_import_path(short: &str) -> ProcessorClassImportPath {
         ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap()
     }
 
@@ -76,7 +76,7 @@ mod tests {
 
     #[test]
     fn strategy_reads_priority_from_registered_descriptor() {
-        let path = import_path("Widgetron");
+        let path = class_import_path("Widgetron");
         let descriptor =
             ProcessorDescriptor::new(vestigial_name("Widgetron"), path.clone(), "fixture")
                 .with_scheduling(ProcessorScheduling {
@@ -97,7 +97,7 @@ mod tests {
     #[test]
     fn strategy_falls_back_to_normal_when_descriptor_missing() {
         let node = ProcessorNode::new(
-            import_path("UnregisteredFixtureProcessor"),
+            class_import_path("UnregisteredFixtureProcessor"),
             "ghost-node",
             None,
             vec![],

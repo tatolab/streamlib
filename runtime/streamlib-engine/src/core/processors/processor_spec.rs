@@ -42,7 +42,7 @@ impl ProcessorSpec {
 mod tests {
     use super::*;
 
-    fn import_path(path: &str) -> ProcessorClassImportPath {
+    fn class_import_path(path: &str) -> ProcessorClassImportPath {
         ProcessorClassImportPath::new(path).expect("the fixture path names a class")
     }
 
@@ -52,7 +52,7 @@ mod tests {
     #[test]
     fn serde_emits_the_class_import_path_as_a_plain_string() {
         let spec = ProcessorSpec::new(
-            import_path("my_app.filters:BlurProcessor"),
+            class_import_path("my_app.filters:BlurProcessor"),
             serde_json::Value::Null,
         );
         let json: serde_json::Value = serde_json::to_value(&spec).unwrap();
@@ -88,7 +88,7 @@ mod tests {
     #[test]
     fn with_display_name_overrides_default() {
         let spec = ProcessorSpec::new(
-            import_path("my_app.filters:BlurProcessor"),
+            class_import_path("my_app.filters:BlurProcessor"),
             serde_json::Value::Null,
         )
         .with_display_name("Camera A");
@@ -104,7 +104,7 @@ mod tests {
             "my_app::filters::BlurProcessor",
         ] {
             let spec = ProcessorSpec::new(
-                import_path(path),
+                class_import_path(path),
                 serde_json::json!({
                     "width": 1920,
                     "label": "カメラ — 中文 — emoji 🎥",
@@ -123,7 +123,7 @@ mod tests {
     #[test]
     fn msgpack_round_trip_minimal_spec() {
         let spec = ProcessorSpec::new(
-            import_path("my_app.filters:BlurProcessor"),
+            class_import_path("my_app.filters:BlurProcessor"),
             serde_json::Value::Null,
         );
         let bytes = rmp_serde::to_vec_named(&spec).expect("encode");
@@ -163,7 +163,7 @@ mod tests {
             ),
         ];
         for (name, payload) in cases {
-            let spec = ProcessorSpec::new(import_path("my_app:T"), payload.clone());
+            let spec = ProcessorSpec::new(class_import_path("my_app:T"), payload.clone());
             let bytes = rmp_serde::to_vec_named(&spec).expect("encode");
             let back: ProcessorSpec = rmp_serde::from_slice(&bytes).expect("decode");
             assert_eq!(

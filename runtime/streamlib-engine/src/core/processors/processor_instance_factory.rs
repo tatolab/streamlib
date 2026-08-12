@@ -209,6 +209,11 @@ pub(crate) struct UnregisteredProcessorTypeRecord {
 /// the control plane reports and a helper process imports its class back by.
 /// Stored verbatim and never parsed: the key holds Python's `module:Qualname`
 /// and Rust's `crate::module::Type` alike, and the engine owns neither grammar.
+///
+/// `descriptors` is the authority on which paths are claimed, and it is the
+/// outer lock: a registration holds it across its duplicate check and its
+/// insert, taking `port_info` and `registrations` inside. Anything that needs
+/// two of these three must take them in that order.
 pub struct ProcessorInstanceFactory {
     registrations: RwLock<HashMap<ProcessorClassImportPath, RegistrationKind>>,
     port_info: RwLock<HashMap<ProcessorClassImportPath, (Vec<PortInfo>, Vec<PortInfo>)>>,
@@ -304,36 +309,30 @@ impl ProcessorInstanceFactory {
     ) -> Result<()> {
         let processor_class_import_path = descriptor.processor_class_import_path.clone();
 
-        // Checked against `descriptors`, not `registrations`: both registration
-        // paths write `descriptors`, only this one writes `registrations`, so
-        // reading the narrower map would let a constructor-bearing registration
-        // silently overwrite a descriptor-only one holding the same path.
-        if self
-            .descriptors
-            .read()
-            .contains_key(&processor_class_import_path)
-        {
+        let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
+        let outputs: Vec<PortInfo> = descriptor.outputs.iter().map(PortInfo::from).collect();
+
+        // The `descriptors` guard spans the check and the claim, so two threads
+        // registering one path cannot both pass it. Checked against
+        // `descriptors` rather than `registrations` because both registration
+        // paths write it, and reading the narrower map would let a
+        // constructor-bearing registration displace a descriptor-only one.
+        let mut descriptors = self.descriptors.write();
+        if descriptors.contains_key(&processor_class_import_path) {
             return Err(duplicate_class_import_path(&processor_class_import_path));
         }
 
-        // Build port info from descriptor
-        let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
-
-        let outputs: Vec<PortInfo> = descriptor.outputs.iter().map(PortInfo::from).collect();
-
-        self.port_info.write().insert(
-            processor_class_import_path.clone(),
-            (inputs.clone(), outputs.clone()),
-        );
-
-        self.descriptors
+        self.port_info
             .write()
-            .insert(processor_class_import_path.clone(), descriptor);
+            .insert(processor_class_import_path.clone(), (inputs, outputs));
 
         self.registrations.write().insert(
             processor_class_import_path.clone(),
             RegistrationKind::LegacyDyn { constructor },
         );
+
+        descriptors.insert(processor_class_import_path.clone(), descriptor);
+        drop(descriptors);
 
         // A processor's class is reached by import and nothing else, so "which
         // class is this?" is a question the registration record has to answer;
@@ -363,26 +362,21 @@ impl ProcessorInstanceFactory {
     pub fn register_descriptor_only(&self, descriptor: ProcessorDescriptor) -> Result<()> {
         let processor_class_import_path = descriptor.processor_class_import_path.clone();
 
-        if self
-            .descriptors
-            .read()
-            .contains_key(&processor_class_import_path)
-        {
+        let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
+        let outputs: Vec<PortInfo> = descriptor.outputs.iter().map(PortInfo::from).collect();
+
+        // One guard across the check and the claim — see `register_dynamic`.
+        let mut descriptors = self.descriptors.write();
+        if descriptors.contains_key(&processor_class_import_path) {
             return Err(duplicate_class_import_path(&processor_class_import_path));
         }
 
-        let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
-
-        let outputs: Vec<PortInfo> = descriptor.outputs.iter().map(PortInfo::from).collect();
-
-        self.port_info.write().insert(
-            processor_class_import_path.clone(),
-            (inputs.clone(), outputs.clone()),
-        );
-
-        self.descriptors
+        self.port_info
             .write()
-            .insert(processor_class_import_path.clone(), descriptor);
+            .insert(processor_class_import_path.clone(), (inputs, outputs));
+
+        descriptors.insert(processor_class_import_path.clone(), descriptor);
+        drop(descriptors);
 
         // No constructor registered - create() will fail with ProcessorNotFound,
         // which is correct since subprocess processors are never instantiated in Rust.
@@ -542,7 +536,7 @@ mod tests {
     use super::*;
     use crate::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 
-    fn import_path(path: &str) -> ProcessorClassImportPath {
+    fn class_import_path(path: &str) -> ProcessorClassImportPath {
         ProcessorClassImportPath::new(path).expect("the fixture path names a class")
     }
 
@@ -557,7 +551,7 @@ mod tests {
                 TypeName::new("Vestigial").unwrap(),
                 SemVer::new(0, 0, 0),
             ),
-            import_path(path),
+            class_import_path(path),
             "test",
         )
     }
@@ -565,7 +559,7 @@ mod tests {
     #[test]
     fn a_processor_is_registered_and_looked_up_by_its_class_import_path() {
         let factory = ProcessorInstanceFactory::new();
-        let blur = import_path("my_app.filters:BlurProcessor");
+        let blur = class_import_path("my_app.filters:BlurProcessor");
 
         assert!(
             factory.descriptor(&blur).is_none(),
@@ -609,7 +603,7 @@ mod tests {
         assert_eq!(factory.list_registered().len(), paths.len());
         for path in paths {
             assert!(
-                factory.descriptor(&import_path(path)).is_some(),
+                factory.descriptor(&class_import_path(path)).is_some(),
                 "{path} must stay addressable by its own path"
             );
         }
@@ -696,9 +690,49 @@ mod tests {
             "a constructor-bearing registration must not overwrite a descriptor-only one"
         );
         assert!(
-            !factory.can_create(&import_path(path)),
+            !factory.can_create(&class_import_path(path)),
             "the refused registration must not have installed its constructor either"
         );
+    }
+
+    /// Two threads racing to claim one path: exactly one wins, and the loser
+    /// is refused rather than overwriting. Narrow the `descriptors` guard back
+    /// to a `read()` that ends before the inserts and both threads pass the
+    /// check, so both insert and the second silently displaces the first.
+    #[test]
+    fn concurrent_registrations_of_one_path_leave_exactly_one_winner() {
+        use std::sync::{Arc, Barrier};
+
+        // Repeated, because losing this race once is a scheduling accident —
+        // a single round would pass against the broken code most of the time.
+        for _ in 0..200 {
+            let factory = Arc::new(ProcessorInstanceFactory::new());
+            let both_threads_ready = Arc::new(Barrier::new(2));
+
+            let contenders: Vec<_> = (0..2)
+                .map(|_| {
+                    let factory = Arc::clone(&factory);
+                    let both_threads_ready = Arc::clone(&both_threads_ready);
+                    std::thread::spawn(move || {
+                        both_threads_ready.wait();
+                        factory
+                            .register_descriptor_only(descriptor_for(
+                                "my_app.filters:RacedProcessor",
+                            ))
+                            .is_ok()
+                    })
+                })
+                .collect();
+
+            let winners = contenders
+                .into_iter()
+                .map(|contender| contender.join().expect("no contender may panic"))
+                .filter(|registered| *registered)
+                .count();
+
+            assert_eq!(winners, 1, "exactly one registration may claim a path");
+            assert_eq!(factory.list_registered().len(), 1);
+        }
     }
 
     #[test]
@@ -708,7 +742,7 @@ mod tests {
             .register_descriptor_only(descriptor_for("my_app.filters:BlurProcessor"))
             .unwrap();
 
-        let never_registered = import_path("my_app.filters:SharpenProcessor");
+        let never_registered = class_import_path("my_app.filters:SharpenProcessor");
         assert!(factory.descriptor(&never_registered).is_none());
         assert!(factory.port_info(&never_registered).is_none());
         assert!(!factory.is_registered(&never_registered));

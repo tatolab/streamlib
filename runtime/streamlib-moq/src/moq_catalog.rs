@@ -101,14 +101,14 @@ pub fn catalog_entry_for_output_port(
 mod tests {
     use super::*;
 
-    fn import_path(path: &str) -> ProcessorClassImportPath {
+    fn class_import_path(path: &str) -> ProcessorClassImportPath {
         ProcessorClassImportPath::new(path).expect("the fixture path names a class")
     }
 
     #[test]
     fn add_track_attributes_the_producing_class() {
         let mut catalog = MoqBroadcastCatalog::new();
-        let encoder = import_path("my_app.codecs:H264Encoder");
+        let encoder = class_import_path("my_app.codecs:H264Encoder");
         catalog.add_track("encoder/video_out", Some(&encoder), "video_out");
 
         let entry = &catalog.tracks[0];
@@ -132,7 +132,7 @@ mod tests {
         let mut catalog = MoqBroadcastCatalog::new();
         catalog.add_track(
             "track",
-            Some(&import_path("my_app.codecs:H264Encoder")),
+            Some(&class_import_path("my_app.codecs:H264Encoder")),
             "video",
         );
         let json: serde_json::Value = serde_json::from_slice(&catalog.to_json_bytes()).unwrap();
@@ -152,7 +152,7 @@ mod tests {
     #[test]
     fn catalog_round_trips_through_json() {
         let mut catalog = MoqBroadcastCatalog::new();
-        let encoder = import_path("my_app.codecs:H264Encoder");
+        let encoder = class_import_path("my_app.codecs:H264Encoder");
         catalog.add_track("encoder/video_out", Some(&encoder), "video_out");
 
         let back = MoqBroadcastCatalog::from_json_bytes(&catalog.to_json_bytes()).unwrap();
@@ -168,13 +168,13 @@ mod tests {
     fn the_entry_helper_names_the_track_after_the_processor_and_port() {
         let entry = catalog_entry_for_output_port(
             "encoder",
-            &import_path("my_app.audio:AudioCapture"),
+            &class_import_path("my_app.audio:AudioCapture"),
             "audio_out",
         );
         assert_eq!(entry.track_name, "encoder/audio_out");
         assert_eq!(
             entry.source_processor_type.as_ref(),
-            Some(&import_path("my_app.audio:AudioCapture"))
+            Some(&class_import_path("my_app.audio:AudioCapture"))
         );
     }
 }
