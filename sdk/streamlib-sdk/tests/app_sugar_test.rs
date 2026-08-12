@@ -177,8 +177,8 @@ fn register_ported_type(short: &str, input: &str, output: &str) -> ProcessorType
         format!("{}::{short}", module_path!()),
         "app-sugar connect test",
     )
-        .with_input(PortDescriptor::new(input, "", false))
-        .with_output(PortDescriptor::new(output, "", false));
+    .with_input(PortDescriptor::new(input, "", false))
+    .with_output(PortDescriptor::new(output, "", false));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
     id.into()
 }

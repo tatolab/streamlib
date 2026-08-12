@@ -51,8 +51,8 @@ fn register_test_type(short: &str, input: &str, output: &str) -> SchemaIdent {
         format!("{}::{short}", module_path!()),
         "connect typed-errors test",
     )
-        .with_input(PortDescriptor::new(input, "", false))
-        .with_output(PortDescriptor::new(output, "", false));
+    .with_input(PortDescriptor::new(input, "", false))
+    .with_output(PortDescriptor::new(output, "", false));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
     id
 }

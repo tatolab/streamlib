@@ -34,8 +34,8 @@ fn register_test_type(short: &str) -> SchemaIdent {
         format!("{}::{short}", module_path!()),
         "display-name disambiguation test",
     )
-        .with_input(PortDescriptor::new("_unused_in", "", false))
-        .with_output(PortDescriptor::new("_unused_out", "", false));
+    .with_input(PortDescriptor::new("_unused_in", "", false))
+    .with_output(PortDescriptor::new("_unused_out", "", false));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
     id
 }

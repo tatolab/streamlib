@@ -39,8 +39,8 @@ fn register_test_type(short: &str) -> SchemaIdent {
         format!("{}::{short}", module_path!()),
         "graph readiness signal test",
     )
-        .with_input(PortDescriptor::new("bags_from_upstream", "", false))
-        .with_output(PortDescriptor::new("bags_to_downstream", "", false));
+    .with_input(PortDescriptor::new("bags_from_upstream", "", false))
+    .with_output(PortDescriptor::new("bags_to_downstream", "", false));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
     id
 }
