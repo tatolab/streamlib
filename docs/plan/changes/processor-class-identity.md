@@ -168,6 +168,18 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   processor runs — a banned capability under helper-only placement.)
 - ADDED: an identity-stability test — a class in an importable module registers under the
   same string however the app was launched.
+- ADDED: `ProcessorClassShortName` (`sdk/streamlib-processor-schema/`). Recorded 2026-08-12
+  during #1841. The REMOVED list has `ProcessorDescriptor.name` going with the grammar on
+  the basis that the import path is the only *identity* a descriptor carries — true of
+  identity, and not true of the field, whose last reader is the display-name default that
+  §Processor model & scheduling DECIDES is the class's short name. Both routes out were
+  closed: splitting the import path re-invents the deleted grammar (#1840's non-derivable
+  notes), and changing the default is a plan change. So the short name is re-homed rather
+  than deleted. It is a validating newtype, not a second bare `String`, because
+  `ProcessorDescriptor::new` had exactly one `impl Into<String>` parameter and a second
+  adjacent one re-opens the argument-swap hazard #1840 closed by typing the import path;
+  non-emptiness is the whole rule, since neither language enforces PascalCase on a class
+  name. Read off the authored struct ident in Rust and `cls.__name__` in Python.
 
 ## Out of scope
 
