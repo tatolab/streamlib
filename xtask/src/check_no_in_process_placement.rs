@@ -230,7 +230,10 @@ const EXEMPT_PROHIBITION_LINES: &[(&str, &str)] = &[
         "docs/decisions/importable-python-library.md",
         "- **Both placements, engine-chosen** — rejected 2026-08-04",
     ),
-    ("docs/plan/GLOSSARY.md", "\"transparent move\"."),
+    (
+        "docs/plan/GLOSSARY.md",
+        "\"transparent move\".",
+    ),
     (
         "docs/plan/GLOSSARY.md",
         "**Placement policy**, **Placement heuristic**, **Transparent move** — there is one",
@@ -332,23 +335,13 @@ const BANNED_SHAPES: &[BannedShape] = &[
     // it rejects a *subinterpreter* with a *per-interpreter GIL*.
     BannedShape {
         all_of: &["processor"],
-        any_of: &[
-            "same address space",
-            "single address space",
-            "shared address space",
-            "one address space",
-        ],
+        any_of: &["same address space", "single address space", "shared address space", "one address space"],
         also_requires_any_of: &[],
         guidance: CO_TENANCY_GUIDANCE,
     },
     BannedShape {
         all_of: &["processor"],
-        any_of: &[
-            "subinterpreter",
-            "sub-interpreter",
-            "per-interpreter gil",
-            "concurrent.interpreters",
-        ],
+        any_of: &["subinterpreter", "sub-interpreter", "per-interpreter gil", "concurrent.interpreters"],
         also_requires_any_of: &[],
         guidance: REJECTED_ALTERNATIVE_GUIDANCE,
     },
@@ -357,9 +350,7 @@ const BANNED_SHAPES: &[BannedShape] = &[
     BannedShape {
         all_of: &["processor", "global interpreter lock"],
         any_of: &[],
-        also_requires_any_of: &[
-            "share", "shares", "sharing", "shared", "same", "one", "single", "contend",
-        ],
+        also_requires_any_of: &["share", "shares", "sharing", "shared", "same", "one", "single", "contend"],
         guidance: CO_TENANCY_GUIDANCE,
     },
     BannedShape {
@@ -381,23 +372,12 @@ const BANNED_SHAPES: &[BannedShape] = &[
     BannedShape {
         all_of: &["gil"],
         any_of: &["stall", "block", "starve", "degrade"],
-        also_requires_any_of: &[
-            "other processor",
-            "another processor",
-            "other python processor",
-        ],
+        also_requires_any_of: &["other processor", "another processor", "other python processor"],
         guidance: CO_TENANCY_GUIDANCE,
     },
     BannedShape {
         all_of: &[],
-        any_of: &[
-            "gil-hold",
-            "gil hold",
-            "slow-callback",
-            "slow callback",
-            "stall-attribution",
-            "stall attribution",
-        ],
+        any_of: &["gil-hold", "gil hold", "slow-callback", "slow callback", "stall-attribution", "stall attribution"],
         also_requires_any_of: WATCHDOG_NOUNS,
         guidance: DIAGNOSTIC_GUIDANCE,
     },
@@ -422,14 +402,12 @@ const BANNED_SHAPES: &[BannedShape] = &[
     },
     BannedShape {
         all_of: &[],
-        any_of: &[
-            "0.085ms", "0.085 ms", "0.161ms", "0.161 ms", "0.089ms", "0.089 ms", "0.180ms",
-            "0.180 ms",
-        ],
+        any_of: &["0.085ms", "0.085 ms", "0.161ms", "0.161 ms", "0.089ms", "0.089 ms", "0.180ms", "0.180 ms"],
         also_requires_any_of: &[],
         guidance: RETRACTED_NUMBERS_GUIDANCE,
     },
 ];
+
 
 /// The watchdog family needs its diagnostic name *and* a monitor noun, or
 /// every `GIL-holding thread` doc comment trips it.
@@ -540,10 +518,7 @@ fn ensure_allow_file_set_is_pinned(
         })
         .collect();
     found.sort();
-    let mut expected: Vec<String> = EXPECTED_ALLOW_FILE_PATHS
-        .iter()
-        .map(|p| p.to_string())
-        .collect();
+    let mut expected: Vec<String> = EXPECTED_ALLOW_FILE_PATHS.iter().map(|p| p.to_string()).collect();
     expected.sort();
     anyhow::ensure!(
         found == expected,
@@ -575,9 +550,7 @@ pub fn lint_workspace(workspace_root: &Path) -> Result<InProcessPlacementScanRep
         }
         let before = report.files_scanned;
         scan_dir(workspace_root, &dir, &mut report)?;
-        report
-            .files_scanned_per_root
-            .push((parent, report.files_scanned - before));
+        report.files_scanned_per_root.push((parent, report.files_scanned - before));
     }
     scan_workspace_root_markdown(workspace_root, &mut report)?;
     Ok(report)
@@ -633,21 +606,14 @@ fn ensure_every_scan_root_contributed(report: &InProcessPlacementScanReport) -> 
     Ok(())
 }
 
-fn scan_dir(
-    workspace_root: &Path,
-    dir: &Path,
-    report: &mut InProcessPlacementScanReport,
-) -> Result<()> {
+fn scan_dir(workspace_root: &Path, dir: &Path, report: &mut InProcessPlacementScanReport) -> Result<()> {
     for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
         let path = entry.path();
         if !path.is_file() {
             continue;
         }
         let path_str = path.to_string_lossy();
-        if SKIP_PATH_FRAGMENTS
-            .iter()
-            .any(|frag| path_str.contains(frag))
-        {
+        if SKIP_PATH_FRAGMENTS.iter().any(|frag| path_str.contains(frag)) {
             continue;
         }
         if is_skipped_file_name(path) {
@@ -706,8 +672,8 @@ fn scan_file(
             previous.clear();
             continue;
         }
-        let hit =
-            first_banned_shape(&scanned).or_else(|| wrapped_banned_phrase(&previous, &scanned));
+        let hit = first_banned_shape(&scanned)
+            .or_else(|| wrapped_banned_phrase(&previous, &scanned));
         if let Some(hit) = hit {
             report.violations.push(LintViolation {
                 file: path.to_path_buf(),
@@ -1048,16 +1014,8 @@ mod tests {
         ];
         for (index, sentence) in sentences.iter().enumerate() {
             let tmp = TempDir::new().unwrap();
-            write(
-                tmp.path(),
-                "docs/architecture/a.md",
-                &format!("{sentence}\n"),
-            );
-            assert_eq!(
-                lint(tmp.path()).len(),
-                1,
-                "sentence {index} passed: {sentence}"
-            );
+            write(tmp.path(), "docs/architecture/a.md", &format!("{sentence}\n"));
+            assert_eq!(lint(tmp.path()).len(), 1, "sentence {index} passed: {sentence}");
         }
     }
 
@@ -1157,11 +1115,7 @@ mod tests {
     #[test]
     fn flags_unhyphenated_in_process_hosting() {
         let tmp = TempDir::new().unwrap();
-        write(
-            tmp.path(),
-            "docs/architecture/a.md",
-            "In process hosting is back.\n",
-        );
+        write(tmp.path(), "docs/architecture/a.md", "In process hosting is back.\n");
         assert_eq!(lint(tmp.path()).len(), 1);
     }
 
@@ -1228,11 +1182,7 @@ mod tests {
     #[test]
     fn flags_prose_spelled_with_unicode_punctuation() {
         let tmp = TempDir::new().unwrap();
-        write(
-            tmp.path(),
-            "docs/architecture/a.md",
-            "In\u{2011}process hosting is back.\n",
-        );
+        write(tmp.path(), "docs/architecture/a.md", "In\u{2011}process hosting is back.\n");
         write(
             tmp.path(),
             "docs/architecture/b.md",
@@ -1366,21 +1316,9 @@ mod tests {
     #[test]
     fn flags_in_process_placement_hosting_and_authoring() {
         let tmp = TempDir::new().unwrap();
-        write(
-            tmp.path(),
-            "docs/architecture/a.md",
-            "In-process placement.\n",
-        );
-        write(
-            tmp.path(),
-            "docs/architecture/b.md",
-            "In-process hosting.\n",
-        );
-        write(
-            tmp.path(),
-            "docs/architecture/c.md",
-            "In-process authoring.\n",
-        );
+        write(tmp.path(), "docs/architecture/a.md", "In-process placement.\n");
+        write(tmp.path(), "docs/architecture/b.md", "In-process hosting.\n");
+        write(tmp.path(), "docs/architecture/c.md", "In-process authoring.\n");
         assert_eq!(lint(tmp.path()).len(), 3);
     }
 
@@ -1581,7 +1519,11 @@ mod tests {
     #[test]
     fn the_real_workspace_has_no_banned_placement_vocabulary() {
         let report = lint_workspace(&workspace()).unwrap();
-        assert!(report.violations.is_empty(), "got {:?}", report.violations);
+        assert!(
+            report.violations.is_empty(),
+            "got {:?}",
+            report.violations
+        );
     }
 
     #[test]
@@ -1613,7 +1555,8 @@ mod tests {
     fn exempt_prohibition_lines_are_all_live() {
         let root = workspace();
         for (rel, text) in EXEMPT_PROHIBITION_LINES {
-            let body = fs::read_to_string(root.join(rel)).unwrap_or_else(|e| panic!("{rel}: {e}"));
+            let body = fs::read_to_string(root.join(rel))
+                .unwrap_or_else(|e| panic!("{rel}: {e}"));
             assert!(
                 body.lines().any(|line| line.trim() == *text),
                 "{rel} no longer contains the exempted prohibition line `{text}` — delete the \
@@ -1647,25 +1590,15 @@ mod tests {
     #[test]
     fn scans_workspace_root_markdown_but_not_the_changelog() {
         let tmp = TempDir::new().unwrap();
-        write(
-            tmp.path(),
-            "CLAUDE.md",
-            "In-process hosting is the fast path.\n",
-        );
-        write(
-            tmp.path(),
-            "README.md",
-            "In-process hosting is supported.\n",
-        );
-        write(
-            tmp.path(),
-            "CHANGELOG.md",
-            "* **python:** in-process authoring\n",
-        );
+        write(tmp.path(), "CLAUDE.md", "In-process hosting is the fast path.\n");
+        write(tmp.path(), "README.md", "In-process hosting is supported.\n");
+        write(tmp.path(), "CHANGELOG.md", "* **python:** in-process authoring\n");
         let violations = lint(tmp.path());
         assert_eq!(violations.len(), 2, "got {violations:?}");
         assert!(
-            violations.iter().all(|v| !v.file.ends_with("CHANGELOG.md")),
+            violations
+                .iter()
+                .all(|v| !v.file.ends_with("CHANGELOG.md")),
             "got {violations:?}"
         );
     }

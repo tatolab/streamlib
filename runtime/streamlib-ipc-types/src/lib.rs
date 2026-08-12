@@ -107,9 +107,7 @@ pub enum ChannelEgressAdmission {
     /// is `Some(growth)` the tracked data-segment capacity crossed the frame size
     /// and was advanced — a PowerOfTwo growth the caller logs, additionally
     /// raising a `warn` when [`ChannelSegmentGrowth::crossed_quarter_ceiling`].
-    Admitted {
-        grew_to: Option<ChannelSegmentGrowth>,
-    },
+    Admitted { grew_to: Option<ChannelSegmentGrowth> },
 }
 
 /// Single authority for the per-channel-egress ceiling refusal + PowerOfTwo

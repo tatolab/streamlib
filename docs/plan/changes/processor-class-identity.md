@@ -114,6 +114,14 @@ Bare patterns — the ship gate greps each line verbatim as a fixed string.
   seam an untrusted-code path returns through must be rebuilt against the helper-process
   boundary rather than against an org.
 - REMOVED: IsolationTier::for_processor
+- REMOVED: ProcessorDescriptor::with_version
+  With `ProcessorDescriptor.version` and the control plane's
+  `ProcessorDescriptorOutput.version`. Recorded 2026-08-12 during #1841. The field's only
+  writer was the macro emitting `schema_ident.version` — always the `0.0.0` version-free
+  sentinel this change deletes — so with the sentinel gone nothing could write it and the
+  control plane would have rendered `"version": ""` for every processor under a field
+  documented as a semantic version string. Versions never live at the code layer (§Product,
+  the zero-ceremony bar), so the field goes rather than acquiring a new source.
 - REMOVED: check-no-reverse-dns
   The xtask check and its workflow. Its stated rationale is enforcing the
   `@org/package/Type@version` grammar (`check_no_reverse_dns.rs:5-9`); with that grammar

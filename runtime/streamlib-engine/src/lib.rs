@@ -41,19 +41,59 @@ pub use streamlib_macros::{ConfigDescriptor, processor};
 ///
 /// The message is asserted at the parse seam in `streamlib-macros`; these
 /// assert the refusal survives a real expansion, which a unit test on the
-/// parser cannot — a caller that reintroduced a positional argument ahead of
-/// `parse_body` would pass there and fail here.
+/// parser cannot.
 ///
-/// ```compile_fail
-/// // The leading positional `@org/package/Type` the grammar used to take.
-/// #[streamlib::processor("@tatolab/camera/Camera", execution = manual)]
-/// pub struct RefusedPositionalIdentity;
+/// The first block is the control, and it is what makes the other two mean
+/// anything: it is the same fixture with the identity removed, and it must
+/// COMPILE. A `compile_fail` block passes for any reason at all — an
+/// unresolved path, a missing trait impl — so without a positive twin proving
+/// the fixture is otherwise sound, the two refusals below would pass on a
+/// typo.
+///
+/// ```
+/// use streamlib::sdk::context::RuntimeContextFullAccess;
+/// use streamlib::sdk::error::Result;
+///
+/// #[streamlib::sdk::processor(execution = manual)]
+/// pub struct AcceptedWithoutIdentity;
+///
+/// impl streamlib::sdk::processors::ManualProcessor for AcceptedWithoutIdentity::Processor {
+///     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+///         Ok(())
+///     }
+/// }
 /// ```
 ///
+/// The leading positional `@org/package/Type` the grammar used to take:
+///
 /// ```compile_fail
-/// // The `type = "..."` override that used to name the synthesized segment.
-/// #[streamlib::processor(execution = manual, type = "CustomName")]
+/// use streamlib::sdk::context::RuntimeContextFullAccess;
+/// use streamlib::sdk::error::Result;
+///
+/// #[streamlib::sdk::processor("@tatolab/camera/Camera", execution = manual)]
+/// pub struct RefusedPositionalIdentity;
+///
+/// impl streamlib::sdk::processors::ManualProcessor for RefusedPositionalIdentity::Processor {
+///     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+///         Ok(())
+///     }
+/// }
+/// ```
+///
+/// The `type = "..."` override that used to name the synthesized segment:
+///
+/// ```compile_fail
+/// use streamlib::sdk::context::RuntimeContextFullAccess;
+/// use streamlib::sdk::error::Result;
+///
+/// #[streamlib::sdk::processor(execution = manual, type = "CustomName")]
 /// pub struct RefusedTypeOverride;
+///
+/// impl streamlib::sdk::processors::ManualProcessor for RefusedTypeOverride::Processor {
+///     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
+///         Ok(())
+///     }
+/// }
 /// ```
 #[cfg(doctest)]
 pub struct ProcessorAttributeAcceptsNoIdentity;

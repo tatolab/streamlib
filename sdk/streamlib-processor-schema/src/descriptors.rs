@@ -125,7 +125,6 @@ pub struct ProcessorDescriptor {
     /// that adding a descriptor without deriving one does not compile.
     pub processor_class_import_path: ProcessorClassImportPath,
     pub description: String,
-    pub version: String,
     pub repository: String,
     /// Runtime environment (Rust, Python).
     #[serde(default)]
@@ -155,7 +154,6 @@ impl ProcessorDescriptor {
             processor_class_short_name,
             processor_class_import_path,
             description: description.into(),
-            version: String::new(),
             repository: String::new(),
             runtime: ProcessorRuntime::default(),
             entrypoint: None,
@@ -165,11 +163,6 @@ impl ProcessorDescriptor {
             outputs: Vec::new(),
             examples: CodeExamples::default(),
         }
-    }
-
-    pub fn with_version(mut self, version: impl Into<String>) -> Self {
-        self.version = version.into();
-        self
     }
 
     pub fn with_repository(mut self, repository: impl Into<String>) -> Self {

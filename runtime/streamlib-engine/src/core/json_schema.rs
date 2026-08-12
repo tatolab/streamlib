@@ -166,8 +166,6 @@ pub struct ProcessorDescriptorOutput {
     pub processor_class_import_path: ProcessorClassImportPath,
     /// Human-readable description.
     pub description: String,
-    /// Semantic version string.
-    pub version: String,
     /// Repository URL.
     pub repository: String,
     /// Runtime environment.
@@ -322,7 +320,6 @@ impl From<&crate::core::ProcessorDescriptor> for ProcessorDescriptorOutput {
         Self {
             processor_class_import_path: desc.processor_class_import_path.clone(),
             description: desc.description.clone(),
-            version: desc.version.clone(),
             repository: desc.repository.clone(),
             runtime: ProcessorRuntimeOutput::from(&desc.runtime),
             entrypoint: desc.entrypoint.clone(),

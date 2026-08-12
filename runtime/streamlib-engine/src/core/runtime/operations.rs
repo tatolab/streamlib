@@ -159,3 +159,4 @@ pub trait RuntimeOperations: Send + Sync {
     /// Export graph state as JSON including topology, processor states, metrics, and buffer levels.
     fn to_json(&self) -> Result<serde_json::Value>;
 }
+

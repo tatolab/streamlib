@@ -52,8 +52,6 @@ streamlib-processor-schema = { path = "../../sdk/streamlib-processor-schema", ve
 # re-exports them at `core::error`.
 streamlib-error = { path = "../../sdk/streamlib-error", version = "0.17.0" }
 
-# Schema identity + manifest types (one source of truth for the
-# structured `dependencies:` shape consumed at runtime).
 # Procedural macros
 streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.17.0" }
 
