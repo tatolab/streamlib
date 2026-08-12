@@ -187,7 +187,7 @@ plant docs/learnings/slpkg-raw-device-rhi-construction.md "A separately-built .f
 run_gate
 expect_pass "a learning that records driver behaviour is not residue"
 
-# Consumers lag by design (CLAUDE.md) and are moving out-of-repo (#1672).
+# Consumers lag by design (CLAUDE.md).
 new_repo <<'EOF'
 - REMOVED: fictional_modules
 EOF

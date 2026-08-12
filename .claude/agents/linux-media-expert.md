@@ -24,7 +24,7 @@ You are the Linux media-capture and environment specialist. You own the seams wh
 - **Exactly one consumer per `/dev/videoN`.** V4L2 returns EBUSY at the kernel level if two processes open the same node. The loop serializes rig work; never launch a second capture against a device already in use.
 - **v4l2loopback needs `exclusive_caps=0`** (caps=1 breaks ffmpeg→loopback writes) and does not tolerate `poll()` before `VIDIOC_STREAMON` — a strict-conformance driver that has exposed real MMAP-path bugs the permissive vivid driver hides.
 - **A FAILED cross-device DMA-BUF import probe still perturbs NVIDIA's OPAQUE_FD allocation accounting.** A `vkAllocateMemory` chained with an import-FD info is NOT side-effect-free on NVIDIA even when it returns cleanly; per-handle-type kernel accounting carries forward. Gate such probes by vendor where the engine already does.
-- **Helper-process Vulkan is import-side only** (FD import + bind + map + layout transitions + timeline wait/signal) — allocation, modifier choice, and kernel construction all live in the parent. The RHI boundary (`.claude/rules/rhi.md`) and the polyglot rule (`.claude/rules/polyglot.md`) apply to any capture code you touch.
+- **Helper-process Vulkan is import-side only** (FD import + bind + map + layout transitions + timeline wait/signal) — allocation, modifier choice, and kernel construction all live in the parent. The RHI boundary (`.claude/rules/rhi.md`) applies to any capture code you touch.
 - **Camera / display processor code goes through `GpuContext`, never raw Vulkan.** DMA-BUF import and modifier handling that crosses into Vulkan belongs behind the RHI.
 
 ## What to re-derive from code (never cache here)

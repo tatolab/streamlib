@@ -266,8 +266,6 @@ Revisit when:
   `VulkanGraphicsKernel`.
 - [ray-tracing-kernel.md](ray-tracing-kernel.md) — host's
   `VulkanRayTracingKernel`.
-- [`.claude/rules/polyglot.md`](../../.claude/rules/polyglot.md)
-  — the polyglot rule the carve-out lives under.
 - [`.claude/rules/rhi.md`](../../.claude/rules/rhi.md) —
   the RHI + import-side carve-out rule.
 - [`docs/learnings/`](../learnings/) — bug evidence motivating one host

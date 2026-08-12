@@ -479,30 +479,12 @@ ambient availability) lives in the *Trade-off* section of
 adapter setup is per-runtime and lifetime-controlled, neither of
 which a Cargo feature can express.
 
-## Polyglot coverage
-
-If the adapter is supposed to be reachable from Python and Deno
-subprocesses (which is the default for any new adapter), follow
-[`.claude/rules/polyglot.md`](../../.claude/rules/polyglot.md):
-
-- Cdylibs (`streamlib-python-native`, `streamlib-deno-native`) add
-  the adapter crate as a runtime dep. The cdylib's dep graph
-  must still exclude `streamlib` — `cargo tree -p
-  streamlib-python-native | grep -c "^streamlib v"` should return
-  `0`. CI enforces this via `cargo xtask check-boundaries` (see
-  CLAUDE.md → Vulkan RHI Boundary).
-- The Python adapter mirror at
-  `sdk/streamlib-python/python/streamlib/adapters/` carries the
-  per-adapter context types (`VulkanContext`, `OpenGLContext`, etc.);
-  the base `SurfaceAdapter` Protocol/interface lives in
-  `sdk/streamlib-python/python/streamlib/surface_adapter.py`. It mirrors
-  the trait shape using Python's idiomatic scope binding (`with`).
-  Escalate-op schemas live
-  in `packages/escalate/schemas/`.
-- Polyglot coverage is **both Python AND Deno together** (per
-  `polyglot.md`). The only legitimate split is schema-only /
-  language-specific by construction; document the reason in the
-  PR if you split.
+> A "Polyglot coverage" section was removed here: every artifact it named —
+> the `streamlib-python-native` / `streamlib-deno-native` cdylibs, the
+> `sdk/streamlib-python/` adapter mirror, `packages/escalate/schemas/`, and the
+> Deno half of "both Python AND Deno together" — has been deleted. Adapters are
+> statically linked into the wheel, and a helper process imports that same wheel
+> rather than a separate cdylib.
 
 ## Cross-process producer composition
 
@@ -883,7 +865,5 @@ Read these, in this order, when authoring:
   `VulkanComputeKernel`, the dispatch primitive any adapter that
   needs compute reaches through (via escalate IPC from
   subprocess).
-- [`.claude/rules/polyglot.md`](../../.claude/rules/polyglot.md)
-  — polyglot rules including the import-side carve-out.
 - [`.claude/rules/rhi.md`](../../.claude/rules/rhi.md)
   — the RHI + import-side carve-out rule adapter work rides.
