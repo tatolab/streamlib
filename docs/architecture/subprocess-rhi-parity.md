@@ -1,8 +1,7 @@
 # Subprocess RHI parity
 
-> **Living document.** Validate, update, critique freely per
-> [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation).
-> Verify against current code before generalizing.
+> Current shipped state only, per
+> [`.claude/rules/docs-policy.md`](../../.claude/rules/docs-policy.md).
 
 ## Decision
 
@@ -90,11 +89,11 @@ carve-out exists to make that bind possible and nothing more:
   for Mesa drivers.
 
 Lives in the standalone [`streamlib-consumer-rhi`][crate] crate.
-Cdylibs (`streamlib-python-native`, `streamlib-deno-native`) depend on
-this crate, NOT the full `streamlib`, so the FullAccess capability
-boundary is enforced by the type system — a cdylib's dep graph excludes
-`streamlib` and physically cannot reach `HostVulkanDevice`, the host
-VMA pools, the modifier probe, or any other privileged primitive.
+Every surface-adapter crate depends on this crate, NOT the full
+`streamlib`, so the FullAccess capability boundary is enforced by the
+type system — an adapter's runtime dep graph excludes `streamlib` and
+physically cannot reach `HostVulkanDevice`, the host VMA pools, the
+modifier probe, or any other privileged primitive.
 
 [crate]: ../../runtime/streamlib-consumer-rhi/
 
@@ -102,10 +101,12 @@ VMA pools, the modifier probe, or any other privileged primitive.
 
 Every surface adapter rides the same shape:
 
-- The adapter crate (`streamlib-adapter-vulkan`,
-  `streamlib-adapter-opengl`, `streamlib-adapter-cpu-readback`,
-  `streamlib-adapter-skia`, `streamlib-adapter-cuda`) is **generic over
-  `D: VulkanRhiDevice`** from `streamlib-consumer-rhi`.
+- The Vulkan-device adapter crates (`streamlib-adapter-vulkan`,
+  `streamlib-adapter-cpu-readback`, `streamlib-adapter-skia`,
+  `streamlib-adapter-cuda`) are **generic over `D: VulkanRhiDevice`**
+  from `streamlib-consumer-rhi`. `streamlib-adapter-opengl` imports the
+  same host DMA-BUF through EGL rather than a consumer `VkDevice`, so it
+  is not generic over the device flavor.
 - **Host setup** instantiates the adapter against a host-flavor device;
   pre-allocates whatever per-surface resources the adapter needs (an
   exportable `VkImage` for vulkan/opengl/skia; an exportable HOST_VISIBLE
@@ -133,7 +134,7 @@ Every surface adapter rides the same shape:
   reading.
 
 The single-pattern principle is the engine-model rule
-([CLAUDE.md "The StreamLib Engine Model"](../../CLAUDE.md#the-streamlib-engine-model))
+([`.claude/rules/engine-doctrine.md`](../../.claude/rules/engine-doctrine.md))
 applied to the surface-adapter layer: there is ONE way to expose a
 host-allocated GPU resource to a subprocess customer, and every
 subprocess-wired adapter uses it. RHI bug fixes (e.g. import-side
@@ -144,13 +145,12 @@ automatically because all flow through the same `consumer-rhi` types.
 `streamlib-adapter-skia` is host-side only — it composes on the
 Vulkan and OpenGL adapters (per the cross-process composition
 section in [`adapter-authoring.md`](adapter-authoring.md)) and
-isn't a runtime dep of either cdylib. Its subprocess customers
-reach Skia surfaces through the wrapped adapter's cdylib path,
-which is the canonical "compose, don't rederive" shape; the
-single-pattern principle still holds at the layer that matters
-(subprocess-side imports) because every cross-process customer
-still reaches consumer-rhi through one of the four wired
-adapters.
+isn't a runtime dep of the wheel. Its helper-process customers
+reach Skia surfaces through the wrapped adapter, which is the
+canonical "compose, don't rederive" shape; the single-pattern
+principle still holds at the layer that matters (helper-side
+imports) because every cross-process customer still reaches
+consumer-rhi through one of the four wired adapters.
 
 ## Per-pattern decisions
 
@@ -212,24 +212,24 @@ adapters.
 │                                                                      │
 │  streamlib-adapter-skia is host-side only (composes on the OpenGL    │
 │  / Vulkan adapter per adapter-authoring's cross-process composition  │
-│  section); its subprocess customers reach it through the wrapped     │
-│  adapter's cdylib path and it isn't in either cdylib's Cargo deps.   │
+│  section); its helper-process customers reach it through the        │
+│  wrapped adapter, and it is not a dep of the wheel.                 │
 └───────┼──────────────────────────────────────────────────────────────┘
         ▼
-┌──────────────────────┐         ┌──────────────────────┐
-│ PYTHON SUBPROC       │         │ DENO SUBPROC         │
-│ Cargo: consumer-rhi  │         │ Cargo: consumer-rhi  │
-│  + adapter-{abi,     │         │  + adapter-{abi,     │
-│   vulkan, opengl,    │         │   vulkan, opengl,    │
-│   cpu-readback,      │         │   cpu-readback,      │
-│   cuda};             │         │   cuda};             │
-│  NOT full streamlib  │         │  NOT full streamlib  │
-└──────────────────────┘         └──────────────────────┘
+┌──────────────────────┐
+│ PYTHON HELPER        │
+│ Imports the wheel:   │
+│  consumer-rhi +      │
+│  surface-client +    │
+│  adapter-cuda;       │
+│  import-side Vulkan  │
+│  only                │
+└──────────────────────┘
 ```
 
-`cargo tree -p streamlib-{python,deno}-native | grep -c "^streamlib v"`
-returns 0 — the capability boundary is enforced by Cargo dep resolution
-itself.
+`cargo xtask check-boundaries` fails if `streamlib` appears outside
+`[dev-dependencies]` in any adapter crate's manifest — the capability
+boundary is enforced by Cargo dep resolution itself.
 
 ## Trip-wires
 

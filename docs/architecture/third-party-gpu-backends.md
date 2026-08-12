@@ -1,8 +1,7 @@
 # Third-party GPU library backends — the engine-allocates / vendor-imports pattern
 
-> **Living document.** Validate, update, and critique freely per
-> [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation).
-> Verify against current code before generalizing.
+> Current shipped state only, per
+> [`.claude/rules/docs-policy.md`](../../.claude/rules/docs-policy.md).
 
 ## What this is
 
@@ -138,7 +137,7 @@ backend's steady-state per-frame work
 (`vkCmdCopyBufferToImage`, timeline wait, ring rotation) runs on
 LimitedAccess and never escalates.
 
-Subprocess (Python / Deno cdylib) consumers reach the result via the
+Subprocess (Python helper-process) consumers reach the result via the
 normal `surface_id` contract — they import the **ring slot's
 render-target VkImage** (via surface-share, per
 [`adapter-runtime-integration.md`](adapter-runtime-integration.md)),
@@ -164,10 +163,10 @@ Each field is a `bool` named after the library
 (`nvjpeg`, `optix_denoiser`, etc.); future siblings extend the
 struct, not the device's method surface.
 
-Selection inside a backend-using library (e.g. `SimpleJpegDecoder`)
-is **runtime**: the library auto-selects the highest-tier backend
-whose capability is `true`, with an optional caller override for
-forcing a specific backend.
+Selection inside a backend-using library is **runtime**, decided
+once at construction rather than by a Cargo feature.
+`SimpleJpegDecoder` is the only backend-using library and carries
+one backend, so it constructs `VulkanComputeBackend` unconditionally.
 
 Build gating is **dynamic loading via `libloading`**, not a Cargo
 feature. Backends that need a vendor `.so` (libnvjpeg, etc.) `dlopen`
@@ -181,10 +180,10 @@ Cargo feature" foot-gun.
 
 **Today there is one shipped backend-using library** —
 [`vulkan-jpeg`]'s `SimpleJpegDecoder`, which carries its own
-`JpegDecodeBackend` trait with `VulkanComputeBackend` and
-`NvJpegBackend` implementations. The shape is JPEG-specific by
-design at this stage — a single consumer doesn't justify lifting
-the trait to an engine-tier primitive yet.
+`JpegDecodeBackend` trait with a single `VulkanComputeBackend`
+implementation. The shape is JPEG-specific by design at this
+stage — a single consumer doesn't justify lifting the trait to
+an engine-tier primitive yet.
 
 **When a second backend-using library lands** (NVDEC-flavored
 H.264/H.265 decoder, OptiX-denoiser post-processor, AMF encoder
@@ -203,8 +202,9 @@ engine layer, codifying:
 
 The new trait lives next to [`ThirdPartyGpuCapabilities`] in the
 engine's RHI module. Both the JPEG library and the second
-backend-using library migrate to it in the same PR per CLAUDE.md
-"No bad patterns left behind on engine changes." That migration
+backend-using library migrate to it in the same PR per
+`.claude/rules/engine-doctrine.md`'s "no parallel old/new
+coexistence." That migration
 is the moment the engine-model lift happens — not before.
 
 **The signal that you've hit the trigger** is that
@@ -262,8 +262,8 @@ plausibly attempt without this doc.
 - **Backend-using library**:
   [`sdk/vulkan-jpeg/src/backend.rs`](../../sdk/vulkan-jpeg/src/backend.rs)
   (`JpegDecodeBackend` trait),
-  [`sdk/vulkan-jpeg/src/nvjpeg_backend.rs`](../../sdk/vulkan-jpeg/src/nvjpeg_backend.rs)
-  (`NvJpegBackend` implementation).
+  [`sdk/vulkan-jpeg/src/vulkan_compute_backend.rs`](../../sdk/vulkan-jpeg/src/vulkan_compute_backend.rs)
+  (`VulkanComputeBackend` implementation).
 - **Engine primitives**:
   - [`HostVulkanBuffer::new_opaque_fd_export`] (HOST_VISIBLE) and
     [`HostVulkanBuffer::new_opaque_fd_export_device_local`]

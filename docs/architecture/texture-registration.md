@@ -1,7 +1,7 @@
 # `TextureRegistration` — engine-wide per-surface lifecycle state
 
-> **Living document.** Validate, update, critique freely per
-> [CLAUDE.md's markdown editing rules](../../CLAUDE.md#editing-markdown-documentation).
+> Current shipped state only, per
+> [`.claude/rules/docs-policy.md`](../../.claude/rules/docs-policy.md).
 
 ## What this is
 
@@ -27,8 +27,8 @@ same shape lifted from adapter-scope to engine-wide scope.
 ## Why it exists
 
 The engine-model fix (per
-[CLAUDE.md "Engine-wide bugs get fixed at the engine
-layer"](../../CLAUDE.md#core-operating-principles--read-first)) makes
+[CLAUDE.md "Engine-wide defects get fixed at the engine
+layer"](../../CLAUDE.md#non-negotiables)) makes
 the handoff contract between producers and consumers **explicit and
 typed at the engine layer**. The alternative — implicit conventions
 encoded in producer/consumer code — breaks the moment a new producer
@@ -84,7 +84,7 @@ producer:                  consumer:
        ▼                            ▼
   ┌─────────────────────────────────────────┐
   │ GpuContext::texture_cache               │
-  │   HashMap<surface_id, Arc<TexReg>>      │
+  │   HashMap<surface_id, TexReg>           │
   │     ├── texture: Texture                │
   │     └── current_layout: AtomicI32       │
   └─────────────────────────────────────────┘
@@ -95,8 +95,8 @@ producer:                  consumer:
                               update_layout(target_layout);
 ```
 
-The `Arc<TextureRegistration>` is shared across all holders in-process
-— no IPC, no schema changes. `current_layout` reads use
+The `TextureRegistration` handle is refcount-shared across all holders
+in-process — no IPC, no schema changes. `current_layout` reads use
 `Ordering::Acquire`; writes use `Ordering::Release`. Multi-consumer
 races are tolerated (see [Race model](#race-model)).
 
@@ -390,13 +390,13 @@ the empirical DMA-BUF kernel-cache behavior, not the spec. Mesa is
 the eventual landing point for the QFOT-acquire path; NVIDIA
 consumers ride the bridging fallback indefinitely.
 
-### Producer-side adoption is incremental
+### Producer-side release paths
 
 The producer-side QFOT release machinery
 (`HostVulkanDevice::release_to_foreign` and
-`VulkanSurfaceAdapter::release_to_foreign`) is in place; in-tree
-producers and cdylib FFI release paths adopt it as their
-cross-process correctness story requires. Adapter-cuda and
+`VulkanSurfaceAdapter::release_to_foreign`) is the host half of the
+contract; `ConsumerVulkanDevice` carries the helper-process mirror.
+Adapter-cuda and
 -cpu-readback are out of scope by construction (CUDA imports use
 `cudaImportExternalMemory` ownership semantics; cpu-readback is
 buffer-only with no Vulkan layout).
@@ -487,7 +487,7 @@ When a new field lands on `TextureRegistration`:
 - **First consumer**: `LinuxDisplayProcessor::render_frame` in
   `packages/display/processors/display_linux.rs`.
 - **First adapter-output producer**: `register_render_target_surface`
-  in `examples/camera-python-display/runner/src/linux.rs`.
+  in `examples/camera-python-display/src/linux.rs`.
 - **First in-tree producer**: `LinuxCameraProcessor` in the
   `streamlib-camera` package —
   `packages/camera/processors/camera_linux.rs`.
