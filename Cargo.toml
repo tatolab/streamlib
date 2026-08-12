@@ -188,3 +188,11 @@ hyper = "1.7.0"
 # YUV/RGB conversion - REMOVED (now using GPU-accelerated VTPixelTransferSession)
 # yuv = "0.8"
 
+
+# The lint gates walk the whole tree — ~7400 files against every banned shape —
+# so they are the one dev-profile build where codegen dominates. Three xtask
+# tests each do a full-workspace scan, which unoptimised costs 155s of the
+# workspace test run's 207s; at opt-level 3 the same binary finishes in 7.6s.
+# Scoped to xtask alone so nothing else pays the compile time.
+[profile.dev.package.xtask]
+opt-level = 3
