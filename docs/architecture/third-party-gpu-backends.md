@@ -201,11 +201,7 @@ engine layer, codifying:
 - Runtime selection / override
 
 The new trait lives next to [`ThirdPartyGpuCapabilities`] in the
-engine's RHI module. Both the JPEG library and the second
-backend-using library migrate to it in the same PR per
-`.claude/rules/engine-doctrine.md`'s "no parallel old/new
-coexistence." That migration
-is the moment the engine-model lift happens — not before.
+engine's RHI module.
 
 **The signal that you've hit the trigger** is that
 [`ThirdPartyGpuCapabilities`] grew a second `bool` field. The struct

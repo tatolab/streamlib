@@ -118,12 +118,13 @@ Every surface adapter rides the same shape:
   [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md)
   for the single-writer-per-edge contract that governs the two
   timelines.
-- **Subprocess setup** looks the registration up via surface-share,
-  imports the FDs through `ConsumerVulkanTexture` /
-  `ConsumerVulkanBuffer` plus a pair of
-  `ConsumerVulkanTimelineSemaphore`s (one per edge), and
+- **Subprocess setup** looks the registration up via surface-share and
   instantiates the **same** adapter type against a consumer-flavor
-  device. Same trait surface, same acquire/release shape.
+  device — same trait surface, same acquire/release shape. The
+  Vulkan-device adapters import the FDs through `ConsumerVulkanTexture`
+  / `ConsumerVulkanBuffer` plus a pair of
+  `ConsumerVulkanTimelineSemaphore`s (one per edge);
+  `streamlib-adapter-opengl` imports the same FDs through EGL instead.
 - **Per-acquire IPC**, if the adapter needs the host to do work
   (cpu-readback's `vkCmdCopyImageToBuffer`, escalated compute dispatch
   via `register_compute_kernel` + `run_compute_kernel`), is a **thin

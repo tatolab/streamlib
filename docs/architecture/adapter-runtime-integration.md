@@ -102,8 +102,8 @@ Concretely:
 | Adapter | Pattern (single shape) |
 |---|---|
 | `streamlib-adapter-vulkan` | Generic over `D: VulkanRhiDevice`. Host pre-registers `VkImage` + two timeline semaphores (`produce_done` + `consume_done`) via surface-share; subprocess imports through `ConsumerVulkanTexture` + a pair of `ConsumerVulkanTimelineSemaphore`s. Per-acquire is layout-transition + `produce_done` wait, no IPC. The writer process signals `produce_done` in `end_write_access`; the reader process signals `consume_done` in `end_read_access`. Both edges typically use host CPU `signal_host`. See [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md) for the single-writer-per-edge contract. |
-| `streamlib-adapter-opengl` | Same shape; subprocess imports the `VkImage` and binds it as a `GL_TEXTURE_2D` via EGL DMA-BUF import. (Has not yet lifted to the dual-timeline shape — see [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md); will migrate in a separate issue.) |
-| `streamlib-adapter-skia` | Same shape; composes on the vulkan adapter's import path (and also offers a GL backend that composes on the opengl adapter). (Has not yet lifted to the dual-timeline shape — see [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md); will migrate in a separate issue.) |
+| `streamlib-adapter-opengl` | Same shape; subprocess imports the `VkImage` and binds it as a `GL_TEXTURE_2D` via EGL DMA-BUF import. (Has not yet lifted to the dual-timeline shape — see [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md).) |
+| `streamlib-adapter-skia` | Same shape; composes on the vulkan adapter's import path (and also offers a GL backend that composes on the opengl adapter). (Has not yet lifted to the dual-timeline shape — see [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md).) |
 | `streamlib-adapter-cpu-readback` | Same shape: host pre-registers a HOST_VISIBLE staging `VkBuffer` + two timeline semaphores (`produce_done` + `consume_done`) via surface-share; subprocess imports through `ConsumerVulkanBuffer` + a pair of `ConsumerVulkanTimelineSemaphore`s. Per-acquire is a thin `RunCpuReadbackCopy(surface_id)` IPC that triggers the host's `vkCmdCopyImageToBuffer` and signals `produce_done` via the trigger's `vkQueueSubmit2::pSignalSemaphoreInfos` slot; the subprocess waits on `produce_done`, mmaps the pre-imported staging buffer, then signals `consume_done` via CPU `signal_host` in `end_read_access`. See [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md) for the single-writer-per-edge contract. |
 | `streamlib-adapter-cuda` | Same shape with one twist on the FD wire — two resource flavors: **(a)** the flat-tensor DLPack path: host pre-registers a HOST_VISIBLE OPAQUE_FD-exportable `VkBuffer` (`HostVulkanBuffer::new_opaque_fd_export`) + two OPAQUE_FD-exportable timeline semaphores (`produce_done` + `consume_done`) via surface-share; subprocess imports through `ConsumerVulkanBuffer::from_opaque_fd` + a pair of `ConsumerVulkanTimelineSemaphore::from_imported_opaque_fd`, then maps the same FDs into CUDA via `cudaImportExternalMemory(OPAQUE_FD)` + `cudaImportExternalSemaphore(TimelineSemaphoreFd)`. The OPAQUE_FD handle type (rather than DMA-BUF) is forced by the DLPack zero-copy contract: PyTorch / JAX / NumPy `from_dlpack` consume `DLTensor.data` as a flat `void*`, and only `cudaExternalMemoryGetMappedBuffer` (which requires the source memory to be a `VkBuffer` exported as OPAQUE_FD) yields the flat pointer. **(b)** the tiled-image path: host pre-registers a DEVICE_LOCAL OPAQUE_FD-exportable `VkImage` (`HostVulkanTexture::new_opaque_fd_export`) — `VK_IMAGE_TILING_OPTIMAL`, no DRM modifier, format restricted to the CUDA-mappable subset (`Rgba8Unorm` / `Rgba16Float` / `Rgba32Float`) — and the subprocess imports through `ConsumerVulkanTexture::from_opaque_fd`. The same FD is then handed to CUDA via `cudaImportExternalMemory(OPAQUE_FD)` → `cudaExternalMemoryGetMappedMipmappedArray` for `cudaSurfaceObject_t` / `cudaTextureObject_t` backings. The mipmapped-array handle is opaque (not DLPack-compatible) but unlocks hardware-bilinear sampling, mipmap LOD selection, and surface-write writes from CUDA kernels — the texture-shaped slice that complements (a)'s flat-tensor slice. The host-side trigger that produces frames into the staging buffer signals `produce_done` via `vkQueueSubmit2::pSignalSemaphoreInfos`; the subprocess waits on `produce_done` before consuming and signals `consume_done` via CPU `signal_host` in `end_read_access`. No per-acquire IPC, no CUDA bridge trait. See [`adapter-timeline-single-writer.md`](adapter-timeline-single-writer.md) for the single-writer-per-edge contract. |
 
@@ -142,9 +142,11 @@ Customer code (Rust processor / Python processor in its helper process)
   └── adapter.acquire_write(surface)              ← public API, uniform
       └── streamlib Python surface                ← type stub (_engine.pyi)
           └── streamlib._engine (the wheel)       ← statically linked
-              └── streamlib-adapter-* (vulkan, opengl, skia,
+              └── streamlib-adapter-* (vulkan, opengl,
                                        cpu-readback, cuda)
-                  ↳ generic over D: VulkanRhiDevice
+                  ↳ the Vulkan-device ones are generic over
+                    D: VulkanRhiDevice; opengl imports via EGL
+                  ↳ skia is host-side composition, not in the wheel
                   ↳ pre-registered resources via surface-share
                   ↳ imports via streamlib-consumer-rhi (Consumer*)
                   ↳ per-acquire: layout transitions + timeline waits;
@@ -276,7 +278,7 @@ The shape of what the hook does varies by seam:
   consumers](#dual-registration-for-in-process-consumers) below. No
   bridge — every subprocess acquire is a one-shot `check_out`.
   (Vulkan rides the dual-timeline shape today; OpenGL and Skia
-  haven't lifted yet and will migrate in a separate issue.)
+  haven't lifted yet.)
 - **Escalate-IPC seam** (cpu-readback). The hook constructs the
   `CpuReadbackSurfaceAdapter`, allocates + registers the host
   surface(s) it serves (passing both `produce_done` and `consume_done`

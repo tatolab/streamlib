@@ -269,7 +269,7 @@ decoders escalated every frame and allocated a fresh
   `processor_setup_lock` and `vkDeviceWaitIdle()`s the device
   after — that's a full GPU sync on the per-frame critical path.
   The AGP drone-racing vision pipeline (`docs/architecture/`-
-  adjacent VADR-TS-002, 30 Hz JPEG-over-UDP, latency-critical
+  30 Hz JPEG-over-UDP, latency-critical
   control loop) cannot afford that stall. See the [Honest
   accounting](#honest-accounting-of-whats-eliminated-vs-residual)
   section above for what specifically goes away and what residual

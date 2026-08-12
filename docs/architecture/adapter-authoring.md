@@ -725,75 +725,10 @@ believe the single-pattern principle is wrong for it, **stop and
 surface the disagreement before building a parallel shape.** That
 conversation belongs in an issue, not in code.
 
-## Hypothetical walkthrough — Metal on macOS via MoltenVK
-
-Sanity check: applying the checklist to an adapter not yet shipped.
-The exercise is to confirm the checklist would produce the right
-shape mechanically.
-
-**Goal**: `streamlib-adapter-metal` exposes a host-allocated
-`VkImage` (allocated through the macOS-flavor `HostVulkanDevice`
-running on MoltenVK) as an `MTLTexture` for customers writing
-Metal-native code.
-
-Walking the checklist:
-
-1. **Crate layout** — three crates: `streamlib-adapter-metal`,
-   `streamlib-adapter-metal-helpers` (test-only), and (likely) a
-   `streamlib-adapter-metal-mtltexture-bridge` crate that holds
-   the unsafe Objective-C bridging code. Same dep-graph rules:
-   the runtime adapter crate depends on `streamlib-surface-adapter`
-   + `streamlib-consumer-rhi` + `streamlib-surface-client` +
-   `vulkanalia`, but **not** `streamlib`.
-
-2. **Module layout** — same five files (`lib.rs`, `adapter.rs`,
-   `context.rs`, `state.rs`, `view.rs`) plus a sixth `mtl.rs` for
-   the MoltenVK ↔ Metal handle conversion (analogous to
-   `-opengl/src/egl.rs`).
-
-3. **The trait impl is generic over `D: VulkanRhiDevice`.**
-   `MetalSurfaceAdapter<HostVulkanDevice>` runs in-process Rust;
-   `MetalSurfaceAdapter<ConsumerVulkanDevice>` runs cdylib-side.
-   Per-acquire is a timeline wait + a layout transition into
-   `VK_IMAGE_LAYOUT_GENERAL` plus a MoltenVK-specific call to
-   surface the underlying `id<MTLTexture>` — but the `MTLTexture`
-   handle is read-only metadata on the imported `VkImage`, not a
-   privileged op.
-
-4. **Capability marker** — a new `MetalWritable` marker exposing
-   `mtl_texture(&self) -> *const MTLTexture` (or analogous Rust-
-   side handle type). Lives in `streamlib-surface-adapter`. Existing
-   markers (`VulkanWritable`, `GlWritable`) stay untouched — the
-   adapter can also impl `VulkanWritable` if customers want to
-   issue MoltenVK Vulkan calls against the same image.
-
-5. **Tests** — conformance suite + macOS-specific round-trips.
-   Per [`.claude/rules/engine-doctrine.md`](../../.claude/rules/engine-doctrine.md),
-   cross-compile verification on Linux is required; the
-   walkthrough lands the cross-compile + native-macOS CI lane in
-   the same milestone.
-
-6. **Runtime wiring** — `runtime.install_setup_hook` allocates a
-   host `VkImage` via `gpu.acquire_render_target_image` (the
-   macOS analog of `_dma_buf_image`), registers via surface-share,
-   no bridge needed because there's no per-acquire host work.
-
-7. **Python** — the helper process gets the `MetalContext` +
-   scope-bound acquire shape. The hand-written escalate wire types
-   in `subprocess_escalate_wire_types/` don't change (no new
-   escalate op).
-
-The checklist produced the right shape: the adapter is a thin
-Metal-binding layer on top of the existing single-pattern
-surface-share shape. The MoltenVK / Metal handle conversion is
-genuinely framework-specific (lives in `mtl.rs` / the bridge
-crate); everything else is mechanical.
-
-Trip-wires that **didn't** fire: no subprocess-side allocation, no
-subprocess-side compute kernel, no per-acquire FD passing, no
-custom synchronization. If any of those had been needed, that
-would have been the signal to stop and surface the disagreement —
-but they weren't.
+> A "Hypothetical walkthrough — Metal on macOS via MoltenVK" section was
+> removed here: 70 lines applying the checklist to `streamlib-adapter-
+> metal`, an adapter its own text calls "not yet shipped". Apple support is
+> post-MVP and undesigned, and architecture docs carry no proposed work.
 
 ## Reference adapters
 
