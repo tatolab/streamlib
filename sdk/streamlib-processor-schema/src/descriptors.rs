@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ProcessorClassImportPath, ProcessorScheduling, SchemaIdent};
+use crate::{ProcessorClassImportPath, ProcessorClassShortName, ProcessorScheduling};
 
 /// Runtime environment for a processor.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -112,15 +112,9 @@ impl ConfigDescriptor for () {
 /// Describes a processor with its ports and configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessorDescriptor {
-    /// The `@org/package/Type@version` the authoring surface still declares.
-    ///
-    /// Nothing keys on it — a processor is named by
-    /// `processor_class_import_path`. Its one remaining reader is the default
-    /// display name, which the plan defines as the class's short name and
-    /// which `name.r#type` is currently the only carrier of. Deleting this
-    /// field therefore means re-homing that short name, not just removing a
-    /// field.
-    pub name: SchemaIdent,
+    /// The class's short name — what an instance's display name defaults to.
+    /// Never the processor's identity: that is `processor_class_import_path`.
+    pub processor_class_short_name: ProcessorClassShortName,
     /// The processor class's fully-qualified import path — what the registry,
     /// the control plane and helper-process spawning all name this processor
     /// by.
@@ -153,12 +147,12 @@ pub struct ProcessorDescriptor {
 
 impl ProcessorDescriptor {
     pub fn new(
-        name: SchemaIdent,
+        processor_class_short_name: ProcessorClassShortName,
         processor_class_import_path: ProcessorClassImportPath,
         description: impl Into<String>,
     ) -> Self {
         Self {
-            name,
+            processor_class_short_name,
             processor_class_import_path,
             description: description.into(),
             version: String::new(),

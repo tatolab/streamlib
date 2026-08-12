@@ -221,11 +221,10 @@ mod tests {
 
         use super::super::{DeliveryProfile, delivery_profile_for_input_port};
         use crate::core::descriptors::{
-            PortDescriptor, ProcessorClassImportPath, ProcessorDescriptor,
+            PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
         };
         use crate::core::error::Error;
         use crate::core::processors::PROCESSOR_REGISTRY;
-        use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
 
         fn class_path(type_name: &str) -> ProcessorClassImportPath {
             ProcessorClassImportPath::new(format!("{}::{type_name}", module_path!())).unwrap()
@@ -245,12 +244,7 @@ mod tests {
                 port = port.with_delivery_profile(profile);
             }
             let mut descriptor = ProcessorDescriptor::new(
-                SchemaIdent::new(
-                    Org::new("tatolab").unwrap(),
-                    Package::new(package).unwrap(),
-                    TypeName::new(type_name).unwrap(),
-                    SemVer::new(1, 0, 0),
-                ),
+                ProcessorClassShortName::new(type_name).unwrap(),
                 import_path.clone(),
                 type_name,
             );

@@ -2,14 +2,13 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Grammar for the `#[processor(...)]` attribute — the single source of truth
-//! for a processor's identity, execution mode, and ports.
+//! for a processor's execution mode and ports.
 //!
 //! Nothing here reads any file. Everything the macro needs to emit the
 //! processor module is declared in the attribute tokens:
 //!
 //! ```ignore
 //! #[processor(
-//!     "@tatolab/camera/Camera",         // identity, version-free (omit → @app/local/<StructName>)
 //!     execution = manual,               // reactive | manual | continuous | continuous(interval_ms = 10)
 //!     scheduling = high,                // realtime | high | normal (default: normal)
 //!     unsafe_send,                      // flag — emit `unsafe impl Send`
@@ -23,15 +22,12 @@
 //! profile. It carries no type: type information belongs to the authoring
 //! language and never reaches the engine.
 //!
-//! The processor identity is **version-free** (`@org/package/Type`, no
-//! `@version`): it is an identity the runtime binds version-blind to whatever a
-//! node provides, and versions are derived at package-build time, never
-//! hand-authored (#1409).
+//! The attribute declares no identity. A processor is named by the import path
+//! of its type, captured by the macro at the expansion site.
 
 use streamlib_processor_schema::{
-    DELIVERY_PROFILE_DECLARATION_VALUES, Org, Package, ProcessorPortSchema, ProcessorScheduling,
-    ProcessorSchema, ProcessorSchemaExecution, RuntimeConfig, RuntimeOptions, SchemaIdent, SemVer,
-    ThreadPriority, TypeName,
+    DELIVERY_PROFILE_DECLARATION_VALUES, ProcessorPortSchema, ProcessorScheduling, ProcessorSchema,
+    ProcessorSchemaExecution, RuntimeConfig, RuntimeOptions, ThreadPriority,
 };
 use syn::ext::IdentExt;
 use syn::parse::{ParseStream, Parser};
@@ -66,7 +62,8 @@ pub struct ParsedPort {
 
 /// The fully-parsed `#[processor(...)]` attribute.
 pub struct ParsedProcessorAttr {
-    pub ident: SchemaIdent,
+    /// The author's type name — what an instance's display name defaults to.
+    pub processor_class_short_name: String,
     pub description: Option<String>,
     pub execution: ProcessorSchemaExecution,
     pub scheduling: Option<ThreadPriority>,
@@ -85,8 +82,7 @@ impl ParsedProcessorAttr {
     /// proc-macro emits its descriptor from this, and the source-scan extractor
     /// builds each manifest entry from it — so an added `ParsedProcessorAttr` or
     /// `ProcessorSchema` field can never silently diverge the two. `name` is the
-    /// identity's `Type` segment, ports carry the resolve-free `Specific` idents
-    /// the attribute declared, and the runtime language defaults to Rust (the
+    /// author's type name, and the runtime language defaults to Rust (the
     /// only language a source scan of a Rust crate can produce). `config` stays
     /// `None`: the attribute binds a config *type*, not a resolved manifest
     /// schema; the consuming layer projects the config-schema id to a
@@ -99,7 +95,7 @@ impl ParsedProcessorAttr {
         };
 
         ProcessorSchema {
-            name: self.ident.r#type.as_str().to_string(),
+            name: self.processor_class_short_name.clone(),
             description: self.description.clone(),
             runtime: RuntimeConfig {
                 language: Default::default(),
@@ -132,8 +128,7 @@ impl ParsedProcessorAttr {
 /// parser — code is the
 /// source of truth, so both readers of that truth share one grammar.
 ///
-/// `struct_ident` provides the `Type` segment for the synthesized `@app/local`
-/// identity when no identity string is declared.
+/// `struct_ident` supplies the class short name the display-name default reads.
 pub fn parse2(
     attr: proc_macro2::TokenStream,
     struct_ident: &Ident,
@@ -144,8 +139,6 @@ pub fn parse2(
 }
 
 fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedProcessorAttr> {
-    let mut identity: Option<SchemaIdent> = None;
-    let mut app_local_type: Option<(String, proc_macro2::Span)> = None;
     let mut description: Option<String> = None;
     let mut execution: Option<ProcessorSchemaExecution> = None;
     let mut scheduling: Option<ThreadPriority> = None;
@@ -156,14 +149,7 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
     let mut inputs: Vec<ParsedPort> = Vec::new();
     let mut outputs: Vec<ParsedPort> = Vec::new();
 
-    // Optional leading positional identity string.
-    if input.peek(LitStr) {
-        let lit: LitStr = input.parse()?;
-        identity = Some(parse_schema_ident_str(&lit.value(), lit.span())?);
-        if !input.is_empty() {
-            input.parse::<Token![,]>()?;
-        }
-    }
+    reject_positional_identity(input)?;
 
     while !input.is_empty() {
         // `parse_any` so keyword-like keys (`type`) are accepted as raw idents.
@@ -215,9 +201,7 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
                 config_schema_id = Some(lit.value());
             }
             "type" => {
-                input.parse::<Token![=]>()?;
-                let lit: LitStr = input.parse()?;
-                app_local_type = Some((lit.value(), lit.span()));
+                return Err(syn::Error::new(key.span(), CLASS_PATH_RULE));
             }
             "input" => inputs.push(parse_port(input, PortDirection::Input)?),
             "output" => outputs.push(parse_port(input, PortDirection::Output)?),
@@ -227,7 +211,7 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
                     format!(
                         "unknown `#[processor(...)]` key `{other}` — expected one of \
                          `execution`, `scheduling`, `unsafe_send`, `config`, `config_field`, \
-                         `config_schema`, `description`, `type`, `input`, `output`"
+                         `config_schema`, `description`, `input`, `output`"
                     ),
                 ));
             }
@@ -250,56 +234,19 @@ fn parse_body(input: ParseStream<'_>, struct_name: &str) -> syn::Result<ParsedPr
         )
     })?;
 
-    // Resolve identity: explicit id string, else synthesize @app/local.
-    let ident = match identity {
-        Some(id) => id,
-        None => {
-            let type_str = app_local_type
-                .as_ref()
-                .map(|(s, _)| s.clone())
-                .unwrap_or_else(|| struct_name.to_string());
-            let type_span = app_local_type
-                .as_ref()
-                .map(|(_, sp)| *sp)
-                .unwrap_or_else(proc_macro2::Span::call_site);
-            let type_name = TypeName::new(&type_str).map_err(|e| {
-                syn::Error::new(
-                    type_span,
-                    format!(
-                        "cannot synthesize `@app/local` identity: `{type_str}` is not a valid \
-                         PascalCase TypeName ({e}). Declare an explicit identity string \
-                         (`\"@org/package/Type\"`) or a valid `type = \"...\"`."
-                    ),
-                )
-            })?;
-            SchemaIdent::new(
-                Org::new("app").expect("`app` is a valid org"),
-                Package::new("local").expect("`local` is a valid package"),
-                type_name,
-                SemVer::new(0, 0, 0),
-            )
-        }
-    };
-
-    // Synthesize the descriptor config-schema id from the config type when the
-    // author didn't spell one out: version-free `@<org>/<package>/<ConfigTypeName>`
-    // (the runtime schema registry stores and looks up unversioned).
+    // Name the config type when the author didn't spell an id out. Descriptor
+    // metadata only — nothing resolves it.
     if config_schema_id.is_none()
         && let Some(path) = &config_type
         && let Some(last) = path.segments.last()
     {
-        config_schema_id = Some(format!(
-            "@{}/{}/{}",
-            ident.org.as_str(),
-            ident.package.as_str(),
-            last.ident,
-        ));
+        config_schema_id = Some(last.ident.to_string());
     }
 
     let config_field_name = config_field_name.unwrap_or_else(|| "config".to_string());
 
     Ok(ParsedProcessorAttr {
-        ident,
+        processor_class_short_name: struct_name.to_string(),
         description,
         execution,
         scheduling,
@@ -499,49 +446,26 @@ fn reject_delivery_profile_on_output(
     Ok(())
 }
 
-/// Parse a **version-free** `@org/package/Type` into a validated
-/// [`SchemaIdent`].
+/// The refusal every authored-identity spelling lands on.
+const CLASS_PATH_RULE: &str = "`#[processor(...)]` declares no identity. A processor is named by \
+     the import path of the type it is — `my_app::filters::BlurProcessor` — captured by the macro \
+     at the expansion site and never authored. Remove it; `execution`, `scheduling`, \
+     `unsafe_send`, `config`, `config_field`, `config_schema`, `description`, `input` and \
+     `output` are the keys the attribute takes.";
+
+/// Reject the leading positional `"@org/package/Type"` the attribute used to
+/// take, naming the class-path rule.
 ///
-/// The attribute grammar is version-free: a trailing `@<version>` is
-/// rejected, and the synthesized [`SchemaIdent`] carries the `0.0.0`
-/// version-free sentinel. Nothing keys on the result — a processor is named by
-/// the import path of its type — so this fills the descriptor's vestigial
-/// `name` and supplies the default display name.
-pub fn parse_schema_ident_str(raw: &str, span: proc_macro2::Span) -> syn::Result<SchemaIdent> {
-    let err = |msg: String| syn::Error::new(span, msg);
-
-    let stripped = raw.strip_prefix('@').ok_or_else(|| {
-        err(format!(
-            "schema identity `{raw}` must start with `@` (e.g. `@tatolab/core/VideoFrame`)"
-        ))
-    })?;
-    if stripped.contains('@') {
-        return Err(err(format!(
-            "schema identity `{raw}` must be version-free `@<org>/<package>/<Type>` \
-             with no `@<version>` — a schema ref is an identity the runtime binds \
-             version-blind; versions are derived at package-build time, never \
-             hand-authored (#1409)"
-        )));
+/// Without this the author sees syn's bare `expected identifier` and has
+/// nothing to act on.
+fn reject_positional_identity(input: ParseStream<'_>) -> syn::Result<()> {
+    if input.peek(LitStr) {
+        return Err(syn::Error::new(
+            input.fork().parse::<LitStr>()?.span(),
+            CLASS_PATH_RULE,
+        ));
     }
-    let segments: Vec<&str> = stripped.split('/').collect();
-    if segments.len() != 3 {
-        return Err(err(format!(
-            "schema identity `{raw}` must be `@<org>/<package>/<Type>` \
-             (exactly three `/`-separated segments)"
-        )));
-    }
-    let org = Org::new(segments[0]).map_err(|e| err(format!("invalid org in `{raw}`: {e}")))?;
-    let package =
-        Package::new(segments[1]).map_err(|e| err(format!("invalid package in `{raw}`: {e}")))?;
-    let type_name =
-        TypeName::new(segments[2]).map_err(|e| err(format!("invalid type in `{raw}`: {e}")))?;
-
-    Ok(SchemaIdent::new(
-        org,
-        package,
-        type_name,
-        SemVer::new(0, 0, 0),
-    ))
+    Ok(())
 }
 
 #[cfg(test)]
@@ -566,19 +490,13 @@ mod tests {
     }
 
     #[test]
-    fn full_identity_execution_and_ports() {
+    fn full_execution_and_ports() {
         let parsed = parse_ok(quote! {
-            "@tatolab/camera/Camera",
             execution = manual,
             scheduling = high,
             input("video_in", delivery_profile = "latest"),
             output("video"),
         });
-        assert_eq!(parsed.ident.org.as_str(), "tatolab");
-        assert_eq!(parsed.ident.package.as_str(), "camera");
-        assert_eq!(parsed.ident.r#type.as_str(), "Camera");
-        // Version-free identity synthesizes the 0.0.0 version-free sentinel.
-        assert_eq!(parsed.ident.version, SemVer::new(0, 0, 0));
         assert_eq!(parsed.execution, ProcessorSchemaExecution::Manual);
         assert_eq!(parsed.scheduling, Some(ThreadPriority::High));
         assert_eq!(parsed.inputs.len(), 1);
@@ -596,7 +514,6 @@ mod tests {
         // processor description and each port description are carried by the
         // attribute and reach the ParsedProcessorAttr.
         let parsed = parse_ok(quote! {
-            "@tatolab/camera/Camera",
             description = "Captures video from cameras",
             execution = manual,
             input(
@@ -623,7 +540,6 @@ mod tests {
     #[test]
     fn continuous_with_interval() {
         let parsed = parse_ok(quote! {
-            "@tatolab/audio/ChordGenerator",
             execution = continuous(interval_ms = 10),
         });
         assert_eq!(
@@ -635,7 +551,6 @@ mod tests {
     #[test]
     fn continuous_without_interval_defaults_to_zero() {
         let parsed = parse_ok(quote! {
-            "@tatolab/audio/ChordGenerator",
             execution = continuous,
         });
         assert_eq!(
@@ -650,7 +565,6 @@ mod tests {
         // `input("name", <schema>, ...)` form must fail to parse, not be
         // silently accepted and dropped.
         let msg = parse_err(quote! {
-            "@tatolab/testing/Mock",
             execution = manual,
             input("in1", "@tatolab/core/VideoFrame", delivery_profile = "latest"),
         });
@@ -663,7 +577,6 @@ mod tests {
     #[test]
     fn a_bare_any_port_schema_is_an_error() {
         let msg = parse_err(quote! {
-            "@tatolab/testing/Mock",
             execution = manual,
             output("out1", any),
         });
@@ -676,23 +589,18 @@ mod tests {
     #[test]
     fn config_type_and_synthesized_schema_id() {
         let parsed = parse_ok(quote! {
-            "@tatolab/camera/Camera",
             execution = manual,
             config = crate::camera_config::CameraConfig,
         });
         assert!(parsed.config_type.is_some());
         assert_eq!(parsed.config_field_name, "config");
         // The synthesized config-schema id is version-free.
-        assert_eq!(
-            parsed.config_schema_id.as_deref(),
-            Some("@tatolab/camera/CameraConfig")
-        );
+        assert_eq!(parsed.config_schema_id.as_deref(), Some("CameraConfig"));
     }
 
     #[test]
     fn explicit_config_schema_overrides_synthesis() {
         let parsed = parse_ok(quote! {
-            "@tatolab/audio/BufferRechunker",
             execution = reactive,
             config = crate::BufferRechunkerConfig,
             config_schema = "com.tatolab.buffer_rechunker.config@1.0.0",
@@ -706,7 +614,6 @@ mod tests {
     #[test]
     fn no_config_has_no_schema_id() {
         let parsed = parse_ok(quote! {
-            "@tatolab/testing/Mock",
             execution = manual,
         });
         assert!(parsed.config_type.is_none());
@@ -714,31 +621,19 @@ mod tests {
     }
 
     #[test]
-    fn app_local_synthesis_from_struct_name() {
-        // No identity string, no `type` — synthesize @app/local/<StructName>.
+    fn the_class_short_name_is_the_authored_struct_ident() {
+        // The display-name default's only carrier. It is read off the item the
+        // attribute is attached to — never authored, and never recovered by
+        // splitting the import path.
         let parsed = parse2(quote! { execution = reactive }, &ident("MyLocalProcessor"))
-            .expect("bare app-local processor should parse");
-        assert_eq!(parsed.ident.org.as_str(), "app");
-        assert_eq!(parsed.ident.package.as_str(), "local");
-        assert_eq!(parsed.ident.r#type.as_str(), "MyLocalProcessor");
-        assert_eq!(parsed.ident.version, SemVer::new(0, 0, 0));
-    }
-
-    #[test]
-    fn app_local_type_override() {
-        let parsed = parse2(
-            quote! { execution = reactive, type = "CustomName" },
-            &ident("StructIdent"),
-        )
-        .expect("app-local with type override should parse");
-        assert_eq!(parsed.ident.r#type.as_str(), "CustomName");
-        assert_eq!(parsed.ident.org.as_str(), "app");
+            .expect("a bare processor should parse");
+        assert_eq!(parsed.processor_class_short_name, "MyLocalProcessor");
+        assert_eq!(parsed.to_processor_schema().name, "MyLocalProcessor");
     }
 
     #[test]
     fn unsafe_send_flag() {
         let parsed = parse_ok(quote! {
-            "@tatolab/camera/Camera",
             execution = manual,
             unsafe_send,
         });
@@ -756,7 +651,6 @@ mod tests {
     #[test]
     fn duplicate_input_port_is_an_error() {
         let msg = parse_err(quote! {
-            "@tatolab/testing/Mock",
             execution = manual,
             input("dup", delivery_profile = "latest"),
             input("dup", delivery_profile = "latest"),
@@ -770,7 +664,6 @@ mod tests {
     #[test]
     fn duplicate_output_port_is_an_error() {
         let msg = parse_err(quote! {
-            "@tatolab/testing/Mock",
             execution = manual,
             output("dup"),
             output("dup"),
@@ -803,7 +696,6 @@ mod tests {
         // The mirror of the rejection test: `delivery_profile` stays valid on
         // an `input(...)` and reaches the parsed port.
         let parsed = parse_ok(quote! {
-            "@tatolab/camera/Camera",
             execution = manual,
             input("video_in", delivery_profile = "lossless"),
         });
@@ -816,7 +708,6 @@ mod tests {
     #[test]
     fn input_without_a_delivery_profile_is_an_error() {
         let msg = parse_err(quote! {
-            "@tatolab/camera/Camera",
             execution = manual,
             input("video_in"),
         });
@@ -835,7 +726,6 @@ mod tests {
         // The requirement is consumer-side only: an `output(...)` declaring no
         // profile is the correct shape, not a missing declaration.
         let parsed = parse_ok(quote! {
-            "@tatolab/camera/Camera",
             execution = manual,
             output("video"),
         });
@@ -845,7 +735,6 @@ mod tests {
     #[test]
     fn unknown_key_is_an_error() {
         let msg = parse_err(quote! {
-            "@tatolab/testing/Mock",
             execution = manual,
             frobnicate = "yes",
         });
@@ -858,7 +747,6 @@ mod tests {
     #[test]
     fn unknown_execution_mode_is_an_error() {
         let msg = parse_err(quote! {
-            "@tatolab/testing/Mock",
             execution = sideways,
         });
         assert!(
@@ -882,7 +770,6 @@ mod tests {
         // the identity is rejected. Mentally revert the version-free
         // `parse_schema_ident_str` and this passes when it must fail.
         let msg = parse_err(quote! {
-            "@tatolab/camera/Camera@1.0.0",
             execution = manual,
         });
         assert!(msg.contains("must be version-free"), "got: {msg}");
@@ -891,7 +778,6 @@ mod tests {
     #[test]
     fn identity_wrong_segment_count_is_an_error() {
         let msg = parse_err(quote! {
-            "@tatolab/Camera",
             execution = manual,
         });
         assert!(msg.contains("three `/`-separated segments"), "got: {msg}");
@@ -900,7 +786,6 @@ mod tests {
     #[test]
     fn continuous_unknown_key_is_an_error() {
         let msg = parse_err(quote! {
-            "@tatolab/camera/Camera",
             execution = continuous(period = 5),
         });
         assert!(msg.contains("expected `interval_ms`"), "got: {msg}");

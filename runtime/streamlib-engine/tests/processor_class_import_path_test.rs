@@ -17,7 +17,7 @@ use streamlib_engine::core::{Result, RuntimeContextFullAccess};
 mod video_filters {
     use super::*;
 
-    #[streamlib::sdk::processor("@tatolab/import-path-test/BlurProcessor", execution = manual)]
+    #[streamlib::sdk::processor(execution = manual)]
     pub struct BlurProcessor;
 
     impl streamlib_engine::ManualProcessor for BlurProcessor::Processor {
@@ -27,7 +27,7 @@ mod video_filters {
     }
 }
 
-#[streamlib::sdk::processor("@tatolab/import-path-test/CrateRootProcessor", execution = manual)]
+#[streamlib::sdk::processor(execution = manual)]
 pub struct CrateRootProcessor;
 
 impl streamlib_engine::ManualProcessor for CrateRootProcessor::Processor {

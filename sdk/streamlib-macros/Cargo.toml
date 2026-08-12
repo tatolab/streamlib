@@ -23,7 +23,6 @@ streamlib-processor-schema = { path = "../streamlib-processor-schema", version =
 # The `#[processor(...)]` attribute grammar — shared with the source-scan
 # extractor so both parse the attribute through one parser (#1411).
 # Structured identity newtypes — `SemVerRange` for the `module_ident!*` macros.
-streamlib-idents = { path = "../streamlib-idents", version = "0.17.0" }
 
 
 [dev-dependencies]

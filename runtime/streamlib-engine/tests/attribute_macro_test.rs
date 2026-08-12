@@ -15,7 +15,6 @@ use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextFullAccess};
 // Define a simple processor. The macro emits the type, port markers,
 // descriptor, and `schema_ident()` accessor — it never auto-registers.
 #[streamlib::sdk::processor(
-    "@tatolab/streamlib-engine/TestProcessor",
     execution = manual,
     input("video_in", delivery_profile = "latest"),
     output("video_out"),
@@ -105,35 +104,25 @@ fn empty_config_is_a_tolerant_bag() {
 }
 
 #[test]
-fn test_processor_schema_ident_declared_in_attribute() {
-    // The macro emits `Processor::schema_ident()` returning the structured
-    // SchemaIdent parsed from the attribute's identity string. This locks the
-    // codegen contract end-to-end: identity parse, structured const emit,
-    // SchemaIdent::new + segment validators all wired through the generated
-    // module.
-    //
-    // Reverting the attribute's identity parse (e.g. hardcoding org) would
-    // flip this assertion — that's the regression the test guards.
-    let ident = TestProcessor::schema_ident();
-    assert_eq!(ident.org.as_str(), "tatolab");
-    assert_eq!(ident.package.as_str(), "streamlib-engine");
-    assert_eq!(ident.r#type.as_str(), "TestProcessor");
-    // The version-free attribute grammar (#1409) synthesizes the 0.0.0
-    // version-free sentinel — versions are derived at package-build time.
-    assert_eq!(ident.version.major, 0);
-    assert_eq!(ident.version.minor, 0);
-    assert_eq!(ident.version.patch, 0);
+fn the_class_short_name_is_the_authored_struct_ident() {
+    // `NAME` is the display-name default's only carrier. It comes off the item
+    // the attribute is attached to — never a string in the attribute, and never
+    // recovered by splitting the import path.
+    assert_eq!(TestProcessor::Processor::NAME, "TestProcessor");
+    assert_eq!(
+        BareProcessor::Processor::NAME,
+        "BareProcessor",
+        "a bare `#[processor]` still names its class"
+    );
 }
 
-// A bare processor with NO identity string. This test crate has no sibling
-// streamlib.yaml and the macro reads no file — the identity is synthesized
-// purely from the struct name as `@app/local/<StructName>@0.0.0`. This is the
-// full macro-expansion proof of the named acceptance criterion (#1409): a bare
-// crate with no streamlib.yaml compiles under @app/local.
+// A bare `#[processor]` — the attribute takes no identity in any spelling, so
+// this is the only spelling there is. The class is named by its import path,
+// captured at the expansion site.
 #[streamlib::sdk::processor(execution = manual)]
-pub struct BareAppLocalProcessor;
+pub struct BareProcessor;
 
-impl streamlib_engine::ManualProcessor for BareAppLocalProcessor::Processor {
+impl streamlib_engine::ManualProcessor for BareProcessor::Processor {
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         Ok(())
     }
@@ -148,22 +137,13 @@ impl streamlib_engine::ManualProcessor for BareAppLocalProcessor::Processor {
 }
 
 #[test]
-fn test_bare_processor_synthesizes_app_local_identity() {
-    // No identity string in the attribute and no file read: the emitted
-    // `schema_ident()` is `@app/local/<StructName>@0.0.0`, the struct name
-    // supplying the Type segment and the 0.0.0 version-free sentinel the
-    // version. Reverting the @app/local synthesis (or making it read a file)
-    // flips this assertion — that is the regression it guards.
-    let ident = BareAppLocalProcessor::schema_ident();
-    assert_eq!(ident.org.as_str(), "app");
-    assert_eq!(ident.package.as_str(), "local");
-    assert_eq!(ident.r#type.as_str(), "BareAppLocalProcessor");
-    assert_eq!(ident.version.major, 0);
-    assert_eq!(ident.version.minor, 0);
-    assert_eq!(ident.version.patch, 0);
+fn a_bare_processor_is_named_by_its_import_path() {
+    // The org/package synthesis is gone with the grammar. The class path is
+    // the whole identity, and it names the module the macro expanded in —
+    // nothing is synthesized and no file is read.
     assert_eq!(
-        BareAppLocalProcessor::schema_ident().to_string(),
-        "@app/local/BareAppLocalProcessor@0.0.0"
+        BareProcessor::processor_class_import_path().as_str(),
+        "attribute_macro_test::BareProcessor"
     );
 }
 
@@ -198,7 +178,6 @@ pub struct CfgGatedFieldAlwaysCompiledState {
 // still gets its initializer. The `target_os` pair exercises the real-world
 // shape on top of the target-independent halves.
 #[streamlib::sdk::processor(
-    "@tatolab/streamlib-engine/CfgGatedFieldProcessor",
     execution = manual,
     input("video_in", delivery_profile = "latest"),
     output("video_out"),
@@ -256,12 +235,17 @@ fn cfg_gated_processor_still_declares_its_port_fields_unconditionally() {
 }
 
 #[test]
-fn test_processor_schema_ident_renders_canonical_joined_form() {
-    // The structured SchemaIdent's Display impl produces the canonical
-    // `@<org>/<package>/<Type>@<major.minor.patch>` joined form. The
-    // version-free grammar renders the 0.0.0 sentinel.
+fn the_descriptor_carries_the_short_name_and_the_import_path_apart() {
+    // Two fields, two jobs: the path is identity, the short name is only the
+    // display default. Collapsing either into the other is the regression.
+    let descriptor = <TestProcessor::Processor as GeneratedProcessor>::descriptor()
+        .expect("the macro emits a descriptor");
     assert_eq!(
-        TestProcessor::schema_ident().to_string(),
-        "@tatolab/streamlib-engine/TestProcessor@0.0.0"
+        descriptor.processor_class_short_name.as_str(),
+        "TestProcessor"
+    );
+    assert_eq!(
+        descriptor.processor_class_import_path.as_str(),
+        "attribute_macro_test::TestProcessor"
     );
 }

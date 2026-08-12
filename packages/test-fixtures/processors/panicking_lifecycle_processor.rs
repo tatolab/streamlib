@@ -30,7 +30,6 @@ use streamlib::sdk::error::Result;
 use streamlib::sdk::processors::{ContinuousProcessor, ManualProcessor};
 
 #[streamlib::sdk::processor(
-    "@tatolab/test-fixtures/PanickingManualLifecycleProcessor",
     description = "Panic-injection Manual fixture. Panics in the configured lifecycle hook (setup / start / stop / teardown / on_pause / on_resume); the host's panic-safety net is expected to absorb the panic and keep the runtime alive.",
     execution = manual,
     config = crate::test_fixture_processor_configs::PanickingManualLifecycleProcessorConfig,
@@ -82,7 +81,6 @@ impl ManualProcessor for PanickingManualLifecycle::Processor {
 }
 
 #[streamlib::sdk::processor(
-    "@tatolab/test-fixtures/PanickingContinuousLifecycleProcessor",
     description = "Panic-injection Continuous fixture. Panics in the configured lifecycle hook (process); the host's panic-safety net is expected to absorb the panic and keep the runtime alive.",
     execution = continuous,
     config = crate::test_fixture_processor_configs::PanickingContinuousLifecycleProcessorConfig,

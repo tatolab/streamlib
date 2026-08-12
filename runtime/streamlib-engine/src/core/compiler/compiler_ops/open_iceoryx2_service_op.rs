@@ -299,11 +299,11 @@ pub fn close_iceoryx2_service(graph: &mut Graph, link_id: &LinkUniqueId) -> Resu
 
 /// The channel service name a source output port publishes to —
 /// `{source_processor}/{source_output_port}`, the single source of truth for
-/// channel identity (`streamlib_idents::source_channel_name`). A grammar-illegal
+/// channel identity ([`crate::iceoryx2::source_channel_name`]). A grammar-illegal
 /// port name surfaces as a named [`Error::Configuration`] here rather than an
 /// opaque iceoryx2 `Invalid service name` deep in the FFI.
 fn channel_service_name(source_proc_id: &ProcessorUniqueId, source_port: &str) -> Result<String> {
-    streamlib_idents::source_channel_name(source_proc_id.as_str(), source_port)
+    crate::iceoryx2::source_channel_name(source_proc_id.as_str(), source_port)
         .map(|name| name.into_string())
         .map_err(|source| {
             Error::Configuration(format!(
@@ -409,7 +409,7 @@ pub(crate) fn resolve_channel_sizing(
 /// A channel's iceoryx2 data service only exists once a `connect()` has wired
 /// its source output port, so a channel with no outbound link is genuinely
 /// untappable — the caller maps `None` to [`Error::TapChannelNotFound`]. The
-/// derivation is the same `streamlib_idents::source_channel_name` the compiler
+/// derivation is the same [`crate::iceoryx2::source_channel_name`] the compiler
 /// op keys the service on, so a match here is exact (including the
 /// hash-legalized over-budget form).
 pub(crate) fn find_channel_source_port(
@@ -419,7 +419,7 @@ pub(crate) fn find_channel_source_port(
     graph.traversal_mut().e(()).iter().find_map(|link| {
         let source = link.from_port();
         let derived =
-            streamlib_idents::source_channel_name(source.processor_id.as_str(), &source.port_name)
+            crate::iceoryx2::source_channel_name(source.processor_id.as_str(), &source.port_name)
                 .ok()?;
         (derived.as_str() == channel_service_name)
             .then(|| (source.processor_id.clone(), source.port_name.clone()))
@@ -748,7 +748,6 @@ fn wire_subprocess_dest(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::descriptors::SchemaIdent;
     use crate::core::execution::ExecutionConfig;
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef};
     use crate::core::processors::{DynGeneratedProcessor, PROCESSOR_REGISTRY, ProcessorSpec};
@@ -1296,7 +1295,7 @@ mod tests {
             InputLinkPortRef::new(&dest_id, "in1"),
         );
 
-        let channel_name = streamlib_idents::source_channel_name(&src_id, "out1")
+        let channel_name = crate::iceoryx2::source_channel_name(&src_id, "out1")
             .expect("source port derives a channel name")
             .into_string();
 
@@ -1343,9 +1342,8 @@ mod tests {
     #[test]
     fn conflicting_destination_profile_is_a_configuration_error() {
         use crate::core::descriptors::{
-            PortDescriptor, ProcessorClassImportPath, ProcessorDescriptor,
+            PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
         };
-        use streamlib_idents::{Org, Package, SemVer, TypeName};
 
         // One sink per profile, under distinct import paths: the registry keys
         // on the path, so two sinks sharing one would collide and the second
@@ -1357,12 +1355,7 @@ mod tests {
                 ProcessorClassImportPath::new(format!("{}::ProfileSink_{profile}", module_path!()))
                     .unwrap();
             let mut desc = ProcessorDescriptor::new(
-                SchemaIdent::new(
-                    Org::new("tatolab").unwrap(),
-                    Package::new("test-conflicting-profile").unwrap(),
-                    TypeName::new("ProfileSink").unwrap(),
-                    SemVer::new(1, 0, 0),
-                ),
+                ProcessorClassShortName::new("ProfileSink").unwrap(),
                 import_path.clone(),
                 "conflicting-profile sink",
             );

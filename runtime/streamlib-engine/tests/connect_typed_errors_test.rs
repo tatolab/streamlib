@@ -18,8 +18,7 @@
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
-    Org, Package, PortDescriptor, ProcessorClassImportPath, ProcessorDescriptor, SchemaIdent,
-    SemVer, TypeName,
+    PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
 };
 use streamlib::sdk::error::Error;
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
@@ -38,12 +37,7 @@ fn unknown_ident() -> ProcessorClassImportPath {
 fn register_test_type(short: &str, input: &str, output: &str) -> ProcessorClassImportPath {
     let import_path =
         ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
-    let id = SchemaIdent::new(
-        Org::new("tatolab").unwrap(),
-        Package::new("connect-typed-errors-test").unwrap(),
-        TypeName::new(short).unwrap(),
-        SemVer::new(1, 0, 0),
-    );
+    let id = ProcessorClassShortName::new(short).unwrap();
     let descriptor = ProcessorDescriptor::new(id, import_path.clone(), "connect typed-errors test")
         .with_input(PortDescriptor::new(input, "", false))
         .with_output(PortDescriptor::new(output, "", false));

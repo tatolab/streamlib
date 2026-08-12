@@ -107,7 +107,9 @@ pub enum ChannelEgressAdmission {
     /// is `Some(growth)` the tracked data-segment capacity crossed the frame size
     /// and was advanced — a PowerOfTwo growth the caller logs, additionally
     /// raising a `warn` when [`ChannelSegmentGrowth::crossed_quarter_ceiling`].
-    Admitted { grew_to: Option<ChannelSegmentGrowth> },
+    Admitted {
+        grew_to: Option<ChannelSegmentGrowth>,
+    },
 }
 
 /// Single authority for the per-channel-egress ceiling refusal + PowerOfTwo
@@ -272,7 +274,7 @@ pub const FRAME_HEADER_SIZE: usize = MAX_PORT_KEY_SIZE + 8 + 4; // 76 bytes
 /// one the author named. Over-length is now a hard, named error the caller
 /// must handle rather than a data-corruption surface. Names crossing this
 /// boundary have already passed the charset + length grammar in
-/// `streamlib_idents::validate_channel_name`; this guard is the wire-level
+/// the engine's `iceoryx2::validate_channel_name`; this guard is the wire-level
 /// backstop that makes truncation unrepresentable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PortKeyError {

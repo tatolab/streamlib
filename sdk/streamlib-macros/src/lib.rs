@@ -3,18 +3,12 @@
 
 //! Procedural macros for streamlib.
 //!
-//! - `#[streamlib::processor("@org/package/Type", execution = …, …)]`
-//!   — processor definition. The attribute is the single source of truth:
-//!   identity, execution mode, and input/output ports are declared in code,
-//!   read from no file at expansion. See [`grammar`] for the full
-//!   grammar. An identity string omitted from the attribute synthesizes an
-//!   `@app/local/<StructName>` identity so a bare crate with no
-//!   `streamlib.yaml` compiles.
-//! - `streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")` —
-//!   the same four fields as the long [`SchemaIdent::new`] constructor,
-//!   validated at compile time and expanding to it verbatim. It does not name
-//!   a processor: a processor is named by the import path of the class it is,
-//!   which the attribute macro captures from its expansion site.
+//! - `#[streamlib::processor(execution = …, …)]` — processor definition. The
+//!   attribute is the single source of truth: execution mode and input/output
+//!   ports are declared in code, read from no file at expansion. See
+//!   [`grammar`] for the full grammar. It declares no identity — a processor is
+//!   named by the import path of the class it is, which the macro captures from
+//!   its expansion site.
 
 mod codegen;
 mod config_descriptor;
@@ -24,25 +18,13 @@ use grammar as attribute_grammar;
 
 use proc_macro::TokenStream;
 use quote::quote;
-use streamlib_processor_schema::{Org, Package, SemVer, TypeName};
-
-// Range parsing for `module_ident!*` macros. The streamlib_idents crate
-// owns the SemVerRange grammar; the macro just forwards the input through
-// it at expansion time so invalid ranges surface as compile errors.
-use streamlib_idents::SemVerRange;
-use syn::{
-    DeriveInput, ItemStruct, LitStr, Token,
-    parse::{Parse, ParseStream},
-    parse_macro_input,
-};
+use syn::{DeriveInput, ItemStruct, parse_macro_input};
 
 /// Main processor attribute macro.
 ///
-/// The attribute is the single source of truth for a processor's identity,
-/// execution mode, and ports — see [`grammar`] for the grammar. It
-/// reads no file at expansion. An omitted identity string synthesizes an
-/// `@app/local/<StructName>` identity so a bare crate compiles with no
-/// `streamlib.yaml`.
+/// The attribute is the single source of truth for a processor's execution mode
+/// and ports — see [`grammar`] for the grammar. It reads no file at expansion
+/// and declares no identity.
 ///
 /// Authoring contract for struct fields: `#[cfg]`, `///` docs, and the lint
 /// controls (`allow` / `warn` / `deny` / `forbid`) are forwarded onto the
@@ -53,9 +35,8 @@ use syn::{
 /// `cfg_attr` expanding to a `cfg` would gate one of the two emission sites and
 /// not the other. Every other field attribute is dropped.
 ///
-/// The macro emits the processor's type, port markers, descriptor, and
-/// `schema_ident()` accessor — but does NOT register the processor in
-/// the global `PROCESSOR_REGISTRY`. In-process Rust callers invoke
+/// The macro emits the processor's type, port markers, and descriptor — but
+/// does NOT register the processor in the global `PROCESSOR_REGISTRY`. In-process Rust callers invoke
 /// `PROCESSOR_REGISTRY.register::<Foo::Processor>()` directly; tests and
 /// engine-internal mocks use this path.
 #[proc_macro_attribute]
@@ -68,7 +49,6 @@ pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
     };
 
     let schema = parsed.to_processor_schema();
-    let schema_ident = parsed.ident.clone();
     let config_field_name = parsed
         .config_type
         .as_ref()
@@ -77,7 +57,6 @@ pub fn processor(attr: TokenStream, item: TokenStream) -> TokenStream {
     let generated = codegen::generate_from_processor_schema(
         &item_struct,
         &schema,
-        &schema_ident,
         parsed.config_type.as_ref(),
         config_field_name.as_deref(),
         parsed.config_schema_id.as_deref(),
@@ -116,373 +95,6 @@ fn sdk_root() -> proc_macro2::TokenStream {
     }
     // In-engine macro use: `extern crate self as streamlib` resolves this.
     quote! { ::streamlib::sdk }
-}
-
-/// Short form of [`SchemaIdent::new`] — strict version-pinning. Takes
-/// the same four fields as the long-form constructor (org, package,
-/// type, version) as string literals, validates each at compile time,
-/// and expands to the equivalent `SchemaIdent::new(...)` expression.
-///
-/// ```ignore
-/// // Long form (5 lines):
-/// SchemaIdent::new(
-///     Org::new("tatolab").unwrap(),
-///     Package::new("polyglot-continuous-processor").unwrap(),
-///     TypeName::new("PolyglotContinuousProcessor").unwrap(),
-///     SemVer::new(1, 0, 0),
-/// )
-///
-/// // Short form (1 line):
-/// schema_ident!("tatolab", "polyglot-continuous-processor", "PolyglotContinuousProcessor", "1.0.0")
-/// ```
-///
-/// Each segment is validated at proc-macro expansion: invalid org / package /
-/// type / semver becomes a compile error, never a runtime panic.
-#[proc_macro]
-pub fn schema_ident(input: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(input as SchemaIdentArgs);
-    match expand_schema_ident(&args) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.to_compile_error().into(),
-    }
-}
-
-struct SchemaIdentArgs {
-    org: LitStr,
-    package: LitStr,
-    type_name: LitStr,
-    version: LitStr,
-}
-
-impl Parse for SchemaIdentArgs {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let org: LitStr = input.parse()?;
-        input.parse::<Token![,]>()?;
-        let package: LitStr = input.parse()?;
-        input.parse::<Token![,]>()?;
-        let type_name: LitStr = input.parse()?;
-        input.parse::<Token![,]>()?;
-        let version: LitStr = input.parse()?;
-        // Tolerate an optional trailing comma.
-        let _ = input.parse::<Token![,]>();
-        Ok(Self {
-            org,
-            package,
-            type_name,
-            version,
-        })
-    }
-}
-
-fn expand_schema_ident(args: &SchemaIdentArgs) -> syn::Result<proc_macro2::TokenStream> {
-    let org_str = args.org.value();
-    let package_str = args.package.value();
-    let type_str = args.type_name.value();
-    let version_str = args.version.value();
-
-    Org::new(&org_str).map_err(|e| {
-        syn::Error::new(args.org.span(), format!("invalid org `{}`: {}", org_str, e))
-    })?;
-    Package::new(&package_str).map_err(|e| {
-        syn::Error::new(
-            args.package.span(),
-            format!("invalid package `{}`: {}", package_str, e),
-        )
-    })?;
-    TypeName::new(&type_str).map_err(|e| {
-        syn::Error::new(
-            args.type_name.span(),
-            format!("invalid type name `{}`: {}", type_str, e),
-        )
-    })?;
-    let (major, minor, patch) = parse_semver(&version_str).map_err(|e| {
-        syn::Error::new(
-            args.version.span(),
-            format!("invalid version `{}`: {}", version_str, e),
-        )
-    })?;
-
-    let _ = SemVer::new(major, minor, patch);
-
-    Ok(quote! {
-        ::streamlib::sdk::descriptors::SchemaIdent::new(
-            ::streamlib::sdk::descriptors::Org::new(#org_str).expect("validated by macro"),
-            ::streamlib::sdk::descriptors::Package::new(#package_str).expect("validated by macro"),
-            ::streamlib::sdk::descriptors::TypeName::new(#type_str).expect("validated by macro"),
-            ::streamlib::sdk::descriptors::SemVer::new(#major, #minor, #patch),
-        )
-    })
-}
-
-// =============================================================================
-// module_ident! / module_ident_any_version! / module_ident_joined! /
-// module_ident_joined_any_version! — imperative-API ModuleIdent builders.
-// =============================================================================
-//
-// Four macros, one identifier shape:
-//
-// - `module_ident!("org", "name", "^1.0.0")` — split args, with version.
-// - `module_ident_any_version!("org", "name")` — split args, any version (`*`).
-// - `module_ident_joined!("@org/name", "^1.0.0")` — joined org/name, with version.
-// - `module_ident_joined_any_version!("@org/name")` — joined org/name, any version.
-//
-// Each macro validates inputs at expansion time (invalid org / name /
-// semver range becomes a `compile_error!`) and expands to a
-// `streamlib::sdk::descriptors::ModuleIdent::new(...)` expression.
-
-/// `module_ident!("org", "name", "^1.0.0")` — split args, version required.
-///
-/// Validates org / name / semver range at compile time; expands to a
-/// `ModuleIdent::new(...)` expression. Use [`module_ident_any_version!`]
-/// when the version isn't pinned, [`module_ident_joined!`] when the
-/// `@org/name` is already a single string.
-#[proc_macro]
-pub fn module_ident(input: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(input as ModuleIdentArgs);
-    match expand_module_ident_split(&args.org, &args.name, Some(&args.version)) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.to_compile_error().into(),
-    }
-}
-
-/// `module_ident_any_version!("org", "name")` — split args, any version.
-///
-/// Equivalent to `module_ident!("org", "name", "*")`. Use when the
-/// caller doesn't pin a version range.
-#[proc_macro]
-pub fn module_ident_any_version(input: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(input as ModuleIdentAnyArgs);
-    match expand_module_ident_split(&args.org, &args.name, None) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.to_compile_error().into(),
-    }
-}
-
-/// `module_ident_joined!("@org/name", "^1.0.0")` — joined org/name, version required.
-///
-/// The `@org/name` literal is parsed into typed [`Org`] / [`Package`]
-/// segments at compile time; version is validated as a [`SemVerRange`].
-/// Use [`module_ident_joined_any_version!`] when the version isn't
-/// pinned, [`module_ident!`] when the org and name are already separate
-/// string literals.
-#[proc_macro]
-pub fn module_ident_joined(input: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(input as ModuleIdentJoinedArgs);
-    match expand_module_ident_joined(&args.joined, Some(&args.version)) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.to_compile_error().into(),
-    }
-}
-
-/// `module_ident_joined_any_version!("@org/name")` — joined org/name, any version.
-///
-/// Equivalent to `module_ident_joined!("@org/name", "*")`.
-#[proc_macro]
-pub fn module_ident_joined_any_version(input: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(input as ModuleIdentJoinedAnyArgs);
-    match expand_module_ident_joined(&args.joined, None) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.to_compile_error().into(),
-    }
-}
-
-struct ModuleIdentArgs {
-    org: LitStr,
-    name: LitStr,
-    version: LitStr,
-}
-
-impl Parse for ModuleIdentArgs {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let org: LitStr = input.parse()?;
-        input.parse::<Token![,]>()?;
-        let name: LitStr = input.parse()?;
-        input.parse::<Token![,]>()?;
-        let version: LitStr = input.parse()?;
-        let _ = input.parse::<Token![,]>();
-        Ok(Self { org, name, version })
-    }
-}
-
-struct ModuleIdentAnyArgs {
-    org: LitStr,
-    name: LitStr,
-}
-
-impl Parse for ModuleIdentAnyArgs {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let org: LitStr = input.parse()?;
-        input.parse::<Token![,]>()?;
-        let name: LitStr = input.parse()?;
-        let _ = input.parse::<Token![,]>();
-        Ok(Self { org, name })
-    }
-}
-
-struct ModuleIdentJoinedArgs {
-    joined: LitStr,
-    version: LitStr,
-}
-
-impl Parse for ModuleIdentJoinedArgs {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let joined: LitStr = input.parse()?;
-        input.parse::<Token![,]>()?;
-        let version: LitStr = input.parse()?;
-        let _ = input.parse::<Token![,]>();
-        Ok(Self { joined, version })
-    }
-}
-
-struct ModuleIdentJoinedAnyArgs {
-    joined: LitStr,
-}
-
-impl Parse for ModuleIdentJoinedAnyArgs {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let joined: LitStr = input.parse()?;
-        let _ = input.parse::<Token![,]>();
-        Ok(Self { joined })
-    }
-}
-
-/// Expand the split-args variants. `version` is `None` for any-version
-/// (`*`); `Some` for pinned. Each segment is validated at expansion time.
-fn expand_module_ident_split(
-    org: &LitStr,
-    name: &LitStr,
-    version: Option<&LitStr>,
-) -> syn::Result<proc_macro2::TokenStream> {
-    let org_str = org.value();
-    let name_str = name.value();
-
-    Org::new(&org_str)
-        .map_err(|e| syn::Error::new(org.span(), format!("invalid org `{}`: {}", org_str, e)))?;
-    Package::new(&name_str).map_err(|e| {
-        syn::Error::new(
-            name.span(),
-            format!("invalid package `{}`: {}", name_str, e),
-        )
-    })?;
-
-    emit_module_ident(&org_str, &name_str, version)
-}
-
-/// Expand the joined-args variants. The `@org/name` literal is split at
-/// the first `/`; `@` prefix is required. `version` is `None` for
-/// any-version (`*`); `Some` for pinned.
-fn expand_module_ident_joined(
-    joined: &LitStr,
-    version: Option<&LitStr>,
-) -> syn::Result<proc_macro2::TokenStream> {
-    let raw = joined.value();
-    let stripped = raw.strip_prefix('@').ok_or_else(|| {
-        syn::Error::new(
-            joined.span(),
-            format!(
-                "invalid joined module ref `{}`: must start with '@' (e.g. `\"@org/name\"`)",
-                raw
-            ),
-        )
-    })?;
-    let (org_str, name_str) = stripped.split_once('/').ok_or_else(|| {
-        syn::Error::new(
-            joined.span(),
-            format!(
-                "invalid joined module ref `{}`: must contain '/' between org and name \
-                 (e.g. `\"@org/name\"`)",
-                raw
-            ),
-        )
-    })?;
-    if name_str.contains('@') || name_str.contains('/') {
-        return Err(syn::Error::new(
-            joined.span(),
-            format!(
-                "invalid joined module ref `{}`: name segment must not contain '@' or '/' \
-                 (the version goes in the second arg, e.g. `module_ident_joined!(\"@org/name\", \"^1.0.0\")`)",
-                raw
-            ),
-        ));
-    }
-
-    Org::new(org_str).map_err(|e| {
-        syn::Error::new(
-            joined.span(),
-            format!("invalid org `{}` in `{}`: {}", org_str, raw, e),
-        )
-    })?;
-    Package::new(name_str).map_err(|e| {
-        syn::Error::new(
-            joined.span(),
-            format!("invalid package `{}` in `{}`: {}", name_str, raw, e),
-        )
-    })?;
-
-    emit_module_ident(org_str, name_str, version)
-}
-
-/// Validate the version range (if any) and emit the
-/// `ModuleIdent::new(...)` expression. The runtime types
-/// (`Org` / `Package` / `SemVerRange` / `ModuleIdent`) are re-validated
-/// at runtime via the canonical `*::new` / `from_str` constructors —
-/// the macro just guarantees they'll succeed.
-fn emit_module_ident(
-    org_str: &str,
-    name_str: &str,
-    version: Option<&LitStr>,
-) -> syn::Result<proc_macro2::TokenStream> {
-    let version_expr = match version {
-        Some(lit) => {
-            let v_str = lit.value();
-            SemVerRange::from_str(&v_str).map_err(|e| {
-                syn::Error::new(
-                    lit.span(),
-                    format!("invalid semver range `{}`: {}", v_str, e),
-                )
-            })?;
-            quote! {
-                ::streamlib::sdk::descriptors::SemVerRange::from_str(#v_str)
-                    .expect("validated by macro")
-            }
-        }
-        None => quote! { ::streamlib::sdk::descriptors::SemVerRange::Any },
-    };
-
-    Ok(quote! {
-        ::streamlib::sdk::descriptors::ModuleIdent::new(
-            ::streamlib::sdk::descriptors::Org::new(#org_str).expect("validated by macro"),
-            ::streamlib::sdk::descriptors::Package::new(#name_str).expect("validated by macro"),
-            #version_expr,
-        )
-    })
-}
-
-/// Parse a `schema_ident!` version string. Schema-ident versions are
-/// release-only by invariant — a `-dev.N` / `-rc.N` prerelease is
-/// rejected here (the package-dependency axis accepts prereleases via
-/// `SemVerRange::from_str`, not this parser).
-fn parse_semver(s: &str) -> Result<(u32, u32, u32), String> {
-    if s.contains('-') {
-        return Err(format!(
-            "schema-ident version `{s}` must be a release `MAJOR.MINOR.PATCH`; \
-             prerelease (`-dev.N` / `-rc.N`) versions are not valid for schema idents"
-        ));
-    }
-    let mut parts = s.split('.');
-    let major = parse_part(parts.next())?;
-    let minor = parse_part(parts.next())?;
-    let patch = parse_part(parts.next())?;
-    if parts.next().is_some() {
-        return Err("expected exactly three dot-separated integers (e.g. 1.0.0)".into());
-    }
-    Ok((major, minor, patch))
-}
-
-fn parse_part(part: Option<&str>) -> Result<u32, String> {
-    let p = part.ok_or_else(|| "expected three dot-separated integers".to_string())?;
-    p.parse::<u32>()
-        .map_err(|_| format!("`{}` is not a non-negative integer", p))
 }
 
 /// Derive macro for ConfigDescriptor trait.

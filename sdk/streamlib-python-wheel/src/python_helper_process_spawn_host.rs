@@ -738,12 +738,7 @@ mod tests {
             processor_id: "Pblur".to_string(),
             processor_configuration: None,
             descriptor: ProcessorDescriptor::new(
-                streamlib::sdk::descriptors::SchemaIdent::new(
-                    streamlib::sdk::descriptors::Org::new("app").unwrap(),
-                    streamlib::sdk::descriptors::Package::new("local").unwrap(),
-                    streamlib::sdk::descriptors::TypeName::new("BlurProcessor").unwrap(),
-                    streamlib::sdk::descriptors::SemVer::new(0, 0, 0),
-                ),
+                streamlib::sdk::descriptors::ProcessorClassShortName::new("BlurProcessor").unwrap(),
                 streamlib::sdk::descriptors::ProcessorClassImportPath::new(
                     "my_app.filters:BlurProcessor",
                 )

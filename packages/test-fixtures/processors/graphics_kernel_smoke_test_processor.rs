@@ -63,7 +63,6 @@ const SMOKE_PUSH_CONSTANT_SIZE: u32 = std::mem::size_of::<u32>() as u32;
 const SMOKE_SURFACE_SIZE: u32 = 64;
 
 #[streamlib::sdk::processor(
-    "@tatolab/test-fixtures/GraphicsKernelSmokeTestProcessor",
     description = "Graphics-kernel smoke test fixture — creates a graphics kernel via FullAccess, acquires a render-target Texture, runs a single offscreen_render() to assert the binding methods don't panic. Smoke-only; pixel correctness not asserted.",
     execution = manual,
     config = crate::test_fixture_processor_configs::GraphicsKernelSmokeTestProcessorConfig,

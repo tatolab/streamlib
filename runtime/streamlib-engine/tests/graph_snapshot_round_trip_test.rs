@@ -17,21 +17,15 @@
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
-    Org, Package, PortDescriptor, ProcessorClassImportPath, ProcessorDescriptor, SchemaIdent,
-    SemVer, TypeName,
+    PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
 };
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
 
-fn ident(short: &str) -> SchemaIdent {
-    SchemaIdent::new(
-        Org::new("tatolab").unwrap(),
-        Package::new("snapshot-test").unwrap(),
-        TypeName::new(short).unwrap(),
-        SemVer::new(1, 0, 0),
-    )
+fn class_short_name(short: &str) -> ProcessorClassShortName {
+    ProcessorClassShortName::new(short).unwrap()
 }
 
 /// Register a descriptor-only processor type with two `Any`-typed
@@ -41,7 +35,7 @@ fn register_test_type(short: &str, input: &str, output: &str) -> ProcessorClassI
     let import_path =
         ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
     let descriptor = ProcessorDescriptor::new(
-        ident(short),
+        class_short_name(short),
         import_path.clone(),
         "snapshot round-trip test",
     )

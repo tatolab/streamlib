@@ -88,7 +88,6 @@ enum TestPatternSurfaceState {
 }
 
 #[streamlib::sdk::processor(
-    "@tatolab/media-builtins/TestPatternSource",
     description = "Synthetic SMPTE-style color-bar source — demos a pipeline with no camera attached",
     execution = continuous(interval_ms = 33),
     config = crate::test_pattern_source::TestPatternSourceConfig,

@@ -18,8 +18,7 @@ use std::time::{Duration, Instant};
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
-    Org, Package, PortDescriptor, ProcessorClassImportPath, ProcessorDescriptor, SchemaIdent,
-    SemVer, TypeName,
+    PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
 };
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
@@ -31,12 +30,7 @@ const SHORT_TIMEOUT: Duration = Duration::from_millis(250);
 fn register_test_type(short: &str) -> ProcessorClassImportPath {
     let import_path =
         ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
-    let id = SchemaIdent::new(
-        Org::new("tatolab").unwrap(),
-        Package::new("graph-readiness-signal-test").unwrap(),
-        TypeName::new(short).unwrap(),
-        SemVer::new(1, 0, 0),
-    );
+    let id = ProcessorClassShortName::new(short).unwrap();
     let descriptor =
         ProcessorDescriptor::new(id, import_path.clone(), "graph readiness signal test")
             .with_input(PortDescriptor::new("bags_from_upstream", "", false))

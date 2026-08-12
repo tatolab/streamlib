@@ -15,8 +15,7 @@
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
-    Org, Package, PortDescriptor, ProcessorClassImportPath, ProcessorDescriptor, SchemaIdent,
-    SemVer, TypeName,
+    PortDescriptor, ProcessorClassImportPath, ProcessorClassShortName, ProcessorDescriptor,
 };
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
@@ -28,12 +27,7 @@ const RETIRED_IDENTITY_KEYS: [&str; 3] = ["org", "package", "version"];
 fn register_test_type(short: &str) -> ProcessorClassImportPath {
     let import_path = ProcessorClassImportPath::new(format!("my_app.processors:{short}")).unwrap();
     let descriptor = ProcessorDescriptor::new(
-        SchemaIdent::new(
-            Org::new("tatolab").unwrap(),
-            Package::new("control-plane-type-test").unwrap(),
-            TypeName::new(short).unwrap(),
-            SemVer::new(1, 0, 0),
-        ),
+        ProcessorClassShortName::new(short).unwrap(),
         import_path.clone(),
         "control-plane rendering test",
     )

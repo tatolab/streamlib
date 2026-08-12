@@ -25,10 +25,10 @@
 //! so future contributors can decide whether to extend the allowlist or
 //! refactor the offending file.
 
+use crate::normal_build_dep_graph::NormalBuildDepGraph;
 use anyhow::{Context, Result};
 use std::fs;
 use std::path::{Path, PathBuf};
-use crate::normal_build_dep_graph::NormalBuildDepGraph;
 use walkdir::WalkDir;
 
 #[derive(Debug, Clone)]
@@ -168,7 +168,9 @@ fn matches_allow(rel_path: &Path, allow: &[AllowEntry]) -> bool {
 /// `target/`, `.git/`, vendored node_modules, etc. by construction. `xtask`
 /// is intentionally excluded — it is build tooling with no Vulkan deps, and
 /// the fixture-test strings in this very file would otherwise self-flag.
-const SCAN_ROOTS: &[&str] = &["runtime", "sdk", "adapters", "vendor", "examples", "packages"];
+const SCAN_ROOTS: &[&str] = &[
+    "runtime", "sdk", "adapters", "vendor", "examples", "packages",
+];
 
 fn walk_rs(project_root: &Path) -> impl Iterator<Item = PathBuf> + '_ {
     SCAN_ROOTS
@@ -957,13 +959,11 @@ const PACKAGES_FACADE_DEP_RATIONALE: &str = "a packages/* crate must not carry t
 /// every distributable package builds engine-free against the plugin-authoring
 /// SDK. A newly-carved package is NOT added here — it converts to the
 /// engine-free SDK instead.
-const PACKAGES_FACADE_DEP_ALLOWLIST: &[AllowEntry] = &[
-    AllowEntry {
-        path: "packages/test-fixtures/Cargo.toml",
-        kind: AllowKind::ExactFile,
-        rationale: "permanent, host-by-design: test-fixtures run host-side under cargo test and legitimately link the full facade",
-    },
-];
+const PACKAGES_FACADE_DEP_ALLOWLIST: &[AllowEntry] = &[AllowEntry {
+    path: "packages/test-fixtures/Cargo.toml",
+    kind: AllowKind::ExactFile,
+    rationale: "permanent, host-by-design: test-fixtures run host-side under cargo test and legitimately link the full facade",
+}];
 
 fn check_packages_facade_runtime_dep(
     project_root: &Path,
@@ -1056,13 +1056,11 @@ const HOST_DEVICE_ARC_IDENT: &str = "host_vulkan_device_arc";
 /// device. `test-fixtures` is the only permitted reacher (host-side, exercises
 /// the bridge by design); a distributable package's GPU code goes through the
 /// cdylib-safe FullAccess primitives instead.
-const PACKAGES_ENGINE_REACH_ALLOWLIST: &[AllowEntry] = &[
-    AllowEntry {
-        path: "packages/test-fixtures/",
-        kind: AllowKind::PathPrefix,
-        rationale: "permanent: test-fixtures run host-side and exercise the engine bridge directly by design",
-    },
-];
+const PACKAGES_ENGINE_REACH_ALLOWLIST: &[AllowEntry] = &[AllowEntry {
+    path: "packages/test-fixtures/",
+    kind: AllowKind::PathPrefix,
+    rationale: "permanent: test-fixtures run host-side and exercise the engine bridge directly by design",
+}];
 
 fn check_packages_engine_reach(
     project_root: &Path,
@@ -1132,7 +1130,7 @@ fn check_packages_engine_reach(
 // The list is PRINCIPLED, not enumerated ad hoc: a crate earns root status by
 // being something packages dep DIRECTLY and consume by version. The small
 // utility crates (`streamlib-error`, `streamlib-processor-schema`,
-// `streamlib-idents`) are deliberately NOT listed — they are covered
+// `streamlib-processor-schema`) are deliberately NOT listed — they are covered
 // TRANSITIVELY through the roots (check 12 walks the closure), so a listing
 // would be redundant. `streamlib-consumer-rhi` earns root status on its own
 // because check 3 makes it a first-class part of the boundary contract:
@@ -1150,7 +1148,7 @@ fn check_packages_engine_reach(
 
 const CHECK_TRUNK_NO_ENGINE_DEP: &str = "trunk-set-no-engine-cargo-dep";
 
-const TRUNK_NO_ENGINE_DEP_RATIONALE: &str = "PERMANENT trunk ban: an engine-free trunk root (streamlib-macros / streamlib-consumer-rhi) must never carry `streamlib-engine` as a non-dev Cargo dep. MEMBERSHIP RULE: roots = every crate packages are mandated or expected to link directly and consume by version — the small utility crates (streamlib-error / streamlib-processor-schema / streamlib-idents) are covered transitively through the roots, and consumer-rhi earns root status because check 3 makes it a first-class part of the boundary contract (adapter crates dep it directly). External packages consume these roots by version from the registry, so a published root that pulled the engine would propagate the FullAccess engine surface to every external consumer invisibly. This ban has no shrinking allowlist; [dev-dependencies] are exempt (conformance tests may pull the engine)";
+const TRUNK_NO_ENGINE_DEP_RATIONALE: &str = "PERMANENT trunk ban: an engine-free trunk root (streamlib-macros / streamlib-consumer-rhi) must never carry `streamlib-engine` as a non-dev Cargo dep. MEMBERSHIP RULE: roots = every crate packages are mandated or expected to link directly and consume by version — the small utility crates (streamlib-error / streamlib-processor-schema) are covered transitively through the roots, and consumer-rhi earns root status because check 3 makes it a first-class part of the boundary contract (adapter crates dep it directly). External packages consume these roots by version from the registry, so a published root that pulled the engine would propagate the FullAccess engine surface to every external consumer invisibly. This ban has no shrinking allowlist; [dev-dependencies] are exempt (conformance tests may pull the engine)";
 
 /// The engine crate's Cargo package name (lib name is `streamlib_engine`; the
 /// Cargo dependency key / `package =` rename resolves to this hyphenated form).
@@ -1161,7 +1159,7 @@ const TRUNK_ENGINE_CRATE_NAME: &str = "streamlib-engine";
 /// `NO_STREAMLIB_RUNTIME_DEP`) — this is a permanent invariant, not a
 /// shrinking ratchet. Roots = every crate packages are mandated or expected to
 /// link directly and consume by version; the small utility crates
-/// (streamlib-error / streamlib-processor-schema / streamlib-idents) are
+/// (streamlib-error / streamlib-processor-schema) are
 /// covered transitively through these roots (check 12), and consumer-rhi is a
 /// root because check 3 makes it a first-class part of the boundary contract.
 const TRUNK_NO_ENGINE_DEP: &[&str] = &[
@@ -1260,10 +1258,7 @@ fn check_trunk_set_no_engine_dep(
 /// crate packages are mandated or expected to link directly and consume by
 /// version; consumer-rhi is a root because check 3 makes it a first-class part
 /// of the boundary contract (packages dep it directly).
-const TRUNK_CRATE_NAMES: &[&str] = &[
-    "streamlib-macros",
-    "streamlib-consumer-rhi",
-];
+const TRUNK_CRATE_NAMES: &[&str] = &["streamlib-macros", "streamlib-consumer-rhi"];
 
 /// A discovered trunk-crate → `streamlib-engine` dependency chain, as package
 /// names from the trunk crate to the engine inclusive.
@@ -2534,7 +2529,6 @@ streamlib = { version = "0.6.0" }
 
     // ----- Check 10: examples/* cdylib facade-dep ban -----
 
-
     // ----- Check 11: trunk-set -> streamlib-engine Cargo-dep ban -----
 
     #[test]
@@ -2587,10 +2581,11 @@ x = { package = "streamlib-engine", path = "../../runtime/streamlib-engine" }
         );
         let report = scan_all(dir.path()).unwrap();
         assert!(
-            report.violations.iter().any(|v| v.check
-                == CHECK_TRUNK_NO_ENGINE_DEP
-                && v.matched_pattern
-                    .contains("package = \"streamlib-engine\"")),
+            report
+                .violations
+                .iter()
+                .any(|v| v.check == CHECK_TRUNK_NO_ENGINE_DEP
+                    && v.matched_pattern.contains("package = \"streamlib-engine\"")),
             "expected trunk-set aliased engine-dep violation, got {:?}",
             report.violations,
         );

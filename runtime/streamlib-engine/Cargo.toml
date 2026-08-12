@@ -54,7 +54,6 @@ streamlib-error = { path = "../../sdk/streamlib-error", version = "0.17.0" }
 
 # Schema identity + manifest types (one source of truth for the
 # structured `dependencies:` shape consumed at runtime).
-streamlib-idents = { path = "../../sdk/streamlib-idents", version = "0.17.0" }
 # Procedural macros
 streamlib-macros = { path = "../../sdk/streamlib-macros", version = "0.17.0" }
 

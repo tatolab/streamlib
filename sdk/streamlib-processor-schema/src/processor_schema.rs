@@ -6,7 +6,6 @@ use schemars::r#gen::SchemaGenerator;
 use schemars::schema::{InstanceType, Schema, SchemaObject, SubschemaValidation};
 use serde::{Deserialize, Serialize};
 use std::borrow::Cow;
-use streamlib_idents::TypeName;
 
 use crate::ThreadPriority;
 
@@ -396,10 +395,9 @@ pub struct ProcessorPortSchema {
 pub struct ProcessorConfigSchema {
     /// Config field name (e.g., "config").
     pub name: String,
-    /// Bare PascalCase TypeName (e.g. `H264EncoderConfig`). Resolved
-    /// against the enclosing manifest's `schemas:` map at proc-macro
-    /// expansion / runtime startup.
-    pub schema: TypeName,
+    /// The config type's name (e.g. `H264EncoderConfig`). Descriptor metadata
+    /// only — there is no schema layer for it to resolve against.
+    pub schema: String,
 }
 
 /// A state field definition within a processor schema.
