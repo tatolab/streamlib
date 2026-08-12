@@ -223,8 +223,11 @@ impl FrameTapProcessor::Processor {
                     .filename_prefix
                     .clone()
                     .unwrap_or_else(|| "frame".to_string());
-                let quality =
-                    self.config.jpeg_quality.unwrap_or(DEFAULT_JPEG_QUALITY).clamp(1, 100) as u8;
+                let quality = self
+                    .config
+                    .jpeg_quality
+                    .unwrap_or(DEFAULT_JPEG_QUALITY)
+                    .clamp(1, 100) as u8;
                 let path = PathBuf::from(&self.config.output_dir)
                     .join(format!("{}_{:06}.jpg", prefix, self.sample_index));
                 let job = SampleJob {
@@ -235,7 +238,11 @@ impl FrameTapProcessor::Processor {
                     quality,
                     path,
                 };
-                let enqueued = self.writer.as_ref().map(|w| w.try_enqueue(job)).unwrap_or(false);
+                let enqueued = self
+                    .writer
+                    .as_ref()
+                    .map(|w| w.try_enqueue(job))
+                    .unwrap_or(false);
                 if enqueued {
                     self.sample_index += 1;
                 } else {
@@ -324,9 +331,9 @@ impl FrameTapProcessor::Processor {
             // inner is the creation. Best-effort on both: warn, arm a backoff so
             // a persistent failure does not re-drain the GPU every frame, and
             // skip this sample rather than stalling or failing the pipeline.
-            match gpu.escalate(|full| {
-                full.create_texture_readback("frame-tap", width, height, format)
-            }) {
+            match gpu
+                .escalate(|full| full.create_texture_readback("frame-tap", width, height, format))
+            {
                 Ok(Ok(readback)) => {
                     tracing::info!(
                         "FrameTap: created readback handle ({:?}, {}x{})",
@@ -544,7 +551,11 @@ mod tests {
     fn no_backoff_never_blocks() {
         // First attempt (or after a success cleared the backoff): nothing to
         // throttle, so creation is always allowed.
-        assert!(!readback_creation_backoff_blocks(None, KEY_A, Instant::now()));
+        assert!(!readback_creation_backoff_blocks(
+            None,
+            KEY_A,
+            Instant::now()
+        ));
     }
 
     #[test]

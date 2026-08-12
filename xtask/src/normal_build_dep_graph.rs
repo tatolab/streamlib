@@ -27,7 +27,6 @@ fn resolve_dep_is_normal_or_build(dep: &serde_json::Value) -> bool {
         .unwrap_or(true)
 }
 
-
 /// A `cargo metadata` dependency graph reduced to the edges that participate in
 /// the publish / link closure: normal + build edges only, keyed by package id.
 ///

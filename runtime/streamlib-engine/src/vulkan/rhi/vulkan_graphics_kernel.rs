@@ -44,7 +44,6 @@ use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
 use std::ffi::c_void;
 
-
 use crate::core::rhi::{
     BlendFactor, BlendOp, ColorBlendState, ColorWriteMask, CullMode, DepthCompareOp, DepthFormat,
     DepthStencilState, DrawCall, DrawIndexedCall, FrontFace, GraphicsBindingKind,
@@ -1415,7 +1414,6 @@ impl VulkanGraphicsKernel {
     }
 }
 
-
 impl Clone for VulkanGraphicsKernel {
     fn clone(&self) -> Self {
         if !self.handle.is_null() {
@@ -1450,7 +1448,6 @@ impl std::fmt::Debug for VulkanGraphicsKernel {
         f.debug_struct("VulkanGraphicsKernel").finish()
     }
 }
-
 
 // ---- Validation + creation helpers --------------------------------------------
 

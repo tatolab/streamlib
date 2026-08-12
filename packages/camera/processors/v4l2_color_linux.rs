@@ -18,8 +18,8 @@
 //! `V4L2_COLORSPACE_DEFAULT` and any unrecognized enumerant
 //! propagate as `None`.
 
-use crate::_generated_::tatolab__core::color_info::{Matrix, Primaries, Range, Transfer};
 use crate::_generated_::ColorInfo;
+use crate::_generated_::tatolab__core::color_info::{Matrix, Primaries, Range, Transfer};
 
 // V4L2 `colorspace` enumerants (from `<linux/videodev2.h>`).
 const V4L2_COLORSPACE_DEFAULT: u32 = 0;

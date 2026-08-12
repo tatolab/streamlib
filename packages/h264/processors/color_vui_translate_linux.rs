@@ -106,8 +106,11 @@ pub fn color_info_to_h273_repr(info: &ColorInfo) -> H273ColorVuiRepr {
     let (primaries, primaries_present) = axis(info.primaries.as_ref().map(primaries_to_byte));
     let (transfer, transfer_present) = axis(info.transfer.as_ref().map(transfer_to_byte));
     let (matrix, matrix_present) = axis(info.matrix.as_ref().map(matrix_to_byte));
-    let (full_range, full_range_present) =
-        axis(info.range.as_ref().map(|r| u8::from(matches!(r, Range::Full))));
+    let (full_range, full_range_present) = axis(
+        info.range
+            .as_ref()
+            .map(|r| u8::from(matches!(r, Range::Full))),
+    );
     H273ColorVuiRepr {
         primaries,
         primaries_present,
@@ -129,7 +132,9 @@ pub fn decoded_vui_to_color_info(vui: &DecodedColorVui) -> ColorInfo {
         primaries: vui.primaries.and_then(primaries_from_byte),
         transfer: vui.transfer.and_then(transfer_from_byte),
         matrix: vui.matrix.and_then(matrix_from_byte),
-        range: vui.full_range.map(|f| if f { Range::Full } else { Range::Limited }),
+        range: vui
+            .full_range
+            .map(|f| if f { Range::Full } else { Range::Limited }),
     }
 }
 

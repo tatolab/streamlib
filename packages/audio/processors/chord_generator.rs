@@ -1,13 +1,13 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use parking_lot::Mutex;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Arc;
 use crate::_generated_::AudioFrame;
+use parking_lot::Mutex;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use streamlib_plugin_sdk::sdk::context::AudioTickContext;
-use streamlib_plugin_sdk::sdk::error::Result;
 use streamlib_plugin_sdk::sdk::context::RuntimeContextFullAccess;
+use streamlib_plugin_sdk::sdk::error::Result;
 
 struct SineOscillator {
     phase: f64,

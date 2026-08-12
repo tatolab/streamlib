@@ -14,8 +14,8 @@
 // state at the top of each test.
 
 use crate::_generated_::VideoFrame;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib_plugin_sdk::sdk::error::Result;
 
@@ -56,7 +56,9 @@ pub fn reset() {
 )]
 pub struct VideoFrameCounterProcessor;
 
-impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for VideoFrameCounterProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor
+    for VideoFrameCounterProcessor::Processor
+{
     fn process(&mut self, _ctx: &RuntimeContextLimitedAccess<'_>) -> Result<()> {
         if !self.inputs.has_data("input") {
             return Ok(());

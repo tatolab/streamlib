@@ -6,7 +6,16 @@ pre-commit:
   commands:
     format:
       glob: "*.rs"
-      run: cargo fmt --all -- --check
+      # Not `--all`: rustfmt disagrees with the verbatim-vendored
+      # vendor/tatolab-vulkanalia* formatting, and those trees are pinned
+      # byte-for-byte by `cargo xtask check-vendored-vulkanalia`. The member list
+      # is derived, so a new workspace member is covered without editing this hook.
+      run: |
+        packages_to_format=$(cargo metadata --no-deps --format-version 1 \
+          | jq -r '.workspace_root as $root | .packages[]
+                   | select(.manifest_path | startswith($root + "/vendor/") | not)
+                   | "-p\n" + .name')
+        cargo fmt $packages_to_format -- --check
       stage_fixed: true
 
     cargo-check:

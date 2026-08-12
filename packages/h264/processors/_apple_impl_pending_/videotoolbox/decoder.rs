@@ -17,8 +17,8 @@
 
 use super::{ffi, format};
 use crate::_generated_::VideoFrame;
-use crate::core::rhi::{PixelFormat, PixelBuffer, PixelBufferRef};
-use crate::core::{GpuContext, Result, RuntimeContext, Error, VideoDecoderConfig};
+use crate::core::rhi::{PixelBuffer, PixelBufferRef, PixelFormat};
+use crate::core::{Error, GpuContext, Result, RuntimeContext, VideoDecoderConfig};
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
@@ -343,9 +343,10 @@ impl VideoToolboxDecoder {
 
         // Step 6: Retrieve decoded frame from queue
         let decoded_frame = {
-            let mut queue = self.decoded_frames.lock().map_err(|e| {
-                Error::Runtime(format!("Failed to lock decoded frames: {}", e))
-            })?;
+            let mut queue = self
+                .decoded_frames
+                .lock()
+                .map_err(|e| Error::Runtime(format!("Failed to lock decoded frames: {}", e)))?;
             queue.pop_front()
         };
 

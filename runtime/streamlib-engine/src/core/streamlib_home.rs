@@ -4,7 +4,6 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-
 /// The streamlib home root — the parent of the generated `.streamlib/`
 /// working tree ([`get_streamlib_data_dir`]).
 ///

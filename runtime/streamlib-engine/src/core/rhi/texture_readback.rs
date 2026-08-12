@@ -12,7 +12,6 @@
 
 use std::ffi::c_void;
 
-
 use crate::core::rhi::{Texture, TextureFormat};
 use crate::core::{Error, Result};
 
@@ -273,7 +272,9 @@ impl TextureReadback {
     #[cfg(target_os = "linux")]
     fn host_inner(&self) -> &crate::vulkan::rhi::VulkanTextureReadback {
         // SAFETY: `handle` is `Box::into_raw(Box<Arc<VulkanTextureReadback>>)`.
-        unsafe { &**(self.handle as *const std::sync::Arc<crate::vulkan::rhi::VulkanTextureReadback>) }
+        unsafe {
+            &**(self.handle as *const std::sync::Arc<crate::vulkan::rhi::VulkanTextureReadback>)
+        }
     }
 
     /// Schedule a GPU→CPU copy of `texture` (at its current
@@ -285,7 +286,9 @@ impl TextureReadback {
         texture: &Texture,
         source_layout: TextureSourceLayout,
     ) -> Result<ReadbackTicket> {
-        self.host_inner().submit(texture, source_layout).map_err(Error::from)
+        self.host_inner()
+            .submit(texture, source_layout)
+            .map_err(Error::from)
     }
 
     /// Non-blocking poll. `Ok(Some(bytes))` once the copy completes
@@ -354,4 +357,3 @@ impl std::fmt::Debug for TextureReadback {
             .finish()
     }
 }
-

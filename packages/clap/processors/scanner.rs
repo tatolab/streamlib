@@ -89,8 +89,8 @@ impl ClapScanner {
         for entry in std::fs::read_dir(path).map_err(|e| {
             Error::Configuration(format!("Failed to read directory {:?}: {}", path, e))
         })? {
-            let entry = entry
-                .map_err(|e| Error::Configuration(format!("Failed to read entry: {}", e)))?;
+            let entry =
+                entry.map_err(|e| Error::Configuration(format!("Failed to read entry: {}", e)))?;
             let entry_path = entry.path();
 
             if Self::is_clap_bundle(&entry_path) {

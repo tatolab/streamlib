@@ -1312,8 +1312,7 @@ mod display_name_disambiguation {
         let mut graph = test_graph();
 
         graph.traversal_mut().add_v(
-            MockProcessor::Processor::node(Default::default())
-                .with_display_name("MockProcessor 2"),
+            MockProcessor::Processor::node(Default::default()).with_display_name("MockProcessor 2"),
         );
         graph
             .traversal_mut()
@@ -1324,11 +1323,7 @@ mod display_name_disambiguation {
 
         assert_eq!(
             display_names_in_the_graph(&graph),
-            vec![
-                "MockProcessor 2",
-                "MockProcessor",
-                "MockProcessor 3",
-            ]
+            vec!["MockProcessor 2", "MockProcessor", "MockProcessor 3",]
         );
     }
 

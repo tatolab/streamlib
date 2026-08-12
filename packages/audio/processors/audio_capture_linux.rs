@@ -5,12 +5,12 @@
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, StreamConfig};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc;
 use std::thread::JoinHandle;
-use streamlib_plugin_sdk::sdk::error::{Result, Error};
 use streamlib_plugin_sdk::sdk::context::RuntimeContextFullAccess;
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
 use streamlib_plugin_sdk::sdk::iceoryx2::OutputWriter;
 
 #[derive(Debug, Clone)]
@@ -46,7 +46,9 @@ pub struct LinuxAudioCaptureProcessor {
     shutdown_sender: Option<mpsc::Sender<()>>,
 }
 
-impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for LinuxAudioCaptureProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ManualProcessor
+    for LinuxAudioCaptureProcessor::Processor
+{
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!("[AudioCapture] setup() called - will set up stream in start()");
         self.stream_setup_done = false;
@@ -130,13 +132,9 @@ impl LinuxAudioCaptureProcessor::Processor {
                 Error::Configuration(format!("Failed to spawn audio capture thread: {}", e))
             })?;
 
-        let device_info = ready_receiver
-            .recv()
-            .map_err(|_| {
-                Error::Configuration(
-                    "Audio capture thread exited before reporting stream setup".into(),
-                )
-            })??;
+        let device_info = ready_receiver.recv().map_err(|_| {
+            Error::Configuration("Audio capture thread exited before reporting stream setup".into())
+        })??;
 
         self.device_info = Some(device_info);
         self.capture_thread = Some(handle);
@@ -149,10 +147,7 @@ impl LinuxAudioCaptureProcessor::Processor {
         let devices: Result<Vec<LinuxAudioInputDevice>> = host
             .input_devices()
             .map_err(|e| {
-                Error::Configuration(format!(
-                    "Failed to enumerate audio input devices: {}",
-                    e
-                ))
+                Error::Configuration(format!("Failed to enumerate audio input devices: {}", e))
             })?
             .enumerate()
             .filter_map(|(id, device)| {
@@ -200,127 +195,122 @@ fn build_capture_stream(
     frame_counter: Arc<AtomicU64>,
     is_capturing: &Arc<AtomicBool>,
 ) -> Result<(LinuxAudioInputDevice, cpal::Stream)> {
-        let host = cpal::default_host();
+    let host = cpal::default_host();
 
-        let device = if let Some(device_name_str) = &device_id {
-            let devices: Vec<Device> = host
-                .input_devices()
-                .map_err(|e| {
-                    Error::Configuration(format!(
-                        "Failed to enumerate audio input devices: {}",
-                        e
-                    ))
-                })?
-                .collect();
-
-            devices
-                .into_iter()
-                .find(|d| {
-                    if let Ok(name) = d.name() {
-                        name == *device_name_str
-                    } else {
-                        false
-                    }
-                })
-                .ok_or_else(|| {
-                    Error::Configuration(format!(
-                        "Audio input device '{}' not found",
-                        device_name_str
-                    ))
-                })?
-        } else {
-            host.default_input_device()
-                .ok_or_else(|| Error::Configuration("No default audio input device".into()))?
-        };
-
-        let device_name = device
-            .name()
-            .unwrap_or_else(|_| "Unknown Device".to_string());
-
-        let default_config = device.default_input_config().map_err(|e| {
-            Error::Configuration(format!("Failed to get audio config: {}", e))
-        })?;
-
-        let device_sample_rate = default_config.sample_rate().0;
-        let device_channels = default_config.channels();
-
-        tracing::info!(
-            "Audio input device: {} (native: {}Hz, {} channels)",
-            device_name,
-            device_sample_rate,
-            device_channels
-        );
-
-        let device_info = LinuxAudioInputDevice {
-            id: 0,
-            name: device_name.clone(),
-            sample_rate: device_sample_rate,
-            channels: device_channels as u32,
-            is_default: device_id.is_none(),
-        };
-
-        let outputs_clone: OutputWriter = outputs;
-        let frame_counter_clone = frame_counter;
-        let is_capturing_clone = Arc::clone(is_capturing);
-        let sample_rate_clone = device_sample_rate;
-
-        let stream_config = StreamConfig {
-            channels: 1, // Mono only
-            sample_rate: cpal::SampleRate(device_sample_rate),
-            buffer_size: cpal::BufferSize::Default,
-        };
-
-        tracing::info!("[AudioCapture] Building mono input stream with native config (ALSA backend)");
-
-        let stream = device
-            .build_input_stream(
-                &stream_config,
-                move |data: &[f32], _info: &cpal::InputCallbackInfo| {
-                    if !is_capturing_clone.load(Ordering::Relaxed) {
-                        return;
-                    }
-
-                    let frame_number = frame_counter_clone.fetch_add(1, Ordering::Relaxed);
-                    let timestamp_ns =
-                        streamlib_plugin_sdk::sdk::media_clock::MediaClock::now().as_nanos() as i64;
-
-                    let ipc_frame = crate::_generated_::AudioFrame {
-                        samples: data.to_vec(),
-                        channels: 1,
-                        sample_rate: sample_rate_clone,
-                        timestamp_ns: timestamp_ns.to_string(),
-                        frame_index: frame_number.to_string(),
-                    };
-
-                    if let Err(e) = outputs_clone.write("audio", &ipc_frame) {
-                        tracing::error!(error = %e, "AudioCapture: failed to write frame");
-                    }
-                },
-                move |err| {
-                    tracing::error!("Audio capture error: {}", err);
-                },
-                None,
-            )
+    let device = if let Some(device_name_str) = &device_id {
+        let devices: Vec<Device> = host
+            .input_devices()
             .map_err(|e| {
-                Error::Configuration(format!("Failed to build audio stream: {}", e))
-            })?;
+                Error::Configuration(format!("Failed to enumerate audio input devices: {}", e))
+            })?
+            .collect();
 
-        tracing::info!("[AudioCapture] Starting stream...");
+        devices
+            .into_iter()
+            .find(|d| {
+                if let Ok(name) = d.name() {
+                    name == *device_name_str
+                } else {
+                    false
+                }
+            })
+            .ok_or_else(|| {
+                Error::Configuration(format!(
+                    "Audio input device '{}' not found",
+                    device_name_str
+                ))
+            })?
+    } else {
+        host.default_input_device()
+            .ok_or_else(|| Error::Configuration("No default audio input device".into()))?
+    };
 
-        stream.play().map_err(|e| {
-            Error::Configuration(format!("Failed to start audio stream: {}", e))
-        })?;
+    let device_name = device
+        .name()
+        .unwrap_or_else(|_| "Unknown Device".to_string());
 
-        tracing::info!(
-            "[AudioCapture] Stream active - capturing mono audio at {}Hz",
-            device_sample_rate
-        );
+    let default_config = device
+        .default_input_config()
+        .map_err(|e| Error::Configuration(format!("Failed to get audio config: {}", e)))?;
 
-        tracing::info!(
-            "[AudioCapture] {} Started - outputting device-native mono frames",
-            device_name
-        );
-        Ok((device_info, stream))
+    let device_sample_rate = default_config.sample_rate().0;
+    let device_channels = default_config.channels();
+
+    tracing::info!(
+        "Audio input device: {} (native: {}Hz, {} channels)",
+        device_name,
+        device_sample_rate,
+        device_channels
+    );
+
+    let device_info = LinuxAudioInputDevice {
+        id: 0,
+        name: device_name.clone(),
+        sample_rate: device_sample_rate,
+        channels: device_channels as u32,
+        is_default: device_id.is_none(),
+    };
+
+    let outputs_clone: OutputWriter = outputs;
+    let frame_counter_clone = frame_counter;
+    let is_capturing_clone = Arc::clone(is_capturing);
+    let sample_rate_clone = device_sample_rate;
+
+    let stream_config = StreamConfig {
+        channels: 1, // Mono only
+        sample_rate: cpal::SampleRate(device_sample_rate),
+        buffer_size: cpal::BufferSize::Default,
+    };
+
+    tracing::info!("[AudioCapture] Building mono input stream with native config (ALSA backend)");
+
+    let stream = device
+        .build_input_stream(
+            &stream_config,
+            move |data: &[f32], _info: &cpal::InputCallbackInfo| {
+                if !is_capturing_clone.load(Ordering::Relaxed) {
+                    return;
+                }
+
+                let frame_number = frame_counter_clone.fetch_add(1, Ordering::Relaxed);
+                let timestamp_ns =
+                    streamlib_plugin_sdk::sdk::media_clock::MediaClock::now().as_nanos() as i64;
+
+                let ipc_frame = crate::_generated_::AudioFrame {
+                    samples: data.to_vec(),
+                    channels: 1,
+                    sample_rate: sample_rate_clone,
+                    timestamp_ns: timestamp_ns.to_string(),
+                    frame_index: frame_number.to_string(),
+                };
+
+                if let Err(e) = outputs_clone.write("audio", &ipc_frame) {
+                    tracing::error!(error = %e, "AudioCapture: failed to write frame");
+                }
+            },
+            move |err| {
+                tracing::error!("Audio capture error: {}", err);
+            },
+            None,
+        )
+        .map_err(|e| Error::Configuration(format!("Failed to build audio stream: {}", e)))?;
+
+    tracing::info!("[AudioCapture] Starting stream...");
+
+    stream
+        .play()
+        .map_err(|e| Error::Configuration(format!("Failed to start audio stream: {}", e)))?;
+
+    tracing::info!(
+        "[AudioCapture] Stream active - capturing mono audio at {}Hz",
+        device_sample_rate
+    );
+
+    tracing::info!(
+        "[AudioCapture] {} Started - outputting device-native mono frames",
+        device_name
+    );
+    Ok((device_info, stream))
 }
 
 #[cfg(test)]

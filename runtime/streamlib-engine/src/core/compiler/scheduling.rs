@@ -65,11 +65,14 @@ mod tests {
     #[test]
     fn strategy_reads_priority_from_registered_descriptor() {
         let path = class_import_path("Widgetron");
-        let descriptor =
-            ProcessorDescriptor::new(ProcessorClassShortName::new("Widgetron").unwrap(), path.clone(), "fixture")
-                .with_scheduling(ProcessorScheduling {
-                    priority: ThreadPriority::RealTime,
-                });
+        let descriptor = ProcessorDescriptor::new(
+            ProcessorClassShortName::new("Widgetron").unwrap(),
+            path.clone(),
+            "fixture",
+        )
+        .with_scheduling(ProcessorScheduling {
+            priority: ThreadPriority::RealTime,
+        });
         PROCESSOR_REGISTRY
             .register_descriptor_only(descriptor)
             .expect("fixture descriptor registers cleanly");

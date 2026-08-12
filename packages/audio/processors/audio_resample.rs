@@ -81,80 +81,56 @@ impl AudioResampler {
             1 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 1)
                     .map_err(|e| {
-                        Error::Runtime(format!(
-                            "Failed to create 1-channel resampler: {:?}",
-                            e
-                        ))
+                        Error::Runtime(format!("Failed to create 1-channel resampler: {:?}", e))
                     })?;
                 ResamplerInner::One(resampler)
             }
             2 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 2)
                     .map_err(|e| {
-                        Error::Runtime(format!(
-                            "Failed to create 2-channel resampler: {:?}",
-                            e
-                        ))
+                        Error::Runtime(format!("Failed to create 2-channel resampler: {:?}", e))
                     })?;
                 ResamplerInner::Two(resampler)
             }
             3 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 3)
                     .map_err(|e| {
-                        Error::Runtime(format!(
-                            "Failed to create 3-channel resampler: {:?}",
-                            e
-                        ))
+                        Error::Runtime(format!("Failed to create 3-channel resampler: {:?}", e))
                     })?;
                 ResamplerInner::Three(resampler)
             }
             4 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 4)
                     .map_err(|e| {
-                        Error::Runtime(format!(
-                            "Failed to create 4-channel resampler: {:?}",
-                            e
-                        ))
+                        Error::Runtime(format!("Failed to create 4-channel resampler: {:?}", e))
                     })?;
                 ResamplerInner::Four(resampler)
             }
             5 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 5)
                     .map_err(|e| {
-                        Error::Runtime(format!(
-                            "Failed to create 5-channel resampler: {:?}",
-                            e
-                        ))
+                        Error::Runtime(format!("Failed to create 5-channel resampler: {:?}", e))
                     })?;
                 ResamplerInner::Five(resampler)
             }
             6 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 6)
                     .map_err(|e| {
-                        Error::Runtime(format!(
-                            "Failed to create 6-channel resampler: {:?}",
-                            e
-                        ))
+                        Error::Runtime(format!("Failed to create 6-channel resampler: {:?}", e))
                     })?;
                 ResamplerInner::Six(resampler)
             }
             7 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 7)
                     .map_err(|e| {
-                        Error::Runtime(format!(
-                            "Failed to create 7-channel resampler: {:?}",
-                            e
-                        ))
+                        Error::Runtime(format!("Failed to create 7-channel resampler: {:?}", e))
                     })?;
                 ResamplerInner::Seven(resampler)
             }
             8 => {
                 let resampler = SincFixedIn::<f32>::new(ratio, 2.0, params, chunk_size, 8)
                     .map_err(|e| {
-                        Error::Runtime(format!(
-                            "Failed to create 8-channel resampler: {:?}",
-                            e
-                        ))
+                        Error::Runtime(format!("Failed to create 8-channel resampler: {:?}", e))
                     })?;
                 ResamplerInner::Eight(resampler)
             }
@@ -162,7 +138,7 @@ impl AudioResampler {
                 return Err(Error::Configuration(format!(
                     "Unsupported channel count: {}. Must be 1-8.",
                     channels
-                )))
+                )));
             }
         };
 

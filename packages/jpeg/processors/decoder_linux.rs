@@ -16,9 +16,7 @@
 
 use crate::_generated_::{EncodedJpegFrame, VideoFrame};
 use crate::color_resolved_to_core_linux::resolved_color_info_to_core;
-use streamlib_plugin_sdk::sdk::context::{
-    RuntimeContextFullAccess, RuntimeContextLimitedAccess,
-};
+use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib_plugin_sdk::sdk::error::{Error, Result};
 
 use vulkan_jpeg::SimpleJpegDecoder;
@@ -170,7 +168,10 @@ mod tests {
         // unset must produce a valid construction — otherwise an empty
         // config (`{}`) would silently fail at setup.
         assert!(DEFAULT_MAX_WIDTH > 0, "DEFAULT_MAX_WIDTH must be non-zero");
-        assert!(DEFAULT_MAX_HEIGHT > 0, "DEFAULT_MAX_HEIGHT must be non-zero");
+        assert!(
+            DEFAULT_MAX_HEIGHT > 0,
+            "DEFAULT_MAX_HEIGHT must be non-zero"
+        );
     }
 
     #[test]

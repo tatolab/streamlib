@@ -799,7 +799,6 @@ impl std::fmt::Debug for VulkanAccelerationStructure {
     }
 }
 
-
 // ---- Internal buffer helper -------------------------------------------------
 
 /// Owning DEVICE_LOCAL buffer with a pre-queried device address. Internal

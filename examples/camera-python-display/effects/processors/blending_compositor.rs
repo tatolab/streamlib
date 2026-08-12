@@ -241,7 +241,9 @@ pub struct BlendingCompositorProcessor {
     backend: Option<GpuBackend>,
 }
 
-impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for BlendingCompositorProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ManualProcessor
+    for BlendingCompositorProcessor::Processor
+{
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.setup_inner(ctx)
     }
@@ -596,7 +598,12 @@ fn compose_one_frame(
     // producer's clock didn't align with ours), reuse the prior
     // tick's resolved layer — see [`LoopState`] for the rationale.
     refresh_layer(gpu_ctx, inputs, "video_in", &mut state.last_video)?;
-    refresh_layer(gpu_ctx, inputs, "lower_third_in", &mut state.last_lower_third)?;
+    refresh_layer(
+        gpu_ctx,
+        inputs,
+        "lower_third_in",
+        &mut state.last_lower_third,
+    )?;
     refresh_layer(gpu_ctx, inputs, "watermark_in", &mut state.last_watermark)?;
     refresh_layer(gpu_ctx, inputs, "pip_in", &mut state.last_pip)?;
 
@@ -680,7 +687,9 @@ fn compose_one_frame(
         } else {
             None
         },
-        output: BlendingOutput { texture: &slot.texture },
+        output: BlendingOutput {
+            texture: &slot.texture,
+        },
         pip_slide_progress,
     })?;
 
@@ -1166,6 +1175,9 @@ mod tests {
 
         state.pip_animation_start = Some(Instant::now() - Duration::from_millis(2000));
         let done = state.pip_slide_progress();
-        assert!((done - 1.0).abs() < 1e-3, "expected 1.0 past duration, got {done}");
+        assert!(
+            (done - 1.0).abs() < 1e-3,
+            "expected 1.0 past duration, got {done}"
+        );
     }
 }

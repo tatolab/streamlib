@@ -128,12 +128,21 @@ pub fn parse_nal_units(data: &[u8]) -> Vec<Vec<u8>> {
 
         // Sanity check: length should be reasonable (< 1MB for a single NAL unit)
         if length > 0 && length < 1_000_000 && length + 4 <= data.len() {
-            tracing::info!("🔍 [NAL Parser] Detected AVCC format H.264 (first NAL length: {}, total data: {} bytes)", length, data.len());
+            tracing::info!(
+                "🔍 [NAL Parser] Detected AVCC format H.264 (first NAL length: {}, total data: {} bytes)",
+                length,
+                data.len()
+            );
             parse_nal_units_avcc(data)
         } else {
             tracing::error!(
                 "❌ [NAL Parser] UNKNOWN H.264 FORMAT! First 4 bytes = {:02x} {:02x} {:02x} {:02x} (interpreted length={}, total data={})",
-                data[0], data[1], data[2], data[3], length, data.len()
+                data[0],
+                data[1],
+                data[2],
+                data[3],
+                length,
+                data.len()
             );
             tracing::error!(
                 "❌ [NAL Parser] This will result in NO NAL units parsed - stream will fail!"

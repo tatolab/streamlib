@@ -1,10 +1,10 @@
 // Copyright (c) 2025 Jonathan Fontanez
 // SPDX-License-Identifier: BUSL-1.1
 
-use crate::_generated_::tatolab__audio::audio_channel_converter_config::Mode;
 use crate::_generated_::AudioFrame;
-use streamlib_plugin_sdk::sdk::error::{Result, Error};
+use crate::_generated_::tatolab__audio::audio_channel_converter_config::Mode;
 use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
 
 #[streamlib_plugin_sdk::sdk::processor(
     "@tatolab/audio/AudioChannelConverter",
@@ -19,7 +19,9 @@ pub struct AudioChannelConverterProcessor {
     frame_counter: u64,
 }
 
-impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for AudioChannelConverterProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor
+    for AudioChannelConverterProcessor::Processor
+{
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!(
             "[AudioChannelConverter] setup() - mode: {:?}",

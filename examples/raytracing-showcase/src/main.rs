@@ -20,41 +20,22 @@ use std::sync::Arc;
 use streamlib::sdk::engine::HostTextureExt;
 
 use anyhow::{Context, Result};
-use streamlib::sdk::rhi::{
-    RayTracingBindingSpec,
-    RayTracingKernelDescriptor,
-    RayTracingPushConstants,
-    RayTracingShaderGroup,
-    RayTracingShaderStageFlags,
-    RayTracingStage,
-    Texture,
-    TextureDescriptor,
-    TextureFormat,
-    TextureReadbackDescriptor,
-    TextureSourceLayout,
-    TextureUsages,
-};
 use streamlib::sdk::engine::host_rhi::{
-    HostVulkanDevice,
-    HostVulkanTexture,
-    TlasInstanceDesc,
-    VulkanAccelerationStructure,
-    VulkanRayTracingKernel,
-    VulkanTextureReadback,
+    HostVulkanDevice, HostVulkanTexture, TlasInstanceDesc, VulkanAccelerationStructure,
+    VulkanRayTracingKernel, VulkanTextureReadback,
+};
+use streamlib::sdk::rhi::{
+    RayTracingBindingSpec, RayTracingKernelDescriptor, RayTracingPushConstants,
+    RayTracingShaderGroup, RayTracingShaderStageFlags, RayTracingStage, Texture, TextureDescriptor,
+    TextureFormat, TextureReadbackDescriptor, TextureSourceLayout, TextureUsages,
 };
 
-const SHOWCASE_RGEN: &[u8] = include_bytes!(concat!(
-    env!("OUT_DIR"),
-    "/raytracing_showcase.rgen.spv"
-));
-const SHOWCASE_RMISS: &[u8] = include_bytes!(concat!(
-    env!("OUT_DIR"),
-    "/raytracing_showcase.rmiss.spv"
-));
-const SHOWCASE_RCHIT: &[u8] = include_bytes!(concat!(
-    env!("OUT_DIR"),
-    "/raytracing_showcase.rchit.spv"
-));
+const SHOWCASE_RGEN: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/raytracing_showcase.rgen.spv"));
+const SHOWCASE_RMISS: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/raytracing_showcase.rmiss.spv"));
+const SHOWCASE_RCHIT: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/raytracing_showcase.rchit.spv"));
 
 const WIDTH: u32 = 1280;
 const HEIGHT: u32 = 720;
@@ -73,8 +54,7 @@ fn main() -> Result<()> {
     let out_dir: PathBuf = std::env::var("RT_SHOWCASE_OUT_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir().join("rt-showcase"));
-    std::fs::create_dir_all(&out_dir)
-        .with_context(|| format!("create output dir {out_dir:?}"))?;
+    std::fs::create_dir_all(&out_dir).with_context(|| format!("create output dir {out_dir:?}"))?;
 
     println!("Ray-tracing showcase");
     println!("  output dir: {}", out_dir.display());
@@ -106,8 +86,7 @@ fn main() -> Result<()> {
         inst.custom_index = 0;
         inst
     }];
-    let tlas =
-        VulkanAccelerationStructure::build_tlas(&device, "showcase-tlas", &tlas_instances)?;
+    let tlas = VulkanAccelerationStructure::build_tlas(&device, "showcase-tlas", &tlas_instances)?;
 
     let texture = HostVulkanTexture::new_device_local(
         &device,
@@ -210,13 +189,13 @@ fn unit_cube() -> (Vec<f32>, Vec<u32>) {
     // Centered unit cube spanning [-0.5, 0.5]³.
     let vertices: Vec<f32> = vec![
         -0.5, -0.5, -0.5, // 0
-         0.5, -0.5, -0.5, // 1
-         0.5,  0.5, -0.5, // 2
-        -0.5,  0.5, -0.5, // 3
-        -0.5, -0.5,  0.5, // 4
-         0.5, -0.5,  0.5, // 5
-         0.5,  0.5,  0.5, // 6
-        -0.5,  0.5,  0.5, // 7
+        0.5, -0.5, -0.5, // 1
+        0.5, 0.5, -0.5, // 2
+        -0.5, 0.5, -0.5, // 3
+        -0.5, -0.5, 0.5, // 4
+        0.5, -0.5, 0.5, // 5
+        0.5, 0.5, 0.5, // 6
+        -0.5, 0.5, 0.5, // 7
     ];
     let indices: Vec<u32> = vec![
         0, 1, 2, 0, 2, 3, // -Z face

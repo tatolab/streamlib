@@ -17,8 +17,8 @@ use streamlib_plugin_sdk::sdk::processors::ManualProcessor;
 use streamlib_plugin_sdk::sdk::rhi::PixelFormat;
 
 use std::io::Read;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 #[streamlib_plugin_sdk::sdk::processor(
     "@tatolab/debug-utilities/BgraFileSource",
@@ -59,9 +59,10 @@ impl ManualProcessor for BgraFileSourceProcessor::Processor {
     }
 
     fn start(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
-        let gpu_context = self.gpu_context.clone().ok_or_else(|| {
-            Error::Configuration("GPU context not initialized".into())
-        })?;
+        let gpu_context = self
+            .gpu_context
+            .clone()
+            .ok_or_else(|| Error::Configuration("GPU context not initialized".into()))?;
 
         let width = self.config.width;
         let height = self.config.height;
@@ -90,9 +91,7 @@ impl ManualProcessor for BgraFileSourceProcessor::Processor {
                     gpu_context,
                 );
             })
-            .map_err(|e| {
-                Error::Configuration(format!("Failed to spawn source thread: {e}"))
-            })?;
+            .map_err(|e| Error::Configuration(format!("Failed to spawn source thread: {e}")))?;
 
         self.source_thread_handle = Some(handle);
         tracing::info!("[BgraFileSource] Streaming started");

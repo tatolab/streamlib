@@ -8,8 +8,8 @@
 // Encoding is handled by upstream H264EncoderProcessor / OpusEncoderProcessor.
 
 use crate::_generated_::{EncodedAudioFrame, EncodedVideoFrame};
-use crate::streaming::{convert_audio_to_sample, convert_video_to_samples};
 use crate::streaming::{WhipClient, WhipConfig};
+use crate::streaming::{convert_audio_to_sample, convert_video_to_samples};
 use std::sync::Arc;
 use streamlib_plugin_sdk::sdk::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
 use streamlib_plugin_sdk::sdk::error::{Error, Result};
@@ -227,9 +227,10 @@ impl WebRtcWhipProcessor::Processor {
         let fps = self.config.video.fps;
         let samples = convert_video_to_samples(encoded, fps)?;
 
-        let sender = self.whip_client_message_sender.as_ref().ok_or_else(|| {
-            Error::Runtime("WHIP client channel not initialized".into())
-        })?;
+        let sender = self
+            .whip_client_message_sender
+            .as_ref()
+            .ok_or_else(|| Error::Runtime("WHIP client channel not initialized".into()))?;
 
         for sample in samples {
             match sender.try_send(WhipClientMessage::VideoSample(sample)) {
@@ -254,9 +255,10 @@ impl WebRtcWhipProcessor::Processor {
 
         let sample = convert_audio_to_sample(encoded, self.config.audio.sample_rate)?;
 
-        let sender = self.whip_client_message_sender.as_ref().ok_or_else(|| {
-            Error::Runtime("WHIP client channel not initialized".into())
-        })?;
+        let sender = self
+            .whip_client_message_sender
+            .as_ref()
+            .ok_or_else(|| Error::Runtime("WHIP client channel not initialized".into()))?;
 
         match sender.try_send(WhipClientMessage::AudioSample(sample)) {
             Ok(()) => {}

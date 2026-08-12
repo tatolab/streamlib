@@ -116,7 +116,9 @@ pub struct CameraToCudaCopyProcessor {
     frame_count: AtomicU64,
 }
 
-impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for CameraToCudaCopyProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor
+    for CameraToCudaCopyProcessor::Processor
+{
     fn setup(&mut self, ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         self.setup_inner(ctx)
     }

@@ -13,7 +13,6 @@
 
 use std::ffi::c_void;
 
-
 use super::texture::Texture;
 
 /// Rich data backing a [`CommandBuffer`], held behind the opaque handle.

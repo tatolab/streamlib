@@ -15,7 +15,6 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-
 use crate::core::error::Result;
 use crate::core::pubsub::{Event, PUBSUB, RuntimeEvent};
 
@@ -153,5 +152,4 @@ mod tests {
             );
         });
     }
-
 }

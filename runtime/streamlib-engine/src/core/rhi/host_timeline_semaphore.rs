@@ -68,7 +68,9 @@ impl Clone for HostTimelineSemaphore {
             // SAFETY: `handle` is `Arc::into_raw(Arc<HostVulkanTimelineSemaphore>)`
             // (see `from_arc`); balanced by the Drop impl below.
             unsafe {
-                Arc::increment_strong_count(self.handle as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore);
+                Arc::increment_strong_count(
+                    self.handle as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore,
+                );
             }
         }
         Self {
@@ -84,7 +86,9 @@ impl Drop for HostTimelineSemaphore {
             // SAFETY: matched with the `Arc::into_raw` in `from_arc`
             // and any `Clone` increment.
             unsafe {
-                Arc::decrement_strong_count(self.handle as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore);
+                Arc::decrement_strong_count(
+                    self.handle as *const crate::vulkan::rhi::HostVulkanTimelineSemaphore,
+                );
             }
         }
     }
@@ -100,7 +104,6 @@ impl std::fmt::Debug for HostTimelineSemaphore {
 #[cfg(all(test, target_pointer_width = "64", target_os = "linux"))]
 mod layout_tests {
     use super::*;
-    
 
     #[test]
     fn host_timeline_semaphore_is_send_sync() {

@@ -32,11 +32,14 @@ the drifted dir. This is the enforcement behind the verbatim-copy
 contract; prose alone cannot stop a routine workspace `cargo fmt --all`
 sweep from rewriting vendored sources (`cargo fmt --check` already
 disagrees with the vendored formatting, and no stable rustfmt exclusion
-mechanism exists — `rustfmt.toml`'s `ignore` is nightly-only). There is
-no `cargo fmt` CI gate today; if one is ever added it must skip the
-three vendored dirs explicitly (e.g. run `cargo fmt -p <crate>` on
-non-vendored members), with this hash guard as the backstop. Workspace
-fmt sweeps must exclude `vendor/tatolab-vulkanalia*`.
+mechanism exists — `rustfmt.toml`'s `ignore` is nightly-only). So the
+`.lefthook.yml` pre-commit `format` gate does not run `cargo fmt --all`:
+it derives its package list from `cargo metadata` and drops every member
+whose manifest lives under `vendor/`, which keeps a new workspace member
+covered without editing the hook. This hash guard is the backstop. No CI
+workflow runs `cargo fmt`; one added later must skip the three vendored
+dirs the same way. Workspace fmt sweeps must exclude
+`vendor/tatolab-vulkanalia*`.
 
 ## License
 

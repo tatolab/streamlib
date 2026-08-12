@@ -62,9 +62,7 @@ pub use utils::*;
 // crossing — items not listed here stay engine-internal.
 //
 // Home / data-dir resolution:
-pub use streamlib_home::{
-    get_streamlib_data_dir, get_streamlib_home, get_uv_cache_dir,
-};
+pub use streamlib_home::{get_streamlib_data_dir, get_streamlib_home, get_uv_cache_dir};
 
 /// The framed-IPC transport a helper process is driven over.
 ///

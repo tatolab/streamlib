@@ -3,11 +3,12 @@
 
 use crate::_generated_::{AudioFrame, VideoFrame};
 use crate::core::{
-    sync::DEFAULT_SYNC_TOLERANCE_MS, GpuContextLimitedAccess, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess, Error,
+    Error, GpuContextLimitedAccess, Result, RuntimeContextFullAccess, RuntimeContextLimitedAccess,
+    sync::DEFAULT_SYNC_TOLERANCE_MS,
 };
 use objc2::rc::Retained;
 use objc2::runtime::AnyObject;
-use objc2::{msg_send, ClassType};
+use objc2::{ClassType, msg_send};
 use objc2_av_foundation::{
     AVAssetWriter, AVAssetWriterInput, AVAssetWriterInputPixelBufferAdaptor,
 };
@@ -101,7 +102,8 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
             self.gpu_context = Some(ctx.gpu_limited_access().clone());
 
             // Initialize GPU-accelerated pixel transfer (RGBA → NV12) using RHI device
-            let pixel_transfer = crate::apple::PixelTransferSession::new(ctx.gpu_full_access().device().clone())?;
+            let pixel_transfer =
+                crate::apple::PixelTransferSession::new(ctx.gpu_full_access().device().clone())?;
             self.pixel_transfer = Some(pixel_transfer);
 
             // AVAssetWriter initialization will happen in process() on first frame
@@ -153,9 +155,10 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
             }
 
             // Start the writing session (all inputs configured)
-            let writer = self.writer.as_ref().ok_or_else(|| {
-                Error::Configuration("AVAssetWriter not initialized".into())
-            })?;
+            let writer = self
+                .writer
+                .as_ref()
+                .ok_or_else(|| Error::Configuration("AVAssetWriter not initialized".into()))?;
 
             info!("🎬 STARTING AVAssetWriter session...");
             let started = unsafe { writer.startWriting() };
@@ -254,9 +257,7 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
             let sample_count = audio.samples.len() / audio.channels as usize;
             trace!(
                 "Processing audio frame: timestamp_ns={}, sample_count={}, channels={}",
-                audio_timestamp_ns,
-                sample_count,
-                audio.channels
+                audio_timestamp_ns, sample_count, audio.channels
             );
 
             // IMPORTANT: Check for new video frame for EACH audio frame
@@ -321,10 +322,7 @@ impl crate::core::ReactiveProcessor for AppleMp4WriterProcessor::Processor {
                     let mut video_to_write = last_video.clone();
                     video_to_write.timestamp_ns = video_relative_ns.to_string();
 
-                    debug!(
-                        "Writing video: relative_ts={:.6}s",
-                        video_timestamp_s
-                    );
+                    debug!("Writing video: relative_ts={:.6}s", video_timestamp_s);
 
                     self.write_video_frame(&video_to_write)?;
                     self.last_written_video_timestamp_ns = Some(video_timestamp_ns);
@@ -397,9 +395,8 @@ impl AppleMp4WriterProcessor::Processor {
 
         // SAFETY: We just created this pointer on the main thread
         let writer = unsafe {
-            Retained::retain(writer_ptr as *mut AVAssetWriter).ok_or_else(|| {
-                Error::Configuration("Failed to retain AVAssetWriter".into())
-            })?
+            Retained::retain(writer_ptr as *mut AVAssetWriter)
+                .ok_or_else(|| Error::Configuration("Failed to retain AVAssetWriter".into()))?
         };
 
         self.writer = Some(writer);
@@ -780,9 +777,10 @@ impl AppleMp4WriterProcessor::Processor {
             && !self.start_time_set
             && !self.writer_failed
         {
-            let writer = self.writer.as_ref().ok_or_else(|| {
-                Error::Configuration("AVAssetWriter not initialized".into())
-            })?;
+            let writer = self
+                .writer
+                .as_ref()
+                .ok_or_else(|| Error::Configuration("AVAssetWriter not initialized".into()))?;
 
             info!("Both audio and video inputs configured, starting AVAssetWriter session...");
 
@@ -852,9 +850,10 @@ impl AppleMp4WriterProcessor::Processor {
     }
 
     fn write_video_frame(&self, frame: &VideoFrame) -> Result<()> {
-        let pixel_buffer_adaptor = self.pixel_buffer_adaptor.as_ref().ok_or_else(|| {
-            Error::Configuration("Pixel buffer adaptor not initialized".into())
-        })?;
+        let pixel_buffer_adaptor = self
+            .pixel_buffer_adaptor
+            .as_ref()
+            .ok_or_else(|| Error::Configuration("Pixel buffer adaptor not initialized".into()))?;
 
         let video_input = self
             .video_input
@@ -868,9 +867,10 @@ impl AppleMp4WriterProcessor::Processor {
             return Ok(());
         }
 
-        let pixel_transfer = self.pixel_transfer.as_ref().ok_or_else(|| {
-            Error::Configuration("PixelTransferSession not initialized".into())
-        })?;
+        let pixel_transfer = self
+            .pixel_transfer
+            .as_ref()
+            .ok_or_else(|| Error::Configuration("PixelTransferSession not initialized".into()))?;
 
         let gpu_context = self
             .gpu_context
@@ -933,9 +933,14 @@ impl AppleMp4WriterProcessor::Processor {
         let num_channels = frame.channels as usize;
         let num_samples_per_channel = total_samples / num_channels;
 
-        info!("Writing audio frame: sample_rate={}, channels={}, total_samples={}, num_frames={}, duration_ms={:.2}",
-            frame.sample_rate, num_channels, total_samples, num_samples_per_channel,
-            (num_samples_per_channel as f64 / frame.sample_rate as f64) * 1000.0);
+        info!(
+            "Writing audio frame: sample_rate={}, channels={}, total_samples={}, num_frames={}, duration_ms={:.2}",
+            frame.sample_rate,
+            num_channels,
+            total_samples,
+            num_samples_per_channel,
+            (num_samples_per_channel as f64 / frame.sample_rate as f64) * 1000.0
+        );
         let mut pcm_data: Vec<i16> = Vec::with_capacity(total_samples);
 
         for sample in frame.samples.iter() {
@@ -952,9 +957,8 @@ impl AppleMp4WriterProcessor::Processor {
         use std::ptr::NonNull;
 
         let mut block_buffer_ptr: *mut CMBlockBuffer = std::ptr::null_mut();
-        let block_buffer_out = NonNull::new(&mut block_buffer_ptr as *mut _).ok_or_else(|| {
-            Error::GpuError("Failed to create NonNull for block buffer".into())
-        })?;
+        let block_buffer_out = NonNull::new(&mut block_buffer_ptr as *mut _)
+            .ok_or_else(|| Error::GpuError("Failed to create NonNull for block buffer".into()))?;
 
         // Create CMBlockBuffer that allocates its own memory and copies our data
         let status = unsafe {
@@ -1026,10 +1030,8 @@ impl AppleMp4WriterProcessor::Processor {
         use objc2_core_media::CMSampleBuffer;
 
         let mut sample_buffer_ptr: *mut CMSampleBuffer = std::ptr::null_mut();
-        let _sample_buffer_out =
-            NonNull::new(&mut sample_buffer_ptr as *mut _).ok_or_else(|| {
-                Error::GpuError("Failed to create NonNull for sample buffer".into())
-            })?;
+        let _sample_buffer_out = NonNull::new(&mut sample_buffer_ptr as *mut _)
+            .ok_or_else(|| Error::GpuError("Failed to create NonNull for sample buffer".into()))?;
 
         // We need to use CMAudioSampleBufferCreateWithPacketDescriptions
         // But first we need the format description which is already set in the audio input
@@ -1160,9 +1162,14 @@ impl AppleMp4WriterProcessor::Processor {
                 .ok_or_else(|| Error::GpuError("Sample buffer is null".into()))?
         };
 
-        trace!("Appending audio to AVAssetWriter: timestamp={}ns ({:.6}s), samples={}, channels={}, rate={}Hz",
-            timestamp_ns, timestamp_ns as f64 / 1_000_000_000.0,
-            num_samples_per_channel, num_channels, frame.sample_rate);
+        trace!(
+            "Appending audio to AVAssetWriter: timestamp={}ns ({:.6}s), samples={}, channels={}, rate={}Hz",
+            timestamp_ns,
+            timestamp_ns as f64 / 1_000_000_000.0,
+            num_samples_per_channel,
+            num_channels,
+            frame.sample_rate
+        );
 
         // Append to audio input
         let success = unsafe { audio_input.appendSampleBuffer(&sample_buffer) };

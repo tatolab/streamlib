@@ -18,7 +18,6 @@
 // to `submit_texture`, which resolves the encode-src image view host-side —
 // no `host_vulkan_texture_arc` / raw-view bridge in the cdylib.
 
-
 use crate::_generated_::{EncodedVideoFrame, VideoFrame};
 use crate::color_vui_translate_linux::color_info_to_h273_repr;
 use streamlib_plugin_sdk::sdk::context::{
@@ -119,7 +118,11 @@ impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for H264EncoderPro
             .ok_or_else(|| Error::Runtime("H.264 encoder session not initialized".into()))?;
 
         let packet_count = session
-            .submit_texture(&texture, VulkanLayout::SHADER_READ_ONLY_OPTIMAL, timestamp_ns)
+            .submit_texture(
+                &texture,
+                VulkanLayout::SHADER_READ_ONLY_OPTIMAL,
+                timestamp_ns,
+            )
             .map_err(|e| Error::Runtime(format!("H.264 encode failed: {e}")))?;
 
         for index in 0..packet_count {
@@ -143,7 +146,10 @@ impl streamlib_plugin_sdk::sdk::processors::ReactiveProcessor for H264EncoderPro
         if self.frames_encoded == 1 {
             tracing::info!("[H264Encoder] First frame encoded");
         } else if self.frames_encoded % 300 == 0 {
-            tracing::info!(frames = self.frames_encoded, "[H264Encoder] Encode progress");
+            tracing::info!(
+                frames = self.frames_encoded,
+                "[H264Encoder] Encode progress"
+            );
         }
 
         Ok(())
@@ -308,8 +314,7 @@ mod tests {
 
     #[test]
     fn frame_fps_falls_back_to_config_then_default() {
-        let (_, _, fps_from_config) =
-            select_encoder_dims(None, None, Some(24), 1280, 720, None);
+        let (_, _, fps_from_config) = select_encoder_dims(None, None, Some(24), 1280, 720, None);
         assert_eq!(fps_from_config, 24);
 
         let (_, _, fps_default) = select_encoder_dims(None, None, None, 1280, 720, None);

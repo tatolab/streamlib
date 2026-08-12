@@ -31,7 +31,6 @@ use vulkanalia_vma as vma;
 
 use std::ffi::c_void;
 
-
 use crate::core::rhi::{
     RayTracingBindingKind, RayTracingBindingSpec, RayTracingKernelDescriptor,
     RayTracingShaderGroup, RayTracingShaderStage, RayTracingShaderStageFlags, RayTracingStage,
@@ -1067,7 +1066,6 @@ impl std::fmt::Debug for VulkanRayTracingKernel {
 #[cfg(all(test, target_pointer_width = "64"))]
 mod plugin_abi_object_layout_tests {
     use super::*;
-    
 
     #[test]
     fn vulkan_ray_tracing_kernel_is_send_sync() {

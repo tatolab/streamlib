@@ -14,7 +14,6 @@ use std::ffi::c_void;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-
 use crate::core::context::GpuContext;
 use crate::core::rhi::{Texture, TextureFormat};
 
@@ -575,7 +574,6 @@ impl std::fmt::Debug for TextureRing {
 mod layout_tests {
     use super::*;
     use core::mem::{align_of, offset_of, size_of};
-
 
     #[test]
     fn texture_ring_slot_surface_id_max_bytes_constant() {

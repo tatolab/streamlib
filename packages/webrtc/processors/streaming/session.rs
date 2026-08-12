@@ -91,9 +91,7 @@ impl WebRtcSession {
                 },
                 webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video,
             )
-            .map_err(|e| {
-                Error::Configuration(format!("Failed to register H.264 codec: {}", e))
-            })?;
+            .map_err(|e| Error::Configuration(format!("Failed to register H.264 codec: {}", e)))?;
 
         // Register Opus audio codec
         media_engine
@@ -111,9 +109,7 @@ impl WebRtcSession {
                 },
                 webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Audio,
             )
-            .map_err(|e| {
-                Error::Configuration(format!("Failed to register Opus codec: {}", e))
-            })?;
+            .map_err(|e| Error::Configuration(format!("Failed to register Opus codec: {}", e)))?;
 
         tracing::info!("[WebRTC] Registered ONLY H.264 (PT=102) and Opus (PT=111) codecs");
 
@@ -125,9 +121,7 @@ impl WebRtcSession {
             registry,
             &mut media_engine,
         )
-        .map_err(|e| {
-            Error::Configuration(format!("Failed to register interceptors: {}", e))
-        })?;
+        .map_err(|e| Error::Configuration(format!("Failed to register interceptors: {}", e)))?;
 
         tracing::debug!("[WebRTC] Creating WebRTC API...");
 
@@ -281,13 +275,15 @@ impl WebRtcSession {
 
         // Log all codec parameters
         for (idx, codec) in video_params.rtp_parameters.codecs.iter().enumerate() {
-            tracing::info!("[TELEMETRY:VIDEO_CODEC_{}] mime_type={}, pt={}, clock_rate={}, channels={}, fmtp='{}'",
+            tracing::info!(
+                "[TELEMETRY:VIDEO_CODEC_{}] mime_type={}, pt={}, clock_rate={}, channels={}, fmtp='{}'",
                 idx,
                 codec.capability.mime_type,
                 codec.payload_type,
                 codec.capability.clock_rate,
                 codec.capability.channels,
-                codec.capability.sdp_fmtp_line);
+                codec.capability.sdp_fmtp_line
+            );
         }
 
         // Log encoding parameters
@@ -328,13 +324,15 @@ impl WebRtcSession {
 
         // Log all codec parameters
         for (idx, codec) in audio_params.rtp_parameters.codecs.iter().enumerate() {
-            tracing::info!("[TELEMETRY:AUDIO_CODEC_{}] mime_type={}, pt={}, clock_rate={}, channels={}, fmtp='{}'",
+            tracing::info!(
+                "[TELEMETRY:AUDIO_CODEC_{}] mime_type={}, pt={}, clock_rate={}, channels={}, fmtp='{}'",
                 idx,
                 codec.capability.mime_type,
                 codec.payload_type,
                 codec.capability.clock_rate,
                 codec.capability.channels,
-                codec.capability.sdp_fmtp_line);
+                codec.capability.sdp_fmtp_line
+            );
         }
 
         // Log encoding parameters
@@ -412,9 +410,7 @@ impl WebRtcSession {
                 },
                 webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video,
             )
-            .map_err(|e| {
-                Error::Configuration(format!("Failed to register H.264 codec: {}", e))
-            })?;
+            .map_err(|e| Error::Configuration(format!("Failed to register H.264 codec: {}", e)))?;
 
         // Register Opus audio codec (same as WHIP)
         media_engine
@@ -432,9 +428,7 @@ impl WebRtcSession {
                 },
                 webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Audio,
             )
-            .map_err(|e| {
-                Error::Configuration(format!("Failed to register Opus codec: {}", e))
-            })?;
+            .map_err(|e| Error::Configuration(format!("Failed to register Opus codec: {}", e)))?;
 
         tracing::info!(
             "[WebRTC WHEP] Registered H.264 (PT=102) and Opus (PT=111) codecs for receive"
@@ -446,9 +440,7 @@ impl WebRtcSession {
             registry,
             &mut media_engine,
         )
-        .map_err(|e| {
-            Error::Configuration(format!("Failed to register interceptors: {}", e))
-        })?;
+        .map_err(|e| Error::Configuration(format!("Failed to register interceptors: {}", e)))?;
 
         // Create API with MediaEngine and InterceptorRegistry
         let api = webrtc::api::APIBuilder::new()
@@ -716,9 +708,7 @@ impl WebRtcSession {
         self.peer_connection
             .set_remote_description(answer)
             .await
-            .map_err(|e| {
-                Error::Runtime(format!("Failed to set remote description: {}", e))
-            })?;
+            .map_err(|e| Error::Runtime(format!("Failed to set remote description: {}", e)))?;
 
         tracing::debug!("[WebRTC {}] Remote SDP answer set successfully", mode_str);
 
@@ -876,14 +866,8 @@ impl WebRtcSession {
             1 => tracing::trace!("[H264] Sample {}: Coded slice (non-IDR)", sample_idx),
             5 => tracing::info!("[H264] Sample {}: IDR (keyframe)", sample_idx),
             6 => tracing::trace!("[H264] Sample {}: SEI", sample_idx),
-            7 => tracing::info!(
-                "[H264] Sample {}: SPS (Sequence Parameter Set)",
-                sample_idx
-            ),
-            8 => tracing::info!(
-                "[H264] Sample {}: PPS (Picture Parameter Set)",
-                sample_idx
-            ),
+            7 => tracing::info!("[H264] Sample {}: SPS (Sequence Parameter Set)", sample_idx),
+            8 => tracing::info!("[H264] Sample {}: PPS (Picture Parameter Set)", sample_idx),
             9 => tracing::trace!("[H264] Sample {}: AUD (Access Unit Delimiter)", sample_idx),
             _ => tracing::debug!("[H264] Sample {}: NAL type {}", sample_idx, nal_unit_type),
         }
@@ -981,13 +965,17 @@ impl WebRtcSession {
                 };
 
                 tokio_handle.block_on(async {
-                    track.write_rtp(&rtp_packet).await.map_err(|e| {
-                        Error::Runtime(format!("Failed to write video RTP: {}", e))
-                    })
+                    track
+                        .write_rtp(&rtp_packet)
+                        .await
+                        .map_err(|e| Error::Runtime(format!("Failed to write video RTP: {}", e)))
                 })?;
 
                 if counter == 0 && i == 0 {
-                    tracing::info!("[WebRTC] Successfully wrote first video RTP packet (Single NAL, {} bytes)", sample.data.len());
+                    tracing::info!(
+                        "[WebRTC] Successfully wrote first video RTP packet (Single NAL, {} bytes)",
+                        sample.data.len()
+                    );
                 } else if counter.is_multiple_of(30) && i == 0 {
                     tracing::info!(
                         "[WebRTC] Video RTP packet #{} sent (Single NAL, {} bytes)",
@@ -1053,9 +1041,11 @@ impl WebRtcSession {
                     })?;
 
                     if counter == 0 && i == 0 && frag_count == 0 {
-                        tracing::info!("[WebRTC] Successfully wrote first video RTP packet (FU-A mode, NAL size {} bytes, fragments ~{})",
+                        tracing::info!(
+                            "[WebRTC] Successfully wrote first video RTP packet (FU-A mode, NAL size {} bytes, fragments ~{})",
                             sample.data.len(),
-                            sample.data.len().div_ceil(MAX_PAYLOAD_SIZE));
+                            sample.data.len().div_ceil(MAX_PAYLOAD_SIZE)
+                        );
                     } else if counter.is_multiple_of(30) && i == 0 && frag_count == 0 {
                         tracing::info!(
                             "[WebRTC] Video RTP packet #{} sent (FU-A mode, NAL size {} bytes)",

@@ -15,13 +15,13 @@
 // EncodedJpegFrame — most notably @tatolab/jpeg::JpegDecoder.
 
 use crate::_generated_::EncodedJpegFrame;
+use streamlib_plugin_sdk::sdk::context::RuntimeContextFullAccess;
 use streamlib_plugin_sdk::sdk::error::{Error, Result};
 use streamlib_plugin_sdk::sdk::iceoryx2::OutputWriter;
 use streamlib_plugin_sdk::sdk::processors::ManualProcessor;
-use streamlib_plugin_sdk::sdk::context::RuntimeContextFullAccess;
 
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 const DEFAULT_FPS: u32 = 10;
 
@@ -85,21 +85,18 @@ impl ManualProcessor for JpegBytesSourceProcessor::Processor {
         let handle = std::thread::Builder::new()
             .name("jpeg-bytes-source".into())
             .spawn(move || {
-                source_thread_loop(
-                    bytes,
-                    fps,
-                    frame_count,
-                    is_running,
-                    frame_counter,
-                    outputs,
-                );
+                source_thread_loop(bytes, fps, frame_count, is_running, frame_counter, outputs);
             })
             .map_err(|e| {
                 Error::Configuration(format!("JpegBytesSource: failed to spawn thread: {e}"))
             })?;
 
         self.source_thread_handle = Some(handle);
-        tracing::info!(fps = fps, frame_count = frame_count, "[JpegBytesSource] Started");
+        tracing::info!(
+            fps = fps,
+            frame_count = frame_count,
+            "[JpegBytesSource] Started"
+        );
         Ok(())
     }
 

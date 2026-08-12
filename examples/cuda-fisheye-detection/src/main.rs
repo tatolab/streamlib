@@ -171,11 +171,8 @@ fn main() -> Result<()> {
     ))?;
     println!("+ BgraFileSource: {source}");
 
-    let undistort_ident = processor_type_ref!(
-        "tatolab",
-        "cuda-fisheye-python",
-        "CudaFisheyeUndistortion"
-    );
+    let undistort_ident =
+        processor_type_ref!("tatolab", "cuda-fisheye-python", "CudaFisheyeUndistortion");
     let reference_path = cache_subpath("warped-reference.rgba").map_err(Error::Configuration)?;
     let stages_dir = output_png
         .parent()

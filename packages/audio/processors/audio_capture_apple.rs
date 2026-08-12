@@ -5,10 +5,10 @@
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Device, Stream, StreamConfig};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
-use streamlib_plugin_sdk::sdk::error::{Result, Error};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use streamlib_plugin_sdk::sdk::context::RuntimeContextFullAccess;
+use streamlib_plugin_sdk::sdk::error::{Error, Result};
 use streamlib_plugin_sdk::sdk::iceoryx2::OutputWriter;
 
 #[derive(Debug, Clone)]
@@ -37,7 +37,9 @@ pub struct AppleAudioCaptureProcessor {
     stream_setup_done: bool,
 }
 
-impl streamlib_plugin_sdk::sdk::processors::ManualProcessor for AppleAudioCaptureProcessor::Processor {
+impl streamlib_plugin_sdk::sdk::processors::ManualProcessor
+    for AppleAudioCaptureProcessor::Processor
+{
     fn setup(&mut self, _ctx: &RuntimeContextFullAccess<'_>) -> Result<()> {
         tracing::info!("[AudioCapture] setup() called - will set up stream in process()");
         self.stream_setup_done = false;
@@ -86,10 +88,7 @@ impl AppleAudioCaptureProcessor::Processor {
             let devices: Vec<Device> = host
                 .input_devices()
                 .map_err(|e| {
-                    Error::Configuration(format!(
-                        "Failed to enumerate audio input devices: {}",
-                        e
-                    ))
+                    Error::Configuration(format!("Failed to enumerate audio input devices: {}", e))
                 })?
                 .collect();
 
@@ -117,9 +116,9 @@ impl AppleAudioCaptureProcessor::Processor {
             .name()
             .unwrap_or_else(|_| "Unknown Device".to_string());
 
-        let default_config = device.default_input_config().map_err(|e| {
-            Error::Configuration(format!("Failed to get audio config: {}", e))
-        })?;
+        let default_config = device
+            .default_input_config()
+            .map_err(|e| Error::Configuration(format!("Failed to get audio config: {}", e)))?;
 
         let device_sample_rate = default_config.sample_rate().0;
         let device_channels = default_config.channels();
@@ -190,15 +189,13 @@ impl AppleAudioCaptureProcessor::Processor {
                 },
                 None,
             )
-            .map_err(|e| {
-                Error::Configuration(format!("Failed to build audio stream: {}", e))
-            })?;
+            .map_err(|e| Error::Configuration(format!("Failed to build audio stream: {}", e)))?;
 
         tracing::info!("[AudioCapture] Starting stream...");
 
-        stream.play().map_err(|e| {
-            Error::Configuration(format!("Failed to start audio stream: {}", e))
-        })?;
+        stream
+            .play()
+            .map_err(|e| Error::Configuration(format!("Failed to start audio stream: {}", e)))?;
 
         self.is_capturing.store(true, Ordering::Relaxed);
         tracing::info!(
@@ -222,10 +219,7 @@ impl AppleAudioCaptureProcessor::Processor {
         let devices: Result<Vec<AppleAudioInputDevice>> = host
             .input_devices()
             .map_err(|e| {
-                Error::Configuration(format!(
-                    "Failed to enumerate audio input devices: {}",
-                    e
-                ))
+                Error::Configuration(format!("Failed to enumerate audio input devices: {}", e))
             })?
             .enumerate()
             .filter_map(|(id, device)| {

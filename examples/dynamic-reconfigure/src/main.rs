@@ -98,7 +98,11 @@ fn main() -> Result<()> {
                 // Splice IN: camera → forwarder → display, live. The reactive
                 // forwarder pumps every frame, so the display keeps delivering
                 // live video through the spliced path (live→live, no freeze).
-                println!("  ↳ cycle {}/{}: splicing forwarder IN", cycles_done + 1, total_cycles);
+                println!(
+                    "  ↳ cycle {}/{}: splicing forwarder IN",
+                    cycles_done + 1,
+                    total_cycles
+                );
                 let link = direct_link
                     .take()
                     .expect("direct link present while un-spliced");
@@ -120,7 +124,11 @@ fn main() -> Result<()> {
             }
             Some((forwarder, cam_to_fwd, fwd_to_disp)) => {
                 // Splice OUT: restore camera → display direct, live.
-                println!("  ↳ cycle {}/{}: splicing forwarder OUT", cycles_done + 1, total_cycles);
+                println!(
+                    "  ↳ cycle {}/{}: splicing forwarder OUT",
+                    cycles_done + 1,
+                    total_cycles
+                );
                 started_runtime.disconnect(&cam_to_fwd)?;
                 started_runtime.disconnect(&fwd_to_disp)?;
                 started_runtime.remove_processor(&forwarder)?;

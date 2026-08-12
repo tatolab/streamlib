@@ -108,10 +108,7 @@ impl WhepClient {
             rustls::crypto::ring::default_provider()
                 .install_default()
                 .map_err(|e| {
-                    Error::Runtime(format!(
-                        "Failed to install rustls crypto provider: {:?}",
-                        e
-                    ))
+                    Error::Runtime(format!("Failed to install rustls crypto provider: {:?}", e))
                 })?;
         }
 
@@ -251,9 +248,7 @@ impl WhepClient {
                 },
                 webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Video,
             )
-            .map_err(|e| {
-                Error::Configuration(format!("Failed to register H.264 codec: {}", e))
-            })?;
+            .map_err(|e| Error::Configuration(format!("Failed to register H.264 codec: {}", e)))?;
 
         // Register Opus audio codec
         media_engine
@@ -271,9 +266,7 @@ impl WhepClient {
                 },
                 webrtc::rtp_transceiver::rtp_codec::RTPCodecType::Audio,
             )
-            .map_err(|e| {
-                Error::Configuration(format!("Failed to register Opus codec: {}", e))
-            })?;
+            .map_err(|e| Error::Configuration(format!("Failed to register Opus codec: {}", e)))?;
 
         tracing::info!("[WhepClient] Registered H.264 (PT=102) and Opus (PT=111) codecs");
 
@@ -283,9 +276,7 @@ impl WhepClient {
             registry,
             &mut media_engine,
         )
-        .map_err(|e| {
-            Error::Configuration(format!("Failed to register interceptors: {}", e))
-        })?;
+        .map_err(|e| Error::Configuration(format!("Failed to register interceptors: {}", e)))?;
 
         // Create API
         let api = webrtc::api::APIBuilder::new()
@@ -456,9 +447,7 @@ impl WhepClient {
         peer_connection
             .set_remote_description(answer)
             .await
-            .map_err(|e| {
-                Error::Runtime(format!("Failed to set remote description: {}", e))
-            })?;
+            .map_err(|e| Error::Runtime(format!("Failed to set remote description: {}", e)))?;
 
         Ok(())
     }
@@ -499,7 +488,7 @@ impl WhepClient {
     /// POSTs SDP offer to WHEP endpoint.
     async fn post_offer(&mut self, sdp_offer: &str) -> Result<String> {
         use http_body_util::{BodyExt, Full};
-        use hyper::{header, Request, StatusCode};
+        use hyper::{Request, StatusCode, header};
 
         let body = Full::new(bytes::Bytes::from(sdp_offer.to_owned()));
         let boxed_body = body.map_err(|never| match never {}).boxed();
@@ -547,10 +536,7 @@ impl WhepClient {
                     .get(header::LOCATION)
                     .and_then(|v| v.to_str().ok())
                     .ok_or_else(|| {
-                        Error::Runtime(format!(
-                            "WHEP {} without Location header",
-                            status.as_u16()
-                        ))
+                        Error::Runtime(format!("WHEP {} without Location header", status.as_u16()))
                     })?;
 
                 // Convert relative to absolute URL
@@ -591,7 +577,7 @@ impl WhepClient {
     /// Sends pending ICE candidates via PATCH.
     async fn send_ice_candidates(&mut self) -> Result<()> {
         use http_body_util::{BodyExt, Full};
-        use hyper::{header, Request, StatusCode};
+        use hyper::{Request, StatusCode, header};
 
         let session_url = match &self.session_url {
             Some(url) => url.clone(),
@@ -649,10 +635,7 @@ impl WhepClient {
                     .ok()
                     .and_then(|b| String::from_utf8(b.to_bytes().to_vec()).ok())
                     .unwrap_or_else(|| format!("HTTP {}", status));
-                Err(Error::Runtime(format!(
-                    "WHEP PATCH failed: {}",
-                    body_bytes
-                )))
+                Err(Error::Runtime(format!("WHEP PATCH failed: {}", body_bytes)))
             }
         }
     }
@@ -710,7 +693,7 @@ impl WhepClient {
     /// Sends DELETE request to terminate WHEP session.
     async fn send_delete(&self, session_url: &str) -> Result<()> {
         use http_body_util::{BodyExt, Empty};
-        use hyper::{header, Request};
+        use hyper::{Request, header};
 
         let body = Empty::<bytes::Bytes>::new();
         let boxed_body = body.map_err(|never| match never {}).boxed();

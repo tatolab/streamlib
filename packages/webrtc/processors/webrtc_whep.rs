@@ -134,7 +134,8 @@ impl ManualProcessor for WebRtcWhepProcessor::Processor {
             .ok_or_else(|| Error::Runtime("tokio runtime not initialized in setup()".into()))?;
 
         tokio_handle.spawn(async move {
-            run_whep_receive_loop(video_rx, audio_rx, outputs, audio_sample_rate, shutdown_rx).await;
+            run_whep_receive_loop(video_rx, audio_rx, outputs, audio_sample_rate, shutdown_rx)
+                .await;
         });
 
         tracing::info!("[WebRtcWhep] Started async receive loop");

@@ -1238,7 +1238,9 @@ mod tests {
     /// `vulkan_command_recorder::tests::dynamic_rendering_balance_tracks_open_then_close`.
     #[test]
     fn end_frame_closes_open_dynamic_rendering_before_present_barrier() {
-        use PresentEndFramePostDrawOp::{CloseOpenDynamicRenderingPass, RecordSwapchainPresentBarrier};
+        use PresentEndFramePostDrawOp::{
+            CloseOpenDynamicRenderingPass, RecordSwapchainPresentBarrier,
+        };
 
         // Pass left open: close precedes the present barrier.
         assert_eq!(
@@ -1356,7 +1358,6 @@ mod tests {
     fn max_frames_in_flight_is_two() {
         assert_eq!(MAX_FRAMES_IN_FLIGHT, 2);
     }
-
 
     /// `PresentTarget` is deliberately NOT `Clone` — the backing
     /// `VulkanPresentTarget` is single-owner `Drop`-heavy.

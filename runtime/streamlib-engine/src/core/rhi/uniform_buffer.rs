@@ -11,7 +11,6 @@ use std::ffi::c_void;
 #[cfg(target_os = "linux")]
 use std::sync::Arc;
 
-
 /// Uniform buffer for per-draw / per-dispatch shader parameters.
 ///
 /// Linux-only — UBO allocation rides the Vulkan RHI path. Kernels
@@ -90,7 +89,9 @@ impl Clone for UniformBuffer {
             // SAFETY: `handle` is `Arc::into_raw(Arc<crate::vulkan::rhi::HostVulkanBuffer>)`
             // (see `from_arc_into_raw`); balanced by the Drop impl below.
             unsafe {
-                Arc::increment_strong_count(self.handle as *const crate::vulkan::rhi::HostVulkanBuffer);
+                Arc::increment_strong_count(
+                    self.handle as *const crate::vulkan::rhi::HostVulkanBuffer,
+                );
             }
         }
         Self {
@@ -108,7 +109,9 @@ impl Drop for UniformBuffer {
             // SAFETY: matched with the `Arc::into_raw` in
             // `from_arc_into_raw` and any `Clone` increment.
             unsafe {
-                Arc::decrement_strong_count(self.handle as *const crate::vulkan::rhi::HostVulkanBuffer);
+                Arc::decrement_strong_count(
+                    self.handle as *const crate::vulkan::rhi::HostVulkanBuffer,
+                );
             }
         }
     }
@@ -126,7 +129,6 @@ impl std::fmt::Debug for UniformBuffer {
 #[cfg(all(test, target_pointer_width = "64", target_os = "linux"))]
 mod layout_tests {
     use super::*;
-    
 
     #[test]
     fn uniform_buffer_is_send_sync() {

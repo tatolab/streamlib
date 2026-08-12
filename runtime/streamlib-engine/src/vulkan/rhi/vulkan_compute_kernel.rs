@@ -26,7 +26,6 @@ use rspirv_reflect::{DescriptorType as RDescriptorType, Reflection};
 
 use std::ffi::c_void;
 
-
 use crate::core::rhi::{ComputeBindingKind, ComputeBindingSpec, ComputeKernelDescriptor, Texture};
 use crate::core::{Error, Result};
 
@@ -612,7 +611,6 @@ impl VulkanComputeKernelInner {
             group_count_z,
         )
     }
-
 
     fn drain_and_validate_pending(&self) -> Result<PendingState> {
         let pending = {
@@ -2492,7 +2490,7 @@ mod tests {
         unsafe {
             device_handle.destroy_image_view(in_view, None);
             device_handle.destroy_image_view(out_view, None);
-            
+
             allocator.destroy_image(in_image, in_alloc);
             allocator.destroy_image(out_image, out_alloc);
         }
