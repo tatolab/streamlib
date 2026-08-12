@@ -5,16 +5,21 @@ xtask = "run --package xtask --"
 # The local mirror of CI. A green run here means a green run on the PR — the gate
 # list is `run_local_ci_gates` in xtask/src/main.rs, kept alongside the workflows
 # in .github/workflows/ so the two can be read against each other.
-ci = "run --release --package xtask -- run-local-ci-gates"
+ci = "run --locked --release --package xtask -- run-local-ci-gates"
 # Just the source-walking gates: no workspace build, so it is the fast pre-commit
 # check. `cargo ci` is the full one.
-gates = "run --release --package xtask -- check-all-source-gates"
+gates = "run --locked --release --package xtask -- check-all-source-gates"
 
 # `--release` on both, because these gates are syn-parsing ~7k files and the
 # profile dominates: 11s release vs 24s debug. That is the difference between a
 # pre-commit check you run and one you skip. CI deliberately does NOT mirror this
 # — its job already compiles xtask in debug for `cargo test -p xtask`, and adding
 # a second profile there would cost more compile time than the 13s it saves.
+#
+# `--locked` because the workflows use it. Without it these aliases can resolve a
+# different dependency graph than CI, or quietly rewrite Cargo.lock, and then go
+# green on a build the PR will not reproduce — which is exactly the promise
+# `cargo ci` exists to make.
 
 # Incremental compilation stays ON here, deliberately. It was briefly disabled
 # after `target/debug/incremental` was found holding 419 GB, but measuring the

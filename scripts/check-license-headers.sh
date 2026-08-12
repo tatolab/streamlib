@@ -22,8 +22,14 @@ list_repo_files() {
 
 # A `#!` interpreter line may legitimately occupy line 1; the copyright header
 # then sits on line 2.
+#
+# Both lines are checked, and as whole lines. Checking only the copyright line —
+# which is what this gate did for its whole life before 2026-08-12 — passes a
+# file that carries the copyright but no SPDX identifier, and SPDX is the half a
+# licence scanner actually reads.
 report_files_missing_header() {
   local expected_header="$1"
+  local expected_spdx="${expected_header%%Copyright*}SPDX-License-Identifier: BUSL-1.1"
   local language="$2"
   shift 2
 
@@ -36,7 +42,8 @@ report_files_missing_header() {
     else
       header_line_number=1
     fi
-    if ! sed -n "${header_line_number}p" "$file" | grep -qF "$expected_header"; then
+    if ! sed -n "${header_line_number}p" "$file" | grep -qxF "$expected_header" ||
+      ! sed -n "$((header_line_number + 1))p" "$file" | grep -qxF "$expected_spdx"; then
       missing_files+=("$file")
     fi
   done < <(list_repo_files "$@")
@@ -48,7 +55,7 @@ report_files_missing_header() {
     echo ""
     echo "Required header (lines 1-2, or lines 2-3 after a shebang):"
     echo "  $expected_header"
-    echo "  ${expected_header%%Copyright*}SPDX-License-Identifier: BUSL-1.1"
+    echo "  $expected_spdx"
     return 1
   fi
 
@@ -58,6 +65,11 @@ report_files_missing_header() {
 
 failed_language_checks=()
 
+# Every Rust file in the repo, not an enumerated set of zone dirs. The old list
+# named runtime/ sdk/ adapters/ vendor/ examples/, which silently exempted
+# `xtask/` and `tools/` — and `xtask/src/check_no_inventory_submit.rs` had been
+# sitting there with a `2026` copyright line the rule does not permit.
+#
 # The three vendored vulkanalia fork dirs are Apache-2.0 verbatim copies and
 # deliberately carry NO BUSL headers — see
 # docs/architecture/vendored-vulkanalia.md and CLAUDE.md's licensing exception.
@@ -65,7 +77,7 @@ failed_language_checks=()
 # NOT be excluded).
 report_files_missing_header \
   "// Copyright (c) 2025 Jonathan Fontanez" Rust \
-  'runtime/*.rs' 'sdk/*.rs' 'adapters/*.rs' 'vendor/*.rs' 'examples/*.rs' \
+  '*.rs' \
   ':(exclude)vendor/tatolab-vulkanalia/*' \
   ':(exclude)vendor/tatolab-vulkanalia-sys/*' \
   ':(exclude)vendor/tatolab-vulkanalia-vma/*' ||

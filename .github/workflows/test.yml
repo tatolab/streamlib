@@ -37,6 +37,10 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+        with:
+          # Compiles and runs PR-authored code; a persisted checkout token would
+          # be readable by it. No workspace member has a git dependency.
+          persist-credentials: false
 
       - name: Install system dependencies
         # `-p streamlib` pulls streamlib-engine, whose build.rs compiles GLSL

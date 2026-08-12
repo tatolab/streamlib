@@ -52,6 +52,12 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          # This job compiles and runs PR-authored code (`cargo run`, `cargo
+          # test`, build scripts, proc macros). A persisted checkout token sits
+          # in `.git/config` where any of that can read it, and no workspace
+          # member has a git dependency, so nothing here needs credentials.
+          persist-credentials: false
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
