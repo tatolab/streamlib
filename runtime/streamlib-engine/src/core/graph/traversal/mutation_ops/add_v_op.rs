@@ -3,11 +3,11 @@
 
 use petgraph::graph::DiGraph;
 
+use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::graph::{
     GraphNodeWithComponents, Link, ProcessorNode, ProcessorTraversalMut, StateComponent,
     TraversalSourceMut,
 };
-use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec, ProcessorState};
 
 impl<'a> TraversalSourceMut<'a> {
@@ -79,7 +79,9 @@ impl<'a> TraversalSourceMut<'a> {
 /// path. Splitting the path on `:` or `::` would re-derive the short name the
 /// identity grammar used to carry — the engine holds the path opaque, and a
 /// display default is not a reason to start parsing it.
-pub(crate) fn default_display_name_for(processor_class_import_path: &ProcessorClassImportPath) -> String {
+pub(crate) fn default_display_name_for(
+    processor_class_import_path: &ProcessorClassImportPath,
+) -> String {
     PROCESSOR_REGISTRY
         .descriptor(processor_class_import_path)
         .map(|descriptor| descriptor.name.r#type.as_str().to_string())

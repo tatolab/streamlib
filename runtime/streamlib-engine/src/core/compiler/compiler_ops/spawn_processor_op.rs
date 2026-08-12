@@ -151,8 +151,7 @@ fn spawn_dedicated_thread(
     let proc_id_clone = processor_id.clone();
 
     // Create processor instance now (with lock) since factory needs node
-    // reference; read the org off the same guaranteed-present node so the
-    // isolation tier is always derived from provenance, never from node absence.
+    // reference.
     let processor_arc = {
         let graph = graph_arc.read();
         let node = graph.traversal().v(&processor_id).first().ok_or_else(|| {

@@ -23,8 +23,7 @@ use crate::python_processor_declaration::PythonProcessorDeclaration;
 /// A cache of *which class*, never the authority on *whether* a type is
 /// registered — that stays the engine's registry, consulted below, so this can
 /// never suppress a re-registration the engine actually needs.
-fn registered_processor_classes()
--> &'static Mutex<HashMap<ProcessorClassImportPath, Py<PyAny>>> {
+fn registered_processor_classes() -> &'static Mutex<HashMap<ProcessorClassImportPath, Py<PyAny>>> {
     static REGISTERED_PROCESSOR_CLASSES: OnceLock<
         Mutex<HashMap<ProcessorClassImportPath, Py<PyAny>>>,
     > = OnceLock::new();

@@ -157,7 +157,10 @@ mod tests {
 
         let back = MoqBroadcastCatalog::from_json_bytes(&catalog.to_json_bytes()).unwrap();
         assert_eq!(back.tracks.len(), 1);
-        assert_eq!(back.tracks[0].source_processor_type.as_ref(), Some(&encoder));
+        assert_eq!(
+            back.tracks[0].source_processor_type.as_ref(),
+            Some(&encoder)
+        );
         assert_eq!(back.version, 1);
     }
 

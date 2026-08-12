@@ -12,9 +12,9 @@ use std::sync::Arc;
 
 use serde::Serialize;
 
+use crate::sdk::descriptors::ProcessorClassImportPath;
 use crate::sdk::error::{Error, Result};
 use crate::sdk::graph::{InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId};
-use crate::sdk::descriptors::ProcessorClassImportPath;
 use crate::sdk::processors::{Config, GeneratedProcessor, ProcessorSpec};
 use crate::sdk::runtime::Runner;
 

@@ -44,13 +44,9 @@ fn register_test_type(short: &str, input: &str, output: &str) -> ProcessorClassI
         TypeName::new(short).unwrap(),
         SemVer::new(1, 0, 0),
     );
-    let descriptor = ProcessorDescriptor::new(
-        id,
-        import_path.clone(),
-        "connect typed-errors test",
-    )
-    .with_input(PortDescriptor::new(input, "", false))
-    .with_output(PortDescriptor::new(output, "", false));
+    let descriptor = ProcessorDescriptor::new(id, import_path.clone(), "connect typed-errors test")
+        .with_input(PortDescriptor::new(input, "", false))
+        .with_output(PortDescriptor::new(output, "", false));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
     import_path
 }

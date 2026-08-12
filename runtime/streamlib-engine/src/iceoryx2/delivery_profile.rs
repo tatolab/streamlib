@@ -11,8 +11,8 @@
 //! ([`Overflow`]), and the ring depth. Every input port declares one and
 //! nothing is inferred — an input port without a profile is a wiring error.
 
-use streamlib_processor_schema::ProcessorClassImportPath;
 use streamlib_processor_schema::DELIVERY_PROFILE_DECLARATION_VALUES;
+use streamlib_processor_schema::ProcessorClassImportPath;
 
 use super::overflow::Overflow;
 use super::read_mode::ReadMode;

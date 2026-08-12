@@ -434,9 +434,7 @@ mod filter_ops {
         let mock_processors: Vec<_> = graph
             .traversal()
             .v(())
-            .filter(|n| {
-                n.processor_type == MockProcessor::Processor::processor_class_import_path()
-            })
+            .filter(|n| n.processor_type == MockProcessor::Processor::processor_class_import_path())
             .ids();
 
         assert_eq!(mock_processors.len(), 2);

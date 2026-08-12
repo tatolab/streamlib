@@ -37,13 +37,10 @@ fn register_test_type(short: &str) -> ProcessorClassImportPath {
         TypeName::new(short).unwrap(),
         SemVer::new(1, 0, 0),
     );
-    let descriptor = ProcessorDescriptor::new(
-        id,
-        import_path.clone(),
-        "graph readiness signal test",
-    )
-    .with_input(PortDescriptor::new("bags_from_upstream", "", false))
-    .with_output(PortDescriptor::new("bags_to_downstream", "", false));
+    let descriptor =
+        ProcessorDescriptor::new(id, import_path.clone(), "graph readiness signal test")
+            .with_input(PortDescriptor::new("bags_from_upstream", "", false))
+            .with_output(PortDescriptor::new("bags_to_downstream", "", false));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
     import_path
 }

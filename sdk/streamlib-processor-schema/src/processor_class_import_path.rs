@@ -200,7 +200,9 @@ mod tests {
     #[test]
     fn display_renders_the_path_alone() {
         assert_eq!(
-            ProcessorClassImportPath::new(PYTHON_PATH).unwrap().to_string(),
+            ProcessorClassImportPath::new(PYTHON_PATH)
+                .unwrap()
+                .to_string(),
             PYTHON_PATH
         );
     }

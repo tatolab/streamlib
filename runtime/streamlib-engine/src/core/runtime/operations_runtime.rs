@@ -546,10 +546,10 @@ mod connect_wires_without_inspecting_a_port_tests {
 
     use super::connect_impl;
     use crate::core::compiler::Compiler;
+    use crate::core::descriptors::ProcessorClassImportPath;
     use crate::core::descriptors::{PortDescriptor, ProcessorDescriptor};
     use crate::core::graph::{InputLinkPortRef, OutputLinkPortRef, ProcessorUniqueId};
     use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
-    use crate::core::descriptors::ProcessorClassImportPath;
     use streamlib_idents::{Org, Package, SchemaIdent, SemVer, TypeName};
 
     const PRODUCER_TYPE: &str = "ConnectSilenceProducer";
@@ -608,20 +608,14 @@ mod connect_wires_without_inspecting_a_port_tests {
             compiler.scope(|graph, _tx| {
                 let from = graph
                     .traversal_mut()
-                    .add_v(ProcessorSpec::new(
-                        producer_class_path(),
-                        Value::Null,
-                    ))
+                    .add_v(ProcessorSpec::new(producer_class_path(), Value::Null))
                     .first()
                     .expect("producer node must be created")
                     .id
                     .clone();
                 let to = graph
                     .traversal_mut()
-                    .add_v(ProcessorSpec::new(
-                        consumer_class_path(),
-                        Value::Null,
-                    ))
+                    .add_v(ProcessorSpec::new(consumer_class_path(), Value::Null))
                     .first()
                     .expect("consumer node must be created")
                     .id

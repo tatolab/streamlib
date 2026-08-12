@@ -60,9 +60,7 @@ pub enum Error {
     ProcessorNotFound(String),
 
     #[error("Unknown processor type: {ident} (not registered)")]
-    UnknownProcessorType {
-        ident: ProcessorClassImportPath,
-    },
+    UnknownProcessorType { ident: ProcessorClassImportPath },
 
     #[error("Processor '{processor_id}' has no {direction} port named '{port_name}'")]
     ProcessorPortNotFound {

@@ -18,8 +18,8 @@ use std::collections::HashMap;
 
 use streamlib::sdk::App;
 use streamlib::sdk::context::RuntimeContextFullAccess;
-use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::descriptors::ProcessorClassImportPath;
+use streamlib::sdk::error::{Error, Result};
 use streamlib::sdk::processors::{Config, GeneratedProcessor, ManualProcessor, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
 

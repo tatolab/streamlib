@@ -149,7 +149,6 @@ impl Runner {
             }
         };
 
-
         // Load a local .env if present (RUST_LOG and other dev overrides).
         let _ = dotenvy::dotenv();
 

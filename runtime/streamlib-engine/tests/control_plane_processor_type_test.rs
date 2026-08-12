@@ -26,8 +26,7 @@ use streamlib::sdk::runtime::Runner;
 const RETIRED_IDENTITY_KEYS: [&str; 3] = ["org", "package", "version"];
 
 fn register_test_type(short: &str) -> ProcessorClassImportPath {
-    let import_path =
-        ProcessorClassImportPath::new(format!("my_app.processors:{short}")).unwrap();
+    let import_path = ProcessorClassImportPath::new(format!("my_app.processors:{short}")).unwrap();
     let descriptor = ProcessorDescriptor::new(
         SchemaIdent::new(
             Org::new("tatolab").unwrap(),

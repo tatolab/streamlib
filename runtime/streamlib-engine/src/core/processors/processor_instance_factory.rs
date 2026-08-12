@@ -525,7 +525,6 @@ fn duplicate_class_import_path(processor_class_import_path: &ProcessorClassImpor
     ))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -568,7 +567,10 @@ mod tests {
         assert!(factory.descriptor(&blur).is_some());
         assert!(factory.port_info(&blur).is_some());
         assert_eq!(
-            factory.descriptor(&blur).unwrap().processor_class_import_path,
+            factory
+                .descriptor(&blur)
+                .unwrap()
+                .processor_class_import_path,
             blur
         );
     }
