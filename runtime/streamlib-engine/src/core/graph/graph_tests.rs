@@ -4,7 +4,7 @@
 //! Graph data structure tests using only the traversal API.
 //!
 //! Tests verify Graph operates as a standalone data structure.
-//! Engine-shared TestMock processors live in [`crate::core::test_support`].
+//! Engine-shared mock processors live in [`crate::core::test_support`].
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1243,7 +1243,7 @@ mod display_name_disambiguation {
 
         assert_eq!(
             display_names_in_the_graph(&graph),
-            vec!["TestMockProcessor", "TestMockProcessor 2"]
+            vec!["MockProcessor", "MockProcessor 2"]
         );
     }
 
@@ -1260,10 +1260,10 @@ mod display_name_disambiguation {
         assert_eq!(
             display_names_in_the_graph(&graph),
             vec![
-                "TestMockProcessor",
-                "TestMockProcessor 2",
-                "TestMockProcessor 3",
-                "TestMockProcessor 4",
+                "MockProcessor",
+                "MockProcessor 2",
+                "MockProcessor 3",
+                "MockProcessor 4",
             ]
         );
     }
@@ -1301,7 +1301,7 @@ mod display_name_disambiguation {
 
         assert_eq!(
             display_names_in_the_graph(&graph),
-            vec!["TestMockProcessor", "TestMockOutputOnlyProcessor"]
+            vec!["MockProcessor", "MockOutputOnlyProcessor"]
         );
     }
 
@@ -1313,7 +1313,7 @@ mod display_name_disambiguation {
 
         graph.traversal_mut().add_v(
             MockProcessor::Processor::node(Default::default())
-                .with_display_name("TestMockProcessor 2"),
+                .with_display_name("MockProcessor 2"),
         );
         graph
             .traversal_mut()
@@ -1325,9 +1325,9 @@ mod display_name_disambiguation {
         assert_eq!(
             display_names_in_the_graph(&graph),
             vec![
-                "TestMockProcessor 2",
-                "TestMockProcessor",
-                "TestMockProcessor 3",
+                "MockProcessor 2",
+                "MockProcessor",
+                "MockProcessor 3",
             ]
         );
     }
@@ -1351,7 +1351,7 @@ mod display_name_disambiguation {
                 MockProcessor::Processor::processor_class_import_path()
             );
             assert!(
-                !node.id.to_string().contains("TestMockProcessor"),
+                !node.id.to_string().contains("MockProcessor"),
                 "the minted id must not carry the display name, got {}",
                 node.id
             );

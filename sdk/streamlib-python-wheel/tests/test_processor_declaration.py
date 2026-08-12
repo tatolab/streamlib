@@ -203,15 +203,17 @@ def test_keyword_arguments_are_the_whole_grammar():
         "@tatolab/camera",
     ],
 )
-def test_a_positional_identity_is_refused_naming_the_class_path_rule(identity):
+def test_a_positional_identity_is_refused_naming_the_class_path_rule(identity: str):
     """Every spelling the deleted grammar accepted lands on one refusal.
 
     Mental-revert guard: restore the positional identity parameter and these
-    declare cleanly instead of raising.
+    declare cleanly instead of raising. The argument is deliberately the wrong
+    type — the decorator's signature takes `type | None` — because the runtime
+    refusal is what a caller without a type checker actually meets.
     """
     with pytest.raises(TypeError, match="takes no positional argument"):
 
-        @processor(identity, execution="manual")
+        @processor(identity, execution="manual")  # pyright: ignore[reportArgumentType]
         class Camera:
             @output()
             def frames_to_downstream(self) -> None: ...
@@ -220,7 +222,7 @@ def test_a_positional_identity_is_refused_naming_the_class_path_rule(identity):
 def test_the_refusal_names_where_the_identity_actually_comes_from():
     with pytest.raises(TypeError) as refusal:
 
-        @processor("@tatolab/camera/Camera")
+        @processor("@tatolab/camera/Camera")  # pyright: ignore[reportArgumentType]
         class Camera:
             @output()
             def frames_to_downstream(self) -> None: ...
