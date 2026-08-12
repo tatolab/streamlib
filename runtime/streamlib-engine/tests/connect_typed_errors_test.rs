@@ -84,7 +84,7 @@ fn connect_to_orphan_unknown_processor_returns_port_not_found_with_input_directi
     let nodes = graph_json["nodes"].as_array().unwrap();
     let failed_id = nodes
         .iter()
-        .find(|n| n["type"]["type"].as_str() == Some("DefinitelyNotARegisteredProcessor"))
+        .find(|n| n["type"].as_str() == Some(unknown_ident().as_str()))
         .expect("failed node should be in graph")["id"]
         .as_str()
         .unwrap()
@@ -130,7 +130,7 @@ fn connect_with_unknown_target_processor_id_returns_processor_not_found() {
     let nodes = graph_json["nodes"].as_array().unwrap();
     let failed_id = nodes
         .iter()
-        .find(|n| n["type"]["type"].as_str() == Some("DefinitelyNotARegisteredProcessor"))
+        .find(|n| n["type"].as_str() == Some(unknown_ident().as_str()))
         .unwrap()["id"]
         .as_str()
         .unwrap()
