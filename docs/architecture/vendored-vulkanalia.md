@@ -21,7 +21,7 @@ renames, so every consumer keeps writing `use vulkanalia::…` /
 zero registry configuration — the crates resolve by `path` like any
 other workspace member.
 
-## Drift guard — no in-place edits, no fmt sweeps
+## Drift guard — no in-place edits
 
 `cargo xtask check-vendored-vulkanalia` pins one deterministic content
 hash per vendored crate dir (recorded in
@@ -29,17 +29,26 @@ hash per vendored crate dir (recorded in
 workflow and by `cargo test -p xtask`). Any byte change — an edit, a
 reformat, an added/removed/renamed file — fails with a message naming
 the drifted dir. This is the enforcement behind the verbatim-copy
-contract; prose alone cannot stop a routine workspace `cargo fmt --all`
-sweep from rewriting vendored sources (`cargo fmt --check` already
-disagrees with the vendored formatting, and no stable rustfmt exclusion
-mechanism exists — `rustfmt.toml`'s `ignore` is nightly-only). So the
-`.lefthook.yml` pre-commit `format` gate does not run `cargo fmt --all`:
-it derives its package list from `cargo metadata` and drops every member
-whose manifest lives under `vendor/`, which keeps a new workspace member
-covered without editing the hook. This hash guard is the backstop. No CI
-workflow runs `cargo fmt`; one added later must skip the three vendored
-dirs the same way. Workspace fmt sweeps must exclude
-`vendor/tatolab-vulkanalia*`.
+contract, and it is the whole of it: no stable rustfmt exclusion
+mechanism exists (`rustfmt.toml`'s `ignore` is nightly-only), so a
+workspace fmt sweep is not held off, it is caught.
+
+The trees are rustfmt-clean as vendored, so `cargo fmt --all` — the
+`.lefthook.yml` pre-commit `format` gate — is a no-op over them and the
+gate needs no vendor carve-out. Two things keep that true, and a
+re-vendor must preserve both:
+
+- Upstream marks every generated `vk` / sys module declaration
+  `#[rustfmt::skip]`. That, not any repo-level config, is what keeps
+  rustfmt off the codegen output. Checking one of those files directly
+  bypasses the attribute and reports diffs that the gate does not.
+- `tatolab-vulkanalia-vma` is edition 2021 while its two siblings are
+  edition 2024, so rustfmt applies style edition 2021 import sorting to
+  it alone. Its `src/allocation.rs`, `src/allocator.rs` and
+  `src/virtual.rs` carry that ordering; a re-vendor that takes upstream's
+  edition-2024 ordering verbatim will drift the hash on the next fmt run.
+
+No CI workflow runs `cargo fmt`.
 
 ## License
 
@@ -47,7 +56,9 @@ The vendored crates are **Apache-2.0** (upstream vulkanalia's license;
 `LICENSE.txt` is copied into each directory). This is a deliberate
 exception to the repo-wide BUSL-1.1 new-file header rule: **do not add
 BUSL headers to any file under `vendor/tatolab-vulkanalia*`**, and do not
-reformat or "improve" the vendored sources. The embedded third-party
+"improve" the vendored sources — the only edit they carry beyond the
+pinned fork rev is rustfmt normalisation, which the drift guard records.
+The embedded third-party
 headers keep their own notices (VulkanMemoryAllocator's MIT notice is
 embedded at the top of `vk_mem_alloc.h`; the Vulkan headers are
 Apache-2.0).

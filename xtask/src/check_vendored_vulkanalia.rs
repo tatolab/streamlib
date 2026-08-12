@@ -7,14 +7,16 @@
 //! The vendored sources are a verbatim copy of a pinned fork rev plus a
 //! short, documented local-patch list (see
 //! `docs/architecture/vendored-vulkanalia.md`). Nothing in-tree may edit
-//! them casually — the loudest failure mode being a routine workspace
-//! `cargo fmt --all` sweep silently rewriting vendored files (`cargo fmt
-//! --check` already disagrees with the vendored formatting, and no stable
-//! rustfmt exclusion mechanism exists — `rustfmt.toml`'s `ignore` is
-//! nightly-only). Prose alone can't stop that, so this check pins one
+//! them casually, and prose alone can't stop that, so this check pins one
 //! deterministic content hash per vendored crate dir, in a content-hash
 //! trip-wire style: any byte change (edit, reformat,
 //! added/removed/renamed file) fails CI and names the offending dir.
+//!
+//! The trees are rustfmt-clean as vendored, so `cargo fmt --all` is a no-op
+//! over them and needs no exclusion — no stable exclusion exists anyway
+//! (`rustfmt.toml`'s `ignore` is nightly-only). What keeps rustfmt off the
+//! codegen output is upstream's own `#[rustfmt::skip]` on each generated
+//! `vk` / sys module declaration; a re-vendor must preserve those.
 //!
 //! When it trips on a DELIBERATE re-vendor or documented local patch:
 //! follow the update recipe in `docs/architecture/vendored-vulkanalia.md`
@@ -30,7 +32,7 @@ use std::path::Path;
 const VENDORED_TREES: &[(&str, u64)] = &[
     ("vendor/tatolab-vulkanalia", 0x7508_cfa2_9c2b_b9c7),
     ("vendor/tatolab-vulkanalia-sys", 0xef46_fa14_69b6_8757),
-    ("vendor/tatolab-vulkanalia-vma", 0xac41_8fe4_7384_c0c9),
+    ("vendor/tatolab-vulkanalia-vma", 0x765e_4ed7_3be3_2585),
 ];
 
 /// FNV-1a 64 — deterministic (platform/version-stable).
