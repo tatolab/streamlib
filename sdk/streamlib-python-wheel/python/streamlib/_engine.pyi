@@ -524,8 +524,9 @@ def runtime_log_directory() -> Path:
 def media_clock_now_ns() -> int:
     """The clock the engine stamps bags with, in nanoseconds.
 
-    Not the system-wide `CLOCK_MONOTONIC` epoch — the origin is this process's
-    engine start, so a value from one process means nothing in another.
+    The machine's monotonic clock — `CLOCK_MONOTONIC` on Linux,
+    `mach_absolute_time` on Apple — so a value is comparable across every
+    process on the host.
     """
 
 def open_test_harness_channel(channel: str) -> None:

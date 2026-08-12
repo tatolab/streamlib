@@ -362,10 +362,6 @@ impl PythonProcessorLinkDataAccess {
             return Err(unwired_port_error("output", port_name));
         };
         let encoded = encode_bag_to_msgpack(bag)?;
-        // Default stamp is raw CLOCK_MONOTONIC, bug-compatible with the old
-        // SDK's NativeOutputs.write — NOT the MediaClock epoch the engine's
-        // Rust processors stamp with. Unifying the two epochs is a flagged
-        // owner decision.
         let timestamp_ns = timestamp_ns.unwrap_or_else(|| monotonic_clock_now_ns() as i64);
         match python.detach(|| output_writer.write_raw(port_name, &encoded, timestamp_ns)) {
             Ok(()) => Ok(()),

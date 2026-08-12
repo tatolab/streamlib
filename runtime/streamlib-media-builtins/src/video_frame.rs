@@ -26,10 +26,9 @@ pub struct VideoFrame {
     pub width: u32,
     /// Frame height in pixels.
     pub height: u32,
-    /// Monotonic timestamp in nanoseconds, stamped via `MediaClock`. Today
-    /// that epoch is process-relative; it becomes the machine's monotonic
-    /// epoch (comparable to V4L2/ALSA driver stamps) when #1725 lands —
-    /// until then, compare stamps only within one process.
+    /// Monotonic timestamp in nanoseconds, stamped via `MediaClock` — the
+    /// machine's monotonic epoch, comparable to V4L2 / ALSA driver stamps and
+    /// to a reading taken in any other process on the host.
     pub timestamp_ns: i64,
     /// H.273 / ITU-T VUI four-tuple describing this frame's color. Absent
     /// means unknown; every consumer treats absent as all-`unspecified`.
