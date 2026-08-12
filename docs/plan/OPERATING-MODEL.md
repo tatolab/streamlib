@@ -293,15 +293,14 @@ PR — never accreted mid-session because something annoyed an agent once.
 1. **Commit the pivot** — today's uncommitted rule/CLAUDE.md/settings edits + this
    document, one operating-model PR. (`docs/plan/` is currently untracked; nothing
    enforces a plan that isn't in git.)
-2. **Land #1672** — consumers out; kills the build coupling.
-3. **Wave 1 skills** — `grilling`, `batch-grilling`, `glossary`, `/align`, `/plan`:
+2. **Wave 1 skills** — `grilling`, `batch-grilling`, `glossary`, `/align`, `/plan`:
    just enough to run the plan session.
-4. **The plan session** — `/align` on §Product first (the MVP sentence), then module
+3. **The plan session** — `/align` on §Product first (the MVP sentence), then module
    system, processor model, SDK parity, in that order. Everything after this is execution.
-5. **Wave 2 skills** — `/reconcile-tracker` first (clean today's misaligned milestones
+4. **Wave 2 skills** — `/reconcile-tracker` first (clean today's misaligned milestones
    and tickets against the fresh plan), then `/propose-change`, `/derive-tickets`,
    `/implement`, `review-pr` consolidation: the first real change flows through them.
-6. **Wave 3** — `/ship-change`, `/pivot`, `/hygiene` (whose first full run seeds the
+5. **Wave 3** — `/ship-change`, `/pivot`, `/hygiene` (whose first full run seeds the
    kill-list), then the docs-consolidation
    change (retiring `docs/architecture/`) as the first big change run through the new
    system — the system migrates the old docs, proving itself on its own bootstrap.
