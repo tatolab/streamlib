@@ -13,6 +13,7 @@ pub mod check_no_escalate_in_lifecycle;
 pub mod check_no_in_process_placement;
 pub mod check_no_inventory_submit;
 pub mod check_no_reverse_dns;
+pub mod check_no_unbounded_cstr_from_ptr;
 pub mod check_vendored_vulkanalia;
 pub mod lint_logging;
 pub mod normal_build_dep_graph;
@@ -108,6 +109,17 @@ enum Commands {
     /// reports `UNASSIGNED-Threading-Info`).
     CheckDeviceWaitIdle,
 
+    /// CI gate for the borrow-checked-C-string rule in the Vulkan RHI. Fails
+    /// on any `CStr::from_ptr(<owner>.as_ptr())` under
+    /// `runtime/streamlib-engine/src/vulkan/` or
+    /// `runtime/streamlib-consumer-rhi/src/`. `CStr::from_ptr` returns an
+    /// unbounded lifetime, so the borrow is never tied to the storage the
+    /// pointer came from and survives it — the use-after-free two device
+    /// bring-up paths shipped in #1846. `vk::StringArray::as_cstr` borrows
+    /// from `&self` and is the drop-in. A bare pointer argument owned by an
+    /// external API is not flagged.
+    CheckNoUnboundedCstrFromPtr,
+
     /// Drift trip-wire for the vendored vulkanalia fork trees
     /// (`vendor/tatolab-vulkanalia{,-sys,-vma}`): hashes each vendored crate
     /// dir and fails on any byte change vs. the recorded hash — the guard
@@ -142,6 +154,9 @@ fn main() -> Result<()> {
             check_no_escalate_in_lifecycle::run(&workspace_root()?)?
         }
         Commands::CheckDeviceWaitIdle => check_device_wait_idle::run(&workspace_root()?)?,
+        Commands::CheckNoUnboundedCstrFromPtr => {
+            check_no_unbounded_cstr_from_ptr::run(&workspace_root()?)?
+        }
         Commands::CheckVendoredVulkanalia => check_vendored_vulkanalia::run(&workspace_root()?)?,
     }
 

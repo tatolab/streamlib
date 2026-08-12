@@ -41,6 +41,7 @@ use vulkanalia::loader::{LIBRARY, LibloadingLoader};
 use vulkanalia::prelude::v1_4::*;
 use vulkanalia::vk;
 
+use crate::vulkan_extension_names::vulkan_extension_names_borrowed_from_properties;
 use crate::{ConsumerMarker, ConsumerRhiError, Result, VulkanRhiDevice};
 
 /// Single-COLOR-aspect / single-mip / single-layer subresource range —
@@ -152,7 +153,9 @@ impl ConsumerVulkanDevice {
             .unwrap_or(physical_devices[0]);
 
         let device_props = unsafe { instance.get_physical_device_properties(physical_device) };
-        let device_name = unsafe { CStr::from_ptr(device_props.device_name.as_ptr()) }
+        let device_name = device_props
+            .device_name
+            .as_cstr()
             .to_string_lossy()
             .into_owned();
 
@@ -183,16 +186,15 @@ impl ConsumerVulkanDevice {
         // Required device extensions. All four are mandatory on the
         // carve-out path — refusing to construct the device on a driver
         // that doesn't expose them is the right shape (see module docs).
-        let available_device_ext_names: Vec<&CStr> = unsafe {
+        let available_device_extension_properties = unsafe {
             instance
                 .enumerate_device_extension_properties(physical_device, None)
                 .map_err(|e| {
                     ConsumerRhiError::Gpu(format!("enumerate_device_extension_properties: {e}"))
                 })?
-        }
-        .iter()
-        .map(|ext| unsafe { CStr::from_ptr(ext.extension_name.as_ptr()) })
-        .collect();
+        };
+        let available_device_ext_names =
+            vulkan_extension_names_borrowed_from_properties(&available_device_extension_properties);
 
         const REQUIRED: &[&CStr] = &[
             c"VK_KHR_external_memory",

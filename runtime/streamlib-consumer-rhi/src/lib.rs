@@ -59,6 +59,8 @@ mod consumer_vulkan_texture;
 #[cfg(target_os = "linux")]
 mod device_capability;
 #[cfg(target_os = "linux")]
+mod vulkan_extension_names;
+#[cfg(target_os = "linux")]
 mod vulkan_layout;
 
 pub use error::{ConsumerRhiError, Result};
@@ -85,6 +87,8 @@ pub use device_capability::{
     ConsumerMarker, DevicePrivilege, VulkanRhiBuffer, VulkanRhiDevice, VulkanTextureLike,
     VulkanTimelineSemaphoreLike,
 };
+#[cfg(target_os = "linux")]
+pub use vulkan_extension_names::vulkan_extension_names_borrowed_from_properties;
 #[cfg(target_os = "linux")]
 pub use vulkan_layout::VulkanLayout;
 
