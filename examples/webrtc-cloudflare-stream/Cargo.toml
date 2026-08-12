@@ -20,7 +20,6 @@ publish = false
 [build-dependencies]
 # The SDK codegen crate is resolved by version (same link-by-checkout dev loop
 # as the `streamlib` dep below).
-streamlib-jtd-codegen = { version = "0.16.0" }
 
 [dependencies]
 # The SDK is resolved by version. `./setup.sh` runs

@@ -20,8 +20,6 @@ publish = false
 path = "_generated_rust_crate_root_/lib.rs"
 crate-type = ["rlib", "cdylib"]
 
-[build-dependencies]
-streamlib-jtd-codegen = { workspace = true }
 
 [dependencies]
 streamlib-plugin-sdk = { workspace = true }
