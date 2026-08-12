@@ -158,8 +158,9 @@ pub enum ProcessorRuntimeOutput {
 /// Descriptor for a processor type.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ProcessorDescriptorOutput {
-    /// The import path of the class this processor is.
-    pub name: ProcessorClassImportPath,
+    /// The import path of the class this processor is — the same value, under
+    /// the same name, that a graph node renders as `type`.
+    pub processor_class_import_path: ProcessorClassImportPath,
     /// Human-readable description.
     pub description: String,
     /// Semantic version string.
@@ -316,7 +317,7 @@ impl From<crate::core::graph::LinkState> for LinkStateOutput {
 impl From<&crate::core::ProcessorDescriptor> for ProcessorDescriptorOutput {
     fn from(desc: &crate::core::ProcessorDescriptor) -> Self {
         Self {
-            name: desc.processor_class_import_path.clone(),
+            processor_class_import_path: desc.processor_class_import_path.clone(),
             description: desc.description.clone(),
             version: desc.version.clone(),
             repository: desc.repository.clone(),

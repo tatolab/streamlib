@@ -112,10 +112,14 @@ impl ConfigDescriptor for () {
 /// Describes a processor with its ports and configuration.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProcessorDescriptor {
-    /// The `@org/package/Type@version` the authoring surface still
-    /// declares. Vestigial: nothing keys on it — a processor is named by
-    /// `processor_class_import_path` — and it supplies the default display
-    /// name until the authoring grammar retires.
+    /// The `@org/package/Type@version` the authoring surface still declares.
+    ///
+    /// Nothing keys on it — a processor is named by
+    /// `processor_class_import_path`. Its one remaining reader is the default
+    /// display name, which the plan defines as the class's short name and
+    /// which `name.r#type` is currently the only carrier of. Deleting this
+    /// field therefore means re-homing that short name, not just removing a
+    /// field.
     pub name: SchemaIdent,
     /// The processor class's fully-qualified import path — what the registry,
     /// the control plane and helper-process spawning all name this processor

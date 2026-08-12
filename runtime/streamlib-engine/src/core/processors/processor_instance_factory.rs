@@ -335,9 +335,11 @@ impl ProcessorInstanceFactory {
             RegistrationKind::LegacyDyn { constructor },
         );
 
-        // Recorded as a string-valued field rather than through `Display`:
-        // `test_processor_identity.py` matches on the quoted `field="value"`
-        // rendering, which only the string path produces.
+        // A processor's class is reached by import and nothing else, so "which
+        // class is this?" is a question the registration record has to answer;
+        // a display name cannot, and by the time a helper fails to import one
+        // the app is long past `add`. Named field rather than message text
+        // because that is what a log consumer can select on.
         tracing::info!(
             processor_class_import_path = processor_class_import_path.as_str(),
             "[register_dynamic] new processor type registered"

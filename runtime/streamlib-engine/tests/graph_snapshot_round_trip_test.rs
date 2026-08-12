@@ -181,3 +181,44 @@ fn empty_graph_round_trips() {
     let snap2 = r2.save_graph_snapshot().unwrap();
     assert_eq!(snap1, snap2);
 }
+
+/// A node whose type never resolved saves under the requested import path
+/// verbatim — it used to save a synthesized `(org, package, type)@0.0.0`
+/// diagnostic ident instead.
+///
+/// Its display name, and so its alias base, is that whole path, which for a
+/// Python class carries `.` — the separator `parse_port_ref` splits an
+/// `alias.port` reference on. Inert twice over: an unresolved node has empty
+/// port lists so `connect` refuses it and no connection can name its alias,
+/// and the snapshot cannot be loaded at all, because `validate` resolves every
+/// processor type against the registry and this one still misses. That refusal
+/// is unchanged by the re-key — the old diagnostic ident missed too.
+#[test]
+#[serial]
+fn an_unresolved_node_saves_under_the_requested_path_and_still_refuses_to_load() {
+    const UNRESOLVED: &str = "my_app.filters:NeverRegistered";
+
+    let runtime = Runner::new().unwrap();
+    let _ = runtime.add_processor(ProcessorSpec::new(
+        ProcessorClassImportPath::new(UNRESOLVED).unwrap(),
+        serde_json::json!({}),
+    ));
+
+    let saved = runtime
+        .save_graph_snapshot()
+        .expect("save with a failed node");
+    assert_eq!(saved.processors.len(), 1, "the failed node must be saved");
+    assert_eq!(
+        saved.processors[0].processor_type.as_str(),
+        UNRESOLVED,
+        "the saved type must be what the caller asked for, not a synthesized stand-in"
+    );
+
+    let reloaded = Runner::new().unwrap();
+    match reloaded.load_graph_snapshot(&saved) {
+        Err(streamlib::sdk::error::Error::UnknownProcessorType { ident }) => {
+            assert_eq!(ident.as_str(), UNRESOLVED);
+        }
+        other => panic!("expected the load to refuse the unresolved type, got {other:?}"),
+    }
+}

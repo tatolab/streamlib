@@ -323,10 +323,7 @@ impl JsonSchema for TypeName {
 /// let _: SchemaIdent = "@tatolab/core/VideoFrame@1.0.0".parse().unwrap();
 /// ```
 ///
-/// The derived `PartialEq` below is version-inclusive. Every resolution
-/// surface in the runtime binds version-blind, so anything deciding whether
-/// two idents name the same schema compares [`Self::matches_schema_tuple`],
-/// not `==` — reaching for `==` there is what reintroduced #1460 as #1477.
+/// The derived `PartialEq` is version-inclusive.
 #[derive(
     Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema,
 )]
@@ -359,20 +356,6 @@ impl SchemaIdent {
             r#type,
             version: version.release_core(),
         }
-    }
-
-    /// The `(org, package, type)` identity tuple with the version projected
-    /// away — the borrowed form usable as a hash/order key, which
-    /// [`Self::matches_schema_tuple`] alone cannot express. Set membership
-    /// keyed on a whole `SchemaIdent` binds version-inclusively through the
-    /// derived `Hash` + `Eq`; key on this instead.
-    pub fn schema_identity_tuple(&self) -> (&Org, &Package, &TypeName) {
-        (&self.org, &self.package, &self.r#type)
-    }
-
-    /// Whether two idents share the same `(org, package, type)` identity tuple, version-blind (the registry is version-lookup-blind).
-    pub fn matches_schema_tuple(&self, other: &SchemaIdent) -> bool {
-        self.schema_identity_tuple() == other.schema_identity_tuple()
     }
 }
 
@@ -697,57 +680,6 @@ version: 0.4.33-dev.2
             msg.contains("release") && msg.contains("dev"),
             "error must name the release-only rule: {msg}"
         );
-    }
-
-    /// The `@0.0.0` diagnostic placeholder and a real registered version name
-    /// the same type. Derived `PartialEq` says otherwise — every resolution
-    /// surface must go through the tuple.
-    #[test]
-    fn identity_tuple_ignores_the_version() {
-        let diagnostic = ident("tatolab", "camera", "Camera", SemVer::new(0, 0, 0));
-        let registered = ident("tatolab", "camera", "Camera", SemVer::new(1, 2, 0));
-        assert_eq!(
-            diagnostic.schema_identity_tuple(),
-            registered.schema_identity_tuple()
-        );
-        assert!(diagnostic.matches_schema_tuple(&registered));
-        assert_ne!(
-            diagnostic, registered,
-            "derived PartialEq stays version-inclusive — the tuple is the version-blind projection"
-        );
-    }
-
-    #[test]
-    fn identity_tuple_separates_idents_differing_before_the_version() {
-        let camera = ident("tatolab", "camera", "Camera", SemVer::new(1, 0, 0));
-        for other in [
-            ident("acme", "camera", "Camera", SemVer::new(1, 0, 0)),
-            ident("tatolab", "display", "Camera", SemVer::new(1, 0, 0)),
-            ident("tatolab", "camera", "CameraFrame", SemVer::new(1, 0, 0)),
-        ] {
-            assert_ne!(
-                camera.schema_identity_tuple(),
-                other.schema_identity_tuple(),
-                "{camera} and {other} must not share an identity tuple"
-            );
-            assert!(!camera.matches_schema_tuple(&other));
-        }
-    }
-
-    /// The projection is a usable hash key — this is what `matches_schema_tuple`
-    /// alone could not express, and what left `remove_module`'s in-use guard
-    /// version-inclusive (#1660).
-    #[test]
-    fn identity_tuple_is_a_version_blind_hash_key() {
-        let registered = ident("tatolab", "camera", "Camera", SemVer::new(1, 2, 0));
-        let set: std::collections::HashSet<_> =
-            std::iter::once(registered.schema_identity_tuple()).collect();
-
-        let diagnostic = ident("tatolab", "camera", "Camera", SemVer::new(0, 0, 0));
-        assert!(set.contains(&diagnostic.schema_identity_tuple()));
-        assert!(!set.contains(
-            &ident("tatolab", "camera", "Microphone", SemVer::new(1, 2, 0)).schema_identity_tuple()
-        ));
     }
 
     #[test]

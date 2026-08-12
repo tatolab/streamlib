@@ -11,9 +11,6 @@ import streamlib
 from identity_stable_processor import IdentityStableProcessor
 from second_identity_stable_processor import SecondIdentityStableProcessor
 
-DIRECT_LAUNCH_ARGUMENT = "add-then-exit"
-
-
 def setup(rt) -> None:
     """Both processors, in one graph."""
     rt.add(IdentityStableProcessor)

@@ -99,7 +99,7 @@ Surfaces this rule covers:
 > the lockfile is deleted, so it is no longer a surface this rule covers.
 
 > ~~Graph JSON (the runtime's serialized pipeline graph).~~ — Superseded
-> 2026-08-11 by #1840. A processor is identified by the import path of its
+> 2026-08-11. A processor is identified by the import path of its
 > class, so the graph's `type` field is a plain string
 > (`my_app.filters:BlurProcessor`), not a structured record. No schema
 > identifier reaches graph JSON at all — the engine has no type layer.
@@ -251,7 +251,7 @@ A call site **references** a processor by the import path of its class —
 captures from its own expansion site. That path is what `ProcessorSpec::new`
 takes and what the registry is keyed on.
 
-> Removed 2026-08-11 by #1840: the two call-site reference macros and the
+> Removed 2026-08-11: the two call-site reference macros and the
 > version-free reference type they expanded to. One resolved a version against
 > a registry that no longer holds one; the other narrowed an identity the
 > registry no longer keys on. Their names are in that PR and in git history —
