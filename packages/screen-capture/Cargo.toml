@@ -18,8 +18,6 @@ path = "_generated_rust_crate_root_/lib.rs"
 name = "streamlib_screen_capture"
 crate-type = ["rlib", "cdylib"]
 
-[build-dependencies]
-streamlib-jtd-codegen = {version = "0.16.0"}
 
 [dependencies]
 # Engine-free authoring SDK (never the `streamlib` facade) — runtime context
