@@ -13,7 +13,7 @@ use streamlib_engine::core::GeneratedProcessor;
 use streamlib_engine::core::{EmptyConfig, Result, RuntimeContextFullAccess};
 
 // Define a simple processor. The macro emits the type, port markers,
-// descriptor, and `schema_ident()` accessor — it never auto-registers.
+// descriptor, and the class-path accessor — it never auto-registers.
 #[streamlib::sdk::processor(
     execution = manual,
     input("video_in", delivery_profile = "latest"),

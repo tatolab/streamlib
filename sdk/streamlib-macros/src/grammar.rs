@@ -644,7 +644,7 @@ mod tests {
 
     #[test]
     fn missing_execution_is_an_error() {
-        let msg = parse_err(quote! { "@tatolab/camera/Camera" });
+        let msg = parse_err(quote! { description = "no execution" });
         assert!(msg.contains("missing required `execution`"), "got: {msg}");
     }
 
@@ -680,10 +680,10 @@ mod tests {
         // `output(...)`. It must be a spanned error, not silently nulled.
         // Mentally revert `reject_delivery_profile_on_output` and this parses
         // cleanly (bug) instead of erroring.
-        let tokens: proc_macro2::TokenStream = "\"@tatolab/camera/Camera\", execution = manual, \
-             output(\"video\", delivery_profile = \"latest\")"
-            .parse()
-            .expect("token stream parses");
+        let tokens: proc_macro2::TokenStream =
+            "execution = manual, output(\"video\", delivery_profile = \"latest\")"
+                .parse()
+                .expect("token stream parses");
         let msg = parse_err(tokens);
         assert!(
             msg.contains("`delivery_profile` is a consumer-side setting"),
@@ -756,31 +756,43 @@ mod tests {
     }
 
     #[test]
-    fn malformed_identity_is_an_error() {
-        let msg = parse_err(quote! {
-            "tatolab/camera/Camera",
-            execution = manual,
-        });
-        assert!(msg.contains("must start with `@`"), "got: {msg}");
+    fn a_positional_identity_is_refused_naming_the_class_path_rule() {
+        // Every spelling the deleted grammar accepted lands on one refusal —
+        // including the ones it used to reject for its own reasons, which must
+        // not leak a message about a grammar that no longer exists. Mental-
+        // revert guard: restore the positional `LitStr` parse and these parse
+        // clean instead of erroring.
+        for identity in [
+            "\"@tatolab/camera/Camera\", execution = manual",
+            "\"@tatolab/camera/Camera@1.0.0\", execution = manual",
+            "\"tatolab/camera/Camera\", execution = manual",
+            "\"@tatolab/camera\", execution = manual",
+        ] {
+            let tokens: proc_macro2::TokenStream = identity.parse().expect("token stream parses");
+            let msg = parse_err(tokens);
+            assert!(
+                msg.contains("declares no identity") && msg.contains("import path"),
+                "got: {msg}"
+            );
+        }
     }
 
     #[test]
-    fn versioned_identity_is_rejected() {
-        // The grammar is version-free (#1409): a hand-authored `@<version>` on
-        // the identity is rejected. Mentally revert the version-free
-        // `parse_schema_ident_str` and this passes when it must fail.
-        let msg = parse_err(quote! {
-            execution = manual,
-        });
-        assert!(msg.contains("must be version-free"), "got: {msg}");
+    fn a_type_override_is_refused_naming_the_class_path_rule() {
+        let msg = parse_err(quote! { execution = reactive, type = "CustomName" });
+        assert!(msg.contains("declares no identity"), "got: {msg}");
     }
 
     #[test]
-    fn identity_wrong_segment_count_is_an_error() {
-        let msg = parse_err(quote! {
-            execution = manual,
-        });
-        assert!(msg.contains("three `/`-separated segments"), "got: {msg}");
+    fn type_is_not_offered_as_a_valid_key() {
+        // The unknown-key list is the author's map of the grammar; leaving
+        // `type` on it would point them at a key that now errors.
+        let msg = parse_err(quote! { execution = reactive, bogus = "x" });
+        assert!(
+            msg.contains("unknown `#[processor(...)]` key"),
+            "got: {msg}"
+        );
+        assert!(!msg.contains("`type`"), "got: {msg}");
     }
 
     #[test]
