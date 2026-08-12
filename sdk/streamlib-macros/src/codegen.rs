@@ -86,6 +86,14 @@ pub fn generate_from_processor_schema(
         pub fn schema_ident() -> __streamlib_sdk::descriptors::SchemaIdent {
             Processor::schema_ident()
         }
+
+        /// This processor's identity: the path its type is reached by.
+        #[allow(dead_code)]
+        pub fn processor_class_import_path()
+            -> __streamlib_sdk::descriptors::ProcessorClassImportPath
+        {
+            Processor::processor_class_import_path()
+        }
     };
 
     // Generate unsafe Send impl if required (for !Send types like AVFoundation)
@@ -446,14 +454,22 @@ fn generate_processor_impl_from_schema(
                 #schema_ident_literal
             }
 
+            /// This processor's identity: the path its type is reached by,
+            /// captured where the macro expanded.
+            pub fn processor_class_import_path()
+                -> __streamlib_sdk::descriptors::ProcessorClassImportPath
+            {
+                __streamlib_sdk::descriptors::ProcessorClassImportPath::new(
+                    ::core::module_path!(),
+                )
+                .expect("module_path! always names the enclosing module")
+            }
+
             /// Create a [`ProcessorSpec`](__streamlib_sdk::processors::ProcessorSpec)
             /// for adding this processor to a runtime.
             pub fn node(config: #config_type) -> __streamlib_sdk::processors::ProcessorSpec {
-                // `ProcessorSpec::new` takes the SchemaIdent directly on the
-                // engine-free SDK and via `From<SchemaIdent>` on the engine SDK
-                // (where `name` is a `ProcessorTypeReference`).
                 __streamlib_sdk::processors::ProcessorSpec::new(
-                    Self::schema_ident(),
+                    Self::processor_class_import_path(),
                     __streamlib_sdk::serde_json::to_value(&config)
                         .expect("Config serialization failed"),
                 )
@@ -676,7 +692,10 @@ fn generate_descriptor_from_schema(
             Some(
                 __streamlib_sdk::descriptors::ProcessorDescriptor::new(
                     Processor::schema_ident(),
-                    ::core::module_path!(),
+                    __streamlib_sdk::descriptors::ProcessorClassImportPath::new(
+                        ::core::module_path!(),
+                    )
+                    .expect("module_path! always names the enclosing module"),
                     #description,
                 )
                     .with_version(#version)

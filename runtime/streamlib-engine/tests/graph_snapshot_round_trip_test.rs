@@ -17,7 +17,8 @@
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
-    Org, Package, PortDescriptor, ProcessorDescriptor, SchemaIdent, SemVer, TypeName,
+    Org, Package, PortDescriptor, ProcessorClassImportPath, ProcessorDescriptor, SchemaIdent,
+    SemVer, TypeName,
 };
 use streamlib::sdk::graph::{InputLinkPortRef, OutputLinkPortRef};
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
@@ -36,11 +37,12 @@ fn ident(short: &str) -> SchemaIdent {
 /// Register a descriptor-only processor type with two `Any`-typed
 /// ports — enough to satisfy `add_processor`'s port-info lookup and
 /// `connect`'s port existence check. Idempotent under `serial_test`.
-fn register_test_type(short: &str, input: &str, output: &str) -> SchemaIdent {
-    let id = ident(short);
+fn register_test_type(short: &str, input: &str, output: &str) -> ProcessorClassImportPath {
+    let import_path =
+        ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
     let descriptor = ProcessorDescriptor::new(
-        id.clone(),
-        format!("{}::{short}", module_path!()),
+        ident(short),
+        import_path.clone(),
         "snapshot round-trip test",
     )
     .with_input(PortDescriptor::new(input, "", false))
@@ -49,7 +51,7 @@ fn register_test_type(short: &str, input: &str, output: &str) -> SchemaIdent {
     // `Error::Configuration("Processor 'X' already registered")` which
     // we ignore.
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
-    id
+    import_path
 }
 
 #[test]

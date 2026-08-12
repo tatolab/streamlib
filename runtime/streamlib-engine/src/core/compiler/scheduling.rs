@@ -5,8 +5,8 @@
 //!
 //! Resolves a [`SchedulingStrategy`] for a processor by reading the
 //! [`ProcessorScheduling`] block off the registered [`ProcessorDescriptor`].
-//! The block is sourced from the processor's `streamlib.yaml`; processors
-//! that don't declare one fall through to [`ThreadPriority::Normal`].
+//! The block is declared in the `#[processor]` attribute; processors that
+//! don't declare one fall through to [`ThreadPriority::Normal`].
 
 use crate::core::execution::ThreadPriority;
 use crate::core::graph::ProcessorNode;
@@ -47,16 +47,25 @@ pub(crate) fn scheduling_strategy_for_processor(node: &ProcessorNode) -> Schedul
 mod tests {
     use super::*;
     use crate::core::descriptors::{
-        Org, Package, ProcessorDescriptor, ProcessorScheduling, SchemaIdent, SemVer, TypeName,
+        Org, Package, ProcessorClassImportPath, ProcessorDescriptor, ProcessorScheduling,
+        SchemaIdent, SemVer, TypeName,
     };
 
-    /// Build an ident whose short name is **deliberately neutral** —
-    /// none of the substrings the pre-#722 heuristic matched on
-    /// (`Camera`, `Display`, `Audio`, `Microphone`, `Speaker`, `Encoder`,
-    /// `Decoder`, `H264`, `H265`, `Compositor`). That way mentally
+    /// Build a class import path that is **deliberately neutral** — no segment
+    /// of it, module included, is one of the substrings the pre-#722 heuristic
+    /// matched on (`Camera`, `Display`, `Audio`, `Microphone`, `Speaker`,
+    /// `Encoder`, `Decoder`, `H264`, `H265`, `Compositor`). That way mentally
     /// reverting `scheduling_strategy_for_processor` back to the old
-    /// substring-match heuristic causes these tests to fail.
-    fn ident(short: &str) -> SchemaIdent {
+    /// substring-match heuristic causes these tests to fail. The whole path is
+    /// what has to stay neutral now: the key is the whole string, and this
+    /// module's own path is part of it.
+    fn import_path(short: &str) -> ProcessorClassImportPath {
+        ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap()
+    }
+
+    /// The descriptor's vestigial `name`. Nothing keys on it; it supplies the
+    /// default display name and nothing else.
+    fn vestigial_name(short: &str) -> SchemaIdent {
         SchemaIdent::new(
             Org::new("scheduling-test").unwrap(),
             Package::new("fixture").unwrap(),
@@ -67,20 +76,17 @@ mod tests {
 
     #[test]
     fn strategy_reads_priority_from_registered_descriptor() {
-        let id = ident("Widgetron");
-        let descriptor = ProcessorDescriptor::new(
-            id.clone(),
-            concat!(module_path!(), "::Widgetron"),
-            "fixture",
-        )
-        .with_scheduling(ProcessorScheduling {
-            priority: ThreadPriority::RealTime,
-        });
+        let path = import_path("Widgetron");
+        let descriptor =
+            ProcessorDescriptor::new(vestigial_name("Widgetron"), path.clone(), "fixture")
+                .with_scheduling(ProcessorScheduling {
+                    priority: ThreadPriority::RealTime,
+                });
         PROCESSOR_REGISTRY
             .register_descriptor_only(descriptor)
             .expect("fixture descriptor registers cleanly");
 
-        let node = ProcessorNode::new(id, "fixture-node", None, vec![], vec![]);
+        let node = ProcessorNode::new(path, "fixture-node", None, vec![], vec![]);
         match scheduling_strategy_for_processor(&node) {
             SchedulingStrategy::DedicatedThread { priority } => {
                 assert_eq!(priority, ThreadPriority::RealTime);
@@ -90,8 +96,13 @@ mod tests {
 
     #[test]
     fn strategy_falls_back_to_normal_when_descriptor_missing() {
-        let id = ident("UnregisteredFixtureProcessor");
-        let node = ProcessorNode::new(id, "ghost-node", None, vec![], vec![]);
+        let node = ProcessorNode::new(
+            import_path("UnregisteredFixtureProcessor"),
+            "ghost-node",
+            None,
+            vec![],
+            vec![],
+        );
         match scheduling_strategy_for_processor(&node) {
             SchedulingStrategy::DedicatedThread { priority } => {
                 assert_eq!(priority, ThreadPriority::Normal);

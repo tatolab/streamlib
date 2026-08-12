@@ -7,9 +7,8 @@ use crate::core::graph::{
     GraphNodeWithComponents, Link, ProcessorNode, ProcessorTraversalMut, StateComponent,
     TraversalSourceMut,
 };
-use crate::core::processors::{
-    PROCESSOR_REGISTRY, ProcessorSpec, ProcessorState,
-};
+use crate::core::descriptors::ProcessorClassImportPath;
+use crate::core::processors::{PROCESSOR_REGISTRY, ProcessorSpec, ProcessorState};
 
 impl<'a> TraversalSourceMut<'a> {
     /// Add a new processor node to the graph.
@@ -24,24 +23,13 @@ impl<'a> TraversalSourceMut<'a> {
     /// why — runtime-dynamic systems prefer "load-and-mark-failed" over
     /// "silently-skip" so observability survives the misconfiguration.
     pub fn add_v(self, spec: ProcessorSpec) -> ProcessorTraversalMut<'a> {
-        // Resolve `(org, package, type)` to the installed provider's registered
-        // ident + its ports. Gated on `port_info` presence — every registered
-        // processor has an entry (subprocess-only descriptors register empty
-        // port lists), so this resolves any registered type and misses only a
+        // Gated on `port_info` presence — every registered processor has an
+        // entry (subprocess-only descriptors register empty port lists), so
+        // this resolves any registered type and misses only a
         // genuinely-unregistered one.
-        let resolved = PROCESSOR_REGISTRY
-            .resolve_installed_processor_type(
-                spec.name.org(),
-                spec.name.package(),
-                spec.name.r#type(),
-            )
-            .and_then(|ident| {
-                PROCESSOR_REGISTRY
-                    .port_info(&ident)
-                    .map(|ports| (ident, ports))
-            });
+        let resolved_ports = PROCESSOR_REGISTRY.port_info(&spec.name);
 
-        let registry_miss = resolved.is_none();
+        let registry_miss = resolved_ports.is_none();
 
         if registry_miss {
             tracing::error!(
@@ -50,19 +38,17 @@ impl<'a> TraversalSourceMut<'a> {
             );
         }
 
-        // On a miss, build the failed node with the reference's diagnostic
-        // ident (`(org, package, type)@0.0.0`) so it stays visible via
-        // `GET /api/graph`.
-        let (node_ident, (inputs, outputs)) =
-            resolved.unwrap_or_else(|| (spec.name.to_diagnostic_ident(), (vec![], vec![])));
+        // A missed node carries the requested path verbatim, so
+        // `GET /api/graph` names exactly what the caller asked for.
+        let (inputs, outputs) = resolved_ports.unwrap_or_default();
 
         let requested_display_name = spec
             .display_name
-            .unwrap_or_else(|| node_ident.r#type.as_str().to_string());
+            .unwrap_or_else(|| default_display_name_for(&spec.name));
         let display_name =
             disambiguate_display_name_within_graph(self.graph, requested_display_name);
 
-        let node = ProcessorNode::new(node_ident, display_name, Some(spec.config), inputs, outputs);
+        let node = ProcessorNode::new(spec.name, display_name, Some(spec.config), inputs, outputs);
 
         let node_idx = self.graph.add_node(node);
 
@@ -83,6 +69,21 @@ impl<'a> TraversalSourceMut<'a> {
             ids: vec![node_idx],
         }
     }
+}
+
+/// The label a node takes when the caller named none: the class's short name,
+/// falling back to the requested import path when nothing is registered under
+/// it.
+///
+/// Read off the registered descriptor rather than recovered from the import
+/// path. Splitting the path on `:` or `::` would re-derive the short name the
+/// identity grammar used to carry — the engine holds the path opaque, and a
+/// display default is not a reason to start parsing it.
+pub(crate) fn default_display_name_for(processor_class_import_path: &ProcessorClassImportPath) -> String {
+    PROCESSOR_REGISTRY
+        .descriptor(processor_class_import_path)
+        .map(|descriptor| descriptor.name.r#type.as_str().to_string())
+        .unwrap_or_else(|| processor_class_import_path.as_str().to_string())
 }
 
 /// Make `requested_display_name` unique among the graph's nodes by appending

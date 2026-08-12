@@ -14,7 +14,8 @@ use serde::Serialize;
 
 use crate::sdk::error::{Error, Result};
 use crate::sdk::graph::{InputLinkPortRef, LinkUniqueId, OutputLinkPortRef, ProcessorUniqueId};
-use crate::sdk::processors::{Config, GeneratedProcessor, ProcessorSpec, ProcessorTypeReference};
+use crate::sdk::descriptors::ProcessorClassImportPath;
+use crate::sdk::processors::{Config, GeneratedProcessor, ProcessorSpec};
 use crate::sdk::runtime::Runner;
 
 /// A `(processor, port)` endpoint for [`App::connect`]. The processor is
@@ -63,18 +64,22 @@ impl App {
         })
     }
 
-    /// Add a processor by type reference, configured from `config`. `config` is
-    /// any [`Serialize`] value (a generated config `Bag`, a plain struct, or a
-    /// [`serde_json::Value`]); it is encoded to JSON and handed to the runtime
-    /// unchanged. A `display_name` of `None` takes the type's short name.
+    /// Add a processor by the import path of its class, configured from
+    /// `config`. `config` is any [`Serialize`] value (a generated config `Bag`,
+    /// a plain struct, or a [`serde_json::Value`]); it is encoded to JSON and
+    /// handed to the runtime unchanged. A `display_name` of `None` takes the
+    /// class's short name.
     pub fn add(
         &self,
-        processor_ref: impl Into<ProcessorTypeReference>,
+        processor_class_import_path: ProcessorClassImportPath,
         config: impl Serialize,
         display_name: Option<&str>,
     ) -> Result<AddedProcessor> {
         let config = to_config_value(config)?;
-        self.add_spec(ProcessorSpec::new(processor_ref, config), display_name)
+        self.add_spec(
+            ProcessorSpec::new(processor_class_import_path, config),
+            display_name,
+        )
     }
 
     /// Register a `#[processor]`-annotated host type `P` on the processor
@@ -91,8 +96,11 @@ impl App {
         P::Config: Config,
     {
         let config = to_config_value(config)?;
-        let reference = self.runner.add_local::<P>(config.clone())?;
-        self.add_spec(ProcessorSpec::new(reference, config), display_name)
+        let processor_class_import_path = self.runner.add_local::<P>(config.clone())?;
+        self.add_spec(
+            ProcessorSpec::new(processor_class_import_path, config),
+            display_name,
+        )
     }
 
     /// Connect an output endpoint to an input endpoint — `((&from, "out"),

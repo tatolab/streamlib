@@ -8,7 +8,7 @@ use parking_lot::RwLock;
 
 use crate::core::ProcessorDescriptor;
 use crate::core::context::{RuntimeContextFullAccess, RuntimeContextLimitedAccess};
-use crate::core::descriptors::SchemaIdent;
+use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};
 use crate::core::execution::ExecutionConfig;
 use crate::core::graph::{PortInfo, ProcessorNode};
@@ -35,15 +35,6 @@ impl ProcessorInstance {
     /// Wrap a boxed generated processor for runtime dispatch.
     pub(crate) fn new(processor: Box<dyn DynGeneratedProcessor + Send>) -> Self {
         Self(processor)
-    }
-
-    /// Isolation-tier seam: whether this instance's code is separately built
-    /// and untrusted. Always `false` now that every processor is host-compiled
-    /// (`register::<P>()` / `add_local::<P>()`) or a subprocess host wrapper —
-    /// both the host's own code. Retained as the isolation-tier input; when an
-    /// untrusted-code path returns, this is where it reports.
-    pub(crate) fn is_cdylib_resident(&self) -> bool {
-        false
     }
 
     /// Run the processor's `setup` lifecycle.
@@ -195,27 +186,8 @@ pub type DynamicProcessorConstructorFn =
 
 /// Per-type registration entry the factory stores.
 enum RegistrationKind {
-    /// VTable-based dispatch. Used by both cdylib registrations
-    /// (extern "C" wrappers landing in the cdylib's address space) and
-    /// inventory-registered host processors (extern "C" wrappers
-    /// landing in the host's address space).
-    ///
-    /// `cdylib_resident` distinguishes the two — `true` when the
-    /// vtable's function pointers target a cdylib's address space
-    /// (loaded via `STREAMLIB_PLUGIN` dlopen), `false` when they
-    /// target the host's address space (`register::<P>()`). The
-    /// lifecycle dispatch in [`ProcessorInstance::setup`] /
-    /// [`ProcessorInstance::teardown`] consults this flag to pick
-    /// between the cdylib-shaped `ScopeToken` FullAccess wrap and
-    /// the in-process Boxed FullAccess dispatch — only cdylib-
-    /// resident bodies need the vtable hop to dodge the
-    /// `host_inner()` panic guard. Mis-tagging an in-process
-    /// VTable as `cdylib_resident: true` would route its `device()`
-    /// (and other `host_inner()`-only) calls through an opaque
-    /// scope token whose memory layout doesn't match `Box<Arc<…>>`
-    /// — UB.
-    /// Box<dyn Fn> closure constructor — used for subprocess host
-    /// wrappers via `register_dynamic`.
+    /// `Box<dyn Fn>` closure constructor — the one dispatch shape, used by
+    /// host-compiled Rust types and helper-process host wrappers alike.
     LegacyDyn {
         constructor: DynamicProcessorConstructorFn,
     },
@@ -225,17 +197,22 @@ enum RegistrationKind {
 /// [`ProcessorInstanceFactory::unregister_processor_types`] and held so a
 /// refused `remove_module` can reinstate the registration exactly.
 pub(crate) struct UnregisteredProcessorTypeRecord {
-    processor_type: SchemaIdent,
+    processor_type: ProcessorClassImportPath,
     registration: Option<RegistrationKind>,
     port_info: Option<(Vec<PortInfo>, Vec<PortInfo>)>,
     descriptor: Option<ProcessorDescriptor>,
 }
 
 /// Factory for compile-time registered Rust processors.
+///
+/// Keyed on the import path of the class each processor is — the same string
+/// the control plane reports and a helper process imports its class back by.
+/// Stored verbatim and never parsed: the key holds Python's `module:Qualname`
+/// and Rust's `crate::module::Type` alike, and the engine owns neither grammar.
 pub struct ProcessorInstanceFactory {
-    registrations: RwLock<HashMap<SchemaIdent, RegistrationKind>>,
-    port_info: RwLock<HashMap<SchemaIdent, (Vec<PortInfo>, Vec<PortInfo>)>>,
-    descriptors: RwLock<HashMap<SchemaIdent, ProcessorDescriptor>>,
+    registrations: RwLock<HashMap<ProcessorClassImportPath, RegistrationKind>>,
+    port_info: RwLock<HashMap<ProcessorClassImportPath, (Vec<PortInfo>, Vec<PortInfo>)>>,
+    descriptors: RwLock<HashMap<ProcessorClassImportPath, ProcessorDescriptor>>,
 }
 
 /// Global processor registry for runtime lookups.
@@ -318,20 +295,21 @@ impl ProcessorInstanceFactory {
     /// * `constructor` - Factory function that creates processor instances
     ///
     /// # Returns
-    /// Error if a processor with the same name is already registered.
+    /// Error if a processor with the same class import path is already
+    /// registered.
     pub fn register_dynamic(
         &self,
         descriptor: ProcessorDescriptor,
         constructor: DynamicProcessorConstructorFn,
     ) -> Result<()> {
-        let type_name = descriptor.name.clone();
+        let processor_class_import_path = descriptor.processor_class_import_path.clone();
 
-        // Check for duplicate registration
-        if self.registrations.read().contains_key(&type_name) {
-            return Err(Error::Configuration(format!(
-                "Processor '{}' already registered",
-                type_name
-            )));
+        if self
+            .registrations
+            .read()
+            .contains_key(&processor_class_import_path)
+        {
+            return Err(duplicate_class_import_path(&processor_class_import_path));
         }
 
         // Build port info from descriptor
@@ -339,36 +317,38 @@ impl ProcessorInstanceFactory {
 
         let outputs: Vec<PortInfo> = descriptor.outputs.iter().map(PortInfo::from).collect();
 
-        // Read before the descriptor moves into the map.
-        let processor_class_import_path = descriptor.processor_class_import_path.clone();
-
-        self.port_info
-            .write()
-            .insert(type_name.clone(), (inputs.clone(), outputs.clone()));
+        self.port_info.write().insert(
+            processor_class_import_path.clone(),
+            (inputs.clone(), outputs.clone()),
+        );
 
         self.descriptors
             .write()
-            .insert(type_name.clone(), descriptor);
+            .insert(processor_class_import_path.clone(), descriptor);
 
         self.registrations.write().insert(
-            type_name.clone(),
+            processor_class_import_path.clone(),
             RegistrationKind::LegacyDyn { constructor },
         );
 
-        // A processor's class is reached by import and nothing else, so
-        // "which class is this?" is a question the record has to answer; a
-        // display name cannot, and by the time a helper fails to import one
-        // the app is long past `add`.
+        // The path is emitted as a structured field, not only inside the
+        // message: it is what `test_processor_identity.py` reads back to prove
+        // a class identifies the same way however the app was launched, and a
+        // named field is a contract a message body is not.
+        // Recorded as a string-valued field rather than through `Display`:
+        // `test_processor_identity.py` reads the identity back off this record
+        // to prove a class identifies the same way however the app was
+        // launched, and it matches on the quoted `field="value"` rendering that
+        // only the string path produces.
         tracing::info!(
-            %processor_class_import_path,
-            "[register_dynamic] new processor type registered '{}'",
-            type_name
+            processor_class_import_path = processor_class_import_path.as_str(),
+            "[register_dynamic] new processor type registered"
         );
 
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidRegisterProcessorType {
-                processor_type: type_name.clone(),
+                processor_type: processor_class_import_path,
             }),
         );
 
@@ -381,39 +361,41 @@ impl ProcessorInstanceFactory {
     /// `ProcessorInstance` is created. The graph needs the descriptor and port info
     /// for validation and wiring, but `create()` will return an error if called.
     pub fn register_descriptor_only(&self, descriptor: ProcessorDescriptor) -> Result<()> {
-        let type_name = descriptor.name.clone();
+        let processor_class_import_path = descriptor.processor_class_import_path.clone();
 
-        if self.descriptors.read().contains_key(&type_name) {
-            return Err(Error::Configuration(format!(
-                "Processor '{}' already registered",
-                type_name
-            )));
+        if self
+            .descriptors
+            .read()
+            .contains_key(&processor_class_import_path)
+        {
+            return Err(duplicate_class_import_path(&processor_class_import_path));
         }
 
         let inputs: Vec<PortInfo> = descriptor.inputs.iter().map(PortInfo::from).collect();
 
         let outputs: Vec<PortInfo> = descriptor.outputs.iter().map(PortInfo::from).collect();
 
-        self.port_info
-            .write()
-            .insert(type_name.clone(), (inputs.clone(), outputs.clone()));
+        self.port_info.write().insert(
+            processor_class_import_path.clone(),
+            (inputs.clone(), outputs.clone()),
+        );
 
         self.descriptors
             .write()
-            .insert(type_name.clone(), descriptor);
+            .insert(processor_class_import_path.clone(), descriptor);
 
         // No constructor registered - create() will fail with ProcessorNotFound,
         // which is correct since subprocess processors are never instantiated in Rust.
 
         tracing::info!(
             "[register_descriptor_only] subprocess processor type registered '{}'",
-            type_name
+            processor_class_import_path
         );
 
         PUBSUB.publish(
             topics::RUNTIME_GLOBAL,
             &Event::RuntimeGlobal(RuntimeEvent::RuntimeDidRegisterProcessorType {
-                processor_type: type_name.clone(),
+                processor_type: processor_class_import_path,
             }),
         );
 
@@ -428,18 +410,18 @@ impl ProcessorInstanceFactory {
     /// entry are skipped.
     pub(crate) fn unregister_processor_types(
         &self,
-        processor_type_idents: &[SchemaIdent],
+        processor_class_import_paths: &[ProcessorClassImportPath],
     ) -> Vec<UnregisteredProcessorTypeRecord> {
         let mut removed = Vec::new();
-        for ident in processor_type_idents {
-            let registration = self.registrations.write().remove(ident);
-            let port_info = self.port_info.write().remove(ident);
-            let descriptor = self.descriptors.write().remove(ident);
+        for import_path in processor_class_import_paths {
+            let registration = self.registrations.write().remove(import_path);
+            let port_info = self.port_info.write().remove(import_path);
+            let descriptor = self.descriptors.write().remove(import_path);
             if registration.is_none() && port_info.is_none() && descriptor.is_none() {
                 continue;
             }
             removed.push(UnregisteredProcessorTypeRecord {
-                processor_type: ident.clone(),
+                processor_type: import_path.clone(),
                 registration,
                 port_info,
                 descriptor,
@@ -477,7 +459,7 @@ impl ProcessorInstanceFactory {
         }
     }
 
-    pub fn can_create(&self, processor_type: &SchemaIdent) -> bool {
+    pub fn can_create(&self, processor_type: &ProcessorClassImportPath) -> bool {
         self.registrations.read().contains_key(processor_type)
     }
 
@@ -498,424 +480,216 @@ impl ProcessorInstanceFactory {
 
     pub fn port_info(
         &self,
-        processor_type: &SchemaIdent,
+        processor_type: &ProcessorClassImportPath,
     ) -> Option<(Vec<PortInfo>, Vec<PortInfo>)> {
         self.port_info.read().get(processor_type).cloned()
     }
 
-    pub fn is_registered(&self, processor_type: &SchemaIdent) -> bool {
+    pub fn is_registered(&self, processor_type: &ProcessorClassImportPath) -> bool {
         self.registrations.read().contains_key(processor_type)
     }
 
     /// Get the descriptor for a processor type, if registered.
-    pub fn descriptor(&self, processor_type: &SchemaIdent) -> Option<ProcessorDescriptor> {
+    pub fn descriptor(
+        &self,
+        processor_type: &ProcessorClassImportPath,
+    ) -> Option<ProcessorDescriptor> {
         self.descriptors.read().get(processor_type).cloned()
-    }
-
-    /// Warn when `ident`'s short type name collides with an already-registered
-    /// processor under a different `(org, package)` — the session-local vs
-    /// installed name-shadow case. Both stay addressable by full ident (the
-    /// registry keys on the structured `SchemaIdent`, never the short name), so
-    /// this only surfaces the ambiguity a bare short-name reference would hit;
-    /// it never removes or overwrites either registration. Returns the shadowed
-    /// idents (for tests / diagnostics).
-    pub fn warn_on_short_name_shadow(&self, ident: &SchemaIdent) -> Vec<SchemaIdent> {
-        let shadowed: Vec<SchemaIdent> = self
-            .descriptors
-            .read()
-            .keys()
-            .filter(|other| {
-                other.r#type == ident.r#type
-                    && (other.org != ident.org || other.package != ident.package)
-            })
-            .cloned()
-            .collect();
-        for other in &shadowed {
-            tracing::warn!(
-                registering = %ident,
-                shadows = %other,
-                "processor short type name '{}' is now registered under two \
-                 distinct packages; both remain addressable by their full \
-                 `@org/package/Type@version` ident, but a bare short-name \
-                 reference is ambiguous",
-                ident.r#type,
-            );
-        }
-        shadowed
     }
 
     /// List all registered processor types with their full descriptors.
     pub fn list_registered(&self) -> Vec<ProcessorDescriptor> {
         self.descriptors.read().values().cloned().collect()
     }
-
-    /// The highest-`SemVer` registered ident matching `(org, package, type)`,
-    /// or `None` when nothing matches. Shared tuple-scan behind
-    /// [`Self::resolve_any_version`] and
-    /// [`Self::resolve_installed_processor_type`].
-    ///
-    /// Iterates over `descriptors` (the truth for registered idents),
-    /// not `registrations`, so subprocess-only processors registered via
-    /// [`Self::register_descriptor_only`] participate in resolution.
-    fn highest_registered_for_tuple(
-        &self,
-        org: &crate::core::descriptors::Org,
-        package: &crate::core::descriptors::Package,
-        type_name: &crate::core::descriptors::TypeName,
-    ) -> Option<SchemaIdent> {
-        self.descriptors
-            .read()
-            .keys()
-            .filter(|id| id.schema_identity_tuple() == (org, package, type_name))
-            .max_by_key(|id| id.version)
-            .cloned()
-    }
-
-    /// Resolve `(org, package, type)` against the registry by picking the
-    /// highest-`SemVer` match across all registered idents. Returns
-    /// [`Error::UnknownProcessorType`] when nothing matches.
-    pub fn resolve_any_version(
-        &self,
-        org: &crate::core::descriptors::Org,
-        package: &crate::core::descriptors::Package,
-        type_name: &crate::core::descriptors::TypeName,
-    ) -> Result<SchemaIdent> {
-        self.highest_registered_for_tuple(org, package, type_name)
-            .ok_or_else(|| Error::UnknownProcessorType {
-                // No version was supplied; we render the search target as
-                // `(org, package, type)@0.0.0` so the diagnostic still names
-                // the offending tuple. Callers who want the exact "any
-                // version" semantics in the message string should match on
-                // the variant and re-render.
-                ident: SchemaIdent::new(
-                    org.clone(),
-                    package.clone(),
-                    type_name.clone(),
-                    crate::core::descriptors::SemVer::new(0, 0, 0),
-                ),
-            })
-    }
-
-    /// Resolve a version-free reference to the concrete [`SchemaIdent`] of the
-    /// single installed provider for `(org, package, type)`, or `None` when no
-    /// provider is registered.
-    ///
-    /// The one-installed-version-per-package invariant means at most one
-    /// version is registered for a tuple in a process; if more than one
-    /// somehow is, the highest `SemVer` wins deterministically. This is the
-    /// terminal resolution for a
-    /// [`ProcessorTypeReference`](crate::core::processors::ProcessorTypeReference),
-    /// distinct from [`Self::resolve_any_version`] (which the version-omitting
-    /// call-site macro uses against already-registered types).
-    pub fn resolve_installed_processor_type(
-        &self,
-        org: &crate::core::descriptors::Org,
-        package: &crate::core::descriptors::Package,
-        type_name: &crate::core::descriptors::TypeName,
-    ) -> Option<SchemaIdent> {
-        self.highest_registered_for_tuple(org, package, type_name)
-    }
 }
+
+/// The refusal when a second processor claims a class import path the registry
+/// already holds.
+///
+/// One path names one class, so a collision means two declarations that a
+/// fresh interpreter or a `use` cannot tell apart — and the remedy differs by
+/// language, so the message names both. It never resolves the collision by
+/// overwriting: the registration that arrived first stays.
+fn duplicate_class_import_path(processor_class_import_path: &ProcessorClassImportPath) -> Error {
+    Error::Configuration(format!(
+        "two processors both identify as `{processor_class_import_path}`, and one import path \
+         names one class. In Python this means a module was imported twice under different \
+         names, so `sys.modules` holds two copies of the class — import it by one name. In Rust \
+         it means two `#[processor]` types share a module path, which happens when one is \
+         declared inside a function body: a function's name is not part of a module path, so \
+         neither type is reachable by `use`. Declare processors at module scope."
+    ))
+}
+
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::descriptors::{Org, Package, SemVer, TypeName};
+    use crate::core::descriptors::{Org, Package, SchemaIdent, SemVer, TypeName};
 
-    fn ident(org: &str, pkg: &str, ty: &str, v: SemVer) -> SchemaIdent {
-        SchemaIdent::new(
-            Org::new(org).unwrap(),
-            Package::new(pkg).unwrap(),
-            TypeName::new(ty).unwrap(),
-            v,
+    fn import_path(path: &str) -> ProcessorClassImportPath {
+        ProcessorClassImportPath::new(path).expect("the fixture path names a class")
+    }
+
+    /// `name` is vestigial from here on — nothing keys on it — so the fixtures
+    /// hold it constant while the import path varies. A test that varied both
+    /// together could not tell which one the registry actually keyed on.
+    fn descriptor_for(path: &str) -> ProcessorDescriptor {
+        ProcessorDescriptor::new(
+            SchemaIdent::new(
+                Org::new("vestigial").unwrap(),
+                Package::new("vestigial").unwrap(),
+                TypeName::new("Vestigial").unwrap(),
+                SemVer::new(0, 0, 0),
+            ),
+            import_path(path),
+            "test",
         )
     }
 
-    fn unit_descriptor(name: SchemaIdent) -> ProcessorDescriptor {
-        // Distinct per type so these fixtures keep the property production
-        // descriptors have: one import path names one class.
-        let import_path = format!("{}::{}", module_path!(), name.r#type.as_str());
-        ProcessorDescriptor::new(name, import_path, "test")
+    #[test]
+    fn a_processor_is_registered_and_looked_up_by_its_class_import_path() {
+        let factory = ProcessorInstanceFactory::new();
+        let blur = import_path("my_app.filters:BlurProcessor");
+
+        assert!(
+            factory.descriptor(&blur).is_none(),
+            "nothing is registered until it is"
+        );
+
+        factory
+            .register_descriptor_only(descriptor_for(blur.as_str()))
+            .expect("registering a fresh import path succeeds");
+
+        assert!(factory.descriptor(&blur).is_some());
+        assert!(factory.port_info(&blur).is_some());
+        assert_eq!(
+            factory.descriptor(&blur).unwrap().processor_class_import_path,
+            blur
+        );
     }
 
+    /// The two grammars share one registry and never collide with each other:
+    /// the key is the whole string, so nothing canonicalizes a Python path into
+    /// a Rust one or back.
     #[test]
-    fn identical_pascal_case_from_different_org_package_pairs_coexist() {
-        // Two packages each ship a `Camera` processor — same PascalCase
-        // short name, different `(org, package)` pair. Pre-#707 this
-        // collided in the `String`-keyed registry; post-#707 the
-        // structured key disambiguates them and both registrations
-        // succeed cleanly.
+    fn distinct_import_paths_do_not_collide() {
         let factory = ProcessorInstanceFactory::new();
+        let paths = [
+            "my_app.filters:BlurProcessor",
+            "my_app::filters::BlurProcessor",
+            "other_app.filters:BlurProcessor",
+            "my_app.effects:BlurProcessor",
+        ];
 
-        let camera_a = ident("acme", "core", "Camera", SemVer::new(1, 0, 0));
-        let camera_b = ident("contoso", "core", "Camera", SemVer::new(1, 0, 0));
+        for path in paths {
+            factory
+                .register_descriptor_only(descriptor_for(path))
+                .unwrap_or_else(|e| panic!("{path} must register cleanly: {e}"));
+        }
 
-        factory
-            .register_descriptor_only(unit_descriptor(camera_a.clone()))
-            .expect("first Camera must register cleanly");
-        factory
-            .register_descriptor_only(unit_descriptor(camera_b.clone()))
-            .expect(
-                "second Camera (different org) must register cleanly — \
-                 the structured key disambiguates @acme/core/Camera@1.0.0 \
-                 from @contoso/core/Camera@1.0.0",
+        assert_eq!(factory.list_registered().len(), paths.len());
+        for path in paths {
+            assert!(
+                factory.descriptor(&import_path(path)).is_some(),
+                "{path} must stay addressable by its own path"
             );
-
-        assert!(factory.descriptor(&camera_a).is_some());
-        assert!(factory.descriptor(&camera_b).is_some());
-        assert_eq!(factory.list_registered().len(), 2);
+        }
     }
 
+    /// The registration that arrived first stays, and the refusal names both
+    /// languages' causes — a Rust processor declared in a function body derives
+    /// its enclosing module's path, so two of them collide here and nowhere
+    /// else.
     #[test]
-    fn duplicate_full_4_tuple_returns_clear_error() {
-        // Two registrations of the SAME structured ident must fail with
-        // an actionable error variant — the new typed key doesn't
-        // accidentally tolerate exact 4-tuple collisions.
+    fn a_second_class_claiming_a_registered_import_path_is_refused() {
         let factory = ProcessorInstanceFactory::new();
-        let id = ident("acme", "core", "Camera", SemVer::new(1, 0, 0));
+        let path = "my_app.filters:BlurProcessor";
 
         factory
-            .register_descriptor_only(unit_descriptor(id.clone()))
+            .register_descriptor_only(descriptor_for(path))
             .expect("first registration succeeds");
 
-        let err = factory
-            .register_descriptor_only(unit_descriptor(id.clone()))
-            .expect_err("duplicate 4-tuple must be rejected");
+        let refusal = factory
+            .register_descriptor_only(descriptor_for(path))
+            .expect_err("a duplicate import path must be refused");
 
-        match err {
-            Error::Configuration(msg) => {
-                assert!(
-                    msg.contains("already registered"),
-                    "error must name the collision; got: {msg}"
-                );
-                // The Display form of the offending ident is in the
-                // message — that's what humans need to see.
-                assert!(
-                    msg.contains("@acme/core/Camera@1.0.0"),
-                    "error must render the structured ident; got: {msg}"
-                );
-            }
-            other => panic!("expected Configuration variant; got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn version_difference_disambiguates_otherwise_identical_ident() {
-        // Major-version bumps of the same `(org, package, type)` are
-        // distinct registrations — locks the package-as-publication-unit
-        // invariant from the milestone description.
-        let factory = ProcessorInstanceFactory::new();
-        let v1 = ident("acme", "core", "Camera", SemVer::new(1, 0, 0));
-        let v2 = ident("acme", "core", "Camera", SemVer::new(2, 0, 0));
-
-        factory
-            .register_descriptor_only(unit_descriptor(v1.clone()))
-            .unwrap();
-        factory
-            .register_descriptor_only(unit_descriptor(v2.clone()))
-            .unwrap();
-
-        assert!(factory.descriptor(&v1).is_some());
-        assert!(factory.descriptor(&v2).is_some());
-    }
-
-    #[test]
-    fn resolve_any_version_picks_highest_semver_when_multiple_registered() {
-        let factory = ProcessorInstanceFactory::new();
-        let org = Org::new("acme").unwrap();
-        let pkg = Package::new("core").unwrap();
-        let ty = TypeName::new("Camera").unwrap();
-
-        let v1 = SchemaIdent::new(org.clone(), pkg.clone(), ty.clone(), SemVer::new(1, 0, 0));
-        let v2 = SchemaIdent::new(org.clone(), pkg.clone(), ty.clone(), SemVer::new(1, 2, 0));
-        let v3 = SchemaIdent::new(org.clone(), pkg.clone(), ty.clone(), SemVer::new(2, 0, 0));
-
-        // Insert out of order to prove the resolver picks max, not last-inserted.
-        factory
-            .register_descriptor_only(unit_descriptor(v2.clone()))
-            .unwrap();
-        factory
-            .register_descriptor_only(unit_descriptor(v3.clone()))
-            .unwrap();
-        factory
-            .register_descriptor_only(unit_descriptor(v1.clone()))
-            .unwrap();
-
-        let resolved = factory.resolve_any_version(&org, &pkg, &ty).unwrap();
+        let Error::Configuration(message) = refusal else {
+            panic!("expected Configuration; got {refusal:?}");
+        };
+        assert!(
+            message.contains(path),
+            "the refusal must name the contested path; got: {message}"
+        );
+        assert!(
+            message.contains("sys.modules"),
+            "the refusal must name the Python cause; got: {message}"
+        );
+        assert!(
+            message.contains("module scope"),
+            "the refusal must name the Rust cause and its fix; got: {message}"
+        );
         assert_eq!(
-            resolved, v3,
-            "resolve_any_version must return the highest semver"
+            factory.list_registered().len(),
+            1,
+            "a refused duplicate must not overwrite the live registration"
         );
     }
 
+    /// Two `#[processor]` types declared inside function bodies in one module
+    /// derive the same `module_path!()`. Under the structured key their
+    /// distinct idents hid the clash and neither was reachable by `use`; the
+    /// import-path key surfaces it at registration.
     #[test]
-    fn resolve_any_version_returns_unknown_processor_type_when_nothing_matches() {
+    fn two_rust_processors_sharing_a_module_path_are_caught_at_registration() {
         let factory = ProcessorInstanceFactory::new();
-        // Register an unrelated ident — must not satisfy the lookup.
+        let shared_module_path = "my_crate::filters";
+
         factory
-            .register_descriptor_only(unit_descriptor(ident(
-                "other",
-                "core",
-                "Camera",
-                SemVer::new(1, 0, 0),
-            )))
-            .unwrap();
+            .register_descriptor_only(descriptor_for(shared_module_path))
+            .expect("the first of the two registers");
 
-        let org = Org::new("acme").unwrap();
-        let pkg = Package::new("core").unwrap();
-        let ty = TypeName::new("Camera").unwrap();
-
-        let err = factory.resolve_any_version(&org, &pkg, &ty).unwrap_err();
-        match err {
-            Error::UnknownProcessorType { ident } => {
-                assert_eq!(ident.org, org);
-                assert_eq!(ident.package, pkg);
-                assert_eq!(ident.r#type, ty);
-            }
-            other => panic!("expected UnknownProcessorType, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn resolve_installed_processor_type_returns_the_single_installed_version() {
-        // Terminal resolution for a version-free reference: with one installed
-        // version, resolve to it; with nothing registered, `None` (the
-        // genuinely-absent case the caller degrades to `UnknownProcessorType`).
-        let factory = ProcessorInstanceFactory::new();
-        let org = Org::new("acme").unwrap();
-        let pkg = Package::new("core").unwrap();
-        let ty = TypeName::new("Camera").unwrap();
-
-        // Nothing registered → None.
         assert!(
             factory
-                .resolve_installed_processor_type(&org, &pkg, &ty)
-                .is_none(),
-            "an absent tuple must resolve to None"
+                .register_descriptor_only(descriptor_for(shared_module_path))
+                .is_err(),
+            "the second must be refused rather than silently shadowing the first"
         );
+    }
 
-        // Register the single installed version.
-        let installed = ident("acme", "core", "Camera", SemVer::new(2, 3, 4));
+    /// `register_dynamic` and `register_descriptor_only` write the same key
+    /// into the same maps, so a path claimed through one is claimed against the
+    /// other — a Python class cannot quietly displace a native built-in.
+    #[test]
+    fn the_two_registration_paths_share_one_key_space() {
+        let factory = ProcessorInstanceFactory::new();
+        let path = "my_app.filters:BlurProcessor";
+
         factory
-            .register_descriptor_only(unit_descriptor(installed.clone()))
-            .unwrap();
+            .register_descriptor_only(descriptor_for(path))
+            .expect("descriptor-only registration succeeds");
 
-        // A version-free resolve returns the concrete installed ident.
-        assert_eq!(
-            factory.resolve_installed_processor_type(&org, &pkg, &ty),
-            Some(installed),
-            "must resolve to the installed version's concrete ident"
-        );
-
-        // A different type in the same package still resolves to None — the
-        // resolve is tuple-scoped, not a loose match.
-        let other_ty = TypeName::new("Display").unwrap();
+        let constructor: DynamicProcessorConstructorFn =
+            Box::new(|_node| Err(Error::Configuration("unreachable".into())));
         assert!(
             factory
-                .resolve_installed_processor_type(&org, &pkg, &other_ty)
-                .is_none(),
-            "a different type must not resolve"
+                .register_dynamic(descriptor_for(path), constructor)
+                .is_err(),
+            "a constructor-bearing registration must not overwrite a descriptor-only one"
         );
     }
 
     #[test]
-    fn version_free_reference_resolves_zero_version_registration_that_a_one_zero_zero_pin_misses() {
-        use crate::core::processors::ProcessorTypeReference;
-
-        // The `streamlib-runtime` boot scenario: the always-present api-server
-        // is declared with the version-free `#[processor("@tatolab/api-server/
-        // ApiServer")]` grammar, so `register::<P>()` registers its descriptor
-        // under the `0.0.0` version-free sentinel (#1409). This reproduces both
-        // `add_v` resolution arms against exactly that registration.
+    fn an_unregistered_path_is_absent_from_every_map() {
         let factory = ProcessorInstanceFactory::new();
-        let registered = ident("tatolab", "api-server", "ApiServer", SemVer::new(0, 0, 0));
         factory
-            .register_descriptor_only(unit_descriptor(registered.clone()))
-            .expect("register the api-server descriptor at the 0.0.0 sentinel");
-
-        // A reference resolves `(org, package, type)` to the concrete 0.0.0
-        // registration, and that ident carries a `port_info` entry — so `add_v`
-        // resolves the node.
-        let version_free = ProcessorTypeReference::new(
-            Org::new("tatolab").unwrap(),
-            Package::new("api-server").unwrap(),
-            TypeName::new("ApiServer").unwrap(),
-        );
-        let resolved = factory.resolve_installed_processor_type(
-            version_free.org(),
-            version_free.package(),
-            version_free.r#type(),
-        );
-        assert_eq!(
-            resolved.as_ref(),
-            Some(&registered),
-            "a version-free reference must resolve to the 0.0.0 registration"
-        );
-        assert!(
-            factory.port_info(&registered).is_some(),
-            "the resolved ident must carry a port_info entry so add_v resolves the node"
-        );
-
-        // Why a reference may not carry a version: the registry is version-EXACT,
-        // and a code-declared processor registers under the 0.0.0 version-free
-        // sentinel. A reference pinned at 1.0.0 therefore missed a processor that
-        // was loaded and registered — the api-server booted with its node in
-        // Error state and never served /health. `ProcessorTypeReference` has no
-        // version field now, so that reference cannot be written; this locks the
-        // exactness that made it fatal.
-        let one_zero_zero = ident("tatolab", "api-server", "ApiServer", SemVer::new(1, 0, 0));
-        assert!(
-            factory.port_info(&one_zero_zero).is_none(),
-            "a 1.0.0-pinned reference must MISS the 0.0.0 registration — the boot bug"
-        );
-    }
-
-    #[test]
-    fn resolve_any_version_does_not_cross_org_or_package_or_type_boundaries() {
-        let factory = ProcessorInstanceFactory::new();
-
-        // Same type name + version, different (org, package) tuples must
-        // not satisfy a lookup against the wrong tuple.
-        factory
-            .register_descriptor_only(unit_descriptor(ident(
-                "acme",
-                "core",
-                "Camera",
-                SemVer::new(1, 0, 0),
-            )))
-            .unwrap();
-        factory
-            .register_descriptor_only(unit_descriptor(ident(
-                "acme",
-                "audio",
-                "Camera",
-                SemVer::new(9, 9, 9),
-            )))
-            .unwrap();
-        factory
-            .register_descriptor_only(unit_descriptor(ident(
-                "contoso",
-                "core",
-                "Camera",
-                SemVer::new(9, 9, 9),
-            )))
-            .unwrap();
-        factory
-            .register_descriptor_only(unit_descriptor(ident(
-                "acme",
-                "core",
-                "Microphone",
-                SemVer::new(9, 9, 9),
-            )))
+            .register_descriptor_only(descriptor_for("my_app.filters:BlurProcessor"))
             .unwrap();
 
-        let resolved = factory
-            .resolve_any_version(
-                &Org::new("acme").unwrap(),
-                &Package::new("core").unwrap(),
-                &TypeName::new("Camera").unwrap(),
-            )
-            .unwrap();
-        assert_eq!(resolved.version, SemVer::new(1, 0, 0));
+        let never_registered = import_path("my_app.filters:SharpenProcessor");
+        assert!(factory.descriptor(&never_registered).is_none());
+        assert!(factory.port_info(&never_registered).is_none());
+        assert!(!factory.is_registered(&never_registered));
+        assert!(!factory.can_create(&never_registered));
     }
 }

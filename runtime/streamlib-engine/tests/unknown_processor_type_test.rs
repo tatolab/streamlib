@@ -2,30 +2,29 @@
 // SPDX-License-Identifier: BUSL-1.1
 
 //! Tests for `Error::UnknownProcessorType` — the typed error surfaced when
-//! a caller asks `add_processor` for a structurally-valid `SchemaIdent`
-//! whose type isn't registered.
+//! a caller asks `add_processor` for a class import path nothing is
+//! registered under.
 //!
 //! Two behaviors locked here:
 //! 1. The error variant is `UnknownProcessorType` (not the old generic
-//!    `GraphError("Could not create node")`), and names the offending
-//!    `(org, package, type)` tuple.
+//!    `GraphError("Could not create node")`), and carries the requested path
+//!    verbatim — the caller asked for a class by that name, and matching
+//!    their spelling is what makes a typo findable.
 //! 2. The failed node is left in the graph in `ProcessorState::Error`, so
 //!    API consumers (`GET /api/graph`) can see what failed and why. This
 //!    is the runtime-dynamic-system shape: the runtime tells you something
 //!    didn't resolve, and leaves a placeholder for observability.
 
 use serial_test::serial;
+use streamlib::sdk::descriptors::ProcessorClassImportPath;
 use streamlib::sdk::error::Error;
 use streamlib::sdk::processors::ProcessorSpec;
 use streamlib::sdk::runtime::Runner;
 
-fn unknown_ident() -> streamlib::sdk::descriptors::SchemaIdent {
-    streamlib::sdk::schema_ident!(
-        "tatolab",
-        "ghost-package",
-        "DefinitelyNotARegisteredProcessor",
-        "9.9.9"
-    )
+const UNKNOWN_PATH: &str = "ghost_package:DefinitelyNotARegisteredProcessor";
+
+fn unknown_ident() -> ProcessorClassImportPath {
+    ProcessorClassImportPath::new(UNKNOWN_PATH).unwrap()
 }
 
 #[test]
@@ -38,20 +37,11 @@ fn add_processor_with_unknown_type_returns_typed_error() {
 
     match result {
         Err(Error::UnknownProcessorType { ident: returned }) => {
-            // The tuple, not the whole ident: resolution is version-blind, so
-            // the error names what was searched for and carries no meaningful
-            // version. Asserting the caller's version back would lock the
-            // pre-version-blind behaviour.
-            //
-            // Spelled as literals rather than compared against `ident` — that
+            // Spelled as a literal rather than compared against `ident` — that
             // would echo the input on both sides and pass no matter what the
-            // engine returned.
-            assert_eq!(returned.org.as_str(), "tatolab");
-            assert_eq!(returned.package.as_str(), "ghost-package");
-            assert_eq!(
-                returned.r#type.as_str(),
-                "DefinitelyNotARegisteredProcessor"
-            );
+            // engine returned. The path must come back byte for byte: the
+            // engine stores it opaque, so anything else means it parsed it.
+            assert_eq!(returned.as_str(), UNKNOWN_PATH);
         }
         other => panic!("expected Err(UnknownProcessorType), got {:?}", other),
     }
@@ -79,14 +69,12 @@ fn unknown_processor_type_leaves_failed_node_in_graph_with_error_state() {
         .and_then(|v| v.as_array())
         .expect("graph JSON should carry a nodes array");
 
+    // The unresolved node carries the requested path verbatim — nothing
+    // resolved it, so there is nothing else it could carry, and the caller can
+    // find their own typo in the graph.
     let failed_node = nodes
         .iter()
-        .find(|node| {
-            node.get("type")
-                .and_then(|t| t.get("type"))
-                .and_then(|s| s.as_str())
-                == Some("DefinitelyNotARegisteredProcessor")
-        })
+        .find(|node| node.get("type").and_then(|t| t.as_str()) == Some(UNKNOWN_PATH))
         .expect("failed node should be present in the graph for observability");
 
     let state = failed_node
@@ -110,12 +98,7 @@ fn graph_snapshot_validate_rejects_unknown_processor_type() {
         "processors": [
             {
                 "alias": "ghost",
-                "type": {
-                    "org": "tatolab",
-                    "package": "ghost-package",
-                    "type": "DefinitelyNotARegisteredProcessor",
-                    "version": "1.0.0"
-                },
+                "type": "ghost_package:DefinitelyNotARegisteredProcessor",
                 "config": {}
             }
         ]
@@ -124,8 +107,7 @@ fn graph_snapshot_validate_rejects_unknown_processor_type() {
     let snapshot = GraphSnapshot::from_json_str(json).unwrap();
     match snapshot.validate() {
         Err(Error::UnknownProcessorType { ident }) => {
-            assert_eq!(ident.r#type.as_str(), "DefinitelyNotARegisteredProcessor");
-            assert_eq!(ident.package.as_str(), "ghost-package");
+            assert_eq!(ident.as_str(), UNKNOWN_PATH);
         }
         other => panic!("expected Err(UnknownProcessorType), got {:?}", other),
     }

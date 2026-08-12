@@ -10,18 +10,11 @@
 //!   grammar. An identity string omitted from the attribute synthesizes an
 //!   `@app/local/<StructName>` identity so a bare crate with no
 //!   `streamlib.yaml` compiles.
-//! - `streamlib::sdk::schema_ident_any_version!("org", "package", "Type")`
-//!   — **canonical, default form.** Validates `(org, package, type)` at
-//!   compile time; resolves the version at runtime against the global
-//!   processor registry (highest installed `SemVer` wins, Cargo / npm
-//!   convention). Returns `Result<SchemaIdent, Error>` —
-//!   `Error::UnknownProcessorType` when nothing matches.
 //! - `streamlib::sdk::schema_ident!("org", "package", "Type", "1.0.0")` —
 //!   the same four fields as the long [`SchemaIdent::new`] constructor,
-//!   validated at compile time and expanding to it verbatim. For the
-//!   *resolved* identities that carry a version (registry keys); naming a
-//!   processor from code goes through `processor_type_ref!`, which carries
-//!   no version at all.
+//!   validated at compile time and expanding to it verbatim. It does not name
+//!   a processor: a processor is named by the import path of the class it is,
+//!   which the attribute macro captures from its expansion site.
 
 mod codegen;
 mod config_descriptor;
@@ -130,14 +123,6 @@ fn sdk_root() -> proc_macro2::TokenStream {
 /// type, version) as string literals, validates each at compile time,
 /// and expands to the equivalent `SchemaIdent::new(...)` expression.
 ///
-/// **Prefer [`schema_ident_any_version!`] for the common case.** Reach
-/// for `schema_ident!` only when you have a deliberate reason to refuse
-/// any version other than the one you typed: tests asserting against a
-/// specific historical version, callers that bind to a known-broken
-/// version they don't want auto-upgraded out of, or any other case
-/// where strict pinning is the *intent*. For "match whatever's
-/// registered" — the dominant case — use `schema_ident_any_version!`.
-///
 /// ```ignore
 /// // Long form (5 lines):
 /// SchemaIdent::new(
@@ -160,155 +145,6 @@ pub fn schema_ident(input: TokenStream) -> TokenStream {
         Ok(tokens) => tokens.into(),
         Err(err) => err.to_compile_error().into(),
     }
-}
-
-/// **Canonical, default form** for naming a processor at a call site.
-/// Omits the version arg and resolves it at runtime from the global
-/// processor registry, picking the highest registered `SemVer` for the
-/// `(org, package, type)` tuple (Cargo / npm convention).
-///
-/// This is the right shape for nearly every call site — the spawning
-/// binary should match whatever version of a processor happens to be
-/// registered when `runtime.add_module(...)` finishes. Reach for the
-/// strict-pin [`schema_ident!`] form only when you have a deliberate
-/// reason to refuse newer-but-compatible registered versions.
-///
-/// ```ignore
-/// // Compile-time:  org / package / type validated at proc-macro expansion.
-/// // Runtime:       PROCESSOR_REGISTRY.resolve_any_version(...) picks the
-/// //                highest semver and returns Result<SchemaIdent, Error>.
-/// let id: SchemaIdent =
-///     streamlib::sdk::schema_ident_any_version!("tatolab", "polyglot-foo", "PolyglotFoo")?;
-/// ```
-///
-/// Returns `Result<SchemaIdent, streamlib::sdk::error::Error>`. `Error::UnknownProcessorType`
-/// is returned when no registration matches `(org, package, type)`.
-#[proc_macro]
-pub fn schema_ident_any_version(input: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(input as SchemaIdentAnyVersionArgs);
-    match expand_schema_ident_any_version(&args) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.to_compile_error().into(),
-    }
-}
-
-struct SchemaIdentAnyVersionArgs {
-    org: LitStr,
-    package: LitStr,
-    type_name: LitStr,
-}
-
-impl Parse for SchemaIdentAnyVersionArgs {
-    fn parse(input: ParseStream<'_>) -> syn::Result<Self> {
-        let org: LitStr = input.parse()?;
-        input.parse::<Token![,]>()?;
-        let package: LitStr = input.parse()?;
-        input.parse::<Token![,]>()?;
-        let type_name: LitStr = input.parse()?;
-        // Tolerate an optional trailing comma.
-        let _ = input.parse::<Token![,]>();
-        Ok(Self {
-            org,
-            package,
-            type_name,
-        })
-    }
-}
-
-fn expand_schema_ident_any_version(
-    args: &SchemaIdentAnyVersionArgs,
-) -> syn::Result<proc_macro2::TokenStream> {
-    let org_str = args.org.value();
-    let package_str = args.package.value();
-    let type_str = args.type_name.value();
-
-    Org::new(&org_str).map_err(|e| {
-        syn::Error::new(args.org.span(), format!("invalid org `{}`: {}", org_str, e))
-    })?;
-    Package::new(&package_str).map_err(|e| {
-        syn::Error::new(
-            args.package.span(),
-            format!("invalid package `{}`: {}", package_str, e),
-        )
-    })?;
-    TypeName::new(&type_str).map_err(|e| {
-        syn::Error::new(
-            args.type_name.span(),
-            format!("invalid type name `{}`: {}", type_str, e),
-        )
-    })?;
-
-    Ok(quote! {
-        ::streamlib::sdk::processors::PROCESSOR_REGISTRY.resolve_any_version(
-            &::streamlib::sdk::descriptors::Org::new(#org_str).expect("validated by macro"),
-            &::streamlib::sdk::descriptors::Package::new(#package_str).expect("validated by macro"),
-            &::streamlib::sdk::descriptors::TypeName::new(#type_str).expect("validated by macro"),
-        )
-    })
-}
-
-/// `processor_type_ref!("org", "package", "Type")` — a **version-free**
-/// processor-type reference for the lazy-discovery world (app code that never
-/// calls `add_module`).
-///
-/// Expands to a `ProcessorTypeReference` value, which carries no version and
-/// does **no registry lookup at the call site**, so the reference
-/// reaches `add_processor`'s lazy hook and resolves to the single installed
-/// provider. This is the canonical form for referencing a processor by
-/// `@org/package/Type` with no version.
-///
-/// Distinct from [`schema_ident_any_version!`], which resolves a `SchemaIdent`
-/// *now* against the already-registered processor types (the post-`add_module`
-/// / power-caller form). Reach for `processor_type_ref!` when you want lazy
-/// loading; reach for `schema_ident_any_version!` when the provider is already
-/// registered.
-///
-/// ```ignore
-/// // No version at the reference site, no `?`, no add_module call:
-/// runtime.add_processor(streamlib::sdk::processors::ProcessorSpec::new(
-///     streamlib::sdk::processor_type_ref!("tatolab", "camera", "Camera"),
-///     serde_json::json!({}),
-/// ))?;
-/// ```
-#[proc_macro]
-pub fn processor_type_ref(input: TokenStream) -> TokenStream {
-    let args = parse_macro_input!(input as SchemaIdentAnyVersionArgs);
-    match expand_processor_type_ref(&args) {
-        Ok(tokens) => tokens.into(),
-        Err(err) => err.to_compile_error().into(),
-    }
-}
-
-fn expand_processor_type_ref(
-    args: &SchemaIdentAnyVersionArgs,
-) -> syn::Result<proc_macro2::TokenStream> {
-    let org_str = args.org.value();
-    let package_str = args.package.value();
-    let type_str = args.type_name.value();
-
-    Org::new(&org_str).map_err(|e| {
-        syn::Error::new(args.org.span(), format!("invalid org `{}`: {}", org_str, e))
-    })?;
-    Package::new(&package_str).map_err(|e| {
-        syn::Error::new(
-            args.package.span(),
-            format!("invalid package `{}`: {}", package_str, e),
-        )
-    })?;
-    TypeName::new(&type_str).map_err(|e| {
-        syn::Error::new(
-            args.type_name.span(),
-            format!("invalid type name `{}`: {}", type_str, e),
-        )
-    })?;
-
-    Ok(quote! {
-        ::streamlib::sdk::processors::ProcessorTypeReference::new(
-            ::streamlib::sdk::descriptors::Org::new(#org_str).expect("validated by macro"),
-            ::streamlib::sdk::descriptors::Package::new(#package_str).expect("validated by macro"),
-            ::streamlib::sdk::descriptors::TypeName::new(#type_str).expect("validated by macro"),
-        )
-    })
 }
 
 struct SchemaIdentArgs {

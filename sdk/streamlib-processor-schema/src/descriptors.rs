@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ProcessorScheduling, SchemaIdent};
+use crate::{ProcessorClassImportPath, ProcessorScheduling, SchemaIdent};
 
 /// Runtime environment for a processor.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -114,15 +114,15 @@ impl ConfigDescriptor for () {
 pub struct ProcessorDescriptor {
     /// Structured processor identity — `@org/package/Type@version`.
     pub name: SchemaIdent,
-    /// The processor class's fully-qualified import path —
-    /// `my_app.filters:BlurProcessor` in Python,
-    /// `my_app::filters::BlurProcessor` in Rust.
+    /// The processor class's fully-qualified import path — what the registry,
+    /// the control plane and helper-process spawning all name this processor
+    /// by.
     ///
     /// Derived mechanically by the authoring surface — the `#[processor]`
     /// macro captures it at the expansion site, the wheel reads it off the
     /// class — and never authored. Taken by `new` rather than by a builder so
     /// that adding a descriptor without deriving one does not compile.
-    pub processor_class_import_path: String,
+    pub processor_class_import_path: ProcessorClassImportPath,
     pub description: String,
     pub version: String,
     pub repository: String,
@@ -148,12 +148,12 @@ pub struct ProcessorDescriptor {
 impl ProcessorDescriptor {
     pub fn new(
         name: SchemaIdent,
-        processor_class_import_path: impl Into<String>,
+        processor_class_import_path: ProcessorClassImportPath,
         description: impl Into<String>,
     ) -> Self {
         Self {
             name,
-            processor_class_import_path: processor_class_import_path.into(),
+            processor_class_import_path,
             description: description.into(),
             version: String::new(),
             repository: String::new(),

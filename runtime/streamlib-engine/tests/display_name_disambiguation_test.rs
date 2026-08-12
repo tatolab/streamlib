@@ -13,7 +13,8 @@
 
 use serial_test::serial;
 use streamlib::sdk::descriptors::{
-    Org, Package, PortDescriptor, ProcessorDescriptor, SchemaIdent, SemVer, TypeName,
+    Org, Package, PortDescriptor, ProcessorClassImportPath, ProcessorDescriptor, SchemaIdent,
+    SemVer, TypeName,
 };
 use streamlib::sdk::graph_snapshot::GraphSnapshot;
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
@@ -22,22 +23,23 @@ use streamlib::sdk::runtime::Runner;
 /// Register a descriptor-only processor type — enough for `add_processor`'s
 /// port-info lookup, with no instance to construct. Idempotent: a second
 /// register under `serial_test` returns an already-registered error we ignore.
-fn register_test_type(short: &str) -> SchemaIdent {
-    let id = SchemaIdent::new(
-        Org::new("tatolab").unwrap(),
-        Package::new("display-name-test").unwrap(),
-        TypeName::new(short).unwrap(),
-        SemVer::new(1, 0, 0),
-    );
+fn register_test_type(short: &str) -> ProcessorClassImportPath {
+    let import_path =
+        ProcessorClassImportPath::new(format!("{}::{short}", module_path!())).unwrap();
     let descriptor = ProcessorDescriptor::new(
-        id.clone(),
-        format!("{}::{short}", module_path!()),
+        SchemaIdent::new(
+            Org::new("tatolab").unwrap(),
+            Package::new("display-name-test").unwrap(),
+            TypeName::new(short).unwrap(),
+            SemVer::new(1, 0, 0),
+        ),
+        import_path.clone(),
         "display-name disambiguation test",
     )
     .with_input(PortDescriptor::new("_unused_in", "", false))
     .with_output(PortDescriptor::new("_unused_out", "", false));
     let _ = PROCESSOR_REGISTRY.register_descriptor_only(descriptor);
-    id
+    import_path
 }
 
 /// Every node's display name, in node-iteration order, as the graph JSON
@@ -105,7 +107,8 @@ fn the_read_back_name_is_the_assigned_one_not_the_requested_one() {
 #[test]
 #[serial]
 fn the_counter_never_reaches_the_processor_type() {
-    let camera = register_test_type("TypeUntouchedCamera");
+    let camera_path = register_test_type("TypeUntouchedCamera");
+    let camera = camera_path.clone();
 
     let runtime = Runner::new().unwrap();
     runtime
@@ -117,7 +120,7 @@ fn the_counter_never_reaches_the_processor_type() {
 
     let graph = runtime.to_json().expect("graph json");
     for node in graph["nodes"].as_array().expect("nodes array") {
-        assert_eq!(node["type"]["type"], "TypeUntouchedCamera");
+        assert_eq!(node["type"], serde_json::json!(camera_path.as_str()));
     }
 }
 

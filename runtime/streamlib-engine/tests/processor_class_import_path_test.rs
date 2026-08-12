@@ -40,6 +40,8 @@ fn import_path_of<P: GeneratedProcessor>() -> String {
     P::descriptor()
         .expect("the macro emits a descriptor for every processor")
         .processor_class_import_path
+        .as_str()
+        .to_string()
 }
 
 #[test]

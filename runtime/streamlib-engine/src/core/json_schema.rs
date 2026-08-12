@@ -12,14 +12,13 @@ use serde::{Deserialize, Serialize};
 
 use crate::core::graph::{GraphEdgeWithComponents, GraphNodeWithComponents};
 
-/// Structured schema-identifier + semantic-version wire DTOs. Relocated to the
-/// engine-free `streamlib-processor-schema` crate so the MoQ catalog and the
-/// plugin authoring chain share one definition; re-exported here so every
-/// `core::json_schema::{SchemaIdentOutput, SemanticVersionOutput}` path — and
-/// the `streamlib::sdk::json_schema` facade the API server consumes — resolves
-/// unchanged. The `utoipa` feature the engine enables gives them the
-/// `utoipa::ToSchema` derive the aggregate response types below require.
-pub use streamlib_processor_schema::{SchemaIdentOutput, SemanticVersionOutput};
+/// The processor-identity wire type. Defined in the engine-free
+/// `streamlib-processor-schema` crate so the MoQ catalog and the authoring
+/// chain share one definition; re-exported here so the
+/// `streamlib::sdk::json_schema` facade the API server consumes resolves it.
+/// The `utoipa` feature the engine enables gives it the `utoipa::ToSchema`
+/// derive the aggregate response types below require.
+pub use streamlib_processor_schema::ProcessorClassImportPath;
 
 // =============================================================================
 // Graph Response Schema (/api/graph)
@@ -39,11 +38,9 @@ pub struct GraphResponse {
 pub struct ProcessorNodeOutput {
     /// Unique identifier for this processor instance.
     pub id: String,
-    /// Structured processor identity — `@org/package/Type@version`
-    /// rendered as four typed fields on the wire (the structured-everywhere
-    /// rule). The joined `Display` form is render-only.
+    /// The import path of the class this processor is — a plain string.
     #[serde(rename = "type")]
-    pub processor_type: SchemaIdentOutput,
+    pub processor_type: ProcessorClassImportPath,
     /// Display name for UI. May differ from type for hosted processors.
     pub display_name: String,
     /// Processor configuration as JSON.
@@ -161,9 +158,8 @@ pub enum ProcessorRuntimeOutput {
 /// Descriptor for a processor type.
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, utoipa::ToSchema)]
 pub struct ProcessorDescriptorOutput {
-    /// Structured processor identity — `@org/package/Type@version`
-    /// rendered as four typed fields on the wire.
-    pub name: SchemaIdentOutput,
+    /// The import path of the class this processor is.
+    pub name: ProcessorClassImportPath,
     /// Human-readable description.
     pub description: String,
     /// Semantic version string.
@@ -234,7 +230,7 @@ impl From<&crate::core::graph::ProcessorNode> for ProcessorNodeOutput {
     fn from(node: &crate::core::graph::ProcessorNode) -> Self {
         Self {
             id: node.id.to_string(),
-            processor_type: SchemaIdentOutput::from(&node.processor_type),
+            processor_type: node.processor_type.clone(),
             display_name: node.display_name.clone(),
             config: node.config.clone(),
             config_checksum: node.config_checksum,
@@ -320,7 +316,7 @@ impl From<crate::core::graph::LinkState> for LinkStateOutput {
 impl From<&crate::core::ProcessorDescriptor> for ProcessorDescriptorOutput {
     fn from(desc: &crate::core::ProcessorDescriptor) -> Self {
         Self {
-            name: SchemaIdentOutput::from(&desc.name),
+            name: desc.processor_class_import_path.clone(),
             description: desc.description.clone(),
             version: desc.version.clone(),
             repository: desc.repository.clone(),

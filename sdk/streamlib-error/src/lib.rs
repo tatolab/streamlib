@@ -5,11 +5,11 @@
 //!
 //! Shared by `streamlib-engine` (which re-exports it at
 //! `core::error`) and the engine-free authoring surface. Every variant
-//! is String / std / anyhow based plus the engine-free `SchemaIdent`
-//! (from `streamlib-processor-schema`) and, on Linux, the engine-free
-//! `ConsumerRhiError` conversion.
+//! is String / std / anyhow based plus the engine-free
+//! `ProcessorClassImportPath` (from `streamlib-processor-schema`) and, on
+//! Linux, the engine-free `ConsumerRhiError` conversion.
 
-use streamlib_processor_schema::SchemaIdent;
+use streamlib_processor_schema::ProcessorClassImportPath;
 
 /// The StreamLib error type.
 #[derive(thiserror::Error, Debug)]
@@ -60,7 +60,9 @@ pub enum Error {
     ProcessorNotFound(String),
 
     #[error("Unknown processor type: {ident} (not registered)")]
-    UnknownProcessorType { ident: SchemaIdent },
+    UnknownProcessorType {
+        ident: ProcessorClassImportPath,
+    },
 
     #[error("Processor '{processor_id}' has no {direction} port named '{port_name}'")]
     ProcessorPortNotFound {
@@ -207,30 +209,20 @@ impl From<streamlib_consumer_rhi::ConsumerRhiError> for Error {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use streamlib_processor_schema::{Org, Package, SchemaIdent, SemVer, TypeName};
 
-    fn ident(org: &str, package: &str, ty: &str) -> SchemaIdent {
-        SchemaIdent::new(
-            Org::new(org).unwrap(),
-            Package::new(package).unwrap(),
-            TypeName::new(ty).unwrap(),
-            SemVer::new(1, 0, 0),
-        )
-    }
-
+    /// The message carries the requested import path verbatim — the caller
+    /// asked for a class by that name, and matching their spelling is what
+    /// makes a typo findable. The install fix-it died with the module system.
     #[test]
-    fn unknown_processor_type_names_the_type() {
-        // One message for every ident flavor — the install fix-it died
-        // with the module system. Mentally revert the collapse and the
-        // no-fix-it assertion goes red.
+    fn unknown_processor_type_names_the_class_that_is_not_registered() {
         let msg = Error::UnknownProcessorType {
-            ident: ident("tatolab", "camera", "Camera"),
+            ident: ProcessorClassImportPath::new("my_app.filters:BlurProcessor").unwrap(),
         }
         .to_string();
         assert!(msg.contains("not registered"), "message: {msg}");
         assert!(
-            msg.contains("tatolab") && msg.contains("Camera"),
-            "ident must reach the user: {msg}"
+            msg.contains("my_app.filters:BlurProcessor"),
+            "the requested path must reach the user unaltered: {msg}"
         );
         assert!(
             !msg.contains("streamlib add"),

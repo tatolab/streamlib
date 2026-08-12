@@ -180,8 +180,8 @@ mod query_ops {
         let found = graph.traversal().v(id.as_str()).first();
         assert!(found.is_some());
         assert_eq!(
-            found.unwrap().processor_type.r#type.as_str(),
-            "TestMockProcessor"
+            found.unwrap().processor_type,
+            MockProcessor::Processor::processor_class_import_path()
         );
     }
 
@@ -271,17 +271,21 @@ mod query_ops {
             .traversal_mut()
             .add_v(MockInputOnlyProcessor::Processor::node(Default::default()));
 
-        let type_short_names: Vec<String> = graph
+        let class_paths: Vec<_> = graph
             .traversal()
             .v(())
             .iter()
-            .map(|n| n.processor_type.r#type.as_str().to_string())
+            .map(|n| n.processor_type.clone())
             .collect();
 
-        assert_eq!(type_short_names.len(), 3);
-        assert!(type_short_names.contains(&"TestMockProcessor".to_string()));
-        assert!(type_short_names.contains(&"TestMockOutputOnlyProcessor".to_string()));
-        assert!(type_short_names.contains(&"TestMockInputOnlyProcessor".to_string()));
+        assert_eq!(class_paths.len(), 3);
+        for expected in [
+            MockProcessor::Processor::processor_class_import_path(),
+            MockOutputOnlyProcessor::Processor::processor_class_import_path(),
+            MockInputOnlyProcessor::Processor::processor_class_import_path(),
+        ] {
+            assert!(class_paths.contains(&expected), "missing {expected}");
+        }
     }
 }
 
@@ -430,7 +434,9 @@ mod filter_ops {
         let mock_processors: Vec<_> = graph
             .traversal()
             .v(())
-            .filter(|n| n.processor_type.r#type.as_str() == "TestMockProcessor")
+            .filter(|n| {
+                n.processor_type == MockProcessor::Processor::processor_class_import_path()
+            })
             .ids();
 
         assert_eq!(mock_processors.len(), 2);
@@ -1342,7 +1348,10 @@ mod display_name_disambiguation {
             .add_v(MockProcessor::Processor::node(Default::default()));
 
         for node in graph.traversal().v(()).iter() {
-            assert_eq!(node.processor_type.r#type.as_str(), "TestMockProcessor");
+            assert_eq!(
+                node.processor_type,
+                MockProcessor::Processor::processor_class_import_path()
+            );
             assert!(
                 !node.id.to_string().contains("TestMockProcessor"),
                 "the minted id must not carry the display name, got {}",

@@ -744,7 +744,10 @@ mod tests {
                     streamlib::sdk::descriptors::TypeName::new("BlurProcessor").unwrap(),
                     streamlib::sdk::descriptors::SemVer::new(0, 0, 0),
                 ),
-                "my_app.filters:BlurProcessor",
+                streamlib::sdk::descriptors::ProcessorClassImportPath::new(
+                    "my_app.filters:BlurProcessor",
+                )
+                .unwrap(),
                 "a test double",
             ),
             child_execution_config: ExecutionConfig::new(ProcessExecution::Reactive),

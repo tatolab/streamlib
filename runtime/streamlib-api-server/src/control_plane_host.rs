@@ -7,7 +7,6 @@
 //! whichever one launched it.
 
 use streamlib::sdk::error::Result;
-use streamlib::sdk::processor_type_ref;
 use streamlib::sdk::processors::{PROCESSOR_REGISTRY, ProcessorSpec};
 use streamlib::sdk::runtime::Runner;
 
@@ -47,7 +46,7 @@ pub fn register_api_server_control_plane_processor_on_runtime(
     }
 
     runtime.add_processor(ProcessorSpec::new(
-        processor_type_ref!("tatolab", "api-server", "ApiServer"),
+        crate::api_server::ApiServerProcessor::processor_class_import_path(),
         serde_json::Value::Object(api_server_config),
     ))?;
 

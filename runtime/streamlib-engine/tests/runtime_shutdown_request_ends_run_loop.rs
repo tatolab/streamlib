@@ -105,7 +105,7 @@ fn a_processor_shutdown_request_ends_the_harness_run_loop() {
     let runtime = Runner::new().expect("Runner::new");
     runtime
         .add_processor(ProcessorSpec::new(
-            ShutdownRequestingTestProcessor::schema_ident(),
+            ShutdownRequestingTestProcessor::processor_class_import_path(),
             serde_json::json!({}),
         ))
         .expect("add the shutdown-requesting processor");

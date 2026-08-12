@@ -4,27 +4,26 @@
 //! [`Runner::add_local`] — register an already-compiled `#[processor]` host
 //! type on the one processor registry, live, with no package on disk.
 //!
-//! The type registers under the identity its own `#[processor]` descriptor
-//! carries. Nothing is minted: identity is derived from the type, never
-//! synthesized for the registration, which is the same rule the Python side
-//! follows when the wheel registers a class by its import path.
+//! The type registers under the class import path its own `#[processor]`
+//! descriptor carries. Nothing is minted: identity is derived from the type,
+//! never synthesized for the registration, which is the same rule the Python
+//! side follows when the wheel registers a class.
 
+use crate::core::descriptors::ProcessorClassImportPath;
 use crate::core::error::{Error, Result};
-use crate::core::processors::{
-    Config, GeneratedProcessor, PROCESSOR_REGISTRY, ProcessorTypeReference,
-};
+use crate::core::processors::{Config, GeneratedProcessor, PROCESSOR_REGISTRY};
 
 use super::Runner;
 
 impl Runner {
-    /// Register host type `P` on the processor registry and return the
-    /// reference [`Runner::add_processor`] takes.
+    /// Register host type `P` on the processor registry and return the class
+    /// import path [`Runner::add_processor`] names it by.
     ///
     /// `config` is validated against `P::Config` before anything is
     /// registered, so a type whose config does not deserialize is refused
     /// here rather than at instantiation. Registering a type twice is an
     /// error — the registry never overwrites a live registration.
-    pub fn add_local<P>(&self, config: serde_json::Value) -> Result<ProcessorTypeReference>
+    pub fn add_local<P>(&self, config: serde_json::Value) -> Result<ProcessorClassImportPath>
     where
         P: GeneratedProcessor + 'static,
         P::Config: Config,
@@ -43,7 +42,7 @@ impl Runner {
             ))
         })?;
 
-        let identity = descriptor.name.clone();
+        let processor_class_import_path = descriptor.processor_class_import_path.clone();
         // Host-compiled Rust types register through the same
         // trait-object path as subprocess hosts.
         let constructor: crate::core::processors::DynamicProcessorConstructorFn = Box::new(
@@ -64,10 +63,6 @@ impl Runner {
         );
         PROCESSOR_REGISTRY.register_dynamic(descriptor, constructor)?;
 
-        Ok(ProcessorTypeReference::new(
-            identity.org,
-            identity.package,
-            identity.r#type,
-        ))
+        Ok(processor_class_import_path)
     }
 }

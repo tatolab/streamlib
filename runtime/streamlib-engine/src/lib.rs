@@ -36,8 +36,7 @@ pub mod logging {
 // - #[derive(ConfigDescriptor)] - Config field metadata derive macro
 pub use streamlib_macros::{
     ConfigDescriptor, module_ident, module_ident_any_version, module_ident_joined,
-    module_ident_joined_any_version, processor, processor_type_ref, schema_ident,
-    schema_ident_any_version,
+    module_ident_joined_any_version, processor, schema_ident,
 };
 
 pub use core::{
@@ -237,8 +236,7 @@ pub mod sdk {
 
     pub use streamlib_macros::{
         ConfigDescriptor, module_ident, module_ident_any_version, module_ident_joined,
-        module_ident_joined_any_version, processor, processor_type_ref, schema_ident,
-        schema_ident_any_version,
+        module_ident_joined_any_version, processor, schema_ident,
     };
 
     pub mod permissions {

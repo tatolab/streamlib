@@ -237,15 +237,15 @@ impl PythonTestBagCollectorBlock {
 }
 
 /// The harness marker classes, resolved the same way the media built-ins are.
-pub(crate) fn test_harness_type_reference(
+pub(crate) fn test_harness_class_import_path(
     python: Python<'_>,
     processor_class: &Bound<'_, PyAny>,
-) -> Option<streamlib::sdk::processors::ProcessorTypeReference> {
+) -> Option<streamlib::sdk::descriptors::ProcessorClassImportPath> {
     if processor_class.is(python.get_type::<PythonTestBagFeederBlock>()) {
-        return Some(TestBagFeeder::Processor::schema_ident().into());
+        return Some(TestBagFeeder::Processor::processor_class_import_path());
     }
     if processor_class.is(python.get_type::<PythonTestBagCollectorBlock>()) {
-        return Some(TestBagCollector::Processor::schema_ident().into());
+        return Some(TestBagCollector::Processor::processor_class_import_path());
     }
     None
 }
